@@ -65,6 +65,20 @@ pub enum NotaryInitSourceKind {
     FhirSidecar,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+#[value(rename_all = "kebab_case")]
+pub enum NotaryInitRecipe {
+    OpencrvsDci,
+}
+
+impl NotaryInitRecipe {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::OpencrvsDci => "opencrvs-dci",
+        }
+    }
+}
+
 impl NotaryInitSourceKind {
     fn source_label(self) -> &'static str {
         match self {
@@ -167,7 +181,11 @@ impl NotaryInitSourceKind {
 
 #[derive(Debug)]
 pub struct NotaryInitOptions {
+    pub recipe: Option<NotaryInitRecipe>,
     pub source_kind: NotaryInitSourceKind,
+    pub env_files: Vec<PathBuf>,
+    pub local_secrets_env: PathBuf,
+    pub evaluator_key_env: String,
     pub source_url: String,
     pub source_token_from_env: Option<String>,
     pub source_token_env: String,
@@ -177,7 +195,52 @@ pub struct NotaryInitOptions {
     pub source_network: Option<String>,
     pub source_claim: String,
     pub source_claim_title: String,
+    pub smoke_target_identifier: Option<String>,
     pub smoke_target_id: String,
+}
+
+impl NotaryInitOptions {
+    fn source_label(&self) -> &'static str {
+        match self.recipe {
+            Some(NotaryInitRecipe::OpencrvsDci) => "opencrvs_dci",
+            None => self.source_kind.source_label(),
+        }
+    }
+
+    fn source_connection_id(&self) -> &'static str {
+        match self.recipe {
+            Some(NotaryInitRecipe::OpencrvsDci) => "opencrvs_crvs",
+            None => self.source_kind.connection_id(),
+        }
+    }
+
+    fn source_connector(&self) -> &'static str {
+        match self.recipe {
+            Some(NotaryInitRecipe::OpencrvsDci) => "dci",
+            None => self.source_kind.connector(),
+        }
+    }
+
+    fn source_binding(&self) -> &'static str {
+        match self.recipe {
+            Some(NotaryInitRecipe::OpencrvsDci) => "birth_record",
+            None => self.source_kind.source_binding(),
+        }
+    }
+
+    fn source_retry_on_5xx(&self) -> &'static str {
+        match self.recipe {
+            Some(NotaryInitRecipe::OpencrvsDci) => "true",
+            None => self.source_kind.retry_on_5xx(),
+        }
+    }
+
+    fn source_bulk_mode(&self) -> &'static str {
+        match self.recipe {
+            Some(NotaryInitRecipe::OpencrvsDci) => "none",
+            None => self.source_kind.bulk_mode(),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -329,6 +392,21 @@ pub fn init_spreadsheet_api(dir: &Path, sample: Sample) -> Result<()> {
 
 pub fn init_notary_project(dir: &Path, options: NotaryInitOptions) -> Result<()> {
     init_standalone_notary_project(dir, options)
+}
+
+pub fn init_notary_recipe_project(
+    dir: &Path,
+    recipe: NotaryInitRecipe,
+    env_file: Option<&Path>,
+) -> Result<()> {
+    match recipe {
+        NotaryInitRecipe::OpencrvsDci => {
+            let env_file = env_file.ok_or_else(|| {
+                anyhow!("--recipe opencrvs-dci requires --env-file with OpenCRVS credentials")
+            })?;
+            init_opencrvs_dci_notary_project(dir, env_file)
+        }
+    }
 }
 
 pub fn add_notary(project_dir: &Path, from: NotarySource, force: bool) -> Result<()> {
@@ -1021,7 +1099,8 @@ pub fn smoke_project(project_dir: &Path) -> Result<()> {
     let project = Project::load(project_dir)?;
     let relay_base_url = project.relay_base_url()?;
     validate_project_fingerprints(project_dir, &project)?;
-    let secrets = LocalEnv::load(&project_dir.join(&project.local.secrets_env))?;
+    let env_files = project_notary_env_files(&project);
+    let secrets = LocalEnv::load_many(project_dir, &env_files)?;
     let report = run_smoke_checks(relay_base_url, &secrets);
     let output_path = project_dir
         .join(project.local.output_dir)
@@ -1044,30 +1123,33 @@ pub fn smoke_project(project_dir: &Path) -> Result<()> {
     }
 }
 
-pub fn notary_smoke_project(project_dir: &Path) -> Result<()> {
+pub fn notary_smoke_project(
+    project_dir: &Path,
+    target_id: Option<String>,
+    target_env: Option<String>,
+) -> Result<()> {
     let project = Project::load(project_dir)?;
     validate_project_fingerprints(project_dir, &project)?;
     validate_notary_fingerprint(project_dir, &project)?;
     let notary_base_url = project.notary_base_url()?.to_string();
     let claim_id = project.notary_claim_id();
-    let smoke_target_id = project
-        .notary
-        .as_ref()
-        .map(notary_smoke_target_id)
-        .unwrap_or("per-2001");
+    let env_files = project_notary_env_files(&project);
+    let secrets = LocalEnv::load_many(project_dir, &env_files)?;
     let smoke_target_type = project
         .notary
         .as_ref()
         .and_then(|notary| notary.source_entity.as_deref())
         .unwrap_or("person");
-    let secrets = LocalEnv::load(&project_dir.join(&project.local.secrets_env))?;
-    let report = run_notary_smoke_checks(
-        &notary_base_url,
-        &secrets,
-        &claim_id,
-        smoke_target_type,
-        smoke_target_id,
-    );
+    let smoke_target = project
+        .notary
+        .as_ref()
+        .map(|notary| {
+            notary_smoke_target(notary, smoke_target_type, target_id, target_env, &secrets)
+        })
+        .transpose()?
+        .flatten();
+    let report =
+        run_notary_smoke_checks(&notary_base_url, &secrets, &claim_id, smoke_target.as_ref());
     let output_path = project_dir
         .join(&project.local.output_dir)
         .join("notary-smoke-results.json");
@@ -1479,6 +1561,7 @@ fn product_doctor_invocations(
         });
     }
     if let Some(notary) = &project.notary {
+        let env_file = notary_doctor_env_file(project_dir, project, notary)?;
         invocations.push(ProductDoctorInvocation {
             product: "registry-notary",
             binary: "registry-notary",
@@ -1491,6 +1574,37 @@ fn product_doctor_invocations(
         });
     }
     Ok(invocations)
+}
+
+fn notary_doctor_env_file(
+    project_dir: &Path,
+    project: &Project,
+    notary: &ProjectNotary,
+) -> Result<PathBuf> {
+    let env_files = if notary.env_files.is_empty() {
+        vec![project.local.secrets_env.clone()]
+    } else {
+        notary.env_files.clone()
+    };
+    if env_files.len() == 1 {
+        return Ok(project_dir.join(&env_files[0]));
+    }
+
+    let mut values = BTreeMap::new();
+    for relative in &env_files {
+        let path = project_dir.join(relative);
+        let contents = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+        values.extend(parse_local_env(&contents));
+    }
+    add_opencrvs_dci_aliases(&mut values);
+
+    let output_dir = project_dir.join(&project.local.output_dir).join("doctor");
+    fs::create_dir_all(&output_dir)
+        .with_context(|| format!("failed to create {}", output_dir.display()))?;
+    let merged = output_dir.join("registry-notary.env");
+    write_text(merged.clone(), &render_env_values(&values))?;
+    Ok(merged)
 }
 
 fn relay_doctor_config_path(
@@ -1932,6 +2046,93 @@ fn init_benefits_project(dir: &Path) -> Result<()> {
     Ok(())
 }
 
+fn init_opencrvs_dci_notary_project(dir: &Path, env_file: &Path) -> Result<()> {
+    let env_path = env_file.to_path_buf();
+    let env_contents = fs::read_to_string(&env_path)
+        .with_context(|| format!("failed to read {}", env_path.display()))?;
+    let source_env = LocalEnv {
+        values: parse_local_env(&env_contents),
+    };
+    let dci_base_url = required_env_alias(&source_env, "DCI_BASE_URL", &["OPENCRVS_DCI_BASE_URL"])?;
+    let dci_client_id_env =
+        required_env_alias_name(&source_env, "DCI_CLIENT_ID", &["OPENCRVS_DCI_CLIENT_ID"])?;
+    let dci_client_secret_env = required_env_alias_name(
+        &source_env,
+        "DCI_CLIENT_SECRET",
+        &["OPENCRVS_DCI_CLIENT_SECRET"],
+    )?;
+    if source_env
+        .values
+        .keys()
+        .any(|key| matches!(key.as_str(), "DCI_TOKEN" | "OPENCRVS_DCI_TOKEN"))
+    {
+        println!(
+            "OpenCRVS bearer token was present but is not used by the generated OAuth client-credentials config."
+        );
+    }
+
+    prepare_recipe_init_dir(dir, &env_path, &env_contents)?;
+
+    fs::create_dir_all(dir.join("notary"))?;
+    fs::create_dir_all(dir.join("secrets"))?;
+    fs::create_dir_all(dir.join("output"))?;
+
+    let notary_credentials = NotaryLocalCredentials::generate(String::new())?;
+    let options = NotaryInitOptions {
+        recipe: Some(NotaryInitRecipe::OpencrvsDci),
+        source_kind: NotaryInitSourceKind::RegistryDataApi,
+        env_files: vec![
+            PathBuf::from(".env"),
+            PathBuf::from("secrets/notary.local.env"),
+        ],
+        local_secrets_env: PathBuf::from("secrets/notary.local.env"),
+        evaluator_key_env: "NOTARY_API_KEY_RAW".to_string(),
+        source_url: dci_base_url.trim_end_matches('/').to_string(),
+        source_token_from_env: None,
+        source_token_env: String::new(),
+        source_dataset: "civil_registry".to_string(),
+        source_entity: "person".to_string(),
+        source_lookup_field: "UIN".to_string(),
+        source_network: None,
+        source_claim: "opencrvs-birth-record-exists".to_string(),
+        source_claim_title: "OpenCRVS birth record exists".to_string(),
+        smoke_target_identifier: Some("UIN".to_string()),
+        smoke_target_id: String::new(),
+    };
+
+    write_text(
+        dir.join("registryctl.yaml"),
+        &registryctl_manifest(
+            dir,
+            ProjectManifestKind::StandaloneNotary { options: &options },
+        )?,
+    )?;
+    write_text(
+        dir.join("compose.yaml"),
+        &compose_notary_only_yaml(
+            options.source_network.as_deref(),
+            &options.env_files,
+            &[
+                ("DCI_CLIENT_ID", dci_client_id_env),
+                ("DCI_CLIENT_SECRET", dci_client_secret_env),
+            ],
+        ),
+    )?;
+    write_text(dir.join("README.md"), opencrvs_dci_notary_readme())?;
+    write_text(dir.join(".gitignore"), include_str!("templates/gitignore"))?;
+    write_text(
+        dir.join("notary/config.yaml"),
+        &notary_config_for_source(&notary_credentials.evaluator, &options),
+    )?;
+    write_text(
+        dir.join("secrets/notary.local.env"),
+        &opencrvs_notary_env_file(&notary_credentials),
+    )?;
+    write_text(dir.join("output/.gitkeep"), "")?;
+    bruno_generate_project(dir, false)?;
+    Ok(())
+}
+
 fn init_standalone_notary_project(dir: &Path, options: NotaryInitOptions) -> Result<()> {
     if dir.exists() {
         let mut entries =
@@ -1964,7 +2165,7 @@ fn init_standalone_notary_project(dir: &Path, options: NotaryInitOptions) -> Res
     )?;
     write_text(
         dir.join("compose.yaml"),
-        &compose_notary_only_yaml(options.source_network.as_deref()),
+        &compose_notary_only_yaml(options.source_network.as_deref(), &options.env_files, &[]),
     )?;
     write_text(dir.join("README.md"), standalone_notary_readme())?;
     write_text(dir.join(".gitignore"), include_str!("templates/gitignore"))?;
@@ -1973,7 +2174,7 @@ fn init_standalone_notary_project(dir: &Path, options: NotaryInitOptions) -> Res
         &notary_config_for_source(&notary_credentials.evaluator, &options),
     )?;
     write_text(
-        dir.join("secrets/local.env"),
+        dir.join(&options.local_secrets_env),
         &standalone_notary_env_file(&notary_credentials, &options.source_token_env),
     )?;
     write_text(dir.join("output/.gitkeep"), "")?;
@@ -3175,6 +3376,9 @@ fn bruno_notary_files(project: &Project, _secrets: &LocalEnv) -> Result<Vec<Gene
     let smoke_target_id = notary_smoke_target_id(notary);
     let missing_smoke_target_id = format!("{smoke_target_id}-missing");
     let source_entity = notary.source_entity.as_deref().unwrap_or("person");
+    let smoke_target_json = bruno_notary_target_json(notary, source_entity, smoke_target_id);
+    let missing_smoke_target_json =
+        bruno_notary_target_json(notary, source_entity, &missing_smoke_target_id);
     let source_url = notary
         .source_url
         .as_deref()
@@ -3224,10 +3428,7 @@ fn bruno_notary_files(project: &Project, _secrets: &LocalEnv) -> Result<Vec<Gene
             ],
             &format!(
                 r#"{{
-  "target": {{
-    "type": "{source_entity}",
-    "id": "{smoke_target_id}"
-  }},
+  "target": {smoke_target_json},
   "claims": ["{claim_id}"],
   "disclosure": "predicate",
   "purpose": "{{{{purpose}}}}"
@@ -3246,10 +3447,7 @@ fn bruno_notary_files(project: &Project, _secrets: &LocalEnv) -> Result<Vec<Gene
             ],
             &format!(
                 r#"{{
-  "target": {{
-    "type": "{source_entity}",
-    "id": "{missing_smoke_target_id}"
-  }},
+  "target": {missing_smoke_target_json},
   "claims": ["{claim_id}"],
   "disclosure": "predicate",
   "purpose": "{{{{purpose}}}}"
@@ -3263,9 +3461,10 @@ fn bruno_notary_files(project: &Project, _secrets: &LocalEnv) -> Result<Vec<Gene
         generated_file(
             "Notary/README.md",
             &format!(
-                "Notary requests call the generated local Notary API. The source connection is `{}` at {}. Source token env: {}. Starter source: dataset `{}`, entity `{}`, lookup field `{}`. Source network: {}.\n",
+                "Notary requests call the generated local Notary API. The source connection is `{}` at {}. Recipe: {}. Source token env: {}. Starter source: dataset `{}`, entity `{}`, lookup field `{}`. Source network: {}.\n",
                 notary.source,
                 source_url,
+                notary.recipe.as_deref().unwrap_or("none"),
                 notary.source_token_env.as_deref().unwrap_or("configured in secrets/local.env"),
                 notary.source_dataset.as_deref().unwrap_or("configured"),
                 notary.source_entity.as_deref().unwrap_or("configured"),
@@ -3284,6 +3483,76 @@ fn notary_smoke_target_id(notary: &ProjectNotary) -> &str {
             "per-2001"
         }
     })
+}
+
+fn project_notary_env_files(project: &Project) -> Vec<PathBuf> {
+    project
+        .notary
+        .as_ref()
+        .filter(|notary| !notary.env_files.is_empty())
+        .map(|notary| notary.env_files.clone())
+        .unwrap_or_else(|| vec![project.local.secrets_env.clone()])
+}
+
+#[derive(Debug)]
+struct NotarySmokeTarget {
+    entity_type: String,
+    identifier_scheme: Option<String>,
+    value: String,
+}
+
+fn notary_smoke_target(
+    notary: &ProjectNotary,
+    entity_type: &str,
+    target_id: Option<String>,
+    target_env: Option<String>,
+    env: &LocalEnv,
+) -> Result<Option<NotarySmokeTarget>> {
+    if target_id.is_some() && target_env.is_some() {
+        bail!("pass either --target-id or --target-env, not both");
+    }
+    let value = match (target_id, target_env) {
+        (Some(value), None) => Some(value),
+        (None, Some(name)) => {
+            let value = std::env::var(&name)
+                .ok()
+                .filter(|value| !value.is_empty())
+                .or_else(|| {
+                    env.values
+                        .get(&name)
+                        .filter(|value| !value.is_empty())
+                        .cloned()
+                })
+                .ok_or_else(|| anyhow!("target env {name} is not set or is empty"))?;
+            Some(value)
+        }
+        (None, None) => notary.smoke_target_id.clone(),
+        (Some(_), Some(_)) => unreachable!(),
+    };
+    let Some(value) = value.filter(|value| !value.trim().is_empty()) else {
+        return Ok(None);
+    };
+    Ok(Some(NotarySmokeTarget {
+        entity_type: entity_type.to_string(),
+        identifier_scheme: notary.smoke_target_identifier.clone(),
+        value,
+    }))
+}
+
+fn bruno_notary_target_json(notary: &ProjectNotary, source_entity: &str, value: &str) -> String {
+    let target = match notary.smoke_target_identifier.as_deref() {
+        Some(scheme) => serde_json::json!({
+            "type": source_entity,
+            "identifiers": [
+                { "scheme": scheme, "value": value }
+            ]
+        }),
+        None => serde_json::json!({
+            "type": source_entity,
+            "id": value
+        }),
+    };
+    serde_json::to_string_pretty(&target).unwrap_or_else(|_| target.to_string())
 }
 
 fn bruno_get(
@@ -3363,10 +3632,15 @@ fn bruno_env(project: &Project, secrets: &LocalEnv, example: bool) -> Result<Str
         ));
     }
     if project.notary.is_some() {
+        let evaluator_key_env = project
+            .notary
+            .as_ref()
+            .and_then(|notary| notary.evaluator_key_env.as_deref())
+            .unwrap_or("REGISTRY_NOTARY_TUTORIAL_EVALUATOR_RAW");
         values.push(("notary_base_url", project.notary_base_url()?.to_string()));
         values.push((
             "notary_evaluator_key",
-            bruno_env_value(secrets, "REGISTRY_NOTARY_TUTORIAL_EVALUATOR_RAW", example),
+            bruno_env_value(secrets, evaluator_key_env, example),
         ));
     }
 
@@ -3424,6 +3698,12 @@ struct ProjectNotary {
     config: PathBuf,
     source: String,
     #[serde(default)]
+    recipe: Option<String>,
+    #[serde(default)]
+    env_files: Vec<PathBuf>,
+    #[serde(default)]
+    evaluator_key_env: Option<String>,
+    #[serde(default)]
     source_relay_service_url: Option<String>,
     #[serde(default)]
     source_url: Option<String>,
@@ -3439,6 +3719,8 @@ struct ProjectNotary {
     source_network: Option<String>,
     #[serde(default)]
     claims: Vec<String>,
+    #[serde(default)]
+    smoke_target_identifier: Option<String>,
     #[serde(default)]
     smoke_target_id: Option<String>,
 }
@@ -3502,6 +3784,18 @@ impl LocalEnv {
         })
     }
 
+    fn load_many(project_dir: &Path, paths: &[PathBuf]) -> Result<Self> {
+        let mut values = BTreeMap::new();
+        for relative in paths {
+            let path = project_dir.join(relative);
+            let contents = fs::read_to_string(&path)
+                .with_context(|| format!("failed to read {}", path.display()))?;
+            values.extend(parse_local_env(&contents));
+        }
+        add_opencrvs_dci_aliases(&mut values);
+        Ok(Self { values })
+    }
+
     fn required(&self, name: &str) -> Result<&str> {
         self.values
             .get(name)
@@ -3512,6 +3806,139 @@ impl LocalEnv {
     fn value(&self, name: &str) -> &str {
         self.values.get(name).map(String::as_str).unwrap_or("")
     }
+}
+
+fn required_env_alias<'a>(env: &'a LocalEnv, canonical: &str, aliases: &[&str]) -> Result<&'a str> {
+    if let Some(value) = env
+        .values
+        .get(canonical)
+        .map(String::as_str)
+        .filter(|value| !value.is_empty())
+    {
+        return Ok(value);
+    }
+    for alias in aliases {
+        if let Some(value) = env
+            .values
+            .get(*alias)
+            .map(String::as_str)
+            .filter(|value| !value.is_empty())
+        {
+            return Ok(value);
+        }
+    }
+    let accepted = std::iter::once(canonical)
+        .chain(aliases.iter().copied())
+        .collect::<Vec<_>>()
+        .join(" or ");
+    Err(anyhow!("missing required env value {accepted}"))
+}
+
+fn required_env_alias_name<'a>(
+    env: &LocalEnv,
+    canonical: &'a str,
+    aliases: &[&'a str],
+) -> Result<&'a str> {
+    if env
+        .values
+        .get(canonical)
+        .is_some_and(|value| !value.is_empty())
+    {
+        return Ok(canonical);
+    }
+    for alias in aliases {
+        if env
+            .values
+            .get(*alias)
+            .is_some_and(|value| !value.is_empty())
+        {
+            return Ok(*alias);
+        }
+    }
+    let accepted = std::iter::once(canonical)
+        .chain(aliases.iter().copied())
+        .collect::<Vec<_>>()
+        .join(" or ");
+    Err(anyhow!("missing required env value {accepted}"))
+}
+
+fn prepare_recipe_init_dir(dir: &Path, env_path: &Path, env_contents: &str) -> Result<()> {
+    let target_env_path = dir.join(".env");
+    let env_canonical = fs::canonicalize(env_path)
+        .with_context(|| format!("failed to resolve {}", env_path.display()))?;
+
+    if !dir.exists() {
+        fs::create_dir_all(dir).with_context(|| format!("failed to create {}", dir.display()))?;
+    }
+    let entries = fs::read_dir(dir)
+        .with_context(|| format!("failed to inspect {}", dir.display()))?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .with_context(|| format!("failed to inspect {}", dir.display()))?;
+
+    if entries.is_empty() {
+        write_text(target_env_path, env_contents)?;
+        return Ok(());
+    }
+
+    let target_env_canonical = fs::canonicalize(&target_env_path).ok();
+    for entry in &entries {
+        let path = entry.path();
+        let is_allowed_env = target_env_canonical
+            .as_ref()
+            .and_then(|target| {
+                fs::canonicalize(&path)
+                    .ok()
+                    .map(|canonical| canonical == *target)
+            })
+            .unwrap_or(false);
+        if !is_allowed_env {
+            bail!(
+                "target directory already exists and contains files other than the supplied .env: {}",
+                dir.display()
+            );
+        }
+    }
+
+    let Some(target_env_canonical) = target_env_canonical else {
+        bail!(
+            "target directory contains entries but does not contain {}",
+            target_env_path.display()
+        );
+    };
+    if env_canonical != target_env_canonical {
+        bail!(
+            "--recipe opencrvs-dci expects --env-file to point at {} when the target already contains .env",
+            target_env_path.display()
+        );
+    }
+    Ok(())
+}
+
+fn add_opencrvs_dci_aliases(values: &mut BTreeMap<String, String>) {
+    for (canonical, alias) in [
+        ("DCI_BASE_URL", "OPENCRVS_DCI_BASE_URL"),
+        ("DCI_CLIENT_ID", "OPENCRVS_DCI_CLIENT_ID"),
+        ("DCI_CLIENT_SECRET", "OPENCRVS_DCI_CLIENT_SECRET"),
+        ("DCI_TOKEN", "OPENCRVS_DCI_TOKEN"),
+        ("DCI_SHA_SECRET", "OPENCRVS_DCI_SHA_SECRET"),
+    ] {
+        if !values.contains_key(canonical) {
+            if let Some(value) = values.get(alias).cloned() {
+                values.insert(canonical.to_string(), value);
+            }
+        }
+    }
+}
+
+fn render_env_values(values: &BTreeMap<String, String>) -> String {
+    let mut rendered = String::new();
+    for (key, value) in values {
+        rendered.push_str(key);
+        rendered.push('=');
+        rendered.push_str(value);
+        rendered.push('\n');
+    }
+    rendered
 }
 
 fn parse_local_env(contents: &str) -> BTreeMap<String, String> {
@@ -3653,7 +4080,11 @@ fn validate_notary_fingerprint(project_dir: &Path, project: &Project) -> Result<
             .ok_or_else(|| anyhow!("notary config api key {id} is missing commitment"))?;
 
         let fingerprint = secrets.required(hash_env)?;
-        let raw_key = secrets.required(raw_env_name_for_notary(id)?)?;
+        let raw_key_env = match notary.evaluator_key_env.as_deref() {
+            Some(env) => env,
+            None => raw_env_name_for_notary(id)?,
+        };
+        let raw_key = secrets.required(raw_key_env)?;
         let expected_fingerprint = fingerprint_api_key(raw_key);
         if fingerprint != expected_fingerprint {
             bail!("local raw key and fingerprint do not match for notary api key {id}");
@@ -3911,6 +4342,12 @@ struct NotarySection<'a> {
     config: &'a str,
     source: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
+    recipe: Option<&'a str>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    env_files: Vec<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    evaluator_key_env: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     source_relay_service_url: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     source_url: Option<&'a str>,
@@ -3926,6 +4363,8 @@ struct NotarySection<'a> {
     source_network: Option<&'a str>,
     claims: Vec<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    smoke_target_identifier: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     smoke_target_id: Option<&'a str>,
 }
 
@@ -3935,6 +4374,7 @@ struct LocalSection<'a> {
     output_dir: &'a str,
 }
 
+#[derive(Clone, Copy)]
 enum ProjectManifestKind<'a> {
     Relay,
     RelayWithNotary,
@@ -3968,6 +4408,9 @@ fn registryctl_manifest(dir: &Path, kind: ProjectManifestKind<'_>) -> Result<Str
         ProjectManifestKind::RelayWithNotary => Some(NotarySection {
             config: "notary/config.yaml",
             source: "relay",
+            recipe: None,
+            env_files: Vec::new(),
+            evaluator_key_env: Some("REGISTRY_NOTARY_TUTORIAL_EVALUATOR_RAW"),
             source_relay_service_url: Some(NOTARY_SOURCE_RELAY_SERVICE_URL),
             source_url: None,
             source_token_env: Some("EVIDENCE_SOURCE_REGISTRY_RELAY_TOKEN"),
@@ -3976,20 +4419,31 @@ fn registryctl_manifest(dir: &Path, kind: ProjectManifestKind<'_>) -> Result<Str
             source_lookup_field: Some("id"),
             source_network: None,
             claims: vec![NOTARY_TUTORIAL_CLAIM],
+            smoke_target_identifier: None,
             smoke_target_id: Some("per-2001"),
         }),
         ProjectManifestKind::StandaloneNotary { options } => Some(NotarySection {
             config: "notary/config.yaml",
-            source: options.source_kind.source_label(),
+            source: options.source_label(),
+            recipe: options.recipe.map(NotaryInitRecipe::as_str),
+            env_files: options
+                .env_files
+                .iter()
+                .map(|path| path.to_str().unwrap_or(""))
+                .collect(),
+            evaluator_key_env: Some(&options.evaluator_key_env),
             source_relay_service_url: None,
             source_url: Some(&options.source_url),
-            source_token_env: Some(&options.source_token_env),
+            source_token_env: (!options.source_token_env.is_empty())
+                .then_some(options.source_token_env.as_str()),
             source_dataset: Some(&options.source_dataset),
             source_entity: Some(&options.source_entity),
             source_lookup_field: Some(&options.source_lookup_field),
             source_network: options.source_network.as_deref(),
             claims: vec![&options.source_claim],
-            smoke_target_id: Some(&options.smoke_target_id),
+            smoke_target_identifier: options.smoke_target_identifier.as_deref(),
+            smoke_target_id: (!options.smoke_target_id.is_empty())
+                .then_some(options.smoke_target_id.as_str()),
         }),
         ProjectManifestKind::Relay => None,
     };
@@ -4015,7 +4469,13 @@ fn registryctl_manifest(dir: &Path, kind: ProjectManifestKind<'_>) -> Result<Str
         }),
         notary,
         local: LocalSection {
-            secrets_env: "secrets/local.env",
+            secrets_env: match kind {
+                ProjectManifestKind::StandaloneNotary { options } => options
+                    .local_secrets_env
+                    .to_str()
+                    .unwrap_or("secrets/local.env"),
+                _ => "secrets/local.env",
+            },
             output_dir: "output",
         },
     };
@@ -4031,7 +4491,11 @@ fn compose_yaml(include_notary: bool) -> String {
     }
 }
 
-fn compose_notary_only_yaml(source_network: Option<&str>) -> String {
+fn compose_notary_only_yaml(
+    source_network: Option<&str>,
+    env_files: &[PathBuf],
+    environment: &[(&str, &str)],
+) -> String {
     let (service_networks, networks) = match source_network {
         Some(name) => (
             "    networks:\n      - default\n      - source_api\n",
@@ -4041,8 +4505,36 @@ fn compose_notary_only_yaml(source_network: Option<&str>) -> String {
     };
     include_str!("templates/compose-notary.yaml")
         .replace("{{notary_redis_image}}", NOTARY_REDIS_IMAGE)
+        .replace("{{notary_env_files}}", &compose_env_files(env_files))
+        .replace(
+            "{{notary_environment}}",
+            &compose_notary_environment(environment),
+        )
         .replace("{{source_network_service}}", service_networks)
         .replace("{{source_networks}}", &networks)
+}
+
+fn compose_env_files(env_files: &[PathBuf]) -> String {
+    let files = if env_files.is_empty() {
+        vec![PathBuf::from("secrets/local.env")]
+    } else {
+        env_files.to_vec()
+    };
+    files
+        .iter()
+        .map(|path| format!("      - ./{}\n", path.display()))
+        .collect::<String>()
+}
+
+fn compose_notary_environment(environment: &[(&str, &str)]) -> String {
+    if environment.is_empty() {
+        return String::new();
+    }
+    let mut rendered = "    environment:\n".to_string();
+    for (container_name, project_name) in environment {
+        rendered.push_str(&format!("      {container_name}: ${{{project_name}}}\n"));
+    }
+    rendered
 }
 
 fn project_readme() -> &'static str {
@@ -4051,6 +4543,10 @@ fn project_readme() -> &'static str {
 
 fn standalone_notary_readme() -> &'static str {
     include_str!("templates/notary_project_readme.md")
+}
+
+fn opencrvs_dci_notary_readme() -> &'static str {
+    include_str!("templates/opencrvs_dci_notary_project_readme.md")
 }
 
 fn relay_config(credentials: &LocalCredentials) -> String {
@@ -4078,26 +4574,47 @@ fn notary_config(evaluator: &Credential) -> String {
 }
 
 fn notary_config_for_source(evaluator: &Credential, options: &NotaryInitOptions) -> String {
+    if options.recipe == Some(NotaryInitRecipe::OpencrvsDci) {
+        return include_str!("templates/notary_opencrvs_dci_config.yaml.tmpl")
+            .replace("{{evaluator_id}}", evaluator.id)
+            .replace("{{evaluator_commitment}}", &evaluator.commitment)
+            .replace("{{issuer_key_id}}", NOTARY_DEMO_ISSUER_KEY_ID)
+            .replace("{{issuer_kid}}", NOTARY_DEMO_ISSUER_KID)
+            .replace("{{source_url}}", &options.source_url);
+    }
     include_str!("templates/notary_standalone_config.yaml.tmpl")
         .replace("{{evaluator_id}}", evaluator.id)
         .replace("{{evaluator_commitment}}", &evaluator.commitment)
         .replace("{{issuer_key_id}}", NOTARY_DEMO_ISSUER_KEY_ID)
         .replace("{{issuer_kid}}", NOTARY_DEMO_ISSUER_KID)
-        .replace("{{source_connection}}", options.source_kind.connection_id())
-        .replace("{{source_connector}}", options.source_kind.connector())
-        .replace("{{source_binding}}", options.source_kind.source_binding())
+        .replace("{{source_connection}}", options.source_connection_id())
+        .replace("{{source_connector}}", options.source_connector())
+        .replace("{{source_binding}}", options.source_binding())
         .replace("{{source_url}}", &options.source_url)
         .replace("{{source_token_env}}", &options.source_token_env)
-        .replace(
-            "{{source_retry_on_5xx}}",
-            options.source_kind.retry_on_5xx(),
-        )
-        .replace("{{source_bulk_mode}}", options.source_kind.bulk_mode())
+        .replace("{{source_retry_on_5xx}}", options.source_retry_on_5xx())
+        .replace("{{source_bulk_mode}}", options.source_bulk_mode())
         .replace("{{source_dataset}}", &options.source_dataset)
         .replace("{{source_entity}}", &options.source_entity)
         .replace("{{source_lookup_field}}", &options.source_lookup_field)
         .replace("{{source_claim}}", &options.source_claim)
         .replace("{{source_claim_title}}", &options.source_claim_title)
+}
+
+fn opencrvs_notary_env_file(credentials: &NotaryLocalCredentials) -> String {
+    format!(
+        "\
+NOTARY_API_KEY_RAW={api_key_raw}
+NOTARY_API_KEY_HASH={api_key_hash}
+NOTARY_AUDIT_SECRET={audit_secret}
+NOTARY_ISSUER_PRIVATE_JWK={issuer_jwk}
+NOTARY_REPLAY_REDIS_URL=redis://registry-notary-redis:6379
+",
+        api_key_raw = credentials.evaluator.raw,
+        api_key_hash = credentials.evaluator.fingerprint,
+        audit_secret = credentials.audit_hash_secret,
+        issuer_jwk = credentials.issuer_jwk,
+    )
 }
 
 fn standalone_notary_env_file(
@@ -4220,21 +4737,15 @@ fn run_notary_smoke_checks(
     base_url: &str,
     secrets: &LocalEnv,
     claim_id: &str,
-    smoke_target_type: &str,
-    smoke_target_id: &str,
+    smoke_target: Option<&NotarySmokeTarget>,
 ) -> SmokeReport {
     let mut checks = Vec::new();
     let api_key = secrets.value("REGISTRY_NOTARY_TUTORIAL_EVALUATOR_RAW");
-    let evaluation_body = serde_json::json!({
-        "target": {
-            "type": smoke_target_type,
-            "id": smoke_target_id
-        },
-        "claims": [claim_id],
-        "disclosure": "predicate",
-        "purpose": TUTORIAL_PURPOSE
-    })
-    .to_string();
+    let api_key = if api_key.is_empty() {
+        secrets.value("NOTARY_API_KEY_RAW")
+    } else {
+        api_key
+    };
 
     record_smoke_check(
         &mut checks,
@@ -4287,26 +4798,53 @@ fn run_notary_smoke_checks(
             ("Accept".to_string(), "application/json".to_string()),
         ],
     );
-    record_notary_evaluation_check(
-        &mut checks,
-        base_url,
-        "notary evaluator can verify starter claim",
-        "/v1/evaluations",
-        &[
-            api_key_header(api_key),
-            ("Content-Type".to_string(), "application/json".to_string()),
-            ("Accept".to_string(), NOTARY_CLAIM_RESULT_JSON.to_string()),
-            ("Data-Purpose".to_string(), TUTORIAL_PURPOSE.to_string()),
-        ],
-        &evaluation_body,
-        claim_id,
-    );
+    if let Some(smoke_target) = smoke_target {
+        let evaluation_body = notary_evaluation_body(smoke_target, claim_id);
+        record_notary_evaluation_check(
+            &mut checks,
+            base_url,
+            "notary evaluator can verify starter claim",
+            "/v1/evaluations",
+            &[
+                api_key_header(api_key),
+                ("Content-Type".to_string(), "application/json".to_string()),
+                ("Accept".to_string(), NOTARY_CLAIM_RESULT_JSON.to_string()),
+                ("Data-Purpose".to_string(), TUTORIAL_PURPOSE.to_string()),
+            ],
+            &evaluation_body,
+            claim_id,
+        );
+    } else {
+        record_notary_evaluation_not_run(&mut checks);
+    }
 
     SmokeReport {
         base_url: base_url.to_string(),
         passed: checks.iter().all(|check| check.passed),
         checks,
     }
+}
+
+fn notary_evaluation_body(smoke_target: &NotarySmokeTarget, claim_id: &str) -> String {
+    let target = match &smoke_target.identifier_scheme {
+        Some(scheme) => serde_json::json!({
+            "type": smoke_target.entity_type,
+            "identifiers": [
+                { "scheme": scheme, "value": smoke_target.value.as_str() }
+            ]
+        }),
+        None => serde_json::json!({
+            "type": smoke_target.entity_type,
+            "id": smoke_target.value.as_str()
+        }),
+    };
+    serde_json::json!({
+        "target": target,
+        "claims": [claim_id],
+        "disclosure": "predicate",
+        "purpose": TUTORIAL_PURPOSE
+    })
+    .to_string()
 }
 
 fn parse_smoke_report(contents: &str) -> Result<SmokeReport> {
@@ -4392,6 +4930,18 @@ fn record_notary_evaluation_check(
     }
 }
 
+fn record_notary_evaluation_not_run(checks: &mut Vec<SmokeCheck>) {
+    checks.push(SmokeCheck {
+        name: "notary evaluator live claim evaluation not run".to_string(),
+        method: "POST".to_string(),
+        path: "/v1/evaluations".to_string(),
+        expected_status: 200,
+        actual_status: None,
+        passed: true,
+        error: Some("pass --target-id or --target-env to run live evaluation".to_string()),
+    });
+}
+
 fn bearer_header(raw_key: &str) -> (String, String) {
     ("Authorization".to_string(), format!("Bearer {raw_key}"))
 }
@@ -4435,7 +4985,7 @@ fn http_request(
         .ok_or_else(|| anyhow!("could not resolve {}", parsed.host))?;
     let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(3))
         .with_context(|| format!("failed to connect to {}", parsed.authority()))?;
-    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+    stream.set_read_timeout(Some(Duration::from_secs(30)))?;
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
 
     write!(
@@ -5319,13 +5869,321 @@ workflows:
     }
 
     #[test]
+    fn opencrvs_dci_recipe_accepts_alias_env_and_generates_clean_project() {
+        let temp = TempDir::new().unwrap();
+        let project = temp.path().join("opencrvs-notary");
+        fs::create_dir_all(&project).unwrap();
+        let env_path = project.join(".env");
+        fs::write(&env_path, fake_opencrvs_alias_env()).unwrap();
+
+        init_notary_recipe_project(
+            &project,
+            NotaryInitRecipe::OpencrvsDci,
+            Some(env_path.as_path()),
+        )
+        .unwrap();
+
+        for path in [
+            ".env",
+            "registryctl.yaml",
+            "compose.yaml",
+            "README.md",
+            ".gitignore",
+            "notary/config.yaml",
+            "secrets/notary.local.env",
+            "output/.gitkeep",
+            "bruno/registry-api/Notary/Evaluate person exists.bru",
+        ] {
+            assert!(project.join(path).exists(), "{path} should exist");
+        }
+
+        let manifest: Value =
+            serde_yaml::from_str(&fs::read_to_string(project.join("registryctl.yaml")).unwrap())
+                .unwrap();
+        assert_eq!(manifest["notary"]["recipe"], "opencrvs-dci");
+        assert_eq!(manifest["notary"]["source"], "opencrvs_dci");
+        assert_eq!(manifest["notary"]["env_files"][0], ".env");
+        assert_eq!(
+            manifest["notary"]["env_files"][1],
+            "secrets/notary.local.env"
+        );
+        assert_eq!(manifest["notary"]["smoke_target_identifier"], "UIN");
+        assert_eq!(manifest["local"]["secrets_env"], "secrets/notary.local.env");
+
+        let config = fs::read_to_string(project.join("notary/config.yaml")).unwrap();
+        let config_yaml: Value = serde_yaml::from_str(&config).unwrap();
+        let source = &config_yaml["evidence"]["source_connections"]["opencrvs_crvs"];
+        assert_eq!(source["base_url"], "https://opencrvs.example.test");
+        assert_eq!(source["source_auth"]["type"], "oauth2_client_credentials");
+        assert_eq!(source["source_auth"]["client_id_env"], "DCI_CLIENT_ID");
+        assert_eq!(
+            source["source_auth"]["client_secret_env"],
+            "DCI_CLIENT_SECRET"
+        );
+        assert_eq!(source["dci"]["search_path"], "/registry/sync/search");
+        assert_eq!(source["dci"]["query_type"], "idtype-value");
+        assert_eq!(source["dci"]["registry_event_type"], "birth");
+        let credential_profile =
+            &config_yaml["evidence"]["credential_profiles"]["opencrvs_birth_record_sd_jwt"];
+        assert_eq!(credential_profile["format"], "application/dc+sd-jwt");
+        assert_eq!(credential_profile["issuer"], "did:web:localhost");
+        assert_eq!(credential_profile["signing_key"], NOTARY_DEMO_ISSUER_KEY_ID);
+        assert_eq!(
+            credential_profile["allowed_claims"][0],
+            "opencrvs-birth-record-exists"
+        );
+        let binding = &config_yaml["evidence"]["claims"][0]["source_bindings"]["birth_record"];
+        assert_eq!(binding["connector"], "dci");
+        assert_eq!(binding["lookup"]["input"], "target.identifiers.UIN");
+        assert_eq!(binding["lookup"]["field"], "UIN");
+        assert_eq!(
+            config_yaml["evidence"]["claims"][0]["disclosure"]["default"],
+            "predicate"
+        );
+        assert_eq!(
+            config_yaml["evidence"]["claims"][0]["formats"][1],
+            "application/dc+sd-jwt"
+        );
+        assert_eq!(
+            config_yaml["evidence"]["claims"][0]["credential_profiles"][0],
+            "opencrvs_birth_record_sd_jwt"
+        );
+
+        let source_env = fs::read_to_string(project.join(".env")).unwrap();
+        let notary_env = fs::read_to_string(project.join("secrets/notary.local.env")).unwrap();
+        let compose = fs::read_to_string(project.join("compose.yaml")).unwrap();
+        let readme = fs::read_to_string(project.join("README.md")).unwrap();
+        for secret in [
+            env_value(&source_env, "OPENCRVS_DCI_CLIENT_SECRET"),
+            env_value(&source_env, "OPENCRVS_DCI_TOKEN"),
+            env_value(&source_env, "OPENCRVS_DEMO_SUBJECT_UIN"),
+            env_value(&notary_env, "NOTARY_API_KEY_RAW"),
+            env_value(&notary_env, "NOTARY_ISSUER_PRIVATE_JWK"),
+            env_value(&notary_env, "NOTARY_AUDIT_SECRET"),
+        ] {
+            assert!(!config.contains(&secret));
+            assert!(!readme.contains(&secret));
+        }
+        assert!(!notary_env.contains("OPENCRVS_DCI_CLIENT_SECRET="));
+        assert!(!notary_env.contains("DCI_CLIENT_SECRET="));
+        assert!(notary_env.contains("NOTARY_API_KEY_RAW="));
+        assert!(compose.contains("      - ./.env"));
+        assert!(compose.contains("      - ./secrets/notary.local.env"));
+        assert!(compose.contains("    environment:"));
+        assert!(compose.contains("      DCI_CLIENT_ID: ${OPENCRVS_DCI_CLIENT_ID}"));
+        assert!(compose.contains("      DCI_CLIENT_SECRET: ${OPENCRVS_DCI_CLIENT_SECRET}"));
+        serde_yaml::from_str::<serde_yaml::Value>(&compose).unwrap();
+        assert!(readme.contains("registryctl notary smoke --target-id <test-uin>"));
+    }
+
+    #[test]
+    fn opencrvs_dci_recipe_can_copy_env_into_empty_target_directory() {
+        let temp = TempDir::new().unwrap();
+        let source_env = temp.path().join("source.env");
+        fs::write(&source_env, fake_opencrvs_canonical_env()).unwrap();
+        let project = temp.path().join("opencrvs-notary");
+        fs::create_dir_all(&project).unwrap();
+
+        init_notary_recipe_project(
+            &project,
+            NotaryInitRecipe::OpencrvsDci,
+            Some(source_env.as_path()),
+        )
+        .unwrap();
+
+        assert_eq!(
+            fs::read_to_string(project.join(".env")).unwrap(),
+            fake_opencrvs_canonical_env()
+        );
+        let compose = fs::read_to_string(project.join("compose.yaml")).unwrap();
+        assert!(compose.contains("      DCI_CLIENT_ID: ${DCI_CLIENT_ID}"));
+        assert!(compose.contains("      DCI_CLIENT_SECRET: ${DCI_CLIENT_SECRET}"));
+        assert!(project.join("registryctl.yaml").exists());
+    }
+
+    #[test]
+    fn opencrvs_dci_recipe_fails_before_writing_when_required_env_is_missing() {
+        let temp = TempDir::new().unwrap();
+        let project = temp.path().join("opencrvs-notary");
+        fs::create_dir_all(&project).unwrap();
+        let env_path = project.join(".env");
+        fs::write(
+            &env_path,
+            "OPENCRVS_DCI_BASE_URL=https://opencrvs.example.test\nOPENCRVS_DCI_CLIENT_ID=test-client\n",
+        )
+        .unwrap();
+
+        let error = init_notary_recipe_project(
+            &project,
+            NotaryInitRecipe::OpencrvsDci,
+            Some(env_path.as_path()),
+        )
+        .unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("DCI_CLIENT_SECRET or OPENCRVS_DCI_CLIENT_SECRET"));
+        assert!(!project.join("registryctl.yaml").exists());
+        assert!(!project.join("notary/config.yaml").exists());
+    }
+
+    #[test]
+    fn opencrvs_dci_recipe_rejects_non_clean_target_directory() {
+        let temp = TempDir::new().unwrap();
+        let project = temp.path().join("opencrvs-notary");
+        fs::create_dir_all(&project).unwrap();
+        let env_path = project.join(".env");
+        fs::write(&env_path, fake_opencrvs_alias_env()).unwrap();
+        fs::write(project.join("notes.md"), "user notes\n").unwrap();
+
+        let error = init_notary_recipe_project(
+            &project,
+            NotaryInitRecipe::OpencrvsDci,
+            Some(env_path.as_path()),
+        )
+        .unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("contains files other than the supplied .env"));
+        assert!(!project.join("registryctl.yaml").exists());
+    }
+
+    #[test]
+    fn opencrvs_dci_smoke_without_target_marks_live_evaluation_not_run() {
+        let temp = TempDir::new().unwrap();
+        let project = temp.path().join("opencrvs-notary");
+        fs::create_dir_all(&project).unwrap();
+        let env_path = project.join(".env");
+        fs::write(&env_path, fake_opencrvs_alias_env_without_uin()).unwrap();
+        init_notary_recipe_project(
+            &project,
+            NotaryInitRecipe::OpencrvsDci,
+            Some(env_path.as_path()),
+        )
+        .unwrap();
+
+        let error = notary_smoke_project(&project, None, None).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("one or more Notary smoke checks failed"));
+
+        let report = fs::read_to_string(project.join("output/notary-smoke-results.json")).unwrap();
+        assert!(report.contains("notary evaluator live claim evaluation not run"));
+        assert!(!report.contains("9999999999"));
+        assert!(!report.contains("alias-client-secret"));
+    }
+
+    #[test]
+    fn notary_smoke_target_rejects_target_id_and_target_env_together() {
+        let notary = ProjectNotary {
+            config: PathBuf::from("notary/config.yaml"),
+            source: "opencrvs_dci".to_string(),
+            recipe: Some("opencrvs-dci".to_string()),
+            env_files: vec![PathBuf::from(".env")],
+            evaluator_key_env: None,
+            source_relay_service_url: None,
+            source_url: None,
+            source_token_env: None,
+            source_dataset: None,
+            source_entity: Some("person".to_string()),
+            source_lookup_field: None,
+            source_network: None,
+            claims: vec!["opencrvs-birth-record-exists".to_string()],
+            smoke_target_identifier: Some("UIN".to_string()),
+            smoke_target_id: None,
+        };
+        let env = LocalEnv {
+            values: BTreeMap::from([(
+                "OPENCRVS_DEMO_SUBJECT_UIN".to_string(),
+                "env-target-id".to_string(),
+            )]),
+        };
+
+        let error = notary_smoke_target(
+            &notary,
+            "person",
+            Some("flag-target-id".to_string()),
+            Some("OPENCRVS_DEMO_SUBJECT_UIN".to_string()),
+            &env,
+        )
+        .unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("pass either --target-id or --target-env, not both"));
+    }
+
+    #[test]
+    fn notary_smoke_target_reads_target_env_from_loaded_project_env() {
+        let notary = ProjectNotary {
+            config: PathBuf::from("notary/config.yaml"),
+            source: "opencrvs_dci".to_string(),
+            recipe: Some("opencrvs-dci".to_string()),
+            env_files: vec![PathBuf::from(".env")],
+            evaluator_key_env: None,
+            source_relay_service_url: None,
+            source_url: None,
+            source_token_env: None,
+            source_dataset: None,
+            source_entity: Some("person".to_string()),
+            source_lookup_field: None,
+            source_network: None,
+            claims: vec!["opencrvs-birth-record-exists".to_string()],
+            smoke_target_identifier: Some("UIN".to_string()),
+            smoke_target_id: None,
+        };
+        let env = LocalEnv {
+            values: BTreeMap::from([(
+                "OPENCRVS_DEMO_SUBJECT_UIN".to_string(),
+                "env-target-id".to_string(),
+            )]),
+        };
+
+        let target = notary_smoke_target(
+            &notary,
+            "person",
+            None,
+            Some("OPENCRVS_DEMO_SUBJECT_UIN".to_string()),
+            &env,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(target.entity_type, "person");
+        assert_eq!(target.identifier_scheme, Some("UIN".to_string()));
+        assert_eq!(target.value, "env-target-id");
+    }
+
+    #[test]
+    fn opencrvs_dci_evaluation_body_uses_uin_identifier_target() {
+        let target = NotarySmokeTarget {
+            entity_type: "person".to_string(),
+            identifier_scheme: Some("UIN".to_string()),
+            value: "1234567890".to_string(),
+        };
+
+        let body = notary_evaluation_body(&target, "opencrvs-birth-record-exists");
+        let value: Value = serde_json::from_str(&body).unwrap();
+
+        assert_eq!(value["target"]["type"], "person");
+        assert_eq!(value["target"]["identifiers"][0]["scheme"], "UIN");
+        assert_eq!(value["target"]["identifiers"][0]["value"], "1234567890");
+        assert_eq!(value["claims"][0], "opencrvs-birth-record-exists");
+    }
+
+    #[test]
     fn standalone_notary_init_creates_notary_only_project() {
         let temp = TempDir::new().unwrap();
         let project = temp.path().join("my-notary");
         init_notary_project(
             &project,
             NotaryInitOptions {
+                recipe: None,
                 source_kind: NotaryInitSourceKind::RegistryDataApi,
+                env_files: Vec::new(),
+                local_secrets_env: PathBuf::from("secrets/local.env"),
+                evaluator_key_env: "REGISTRY_NOTARY_TUTORIAL_EVALUATOR_RAW".to_string(),
                 source_url: "http://registry-relay:8080".to_string(),
                 source_token_from_env: None,
                 source_token_env: "EVIDENCE_SOURCE_API_TOKEN".to_string(),
@@ -5335,6 +6193,7 @@ workflows:
                 source_network: Some("my-first-api_default".to_string()),
                 source_claim: "benefits-person-exists".to_string(),
                 source_claim_title: "Benefits person exists".to_string(),
+                smoke_target_identifier: None,
                 smoke_target_id: "per-2001".to_string(),
             },
         )
@@ -5399,7 +6258,11 @@ workflows:
         init_notary_project(
             &project,
             NotaryInitOptions {
+                recipe: None,
                 source_kind: NotaryInitSourceKind::FhirSidecar,
+                env_files: Vec::new(),
+                local_secrets_env: PathBuf::from("secrets/local.env"),
+                evaluator_key_env: "REGISTRY_NOTARY_TUTORIAL_EVALUATOR_RAW".to_string(),
                 source_url: "http://host.docker.internal:4360".to_string(),
                 source_token_from_env: None,
                 source_token_env: "FHIR_SIDECAR_TOKEN".to_string(),
@@ -5409,6 +6272,7 @@ workflows:
                 source_network: None,
                 source_claim: "patient-record-exists".to_string(),
                 source_claim_title: "Patient record exists".to_string(),
+                smoke_target_identifier: None,
                 smoke_target_id: "person-123".to_string(),
             },
         )
@@ -5750,7 +6614,7 @@ workflows:
         init_spreadsheet_api(&project_dir, Sample::Benefits).unwrap();
         add_notary(&project_dir, NotarySource::LocalRelay, false).unwrap();
 
-        let error = notary_smoke_project(&project_dir).unwrap_err();
+        let error = notary_smoke_project(&project_dir, None, None).unwrap_err();
         assert!(error
             .to_string()
             .contains("one or more Notary smoke checks failed"));
@@ -6184,6 +7048,56 @@ workflows:
     }
 
     #[test]
+    fn doctor_merges_opencrvs_dci_env_files_for_product_doctor() {
+        let temp = TempDir::new().unwrap();
+        let project_dir = temp.path().join("opencrvs-notary");
+        fs::create_dir_all(&project_dir).unwrap();
+        let env_path = project_dir.join(".env");
+        fs::write(&env_path, fake_opencrvs_alias_env()).unwrap();
+        init_notary_recipe_project(
+            &project_dir,
+            NotaryInitRecipe::OpencrvsDci,
+            Some(env_path.as_path()),
+        )
+        .unwrap();
+        let fake_bin = temp.path().join("bin");
+        fs::create_dir_all(&fake_bin).unwrap();
+        let product_json = fake_product_report("registry-notary", "ok", serde_json::json!([]));
+        write_fake_product(
+            &fake_bin.join("registry-notary"),
+            &format!(
+                "printf '%s\\n' \"$@\" > {}\nprintf '%s\\n' {}\nexit 0\n",
+                shell_single_quoted(&temp.path().join("notary.args").display().to_string()),
+                shell_single_quoted(&product_json)
+            ),
+        );
+
+        let report = run_doctor_report_with_path(
+            &project_dir,
+            DoctorFormat::Json,
+            Some(DeploymentProfile::Local),
+            Some(&fake_bin),
+        )
+        .unwrap();
+
+        assert_eq!(report.status, ReportStatus::Ok);
+        let args = fs::read_to_string(temp.path().join("notary.args")).unwrap();
+        let merged_env = project_dir.join("output/doctor/registry-notary.env");
+        assert!(args.contains(&merged_env.display().to_string()));
+        let merged = fs::read_to_string(merged_env).unwrap();
+        assert_eq!(env_value(&merged, "DCI_CLIENT_ID"), "alias-client-id");
+        assert_eq!(
+            env_value(&merged, "DCI_CLIENT_SECRET"),
+            "alias-client-secret"
+        );
+        assert_eq!(
+            env_value(&merged, "NOTARY_REPLAY_REDIS_URL"),
+            "redis://registry-notary-redis:6379"
+        );
+        assert!(merged.contains("NOTARY_API_KEY_RAW="));
+    }
+
+    #[test]
     fn doctor_reports_missing_product_binary_without_panic() {
         let temp = TempDir::new().unwrap();
         let project_dir = temp.path().join("my-first-api");
@@ -6537,9 +7451,39 @@ workflows:
         format!("'{}'", value.replace('\'', "'\\''"))
     }
 
+    fn fake_opencrvs_alias_env() -> &'static str {
+        "\
+OPENCRVS_DCI_BASE_URL=https://opencrvs.example.test
+OPENCRVS_DCI_CLIENT_ID=alias-client-id
+OPENCRVS_DCI_CLIENT_SECRET=alias-client-secret
+OPENCRVS_DCI_TOKEN=alias-bearer-token
+OPENCRVS_DEMO_SUBJECT_UIN=9999999999
+"
+    }
+
+    fn fake_opencrvs_alias_env_without_uin() -> &'static str {
+        "\
+OPENCRVS_DCI_BASE_URL=https://opencrvs.example.test
+OPENCRVS_DCI_CLIENT_ID=alias-client-id
+OPENCRVS_DCI_CLIENT_SECRET=alias-client-secret
+"
+    }
+
+    fn fake_opencrvs_canonical_env() -> &'static str {
+        "\
+DCI_BASE_URL=https://opencrvs.example.test
+DCI_CLIENT_ID=canonical-client-id
+DCI_CLIENT_SECRET=canonical-client-secret
+"
+    }
+
     fn default_notary_options() -> NotaryInitOptions {
         NotaryInitOptions {
+            recipe: None,
             source_kind: NotaryInitSourceKind::RegistryDataApi,
+            env_files: Vec::new(),
+            local_secrets_env: PathBuf::from("secrets/local.env"),
+            evaluator_key_env: "REGISTRY_NOTARY_TUTORIAL_EVALUATOR_RAW".to_string(),
             source_url: "https://api.example.test".to_string(),
             source_token_from_env: None,
             source_token_env: "EVIDENCE_SOURCE_API_TOKEN".to_string(),
@@ -6549,6 +7493,7 @@ workflows:
             source_network: None,
             source_claim: "benefits-person-exists".to_string(),
             source_claim_title: "Benefits person exists".to_string(),
+            smoke_target_identifier: None,
             smoke_target_id: "per-2001".to_string(),
         }
     }

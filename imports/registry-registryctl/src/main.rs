@@ -5,8 +5,8 @@ use clap::{Parser, Subcommand};
 
 use registryctl::{
     ConfigProduct, DeploymentProfile, DoctorFormat, LabEnvFormat, NotaryInitOptions,
-    NotaryInitSourceKind, NotarySource, OpenFnBatchMode, OpenFnConvertOptions, OpenFnImportOptions,
-    Sample,
+    NotaryInitRecipe, NotaryInitSourceKind, NotarySource, OpenFnBatchMode, OpenFnConvertOptions,
+    OpenFnImportOptions, Sample,
 };
 
 fn main() -> Result<()> {
@@ -26,6 +26,8 @@ fn main() -> Result<()> {
             }
             InitCommand::Notary {
                 dir,
+                recipe,
+                env_file,
                 source_kind,
                 source_url,
                 source_token_from_env,
@@ -38,32 +40,44 @@ fn main() -> Result<()> {
                 source_claim_title,
                 smoke_target_id,
             } => {
-                registryctl::init_notary_project(
-                    &dir,
-                    NotaryInitOptions {
-                        source_kind,
-                        source_url: source_url
-                            .unwrap_or_else(|| source_kind.default_source_url().to_string()),
-                        source_token_from_env,
-                        source_token_env: source_token_env
-                            .unwrap_or_else(|| source_kind.default_source_token_env().to_string()),
-                        source_dataset: source_dataset
-                            .unwrap_or_else(|| source_kind.default_source_dataset().to_string()),
-                        source_entity: source_entity
-                            .unwrap_or_else(|| source_kind.default_source_entity().to_string()),
-                        source_lookup_field: source_lookup_field.unwrap_or_else(|| {
-                            source_kind.default_source_lookup_field().to_string()
-                        }),
-                        source_network,
-                        source_claim: source_claim
-                            .unwrap_or_else(|| source_kind.default_source_claim().to_string()),
-                        source_claim_title: source_claim_title.unwrap_or_else(|| {
-                            source_kind.default_source_claim_title().to_string()
-                        }),
-                        smoke_target_id: smoke_target_id
-                            .unwrap_or_else(|| source_kind.default_smoke_target_id().to_string()),
-                    },
-                )?;
+                if let Some(recipe) = recipe {
+                    registryctl::init_notary_recipe_project(&dir, recipe, env_file.as_deref())?;
+                } else {
+                    registryctl::init_notary_project(
+                        &dir,
+                        NotaryInitOptions {
+                            recipe: None,
+                            source_kind,
+                            env_files: Vec::new(),
+                            local_secrets_env: PathBuf::from("secrets/local.env"),
+                            evaluator_key_env: "REGISTRY_NOTARY_TUTORIAL_EVALUATOR_RAW".to_string(),
+                            source_url: source_url
+                                .unwrap_or_else(|| source_kind.default_source_url().to_string()),
+                            source_token_from_env,
+                            source_token_env: source_token_env.unwrap_or_else(|| {
+                                source_kind.default_source_token_env().to_string()
+                            }),
+                            source_dataset: source_dataset.unwrap_or_else(|| {
+                                source_kind.default_source_dataset().to_string()
+                            }),
+                            source_entity: source_entity
+                                .unwrap_or_else(|| source_kind.default_source_entity().to_string()),
+                            source_lookup_field: source_lookup_field.unwrap_or_else(|| {
+                                source_kind.default_source_lookup_field().to_string()
+                            }),
+                            source_network,
+                            source_claim: source_claim
+                                .unwrap_or_else(|| source_kind.default_source_claim().to_string()),
+                            source_claim_title: source_claim_title.unwrap_or_else(|| {
+                                source_kind.default_source_claim_title().to_string()
+                            }),
+                            smoke_target_identifier: None,
+                            smoke_target_id: smoke_target_id.unwrap_or_else(|| {
+                                source_kind.default_smoke_target_id().to_string()
+                            }),
+                        },
+                    )?;
+                }
             }
         },
         Commands::Add { command } => match command {
@@ -94,7 +108,12 @@ fn main() -> Result<()> {
         },
         Commands::Logs => registryctl::logs_project(&std::env::current_dir()?)?,
         Commands::Notary { command } => match command {
-            NotaryCommand::Smoke => registryctl::notary_smoke_project(&std::env::current_dir()?)?,
+            NotaryCommand::Smoke {
+                target_id,
+                target_env,
+            } => {
+                registryctl::notary_smoke_project(&std::env::current_dir()?, target_id, target_env)?
+            }
             NotaryCommand::Open => registryctl::notary_open_project(&std::env::current_dir()?)?,
         },
         Commands::Openfn { command } => match *command {
@@ -391,6 +410,8 @@ mod tests {
             panic!("expected init command");
         };
         let InitCommand::Notary {
+            recipe,
+            env_file,
             source_kind,
             source_url,
             source_token_env,
@@ -400,10 +421,89 @@ mod tests {
         else {
             panic!("expected init notary command");
         };
+        assert_eq!(recipe, None);
+        assert_eq!(env_file, None);
         assert_eq!(source_kind, NotaryInitSourceKind::FhirSidecar);
         assert_eq!(source_url, None);
         assert_eq!(source_token_env, None);
         assert_eq!(smoke_target_id, None);
+    }
+
+    #[test]
+    fn notary_init_cli_accepts_opencrvs_dci_recipe_and_env_file() {
+        let cli = Cli::try_parse_from([
+            "registryctl",
+            "init",
+            "notary",
+            ".",
+            "--recipe",
+            "opencrvs-dci",
+            "--env-file",
+            ".env",
+        ])
+        .unwrap();
+
+        let Commands::Init { command } = cli.command else {
+            panic!("expected init command");
+        };
+        let InitCommand::Notary {
+            recipe, env_file, ..
+        } = *command
+        else {
+            panic!("expected init notary command");
+        };
+        assert_eq!(recipe, Some(NotaryInitRecipe::OpencrvsDci));
+        assert_eq!(env_file, Some(PathBuf::from(".env")));
+    }
+
+    #[test]
+    fn notary_smoke_cli_accepts_target_id() {
+        let cli = Cli::try_parse_from([
+            "registryctl",
+            "notary",
+            "smoke",
+            "--target-id",
+            "fake-target-id",
+        ])
+        .unwrap();
+
+        let Commands::Notary { command } = cli.command else {
+            panic!("expected notary command");
+        };
+        let NotaryCommand::Smoke {
+            target_id,
+            target_env,
+        } = command
+        else {
+            panic!("expected notary smoke command");
+        };
+        assert_eq!(target_id, Some("fake-target-id".to_string()));
+        assert_eq!(target_env, None);
+    }
+
+    #[test]
+    fn notary_smoke_cli_accepts_target_env() {
+        let cli = Cli::try_parse_from([
+            "registryctl",
+            "notary",
+            "smoke",
+            "--target-env",
+            "OPENCRVS_DEMO_SUBJECT_UIN",
+        ])
+        .unwrap();
+
+        let Commands::Notary { command } = cli.command else {
+            panic!("expected notary command");
+        };
+        let NotaryCommand::Smoke {
+            target_id,
+            target_env,
+        } = command
+        else {
+            panic!("expected notary smoke command");
+        };
+        assert_eq!(target_id, None);
+        assert_eq!(target_env, Some("OPENCRVS_DEMO_SUBJECT_UIN".to_string()));
     }
 
     #[test]
@@ -533,6 +633,12 @@ enum InitCommand {
     Notary {
         /// Directory to create.
         dir: PathBuf,
+        /// Built-in onboarding recipe to generate.
+        #[arg(long, value_enum)]
+        recipe: Option<NotaryInitRecipe>,
+        /// Dotenv-style file with source credentials for recipe-based init.
+        #[arg(long)]
+        env_file: Option<PathBuf>,
         /// Source kind to use for the starter Notary project.
         #[arg(long, value_enum, default_value_t = NotaryInitSourceKind::RegistryDataApi)]
         source_kind: NotaryInitSourceKind,
@@ -585,7 +691,14 @@ enum AddCommand {
 #[derive(Debug, Subcommand)]
 enum NotaryCommand {
     /// Run built-in local Notary smoke checks.
-    Smoke,
+    Smoke {
+        /// Target id or identifier value used by live evaluation.
+        #[arg(long)]
+        target_id: Option<String>,
+        /// Read the live evaluation target from this env var.
+        #[arg(long)]
+        target_env: Option<String>,
+    },
     /// Open or print the local Notary API docs URL.
     Open,
 }
