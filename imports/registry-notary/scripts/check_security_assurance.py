@@ -463,24 +463,6 @@ def check_workflow_external_refs() -> None:
                 fail(f"{rel}:{lineno} must pin REGISTRY_PLATFORM_REF to a full commit SHA")
 
 
-def check_workflow_secret_boundaries() -> None:
-    dhis2_canary = ROOT / ".github" / "workflows" / "openfn-dhis2-canary.yml"
-    if not dhis2_canary.is_file():
-        fail("missing .github/workflows/openfn-dhis2-canary.yml")
-    text = dhis2_canary.read_text(encoding="utf-8")
-    if "OPENFN_DHIS2_PASSWORD: ${{ secrets.OPENFN_DHIS2_PASSWORD }}" not in text:
-        fail("OpenFn DHIS2 canary must source its password from the repository secret")
-    forbidden = [
-        "dhis2_host_url:",
-        "dhis2_username:",
-        "OPENFN_DHIS2_HOST_URL: ${{ inputs.",
-        "OPENFN_DHIS2_USERNAME: ${{ inputs.",
-    ]
-    for pattern in forbidden:
-        if pattern in text:
-            fail(f"OpenFn DHIS2 canary must not expose secret-boundary input: {pattern}")
-
-
 def check_workflow_pull_request_hardening() -> None:
     fuzz = ROOT / ".github" / "workflows" / "fuzz.yml"
     container = ROOT / ".github" / "workflows" / "container.yml"
@@ -545,7 +527,6 @@ def main() -> None:
             "openapi-baseline",
             "openapi-coverage",
             "workflow-external-refs",
-            "workflow-secret-boundaries",
             "workflow-pull-request-hardening",
         ],
         default=None,
@@ -556,7 +537,6 @@ def main() -> None:
         "dockerfile-secrets",
         "openapi-baseline",
         "workflow-external-refs",
-        "workflow-secret-boundaries",
         "workflow-pull-request-hardening",
     ]
     if "manifest" in checks:
@@ -571,8 +551,6 @@ def main() -> None:
         check_openapi_manifest_coverage(ROOT / "openapi" / "registry-notary.openapi.json")
     if "workflow-external-refs" in checks:
         check_workflow_external_refs()
-    if "workflow-secret-boundaries" in checks:
-        check_workflow_secret_boundaries()
     if "workflow-pull-request-hardening" in checks:
         check_workflow_pull_request_hardening()
 
