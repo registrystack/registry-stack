@@ -1,27 +1,34 @@
 ---
 title: Registry Stack docs
-description: "Documentation for Registry Stack: tutorials, product docs, explanation, and reference for Registry Relay and Registry Notary."
+description: "Documentation for Registry Stack: protected registry APIs, governed evidence exchange, Registry Relay, and Registry Notary."
 status: current
 owner: registry-docs
 source_repos:
   - registry-relay
   - registry-notary
-last_reviewed: "2026-06-12"
+last_reviewed: "2026-06-20"
 doc_type: explanation
 locale: en
 standards_referenced: []
 ---
 
-Registry Stack turns sensitive registry data you already hold into protected, audited, read-only
-APIs, and answers evidence questions without handing over the underlying records.
+Registry Stack is for building registry-facing services over data an institution already holds. It
+adds controlled read access, governed evidence responses, and audit records without turning the
+registry into a shared database.
 
-Two products do the work. **Registry Relay** returns records to authorized callers over scoped,
-purpose-bound read APIs. **Registry Notary** returns a yes or no answer, a selected value, or a
-signed credential without exposing the full record.
+Registry Stack has two runtime patterns:
 
-These docs are how you build with both; the product pages are pulled from each repository at build
-time, so they always match the code. For the pitch (why registry surfaces matter, who benefits,
-where the stack fits), see the marketing site at [registrystack.org](https://registrystack.org/).
+- **Protected Registry APIs** are scoped, read-only HTTP APIs over existing files, extracts,
+  databases, or legacy registry systems. Registry Relay implements this surface.
+- **Evidence Gateway** is the governed evidence path. A runtime service checks request context,
+  source context, supported policy terms, freshness, redaction, and audit provenance before it
+  returns a claim result, credential, redacted response, protected read, or denial. Registry Notary
+  implements claim evaluation and credential issuance; governed Registry Relay routes use the same
+  Policy Decision Point (PDP) pattern for protected reads.
+
+Use these docs to build and operate both patterns. The product pages are pulled from each repository
+at build time, so they match the code. For audience, problem, and ecosystem context, see
+[registrystack.org](https://registrystack.org/).
 
 Start with [See it live](start/see-it-live/): a hosted lab, zero install, one protected read and one
 signed credential in under two minutes.
@@ -38,6 +45,6 @@ signed credential in under two minutes.
 | How do I try claim checks from FHIR-shaped health data? | [Getting started with FHIR evidence](tutorials/getting-started-fhir-evidence/) | [Integration patterns](explanation/integration-patterns/) |
 | How do I deploy Relay against my own data, not a sample? | [Deploy Relay and Notary standalone with your own data](tutorials/deploy-standalone-with-own-data/) | [Relay configuration](products/registry-relay/configuration/) |
 | I already have an API. How do I verify claims from it? | [Run Notary standalone for an API you operate](tutorials/verify-claim-registry-api/#run-notary-standalone-for-an-api-you-operate) | [Registry Notary](products/registry-notary/) |
-| How do existing files, extracts, databases, or legacy systems become usable? | [Registry Relay](products/registry-relay/) | [Relay API reference](reference/apis/registry-relay/) |
-| How can a service verify a status or claim without receiving the full record? | [Registry Notary](products/registry-notary/) | [Evidence issuance](explanation/evidence-issuance/) |
+| How do existing files, extracts, databases, or legacy systems become usable? | [Protected Registry APIs with Registry Relay](products/registry-relay/) | [Relay API reference](reference/apis/registry-relay/) |
+| How can a service verify a status or claim without receiving the full record? | [Evidence Gateway with Registry Notary](products/registry-notary/) | [Evidence issuance](explanation/evidence-issuance/) |
 | How do the pieces fit together? | [Architecture overview](explanation/architecture/) | [Registry Relay](products/registry-relay/) and [Registry Notary](products/registry-notary/) |
