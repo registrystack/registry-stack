@@ -12,7 +12,7 @@
       "products": {
         "registry-relay": {
           "version": "main snapshot",
-          "ref": "479b27709f8f2653d1fd0a882ed809d6185a2d2b"
+          "ref": "bcd8ebae58bc5c468577bcd418a01129899bb5b6"
         },
         "registry-notary": {
           "version": "main snapshot",
