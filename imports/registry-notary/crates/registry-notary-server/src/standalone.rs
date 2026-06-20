@@ -8752,64 +8752,6 @@ claims:
         serde_norway::from_str(&raw).expect("spike config parses")
     }
 
-    fn openfn_sidecar_test_manifest(attempt_log: std::path::PathBuf) -> String {
-        std::env::set_var(OPENFN_SIDECAR_TOKEN_HASH_ENV, OPENFN_SIDECAR_TOKEN_HASH);
-        let sidecar_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../registry-notary-source-adapter-sidecar");
-        let worker = sidecar_root.join("tests/fixtures/contract_worker.sh");
-        let job = sidecar_root.join("tests/fixtures/jobs/opencrvs-person-lookup.js");
-        format!(
-            r#"
-server:
-  bind: "127.0.0.1:0"
-auth:
-  bearer_tokens:
-    - id: notary
-      hash_env: "{OPENFN_SIDECAR_TOKEN_HASH_ENV}"
-limits:
-  max_workers: 2
-  worker_timeout_ms: 250
-  max_output_bytes: 4096
-  max_request_bytes: 2048
-  max_query_parameter_bytes: 128
-  max_worker_memory_mb: 256
-openfn:
-  cli_build_tool: "1.36.0"
-  runtime: "1.36.0"
-worker:
-  command: "/bin/sh"
-  args:
-    - "{}"
-    - "{}"
-sources:
-  openfn_crvs:
-    dataset: civil_registry
-    entity: civil_person
-    workflow:
-      steps:
-        - id: lookup
-          expression: "{}"
-          adaptors:
-            - "@openfn/language-http@7.2.0"
-    credential_env: TEST_OPENCRVS_READER_CREDENTIAL_JSON
-    smoke_lookup:
-      field: national_id
-      value: smoke-person
-      fields:
-        - national_id
-      purpose: startup-smoke
-"#,
-            worker.display(),
-            attempt_log.display(),
-            job.display()
-        )
-    }
-
-    fn openfn_sidecar_test_config(attempt_log: std::path::PathBuf) -> SidecarConfig {
-        serde_norway::from_str(&openfn_sidecar_test_manifest(attempt_log))
-            .expect("sidecar test config parses")
-    }
-
     fn http_json_sidecar_test_manifest(upstream_url: &str) -> String {
         std::env::set_var(OPENFN_SIDECAR_TOKEN_HASH_ENV, OPENFN_SIDECAR_TOKEN_HASH);
         std::env::set_var(
@@ -9621,71 +9563,6 @@ config_trust:
     }
 
     #[tokio::test]
-    async fn openfn_sidecar_rda_facade_can_source_single_item_attestation() {
-        std::env::set_var(OPENFN_SIDECAR_TOKEN_ENV, OPENFN_SIDECAR_TOKEN);
-        std::env::set_var(
-            "TEST_OPENCRVS_READER_CREDENTIAL_JSON",
-            r#"{"apiToken":"fixture-token"}"#,
-        );
-        let tmp = tempfile::TempDir::new().expect("tempdir");
-        let sidecar = sidecar_router(openfn_sidecar_test_config(
-            tmp.path().join("attempts.jsonl"),
-        ))
-        .await
-        .expect("sidecar router builds");
-        let server = TestServer::builder().http_transport().build(sidecar);
-        let evidence = Arc::new(openfn_sidecar_spike_config(
-            server
-                .server_address()
-                .expect("HTTP transport exposes sidecar address")
-                .as_str(),
-        ));
-        let source = Arc::new(
-            HttpEvidenceSources::from_config(&evidence, Arc::new(AppMetrics::default()))
-                .expect("source config"),
-        );
-        let principal = EvidencePrincipal {
-            principal_id: "caseworker".to_string(),
-            scopes: vec!["civil_registry:evidence_verification".to_string()],
-            access_mode: AccessMode::MachineClient,
-            verified_claims: None,
-            authorization_details: None,
-        };
-
-        let results = crate::RegistryNotaryRuntime::new()
-            .evaluate(
-                Arc::clone(&evidence),
-                source,
-                &EvidenceStore::default(),
-                &principal,
-                EvaluateRequest {
-                    requester: None,
-                    target: Some(registry_notary_core::EvidenceEntity::from_subject_request(
-                        "Person",
-                        SubjectRequest {
-                            id: "person-123".to_string(),
-                            id_type: None,
-                        },
-                    )),
-                    relationship: None,
-                    on_behalf_of: None,
-                    claims: vec![registry_notary_core::ClaimRef::from("date-of-birth")],
-                    disclosure: Some("value".to_string()),
-                    format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
-                    purpose: Some(OPENFN_SPIKE_PURPOSE.to_string()),
-                },
-                None,
-            )
-            .await
-            .expect("OpenFn sidecar facade sources the claim");
-
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].claim_id, "date-of-birth");
-        assert_eq!(results[0].value, Some(json!("1990-01-01")));
-        assert_eq!(results[0].provenance.used.source_count, 1);
-    }
-
-    #[tokio::test]
     async fn http_json_sidecar_rda_facade_can_source_single_item_attestation() {
         let _env_guard = HTTP_JSON_SIDECAR_ENV_LOCK.lock().await;
         std::env::set_var(OPENFN_SIDECAR_TOKEN_ENV, OPENFN_SIDECAR_TOKEN);
@@ -9758,114 +9635,6 @@ config_trust:
     }
 
     #[tokio::test]
-    async fn governed_openfn_sidecar_e2e_notary_pins_assurance_and_evaluates() {
-        std::env::set_var(OPENFN_SIDECAR_TOKEN_ENV, OPENFN_SIDECAR_TOKEN);
-        std::env::set_var(
-            "TEST_OPENCRVS_READER_CREDENTIAL_JSON",
-            r#"{"apiToken":"fixture-token"}"#,
-        );
-        let tmp = tempfile::TempDir::new().expect("tempdir");
-        let attempt_log = tmp.path().join("attempts.jsonl");
-        let manifest = openfn_sidecar_test_manifest(attempt_log);
-        let sidecar_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../registry-notary-source-adapter-sidecar");
-        let jobs_root = sidecar_root.join("tests/fixtures/jobs");
-        let target_bytes = render_governed_runtime_target_json(&manifest, &jobs_root)
-            .expect("governed target renders");
-        let previous_config_hash =
-            "sha256:1111111111111111111111111111111111111111111111111111111111111111";
-        let repo = signed_openfn_runtime_repo(&target_bytes, 12, previous_config_hash).await;
-        initialize_openfn_antirollback(&repo, previous_config_hash, 11);
-        let bootstrap = openfn_governed_bootstrap_yaml(&repo);
-        let sidecar_config = load_openfn_sidecar_startup_config(&bootstrap)
-            .await
-            .expect("governed sidecar startup config loads");
-        let sidecar = sidecar_router(sidecar_config)
-            .await
-            .expect("governed sidecar starts");
-        let server = TestServer::builder().http_transport().build(sidecar);
-
-        let ready = server.get("/ready").await;
-        ready.assert_status_ok();
-        let ready_body: Value = ready.json();
-        assert_eq!(ready_body["status"], "ready");
-        assert_eq!(ready_body["config_hash"], repo.config_hash);
-
-        let mut evidence = openfn_sidecar_spike_config(
-            server
-                .server_address()
-                .expect("HTTP transport exposes sidecar address")
-                .as_str(),
-        );
-        evidence
-            .source_connections
-            .get_mut("openfn_crvs")
-            .expect("connection exists")
-            .expected_sidecar = Some(expected_openfn_sidecar(&repo.config_hash));
-        let evidence = Arc::new(evidence);
-        let source = Arc::new(
-            HttpEvidenceSources::from_config(&evidence, Arc::new(AppMetrics::default()))
-                .expect("source config"),
-        );
-        assert!(source.check_ready().await);
-        let principal = EvidencePrincipal {
-            principal_id: "caseworker".to_string(),
-            scopes: vec!["civil_registry:evidence_verification".to_string()],
-            access_mode: AccessMode::MachineClient,
-            verified_claims: None,
-            authorization_details: None,
-        };
-
-        let results = crate::RegistryNotaryRuntime::new()
-            .evaluate(
-                Arc::clone(&evidence),
-                source.clone(),
-                &EvidenceStore::default(),
-                &principal,
-                EvaluateRequest {
-                    requester: None,
-                    target: Some(registry_notary_core::EvidenceEntity::from_subject_request(
-                        "Person",
-                        SubjectRequest {
-                            id: "person-123".to_string(),
-                            id_type: None,
-                        },
-                    )),
-                    relationship: None,
-                    on_behalf_of: None,
-                    claims: vec![registry_notary_core::ClaimRef::from("date-of-birth")],
-                    disclosure: Some("value".to_string()),
-                    format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
-                    purpose: Some(OPENFN_SPIKE_PURPOSE.to_string()),
-                },
-                None,
-            )
-            .await
-            .expect("governed OpenFn sidecar sources the claim");
-
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].claim_id, "date-of-birth");
-        assert_eq!(results[0].value, Some(json!("1990-01-01")));
-        assert_eq!(
-            source
-                .observed_sidecar_config_hashes(&evidence, &["date-of-birth".to_string()])
-                .await,
-            vec![repo.config_hash.clone()]
-        );
-        // The minimized sidecar summary appears in the public claim provenance
-        // for a connector that crossed an external execution boundary.
-        let runtimes = &results[0].provenance.used.source_runtimes;
-        assert_eq!(runtimes.len(), 1, "one sidecar runtime summary expected");
-        assert_eq!(runtimes[0].kind, SOURCE_RUNTIME_KIND_OPENFN_SIDECAR);
-        assert_eq!(runtimes[0].config_hash, repo.config_hash);
-        assert!(runtimes[0].config_hash.starts_with("sha256:"));
-        assert!(runtimes[0].assurance.pinned);
-        assert!(runtimes[0].assurance.expression_hashes_verified);
-        assert!(runtimes[0].assurance.runtime_verified);
-        assert!(runtimes[0].assurance.smoke_verified);
-    }
-
-    #[tokio::test]
     async fn governed_http_json_sidecar_e2e_notary_pins_assurance_and_evaluates() {
         let _env_guard = HTTP_JSON_SIDECAR_ENV_LOCK.lock().await;
         std::env::set_var(OPENFN_SIDECAR_TOKEN_ENV, OPENFN_SIDECAR_TOKEN);
@@ -9878,9 +9647,8 @@ config_trust:
             .to_string()
             .trim_end_matches('/')
             .to_string();
-        let tmp = tempfile::TempDir::new().expect("tempdir");
         let manifest = http_json_sidecar_test_manifest(&upstream_url);
-        let target_bytes = render_governed_runtime_target_json(&manifest, tmp.path())
+        let target_bytes = render_governed_runtime_target_json(&manifest)
             .expect("governed http_json target renders");
         let target_json: Value =
             serde_json::from_slice(&target_bytes).expect("target is valid JSON");
@@ -9977,72 +9745,6 @@ config_trust:
         assert!(runtimes[0].assurance.expression_hashes_verified);
         assert!(runtimes[0].assurance.runtime_verified);
         assert!(runtimes[0].assurance.smoke_verified);
-    }
-
-    #[tokio::test]
-    async fn openfn_sidecar_rda_failures_are_not_retried_by_notary() {
-        std::env::set_var(OPENFN_SIDECAR_TOKEN_ENV, OPENFN_SIDECAR_TOKEN);
-        std::env::set_var(
-            "TEST_OPENCRVS_READER_CREDENTIAL_JSON",
-            r#"{"apiToken":"fixture-token"}"#,
-        );
-        let tmp = tempfile::TempDir::new().expect("tempdir");
-        let attempt_log = tmp.path().join("attempts.jsonl");
-        let sidecar = sidecar_router(openfn_sidecar_test_config(attempt_log.clone()))
-            .await
-            .expect("sidecar router builds");
-        let server = TestServer::builder().http_transport().build(sidecar);
-        let evidence = Arc::new(openfn_sidecar_spike_config(
-            server
-                .server_address()
-                .expect("HTTP transport exposes sidecar address")
-                .as_str(),
-        ));
-        let source = Arc::new(
-            HttpEvidenceSources::from_config(&evidence, Arc::new(AppMetrics::default()))
-                .expect("source config"),
-        );
-        let principal = EvidencePrincipal {
-            principal_id: "caseworker".to_string(),
-            scopes: vec!["civil_registry:evidence_verification".to_string()],
-            access_mode: AccessMode::MachineClient,
-            verified_claims: None,
-            authorization_details: None,
-        };
-
-        let result = crate::RegistryNotaryRuntime::new()
-            .evaluate(
-                Arc::clone(&evidence),
-                source,
-                &EvidenceStore::default(),
-                &principal,
-                EvaluateRequest {
-                    requester: None,
-                    target: Some(registry_notary_core::EvidenceEntity::from_subject_request(
-                        "Person",
-                        SubjectRequest {
-                            id: "retry-sentinel".to_string(),
-                            id_type: None,
-                        },
-                    )),
-                    relationship: None,
-                    on_behalf_of: None,
-                    claims: vec![registry_notary_core::ClaimRef::from("date-of-birth")],
-                    disclosure: Some("value".to_string()),
-                    format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
-                    purpose: Some(OPENFN_SPIKE_PURPOSE.to_string()),
-                },
-                None,
-            )
-            .await;
-
-        assert!(result.is_err());
-        let attempts = std::fs::read_to_string(attempt_log)
-            .unwrap_or_default()
-            .lines()
-            .filter(|line| line.contains("retry-sentinel"))
-            .count();
-        assert_eq!(attempts, 1, "Notary must not retry sidecar failures");
     }
 
     #[tokio::test]

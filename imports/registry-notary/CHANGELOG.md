@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - Unreleased
+
+### Added
+
+- **Built-in DHIS2 health-programme and civil source-adapter examples**: the
+  source-adapter sidecar gains `http_json` manifests
+  (`examples/dhis2-health-sidecar.yaml`, `examples/civil-http-json-sidecar.yaml`)
+  that reproduce the retired OpenFn DHIS2 health and civil jobs through the
+  built-in engine plus CEL collection macros, a live DHIS2 health canary
+  (`scripts/smoke-http-json-dhis2-health-sidecar.sh`), and a parity gate note
+  (`docs/dhis2-health-parity.md`).
+
+### Removed
+
+- **BREAKING: retired the `engine: openfn` source-adapter execution engine.**
+  The source-adapter sidecar no longer runs the pinned OpenFn Node worker pool.
+  All sources now run through the built-in `http_json`, `http_flow`, and `fhir`
+  engines. Removed the manifest `openfn`, `worker`, `jobs_root`, and per-source
+  `workflow` fields (and their governed-target schema fields), the OpenFn
+  worker-pool lifecycle and version-pin/expression-hash checks, the
+  `config print-expression-hashes` CLI subcommand (and the `--jobs-root` flag is
+  now accepted for compatibility but ignored), the Node worker assets and
+  OpenFn smoke scripts, and the `OpenFn DHIS2 Canary` workflow. The sidecar
+  image (`Dockerfile.openfn-sidecar`) is now a pure-Rust distroless image; its
+  filename and built image name/tag conventions, the `openfn_sidecar` Notary
+  source-connector name, and the `registry_notary_openfn_sidecar_*` metric
+  prefix are intentionally kept stable this round (a cosmetic rename is a
+  deferred follow-up). The OpenFn-as-caller integration
+  (`demo/openfn-notary-caller/`, `docs/openfn-notary-caller-guide.md`, and the
+  `@registry/notary-openfn` caller adaptor) is unchanged and still supported.
+
+  GOVERNED-CONFIG IMPACT: dropping the `openfn`/`worker`/`jobs_root` fields
+  changes the governed runtime target's field set, so its `config_hash` changes
+  even though the target schema id is unchanged. Deploying this version requires
+  a coordinated governed-config apply: re-render and re-sign the runtime target,
+  and update the `expected_sidecar.config_hash` that Notary pins for each
+  source connection, before rollout.
+
 ## [0.4.0] - 2026-06-13
 
 ### Added
