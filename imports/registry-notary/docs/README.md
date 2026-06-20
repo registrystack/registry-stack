@@ -45,7 +45,6 @@ For operators deploying, configuring, and running a Registry Notary.
 - [Credential lifecycle and status](credential-lifecycle-status.md): short-lived credentials, optional live status, retention, and verifier caveats.
 - [Sidecar trust and secret handling](https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/docs/sidecar-trust-and-secrets.md): how the source adapter sidecar verifies its configuration, how Notary pins the sidecar it trusts, how secrets are handled, and what that path does and does not protect against.
 - [Deployment hardening runbook](deployment-hardening-runbook.md): production-readiness checklist for network boundaries, secrets, Redis, audit, and rollback.
-- [OpenFn sidecar egress hardening](openfn-sidecar-egress-hardening.md): required network-layer egress controls for the OpenFn engine path, including Kubernetes NetworkPolicy and enforced egress-proxy options, IP range reference, and verification checklist.
 
 ## Build and maintain
 

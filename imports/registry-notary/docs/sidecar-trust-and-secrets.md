@@ -110,13 +110,9 @@ for them with deployment controls.
   supply-chain controls.
 - **The base-URL allow-list is not an egress sandbox.** `allowed_base_urls`
   validates the configured credential targets at startup. It is not a general
-  JavaScript egress firewall for workflow code. The `http_json`, `http_flow`,
-  and `fhir` engine paths enforce in-process SSRF defenses; the Node.js OpenFn
-  engine path does not. Constrain outbound traffic with deployment networking.
-  For OpenFn sources, network-layer egress controls are required, not optional;
-  see [OpenFn sidecar egress hardening](openfn-sidecar-egress-hardening.md)
-  for a ready-to-apply Kubernetes NetworkPolicy and enforced egress-proxy
-  alternative.
+  JavaScript egress firewall for workflow code. Constrain outbound traffic with
+  deployment networking, for example a Kubernetes network policy or an internal
+  network.
 - **Notary's assurance view is periodic, not per-read.** Notary refreshes the
   sidecar's assurance on readiness checks and caches it for a short interval, so a
   sidecar that changes underneath a running Notary is recognized on the next
