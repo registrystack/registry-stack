@@ -75,7 +75,7 @@ updated policy documents without touching deployment config.
    endpoints through configured auth.
 5. Registry Notary evaluates claims against configured HTTP sources (`registry_data_api`, `dci`,
    or source adapter sidecar connectors — the sidecar uses built-in `http_json`, `http_flow`, or
-   `fhir` engines to reach external sources such as DHIS2). It renders evaluation results as
+   `fhir` engines to reach external sources such as DHIS2 or FHIR servers). It renders evaluation results as
    `application/vnd.registry-notary.claim-result+json`
    or CCCEV-shaped JSON-LD (`application/ld+json; profile="cccev"`), and it materializes eligible
    stored evaluations into SD-JWT VC credentials (`application/dc+sd-jwt`).
