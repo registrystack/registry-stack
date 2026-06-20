@@ -122,6 +122,17 @@ registryctl status
 
 The service reports `healthz: 200` and `ready: 200` when startup is complete.
 
+Validate the generated runtime config with the product doctor:
+
+```sh
+registryctl doctor --format json
+```
+
+The JSON report uses `schema_version: registryctl.validation.report.v1`. For a Relay-only
+project it contains one product report under `products[]`; that embedded report uses
+`schema_version: registry.config.diagnostic_report.v1` and a `status` of `ok`, `warning`,
+`error`, or `not_run`.
+
 ## Run the smoke test
 
 Run the smoke checks:

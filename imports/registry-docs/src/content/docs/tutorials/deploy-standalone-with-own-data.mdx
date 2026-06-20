@@ -601,11 +601,13 @@ docker run --rm \
   -e REGISTRY_NOTARY_AUDIT_HASH_SECRET="$REGISTRY_NOTARY_AUDIT_HASH_SECRET" \
   -e RELAY_SOURCE_TOKEN="$RELAY_SOURCE_TOKEN" \
   ghcr.io/jeremi/registry-notary:vX.Y.Z \
-  doctor --config /etc/registry-notary/config.yaml
+  doctor --config /etc/registry-notary/config.yaml --format json
 ```
 
-`doctor` reports missing environment variables, malformed fingerprints, and broken source
-references; `explain-config` prints the resolved configuration and the env vars it requires.
+`doctor --format json` emits `schema_version: registry.config.diagnostic_report.v1` with a
+`status` of `ok`, `warning`, or `error`. It reports missing environment variables, malformed
+fingerprints, and broken source references. `explain-config --format json` prints the resolved
+configuration and the env vars it requires.
 For exercising the claim end to end (request shapes, outcomes, and credential issuance on top),
 work through [Verify a claim with Registry Notary](../verify-claim-registry-api/), which runs
 the same claim lifecycle against a `registryctl` sample project.

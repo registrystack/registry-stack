@@ -122,6 +122,17 @@ registryctl status
 
 The Relay and Notary services report healthy and ready when startup is complete.
 
+Validate both generated runtime configs with the product doctors:
+
+```sh
+registryctl doctor --format json
+```
+
+The JSON report uses `schema_version: registryctl.validation.report.v1`. It contains separate
+Relay and Notary product reports under `products[]`; each embedded product report uses
+`schema_version: registry.config.diagnostic_report.v1` and a `status` of `ok`, `warning`,
+`error`, or `not_run`.
+
 ## Run the Notary smoke test
 
 Run the Notary smoke checks:
