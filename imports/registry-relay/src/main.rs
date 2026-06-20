@@ -965,6 +965,18 @@ fn relay_config_value_classification(path: &[&str], value: &Value) -> ConfigValu
     ) {
         return ConfigValueClassification::Public;
     }
+
+    // Value-level defense, independent of the key name: a leaf string whose
+    // value is a URL carrying userinfo (`user:pass@host` or `user@host`) is a
+    // secret regardless of the key it lives under. This is the core defense
+    // against e.g. `jwks_url: ${URL_WITH_BASIC_AUTH}` expanding to a URL with
+    // embedded credentials under a key that is not otherwise a trigger word.
+    if let Value::String(text) = value {
+        if url_contains_userinfo(text) {
+            return ConfigValueClassification::Secret;
+        }
+    }
+
     let Some(key) = path.last() else {
         return ConfigValueClassification::Public;
     };
@@ -974,12 +986,69 @@ fn relay_config_value_classification(path: &[&str], value: &Value) -> ConfigValu
         || key.contains("token")
         || key.contains("private")
         || key.contains("passphrase")
+        || key.contains("credential")
+        || key.contains("connection")
+        || key.contains("dsn")
+        || key.contains("url")
+        || key.contains("uri")
+        // Catches `apikey`, `signing_key`, `api_key`, ... while the explicit
+        // checks below keep harmless public key material public.
+        || key.contains("key")
         || key == "jwk"
     {
+        // `key` substring is broad; carve out the well-known *public* key
+        // material so we do not over-redact harmless values.
+        if key.contains("key") && is_public_key_name(&key) {
+            return ConfigValueClassification::Public;
+        }
         ConfigValueClassification::Secret
     } else {
         ConfigValueClassification::Public
     }
+}
+
+/// Returns true for key names that contain `key` but denote *public* key
+/// material (or a JWKS endpoint key id), so the broad `key` substring match
+/// does not redact values that are safe to print.
+fn is_public_key_name(key: &str) -> bool {
+    key.contains("public")
+        || key.contains("pubkey")
+        || key == "kid"
+        || key == "key_id"
+        || key == "keyid"
+}
+
+/// Robust, dependency-free detection of a URL string carrying a userinfo
+/// component (`user:password@host` or `user@host`). We deliberately avoid
+/// matching bare `@` (e.g. email addresses) by requiring a `scheme://`
+/// prefix and locating the `@` within the authority — that is, before the
+/// first `/`, `?`, or `#` that ends the authority.
+fn url_contains_userinfo(value: &str) -> bool {
+    let value = value.trim();
+    let Some(scheme_end) = value.find("://") else {
+        return false;
+    };
+    // A scheme must be non-empty and a valid scheme token to avoid matching
+    // arbitrary text that merely happens to contain `://`.
+    let scheme = &value[..scheme_end];
+    if scheme.is_empty()
+        || !scheme
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic())
+        || !scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.')
+    {
+        return false;
+    }
+    let authority_and_rest = &value[scheme_end + 3..];
+    // The authority ends at the first `/`, `?`, or `#`.
+    let authority_end = authority_and_rest
+        .find(['/', '?', '#'])
+        .unwrap_or(authority_and_rest.len());
+    let authority = &authority_and_rest[..authority_end];
+    authority.contains('@')
 }
 
 fn path_for_json(path: &std::path::Path) -> String {
@@ -2107,9 +2176,10 @@ mod tests {
         build_audit_sink, compile_relay_runtime, config_apply_bundle_request_body,
         load_env_file_arg, parse_cli_command_from, parse_env_file_value,
         relay_config_value_classification, render_generated_api_key, run_config_apply_bundle,
-        run_healthcheck, CliCommand, ConfigApplyBundleCommand, ConfigValueClassification,
-        ConfigVerifyBundleSource, GenerateApiKeyCommand, OperationalLogFormat, OutputFormat,
-        DEFAULT_HEALTHCHECK_TIMEOUT_MS, DEFAULT_HEALTHCHECK_URL,
+        run_healthcheck, url_contains_userinfo, CliCommand, ConfigApplyBundleCommand,
+        ConfigValueClassification, ConfigVerifyBundleSource, GenerateApiKeyCommand,
+        OperationalLogFormat, OutputFormat, DEFAULT_HEALTHCHECK_TIMEOUT_MS,
+        DEFAULT_HEALTHCHECK_URL,
     };
     use axum::extract::State;
     use axum::http::{HeaderMap, StatusCode};
@@ -2685,6 +2755,106 @@ audit:
                 "{key} should be classified as secret"
             );
         }
+    }
+
+    #[test]
+    fn config_explanation_redacts_url_with_userinfo_under_non_secret_key() {
+        // M-1: a URL carrying basic-auth credentials must be redacted even when
+        // the key name is not a trigger word on its own.
+        for (path, value) in [
+            (
+                vec!["auth", "oidc", "jwks_url"],
+                "https://svc:s3cr3t@idp.example.com/.well-known/jwks.json",
+            ),
+            (
+                vec!["catalog", "endpoint"],
+                "https://user@host.example.com/path",
+            ),
+            (
+                vec!["datasets", "source"],
+                "postgres://app:hunter2@db.internal:5432/registry",
+            ),
+        ] {
+            let path: Vec<&str> = path;
+            assert_eq!(
+                relay_config_value_classification(&path, &json!(value)),
+                ConfigValueClassification::Secret,
+                "{value:?} under {path:?} should be redacted (URL userinfo)"
+            );
+        }
+    }
+
+    #[test]
+    fn config_explanation_keeps_plain_non_secret_values_public() {
+        // Plain values, and URLs without userinfo under non-secret keys, must
+        // not be over-redacted. Bare `@` (emails) is not a URL userinfo leak.
+        for (path, value) in [
+            (vec!["catalog", "title"], "Test Catalog"),
+            (vec!["server", "bind"], "0.0.0.0:8080"),
+            (vec!["catalog", "contact"], "ops@example.com"),
+        ] {
+            let path: Vec<&str> = path;
+            assert_eq!(
+                relay_config_value_classification(&path, &json!(value)),
+                ConfigValueClassification::Public,
+                "{value:?} under {path:?} should stay public"
+            );
+        }
+    }
+
+    #[test]
+    fn config_explanation_keeps_public_key_material_public() {
+        // The broad `key` substring match must not redact well-known public
+        // key material or key identifiers.
+        for key in ["public_key", "pubkey", "kid", "key_id", "signer_public_key"] {
+            assert_eq!(
+                relay_config_value_classification(&["provenance", key], &json!("MFkwEw...")),
+                ConfigValueClassification::Public,
+                "{key} should stay public"
+            );
+        }
+    }
+
+    #[test]
+    fn config_explanation_redacts_broadened_secret_keys() {
+        // Existing secret-keyed leaves remain redacted, and the broadened set
+        // (url/uri/dsn/connection/credential/*key*) is now redacted too.
+        for key in [
+            "api_secret",
+            "auth_token",
+            "jwks_url",
+            "callback_uri",
+            "database_dsn",
+            "connection_string",
+            "service_credential",
+            "apikey",
+            "signing_key",
+        ] {
+            assert_eq!(
+                relay_config_value_classification(&["section", key], &json!("value")),
+                ConfigValueClassification::Secret,
+                "{key} should be classified as secret"
+            );
+        }
+    }
+
+    #[test]
+    fn url_userinfo_detection_avoids_false_positives() {
+        assert!(url_contains_userinfo(
+            "https://user:pass@host.example.com/path"
+        ));
+        assert!(url_contains_userinfo("https://user@host.example.com"));
+        assert!(url_contains_userinfo("  redis://default:pw@cache:6379/0  "));
+        // No scheme: a bare email is not a URL userinfo leak.
+        assert!(!url_contains_userinfo("ops@example.com"));
+        // `@` only in the path/query, not the authority.
+        assert!(!url_contains_userinfo("https://host.example.com/u@v"));
+        assert!(!url_contains_userinfo("https://host.example.com/?q=a@b"));
+        // Plain URL without userinfo.
+        assert!(!url_contains_userinfo("https://host.example.com/path"));
+        // Not a URL at all.
+        assert!(!url_contains_userinfo("just a string"));
+        assert!(!url_contains_userinfo("://malformed@host"));
     }
 
     #[test]
