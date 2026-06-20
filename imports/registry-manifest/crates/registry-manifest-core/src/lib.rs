@@ -101,6 +101,7 @@ pub const RUNTIME_ONLY_KEYS: &[&str] = &[
     "secret_providers",
     "signing_keys",
     "source",
+    "source_connections",
     "source_id",
     "table",
     "token_url",
@@ -2467,7 +2468,18 @@ pub fn compile_manifest(manifest: &MetadataManifest) -> Result<CompiledMetadata,
                         .external_ref
                         .as_deref()
                         .and_then(|iri| expand_uri(iri, &manifest.vocabularies)),
-                    concepts: codelist.concepts.clone(),
+                    concepts: codelist
+                        .concepts
+                        .iter()
+                        .map(|concept| {
+                            let mut concept = concept.clone();
+                            concept.iri = concept
+                                .iri
+                                .as_deref()
+                                .and_then(|iri| expand_uri(iri, &manifest.vocabularies));
+                            concept
+                        })
+                        .collect(),
                 },
             )
         })

@@ -264,6 +264,20 @@ fn publish_writes_every_indexed_artifact_without_undeclared_profiles() {
             .len(),
         1
     );
+    let ogc_records_path = out.join("ogc-records").join("items.json");
+    assert!(ogc_records_path.exists());
+    assert_eq!(
+        index["ogc_records_items"],
+        "/metadata/ogc-records/items.json"
+    );
+    let ogc_records: serde_json::Value =
+        serde_json::from_slice(&fs::read(&ogc_records_path).expect("ogc records reads"))
+            .expect("ogc records json");
+    assert_eq!(
+        ogc_records["schema_version"],
+        "registry-manifest-ogc-records/v1"
+    );
+    assert_eq!(ogc_records["type"], "FeatureCollection");
     assert_index_urls_exist(&out, &index);
     assert_well_known_discovery_matches_index(&out, &index);
     assert_api_catalog_points_at_index_and_catalogs(&out, &index);
@@ -319,6 +333,13 @@ fn publish_writes_stable_package_digest_and_artifact_digests() {
     let artifacts = first_index["artifacts"].as_array().expect("artifacts");
     assert!(artifacts.iter().any(|artifact| {
         artifact["path"] == "metadata.yaml"
+            && artifact["sha256"]
+                .as_str()
+                .is_some_and(|digest| digest.starts_with("sha256:"))
+    }));
+    assert!(artifacts.iter().any(|artifact| {
+        artifact["path"] == "ogc-records/items.json"
+            && artifact["media_type"] == "application/geo+json"
             && artifact["sha256"]
                 .as_str()
                 .is_some_and(|digest| digest.starts_with("sha256:"))
@@ -728,6 +749,7 @@ fn assert_index_urls_exist(out: &Path, index: &serde_json::Value) {
         "policies",
         "dcat",
         "shacl",
+        "ogc_records_items",
     ] {
         assert_url_exists(out, index[key].as_str().expect("url"));
     }
@@ -793,6 +815,11 @@ fn assert_api_catalog_points_at_index_and_catalogs(out: &Path, index: &serde_jso
         .collect::<Vec<_>>();
     assert!(item_hrefs.contains(&index["catalog"].as_str().expect("catalog url")));
     assert!(item_hrefs.contains(&index["dcat"].as_str().expect("dcat url")));
+    assert!(item_hrefs.contains(
+        &index["ogc_records_items"]
+            .as_str()
+            .expect("ogc records url")
+    ));
     for entry in index["service_catalogues"]
         .as_array()
         .expect("service catalogues")

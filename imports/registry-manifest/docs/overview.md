@@ -25,16 +25,17 @@ No renderer makes network calls or reads files beyond the manifest input.
 | SHACL node shapes JSON-LD | `shacl` |
 | JSON Schema Draft 2020-12 | `json-schema` |
 | Form JSON Schema Draft 2020-12 | `form-json-schema` |
-| OGC API Records item bodies JSON | `ogc-records` |
+| OGC API Records FeatureCollection JSON | `ogc-records` |
 | ODRL policy collection JSON-LD | `policies` |
 | Per-dataset ODRL policy document JSON-LD | `policy` |
 | Evidence offerings collection JSON | `evidence-offerings` |
 | Single evidence offering JSON | `evidence-offering` |
 
 Federation metadata appears inside the catalog and evidence-offering JSON outputs. It is not a
-separate render format.
+separate render format. Codelists are emitted as embedded SKOS-shaped nodes inside the SHACL
+and DCAT/BRegDCAT-shaped linked-data outputs; there is not yet a standalone SKOS artifact.
 
-Not yet implemented: GovStack DR BB, SP DCI, and standalone PROV-O.
+Not yet implemented: GovStack DR BB, SP DCI, standalone SKOS, and standalone PROV-O.
 
 The `dcat` format dispatches based on an optional `--profile` flag: `--profile dcat` or
 `--profile dcat-ap` renders base Data Catalog Vocabulary (DCAT); `--profile bregdcat-ap`
@@ -47,8 +48,9 @@ For external validator smoke checks and claim boundaries, see
 
 You have a registry or public-service workflow and need to publish machine-readable metadata:
 a Core Public Service Vocabulary Application Profile (CPSV-AP) service catalogue, a DCAT
-catalog, Shapes Constraint Language (SHACL) shapes, JSON Schema for API contract
-documentation, a local form profile, or Open Digital Rights Language (ODRL) policies
+catalog, OGC Records item collection, Shapes Constraint Language (SHACL) shapes, JSON Schema
+for API contract documentation, a local form profile, codelist metadata, or Open Digital
+Rights Language (ODRL) policies
 declaring access terms.
 Write one `metadata.yaml`, run `registry-manifest-cli publish`, and get a static directory
 of all those artifacts ready to host anywhere.
@@ -205,8 +207,8 @@ Profile fixtures in `profiles/` are non-normative examples.
 The static publication bundle format includes `index.json` schema version
 `registry-manifest-index/v1`.
 
-The test suite includes golden-fixture assertions for the older example profiles and a
-shared CPSV-AP fixture contract used by Atlas service-first discovery tests.
+The test suite includes golden-fixture assertions for the older example profiles and the
+standards-shaped renderer outputs, including CPSV-AP and OGC Records fixtures.
 
 ## See also
 
