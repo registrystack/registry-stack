@@ -82,9 +82,6 @@ class FakeNotaryHandler(BaseHTTPRequestHandler):
         target = body.get("target") or {}
         identifiers = target.get("identifiers") or []
         value = identifiers[0].get("value") if identifiers else ""
-        if value in {"NID-1010", "NID-1011"}:
-            self.respond_problem("pdp.evidence_stale")
-            return
         if value in {"NID-LIVE-MISSING", "UIN-LIVE-MISSING", "WAVE-A-LIVE-MISSING"}:
             self.respond(
                 409,
@@ -377,14 +374,20 @@ class EvidenceGatewayLiveFixtureRunnerTest(unittest.TestCase):
         executed = {item["id"] for item in summary["executed"]}
         self.assertIn("baseline-success-combined-support", executed)
         self.assertIn("baseline-denial-assurance", executed)
-        self.assertIn("baseline-denial-stale-evidence", executed)
-        self.assertIn("baseline-denial-missing-freshness", executed)
         self.assertIn("baseline-denial-jurisdiction", executed)
         self.assertIn("baseline-denial-legal-basis", executed)
         self.assertIn("baseline-denial-consent", executed)
         self.assertIn("baseline-audit-permit", executed)
         self.assertIn("baseline-dpi.v1-runtime-missing-subject", executed)
-        self.assertFalse(any(item["blocker"] == "live-source-observed-at-field-not-configured" for item in summary["skipped"]))
+        skipped = {item["id"]: item["blocker"] for item in summary["skipped"]}
+        self.assertEqual(
+            skipped["baseline-denial-stale-evidence"],
+            "static-registry-runtime-does-not-use-row-observed-at-freshness",
+        )
+        self.assertEqual(
+            skipped["baseline-denial-missing-freshness"],
+            "static-registry-runtime-does-not-use-row-observed-at-freshness",
+        )
         auth_header = server.requests_seen[0]["headers"].get("Authorization")
         self.assertEqual(auth_header, "Bearer token")
         audit_log = write_audit_log(server.audit_records)

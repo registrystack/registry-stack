@@ -27,8 +27,8 @@ V1_MATRIX = [
     {
         "id": "NID-1010",
         "alive": True,
-        "health": {"status": 403, "code": "pdp.evidence_stale"},
-        "combined": {"status": 403, "code": "pdp.evidence_stale"},
+        "health": False,
+        "combined": False,
     },
 ]
 

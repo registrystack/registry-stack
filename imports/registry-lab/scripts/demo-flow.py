@@ -38,8 +38,8 @@ V1_MATRIX = [
     {
         "id": "NID-1010",
         "alive": True,
-        "health": {"status": 403, "code": "pdp.evidence_stale"},
-        "combined": {"status": 403, "code": "pdp.evidence_stale"},
+        "health": False,
+        "combined": False,
     },
 ]
 # The full matrix above covers all subjects. Keep the batch proof smaller so a

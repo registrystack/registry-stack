@@ -465,7 +465,7 @@ matrix_cases=(
   "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|health-service-available|NID-1007|true"
   "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|health-service-available|NID-1008|true"
   "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|health-service-available|NID-1009|true"
-  "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|health-service-available|NID-1010|403:pdp.evidence_stale"
+  "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|health-service-available|NID-1010|false"
   "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|eligible-for-combined-support|NID-1001|true"
   "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|eligible-for-combined-support|NID-1002|false"
   "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|eligible-for-combined-support|NID-1003|false"
@@ -475,7 +475,7 @@ matrix_cases=(
   "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|eligible-for-combined-support|NID-1007|false"
   "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|eligible-for-combined-support|NID-1008|true"
   "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|eligible-for-combined-support|NID-1009|false"
-  "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|eligible-for-combined-support|NID-1010|403:pdp.evidence_stale"
+  "shared|http://127.0.0.1:4323/v1/evaluations|SHARED_EVIDENCE_CLIENT_BEARER|eligible-for-combined-support|NID-1010|false"
 )
 
 for matrix_case in "${matrix_cases[@]}"; do

@@ -62,13 +62,10 @@ class GenerateFixturesTest(unittest.TestCase):
             "NID-1009": {"alive": True, "health": True, "combined": False},
             "NID-1010": {"alive": True, "health": False, "combined": False},
         }
-        stale_problem = {"status": 403, "code": "pdp.evidence_stale"}
         cls.expected_runtime_outcomes = {
             national_id: dict(expected)
             for national_id, expected in cls.expected_outcomes.items()
         }
-        cls.expected_runtime_outcomes["NID-1010"]["health"] = stale_problem
-        cls.expected_runtime_outcomes["NID-1010"]["combined"] = stale_problem
 
     def test_v1_registry_lab_matrix_matches_openspp_story_people(self) -> None:
         expected = {
@@ -292,35 +289,18 @@ class GenerateFixturesTest(unittest.TestCase):
                 if national_id == "NID-1010":
                     self.assertEqual(value, self.generator.STALE_SOURCE_OBSERVED_AT)
 
-    def test_baseline_freshness_configs_reference_observed_at(self) -> None:
-        relay_paths = [
-            self.generator.ROOT / "config" / "relay" / "civil-registry-relay.yaml",
-            self.generator.ROOT / "config" / "relay" / "civil-registry-relay.metadata.yaml",
-            self.generator.ROOT / "config" / "relay" / "social-protection-registry-relay.yaml",
-            self.generator.ROOT / "config" / "relay" / "social-protection-registry-relay.metadata.yaml",
-            self.generator.ROOT / "config" / "relay" / "health-registry-relay.yaml",
-            self.generator.ROOT / "config" / "relay" / "health-registry-relay.metadata.yaml",
-            self.generator.ROOT / "config" / "coolify" / "relay" / "civil-registry-relay.yaml",
-            self.generator.ROOT / "config" / "coolify" / "relay" / "civil-registry-relay.metadata.yaml",
-            self.generator.ROOT / "config" / "coolify" / "relay" / "social-protection-registry-relay.yaml",
-            self.generator.ROOT / "config" / "coolify" / "relay" / "social-protection-registry-relay.metadata.yaml",
-            self.generator.ROOT / "config" / "coolify" / "relay" / "health-registry-relay.yaml",
-            self.generator.ROOT / "config" / "coolify" / "relay" / "health-registry-relay.metadata.yaml",
-        ]
-        for path in relay_paths:
-            with self.subTest(path=path.relative_to(self.generator.ROOT)):
-                text = path.read_text(encoding="utf-8")
-                self.assertIn("- name: observed_at", text)
-
+    def test_static_registry_notaries_do_not_use_row_observed_at_for_freshness(self) -> None:
         notary_paths = [
             self.generator.ROOT / "config" / "notary" / "shared-eligibility-notary.yaml",
+            self.generator.ROOT / "config" / "notary" / "social-protection-notary.yaml",
             self.generator.ROOT / "config" / "coolify" / "notary" / "shared-eligibility-notary.yaml",
+            self.generator.ROOT / "config" / "coolify" / "notary" / "social-protection-notary.yaml",
         ]
         for path in notary_paths:
             with self.subTest(path=path.relative_to(self.generator.ROOT)):
                 text = path.read_text(encoding="utf-8")
-                self.assertEqual(text.count("max_source_age_seconds: 86400"), 3)
-                self.assertEqual(text.count("source_observed_at_field: observed_at"), 3)
+                self.assertNotIn("max_source_age_seconds:", text)
+                self.assertNotIn("source_observed_at_field: observed_at", text)
 
     def test_opencrvs_dci_freshness_uses_source_response_timestamp(self) -> None:
         notary_paths = [
