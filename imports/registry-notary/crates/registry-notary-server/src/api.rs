@@ -8214,14 +8214,30 @@ fn source_binding_matches_request(
     context: &registry_notary_core::EvidenceRequestContext,
 ) -> bool {
     if binding.query_fields.is_empty() {
-        return context
-            .lookup_value(binding.lookup.input.as_str())
-            .is_some();
+        return source_lookup_input_matches_request(binding.lookup.input.as_str(), context);
     }
     binding
         .query_fields
         .iter()
-        .all(|field| context.lookup_value(field.input.as_str()).is_some())
+        .all(|field| source_lookup_input_matches_request(field.input.as_str(), context))
+}
+
+fn source_lookup_input_matches_request(
+    input: &str,
+    context: &registry_notary_core::EvidenceRequestContext,
+) -> bool {
+    context.lookup_value(input).is_some() || parse_source_lookup_input(input).is_some()
+}
+
+fn parse_source_lookup_input(input: &str) -> Option<(&str, &str)> {
+    let remainder = input
+        .strip_prefix("sources.")
+        .or_else(|| input.strip_prefix("source."))?;
+    let (binding_id, field_path) = remainder.split_once('.')?;
+    if binding_id.is_empty() || field_path.is_empty() {
+        return None;
+    }
+    Some((binding_id, field_path))
 }
 
 fn is_matching_policy_provenance_code(code: &str) -> bool {
@@ -11656,8 +11672,8 @@ mod tests {
                         "dataset": "civil",
                         "entity": "person",
                         "lookup": {
-                            "input": "target.identifiers.national_id",
-                            "field": "national_id",
+                            "input": "sources.aa_wrong.alive",
+                            "field": "alive",
                             "op": "eq",
                             "cardinality": "one"
                         },
