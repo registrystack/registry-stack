@@ -45,6 +45,12 @@ const CONFORMANCE_GROUP_BY: &str = "https://spec.spdci.org/spdci-aggregates-1/1.
 const PROFILE_GROUP_BY: &str = "https://spec.spdci.org/spdci-aggregates-1/1.0/profile/group-by";
 const NO_MATCH_ADMIN_ID: &str = "__registry_relay_no_matching_admin_geometry__";
 
+/// Upper bound on rows scanned while resolving an EDR `area` query, to
+/// stop a single authenticated request from forcing an unbounded
+/// full-table geometry scan. Generous: legitimate admin-boundary tables
+/// are far smaller.
+const MAX_AREA_SCAN_ROWS: usize = 1_000_000;
+
 pub fn router<S>() -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
@@ -520,6 +526,7 @@ async fn matching_admin_geometries(
     let input_geo = geo_geometry(input_geometry)?;
     let mut matched = Vec::new();
     let mut after_primary_key = None;
+    let mut scanned: usize = 0;
     loop {
         let mut query = EntityCollectionQuery::new()
             .with_fields([geometry_id_field.to_string(), geometry_field.to_string()])
@@ -531,6 +538,10 @@ async fn matching_admin_geometries(
             .read_collection(dataset_id, geometry_entity, query)
             .await?;
         after_primary_key = rows.next_primary_key;
+        scanned = scanned.saturating_add(rows.rows.len());
+        if scanned > MAX_AREA_SCAN_ROWS {
+            return Err(SpatialError::AreaScanTooLarge.into());
+        }
         for row in rows.rows {
             let Some(object) = row.as_object() else {
                 continue;

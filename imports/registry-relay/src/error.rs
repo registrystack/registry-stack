@@ -459,6 +459,10 @@ pub enum SpatialError {
     /// Requested CRS is not supported by Phase 1 OGC routes.
     #[error("spatial crs unsupported")]
     CrsUnsupported,
+    /// EDR `area` query would scan more rows than the per-request cap.
+    /// Protects against resource-amplification on large geometry tables.
+    #[error("spatial area query too broad")]
+    AreaScanTooLarge,
 }
 
 /// `query.*` runtime codes.
@@ -1491,6 +1495,7 @@ impl SpatialError {
             }
             SpatialError::FilterUnsupported { .. } => "spatial.filter_unsupported",
             SpatialError::CrsUnsupported => "spatial.crs_unsupported",
+            SpatialError::AreaScanTooLarge => "spatial.area_scan_too_large",
         }
     }
 
@@ -1502,6 +1507,7 @@ impl SpatialError {
             | SpatialError::BboxAntimeridianUnsupported
             | SpatialError::FilterUnsupported { .. }
             | SpatialError::CrsUnsupported => StatusCode::BAD_REQUEST,
+            SpatialError::AreaScanTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
         }
     }
 
@@ -1514,6 +1520,7 @@ impl SpatialError {
             }
             SpatialError::FilterUnsupported { .. } => "Spatial filter unsupported",
             SpatialError::CrsUnsupported => "Spatial CRS unsupported",
+            SpatialError::AreaScanTooLarge => "Spatial area scan too large",
         }
     }
 
@@ -1538,6 +1545,9 @@ impl SpatialError {
                 )
             }
             SpatialError::CrsUnsupported => "requested CRS is not supported".to_string(),
+            SpatialError::AreaScanTooLarge => {
+                "area query would scan too many geometry rows; reduce the query area".to_string()
+            }
         }
     }
 }
