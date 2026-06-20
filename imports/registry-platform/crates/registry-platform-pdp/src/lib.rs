@@ -1089,11 +1089,44 @@ mod tests {
     #[test]
     fn denies_disallowed_route_source_and_scope_context() {
         let mut source_policy = policy();
+        source_policy.ecosystem_binding_id = Some("baseline-dpi/v1".to_string());
+        source_policy.ecosystem_binding_version = Some("v1".to_string());
         source_policy.allowed_source_bindings = vec!["sp-dci/v1".to_string()];
-        assert_eq!(
-            deny_code(decide(&context(), &source_policy)),
-            Some(SOURCE_BINDING_NOT_PERMITTED.to_string())
-        );
+        match decide(&context(), &source_policy) {
+            Decision::Deny {
+                audit,
+                stable_problem_code,
+            } => {
+                assert_eq!(stable_problem_code, SOURCE_BINDING_NOT_PERMITTED);
+                assert_eq!(
+                    audit.stable_problem_code.as_deref(),
+                    Some(SOURCE_BINDING_NOT_PERMITTED)
+                );
+                assert_eq!(
+                    audit.ecosystem_binding_id.as_deref(),
+                    Some("baseline-dpi/v1")
+                );
+                assert_eq!(audit.ecosystem_binding_version.as_deref(), Some("v1"));
+                assert_eq!(audit.route_identity.as_deref(), Some("route:benefits"));
+                assert_eq!(audit.source_binding.as_deref(), Some("baseline-dpi/v1"));
+                assert_eq!(
+                    audit.checked_scopes,
+                    BTreeSet::from(["evidence.read".to_string()])
+                );
+                assert_eq!(
+                    audit.trust_provenance,
+                    BTreeSet::from([
+                        "asserted_assurance".to_string(),
+                        "consent_ref".to_string(),
+                        "jurisdiction".to_string(),
+                        "legal_basis_ref".to_string(),
+                        "source_observed_age_seconds".to_string(),
+                        "source_observed_at_unix_seconds".to_string(),
+                    ])
+                );
+            }
+            other => panic!("expected Deny, got {other:?}"),
+        }
 
         let mut route_policy = policy();
         route_policy.allowed_route_identities = vec!["route:registration".to_string()];
