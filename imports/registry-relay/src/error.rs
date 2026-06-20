@@ -198,6 +198,8 @@ pub enum FilterError {
     TooManyValues,
     #[error("too many filters")]
     TooManyFilters,
+    #[error("too many search items")]
+    TooManyItems,
     #[error("invalid range")]
     InvalidRange,
     #[error("limit out of range")]
@@ -457,6 +459,10 @@ pub enum SpatialError {
     /// Requested CRS is not supported by Phase 1 OGC routes.
     #[error("spatial crs unsupported")]
     CrsUnsupported,
+    /// EDR `area` query would scan more rows than the per-request cap.
+    /// Protects against resource-amplification on large geometry tables.
+    #[error("spatial area query too broad")]
+    AreaScanTooLarge,
 }
 
 /// `query.*` runtime codes.
@@ -823,6 +829,7 @@ impl FilterError {
             FilterError::InvalidValue => "filter.invalid_value",
             FilterError::TooManyValues => "filter.too_many_values",
             FilterError::TooManyFilters => "filter.too_many_filters",
+            FilterError::TooManyItems => "filter.too_many_items",
             FilterError::InvalidRange => "filter.invalid_range",
             FilterError::LimitOutOfRange => "filter.limit_out_of_range",
         }
@@ -839,6 +846,7 @@ impl FilterError {
             | FilterError::UnsupportedOp
             | FilterError::InvalidValue
             | FilterError::TooManyFilters
+            | FilterError::TooManyItems
             | FilterError::InvalidRange
             | FilterError::LimitOutOfRange => StatusCode::BAD_REQUEST,
         }
@@ -852,6 +860,7 @@ impl FilterError {
             FilterError::InvalidValue => "Invalid filter value",
             FilterError::TooManyValues => "Too many filter values",
             FilterError::TooManyFilters => "Too many filters",
+            FilterError::TooManyItems => "Too many search items",
             FilterError::InvalidRange => "Invalid range",
             FilterError::LimitOutOfRange => "Limit out of range",
         }
@@ -868,6 +877,9 @@ impl FilterError {
             FilterError::TooManyValues => "in-list exceeds the configured maximum of 100 values",
             FilterError::TooManyFilters => {
                 "request carries more filter parameters than the per-request cap allows"
+            }
+            FilterError::TooManyItems => {
+                "search request carries more items than the per-request cap allows"
             }
             FilterError::InvalidRange => "range bounds are inverted or invalid",
             FilterError::LimitOutOfRange => {
@@ -1483,6 +1495,7 @@ impl SpatialError {
             }
             SpatialError::FilterUnsupported { .. } => "spatial.filter_unsupported",
             SpatialError::CrsUnsupported => "spatial.crs_unsupported",
+            SpatialError::AreaScanTooLarge => "spatial.area_scan_too_large",
         }
     }
 
@@ -1494,6 +1507,7 @@ impl SpatialError {
             | SpatialError::BboxAntimeridianUnsupported
             | SpatialError::FilterUnsupported { .. }
             | SpatialError::CrsUnsupported => StatusCode::BAD_REQUEST,
+            SpatialError::AreaScanTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
         }
     }
 
@@ -1506,6 +1520,7 @@ impl SpatialError {
             }
             SpatialError::FilterUnsupported { .. } => "Spatial filter unsupported",
             SpatialError::CrsUnsupported => "Spatial CRS unsupported",
+            SpatialError::AreaScanTooLarge => "Spatial area scan too large",
         }
     }
 
@@ -1530,6 +1545,9 @@ impl SpatialError {
                 )
             }
             SpatialError::CrsUnsupported => "requested CRS is not supported".to_string(),
+            SpatialError::AreaScanTooLarge => {
+                "area query would scan too many geometry rows; reduce the query area".to_string()
+            }
         }
     }
 }

@@ -53,6 +53,11 @@ const REQUIRED_HEADER_FIELDS: &[&str] = &[
 const DEFAULT_DISABILITY_REGISTRY_NAME: &str = "dr";
 const DEFAULT_DISABILITY_REGISTRY_TYPE: &str = "ns:org:RegistryType:DR";
 const DEFAULT_DISABILITY_RECORD_TYPE: &str = "spdci-extensions-dci:DisabledPerson";
+/// Maximum number of items allowed in a single `search_request` array.
+/// Bounds the per-request DataFusion fan-out: each item triggers a full
+/// `read_search_rows` scan, so without this cap a single authenticated
+/// request can drive an unbounded number of sequential scans.
+const MAX_SEARCH_ITEMS: usize = 20;
 
 struct RouteDeps {
     runtime: RuntimeSnapshot,
@@ -619,6 +624,9 @@ impl SearchRequest {
         };
         if items.is_empty() {
             return Err(FilterError::InvalidValue.into());
+        }
+        if items.len() > MAX_SEARCH_ITEMS {
+            return Err(FilterError::TooManyItems.into());
         }
         let mut parsed = Vec::with_capacity(items.len());
         for item in items {
@@ -1246,8 +1254,87 @@ fn with_search_audit_context(
 
 #[cfg(test)]
 mod tests {
-    use super::query_value;
+    use super::{query_value, SearchRequest, MAX_SEARCH_ITEMS};
+    use crate::config::SpdciRegistryConfig;
     use serde_json::{json, Value};
+
+    fn minimal_spdci_registry_config() -> SpdciRegistryConfig {
+        serde_json::from_value(json!({
+            "dataset": "test_dataset",
+            "entity": "test_entity",
+            "identifiers": { "DISABILITY_ID": "id" }
+        }))
+        .expect("minimal SpdciRegistryConfig deserializes")
+    }
+
+    fn valid_search_body_with_n_items(n: usize) -> Value {
+        let items: Vec<Value> = (0..n)
+            .map(|i| {
+                json!({
+                    "reference_id": format!("ref-{i}"),
+                    "search_criteria": {
+                        "query_type": "idtype-value",
+                        "query": {
+                            "type": "DISABILITY_ID",
+                            "value": format!("ID{i:06}")
+                        }
+                    }
+                })
+            })
+            .collect();
+        json!({
+            "header": {
+                "message_id": "msg-cap-test",
+                "message_ts": "2026-01-01T00:00:00Z",
+                "action": "search",
+                "sender_id": "spp.example.org",
+                "total_count": n
+            },
+            "message": {
+                "transaction_id": "txn-cap-test",
+                "search_request": items
+            }
+        })
+    }
+
+    /// `search_request` with exactly MAX_SEARCH_ITEMS items must be accepted.
+    #[test]
+    fn search_request_at_cap_is_accepted() {
+        let config = minimal_spdci_registry_config();
+        let body = valid_search_body_with_n_items(MAX_SEARCH_ITEMS);
+        let result = SearchRequest::from_body(body, &config);
+        assert!(
+            result.is_ok(),
+            "exactly MAX_SEARCH_ITEMS items should be accepted; got: {:?}",
+            result.err()
+        );
+    }
+
+    /// `search_request` with more than MAX_SEARCH_ITEMS items must be
+    /// rejected with `FilterError::TooManyItems` (→ HTTP 400
+    /// `filter.too_many_items`) before any query runs.
+    #[test]
+    fn search_request_over_cap_is_rejected_with_too_many_items() {
+        let config = minimal_spdci_registry_config();
+        let body = valid_search_body_with_n_items(MAX_SEARCH_ITEMS + 1);
+        // Use a match rather than `expect_err`/`unwrap_err`: those require the
+        // Ok type (`SearchRequest`) to implement `Debug`, which it does not.
+        let err = match SearchRequest::from_body(body, &config) {
+            Ok(_) => panic!("oversized search_request should be rejected"),
+            Err(err) => err,
+        };
+        assert_eq!(
+            err.code(),
+            "filter.too_many_items",
+            "expected filter.too_many_items, got code={} ({err})",
+            err.code()
+        );
+        assert_eq!(
+            err.http_status(),
+            axum::http::StatusCode::BAD_REQUEST,
+            "TooManyItems should map to 400 BAD_REQUEST"
+        );
+    }
 
     #[test]
     fn query_value_accepts_only_nonblank_scalars() {
