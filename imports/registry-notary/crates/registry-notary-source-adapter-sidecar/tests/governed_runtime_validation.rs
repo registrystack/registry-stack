@@ -189,7 +189,10 @@ async fn governed_target_renders_http_json_only_without_openfn_runtime() {
     let target_bytes = harness.governed_runtime_target_bytes();
     let target: Value = serde_json::from_slice(&target_bytes).expect("target is JSON");
 
-    assert_eq!(target["schema"], "registry.notary.openfn_sidecar.runtime.v1");
+    assert_eq!(
+        target["schema"],
+        "registry.notary.openfn_sidecar.runtime.v1"
+    );
     assert!(target["openfn"].is_null());
     assert!(target["worker"].is_null());
     assert!(target["jobs_root"].is_null());
@@ -495,7 +498,9 @@ async fn governed_startup_rejects_lower_antirollback_sequence() {
         .await
         .expect_err("lower antirollback sequence must fail");
 
-    assert!(error.to_string().contains("anti-rollback acceptance failed"));
+    assert!(error
+        .to_string()
+        .contains("anti-rollback acceptance failed"));
 }
 
 #[tokio::test]
@@ -518,7 +523,9 @@ async fn governed_startup_rejects_antirollback_previous_hash_mismatch() {
         .await
         .expect_err("antirollback previous hash mismatch must fail");
 
-    assert!(error.to_string().contains("anti-rollback acceptance failed"));
+    assert!(error
+        .to_string()
+        .contains("anti-rollback acceptance failed"));
 }
 
 #[tokio::test]
