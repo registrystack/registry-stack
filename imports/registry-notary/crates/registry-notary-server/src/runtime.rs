@@ -3005,11 +3005,20 @@ async fn load_sources_with_dependencies(
     let mut oldest_memo_ts: Option<OffsetDateTime> = None;
     let mut redaction_fields = BTreeSet::new();
     let mut matching_policy_audit = MatchingPolicyAudit::default();
+    let mut dependencies_by_binding = BTreeMap::new();
+    for (id, binding) in &claim.source_bindings {
+        dependencies_by_binding.insert(
+            id.clone(),
+            binding_source_lookup_dependencies(binding, &claim.source_bindings)?,
+        );
+    }
 
     while !pending.is_empty() {
         let mut ready_ids = Vec::new();
-        for (id, binding) in &pending {
-            let dependencies = binding_source_lookup_dependencies(binding, &claim.source_bindings)?;
+        for id in pending.keys() {
+            let Some(dependencies) = dependencies_by_binding.get(id) else {
+                return Err(EvidenceError::InvalidRequest);
+            };
             if dependencies
                 .iter()
                 .all(|source_id| out.contains_key(source_id))
@@ -3689,8 +3698,7 @@ fn binding_source_lookup_dependencies(
     all_bindings: &BTreeMap<String, SourceBindingConfig>,
 ) -> Result<BTreeSet<String>, EvidenceError> {
     let mut dependencies = BTreeSet::new();
-    let mut inputs = vec![binding.lookup.input.as_str()];
-    inputs.extend(
+    let inputs = std::iter::once(binding.lookup.input.as_str()).chain(
         binding
             .query_fields
             .iter()
