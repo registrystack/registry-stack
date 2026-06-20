@@ -180,7 +180,7 @@ fn publish_command(args: &[String]) -> Result<(), String> {
     write_json(&out_root, "shacl.jsonld", &render_shacl(&compiled))?;
     write_json(
         &out_root,
-        PathBuf::from("ogc-records").join("items.json"),
+        "ogc-records/items.json",
         &render_ogc_records_items(&compiled),
     )?;
 
