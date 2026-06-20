@@ -336,7 +336,7 @@ fn redact_child<'a>(
         path[depth] = segment;
         redact_config_value_at(value, path, depth + 1, classify)
     } else {
-        let mut overflow_path = Vec::with_capacity(path.len() + 1);
+        let mut overflow_path = Vec::with_capacity(path.len() + 16);
         overflow_path.extend_from_slice(path);
         overflow_path.push(segment);
         redact_config_value_overflow(value, &mut overflow_path, classify)
