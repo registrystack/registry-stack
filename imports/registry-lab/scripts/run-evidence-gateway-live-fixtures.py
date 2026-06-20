@@ -447,8 +447,6 @@ def runnable_case_ids(profile: str) -> set[str]:
             "baseline-success-combined-support",
             "baseline-denial-purpose",
             "baseline-denial-assurance",
-            "baseline-denial-stale-evidence",
-            "baseline-denial-missing-freshness",
             "baseline-denial-jurisdiction",
             "baseline-denial-legal-basis",
             "baseline-denial-consent",
@@ -492,7 +490,7 @@ def skip_blocker(profile: str, case: dict[str, Any]) -> str:
         if code == "pdp.evidence_stale":
             if profile == "sp-dci/v1":
                 return "live-opencrvs-response-timestamp-is-fresh-no-stale-demo-subject"
-            return "live-source-observed-at-field-not-configured"
+            return "static-registry-runtime-does-not-use-row-observed-at-freshness"
         if code == "pdp.unsupported_policy_term":
             return "live-runtime-policy-terms-are-config-static-not-request-supplied"
         return "live-runtime-missing-evidence-gateway-pdp-context-gate"

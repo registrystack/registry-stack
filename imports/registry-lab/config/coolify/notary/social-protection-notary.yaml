@@ -175,8 +175,6 @@ evidence:
               - ZZ
             require_legal_basis: true
             require_consent: true
-            max_source_age_seconds: 86400
-            source_observed_at_field: observed_at
             ecosystem_binding:
               id: baseline-dpi/v1
           lookup:
@@ -226,8 +224,6 @@ evidence:
               - ZZ
             require_legal_basis: true
             require_consent: true
-            max_source_age_seconds: 86400
-            source_observed_at_field: observed_at
             ecosystem_binding:
               id: baseline-dpi/v1
           lookup:
@@ -311,8 +307,6 @@ evidence:
               - ZZ
             require_legal_basis: true
             require_consent: true
-            max_source_age_seconds: 86400
-            source_observed_at_field: observed_at
             ecosystem_binding:
               id: baseline-dpi/v1
           lookup:
@@ -365,8 +359,6 @@ evidence:
               - ZZ
             require_legal_basis: true
             require_consent: true
-            max_source_age_seconds: 86400
-            source_observed_at_field: observed_at
             ecosystem_binding:
               id: baseline-dpi/v1
           lookup:
@@ -394,8 +386,6 @@ evidence:
               - ZZ
             require_legal_basis: true
             require_consent: true
-            max_source_age_seconds: 86400
-            source_observed_at_field: observed_at
             ecosystem_binding:
               id: baseline-dpi/v1
           lookup:
@@ -455,8 +445,6 @@ evidence:
               - ZZ
             require_legal_basis: true
             require_consent: true
-            max_source_age_seconds: 86400
-            source_observed_at_field: observed_at
             ecosystem_binding:
               id: baseline-dpi/v1
           lookup:
@@ -509,8 +497,6 @@ evidence:
               - ZZ
             require_legal_basis: true
             require_consent: true
-            max_source_age_seconds: 86400
-            source_observed_at_field: observed_at
             ecosystem_binding:
               id: baseline-dpi/v1
           lookup:
