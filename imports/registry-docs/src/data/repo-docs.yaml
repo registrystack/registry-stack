@@ -62,7 +62,7 @@ repos:
     #   docs/development.md                 contributor guide, repo-owned
   registry-notary:
     remote: https://github.com/jeremi/registry-notary
-    ref: 313a226b92a6e2075003b04353dcbdab335c2c10
+    ref: 8a2d2fd96d013809bf42e9e8038d4a557091d7dd
     version: main snapshot
     local: ../registry-notary
     docs:
@@ -94,6 +94,11 @@ repos:
         label: Source and claim modeling
         nav_order: 60
         doc_type: how-to
+      - src: docs/opencrvs-onboarding.md
+        dest: products/registry-notary/opencrvs-onboarding
+        label: OpenCRVS onboarding model
+        nav_order: 65
+        doc_type: explanation
       - src: docs/operator-config-reference.md
         dest: products/registry-notary/operator-config-reference
         label: Operator configuration reference
@@ -192,7 +197,7 @@ repos:
 #         description: Demo-operator and integrator documentation for Registry Lab, pulled from the product repository.
 #       - src: docs/opencrvs-dci-notary-tutorial.md
 #         dest: products/registry-lab/opencrvs-dci-notary-tutorial
-#         label: OpenCRVS DCI tutorial
+#         label: OpenCRVS tutorial
 #         nav_order: 10
 #         doc_type: tutorial
 #       - src: docs/dhis2-openfn-notary-tutorial.md

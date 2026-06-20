@@ -69,6 +69,10 @@
           {
             "label": "Identity and record matching",
             "slug": "products/registry-notary/identity-and-record-matching"
+          },
+          {
+            "label": "OpenCRVS onboarding model",
+            "slug": "products/registry-notary/opencrvs-onboarding"
           }
         ]
       }
