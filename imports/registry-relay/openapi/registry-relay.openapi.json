@@ -2250,7 +2250,7 @@
     "contact": {
       "name": "Ministry of Delivery"
     },
-    "description": "Best-effort Registry Relay API document generated from visible metadata.",
+    "description": "Read-only HTTP gateway over governed datasets. Serves entity records, catalog metadata, and SHACL/DCAT-AP shapes, with API discovery through the RFC 9727 catalog endpoint.",
     "license": {
       "identifier": "Apache-2.0",
       "name": "Apache-2.0"
