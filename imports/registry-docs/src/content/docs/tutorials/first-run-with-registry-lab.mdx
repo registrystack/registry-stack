@@ -19,7 +19,8 @@ standards_referenced:
 Registry Lab is the compose-based local demo for the registry stack.
 It wires [Registry Platform](../../reference/glossary/#registry-platform) source crates, three [Registry Relay](../../products/registry-relay/)
 instances, the [Registry Notary](../../products/registry-notary/) instances, live Postgres and
-Zitadel services, a private OpenFn sidecar path, a static metadata publisher, and narrated demo
+Zitadel services, a source adapter sidecar (using built-in `http_json`/`http_flow`/`fhir` engines),
+a static metadata publisher, and narrated demo
 clients into a single topology that runs on a laptop.
 
 This tutorial brings the topology up with the `just` recipes the lab provides, verifies it with the
@@ -87,7 +88,8 @@ Run these from the `registry-lab` checkout, in order.
     ```
 
 `just up` starts the civil, social protection, and health Relay instances, the civil, social
-protection, and shared eligibility Notary instances, Postgres, Zitadel, the OpenFn sidecar services,
+protection, and shared eligibility Notary instances, Postgres, Zitadel, the source adapter sidecar
+services (using built-in `http_json`/`http_flow`/`fhir` engines),
 and the static metadata publisher. The DHIS2, OpenCRVS, and agriculture services stay behind compose
 profiles and do not start by default.
 
@@ -95,7 +97,7 @@ profiles and do not start by default.
 
 The default topology runs three Relay instances (civil `4311`, social protection `4312`, health
 `4313`), the core Notary instances (civil `4321`, social protection `4322`, shared eligibility
-`4323`), live Postgres and Zitadel services, the OpenFn sidecar, the static metadata publisher
+`4323`), live Postgres and Zitadel services, the source adapter sidecar, the static metadata publisher
 (`4331`), and a profile-gated narrated demo client. For the full service inventory with host ports
 and network layout, see the
 [Registry Lab repository](https://github.com/jeremi/registry-lab).

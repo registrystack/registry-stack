@@ -92,9 +92,11 @@ under `source_connections`:
   per-connection bearer token.
 - **SP-DCI** connector sends DCI-shaped search requests and parses the response using configured
   field paths.
-- **OpenFn/source adapter sidecar** connector calls a private sidecar over HTTP, using a static
-  bearer token, for sources reached through built-in HTTP JSON adapters, FHIR source mappings, or a
-  pinned OpenFn workflow.
+- **Source adapter sidecar** connector calls a private sidecar over HTTP, using a static
+  bearer token, for sources reached through the built-in `http_json`, `http_flow`, or `fhir`
+  engines. (Note: OpenFn as an external caller — where OpenFn workflows call Registry Notary — remains
+  supported; what is retired is the OpenFn Node worker pool as a source-reading engine inside the
+  sidecar.)
 
 There is no generic file-based or database connector; source connectors must reach their targets
 over HTTP.

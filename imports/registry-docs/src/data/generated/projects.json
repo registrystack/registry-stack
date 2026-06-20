@@ -132,9 +132,9 @@
     "name": "Registry Lab",
     "repo_path": "../registry-lab",
     "target_repo_path": "../registry-lab",
-    "role": "Docker Compose demo of the registry runtime on a laptop. Wires three Relay instances, four Notary instances, live Postgres and Zitadel services, a private OpenFn sidecar scenario, a static metadata publisher, and narrated demo clients together with Registry Platform, Relay, and Notary source pins, fixtures, and smoke tests.",
+    "role": "Docker Compose demo of the registry runtime on a laptop. Wires three Relay instances, four Notary instances, live Postgres and Zitadel services, a source adapter sidecar scenario (using built-in http_json/http_flow/fhir engines), a static metadata publisher, and narrated demo clients together with Registry Platform, Relay, and Notary source pins, fixtures, and smoke tests.",
     "owns": [
-      "End-to-end local topology for Relay, Notary, live Postgres, live Zitadel, the private OpenFn sidecar path, the static metadata publisher, and demo-client fixtures.",
+      "End-to-end local topology for Relay, Notary, live Postgres, live Zitadel, the source adapter sidecar path (built-in http_json/http_flow/fhir engines), the static metadata publisher, and demo-client fixtures.",
       "Demo scripts, smoke checks, generated local credentials, live-service checks, static metadata checks, and narrated client flows.",
       "Citizen self-attestation walkthrough that exercises the Notary OID4VCI flow end-to-end through the `just citizen-oid4vci-*` recipes.",
       "Acceptance rehearsal after rename waves land."
