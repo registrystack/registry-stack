@@ -631,6 +631,7 @@ crates/registry-notary-source-adapter-sidecar/scripts/smoke-openfn-worker.sh
 crates/registry-notary-source-adapter-sidecar/scripts/smoke-openfn-sidecar.sh
 crates/registry-notary-source-adapter-sidecar/scripts/smoke-openfn-http-sidecar.sh
 crates/registry-notary-source-adapter-sidecar/scripts/smoke-http-json-dhis2-sidecar.sh
+crates/registry-notary-source-adapter-sidecar/scripts/smoke-http-json-dhis2-health-sidecar.sh
 crates/registry-notary-source-adapter-sidecar/scripts/smoke-http-flow-dhis2-sidecar.sh
 crates/registry-notary-source-adapter-sidecar/scripts/load-http-json-sidecar.sh
 ```
@@ -680,12 +681,19 @@ For a live target canary against the DHIS2 play server, run:
 HTTP_JSON_DHIS2_PASSWORD=... \
   crates/registry-notary-source-adapter-sidecar/scripts/smoke-http-json-dhis2-sidecar.sh
 
+HTTP_JSON_DHIS2_HEALTH_PASSWORD=... \
+  crates/registry-notary-source-adapter-sidecar/scripts/smoke-http-json-dhis2-health-sidecar.sh
+
 HTTP_FLOW_DHIS2_PASSWORD=... \
   crates/registry-notary-source-adapter-sidecar/scripts/smoke-http-flow-dhis2-sidecar.sh
-
-OPENFN_DHIS2_PASSWORD=... \
-  crates/registry-notary-source-adapter-sidecar/scripts/smoke-openfn-dhis2-sidecar.sh
 ```
+
+The `smoke-http-json-dhis2-health-sidecar.sh` canary exercises the built-in
+DHIS2 health-programme source ([examples/dhis2-health-sidecar.yaml](examples/dhis2-health-sidecar.yaml)),
+the http_json replacement for the retired OpenFn `dhis2-health-lookup.js` job.
+It confirms the DHIS2 tracker collection query shape and the derived RDA health
+fields. See [docs/dhis2-health-parity.md](docs/dhis2-health-parity.md) for the
+parity gate that asserts byte-for-byte equivalence with the OpenFn output.
 
 The http_json, http_flow, and OpenFn DHIS2 canaries default to the public play
 instance URL and username. For local runs, provide the matching password

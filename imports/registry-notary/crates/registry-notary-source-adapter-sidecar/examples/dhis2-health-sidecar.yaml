@@ -1,0 +1,151 @@
+# Local development unsigned manifest.
+# Production startup requires config_trust and a governed TUF target; run this
+# file only with --allow-unsigned-dev-config.
+#
+# Built-in DHIS2 health-programme source using the http_json engine. This
+# replaces the OpenFn job at registry-lab config/openfn/jobs/dhis2-health-lookup.js
+# with a single governed GET plus a CEL mapping that reproduces the same RDA
+# record shape.
+#
+# DHIS2 query shape (MUST be confirmed by the live smoke in CI):
+#   The OpenFn job fetched a single tracked entity via
+#   GET /api/tracker/trackedEntities/{id}, whose JSON root *is* the entity.
+#   http_json uses LITERAL paths, so the id cannot go in the path. Instead this
+#   manifest queries the tracker COLLECTION endpoint
+#   GET /api/tracker/trackedEntities?trackedEntities={id}&orgUnitMode=ALL&fields=...
+#   whose response root key is `trackedEntities` (an array). The CEL therefore
+#   selects element [0] and reproduces the JS output for that single entity.
+#   Per DHIS2 docs the collection endpoint requires either an orgUnit or
+#   orgUnitMode=ALL/ACCESSIBLE when filtering by explicit UID; orgUnitMode=ALL
+#   is used here. The exact request parameter name (`trackedEntities` plural vs
+#   `trackedEntity` singular) and the response root key MUST be confirmed by the
+#   live DHIS2 smoke (scripts/smoke-http-json-dhis2-health-sidecar.sh).
+server:
+  bind: "127.0.0.1:9191"
+  request_timeout_ms: 30000
+  request_body_timeout_ms: 10000
+  http1_header_read_timeout_ms: 10000
+  max_connections: 1024
+auth:
+  bearer_tokens:
+    - id: notary
+      hash_env: DEV_SIDECAR_TOKEN_HASH
+limits:
+  max_workers: 2
+  worker_timeout_ms: 15000
+  max_worker_memory_mb: 512
+  max_output_bytes: 1048576
+  max_request_bytes: 16384
+  max_query_parameter_bytes: 2048
+  max_batch_items: 100
+  liveness_window_ms: 30000
+  retry_after_seconds: 1
+sources:
+  dhis2_health:
+    engine: http_json
+    dataset: dhis2
+    entity: health_programme
+    credential_env: DHIS2_HEALTH_CREDENTIAL_JSON
+    credential_public_fields:
+      - baseUrl
+    allowed_base_urls:
+      - https://play.im.dhis2.org/stable-2-43-0
+    http_json:
+      method: GET
+      base_url:
+        cel: credential_public.baseUrl
+      path: "/api/tracker/trackedEntities"
+      query:
+        # Strip the 'dhis2:tracked-entity:' reconciliation prefix the caller may
+        # carry, matching the OpenFn job's lookupValue.startsWith(...) handling.
+        #
+        # ASSUMPTION (must be confirmed in CI): crosswalk-core's CEL provides the
+        # standard string methods startsWith() and substring() and size() over a
+        # string. These are standard CEL string functions but are not yet used
+        # elsewhere in this crate's manifests, so the live smoke must confirm
+        # they resolve. If they are unavailable, drop this guard and require the
+        # caller (Notary) to pass the bare tracked entity UID (the lab civil
+        # pipeline already stores the bare UID alongside the reconciliation_ref).
+        trackedEntities:
+          cel: >-
+            lookup.value.startsWith('dhis2:tracked-entity:')
+              ? lookup.value.substring(size('dhis2:tracked-entity:'))
+              : lookup.value
+        orgUnitMode:
+          cel: '"ALL"'
+        fields:
+          cel: >-
+            "trackedEntity,orgUnit,attributes[attribute,value],enrollments[enrollment,program,status,enrolledAt,events[event,programStage,status,occurredAt,scheduledAt]]"
+      auth:
+        type: basic
+        username:
+          secret: username
+        password:
+          secret: password
+      response:
+        # Reproduce the dhis2-health-lookup.js output EXACTLY for the single
+        # matched tracked entity. body.trackedEntities[0] is the first (and only)
+        # element of the tracker collection response. If the entity is not found
+        # the response array is empty and we return an empty record list (RDA
+        # not-found, matching how the OpenFn path would yield no record).
+        #
+        # CEL collection macros (filter/map/exists/exists_one/all) are assumed
+        # available in crosswalk-core 0.2.x (added by a separate change).
+        #
+        # ASSUMPTION (must be confirmed by CI parity gate): the JS counts events
+        # across *all* child-program enrollments (childEvents.flatMap then
+        # .length). DHIS2 normally allows at most one enrollment per program per
+        # tracked entity, and the JS enrollment() helper itself uses .find (first
+        # match), so child_health_visit_count below is computed from the events
+        # of the first child-program enrollment. CEL's macro set has no
+        # fold/sum, so a true cross-enrollment sum is not expressible here; the
+        # single-enrollment form matches the OpenFn output for every real play
+        # instance entity. If a tracked entity ever carried multiple child
+        # enrollments, this field would need the http_flow exception variant.
+        records:
+          cel: >-
+            size(body.trackedEntities) == 0 ? [] : [
+              {
+                "tracked_entity": body.trackedEntities[0].trackedEntity,
+                "org_unit": body.trackedEntities[0].orgUnit,
+                "first_name": size(body.trackedEntities[0].attributes.filter(a, a.attribute == 'w75KJ2mc4zz')) == 0
+                  ? null
+                  : body.trackedEntities[0].attributes.filter(a, a.attribute == 'w75KJ2mc4zz')[0].value,
+                "last_name": size(body.trackedEntities[0].attributes.filter(a, a.attribute == 'zDhUuAYrxNC')) == 0
+                  ? null
+                  : body.trackedEntities[0].attributes.filter(a, a.attribute == 'zDhUuAYrxNC')[0].value,
+                "child_program_code": "DHIS2_CHILD_PROGRAM",
+                "child_program_status": size(body.trackedEntities[0].enrollments.filter(e, e.program == 'IpHINAT79UW')) == 0
+                  ? null
+                  : body.trackedEntities[0].enrollments.filter(e, e.program == 'IpHINAT79UW')[0].status,
+                "child_program_active": body.trackedEntities[0].enrollments.exists(e, e.program == 'IpHINAT79UW' && e.status == 'ACTIVE'),
+                "child_age_band": body.trackedEntities[0].enrollments.exists(e, e.program == 'IpHINAT79UW') ? '5_to_17' : 'unknown',
+                "reconciliation_ref": 'dhis2:tracked-entity:' + body.trackedEntities[0].trackedEntity,
+                "maternal_pnc_status": size(body.trackedEntities[0].enrollments.filter(e, e.program == 'uy2gU8kT1jF')) == 0
+                  ? null
+                  : body.trackedEntities[0].enrollments.filter(e, e.program == 'uy2gU8kT1jF')[0].status,
+                "maternal_pnc_active": body.trackedEntities[0].enrollments.exists(e, e.program == 'uy2gU8kT1jF' && e.status == 'ACTIVE'),
+                "child_health_visit_recorded": body.trackedEntities[0].enrollments.exists(e,
+                  e.program == 'IpHINAT79UW' && e.events.exists(ev,
+                    ev.status == 'COMPLETED' && (ev.programStage == 'A03MvHHogjR' || ev.programStage == 'ZzYYXq4fJie'))),
+                "child_health_visit_count": size(body.trackedEntities[0].enrollments.filter(e, e.program == 'IpHINAT79UW')) == 0
+                  ? 0
+                  : size(body.trackedEntities[0].enrollments.filter(e, e.program == 'IpHINAT79UW')[0].events),
+                "tb_program_status": size(body.trackedEntities[0].enrollments.filter(e, e.program == 'ur1Edk5Oe2n')) == 0
+                  ? null
+                  : body.trackedEntities[0].enrollments.filter(e, e.program == 'ur1Edk5Oe2n')[0].status,
+                "tb_program_active": body.trackedEntities[0].enrollments.exists(e, e.program == 'ur1Edk5Oe2n' && e.status == 'ACTIVE')
+              }
+            ]
+    smoke_lookup:
+      field: tracked_entity
+      value: PQfMcpmXeFE
+      fields:
+        - tracked_entity
+        - org_unit
+        - child_program_code
+        - child_program_status
+        - child_program_active
+        - child_age_band
+        - reconciliation_ref
+      purpose: startup-readiness-smoke
