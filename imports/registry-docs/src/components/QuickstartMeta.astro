@@ -10,7 +10,10 @@ interface Props {
   prerequisites?: string[];
 }
 
-const { outcome, time, level, prerequisites = [] } = Astro.props;
+const { outcome, time, level, prerequisites } = Astro.props;
+// Normalize defensively: an MDX author can pass null or a non-array by mistake,
+// and the default only guards the omitted (undefined) case.
+const items = Array.isArray(prerequisites) ? prerequisites : [];
 ---
 
 <dl class="card-meta quickstart-meta">
@@ -28,11 +31,11 @@ const { outcome, time, level, prerequisites = [] } = Astro.props;
       <dd>{level}</dd>
     </>
   )}
-  {prerequisites.length > 0 && (
+  {items.length > 0 && (
     <>
       <dt>Prerequisites</dt>
       <dd class="meta-chips">
-        {prerequisites.map((item) => (
+        {items.map((item) => (
           <span class="inline-chip">{item}</span>
         ))}
       </dd>

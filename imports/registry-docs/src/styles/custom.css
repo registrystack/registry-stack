@@ -233,25 +233,29 @@ body {
 }
 
 /* The theme toggle is set as a quiet utility control: the same bordered,
-   square chrome as the version select, so the masthead reads as one row of
-   register controls rather than a button. */
-.registry-utility starlight-theme-select {
+   square chrome as the version select, so the masthead (and the mobile menu
+   footer) reads as a row of register controls rather than a button. */
+.registry-utility starlight-theme-select,
+.registry-mobile-menu-footer starlight-theme-select {
   display: inline-flex;
   align-items: center;
 }
 
-.registry-utility starlight-theme-select label {
+.registry-utility starlight-theme-select label,
+.registry-mobile-menu-footer starlight-theme-select label {
   color: var(--registry-muted);
 }
 
-.registry-utility starlight-theme-select label:hover {
+.registry-utility starlight-theme-select label:hover,
+.registry-mobile-menu-footer starlight-theme-select label:hover {
   color: var(--registry-ink);
 }
 
 /* Only the chrome is overridden (border, surface, ink, type). Padding is left
    to Starlight's Select, which sizes the inline padding around its leading
    theme icon and trailing caret, so the icon never overlaps the label. */
-.registry-utility starlight-theme-select select {
+.registry-utility starlight-theme-select select,
+.registry-mobile-menu-footer starlight-theme-select select {
   min-block-size: 32px;
   border: 1px solid var(--registry-rule);
   background: var(--registry-surface);
