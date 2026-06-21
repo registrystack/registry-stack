@@ -11,16 +11,16 @@
       "description": "Current Registry Docs build from the main branch.",
       "products": {
         "registry-relay": {
-          "version": "beta-3 candidate",
-          "ref": "384d95795881a3ce6000cea6219c89353dfa5119"
+          "version": "v0.4.0",
+          "ref": "3c020d79bb1cc707dc7c68e9d47395368f770e27"
         },
         "registry-notary": {
-          "version": "beta-3 candidate",
-          "ref": "50f8ffe04cd9b1cf1986f5742b6bf450642dab03"
+          "version": "v0.5.0",
+          "ref": "4a5a7fb89acf7788bd1d540759dedb2f25419c2c"
         },
         "registry-manifest": {
-          "version": "beta-3 candidate",
-          "ref": "71c9ead582ea81a82022c37357b38b98d3f18f48"
+          "version": "v0.2.1",
+          "ref": "bf73209a0487a2f2e0598b389faad39f36a37f1b"
         }
       }
     },
@@ -34,28 +34,28 @@
       "description": "Beta-3 candidate documentation set prepared for release proof.",
       "products": {
         "registry-platform": {
-          "version": "beta-3 candidate",
-          "ref": "8bd2ede0d1b58761f78d8129a59e366eb59929ea"
+          "version": "v0.3.1",
+          "ref": "0abc4fde81764f6c81143b622624415232197129"
         },
         "registry-manifest": {
-          "version": "beta-3 candidate",
-          "ref": "71c9ead582ea81a82022c37357b38b98d3f18f48"
+          "version": "v0.2.1",
+          "ref": "bf73209a0487a2f2e0598b389faad39f36a37f1b"
         },
         "registry-notary": {
-          "version": "beta-3 candidate",
-          "ref": "50f8ffe04cd9b1cf1986f5742b6bf450642dab03"
+          "version": "v0.5.0",
+          "ref": "4a5a7fb89acf7788bd1d540759dedb2f25419c2c"
         },
         "registry-relay": {
-          "version": "beta-3 candidate",
-          "ref": "384d95795881a3ce6000cea6219c89353dfa5119"
+          "version": "v0.4.0",
+          "ref": "3c020d79bb1cc707dc7c68e9d47395368f770e27"
         },
         "registry-lab": {
-          "version": "beta-3 candidate",
-          "ref": "ed4700972efbf70f46e7c5e2ce48525d575bd0b2"
+          "version": "registry-stack-beta-3-2026-06-21",
+          "ref": "2ae450f74a9985e76289b168914ad8972f481630"
         },
         "registry-registryctl": {
-          "version": "v0.2.0 candidate",
-          "ref": "156c1ec71bf243af396959ee549c42ce81d36ebb"
+          "version": "v0.2.0",
+          "ref": "30ffbe8672b1a8c975ca0722ea93d44a8191380b"
         },
         "crosswalk": {
           "version": "crosswalk-core-v0.2.0",
