@@ -30,14 +30,14 @@ use registry_notary_core::{
     AccessMode, BatchEvaluateItemRequest, BatchEvaluateRequest, BoundedClaimId,
     BoundedCorrelationId, ClaimRef, ClaimResultView, ClaimSet, ConfigAuditEvent, ConfigMetadata,
     CredentialIssueRequest, CredentialProfileConfig, EvaluateRequest, EvidenceAuthMode,
-    EvidenceAuthorizationDetails, EvidenceBatchItemAuditEvent, EvidenceConfig, EvidenceEntity,
-    EvidenceEntityReference, EvidenceError, EvidencePrincipal, EvidenceRelationship,
-    FederationConfig, Hashed, HolderRequest, Oid4vciConfig, Oid4vciCredentialConfigurationConfig,
-    Oid4vciDisplayImageConfig, Oid4vciIssuerDisplayConfig, PolicyIdentifier, RateLimitBucket,
-    RegistryNotaryAdminListenerMode, RenderEvaluationRequest, SelfAttestationConfig,
-    SelfAttestationDenialCode, SelfAttestationScopePolicy, SigningKeyStatus, SourceCapability,
-    StandaloneRegistryNotaryConfig, StoredSelfAttestationMetadata, SubjectRequest,
-    VerifiedClaimValue, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
+    EvidenceBatchItemAuditEvent, EvidenceConfig, EvidenceEntity, EvidenceEntityReference,
+    EvidenceError, EvidencePrincipal, EvidenceRelationship, FederationConfig, Hashed,
+    HolderRequest, Oid4vciConfig, Oid4vciCredentialConfigurationConfig, Oid4vciDisplayImageConfig,
+    Oid4vciIssuerDisplayConfig, PolicyIdentifier, RateLimitBucket, RegistryNotaryAdminListenerMode,
+    RenderEvaluationRequest, SelfAttestationConfig, SelfAttestationDenialCode,
+    SelfAttestationScopePolicy, SigningKeyStatus, SourceCapability, StandaloneRegistryNotaryConfig,
+    StoredSelfAttestationMetadata, SubjectRequest, VerifiedClaimValue, FORMAT_CLAIM_RESULT_JSON,
+    FORMAT_SD_JWT_VC,
 };
 use registry_platform_audit::AuditKeyHasher;
 use registry_platform_config::RegistryTrustRoot;
@@ -3068,7 +3068,8 @@ async fn credential_status_list_response(
     };
     let now = OffsetDateTime::now_utc();
     let ttl_seconds = 300_u64;
-    let Some(expires_at) = now.checked_add(time::Duration::seconds(ttl_seconds as i64)) else {
+    let Some(token_expires_at) = now.checked_add(time::Duration::seconds(ttl_seconds as i64))
+    else {
         return credential_status_problem(
             StatusCode::SERVICE_UNAVAILABLE,
             "credential_status.unavailable",
@@ -3077,17 +3078,43 @@ async fn credential_status_list_response(
         );
     };
     let effective_status = record.effective_status(now);
+    let status_list = encoded_single_entry_status_list(&effective_status);
+    let status_url = state.credential_status.status_url(&record.credential_id);
+    let public_jwk = issuer.public_jwk();
+    let Ok(cache_key) = status_list_jwt_cache_key(
+        record,
+        &status_url,
+        &effective_status,
+        status_list,
+        ttl_seconds,
+        &public_jwk,
+    ) else {
+        return credential_status_problem(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "credential_status.unavailable",
+            "Credential status unavailable",
+            "credential status cache key could not be calculated",
+        );
+    };
+    let cache_expires_at =
+        status_list_jwt_cache_expires_at(record, &effective_status, token_expires_at);
     let payload = json!({
-        "sub": state.credential_status.status_url(&record.credential_id),
+        "sub": status_url,
         "iat": now.unix_timestamp(),
-        "exp": expires_at.unix_timestamp(),
+        "exp": token_expires_at.unix_timestamp(),
         "ttl": ttl_seconds,
         "status_list": {
             "bits": 8,
-            "lst": encoded_single_entry_status_list(&effective_status),
+            "lst": status_list,
         }
     });
-    let Ok(token) = issuer.sign_compact_jwt("statuslist+jwt", payload).await else {
+    let Ok(token) = state
+        .status_list_jwt_cache
+        .get_or_insert_with(cache_key, now, cache_expires_at, || async move {
+            issuer.sign_compact_jwt("statuslist+jwt", payload).await
+        })
+        .await
+    else {
         return credential_status_problem(
             StatusCode::SERVICE_UNAVAILABLE,
             "credential_status.unavailable",
@@ -3101,6 +3128,111 @@ async fn credential_status_list_response(
         HeaderValue::from_static("application/statuslist+jwt"),
     );
     response
+}
+
+#[derive(Debug)]
+struct StatusListJwtCache {
+    entries: tokio::sync::Mutex<BTreeMap<String, StatusListJwtCacheEntry>>,
+}
+
+#[derive(Debug)]
+struct StatusListJwtCacheEntry {
+    token: String,
+    expires_at: OffsetDateTime,
+}
+
+impl Default for StatusListJwtCache {
+    fn default() -> Self {
+        Self {
+            entries: tokio::sync::Mutex::new(BTreeMap::new()),
+        }
+    }
+}
+
+impl StatusListJwtCache {
+    async fn get_or_insert_with<F, Fut>(
+        &self,
+        key: String,
+        now: OffsetDateTime,
+        expires_at: OffsetDateTime,
+        sign: F,
+    ) -> Result<String, EvidenceError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<String, EvidenceError>>,
+    {
+        let mut entries = self.entries.lock().await;
+        entries.retain(|_, entry| entry.expires_at > now);
+        if let Some(entry) = entries.get(&key) {
+            return Ok(entry.token.clone());
+        }
+        let token = sign().await?;
+        if expires_at > now {
+            entries.insert(
+                key,
+                StatusListJwtCacheEntry {
+                    token: token.clone(),
+                    expires_at,
+                },
+            );
+        }
+        Ok(token)
+    }
+}
+
+fn status_list_jwt_cache_key(
+    record: &CredentialStatusRecord,
+    status_url: &str,
+    effective_status: &str,
+    status_list: &str,
+    ttl_seconds: u64,
+    public_jwk: &Value,
+) -> Result<String, serde_json::Error> {
+    let public_jwk_hash = sha256_json(public_jwk)?;
+    let key_material = json!({
+        "typ": "statuslist+jwt",
+        "issuer": record.issuer,
+        "issuer_public_jwk_sha256": public_jwk_hash,
+        "audience": Value::Null,
+        "credential_id": record.credential_id,
+        "credential_profile": record.credential_profile,
+        "status_url": status_url,
+        "status": record.status,
+        "effective_status": effective_status,
+        "issued_at": record.issued_at,
+        "expires_at": record.expires_at,
+        "updated_at": record.updated_at,
+        "ttl": ttl_seconds,
+        "status_list": {
+            "bits": 8,
+            "lst": status_list,
+        }
+    });
+    sha256_json(&key_material)
+}
+
+fn sha256_json(value: &Value) -> Result<String, serde_json::Error> {
+    let bytes = serde_json::to_vec(value)?;
+    Ok(format!("sha256:{}", hex_encode(&Sha256::digest(bytes))))
+}
+
+fn status_list_jwt_cache_expires_at(
+    record: &CredentialStatusRecord,
+    effective_status: &str,
+    token_expires_at: OffsetDateTime,
+) -> OffsetDateTime {
+    if record.status == registry_notary_core::CREDENTIAL_STATUS_VALID
+        && effective_status == registry_notary_core::CREDENTIAL_STATUS_VALID
+    {
+        return OffsetDateTime::parse(
+            &record.expires_at,
+            &time::format_description::well_known::Rfc3339,
+        )
+        .ok()
+        .filter(|credential_expires_at| *credential_expires_at < token_expires_at)
+        .unwrap_or(token_expires_at);
+    }
+    token_expires_at
 }
 
 #[derive(Debug, Deserialize)]
@@ -3273,6 +3405,7 @@ pub struct RegistryNotaryApiState {
     pub(crate) self_attestation_rate_keys: Arc<SelfAttestationRateLimitKeys>,
     pub(crate) replay: ReplayStores,
     pub(crate) credential_status: CredentialStatusStore,
+    status_list_jwt_cache: Arc<StatusListJwtCache>,
     pub(crate) metrics: Arc<AppMetrics>,
     pub(crate) source: Arc<dyn SourceReader>,
     pub(crate) store: Arc<EvidenceStore>,
@@ -3501,6 +3634,7 @@ impl RegistryNotaryApiState {
             self_attestation_rate_keys,
             replay,
             credential_status,
+            status_list_jwt_cache: Arc::new(StatusListJwtCache::default()),
             metrics,
             source,
             store,
@@ -9016,8 +9150,8 @@ mod tests {
     use base64::Engine;
     use registry_notary_core::{
         BoundedVerifiedClaims, CredentialStatusConfig, CredentialStatusRedisConfig,
-        SourceBindingConfig, SubjectRequest, VerifiedClaimName, VerifiedClaimValue,
-        CREDENTIAL_STATUS_STORAGE_REDIS,
+        EvidenceAuthorizationDetails, SourceBindingConfig, SubjectRequest, VerifiedClaimName,
+        VerifiedClaimValue, CREDENTIAL_STATUS_STORAGE_REDIS,
     };
     use registry_platform_crypto::{did_jwk_from_public_jwk, sign, LocalJwkSigner, PrivateJwk};
     use registry_platform_replay::ReplayInsertOutcome;
@@ -11495,6 +11629,58 @@ mod tests {
         }
     }
 
+    struct CountingSigningProvider {
+        inner: LocalJwkSigner,
+        sign_count: Arc<AtomicUsize>,
+    }
+
+    impl CountingSigningProvider {
+        fn new(sign_count: Arc<AtomicUsize>) -> Self {
+            let mut jwk = PrivateJwk::parse(&issuer_private_jwk()).expect("issuer key parses");
+            jwk.kid = Some("did:web:issuer.example#key-1".to_string());
+            let inner = LocalJwkSigner::new(jwk).expect("local signer builds");
+            Self { inner, sign_count }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl SigningProvider for CountingSigningProvider {
+        fn algorithm(&self) -> registry_platform_crypto::SigningAlgorithm {
+            self.inner.algorithm()
+        }
+
+        fn key_id(&self) -> &str {
+            self.inner.key_id()
+        }
+
+        fn public_jwk(&self) -> PublicJwk {
+            self.inner.public_jwk()
+        }
+
+        async fn sign(
+            &self,
+            payload: &[u8],
+        ) -> Result<Vec<u8>, registry_platform_crypto::SigningError> {
+            self.sign_count.fetch_add(1, Ordering::SeqCst);
+            self.inner.sign(payload).await
+        }
+    }
+
+    struct CountingIssuerResolver {
+        sign_count: Arc<AtomicUsize>,
+    }
+
+    impl EvidenceIssuerResolver for CountingIssuerResolver {
+        fn issuer(
+            &self,
+            _profile_id: &str,
+        ) -> Result<registry_notary_core::sd_jwt::EvidenceIssuer, EvidenceError> {
+            registry_notary_core::sd_jwt::EvidenceIssuer::from_signing_provider(Arc::new(
+                CountingSigningProvider::new(Arc::clone(&self.sign_count)),
+            ))
+        }
+    }
+
     #[tokio::test]
     async fn credential_status_list_response_is_signed_status_list_jwt() {
         let credential_status = CredentialStatusStore::from_config(&CredentialStatusConfig {
@@ -11560,6 +11746,57 @@ mod tests {
         assert_eq!(payload["ttl"], json!(300));
         assert_eq!(payload["status_list"]["bits"], json!(8));
         assert_eq!(payload["status_list"]["lst"], json!("eJxjAAAAAQAB"));
+    }
+
+    #[tokio::test]
+    async fn credential_status_list_response_reuses_cached_signature() {
+        let credential_status = CredentialStatusStore::from_config(&CredentialStatusConfig {
+            enabled: true,
+            base_url: "https://issuer.example".to_string(),
+            ..CredentialStatusConfig::default()
+        })
+        .expect("credential status builds");
+        let issued_at = OffsetDateTime::now_utc();
+        credential_status
+            .record_issued(
+                "credential-cache".to_string(),
+                "did:web:issuer.example".to_string(),
+                "civil_status_sd_jwt".to_string(),
+                issued_at,
+                issued_at + time::Duration::seconds(600),
+            )
+            .await
+            .expect("status record writes");
+        let record = credential_status
+            .get("credential-cache")
+            .await
+            .expect("status record reads")
+            .expect("status record exists");
+        let sign_count = Arc::new(AtomicUsize::new(0));
+        let state = RegistryNotaryApiState::new_with_runtime_blocks(
+            Arc::new(evidence_config()),
+            Arc::new(SelfAttestationConfig::default()),
+            Arc::new(Oid4vciConfig::default()),
+            Arc::new(FederationConfig::default()),
+            None,
+            AuditKeyHasher::unkeyed_dev_only(),
+            ReplayStores::memory(),
+            credential_status,
+            Arc::new(AppMetrics::default()),
+            Arc::new(CountingSource::default()),
+            Arc::new(EvidenceStore::default()),
+            Arc::new(CountingIssuerResolver {
+                sign_count: Arc::clone(&sign_count),
+            }),
+            SignerReadiness::default(),
+        );
+
+        let first = credential_status_list_response(&state, &record).await;
+        let second = credential_status_list_response(&state, &record).await;
+
+        assert_eq!(first.status(), StatusCode::OK);
+        assert_eq!(second.status(), StatusCode::OK);
+        assert_eq!(sign_count.load(Ordering::SeqCst), 1);
     }
 
     #[test]
