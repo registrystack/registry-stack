@@ -161,6 +161,7 @@ mod tests {
                 binding_claim: "national_id".to_string(),
                 id_type: "national_id".to_string(),
             }),
+            relationship: None,
             access_mode: Some(AccessMode::SelfAttestation),
             assisted_access_context: None,
         }

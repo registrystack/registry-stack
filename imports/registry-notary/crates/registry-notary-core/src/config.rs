@@ -2553,6 +2553,8 @@ pub struct SelfAttestationConfig {
     #[serde(default)]
     pub credential_profiles: Vec<String>,
     #[serde(default)]
+    pub delegation: SelfAttestationDelegationConfig,
+    #[serde(default)]
     pub rate_limits: SelfAttestationRateLimitsConfig,
 }
 
@@ -2577,6 +2579,7 @@ impl Default for SelfAttestationConfig {
             required_scopes: Vec::new(),
             allowed_wallet_origins: Vec::new(),
             credential_profiles: Vec::new(),
+            delegation: SelfAttestationDelegationConfig::default(),
             rate_limits: SelfAttestationRateLimitsConfig::default(),
         }
     }
@@ -2647,6 +2650,7 @@ impl SelfAttestationConfig {
             "self_attestation.credential_profiles",
             &self.credential_profiles,
         )?;
+        self.delegation.validate(evidence)?;
         self.rate_limits.validate()?;
         validate_exact_wallet_origins(&self.allowed_wallet_origins)?;
 
@@ -2736,6 +2740,167 @@ impl SelfAttestationConfig {
         Err(EvidenceConfigError::InvalidSelfAttestationConfig {
             reason: reason.into(),
         })
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SelfAttestationDelegationConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub allowed_relationships: Vec<SelfAttestationDelegatedRelationshipConfig>,
+}
+
+impl SelfAttestationDelegationConfig {
+    fn validate(&self, evidence: &EvidenceConfig) -> Result<(), EvidenceConfigError> {
+        if !self.enabled {
+            if !self.allowed_relationships.is_empty() {
+                return Err(EvidenceConfigError::InvalidSelfAttestationConfig {
+                    reason:
+                        "self_attestation.delegation.enabled=false requires allowed_relationships to be empty"
+                            .to_string(),
+                });
+            }
+            return Ok(());
+        }
+        if self.allowed_relationships.is_empty() {
+            return Err(EvidenceConfigError::InvalidSelfAttestationConfig {
+                reason: "self_attestation.delegation.enabled requires allowed_relationships"
+                    .to_string(),
+            });
+        }
+        let claim_ids: HashSet<&str> = evidence
+            .claims
+            .iter()
+            .map(|claim| claim.id.as_str())
+            .collect();
+        let mut relationship_types = HashSet::new();
+        for relationship in &self.allowed_relationships {
+            relationship.validate(evidence, &claim_ids)?;
+            if !relationship_types.insert(relationship.relationship_type.as_str()) {
+                return Err(EvidenceConfigError::InvalidSelfAttestationConfig {
+                    reason: format!(
+                        "self_attestation.delegation.allowed_relationships contains duplicate relationship_type '{}'",
+                        relationship.relationship_type
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn relationship(
+        &self,
+        relationship_type: &str,
+    ) -> Option<&SelfAttestationDelegatedRelationshipConfig> {
+        self.allowed_relationships
+            .iter()
+            .find(|relationship| relationship.relationship_type == relationship_type)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SelfAttestationDelegatedRelationshipConfig {
+    pub relationship_type: String,
+    pub proof_claim: String,
+    #[serde(default)]
+    pub target_id_type: Option<String>,
+    #[serde(default)]
+    pub allowed_claims: Vec<String>,
+    #[serde(default)]
+    pub allowed_purposes: Vec<String>,
+    #[serde(default)]
+    pub allowed_formats: Vec<String>,
+    #[serde(default)]
+    pub allowed_disclosures: Vec<String>,
+    #[serde(default)]
+    pub credential_profiles: Vec<String>,
+}
+
+impl SelfAttestationDelegatedRelationshipConfig {
+    fn validate(
+        &self,
+        evidence: &EvidenceConfig,
+        claim_ids: &HashSet<&str>,
+    ) -> Result<(), EvidenceConfigError> {
+        if self.relationship_type.trim().is_empty() {
+            return Err(EvidenceConfigError::InvalidSelfAttestationConfig {
+                reason:
+                    "self_attestation.delegation.allowed_relationships.relationship_type is required"
+                        .to_string(),
+            });
+        }
+        if self.proof_claim.trim().is_empty() || !claim_ids.contains(self.proof_claim.as_str()) {
+            return Err(EvidenceConfigError::InvalidSelfAttestationConfig {
+                reason: format!(
+                    "self_attestation.delegation proof_claim references unknown claim '{}'",
+                    self.proof_claim
+                ),
+            });
+        }
+        if let Some(target_id_type) = self.target_id_type.as_deref() {
+            if target_id_type.trim().is_empty() {
+                return Err(EvidenceConfigError::InvalidSelfAttestationConfig {
+                    reason: "self_attestation.delegation target_id_type must not be blank"
+                        .to_string(),
+                });
+            }
+        }
+        validate_non_empty_entries(
+            "self_attestation.delegation.allowed_claims",
+            &self.allowed_claims,
+        )?;
+        validate_non_empty_entries(
+            "self_attestation.delegation.allowed_purposes",
+            &self.allowed_purposes,
+        )?;
+        validate_non_empty_entries(
+            "self_attestation.delegation.allowed_formats",
+            &self.allowed_formats,
+        )?;
+        validate_non_empty_entries(
+            "self_attestation.delegation.allowed_disclosures",
+            &self.allowed_disclosures,
+        )?;
+        validate_entries(
+            "self_attestation.delegation.credential_profiles",
+            &self.credential_profiles,
+        )?;
+        for claim_id in &self.allowed_claims {
+            if !claim_ids.contains(claim_id.as_str()) {
+                return Err(EvidenceConfigError::InvalidSelfAttestationConfig {
+                    reason: format!(
+                        "self_attestation.delegation allowed_claims references unknown claim '{claim_id}'"
+                    ),
+                });
+            }
+            let claim = evidence
+                .claims
+                .iter()
+                .find(|claim| claim.id == *claim_id)
+                .expect("claim id was checked above");
+            if !claim.depends_on.iter().any(|dep| dep == &self.proof_claim) {
+                return Err(EvidenceConfigError::InvalidSelfAttestationConfig {
+                    reason: format!(
+                        "delegated claim '{claim_id}' must depend_on proof_claim '{}'",
+                        self.proof_claim
+                    ),
+                });
+            }
+        }
+        for profile_id in &self.credential_profiles {
+            if !evidence.credential_profiles.contains_key(profile_id) {
+                return Err(EvidenceConfigError::InvalidSelfAttestationConfig {
+                    reason: format!(
+                        "self_attestation.delegation credential_profiles references unknown profile '{profile_id}'"
+                    ),
+                });
+            }
+        }
+        Ok(())
     }
 }
 

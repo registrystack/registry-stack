@@ -883,6 +883,7 @@ fn principal_with_policy_context(
         jurisdiction: jurisdiction.map(ToOwned::to_owned),
         assurance_level: assurance_level.map(ToOwned::to_owned),
         subject: None,
+        relationship: None,
         access_mode: Some(AccessMode::MachineClient),
         assisted_access_context: None,
     });

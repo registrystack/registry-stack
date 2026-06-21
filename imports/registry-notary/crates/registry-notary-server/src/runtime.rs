@@ -163,6 +163,24 @@ fn selected_claim_refs(
         .collect()
 }
 
+fn scoped_authorization_claim_refs(
+    evidence: &EvidenceConfig,
+    claims: &[ClaimRef],
+    claim_versions: &ClaimVersionSelections,
+    source_capability: &SourceCapability,
+) -> Result<Vec<ClaimRef>, EvidenceError> {
+    let mut claim_refs = selected_claim_refs(evidence, claims, claim_versions)?;
+    if let SourceCapability::DelegatedAttestation { proof_claim_id, .. } = source_capability {
+        let proof_claim =
+            find_claim_for_selection(evidence, proof_claim_id.as_str(), claim_versions)?;
+        let proof_ref = ClaimRef::with_version(&proof_claim.id, &proof_claim.version);
+        if !claim_refs.contains(&proof_ref) {
+            claim_refs.push(proof_ref);
+        }
+    }
+    Ok(claim_refs)
+}
+
 fn find_claim_for_selection<'a>(
     config: &'a EvidenceConfig,
     claim_id: &str,
@@ -592,6 +610,7 @@ async fn prefetch_bulk_bindings(
                 if source_scoped_trusted_policy(
                     &evidence,
                     claim,
+                    &source_capability,
                     context,
                     trusted_policy,
                     purpose,
@@ -1489,7 +1508,12 @@ impl RegistryNotaryRuntime {
             .as_ref()
             .map(|_| Arc::new(Semaphore::new(self.cel_config.worker_count.max(1))));
         let policy = evaluation_policy_from_self_attestation(self_attestation.as_ref());
-        let request_claim_refs = selected_claim_refs(&evidence, &request.claims, &claim_versions)?;
+        let request_claim_refs = scoped_authorization_claim_refs(
+            &evidence,
+            &request.claims,
+            &claim_versions,
+            &source_capability,
+        )?;
         let trusted_policy =
             TrustedPolicyContext::from_principal(principal).with_request_claims(request_claim_refs);
         let internal = self
@@ -2144,7 +2168,22 @@ async fn evaluate_claim_task(
     if !claim.operations.evaluate.enabled {
         return Err(EvidenceError::OperationUnsupported);
     }
-    let (sources, observed_at, redaction_fields, matching_policy_audit) = load_sources(
+    if let Some(proof_claim_id) = ctx
+        .source_capability
+        .required_delegated_proof_for_claim(claim_id)
+    {
+        let proof_satisfied = prior
+            .lock()
+            .expect("prior mutex is not poisoned")
+            .get(proof_claim_id)
+            .and_then(|proof| proof.value.as_bool())
+            .unwrap_or(false);
+        if !proof_satisfied {
+            return Err(delegated_attestation_denied());
+        }
+    }
+    let delegated_proof_claim = ctx.source_capability.is_delegated_proof_claim(claim_id);
+    let sources_result = load_sources(
         Arc::clone(&ctx.evidence),
         Arc::clone(&ctx.source),
         Arc::clone(&claim_arc(&claim)),
@@ -2157,21 +2196,26 @@ async fn evaluate_claim_task(
         Arc::clone(&ctx.binding_concurrency),
         ctx.fetch_memo.clone(),
     )
-    .await?;
+    .await;
+    let (sources, observed_at, redaction_fields, matching_policy_audit) = match sources_result {
+        Ok(loaded) => loaded,
+        Err(_) if delegated_proof_claim => return Err(delegated_attestation_denied()),
+        Err(error) => return Err(error),
+    };
     // When a memoized entry was used, `observed_at` carries the timestamp of
     // the original upstream read. Use that as `iat` so sibling subjects that
     // share a read produce credentials with identical issued_at values.
     let issued_at = observed_at.unwrap_or(ctx.now);
-    let value = match &claim.rule {
+    let value_result = match &claim.rule {
         RuleConfig::Extract { source, field } => {
             let record = sources
                 .get(source)
                 .ok_or(EvidenceError::SourceUnavailable)?;
-            crate::standalone::get_json_path(record, field)
+            Ok(crate::standalone::get_json_path(record, field)
                 .cloned()
-                .ok_or(EvidenceError::SourceNotFound)?
+                .ok_or(EvidenceError::SourceNotFound)?)
         }
-        RuleConfig::Exists { source } => Value::Bool(sources.contains_key(source)),
+        RuleConfig::Exists { source } => Ok(Value::Bool(sources.contains_key(source))),
         RuleConfig::Cel {
             expression,
             bindings,
@@ -2207,10 +2251,18 @@ async fn evaluate_claim_task(
             })
             .await?;
             validate_claim_value_type(&value, &claim.value.value_type)?;
-            value
+            Ok(value)
         }
         RuleConfig::Plugin { .. } => return Err(EvidenceError::OperationUnsupported),
     };
+    let value = match value_result {
+        Ok(value) => value,
+        Err(_) if delegated_proof_claim => return Err(delegated_attestation_denied()),
+        Err(error) => return Err(error),
+    };
+    if delegated_proof_claim && value.as_bool() != Some(true) {
+        return Err(delegated_attestation_denied());
+    }
     // The source_count for this claim is the number of direct sources it
     // read, plus the accumulated source_count from any dependency claims
     // that were evaluated to satisfy depends_on. This ensures predicate
@@ -2435,6 +2487,7 @@ fn source_capability_for_principal(
                 subject_binding_hash,
             })
         }
+        AccessMode::DelegatedAttestation => Err(delegated_attestation_denied()),
         AccessMode::Unknown => Err(EvidenceError::SelfAttestationInvalidToken),
     }
 }
@@ -2445,11 +2498,15 @@ fn ensure_source_capability_matches_principal(
 ) -> Result<(), EvidenceError> {
     match (principal.access_mode(), capability.access_mode()) {
         (AccessMode::MachineClient, AccessMode::MachineClient)
-        | (AccessMode::SelfAttestation, AccessMode::SelfAttestation) => Ok(()),
+        | (AccessMode::SelfAttestation, AccessMode::SelfAttestation)
+        | (AccessMode::DelegatedAttestation, AccessMode::DelegatedAttestation) => Ok(()),
         (AccessMode::SelfAttestation, AccessMode::MachineClient) => {
             Err(EvidenceError::SelfAttestationDenied {
                 reason: SelfAttestationDenialCode::OperationDenied,
             })
+        }
+        (AccessMode::DelegatedAttestation, AccessMode::MachineClient) => {
+            Err(delegated_attestation_denied())
         }
         _ => Err(EvidenceError::SelfAttestationInvalidToken),
     }
@@ -2464,18 +2521,33 @@ fn require_source_read_capability(
         SourceCapability::SelfAttestation {
             claim_id: allowed, ..
         } if allowed.as_str() == claim_id => Ok(()),
+        SourceCapability::DelegatedAttestation { .. }
+            if capability.allows_delegated_claim(claim_id) =>
+        {
+            Ok(())
+        }
         SourceCapability::SelfAttestation { .. } => Err(EvidenceError::SelfAttestationDenied {
             reason: SelfAttestationDenialCode::ClaimDenied,
         }),
+        SourceCapability::DelegatedAttestation { .. } => Err(delegated_attestation_denied()),
     }
 }
 
 fn require_machine_source_capability(capability: &SourceCapability) -> Result<(), EvidenceError> {
     match capability {
         SourceCapability::Machine { .. } => Ok(()),
-        SourceCapability::SelfAttestation { .. } => Err(EvidenceError::SelfAttestationDenied {
-            reason: SelfAttestationDenialCode::OperationDenied,
-        }),
+        SourceCapability::SelfAttestation { .. }
+        | SourceCapability::DelegatedAttestation { .. } => {
+            Err(EvidenceError::SelfAttestationDenied {
+                reason: SelfAttestationDenialCode::OperationDenied,
+            })
+        }
+    }
+}
+
+fn delegated_attestation_denied() -> EvidenceError {
+    EvidenceError::SelfAttestationDenied {
+        reason: SelfAttestationDenialCode::SubjectMismatch,
     }
 }
 
@@ -2893,6 +2965,7 @@ fn max_batch_subjects(
 fn source_scoped_trusted_policy(
     evidence: &EvidenceConfig,
     claim: &ClaimDefinition,
+    source_capability: &SourceCapability,
     context: &EvidenceRequestContext,
     trusted_policy: &TrustedPolicyContext,
     purpose: &str,
@@ -2916,7 +2989,7 @@ fn source_scoped_trusted_policy(
             disclosure: disclosure.as_str(),
             format,
             purpose,
-            access_mode: trusted_policy_access_mode(trusted_policy),
+            access_mode: trusted_policy_access_mode(trusted_policy, source_capability),
             subject,
             allow_subset_claims: true,
             allowed_claims: Some(&trusted_policy.request_claims),
@@ -2970,7 +3043,16 @@ fn source_authorization_subject_expectation(
     }))
 }
 
-fn trusted_policy_access_mode(trusted_policy: &TrustedPolicyContext) -> AccessMode {
+fn trusted_policy_access_mode(
+    trusted_policy: &TrustedPolicyContext,
+    source_capability: &SourceCapability,
+) -> AccessMode {
+    if matches!(
+        source_capability.access_mode(),
+        AccessMode::DelegatedAttestation
+    ) {
+        return AccessMode::DelegatedAttestation;
+    }
     if trusted_policy.subject_binding_claim.is_some() {
         AccessMode::SelfAttestation
     } else {
@@ -3020,6 +3102,7 @@ async fn load_sources(
     let trusted_policy = source_scoped_trusted_policy(
         &evidence,
         &claim,
+        &source_capability,
         &context,
         &trusted_policy,
         &purpose,
@@ -4004,7 +4087,11 @@ fn validate_matching_policy(
     requested_format: &str,
 ) -> Result<BindingPolicyEffect, EvidenceError> {
     let matching = &binding.matching;
-    if context.on_behalf_of.is_some()
+    if (context.on_behalf_of.is_some()
+        && !matches!(
+            source_capability.access_mode(),
+            AccessMode::DelegatedAttestation
+        ))
         || context.target.profile.is_some()
         || context
             .requester
