@@ -8537,8 +8537,7 @@ fn is_matching_policy_provenance_code(code: &str) -> bool {
     }
     matches!(
         code,
-        "purpose.not_allowed"
-            | "target.matching_policy_rejected"
+        "target.matching_policy_rejected"
             | "requester.matching_policy_rejected"
             | "relationship.policy_rejected"
     )
@@ -12829,6 +12828,11 @@ mod tests {
             )
             .is_none(),
             "pre-policy input errors must not claim PDP provenance"
+        );
+        assert!(
+            denied_matching_policy_audit_identity(&evidence, &request, Some("purpose.not_allowed"))
+                .is_none(),
+            "purpose denials happen before PDP matching policy evaluation"
         );
     }
 
