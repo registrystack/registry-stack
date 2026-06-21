@@ -940,6 +940,11 @@ impl IngestRegistry {
         for (idx, resource) in prepared.iter().enumerate() {
             if let Err(error) = resource.plan.commit_prepared(&resource.prepared).await {
                 self.rollback_committed_reload(&prepared[..idx]).await;
+                if !matches!(resource.prior_readiness, ResourceReadiness::Ready { .. }) {
+                    resource
+                        .plan
+                        .store_failed(ingest_error_code(&error), &resource.prior_readiness);
+                }
                 resources.insert(
                     (resource.dataset_id.clone(), resource.resource_id.clone()),
                     ResourceReloadResult {
@@ -1026,23 +1031,30 @@ impl IngestRegistry {
 
     async fn rollback_committed_reload(&self, committed: &[PreparedReloadResource]) {
         for resource in committed.iter().rev() {
-            if let Err(error) = restore_versioned_table(
+            match restore_versioned_table(
                 &resource.plan.df_ctx,
                 &resource.prepared.table_name,
                 resource.prior_table.clone(),
             )
             .await
             {
-                tracing::error!(
-                    event = "ingest.reload_rollback_failed",
-                    dataset_id = %resource.dataset_id,
-                    resource_id = %resource.resource_id,
-                    error = %error,
-                );
+                Ok(()) => {
+                    resource
+                        .plan
+                        .restore_readiness(resource.prior_readiness.clone());
+                }
+                Err(error) => {
+                    tracing::error!(
+                        event = "ingest.reload_rollback_failed",
+                        dataset_id = %resource.dataset_id,
+                        resource_id = %resource.resource_id,
+                        error = %error,
+                    );
+                    resource
+                        .plan
+                        .store_failed("ingest.reload_rollback_failed", &resource.prior_readiness);
+                }
             }
-            resource
-                .plan
-                .restore_readiness(resource.prior_readiness.clone());
         }
     }
 
