@@ -2242,6 +2242,7 @@ dependencies = [
  "hmac 0.13.0",
  "http",
  "jsonwebtoken",
+ "registry-platform-audit",
  "registry-platform-crypto",
  "registry-platform-oidc",
  "serde",

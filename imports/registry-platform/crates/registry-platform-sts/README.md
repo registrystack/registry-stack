@@ -42,6 +42,8 @@ same library. Required environment variables:
 - `REGISTRY_PLATFORM_STS_SUBJECT_AUDIENCE`
 - `REGISTRY_PLATFORM_STS_SUBJECT_JWKS_URI`
 - `REGISTRY_PLATFORM_STS_SESSION_BINDING_SECRET`
+- `REGISTRY_PLATFORM_STS_AUDIT_HASH_SECRET`, at least 32 bytes
+- `REGISTRY_PLATFORM_STS_AUDIT_LOG_PATH`
 
 Optional environment variables:
 
@@ -49,3 +51,7 @@ Optional environment variables:
 - `REGISTRY_PLATFORM_STS_SUBJECT_CLAIM`, default `sub`
 - `REGISTRY_PLATFORM_STS_SUBJECT_ALLOWED_TYP`, default `at+jwt,JWT`
 - `REGISTRY_PLATFORM_STS_SUBJECT_ALLOWED_ALGS`, default `EdDSA,RS256`
+
+The binary appends token-mint events to a keyed JSONL audit chain and fails the
+exchange if the audit append fails. Library callers that construct
+`TokenExchangeService` directly must still supply their own `StsAuditSink`.
