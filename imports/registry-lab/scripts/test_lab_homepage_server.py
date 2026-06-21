@@ -1374,7 +1374,21 @@ class ExplorerApiPayloadTest(unittest.TestCase):
     """Explorer APIs are allowlisted, bounded, and safe to render in the public lab."""
 
     def setUp(self) -> None:
+        self._saved = dict(os.environ)
+        for key in (
+            "AGRI_EVIDENCE_CLIENT_BEARER",
+            "CIVIL_EVIDENCE_CLIENT_BEARER",
+            "DHIS2_EVIDENCE_CLIENT_BEARER",
+            "SHARED_EVIDENCE_CLIENT_BEARER",
+            "SOCIAL_EVIDENCE_CLIENT_BEARER",
+            "SOCIAL_PROTECTION_EVIDENCE_CLIENT_BEARER",
+        ):
+            os.environ.pop(key, None)
         self.config = server.enrich_config(server.load_config(server.DEFAULT_CONFIG))
+
+    def tearDown(self) -> None:
+        os.environ.clear()
+        os.environ.update(self._saved)
 
     def test_registry_catalog_uses_exact_allowlist(self) -> None:
         payload = server.registry_explorer.registry_catalog_payload(self.config)
