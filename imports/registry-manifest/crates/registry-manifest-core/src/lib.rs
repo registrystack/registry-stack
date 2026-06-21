@@ -110,9 +110,45 @@ pub const RUNTIME_ONLY_KEYS: &[&str] = &[
     "visibility",
 ];
 
+const SECRET_BEARING_KEYS: &[&str] = &[
+    "api_key",
+    "client_secret",
+    "credentials",
+    "password",
+    "private_key",
+    "secret",
+    "token",
+];
+
 #[must_use]
 pub fn is_runtime_only_key(key: &str) -> bool {
     RUNTIME_ONLY_KEYS.contains(&key)
+}
+
+fn is_secret_bearing_key(key: &str) -> bool {
+    let normalized = normalize_manifest_key(key);
+    let compact = normalized.replace('_', "");
+    SECRET_BEARING_KEYS.iter().any(|secret| {
+        let compact_secret = secret.replace('_', "");
+        normalized == *secret
+            || normalized
+                .strip_suffix(secret)
+                .is_some_and(|prefix| prefix.ends_with('_'))
+            || compact == compact_secret
+            || compact.ends_with(&compact_secret)
+    })
+}
+
+fn normalize_manifest_key(key: &str) -> String {
+    key.chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 #[derive(Debug, Error)]
@@ -261,13 +297,22 @@ impl<'de> Deserialize<'de> for MetadataManifest {
     {
         let value = Value::deserialize(deserializer)?;
         let mut runtime_keys = Vec::new();
-        collect_runtime_only_json_keys(&value, &mut runtime_keys);
+        let mut secret_keys = Vec::new();
+        collect_disallowed_json_keys(&value, &mut runtime_keys, &mut secret_keys);
         if !runtime_keys.is_empty() {
             runtime_keys.sort();
             runtime_keys.dedup();
             return Err(de::Error::custom(format!(
                 "runtime-only keys are not allowed in metadata manifests: {}",
                 runtime_keys.join(", ")
+            )));
+        }
+        if !secret_keys.is_empty() {
+            secret_keys.sort();
+            secret_keys.dedup();
+            return Err(de::Error::custom(format!(
+                "secret-bearing keys are not allowed in metadata manifests: {}",
+                secret_keys.join(", ")
             )));
         }
         let fields = MetadataManifestFields::deserialize(value).map_err(de::Error::custom)?;
@@ -329,19 +374,26 @@ impl From<MetadataManifestFields> for MetadataManifest {
     }
 }
 
-fn collect_runtime_only_json_keys(value: &Value, keys: &mut Vec<String>) {
+fn collect_disallowed_json_keys(
+    value: &Value,
+    runtime_keys: &mut Vec<String>,
+    secret_keys: &mut Vec<String>,
+) {
     match value {
         Value::Object(map) => {
             for (key, child) in map {
                 if is_runtime_only_key(key) {
-                    keys.push(key.clone());
+                    runtime_keys.push(key.clone());
                 }
-                collect_runtime_only_json_keys(child, keys);
+                if is_secret_bearing_key(key) {
+                    secret_keys.push(key.clone());
+                }
+                collect_disallowed_json_keys(child, runtime_keys, secret_keys);
             }
         }
         Value::Array(values) => {
             for child in values {
-                collect_runtime_only_json_keys(child, keys);
+                collect_disallowed_json_keys(child, runtime_keys, secret_keys);
             }
         }
         Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}

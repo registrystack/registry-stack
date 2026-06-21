@@ -175,6 +175,85 @@ codelists: []
 }
 
 #[test]
+fn secret_bearing_unknown_manifest_fields_are_rejected_before_unknown_fields_are_ignored() {
+    for key in [
+        "client_secret",
+        "password",
+        "credentials",
+        "api_key",
+        "private_key",
+        "token",
+        "secret",
+    ] {
+        let raw = format!(
+            r#"
+schema_version: registry-manifest/v1
+{key}: leaked
+catalog:
+  id: secret-bearing-direct-parse
+  base_url: https://registry.example.test
+  title: Secret-bearing Direct Parse
+  publisher:
+    name: Publisher
+datasets: []
+codelists: []
+"#
+        );
+        let error = serde_yaml_ng::from_str::<MetadataManifest>(&raw)
+            .expect_err("secret-bearing keys are rejected during manifest parsing");
+
+        assert!(
+            error.to_string().contains("secret-bearing keys"),
+            "unexpected parse error for {key}: {error}"
+        );
+        assert!(
+            error.to_string().contains(key),
+            "secret-bearing key should be named in parse error for {key}: {error}"
+        );
+    }
+}
+
+#[test]
+fn secret_bearing_extension_map_keys_are_rejected() {
+    let raw = r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: secret-bearing-extension
+  base_url: https://registry.example.test
+  title: Secret-bearing Extension
+  publisher:
+    name: Publisher
+evaluation_profiles:
+  - id: eligibility_profile
+    ruleset: eligibility-rules-v1
+    claim_id: eligibility
+    subject_id_type: national_id
+    evidence_pack:
+      source_basis:
+        partnerCredentials:
+          username: partner
+          password: leaked
+datasets: []
+codelists: []
+"#;
+    let error = serde_yaml_ng::from_str::<MetadataManifest>(raw)
+        .expect_err("secret-bearing extension keys are rejected during manifest parsing");
+
+    assert!(
+        error.to_string().contains("secret-bearing keys"),
+        "unexpected parse error: {error}"
+    );
+    assert!(
+        error.to_string().contains("partnerCredentials"),
+        "extension key should be named in parse error: {error}"
+    );
+    assert!(
+        error.to_string().contains("password"),
+        "nested secret key should be named in parse error: {error}"
+    );
+}
+
+#[test]
 fn runtime_only_rejection_covers_representative_product_configs() {
     let cases = [
         (

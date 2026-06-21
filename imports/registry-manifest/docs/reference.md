@@ -223,7 +223,11 @@ fields to existing mapping objects without requiring a new major schema version.
 Beta-era readers must ignore unrecognized fields while continuing to require and
 validate the fields they understand. Unknown fields do not relax existing validation:
 required fields, identifier syntax, URI syntax, reference integrity, collection limits,
-and runtime-only key rejection still apply.
+runtime-only key rejection, and secret-bearing key rejection still apply.
+
+Readers must reject unrecognized or extension keys that look credential-bearing,
+including keys such as `client_secret`, `password`, `credentials`, `api_key`,
+`private_key`, `token`, or `secret`.
 
 Readers must treat unrecognized fields as advisory extension data. A reader may expose
 or preserve extension data when it has a typed extension model, but it must not fail
