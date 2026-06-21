@@ -37,7 +37,7 @@ It is not a formal production deployment profile.
 Deployment-profile formalization (Compose and Kubernetes shapes, sizing, and a hardening
 baseline) is tracked separately and is not part of this guide.
 Before exposing any deployment beyond local evaluation, work through the
-[Relay operations runbook](https://github.com/jeremi/registry-relay/blob/256d281829a502725ca2b327c24b444f66126122/docs/ops.md)
+[Relay operations runbook](https://github.com/jeremi/registry-relay/blob/384d95795881a3ce6000cea6219c89353dfa5119/docs/ops.md)
 production hardening checklist.
 
 ## Before you start
@@ -63,8 +63,8 @@ The published versions are listed on the
 the current stable is `v0.2.1`, so replace `vX.Y.Z` with that (or a newer release) throughout
 this page.
 For the image signing policy, see the Relay
-[security assurance notes](https://github.com/jeremi/registry-relay/blob/256d281829a502725ca2b327c24b444f66126122/docs/security-assurance.md)
-and the [build and release section](https://github.com/jeremi/registry-relay/blob/256d281829a502725ca2b327c24b444f66126122/docs/ops.md#build-and-release)
+[security assurance notes](https://github.com/jeremi/registry-relay/blob/384d95795881a3ce6000cea6219c89353dfa5119/docs/security-assurance.md)
+and the [build and release section](https://github.com/jeremi/registry-relay/blob/384d95795881a3ce6000cea6219c89353dfa5119/docs/ops.md#build-and-release)
 of the operations runbook.
 
 Pull the version you intend to run:
@@ -78,7 +78,7 @@ You can override the config path with the `--config` flag or the `REGISTRY_RELAY
 environment variable.
 
 If you build from source instead of consuming a published image, follow the
-[build and release section](https://github.com/jeremi/registry-relay/blob/256d281829a502725ca2b327c24b444f66126122/docs/ops.md#build-and-release)
+[build and release section](https://github.com/jeremi/registry-relay/blob/384d95795881a3ce6000cea6219c89353dfa5119/docs/ops.md#build-and-release)
 of the operations runbook; the source build needs the pinned sibling checkouts it documents.
 
 ## Lay out the deployment directory
@@ -99,9 +99,9 @@ Mount the data directory read-only and keep a separate writable cache directory;
 ## Write the minimal Relay config
 
 Start from the canonical
-[`config/example.yaml`](https://github.com/jeremi/registry-relay/blob/256d281829a502725ca2b327c24b444f66126122/config/example.yaml)
+[`config/example.yaml`](https://github.com/jeremi/registry-relay/blob/384d95795881a3ce6000cea6219c89353dfa5119/config/example.yaml)
 and the
-[configuration guide](https://github.com/jeremi/registry-relay/blob/256d281829a502725ca2b327c24b444f66126122/docs/configuration.md),
+[configuration guide](https://github.com/jeremi/registry-relay/blob/384d95795881a3ce6000cea6219c89353dfa5119/docs/configuration.md),
 which is the authoritative reference for every block.
 A minimal deployment needs five blocks: `server` (a listener), `catalog` (public metadata
 base), `auth` (one auth mode), `audit` (a sink and hash secret), and at least one
@@ -231,7 +231,7 @@ Key points the configuration guide spells out in full:
 
 For aggregates, relationships, OIDC auth, Postgres sources, live materialization, and provenance
 signing, follow the corresponding sections of the
-[configuration guide](https://github.com/jeremi/registry-relay/blob/256d281829a502725ca2b327c24b444f66126122/docs/configuration.md).
+[configuration guide](https://github.com/jeremi/registry-relay/blob/384d95795881a3ce6000cea6219c89353dfa5119/docs/configuration.md).
 
 ## Provision the API-key fingerprint and commitment
 
@@ -277,7 +277,7 @@ The commitment binds the key's fingerprint to the product, the credential type, 
 credential id, so the `--id` you pass must match the `api_keys` entry's `id` exactly.
 If you later rotate the key or rename the entry, rerun the command and update both the secret
 and the YAML commitment together.
-The [API keys section](https://github.com/jeremi/registry-relay/blob/256d281829a502725ca2b327c24b444f66126122/docs/configuration.md#api-keys)
+The [API keys section](https://github.com/jeremi/registry-relay/blob/384d95795881a3ce6000cea6219c89353dfa5119/docs/configuration.md#api-keys)
 of the configuration guide documents the underlying contract.
 
 ## Run the container
@@ -381,7 +381,7 @@ If you point API tooling at the deployment, note that `/openapi.json` is auth-ga
 
 If `/ready` returns `503`, the source failed to ingest; check the container logs for the failing
 table and the declared schema. The
-[readiness and probes section](https://github.com/jeremi/registry-relay/blob/256d281829a502725ca2b327c24b444f66126122/docs/ops.md)
+[readiness and probes section](https://github.com/jeremi/registry-relay/blob/384d95795881a3ce6000cea6219c89353dfa5119/docs/ops.md)
 of the operations runbook explains the readiness contract.
 
 ## Add a standalone Registry Notary alongside
@@ -634,16 +634,16 @@ Notary's own operator documentation is the authoritative own-keys path:
   designing source connectors and claim boundaries beyond the single claim above.
 
 The
-[Operating with Registry Notary section](https://github.com/jeremi/registry-relay/blob/256d281829a502725ca2b327c24b444f66126122/docs/ops.md#operating-with-registry-notary)
+[Operating with Registry Notary section](https://github.com/jeremi/registry-relay/blob/384d95795881a3ce6000cea6219c89353dfa5119/docs/ops.md#operating-with-registry-notary)
 of the Relay runbook documents the credential handshake the two services use, which the steps
 above followed: a narrowly scoped Relay key for the Notary source caller, a separate Notary
 caller key, and `_env` secret indirection on both sides so raw tokens stay out of YAML.
 
 ## Next
 
-- [Relay configuration guide](https://github.com/jeremi/registry-relay/blob/256d281829a502725ca2b327c24b444f66126122/docs/configuration.md):
+- [Relay configuration guide](https://github.com/jeremi/registry-relay/blob/384d95795881a3ce6000cea6219c89353dfa5119/docs/configuration.md):
   the full block-by-block reference for aggregates, OIDC, Postgres, and provenance.
-- [Relay operations runbook](https://github.com/jeremi/registry-relay/blob/256d281829a502725ca2b327c24b444f66126122/docs/ops.md):
+- [Relay operations runbook](https://github.com/jeremi/registry-relay/blob/384d95795881a3ce6000cea6219c89353dfa5119/docs/ops.md):
   the production hardening checklist to work through before exposing the deployment.
 - [Consultation flow](../../explanation/consultation-flow/): how Relay binds a source, applies
   scopes, serves entity routes, and audits every request.

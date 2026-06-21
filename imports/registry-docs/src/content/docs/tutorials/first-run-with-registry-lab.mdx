@@ -222,7 +222,7 @@ This scenario exercises the static metadata publisher (port `4331`), the shared 
 
 What this proves: the Notary fans out to all three Relay services using per-source bearer tokens
 configured in
-[`config/notary/shared-eligibility-notary.yaml`](https://github.com/jeremi/registry-lab/blob/c09029fcbbb01957659f0dd837884d9352432784/config/notary/shared-eligibility-notary.yaml).
+[`config/notary/shared-eligibility-notary.yaml`](https://github.com/jeremi/registry-lab/blob/ed4700972efbf70f46e7c5e2ce48525d575bd0b2/config/notary/shared-eligibility-notary.yaml).
 The result carries `provenance.used.source_count >= 2` once at least two sources contribute. A single Notary
 aggregates evidence across independently operated registries and reports how many authorities
 contributed, without merging or exposing the underlying rows.

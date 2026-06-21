@@ -10,10 +10,10 @@ docsets:
     products:
       registry-relay:
         version: beta-3 candidate
-        ref: 256d281829a502725ca2b327c24b444f66126122
+        ref: 384d95795881a3ce6000cea6219c89353dfa5119
       registry-notary:
         version: beta-3 candidate
-        ref: 18b30ec45086a12d8b518eca9bfe838c7cff780e
+        ref: 50f8ffe04cd9b1cf1986f5742b6bf450642dab03
       registry-manifest:
         version: beta-3 candidate
         ref: 71c9ead582ea81a82022c37357b38b98d3f18f48
@@ -33,13 +33,13 @@ docsets:
         ref: 71c9ead582ea81a82022c37357b38b98d3f18f48
       registry-notary:
         version: beta-3 candidate
-        ref: 18b30ec45086a12d8b518eca9bfe838c7cff780e
+        ref: 50f8ffe04cd9b1cf1986f5742b6bf450642dab03
       registry-relay:
         version: beta-3 candidate
-        ref: 256d281829a502725ca2b327c24b444f66126122
+        ref: 384d95795881a3ce6000cea6219c89353dfa5119
       registry-lab:
         version: beta-3 candidate
-        ref: c09029fcbbb01957659f0dd837884d9352432784
+        ref: ed4700972efbf70f46e7c5e2ce48525d575bd0b2
       registry-registryctl:
         version: v0.2.0 candidate
         ref: 156c1ec71bf243af396959ee549c42ce81d36ebb

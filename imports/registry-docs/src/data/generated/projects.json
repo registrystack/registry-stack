@@ -84,11 +84,11 @@
       },
       {
         "label": "Local API docs",
-        "url": "https://github.com/jeremi/registry-relay/blob/256d281829a502725ca2b327c24b444f66126122/docs/api.md"
+        "url": "https://github.com/jeremi/registry-relay/blob/384d95795881a3ce6000cea6219c89353dfa5119/docs/api.md"
       },
       {
         "label": "Local metadata docs",
-        "url": "https://github.com/jeremi/registry-relay/blob/256d281829a502725ca2b327c24b444f66126122/docs/metadata.md"
+        "url": "https://github.com/jeremi/registry-relay/blob/384d95795881a3ce6000cea6219c89353dfa5119/docs/metadata.md"
       }
     ],
     "rename_status": "Local checkout renamed to `registry-relay`; old worktrees under `registry_relay-*` remain for historical evidence."
@@ -122,7 +122,7 @@
       },
       {
         "label": "OpenAPI source",
-        "url": "https://github.com/jeremi/registry-notary/blob/18b30ec45086a12d8b518eca9bfe838c7cff780e/crates/registry-notary-server/src/openapi.rs"
+        "url": "https://github.com/jeremi/registry-notary/blob/50f8ffe04cd9b1cf1986f5742b6bf450642dab03/crates/registry-notary-server/src/openapi.rs"
       }
     ],
     "rename_status": "Already using the target repo name locally."
@@ -147,7 +147,7 @@
     "source_docs": [
       {
         "label": "README",
-        "url": "https://github.com/jeremi/registry-lab/blob/c09029fcbbb01957659f0dd837884d9352432784/README.md"
+        "url": "https://github.com/jeremi/registry-lab/blob/ed4700972efbf70f46e7c5e2ce48525d575bd0b2/README.md"
       },
       {
         "label": "Rename plan",
