@@ -5,9 +5,9 @@ FROM rust:1-bookworm AS publisher
 WORKDIR /app
 
 ARG REGISTRY_MANIFEST_REPO_URL=https://github.com/jeremi/registry-manifest.git
-ARG REGISTRY_MANIFEST_REF=71c9ead582ea81a82022c37357b38b98d3f18f48
+ARG REGISTRY_MANIFEST_REF=bf73209a0487a2f2e0598b389faad39f36a37f1b
 ARG REGISTRY_RELAY_REPO_URL=https://github.com/jeremi/registry-relay.git
-ARG REGISTRY_RELAY_REF=384d95795881a3ce6000cea6219c89353dfa5119
+ARG REGISTRY_RELAY_REF=3c020d79bb1cc707dc7c68e9d47395368f770e27
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates git openssl python3 && \

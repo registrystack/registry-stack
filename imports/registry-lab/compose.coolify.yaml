@@ -290,8 +290,8 @@ services:
       context: .
       dockerfile: Dockerfile.static-metadata
       args:
-        REGISTRY_MANIFEST_REF: 71c9ead582ea81a82022c37357b38b98d3f18f48
-        REGISTRY_RELAY_REF: 384d95795881a3ce6000cea6219c89353dfa5119
+        REGISTRY_MANIFEST_REF: bf73209a0487a2f2e0598b389faad39f36a37f1b
+        REGISTRY_RELAY_REF: 3c020d79bb1cc707dc7c68e9d47395368f770e27
     restart: unless-stopped
     expose:
       - "8080"

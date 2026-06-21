@@ -9,8 +9,8 @@ publish = false
 aws-lc-rs = "1"
 chrono = { version = "0.4" }
 olpc-cjson = "0.1"
-registry-platform-config = { version = "0.3.0", path = "../../vendor/registry-platform/crates/registry-platform-config" }
-registry-platform-ops = { version = "0.3.0", path = "../../vendor/registry-platform/crates/registry-platform-ops" }
+registry-platform-config = { version = "0.3.1", path = "../../vendor/registry-platform/crates/registry-platform-config" }
+registry-platform-ops = { version = "0.3.1", path = "../../vendor/registry-platform/crates/registry-platform-ops" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
 serde_yaml = { version = "0.9" }
