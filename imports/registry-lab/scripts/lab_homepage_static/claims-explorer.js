@@ -20,6 +20,8 @@ const state = {
   selectedClaim: CIVIL_NOTARY_DEFAULT.claimId,
   subjectScheme: CIVIL_NOTARY_DEFAULT.subjectScheme,
   subjectValue: CIVIL_NOTARY_DEFAULT.subjectValue,
+  targetGroupKey: "",
+  targetValues: {},
   disclosure: CIVIL_NOTARY_DEFAULT.disclosure,
   format: CIVIL_NOTARY_DEFAULT.format,
   purpose: CIVIL_NOTARY_DEFAULT.purpose
@@ -150,6 +152,100 @@ function selectedSubject() {
   return byId("subject-input")?.value || state.subjectValue || CIVIL_NOTARY_DEFAULT.subjectValue;
 }
 
+function targetInputMethods(claim = selectedClaimSummary()) {
+  return normalizeCollection(claim?.target_inputs);
+}
+
+function targetInputGroups(claim = selectedClaimSummary()) {
+  const groups = [];
+  targetInputMethods(claim).forEach((method, methodIndex) => {
+    normalizeCollection(method?.groups).forEach((group, groupIndex) => {
+      const inputs = normalizeCollection(group?.inputs).filter((item) => item && typeof item === "object");
+      if (!inputs.length) return;
+      groups.push({
+        key: `${method.method || methodIndex}:${groupIndex}`,
+        method: method.method || "",
+        targetType: method.target_type || claim.subject_type || "Person",
+        label: targetGroupLabel(group, inputs),
+        inputs
+      });
+    });
+  });
+  return groups;
+}
+
+function targetGroupLabel(group, inputs) {
+  if (group?.label) return group.label;
+  return inputs.map((input) => input.label || labelFromName(input.name || input.path || input.kind || "Target input")).join(" + ");
+}
+
+function labelFromName(value) {
+  const words = text(value).replace(/^target\.(identifiers|attributes)\./, "").split(/[_\s.-]+/).filter(Boolean);
+  if (!words.length) return text(value);
+  return words.map((word) => `${word.charAt(0).toUpperCase()}${word.slice(1)}`).join(" ");
+}
+
+function selectedTargetGroup() {
+  const groups = targetInputGroups();
+  if (!groups.length) return null;
+  const key = byId("target-group-select")?.value || state.targetGroupKey || groups[0].key;
+  return groups.find((group) => group.key === key) || groups[0];
+}
+
+function targetValueKey(input) {
+  return input.path || `${input.kind || "input"}:${input.name || ""}`;
+}
+
+function defaultTargetValue(input, selected = selectedServiceSummary(), claim = selectedClaimSummary()) {
+  if (input.default_value != null) return text(input.default_value);
+  const name = text(input.name);
+  const scheme = claim.default_identifier_scheme || selected.default_identifier_scheme || CIVIL_NOTARY_DEFAULT.subjectScheme;
+  if (input.kind === "identifier" && name === scheme) {
+    return claim.default_subject || selected.default_subject || CIVIL_NOTARY_DEFAULT.subjectValue;
+  }
+  return "";
+}
+
+function resetTargetValues(claim = selectedClaimSummary()) {
+  state.targetValues = {};
+  const selected = selectedServiceSummary();
+  targetInputGroups(claim).forEach((group) => {
+    group.inputs.forEach((input) => {
+      state.targetValues[targetValueKey(input)] = defaultTargetValue(input, selected, claim);
+    });
+  });
+  state.targetGroupKey = targetInputGroups(claim)[0]?.key || "";
+}
+
+function readTargetValue(input, index) {
+  const key = targetValueKey(input);
+  return state.targetValues[key] ?? defaultTargetValue(input);
+}
+
+function captureTargetValues() {
+  const group = selectedTargetGroup();
+  if (!group) return;
+  state.targetGroupKey = group.key;
+  group.inputs.forEach((input, index) => {
+    state.targetValues[targetValueKey(input)] = readTargetValue(input, index);
+  });
+}
+
+function targetFromInputs(group) {
+  const target = {type: group.targetType || "Person"};
+  const identifiers = [];
+  const attributes = {};
+  group.inputs.forEach((input, index) => {
+    const value = readTargetValue(input, index);
+    if (input.kind === "id") target.id = value;
+    if (input.kind === "identifier") identifiers.push({scheme: input.name || "id", value});
+    if (input.kind === "attribute") attributes[input.name || targetValueKey(input)] = value;
+  });
+  if (identifiers.length) target.identifiers = identifiers;
+  if (Object.keys(attributes).length) target.attributes = attributes;
+  return target;
+}
+
 function selectedDisclosure() {
   return byId("disclosure-select")?.value || state.disclosure || CIVIL_NOTARY_DEFAULT.disclosure;
 }
@@ -163,29 +259,41 @@ function selectedPurpose() {
 }
 
 function evaluationPayload() {
-  return {
+  const group = selectedTargetGroup();
+  const payload = {
     claim_id: selectedClaim(),
-    subject: {
-      scheme: selectedScheme(),
-      value: selectedSubject()
-    },
     disclosure: selectedDisclosure(),
     format: selectedFormat(),
     purpose: selectedPurpose()
   };
+  if (group) {
+    payload.target = targetFromInputs(group);
+  } else {
+    payload.subject = {
+      scheme: selectedScheme(),
+      value: selectedSubject()
+    };
+  }
+  return payload;
 }
 
 function evaluationStatePayload() {
-  return {
+  const group = selectedTargetGroup();
+  const payload = {
     claim_id: state.selectedClaim,
-    subject: {
-      scheme: state.subjectScheme,
-      value: state.subjectValue
-    },
     disclosure: state.disclosure,
     format: state.format,
     purpose: state.purpose
   };
+  if (group) {
+    payload.target = targetFromInputs(group);
+  } else {
+    payload.subject = {
+      scheme: state.subjectScheme,
+      value: state.subjectValue
+    };
+  }
+  return payload;
 }
 
 function minimization() {
@@ -267,22 +375,49 @@ function disclosure(title, value, copyLabel) {
 
 function renderClaimQuestion() {
   const claims = claimItems();
+  const claim = selectedClaimSummary();
+  const groups = targetInputGroups(claim);
   return `
     <section class="claim-question-panel">
       <div class="field-control">
         <label for="claim-select">Claim</label>
         <select id="claim-select">${claims.map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === state.selectedClaim ? "selected" : ""}>${escapeHtml(labelFor(item, item.id))}</option>`).join("")}</select>
       </div>
-      <div class="field-control">
-        <label for="scheme-input">Subject identifier scheme</label>
-        <input id="scheme-input" value="${escapeHtml(state.subjectScheme || CIVIL_NOTARY_DEFAULT.subjectScheme)}">
-      </div>
-      <div class="field-control">
-        <label for="subject-input">Subject identifier</label>
-        <input id="subject-input" value="${escapeHtml(state.subjectValue || CIVIL_NOTARY_DEFAULT.subjectValue)}">
-      </div>
+      ${groups.length ? renderTargetInputControls(groups) : renderLegacySubjectControls()}
       <div class="actions"><button class="primary" type="button" data-evaluate>Evaluate</button></div>
     </section>
+  `;
+}
+
+function renderLegacySubjectControls() {
+  return `
+    <div class="field-control">
+      <label for="scheme-input">Subject identifier scheme</label>
+      <input id="scheme-input" value="${escapeHtml(state.subjectScheme || CIVIL_NOTARY_DEFAULT.subjectScheme)}">
+    </div>
+    <div class="field-control">
+      <label for="subject-input">Subject identifier</label>
+      <input id="subject-input" value="${escapeHtml(state.subjectValue || CIVIL_NOTARY_DEFAULT.subjectValue)}">
+    </div>
+  `;
+}
+
+function renderTargetInputControls(groups) {
+  const group = selectedTargetGroup() || groups[0];
+  const groupSelect = groups.length > 1 ? `
+    <div class="field-control">
+      <label for="target-group-select">Input mode</label>
+      <select id="target-group-select">${groups.map((item) => `<option value="${escapeHtml(item.key)}" ${item.key === group.key ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("")}</select>
+    </div>
+  ` : "";
+  return `
+    ${groupSelect}
+    ${group.inputs.map((input, index) => `
+      <div class="field-control">
+        <label for="target-input-${index}">${escapeHtml(input.label || labelFromName(input.name || input.path || "Target input"))}</label>
+        <input id="target-input-${index}" data-target-key="${escapeHtml(targetValueKey(input))}" value="${escapeHtml(readTargetValue(input, index))}">
+      </div>
+    `).join("")}
   `;
 }
 
@@ -423,21 +558,15 @@ async function loadSelectedService(root, serviceId) {
   state.subjectValue = selected.default_subject || CIVIL_NOTARY_DEFAULT.subjectValue;
   state.purpose = selected.default_purpose || CIVIL_NOTARY_DEFAULT.purpose;
   const claim = selectedClaimSummary();
+  state.subjectScheme = claim.default_identifier_scheme || state.subjectScheme;
+  state.subjectValue = claim.default_subject || state.subjectValue;
+  resetTargetValues(claim);
   state.disclosure = claim.default_disclosure || CIVIL_NOTARY_DEFAULT.disclosure;
   state.format = normalizeCollection(claim.formats)[0] || CIVIL_NOTARY_DEFAULT.format;
   state.evaluation = await explorerFetch(endpoint(`/api/explorer/claims/${encodeURIComponent(state.selectedService)}/evaluate.json`), {
     method: "POST",
     headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({
-      claim_id: state.selectedClaim,
-      subject: {
-        scheme: state.subjectScheme,
-        value: state.subjectValue
-      },
-      disclosure: state.disclosure,
-      format: state.format,
-      purpose: state.purpose
-    })
+    body: JSON.stringify(evaluationStatePayload())
   });
   renderReady(root);
 }
@@ -447,6 +576,7 @@ async function evaluateClaim(root) {
   if (button) button.disabled = true;
   try {
     state.selectedClaim = selectedClaim();
+    captureTargetValues();
     state.subjectScheme = selectedScheme();
     state.subjectValue = selectedSubject();
     state.disclosure = selectedDisclosure();
@@ -504,9 +634,18 @@ function wire(root) {
       return;
     }
     const claimSelect = event.target instanceof Element ? event.target.closest("#claim-select") : null;
+    const targetGroupSelect = event.target instanceof Element ? event.target.closest("#target-group-select") : null;
+    if (targetGroupSelect) {
+      state.targetGroupKey = targetGroupSelect.value;
+      renderReady(root);
+      return;
+    }
     if (!claimSelect) return;
     state.selectedClaim = claimSelect.value;
     const claim = selectedClaimSummary();
+    state.subjectScheme = claim.default_identifier_scheme || selectedServiceSummary().default_identifier_scheme || state.subjectScheme;
+    state.subjectValue = claim.default_subject || selectedServiceSummary().default_subject || state.subjectValue;
+    resetTargetValues(claim);
     state.disclosure = claim.default_disclosure || state.disclosure;
     state.format = normalizeCollection(claim.formats)[0] || state.format;
     await evaluateSelectedClaim(root).catch((error) => renderUnavailable(root, error));

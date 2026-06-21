@@ -129,8 +129,38 @@ class FakeNotaryHandler(BaseHTTPRequestHandler):
             if claim == "opencrvs-sex":
                 result["value"] = "F"
                 result["satisfied"] = None
+            fixture_value = self.fixture_value_for_claim(claim)
+            if fixture_value is not None:
+                result["value"] = fixture_value
+                result["satisfied"] = None
             results.append(result)
         self.respond(200, {"results": results}, decision="evaluate")
+
+    def fixture_value_for_claim(self, claim: str) -> Any:
+        fixture_cases = {
+            "birth.certificate_summary": (
+                "birth-certificate-evidence/v1",
+                "birth-certificate-success-minimized-json",
+            ),
+            "birth.certificate_summary_by_demographics": (
+                "birth-certificate-evidence/v1",
+                "birth-certificate-success-demographic",
+            ),
+            "marriage.certificate_summary": (
+                "marriage-certificate-evidence/v1",
+                "marriage-certificate-success-minimized-json",
+            ),
+        }
+        fixture_case = fixture_cases.get(claim)
+        if not fixture_case:
+            return None
+        profile, case_id = fixture_case
+        golden = runner.load_json(runner.golden_path(profile))
+        for case in golden.get("cases") or []:
+            if case.get("id") == case_id:
+                value = case.get("expected", {}).get("result", {}).get("value")
+                return json.loads(json.dumps(value))
+        return None
 
     def respond_problem(self, code: str) -> None:
         self.respond(
@@ -178,7 +208,7 @@ class FakeNotaryHandler(BaseHTTPRequestHandler):
             "source-binding-policy:health_facility.route_identity",
             "source-binding-policy:health_facility.checked_scope",
         ]
-        sp_dci_rule_ids = [
+        birth_registration_rule_ids = [
             "source-binding-policy:birth_registration.policy_identity",
             "source-binding-policy:birth_registration.odrl_terms",
             "source-binding-policy:birth_registration.purpose",
@@ -193,46 +223,46 @@ class FakeNotaryHandler(BaseHTTPRequestHandler):
             "source-binding-policy:birth_registration.route_identity",
             "source-binding-policy:birth_registration.checked_scope",
         ]
-        oots_birth_rule_ids = [
-            "source-binding-policy:oots_birth.policy_identity",
-            "source-binding-policy:oots_birth.odrl_terms",
-            "source-binding-policy:oots_birth.purpose",
-            "source-binding-policy:oots_birth.jurisdiction",
-            "source-binding-policy:oots_birth.assurance_allowed_set",
-            "source-binding-policy:oots_birth.legal_basis_required",
-            "source-binding-policy:oots_birth.consent_required",
-            "source-binding-policy:oots_birth.credential_format",
+        birth_certificate_rule_ids = [
+            "source-binding-policy:birth_certificate.policy_identity",
+            "source-binding-policy:birth_certificate.odrl_terms",
+            "source-binding-policy:birth_certificate.purpose",
+            "source-binding-policy:birth_certificate.jurisdiction",
+            "source-binding-policy:birth_certificate.assurance_allowed_set",
+            "source-binding-policy:birth_certificate.legal_basis_required",
+            "source-binding-policy:birth_certificate.consent_required",
+            "source-binding-policy:birth_certificate.credential_format",
         ]
-        oots_marriage_rule_ids = [
-            "source-binding-policy:oots_marriage.policy_identity",
-            "source-binding-policy:oots_marriage.odrl_terms",
-            "source-binding-policy:oots_marriage.purpose",
-            "source-binding-policy:oots_marriage.jurisdiction",
-            "source-binding-policy:oots_marriage.assurance_allowed_set",
-            "source-binding-policy:oots_marriage.legal_basis_required",
-            "source-binding-policy:oots_marriage.consent_required",
-            "source-binding-policy:oots_marriage.credential_format",
+        marriage_certificate_rule_ids = [
+            "source-binding-policy:marriage_certificate.policy_identity",
+            "source-binding-policy:marriage_certificate.odrl_terms",
+            "source-binding-policy:marriage_certificate.purpose",
+            "source-binding-policy:marriage_certificate.jurisdiction",
+            "source-binding-policy:marriage_certificate.assurance_allowed_set",
+            "source-binding-policy:marriage_certificate.legal_basis_required",
+            "source-binding-policy:marriage_certificate.consent_required",
+            "source-binding-policy:marriage_certificate.credential_format",
         ]
         policy = {
-            "baseline-dpi/v1": (
-                "lab.baseline-dpi.governed-evidence.v1",
-                "sha256:9818125ad99b32b4eb996780c12cc68730fbcb0b406c4124dbb36dea4ccc6bdb",
+            "combined-support-eligibility/v1": (
+                "lab.combined-support-eligibility.governed-evidence.v1",
+                "sha256:4a680200c1095d2dbee608046d78d2399db5dfae7426c36a4580fe81e50dbeb9",
                 baseline_rule_ids,
             ),
-            "sp-dci/v1": (
-                "lab.sp-dci.governed-evidence.v1",
-                "sha256:479cfba9c5895f5f827b855244436a5b4a9f84c76fbd5472e861ad56983254db",
-                sp_dci_rule_ids,
+            "birth-registration-evidence/v1": (
+                "lab.birth-registration-evidence.governed-evidence.v1",
+                "sha256:1b239a9f1d158705364d444d8ea00ed26088ffbe69bb7e3477bf72c2522979c2",
+                birth_registration_rule_ids,
             ),
-            "oots-birth-evidence/v1": (
-                "lab.oots-birth-evidence.governed-evidence.v1",
-                "sha256:a4804f81f3287b7922e8c3d5bad49377584b7ab8727fe62cbae23c1f5bc85e1c",
-                oots_birth_rule_ids,
+            "birth-certificate-evidence/v1": (
+                "lab.birth-certificate-evidence.governed-evidence.v1",
+                "sha256:0683b8cc550406aa570d404aaa617a15fe74c47799a2129306ed17e8829eb679",
+                birth_certificate_rule_ids,
             ),
-            "oots-marriage-evidence/v1": (
-                "lab.oots-marriage-evidence.governed-evidence.v1",
-                "sha256:e5193284535dfa9689dd081942ec847f51eacd50ebc71d93b482247207b63dcf",
-                oots_marriage_rule_ids,
+            "marriage-certificate-evidence/v1": (
+                "lab.marriage-certificate-evidence.governed-evidence.v1",
+                "sha256:cc32ee652001f5beb4a68ef0557ba558451311c6393889e0939288f8f09a0156",
+                marriage_certificate_rule_ids,
             ),
         }[profile]
         claims = request_body.get("claims") or []
@@ -250,7 +280,7 @@ class FakeNotaryHandler(BaseHTTPRequestHandler):
             "source_read_count": 0 if status >= 400 else 1,
             "status": status,
         }
-        if profile == "baseline-dpi/v1":
+        if profile == "combined-support-eligibility/v1":
             record.update(
                 {
                     "target_ref_hash": "hmac-sha256:targettargettargettargettargettarget",
@@ -263,12 +293,12 @@ class FakeNotaryHandler(BaseHTTPRequestHandler):
             record.update(
                 {
                     "target_ref_hash": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
-                    if profile.startswith("oots-")
-                    else "hmac-sha256:spdcitargettargettargettargettargettarget",
+                    if profile in {"birth-certificate-evidence/v1", "marriage-certificate-evidence/v1"}
+                    else "hmac-sha256:birthregistrationtargettargettargettarget",
                     "claim_hash": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
                     "correlation_id_hash": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
-                    if profile.startswith("oots-")
-                    else "hmac-sha256:spdcicorrelationcorrelationcorrelation",
+                    if profile in {"birth-certificate-evidence/v1", "marriage-certificate-evidence/v1"}
+                    else "hmac-sha256:birthregistrationcorrelationcorrelation",
                     "request_ref_hash": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
                 }
             )
@@ -286,12 +316,16 @@ class FakeNotaryHandler(BaseHTTPRequestHandler):
     def profile_for_request(self, request_body: dict[str, Any]) -> str:
         claims = request_body.get("claims") or []
         if any(isinstance(claim, str) and claim.startswith("opencrvs-") for claim in claims):
-            return "sp-dci/v1"
-        if set(claims) & {"birth.certificate_summary", "birth.event_exists"}:
-            return "oots-birth-evidence/v1"
+            return "birth-registration-evidence/v1"
+        if set(claims) & {
+            "birth.certificate_summary",
+            "birth.certificate_summary_by_demographics",
+            "birth.event_exists",
+        }:
+            return "birth-certificate-evidence/v1"
         if set(claims) & {"marriage.certificate_summary", "marriage.event_exists"}:
-            return "oots-marriage-evidence/v1"
-        return "baseline-dpi/v1"
+            return "marriage-certificate-evidence/v1"
+        return "combined-support-eligibility/v1"
 
 
 class FakeNotaryServer:
@@ -360,10 +394,31 @@ NEGATIVE_ENV = {
 
 
 class EvidenceGatewayLiveFixtureRunnerTest(unittest.TestCase):
+    def test_civil_certificate_profiles_default_to_civil_notary_port_and_json_runtime_format(self) -> None:
+        self.assertEqual(
+            runner.default_base_url("birth-certificate-evidence/v1"),
+            "http://127.0.0.1:4321",
+        )
+        self.assertEqual(
+            runner.default_base_url("marriage-certificate-evidence/v1"),
+            "http://127.0.0.1:4321",
+        )
+        self.assertEqual(
+            runner.live_notary_format("birth-certificate-evidence/v1", "minimized_json"),
+            runner.CLAIM_RESULT_JSON,
+        )
+
+    def test_civil_certificate_profiles_honor_civil_notary_port_override(self) -> None:
+        with temporary_env({"CIVIL_NOTARY_PORT": "4361"}):
+            self.assertEqual(
+                runner.default_base_url("birth-certificate-evidence/v1"),
+                "http://127.0.0.1:4361",
+            )
+
     def test_baseline_prove_live_runs_success_audit_and_runtime_negative(self) -> None:
         with temporary_env(NEGATIVE_ENV), FakeNotaryServer() as server:
             runtime = runner.ProfileRuntime(
-                profile="baseline-dpi/v1",
+                profile="combined-support-eligibility/v1",
                 base_url=server.url,
                 token="token",
                 auth="bearer",
@@ -378,7 +433,7 @@ class EvidenceGatewayLiveFixtureRunnerTest(unittest.TestCase):
         self.assertIn("baseline-denial-legal-basis", executed)
         self.assertIn("baseline-denial-consent", executed)
         self.assertIn("baseline-audit-permit", executed)
-        self.assertIn("baseline-dpi.v1-runtime-missing-subject", executed)
+        self.assertIn("combined-support-eligibility.v1-runtime-missing-subject", executed)
         skipped = {item["id"]: item["blocker"] for item in summary["skipped"]}
         self.assertEqual(
             skipped["baseline-denial-stale-evidence"],
@@ -388,6 +443,7 @@ class EvidenceGatewayLiveFixtureRunnerTest(unittest.TestCase):
             skipped["baseline-denial-missing-freshness"],
             "static-registry-runtime-does-not-use-row-observed-at-freshness",
         )
+        self.assertFalse(any(item["blocker"] == "live-source-observed-at-field-not-configured" for item in summary["skipped"]))
         auth_header = server.requests_seen[0]["headers"].get("Authorization")
         self.assertEqual(auth_header, "Bearer token")
         audit_log = write_audit_log(server.audit_records)
@@ -399,7 +455,7 @@ class EvidenceGatewayLiveFixtureRunnerTest(unittest.TestCase):
     def test_strict_mode_fails_on_unexercised_context_gates(self) -> None:
         with temporary_env(NEGATIVE_ENV), FakeNotaryServer() as server:
             runtime = runner.ProfileRuntime(
-                profile="baseline-dpi/v1",
+                profile="combined-support-eligibility/v1",
                 base_url=server.url,
                 token="token",
                 auth="api-key",
@@ -408,10 +464,10 @@ class EvidenceGatewayLiveFixtureRunnerTest(unittest.TestCase):
             with self.assertRaisesRegex(runner.LiveFixtureError, "strict mode has unexercised fixture blockers"):
                 runner.run_profile(runtime, "strict", "test-live")
 
-    def test_sp_dci_subject_override_and_credential_flow(self) -> None:
+    def test_birth_registration_subject_override_and_credential_flow(self) -> None:
         with FakeNotaryServer() as server:
             runtime = runner.ProfileRuntime(
-                profile="sp-dci/v1",
+                profile="birth-registration-evidence/v1",
                 base_url=server.url,
                 token="token",
                 auth="api-key",
@@ -421,13 +477,13 @@ class EvidenceGatewayLiveFixtureRunnerTest(unittest.TestCase):
                 summary = runner.run_profile(runtime, "prove-live", "test-live")
 
         executed = {item["id"] for item in summary["executed"]}
-        self.assertIn("sp-dci-success-birth-record", executed)
-        self.assertIn("sp-dci-denial-assurance", executed)
-        self.assertIn("sp-dci-denial-jurisdiction", executed)
-        self.assertIn("sp-dci-denial-legal-basis", executed)
-        self.assertIn("sp-dci-denial-consent", executed)
-        self.assertIn("sp-dci-redaction-birth-attributes", executed)
-        self.assertIn("sp-dci-credential-sd-jwt", executed)
+        self.assertIn("birth-registration-evidence-success-birth-record", executed)
+        self.assertIn("birth-registration-evidence-denial-assurance", executed)
+        self.assertIn("birth-registration-evidence-denial-jurisdiction", executed)
+        self.assertIn("birth-registration-evidence-denial-legal-basis", executed)
+        self.assertIn("birth-registration-evidence-denial-consent", executed)
+        self.assertIn("birth-registration-evidence-redaction-birth-attributes", executed)
+        self.assertIn("birth-registration-evidence-credential-sd-jwt", executed)
         first_eval = next(request for request in server.requests_seen if request["path"] == "/v1/evaluations")
         self.assertEqual(
             first_eval["body"]["target"]["identifiers"][0]["value"],
@@ -441,10 +497,10 @@ class EvidenceGatewayLiveFixtureRunnerTest(unittest.TestCase):
         finally:
             audit_log.unlink(missing_ok=True)
 
-    def test_wave_a_birth_and_marriage_minimized_json(self) -> None:
+    def test_wave_a_birth_and_marriage_certificate_profiles_run_against_notary_json(self) -> None:
         with temporary_env(NEGATIVE_ENV), FakeNotaryServer() as server:
             profiles = []
-            for profile in ("oots-birth-evidence/v1", "oots-marriage-evidence/v1"):
+            for profile in ("birth-certificate-evidence/v1", "marriage-certificate-evidence/v1"):
                 runtime = runner.ProfileRuntime(
                     profile=profile,
                     base_url=server.url,
@@ -455,18 +511,20 @@ class EvidenceGatewayLiveFixtureRunnerTest(unittest.TestCase):
                 profiles.append(runner.run_profile(runtime, "prove-live", "test-live"))
 
         executed = {item["id"] for profile in profiles for item in profile["executed"]}
-        self.assertIn("oots-birth-success-minimized-json", executed)
-        self.assertIn("oots-birth-success-predicate", executed)
-        self.assertIn("oots-birth-denial-purpose", executed)
-        self.assertIn("oots-birth-denial-jurisdiction", executed)
-        self.assertIn("oots-birth-audit-permit", executed)
-        self.assertIn("oots-birth-evidence.v1-runtime-missing-subject", executed)
-        self.assertIn("oots-marriage-success-minimized-json", executed)
-        self.assertIn("oots-marriage-success-predicate", executed)
-        self.assertIn("oots-marriage-denial-purpose", executed)
-        self.assertIn("oots-marriage-denial-jurisdiction", executed)
-        self.assertIn("oots-marriage-audit-permit", executed)
-        self.assertIn("oots-marriage-evidence.v1-runtime-missing-subject", executed)
+        self.assertIn("birth-certificate-success-minimized-json", executed)
+        self.assertIn("birth-certificate-success-demographic", executed)
+        self.assertIn("birth-certificate-success-predicate", executed)
+        self.assertIn("birth-certificate-denial-purpose", executed)
+        self.assertIn("birth-certificate-audit-permit", executed)
+        self.assertIn("birth-certificate-evidence.v1-runtime-missing-subject", executed)
+        self.assertIn("marriage-certificate-success-minimized-json", executed)
+        self.assertIn("marriage-certificate-success-predicate", executed)
+        self.assertIn("marriage-certificate-denial-purpose", executed)
+        self.assertIn("marriage-certificate-audit-permit", executed)
+        self.assertIn("marriage-certificate-evidence.v1-runtime-missing-subject", executed)
+        skipped = {item["id"] for profile in profiles for item in profile["skipped"]}
+        self.assertIn("birth-certificate-denial-jurisdiction", skipped)
+        self.assertIn("marriage-certificate-denial-jurisdiction", skipped)
         wave_a_requests = [
             request["body"]
             for request in server.requests_seen
@@ -474,13 +532,14 @@ class EvidenceGatewayLiveFixtureRunnerTest(unittest.TestCase):
             and set(request["body"].get("claims") or [])
             & {
                 "birth.certificate_summary",
+                "birth.certificate_summary_by_demographics",
                 "birth.event_exists",
                 "marriage.certificate_summary",
                 "marriage.event_exists",
             }
         ]
         self.assertTrue(wave_a_requests)
-        self.assertTrue(all(request.get("format") == "minimized_json" for request in wave_a_requests))
+        self.assertTrue(all(request.get("format") == runner.CLAIM_RESULT_JSON for request in wave_a_requests))
         self.assertTrue(all("binding_id" not in request for request in wave_a_requests))
         audit_log = write_audit_log(server.audit_records)
         try:
@@ -519,8 +578,8 @@ class EvidenceGatewayLiveFixtureRunnerTest(unittest.TestCase):
                             "status": 403,
                             "request_id": "req-1",
                             "audit": {
-                                "binding_id": "baseline-dpi/v1",
-                                "policy_id": "lab.baseline-dpi.governed-evidence.v1",
+                                "binding_id": "combined-support-eligibility/v1",
+                                "policy_id": "lab.combined-support-eligibility.governed-evidence.v1",
                                 "policy_hash": "sha256:policy",
                                 "decision": "deny",
                             },
@@ -538,12 +597,12 @@ class EvidenceGatewayLiveFixtureRunnerTest(unittest.TestCase):
                 "svc | "
                 + json.dumps(
                     {
-                        "binding_id": "baseline-dpi/v1",
+                        "binding_id": "combined-support-eligibility/v1",
                         "decision": "deny",
                         "method": "POST",
                         "path": "/v1/evaluations",
                         "policy_hash": "sha256:policy",
-                        "policy_id": "lab.baseline-dpi.governed-evidence.v1",
+                        "policy_id": "lab.combined-support-eligibility.governed-evidence.v1",
                         "problem_code": "pdp.purpose_not_permitted",
                         "request_id": "req-1",
                         "status": 403,
@@ -630,7 +689,7 @@ class EvidenceGatewayLiveFixtureRunnerTest(unittest.TestCase):
             log_path = Path(tmp) / "audit.log"
             log_path.write_text(
                 'svc | {"path":"/v1/evaluations","status":200,'
-                '"evaluated_rule_ids":["urn:registry-lab:rule:baseline-dpi:purpose"]}\n',
+                '"evaluated_rule_ids":["urn:registry-lab:rule:combined-support-eligibility:purpose"]}\n',
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(runner.LiveFixtureError, "evaluated_rule_ids"):

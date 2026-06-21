@@ -443,7 +443,7 @@ if source_count < 2:
 PY
 
 live_fixture_output="${output_dir}/evidence-gateway-live-baseline.json"
-check "baseline live evidence gateway fixtures" python3 "${script_dir}/run-evidence-gateway-live-fixtures.py" --profile baseline-dpi/v1 --output "${live_fixture_output}" --correlation-prefix "${correlation_id}-evidence-gateway"
+check "baseline live evidence gateway fixtures" python3 "${script_dir}/run-evidence-gateway-live-fixtures.py" --profile combined-support-eligibility/v1 --output "${live_fixture_output}" --correlation-prefix "${correlation_id}-evidence-gateway"
 
 matrix_cases=(
   "civil|http://127.0.0.1:4321/v1/evaluations|CIVIL_EVIDENCE_CLIENT_BEARER|person-is-alive|NID-1001|true"
@@ -508,9 +508,9 @@ decision_artifact="$(find "${output_dir}" -maxdepth 1 -name '*household-benefit-
 check "household decision has no Relay write-back" json_path_equals "${decision_artifact}" boundary.relay_write_back false
 
 log_file="/tmp/decentralized-smoke-service-logs.txt"
-check "baseline live evidence gateway fixtures for audit" python3 "${script_dir}/run-evidence-gateway-live-fixtures.py" --profile baseline-dpi/v1 --output "${live_fixture_output}" --correlation-prefix "${correlation_id}-evidence-gateway-audit"
+check "baseline live evidence gateway fixtures for audit" python3 "${script_dir}/run-evidence-gateway-live-fixtures.py" --profile combined-support-eligibility/v1 --output "${live_fixture_output}" --correlation-prefix "${correlation_id}-evidence-gateway-audit"
 docker compose -f "${compose_file}" logs --no-color civil-registry-relay social-protection-registry-relay health-registry-relay civil-notary social-protection-notary shared-eligibility-notary > "${log_file}"
-check "baseline live evidence gateway audit log" python3 "${script_dir}/run-evidence-gateway-live-fixtures.py" --profile baseline-dpi/v1 --output "${live_fixture_output}" --audit-log-path "${log_file}" --audit-only
+check "baseline live evidence gateway audit log" python3 "${script_dir}/run-evidence-gateway-live-fixtures.py" --profile combined-support-eligibility/v1 --output "${live_fixture_output}" --audit-log-path "${log_file}" --audit-only
 grep '"error_code":"auth.scope_denied"' "${log_file}" >/dev/null || fail "Relay denied audit event"
 grep '"error_code":"pdp.purpose_not_permitted"' "${log_file}" >/dev/null || fail "Relay purpose policy denied audit event"
 python3 - "${log_file}" <<'PY' || fail "Relay baseline PDP policy id/hash audit events"
@@ -518,8 +518,8 @@ import json
 import sys
 
 log_path = sys.argv[1]
-expected_policy_id = "lab.baseline-dpi.governed-evidence.v1"
-expected_policy_hash = "sha256:9818125ad99b32b4eb996780c12cc68730fbcb0b406c4124dbb36dea4ccc6bdb"
+expected_policy_id = "lab.combined-support-eligibility.governed-evidence.v1"
+expected_policy_hash = "sha256:4a680200c1095d2dbee608046d78d2399db5dfae7426c36a4580fe81e50dbeb9"
 expected_datasets = {
     "civil_registry",
     "health_registry",
@@ -552,7 +552,7 @@ if missing:
 PY
 grep '"pdp_evaluated_rule_ids":\["entity-purpose-required:household.policy_identity","entity-purpose-required:household.odrl_terms","entity-purpose-required:household.purpose"' "${log_file}" >/dev/null || fail "Relay PDP evaluated rule ids audit event"
 grep '"decision":"evaluate"' "${log_file}" >/dev/null || fail "Evidence Server evaluation audit event"
-grep '"matching_policy_id":"lab.baseline-dpi.governed-evidence.v1"' "${log_file}" >/dev/null || fail "Evidence Server matching policy audit event"
+grep '"matching_policy_id":"lab.combined-support-eligibility.governed-evidence.v1"' "${log_file}" >/dev/null || fail "Evidence Server matching policy audit event"
 grep '"status_code":200' "${log_file}" >/dev/null || fail "Relay positive audit event"
 
 for secret_var in \

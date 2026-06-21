@@ -1,9 +1,9 @@
 {
   "schema_version": "registry-lab/evidence-gateway-binding/v1",
   "binding": {
-    "id": "baseline-dpi/v1",
+    "id": "combined-support-eligibility/v1",
     "version": "v1",
-    "profile": "baseline-dpi",
+    "profile": "combined-support-eligibility",
     "type": "governed-evidence",
     "description": "Default governed evidence binding for PublicSchema-style REST evidence requests.",
     "source_configs": [
@@ -11,12 +11,28 @@
       "config/relay/social-protection-registry-relay.metadata.yaml",
       "config/relay/health-registry-relay.metadata.yaml"
     ],
-    "synthetic_data": "config/evidence-gateway/synthetic/baseline-dpi.v1.json",
-    "golden_fixtures": "config/evidence-gateway/golden/baseline-dpi.v1.json"
+    "synthetic_data": "config/evidence-gateway/synthetic/combined-support-eligibility.v1.json",
+    "golden_fixtures": "config/evidence-gateway/golden/combined-support-eligibility.v1.json"
   },
   "evidence_pack": {
-    "policy_id": "lab.baseline-dpi.governed-evidence.v1",
-    "policy_hash": "sha256:9818125ad99b32b4eb996780c12cc68730fbcb0b406c4124dbb36dea4ccc6bdb",
+    "pack_id": "combined-support-eligibility/v1",
+    "pack_version": "v1",
+    "pack_title": "Combined support eligibility evidence",
+    "source_basis": {
+      "family": "registry-lab-baseline",
+      "evidence_type": "Combined support eligibility",
+      "adaptation": "jurisdiction-neutral-publicschema"
+    },
+    "matching_modes": [
+      {
+        "mode": "identifier",
+        "status": "implemented",
+        "input": "target.identifiers.national_id",
+        "identifier_scheme": "national_id"
+      }
+    ],
+    "policy_id": "lab.combined-support-eligibility.governed-evidence.v1",
+    "policy_hash": "sha256:4a680200c1095d2dbee608046d78d2399db5dfae7426c36a4580fe81e50dbeb9",
     "odrl_enforcement": {
       "profile": "registry-evidence-gateway-pdp/v1",
       "constraint_terms": [
@@ -57,13 +73,13 @@
       }
     ],
     "@type": "Set",
-    "uid": "urn:registry-lab:policy:baseline-dpi:governed-evidence:v1",
+    "uid": "urn:registry-lab:policy:combined-support-eligibility:governed-evidence:v1",
     "profile": "registry-evidence-gateway-pdp/v1",
     "permission": [
       {
-        "uid": "urn:registry-lab:rule:baseline-dpi:purpose:decentralized-evidence-demo",
+        "uid": "urn:registry-lab:rule:combined-support-eligibility:purpose:decentralized-evidence-demo",
         "action": "odrl:use",
-        "target": "urn:registry-lab:evidence:baseline-dpi:v1",
+        "target": "urn:registry-lab:evidence:combined-support-eligibility:v1",
         "constraint": [
           {
             "leftOperand": "odrl:purpose",

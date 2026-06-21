@@ -556,6 +556,9 @@ class ScenarioPayloadTest(unittest.TestCase):
             [
                 "alive-proof",
                 "civil-birth-demographics",
+                "civil-birth-evidence",
+                "civil-birth-evidence-demographics",
+                "civil-marriage-evidence",
                 "wallet-credential",
                 "dhis2-programme-vc",
                 "social-aggregate",
@@ -564,13 +567,9 @@ class ScenarioPayloadTest(unittest.TestCase):
             ],
         )
         self.assertEqual(payload["default_scenario_id"], "alive-proof")
-        self.assertEqual(len(payload["scenarios"]), 7)
-        self.assertEqual(payload["scenarios"][1]["availability"], "hosted")
-        self.assertEqual(payload["scenarios"][2]["availability"], "hosted")
-        self.assertEqual(payload["scenarios"][3]["availability"], "hosted")
-        self.assertEqual(payload["scenarios"][4]["availability"], "hosted")
-        self.assertEqual(payload["scenarios"][5]["availability"], "hosted")
-        self.assertEqual(payload["scenarios"][6]["availability"], "hosted")
+        self.assertEqual(len(payload["scenarios"]), 10)
+        for scenario in payload["scenarios"][1:]:
+            self.assertEqual(scenario["availability"], "hosted")
 
     def test_catalogue_exposes_attestation_metadata_and_availability_state(self) -> None:
         payload = server.scenario_payload(self._payload_config(), lab_mode="hosted")
@@ -1106,6 +1105,47 @@ class CivilBirthDemographicsScenarioTest(unittest.TestCase):
         self.assertEqual(facts["Target inputs"], "Legacy identifier fallback")
 
 
+class CivilCrvsEvidenceScenarioTest(unittest.TestCase):
+    """CRVS Birth Evidence and Marriage Evidence scenarios use metadata target inputs."""
+
+    def _config(self) -> dict:
+        return server.enrich_config(
+            {
+                "credentials": [
+                    {
+                        "id": "civil-notary-evidence",
+                        "label": "Civil Notary evidence bearer",
+                        "env": "CIVIL_EVIDENCE_CLIENT_BEARER",
+                        "auth_scheme": "bearer",
+                        "service_url": "https://notary.example",
+                        "example": {"method": "GET", "path": "/v1/claims"},
+                    }
+                ]
+            }
+        )
+
+    def test_birth_evidence_story_preview_uses_registration_number_target(self) -> None:
+        story = server.scenario_payload(self._config(), "civil-birth-evidence")["story"]
+        self.assertEqual(story["id"], "civil-birth-evidence")
+        self.assertEqual([step["id"] for step in story["steps"]], ["discover", "evaluate"])
+        preview = story["steps"][1]["request_preview"]
+        self.assertEqual(preview["target_input_selection"]["group"], "Registration number")
+        self.assertEqual(
+            preview["body"]["target"]["identifiers"],
+            [{"scheme": "registration_number", "value": "B-2016-N-1001"}],
+        )
+
+    def test_marriage_evidence_story_preview_uses_marriage_target_type(self) -> None:
+        story = server.scenario_payload(self._config(), "civil-marriage-evidence")["story"]
+        preview = story["steps"][1]["request_preview"]
+        self.assertEqual(preview["body"]["claims"], ["marriage.certificate_summary"])
+        self.assertEqual(preview["body"]["target"]["type"], "Marriage")
+        self.assertEqual(
+            preview["body"]["target"]["identifiers"],
+            [{"scheme": "registration_number", "value": "MR-2026-2001"}],
+        )
+
+
 class HomepageHtmlTest(unittest.TestCase):
     """The credentials section is merged into services, and Open links are status-gated."""
 
@@ -1306,6 +1346,16 @@ class ExplorerPageHtmlTest(unittest.TestCase):
         self.assertIn("state.metadata?.data", CLAIMS_EXPLORER_JS)
         self.assertIn("state.metadata?.service?.data", CLAIMS_EXPLORER_JS)
 
+    def test_claims_explorer_js_renders_metadata_target_inputs(self) -> None:
+        self.assertIn("function targetInputGroups", CLAIMS_EXPLORER_JS)
+        self.assertIn("target_inputs", CLAIMS_EXPLORER_JS)
+        self.assertIn("target.identifiers", CLAIMS_EXPLORER_JS)
+        self.assertIn("payload.target = targetFromInputs(group)", CLAIMS_EXPLORER_JS)
+
+    def test_claims_explorer_js_reads_target_values_from_state_during_render(self) -> None:
+        self.assertIn("return state.targetValues[key] ?? defaultTargetValue(input)", CLAIMS_EXPLORER_JS)
+        self.assertNotIn("byId(`target-input-${index}`)?.value", CLAIMS_EXPLORER_JS)
+
     def test_claims_explorer_js_keeps_minimization_secondary(self) -> None:
         answer = CLAIMS_EXPLORER_JS.index("Answer")
         minimization = CLAIMS_EXPLORER_JS.index("Minimization details")
@@ -1378,6 +1428,22 @@ class ExplorerApiPayloadTest(unittest.TestCase):
         self.assertEqual(opencrvs_titles["opencrvs-birth-record-exists"], "Birth Registration Attestation")
         self.assertEqual(opencrvs_titles["opencrvs-age-band"], "Age Eligibility Attestation")
 
+        civil_claims = {claim["id"]: claim for claim in civil["claims"]}
+        self.assertEqual(civil_claims["birth.certificate_summary"]["title"], "Birth certificate summary")
+        self.assertEqual(
+            civil_claims["birth.certificate_summary_by_demographics"]["title"],
+            "Birth Evidence by demographics",
+        )
+        self.assertEqual(civil_claims["marriage.certificate_summary"]["title"], "Marriage certificate summary")
+        self.assertEqual(
+            civil_claims["birth.certificate_summary"]["target_inputs"][0]["groups"][0]["inputs"][0]["path"],
+            "target.identifiers.registration_number",
+        )
+        self.assertEqual(
+            civil_claims["birth.certificate_summary_by_demographics"]["target_inputs"][0]["groups"][0]["inputs"][0]["path"],
+            "target.attributes.given_name",
+        )
+
         agriculture = server.claims_explorer.claim_metadata_payload(self.config, "agriculture-notary")["claim_service"]
         self.assertEqual(agriculture["default_identifier_scheme"], "farmer_id")
         self.assertEqual(agriculture["default_subject"], "FARMER-1001")
@@ -1394,6 +1460,7 @@ class ExplorerApiPayloadTest(unittest.TestCase):
                 "civil_identifier",
                 "birth_event",
                 "death_event",
+                "marriage_event",
                 "civil_status_record",
                 "certificate",
                 "relationship",
@@ -1577,6 +1644,58 @@ class ExplorerApiPayloadTest(unittest.TestCase):
         self.assertEqual(normalized["subject"], "NID-1001")
         self.assertEqual(normalized["identifier_scheme"], "national_id")
 
+    def test_claim_evaluation_accepts_full_target_shape(self) -> None:
+        target = {
+            "type": "Person",
+            "identifiers": [{"scheme": "registration_number", "value": "B-2016-N-1001"}],
+        }
+        normalized = server._normalize_evaluation_body(
+            {
+                "claim_id": "birth.certificate_summary",
+                "target": target,
+                "disclosure": "value",
+                "format": server.claims_explorer.CLAIM_RESULT_FORMAT,
+                "purpose": server.claims_explorer.PURPOSE,
+            }
+        )
+        self.assertEqual(normalized["target"], target)
+        self.assertNotIn("subject", normalized)
+
+    def test_claim_evaluation_validation_accepts_legacy_subject_shape(self) -> None:
+        validated = server.claims_explorer.validate_evaluation_input(
+            "civil-notary",
+            {
+                "claim_id": "person-is-alive",
+                "subject": "NID-1001",
+                "identifier_scheme": "national_id",
+                "disclosure": "predicate",
+                "format": server.claims_explorer.CLAIM_RESULT_FORMAT,
+                "purpose": server.claims_explorer.PURPOSE,
+            },
+        )
+        self.assertEqual(validated["subject"], "NID-1001")
+        self.assertEqual(validated["identifier_scheme"], "national_id")
+        self.assertIsNone(validated["target"])
+
+    def test_claim_evaluation_validation_accepts_target_shape_without_legacy_subject(self) -> None:
+        target = {
+            "type": "Person",
+            "identifiers": [{"scheme": "registration_number", "value": "B-2016-N-1001"}],
+        }
+        validated = server.claims_explorer.validate_evaluation_input(
+            "civil-notary",
+            {
+                "claim_id": "birth.certificate_summary",
+                "target": target,
+                "disclosure": "value",
+                "format": server.claims_explorer.CLAIM_RESULT_FORMAT,
+                "purpose": "https://demo.example.gov/purpose/civil-certificate-evidence",
+            },
+        )
+        self.assertEqual(validated["target"], target)
+        self.assertEqual(validated["subject"], "B-2016-N-1001")
+        self.assertEqual(validated["identifier_scheme"], "registration_number")
+
     def test_default_claim_result_minimization_precedes_raw_row_access(self) -> None:
         payload = server.claims_explorer.run_evaluation(
             self.config,
@@ -1627,6 +1746,43 @@ class ExplorerApiPayloadTest(unittest.TestCase):
         self.assertEqual(captured["headers"]["Authorization"], "Bearer civil-real-token")
         self.assertNotIn("civil-real-token", str(payload["request_source"]))
         self.assertIn("[runtime demo token hidden]", str(payload["request_source"]))
+
+    def test_runtime_claim_evaluation_passes_metadata_target_through(self) -> None:
+        captured = {}
+        target = {
+            "type": "Person",
+            "identifiers": [{"scheme": "registration_number", "value": "B-2016-N-1001"}],
+        }
+
+        class Result:
+            status = 200
+            body = {"results": [{"claim_id": "birth.certificate_summary", "value": True}]}
+            headers = {"content-type": "application/json"}
+            error = ""
+
+        def fake_http_json(method, url, headers, body, timeout=8.0):
+            captured["body"] = body
+            return Result()
+
+        os.environ["CIVIL_EVIDENCE_CLIENT_BEARER"] = "civil-real-token"
+        try:
+            with mock.patch.object(server.claims_explorer, "http_json", fake_http_json):
+                payload = server.claims_explorer.run_evaluation(
+                    server.enrich_config({"credentials": []}),
+                    "civil-notary",
+                    {
+                        "claim_id": "birth.certificate_summary",
+                        "target": target,
+                        "disclosure": "value",
+                        "format": server.claims_explorer.CLAIM_RESULT_FORMAT,
+                        "purpose": "https://demo.example.gov/purpose/civil-certificate-evidence",
+                    },
+                )
+        finally:
+            os.environ.pop("CIVIL_EVIDENCE_CLIENT_BEARER", None)
+        self.assertEqual(captured["body"]["target"], target)
+        self.assertNotIn("subject", captured["body"])
+        self.assertEqual(payload["request_source"]["body"]["target"], target)
 
     def test_civil_preview_unknown_subject_is_not_satisfied(self) -> None:
         payload = server.claims_explorer.run_evaluation(

@@ -81,6 +81,20 @@ logs *services:
 smoke:
     scripts/smoke.sh
 
+# Run evidence-gateway pack contract checks and runner unit tests.
+evidence-gateway-test:
+    scripts/check-evidence-gateway-fixtures.py
+    python3 -m unittest scripts.test_evidence_gateway_fixtures scripts.test_evidence_gateway_live_fixtures
+
+# Run live evidence-gateway fixtures for one profile. Pass runner args after the profile.
+evidence-gateway-live profile *args:
+    @python3 scripts/run-evidence-gateway-live-fixtures.py --profile "{{profile}}" {{args}}
+
+# Run local CRVS relay-backed certificate evidence packs against civil-notary.
+evidence-gateway-crvs-live:
+    @mkdir -p output
+    @python3 scripts/run-evidence-gateway-live-fixtures.py --profile birth-certificate-evidence/v1 --profile marriage-certificate-evidence/v1 --output output/evidence-gateway-live-crvs-certificates.json
+
 # Generate governed runtime configuration artifacts for the opt-in Lab 2 demo.
 lab2-generate:
     @test -f .env || (echo "Run just generate before just lab2-generate." >&2; exit 1)

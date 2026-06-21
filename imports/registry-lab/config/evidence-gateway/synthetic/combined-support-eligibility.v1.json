@@ -1,11 +1,11 @@
 {
   "schema_version": "registry-lab/evidence-gateway-synthetic-data/v1",
-  "binding_id": "baseline-dpi/v1",
+  "binding_id": "combined-support-eligibility/v1",
   "records": [
     {
       "id": "baseline-success-child",
       "source_metadata": {
-        "source_system": "baseline-dpi-synthetic-source",
+        "source_system": "combined-support-eligibility-synthetic-source",
         "freshness_source": "source_row.observed_at",
         "observed_at": "2026-06-18T12:00:00Z"
       },
@@ -30,7 +30,7 @@
     {
       "id": "baseline-denied-purpose",
       "source_metadata": {
-        "source_system": "baseline-dpi-synthetic-source",
+        "source_system": "combined-support-eligibility-synthetic-source",
         "freshness_source": "source_row.observed_at",
         "observed_at": "2026-06-18T12:00:00Z"
       },
@@ -50,7 +50,7 @@
     {
       "id": "baseline-stale-evidence",
       "source_metadata": {
-        "source_system": "baseline-dpi-synthetic-source",
+        "source_system": "combined-support-eligibility-synthetic-source",
         "freshness_source": "source_row.observed_at",
         "observed_at": "2026-06-17T00:00:00Z"
       },
@@ -70,7 +70,7 @@
     {
       "id": "baseline-missing-observed-at",
       "source_metadata": {
-        "source_system": "baseline-dpi-synthetic-source",
+        "source_system": "combined-support-eligibility-synthetic-source",
         "freshness_source": "source_row.observed_at"
       },
       "national_id": "NID-1011",
@@ -89,7 +89,7 @@
     {
       "id": "baseline-redaction-household",
       "source_metadata": {
-        "source_system": "baseline-dpi-synthetic-source",
+        "source_system": "combined-support-eligibility-synthetic-source",
         "freshness_source": "source_row.observed_at",
         "observed_at": "2026-06-18T12:00:00Z"
       },

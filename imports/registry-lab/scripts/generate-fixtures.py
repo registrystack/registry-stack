@@ -85,7 +85,7 @@ CIVIL_ROWS = append_observed_at([
 ], national_id_index=0)
 
 # PublicSchema anchors:
-# Person / Identifier / CivilStatusRecord / Birth / Death / Certificate / Relationship.
+# Person / Identifier / CivilStatusRecord / Birth / Death / Marriage / Certificate / Relationship.
 CIVIL_PERSON_DETAILS = [
     [
         "person_id",
@@ -137,9 +137,9 @@ BIRTH_EVENTS = [
         "sex_at_birth",
         "attendant_or_place_type",
     ],
-    ["BE-1001", "CP-1001", "CP-2001", "", "North City", "2016-01-15", "M", "clinic"],
+    ["BE-1001", "CP-1001", "CP-2001", "CP-2002", "North City", "2016-01-15", "M", "clinic"],
     ["BE-1002", "CP-1002", "", "CP-2002", "South Town", "2018-01-15", "F", "clinic"],
-    ["BE-1004", "CP-1004", "CP-2004", "", "East City", "2019-01-15", "M", "clinic"],
+    ["BE-1004", "CP-1004", "CP-2004", "CP-2005", "East City", "2019-01-15", "M", "clinic"],
     ["BE-1005", "CP-1005", "", "CP-2005", "West City", "2013-01-15", "F", "clinic"],
     ["BE-1006", "CP-1006", "", "CP-2006", "North City", "2014-01-15", "M", "clinic"],
     ["BE-1011", "CP-1011", "", "", "South Town", "2016-01-15", "M", "clinic"],
@@ -148,6 +148,20 @@ BIRTH_EVENTS = [
 DEATH_EVENTS = [
     ["event_id", "deceased_person_id", "date_of_death", "place_of_death", "registration_date", "authority"],
     ["DE-1003", "CP-1003", "2025-11-02", "Central City", "2025-11-03", "Civil Registry Authority"],
+]
+
+MARRIAGE_EVENTS = [
+    [
+        "event_id",
+        "spouse_1_person_id",
+        "spouse_2_person_id",
+        "marriage_date",
+        "marriage_place",
+        "registration_date",
+        "authority",
+    ],
+    ["ME-2001", "CP-2001", "CP-2002", "2020-08-15", "North City", "2020-08-16", "Civil Registry Authority"],
+    ["ME-2002", "CP-2004", "CP-2005", "2021-09-03", "East City", "2021-09-04", "Civil Registry Authority"],
 ]
 
 CIVIL_STATUS_RECORDS = [
@@ -168,6 +182,8 @@ CIVIL_STATUS_RECORDS = [
     ["CSR-BIRTH-1006", "birth", "B-2014-N-1006", "CP-1006", "BE-1006", "Civil Registry Authority", "registered", "2014-01-17"],
     ["CSR-BIRTH-1011", "birth", "B-2016-S-1011", "CP-1011", "BE-1011", "Civil Registry Authority", "registered", "2016-01-20"],
     ["CSR-DEATH-1003", "death", "D-2025-C-1003", "CP-1003", "DE-1003", "Civil Registry Authority", "registered", "2025-11-03"],
+    ["CSR-MARRIAGE-2001", "marriage", "MR-2026-2001", "CP-2001", "ME-2001", "Civil Registry Authority", "registered", "2020-08-16"],
+    ["CSR-MARRIAGE-2002", "marriage", "MR-2026-2002", "CP-2004", "ME-2002", "Civil Registry Authority", "registered", "2021-09-04"],
 ]
 
 CERTIFICATES = [
@@ -177,6 +193,8 @@ CERTIFICATES = [
     ["CERT-B-1004", "CSR-BIRTH-1004", "2019-01-18", "East Civil Office", "birth", ""],
     ["CERT-B-1011", "CSR-BIRTH-1011", "2016-01-21", "South Civil Office", "birth", ""],
     ["CERT-D-1003", "CSR-DEATH-1003", "2025-11-04", "Central Civil Office", "death", ""],
+    ["CERT-M-2001", "CSR-MARRIAGE-2001", "2026-06-02", "North Civil Office", "marriage", ""],
+    ["CERT-M-2002", "CSR-MARRIAGE-2002", "2026-06-02", "East Civil Office", "marriage", ""],
 ]
 
 RELATIONSHIPS = [
@@ -191,8 +209,10 @@ RELATIONSHIPS = [
         "relationship_status",
     ],
     ["REL-1001-MOTHER", "CP-1001", "CP-2001", "mother", "CSR-BIRTH-1001", "2016-01-15", "", "established"],
+    ["REL-1001-FATHER", "CP-1001", "CP-2002", "father", "CSR-BIRTH-1001", "2016-01-15", "", "established"],
     ["REL-1002-FATHER", "CP-1002", "CP-2002", "father", "CSR-BIRTH-1002", "2018-01-15", "", "established"],
     ["REL-1004-MOTHER", "CP-1004", "CP-2004", "mother", "CSR-BIRTH-1004", "2019-01-15", "", "established"],
+    ["REL-1004-FATHER", "CP-1004", "CP-2005", "father", "CSR-BIRTH-1004", "2019-01-15", "", "established"],
     ["REL-1005-FATHER", "CP-1005", "CP-2005", "father", "CSR-BIRTH-1005", "2013-01-15", "", "established"],
     ["REL-1006-FATHER", "CP-1006", "CP-2006", "father", "CSR-BIRTH-1006", "2014-01-15", "", "established"],
 ]
@@ -598,6 +618,7 @@ def validate_fixture_coverage() -> None:
     require_unique(CIVIL_IDENTIFIERS, "identifier_id")
     require_unique(BIRTH_EVENTS, "event_id")
     require_unique(DEATH_EVENTS, "event_id")
+    require_unique(MARRIAGE_EVENTS, "event_id")
     require_unique(CIVIL_STATUS_RECORDS, "record_id")
     require_unique(CIVIL_STATUS_RECORDS, "registration_number")
     require_unique(CERTIFICATES, "certificate_number")
@@ -623,6 +644,7 @@ def validate_fixture_coverage() -> None:
     civil_person_ids = {row[0] for row in data_rows(CIVIL_PERSON_DETAILS)}
     birth_event_ids = {row[0] for row in data_rows(BIRTH_EVENTS)}
     death_event_ids = {row[0] for row in data_rows(DEATH_EVENTS)}
+    marriage_event_ids = {row[0] for row in data_rows(MARRIAGE_EVENTS)}
     civil_record_ids = {row[0] for row in data_rows(CIVIL_STATUS_RECORDS)}
     household_ids = {row[0] for row in data_rows(HOUSEHOLDS)}
     person_ids = {row[0] for row in data_rows(PERSONS)}
@@ -636,10 +658,16 @@ def validate_fixture_coverage() -> None:
     require_refs(BIRTH_EVENTS, "mother_person_id", civil_person_ids, "CIVIL_PERSON_DETAILS.person_id")
     require_refs(BIRTH_EVENTS, "father_person_id", civil_person_ids, "CIVIL_PERSON_DETAILS.person_id")
     require_refs(DEATH_EVENTS, "deceased_person_id", civil_person_ids, "CIVIL_PERSON_DETAILS.person_id")
+    require_refs(MARRIAGE_EVENTS, "spouse_1_person_id", civil_person_ids, "CIVIL_PERSON_DETAILS.person_id")
+    require_refs(MARRIAGE_EVENTS, "spouse_2_person_id", civil_person_ids, "CIVIL_PERSON_DETAILS.person_id")
     require_refs(CIVIL_STATUS_RECORDS, "person_id", civil_person_ids, "CIVIL_PERSON_DETAILS.person_id")
     for row in data_rows(CIVIL_STATUS_RECORDS):
         event_id = row[4]
-        allowed_events = birth_event_ids if row[1] == "birth" else death_event_ids
+        allowed_events = {
+            "birth": birth_event_ids,
+            "death": death_event_ids,
+            "marriage": marriage_event_ids,
+        }.get(row[1], set())
         if event_id not in allowed_events:
             raise ValueError(f"civil status record {row[0]} references unknown {row[1]} event {event_id}")
     require_refs(CERTIFICATES, "record_id", civil_record_ids, "CIVIL_STATUS_RECORDS.record_id")
@@ -729,6 +757,7 @@ def write_civil_csv() -> None:
         ("civil-identifiers.csv", CIVIL_IDENTIFIERS),
         ("birth-events.csv", BIRTH_EVENTS),
         ("death-events.csv", DEATH_EVENTS),
+        ("marriage-events.csv", MARRIAGE_EVENTS),
         ("civil-status-records.csv", CIVIL_STATUS_RECORDS),
         ("certificates.csv", CERTIFICATES),
         ("relationships.csv", RELATIONSHIPS),

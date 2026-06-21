@@ -65,10 +65,10 @@ evidence:
           child_place_of_birth: /birth_place
           observed_at: "$response:/message/search_response/0/timestamp"
   ecosystem_bindings:
-    sp-dci/v1:
+    birth-registration-evidence/v1:
       profile: registry-notary/source-policy/v1
-      policy_id: lab.sp-dci.governed-evidence.v1
-      policy_hash: sha256:479cfba9c5895f5f827b855244436a5b4a9f84c76fbd5472e861ad56983254db
+      policy_id: lab.birth-registration-evidence.governed-evidence.v1
+      policy_hash: sha256:1b239a9f1d158705364d444d8ea00ed26088ffbe69bb7e3477bf72c2522979c2
   signing_keys:
     opencrvs-dci-demo:
       provider: local_jwk_env
@@ -135,7 +135,7 @@ evidence:
             max_source_age_seconds: 86400
             source_observed_at_field: observed_at
             ecosystem_binding:
-              id: sp-dci/v1
+              id: birth-registration-evidence/v1
           lookup:
             input: target.identifiers.UIN
             field: UIN
@@ -179,7 +179,7 @@ evidence:
             max_source_age_seconds: 86400
             source_observed_at_field: observed_at
             ecosystem_binding:
-              id: sp-dci/v1
+              id: birth-registration-evidence/v1
           lookup:
             input: target.identifiers.UIN
             field: UIN
@@ -229,7 +229,7 @@ evidence:
             max_source_age_seconds: 86400
             source_observed_at_field: observed_at
             ecosystem_binding:
-              id: sp-dci/v1
+              id: birth-registration-evidence/v1
           lookup:
             input: target.identifiers.UIN
             field: UIN
@@ -279,7 +279,7 @@ evidence:
             max_source_age_seconds: 86400
             source_observed_at_field: observed_at
             ecosystem_binding:
-              id: sp-dci/v1
+              id: birth-registration-evidence/v1
           lookup:
             input: target.identifiers.UIN
             field: UIN
@@ -333,7 +333,7 @@ evidence:
             max_source_age_seconds: 86400
             source_observed_at_field: observed_at
             ecosystem_binding:
-              id: sp-dci/v1
+              id: birth-registration-evidence/v1
           lookup:
             input: target.identifiers.UIN
             field: UIN
@@ -383,7 +383,7 @@ evidence:
             max_source_age_seconds: 86400
             source_observed_at_field: observed_at
             ecosystem_binding:
-              id: sp-dci/v1
+              id: birth-registration-evidence/v1
           lookup:
             input: target.identifiers.UIN
             field: UIN
@@ -433,7 +433,7 @@ evidence:
             max_source_age_seconds: 86400
             source_observed_at_field: observed_at
             ecosystem_binding:
-              id: sp-dci/v1
+              id: birth-registration-evidence/v1
           lookup:
             input: target.identifiers.UIN
             field: UIN
@@ -483,7 +483,7 @@ evidence:
             max_source_age_seconds: 86400
             source_observed_at_field: observed_at
             ecosystem_binding:
-              id: sp-dci/v1
+              id: birth-registration-evidence/v1
           lookup:
             input: target.identifiers.UIN
             field: UIN

@@ -183,7 +183,7 @@ services:
     <<: *notary-common
     command: ["--config", "/etc/registry-notary/civil-notary.yaml"]
     ports:
-      - "4321:8080"
+      - "${CIVIL_NOTARY_PORT:-4321}:8080"
       - "4329:8081"
     volumes:
       - ./config/notary/civil-notary.yaml:/etc/registry-notary/civil-notary.yaml:ro

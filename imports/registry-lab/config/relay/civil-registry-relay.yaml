@@ -16,9 +16,9 @@ config_trust:
 metadata:
   source:
     path: civil-registry-relay.metadata.yaml
-    digest: sha256:0df2398828629f24e9163f42acab4bfad87467a95c0ead0f485cebd09527b3ac
+    digest: sha256:0cf785b86c7d2ffe6633771af22e51aefe206301909a379fe3a999791dc1bc38
   ecosystem_binding:
-    id: baseline-dpi/v1
+    id: combined-support-eligibility/v1
     version: v1
 
 catalog:
@@ -318,6 +318,39 @@ datasets:
             - name: authority
               type: string
               nullable: false
+      - id: marriage_events_table
+        materialization: snapshot
+        source:
+          type: file
+          path: /demo/data/civil/marriage-events.csv
+          format:
+            csv:
+              header_row: 1
+        primary_key: event_id
+        schema:
+          strict: true
+          fields:
+            - name: event_id
+              type: string
+              nullable: false
+            - name: spouse_1_person_id
+              type: string
+              nullable: false
+            - name: spouse_2_person_id
+              type: string
+              nullable: false
+            - name: marriage_date
+              type: date
+              nullable: false
+            - name: marriage_place
+              type: string
+              nullable: false
+            - name: registration_date
+              type: date
+              nullable: false
+            - name: authority
+              type: string
+              nullable: false
       - id: civil_status_records_table
         materialization: snapshot
         source:
@@ -486,6 +519,9 @@ datasets:
           default_limit: 25
           max_limit: 100
           require_purpose_header: true
+          governed_policy:
+            permitted_purposes:
+              - https://demo.example.gov/purpose/civil-certificate-evidence
           allowed_filters:
             - field: id
               ops: [eq, in]
@@ -601,6 +637,38 @@ datasets:
               ops: [eq, in]
             - field: date_of_death
               ops: [eq, gte, lte]
+      - name: marriage_event
+        title: Marriage Event
+        description: Registered marriage event source record.
+        table: marriage_events_table
+        concept_uri: demo:Marriage
+        fields:
+          - name: id
+            from: event_id
+          - name: spouse_1_person_id
+          - name: spouse_2_person_id
+          - name: marriage_date
+          - name: marriage_place
+          - name: registration_date
+          - name: authority
+        access:
+          metadata_scope: civil_registry:metadata
+          aggregate_scope: civil_registry:aggregate
+          read_scope: civil_registry:rows
+          evidence_verification_scope: civil_registry:evidence_verification
+        api:
+          default_limit: 25
+          max_limit: 100
+          require_purpose_header: true
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: spouse_1_person_id
+              ops: [eq, in]
+            - field: spouse_2_person_id
+              ops: [eq, in]
+            - field: marriage_date
+              ops: [eq, gte, lte]
       - name: civil_status_record
         title: Civil Status Record
         description: Registered civil status record linking a person to an event.
@@ -638,7 +706,7 @@ datasets:
               ops: [eq, in]
       - name: certificate
         title: Certificate
-        description: Birth or death certificate issued from a civil status record.
+        description: Birth, marriage, or death certificate issued from a civil status record.
         table: certificates_table
         concept_uri: demo:Certificate
         fields:

@@ -68,9 +68,12 @@ def _claim(
     source: dict[str, str],
     *,
     value_type: str = "boolean",
+    target_inputs: list[dict[str, Any]] | None = None,
+    default_subject: str = "",
+    default_identifier_scheme: str = "",
 ) -> dict[str, Any]:
     default_disclosure = "predicate" if "predicate" in disclosures else disclosures[0]
-    return {
+    claim = {
         "id": claim_id,
         "title": title,
         "value_type": value_type,
@@ -80,6 +83,67 @@ def _claim(
         "relay_fields_used": relay_fields_used,
         "source": source,
     }
+    if target_inputs:
+        claim["target_inputs"] = target_inputs
+    if default_subject:
+        claim["default_subject"] = default_subject
+    if default_identifier_scheme:
+        claim["default_identifier_scheme"] = default_identifier_scheme
+    return claim
+
+
+def _target_inputs(target_type: str, method: str, groups: list[list[dict[str, str]]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "target_type": target_type,
+            "method": method,
+            "groups": [{"inputs": group} for group in groups],
+        }
+    ]
+
+
+def _identifier_input(name: str, label: str) -> dict[str, str]:
+    return {
+        "path": f"target.identifiers.{name}",
+        "kind": "identifier",
+        "name": name,
+        "label": label,
+    }
+
+
+def _attribute_input(name: str, label: str, default_value: str = "") -> dict[str, str]:
+    item = {
+        "path": f"target.attributes.{name}",
+        "kind": "attribute",
+        "name": name,
+        "label": label,
+    }
+    if default_value:
+        item["default_value"] = default_value
+    return item
+
+
+REGISTRATION_NUMBER_INPUTS = _target_inputs(
+    "Person",
+    "certificate_registration_number",
+    [[_identifier_input("registration_number", "Registration number")]],
+)
+
+BIRTH_DEMOGRAPHIC_INPUTS = _target_inputs(
+    "Person",
+    "configured_demographic_lookup",
+    [[
+        _attribute_input("given_name", "Given name", "Rafael"),
+        _attribute_input("surname", "Surname", "Aquino"),
+        _attribute_input("birth_date", "Birth date", "2019-01-15"),
+    ]],
+)
+
+MARRIAGE_REGISTRATION_NUMBER_INPUTS = _target_inputs(
+    "Marriage",
+    "certificate_registration_number",
+    [[_identifier_input("registration_number", "Registration number")]],
+)
 
 CLAIM_SERVICES: dict[str, dict[str, Any]] = {
     "civil-notary": {
@@ -114,7 +178,56 @@ CLAIM_SERVICES: dict[str, dict[str, Any]] = {
                     "required_scope": "civil_registry:evidence_verification",
                     "connector_type": "dci",
                 },
-            }
+            },
+            "birth.certificate_summary": _claim(
+                "birth.certificate_summary",
+                "Birth certificate summary",
+                ["value"],
+                ["record_type", "registration_status"],
+                _source("Civil Registry", "civil_registry", "civil_status_record", "registration_number", "civil_registry:evidence_verification", "registry_data_api"),
+                target_inputs=REGISTRATION_NUMBER_INPUTS,
+                default_subject="B-2016-N-1001",
+                default_identifier_scheme="registration_number",
+            ),
+            "birth.event_exists": _claim(
+                "birth.event_exists",
+                "Birth event exists",
+                ["predicate"],
+                ["record_type", "registration_status"],
+                _source("Civil Registry", "civil_registry", "civil_status_record", "registration_number", "civil_registry:evidence_verification", "registry_data_api"),
+                target_inputs=REGISTRATION_NUMBER_INPUTS,
+                default_subject="B-2016-N-1001",
+                default_identifier_scheme="registration_number",
+            ),
+            "birth.certificate_summary_by_demographics": _claim(
+                "birth.certificate_summary_by_demographics",
+                "Birth Evidence by demographics",
+                ["value"],
+                ["given_name", "surname", "birth_date", "record_type", "certificate_type"],
+                _source("Civil Registry", "civil_registry", "civil_person_detail", "given_name+surname+birth_date", "civil_registry:evidence_verification", "registry_data_api"),
+                value_type="object",
+                target_inputs=BIRTH_DEMOGRAPHIC_INPUTS,
+            ),
+            "marriage.certificate_summary": _claim(
+                "marriage.certificate_summary",
+                "Marriage certificate summary",
+                ["value"],
+                ["record_type", "registration_status"],
+                _source("Civil Registry", "civil_registry", "civil_status_record", "registration_number", "civil_registry:evidence_verification", "registry_data_api"),
+                target_inputs=MARRIAGE_REGISTRATION_NUMBER_INPUTS,
+                default_subject="MR-2026-2001",
+                default_identifier_scheme="registration_number",
+            ),
+            "marriage.event_exists": _claim(
+                "marriage.event_exists",
+                "Marriage event exists",
+                ["predicate"],
+                ["record_type", "registration_status"],
+                _source("Civil Registry", "civil_registry", "civil_status_record", "registration_number", "civil_registry:evidence_verification", "registry_data_api"),
+                target_inputs=MARRIAGE_REGISTRATION_NUMBER_INPUTS,
+                default_subject="MR-2026-2001",
+                default_identifier_scheme="registration_number",
+            ),
         },
     },
     "social-protection-notary": {
@@ -426,7 +539,13 @@ def _civil_person_by_national_id(national_id: str) -> CivilRow | None:
 
 
 def validate_evaluation_input(service_id: str, body: dict[str, Any]) -> dict[str, Any]:
-    require_keys(body, {"claim_id", "subject", "identifier_scheme", "disclosure", "format", "purpose"})
+    # require_keys is an allowlist guard, not a presence check. Legacy subject
+    # inputs and metadata target inputs are alternative request shapes, and
+    # internal previews may carry both while preserving the target payload.
+    require_keys(
+        body,
+        {"claim_id", "subject", "identifier_scheme", "target", "disclosure", "format", "purpose"},
+    )
     service = claim_service_config(service_id)
     claim_id = str(body.get("claim_id", service["default_claim"]))
     if claim_id not in service["claims"]:
@@ -437,10 +556,16 @@ def validate_evaluation_input(service_id: str, body: dict[str, Any]) -> dict[str
             allowed=sorted(service["claims"]),
         )
     claim = service["claims"][claim_id]
-    subject = str(body.get("subject", "")).strip()
+    target = body.get("target")
+    if target is not None and not isinstance(target, dict):
+        raise ExplorerInputError("explorer.invalid_target", "Target must be an object.", field="target")
+    subject, identifier_scheme = _subject_from_target(target if isinstance(target, dict) else {})
+    body_subject = str(body.get("subject", "")).strip()
+    subject = body_subject or subject
     if not subject:
         raise ExplorerInputError("explorer.missing_subject", "Subject value is required.", field="subject")
-    identifier_scheme = str(body.get("identifier_scheme", service["default_identifier_scheme"])).strip()
+    body_identifier_scheme = str(body.get("identifier_scheme", "")).strip()
+    identifier_scheme = body_identifier_scheme or identifier_scheme or service["default_identifier_scheme"]
     if not identifier_scheme:
         raise ExplorerInputError("explorer.missing_identifier_scheme", "Identifier scheme is required.", field="identifier_scheme")
     disclosure = str(body.get("disclosure", claim["default_disclosure"]))
@@ -465,6 +590,7 @@ def validate_evaluation_input(service_id: str, body: dict[str, Any]) -> dict[str
         "claim_id": claim_id,
         "subject": subject,
         "identifier_scheme": identifier_scheme,
+        "target": deepcopy(target) if isinstance(target, dict) else None,
         "disclosure": disclosure,
         "format": result_format,
         "purpose": str(body.get("purpose", service["default_purpose"])),
@@ -481,18 +607,19 @@ def build_evaluation_request(
     disclosure: str,
     result_format: str,
     purpose: str,
+    target: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    validated = validate_evaluation_input(
-        service_id,
-        {
-            "claim_id": claim_id,
-            "subject": subject,
-            "identifier_scheme": identifier_scheme,
-            "disclosure": disclosure,
-            "format": result_format,
-            "purpose": purpose,
-        },
-    )
+    validation_body = {
+        "claim_id": claim_id,
+        "subject": subject,
+        "identifier_scheme": identifier_scheme,
+        "disclosure": disclosure,
+        "format": result_format,
+        "purpose": purpose,
+    }
+    if target is not None:
+        validation_body["target"] = target
+    validated = validate_evaluation_input(service_id, validation_body)
     service = validated["service"]
     credential = credential_for_execution(
         config,
@@ -506,6 +633,7 @@ def build_evaluation_request(
         id_scheme=validated["identifier_scheme"],
         disclosure=validated["disclosure"],
         result_format=validated["format"],
+        target=validated["target"],
     )
     headers = {display_name: display_value, "Content-Type": "application/json", "Data-Purpose": validated["purpose"]}
     url = evaluation_url(config, service)
@@ -536,6 +664,7 @@ def run_evaluation(config: dict[str, Any], service_id: str, body: dict[str, Any]
         disclosure=validated["disclosure"],
         result_format=validated["format"],
         purpose=validated["purpose"],
+        target=validated["target"],
     )
     headers = _execution_headers(config, validated["service"], built["request_source"]["headers"])
     credential = credential_for_execution(
@@ -582,13 +711,39 @@ def evaluation_body(
     id_scheme: str,
     disclosure: str,
     result_format: str = CLAIM_RESULT_FORMAT,
+    target: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
-        "target": {"type": "Person", "identifiers": [{"scheme": id_scheme, "value": subject}]},
+        "target": deepcopy(target) if target is not None else {"type": "Person", "identifiers": [{"scheme": id_scheme, "value": subject}]},
         "claims": [claim_id],
         "disclosure": disclosure,
         "format": result_format,
     }
+
+
+def _subject_from_target(target: dict[str, Any]) -> tuple[str, str]:
+    identifiers = target.get("identifiers")
+    if isinstance(identifiers, list):
+        for identifier in identifiers:
+            if not isinstance(identifier, dict):
+                continue
+            scheme = str(identifier.get("scheme") or "").strip()
+            value = str(identifier.get("value") or "").strip()
+            if scheme and value:
+                return value, scheme
+    if isinstance(identifiers, dict):
+        for scheme, value in identifiers.items():
+            scheme_text = str(scheme).strip()
+            value_text = str(value).strip()
+            if scheme_text and value_text:
+                return value_text, scheme_text
+    target_id = str(target.get("id") or "").strip()
+    if target_id:
+        return target_id, "id"
+    attributes = target.get("attributes")
+    if isinstance(attributes, dict) and attributes:
+        return "metadata-target", "target_inputs"
+    return "", ""
 
 
 def data_minimization_readout(claim: dict[str, Any]) -> dict[str, Any]:
@@ -652,6 +807,9 @@ def _service_summary(service: dict[str, Any], config: dict[str, Any]) -> dict[st
                 "allowed_disclosures": list(claim["allowed_disclosures"]),
                 "formats": list(claim["formats"]),
                 "source": deepcopy(claim["source"]),
+                **({"target_inputs": deepcopy(claim["target_inputs"])} if "target_inputs" in claim else {}),
+                **({"default_subject": claim["default_subject"]} if "default_subject" in claim else {}),
+                **({"default_identifier_scheme": claim["default_identifier_scheme"]} if "default_identifier_scheme" in claim else {}),
             }
             for claim in service["claims"].values()
         ],

@@ -303,7 +303,7 @@ def _single_query_value(query: dict[str, list[str]], name: str) -> str:
 
 
 def _normalize_evaluation_body(body: dict[str, Any]) -> dict[str, Any]:
-    allowed = {"claim_id", "subject", "identifier_scheme", "disclosure", "format", "purpose"}
+    allowed = {"claim_id", "subject", "identifier_scheme", "target", "disclosure", "format", "purpose"}
     unexpected = sorted(set(body) - allowed)
     if unexpected:
         raise ExplorerInputError(
@@ -313,6 +313,9 @@ def _normalize_evaluation_body(body: dict[str, Any]) -> dict[str, Any]:
             allowed=sorted(allowed),
         )
     normalized = dict(body)
+    target = normalized.get("target")
+    if target is not None and not isinstance(target, dict):
+        raise ExplorerInputError("explorer.invalid_target", "Target must be an object.", field="target")
     subject = normalized.get("subject")
     if isinstance(subject, dict):
         normalized["subject"] = str(subject.get("value", ""))

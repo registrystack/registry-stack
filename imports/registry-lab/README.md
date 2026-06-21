@@ -149,6 +149,8 @@ just civil       # built-in http_json civil sidecar Notary smoke  (just openfn a
 just opencrvs-dci # live OpenCRVS DCI-backed Notary smoke
 just dhis2       # live DHIS2 health evidence smoke (just dhis2-openfn also works)
 just notary-client # Registry Notary Python client smoke against lab Notaries
+just evidence-gateway-test # fast Evidence Gateway pack contract checks
+just evidence-gateway-crvs-live # live CRVS relay-backed certificate pack check
 just client      # narrated default client flow
 just quick       # generate, build, up, smoke, openfn, client
 ```
@@ -240,11 +242,14 @@ integration DCI API:
 - `opencrvs-child-date-of-birth`
 - `opencrvs-child-place-of-birth`
 
-It also attempts the demographic lookup path without UIN using child given
-name, family name, and date of birth, then issues a demo
-`application/dc+sd-jwt` VC with credential profile
+It then issues a demo `application/dc+sd-jwt` VC with credential profile
 `opencrvs_birth_attributes_sd_jwt`. The full response is written to
 `output/opencrvs-dci/credential.json`.
+
+The current OpenCRVS DCI evidence path is UIN-backed. Demographic matching is
+tracked as not implemented in the Evidence Gateway pack metadata until a
+configured claim and live fixture prove unique-match, no-match, and
+multiple-match behavior.
 
 Put the live OpenCRVS values in `.env.local`, which is ignored by Git:
 
@@ -269,6 +274,9 @@ machine-to-machine issuance without wallet ceremony. Use a holder-bound
 `did:jwk` proof profile before presenting this as citizen-wallet issuance.
 See [`docs/opencrvs-dci-notary-tutorial.md`](docs/opencrvs-dci-notary-tutorial.md)
 for the non-developer step-by-step walkthrough.
+See [`docs/evidence-gateway-packs.md`](docs/evidence-gateway-packs.md) for pack
+IDs, binding IDs, implemented inputs, and focused test commands, including the
+local CRVS relay-backed certificate pack check.
 
 `just agri-federation` proves the first Registry Notary federation slice. The
 demo benefits peer signs compact JWS requests to
@@ -291,6 +299,8 @@ Run the broader checks:
 
 ```bash
 just try          # standard demo sequence, leaves containers up
+just evidence-gateway-test # fast Evidence Gateway pack contract checks
+just evidence-gateway-crvs-live # live CRVS relay-backed certificate pack check
 just release      # full release check, cleans up volumes on success
 just release-fast # release check without slower live-service extras
 ```

@@ -131,6 +131,19 @@ REGISTRIES: dict[str, dict[str, Any]] = {
                             _field("authority", filter_ops=["eq", "in"]),
                         ],
                     ),
+                    "marriage_event": _entity_definition(
+                        "marriage_event",
+                        "Marriage Event",
+                        [
+                            _field("id", filter_ops=["eq", "in"]),
+                            _field("spouse_1_person_id", filter_ops=["eq", "in"], sensitive=True),
+                            _field("spouse_2_person_id", filter_ops=["eq", "in"], sensitive=True),
+                            _field("marriage_date", "date", ["eq", "gte", "lte"], sensitive=True),
+                            _field("marriage_place", filter_ops=["eq", "in"], sensitive=True),
+                            _field("registration_date", "date", ["eq", "gte", "lte"]),
+                            _field("authority", filter_ops=["eq", "in"]),
+                        ],
+                    ),
                     "civil_status_record": _entity_definition(
                         "civil_status_record",
                         "Civil Status Record",
@@ -1002,6 +1015,7 @@ def _sample_records(registry_id: str, dataset_id: str, entity_id: str, limit: in
             "civil_identifier": ("civil-identifiers.csv", {"identifier_id": "id"}),
             "birth_event": ("birth-events.csv", {"event_id": "id"}),
             "death_event": ("death-events.csv", {"event_id": "id"}),
+            "marriage_event": ("marriage-events.csv", {"event_id": "id"}),
             "civil_status_record": ("civil-status-records.csv", {"record_id": "id"}),
             "certificate": ("certificates.csv", {"certificate_number": "id"}),
             "relationship": ("relationships.csv", {"relationship_id": "id"}),

@@ -1,0 +1,110 @@
+{
+  "schema_version": "registry-lab/evidence-gateway-binding/v1",
+  "binding": {
+    "id": "marriage-certificate-evidence/v1",
+    "version": "v1",
+    "profile": "marriage-certificate-evidence",
+    "type": "governed-evidence",
+    "description": "Marriage Evidence pack for minimized JSON responses.",
+    "source_configs": [
+      "config/relay/civil-registry-relay.metadata.yaml",
+      "config/notary/civil-notary.yaml"
+    ],
+    "synthetic_data": "config/evidence-gateway/synthetic/marriage-certificate-evidence.v1.json",
+    "golden_fixtures": "config/evidence-gateway/golden/marriage-certificate-evidence.v1.json"
+  },
+  "evidence_pack": {
+    "pack_id": "marriage-certificate-evidence/v1",
+    "pack_version": "v1",
+    "pack_title": "Marriage Evidence",
+    "source_basis": {
+      "family": "oots-common-data-model",
+      "evidence_type": "Marriage Evidence",
+      "adaptation": "jurisdiction-neutral-publicschema"
+    },
+    "matching_modes": [
+      {
+        "mode": "identifier",
+        "status": "implemented",
+        "input": "target.identifiers.registration_number",
+        "identifier_scheme": "registration_number"
+      },
+      {
+        "mode": "party_demographic",
+        "status": "not_implemented",
+        "input": "target.attributes.party_names + target.attributes.marriage_date",
+        "reason": "Wave A marriage fixtures use a registration number; party demographic search is not configured."
+      }
+    ],
+    "policy_id": "lab.marriage-certificate-evidence.governed-evidence.v1",
+    "policy_hash": "sha256:cc32ee652001f5beb4a68ef0557ba558451311c6393889e0939288f8f09a0156",
+    "output_profile": "oots_object_json",
+    "deferred_outputs": [
+      "application/dc+sd-jwt",
+      "application/ld+json; profile=\"cccev\""
+    ],
+    "odrl_enforcement": {
+      "profile": "registry-evidence-gateway-pdp/v1",
+      "constraint_terms": [
+        "odrl:purpose",
+        "odrl:spatial"
+      ],
+      "unsupported_terms_fail_closed": true,
+      "compile_target": "native-pdp"
+    },
+    "pdp_gates": [
+      {
+        "term": "registry:pdp:assurance",
+        "operator": "odrl:gteq",
+        "rightOperand": "substantial"
+      },
+      {
+        "term": "registry:pdp:source_age",
+        "operator": "odrl:lteq",
+        "rightOperand": 86400
+      },
+      {
+        "term": "registry:pdp:legal_basis",
+        "operator": "odrl:isA",
+        "rightOperand": "demo:marriage-certificate-evidence"
+      },
+      {
+        "term": "registry:pdp:consent",
+        "operator": "odrl:isA",
+        "rightOperand": "demo:marriage-certificate-consent"
+      },
+      {
+        "term": "registry:pdp:credential_format",
+        "operator": "odrl:isA",
+        "rightOperand": "minimized_json"
+      }
+    ]
+  },
+  "odrl_policy": {
+    "@context": [
+      "https://www.w3.org/ns/odrl.jsonld"
+    ],
+    "@type": "Set",
+    "uid": "urn:registry-lab:policy:marriage-certificate-evidence:wave-a:v1",
+    "profile": "registry-evidence-gateway-pdp/v1",
+    "permission": [
+      {
+        "uid": "urn:registry-lab:rule:marriage-certificate-evidence:purpose:wave-a",
+        "action": "odrl:use",
+        "target": "urn:registry-lab:evidence:marriage-certificate-evidence:v1",
+        "constraint": [
+          {
+            "leftOperand": "odrl:purpose",
+            "operator": "odrl:isA",
+            "rightOperand": "https://demo.example.gov/purpose/civil-certificate-evidence"
+          },
+          {
+            "leftOperand": "odrl:spatial",
+            "operator": "odrl:isA",
+            "rightOperand": "ZZ"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,197 @@
+{
+  "schema_version": "registry-lab/evidence-gateway-synthetic-data/v1",
+  "binding_id": "birth-certificate-evidence/v1",
+  "records": [
+    {
+      "id": "birth-certificate-success",
+      "observed_at": "2026-06-19T00:00:00Z",
+      "evidence": {
+        "identifier": "CERT-B-1001",
+        "issue_date": "2016-01-18",
+        "issuing_authority": "Civil Registry Authority",
+        "issuing_place": {
+          "name": "North Civil Office"
+        }
+      },
+      "birth": {
+        "identifier": "B-2016-N-1001",
+        "child": {
+          "identifiers": [
+            {
+              "scheme": "national_id",
+              "value": "NID-1001"
+            }
+          ],
+          "given_name": "Miguel",
+          "family_name": "Santos",
+          "date_of_birth": "2016-01-15",
+          "place_of_birth": "North City",
+          "sex_at_birth": "male"
+        },
+        "parents": [
+          {
+            "identifiers": [
+              {
+                "scheme": "national_id",
+                "value": "NID-2001"
+              }
+            ],
+            "relationship": "mother",
+            "given_name": "Maria",
+            "family_name": "Santos",
+            "date_of_birth": "1984-01-15"
+          },
+          {
+            "identifiers": [
+              {
+                "scheme": "national_id",
+                "value": "NID-2002"
+              }
+            ],
+            "relationship": "father",
+            "given_name": "Juan",
+            "family_name": "Dela Cruz",
+            "date_of_birth": "1988-01-15"
+          }
+        ]
+      }
+    },
+    {
+      "id": "birth-certificate-demographic-success",
+      "observed_at": "2026-06-19T00:00:00Z",
+      "evidence": {
+        "identifier": "CERT-B-1004",
+        "issue_date": "2019-01-18",
+        "issuing_authority": "Civil Registry Authority",
+        "issuing_place": {
+          "name": "East Civil Office"
+        }
+      },
+      "birth": {
+        "identifier": "B-2019-E-1004",
+        "child": {
+          "identifiers": [
+            {
+              "scheme": "national_id",
+              "value": "NID-1004"
+            }
+          ],
+          "given_name": "Rafael",
+          "family_name": "Aquino",
+          "date_of_birth": "2019-01-15",
+          "place_of_birth": "East City",
+          "sex_at_birth": "male"
+        },
+        "parents": [
+          {
+            "identifiers": [
+              {
+                "scheme": "national_id",
+                "value": "NID-2004"
+              }
+            ],
+            "relationship": "mother",
+            "given_name": "Rosario",
+            "family_name": "Aquino",
+            "date_of_birth": "1988-01-15"
+          },
+          {
+            "identifiers": [
+              {
+                "scheme": "national_id",
+                "value": "NID-2005"
+              }
+            ],
+            "relationship": "father",
+            "given_name": "Eduardo",
+            "family_name": "Bautista",
+            "date_of_birth": "1978-01-15"
+          }
+        ]
+      }
+    },
+    {
+      "id": "birth-certificate-denial-target",
+      "observed_at": "2026-06-19T00:00:00Z",
+      "evidence": {
+        "identifier": "CERT-B-1002",
+        "issue_date": "2018-01-17",
+        "issuing_authority": "Civil Registry Authority",
+        "issuing_place": {
+          "name": "South Civil Office"
+        }
+      },
+      "birth": {
+        "identifier": "B-2018-S-1002",
+        "child": {
+          "identifiers": [
+            {
+              "scheme": "national_id",
+              "value": "NID-1002"
+            }
+          ],
+          "given_name": "Maria",
+          "family_name": "Dela Cruz",
+          "date_of_birth": "2018-01-15",
+          "place_of_birth": "South Town",
+          "sex_at_birth": "female"
+        },
+        "parents": []
+      }
+    },
+    {
+      "id": "birth-certificate-stale",
+      "observed_at": "2026-06-15T00:00:00Z",
+      "evidence": {
+        "identifier": "CERT-B-1001",
+        "issue_date": "2016-01-18",
+        "issuing_authority": "Civil Registry Authority",
+        "issuing_place": {
+          "name": "North Civil Office"
+        }
+      },
+      "birth": {
+        "identifier": "B-2016-N-1001",
+        "child": {
+          "identifiers": [
+            {
+              "scheme": "national_id",
+              "value": "NID-1001"
+            }
+          ],
+          "given_name": "Miguel",
+          "family_name": "Santos",
+          "date_of_birth": "2016-01-15",
+          "place_of_birth": "North City",
+          "sex_at_birth": "male"
+        },
+        "parents": [
+          {
+            "identifiers": [
+              {
+                "scheme": "national_id",
+                "value": "NID-2001"
+              }
+            ],
+            "relationship": "mother",
+            "given_name": "Maria",
+            "family_name": "Santos",
+            "date_of_birth": "1984-01-15"
+          },
+          {
+            "identifiers": [
+              {
+                "scheme": "national_id",
+                "value": "NID-2002"
+              }
+            ],
+            "relationship": "father",
+            "given_name": "Juan",
+            "family_name": "Dela Cruz",
+            "date_of_birth": "1988-01-15"
+          }
+        ]
+      }
+    }
+  ]
+}

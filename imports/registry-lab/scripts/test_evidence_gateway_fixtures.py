@@ -22,10 +22,13 @@ class EvidenceGatewayFixtureCheckTest(unittest.TestCase):
             capture_output=True,
         )
 
-        self.assertIn("baseline-dpi/v1", result.stdout)
-        self.assertIn("sp-dci/v1", result.stdout)
-        self.assertIn("oots-birth-evidence/v1", result.stdout)
-        self.assertIn("oots-marriage-evidence/v1", result.stdout)
+        self.assertIn("combined-support-eligibility/v1", result.stdout)
+        self.assertIn("birth-registration-evidence/v1", result.stdout)
+        self.assertIn("birth-certificate-evidence/v1", result.stdout)
+        self.assertIn("marriage-certificate-evidence/v1", result.stdout)
+        self.assertIn("pack identity and matching modes OK", result.stdout)
+        self.assertIn("birth-registration-evidence/v1->birth-registration-evidence/v1", result.stdout)
+        self.assertIn("demographic:not_implemented", result.stdout)
         self.assertIn("production enforcement profile terms OK", result.stdout)
         self.assertIn("relay metadata binding selectors OK", result.stdout)
         self.assertIn("relay metadata policy hashes OK", result.stdout)

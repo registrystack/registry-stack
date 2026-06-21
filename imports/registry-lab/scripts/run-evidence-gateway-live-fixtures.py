@@ -174,18 +174,19 @@ def golden_path(profile: str) -> Path:
 
 
 def default_base_url(profile: str) -> str:
-    if profile == "baseline-dpi/v1":
+    if profile == "combined-support-eligibility/v1":
         return os.environ.get("SHARED_NOTARY_URL", "http://127.0.0.1:4323")
-    if profile == "sp-dci/v1":
+    if profile == "birth-registration-evidence/v1":
         port = os.environ.get("OPENCRVS_DCI_NOTARY_PORT", "4352")
         return os.environ.get("OPENCRVS_DCI_NOTARY_URL", f"http://127.0.0.1:{port}")
-    if profile in {"oots-birth-evidence/v1", "oots-marriage-evidence/v1"}:
-        return os.environ.get("CIVIL_NOTARY_URL", "http://127.0.0.1:4320")
+    if profile in {"birth-certificate-evidence/v1", "marriage-certificate-evidence/v1"}:
+        port = os.environ.get("CIVIL_NOTARY_PORT", "4321")
+        return os.environ.get("CIVIL_NOTARY_URL", f"http://127.0.0.1:{port}")
     problem(f"unsupported profile {profile!r}")
 
 
 def default_token_and_auth(profile: str) -> tuple[str, str]:
-    if profile == "baseline-dpi/v1":
+    if profile == "combined-support-eligibility/v1":
         bearer = os.environ.get("SHARED_EVIDENCE_CLIENT_BEARER")
         if bearer:
             return bearer, "bearer"
@@ -193,12 +194,12 @@ def default_token_and_auth(profile: str) -> tuple[str, str]:
         if api_key:
             return api_key, "api-key"
         problem("missing SHARED_EVIDENCE_CLIENT_BEARER or SHARED_EVIDENCE_CLIENT_TOKEN")
-    if profile == "sp-dci/v1":
+    if profile == "birth-registration-evidence/v1":
         token = os.environ.get("OPENCRVS_EVIDENCE_CLIENT_TOKEN")
         if token:
             return token, "api-key"
         problem("missing OPENCRVS_EVIDENCE_CLIENT_TOKEN")
-    if profile in {"oots-birth-evidence/v1", "oots-marriage-evidence/v1"}:
+    if profile in {"birth-certificate-evidence/v1", "marriage-certificate-evidence/v1"}:
         bearer = os.environ.get("CIVIL_EVIDENCE_CLIENT_BEARER")
         if bearer:
             return bearer, "bearer"
@@ -210,17 +211,17 @@ def default_token_and_auth(profile: str) -> tuple[str, str]:
 
 
 def default_subject_override(profile: str) -> str | None:
-    if profile == "sp-dci/v1":
+    if profile == "birth-registration-evidence/v1":
         return os.environ.get("OPENCRVS_DEMO_SUBJECT_UIN")
     return None
 
 
 def negative_token_env(profile: str, code: str) -> str | None:
     prefix = {
-        "baseline-dpi/v1": "SHARED_EVIDENCE",
-        "sp-dci/v1": "OPENCRVS_EVIDENCE",
-        "oots-birth-evidence/v1": "CIVIL_EVIDENCE",
-        "oots-marriage-evidence/v1": "CIVIL_EVIDENCE",
+        "combined-support-eligibility/v1": "SHARED_EVIDENCE",
+        "birth-registration-evidence/v1": "OPENCRVS_EVIDENCE",
+        "birth-certificate-evidence/v1": "CIVIL_EVIDENCE",
+        "marriage-certificate-evidence/v1": "CIVIL_EVIDENCE",
     }.get(profile)
     suffix = {
         "pdp.assurance_insufficient": "DENY_ASSURANCE_TOKEN",
@@ -313,9 +314,18 @@ def live_request(case: dict[str, Any], runtime: ProfileRuntime) -> dict[str, Any
     request = {key: copy.deepcopy(value) for key, value in raw.items() if key in LIVE_REQUEST_KEYS}
     if "format" not in request:
         request["format"] = CLAIM_RESULT_JSON
+    if isinstance(request.get("format"), str):
+        request["format"] = live_notary_format(runtime.profile, request["format"])
     if runtime.subject_override and isinstance(request.get("target"), dict):
         override_first_identifier(request["target"], runtime.subject_override)
     return request
+
+
+def live_notary_format(profile: str, fixture_format: str) -> str:
+    if profile in {"birth-certificate-evidence/v1", "marriage-certificate-evidence/v1"}:
+        if fixture_format == "minimized_json":
+            return CLAIM_RESULT_JSON
+    return fixture_format
 
 
 def live_purpose(case: dict[str, Any]) -> str | None:
@@ -442,7 +452,7 @@ def audit_expectation_for(
 
 
 def runnable_case_ids(profile: str) -> set[str]:
-    if profile == "baseline-dpi/v1":
+    if profile == "combined-support-eligibility/v1":
         return {
             "baseline-success-combined-support",
             "baseline-denial-purpose",
@@ -452,33 +462,32 @@ def runnable_case_ids(profile: str) -> set[str]:
             "baseline-denial-consent",
             "baseline-audit-permit",
         }
-    if profile == "sp-dci/v1":
+    if profile == "birth-registration-evidence/v1":
         return {
-            "sp-dci-success-birth-record",
-            "sp-dci-denial-purpose",
-            "sp-dci-denial-assurance",
-            "sp-dci-denial-jurisdiction",
-            "sp-dci-denial-legal-basis",
-            "sp-dci-denial-consent",
-            "sp-dci-redaction-birth-attributes",
-            "sp-dci-credential-sd-jwt",
-            "sp-dci-audit-permit",
+            "birth-registration-evidence-success-birth-record",
+            "birth-registration-evidence-denial-purpose",
+            "birth-registration-evidence-denial-assurance",
+            "birth-registration-evidence-denial-jurisdiction",
+            "birth-registration-evidence-denial-legal-basis",
+            "birth-registration-evidence-denial-consent",
+            "birth-registration-evidence-redaction-birth-attributes",
+            "birth-registration-evidence-credential-sd-jwt",
+            "birth-registration-evidence-audit-permit",
         }
-    if profile == "oots-birth-evidence/v1":
+    if profile == "birth-certificate-evidence/v1":
         return {
-            "oots-birth-success-minimized-json",
-            "oots-birth-success-predicate",
-            "oots-birth-denial-purpose",
-            "oots-birth-denial-jurisdiction",
-            "oots-birth-audit-permit",
+            "birth-certificate-success-minimized-json",
+            "birth-certificate-success-demographic",
+            "birth-certificate-success-predicate",
+            "birth-certificate-denial-purpose",
+            "birth-certificate-audit-permit",
         }
-    if profile == "oots-marriage-evidence/v1":
+    if profile == "marriage-certificate-evidence/v1":
         return {
-            "oots-marriage-success-minimized-json",
-            "oots-marriage-success-predicate",
-            "oots-marriage-denial-purpose",
-            "oots-marriage-denial-jurisdiction",
-            "oots-marriage-audit-permit",
+            "marriage-certificate-success-minimized-json",
+            "marriage-certificate-success-predicate",
+            "marriage-certificate-denial-purpose",
+            "marriage-certificate-audit-permit",
         }
     return set()
 
@@ -488,15 +497,15 @@ def skip_blocker(profile: str, case: dict[str, Any]) -> str:
     if case_type == "denial":
         code = case.get("expected", {}).get("problem", {}).get("code")
         if code == "pdp.evidence_stale":
-            if profile == "sp-dci/v1":
+            if profile == "birth-registration-evidence/v1":
                 return "live-opencrvs-response-timestamp-is-fresh-no-stale-demo-subject"
             return "static-registry-runtime-does-not-use-row-observed-at-freshness"
         if code == "pdp.unsupported_policy_term":
             return "live-runtime-policy-terms-are-config-static-not-request-supplied"
         return "live-runtime-missing-evidence-gateway-pdp-context-gate"
-    if profile == "baseline-dpi/v1" and case_type == "redaction":
+    if profile == "combined-support-eligibility/v1" and case_type == "redaction":
         return "baseline-redaction-fixture-targets-social-notary-not-shared-notary"
-    if profile == "baseline-dpi/v1" and case_type == "credential":
+    if profile == "combined-support-eligibility/v1" and case_type == "credential":
         return "baseline-credential-fixture-targets-civil-notary-claim-not-shared-notary"
     if case_type == "credential":
         return "credential-fixture-lacks-live-target-context"
@@ -576,7 +585,7 @@ def run_credential_case(
         "claims": case.get("request", {}).get("claims") or [],
         "disclosure": request.get("disclosure"),
     }
-    if case_runtime.profile == "sp-dci/v1":
+    if case_runtime.profile == "birth-registration-evidence/v1":
         issue_body["credential_profile"] = "opencrvs_birth_attributes_sd_jwt"
     issue_status, credential_body, issue_request_id = json_request(
         case_runtime,
@@ -620,9 +629,9 @@ def run_missing_subject_negative(
     target = request.get("target")
     if not isinstance(target, dict):
         problem(f"{runtime.profile} success fixture has no live target")
-    if runtime.profile == "baseline-dpi/v1":
+    if runtime.profile == "combined-support-eligibility/v1":
         missing_value = "NID-LIVE-MISSING"
-    elif runtime.profile == "sp-dci/v1":
+    elif runtime.profile == "birth-registration-evidence/v1":
         missing_value = "UIN-LIVE-MISSING"
     else:
         missing_value = "WAVE-A-LIVE-MISSING"
@@ -944,10 +953,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--profile",
         action="append",
         choices=[
-            "baseline-dpi/v1",
-            "sp-dci/v1",
-            "oots-birth-evidence/v1",
-            "oots-marriage-evidence/v1",
+            "combined-support-eligibility/v1",
+            "birth-registration-evidence/v1",
+            "birth-certificate-evidence/v1",
+            "marriage-certificate-evidence/v1",
         ],
         required=True,
         help="Fixture profile to run. Repeat to run multiple profiles.",
