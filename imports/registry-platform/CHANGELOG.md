@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.3.1 - 2026-06-21
+
 ### Security
 
 - (AUDIT-03) `registry-platform-audit` now derives independent, domain-separated
@@ -11,7 +13,7 @@
   `registry-platform-audit/identifier-key/v1`). Previously both HMACs used the
   identical raw env material, so a leak of one key exposed the other. **This
   changes persisted chain and identifier hash values**; acceptable pre-beta
-  (crate is `version 0.3.0`, `publish = false`) and only affects legacy
+  (crate is `version 0.3.1`, `publish = false`) and only affects legacy
   pre-beta logs, which were already unkeyed/dev-only. Explicit `keyed(secret)`
   construction is unchanged (caller-owned key material).
 - (AUDIT-02) `AuditHashSecret` now holds its HMAC key behind a
