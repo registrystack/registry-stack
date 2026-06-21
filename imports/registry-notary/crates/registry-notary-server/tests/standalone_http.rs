@@ -31,9 +31,7 @@ use registry_notary_server::{
     compile_notary_runtime, notary_routers_from_runtime, openapi_document, standalone_router,
     StandaloneServerError,
 };
-use registry_platform_audit::{
-    verify_jsonl_lines, verify_jsonl_lines_with_hasher, AuditChainHasher, AuditEnvelope,
-};
+use registry_platform_audit::{verify_jsonl_lines_with_hasher, AuditChainHasher, AuditEnvelope};
 use registry_platform_authcommon::{
     credential_fingerprint_commitment, CredentialCommitmentContext, CredentialFingerprintProvider,
     CredentialFingerprintRef, CredentialProduct, CredentialType,
@@ -10583,10 +10581,11 @@ async fn audit_chain_bootstraps_from_sink_tail() {
 
     let contents = std::fs::read_to_string(&audit_path).expect("audit was written");
     assert!(
-        verify_jsonl_lines(contents.lines()).is_err(),
+        verify_jsonl_lines_with_hasher(contents.lines(), &AuditChainHasher::unkeyed_dev_only())
+            .is_err(),
         "runtime audit chain must not verify with the dev-only unkeyed hasher"
     );
-    let hasher = AuditChainHasher::from_env("REGISTRY_NOTARY_AUDIT_HASH_SECRET")
+    let hasher = AuditChainHasher::from_env_derived("REGISTRY_NOTARY_AUDIT_HASH_SECRET")
         .expect("configured audit chain secret loads");
     verify_jsonl_lines_with_hasher(contents.lines(), &hasher).expect("audit chain verifies");
     let envelopes = audit_envelopes(&audit_path);

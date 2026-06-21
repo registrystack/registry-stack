@@ -17,7 +17,7 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_NET_GIT_FETCH_WITH_CLI: true
   REGISTRY_PLATFORM_REPOSITORY: jeremi/registry-platform
-  REGISTRY_PLATFORM_REF: e5b646f5979a41a65155b674f4769ff063910dba
+  REGISTRY_PLATFORM_REF: 0abc4fde81764f6c81143b622624415232197129
   CROSSWALK_REPOSITORY: PublicSchema/crosswalk
   CROSSWALK_REF: 1d44ec735fdc8a7c719264b339574371e8330337
   REGISTRY_NOTARY_FEATURES: registry-notary-cel,pkcs11
@@ -56,6 +56,44 @@ jobs:
         with:
           path: registry-notary
           persist-credentials: false
+
+      - name: Verify release tag provenance
+        if: github.event_name == 'push' && github.ref_type == 'tag' && matrix.target == 'x86_64-unknown-linux-gnu'
+        working-directory: registry-notary
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "${GITHUB_REF_NAME:-}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tags must be stable semver tags like v0.1.2." >&2
+            exit 1
+          fi
+          crate_version="$(python3 -c 'import pathlib, tomllib; print(tomllib.load(pathlib.Path("Cargo.toml").open("rb"))["workspace"]["package"]["version"])')"
+          if [[ "$GITHUB_REF_NAME" != "v${crate_version}" ]]; then
+            echo "Release tag ${GITHUB_REF_NAME} does not match workspace package version ${crate_version}." >&2
+            exit 1
+          fi
+
+          release_sha="$(git rev-parse HEAD)"
+          IFS=$'\t' read -r protected protected_main_sha < <(
+            gh api "repos/${GITHUB_REPOSITORY}/branches/main" \
+              --jq '[.protected, .commit.sha] | @tsv'
+          )
+          if [[ "$protected" != "true" ]]; then
+            echo "Official release binaries require the repository's main branch to be protected." >&2
+            exit 1
+          fi
+          if [[ ! "$protected_main_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Could not resolve protected main branch to an immutable commit SHA." >&2
+            exit 1
+          fi
+
+          status="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${release_sha}...${protected_main_sha}" --jq '.status')"
+          if [[ "$status" != "ahead" && "$status" != "identical" ]]; then
+            echo "Official release binaries require tag commit $release_sha to be reachable from protected main (compare status: ${status})." >&2
+            exit 1
+          fi
 
       - name: Checkout registry-platform
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6

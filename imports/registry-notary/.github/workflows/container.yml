@@ -24,7 +24,7 @@ concurrency:
 
 env:
   REGISTRY_PLATFORM_REPOSITORY: jeremi/registry-platform
-  REGISTRY_PLATFORM_REF: e5b646f5979a41a65155b674f4769ff063910dba
+  REGISTRY_PLATFORM_REF: 0abc4fde81764f6c81143b622624415232197129
   CROSSWALK_REPOSITORY: PublicSchema/crosswalk
   CROSSWALK_REF: 1d44ec735fdc8a7c719264b339574371e8330337
   NOTARY_IMAGE: ghcr.io/jeremi/registry-notary
@@ -262,6 +262,14 @@ jobs:
           if [[ ! "$protected_main_sha" =~ ^[0-9a-f]{40}$ ]]; then
             echo "Could not resolve the protected main branch SHA." >&2
             exit 1
+          fi
+
+          if [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            crate_version="$(python3 -c 'import pathlib, tomllib; print(tomllib.load(pathlib.Path("Cargo.toml").open("rb"))["workspace"]["package"]["version"])')"
+            if [[ "$GITHUB_REF_NAME" != "v${crate_version}" ]]; then
+              echo "Release tag ${GITHUB_REF_NAME} does not match workspace package version ${crate_version}." >&2
+              exit 1
+            fi
           fi
 
           # Ancestry via the compare API: the checkout has no persisted
