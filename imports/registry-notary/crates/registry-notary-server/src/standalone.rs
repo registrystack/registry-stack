@@ -9167,6 +9167,10 @@ auth:
   bearer_tokens:
     - id: notary-contract
       hash_env: {token_hash_env}
+audit:
+  sink: jsonl
+  path: {audit_path}
+  hash_secret_env: {audit_hash_secret_env}
 config_trust:
   product: {product}
   instance_id: {instance_id}
@@ -9195,6 +9199,8 @@ config_trust:
             - openfn_sidecar_workflow_bundle
 "#,
             token_hash_env = yaml_string(OPENFN_SIDECAR_TOKEN_HASH_ENV),
+            audit_path = yaml_path(&repo.datastore_dir.join("sidecar-audit.jsonl")),
+            audit_hash_secret_env = yaml_string(TEST_AUDIT_HASH_SECRET_ENV),
             product = yaml_string(OPENFN_PRODUCT),
             instance_id = yaml_string(OPENFN_INSTANCE_ID),
             environment = yaml_string(OPENFN_ENVIRONMENT),
@@ -9678,6 +9684,10 @@ config_trust:
     async fn governed_http_json_sidecar_e2e_notary_pins_assurance_and_evaluates() {
         let _env_guard = HTTP_JSON_SIDECAR_ENV_LOCK.lock().await;
         std::env::set_var(OPENFN_SIDECAR_TOKEN_ENV, OPENFN_SIDECAR_TOKEN);
+        std::env::set_var(
+            TEST_AUDIT_HASH_SECRET_ENV,
+            "registry-notary-sidecar-test-audit-secret-32-bytes-minimum",
+        );
         let upstream = TestServer::builder()
             .http_transport()
             .build(Router::new().route("/people", get(http_json_people_handler)));

@@ -8067,6 +8067,12 @@ fn attach_evaluate_request_audit(
     let Some(audit) = response.extensions_mut().get_mut::<EvidenceAuditContext>() else {
         return Ok(());
     };
+    if audit.purposes.is_none() {
+        audit.purposes = request
+            .purpose
+            .as_ref()
+            .map(|purpose| vec![purpose.clone()]);
+    }
     audit.target_type = result
         .map(|result| result.target_ref.entity_type.as_str())
         .or_else(|| {
@@ -12471,7 +12477,7 @@ mod tests {
             .expect("audit context is attached");
         assert_eq!(
             audit.purposes.as_deref(),
-            Some(&["citizen_self_attestation".to_string()][..])
+            Some(&["program-a".to_string()][..])
         );
         assert_eq!(audit.target_type.as_deref(), Some("Person"));
         assert_eq!(audit.requester_type.as_deref(), Some("Person"));
