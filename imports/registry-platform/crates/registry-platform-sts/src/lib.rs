@@ -824,14 +824,16 @@ fn validate_exchange_context(
         let delegation_ref = effective_delegation_ref(context, subject).unwrap_or("");
         let expected = session_binding_mac(
             secret,
-            session_id,
-            correlation_id,
-            &subject.subject,
-            subject_id_hash,
-            client_id,
-            tenant,
-            actor_id_hash,
-            delegation_ref,
+            SessionBindingMacInput {
+                session_id,
+                correlation_id,
+                verified_subject: &subject.subject,
+                subject_id_hash,
+                client_id,
+                tenant,
+                actor_id_hash,
+                delegation_ref,
+            },
         );
         let provided = context.session_binding.as_deref().unwrap_or("");
         if expected.len() != provided.len()
@@ -1060,27 +1062,29 @@ fn sha256_hex(value: &str) -> String {
 type HmacSha256 = Hmac<Sha256>;
 
 #[must_use]
-pub fn session_binding_mac(
-    secret: &str,
-    session_id: &str,
-    correlation_id: &str,
-    verified_subject: &str,
-    subject_id_hash: &str,
-    client_id: &str,
-    tenant: &str,
-    actor_id_hash: &str,
-    delegation_ref: &str,
-) -> String {
+pub struct SessionBindingMacInput<'a> {
+    pub session_id: &'a str,
+    pub correlation_id: &'a str,
+    pub verified_subject: &'a str,
+    pub subject_id_hash: &'a str,
+    pub client_id: &'a str,
+    pub tenant: &'a str,
+    pub actor_id_hash: &'a str,
+    pub delegation_ref: &'a str,
+}
+
+#[must_use]
+pub fn session_binding_mac(secret: &str, input: SessionBindingMacInput<'_>) -> String {
     let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
         .expect("HMAC accepts any non-empty key length");
-    update_mac_field(&mut mac, session_id);
-    update_mac_field(&mut mac, correlation_id);
-    update_mac_field(&mut mac, verified_subject);
-    update_mac_field(&mut mac, subject_id_hash);
-    update_mac_field(&mut mac, client_id);
-    update_mac_field(&mut mac, tenant);
-    update_mac_field(&mut mac, actor_id_hash);
-    update_mac_field(&mut mac, delegation_ref);
+    update_mac_field(&mut mac, input.session_id);
+    update_mac_field(&mut mac, input.correlation_id);
+    update_mac_field(&mut mac, input.verified_subject);
+    update_mac_field(&mut mac, input.subject_id_hash);
+    update_mac_field(&mut mac, input.client_id);
+    update_mac_field(&mut mac, input.tenant);
+    update_mac_field(&mut mac, input.actor_id_hash);
+    update_mac_field(&mut mac, input.delegation_ref);
     format!("hmac-sha256:{}", hex_bytes(&mac.finalize().into_bytes()))
 }
 
@@ -1466,14 +1470,16 @@ mod tests {
         context.subject_id_hash = Some("hmac-sha256:subject-id".to_string());
         context.session_binding = Some(session_binding_mac(
             "session-binding-secret",
-            "sess_123",
-            "corr_123",
-            "hmac-sha256:subject",
-            "hmac-sha256:subject-id",
-            "assisted-access-client",
-            "tenant-a",
-            "hmac-sha256:actor",
-            "delegation-123",
+            SessionBindingMacInput {
+                session_id: "sess_123",
+                correlation_id: "corr_123",
+                verified_subject: "hmac-sha256:subject",
+                subject_id_hash: "hmac-sha256:subject-id",
+                client_id: "assisted-access-client",
+                tenant: "tenant-a",
+                actor_id_hash: "hmac-sha256:actor",
+                delegation_ref: "delegation-123",
+            },
         ));
         context
     }

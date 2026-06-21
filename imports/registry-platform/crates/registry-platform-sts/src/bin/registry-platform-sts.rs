@@ -1,15 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Minimal process wrapper for the Registry Platform STS bridge.
 
-use std::{
-    env,
-    error::Error,
-    io,
-    net::SocketAddr,
-    path::{Path, PathBuf},
-    sync::Arc,
-    time::Duration,
-};
+use std::{env, error::Error, io, net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
+
+#[cfg(test)]
+use std::path::Path;
 
 use async_trait::async_trait;
 use jsonwebtoken::Algorithm;
