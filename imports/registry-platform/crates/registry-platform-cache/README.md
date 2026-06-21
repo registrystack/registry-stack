@@ -4,8 +4,8 @@ Small cache-store primitives for registry services.
 
 ## What It Provides
 
-- `CacheStore`, an async trait for `get`, `set`, `set_if_absent`, `delete`, and
-  readiness checks.
+- `CacheStore`, an async trait for `get`, `set`, `set_if_absent`,
+  `compare_and_set`, `delete`, and readiness checks.
 - `CacheKey`, a redacted-debug key wrapper with helpers for hashed keys derived
   from sensitive scope material.
 - `InMemoryCacheStore` for tests, local development, and single-process

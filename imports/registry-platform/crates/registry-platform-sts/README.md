@@ -24,8 +24,9 @@ the Notary-bound transaction token.
 
 When `session_binding_secret` is configured, `session_binding` must be an
 `hmac-sha256:<hex>` value over the session id, correlation id, verified subject,
-subject id hash, and actor id hash. This prevents a leaked subject token plus
-arbitrary request-body session strings from minting a Notary-bound token.
+subject id hash, client id, tenant, actor id hash, and delegation reference.
+This prevents a leaked subject token plus arbitrary request-body caller context
+from minting a Notary-bound token.
 
 Current limits: the bridge does not yet verify UserInfo JWT continuity and the
 binary uses local JWK signing material. Do not claim external OAuth/OIDC/FAPI
@@ -41,6 +42,8 @@ same library. Required environment variables:
 - `REGISTRY_PLATFORM_STS_SUBJECT_AUDIENCE`
 - `REGISTRY_PLATFORM_STS_SUBJECT_JWKS_URI`
 - `REGISTRY_PLATFORM_STS_SESSION_BINDING_SECRET`
+- `REGISTRY_PLATFORM_STS_AUDIT_HASH_SECRET`, at least 32 bytes
+- `REGISTRY_PLATFORM_STS_AUDIT_LOG_PATH`
 
 Optional environment variables:
 
@@ -48,3 +51,7 @@ Optional environment variables:
 - `REGISTRY_PLATFORM_STS_SUBJECT_CLAIM`, default `sub`
 - `REGISTRY_PLATFORM_STS_SUBJECT_ALLOWED_TYP`, default `at+jwt,JWT`
 - `REGISTRY_PLATFORM_STS_SUBJECT_ALLOWED_ALGS`, default `EdDSA,RS256`
+
+The binary appends token-mint events to a keyed JSONL audit chain and fails the
+exchange if the audit append fails. Library callers that construct
+`TokenExchangeService` directly must still supply their own `StsAuditSink`.

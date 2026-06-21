@@ -2,7 +2,8 @@
 //! Token-exchange primitives for minting Notary-bound transaction tokens.
 
 use std::{
-    collections::HashMap,
+    cmp::{Ordering, Reverse},
+    collections::{BinaryHeap, HashMap, HashSet},
     fmt,
     sync::{Arc, Mutex},
     time::Duration,
@@ -149,6 +150,7 @@ impl fmt::Debug for TokenExchangeRequest {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct NotaryAuthorizationDetails {
     #[serde(rename = "type")]
     pub detail_type: String,
@@ -172,6 +174,7 @@ pub struct NotaryAuthorizationDetails {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct NotaryClaimRef {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -179,6 +182,7 @@ pub struct NotaryClaimRef {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct NotaryAuthorizationSubject {
     pub binding_claim: String,
     pub id_type: String,
@@ -408,13 +412,71 @@ pub enum RateLimitError {
 
 #[derive(Debug, Default)]
 pub struct InMemoryRateLimitStore {
-    counters: Mutex<HashMap<(RateLimitScope, RateLimitKey), WindowCounter>>,
+    state: Mutex<RateLimitState>,
+}
+
+const RATE_LIMIT_CLEANUP_BATCH: usize = 64;
+
+#[derive(Debug, Default)]
+struct RateLimitState {
+    counters: HashMap<(RateLimitScope, RateLimitKey), WindowCounter>,
+    expirations: BinaryHeap<Reverse<WindowExpiry>>,
 }
 
 #[derive(Debug, Clone)]
 struct WindowCounter {
     window_start: i64,
+    expires_at: i64,
     count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WindowExpiry {
+    expires_at: i64,
+    scope: RateLimitScope,
+    key: RateLimitKey,
+}
+
+impl Ord for WindowExpiry {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.expires_at
+            .cmp(&other.expires_at)
+            .then_with(|| self.scope.0.cmp(&other.scope.0))
+            .then_with(|| self.key.0.cmp(&other.key.0))
+    }
+}
+
+impl PartialOrd for WindowExpiry {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl RateLimitState {
+    fn prune_expired(&mut self, now_unix: i64, max_popped: usize) {
+        let mut popped = 0;
+        while popped < max_popped {
+            let Some(Reverse(expiry)) = self.expirations.peek() else {
+                break;
+            };
+            if expiry.expires_at > now_unix {
+                break;
+            }
+            let Reverse(expiry) = self
+                .expirations
+                .pop()
+                .expect("peek confirmed an expiry entry");
+            popped += 1;
+            let counter_key = (expiry.scope, expiry.key);
+            if self
+                .counters
+                .get(&counter_key)
+                .is_some_and(|counter| counter.expires_at == expiry.expires_at)
+            {
+                self.counters.remove(&counter_key);
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -426,33 +488,55 @@ impl RateLimitStore for InMemoryRateLimitStore {
         policy: RateLimitPolicy,
         now: OffsetDateTime,
     ) -> Result<RateLimitOutcome, RateLimitError> {
-        let mut counters = self
-            .counters
+        let mut state = self
+            .state
             .lock()
             .map_err(|_| RateLimitError::StoreUnavailable)?;
         let now_unix = now.unix_timestamp();
         let window_secs = policy.window.as_secs().max(1) as i64;
-        counters.retain(|_, counter| now_unix.saturating_sub(counter.window_start) < window_secs);
-        let counter = counters
-            .entry((scope.clone(), key.clone()))
-            .or_insert(WindowCounter {
-                window_start: now_unix,
-                count: 0,
-            });
-        if now_unix.saturating_sub(counter.window_start) >= window_secs {
-            counter.window_start = now_unix;
-            counter.count = 0;
+        state.prune_expired(now_unix, RATE_LIMIT_CLEANUP_BATCH);
+        let counter_key = (scope.clone(), key.clone());
+        let mut queue_expiry = None;
+        let outcome = {
+            let counter = state
+                .counters
+                .entry(counter_key.clone())
+                .or_insert_with(|| {
+                    let expires_at = now_unix.saturating_add(window_secs);
+                    queue_expiry = Some(expires_at);
+                    WindowCounter {
+                        window_start: now_unix,
+                        expires_at,
+                        count: 0,
+                    }
+                });
+            if now_unix >= counter.expires_at {
+                let expires_at = now_unix.saturating_add(window_secs);
+                counter.window_start = now_unix;
+                counter.expires_at = expires_at;
+                counter.count = 0;
+                queue_expiry = Some(expires_at);
+            }
+            if counter.count >= policy.max_requests {
+                let retry_after = counter.expires_at.saturating_sub(now_unix) as u64;
+                RateLimitOutcome::Denied {
+                    retry_after: Duration::from_secs(retry_after.max(1)),
+                }
+            } else {
+                counter.count += 1;
+                RateLimitOutcome::Allowed {
+                    remaining: policy.max_requests.saturating_sub(counter.count),
+                }
+            }
+        };
+        if let Some(expires_at) = queue_expiry {
+            state.expirations.push(Reverse(WindowExpiry {
+                expires_at,
+                scope: scope.clone(),
+                key: key.clone(),
+            }));
         }
-        if counter.count >= policy.max_requests {
-            let retry_after = (counter.window_start + window_secs).saturating_sub(now_unix) as u64;
-            return Ok(RateLimitOutcome::Denied {
-                retry_after: Duration::from_secs(retry_after.max(1)),
-            });
-        }
-        counter.count += 1;
-        Ok(RateLimitOutcome::Allowed {
-            remaining: policy.max_requests.saturating_sub(counter.count),
-        })
+        Ok(outcome)
     }
 }
 
@@ -734,14 +818,22 @@ fn validate_exchange_context(
             .subject_id_hash
             .as_deref()
             .ok_or(StsError::SubjectBindingMissing)?;
-        let actor_id_hash = context.actor_id_hash.as_deref().unwrap_or("");
+        let client_id = context.client_id.as_deref().unwrap_or("");
+        let tenant = context.tenant.as_deref().unwrap_or("");
+        let actor_id_hash = effective_actor_id_hash(context, subject).unwrap_or("");
+        let delegation_ref = effective_delegation_ref(context, subject).unwrap_or("");
         let expected = session_binding_mac(
             secret,
-            session_id,
-            correlation_id,
-            &subject.subject,
-            subject_id_hash,
-            actor_id_hash,
+            SessionBindingMacInput {
+                session_id,
+                correlation_id,
+                verified_subject: &subject.subject,
+                subject_id_hash,
+                client_id,
+                tenant,
+                actor_id_hash,
+                delegation_ref,
+            },
         );
         let provided = context.session_binding.as_deref().unwrap_or("");
         if expected.len() != provided.len()
@@ -806,39 +898,107 @@ fn validate_authorization_details(
     let detail = &details[0];
     if detail.detail_type != NOTARY_AUTHORIZATION_DETAILS_TYPE
         || detail.schema_version != NOTARY_AUTHORIZATION_DETAILS_SCHEMA_VERSION
-        || !detail.actions.iter().any(|action| action == "evaluate")
-        || !detail
-            .locations
-            .iter()
-            .any(|location| location == &config.notary_audience)
+        || detail.actions.as_slice() != ["evaluate"]
+        || detail.locations.len() != 1
+        || detail.locations.first() != Some(&config.notary_audience)
         || detail.claims.is_empty()
-        || detail.claims.iter().any(|claim| claim.id.trim().is_empty())
-        || detail
-            .claims
-            .iter()
-            .any(|claim| claim.version.as_deref().is_some_and(str::is_empty))
-        || detail.purpose.as_deref().is_none_or(str::is_empty)
-        || detail.disclosure.as_deref().is_none_or(str::is_empty)
-        || detail.format.as_deref().is_none_or(str::is_empty)
         || detail.access_mode.as_deref() != Some("self_attestation")
     {
         return Err(StsError::AuthorizationDetailsInvalid);
     }
+
+    let mut seen_claim_ids = HashSet::new();
+    let mut claims = Vec::with_capacity(detail.claims.len());
+    for claim in &detail.claims {
+        let id = canonical_claim_field(&claim.id)?;
+        if !seen_claim_ids.insert(id.clone()) {
+            return Err(StsError::AuthorizationDetailsInvalid);
+        }
+        let version = claim
+            .version
+            .as_deref()
+            .ok_or(StsError::AuthorizationDetailsInvalid)
+            .and_then(canonical_claim_field)?;
+        claims.push(NotaryClaimRef {
+            id,
+            version: Some(version),
+        });
+    }
+    claims.sort_by(|left, right| {
+        left.id
+            .cmp(&right.id)
+            .then_with(|| left.version.cmp(&right.version))
+    });
+
+    let purpose = canonical_required_text(detail.purpose.as_deref())?;
+    let disclosure = canonical_required_text(detail.disclosure.as_deref())?;
+    let format = canonical_required_text(detail.format.as_deref())?;
     let subject = detail
         .subject
         .as_ref()
         .ok_or(StsError::AuthorizationDetailsInvalid)?;
-    if subject.binding_claim.trim().is_empty() || subject.id_type.trim().is_empty() {
-        return Err(StsError::AuthorizationDetailsInvalid);
-    }
+    let binding_claim = canonical_claim_field(&subject.binding_claim)?;
+    let id_type = canonical_claim_field(&subject.id_type)?;
     if config
         .subject_binding_claim
         .as_deref()
-        .is_some_and(|expected| subject.binding_claim != expected)
+        .is_some_and(|expected| binding_claim != expected)
     {
         return Err(StsError::SubjectBindingMismatch);
     }
-    Ok(details.clone())
+    Ok(vec![NotaryAuthorizationDetails {
+        detail_type: NOTARY_AUTHORIZATION_DETAILS_TYPE.to_string(),
+        schema_version: NOTARY_AUTHORIZATION_DETAILS_SCHEMA_VERSION.to_string(),
+        actions: vec!["evaluate".to_string()],
+        locations: vec![config.notary_audience.clone()],
+        claims,
+        disclosure: Some(disclosure),
+        format: Some(format),
+        purpose: Some(purpose),
+        subject: Some(NotaryAuthorizationSubject {
+            binding_claim,
+            id_type,
+        }),
+        access_mode: Some("self_attestation".to_string()),
+    }])
+}
+
+fn effective_actor_id_hash<'a>(
+    context: &'a ExchangeContext,
+    subject: &'a VerifiedSubjectToken,
+) -> Option<&'a str> {
+    subject
+        .actor
+        .as_ref()
+        .map(|actor| actor.actor_id_hash.as_str())
+        .or(context.actor_id_hash.as_deref())
+}
+
+fn effective_delegation_ref<'a>(
+    context: &'a ExchangeContext,
+    subject: &'a VerifiedSubjectToken,
+) -> Option<&'a str> {
+    if let Some(actor) = subject.actor.as_ref() {
+        actor.delegation_ref.as_deref()
+    } else {
+        context.delegation_ref.as_deref()
+    }
+}
+
+fn canonical_required_text(value: Option<&str>) -> Result<String, StsError> {
+    let value = value.ok_or(StsError::AuthorizationDetailsInvalid)?.trim();
+    if value.is_empty() {
+        return Err(StsError::AuthorizationDetailsInvalid);
+    }
+    Ok(value.to_string())
+}
+
+fn canonical_claim_field(value: &str) -> Result<String, StsError> {
+    let canonical = value.trim();
+    if canonical.is_empty() || canonical != value {
+        return Err(StsError::AuthorizationDetailsInvalid);
+    }
+    Ok(canonical.to_string())
 }
 
 fn validate_sender_constraint(
@@ -902,21 +1062,29 @@ fn sha256_hex(value: &str) -> String {
 type HmacSha256 = Hmac<Sha256>;
 
 #[must_use]
-pub fn session_binding_mac(
-    secret: &str,
-    session_id: &str,
-    correlation_id: &str,
-    verified_subject: &str,
-    subject_id_hash: &str,
-    actor_id_hash: &str,
-) -> String {
+pub struct SessionBindingMacInput<'a> {
+    pub session_id: &'a str,
+    pub correlation_id: &'a str,
+    pub verified_subject: &'a str,
+    pub subject_id_hash: &'a str,
+    pub client_id: &'a str,
+    pub tenant: &'a str,
+    pub actor_id_hash: &'a str,
+    pub delegation_ref: &'a str,
+}
+
+#[must_use]
+pub fn session_binding_mac(secret: &str, input: SessionBindingMacInput<'_>) -> String {
     let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
         .expect("HMAC accepts any non-empty key length");
-    update_mac_field(&mut mac, session_id);
-    update_mac_field(&mut mac, correlation_id);
-    update_mac_field(&mut mac, verified_subject);
-    update_mac_field(&mut mac, subject_id_hash);
-    update_mac_field(&mut mac, actor_id_hash);
+    update_mac_field(&mut mac, input.session_id);
+    update_mac_field(&mut mac, input.correlation_id);
+    update_mac_field(&mut mac, input.verified_subject);
+    update_mac_field(&mut mac, input.subject_id_hash);
+    update_mac_field(&mut mac, input.client_id);
+    update_mac_field(&mut mac, input.tenant);
+    update_mac_field(&mut mac, input.actor_id_hash);
+    update_mac_field(&mut mac, input.delegation_ref);
     format!("hmac-sha256:{}", hex_bytes(&mac.finalize().into_bytes()))
 }
 
@@ -1302,11 +1470,16 @@ mod tests {
         context.subject_id_hash = Some("hmac-sha256:subject-id".to_string());
         context.session_binding = Some(session_binding_mac(
             "session-binding-secret",
-            "sess_123",
-            "corr_123",
-            "hmac-sha256:subject",
-            "hmac-sha256:subject-id",
-            "",
+            SessionBindingMacInput {
+                session_id: "sess_123",
+                correlation_id: "corr_123",
+                verified_subject: "hmac-sha256:subject",
+                subject_id_hash: "hmac-sha256:subject-id",
+                client_id: "assisted-access-client",
+                tenant: "tenant-a",
+                actor_id_hash: "hmac-sha256:actor",
+                delegation_ref: "delegation-123",
+            },
         ));
         context
     }
@@ -1371,12 +1544,107 @@ mod tests {
 
         let mut wrong = request();
         wrong.authorization_details.as_mut().unwrap()[0]
+            .actions
+            .push("admin".to_string());
+        assert!(matches!(
+            validate_authorization_details(&wrong, &config),
+            Err(StsError::AuthorizationDetailsInvalid)
+        ));
+
+        let mut wrong = request();
+        wrong.authorization_details.as_mut().unwrap()[0]
             .claims
             .clear();
         assert!(matches!(
             validate_authorization_details(&wrong, &config),
             Err(StsError::AuthorizationDetailsInvalid)
         ));
+
+        let mut wrong = request();
+        wrong.authorization_details.as_mut().unwrap()[0].claims[0].version = None;
+        assert!(matches!(
+            validate_authorization_details(&wrong, &config),
+            Err(StsError::AuthorizationDetailsInvalid)
+        ));
+
+        let mut wrong = request();
+        wrong.authorization_details.as_mut().unwrap()[0]
+            .claims
+            .push(NotaryClaimRef {
+                id: "person-is-alive".to_string(),
+                version: Some("2".to_string()),
+            });
+        assert!(matches!(
+            validate_authorization_details(&wrong, &config),
+            Err(StsError::AuthorizationDetailsInvalid)
+        ));
+    }
+
+    #[test]
+    fn authorization_details_validation_returns_canonical_details() {
+        let config = TokenExchangeConfig::notary_transaction_token(
+            "https://sts.example.test",
+            "https://notary.example.test",
+        );
+        let mut request = request();
+        let details = request.authorization_details.as_mut().unwrap();
+        details[0].claims = vec![
+            NotaryClaimRef {
+                id: "z-claim".to_string(),
+                version: Some("2".to_string()),
+            },
+            NotaryClaimRef {
+                id: "a-claim".to_string(),
+                version: Some("1".to_string()),
+            },
+        ];
+        details[0].purpose = Some(" citizen_self_attestation ".to_string());
+        details[0].disclosure = Some(" predicate ".to_string());
+        details[0].format = Some(" application/vnd.registry-notary.claim-result+json ".to_string());
+
+        let canonical = validate_authorization_details(&request, &config).unwrap();
+
+        assert_eq!(canonical.len(), 1);
+        assert_eq!(canonical[0].actions, ["evaluate"]);
+        assert_eq!(canonical[0].locations, ["https://notary.example.test"]);
+        assert_eq!(canonical[0].claims[0].id, "a-claim");
+        assert_eq!(canonical[0].claims[1].id, "z-claim");
+        assert_eq!(
+            canonical[0].purpose.as_deref(),
+            Some("citizen_self_attestation")
+        );
+        assert_eq!(canonical[0].disclosure.as_deref(), Some("predicate"));
+        assert_eq!(
+            canonical[0].format.as_deref(),
+            Some("application/vnd.registry-notary.claim-result+json")
+        );
+    }
+
+    #[test]
+    fn authorization_details_deserialization_rejects_extra_or_duplicate_claim_fields() {
+        let with_extra_field = json!({
+            "type": NOTARY_AUTHORIZATION_DETAILS_TYPE,
+            "schema_version": NOTARY_AUTHORIZATION_DETAILS_SCHEMA_VERSION,
+            "actions": ["evaluate"],
+            "locations": ["https://notary.example.test"],
+            "claims": [{
+                "id": "person-is-alive",
+                "version": "1",
+                "scope": "broadened"
+            }],
+            "disclosure": "predicate",
+            "format": "application/vnd.registry-notary.claim-result+json",
+            "purpose": "citizen_self_attestation",
+            "subject": {
+                "binding_claim": "national_id",
+                "id_type": "national_id"
+            },
+            "access_mode": "self_attestation"
+        });
+        assert!(serde_json::from_value::<NotaryAuthorizationDetails>(with_extra_field).is_err());
+
+        let duplicate_field = r#"{"id":"person-is-alive","id":"other","version":"1"}"#;
+        assert!(serde_json::from_str::<NotaryClaimRef>(duplicate_field).is_err());
     }
 
     #[tokio::test]
@@ -1505,9 +1773,63 @@ mod tests {
             .await
             .unwrap();
 
-        let counters = store.counters.lock().unwrap();
-        assert!(!counters.contains_key(&(scope.clone(), first_key)));
-        assert!(counters.contains_key(&(scope, second_key)));
+        let state = store.state.lock().unwrap();
+        assert!(!state.counters.contains_key(&(scope.clone(), first_key)));
+        assert!(state.counters.contains_key(&(scope, second_key)));
+    }
+
+    #[tokio::test]
+    async fn in_memory_rate_limit_cleans_stale_counters_in_bounded_batches() {
+        let store = InMemoryRateLimitStore::default();
+        let scope = RateLimitScope::new("client").unwrap();
+        let policy = RateLimitPolicy {
+            max_requests: 10,
+            window: Duration::from_secs(60),
+        };
+
+        for index in 0..(RATE_LIMIT_CLEANUP_BATCH + 2) {
+            let key = RateLimitKey::new(format!("client-{index}")).unwrap();
+            store
+                .check_and_increment(&scope, &key, policy, OffsetDateTime::UNIX_EPOCH)
+                .await
+                .unwrap();
+        }
+
+        let first_fresh_key = RateLimitKey::new("fresh-client-a").unwrap();
+        store
+            .check_and_increment(
+                &scope,
+                &first_fresh_key,
+                policy,
+                OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(61),
+            )
+            .await
+            .unwrap();
+        {
+            let state = store.state.lock().unwrap();
+            assert_eq!(state.counters.len(), 3);
+            assert!(state
+                .counters
+                .contains_key(&(scope.clone(), first_fresh_key)));
+        }
+
+        let second_fresh_key = RateLimitKey::new("fresh-client-b").unwrap();
+        store
+            .check_and_increment(
+                &scope,
+                &second_fresh_key,
+                policy,
+                OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(61),
+            )
+            .await
+            .unwrap();
+
+        let state = store.state.lock().unwrap();
+        assert_eq!(state.counters.len(), 2);
+        assert!(state
+            .counters
+            .contains_key(&(scope.clone(), RateLimitKey::new("fresh-client-a").unwrap())));
+        assert!(state.counters.contains_key(&(scope, second_fresh_key)));
     }
 
     #[tokio::test]
@@ -1557,6 +1879,95 @@ mod tests {
             .exchange(request(), bound_context(), OffsetDateTime::UNIX_EPOCH)
             .await
             .unwrap();
+    }
+
+    #[test]
+    fn session_binding_mac_covers_signed_caller_context() {
+        let config = TokenExchangeConfig::notary_transaction_token(
+            "https://sts.example.test",
+            "https://notary.example.test",
+        )
+        .with_session_binding_secret("session-binding-secret")
+        .with_subject_binding_claim("national_id");
+        let subject = verified_subject();
+        let context = bound_context();
+
+        validate_exchange_context(&context, &config, &subject).unwrap();
+
+        let mut wrong = context.clone();
+        wrong.client_id = Some("other-client".to_string());
+        assert!(matches!(
+            validate_exchange_context(&wrong, &config, &subject),
+            Err(StsError::SessionBindingInvalid)
+        ));
+
+        let mut wrong = context.clone();
+        wrong.tenant = Some("other-tenant".to_string());
+        assert!(matches!(
+            validate_exchange_context(&wrong, &config, &subject),
+            Err(StsError::SessionBindingInvalid)
+        ));
+
+        let mut wrong_subject = subject.clone();
+        wrong_subject.actor.as_mut().unwrap().actor_id_hash = "hmac-sha256:other-actor".to_string();
+        assert!(matches!(
+            validate_exchange_context(&context, &config, &wrong_subject),
+            Err(StsError::SessionBindingInvalid)
+        ));
+
+        let mut wrong_subject = subject;
+        wrong_subject.actor.as_mut().unwrap().delegation_ref = Some("other-delegation".to_string());
+        assert!(matches!(
+            validate_exchange_context(&context, &config, &wrong_subject),
+            Err(StsError::SessionBindingInvalid)
+        ));
+    }
+
+    #[test]
+    fn session_binding_mac_matches_signed_actor_delegation_source() {
+        let config = TokenExchangeConfig::notary_transaction_token(
+            "https://sts.example.test",
+            "https://notary.example.test",
+        )
+        .with_session_binding_secret("session-binding-secret")
+        .with_subject_binding_claim("national_id");
+        let mut subject = verified_subject();
+        subject.actor.as_mut().unwrap().delegation_ref = None;
+        let mut context = bound_context();
+        context.delegation_ref = Some("context-delegation".to_string());
+        context.session_binding = Some(session_binding_mac(
+            "session-binding-secret",
+            SessionBindingMacInput {
+                session_id: "sess_123",
+                correlation_id: "corr_123",
+                verified_subject: "hmac-sha256:subject",
+                subject_id_hash: "hmac-sha256:subject-id",
+                client_id: "assisted-access-client",
+                tenant: "tenant-a",
+                actor_id_hash: "hmac-sha256:actor",
+                delegation_ref: "",
+            },
+        ));
+
+        validate_exchange_context(&context, &config, &subject).unwrap();
+
+        context.session_binding = Some(session_binding_mac(
+            "session-binding-secret",
+            SessionBindingMacInput {
+                session_id: "sess_123",
+                correlation_id: "corr_123",
+                verified_subject: "hmac-sha256:subject",
+                subject_id_hash: "hmac-sha256:subject-id",
+                client_id: "assisted-access-client",
+                tenant: "tenant-a",
+                actor_id_hash: "hmac-sha256:actor",
+                delegation_ref: "context-delegation",
+            },
+        ));
+        assert!(matches!(
+            validate_exchange_context(&context, &config, &subject),
+            Err(StsError::SessionBindingInvalid)
+        ));
     }
 
     #[tokio::test]
