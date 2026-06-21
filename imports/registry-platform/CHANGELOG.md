@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## Beta-3 candidate - 2026-06-21
+
 ### Security
 
 - (AUDIT-03) `registry-platform-audit` now derives independent, domain-separated
