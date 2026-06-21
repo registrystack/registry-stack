@@ -49,8 +49,8 @@ const BRUNO_GENERATED_MANIFEST: &str = "bruno/registry-api/.registryctl-generate
 const STANDALONE_SOURCE_TOKEN_PLACEHOLDER: &str = "replace-with-source-api-token";
 const REGISTRYCTL_RELEASES_API: &str =
     "https://api.github.com/repos/jeremi/registry-registryctl/releases/latest";
-const REGISTRYCTL_INSTALL_SCRIPT: &str =
-    "https://raw.githubusercontent.com/jeremi/registry-registryctl/main/install.sh";
+const REGISTRYCTL_INSTALL_SCRIPT_BASE: &str =
+    "https://raw.githubusercontent.com/jeremi/registry-registryctl";
 const UPDATE_CHECK_CACHE_SECONDS: u64 = 60 * 60 * 24;
 const LAB_MANIFEST_URL: &str = "https://lab.registrystack.org/api/lab.json";
 
@@ -697,10 +697,15 @@ fn is_newer_release(current_version: &str, latest_tag: &str) -> bool {
 }
 
 fn update_notice(current_version: &str, latest_tag: &str) -> String {
+    let install_script = registryctl_install_script_url(latest_tag);
     format!(
-        "registryctl {latest_tag} is available. You have {}.\nUpgrade with:\n  REGISTRYCTL_VERSION={latest_tag} curl -fsSL {REGISTRYCTL_INSTALL_SCRIPT} | sh",
+        "registryctl {latest_tag} is available. You have {}.\nUpgrade with:\n  curl -fsSL {install_script} | REGISTRYCTL_VERSION={latest_tag} sh",
         display_version(current_version)
     )
+}
+
+fn registryctl_install_script_url(tag: &str) -> String {
+    format!("{REGISTRYCTL_INSTALL_SCRIPT_BASE}/{tag}/install.sh")
 }
 
 fn display_version(version: &str) -> String {
@@ -5411,8 +5416,10 @@ mod tests {
 
         assert!(notice.contains("registryctl v0.2.0 is available"));
         assert!(notice.contains("You have v0.1.0"));
+        assert!(notice.contains(
+            "https://raw.githubusercontent.com/jeremi/registry-registryctl/v0.2.0/install.sh"
+        ));
         assert!(notice.contains("REGISTRYCTL_VERSION=v0.2.0"));
-        assert!(notice.contains(REGISTRYCTL_INSTALL_SCRIPT));
     }
 
     #[test]

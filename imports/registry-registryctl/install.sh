@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo="jeremi/registry-registryctl"
-default_version="v0.1.0"
+default_version="v0.2.0"
 version="${REGISTRYCTL_VERSION:-$default_version}"
 install_dir="${REGISTRYCTL_INSTALL_DIR:-$HOME/.local/bin}"
 
@@ -11,7 +11,7 @@ usage() {
 Install registryctl.
 
 Environment:
-  REGISTRYCTL_VERSION      Pinned release tag to install. Defaults to v0.1.0.
+  REGISTRYCTL_VERSION      Pinned release tag to install. Defaults to v0.2.0.
   REGISTRYCTL_INSTALL_DIR  Install directory. Defaults to ~/.local/bin.
 EOF
 }
