@@ -708,7 +708,6 @@ def validate_openfn_sidecar_governance(
         )
     required_mounts = {
         "/etc/registry-notary-openfn",
-        "/tmp/registry-lab-openfn-jobs",
         "/var/lib/registry-notary-openfn-sidecar/tuf",
         "/var/lib/registry-notary-openfn-sidecar/config-trust",
     }

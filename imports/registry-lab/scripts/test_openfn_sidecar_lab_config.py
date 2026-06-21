@@ -50,7 +50,8 @@ class BuiltinSidecarLabConfigTest(unittest.TestCase):
         self.assertIn("/etc/registry-notary-openfn/openfn-dhis2-sidecar.bootstrap.yaml", body)
         self.assertIn("openfn-sidecar-tuf-state:/var/lib/registry-notary-openfn-sidecar/tuf", body)
         self.assertIn("openfn-sidecar-config-state:/var/lib/registry-notary-openfn-sidecar/config-trust", body)
-        self.assertIn("cfg-openfn-jobs:/tmp/registry-lab-openfn-jobs:ro", body)
+        self.assertNotIn("cfg-openfn-jobs:/tmp/registry-lab-openfn-jobs:ro", body)
+        self.assertNotIn("/tmp/registry-lab-openfn-jobs", body)
         hosted_service = body.split("  openfn-dhis2-sidecar:", 1)[1].split("\n  dhis2-health-notary:", 1)[0]
         self.assertNotIn("--allow-unsigned-dev-config", hosted_service)
 

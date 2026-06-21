@@ -14,8 +14,8 @@ datastore_dir="${repo_root}/output/openfn-sidecar-tuf-datastore"
 report="${governed_dir}/openfn-dhis2-sidecar-runtime.report.json"
 bootstrap="${repo_root}/config/coolify/openfn/openfn-dhis2-sidecar.bootstrap.yaml"
 notary_config="${repo_root}/config/coolify/notary/dhis2-health-notary.yaml"
-previous_hash="${PREVIOUS_HASH:-sha256:0069fbfebf5ad5ffcd7b46b28eccc470302ac4b0e1d62c81bf1e5d22c6adea4f}"
-sequence="${SEQUENCE:-2}"
+previous_hash="${PREVIOUS_HASH:-sha256:bee640a8fac3b8dd8c87c75fd21a6c550742e1d7889b9d0015aa79a41900a561}"
+sequence="${SEQUENCE:-3}"
 signer_kid="8ec3a843a0f9328c863cac4046ab1cacbbc67888476ac7acf73d9bcd9a223ada"
 
 if [[ ! -d "${notary_root}" ]]; then
