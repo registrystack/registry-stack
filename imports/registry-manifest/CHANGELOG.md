@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Beta-3 candidate - 2026-06-21
+
+### Added
+
+- Governed Evidence Gateway metadata validation, including evidence-pack binding
+  metadata, policy metadata, shared ODRL/PDP terms, and optional
+  evidence-offering `attestation_id`.
+- ITB SEMIC smoke validation hardening for standards profile checks.
+
+### Changed
+
+- Documentation now reflects the beta-3 manifest surface and uses release-pinned
+  owner-source links.
+
+### Release Notes
+
+- The workspace crates remain `publish = false`; beta-3 consumers pin the exact
+  source SHA rather than a crates.io artifact.
+
 ## [0.2.0] - 2026-06-12
 
 ### Added
