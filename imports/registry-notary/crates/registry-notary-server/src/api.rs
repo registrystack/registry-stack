@@ -7170,7 +7170,7 @@ fn require_self_attestation_evaluate(
     require_self_attestation_authorization_details(
         evidence.service_id.as_str(),
         config,
-        principal.authorization_details.as_ref(),
+        principal,
         request,
         &disclosure,
         format,
@@ -7211,74 +7211,75 @@ fn require_self_attestation_evaluate(
 fn require_self_attestation_authorization_details(
     service_id: &str,
     config: &SelfAttestationConfig,
-    authorization_details: Option<&EvidenceAuthorizationDetails>,
+    principal: &EvidencePrincipal,
     request: &EvaluateRequest,
     disclosure: &str,
     format: &str,
     purpose: &str,
 ) -> Result<(), EvidenceError> {
-    let Some(details) = authorization_details else {
+    let Some(details) = principal.authorization_details.as_ref() else {
+        if self_attestation_requires_authorization_details(principal) {
+            return Err(self_attestation_denied(
+                SelfAttestationDenialCode::OperationDenied,
+            ));
+        }
         return Ok(());
     };
 
-    if !details.actions.iter().any(|action| action == "evaluate") {
-        return Err(self_attestation_denied(
-            SelfAttestationDenialCode::OperationDenied,
-        ));
-    }
-    if !details
-        .locations
-        .iter()
-        .any(|location| location == service_id)
-    {
-        return Err(self_attestation_denied(
-            SelfAttestationDenialCode::OperationDenied,
-        ));
-    }
-    if details.access_mode != Some(AccessMode::SelfAttestation) {
-        return Err(self_attestation_denied(
-            SelfAttestationDenialCode::OperationDenied,
-        ));
-    }
-    if details.purpose.as_deref() != Some(purpose) {
-        return Err(self_attestation_denied(
-            SelfAttestationDenialCode::OperationDenied,
-        ));
-    }
-    if details.disclosure.as_deref() != Some(disclosure) {
-        return Err(self_attestation_denied(
-            SelfAttestationDenialCode::DisclosureDenied,
-        ));
-    }
-    if details.format.as_deref() != Some(format) {
-        return Err(self_attestation_denied(
-            SelfAttestationDenialCode::FormatDenied,
-        ));
-    }
-    if details.claims.is_empty()
-        || !request
-            .claims
-            .iter()
-            .all(|requested| details.claims.iter().any(|allowed| allowed == requested))
-    {
-        return Err(self_attestation_denied(
-            SelfAttestationDenialCode::ClaimDenied,
-        ));
-    }
+    crate::authz_details::validate_scoped_authorization_details(
+        details,
+        &crate::authz_details::ScopedAuthorizationRequest {
+            service_id,
+            action: "evaluate",
+            claims: &request.claims,
+            disclosure,
+            format,
+            purpose,
+            access_mode: AccessMode::SelfAttestation,
+            subject: Some(crate::authz_details::ScopedAuthorizationSubject {
+                binding_claim: config.subject_binding.token_claim.clone(),
+                id_type: config.subject_binding.id_type.clone(),
+            }),
+        },
+    )
+    .map_err(self_attestation_authorization_details_denial)
+}
 
-    let Some(subject) = details.subject.as_ref() else {
-        return Err(self_attestation_denied(
-            SelfAttestationDenialCode::SubjectMismatch,
-        ));
+fn self_attestation_requires_authorization_details(principal: &EvidencePrincipal) -> bool {
+    principal
+        .verified_claims
+        .as_ref()
+        .and_then(|claims| claims.token_type.as_ref())
+        .is_some_and(|token_type| {
+            token_type.as_str() == registry_notary_core::tokens::NOTARY_TRANSACTION_TOKEN_JWT_TYP
+        })
+}
+
+fn self_attestation_authorization_details_denial(
+    error: crate::authz_details::ScopedAuthorizationError,
+) -> EvidenceError {
+    let reason = match error {
+        crate::authz_details::ScopedAuthorizationError::Claim => {
+            SelfAttestationDenialCode::ClaimDenied
+        }
+        crate::authz_details::ScopedAuthorizationError::Disclosure => {
+            SelfAttestationDenialCode::DisclosureDenied
+        }
+        crate::authz_details::ScopedAuthorizationError::Format => {
+            SelfAttestationDenialCode::FormatDenied
+        }
+        crate::authz_details::ScopedAuthorizationError::Subject => {
+            SelfAttestationDenialCode::SubjectMismatch
+        }
+        crate::authz_details::ScopedAuthorizationError::DetailType
+        | crate::authz_details::ScopedAuthorizationError::Action
+        | crate::authz_details::ScopedAuthorizationError::Location
+        | crate::authz_details::ScopedAuthorizationError::Purpose
+        | crate::authz_details::ScopedAuthorizationError::AccessMode => {
+            SelfAttestationDenialCode::OperationDenied
+        }
     };
-    if subject.binding_claim != config.subject_binding.token_claim
-        || subject.id_type != config.subject_binding.id_type
-    {
-        return Err(self_attestation_denied(
-            SelfAttestationDenialCode::SubjectMismatch,
-        ));
-    }
-    Ok(())
+    self_attestation_denied(reason)
 }
 
 fn find_requested_claim<'a>(
@@ -10563,6 +10564,37 @@ mod tests {
     }
 
     #[test]
+    fn self_attestation_authorization_details_required_for_transaction_token() {
+        let config = self_attestation_config();
+        let evidence = evidence_config();
+        let mut principal = classify_self_attestation_principal(
+            &config,
+            &fresh_oidc_principal(Some("client_id:citizen-portal"), &["self_attestation"]),
+        )
+        .expect("citizen principal classifies");
+        principal.authorization_details = None;
+        let claims = principal
+            .verified_claims
+            .as_mut()
+            .expect("classified principal carries verified claims");
+        claims.token_type = Some(bounded(
+            registry_notary_core::tokens::NOTARY_TRANSACTION_TOKEN_JWT_TYP,
+        ));
+        let mut request = evaluate_request("NAT-123");
+        request.claims = vec![ClaimRef::with_version("person-is-alive", "1")];
+
+        let err = require_self_attestation_evaluate(&evidence, &config, &principal, &request)
+            .expect_err("transaction tokens must carry authorization_details");
+
+        assert!(matches!(
+            err,
+            EvidenceError::SelfAttestationDenied {
+                reason: SelfAttestationDenialCode::OperationDenied
+            }
+        ));
+    }
+
+    #[test]
     fn self_attestation_authorization_details_reject_omitted_claim_version() {
         let config = self_attestation_config();
         let evidence = evidence_config();
@@ -10576,6 +10608,56 @@ mod tests {
             err,
             EvidenceError::SelfAttestationDenied {
                 reason: SelfAttestationDenialCode::ClaimDenied
+            }
+        ));
+    }
+
+    #[test]
+    fn self_attestation_authorization_details_reject_broadened_claims() {
+        let config = self_attestation_config();
+        let evidence = evidence_config();
+        let mut principal = classified_transaction_principal(&config, &evidence);
+        principal
+            .authorization_details
+            .as_mut()
+            .expect("details exist")
+            .claims
+            .push(ClaimRef::with_version("date-of-birth", "1"));
+        let mut request = evaluate_request("NAT-123");
+        request.claims = vec![ClaimRef::with_version("person-is-alive", "1")];
+
+        let err = require_self_attestation_evaluate(&evidence, &config, &principal, &request)
+            .expect_err("broadened transaction claims must be denied");
+
+        assert!(matches!(
+            err,
+            EvidenceError::SelfAttestationDenied {
+                reason: SelfAttestationDenialCode::ClaimDenied
+            }
+        ));
+    }
+
+    #[test]
+    fn self_attestation_authorization_details_reject_duplicate_action() {
+        let config = self_attestation_config();
+        let evidence = evidence_config();
+        let mut principal = classified_transaction_principal(&config, &evidence);
+        principal
+            .authorization_details
+            .as_mut()
+            .expect("details exist")
+            .actions
+            .push("evaluate".to_string());
+        let mut request = evaluate_request("NAT-123");
+        request.claims = vec![ClaimRef::with_version("person-is-alive", "1")];
+
+        let err = require_self_attestation_evaluate(&evidence, &config, &principal, &request)
+            .expect_err("duplicate transaction action must be denied");
+
+        assert!(matches!(
+            err,
+            EvidenceError::SelfAttestationDenied {
+                reason: SelfAttestationDenialCode::OperationDenied
             }
         ));
     }

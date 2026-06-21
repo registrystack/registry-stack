@@ -238,14 +238,14 @@ use registry_notary_core::{
     BatchEvaluateResponse, BatchItemError, BatchItemResponse, BatchItemStatus, BatchStatus,
     BatchSummary, BoundedClaimId, BoundedCorrelationId, BulkMode, CelBindingsConfig,
     ClaimDefinition, ClaimProvenance, ClaimRef, ClaimResultView, CredentialProfileConfig,
-    DisclosureDowngrade, DisclosureProfile, EvaluateRequest, EvidenceConfig, EvidenceEntity,
-    EvidenceEntityRef, EvidenceError, EvidenceFormat, EvidencePrincipal, EvidenceRequestContext,
-    MatchingMetadata, ProvenanceUsed, RegistryNotaryCelConfig, RenderRequest, RuleConfig,
-    SelfAttestationConfig, SelfAttestationDenialCode, SourceBindingConfig, SourceCapability,
-    SourceRuntimeSummary, StoredSelfAttestationMetadata, SubjectRequest, TargetRefView,
-    FORMAT_CCCEV_JSONLD, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
-    SD_JWT_VC_HOLDER_BINDING_METHOD, SD_JWT_VC_ISSUER_KEY_TYPE, SD_JWT_VC_JWT_TYP,
-    SD_JWT_VC_SIGNING_ALG,
+    DisclosureDowngrade, DisclosureProfile, EvaluateRequest, EvidenceAuthorizationDetails,
+    EvidenceConfig, EvidenceEntity, EvidenceEntityRef, EvidenceError, EvidenceFormat,
+    EvidencePrincipal, EvidenceRequestContext, MatchingMetadata, ProvenanceUsed,
+    RegistryNotaryCelConfig, RenderRequest, RuleConfig, SelfAttestationConfig,
+    SelfAttestationDenialCode, SourceBindingConfig, SourceCapability, SourceRuntimeSummary,
+    StoredSelfAttestationMetadata, SubjectRequest, TargetRefView, FORMAT_CCCEV_JSONLD,
+    FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC, SD_JWT_VC_HOLDER_BINDING_METHOD,
+    SD_JWT_VC_ISSUER_KEY_TYPE, SD_JWT_VC_JWT_TYP, SD_JWT_VC_SIGNING_ALG,
 };
 use registry_platform_audit::AuditKeyHasher;
 #[cfg(feature = "registry-notary-cel")]
@@ -959,27 +959,45 @@ struct ClaimEvaluationContext {
 
 #[derive(Clone, Debug, Default)]
 struct TrustedPolicyContext {
+    authorization_details: Option<EvidenceAuthorizationDetails>,
     legal_basis_ref: Option<String>,
     consent_ref: Option<String>,
     jurisdiction: Option<String>,
     assurance_level: Option<String>,
+    subject_binding_claim: Option<String>,
+    subject_binding_value: Option<String>,
     checked_scopes: BTreeSet<String>,
 }
 
 impl TrustedPolicyContext {
     fn from_principal(principal: &EvidencePrincipal) -> Self {
         let checked_scopes = principal.scopes.iter().cloned().collect();
+        let subject_binding_claim = principal
+            .verified_claims
+            .as_ref()
+            .and_then(|claims| claims.subject_binding_claim.as_ref())
+            .map(|claim| claim.as_str().to_string());
+        let subject_binding_value = principal
+            .verified_claims
+            .as_ref()
+            .and_then(|claims| claims.subject_binding_value.as_ref())
+            .map(|value| value.as_str().to_string());
         let Some(details) = principal.authorization_details.as_ref() else {
             return Self {
                 checked_scopes,
+                subject_binding_claim,
+                subject_binding_value,
                 ..Self::default()
             };
         };
         Self {
+            authorization_details: Some(details.clone()),
             legal_basis_ref: trusted_non_empty(details.legal_basis_ref.as_deref()),
             consent_ref: trusted_non_empty(details.consent_ref.as_deref()),
             jurisdiction: trusted_non_empty(details.jurisdiction.as_deref()),
             assurance_level: trusted_non_empty(details.assurance_level.as_deref()),
+            subject_binding_claim,
+            subject_binding_value,
             checked_scopes,
         }
     }
@@ -2832,6 +2850,92 @@ fn max_batch_subjects(
     Ok(max)
 }
 
+fn source_scoped_trusted_policy(
+    evidence: &EvidenceConfig,
+    claim: &ClaimDefinition,
+    context: &EvidenceRequestContext,
+    trusted_policy: &TrustedPolicyContext,
+    purpose: &str,
+    disclosure: DisclosureProfile,
+    format: &str,
+) -> Result<TrustedPolicyContext, EvidenceError> {
+    if !claim_source_policy_uses_authorization_details(claim) {
+        return Ok(trusted_policy.clone());
+    }
+    let Some(details) = trusted_policy.authorization_details.as_ref() else {
+        return Ok(trusted_policy.clone());
+    };
+    let expected_claims = [ClaimRef::with_version(&claim.id, &claim.version)];
+    let subject = source_authorization_subject_expectation(trusted_policy, context)?;
+    crate::authz_details::validate_scoped_authorization_details(
+        details,
+        &crate::authz_details::ScopedAuthorizationRequest {
+            service_id: &evidence.service_id,
+            action: "evaluate",
+            claims: &expected_claims,
+            disclosure: disclosure.as_str(),
+            format,
+            purpose,
+            access_mode: trusted_policy_access_mode(trusted_policy),
+            subject,
+        },
+    )
+    .map_err(|_| EvidenceError::TargetMatchingPolicyRejected)?;
+    Ok(trusted_policy.clone())
+}
+
+fn claim_source_policy_uses_authorization_details(claim: &ClaimDefinition) -> bool {
+    claim
+        .source_bindings
+        .values()
+        .any(binding_policy_uses_authorization_details)
+}
+
+fn binding_policy_uses_authorization_details(
+    binding: &registry_notary_core::SourceBindingConfig,
+) -> bool {
+    let matching = &binding.matching;
+    !matching.allowed_assurance.is_empty()
+        || matching.minimum_assurance.is_some()
+        || !matching.permitted_jurisdictions.is_empty()
+        || matching.require_legal_basis
+        || matching.require_consent
+}
+
+fn source_authorization_subject_expectation(
+    trusted_policy: &TrustedPolicyContext,
+    context: &EvidenceRequestContext,
+) -> Result<Option<crate::authz_details::ScopedAuthorizationSubject>, EvidenceError> {
+    let (Some(binding_claim), Some(binding_value)) = (
+        trusted_policy.subject_binding_claim.as_deref(),
+        trusted_policy.subject_binding_value.as_deref(),
+    ) else {
+        return Ok(None);
+    };
+    let target_subject = context
+        .target_subject()
+        .ok_or(EvidenceError::TargetMatchingPolicyRejected)?;
+    if target_subject.id != binding_value {
+        return Err(EvidenceError::TargetMatchingPolicyRejected);
+    }
+    let id_type = target_subject
+        .id_type
+        .as_deref()
+        .ok_or(EvidenceError::TargetMatchingPolicyRejected)?;
+    Ok(Some(crate::authz_details::ScopedAuthorizationSubject {
+        binding_claim: binding_claim.to_string(),
+        id_type: id_type.to_string(),
+    }))
+}
+
+fn trusted_policy_access_mode(trusted_policy: &TrustedPolicyContext) -> AccessMode {
+    if trusted_policy.subject_binding_claim.is_some() {
+        AccessMode::SelfAttestation
+    } else {
+        AccessMode::MachineClient
+    }
+}
+
 /// Load all source bindings for a claim. Returns the resolved source map and an
 /// optional observation timestamp.
 ///
@@ -2871,6 +2975,15 @@ async fn load_sources(
     if claim.source_bindings.is_empty() {
         return Ok((BTreeMap::new(), None, BTreeSet::new(), None));
     }
+    let trusted_policy = source_scoped_trusted_policy(
+        &evidence,
+        &claim,
+        &context,
+        &trusted_policy,
+        &purpose,
+        disclosure,
+        &format,
+    )?;
     if claim
         .source_bindings
         .values()

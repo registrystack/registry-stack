@@ -6,6 +6,7 @@
 #![recursion_limit = "256"]
 
 pub mod api;
+pub(crate) mod authz_details;
 #[cfg(feature = "registry-notary-cel")]
 pub mod cel_worker;
 pub mod config_governed;

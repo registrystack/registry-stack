@@ -4859,7 +4859,6 @@ async fn authenticate_oidc(
         subject_binding_claim_source,
         assurance_claim_source,
     )
-    .ok_or(EvidenceError::MissingCredential)
 }
 
 /// Read the `iss` claim from a JWT WITHOUT verifying the signature. Used only to
@@ -4922,7 +4921,6 @@ async fn authenticate_notary_token(
         SelfAttestationClaimSource::AccessToken,
         SelfAttestationAssuranceClaimSource::AccessToken,
     )
-    .ok_or(EvidenceError::MissingCredential)
 }
 
 async fn consume_notary_token_jti(
@@ -4996,7 +4994,7 @@ fn principal_from_oidc(
     subject_binding_claim: Option<&str>,
     subject_binding_claim_source: SelfAttestationClaimSource,
     assurance_claim_source: SelfAttestationAssuranceClaimSource,
-) -> Option<EvidencePrincipal> {
+) -> Result<EvidencePrincipal, EvidenceError> {
     let principal_id = if principal_claim == "sub" {
         verified.claims.sub.clone()
     } else {
@@ -5007,8 +5005,10 @@ fn principal_from_oidc(
             .and_then(Value::as_str)
             .map(ToOwned::to_owned)
     }
-    .or_else(|| verified.matched_client.clone())?;
-    Some(EvidencePrincipal {
+    .or_else(|| verified.matched_client.clone())
+    .ok_or(EvidenceError::MissingCredential)?;
+    let authorization_details = authorization_details_from_oidc(verified)?;
+    Ok(EvidencePrincipal {
         principal_id,
         scopes: verified.scopes.clone(),
         access_mode: AccessMode::MachineClient,
@@ -5021,28 +5021,17 @@ fn principal_from_oidc(
             subject_binding_claim_source,
             assurance_claim_source,
         ),
-        authorization_details: authorization_details_from_oidc(verified),
+        authorization_details,
     })
 }
 
 fn authorization_details_from_oidc(
     verified: &VerifiedToken,
-) -> Option<EvidenceAuthorizationDetails> {
-    let details = verified
-        .claims
-        .extra
-        .get("authorization_details")?
-        .as_array()?;
-    details
-        .iter()
-        .filter_map(|detail| {
-            serde_json::from_value::<EvidenceAuthorizationDetails>(detail.clone()).ok()
-        })
-        .find(|detail| {
-            detail.detail_type == registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_TYPE
-                && detail.schema_version
-                    == registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_SCHEMA_VERSION
-        })
+) -> Result<Option<EvidenceAuthorizationDetails>, EvidenceError> {
+    let Some(details) = verified.claims.extra.get("authorization_details") else {
+        return Ok(None);
+    };
+    crate::authz_details::extract_notary_transaction_authorization_details(details)
 }
 
 fn bounded_verified_claims_from_oidc(
@@ -10158,6 +10147,24 @@ config_trust:
         assert_eq!(details.assurance_level.as_deref(), Some("substantial"));
     }
 
+    fn verified_token_with_extra(extra: Map<String, Value>) -> VerifiedToken {
+        VerifiedToken {
+            claims: registry_platform_oidc::Claims {
+                sub: Some("login-subject-123".to_string()),
+                iss: Some("https://issuer.example.test".to_string()),
+                aud: Some(Audience::One("registry-notary".to_string())),
+                exp: Some(1_700_003_600),
+                iat: Some(1_700_000_000),
+                nbf: Some(1_699_999_900),
+                azp: Some("citizen-client".to_string()),
+                client_id: Some("fallback-client".to_string()),
+                extra,
+            },
+            matched_client: Some("azp:citizen-client".to_string()),
+            scopes: vec!["openid".to_string(), "evidence:self_attest".to_string()],
+        }
+    }
+
     #[test]
     fn oidc_principal_carries_bounded_verified_claims() {
         let subject_binding_claim = "https://id.example.gov/claims/national_id";
@@ -10265,6 +10272,64 @@ config_trust:
         assert_eq!(verified_claims.exp, Some(1_700_003_600));
         assert_eq!(verified_claims.iat, Some(1_700_000_000));
         assert_eq!(verified_claims.nbf, Some(1_699_999_900));
+    }
+
+    #[test]
+    fn oidc_principal_rejects_malformed_matching_authorization_details() {
+        let mut extra = Map::new();
+        extra.insert(
+            "authorization_details".to_string(),
+            json!([{
+                "type": registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_TYPE,
+                "schema_version": registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_SCHEMA_VERSION,
+                "actions": "evaluate"
+            }]),
+        );
+        let verified = verified_token_with_extra(extra);
+
+        let error = principal_from_oidc(
+            &verified,
+            None,
+            None,
+            verified_claim_value("JWT"),
+            "sub",
+            None,
+            SelfAttestationClaimSource::AccessToken,
+            SelfAttestationAssuranceClaimSource::AccessToken,
+        )
+        .expect_err("malformed matching authorization_details must fail auth");
+
+        assert!(matches!(error, EvidenceError::MissingCredential));
+    }
+
+    #[test]
+    fn oidc_principal_rejects_duplicate_matching_authorization_details() {
+        let detail = json!({
+            "type": registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_TYPE,
+            "schema_version": registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_SCHEMA_VERSION,
+            "actions": ["evaluate"],
+            "locations": ["registry-notary"]
+        });
+        let mut extra = Map::new();
+        extra.insert(
+            "authorization_details".to_string(),
+            json!([detail.clone(), detail]),
+        );
+        let verified = verified_token_with_extra(extra);
+
+        let error = principal_from_oidc(
+            &verified,
+            None,
+            None,
+            verified_claim_value("JWT"),
+            "sub",
+            None,
+            SelfAttestationClaimSource::AccessToken,
+            SelfAttestationAssuranceClaimSource::AccessToken,
+        )
+        .expect_err("duplicate matching authorization_details must fail auth");
+
+        assert!(matches!(error, EvidenceError::MissingCredential));
     }
 
     #[test]
