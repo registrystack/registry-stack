@@ -3211,6 +3211,48 @@ fn validation_rejects_invalid_federation_urls_and_did_web_binding() {
 }
 
 #[test]
+fn validation_accepts_federation_endpoints_on_issuer_host() {
+    let mut manifest = federated_evaluation_manifest();
+    let federation = manifest.federation.as_mut().expect("federation");
+    federation.issuer = "https://registry.example.test/issuer".to_string();
+    federation.jwks_uri = "https://registry.example.test/.well-known/jwks.json".to_string();
+    federation.federation_api = "https://registry.example.test/federation".to_string();
+
+    validate_manifest(&manifest).expect("federation endpoints bind to issuer host");
+}
+
+#[test]
+fn validation_rejects_federation_endpoints_on_cross_hosts() {
+    let mut manifest = federated_evaluation_manifest();
+    let federation = manifest.federation.as_mut().expect("federation");
+    federation.jwks_uri = "https://keys.example.test/.well-known/jwks.json".to_string();
+    federation.federation_api = "https://api.example.test/federation".to_string();
+
+    let error = validate_manifest(&manifest).expect_err("cross-host federation endpoints rejected");
+    let MetadataError::Validation { errors } = error else {
+        panic!("unexpected error: {error:?}");
+    };
+    assert!(
+        errors.iter().any(|error| {
+            error.path == "federation.jwks_uri"
+                && error
+                    .message
+                    .contains("must bind to federation issuer host")
+        }),
+        "expected JWKS host binding error, got: {errors:?}"
+    );
+    assert!(
+        errors.iter().any(|error| {
+            error.path == "federation.federation_api"
+                && error
+                    .message
+                    .contains("must bind to federation issuer host")
+        }),
+        "expected federation API host binding error, got: {errors:?}"
+    );
+}
+
+#[test]
 fn validation_rejects_did_web_port_mismatch_against_issuer() {
     let mut manifest = federated_evaluation_manifest();
     let federation = manifest.federation.as_mut().expect("federation");

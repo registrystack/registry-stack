@@ -148,8 +148,8 @@ Fields of `FederationManifest`.
 | --- | --- | --- |
 | `node_id` | Yes | Publishing Notary node id. MVP validation requires `did:web`. |
 | `issuer` | Yes | HTTPS issuer URL. Host must bind to the `did:web` node id. |
-| `jwks_uri` | Yes | HTTPS JWKS URL partners use to verify signed federation responses. |
-| `federation_api` | Yes | HTTPS federation API base URL. |
+| `jwks_uri` | Yes | HTTPS JWKS URL partners use to verify signed federation responses. Host must bind to the issuer host. |
+| `federation_api` | Yes | HTTPS federation API base URL. Host must bind to the issuer host. |
 | `supported_protocol_versions` | Yes | Must include `registry-notary-federation/v0.1`. |
 
 Fields of `EvaluationProfileManifest`.

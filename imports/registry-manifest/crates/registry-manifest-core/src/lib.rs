@@ -1682,6 +1682,20 @@ fn validate_federation(federation: Option<&FederationManifest>, errors: &mut Vec
         "federation.federation_api",
         errors,
     );
+    if let Some(issuer_host) = https_url_host(&federation.issuer) {
+        validate_federation_endpoint_host(
+            &federation.jwks_uri,
+            "federation.jwks_uri",
+            &issuer_host,
+            errors,
+        );
+        validate_federation_endpoint_host(
+            &federation.federation_api,
+            "federation.federation_api",
+            &issuer_host,
+            errors,
+        );
+    }
     if !federation
         .supported_protocol_versions
         .iter()
@@ -1717,6 +1731,22 @@ fn validate_federation(federation: Option<&FederationManifest>, errors: &mut Vec
             "federation.node_id",
             "federation node id must be a did:web identifier",
         )),
+    }
+}
+
+fn validate_federation_endpoint_host(
+    value: &str,
+    path: impl Into<String>,
+    issuer_host: &str,
+    errors: &mut Vec<ValidationError>,
+) {
+    if let Some(endpoint_host) = https_url_host(value) {
+        if !issuer_host.eq_ignore_ascii_case(&endpoint_host) {
+            errors.push(ValidationError::new(
+                path,
+                "federation endpoint host must bind to federation issuer host",
+            ));
+        }
     }
 }
 
