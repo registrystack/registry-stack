@@ -14,7 +14,7 @@
   surface: "Protected Registry Data API, metadata API, evidence offering discovery, aggregates, health and readiness, plus optional standards adapters (OGC API Features, OGC API Records, OGC API EDR, SP DCI) and signed response credential routes (config key: provenance)."
   source_of_truth:
     label: Registry Relay abstract OpenAPI contract
-    url: https://github.com/jeremi/registry-relay/blob/285b31d2e73cb2f32466c865b47d384ca79f0c0f/openapi/registry-relay.openapi.json
+    url: https://github.com/jeremi/registry-relay/blob/d7b8174799ed549064950944a52fc61241450594/openapi/registry-relay.openapi.json
   consumer_note: Hand-authored from `docs/api.md` and the runtime route table. Uses templated paths and capability tags. For instance-specific shape of `{dataset_id}` and `{entity}`, fetch `GET /openapi.json` from a configured gateway. Runtime deployments gate that route by default unless `openapi_requires_auth` is disabled for demos or controlled tooling.
 - id: registry-notary.openapi
   name: Registry Notary OpenAPI
@@ -77,5 +77,5 @@
   surface: Compose build, fixture generation, secret generation, static metadata publication, core smoke checks, live Postgres checks, live Zitadel and OIDC checks, source adapter sidecar smoke checks, raw-secret log checks, and narrated demo flows.
   source_of_truth:
     label: Registry Lab README
-    url: https://github.com/jeremi/registry-lab/blob/a6dfa0acf85d2c6badf43be08ec247362d479e2b/README.md
+    url: https://github.com/jeremi/registry-lab/blob/44751810dd34f717f6a8b849e4d8e2675e919744/README.md
   consumer_note: Use as a demo acceptance path only; production contracts remain in the owning repos.

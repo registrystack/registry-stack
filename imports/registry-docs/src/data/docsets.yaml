@@ -10,7 +10,7 @@ docsets:
     products:
       registry-relay:
         version: beta-3 candidate
-        ref: 285b31d2e73cb2f32466c865b47d384ca79f0c0f
+        ref: d7b8174799ed549064950944a52fc61241450594
       registry-notary:
         version: beta-3 candidate
         ref: c845d7b204af3e86a9fc515b1f347177cea490cb
@@ -36,10 +36,10 @@ docsets:
         ref: c845d7b204af3e86a9fc515b1f347177cea490cb
       registry-relay:
         version: beta-3 candidate
-        ref: 285b31d2e73cb2f32466c865b47d384ca79f0c0f
+        ref: d7b8174799ed549064950944a52fc61241450594
       registry-lab:
         version: beta-3 candidate
-        ref: a6dfa0acf85d2c6badf43be08ec247362d479e2b
+        ref: 44751810dd34f717f6a8b849e4d8e2675e919744
       registry-registryctl:
         version: v0.2.0 candidate
         ref: 156c1ec71bf243af396959ee549c42ce81d36ebb

@@ -84,11 +84,11 @@
       },
       {
         "label": "Local API docs",
-        "url": "https://github.com/jeremi/registry-relay/blob/285b31d2e73cb2f32466c865b47d384ca79f0c0f/docs/api.md"
+        "url": "https://github.com/jeremi/registry-relay/blob/d7b8174799ed549064950944a52fc61241450594/docs/api.md"
       },
       {
         "label": "Local metadata docs",
-        "url": "https://github.com/jeremi/registry-relay/blob/285b31d2e73cb2f32466c865b47d384ca79f0c0f/docs/metadata.md"
+        "url": "https://github.com/jeremi/registry-relay/blob/d7b8174799ed549064950944a52fc61241450594/docs/metadata.md"
       }
     ],
     "rename_status": "Local checkout renamed to `registry-relay`; old worktrees under `registry_relay-*` remain for historical evidence."
@@ -147,7 +147,7 @@
     "source_docs": [
       {
         "label": "README",
-        "url": "https://github.com/jeremi/registry-lab/blob/a6dfa0acf85d2c6badf43be08ec247362d479e2b/README.md"
+        "url": "https://github.com/jeremi/registry-lab/blob/44751810dd34f717f6a8b849e4d8e2675e919744/README.md"
       },
       {
         "label": "Rename plan",
