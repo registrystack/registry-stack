@@ -64,7 +64,7 @@ sources:
           cel: >-
             size(body.trackedEntities) == 0 ? [] : [
               {
-                "tracked_entity": body.trackedEntities[0].trackedEntity,
+                "tracked_entity": lookup.value,
                 "org_unit": body.trackedEntities[0].orgUnit,
                 "first_name": size(body.trackedEntities[0].attributes.filter(a, a.attribute == 'w75KJ2mc4zz')) == 0
                   ? null
