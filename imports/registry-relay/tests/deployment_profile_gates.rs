@@ -19,7 +19,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use axum::http::StatusCode;
 use axum_test::TestServer;
-use registry_platform_audit::{AuditEnvelope, AuditError, AuditSink};
+use registry_platform_audit::{AuditChainHasher, AuditEnvelope, AuditError, AuditSink};
 use registry_platform_ops::AuditWritePolicy;
 use registry_relay::audit::{AuditPipeline, InMemorySink, AUDIT_WRITE_FAILED_CODE};
 use registry_relay::auth::api_key::ApiKeyAuth;
@@ -41,6 +41,14 @@ impl AuditSink for AlwaysFailWriteSink {
     }
 
     async fn tail_hash(&self) -> Result<Option<[u8; 32]>, AuditError> {
+        Ok(None)
+    }
+
+    async fn tail_hash_with_hasher(
+        &self,
+        hasher: &AuditChainHasher,
+    ) -> Result<Option<[u8; 32]>, AuditError> {
+        let _ = hasher;
         Ok(None)
     }
 }

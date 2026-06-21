@@ -49,4 +49,11 @@ impl PlatformAuditSink for SyslogSink {
             .tail_hash_with_hasher(&AuditChainHasher::unkeyed_dev_only())
             .await
     }
+
+    async fn tail_hash_with_hasher(
+        &self,
+        hasher: &AuditChainHasher,
+    ) -> Result<Option<[u8; 32]>, AuditError> {
+        self.inner.tail_hash_with_hasher(hasher).await
+    }
 }
