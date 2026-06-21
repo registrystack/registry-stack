@@ -29,7 +29,7 @@
 repos:
   registry-relay:
     remote: https://github.com/jeremi/registry-relay
-    ref: d7b8174799ed549064950944a52fc61241450594
+    ref: 256d281829a502725ca2b327c24b444f66126122
     version: beta-3 candidate
     local: ../registry-relay
     docs:
