@@ -4506,6 +4506,7 @@ async fn oid4vci_credential(
             profile_id: &configuration.credential_profile,
             holder_binding_mode: &profile.holder_binding.mode,
             policy_hash: context.metadata.policy_hash,
+            purposes: Some(vec![evaluation.purpose.clone()]),
             protocol: Some("openid4vci"),
             credential_configuration_id: Some(configuration_id),
         },
@@ -6239,6 +6240,11 @@ async fn issue_credential(
             return evidence_error_response(EvidenceError::EvaluationBindingMismatch);
         }
     }
+    if let Some(purpose) = request.purpose.as_deref() {
+        if purpose != evaluation.purpose {
+            return evidence_error_response(EvidenceError::EvaluationBindingMismatch);
+        }
+    }
     let (profile_id, profile) = match credential_profile_for(
         evidence,
         &evaluation,
@@ -6468,6 +6474,7 @@ async fn issue_credential(
                 profile_id,
                 holder_binding_mode: &profile.holder_binding.mode,
                 policy_hash: metadata.policy_hash.clone(),
+                purposes: Some(vec![evaluation.purpose.clone()]),
                 protocol: None,
                 credential_configuration_id: None,
             },
@@ -6475,12 +6482,13 @@ async fn issue_credential(
             return evidence_error_response(error);
         }
     } else {
-        attach_evidence_audit(
+        attach_evidence_audit_with_purposes(
             &mut response,
             "credential_issued",
             Some(request.evaluation_id.clone()),
             &evaluation.claim_ids,
             Some(evaluation.results.len() as u64),
+            Some(vec![evaluation.purpose.clone()]),
         );
     }
     response
@@ -8551,6 +8559,7 @@ struct SelfAttestationCredentialAuditDetails<'a> {
     profile_id: &'a str,
     holder_binding_mode: &'a str,
     policy_hash: Option<Hashed<PolicyIdentifier>>,
+    purposes: Option<Vec<String>>,
     protocol: Option<&'a str>,
     credential_configuration_id: Option<&'a str>,
 }
@@ -8599,7 +8608,7 @@ fn attach_self_attestation_credential_audit(
         verification_id: Some(evaluation_id.to_string()),
         verification_decision: Some("credential_issued".to_string()),
         claim_hash: (!claim_ids.is_empty()).then(|| evidence_claim_hash(claim_ids)),
-        purposes: None,
+        purposes: details.purposes,
         row_count: Some(row_count),
         access_mode: Some(AccessMode::SelfAttestation),
         denial_code: None,
@@ -12460,6 +12469,10 @@ mod tests {
             .extensions()
             .get::<EvidenceAuditContext>()
             .expect("audit context is attached");
+        assert_eq!(
+            audit.purposes.as_deref(),
+            Some(&["citizen_self_attestation".to_string()][..])
+        );
         assert_eq!(audit.target_type.as_deref(), Some("Person"));
         assert_eq!(audit.requester_type.as_deref(), Some("Person"));
         assert_eq!(audit.matching_policy_id.as_deref(), Some("policy-v1"));
@@ -12596,6 +12609,7 @@ mod tests {
                 profile_id: "person_is_alive_sd_jwt",
                 holder_binding_mode: "did",
                 policy_hash: None,
+                purposes: Some(vec!["citizen_self_attestation".to_string()]),
                 protocol: Some("openid4vci"),
                 credential_configuration_id: Some("person_is_alive_sd_jwt"),
             },
@@ -13268,6 +13282,7 @@ evaluation_profiles:
                 format: Some(FORMAT_SD_JWT_VC.to_string()),
                 claims: Some(vec!["person-is-alive".to_string()]),
                 disclosure: Some("predicate".to_string()),
+                purpose: None,
                 holder: None,
             })),
         )
@@ -13279,6 +13294,76 @@ evaluation_profiles:
             .expect("body reads");
         let body: Value = serde_json::from_slice(&body).expect("problem body parses");
         assert_eq!(body["code"], json!("credential.issuance_failed"));
+    }
+
+    #[tokio::test]
+    async fn issue_credential_rejects_purpose_mismatch() {
+        let evidence = credential_issue_evidence_config();
+        let store = Arc::new(EvidenceStore::default());
+        store.insert(registry_notary_core::StoredEvaluation {
+            client_id: "caseworker".to_string(),
+            purpose: "benefits".to_string(),
+            claim_ids: vec!["person-is-alive".to_string()],
+            claim_refs: Vec::new(),
+            disclosure: "predicate".to_string(),
+            format: FORMAT_SD_JWT_VC.to_string(),
+            results: vec![claim_result_view(
+                "eval-purpose-mismatch",
+                "person-is-alive",
+            )],
+            created_at: "2026-05-23T00:00:00Z".to_string(),
+            expires_at: "2999-01-01T00:00:00Z".to_string(),
+            request_hash: "request-hash".to_string(),
+            self_attestation: None,
+        });
+        let state = Arc::new(
+            RegistryNotaryApiState::new_with_federation(
+                Arc::new(evidence),
+                Arc::new(SelfAttestationConfig::default()),
+                Arc::new(Oid4vciConfig::default()),
+                Arc::new(FederationConfig::default()),
+                AuditKeyHasher::unkeyed_dev_only(),
+                None,
+                ReplayStores::memory(),
+                CredentialStatusStore::disabled(),
+                Arc::new(AppMetrics::default()),
+                Arc::new(CountingSource::default()),
+                Arc::clone(&store),
+                Arc::new(TestIssuerResolver),
+                None,
+            )
+            .expect("state builds"),
+        );
+        let principal = EvidencePrincipal {
+            principal_id: "caseworker".to_string(),
+            scopes: vec!["civil_registry:evidence_verification".to_string()],
+            access_mode: AccessMode::MachineClient,
+            verified_claims: None,
+            authorization_details: None,
+        };
+
+        let response = issue_credential(
+            HeaderMap::new(),
+            Some(Extension(state)),
+            Some(Extension(principal)),
+            Ok(Json(CredentialIssueRequest {
+                evaluation_id: "eval-purpose-mismatch".to_string(),
+                credential_profile: Some("civil_status_sd_jwt".to_string()),
+                format: Some(FORMAT_SD_JWT_VC.to_string()),
+                claims: Some(vec!["person-is-alive".to_string()]),
+                disclosure: Some("predicate".to_string()),
+                purpose: Some("appeals".to_string()),
+                holder: None,
+            })),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body reads");
+        let body: Value = serde_json::from_slice(&body).expect("problem body parses");
+        assert_eq!(body["code"], json!("evaluation.binding_mismatch"));
     }
 
     #[test]
@@ -13333,6 +13418,7 @@ evaluation_profiles:
             format: None,
             claims: None,
             disclosure: None,
+            purpose: None,
             holder: None,
         }
     }

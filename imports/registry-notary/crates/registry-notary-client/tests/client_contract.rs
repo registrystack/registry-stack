@@ -418,6 +418,7 @@ async fn typed_route_methods_parse_success_responses_and_escape_paths() {
                     format: None,
                     claims: None,
                     disclosure: None,
+                    purpose: None,
                     holder: None,
                 },
                 RequestOptions::default(),
@@ -552,6 +553,37 @@ async fn raw_batch_preserves_body_only_purpose() {
         .expect("batch evaluate succeeds");
 
     assert_eq!(response.body.batch_id, "batch-1");
+}
+
+#[tokio::test]
+async fn raw_credential_issue_preserves_body_only_purpose() {
+    let app = Router::new().route(
+        "/v1/credentials",
+        post(body_purpose_issue_credential_handler),
+    );
+    let base = spawn(app).await;
+    let client = RegistryNotaryClient::builder(base)
+        .bearer_token("bearer-secret")
+        .build()
+        .expect("client builds");
+
+    let response = client
+        .issue_credential_request(
+            registry_notary_core::CredentialIssueRequest {
+                evaluation_id: "eval-1".to_string(),
+                credential_profile: None,
+                format: None,
+                claims: None,
+                disclosure: None,
+                purpose: Some("body-purpose".to_string()),
+                holder: None,
+            },
+            RequestOptions::default(),
+        )
+        .await
+        .expect("credential issue succeeds");
+
+    assert_eq!(response.body.credential_id, "cred-1");
 }
 
 #[tokio::test]
@@ -1074,6 +1106,24 @@ async fn body_purpose_batch_handler(headers: HeaderMap, body: Bytes) -> Response
     .into_response()
 }
 
+async fn body_purpose_issue_credential_handler(headers: HeaderMap, body: Bytes) -> Response {
+    assert_eq!(
+        headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok()),
+        Some("Bearer bearer-secret")
+    );
+    assert_eq!(
+        headers
+            .get("data-purpose")
+            .and_then(|value| value.to_str().ok()),
+        Some("body-purpose")
+    );
+    let parsed: serde_json::Value = serde_json::from_slice(&body).expect("issue body parses");
+    assert_eq!(parsed["purpose"], json!("body-purpose"));
+    issue_credential_json()
+}
+
 async fn health_handler() -> Response {
     Json(json!({ "status": "ok", "checks": {} })).into_response()
 }
@@ -1113,6 +1163,10 @@ async fn render_handler(Path(evaluation_id): Path<String>, body: Bytes) -> Respo
 async fn issue_credential_handler(body: Bytes) -> Response {
     let parsed: serde_json::Value = serde_json::from_slice(&body).expect("issue body parses");
     assert_eq!(parsed["evaluation_id"], "eval-1");
+    issue_credential_json()
+}
+
+fn issue_credential_json() -> Response {
     Json(json!({
         "credential_id": "cred-1",
         "credential_profile": "profile-1",
