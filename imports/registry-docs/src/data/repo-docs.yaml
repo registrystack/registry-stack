@@ -29,7 +29,7 @@
 repos:
   registry-relay:
     remote: https://github.com/jeremi/registry-relay
-    ref: 3c020d79bb1cc707dc7c68e9d47395368f770e27
+    ref: 380261c386309a4194b131913525f6cf70611adb
     version: v0.4.0
     local: ../registry-relay
     docs:
@@ -134,7 +134,7 @@ repos:
     #   docs/deployment-hardening-runbook.md  operator runbook, repo-owned
   registry-manifest:
     remote: https://github.com/jeremi/registry-manifest
-    ref: bf73209a0487a2f2e0598b389faad39f36a37f1b
+    ref: 141efade265f453e15c967770286bafc5c3a3956
     version: v0.2.1
     local: ../registry-manifest
     docs:

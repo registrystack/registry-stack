@@ -12,7 +12,7 @@
       "products": {
         "registry-relay": {
           "version": "v0.4.0",
-          "ref": "3c020d79bb1cc707dc7c68e9d47395368f770e27"
+          "ref": "380261c386309a4194b131913525f6cf70611adb"
         },
         "registry-notary": {
           "version": "v0.5.0",
@@ -20,7 +20,7 @@
         },
         "registry-manifest": {
           "version": "v0.2.1",
-          "ref": "bf73209a0487a2f2e0598b389faad39f36a37f1b"
+          "ref": "141efade265f453e15c967770286bafc5c3a3956"
         }
       }
     },
@@ -39,7 +39,7 @@
         },
         "registry-manifest": {
           "version": "v0.2.1",
-          "ref": "bf73209a0487a2f2e0598b389faad39f36a37f1b"
+          "ref": "141efade265f453e15c967770286bafc5c3a3956"
         },
         "registry-notary": {
           "version": "v0.5.0",
@@ -47,11 +47,11 @@
         },
         "registry-relay": {
           "version": "v0.4.0",
-          "ref": "3c020d79bb1cc707dc7c68e9d47395368f770e27"
+          "ref": "380261c386309a4194b131913525f6cf70611adb"
         },
         "registry-lab": {
           "version": "registry-stack-beta-3-2026-06-21",
-          "ref": "2ae450f74a9985e76289b168914ad8972f481630"
+          "ref": "b4cc8eb37456d65003481929c48955e9a8eb7fb9"
         },
         "registry-registryctl": {
           "version": "v0.2.0",

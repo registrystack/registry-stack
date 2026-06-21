@@ -14,7 +14,7 @@
   surface: "Protected Registry Data API, metadata API, evidence offering discovery, aggregates, health and readiness, plus optional standards adapters (OGC API Features, OGC API Records, OGC API EDR, SP DCI) and signed response credential routes (config key: provenance)."
   source_of_truth:
     label: Registry Relay abstract OpenAPI contract
-    url: https://github.com/jeremi/registry-relay/blob/3c020d79bb1cc707dc7c68e9d47395368f770e27/openapi/registry-relay.openapi.json
+    url: https://github.com/jeremi/registry-relay/blob/380261c386309a4194b131913525f6cf70611adb/openapi/registry-relay.openapi.json
   consumer_note: Hand-authored from `docs/api.md` and the runtime route table. Uses templated paths and capability tags. For instance-specific shape of `{dataset_id}` and `{entity}`, fetch `GET /openapi.json` from a configured gateway. Runtime deployments gate that route by default unless `openapi_requires_auth` is disabled for demos or controlled tooling.
 - id: registry-notary.openapi
   name: Registry Notary OpenAPI
@@ -50,7 +50,7 @@
   surface: Portable `metadata.yaml` documents, compiled metadata model, public services, forms, policies, requirements, evidence type lists, evidence offering metadata, public federation metadata, and evaluation profile metadata.
   source_of_truth:
     label: Registry Manifest core
-    url: https://github.com/jeremi/registry-manifest/tree/bf73209a0487a2f2e0598b389faad39f36a37f1b/crates/registry-manifest-core
+    url: https://github.com/jeremi/registry-manifest/tree/141efade265f453e15c967770286bafc5c3a3956/crates/registry-manifest-core
   consumer_note: Runtime source paths, scopes, table names, backend URLs, peer allowlists, replay storage, and federation secrets belong in runtime service config, not manifests.
 - id: registry-manifest.cpsv-ap-service-catalogue
   name: CPSV-AP Service Catalogue Render Contract
@@ -59,7 +59,7 @@
   surface: CPSV-AP JSON-LD service catalogue, CCCEV requirements, grouped evidence type lists, local form-definition links, DCAT data services, and form JSON Schemas.
   source_of_truth:
     label: Registry Manifest CPSV-AP fixture
-    url: https://github.com/jeremi/registry-manifest/tree/bf73209a0487a2f2e0598b389faad39f36a37f1b/fixtures/cpsv-ap
+    url: https://github.com/jeremi/registry-manifest/tree/141efade265f453e15c967770286bafc5c3a3956/fixtures/cpsv-ap
   consumer_note: Each CCCEV evidence type list is one grouped option; multiple lists on a requirement are alternatives.
 - id: registry-manifest.static-publication
   name: Static Metadata Publication Bundle
@@ -68,7 +68,7 @@
   surface: Static index, catalog JSON, evidence offerings, policies, DCAT, CPSV-AP, BRegDCAT-AP, SHACL, OGC Records item collection, entity JSON Schemas, form JSON Schemas, and embedded SKOS-shaped codelist nodes.
   source_of_truth:
     label: Registry Manifest CLI
-    url: https://github.com/jeremi/registry-manifest/tree/bf73209a0487a2f2e0598b389faad39f36a37f1b/crates/registry-manifest-cli
+    url: https://github.com/jeremi/registry-manifest/tree/141efade265f453e15c967770286bafc5c3a3956/crates/registry-manifest-cli
   consumer_note: The bundle can be hosted as static files without running Registry Relay.
 - id: registry-lab.release-check
   name: Registry Lab Release Check
@@ -77,5 +77,5 @@
   surface: Compose build, fixture generation, secret generation, static metadata publication, core smoke checks, live Postgres checks, live Zitadel and OIDC checks, source adapter sidecar smoke checks, raw-secret log checks, and narrated demo flows.
   source_of_truth:
     label: Registry Lab README
-    url: https://github.com/jeremi/registry-lab/blob/2ae450f74a9985e76289b168914ad8972f481630/README.md
+    url: https://github.com/jeremi/registry-lab/blob/b4cc8eb37456d65003481929c48955e9a8eb7fb9/README.md
   consumer_note: Use as a demo acceptance path only; production contracts remain in the owning repos.

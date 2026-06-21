@@ -192,9 +192,9 @@
     - BRegDCAT/DCAT dataset codelist references
   evidence_docs:
     - label: Registry Manifest codelist renderer
-      url: https://github.com/jeremi/registry-manifest/blob/bf73209a0487a2f2e0598b389faad39f36a37f1b/crates/registry-manifest-core/src/lib.rs
+      url: https://github.com/jeremi/registry-manifest/blob/141efade265f453e15c967770286bafc5c3a3956/crates/registry-manifest-core/src/lib.rs
     - label: Registry Manifest codelist tests
-      url: https://github.com/jeremi/registry-manifest/blob/bf73209a0487a2f2e0598b389faad39f36a37f1b/crates/registry-manifest-core/tests/metadata_core.rs
+      url: https://github.com/jeremi/registry-manifest/blob/141efade265f453e15c967770286bafc5c3a3956/crates/registry-manifest-core/tests/metadata_core.rs
   last_checked: 2026-06-20
   notes: Registry Manifest emits flat SKOS-shaped `skos:ConceptScheme` and `skos:Concept` nodes for manifest codelists inside SHACL and BRegDCAT/DCAT-shaped outputs. It does not yet publish a standalone SKOS artifact or claim full SKOS conformance.
 - id: json-schema
@@ -354,7 +354,7 @@
     - label: Registry Platform PDP ODRL enforcement profile constants
       url: https://github.com/jeremi/registry-platform/blob/0abc4fde81764f6c81143b622624415232197129/crates/registry-platform-pdp/src/lib.rs
     - label: Registry Relay governed evidence PDP path
-      url: https://github.com/jeremi/registry-relay/blob/3c020d79bb1cc707dc7c68e9d47395368f770e27/src/api/governed.rs
+      url: https://github.com/jeremi/registry-relay/blob/380261c386309a4194b131913525f6cf70611adb/src/api/governed.rs
   last_checked: 2026-06-20
   notes: Relay catalog JSON-LD can include dataset-scoped ODRL Offers, and Manifest renders ODRL policy metadata. That publication surface is descriptive and is not itself an access grant. Separately, Relay's governed Evidence Gateway runtime path can select a governed-evidence binding and call the shared PDP using the `registry-evidence-gateway-pdp/v1` profile; the implemented runtime enforcement terms are currently `odrl:purpose` and `odrl:spatial`, while unsupported ODRL terms are denied rather than treated as enforced.
 - id: sdmx
