@@ -5,7 +5,7 @@ Look up CLI subcommand flags, manifest key definitions, federation metadata, pub
 ## CLI subcommands
 
 Source:
-[`crates/registry-manifest-cli/src/main.rs`](https://github.com/jeremi/registry-manifest/blob/main/crates/registry-manifest-cli/src/main.rs)
+[`crates/registry-manifest-cli/src/main.rs`](https://github.com/jeremi/registry-manifest/blob/bb7bc6d015f519a9d1a6b6a0b661a2d28566af9d/crates/registry-manifest-cli/src/main.rs)
 
 ### `validate`
 
@@ -70,7 +70,7 @@ Use `--format cpsv-ap` for the service catalogue rather than `--format dcat --pr
 
 Schema version enforced: `registry-manifest/v1`.
 Source:
-[`crates/registry-manifest-core/src/lib.rs`](https://github.com/jeremi/registry-manifest/blob/main/crates/registry-manifest-core/src/lib.rs)
+[`crates/registry-manifest-core/src/lib.rs`](https://github.com/jeremi/registry-manifest/blob/bb7bc6d015f519a9d1a6b6a0b661a2d28566af9d/crates/registry-manifest-core/src/lib.rs)
 (`MetadataManifest` struct).
 
 | Key | Type | Required | Description |
@@ -101,7 +101,7 @@ Source:
 | `application_profiles` | list of `ApplicationProfile` | No | Profile IDs and versions the catalog declares support for (for example, `[{id: "bregdcat-ap", version: "3.0.0"}]`). |
 | `standards` | `StandardsManifest` | No | Declares DCAT, SHACL, and JSON Schema versions in use. |
 
-### DatasetManifest keys (common keys; see [source](https://github.com/jeremi/registry-manifest/blob/main/crates/registry-manifest-core/src/lib.rs) for the full type definition)
+### DatasetManifest keys (common keys; see [source](https://github.com/jeremi/registry-manifest/blob/bb7bc6d015f519a9d1a6b6a0b661a2d28566af9d/crates/registry-manifest-core/src/lib.rs) for the full type definition)
 
 | Key | Description |
 | --- | --- |
@@ -183,7 +183,7 @@ They belong in Registry Relay or Registry Notary runtime configuration, not in a
 `source`, `source_id`, `table`, `token_url`, `url`, `url_env`, `visibility`
 
 Source:
-[`crates/registry-manifest-core/src/lib.rs`](https://github.com/jeremi/registry-manifest/blob/main/crates/registry-manifest-core/src/lib.rs)
+[`crates/registry-manifest-core/src/lib.rs`](https://github.com/jeremi/registry-manifest/blob/bb7bc6d015f519a9d1a6b6a0b661a2d28566af9d/crates/registry-manifest-core/src/lib.rs)
 (`RUNTIME_ONLY_KEYS`).
 
 ## Schema versions
@@ -239,7 +239,7 @@ for validation bugs, security fixes, or explicitly forbidden runtime-only keys.
 ## Publish output artifacts
 
 Source:
-[`crates/registry-manifest-cli/src/main.rs`](https://github.com/jeremi/registry-manifest/blob/main/crates/registry-manifest-cli/src/main.rs)
+[`crates/registry-manifest-cli/src/main.rs`](https://github.com/jeremi/registry-manifest/blob/bb7bc6d015f519a9d1a6b6a0b661a2d28566af9d/crates/registry-manifest-cli/src/main.rs)
 (`publish_command`).
 
 All paths are relative to the `--out` directory.
@@ -267,7 +267,7 @@ The `index.json` structure contains the schema version, digest metadata, top-lev
 artifact URLs, and arrays for per-profile, per-schema, per-policy, and per-offering
 documents.
 Source:
-[`crates/registry-manifest-cli/src/main.rs`](https://github.com/jeremi/registry-manifest/blob/main/crates/registry-manifest-cli/src/main.rs)
+[`crates/registry-manifest-cli/src/main.rs`](https://github.com/jeremi/registry-manifest/blob/bb7bc6d015f519a9d1a6b6a0b661a2d28566af9d/crates/registry-manifest-cli/src/main.rs)
 
 Digest fields use `sha256:<hex>` values:
 
@@ -351,7 +351,7 @@ Minimal example shape:
 ## Golden fixture coverage
 
 The test suite in
-[`crates/registry-manifest-core/tests/metadata_core.rs`](https://github.com/jeremi/registry-manifest/blob/main/crates/registry-manifest-core/tests/metadata_core.rs)
+[`crates/registry-manifest-core/tests/metadata_core.rs`](https://github.com/jeremi/registry-manifest/blob/bb7bc6d015f519a9d1a6b6a0b661a2d28566af9d/crates/registry-manifest-core/tests/metadata_core.rs)
 asserts exact output for the following renderer and profile combinations.
 These golden files live under `crates/registry-manifest-core/tests/fixtures/golden/`.
 

@@ -132,7 +132,7 @@ program area or official standard), follow these steps to create and validate it
 6. Run `validate-profiles profiles` to confirm the fixture passes alongside all existing profiles.
 
 See
-[`profiles/example-civil-registration/profile.yaml`](https://github.com/jeremi/registry-manifest/blob/main/profiles/example-civil-registration/profile.yaml)
+[`profiles/example-civil-registration/profile.yaml`](https://github.com/jeremi/registry-manifest/blob/bb7bc6d015f519a9d1a6b6a0b661a2d28566af9d/profiles/example-civil-registration/profile.yaml)
 for a complete example.
 
 ## Verification
