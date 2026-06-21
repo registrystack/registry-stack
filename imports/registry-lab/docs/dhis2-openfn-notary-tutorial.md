@@ -1,7 +1,7 @@
 # Issue a DHIS2 programme participation credential
 
 Page type: tutorial
-Product: Registry Lab, Registry Notary, OpenFn sidecar
+Product: Registry Lab, Registry Notary, built-in http_json sidecar
 Layer: evaluation and credential
 Audience: integrators testing Registry Notary with DHIS2
 
@@ -13,7 +13,8 @@ fetch fresh Notary evidence from DHIS2.
 
 The demo starts two local services:
 
-- `openfn-dhis2-sidecar`: a private sidecar that calls the DHIS2 Tracker API.
+- `openfn-dhis2-sidecar`: a private sidecar (built-in `http_json` engine) that
+  calls the DHIS2 Tracker API directly over HTTP — no Node worker pool required.
 - `dhis2-health-notary`: a Registry Notary service on `http://127.0.0.1:4326`.
 
 The smoke first checks the configured health predicates. Then it issues two
@@ -64,12 +65,14 @@ just build
 ## Run the demo
 
 ```bash
-just dhis2-openfn
+just dhis2
 ```
+
+(`just dhis2-openfn` is a backwards-compatible alias for the same target.)
 
 The script will:
 
-1. Start the DHIS2 OpenFn sidecar and Notary services.
+1. Start the DHIS2 sidecar (built-in `http_json` engine) and Notary services.
 2. Wait for Notary discovery on port `4326`.
 3. Evaluate positive and negative DHIS2 health predicate claims.
 4. Evaluate the compatibility child programme credential claims.
@@ -82,7 +85,7 @@ The script will:
 Expected ending:
 
 ```text
-DHIS2 OpenFn health evidence and VC smoke passed
+DHIS2 health evidence and VC smoke passed
 ```
 
 ## Inspect the credential
@@ -267,7 +270,7 @@ curl -fsS -X POST http://127.0.0.1:4326/v1/credentials \
 
 ## Troubleshooting
 
-If `just dhis2-openfn` fails while contacting DHIS2, rerun it once. The source
+If `just dhis2` fails while contacting DHIS2, rerun it once. The source
 is a public sandbox and can be slow or reset.
 
 If Notary returns `401`, regenerate `.env`:

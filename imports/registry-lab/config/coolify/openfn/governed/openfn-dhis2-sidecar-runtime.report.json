@@ -1,9 +1,5 @@
 {
-  "config_hash": "sha256:bee640a8fac3b8dd8c87c75fd21a6c550742e1d7889b9d0015aa79a41900a561",
-  "expression_hashes": {
-    "dhis2_health.lookup": "sha256:245161afe436d38318fbcf65a3685ac86d16ad96debe818410046be01f5000da"
-  },
-  "jobs_root": "/tmp/registry-lab-openfn-jobs",
+  "config_hash": "sha256:5dedb55ab547c38aeca1a7fab32c2f3d037e3a3f59527d324e39acc7a66a9262",
   "metadata": {
     "apply_policy": "restart_required",
     "bundle_id": "registry-lab-hosted-dhis2-openfn-sidecar-2026-06-09",
@@ -12,12 +8,12 @@
       "openfn_sidecar_source_binding",
       "openfn_sidecar_workflow_bundle"
     ],
-    "config_hash": "sha256:bee640a8fac3b8dd8c87c75fd21a6c550742e1d7889b9d0015aa79a41900a561",
+    "config_hash": "sha256:5dedb55ab547c38aeca1a7fab32c2f3d037e3a3f59527d324e39acc7a66a9262",
     "environment": "hosted-lab",
     "instance_id": "hosted-dhis2-openfn-sidecar",
-    "previous_config_hash": "sha256:0069fbfebf5ad5ffcd7b46b28eccc470302ac4b0e1d62c81bf1e5d22c6adea4f",
+    "previous_config_hash": "sha256:bee640a8fac3b8dd8c87c75fd21a6c550742e1d7889b9d0015aa79a41900a561",
     "product": "registry-notary-openfn-sidecar",
-    "sequence": 2,
+    "sequence": 3,
     "signer_kids": [
       "8ec3a843a0f9328c863cac4046ab1cacbbc67888476ac7acf73d9bcd9a223ada"
     ],
@@ -30,9 +26,9 @@
     "signer_kids": [
       "8ec3a843a0f9328c863cac4046ab1cacbbc67888476ac7acf73d9bcd9a223ada"
     ],
-    "snapshot_version": 2,
-    "targets_version": 2,
-    "timestamp_version": 2
+    "snapshot_version": 3,
+    "targets_version": 3,
+    "timestamp_version": 3
   },
   "verified": true
 }

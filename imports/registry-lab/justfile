@@ -138,13 +138,19 @@ client:
 notary-client:
     scripts/smoke-notary-client.py
 
-# Run the OpenFn sidecar smoke.
-openfn:
-    scripts/smoke-openfn.sh
+# Run the civil built-in sidecar smoke (http_json engine).
+civil:
+    scripts/smoke-civil.sh
 
-# Run the live DHIS2 OpenFn sidecar smoke.
-dhis2-openfn:
-    scripts/smoke-dhis2-openfn.sh
+# Alias kept for backwards compatibility: delegates to `civil`.
+openfn: civil
+
+# Run the live DHIS2 built-in sidecar smoke (http_json engine).
+dhis2:
+    scripts/smoke-dhis2.sh
+
+# Alias kept for backwards compatibility: delegates to `dhis2`.
+dhis2-openfn: dhis2
 
 # Build the local deterministic FHIR source-adapter profile.
 fhir-build:

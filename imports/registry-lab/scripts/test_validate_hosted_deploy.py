@@ -1416,12 +1416,11 @@ oid4vci:
         issues = self._validate(compose, self._valid_esignet())
         self.assertIssue(issues, "unsupported-notary-entrypoint")
 
-    def test_rejects_missing_openfn_job_mount(self) -> None:
+    def test_rejects_missing_openfn_config_trust_mount(self) -> None:
         compose = self._valid_registry_lab()
         compose["services"]["openfn-dhis2-sidecar"]["volumes"] = [
             "cfg-openfn-tmpl:/etc/registry-notary-openfn:ro",
             "openfn-sidecar-tuf-state:/var/lib/registry-notary-openfn-sidecar/tuf",
-            "openfn-sidecar-config-state:/var/lib/registry-notary-openfn-sidecar/config-trust",
         ]
         issues = self._validate(compose, self._valid_esignet())
         self.assertIssue(issues, "missing-openfn-governed-mount")
@@ -1812,7 +1811,6 @@ cp -a /tmp/repo/scripts/lab_homepage_static /out/static-scripts/
                     },
                     "volumes": [
                         "cfg-openfn-tmpl:/etc/registry-notary-openfn:ro",
-                        "cfg-openfn-jobs:/tmp/registry-lab-openfn-jobs:ro",
                         "openfn-sidecar-tuf-state:/var/lib/registry-notary-openfn-sidecar/tuf",
                         "openfn-sidecar-config-state:/var/lib/registry-notary-openfn-sidecar/config-trust",
                     ],

@@ -15,10 +15,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 LOCAL_NOTARY = ROOT / "config/notary/dhis2-health-notary.yaml"
 COOLIFY_NOTARY = ROOT / "config/coolify/notary/dhis2-health-notary.yaml"
+# The OpenFn job is kept for reference; the built-in sidecar replaces it at runtime.
 OPENFN_JOB = ROOT / "config/openfn/jobs/dhis2-health-lookup.js"
-LOCAL_SIDECAR = ROOT / "config/openfn/openfn-dhis2-sidecar.yaml.template"
+LOCAL_SIDECAR = ROOT / "config/source-adapter/dhis2-health-sidecar.yaml"
 COOLIFY_SIDECAR = ROOT / "config/coolify/openfn/openfn-dhis2-sidecar.yaml.template"
-SMOKE = ROOT / "scripts/smoke-dhis2-openfn.sh"
+# smoke-dhis2-openfn.sh is a shim that delegates to smoke-dhis2.sh.
+SMOKE = ROOT / "scripts/smoke-dhis2.sh"
 HOLDER_PROOF = ROOT / "scripts/generate-holder-proof.js"
 SUMMARY = ROOT / "scripts/summarize-dhis2-programme-vc.py"
 TUTORIAL = ROOT / "docs/dhis2-openfn-notary-tutorial.md"

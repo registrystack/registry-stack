@@ -61,7 +61,7 @@ just up
 ```
 
 The DHIS2 Notary requests in `30 - Notary Evaluation` additionally require the
-DHIS2 profile used by `just dhis2-openfn`. The local homepage request expects
+DHIS2 profile used by `just dhis2`. The local homepage request expects
 `just lab-homepage` if you want to exercise the homepage service locally.
 
 For the local `31 - DHIS2 Programme VC` walkthrough, start the DHIS2 services

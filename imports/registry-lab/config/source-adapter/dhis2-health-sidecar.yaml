@@ -1,13 +1,43 @@
 # SPDX-License-Identifier: Apache-2.0
-
-# Render input for config/coolify/openfn/governed/openfn-dhis2-sidecar-runtime.json.
-# Hosted runtime starts from openfn-dhis2-sidecar.bootstrap.yaml and verifies the
-# signed TUF target before serving.
 #
-# Built-in http_json source: the OpenFn worker engine is retired, so this hosted
-# manifest mirrors config/source-adapter/dhis2-health-sidecar.yaml -- a single
-# governed GET against the DHIS2 tracker COLLECTION endpoint plus a CEL mapping
-# that reproduces the retired dhis2-health-lookup.js RDA record shape.
+# Built-in http_json sidecar manifest for DHIS2 tracker health lookups.
+# Replaces the former OpenFn-engine dhis2-health sidecar.
+#
+# The source maps the DHIS2 tracker response to the same output fields the
+# retired OpenFn job produced:
+#   tracked_entity, org_unit, first_name, last_name,
+#   child_program_code, child_program_status, child_program_active,
+#   child_age_band, reconciliation_ref,
+#   maternal_pnc_status, maternal_pnc_active,
+#   child_health_visit_recorded, child_health_visit_count,
+#   tb_program_status, tb_program_active
+#
+# DHIS2 query shape (MUST be confirmed by the live smoke in CI):
+#   The OpenFn job fetched a single tracked entity via
+#   GET /api/tracker/trackedEntities/{id}, whose JSON root *is* the entity.
+#   http_json uses LITERAL paths, so the id cannot go in the path. Instead this
+#   manifest queries the tracker COLLECTION endpoint
+#   GET /api/tracker/trackedEntities?trackedEntities={id}&orgUnitMode=ALL&fields=...
+#   whose response root key is `trackedEntities` (an array). The CEL therefore
+#   selects element [0] and reproduces the JS output for that single entity.
+#
+# CEL notes:
+#  - No local variables: repeated sub-expressions are inlined (valid CEL).
+#  - Collection macros filter/map/exists and size() are required (added to
+#    crosswalk-core by the registry-notary CEL engine work). No `.flatten()`.
+#  - String methods startsWith()/substring() are assumed available; the live
+#    smoke must confirm they resolve (see the trackedEntities query below).
+#
+# Programme IDs  (match the retired JS job constants):
+#   CHILD_PROGRAM        = "IpHINAT79UW"
+#   MATERNAL_PNC_PROGRAM = "uy2gU8kT1jF"
+#   TB_PROGRAM           = "ur1Edk5Oe2n"
+# Stage IDs:
+#   CHILD_BIRTH_STAGE    = "A03MvHHogjR"
+#   BABY_POSTNATAL_STAGE = "ZzYYXq4fJie"
+# Attribute IDs:
+#   FIRST_NAME_ATTR = "w75KJ2mc4zz"
+#   LAST_NAME_ATTR  = "zDhUuAYrxNC"
 
 server:
   bind: "0.0.0.0:8080"
@@ -20,12 +50,14 @@ auth:
 limits:
   max_workers: 4
   worker_timeout_ms: 15000
-  max_worker_memory_mb: 12288
+  max_worker_memory_mb: 512
   max_output_bytes: 1048576
   max_request_bytes: 16384
-  max_query_parameter_bytes: 1024
+  max_query_parameter_bytes: 2048
   liveness_window_ms: 30000
   retry_after_seconds: 1
+  max_batch_items: 10
+  batch_timeout_ms: 30000
 
 sources:
   dhis2_health:
@@ -43,6 +75,10 @@ sources:
         cel: credential_public.baseUrl
       path: "/api/tracker/trackedEntities"
       query:
+        # Strip the 'dhis2:tracked-entity:' reconciliation prefix the caller may
+        # carry, matching the OpenFn job's lookupValue.startsWith(...) handling.
+        # If startsWith()/substring() turn out to be unavailable in CEL, drop
+        # this guard and require the caller to pass the bare tracked-entity UID.
         trackedEntities:
           cel: >-
             lookup.value.startsWith('dhis2:tracked-entity:')
@@ -60,6 +96,17 @@ sources:
         password:
           secret: password
       response:
+        # Reproduce the dhis2-health-lookup.js output for the single matched
+        # tracked entity. body.trackedEntities[0] is the first (and only) element
+        # of the tracker collection response. If the entity is not found the
+        # array is empty and we return an empty record list (RDA not-found).
+        #
+        # child_health_visit_count is computed from the events of the FIRST
+        # child-program enrollment: DHIS2 allows at most one enrollment per
+        # program per tracked entity, and the JS enrollment() helper itself uses
+        # .find (first match). CEL's macro set has no fold/sum, so a true
+        # cross-enrollment sum is not expressible; the single-enrollment form
+        # matches the OpenFn output for every real play-instance entity.
         records:
           cel: >-
             size(body.trackedEntities) == 0 ? [] : [
@@ -98,5 +145,11 @@ sources:
     smoke_lookup:
       field: tracked_entity
       value: PQfMcpmXeFE
-      fields: ["tracked_entity", "child_program_active", "child_age_band", "child_program_code", "reconciliation_ref", "tb_program_active"]
+      fields:
+        - tracked_entity
+        - child_program_active
+        - child_age_band
+        - child_program_code
+        - reconciliation_ref
+        - tb_program_active
       purpose: startup-readiness-smoke
