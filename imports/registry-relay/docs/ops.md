@@ -401,7 +401,7 @@ Refresh modes:
 - `interval`: reload unconditionally on the configured interval.
 - `manual`: reload only through an admin request.
 
-The original source file is never modified. On ingest failure, the intended behavior is to keep serving the previously loaded table and mark readiness degraded for the failed resource.
+The original source file is never modified. On single-resource ingest failure, the intended behavior is to keep serving the previously loaded table and mark readiness degraded when no prior generation is ready.
 
 Manual table reload:
 
@@ -417,7 +417,7 @@ curl -X POST -H "Authorization: Bearer $ADMIN_API_KEY" \
   http://127.0.0.1:8081/admin/v1/reload
 ```
 
-The reload-all response includes `status` and aggregate `counts` for total, succeeded, and failed resources. A non-zero failure count returns HTTP 500 with `status: "failed"`; inspect the audit and operational logs for the resource-level failure context. This route reloads configured source resources, not startup runtime config.
+The reload-all response includes `status` and aggregate `counts` for total, succeeded, and failed resources. Reload-all prepares every configured source resource before publishing any of them; if any resource cannot prepare, Relay keeps the previous coherent generation active and returns HTTP 500 with `status: "failed"`. Inspect the audit and operational logs for the resource-level failure context. This route reloads configured source resources, not startup runtime config.
 
 ## Admin Posture And Config Apply
 

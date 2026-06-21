@@ -74,6 +74,28 @@ pub(crate) async fn register_or_replace_versioned_table(
     Ok(())
 }
 
+pub(crate) async fn restore_versioned_table(
+    ctx: &SessionContext,
+    table_name: &str,
+    snapshot: Option<TableSnapshot>,
+) -> DataFusionResult<()> {
+    match snapshot {
+        Some(snapshot) => {
+            register_or_replace_versioned_table(
+                ctx,
+                table_name,
+                snapshot.ingest_ulid,
+                snapshot.provider,
+            )
+            .await
+        }
+        None => {
+            let _ = ctx.deregister_table(table_name.to_string())?;
+            Ok(())
+        }
+    }
+}
+
 #[derive(Clone)]
 struct VersionedTableProvider {
     ingest_ulid: Option<Ulid>,
