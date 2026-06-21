@@ -24,6 +24,8 @@ use serde_json::{json, Value};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
+const TEST_SERVICE_ID: &str = "registry-notary";
+
 #[derive(Debug)]
 struct MatchingSource {
     reads: AtomicUsize,
@@ -620,6 +622,7 @@ fn land_target(parcel_id: &str) -> EvidenceEntity {
 fn evidence_config(claims: Vec<ClaimDefinition>) -> Arc<EvidenceConfig> {
     Arc::new(EvidenceConfig {
         enabled: true,
+        service_id: TEST_SERVICE_ID.to_string(),
         inline_batch_limit: 20,
         claims,
         ..EvidenceConfig::default()
@@ -631,6 +634,7 @@ fn evidence_config_with_openfn_batch_connection(
 ) -> Arc<EvidenceConfig> {
     Arc::new(EvidenceConfig {
         enabled: true,
+        service_id: TEST_SERVICE_ID.to_string(),
         inline_batch_limit: 20,
         source_connections: BTreeMap::from([(
             "openfn_crvs".to_string(),
@@ -660,6 +664,7 @@ fn evidence_config_with_allowed_purposes(
 ) -> Arc<EvidenceConfig> {
     Arc::new(EvidenceConfig {
         enabled: true,
+        service_id: TEST_SERVICE_ID.to_string(),
         inline_batch_limit: 20,
         allowed_purposes,
         claims,
@@ -864,20 +869,21 @@ fn principal_with_policy_context(
 ) -> EvidencePrincipal {
     let mut principal = principal();
     principal.authorization_details = Some(EvidenceAuthorizationDetails {
-        detail_type: "registry_notary".to_string(),
-        schema_version: "1".to_string(),
-        actions: Vec::new(),
-        locations: Vec::new(),
-        claims: Vec::new(),
-        disclosure: None,
-        format: None,
-        purpose: None,
+        detail_type: registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_TYPE.to_string(),
+        schema_version: registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_SCHEMA_VERSION
+            .to_string(),
+        actions: vec!["evaluate".to_string()],
+        locations: vec![TEST_SERVICE_ID.to_string()],
+        claims: vec![ClaimRef::with_version("person-is-alive", "1.0.0")],
+        disclosure: Some("value".to_string()),
+        format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
+        purpose: Some("benefits".to_string()),
         legal_basis_ref: legal_basis_ref.map(ToOwned::to_owned),
         consent_ref: consent_ref.map(ToOwned::to_owned),
         jurisdiction: jurisdiction.map(ToOwned::to_owned),
         assurance_level: assurance_level.map(ToOwned::to_owned),
         subject: None,
-        access_mode: None,
+        access_mode: Some(AccessMode::MachineClient),
         assisted_access_context: None,
     });
     principal
@@ -1703,6 +1709,177 @@ async fn assurance_policy_accepts_trusted_authorization_details() {
 
     assert_eq!(results[0].value, Some(json!(true)));
     assert_eq!(source.reads(), 1);
+}
+
+#[tokio::test]
+async fn source_policy_rejects_broadened_authorization_details_before_source_read() {
+    let runtime = RegistryNotaryRuntime::new();
+    let source = Arc::new(MatchingSource::new());
+    let mut claim = person_claim();
+    claim
+        .source_bindings
+        .get_mut("src")
+        .expect("source binding exists")
+        .matching
+        .allowed_assurance = vec!["substantial".to_string()];
+    let mut principal = principal_with_policy_context(Some("substantial"), None, None, None);
+    principal
+        .authorization_details
+        .as_mut()
+        .expect("authorization details exist")
+        .claims
+        .push(ClaimRef::with_version("date-of-birth", "1.0.0"));
+
+    let error = runtime
+        .evaluate(
+            evidence_config(vec![claim]),
+            source.clone(),
+            &EvidenceStore::default(),
+            &principal,
+            evaluate_request(
+                person_target("Amina", "Diallo", Some("1984-02-10")),
+                "person-is-alive",
+            ),
+            None,
+        )
+        .await
+        .expect_err("broadened authorization_details must reject before source read");
+
+    assert_eq!(error.code(), "target.matching_policy_rejected");
+    assert_eq!(source.reads(), 0);
+}
+
+#[tokio::test]
+async fn source_policy_rejects_duplicate_authorization_action_before_source_read() {
+    let runtime = RegistryNotaryRuntime::new();
+    let source = Arc::new(MatchingSource::new());
+    let mut claim = person_claim();
+    claim
+        .source_bindings
+        .get_mut("src")
+        .expect("source binding exists")
+        .matching
+        .allowed_assurance = vec!["substantial".to_string()];
+    let mut principal = principal_with_policy_context(Some("substantial"), None, None, None);
+    principal
+        .authorization_details
+        .as_mut()
+        .expect("authorization details exist")
+        .actions
+        .push("evaluate".to_string());
+
+    let error = runtime
+        .evaluate(
+            evidence_config(vec![claim]),
+            source.clone(),
+            &EvidenceStore::default(),
+            &principal,
+            evaluate_request(
+                person_target("Amina", "Diallo", Some("1984-02-10")),
+                "person-is-alive",
+            ),
+            None,
+        )
+        .await
+        .expect_err("duplicate authorization_details action must reject before source read");
+
+    assert_eq!(error.code(), "target.matching_policy_rejected");
+    assert_eq!(source.reads(), 0);
+}
+
+#[tokio::test]
+async fn source_policy_rejects_claim_mismatched_authorization_details_before_source_read() {
+    let runtime = RegistryNotaryRuntime::new();
+    let source = Arc::new(MatchingSource::new());
+    let mut claim = person_claim();
+    claim
+        .source_bindings
+        .get_mut("src")
+        .expect("source binding exists")
+        .matching
+        .allowed_assurance = vec!["substantial".to_string()];
+    let mut principal = principal_with_policy_context(Some("substantial"), None, None, None);
+    principal
+        .authorization_details
+        .as_mut()
+        .expect("authorization details exist")
+        .claims = vec![ClaimRef::with_version("date-of-birth", "1.0.0")];
+
+    let error = runtime
+        .evaluate(
+            evidence_config(vec![claim]),
+            source.clone(),
+            &EvidenceStore::default(),
+            &principal,
+            evaluate_request(
+                person_target("Amina", "Diallo", Some("1984-02-10")),
+                "person-is-alive",
+            ),
+            None,
+        )
+        .await
+        .expect_err("claim-mismatched authorization_details must reject before source read");
+
+    assert_eq!(error.code(), "target.matching_policy_rejected");
+    assert_eq!(source.reads(), 0);
+}
+
+#[tokio::test]
+async fn batch_prefetch_rejects_broadened_authorization_details_before_bulk_read() {
+    let runtime = RegistryNotaryRuntime::new();
+    let source = Arc::new(BatchContextRecordingSource::new());
+    let mut claim = person_claim();
+    let binding = claim
+        .source_bindings
+        .get_mut("src")
+        .expect("source binding exists");
+    binding.connector = SourceConnectorKind::OpenFnSidecar;
+    binding.connection = Some("openfn_crvs".to_string());
+    binding.matching.allowed_assurance = vec!["substantial".to_string()];
+
+    let mut principal = principal_with_policy_context(Some("substantial"), None, None, None);
+    principal
+        .authorization_details
+        .as_mut()
+        .expect("authorization details exist")
+        .claims
+        .push(ClaimRef::with_version("date-of-birth", "1.0.0"));
+
+    let response = runtime
+        .batch_evaluate(
+            evidence_config_with_openfn_batch_connection(vec![claim]),
+            source.clone(),
+            &EvidenceStore::default(),
+            &principal,
+            BatchEvaluateRequest {
+                items: vec![BatchEvaluateItemRequest {
+                    requester: None,
+                    target: person_target("Amina", "Diallo", Some("1984-02-10")),
+                    relationship: Some(EvidenceRelationship {
+                        relationship_type: "self".to_string(),
+                        attributes: BTreeMap::new(),
+                    }),
+                    on_behalf_of: None,
+                    purpose: Some("benefits".to_string()),
+                }],
+                claims: vec![ClaimRef::new("person-is-alive")],
+                disclosure: Some("value".to_string()),
+                format: None,
+                purpose: None,
+            },
+            BatchEvaluateOptions::default(),
+        )
+        .await
+        .expect("batch returns per-item authorization failure");
+
+    assert_eq!(source.read_many_calls(), 0);
+    assert_eq!(source.read_one_calls(), 0);
+    assert_eq!(response.summary.succeeded, 0);
+    assert_eq!(response.summary.failed, 1);
+    assert_eq!(
+        response.items[0].errors[0].code,
+        "target.matching_policy_rejected"
+    );
 }
 
 #[tokio::test]

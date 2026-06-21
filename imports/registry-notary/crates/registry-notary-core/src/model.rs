@@ -1097,6 +1097,8 @@ pub struct CredentialIssueRequest {
     #[serde(default)]
     pub disclosure: Option<String>,
     #[serde(default)]
+    pub purpose: Option<String>,
+    #[serde(default)]
     pub holder: Option<HolderRequest>,
 }
 

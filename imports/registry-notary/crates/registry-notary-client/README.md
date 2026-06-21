@@ -93,9 +93,11 @@ stops. It checks the allowed algorithm list, header type, issuer, `vct`,
 `exp`/`nbf`/`iat` with bounded skew, disclosure digests, and required
 holder-binding confirmation. When an SD-JWT VC presentation includes a
 key-binding JWT, the verifier separates it from disclosures and verifies its
-holder proof signature against `cnf.jwk`. Verifier errors expose stable
-redacted codes such as `signature.invalid`, `key.unknown`, `algorithm.disallowed`,
-`claim.issuer_mismatch`, `claim.time_invalid`,
+holder proof signature against `cnf.jwk`. When required holder binding is paired
+with `VerifyOptions::key_binding_challenge`, the trailing key-binding JWT is
+mandatory and must match the expected audience and nonce. Verifier errors expose
+stable redacted codes such as `signature.invalid`, `key.unknown`,
+`algorithm.disallowed`, `claim.issuer_mismatch`, `claim.time_invalid`,
 `disclosure.digest_mismatch`, and `holder_binding.required`.
 
 Python and Node wrappers do not expose verifier wrappers in this first phase;

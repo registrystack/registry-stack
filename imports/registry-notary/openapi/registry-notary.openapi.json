@@ -799,6 +799,12 @@
                 "$ref": "#/components/schemas/HolderRequest"
               }
             ]
+          },
+          "purpose": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [

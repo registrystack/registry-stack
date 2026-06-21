@@ -29,8 +29,8 @@ use registry_notary_core::RegistryNotaryCelConfig;
 use registry_notary_core::{
     AccessMode, BatchEvaluateItemRequest, BatchEvaluateRequest, BoundedClaimId,
     BoundedCorrelationId, ClaimRef, ClaimResultView, ClaimSet, ConfigAuditEvent, ConfigMetadata,
-    CredentialIssueRequest, CredentialProfileConfig, EvaluateRequest, EvidenceAuthMode,
-    EvidenceAuthorizationDetails, EvidenceBatchItemAuditEvent, EvidenceConfig, EvidenceEntity,
+    CredentialIssueRequest, CredentialProfileConfig, EvaluateRequest, EvidenceAuditEvent,
+    EvidenceAuthMode, EvidenceBatchItemAuditEvent, EvidenceConfig, EvidenceEntity,
     EvidenceEntityReference, EvidenceError, EvidencePrincipal, EvidenceRelationship,
     FederationConfig, Hashed, HolderRequest, Oid4vciConfig, Oid4vciCredentialConfigurationConfig,
     Oid4vciDisplayImageConfig, Oid4vciIssuerDisplayConfig, PolicyIdentifier, RateLimitBucket,
@@ -3068,7 +3068,8 @@ async fn credential_status_list_response(
     };
     let now = OffsetDateTime::now_utc();
     let ttl_seconds = 300_u64;
-    let Some(expires_at) = now.checked_add(time::Duration::seconds(ttl_seconds as i64)) else {
+    let Some(token_expires_at) = now.checked_add(time::Duration::seconds(ttl_seconds as i64))
+    else {
         return credential_status_problem(
             StatusCode::SERVICE_UNAVAILABLE,
             "credential_status.unavailable",
@@ -3077,17 +3078,43 @@ async fn credential_status_list_response(
         );
     };
     let effective_status = record.effective_status(now);
+    let status_list = encoded_single_entry_status_list(&effective_status);
+    let status_url = state.credential_status.status_url(&record.credential_id);
+    let public_jwk = issuer.public_jwk();
+    let Ok(cache_key) = status_list_jwt_cache_key(
+        record,
+        &status_url,
+        &effective_status,
+        status_list,
+        ttl_seconds,
+        &public_jwk,
+    ) else {
+        return credential_status_problem(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "credential_status.unavailable",
+            "Credential status unavailable",
+            "credential status cache key could not be calculated",
+        );
+    };
+    let cache_expires_at =
+        status_list_jwt_cache_expires_at(record, &effective_status, token_expires_at);
     let payload = json!({
-        "sub": state.credential_status.status_url(&record.credential_id),
+        "sub": status_url,
         "iat": now.unix_timestamp(),
-        "exp": expires_at.unix_timestamp(),
+        "exp": token_expires_at.unix_timestamp(),
         "ttl": ttl_seconds,
         "status_list": {
             "bits": 8,
-            "lst": encoded_single_entry_status_list(&effective_status),
+            "lst": status_list,
         }
     });
-    let Ok(token) = issuer.sign_compact_jwt("statuslist+jwt", payload).await else {
+    let Ok(token) = state
+        .status_list_jwt_cache
+        .get_or_insert_with(cache_key, now, cache_expires_at, || async move {
+            issuer.sign_compact_jwt("statuslist+jwt", payload).await
+        })
+        .await
+    else {
         return credential_status_problem(
             StatusCode::SERVICE_UNAVAILABLE,
             "credential_status.unavailable",
@@ -3101,6 +3128,120 @@ async fn credential_status_list_response(
         HeaderValue::from_static("application/statuslist+jwt"),
     );
     response
+}
+
+#[derive(Debug)]
+struct StatusListJwtCache {
+    entries: tokio::sync::Mutex<BTreeMap<String, StatusListJwtCacheEntry>>,
+}
+
+#[derive(Debug)]
+struct StatusListJwtCacheEntry {
+    token: String,
+    expires_at: OffsetDateTime,
+}
+
+impl Default for StatusListJwtCache {
+    fn default() -> Self {
+        Self {
+            entries: tokio::sync::Mutex::new(BTreeMap::new()),
+        }
+    }
+}
+
+impl StatusListJwtCache {
+    async fn get_or_insert_with<F, Fut>(
+        &self,
+        key: String,
+        now: OffsetDateTime,
+        expires_at: OffsetDateTime,
+        sign: F,
+    ) -> Result<String, EvidenceError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<String, EvidenceError>>,
+    {
+        {
+            let mut entries = self.entries.lock().await;
+            entries.retain(|_, entry| entry.expires_at > now);
+            if let Some(entry) = entries.get(&key) {
+                return Ok(entry.token.clone());
+            }
+        }
+
+        let token = sign().await?;
+
+        let mut entries = self.entries.lock().await;
+        entries.retain(|_, entry| entry.expires_at > now);
+        if let Some(entry) = entries.get(&key) {
+            return Ok(entry.token.clone());
+        }
+        if expires_at > now {
+            entries.insert(
+                key,
+                StatusListJwtCacheEntry {
+                    token: token.clone(),
+                    expires_at,
+                },
+            );
+        }
+        Ok(token)
+    }
+}
+
+fn status_list_jwt_cache_key(
+    record: &CredentialStatusRecord,
+    status_url: &str,
+    effective_status: &str,
+    status_list: &str,
+    ttl_seconds: u64,
+    public_jwk: &Value,
+) -> Result<String, serde_json::Error> {
+    let public_jwk_hash = sha256_json(public_jwk)?;
+    let key_material = json!({
+        "typ": "statuslist+jwt",
+        "issuer": record.issuer,
+        "issuer_public_jwk_sha256": public_jwk_hash,
+        "audience": Value::Null,
+        "credential_id": record.credential_id,
+        "credential_profile": record.credential_profile,
+        "status_url": status_url,
+        "status": record.status,
+        "effective_status": effective_status,
+        "issued_at": record.issued_at,
+        "expires_at": record.expires_at,
+        "updated_at": record.updated_at,
+        "ttl": ttl_seconds,
+        "status_list": {
+            "bits": 8,
+            "lst": status_list,
+        }
+    });
+    sha256_json(&key_material)
+}
+
+fn sha256_json(value: &Value) -> Result<String, serde_json::Error> {
+    let bytes = serde_json::to_vec(value)?;
+    Ok(format!("sha256:{}", hex_encode(&Sha256::digest(bytes))))
+}
+
+fn status_list_jwt_cache_expires_at(
+    record: &CredentialStatusRecord,
+    effective_status: &str,
+    token_expires_at: OffsetDateTime,
+) -> OffsetDateTime {
+    if record.status == registry_notary_core::CREDENTIAL_STATUS_VALID
+        && effective_status == registry_notary_core::CREDENTIAL_STATUS_VALID
+    {
+        return OffsetDateTime::parse(
+            &record.expires_at,
+            &time::format_description::well_known::Rfc3339,
+        )
+        .ok()
+        .filter(|credential_expires_at| *credential_expires_at < token_expires_at)
+        .unwrap_or(token_expires_at);
+    }
+    token_expires_at
 }
 
 #[derive(Debug, Deserialize)]
@@ -3273,6 +3414,7 @@ pub struct RegistryNotaryApiState {
     pub(crate) self_attestation_rate_keys: Arc<SelfAttestationRateLimitKeys>,
     pub(crate) replay: ReplayStores,
     pub(crate) credential_status: CredentialStatusStore,
+    status_list_jwt_cache: Arc<StatusListJwtCache>,
     pub(crate) metrics: Arc<AppMetrics>,
     pub(crate) source: Arc<dyn SourceReader>,
     pub(crate) store: Arc<EvidenceStore>,
@@ -3501,6 +3643,7 @@ impl RegistryNotaryApiState {
             self_attestation_rate_keys,
             replay,
             credential_status,
+            status_list_jwt_cache: Arc::new(StatusListJwtCache::default()),
             metrics,
             source,
             store,
@@ -4372,6 +4515,7 @@ async fn oid4vci_credential(
             profile_id: &configuration.credential_profile,
             holder_binding_mode: &profile.holder_binding.mode,
             policy_hash: context.metadata.policy_hash,
+            purposes: Some(vec![evaluation.purpose.clone()]),
             protocol: Some("openid4vci"),
             credential_configuration_id: Some(configuration_id),
         },
@@ -4652,22 +4796,52 @@ async fn oid4vci_token(
     let client_address = token_client_address(&state, &headers, connect_info.as_deref());
     let request = match parse_token_request(&headers, &body) {
         Ok(request) => request,
-        Err(error) => return token_error_response(error),
+        Err(error) => {
+            return token_error_with_audit(
+                &preauth,
+                path,
+                None,
+                SelfAttestationDenialCode::OperationDenied,
+                error,
+            )
+            .await;
+        }
     };
     if request.grant_type != PRE_AUTHORIZED_CODE_GRANT_TYPE {
-        return token_error_response(TokenWireError::UnsupportedGrantType);
+        return token_error_with_audit(
+            &preauth,
+            path,
+            None,
+            SelfAttestationDenialCode::OperationDenied,
+            TokenWireError::UnsupportedGrantType,
+        )
+        .await;
     }
     let Some(code) = request
         .pre_authorized_code
         .as_deref()
         .filter(|c| !c.is_empty())
     else {
-        return token_error_response(TokenWireError::InvalidRequest);
+        return token_error_with_audit(
+            &preauth,
+            path,
+            None,
+            SelfAttestationDenialCode::OperationDenied,
+            TokenWireError::InvalidRequest,
+        )
+        .await;
     };
     // Throttle random-code floods per client address (reuse the existing
     // invalid-token-per-address limiter bucket).
     if check_token_client_address_rate_limit(&state, &client_address).is_err() {
-        return token_error_response(TokenWireError::SlowDown);
+        return token_error_with_audit(
+            &preauth,
+            path,
+            None,
+            SelfAttestationDenialCode::RateLimited,
+            TokenWireError::SlowDown,
+        )
+        .await;
     }
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let verified = match preauth
@@ -4769,10 +4943,26 @@ async fn oid4vci_token(
     // optional tx_code mode did not create one.
     preauth.tx_code_sessions().remove(&jti);
     let Some(bound_subject) = bound_subject_from_code(&verified, &state) else {
-        return token_error_response(TokenWireError::InvalidGrant);
+        return token_error_after_invalid_attempt(
+            &state,
+            &preauth,
+            path,
+            &client_address,
+            configuration_id.as_deref(),
+            TokenWireError::InvalidGrant,
+        )
+        .await;
     };
     let Some(configuration_id) = configuration_id else {
-        return token_error_response(TokenWireError::InvalidGrant);
+        return token_error_after_invalid_attempt(
+            &state,
+            &preauth,
+            path,
+            &client_address,
+            None,
+            TokenWireError::InvalidGrant,
+        )
+        .await;
     };
     let access_token_claims = AccessTokenClaims {
         issuer: preauth.notary_issuer().to_string(),
@@ -4795,11 +4985,29 @@ async fn oid4vci_token(
     .await
     {
         Ok(token) => token,
-        Err(_) => return token_error_response(TokenWireError::ServerError),
+        Err(_) => {
+            return token_error_with_audit(
+                &preauth,
+                path,
+                Some(&configuration_id),
+                SelfAttestationDenialCode::OperationDenied,
+                TokenWireError::ServerError,
+            )
+            .await;
+        }
     };
     let c_nonce = match issue_c_nonce(&state, &configuration_id).await {
         Some(c_nonce) => c_nonce,
-        None => return token_error_response(TokenWireError::ServerError),
+        None => {
+            return token_error_with_audit(
+                &preauth,
+                path,
+                Some(&configuration_id),
+                SelfAttestationDenialCode::OperationDenied,
+                TokenWireError::ServerError,
+            )
+            .await;
+        }
     };
     let audit = pre_auth_audit_event(
         "POST",
@@ -5192,21 +5400,62 @@ async fn token_error_after_invalid_attempt(
             .self_attestation_rate_limiter
             .check_invalid_token_for_client_address(&hashed);
     }
+    token_error_with_audit(
+        preauth,
+        path,
+        credential_configuration_id,
+        SelfAttestationDenialCode::InvalidToken,
+        error,
+    )
+    .await
+}
+
+async fn token_error_with_audit(
+    preauth: &PreAuthRuntime,
+    path: &str,
+    credential_configuration_id: Option<&str>,
+    denial_code: SelfAttestationDenialCode,
+    error: TokenWireError,
+) -> Response {
     let response = token_error_response(error);
-    let audit = pre_auth_audit_event(
-        "POST",
+    let audit = token_error_audit_event(
         path,
         response.status().as_u16(),
+        credential_configuration_id,
+        denial_code,
+    );
+    if preauth.emit_audit(&audit).await.is_err() {
+        return token_error_after_audit_result(response, true);
+    }
+    token_error_after_audit_result(response, false)
+}
+
+fn token_error_after_audit_result(response: Response, audit_failed: bool) -> Response {
+    if audit_failed {
+        token_error_response(TokenWireError::ServerError)
+    } else {
+        response
+    }
+}
+
+fn token_error_audit_event(
+    path: &str,
+    status: u16,
+    credential_configuration_id: Option<&str>,
+    denial_code: SelfAttestationDenialCode,
+) -> EvidenceAuditEvent {
+    pre_auth_audit_event(
+        "POST",
+        path,
+        status,
         "denied",
         PreAuthAuditFields {
             credential_configuration_id: credential_configuration_id
                 .and_then(|id| registry_notary_core::ConfigMetadata::new(id).ok()),
-            denial_code: Some(SelfAttestationDenialCode::InvalidToken),
+            denial_code: Some(denial_code),
             ..PreAuthAuditFields::default()
         },
-    );
-    let _ = preauth.emit_audit(&audit).await;
-    response
+    )
 }
 
 /// OAuth 2.0 token-endpoint errors per RFC 6749 / OID4VCI.
@@ -5616,6 +5865,7 @@ async fn evaluate(
                     evaluation_id,
                     &requested_claims,
                     Some(1),
+                    None,
                     self_attestation_policy_hash,
                 );
             } else {
@@ -5891,18 +6141,20 @@ async fn render(
                     Some(evaluation_id),
                     requested_claims.as_deref().unwrap_or(&evaluation.claim_ids),
                     None,
+                    Some(vec![evaluation.purpose.clone()]),
                     evaluation
                         .self_attestation
                         .as_ref()
                         .and_then(|metadata| metadata.policy_hash.clone()),
                 );
             } else {
-                attach_evidence_audit(
+                attach_evidence_audit_with_purposes(
                     &mut response,
                     "render",
                     Some(evaluation_id),
                     requested_claims.as_deref().unwrap_or(&[]),
                     None,
+                    Some(vec![evaluation.purpose.clone()]),
                 );
             }
             response
@@ -5915,6 +6167,7 @@ async fn render(
                     "render_failed",
                     Some(evaluation_id),
                     requested_claims.as_deref().unwrap_or(&evaluation.claim_ids),
+                    None,
                     None,
                     evaluation
                         .self_attestation
@@ -5993,6 +6246,11 @@ async fn issue_credential(
     }
     if let Some(claims) = &request.claims {
         if claims != &evaluation.claim_ids {
+            return evidence_error_response(EvidenceError::EvaluationBindingMismatch);
+        }
+    }
+    if let Some(purpose) = request.purpose.as_deref() {
+        if purpose != evaluation.purpose {
             return evidence_error_response(EvidenceError::EvaluationBindingMismatch);
         }
     }
@@ -6225,6 +6483,7 @@ async fn issue_credential(
                 profile_id,
                 holder_binding_mode: &profile.holder_binding.mode,
                 policy_hash: metadata.policy_hash.clone(),
+                purposes: Some(vec![evaluation.purpose.clone()]),
                 protocol: None,
                 credential_configuration_id: None,
             },
@@ -6232,12 +6491,13 @@ async fn issue_credential(
             return evidence_error_response(error);
         }
     } else {
-        attach_evidence_audit(
+        attach_evidence_audit_with_purposes(
             &mut response,
             "credential_issued",
             Some(request.evaluation_id.clone()),
             &evaluation.claim_ids,
             Some(evaluation.results.len() as u64),
+            Some(vec![evaluation.purpose.clone()]),
         );
     }
     response
@@ -7170,7 +7430,7 @@ fn require_self_attestation_evaluate(
     require_self_attestation_authorization_details(
         evidence.service_id.as_str(),
         config,
-        principal.authorization_details.as_ref(),
+        principal,
         request,
         &disclosure,
         format,
@@ -7211,74 +7471,77 @@ fn require_self_attestation_evaluate(
 fn require_self_attestation_authorization_details(
     service_id: &str,
     config: &SelfAttestationConfig,
-    authorization_details: Option<&EvidenceAuthorizationDetails>,
+    principal: &EvidencePrincipal,
     request: &EvaluateRequest,
     disclosure: &str,
     format: &str,
     purpose: &str,
 ) -> Result<(), EvidenceError> {
-    let Some(details) = authorization_details else {
+    let Some(details) = principal.authorization_details.as_ref() else {
+        if self_attestation_requires_authorization_details(principal) {
+            return Err(self_attestation_denied(
+                SelfAttestationDenialCode::OperationDenied,
+            ));
+        }
         return Ok(());
     };
 
-    if !details.actions.iter().any(|action| action == "evaluate") {
-        return Err(self_attestation_denied(
-            SelfAttestationDenialCode::OperationDenied,
-        ));
-    }
-    if !details
-        .locations
-        .iter()
-        .any(|location| location == service_id)
-    {
-        return Err(self_attestation_denied(
-            SelfAttestationDenialCode::OperationDenied,
-        ));
-    }
-    if details.access_mode != Some(AccessMode::SelfAttestation) {
-        return Err(self_attestation_denied(
-            SelfAttestationDenialCode::OperationDenied,
-        ));
-    }
-    if details.purpose.as_deref() != Some(purpose) {
-        return Err(self_attestation_denied(
-            SelfAttestationDenialCode::OperationDenied,
-        ));
-    }
-    if details.disclosure.as_deref() != Some(disclosure) {
-        return Err(self_attestation_denied(
-            SelfAttestationDenialCode::DisclosureDenied,
-        ));
-    }
-    if details.format.as_deref() != Some(format) {
-        return Err(self_attestation_denied(
-            SelfAttestationDenialCode::FormatDenied,
-        ));
-    }
-    if details.claims.is_empty()
-        || !request
-            .claims
-            .iter()
-            .all(|requested| details.claims.iter().any(|allowed| allowed == requested))
-    {
-        return Err(self_attestation_denied(
-            SelfAttestationDenialCode::ClaimDenied,
-        ));
-    }
+    crate::authz_details::validate_scoped_authorization_details(
+        details,
+        &crate::authz_details::ScopedAuthorizationRequest {
+            service_id,
+            action: "evaluate",
+            claims: &request.claims,
+            disclosure,
+            format,
+            purpose,
+            access_mode: AccessMode::SelfAttestation,
+            subject: Some(crate::authz_details::ScopedAuthorizationSubject {
+                binding_claim: config.subject_binding.token_claim.clone(),
+                id_type: config.subject_binding.id_type.clone(),
+            }),
+            allow_subset_claims: false,
+            allowed_claims: None,
+        },
+    )
+    .map_err(self_attestation_authorization_details_denial)
+}
 
-    let Some(subject) = details.subject.as_ref() else {
-        return Err(self_attestation_denied(
-            SelfAttestationDenialCode::SubjectMismatch,
-        ));
+fn self_attestation_requires_authorization_details(principal: &EvidencePrincipal) -> bool {
+    principal
+        .verified_claims
+        .as_ref()
+        .and_then(|claims| claims.token_type.as_ref())
+        .is_some_and(|token_type| {
+            token_type.as_str() == registry_notary_core::tokens::NOTARY_TRANSACTION_TOKEN_JWT_TYP
+        })
+}
+
+fn self_attestation_authorization_details_denial(
+    error: crate::authz_details::ScopedAuthorizationError,
+) -> EvidenceError {
+    let reason = match error {
+        crate::authz_details::ScopedAuthorizationError::Claim => {
+            SelfAttestationDenialCode::ClaimDenied
+        }
+        crate::authz_details::ScopedAuthorizationError::Disclosure => {
+            SelfAttestationDenialCode::DisclosureDenied
+        }
+        crate::authz_details::ScopedAuthorizationError::Format => {
+            SelfAttestationDenialCode::FormatDenied
+        }
+        crate::authz_details::ScopedAuthorizationError::Subject => {
+            SelfAttestationDenialCode::SubjectMismatch
+        }
+        crate::authz_details::ScopedAuthorizationError::DetailType
+        | crate::authz_details::ScopedAuthorizationError::Action
+        | crate::authz_details::ScopedAuthorizationError::Location
+        | crate::authz_details::ScopedAuthorizationError::Purpose
+        | crate::authz_details::ScopedAuthorizationError::AccessMode => {
+            SelfAttestationDenialCode::OperationDenied
+        }
     };
-    if subject.binding_claim != config.subject_binding.token_claim
-        || subject.id_type != config.subject_binding.id_type
-    {
-        return Err(self_attestation_denied(
-            SelfAttestationDenialCode::SubjectMismatch,
-        ));
-    }
-    Ok(())
+    self_attestation_denied(reason)
 }
 
 fn find_requested_claim<'a>(
@@ -7815,6 +8078,12 @@ fn attach_evaluate_request_audit(
     let Some(audit) = response.extensions_mut().get_mut::<EvidenceAuditContext>() else {
         return Ok(());
     };
+    if audit.purposes.is_none() {
+        audit.purposes = request
+            .purpose
+            .as_ref()
+            .map(|purpose| vec![purpose.clone()]);
+    }
     audit.target_type = result
         .map(|result| result.target_ref.entity_type.as_str())
         .or_else(|| {
@@ -8297,8 +8566,7 @@ fn is_matching_policy_provenance_code(code: &str) -> bool {
     }
     matches!(
         code,
-        "purpose.not_allowed"
-            | "target.matching_policy_rejected"
+        "target.matching_policy_rejected"
             | "requester.matching_policy_rejected"
             | "relationship.policy_rejected"
     )
@@ -8308,6 +8576,7 @@ struct SelfAttestationCredentialAuditDetails<'a> {
     profile_id: &'a str,
     holder_binding_mode: &'a str,
     policy_hash: Option<Hashed<PolicyIdentifier>>,
+    purposes: Option<Vec<String>>,
     protocol: Option<&'a str>,
     credential_configuration_id: Option<&'a str>,
 }
@@ -8356,7 +8625,7 @@ fn attach_self_attestation_credential_audit(
         verification_id: Some(evaluation_id.to_string()),
         verification_decision: Some("credential_issued".to_string()),
         claim_hash: (!claim_ids.is_empty()).then(|| evidence_claim_hash(claim_ids)),
-        purposes: None,
+        purposes: details.purposes,
         row_count: Some(row_count),
         access_mode: Some(AccessMode::SelfAttestation),
         denial_code: None,
@@ -8396,13 +8665,14 @@ fn attach_self_attestation_success_audit(
     verification_id: Option<String>,
     claim_ids: &[String],
     row_count: Option<u64>,
+    purposes: Option<Vec<String>>,
     policy_hash: Option<Hashed<PolicyIdentifier>>,
 ) {
     response.extensions_mut().insert(EvidenceAuditContext {
         verification_id,
         verification_decision: Some(decision.to_string()),
         claim_hash: (!claim_ids.is_empty()).then(|| evidence_claim_hash(claim_ids)),
-        purposes: None,
+        purposes,
         row_count,
         access_mode: Some(AccessMode::SelfAttestation),
         denial_code: None,
@@ -9015,8 +9285,8 @@ mod tests {
     use base64::Engine;
     use registry_notary_core::{
         BoundedVerifiedClaims, CredentialStatusConfig, CredentialStatusRedisConfig,
-        SourceBindingConfig, SubjectRequest, VerifiedClaimName, VerifiedClaimValue,
-        CREDENTIAL_STATUS_STORAGE_REDIS,
+        EvidenceAuthorizationDetails, SourceBindingConfig, SubjectRequest, VerifiedClaimName,
+        VerifiedClaimValue, CREDENTIAL_STATUS_STORAGE_REDIS,
     };
     use registry_platform_crypto::{did_jwk_from_public_jwk, sign, LocalJwkSigner, PrivateJwk};
     use registry_platform_replay::ReplayInsertOutcome;
@@ -10080,6 +10350,51 @@ mod tests {
         assert!(body.get("code").is_none());
     }
 
+    #[test]
+    fn oid4vci_token_denial_audit_records_public_token_path() {
+        let audit = token_error_audit_event(
+            "/oid4vci/token",
+            StatusCode::BAD_REQUEST.as_u16(),
+            Some("person_is_alive_sd_jwt"),
+            SelfAttestationDenialCode::OperationDenied,
+        );
+
+        assert_eq!(audit.method, "POST");
+        assert_eq!(audit.path, "/oid4vci/token");
+        assert_eq!(audit.status, StatusCode::BAD_REQUEST.as_u16());
+        assert_eq!(audit.decision, "denied");
+        assert_eq!(
+            audit.denial_code,
+            Some(SelfAttestationDenialCode::OperationDenied)
+        );
+        assert_eq!(
+            audit.protocol.as_ref().map(|value| value.as_str()),
+            Some("openid4vci")
+        );
+        assert_eq!(
+            audit
+                .credential_configuration_id
+                .as_ref()
+                .map(|value| value.as_str()),
+            Some("person_is_alive_sd_jwt")
+        );
+    }
+
+    #[tokio::test]
+    async fn oid4vci_token_error_fails_closed_when_denial_audit_fails() {
+        let response = token_error_after_audit_result(
+            token_error_response(TokenWireError::InvalidRequest),
+            true,
+        );
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body reads");
+        let body: Value = serde_json::from_slice(&body).expect("error body parses");
+        assert_eq!(body["error"], "server_error");
+    }
+
     #[cfg(feature = "registry-notary-cel")]
     #[tokio::test]
     async fn oid4vci_credential_issues_sd_jwt_and_rejects_nonce_replay() {
@@ -10563,6 +10878,37 @@ mod tests {
     }
 
     #[test]
+    fn self_attestation_authorization_details_required_for_transaction_token() {
+        let config = self_attestation_config();
+        let evidence = evidence_config();
+        let mut principal = classify_self_attestation_principal(
+            &config,
+            &fresh_oidc_principal(Some("client_id:citizen-portal"), &["self_attestation"]),
+        )
+        .expect("citizen principal classifies");
+        principal.authorization_details = None;
+        let claims = principal
+            .verified_claims
+            .as_mut()
+            .expect("classified principal carries verified claims");
+        claims.token_type = Some(bounded(
+            registry_notary_core::tokens::NOTARY_TRANSACTION_TOKEN_JWT_TYP,
+        ));
+        let mut request = evaluate_request("NAT-123");
+        request.claims = vec![ClaimRef::with_version("person-is-alive", "1")];
+
+        let err = require_self_attestation_evaluate(&evidence, &config, &principal, &request)
+            .expect_err("transaction tokens must carry authorization_details");
+
+        assert!(matches!(
+            err,
+            EvidenceError::SelfAttestationDenied {
+                reason: SelfAttestationDenialCode::OperationDenied
+            }
+        ));
+    }
+
+    #[test]
     fn self_attestation_authorization_details_reject_omitted_claim_version() {
         let config = self_attestation_config();
         let evidence = evidence_config();
@@ -10576,6 +10922,56 @@ mod tests {
             err,
             EvidenceError::SelfAttestationDenied {
                 reason: SelfAttestationDenialCode::ClaimDenied
+            }
+        ));
+    }
+
+    #[test]
+    fn self_attestation_authorization_details_reject_broadened_claims() {
+        let config = self_attestation_config();
+        let evidence = evidence_config();
+        let mut principal = classified_transaction_principal(&config, &evidence);
+        principal
+            .authorization_details
+            .as_mut()
+            .expect("details exist")
+            .claims
+            .push(ClaimRef::with_version("date-of-birth", "1"));
+        let mut request = evaluate_request("NAT-123");
+        request.claims = vec![ClaimRef::with_version("person-is-alive", "1")];
+
+        let err = require_self_attestation_evaluate(&evidence, &config, &principal, &request)
+            .expect_err("broadened transaction claims must be denied");
+
+        assert!(matches!(
+            err,
+            EvidenceError::SelfAttestationDenied {
+                reason: SelfAttestationDenialCode::ClaimDenied
+            }
+        ));
+    }
+
+    #[test]
+    fn self_attestation_authorization_details_reject_duplicate_action() {
+        let config = self_attestation_config();
+        let evidence = evidence_config();
+        let mut principal = classified_transaction_principal(&config, &evidence);
+        principal
+            .authorization_details
+            .as_mut()
+            .expect("details exist")
+            .actions
+            .push("evaluate".to_string());
+        let mut request = evaluate_request("NAT-123");
+        request.claims = vec![ClaimRef::with_version("person-is-alive", "1")];
+
+        let err = require_self_attestation_evaluate(&evidence, &config, &principal, &request)
+            .expect_err("duplicate transaction action must be denied");
+
+        assert!(matches!(
+            err,
+            EvidenceError::SelfAttestationDenied {
+                reason: SelfAttestationDenialCode::OperationDenied
             }
         ));
     }
@@ -11413,6 +11809,58 @@ mod tests {
         }
     }
 
+    struct CountingSigningProvider {
+        inner: LocalJwkSigner,
+        sign_count: Arc<AtomicUsize>,
+    }
+
+    impl CountingSigningProvider {
+        fn new(sign_count: Arc<AtomicUsize>) -> Self {
+            let mut jwk = PrivateJwk::parse(&issuer_private_jwk()).expect("issuer key parses");
+            jwk.kid = Some("did:web:issuer.example#key-1".to_string());
+            let inner = LocalJwkSigner::new(jwk).expect("local signer builds");
+            Self { inner, sign_count }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl SigningProvider for CountingSigningProvider {
+        fn algorithm(&self) -> registry_platform_crypto::SigningAlgorithm {
+            self.inner.algorithm()
+        }
+
+        fn key_id(&self) -> &str {
+            self.inner.key_id()
+        }
+
+        fn public_jwk(&self) -> PublicJwk {
+            self.inner.public_jwk()
+        }
+
+        async fn sign(
+            &self,
+            payload: &[u8],
+        ) -> Result<Vec<u8>, registry_platform_crypto::SigningError> {
+            self.sign_count.fetch_add(1, Ordering::SeqCst);
+            self.inner.sign(payload).await
+        }
+    }
+
+    struct CountingIssuerResolver {
+        sign_count: Arc<AtomicUsize>,
+    }
+
+    impl EvidenceIssuerResolver for CountingIssuerResolver {
+        fn issuer(
+            &self,
+            _profile_id: &str,
+        ) -> Result<registry_notary_core::sd_jwt::EvidenceIssuer, EvidenceError> {
+            registry_notary_core::sd_jwt::EvidenceIssuer::from_signing_provider(Arc::new(
+                CountingSigningProvider::new(Arc::clone(&self.sign_count)),
+            ))
+        }
+    }
+
     #[tokio::test]
     async fn credential_status_list_response_is_signed_status_list_jwt() {
         let credential_status = CredentialStatusStore::from_config(&CredentialStatusConfig {
@@ -11478,6 +11926,82 @@ mod tests {
         assert_eq!(payload["ttl"], json!(300));
         assert_eq!(payload["status_list"]["bits"], json!(8));
         assert_eq!(payload["status_list"]["lst"], json!("eJxjAAAAAQAB"));
+    }
+
+    #[tokio::test]
+    async fn credential_status_list_response_reuses_cached_signature() {
+        let credential_status = CredentialStatusStore::from_config(&CredentialStatusConfig {
+            enabled: true,
+            base_url: "https://issuer.example".to_string(),
+            ..CredentialStatusConfig::default()
+        })
+        .expect("credential status builds");
+        let issued_at = OffsetDateTime::now_utc();
+        credential_status
+            .record_issued(
+                "credential-cache".to_string(),
+                "did:web:issuer.example".to_string(),
+                "civil_status_sd_jwt".to_string(),
+                issued_at,
+                issued_at + time::Duration::seconds(600),
+            )
+            .await
+            .expect("status record writes");
+        let record = credential_status
+            .get("credential-cache")
+            .await
+            .expect("status record reads")
+            .expect("status record exists");
+        let sign_count = Arc::new(AtomicUsize::new(0));
+        let state = RegistryNotaryApiState::new_with_runtime_blocks(
+            Arc::new(evidence_config()),
+            Arc::new(SelfAttestationConfig::default()),
+            Arc::new(Oid4vciConfig::default()),
+            Arc::new(FederationConfig::default()),
+            None,
+            AuditKeyHasher::unkeyed_dev_only(),
+            ReplayStores::memory(),
+            credential_status,
+            Arc::new(AppMetrics::default()),
+            Arc::new(CountingSource::default()),
+            Arc::new(EvidenceStore::default()),
+            Arc::new(CountingIssuerResolver {
+                sign_count: Arc::clone(&sign_count),
+            }),
+            SignerReadiness::default(),
+        );
+
+        let first = credential_status_list_response(&state, &record).await;
+        let second = credential_status_list_response(&state, &record).await;
+
+        assert_eq!(first.status(), StatusCode::OK);
+        assert_eq!(second.status(), StatusCode::OK);
+        assert_eq!(sign_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn status_list_jwt_cache_does_not_hold_lock_while_signing() {
+        let cache = Arc::new(StatusListJwtCache::default());
+        let nested_cache = Arc::clone(&cache);
+        let now = OffsetDateTime::now_utc();
+        let expires_at = now + time::Duration::seconds(60);
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            cache.get_or_insert_with("outer".to_string(), now, expires_at, || async move {
+                nested_cache
+                    .get_or_insert_with("inner".to_string(), now, expires_at, || async {
+                        Ok("inner-token".to_string())
+                    })
+                    .await?;
+                Ok("outer-token".to_string())
+            }),
+        )
+        .await
+        .expect("cache lookup should not block behind its own signing future")
+        .expect("outer token signs");
+
+        assert_eq!(result, "outer-token");
     }
 
     #[test]
@@ -11987,6 +12511,10 @@ mod tests {
             .extensions()
             .get::<EvidenceAuditContext>()
             .expect("audit context is attached");
+        assert_eq!(
+            audit.purposes.as_deref(),
+            Some(&["program-a".to_string()][..])
+        );
         assert_eq!(audit.target_type.as_deref(), Some("Person"));
         assert_eq!(audit.requester_type.as_deref(), Some("Person"));
         assert_eq!(audit.matching_policy_id.as_deref(), Some("policy-v1"));
@@ -12123,6 +12651,7 @@ mod tests {
                 profile_id: "person_is_alive_sd_jwt",
                 holder_binding_mode: "did",
                 policy_hash: None,
+                purposes: Some(vec!["citizen_self_attestation".to_string()]),
                 protocol: Some("openid4vci"),
                 credential_configuration_id: Some("person_is_alive_sd_jwt"),
             },
@@ -12360,6 +12889,11 @@ mod tests {
             )
             .is_none(),
             "pre-policy input errors must not claim PDP provenance"
+        );
+        assert!(
+            denied_matching_policy_audit_identity(&evidence, &request, Some("purpose.not_allowed"))
+                .is_none(),
+            "purpose denials happen before PDP matching policy evaluation"
         );
     }
 
@@ -12790,6 +13324,7 @@ evaluation_profiles:
                 format: Some(FORMAT_SD_JWT_VC.to_string()),
                 claims: Some(vec!["person-is-alive".to_string()]),
                 disclosure: Some("predicate".to_string()),
+                purpose: None,
                 holder: None,
             })),
         )
@@ -12801,6 +13336,76 @@ evaluation_profiles:
             .expect("body reads");
         let body: Value = serde_json::from_slice(&body).expect("problem body parses");
         assert_eq!(body["code"], json!("credential.issuance_failed"));
+    }
+
+    #[tokio::test]
+    async fn issue_credential_rejects_purpose_mismatch() {
+        let evidence = credential_issue_evidence_config();
+        let store = Arc::new(EvidenceStore::default());
+        store.insert(registry_notary_core::StoredEvaluation {
+            client_id: "caseworker".to_string(),
+            purpose: "benefits".to_string(),
+            claim_ids: vec!["person-is-alive".to_string()],
+            claim_refs: Vec::new(),
+            disclosure: "predicate".to_string(),
+            format: FORMAT_SD_JWT_VC.to_string(),
+            results: vec![claim_result_view(
+                "eval-purpose-mismatch",
+                "person-is-alive",
+            )],
+            created_at: "2026-05-23T00:00:00Z".to_string(),
+            expires_at: "2999-01-01T00:00:00Z".to_string(),
+            request_hash: "request-hash".to_string(),
+            self_attestation: None,
+        });
+        let state = Arc::new(
+            RegistryNotaryApiState::new_with_federation(
+                Arc::new(evidence),
+                Arc::new(SelfAttestationConfig::default()),
+                Arc::new(Oid4vciConfig::default()),
+                Arc::new(FederationConfig::default()),
+                AuditKeyHasher::unkeyed_dev_only(),
+                None,
+                ReplayStores::memory(),
+                CredentialStatusStore::disabled(),
+                Arc::new(AppMetrics::default()),
+                Arc::new(CountingSource::default()),
+                Arc::clone(&store),
+                Arc::new(TestIssuerResolver),
+                None,
+            )
+            .expect("state builds"),
+        );
+        let principal = EvidencePrincipal {
+            principal_id: "caseworker".to_string(),
+            scopes: vec!["civil_registry:evidence_verification".to_string()],
+            access_mode: AccessMode::MachineClient,
+            verified_claims: None,
+            authorization_details: None,
+        };
+
+        let response = issue_credential(
+            HeaderMap::new(),
+            Some(Extension(state)),
+            Some(Extension(principal)),
+            Ok(Json(CredentialIssueRequest {
+                evaluation_id: "eval-purpose-mismatch".to_string(),
+                credential_profile: Some("civil_status_sd_jwt".to_string()),
+                format: Some(FORMAT_SD_JWT_VC.to_string()),
+                claims: Some(vec!["person-is-alive".to_string()]),
+                disclosure: Some("predicate".to_string()),
+                purpose: Some("appeals".to_string()),
+                holder: None,
+            })),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body reads");
+        let body: Value = serde_json::from_slice(&body).expect("problem body parses");
+        assert_eq!(body["code"], json!("evaluation.binding_mismatch"));
     }
 
     #[test]
@@ -12855,6 +13460,7 @@ evaluation_profiles:
             format: None,
             claims: None,
             disclosure: None,
+            purpose: None,
             holder: None,
         }
     }

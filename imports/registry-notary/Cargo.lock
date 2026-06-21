@@ -2981,6 +2981,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "libc",
+ "registry-platform-audit",
  "registry-platform-authcommon",
  "registry-platform-config",
  "registry-platform-ops",

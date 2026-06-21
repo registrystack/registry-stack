@@ -40,6 +40,8 @@ use tough::schema::Target;
 const TOKEN_HASH_ENV: &str = "GOVERNED_RUNTIME_VALIDATION_TOKEN_HASH";
 const TOKEN: &str = "contract-sidecar-token";
 const TOKEN_HASH: &str = "sha256:98808b694f3b431dcc2459db07bbfb61b8e3287ad0ab7364a2ff510d35e21418";
+const AUDIT_HASH_SECRET_ENV: &str = "GOVERNED_RUNTIME_VALIDATION_AUDIT_HASH_SECRET";
+const AUDIT_HASH_SECRET: &str = "0123456789abcdef0123456789abcdef";
 const CREDENTIAL_ENV: &str = "GOVERNED_RUNTIME_VALIDATION_CREDENTIAL_JSON";
 const PRODUCT: &str = "registry-notary-source-adapter-sidecar";
 const INSTANCE_ID: &str = "demo";
@@ -97,6 +99,7 @@ impl Harness {
             .build(Router::new().route("/people", get(person_lookup)));
         let upstream_url = server_base_url(&upstream);
         std::env::set_var(TOKEN_HASH_ENV, TOKEN_HASH);
+        std::env::set_var(AUDIT_HASH_SECRET_ENV, AUDIT_HASH_SECRET);
         std::env::set_var(
             CREDENTIAL_ENV,
             json!({ "baseUrl": upstream_url, "apiToken": "fixture-token" }).to_string(),
@@ -561,6 +564,34 @@ async fn governed_startup_smoke_failure_does_not_accept_antirollback() {
     assert_eq!(accepted.last_config_hash, previous_config_hash);
 }
 
+#[tokio::test]
+async fn governed_startup_audit_probe_failure_does_not_accept_antirollback() {
+    let harness = Harness::new().await;
+    let previous_config_hash =
+        "sha256:1111111111111111111111111111111111111111111111111111111111111111".to_string();
+    let repo = signed_runtime_repo(&harness, 12, "restart_required", &previous_config_hash).await;
+    initialize_antirollback(&repo, &previous_config_hash, 11);
+    let raw = bootstrap_yaml(&repo);
+    let mut config = load_startup_config(&raw)
+        .await
+        .expect("signed startup config loads");
+    config.audit.path = Some(repo.datastore_dir.to_string_lossy().into_owned());
+
+    let error = sidecar_router(config)
+        .await
+        .expect_err("unwritable audit path must fail before antirollback acceptance");
+
+    assert!(
+        error.to_string().contains("audit setup or write failed"),
+        "unexpected error: {error}"
+    );
+    let accepted: AntiRollbackRecord =
+        serde_json::from_slice(&fs::read(repo.datastore_dir.join("antirollback.json")).unwrap())
+            .expect("antirollback state parses");
+    assert_eq!(accepted.last_sequence, 11);
+    assert_eq!(accepted.last_config_hash, previous_config_hash);
+}
+
 fn yaml_path(path: &Path) -> String {
     yaml_string(path.to_str().expect("fixture path is UTF-8"))
 }
@@ -735,6 +766,10 @@ auth:
   bearer_tokens:
     - id: notary-contract
       hash_env: {token_hash_env}
+audit:
+  sink: file
+  path: {audit_path}
+  hash_secret_env: {audit_hash_secret_env}
 config_trust:
   product: {product}
   instance_id: {instance_id}
@@ -763,6 +798,8 @@ config_trust:
             - {change_class}
 "#,
         token_hash_env = yaml_string(TOKEN_HASH_ENV),
+        audit_path = yaml_path(&repo.datastore_dir.join("sidecar-audit.jsonl")),
+        audit_hash_secret_env = yaml_string(AUDIT_HASH_SECRET_ENV),
         product = yaml_string(PRODUCT),
         instance_id = yaml_string(INSTANCE_ID),
         environment = yaml_string(ENVIRONMENT),

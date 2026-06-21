@@ -595,10 +595,14 @@ impl RegistryNotaryClient {
     /// `Debug` output.
     pub async fn issue_credential_request(
         &self,
-        request: CredentialIssueRequest,
+        mut request: CredentialIssueRequest,
         options: RequestOptions,
     ) -> Result<NotaryResponse<CredentialIssueResponse>, NotaryClientError> {
         self.reject_idempotency(&options)?;
+        let options = self.prepare_purpose(options, request.purpose.as_deref())?;
+        if request.purpose.is_none() {
+            request.purpose = options.purpose.clone();
+        }
         self.post_json(
             "/v1/credentials",
             &request,

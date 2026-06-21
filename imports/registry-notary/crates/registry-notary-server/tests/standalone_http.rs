@@ -7945,6 +7945,10 @@ async fn oidc_self_attestation_evaluates_renders_and_audits_access_mode() {
         })
         .expect("render audit record exists");
     assert_eq!(render_audit["access_mode"], json!("self_attestation"));
+    assert_eq!(
+        render_audit["purposes"],
+        json!(["citizen_self_attestation"])
+    );
     assert!(render_audit["policy_hash"].is_string());
     assert!(render_audit.get("correlation_id").is_none());
     assert!(render_audit["correlation_id_hash"]
@@ -9143,6 +9147,10 @@ async fn oid4vci_credential_route_issues_holder_bound_sd_jwt() {
         })
         .expect("OID4VCI credential audit record exists");
     assert_eq!(credential_audit["access_mode"], json!("self_attestation"));
+    assert_eq!(
+        credential_audit["purposes"],
+        json!(["citizen_self_attestation"])
+    );
     assert_eq!(credential_audit["protocol"], json!("openid4vci"));
     assert_eq!(
         credential_audit["credential_configuration_id"],
@@ -13585,6 +13593,10 @@ async fn preauth_credential_subject_and_evaluation_match_esignet_token_path() {
         .expect("baseline credential issued")
         .to_string();
     let baseline_audit = credential_issued_audit(&baseline_audit_path);
+    assert_eq!(
+        baseline_audit["purposes"],
+        json!(["citizen_self_attestation"])
+    );
     baseline_idp.stop().await;
 
     // The pre-authorized-code path: the same civil id arrives through the eSignet
@@ -13653,6 +13665,10 @@ async fn preauth_credential_subject_and_evaluation_match_esignet_token_path() {
         .expect("preauth credential issued")
         .to_string();
     let preauth_audit = credential_issued_audit(&preauth_audit_path);
+    assert_eq!(
+        preauth_audit["purposes"],
+        json!(["citizen_self_attestation"])
+    );
     preauth_idp.stop().await;
 
     // Subject equality: the pre-auth credential is bound to the eSignet subject,

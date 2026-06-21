@@ -440,6 +440,14 @@ fn verify_holder_binding(
             });
         }
     }
+    if context.key_binding_jwt.is_none()
+        && context.expected_audience.is_some()
+        && context.expected_nonce.is_some()
+    {
+        return Err(VerificationError::HolderBinding {
+            code: "holder_binding.challenge_required",
+        });
+    }
     if let Some(key_binding_jwt) = context.key_binding_jwt {
         verify_key_binding_jwt(
             key_binding_jwt,
