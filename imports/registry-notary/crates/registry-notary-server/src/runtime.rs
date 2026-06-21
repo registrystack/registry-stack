@@ -607,16 +607,16 @@ async fn prefetch_bulk_bindings(
                 fields,
             );
             for context in contexts {
-                if source_scoped_trusted_policy(
-                    &evidence,
+                if source_scoped_trusted_policy(SourceScopedTrustedPolicyRequest {
+                    evidence: &evidence,
                     claim,
-                    &source_capability,
+                    source_capability: &source_capability,
                     context,
                     trusted_policy,
                     purpose,
                     disclosure,
                     format,
-                )
+                })
                 .is_err()
                 {
                     continue;
@@ -2962,41 +2962,52 @@ fn max_batch_subjects(
     Ok(max)
 }
 
-fn source_scoped_trusted_policy(
-    evidence: &EvidenceConfig,
-    claim: &ClaimDefinition,
-    source_capability: &SourceCapability,
-    context: &EvidenceRequestContext,
-    trusted_policy: &TrustedPolicyContext,
-    purpose: &str,
+struct SourceScopedTrustedPolicyRequest<'a> {
+    evidence: &'a EvidenceConfig,
+    claim: &'a ClaimDefinition,
+    source_capability: &'a SourceCapability,
+    context: &'a EvidenceRequestContext,
+    trusted_policy: &'a TrustedPolicyContext,
+    purpose: &'a str,
     disclosure: DisclosureProfile,
-    format: &str,
+    format: &'a str,
+}
+
+fn source_scoped_trusted_policy(
+    request: SourceScopedTrustedPolicyRequest<'_>,
 ) -> Result<TrustedPolicyContext, EvidenceError> {
-    if !claim_source_policy_uses_authorization_details(claim) {
-        return Ok(trusted_policy.clone());
+    if !claim_source_policy_uses_authorization_details(request.claim) {
+        return Ok(request.trusted_policy.clone());
     }
-    let Some(details) = trusted_policy.authorization_details.as_ref() else {
-        return Ok(trusted_policy.clone());
+    let Some(details) = request.trusted_policy.authorization_details.as_ref() else {
+        return Ok(request.trusted_policy.clone());
     };
-    let expected_claims = [ClaimRef::with_version(&claim.id, &claim.version)];
-    let subject = source_authorization_subject_expectation(trusted_policy, context)?;
+    let expected_claims = [ClaimRef::with_version(
+        &request.claim.id,
+        &request.claim.version,
+    )];
+    let subject =
+        source_authorization_subject_expectation(request.trusted_policy, request.context)?;
     crate::authz_details::validate_scoped_authorization_details(
         details,
         &crate::authz_details::ScopedAuthorizationRequest {
-            service_id: &evidence.service_id,
+            service_id: &request.evidence.service_id,
             action: "evaluate",
             claims: &expected_claims,
-            disclosure: disclosure.as_str(),
-            format,
-            purpose,
-            access_mode: trusted_policy_access_mode(trusted_policy, source_capability),
+            disclosure: request.disclosure.as_str(),
+            format: request.format,
+            purpose: request.purpose,
+            access_mode: trusted_policy_access_mode(
+                request.trusted_policy,
+                request.source_capability,
+            ),
             subject,
             allow_subset_claims: true,
-            allowed_claims: Some(&trusted_policy.request_claims),
+            allowed_claims: Some(&request.trusted_policy.request_claims),
         },
     )
     .map_err(|_| EvidenceError::TargetMatchingPolicyRejected)?;
-    Ok(trusted_policy.clone())
+    Ok(request.trusted_policy.clone())
 }
 
 fn claim_source_policy_uses_authorization_details(claim: &ClaimDefinition) -> bool {
@@ -3099,16 +3110,16 @@ async fn load_sources(
     if claim.source_bindings.is_empty() {
         return Ok((BTreeMap::new(), None, BTreeSet::new(), None));
     }
-    let trusted_policy = source_scoped_trusted_policy(
-        &evidence,
-        &claim,
-        &source_capability,
-        &context,
-        &trusted_policy,
-        &purpose,
+    let trusted_policy = source_scoped_trusted_policy(SourceScopedTrustedPolicyRequest {
+        evidence: &evidence,
+        claim: &claim,
+        source_capability: &source_capability,
+        context: &context,
+        trusted_policy: &trusted_policy,
+        purpose: &purpose,
         disclosure,
-        &format,
-    )?;
+        format: &format,
+    })?;
     if claim
         .source_bindings
         .values()
