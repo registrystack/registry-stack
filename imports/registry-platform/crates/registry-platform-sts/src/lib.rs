@@ -2,7 +2,8 @@
 //! Token-exchange primitives for minting Notary-bound transaction tokens.
 
 use std::{
-    collections::{HashMap, HashSet},
+    cmp::{Ordering, Reverse},
+    collections::{BinaryHeap, HashMap, HashSet},
     fmt,
     sync::{Arc, Mutex},
     time::Duration,
@@ -411,13 +412,71 @@ pub enum RateLimitError {
 
 #[derive(Debug, Default)]
 pub struct InMemoryRateLimitStore {
-    counters: Mutex<HashMap<(RateLimitScope, RateLimitKey), WindowCounter>>,
+    state: Mutex<RateLimitState>,
+}
+
+const RATE_LIMIT_CLEANUP_BATCH: usize = 64;
+
+#[derive(Debug, Default)]
+struct RateLimitState {
+    counters: HashMap<(RateLimitScope, RateLimitKey), WindowCounter>,
+    expirations: BinaryHeap<Reverse<WindowExpiry>>,
 }
 
 #[derive(Debug, Clone)]
 struct WindowCounter {
     window_start: i64,
+    expires_at: i64,
     count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WindowExpiry {
+    expires_at: i64,
+    scope: RateLimitScope,
+    key: RateLimitKey,
+}
+
+impl Ord for WindowExpiry {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.expires_at
+            .cmp(&other.expires_at)
+            .then_with(|| self.scope.0.cmp(&other.scope.0))
+            .then_with(|| self.key.0.cmp(&other.key.0))
+    }
+}
+
+impl PartialOrd for WindowExpiry {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl RateLimitState {
+    fn prune_expired(&mut self, now_unix: i64, max_popped: usize) {
+        let mut popped = 0;
+        while popped < max_popped {
+            let Some(Reverse(expiry)) = self.expirations.peek() else {
+                break;
+            };
+            if expiry.expires_at > now_unix {
+                break;
+            }
+            let Reverse(expiry) = self
+                .expirations
+                .pop()
+                .expect("peek confirmed an expiry entry");
+            popped += 1;
+            let counter_key = (expiry.scope, expiry.key);
+            if self
+                .counters
+                .get(&counter_key)
+                .is_some_and(|counter| counter.expires_at == expiry.expires_at)
+            {
+                self.counters.remove(&counter_key);
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -429,33 +488,55 @@ impl RateLimitStore for InMemoryRateLimitStore {
         policy: RateLimitPolicy,
         now: OffsetDateTime,
     ) -> Result<RateLimitOutcome, RateLimitError> {
-        let mut counters = self
-            .counters
+        let mut state = self
+            .state
             .lock()
             .map_err(|_| RateLimitError::StoreUnavailable)?;
         let now_unix = now.unix_timestamp();
         let window_secs = policy.window.as_secs().max(1) as i64;
-        counters.retain(|_, counter| now_unix.saturating_sub(counter.window_start) < window_secs);
-        let counter = counters
-            .entry((scope.clone(), key.clone()))
-            .or_insert(WindowCounter {
-                window_start: now_unix,
-                count: 0,
-            });
-        if now_unix.saturating_sub(counter.window_start) >= window_secs {
-            counter.window_start = now_unix;
-            counter.count = 0;
+        state.prune_expired(now_unix, RATE_LIMIT_CLEANUP_BATCH);
+        let counter_key = (scope.clone(), key.clone());
+        let mut queue_expiry = None;
+        let outcome = {
+            let counter = state
+                .counters
+                .entry(counter_key.clone())
+                .or_insert_with(|| {
+                    let expires_at = now_unix.saturating_add(window_secs);
+                    queue_expiry = Some(expires_at);
+                    WindowCounter {
+                        window_start: now_unix,
+                        expires_at,
+                        count: 0,
+                    }
+                });
+            if now_unix >= counter.expires_at {
+                let expires_at = now_unix.saturating_add(window_secs);
+                counter.window_start = now_unix;
+                counter.expires_at = expires_at;
+                counter.count = 0;
+                queue_expiry = Some(expires_at);
+            }
+            if counter.count >= policy.max_requests {
+                let retry_after = counter.expires_at.saturating_sub(now_unix) as u64;
+                RateLimitOutcome::Denied {
+                    retry_after: Duration::from_secs(retry_after.max(1)),
+                }
+            } else {
+                counter.count += 1;
+                RateLimitOutcome::Allowed {
+                    remaining: policy.max_requests.saturating_sub(counter.count),
+                }
+            }
+        };
+        if let Some(expires_at) = queue_expiry {
+            state.expirations.push(Reverse(WindowExpiry {
+                expires_at,
+                scope: scope.clone(),
+                key: key.clone(),
+            }));
         }
-        if counter.count >= policy.max_requests {
-            let retry_after = (counter.window_start + window_secs).saturating_sub(now_unix) as u64;
-            return Ok(RateLimitOutcome::Denied {
-                retry_after: Duration::from_secs(retry_after.max(1)),
-            });
-        }
-        counter.count += 1;
-        Ok(RateLimitOutcome::Allowed {
-            remaining: policy.max_requests.saturating_sub(counter.count),
-        })
+        Ok(outcome)
     }
 }
 
@@ -1686,9 +1767,63 @@ mod tests {
             .await
             .unwrap();
 
-        let counters = store.counters.lock().unwrap();
-        assert!(!counters.contains_key(&(scope.clone(), first_key)));
-        assert!(counters.contains_key(&(scope, second_key)));
+        let state = store.state.lock().unwrap();
+        assert!(!state.counters.contains_key(&(scope.clone(), first_key)));
+        assert!(state.counters.contains_key(&(scope, second_key)));
+    }
+
+    #[tokio::test]
+    async fn in_memory_rate_limit_cleans_stale_counters_in_bounded_batches() {
+        let store = InMemoryRateLimitStore::default();
+        let scope = RateLimitScope::new("client").unwrap();
+        let policy = RateLimitPolicy {
+            max_requests: 10,
+            window: Duration::from_secs(60),
+        };
+
+        for index in 0..(RATE_LIMIT_CLEANUP_BATCH + 2) {
+            let key = RateLimitKey::new(format!("client-{index}")).unwrap();
+            store
+                .check_and_increment(&scope, &key, policy, OffsetDateTime::UNIX_EPOCH)
+                .await
+                .unwrap();
+        }
+
+        let first_fresh_key = RateLimitKey::new("fresh-client-a").unwrap();
+        store
+            .check_and_increment(
+                &scope,
+                &first_fresh_key,
+                policy,
+                OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(61),
+            )
+            .await
+            .unwrap();
+        {
+            let state = store.state.lock().unwrap();
+            assert_eq!(state.counters.len(), 3);
+            assert!(state
+                .counters
+                .contains_key(&(scope.clone(), first_fresh_key)));
+        }
+
+        let second_fresh_key = RateLimitKey::new("fresh-client-b").unwrap();
+        store
+            .check_and_increment(
+                &scope,
+                &second_fresh_key,
+                policy,
+                OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(61),
+            )
+            .await
+            .unwrap();
+
+        let state = store.state.lock().unwrap();
+        assert_eq!(state.counters.len(), 2);
+        assert!(state
+            .counters
+            .contains_key(&(scope.clone(), RateLimitKey::new("fresh-client-a").unwrap())));
+        assert!(state.counters.contains_key(&(scope, second_fresh_key)));
     }
 
     #[tokio::test]
