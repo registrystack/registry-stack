@@ -7,7 +7,7 @@ WORKDIR /app
 ARG REGISTRY_MANIFEST_REPO_URL=https://github.com/jeremi/registry-manifest.git
 ARG REGISTRY_MANIFEST_REF=71c9ead582ea81a82022c37357b38b98d3f18f48
 ARG REGISTRY_RELAY_REPO_URL=https://github.com/jeremi/registry-relay.git
-ARG REGISTRY_RELAY_REF=285b31d2e73cb2f32466c865b47d384ca79f0c0f
+ARG REGISTRY_RELAY_REF=d7b8174799ed549064950944a52fc61241450594
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates git openssl python3 && \
