@@ -149,6 +149,20 @@ fn requested_claim_versions(claims: &[ClaimRef]) -> Result<ClaimVersionSelection
     Ok(versions)
 }
 
+fn selected_claim_refs(
+    evidence: &EvidenceConfig,
+    claims: &[ClaimRef],
+    claim_versions: &ClaimVersionSelections,
+) -> Result<Vec<ClaimRef>, EvidenceError> {
+    claims
+        .iter()
+        .map(|claim_ref| {
+            let claim = find_claim_for_selection(evidence, claim_ref, claim_versions)?;
+            Ok(ClaimRef::with_version(&claim.id, &claim.version))
+        })
+        .collect()
+}
+
 fn find_claim_for_selection<'a>(
     config: &'a EvidenceConfig,
     claim_id: &str,
@@ -960,6 +974,7 @@ struct ClaimEvaluationContext {
 #[derive(Clone, Debug, Default)]
 struct TrustedPolicyContext {
     authorization_details: Option<EvidenceAuthorizationDetails>,
+    request_claims: Vec<ClaimRef>,
     legal_basis_ref: Option<String>,
     consent_ref: Option<String>,
     jurisdiction: Option<String>,
@@ -992,6 +1007,7 @@ impl TrustedPolicyContext {
         };
         Self {
             authorization_details: Some(details.clone()),
+            request_claims: Vec::new(),
             legal_basis_ref: trusted_non_empty(details.legal_basis_ref.as_deref()),
             consent_ref: trusted_non_empty(details.consent_ref.as_deref()),
             jurisdiction: trusted_non_empty(details.jurisdiction.as_deref()),
@@ -1000,6 +1016,11 @@ impl TrustedPolicyContext {
             subject_binding_value,
             checked_scopes,
         }
+    }
+
+    fn with_request_claims(mut self, request_claims: Vec<ClaimRef>) -> Self {
+        self.request_claims = request_claims;
+        self
     }
 }
 
@@ -1455,7 +1476,9 @@ impl RegistryNotaryRuntime {
             .as_ref()
             .map(|_| Arc::new(Semaphore::new(self.cel_config.worker_count.max(1))));
         let policy = evaluation_policy_from_self_attestation(self_attestation.as_ref());
-        let trusted_policy = TrustedPolicyContext::from_principal(principal);
+        let request_claim_refs = selected_claim_refs(&evidence, &request.claims, &claim_versions)?;
+        let trusted_policy =
+            TrustedPolicyContext::from_principal(principal).with_request_claims(request_claim_refs);
         let internal = self
             .evaluate_claims_dag(
                 Arc::clone(&evidence),
@@ -1589,7 +1612,9 @@ impl RegistryNotaryRuntime {
             .memo_observer
             .map(Arc::clone)
             .unwrap_or_else(|| Arc::new(MemoState::new()));
-        let trusted_policy = TrustedPolicyContext::from_principal(principal);
+        let request_claim_refs = selected_claim_refs(&evidence, &request.claims, &claim_versions)?;
+        let trusted_policy =
+            TrustedPolicyContext::from_principal(principal).with_request_claims(request_claim_refs);
         let disclosure = requested_disclosure(
             &evidence,
             &request.claims,
@@ -1867,7 +1892,9 @@ impl RegistryNotaryRuntime {
                 request
                     .request_context()
                     .ok_or(EvidenceError::InvalidRequest)?,
-                TrustedPolicyContext::from_principal(principal),
+                TrustedPolicyContext::from_principal(principal).with_request_claims(
+                    selected_claim_refs(&evidence, &request.claims, &claim_versions)?,
+                ),
                 purpose_override.to_string(),
                 disclosure,
                 format.clone(),
@@ -2878,6 +2905,8 @@ fn source_scoped_trusted_policy(
             purpose,
             access_mode: trusted_policy_access_mode(trusted_policy),
             subject,
+            allow_subset_claims: true,
+            allowed_claims: Some(&trusted_policy.request_claims),
         },
     )
     .map_err(|_| EvidenceError::TargetMatchingPolicyRejected)?;

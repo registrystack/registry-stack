@@ -7500,6 +7500,8 @@ fn require_self_attestation_authorization_details(
                 binding_claim: config.subject_binding.token_claim.clone(),
                 id_type: config.subject_binding.id_type.clone(),
             }),
+            allow_subset_claims: false,
+            allowed_claims: None,
         },
     )
     .map_err(self_attestation_authorization_details_denial)
