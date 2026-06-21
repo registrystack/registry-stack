@@ -6,7 +6,8 @@
 //! Parquet cache write, table registration, refresh, and readiness.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::io;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
@@ -20,7 +21,7 @@ use datafusion::execution::context::SessionContext;
 use futures::stream;
 use futures::StreamExt as _;
 use time::OffsetDateTime;
-use tokio::sync::{watch, Mutex};
+use tokio::sync::{watch, Mutex, MutexGuard};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use ulid::Ulid;
@@ -40,7 +41,10 @@ use crate::ingest::declared_schema::DeclaredSchema;
 use crate::ingest::refresh::{run_refresh_loop, RefreshPolicy};
 use crate::ingest::validation::validate;
 use crate::source::Source;
-use crate::table_provider::register_or_replace_versioned_table;
+use crate::table_provider::{
+    mark_versioned_table_unavailable, publication_write_guard, register_or_replace_versioned_table,
+    restore_versioned_table, table_snapshot, TableSnapshot,
+};
 
 pub use crate::table_provider::{register_versioned_table, table_name};
 
@@ -75,6 +79,15 @@ pub struct IngestPlan {
     readiness: Arc<ArcSwap<ResourceReadiness>>,
     /// Serialises concurrent refresh attempts so they don't pile up.
     refresh_lock: Mutex<()>,
+}
+
+struct PreparedIngest {
+    table_name: String,
+    provider_ingest_ulid: Option<Ulid>,
+    readiness_ingest_ulid: Ulid,
+    schema: SchemaRef,
+    provider: Arc<dyn TableProvider>,
+    cache_path: Option<PathBuf>,
 }
 
 impl IngestPlan {
@@ -145,16 +158,7 @@ impl IngestPlan {
     /// Run the first ingest. Idempotent across retries.
     pub async fn initial_ingest(&self) -> Result<(), IngestError> {
         let _guard = self.refresh_lock.lock().await;
-        let result = self.run_pipeline().await;
-        if let Err(ref e) = result {
-            let code = ingest_error_code(e);
-            let prior = self.readiness.load_full();
-            // Only set Failed if we aren't already Ready (shouldn't happen on initial, but defensive).
-            if !matches!(prior.as_ref(), ResourceReadiness::Ready { .. }) {
-                self.store_failed(code, prior.as_ref());
-            }
-        }
-        result
+        self.refresh_unlocked().await
     }
 
     /// Re-run the pipeline. On success, rotates `ingest_ulid` and
@@ -162,8 +166,24 @@ impl IngestPlan {
     /// previous `Ready` state intact so it keeps serving.
     pub async fn refresh(&self) -> Result<(), IngestError> {
         let _guard = self.refresh_lock.lock().await;
+        self.refresh_unlocked().await
+    }
+
+    async fn refresh_unlocked(&self) -> Result<(), IngestError> {
         let prior = self.readiness.load_full();
-        let result = self.run_pipeline().await;
+        let result = match self.prepare_pipeline().await {
+            Ok(prepared) => {
+                let result = {
+                    let _publication_guard = publication_write_guard().await;
+                    self.commit_prepared(&prepared).await
+                };
+                if result.is_ok() {
+                    self.finalize_prepared(&prepared).await;
+                }
+                result
+            }
+            Err(error) => Err(error),
+        };
         if let Err(ref e) = result {
             let code = ingest_error_code(e);
             // Preserve prior Ready state on refresh failure (W1-15).
@@ -212,14 +232,14 @@ impl IngestPlan {
 
     // ── Inner pipeline ────────────────────────────────────────────────────────
 
-    async fn run_pipeline(&self) -> Result<(), IngestError> {
+    async fn prepare_pipeline(&self) -> Result<PreparedIngest, IngestError> {
         match self.materialization {
-            MaterializationMode::Snapshot => self.run_snapshot_pipeline().await,
-            MaterializationMode::Live => self.run_live_registration().await,
+            MaterializationMode::Snapshot => self.prepare_snapshot_pipeline().await,
+            MaterializationMode::Live => self.prepare_live_registration().await,
         }
     }
 
-    async fn run_snapshot_pipeline(&self) -> Result<(), IngestError> {
+    async fn prepare_snapshot_pipeline(&self) -> Result<PreparedIngest, IngestError> {
         let dataset_id = &self.dataset_id;
         let resource_id = &self.resource_id;
 
@@ -292,37 +312,24 @@ impl IngestPlan {
         )
         .await?;
 
-        // Step 7: register (or replace) the DataFusion table.
+        // Step 7: construct the DataFusion table provider. Registration is
+        // delayed until commit so multi-table reloads can publish as a unit.
         let table_name = table_name(dataset_id, resource_id);
-        self.register_table(
-            &table_name,
-            &final_path,
-            Arc::clone(&output_schema),
-            ingest_ulid,
-        )
-        .await?;
+        let provider = self
+            .snapshot_table_provider(&final_path, Arc::clone(&output_schema))
+            .await?;
 
-        // Step 8: rotate readiness and GC stale files.
-        self.readiness.store(Arc::new(ResourceReadiness::Ready {
-            ingest_ulid,
+        Ok(PreparedIngest {
+            table_name,
+            provider_ingest_ulid: Some(ingest_ulid),
+            readiness_ingest_ulid: ingest_ulid,
             schema: output_schema,
-            registered_at: OffsetDateTime::now_utc(),
-        }));
-
-        cache::gc_resource(&self.cache_layout, dataset_id, resource_id, ingest_ulid).await;
-
-        tracing::info!(
-            event = "ingest.complete",
-            dataset_id = %dataset_id,
-            resource_id = %resource_id,
-            ingest_ulid = %ingest_ulid,
-            path = %final_path.display(),
-        );
-
-        Ok(())
+            provider,
+            cache_path: Some(final_path),
+        })
     }
 
-    async fn run_live_registration(&self) -> Result<(), IngestError> {
+    async fn prepare_live_registration(&self) -> Result<PreparedIngest, IngestError> {
         let dataset_id = &self.dataset_id;
         let resource_id = &self.resource_id;
 
@@ -373,34 +380,24 @@ impl IngestPlan {
 
         let ingest_ulid = Ulid::new();
         let table_name = table_name(dataset_id, resource_id);
-        self.register_live_provider(&table_name, provider).await?;
 
-        self.readiness.store(Arc::new(ResourceReadiness::Ready {
-            ingest_ulid,
+        Ok(PreparedIngest {
+            table_name,
+            provider_ingest_ulid: None,
+            readiness_ingest_ulid: ingest_ulid,
             schema: output_schema,
-            registered_at: OffsetDateTime::now_utc(),
-        }));
-
-        tracing::info!(
-            event = "ingest.complete",
-            dataset_id = %dataset_id,
-            resource_id = %resource_id,
-            ingest_ulid = %ingest_ulid,
-            materialization = "live",
-        );
-
-        Ok(())
+            provider,
+            cache_path: None,
+        })
     }
 
-    /// Register the parquet file as a DataFusion table, replacing any
-    /// prior provider atomically inside a stable table registration.
-    async fn register_table(
+    /// Build the parquet-backed DataFusion table provider without
+    /// registering it. Registration happens in `commit_prepared`.
+    async fn snapshot_table_provider(
         &self,
-        table_name: &str,
         parquet_path: &std::path::Path,
         schema: SchemaRef,
-        ingest_ulid: Ulid,
-    ) -> Result<(), IngestError> {
+    ) -> Result<Arc<dyn TableProvider>, IngestError> {
         use datafusion::datasource::file_format::parquet::ParquetFormat as DFParquetFormat;
 
         let parquet_path = tokio::fs::canonicalize(parquet_path).await.map_err(|e| {
@@ -441,18 +438,115 @@ impl IngestPlan {
             IngestError::RegistrationFailed
         })?;
 
-        self.register_provider(table_name, Arc::new(table), ingest_ulid)
-            .await
+        Ok(Arc::new(table))
     }
 
-    async fn register_provider(
+    async fn commit_prepared(&self, prepared: &PreparedIngest) -> Result<(), IngestError> {
+        register_or_replace_versioned_table(
+            &self.df_ctx,
+            &prepared.table_name,
+            prepared.provider_ingest_ulid,
+            Arc::clone(&prepared.provider),
+        )
+        .await
+        .map_err(|e| {
+            tracing::error!(
+                event = "ingest.registration_failed",
+                dataset_id = %self.dataset_id,
+                resource_id = %self.resource_id,
+                error = %e,
+            );
+            IngestError::RegistrationFailed
+        })?;
+
+        self.readiness.store(Arc::new(ResourceReadiness::Ready {
+            ingest_ulid: prepared.readiness_ingest_ulid,
+            schema: Arc::clone(&prepared.schema),
+            registered_at: OffsetDateTime::now_utc(),
+        }));
+
+        Ok(())
+    }
+
+    async fn finalize_prepared(&self, prepared: &PreparedIngest) {
+        if prepared.cache_path.is_some() {
+            cache::gc_resource(
+                &self.cache_layout,
+                &self.dataset_id,
+                &self.resource_id,
+                prepared.readiness_ingest_ulid,
+            )
+            .await;
+        }
+
+        if let Some(path) = &prepared.cache_path {
+            tracing::info!(
+                event = "ingest.complete",
+                dataset_id = %self.dataset_id,
+                resource_id = %self.resource_id,
+                ingest_ulid = %prepared.readiness_ingest_ulid,
+                materialization = materialization_label(self.materialization),
+                path = %path.display(),
+            );
+        } else {
+            tracing::info!(
+                event = "ingest.complete",
+                dataset_id = %self.dataset_id,
+                resource_id = %self.resource_id,
+                ingest_ulid = %prepared.readiness_ingest_ulid,
+                materialization = materialization_label(self.materialization),
+            );
+        }
+    }
+
+    async fn discard_prepared(&self, prepared: &PreparedIngest) {
+        let Some(path) = &prepared.cache_path else {
+            return;
+        };
+        match tokio::fs::remove_file(path).await {
+            Ok(()) => {
+                tracing::debug!(
+                    event = "ingest.prepared_cache_discarded",
+                    dataset_id = %self.dataset_id,
+                    resource_id = %self.resource_id,
+                    ingest_ulid = %prepared.readiness_ingest_ulid,
+                    path = %path.display(),
+                );
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => {
+                tracing::warn!(
+                    event = "ingest.prepared_cache_cleanup_failed",
+                    dataset_id = %self.dataset_id,
+                    resource_id = %self.resource_id,
+                    ingest_ulid = %prepared.readiness_ingest_ulid,
+                    path = %path.display(),
+                    error = %error,
+                );
+            }
+        }
+    }
+
+    async fn current_table_snapshot(
         &self,
         table_name: &str,
-        table: Arc<dyn TableProvider>,
-        ingest_ulid: Ulid,
-    ) -> Result<(), IngestError> {
-        register_or_replace_versioned_table(&self.df_ctx, table_name, Some(ingest_ulid), table)
+    ) -> Result<Option<TableSnapshot>, IngestError> {
+        let exists = self.df_ctx.table_exist(table_name).map_err(|e| {
+            tracing::error!(
+                event = "ingest.registration_failed",
+                dataset_id = %self.dataset_id,
+                resource_id = %self.resource_id,
+                error = %e,
+            );
+            IngestError::RegistrationFailed
+        })?;
+        if !exists {
+            return Ok(None);
+        }
+
+        table_snapshot(&self.df_ctx, table_name)
             .await
+            .map(Some)
             .map_err(|e| {
                 tracing::error!(
                     event = "ingest.registration_failed",
@@ -461,29 +555,11 @@ impl IngestPlan {
                     error = %e,
                 );
                 IngestError::RegistrationFailed
-            })?;
-
-        Ok(())
+            })
     }
 
-    async fn register_live_provider(
-        &self,
-        table_name: &str,
-        table: Arc<dyn TableProvider>,
-    ) -> Result<(), IngestError> {
-        register_or_replace_versioned_table(&self.df_ctx, table_name, None, table)
-            .await
-            .map_err(|e| {
-                tracing::error!(
-                    event = "ingest.registration_failed",
-                    dataset_id = %self.dataset_id,
-                    resource_id = %self.resource_id,
-                    error = %e,
-                );
-                IngestError::RegistrationFailed
-            })?;
-
-        Ok(())
+    fn restore_readiness(&self, readiness: ResourceReadiness) {
+        self.readiness.store(Arc::new(readiness));
     }
 }
 
@@ -532,6 +608,15 @@ pub struct ResourceReloadResult {
     pub resource_id: ResourceId,
     pub status: &'static str,
     pub error_code: Option<&'static str>,
+}
+
+struct PreparedReloadResource {
+    dataset_id: DatasetId,
+    resource_id: ResourceId,
+    plan: Arc<IngestPlan>,
+    prior_readiness: ResourceReadiness,
+    prior_table: Option<TableSnapshot>,
+    prepared: PreparedIngest,
 }
 
 impl IngestRegistry {
@@ -763,40 +848,147 @@ impl IngestRegistry {
 
     /// Trigger a reload of every configured resource through the admin endpoint.
     pub async fn reload_all(&self) -> RegistryReloadReport {
-        let mut resources = Vec::with_capacity(self.plans.len());
-        let mut succeeded = 0;
-        let mut failed = 0;
+        let _guards = self.lock_all_plans().await;
+        let total = self.plans.len();
+        let mut prepared = Vec::with_capacity(total);
+        let mut resources = BTreeMap::new();
+        let mut prepare_failed = false;
 
         for ((dataset_id, resource_id), plan) in &self.plans {
-            let result = plan.refresh().await;
-            let resource = match result {
-                Ok(()) => {
-                    succeeded += 1;
-                    ResourceReloadResult {
+            let prior_readiness = plan.readiness();
+            match plan.prepare_pipeline().await {
+                Ok(prepared_ingest) => {
+                    prepared.push(PreparedReloadResource {
                         dataset_id: dataset_id.clone(),
                         resource_id: resource_id.clone(),
-                        status: "ok",
-                        error_code: None,
-                    }
+                        plan: Arc::clone(plan),
+                        prior_readiness,
+                        prior_table: None,
+                        prepared: prepared_ingest,
+                    });
                 }
                 Err(error) => {
-                    failed += 1;
+                    prepare_failed = true;
+                    if !matches!(prior_readiness, ResourceReadiness::Ready { .. }) {
+                        plan.store_failed(ingest_error_code(&error), &prior_readiness);
+                    }
+                    resources.insert(
+                        (dataset_id.clone(), resource_id.clone()),
+                        ResourceReloadResult {
+                            dataset_id: dataset_id.clone(),
+                            resource_id: resource_id.clone(),
+                            status: "failed",
+                            error_code: Some(ingest_error_code(&error)),
+                        },
+                    );
+                }
+            }
+        }
+
+        if prepare_failed {
+            self.discard_prepared_reload(&prepared).await;
+            for resource in prepared {
+                resources.insert(
+                    (resource.dataset_id.clone(), resource.resource_id.clone()),
                     ResourceReloadResult {
-                        dataset_id: dataset_id.clone(),
-                        resource_id: resource_id.clone(),
+                        dataset_id: resource.dataset_id,
+                        resource_id: resource.resource_id,
+                        status: "skipped",
+                        error_code: None,
+                    },
+                );
+            }
+            return atomic_reload_failed_report(total, resources.into_values().collect());
+        }
+
+        for resource in &mut prepared {
+            match resource
+                .plan
+                .current_table_snapshot(&resource.prepared.table_name)
+                .await
+            {
+                Ok(prior_table) => {
+                    resource.prior_table = prior_table;
+                }
+                Err(error) => {
+                    resources.insert(
+                        (resource.dataset_id.clone(), resource.resource_id.clone()),
+                        ResourceReloadResult {
+                            dataset_id: resource.dataset_id.clone(),
+                            resource_id: resource.resource_id.clone(),
+                            status: "failed",
+                            error_code: Some(ingest_error_code(&error)),
+                        },
+                    );
+                    for resource in &prepared {
+                        resources
+                            .entry((resource.dataset_id.clone(), resource.resource_id.clone()))
+                            .or_insert(ResourceReloadResult {
+                                dataset_id: resource.dataset_id.clone(),
+                                resource_id: resource.resource_id.clone(),
+                                status: "skipped",
+                                error_code: None,
+                            });
+                    }
+                    self.discard_prepared_reload(&prepared).await;
+                    return atomic_reload_failed_report(total, resources.into_values().collect());
+                }
+            }
+        }
+
+        let publication_guard = publication_write_guard().await;
+        for (idx, resource) in prepared.iter().enumerate() {
+            if let Err(error) = resource.plan.commit_prepared(&resource.prepared).await {
+                self.rollback_committed_reload(&prepared[..idx]).await;
+                if !matches!(resource.prior_readiness, ResourceReadiness::Ready { .. }) {
+                    resource
+                        .plan
+                        .store_failed(ingest_error_code(&error), &resource.prior_readiness);
+                }
+                resources.insert(
+                    (resource.dataset_id.clone(), resource.resource_id.clone()),
+                    ResourceReloadResult {
+                        dataset_id: resource.dataset_id.clone(),
+                        resource_id: resource.resource_id.clone(),
                         status: "failed",
                         error_code: Some(ingest_error_code(&error)),
-                    }
+                    },
+                );
+                for resource in &prepared {
+                    resources
+                        .entry((resource.dataset_id.clone(), resource.resource_id.clone()))
+                        .or_insert(ResourceReloadResult {
+                            dataset_id: resource.dataset_id.clone(),
+                            resource_id: resource.resource_id.clone(),
+                            status: "skipped",
+                            error_code: None,
+                        });
                 }
-            };
-            resources.push(resource);
+                drop(publication_guard);
+                self.discard_prepared_reload(&prepared).await;
+                return atomic_reload_failed_report(total, resources.into_values().collect());
+            }
+        }
+        drop(publication_guard);
+
+        for resource in &prepared {
+            resource.plan.finalize_prepared(&resource.prepared).await;
+            resources.insert(
+                (resource.dataset_id.clone(), resource.resource_id.clone()),
+                ResourceReloadResult {
+                    dataset_id: resource.dataset_id.clone(),
+                    resource_id: resource.resource_id.clone(),
+                    status: "ok",
+                    error_code: None,
+                },
+            );
         }
 
         RegistryReloadReport {
-            total: resources.len(),
-            succeeded,
-            failed,
-            resources,
+            total,
+            succeeded: total,
+            failed: 0,
+            resources: resources.into_values().collect(),
         }
     }
 
@@ -827,6 +1019,63 @@ impl IngestRegistry {
             }
         }
         snapshot
+    }
+
+    async fn lock_all_plans(&self) -> Vec<MutexGuard<'_, ()>> {
+        let mut guards = Vec::with_capacity(self.plans.len());
+        for plan in self.plans.values() {
+            guards.push(plan.refresh_lock.lock().await);
+        }
+        guards
+    }
+
+    async fn rollback_committed_reload(&self, committed: &[PreparedReloadResource]) {
+        for resource in committed.iter().rev() {
+            match restore_versioned_table(
+                &resource.plan.df_ctx,
+                &resource.prepared.table_name,
+                resource.prior_table.clone(),
+            )
+            .await
+            {
+                Ok(()) => {
+                    resource
+                        .plan
+                        .restore_readiness(resource.prior_readiness.clone());
+                }
+                Err(error) => {
+                    tracing::error!(
+                        event = "ingest.reload_rollback_failed",
+                        dataset_id = %resource.dataset_id,
+                        resource_id = %resource.resource_id,
+                        error = %error,
+                    );
+                    resource
+                        .plan
+                        .store_failed("ingest.reload_rollback_failed", &resource.prior_readiness);
+                    if let Err(mark_error) = mark_versioned_table_unavailable(
+                        &resource.plan.df_ctx,
+                        &resource.prepared.table_name,
+                        "ingest.reload_rollback_failed",
+                    )
+                    .await
+                    {
+                        tracing::error!(
+                            event = "ingest.reload_fail_closed_failed",
+                            dataset_id = %resource.dataset_id,
+                            resource_id = %resource.resource_id,
+                            error = %mark_error,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    async fn discard_prepared_reload(&self, prepared: &[PreparedReloadResource]) {
+        for resource in prepared {
+            resource.plan.discard_prepared(&resource.prepared).await;
+        }
     }
 }
 
@@ -874,6 +1123,18 @@ fn materialization_label(materialization: MaterializationMode) -> &'static str {
     match materialization {
         MaterializationMode::Snapshot => "snapshot",
         MaterializationMode::Live => "live",
+    }
+}
+
+fn atomic_reload_failed_report(
+    total: usize,
+    resources: Vec<ResourceReloadResult>,
+) -> RegistryReloadReport {
+    RegistryReloadReport {
+        total,
+        succeeded: 0,
+        failed: total,
+        resources,
     }
 }
 

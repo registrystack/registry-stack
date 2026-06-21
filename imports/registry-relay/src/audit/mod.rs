@@ -76,9 +76,8 @@ pub struct AuditSettings {
     pub trusted_proxies: Vec<String>,
     pub sensitive_fields: Vec<String>,
     pub hash_hasher: AuditKeyHasher,
-    /// Behavior when the audit record write fails. `availability_first`
-    /// (default) logs and continues; `fail_closed` fails the request with a
-    /// stable error code.
+    /// Behavior when the audit record write fails. `fail_closed` is the
+    /// default; `availability_first` is an explicit best-effort opt-out.
     pub write_policy: AuditWritePolicy,
 }
 
@@ -90,7 +89,7 @@ impl Default for AuditSettings {
             trusted_proxies: Vec::new(),
             sensitive_fields: Vec::new(),
             hash_hasher: AuditKeyHasher::unkeyed_dev_only(),
-            write_policy: AuditWritePolicy::AvailabilityFirst,
+            write_policy: AuditWritePolicy::FailClosed,
         }
     }
 }
@@ -1002,9 +1001,9 @@ pub async fn audit_layer(
     // is preserved within a single client's traffic.
     if let Err(e) = sink.write_record(record).await {
         error!(error = %e, "audit.write_failed");
-        // Under the default `availability_first` policy, audit failures never
-        // fail the request: the error is logged and the original response is
-        // returned unchanged. Under `fail_closed`, the request fails with a
+        // Under explicit `availability_first`, audit failures never fail the
+        // request: the error is logged and the original response is returned
+        // unchanged. Under the default `fail_closed`, the request fails with a
         // stable error code so no outcome is returned without a durable audit
         // record.
         if settings.write_policy == AuditWritePolicy::FailClosed {

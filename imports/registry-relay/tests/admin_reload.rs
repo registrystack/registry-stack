@@ -951,6 +951,61 @@ fn build_fixture() -> AdminFixture {
     build_fixture_from_config_path(tmp, config_path)
 }
 
+fn build_fixture_with_distinct_copy_source() -> (AdminFixture, std::path::PathBuf) {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = write_config(&tmp);
+    let copy_source_path = tmp.path().join("social_registry_copy.csv");
+    std::fs::copy(fixture("social_registry.csv"), &copy_source_path)
+        .expect("copy second source fixture");
+    point_copy_table_at_source(&config_path, &copy_source_path);
+    (
+        build_fixture_from_config_path(tmp, config_path),
+        copy_source_path,
+    )
+}
+
+fn point_copy_table_at_source(config_path: &Path, source_path: &Path) {
+    let raw = std::fs::read_to_string(config_path).expect("config reads");
+    let marker = "      - id: beneficiaries_copy_csv";
+    let marker_index = raw.find(marker).expect("copy table marker exists");
+    let first_source_path = config_path
+        .parent()
+        .expect("config has parent")
+        .join("social_registry.csv");
+    let old_path = format!(r#"path: "{}""#, first_source_path.display());
+    let new_path = format!(r#"path: "{}""#, source_path.display());
+    let (head, tail) = raw.split_at(marker_index);
+    let updated_tail = tail.replacen(&old_path, &new_path, 1);
+    assert_ne!(
+        tail, updated_tail,
+        "copy table source path must be replaced"
+    );
+    std::fs::write(config_path, format!("{head}{updated_tail}")).expect("config writes");
+}
+
+fn cache_parquet_count(fixture: &AdminFixture, dataset_id: &str, resource_id: &str) -> usize {
+    let dir = fixture
+        .config_path
+        .parent()
+        .expect("config has parent")
+        .join("cache")
+        .join(dataset_id)
+        .join(resource_id);
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .path()
+                .extension()
+                .and_then(|extension| extension.to_str())
+                == Some("parquet")
+        })
+        .count()
+}
+
 fn build_fixture_with_required_break_glass_approvers(count: usize) -> AdminFixture {
     let tmp = TempDir::new().expect("tempdir");
     let config_path = write_config(&tmp);
@@ -5086,6 +5141,95 @@ async fn reload_all_publishes_ready_snapshot() {
     assert_eq!(body["checks"]["failed"], 0);
     assert!(body.get("counts").is_none());
     assert!(body.get("resources").is_none());
+}
+
+#[tokio::test]
+async fn reload_all_failure_keeps_previous_generation_atomically() {
+    let (fixture, copy_source_path) = build_fixture_with_distinct_copy_source();
+
+    fixture
+        .server
+        .post("/admin/v1/reload")
+        .add_header("Authorization", format!("Bearer {ADMIN_KEY}"))
+        .await
+        .assert_status(StatusCode::OK);
+    assert_eq!(
+        cache_parquet_count(&fixture, "social_registry", "beneficiaries_csv"),
+        1
+    );
+    assert_eq!(
+        cache_parquet_count(&fixture, "social_registry", "beneficiaries_copy_csv"),
+        1
+    );
+
+    let before = fixture
+        .public_server
+        .get("/v1/datasets/social_registry/entities/beneficiary/records?limit=1000")
+        .add_header("Authorization", format!("Bearer {ADMIN_KEY}"))
+        .await;
+    before.assert_status(StatusCode::OK);
+    let before_etag = before.header("etag").to_str().expect("etag").to_string();
+    let before_body: Value = before.json();
+    assert_eq!(program_for_beneficiary(&before_body, 1654), "food_subsidy");
+
+    let updated_csv = "\
+beneficiary_id,household_size,municipality_code,program,amount_eur,joined_date,last_updated
+1654,2,AA001,emergency_cash,760.07,2020-07-03,2019-02-24
+";
+    std::fs::write(&fixture.source_path, updated_csv).expect("rewrite first source");
+
+    let invalid_copy_csv = "\
+beneficiary_id,household_size,municipality_code,program,joined_date,last_updated
+1654,2,AA001,emergency_cash,2020-07-03,2019-02-24
+";
+    std::fs::write(&copy_source_path, invalid_copy_csv).expect("rewrite second source");
+
+    let failed = fixture
+        .server
+        .post("/admin/v1/reload")
+        .add_header("Authorization", format!("Bearer {ADMIN_KEY}"))
+        .await;
+    failed.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    let failed_body: Value = failed.json();
+    assert_eq!(failed_body["status"], "failed");
+    assert_eq!(failed_body["counts"]["total"], 2);
+    assert_eq!(failed_body["counts"]["succeeded"], 0);
+    assert_eq!(failed_body["counts"]["failed"], 2);
+    assert_eq!(
+        cache_parquet_count(&fixture, "social_registry", "beneficiaries_csv"),
+        1,
+        "failed reload-all must discard unpublished cache files for skipped resources"
+    );
+    assert_eq!(
+        cache_parquet_count(&fixture, "social_registry", "beneficiaries_copy_csv"),
+        1,
+        "failed reload-all must not add cache files for the resource that failed prepare"
+    );
+
+    let ready = fixture.server.get("/ready").await;
+    ready.assert_status(StatusCode::OK);
+    let ready_body: Value = ready.json();
+    assert_eq!(ready_body["status"], "ok");
+    assert_eq!(ready_body["checks"]["ok"], 2);
+
+    let stale_revalidation = fixture
+        .public_server
+        .get("/v1/datasets/social_registry/entities/beneficiary/records?limit=1000")
+        .add_header("Authorization", format!("Bearer {ADMIN_KEY}"))
+        .add_header("if-none-match", &before_etag)
+        .await;
+    stale_revalidation.assert_status(StatusCode::NOT_MODIFIED);
+
+    let after = fixture
+        .public_server
+        .get("/v1/datasets/social_registry/entities/beneficiary/records?limit=1000")
+        .add_header("Authorization", format!("Bearer {ADMIN_KEY}"))
+        .await;
+    after.assert_status(StatusCode::OK);
+    let after_etag = after.header("etag").to_str().expect("etag").to_string();
+    assert_eq!(after_etag, before_etag);
+    let after_body: Value = after.json();
+    assert_eq!(program_for_beneficiary(&after_body, 1654), "food_subsidy");
 }
 
 #[tokio::test]

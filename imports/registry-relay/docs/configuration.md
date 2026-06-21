@@ -552,11 +552,11 @@ audit:
   sink: file
   hash_secret_env: REGISTRY_RELAY_AUDIT_HASH_SECRET
   path: /var/log/registry-relay/audit.jsonl
-  write_policy: availability_first   # availability_first | fail_closed
+  write_policy: fail_closed   # fail_closed | availability_first
 ```
 
-* `availability_first` (default): an audit write failure is logged and the request returns its original outcome unchanged. The deployment stays available even when audit is degraded. This is the historical behavior.
-* `fail_closed`: a request whose audit record cannot be written fails with HTTP `503` and the stable error code `audit.write_failed` (`application/problem+json`). No request outcome is returned without a durable audit record. Choose this when audit completeness is a hard requirement.
+* `fail_closed` (default): a request whose audit record cannot be written fails with HTTP `503` and the stable error code `audit.write_failed` (`application/problem+json`). No request outcome is returned without a durable audit record.
+* `availability_first`: an audit write failure is logged and the request returns its original outcome unchanged. The deployment stays available even when audit is degraded. Use this only when an explicit availability exception accepts best-effort audit durability.
 
 The policy applies to every audited route. Per-route-family selection is not configurable. The selected policy is reported truthfully as the `write_policy` fact in the operations posture audit block, so a deployment cannot claim a stronger guarantee than it runs.
 

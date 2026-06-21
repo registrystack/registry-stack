@@ -10,9 +10,9 @@
 //! * an invalid profile value fails config parse,
 //! * deployment waivers must carry a non-empty reason and a well-formed expiry,
 //! * `evidence_grade` from an unsigned local file refuses startup,
-//! * the audit write-policy hook behaves under both `availability_first`
-//!   (default best-effort) and `fail_closed`, proven with an injected audit
-//!   write failure.
+//! * the audit write-policy hook behaves under the default `fail_closed`
+//!   policy and explicit `availability_first` opt-out, proven with an
+//!   injected audit write failure.
 
 use std::sync::Arc;
 
@@ -226,9 +226,9 @@ fn governed_candidate_apply_accepts_evidence_grade_with_signed_provenance() {
 
 // --- audit write policy (end to end) ----------------------------------------
 
-/// Under the default `availability_first` policy an audit write failure is
-/// swallowed: the request keeps its original outcome (here a 401 from the auth
-/// layer, since the catalog route is protected and no key is presented).
+/// Under explicit `availability_first` an audit write failure is swallowed:
+/// the request keeps its original outcome (here a 401 from the auth layer,
+/// since the catalog route is protected and no key is presented).
 #[tokio::test]
 async fn availability_first_swallows_audit_write_failure() {
     let mut config = load_example_config();
@@ -254,13 +254,13 @@ async fn availability_first_swallows_audit_write_failure() {
     );
 }
 
-/// Under `fail_closed`, the same injected audit write failure fails the request
-/// with the stable `audit.write_failed` code so no outcome is returned without
-/// a durable audit record.
+/// By default, the same injected audit write failure fails the request with the
+/// stable `audit.write_failed` code so no outcome is returned without a durable
+/// audit record.
 #[tokio::test]
-async fn fail_closed_fails_request_on_audit_write_failure() {
-    let mut config = load_example_config();
-    config.audit.write_policy = AuditWritePolicy::FailClosed;
+async fn default_fail_closed_fails_request_on_audit_write_failure() {
+    let config = load_example_config();
+    assert_eq!(config.audit.write_policy, AuditWritePolicy::FailClosed);
     let config = Arc::new(config);
     let auth: Arc<dyn AuthProvider> = Arc::new(ApiKeyAuth::new(Vec::new()));
     let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(AlwaysFailWriteSink);

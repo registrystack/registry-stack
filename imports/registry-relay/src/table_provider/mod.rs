@@ -3,15 +3,19 @@
 
 use std::any::Any;
 use std::fmt;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::{Session, TableProvider};
-use datafusion::common::{Result as DataFusionResult, Statistics};
+use datafusion::common::{DataFusionError, Result as DataFusionResult, Statistics};
 use datafusion::execution::context::SessionContext;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableType};
 use datafusion::physical_plan::ExecutionPlan;
+use tokio::sync::{
+    RwLock as AsyncRwLock, RwLockReadGuard as AsyncRwLockReadGuard,
+    RwLockWriteGuard as AsyncRwLockWriteGuard,
+};
 use ulid::Ulid;
 
 use crate::config::{DatasetId, ResourceId};
@@ -19,6 +23,20 @@ use crate::config::{DatasetId, ResourceId};
 /// DataFusion table name for a private storage table.
 pub fn table_name(dataset: &DatasetId, resource: &ResourceId) -> String {
     format!("{}__{}", dataset.as_str(), resource.as_str())
+}
+
+static PUBLICATION_GATE: OnceLock<AsyncRwLock<()>> = OnceLock::new();
+
+fn publication_gate() -> &'static AsyncRwLock<()> {
+    PUBLICATION_GATE.get_or_init(|| AsyncRwLock::new(()))
+}
+
+pub(crate) async fn publication_read_guard() -> AsyncRwLockReadGuard<'static, ()> {
+    publication_gate().read().await
+}
+
+pub(crate) async fn publication_write_guard() -> AsyncRwLockWriteGuard<'static, ()> {
+    publication_gate().write().await
 }
 
 #[derive(Clone)]
@@ -74,10 +92,92 @@ pub(crate) async fn register_or_replace_versioned_table(
     Ok(())
 }
 
+pub(crate) async fn restore_versioned_table(
+    ctx: &SessionContext,
+    table_name: &str,
+    snapshot: Option<TableSnapshot>,
+) -> DataFusionResult<()> {
+    match snapshot {
+        Some(snapshot) => {
+            register_or_replace_versioned_table(
+                ctx,
+                table_name,
+                snapshot.ingest_ulid,
+                snapshot.provider,
+            )
+            .await
+        }
+        None => {
+            let _ = ctx.deregister_table(table_name.to_string())?;
+            Ok(())
+        }
+    }
+}
+
+pub(crate) async fn mark_versioned_table_unavailable(
+    ctx: &SessionContext,
+    table_name: &str,
+    reason: &'static str,
+) -> DataFusionResult<()> {
+    let schema = ctx.table_provider(table_name).await?.schema();
+    register_or_replace_versioned_table(
+        ctx,
+        table_name,
+        None,
+        Arc::new(UnavailableTableProvider { schema, reason }),
+    )
+    .await
+}
+
 #[derive(Clone)]
 struct VersionedTableProvider {
     ingest_ulid: Option<Ulid>,
     inner: Arc<dyn TableProvider>,
+}
+
+#[derive(Debug)]
+struct UnavailableTableProvider {
+    schema: SchemaRef,
+    reason: &'static str,
+}
+
+#[async_trait]
+impl TableProvider for UnavailableTableProvider {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+
+    fn table_type(&self) -> TableType {
+        TableType::Base
+    }
+
+    async fn scan(
+        &self,
+        _state: &dyn Session,
+        _projection: Option<&Vec<usize>>,
+        _filters: &[Expr],
+        _limit: Option<usize>,
+    ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
+        Err(DataFusionError::Execution(self.reason.to_string()))
+    }
+
+    fn supports_filters_pushdown(
+        &self,
+        filters: &[&Expr],
+    ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
+        Ok(vec![
+            TableProviderFilterPushDown::Unsupported;
+            filters.len()
+        ])
+    }
+
+    fn statistics(&self) -> Option<Statistics> {
+        None
+    }
 }
 
 pub(crate) struct SwappableTableProvider {
@@ -247,5 +347,39 @@ mod tests {
 
         assert_eq!(current_snapshot.ingest_ulid, Some(current));
         assert_eq!(query_values(&ctx, table).await, vec!["current"]);
+    }
+
+    #[tokio::test]
+    async fn unavailable_versioned_table_fails_closed_for_public_reads() {
+        let ctx = SessionContext::new();
+        let table = "unavailable_after_rollback";
+
+        register_or_replace_versioned_table(
+            &ctx,
+            table,
+            Some(ingest_ulid("01J5K8M0000000000000000000")),
+            mem_table(&["partial-generation"]),
+        )
+        .await
+        .expect("register partial table");
+
+        mark_versioned_table_unavailable(&ctx, table, "ingest.reload_rollback_failed")
+            .await
+            .expect("mark table unavailable");
+
+        table_snapshot(&ctx, table)
+            .await
+            .expect("unavailable table remains registered for consistent failures");
+        let error = ctx
+            .sql(&format!("select value from {table}"))
+            .await
+            .expect("sql plans")
+            .collect()
+            .await
+            .expect_err("unavailable table must fail closed at execution");
+        assert!(
+            error.to_string().contains("ingest.reload_rollback_failed"),
+            "unexpected error: {error}"
+        );
     }
 }

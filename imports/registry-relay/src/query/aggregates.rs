@@ -19,7 +19,7 @@ use crate::config::{
 };
 use crate::entity::{EntityField, EntityModel, EntityRegistry};
 use crate::error::{AggregateError, Error, FilterError, SchemaError};
-use crate::table_provider::table_snapshot;
+use crate::table_provider::{publication_read_guard, table_snapshot};
 
 use super::{batches_to_json_rows, table_name_str};
 
@@ -179,6 +179,7 @@ impl AggregateQueryEngine {
         aggregate_id: &str,
         request: AggregateQueryRequest,
     ) -> Result<AggregateResult, Error> {
+        let _publication_guard = publication_read_guard().await;
         let (dataset, aggregate) = self.aggregate_config(dataset_id, aggregate_id)?;
         let source_entity = aggregate
             .source_entity

@@ -58,7 +58,7 @@ POST /admin/v1/reload
 
 `GET /admin/v1/posture` returns a redacted operations posture document for callers with `registry_relay:ops_read`. Pass `?tier=restricted` only to trusted operations users who need the restricted posture projection.
 
-`POST /admin/v1/reload` reloads every configured source resource and returns a compact `status` plus `counts` summary. It requires `registry_relay:admin`, does not reload startup runtime config, and has a table-specific companion route when you need to reload only one source.
+`POST /admin/v1/reload` reloads every configured source resource and returns a compact `status` plus `counts` summary. It requires `registry_relay:admin`, does not reload startup runtime config, and has a table-specific companion route when you need to reload only one source. Reload-all publishes as one coherent generation: if any source resource cannot prepare, Relay keeps the previous generation active and returns `500` with `status: "failed"`.
 
 The governed config routes also require the independent `registry_relay:admin` scope:
 
