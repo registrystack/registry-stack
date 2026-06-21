@@ -635,7 +635,7 @@ fn evidence_pack_policy(
 }
 
 fn supported_odrl_term(term: &str) -> bool {
-    matches!(term, ODRL_PURPOSE_COMPACT | ODRL_SPATIAL_COMPACT)
+    matches!(term, ODRL_PURPOSE_COMPACT)
 }
 
 fn normalized_odrl_term(term: &str) -> &str {
@@ -875,6 +875,43 @@ datasets: []
         registry_manifest_core::compile_manifest(&manifest).expect("metadata compiles")
     }
 
+    fn evidence_pack_with_constraint_terms(constraint_terms: Vec<String>) -> EvidencePackMetadata {
+        EvidencePackMetadata {
+            pack_id: Some("oots-birth-evidence/v1".to_string()),
+            pack_version: Some("v1".to_string()),
+            source_basis: Some(serde_json::json!({
+                "family": "oots-common-data-model",
+                "evidence_type": "Birth Evidence"
+            })),
+            semantic_profile: Some(serde_json::json!({
+                "vocabulary": "publicschema",
+                "fit": "strong"
+            })),
+            evidence_envelope: Some(serde_json::json!({
+                "identifier": "required",
+                "issuing_date": "required",
+                "issuing_authority": "required"
+            })),
+            required_gates: Vec::new(),
+            allowed_outputs: vec!["minimized_json".to_string()],
+            policy_id: Some("baseline-dpi-policy".to_string()),
+            policy_version: None,
+            policy_hash: Some(
+                "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+                    .to_string(),
+            ),
+            source_mapping: None,
+            policy: None,
+            fixtures: Vec::new(),
+            synthetic_data: Vec::new(),
+            odrl_policy_url: None,
+            odrl_enforcement: Some(OdrlEnforcementProfile {
+                profile: "registry-evidence-gateway-pdp/v1".to_string(),
+                constraint_terms,
+            }),
+        }
+    }
+
     #[test]
     fn selected_ecosystem_policy_uses_evidence_pack_identity() {
         let config = config_with_selector();
@@ -908,10 +945,9 @@ datasets: []
     }
 
     #[test]
-    fn selected_ecosystem_policy_accepts_pdp_supported_odrl_terms() {
+    fn selected_ecosystem_policy_accepts_purpose_odrl_term() {
         let config = config_with_selector();
-        let compiled =
-            compiled_metadata_with_binding(&[ODRL_PURPOSE_COMPACT, ODRL_SPATIAL_COMPACT]);
+        let compiled = compiled_metadata_with_binding(&[ODRL_PURPOSE_COMPACT]);
 
         let selected = selected_ecosystem_policy_from_metadata(&config, Some(&compiled))
             .expect("selected binding resolves")
@@ -921,44 +957,39 @@ datasets: []
     }
 
     #[test]
+    fn selected_ecosystem_policy_reports_compact_spatial_odrl_term_unsupported() {
+        let config = config_with_selector();
+        let compiled =
+            compiled_metadata_with_binding(&[ODRL_PURPOSE_COMPACT, ODRL_SPATIAL_COMPACT]);
+
+        let selected = selected_ecosystem_policy_from_metadata(&config, Some(&compiled))
+            .expect("selected binding resolves")
+            .expect("selector is configured");
+
+        assert_eq!(selected.unsupported_odrl_terms, vec![ODRL_SPATIAL_COMPACT]);
+    }
+
+    #[test]
+    fn evidence_pack_policy_reports_absolute_spatial_odrl_term_unsupported() {
+        let evidence_pack = evidence_pack_with_constraint_terms(vec![
+            ODRL_PURPOSE.to_string(),
+            ODRL_SPATIAL.to_string(),
+        ]);
+        let selected = evidence_pack_policy(Some(&evidence_pack)).expect("policy selected");
+
+        assert_eq!(
+            selected.odrl_constraint_terms,
+            vec![ODRL_PURPOSE_COMPACT, ODRL_SPATIAL_COMPACT]
+        );
+        assert_eq!(selected.unsupported_odrl_terms, vec![ODRL_SPATIAL_COMPACT]);
+    }
+
+    #[test]
     fn selected_ecosystem_policy_reports_unsupported_odrl_terms() {
-        let evidence_pack = EvidencePackMetadata {
-            pack_id: Some("oots-birth-evidence/v1".to_string()),
-            pack_version: Some("v1".to_string()),
-            source_basis: Some(serde_json::json!({
-                "family": "oots-common-data-model",
-                "evidence_type": "Birth Evidence"
-            })),
-            semantic_profile: Some(serde_json::json!({
-                "vocabulary": "publicschema",
-                "fit": "strong"
-            })),
-            evidence_envelope: Some(serde_json::json!({
-                "identifier": "required",
-                "issuing_date": "required",
-                "issuing_authority": "required"
-            })),
-            required_gates: Vec::new(),
-            allowed_outputs: vec!["minimized_json".to_string()],
-            policy_id: Some("baseline-dpi-policy".to_string()),
-            policy_version: None,
-            policy_hash: Some(
-                "sha256:3333333333333333333333333333333333333333333333333333333333333333"
-                    .to_string(),
-            ),
-            source_mapping: None,
-            policy: None,
-            fixtures: Vec::new(),
-            synthetic_data: Vec::new(),
-            odrl_policy_url: None,
-            odrl_enforcement: Some(OdrlEnforcementProfile {
-                profile: "registry-evidence-gateway-pdp/v1".to_string(),
-                constraint_terms: vec![
-                    ODRL_PURPOSE_COMPACT.to_string(),
-                    "odrl:recipient".to_string(),
-                ],
-            }),
-        };
+        let evidence_pack = evidence_pack_with_constraint_terms(vec![
+            ODRL_PURPOSE_COMPACT.to_string(),
+            "odrl:recipient".to_string(),
+        ]);
 
         let selected = evidence_pack_policy(Some(&evidence_pack)).expect("policy selected");
 
