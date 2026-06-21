@@ -654,6 +654,26 @@ impl SidecarAuditPipeline {
         Ok(())
     }
 
+    async fn probe_startup_writable(
+        &self,
+        assurance: &SidecarAssurance,
+    ) -> Result<(), registry_platform_audit::AuditError> {
+        self.emit(json!({
+            "event_type": "registry-notary-source-adapter-sidecar.startup_audit_probe",
+            "phase": "startup",
+            "outcome": "writable",
+            "product": assurance.product.as_str(),
+            "instance_id": assurance.instance_id.as_str(),
+            "environment": assurance.environment.as_str(),
+            "stream_id": assurance.stream_id.as_str(),
+            "bundle_id": assurance.bundle_id.as_str(),
+            "sequence": assurance.sequence,
+            "config_hash": assurance.config_hash.as_str(),
+            "timestamp": Utc::now().to_rfc3339(),
+        }))
+        .await
+    }
+
     fn hash(&self, value: &str) -> String {
         self.profile.key_hasher().hash(value)
     }
@@ -1299,6 +1319,9 @@ pub async fn sidecar_router(config: SidecarConfig) -> Result<Router, SidecarErro
         return Err(SidecarError::Config(
             "governed sidecar runtime requires durable audit configuration".to_string(),
         ));
+    }
+    if let (Some(assurance), Some(audit)) = (config.assurance.as_ref(), audit.as_ref()) {
+        audit.probe_startup_writable(assurance).await?;
     }
     let request_timeout = Duration::from_millis(config.server.request_timeout_ms);
     let request_body_timeout = Duration::from_millis(config.server.request_body_timeout_ms);

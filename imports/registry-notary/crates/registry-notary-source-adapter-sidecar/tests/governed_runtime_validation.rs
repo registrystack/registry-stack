@@ -564,6 +564,34 @@ async fn governed_startup_smoke_failure_does_not_accept_antirollback() {
     assert_eq!(accepted.last_config_hash, previous_config_hash);
 }
 
+#[tokio::test]
+async fn governed_startup_audit_probe_failure_does_not_accept_antirollback() {
+    let harness = Harness::new().await;
+    let previous_config_hash =
+        "sha256:1111111111111111111111111111111111111111111111111111111111111111".to_string();
+    let repo = signed_runtime_repo(&harness, 12, "restart_required", &previous_config_hash).await;
+    initialize_antirollback(&repo, &previous_config_hash, 11);
+    let raw = bootstrap_yaml(&repo);
+    let mut config = load_startup_config(&raw)
+        .await
+        .expect("signed startup config loads");
+    config.audit.path = Some(repo.datastore_dir.to_string_lossy().into_owned());
+
+    let error = sidecar_router(config)
+        .await
+        .expect_err("unwritable audit path must fail before antirollback acceptance");
+
+    assert!(
+        error.to_string().contains("audit setup or write failed"),
+        "unexpected error: {error}"
+    );
+    let accepted: AntiRollbackRecord =
+        serde_json::from_slice(&fs::read(repo.datastore_dir.join("antirollback.json")).unwrap())
+            .expect("antirollback state parses");
+    assert_eq!(accepted.last_sequence, 11);
+    assert_eq!(accepted.last_config_hash, previous_config_hash);
+}
+
 fn yaml_path(path: &Path) -> String {
     yaml_string(path.to_str().expect("fixture path is UTF-8"))
 }
