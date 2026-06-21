@@ -3,7 +3,7 @@
 
 use std::any::Any;
 use std::fmt;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
@@ -12,6 +12,10 @@ use datafusion::common::{Result as DataFusionResult, Statistics};
 use datafusion::execution::context::SessionContext;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableType};
 use datafusion::physical_plan::ExecutionPlan;
+use tokio::sync::{
+    RwLock as AsyncRwLock, RwLockReadGuard as AsyncRwLockReadGuard,
+    RwLockWriteGuard as AsyncRwLockWriteGuard,
+};
 use ulid::Ulid;
 
 use crate::config::{DatasetId, ResourceId};
@@ -19,6 +23,20 @@ use crate::config::{DatasetId, ResourceId};
 /// DataFusion table name for a private storage table.
 pub fn table_name(dataset: &DatasetId, resource: &ResourceId) -> String {
     format!("{}__{}", dataset.as_str(), resource.as_str())
+}
+
+static PUBLICATION_GATE: OnceLock<AsyncRwLock<()>> = OnceLock::new();
+
+fn publication_gate() -> &'static AsyncRwLock<()> {
+    PUBLICATION_GATE.get_or_init(|| AsyncRwLock::new(()))
+}
+
+pub(crate) async fn publication_read_guard() -> AsyncRwLockReadGuard<'static, ()> {
+    publication_gate().read().await
+}
+
+pub(crate) async fn publication_write_guard() -> AsyncRwLockWriteGuard<'static, ()> {
+    publication_gate().write().await
 }
 
 #[derive(Clone)]

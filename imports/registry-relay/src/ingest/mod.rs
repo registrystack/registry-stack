@@ -6,6 +6,7 @@
 //! Parquet cache write, table registration, refresh, and readiness.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -41,7 +42,8 @@ use crate::ingest::refresh::{run_refresh_loop, RefreshPolicy};
 use crate::ingest::validation::validate;
 use crate::source::Source;
 use crate::table_provider::{
-    register_or_replace_versioned_table, restore_versioned_table, table_snapshot, TableSnapshot,
+    publication_write_guard, register_or_replace_versioned_table, restore_versioned_table,
+    table_snapshot, TableSnapshot,
 };
 
 pub use crate::table_provider::{register_versioned_table, table_name};
@@ -171,7 +173,10 @@ impl IngestPlan {
         let prior = self.readiness.load_full();
         let result = match self.prepare_pipeline().await {
             Ok(prepared) => {
-                let result = self.commit_prepared(&prepared).await;
+                let result = {
+                    let _publication_guard = publication_write_guard().await;
+                    self.commit_prepared(&prepared).await
+                };
                 if result.is_ok() {
                     self.finalize_prepared(&prepared).await;
                 }
@@ -491,6 +496,34 @@ impl IngestPlan {
                 ingest_ulid = %prepared.readiness_ingest_ulid,
                 materialization = materialization_label(self.materialization),
             );
+        }
+    }
+
+    async fn discard_prepared(&self, prepared: &PreparedIngest) {
+        let Some(path) = &prepared.cache_path else {
+            return;
+        };
+        match tokio::fs::remove_file(path).await {
+            Ok(()) => {
+                tracing::debug!(
+                    event = "ingest.prepared_cache_discarded",
+                    dataset_id = %self.dataset_id,
+                    resource_id = %self.resource_id,
+                    ingest_ulid = %prepared.readiness_ingest_ulid,
+                    path = %path.display(),
+                );
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => {
+                tracing::warn!(
+                    event = "ingest.prepared_cache_cleanup_failed",
+                    dataset_id = %self.dataset_id,
+                    resource_id = %self.resource_id,
+                    ingest_ulid = %prepared.readiness_ingest_ulid,
+                    path = %path.display(),
+                    error = %error,
+                );
+            }
         }
     }
 
@@ -853,6 +886,7 @@ impl IngestRegistry {
         }
 
         if prepare_failed {
+            self.discard_prepared_reload(&prepared).await;
             for resource in prepared {
                 resources.insert(
                     (resource.dataset_id.clone(), resource.resource_id.clone()),
@@ -896,11 +930,13 @@ impl IngestRegistry {
                                 error_code: None,
                             });
                     }
+                    self.discard_prepared_reload(&prepared).await;
                     return atomic_reload_failed_report(total, resources.into_values().collect());
                 }
             }
         }
 
+        let publication_guard = publication_write_guard().await;
         for (idx, resource) in prepared.iter().enumerate() {
             if let Err(error) = resource.plan.commit_prepared(&resource.prepared).await {
                 self.rollback_committed_reload(&prepared[..idx]).await;
@@ -923,9 +959,12 @@ impl IngestRegistry {
                             error_code: None,
                         });
                 }
+                drop(publication_guard);
+                self.discard_prepared_reload(&prepared).await;
                 return atomic_reload_failed_report(total, resources.into_values().collect());
             }
         }
+        drop(publication_guard);
 
         for resource in &prepared {
             resource.plan.finalize_prepared(&resource.prepared).await;
@@ -1004,6 +1043,12 @@ impl IngestRegistry {
             resource
                 .plan
                 .restore_readiness(resource.prior_readiness.clone());
+        }
+    }
+
+    async fn discard_prepared_reload(&self, prepared: &[PreparedReloadResource]) {
+        for resource in prepared {
+            resource.plan.discard_prepared(&resource.prepared).await;
         }
     }
 }

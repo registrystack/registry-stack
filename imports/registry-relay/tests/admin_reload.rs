@@ -983,6 +983,29 @@ fn point_copy_table_at_source(config_path: &Path, source_path: &Path) {
     std::fs::write(config_path, format!("{head}{updated_tail}")).expect("config writes");
 }
 
+fn cache_parquet_count(fixture: &AdminFixture, dataset_id: &str, resource_id: &str) -> usize {
+    let dir = fixture
+        .config_path
+        .parent()
+        .expect("config has parent")
+        .join("cache")
+        .join(dataset_id)
+        .join(resource_id);
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .path()
+                .extension()
+                .and_then(|extension| extension.to_str())
+                == Some("parquet")
+        })
+        .count()
+}
+
 fn build_fixture_with_required_break_glass_approvers(count: usize) -> AdminFixture {
     let tmp = TempDir::new().expect("tempdir");
     let config_path = write_config(&tmp);
@@ -5130,6 +5153,14 @@ async fn reload_all_failure_keeps_previous_generation_atomically() {
         .add_header("Authorization", format!("Bearer {ADMIN_KEY}"))
         .await
         .assert_status(StatusCode::OK);
+    assert_eq!(
+        cache_parquet_count(&fixture, "social_registry", "beneficiaries_csv"),
+        1
+    );
+    assert_eq!(
+        cache_parquet_count(&fixture, "social_registry", "beneficiaries_copy_csv"),
+        1
+    );
 
     let before = fixture
         .public_server
@@ -5164,6 +5195,16 @@ beneficiary_id,household_size,municipality_code,program,joined_date,last_updated
     assert_eq!(failed_body["counts"]["total"], 2);
     assert_eq!(failed_body["counts"]["succeeded"], 0);
     assert_eq!(failed_body["counts"]["failed"], 2);
+    assert_eq!(
+        cache_parquet_count(&fixture, "social_registry", "beneficiaries_csv"),
+        1,
+        "failed reload-all must discard unpublished cache files for skipped resources"
+    );
+    assert_eq!(
+        cache_parquet_count(&fixture, "social_registry", "beneficiaries_copy_csv"),
+        1,
+        "failed reload-all must not add cache files for the resource that failed prepare"
+    );
 
     let ready = fixture.server.get("/ready").await;
     ready.assert_status(StatusCode::OK);

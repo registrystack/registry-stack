@@ -13,7 +13,7 @@ use serde_json::Value;
 use crate::config::{FilterOp, RelationshipKind};
 use crate::entity::{EntityField, EntityModel, EntityRegistry};
 use crate::error::{Error, FilterError, InternalError, SchemaError};
-use crate::table_provider::{table_name, table_snapshot};
+use crate::table_provider::{publication_read_guard, table_name, table_snapshot};
 
 pub mod aggregates;
 pub use aggregates::{
@@ -141,6 +141,7 @@ impl EntityQueryEngine {
         entity_name: &str,
         query: EntityCollectionQuery,
     ) -> Result<EntityRows, Error> {
+        let _publication_guard = publication_read_guard().await;
         let entity = self.entity(dataset_id, entity_name)?;
         validate_allowed_expansions(entity, &query.expansions)?;
         let requested_fields = query.fields.clone();
@@ -203,6 +204,7 @@ impl EntityQueryEngine {
         fields: Option<Vec<String>>,
         expansions: Vec<String>,
     ) -> Result<Option<EntityRecord>, Error> {
+        let _publication_guard = publication_read_guard().await;
         let entity = self.entity(dataset_id, entity_name)?;
         validate_allowed_expansions(entity, &expansions)?;
         let mut projected_fields = projected_fields(entity, fields.as_deref())?;
@@ -236,6 +238,7 @@ impl EntityQueryEngine {
         entity_name: &str,
         primary_key: Value,
     ) -> Result<EntityExists, Error> {
+        let _publication_guard = publication_read_guard().await;
         let entity = self.entity(dataset_id, entity_name)?;
         let projected_fields = vec![&entity.primary_key];
         let filter = EntityFilter::eq(entity.primary_key.name.clone(), primary_key);
@@ -262,6 +265,7 @@ impl EntityQueryEngine {
         primary_key: Value,
         relationship_name: &str,
     ) -> Result<Value, Error> {
+        let _publication_guard = publication_read_guard().await;
         let entity = self.entity(dataset_id, entity_name)?;
         let Some(relationship) = entity.relationships.get(relationship_name) else {
             return Err(SchemaError::UnknownResource.into());
@@ -299,6 +303,7 @@ impl EntityQueryEngine {
         relationship_name: &str,
         page: RelationshipPageQuery,
     ) -> Result<EntityRelationshipPage, Error> {
+        let _publication_guard = publication_read_guard().await;
         let entity = self.entity(dataset_id, entity_name)?;
         let Some(relationship) = entity.relationships.get(relationship_name) else {
             return Err(SchemaError::UnknownResource.into());
@@ -980,5 +985,296 @@ fn table_name_str(dataset_id: &str, resource_id: &str) -> String {
     match (dataset, resource) {
         (Ok(dataset), Ok(resource)) => table_name(&dataset, &resource),
         _ => format!("{dataset_id}__{resource_id}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::any::Any;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
+    use datafusion::arrow::array::{ArrayRef, StringArray};
+    use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+    use datafusion::arrow::record_batch::RecordBatch;
+    use datafusion::catalog::{Session, TableProvider};
+    use datafusion::common::{Result as DataFusionResult, Statistics};
+    use datafusion::datasource::MemTable;
+    use datafusion::execution::context::SessionContext;
+    use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableType};
+    use datafusion::physical_plan::ExecutionPlan;
+    use serde_json::json;
+    use tokio::sync::Notify;
+    use tokio::time::{timeout, Duration};
+
+    use super::*;
+    use crate::config::Config;
+    use crate::entity::EntityRegistry;
+    use crate::table_provider::publication_write_guard;
+
+    #[derive(Debug)]
+    struct BlockingTableProvider {
+        inner: Arc<dyn TableProvider>,
+        started: Arc<Notify>,
+        release: Arc<Notify>,
+        blocked: AtomicBool,
+    }
+
+    impl BlockingTableProvider {
+        fn new(inner: Arc<dyn TableProvider>, started: Arc<Notify>, release: Arc<Notify>) -> Self {
+            Self {
+                inner,
+                started,
+                release,
+                blocked: AtomicBool::new(false),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl TableProvider for BlockingTableProvider {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn schema(&self) -> SchemaRef {
+            self.inner.schema()
+        }
+
+        fn table_type(&self) -> TableType {
+            self.inner.table_type()
+        }
+
+        async fn scan(
+            &self,
+            state: &dyn Session,
+            projection: Option<&Vec<usize>>,
+            filters: &[Expr],
+            limit: Option<usize>,
+        ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
+            if !self.blocked.swap(true, Ordering::SeqCst) {
+                self.started.notify_one();
+                self.release.notified().await;
+            }
+            self.inner.scan(state, projection, filters, limit).await
+        }
+
+        fn supports_filters_pushdown(
+            &self,
+            filters: &[&Expr],
+        ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
+            self.inner.supports_filters_pushdown(filters)
+        }
+
+        fn statistics(&self) -> Option<Statistics> {
+            self.inner.statistics()
+        }
+    }
+
+    fn query_test_config() -> Config {
+        serde_saphyr::from_str(
+            r#"
+server:
+  bind: 127.0.0.1:0
+
+catalog:
+  title: Test
+  base_url: https://data.example.test
+  publisher: Test
+
+vocabularies: {}
+
+auth:
+  mode: api_key
+  api_keys: []
+
+datasets:
+  - id: social_registry
+    title: Social Registry
+    description: Synthetic registry
+    owner: Test
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: monthly
+    tables:
+      - id: households_table
+        source:
+          type: file
+          path: fixtures/social_registry.csv
+        primary_key: household_id
+        schema:
+          strict: true
+          fields:
+            - name: household_id
+              type: string
+              nullable: false
+            - name: region_code
+              type: string
+              nullable: false
+      - id: individuals_table
+        source:
+          type: file
+          path: fixtures/social_registry.csv
+        primary_key: individual_id
+        schema:
+          strict: true
+          fields:
+            - name: individual_id
+              type: string
+              nullable: false
+            - name: household_id
+              type: string
+              nullable: false
+            - name: given_name
+              type: string
+              nullable: false
+    entities:
+      - name: household
+        table: households_table
+        fields:
+          - name: id
+            from: household_id
+          - name: region
+            from: region_code
+        access:
+          metadata_scope: social_registry:metadata
+          aggregate_scope: social_registry:aggregate
+          read_scope: social_registry:rows
+        api:
+          default_limit: 100
+          max_limit: 1000
+      - name: individual
+        table: individuals_table
+        fields:
+          - name: id
+            from: individual_id
+          - name: household_id
+          - name: given_name
+        relationships:
+          - name: household
+            kind: belongs_to
+            target: household
+            foreign_key: household_id
+        access:
+          metadata_scope: social_registry:metadata
+          aggregate_scope: social_registry:aggregate
+          read_scope: social_registry:rows
+        api:
+          default_limit: 100
+          max_limit: 1000
+          allowed_expansions: [household]
+
+audit:
+  sink: stdout
+  format: jsonl
+"#,
+        )
+        .expect("query test config parses")
+    }
+
+    fn mem_table(schema: SchemaRef, columns: Vec<ArrayRef>) -> Arc<dyn TableProvider> {
+        let batch = RecordBatch::try_new(Arc::clone(&schema), columns).expect("record batch");
+        Arc::new(MemTable::try_new(schema, vec![vec![batch]]).expect("mem table"))
+    }
+
+    fn household_table() -> Arc<dyn TableProvider> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("household_id", DataType::Utf8, false),
+            Field::new("region_code", DataType::Utf8, false),
+        ]));
+        mem_table(
+            schema,
+            vec![
+                Arc::new(StringArray::from(vec!["hh-1"])) as ArrayRef,
+                Arc::new(StringArray::from(vec!["north"])) as ArrayRef,
+            ],
+        )
+    }
+
+    fn individual_table() -> Arc<dyn TableProvider> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("individual_id", DataType::Utf8, false),
+            Field::new("household_id", DataType::Utf8, false),
+            Field::new("given_name", DataType::Utf8, false),
+        ]));
+        mem_table(
+            schema,
+            vec![
+                Arc::new(StringArray::from(vec!["p-1"])) as ArrayRef,
+                Arc::new(StringArray::from(vec!["hh-1"])) as ArrayRef,
+                Arc::new(StringArray::from(vec!["Ada"])) as ArrayRef,
+            ],
+        )
+    }
+
+    #[tokio::test]
+    async fn public_collection_read_holds_publication_guard_until_expansions_finish() {
+        let cfg = query_test_config();
+        let registry = Arc::new(EntityRegistry::from_config(&cfg).expect("registry compiles"));
+        let ctx = Arc::new(SessionContext::new());
+
+        ctx.register_table(
+            table_name_str("social_registry", "households_table"),
+            household_table(),
+        )
+        .expect("register households table");
+
+        let scan_started = Arc::new(Notify::new());
+        let release_scan = Arc::new(Notify::new());
+        let blocking_individuals: Arc<dyn TableProvider> = Arc::new(BlockingTableProvider::new(
+            individual_table(),
+            Arc::clone(&scan_started),
+            Arc::clone(&release_scan),
+        ));
+        ctx.register_table(
+            table_name_str("social_registry", "individuals_table"),
+            blocking_individuals,
+        )
+        .expect("register individuals table");
+
+        let engine = EntityQueryEngine::new(ctx, registry);
+        let read_task = tokio::spawn(async move {
+            engine
+                .read_collection(
+                    "social_registry",
+                    "individual",
+                    EntityCollectionQuery::new().with_expansions(["household"]),
+                )
+                .await
+        });
+
+        timeout(Duration::from_secs(1), scan_started.notified())
+            .await
+            .expect("base table scan started");
+
+        let mut publication_write = Box::pin(publication_write_guard());
+        assert!(
+            timeout(Duration::from_millis(50), &mut publication_write)
+                .await
+                .is_err(),
+            "publication write guard acquired while public read was still in flight"
+        );
+
+        release_scan.notify_one();
+        let rows = timeout(Duration::from_secs(1), read_task)
+            .await
+            .expect("public read finishes")
+            .expect("public read task joins")
+            .expect("public read succeeds")
+            .rows;
+        assert_eq!(
+            rows,
+            vec![json!({
+                "id": "p-1",
+                "household_id": "hh-1",
+                "given_name": "Ada",
+                "household": {"id": "hh-1", "region": "north"}
+            })]
+        );
+
+        let _publication_guard = timeout(Duration::from_secs(1), &mut publication_write)
+            .await
+            .expect("publication write unblocks after public read");
     }
 }
