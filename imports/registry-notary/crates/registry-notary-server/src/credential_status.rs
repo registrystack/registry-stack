@@ -12,8 +12,8 @@ use registry_notary_core::{
     CREDENTIAL_STATUS_STORAGE_REDIS, CREDENTIAL_STATUS_SUSPENDED, CREDENTIAL_STATUS_VALID,
 };
 use registry_platform_cache::{
-    CacheKey, CacheKeyError, CacheStore, CacheStoreError, InMemoryCacheStore, RedisCacheBuildError,
-    RedisCacheStore,
+    CacheCompareAndSetOutcome, CacheKey, CacheKeyError, CacheStore, CacheStoreError,
+    InMemoryCacheStore, RedisCacheBuildError, RedisCacheStore,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -235,21 +235,41 @@ impl CredentialStatusStore {
         if !self.enabled {
             return Ok(None);
         }
-        let transition_lock = self.transition_lock(credential_id);
-        let _transition_guard = transition_lock.lock().await;
-        // This guard makes the read-check-write transition atomic for the
-        // process-local memory store. Redis still relies on this process-local
-        // guard because CacheStore does not expose compare-and-set or Lua.
-        let Some(mut record) = self.get(credential_id).await? else {
+        let Some(store) = self.store.as_ref() else {
             return Ok(None);
         };
-        if record.status == CREDENTIAL_STATUS_REVOKED && status != CREDENTIAL_STATUS_REVOKED {
-            return Err(CredentialStatusStoreError::InvalidTransition);
+        let key = self.key(credential_id)?;
+        let transition_lock = self.transition_lock(credential_id);
+        let _transition_guard = transition_lock.lock().await;
+
+        loop {
+            let Some(raw) = store
+                .get(&key)
+                .await
+                .map_err(CredentialStatusStoreError::Store)?
+            else {
+                return Ok(None);
+            };
+            let mut record: CredentialStatusRecord = serde_json::from_slice(&raw)
+                .map_err(|_| CredentialStatusStoreError::InvalidRecord)?;
+            if record.status == CREDENTIAL_STATUS_REVOKED && status != CREDENTIAL_STATUS_REVOKED {
+                return Err(CredentialStatusStoreError::InvalidTransition);
+            }
+            record.status = status.to_string();
+            record.updated_at = format_time(OffsetDateTime::now_utc());
+            let expires_at = self.record_cache_expires_at(&record)?;
+            let value = serde_json::to_vec(&record)
+                .map_err(|_| CredentialStatusStoreError::InvalidRecord)?;
+            match store
+                .compare_and_set(&key, &raw, &value, expires_at)
+                .await
+                .map_err(CredentialStatusStoreError::Store)?
+            {
+                CacheCompareAndSetOutcome::Stored => return Ok(Some(record)),
+                CacheCompareAndSetOutcome::Missing => return Ok(None),
+                CacheCompareAndSetOutcome::Mismatch => continue,
+            }
         }
-        record.status = status.to_string();
-        record.updated_at = format_time(OffsetDateTime::now_utc());
-        self.write_record(&record).await?;
-        Ok(Some(record))
     }
 
     pub(crate) async fn check_ready(&self) -> Result<(), CacheStoreError> {
@@ -266,12 +286,7 @@ impl CredentialStatusStore {
         let Some(store) = self.store.as_ref() else {
             return Ok(());
         };
-        let retention_seconds = i64::try_from(self.retention_seconds)
-            .map_err(|_| CredentialStatusStoreError::InvalidRecord)?;
-        let expires_at = OffsetDateTime::parse(&record.expires_at, &Rfc3339)
-            .map_err(|_| CredentialStatusStoreError::InvalidRecord)?
-            .checked_add(time::Duration::seconds(retention_seconds))
-            .ok_or(CredentialStatusStoreError::InvalidRecord)?;
+        let expires_at = self.record_cache_expires_at(record)?;
         let key = self.key(&record.credential_id)?;
         let value =
             serde_json::to_vec(record).map_err(|_| CredentialStatusStoreError::InvalidRecord)?;
@@ -279,6 +294,18 @@ impl CredentialStatusStore {
             .set(&key, &value, expires_at)
             .await
             .map_err(CredentialStatusStoreError::Store)
+    }
+
+    fn record_cache_expires_at(
+        &self,
+        record: &CredentialStatusRecord,
+    ) -> Result<OffsetDateTime, CredentialStatusStoreError> {
+        let retention_seconds = i64::try_from(self.retention_seconds)
+            .map_err(|_| CredentialStatusStoreError::InvalidRecord)?;
+        OffsetDateTime::parse(&record.expires_at, &Rfc3339)
+            .map_err(|_| CredentialStatusStoreError::InvalidRecord)?
+            .checked_add(time::Duration::seconds(retention_seconds))
+            .ok_or(CredentialStatusStoreError::InvalidRecord)
     }
 
     fn key(&self, credential_id: &str) -> Result<CacheKey, CredentialStatusStoreError> {
@@ -340,7 +367,7 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use registry_notary_core::CredentialStatusRedisConfig;
-    use registry_platform_cache::CacheSetOutcome;
+    use registry_platform_cache::{CacheCompareAndSetOutcome, CacheSetOutcome};
     use std::sync::atomic::{AtomicBool, Ordering};
     use tokio::sync::Notify;
 
@@ -399,6 +426,32 @@ mod tests {
             expires_at: OffsetDateTime,
         ) -> Result<CacheSetOutcome, CacheStoreError> {
             self.inner.set_if_absent(key, value, expires_at).await
+        }
+
+        async fn compare_and_set(
+            &self,
+            key: &CacheKey,
+            expected: &[u8],
+            value: &[u8],
+            expires_at: OffsetDateTime,
+        ) -> Result<CacheCompareAndSetOutcome, CacheStoreError> {
+            let status = serde_json::from_slice::<CredentialStatusRecord>(value)
+                .ok()
+                .map(|record| record.status);
+            if status.as_deref() == Some(CREDENTIAL_STATUS_SUSPENDED)
+                && self.block_next_suspended_set.swap(false, Ordering::SeqCst)
+            {
+                self.suspended_set_started.notify_one();
+                self.release_suspended_set.notified().await;
+            }
+            let result = self
+                .inner
+                .compare_and_set(key, expected, value, expires_at)
+                .await;
+            if status.as_deref() == Some(CREDENTIAL_STATUS_REVOKED) {
+                self.revoked_set_finished.notify_one();
+            }
+            result
         }
 
         async fn delete(&self, key: &CacheKey) -> Result<bool, CacheStoreError> {
@@ -613,6 +666,44 @@ mod tests {
         assert_eq!(revoked.status, CREDENTIAL_STATUS_REVOKED);
 
         let record = store
+            .get(credential_id)
+            .await
+            .expect("lookup succeeds")
+            .expect("record exists");
+        assert_eq!(record.status, CREDENTIAL_STATUS_REVOKED);
+    }
+
+    #[tokio::test]
+    async fn shared_cache_rejects_stale_non_revoked_update_after_cross_process_revoke() {
+        let cache = Arc::new(BlockingInMemoryCacheStore::new());
+        let suspended_store = memory_store_with_cache(cache.clone());
+        let revoked_store = memory_store_with_cache(cache.clone());
+        let credential_id = "urn:ulid:01HX7Y5F2WAJ7ZP0Q4M5K9E8NH";
+        record_test_credential(&suspended_store, credential_id).await;
+
+        let stale_suspended_store = suspended_store.clone();
+        let suspended_update = tokio::spawn(async move {
+            stale_suspended_store
+                .update_status(credential_id, CREDENTIAL_STATUS_SUSPENDED)
+                .await
+        });
+        cache.suspended_set_started.notified().await;
+
+        let revoked = revoked_store
+            .update_status(credential_id, CREDENTIAL_STATUS_REVOKED)
+            .await
+            .expect("revocation succeeds")
+            .expect("record exists");
+        assert_eq!(revoked.status, CREDENTIAL_STATUS_REVOKED);
+        cache.release_suspended_set.notify_waiters();
+
+        let err = suspended_update
+            .await
+            .expect("suspended task joins")
+            .expect_err("stale non-revoked update must lose to revocation");
+        assert!(matches!(err, CredentialStatusStoreError::InvalidTransition));
+
+        let record = suspended_store
             .get(credential_id)
             .await
             .expect("lookup succeeds")
