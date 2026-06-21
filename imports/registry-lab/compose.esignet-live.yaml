@@ -108,7 +108,8 @@ services:
     environment:
       container_user: mosip
       DEFAULT_WELLKNOWN: "%5B%7B%22name%22%3A%22OpenID%20Configuration%22%2C%22value%22%3A%22%2F.well-known%2Fopenid-configuration%22%7D%2C%7B%22name%22%3A%22Jwks%20Json%22%2C%22value%22%3A%22%2F.well-known%2Fjwks.json%22%7D%2C%7B%22name%22%3A%22Authorization%20Server%22%2C%22value%22%3A%22%2F.well-known%2Foauth-authorization-server%22%7D%5D"
-      SIGN_IN_WITH_ESIGNET_PLUGIN_URL: https://raw.githubusercontent.com/mosip/artifactory-ref-impl/master/artifacts/src/mosip-plugins/sign-in-with-esignet/sign-in-with-esignet.zip
+      # Pinned 2026-06-21; sha256 031e16a94fc2379b20ac30e035e0f9ab10d7de8e73a4289d22d4e0fcb5da23c0.
+      SIGN_IN_WITH_ESIGNET_PLUGIN_URL: https://raw.githubusercontent.com/mosip/artifactory-ref-impl/977607990661e864c2adddb9d7de50ea6c651b8f/artifacts/src/mosip-plugins/sign-in-with-esignet/sign-in-with-esignet.zip
       i18n_url_env: ""
       theme_url_env: ""
       images_url_env: ""
