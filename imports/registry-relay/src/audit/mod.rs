@@ -782,9 +782,21 @@ impl registry_platform_audit::AuditSink for InMemorySink {
     }
 
     async fn tail_hash(&self) -> Result<Option<[u8; 32]>, AuditError> {
+        self.tail_hash_with_hasher(&registry_platform_audit::AuditChainHasher::unkeyed_dev_only())
+            .await
+    }
+
+    async fn tail_hash_with_hasher(
+        &self,
+        hasher: &registry_platform_audit::AuditChainHasher,
+    ) -> Result<Option<[u8; 32]>, AuditError> {
         let lines = self.snapshot();
-        let verification = registry_platform_audit::verify_jsonl_lines(lines.iter())
-            .map_err(AuditError::ChainVerification)?;
+        if lines.is_empty() {
+            return Ok(None);
+        }
+        let verification =
+            registry_platform_audit::verify_jsonl_lines_with_hasher(lines.iter(), hasher)
+                .map_err(AuditError::ChainVerification)?;
         Ok(verification.last_hash)
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "registry-relay"
-version = "0.2.0"
+version = "0.4.0"
 edition = "2021"
 rust-version = "1.95"
 license = "Apache-2.0"
@@ -85,19 +85,19 @@ jsonschema = { version = "0.18", optional = true }
 # Pure Rust YAML parser used instead of the previous unmaintained YAML stack.
 serde-saphyr = { version = "0.0.26" }
 humantime-serde = { version = "1" }
-registry-manifest-core = { version = "0.2.0", path = "../registry-manifest/crates/registry-manifest-core" }
+registry-manifest-core = { version = "0.2.1", path = "../registry-manifest/crates/registry-manifest-core" }
 
 # ─── auth / crypto ───────────────────────────────────────────────────────────
-registry-platform-authcommon = { version = "0.3.0", path = "../registry-platform/crates/registry-platform-authcommon" }
-registry-platform-audit = { version = "0.3.0", path = "../registry-platform/crates/registry-platform-audit" }
-registry-platform-crypto = { version = "0.3.0", path = "../registry-platform/crates/registry-platform-crypto" }
-registry-platform-httpsec = { version = "0.3.0", path = "../registry-platform/crates/registry-platform-httpsec" }
-registry-platform-httputil = { version = "0.3.0", path = "../registry-platform/crates/registry-platform-httputil" }
-registry-platform-oidc = { version = "0.3.0", path = "../registry-platform/crates/registry-platform-oidc" }
-registry-platform-config = { version = "0.3.0", path = "../registry-platform/crates/registry-platform-config" }
-registry-config-report = { version = "0.3.0", path = "../registry-platform/crates/registry-config-report" }
-registry-platform-pdp = { version = "0.3.0", path = "../registry-platform/crates/registry-platform-pdp" }
-registry-platform-sdjwt = { version = "0.3.0", path = "../registry-platform/crates/registry-platform-sdjwt" }
+registry-platform-authcommon = { version = "0.3.1", path = "../registry-platform/crates/registry-platform-authcommon" }
+registry-platform-audit = { version = "0.3.1", path = "../registry-platform/crates/registry-platform-audit" }
+registry-platform-crypto = { version = "0.3.1", path = "../registry-platform/crates/registry-platform-crypto" }
+registry-platform-httpsec = { version = "0.3.1", path = "../registry-platform/crates/registry-platform-httpsec" }
+registry-platform-httputil = { version = "0.3.1", path = "../registry-platform/crates/registry-platform-httputil" }
+registry-platform-oidc = { version = "0.3.1", path = "../registry-platform/crates/registry-platform-oidc" }
+registry-platform-config = { version = "0.3.1", path = "../registry-platform/crates/registry-platform-config" }
+registry-config-report = { version = "0.3.1", path = "../registry-platform/crates/registry-config-report" }
+registry-platform-pdp = { version = "0.3.1", path = "../registry-platform/crates/registry-platform-pdp" }
+registry-platform-sdjwt = { version = "0.3.1", path = "../registry-platform/crates/registry-platform-sdjwt" }
 getrandom = { version = "0.4" }
 hmac = { version = "0.13" }
 sha2 = { version = "0.11" }
@@ -123,7 +123,7 @@ ulid = { version = "1" }
 # ─── observability ───────────────────────────────────────────────────────────
 tracing = { version = "0.1" }
 tracing-subscriber = { version = "0.3", features = ["fmt", "json", "env-filter"] }
-registry-platform-ops = { version = "0.3.0", path = "../registry-platform/crates/registry-platform-ops" }
+registry-platform-ops = { version = "0.3.1", path = "../registry-platform/crates/registry-platform-ops" }
 
 # ─── errors ──────────────────────────────────────────────────────────────────
 thiserror = { version = "2" }
@@ -141,7 +141,7 @@ aws-lc-rs = { version = "1" }
 axum-test = { version = "20" }
 assert-json-diff = { version = "2" }
 chrono = { version = "0.4" }
-registry-platform-testing = { version = "0.3.0", path = "../registry-platform/crates/registry-platform-testing", features = ["test-utils"] }
+registry-platform-testing = { version = "0.3.1", path = "../registry-platform/crates/registry-platform-testing", features = ["test-utils"] }
 proptest = { version = "1" }
 tempfile = { version = "3" }
 insta = { version = "1", features = ["json"] }

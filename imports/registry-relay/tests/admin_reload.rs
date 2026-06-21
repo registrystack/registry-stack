@@ -16,7 +16,7 @@ use datafusion::execution::context::SessionContext;
 use ed25519_dalek::SigningKey;
 use rand_core::OsRng;
 use registry_manifest_core::{canonicalize_json, source_manifest_digest, MetadataManifest};
-use registry_platform_audit::{AuditEnvelope, AuditError, AuditSink};
+use registry_platform_audit::{AuditChainHasher, AuditEnvelope, AuditError, AuditSink};
 use registry_platform_authcommon::{
     credential_fingerprint_commitment, CredentialCommitmentContext, CredentialProduct,
     CredentialType,
@@ -80,6 +80,14 @@ impl AuditSink for AlwaysFailWriteSink {
     }
 
     async fn tail_hash(&self) -> Result<Option<[u8; 32]>, AuditError> {
+        Ok(None)
+    }
+
+    async fn tail_hash_with_hasher(
+        &self,
+        hasher: &AuditChainHasher,
+    ) -> Result<Option<[u8; 32]>, AuditError> {
+        let _ = hasher;
         Ok(None)
     }
 }
