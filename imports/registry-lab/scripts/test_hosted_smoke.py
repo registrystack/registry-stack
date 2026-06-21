@@ -89,6 +89,9 @@ def base_routes() -> dict[tuple[str, str], Any]:
                 "scenarios": [
                     {"id": "alive-proof", "steps": 3},
                     {"id": "civil-birth-demographics", "steps": 2},
+                    {"id": "civil-birth-evidence", "steps": 2},
+                    {"id": "civil-birth-evidence-demographics", "steps": 2},
+                    {"id": "civil-marriage-evidence", "steps": 2},
                     {"id": "wallet-credential", "steps": 5},
                     {"id": "dhis2-programme-vc", "steps": 6},
                     {"id": "social-aggregate", "steps": 4},
@@ -115,6 +118,18 @@ def base_routes() -> dict[tuple[str, str], Any]:
         ("GET", "/api/scenarios/civil-birth-demographics.json"): (
             200,
             {"story": {"steps": [{"id": "discover"}, {"id": "lookup"}]}},
+        ),
+        ("GET", "/api/scenarios/civil-birth-evidence.json"): (
+            200,
+            {"story": {"steps": [{"id": "discover"}, {"id": "evaluate"}]}},
+        ),
+        ("GET", "/api/scenarios/civil-birth-evidence-demographics.json"): (
+            200,
+            {"story": {"steps": [{"id": "discover"}, {"id": "evaluate"}]}},
+        ),
+        ("GET", "/api/scenarios/civil-marriage-evidence.json"): (
+            200,
+            {"story": {"steps": [{"id": "discover"}, {"id": "evaluate"}]}},
         ),
         ("GET", "/api/scenarios/wallet-credential.json"): (
             200,
