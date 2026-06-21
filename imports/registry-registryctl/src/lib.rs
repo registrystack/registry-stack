@@ -5959,6 +5959,7 @@ workflows:
         let source_env = fs::read_to_string(project.join(".env")).unwrap();
         let notary_env = fs::read_to_string(project.join("secrets/notary.local.env")).unwrap();
         let compose = fs::read_to_string(project.join("compose.yaml")).unwrap();
+        let gitignore = fs::read_to_string(project.join(".gitignore")).unwrap();
         let readme = fs::read_to_string(project.join("README.md")).unwrap();
         for secret in [
             env_value(&source_env, "OPENCRVS_DCI_CLIENT_SECRET"),
@@ -5980,7 +5981,9 @@ workflows:
         assert!(compose.contains("      DCI_CLIENT_ID: ${OPENCRVS_DCI_CLIENT_ID}"));
         assert!(compose.contains("      DCI_CLIENT_SECRET: ${OPENCRVS_DCI_CLIENT_SECRET}"));
         serde_yaml::from_str::<serde_yaml::Value>(&compose).unwrap();
+        assert!(gitignore.lines().any(|line| line == ".env"));
         assert!(readme.contains("registryctl notary smoke --target-id <test-uin>"));
+        assert!(readme.contains("`.env`, which is ignored by the generated"));
     }
 
     #[test]
@@ -7402,6 +7405,47 @@ workflows:
             assert!(
                 !package_text.contains(secret),
                 "config package must not contain local secret values"
+            );
+        }
+    }
+
+    #[test]
+    fn opencrvs_dci_config_package_excludes_source_and_local_secrets() {
+        let temp = TempDir::new().unwrap();
+        let project_dir = temp.path().join("opencrvs-notary");
+        fs::create_dir_all(&project_dir).unwrap();
+        let env_path = project_dir.join(".env");
+        fs::write(&env_path, fake_opencrvs_alias_env()).unwrap();
+        init_notary_recipe_project(
+            &project_dir,
+            NotaryInitRecipe::OpencrvsDci,
+            Some(env_path.as_path()),
+        )
+        .unwrap();
+        let package = temp.path().join("opencrvs-config-package.zip");
+
+        config_package_project(&project_dir, Some(&package), false).unwrap();
+
+        let package_bytes = fs::read(&package).unwrap();
+        let package_text = String::from_utf8_lossy(&package_bytes);
+        assert!(package_text.contains("registryctl.yaml"));
+        assert!(package_text.contains("compose.yaml"));
+        assert!(package_text.contains("notary/config.yaml"));
+
+        let source_env = fs::read_to_string(project_dir.join(".env")).unwrap();
+        let notary_env = fs::read_to_string(project_dir.join("secrets/notary.local.env")).unwrap();
+        for secret in [
+            env_value(&source_env, "OPENCRVS_DCI_CLIENT_ID"),
+            env_value(&source_env, "OPENCRVS_DCI_CLIENT_SECRET"),
+            env_value(&source_env, "OPENCRVS_DCI_TOKEN"),
+            env_value(&source_env, "OPENCRVS_DEMO_SUBJECT_UIN"),
+            env_value(&notary_env, "NOTARY_API_KEY_RAW"),
+            env_value(&notary_env, "NOTARY_ISSUER_PRIVATE_JWK"),
+            env_value(&notary_env, "NOTARY_AUDIT_SECRET"),
+        ] {
+            assert!(
+                !package_text.contains(&secret),
+                "config package must not contain source or local secret values"
             );
         }
     }
