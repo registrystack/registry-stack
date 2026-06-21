@@ -136,6 +136,20 @@ const SECRET_COMPACT_SUFFIXES: &[&str] = &[
     "values",
 ];
 
+const CREDENTIAL_SECRET_SUFFIXES: &[&str] = &[
+    "env",
+    "key",
+    "keys",
+    "password",
+    "passwords",
+    "secret",
+    "secrets",
+    "token",
+    "tokens",
+    "value",
+    "values",
+];
+
 #[must_use]
 pub fn is_runtime_only_key(key: &str) -> bool {
     RUNTIME_ONLY_KEYS.contains(&key)
@@ -148,9 +162,37 @@ fn is_secret_bearing_key(key: &str) -> bool {
         .filter(|segment| !segment.is_empty())
         .collect::<Vec<_>>();
     let compact = normalized.replace('_', "");
+    if credential_secret_key(&compact) {
+        return true;
+    }
     SECRET_BEARING_KEYS.iter().any(|secret| {
         secret_matches_segments(&segments, secret) || secret_matches_compact(&compact, secret)
     })
+}
+
+fn credential_secret_key(compact: &str) -> bool {
+    if compact == "credential" || compact == "credentials" {
+        return true;
+    }
+    if compact.len() > "credential".len() && compact.ends_with("credential") {
+        return true;
+    }
+    if compact.len() > "credentials".len() && compact.ends_with("credentials") {
+        return true;
+    }
+    for prefix in ["credential", "credentials"] {
+        let Some(suffix) = compact.strip_prefix(prefix) else {
+            continue;
+        };
+        if !suffix.is_empty()
+            && CREDENTIAL_SECRET_SUFFIXES
+                .iter()
+                .any(|secret_suffix| suffix.starts_with(secret_suffix))
+        {
+            return true;
+        }
+    }
+    false
 }
 
 fn secret_matches_segments(segments: &[&str], secret: &str) -> bool {
