@@ -11,16 +11,59 @@
       "description": "Current Registry Docs build from the main branch.",
       "products": {
         "registry-relay": {
-          "version": "main snapshot",
-          "ref": "bcd8ebae58bc5c468577bcd418a01129899bb5b6"
+          "version": "beta-3 candidate",
+          "ref": "f00ffad8a12512104b4bd80e4639444e8baf90c8"
         },
         "registry-notary": {
-          "version": "main snapshot",
-          "ref": "8a2d2fd96d013809bf42e9e8038d4a557091d7dd"
+          "version": "beta-3 candidate",
+          "ref": "a742933b5f4d15b0fed3f7f4089943d1a400987a"
         },
         "registry-manifest": {
-          "version": "main snapshot",
-          "ref": "81eb005f1808415199d79e02e24e84a6649be318"
+          "version": "beta-3 candidate",
+          "ref": "71c9ead582ea81a82022c37357b38b98d3f18f48"
+        }
+      }
+    },
+    {
+      "id": "beta-3",
+      "label": "Beta 3",
+      "path": "/v/beta-3/",
+      "status": "archived",
+      "source": "registry-stack-beta-3",
+      "published_at": "2026-06-21",
+      "description": "Beta-3 candidate documentation set prepared for release proof.",
+      "products": {
+        "registry-platform": {
+          "version": "beta-3 candidate",
+          "ref": "8bd2ede0d1b58761f78d8129a59e366eb59929ea"
+        },
+        "registry-manifest": {
+          "version": "beta-3 candidate",
+          "ref": "71c9ead582ea81a82022c37357b38b98d3f18f48"
+        },
+        "registry-notary": {
+          "version": "beta-3 candidate",
+          "ref": "a742933b5f4d15b0fed3f7f4089943d1a400987a"
+        },
+        "registry-relay": {
+          "version": "beta-3 candidate",
+          "ref": "f00ffad8a12512104b4bd80e4639444e8baf90c8"
+        },
+        "registry-lab": {
+          "version": "beta-3 candidate",
+          "ref": "5f0e322f67fb4334646ec1e73343beb472eccc9d"
+        },
+        "registry-registryctl": {
+          "version": "v0.2.0 candidate",
+          "ref": "156c1ec71bf243af396959ee549c42ce81d36ebb"
+        },
+        "crosswalk": {
+          "version": "crosswalk-core-v0.2.0",
+          "ref": "1d44ec735fdc8a7c719264b339574371e8330337"
+        },
+        "registry-atlas": {
+          "version": "beta-3 vendor input",
+          "ref": "d46f943b9fdcbab787d1d4eed114058aa43980be"
         }
       }
     },

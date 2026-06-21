@@ -50,11 +50,11 @@ environment such as a VM or container.
 Install `registryctl` without cloning a product repository:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/jeremi/registry-registryctl/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/jeremi/registry-registryctl/v0.2.0/install.sh | REGISTRYCTL_VERSION=v0.2.0 sh
 ```
 
 The installer downloads the pinned release selected by `REGISTRYCTL_VERSION`.
-It defaults to `v0.1.0`.
+It defaults to `v0.2.0` in the beta-3 release.
 The container images are published for linux/amd64; on Apple Silicon your Docker provider runs
 them under emulation and prints a platform warning, which is harmless here.
 
@@ -63,7 +63,7 @@ the source install path until the next pinned release is available.
 Install Rust with [`rustup`](https://rustup.rs), then build the pinned release tag:
 
 ```sh
-cargo install --git https://github.com/jeremi/registry-registryctl --tag v0.1.0 --locked
+cargo install --git https://github.com/jeremi/registry-registryctl --tag v0.2.0 --locked
 ```
 
 Confirm the CLI is available:

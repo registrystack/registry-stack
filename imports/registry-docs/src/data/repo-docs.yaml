@@ -29,8 +29,8 @@
 repos:
   registry-relay:
     remote: https://github.com/jeremi/registry-relay
-    ref: bcd8ebae58bc5c468577bcd418a01129899bb5b6
-    version: main snapshot
+    ref: f00ffad8a12512104b4bd80e4639444e8baf90c8
+    version: beta-3 candidate
     local: ../registry-relay
     docs:
       - src: docs/README.md
@@ -62,8 +62,8 @@ repos:
     #   docs/development.md                 contributor guide, repo-owned
   registry-notary:
     remote: https://github.com/jeremi/registry-notary
-    ref: 8a2d2fd96d013809bf42e9e8038d4a557091d7dd
-    version: main snapshot
+    ref: a742933b5f4d15b0fed3f7f4089943d1a400987a
+    version: beta-3 candidate
     local: ../registry-notary
     docs:
       - src: docs/README.md
@@ -134,8 +134,8 @@ repos:
     #   docs/deployment-hardening-runbook.md  operator runbook, repo-owned
   registry-manifest:
     remote: https://github.com/jeremi/registry-manifest
-    ref: 81eb005f1808415199d79e02e24e84a6649be318
-    version: main snapshot
+    ref: 71c9ead582ea81a82022c37357b38b98d3f18f48
+    version: beta-3 candidate
     local: ../registry-manifest
     docs:
       - src: docs/overview.md
