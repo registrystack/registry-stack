@@ -6,7 +6,7 @@ owner: registry-docs
 source_repos:
   - registry-relay
   - registry-platform
-last_reviewed: "2026-06-20"
+last_reviewed: "2026-06-21"
 doc_type: specification
 doc_id: RS-PR-RELAY
 category: normative
@@ -46,6 +46,7 @@ The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 
 | --- | --- | --- | --- |
 | 0.1.0 | 2026-06-13 | draft | Initial protocol contract, distilled from the Registry Relay API reference, the publishing-pipeline explanation, the boundary map, and the generated OpenAPI document. |
 | 0.1.1 | 2026-06-20 | draft | Document governed Evidence Gateway PDP enforcement, aggregate authorization ordering, metadata filtering boundaries, and PDP audit provenance. |
+| 0.1.2 | 2026-06-21 | draft | Clarified aggregate disclosure limits and privacy-budget boundaries. |
 
 ## 1. Scope and references
 
@@ -127,6 +128,8 @@ A gateway may declare aggregates: configured numeric computations (`measures`) o
 
 REQ-PR-RELAY-009: A declared aggregate MUST return statistical observations computed from its configured `measures` over its dimensions, accompanied by the structure (dimensions and measures) needed to interpret them. The exact field layout is defined by the generated OpenAPI document, and the native and SDMX-JSON serializations differ in where they place that structure. When serialized as SDMX-JSON, the media type is `application/vnd.sdmx.data+json;version=2.1`. The aggregate's dimensions and measures are discoverable on their respective routes.
 
+Aggregate routes are statistical outputs, not a longitudinal privacy-budget mechanism. A deployment may configure suppression, minimum cell sizes, PDP policy, or downstream review around aggregate routes, but Relay v1 does not by itself track cumulative disclosure across repeated or overlapping aggregate queries. Documentation, data protection impact assessments, and client guidance must not describe a Relay aggregate route as privacy-budgeted unless a separate deployed control provides that guarantee.
+
 ## 6. Metadata publication
 
 Registry Relay can serve the manifest's standards-shaped metadata at `/metadata/*`, using the Registry Manifest renderers at request time. Unlike a static publication, the runtime view is filtered by the caller's identity: a caller sees only the datasets, entities, and aggregate metadata its `metadata` scope permits. This publication filtering is distinct from the governed PDP enforcement in Section 3: metadata routes reveal scoped descriptions of the configured surface, while PDP gates runtime reads of governed data.
@@ -176,6 +179,7 @@ These constraints are stated so a reader does not infer a capability from the ro
 - **No claim evaluation.** Relay describes evidence offerings but never evaluates a claim or issues a credential; that is Registry Notary's role (REQ-PR-RELAY-012).
 - **Manifest format not owned here.** The metadata schema and renderers belong to Registry Manifest; Relay serves and scopes the artifacts only (REQ-PR-RELAY-011).
 - **PDP enforcement boundary.** Governed PDP enforcement applies to configured runtime reads; scoped metadata publication remains a separate publication and discovery surface (REQ-PR-RELAY-019, REQ-PR-RELAY-023).
+- **Aggregate disclosure boundary.** Aggregate routes return configured statistical observations and may be protected by scopes and PDP policy, but they do not provide a built-in longitudinal privacy budget or cumulative differencing protection (REQ-PR-RELAY-009).
 
 ## Conformance
 

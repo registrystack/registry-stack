@@ -6,7 +6,7 @@ owner: registry-notary
 source_repos:
   - registry-notary
   - registry-platform
-last_reviewed: "2026-06-20"
+last_reviewed: "2026-06-21"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -101,6 +101,11 @@ under `source_connections`:
 There is no generic file-based or database connector; source connectors must reach their targets
 over HTTP.
 
+The sidecar token authenticates the Notary-to-sidecar hop. It is not an end-user authorization
+boundary on its own, so the sidecar belongs on a private network, direct client access stays blocked,
+and source credentials, cache state, retries, and backoff should be scoped so one source or caller
+path cannot affect another.
+
 ## What the specification does not cover
 
 - **Plugin rule type.** The `Plugin` rule variant is declared in config but has no implementation at
@@ -108,6 +113,9 @@ over HTTP.
 - **Holder binding.** `did:jwk` is the only supported proof-of-possession binding method.
 - **Audit events.** Every evaluated request emits an `EvidenceAuditEvent` in a Registry Platform
   audit envelope to a configured sink (stdout, file, or JSONL).
+- **Demo helpers.** Demo OpenFn snippets and generated workflow helpers are examples, not production
+  replay-protection profiles. Add freshness, expiry, or nonce checks before copying a helper into a
+  production workflow.
 
 :::caution
 Audit write failures surface as request errors, not as silent log entries. If the audit sink is
