@@ -291,6 +291,7 @@ services:
       dockerfile: Dockerfile.static-metadata
       args:
         REGISTRY_MANIFEST_REF: 141efade265f453e15c967770286bafc5c3a3956
+        REGISTRY_PLATFORM_REF: 0abc4fde81764f6c81143b622624415232197129
         REGISTRY_RELAY_REF: 380261c386309a4194b131913525f6cf70611adb
     restart: unless-stopped
     expose:
