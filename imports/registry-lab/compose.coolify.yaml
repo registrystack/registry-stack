@@ -291,7 +291,7 @@ services:
       dockerfile: Dockerfile.static-metadata
       args:
         REGISTRY_MANIFEST_REF: 71c9ead582ea81a82022c37357b38b98d3f18f48
-        REGISTRY_RELAY_REF: f00ffad8a12512104b4bd80e4639444e8baf90c8
+        REGISTRY_RELAY_REF: 285b31d2e73cb2f32466c865b47d384ca79f0c0f
     restart: unless-stopped
     expose:
       - "8080"
