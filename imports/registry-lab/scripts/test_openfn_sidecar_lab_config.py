@@ -20,6 +20,7 @@ HOSTED_COMPOSE = ROOT / "compose.coolify.yaml"
 LOCAL_CIVIL_NOTARY = ROOT / "config/notary/openfn-civil-notary.yaml"
 LOCAL_DHIS2_NOTARY = ROOT / "config/notary/dhis2-health-notary.yaml"
 HOSTED_DHIS2_NOTARY = ROOT / "config/coolify/notary/dhis2-health-notary.yaml"
+HOSTED_OPENFN_TEMPLATE = ROOT / "config/coolify/openfn/openfn-dhis2-sidecar.yaml.template"
 # Primary smoke scripts (shims smoke-openfn.sh / smoke-dhis2-openfn.sh delegate here).
 LOCAL_CIVIL_SMOKE = ROOT / "scripts/smoke-civil.sh"
 LOCAL_DHIS2_SMOKE = ROOT / "scripts/smoke-dhis2.sh"
@@ -84,6 +85,11 @@ class BuiltinSidecarLabConfigTest(unittest.TestCase):
         self.assertIn("require_runtime_verified: true", notary)
         self.assertIn("require_smoke_verified: true", notary)
         self.assertIn(f"config_hash: {config_hash}", notary)
+
+    def test_hosted_dhis2_runtime_keeps_lookup_value_as_match_key(self) -> None:
+        body = read(HOSTED_OPENFN_TEMPLATE)
+        self.assertIn('"tracked_entity": lookup.value', body)
+        self.assertIn('"reconciliation_ref": \'dhis2:tracked-entity:\' + body.trackedEntities[0].trackedEntity', body)
 
     def test_lab_readme_names_sidecar_connector(self) -> None:
         body = read(README)
