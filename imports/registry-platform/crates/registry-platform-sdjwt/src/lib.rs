@@ -16,6 +16,8 @@ use std::time::Duration;
 use thiserror::Error;
 use ulid::Ulid;
 
+const HOLDER_PROOF_ALLOWED_ALGORITHM: SigningAlgorithm = SigningAlgorithm::EdDsa;
+
 #[derive(Clone)]
 pub struct SdJwtIssuer {
     signer: Arc<dyn SigningProvider>,
@@ -241,9 +243,7 @@ pub fn validate_holder_proof(
 ) -> Result<HolderProofClaims, SdJwtError> {
     let (header_b64, payload_b64, signature_b64) = split_compact_jwt(proof_jwt)?;
     let header = decode_json(header_b64)?;
-    if header.get("alg").and_then(Value::as_str) != Some("EdDSA") {
-        return Err(SdJwtError::HolderProofInvalid);
-    }
+    require_holder_proof_algorithm(&header, holder_jwk, HOLDER_PROOF_ALLOWED_ALGORITHM)?;
     if header.get("typ").and_then(Value::as_str) != Some("kb+jwt") {
         return Err(SdJwtError::HolderProofInvalid);
     }
@@ -368,6 +368,35 @@ fn signing_algorithm_jwa(algorithm: SigningAlgorithm) -> &'static str {
         SigningAlgorithm::Es256 => "ES256",
         SigningAlgorithm::Rs256 => "RS256",
     }
+}
+
+fn signing_algorithm_from_jwa(alg: &str) -> Option<SigningAlgorithm> {
+    match alg {
+        "EdDSA" => Some(SigningAlgorithm::EdDsa),
+        "ES256" => Some(SigningAlgorithm::Es256),
+        "RS256" => Some(SigningAlgorithm::Rs256),
+        _ => None,
+    }
+}
+
+fn require_holder_proof_algorithm(
+    header: &Value,
+    holder_jwk: &PublicJwk,
+    allowed_algorithm: SigningAlgorithm,
+) -> Result<(), SdJwtError> {
+    let header_algorithm = header
+        .get("alg")
+        .and_then(Value::as_str)
+        .and_then(signing_algorithm_from_jwa)
+        .ok_or(SdJwtError::HolderProofInvalid)?;
+    let jwk_algorithm = holder_jwk
+        .algorithm()
+        .map_err(|_| SdJwtError::HolderProofInvalid)?;
+
+    if header_algorithm != allowed_algorithm || jwk_algorithm != header_algorithm {
+        return Err(SdJwtError::HolderProofInvalid);
+    }
+    Ok(())
 }
 
 struct IssuedDisclosure {
@@ -949,6 +978,29 @@ mod tests {
             now,
         )
         .expect_err("wrong cnf.kid rejects");
+    }
+
+    #[test]
+    fn holder_proof_rejects_header_alg_that_does_not_match_resolved_key() {
+        let holder = PrivateJwk::parse(P256_JWK).expect("p256 holder");
+        let now = 1_700_000_000;
+        let claim_set = claim_set();
+        let bindings = bindings(&claim_set);
+        let proof = sign_jwt_with_private(
+            json!({"alg": "EdDSA", "typ": "kb+jwt", "kid": "did:jwk:holder#p256-key-1"}),
+            proof_payload(now, "proof-jti-alg-confusion"),
+            &holder,
+        )
+        .expect("proof signs with resolved ES256 key");
+        let confirmation = HolderConfirmation {
+            jwk: holder.public(),
+            kid: Some("did:jwk:holder#p256-key-1".to_string()),
+        };
+
+        validate_holder_proof_for_confirmation(&proof, &confirmation, &bindings, &policy(), now)
+            .expect_err("EdDSA header must not verify with an ES256 cnf key");
+        validate_holder_proof(&proof, &holder.public(), &bindings, &policy(), now)
+            .expect_err("EdDSA header must not verify with an ES256 resolved key");
     }
 
     #[test]
