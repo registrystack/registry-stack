@@ -130,6 +130,7 @@ button:active, .button:active {
 .availability.local-only { background: var(--registry-warn-bg); border-color: #e2b66c; color: var(--registry-amber); }
 .domain-tag { background: var(--registry-active); border: 1px solid #b7c7dd; color: var(--registry-blue); display: inline-flex; font-family: var(--registry-mono); font-size: 11px; padding: 3px 7px; width: fit-content; }
 .card-meta { color: var(--registry-muted); font-size: 13px; }
+.card-meta strong { color: var(--registry-ink); }
 .badge-explanation { color: var(--registry-muted); font-size: 13px; margin: 0 0 18px; }
 /* The footer is a deep ink band: the page closes on the ledger. */
 .site-footer {

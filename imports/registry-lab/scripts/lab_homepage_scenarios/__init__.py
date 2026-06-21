@@ -32,10 +32,66 @@ SCENARIOS = [
     agriculture_voucher,
 ]
 STORY_BY_ID = {module.SCENARIO_ID: module for module in SCENARIOS}
+SOURCE_SYSTEM_BY_SCENARIO_ID = {
+    civil_alive.SCENARIO_ID: {
+        "label": "Registry Relay demo source",
+        "summary": "Calls the hosted Civil Relay and Civil Notary over synthetic civil registry fixtures. It does not call OpenCRVS.",
+    },
+    civil_birth_demographics.SCENARIO_ID: {
+        "label": "Registry Relay demo source",
+        "summary": "Calls the hosted Civil Notary over Relay-backed civil registry fixtures. It does not call OpenCRVS.",
+    },
+    civil_crvs_evidence.BIRTH.SCENARIO_ID: {
+        "label": "Registry Relay CRVS fixtures",
+        "summary": "Calls the hosted Civil Notary over Relay-backed birth fixtures. Use the OpenCRVS DCI tutorial for the live OpenCRVS path.",
+    },
+    civil_crvs_evidence.BIRTH_DEMOGRAPHICS.SCENARIO_ID: {
+        "label": "Registry Relay CRVS fixtures",
+        "summary": "Calls the hosted Civil Notary over Relay-backed birth fixtures. Use the OpenCRVS DCI tutorial for the live OpenCRVS path.",
+    },
+    civil_crvs_evidence.MARRIAGE.SCENARIO_ID: {
+        "label": "Registry Relay CRVS fixtures",
+        "summary": "Calls the hosted Civil Notary over Relay-backed marriage fixtures. Use the OpenCRVS DCI tutorial for the live OpenCRVS path.",
+    },
+    wallet_vc.SCENARIO_ID: {
+        "label": "Simulated wallet over Relay-backed civil evidence",
+        "summary": "Uses hosted issuer endpoints and simulated wallet steps. The vital-status source is civil Relay demo data, not OpenCRVS.",
+    },
+    dhis2_programme.SCENARIO_ID: {
+        "label": "Live DHIS2 via built-in http_json sidecar",
+        "summary": "Calls the hosted DHIS2 Notary, which reads the public DHIS2 sandbox through a private built-in http_json sidecar. Registry Relay is not on this source path.",
+    },
+    social_aggregate.SCENARIO_ID: {
+        "label": "Registry Relay demo source",
+        "summary": "Calls the hosted Social Protection Relay over synthetic XLSX fixtures, not OpenSPP or OpenIMIS.",
+    },
+    combined_support.SCENARIO_ID: {
+        "label": "Registry Relay demo sources",
+        "summary": "Calls the shared Notary over civil, social, and health Relay-backed demo sources. It does not call DHIS2, FHIR, or OpenCRVS.",
+    },
+    agriculture_voucher.SCENARIO_ID: {
+        "label": "Registry Relay demo source",
+        "summary": "Calls the hosted Agriculture Notary over workbook-backed demo registries, not a live NAgDI upstream.",
+    },
+}
+
+
+def _with_source_system(story: dict[str, Any]) -> dict[str, Any]:
+    return {
+        **story,
+        "source_system": story.get("source_system")
+        or SOURCE_SYSTEM_BY_SCENARIO_ID.get(
+            story.get("id", ""),
+            {
+                "label": "Registry Relay demo source",
+                "summary": "Uses Registry Relay over hosted lab fixtures. It does not call FHIR, OpenCRVS, or DHIS2.",
+            },
+        ),
+    }
 
 
 def all_stories() -> list[dict[str, Any]]:
-    return [module.story() for module in SCENARIOS]
+    return [_with_source_system(module.story()) for module in SCENARIOS]
 
 
 def _is_runnable(story: dict[str, Any], lab_mode: str) -> bool:
@@ -93,6 +149,7 @@ def public_label_check(stories: list[dict[str, Any]] | None = None) -> list[str]
                 "receipt": story.get("receipt", []),
                 "requested_attestations": story.get("requested_attestations", []),
                 "lookup_profile": story.get("lookup_profile", {}),
+                "source_system": story.get("source_system", {}),
                 "non_disclosure": story.get("non_disclosure", []),
                 "proof_facts": story.get("proof_facts", []),
             },
@@ -106,7 +163,7 @@ def scenario_payload(config: dict[str, Any], scenario_id: str | None = None, lab
         module = STORY_BY_ID.get(scenario_id)
         if not module:
             return {"error": "unknown_scenario", "scenario_id": scenario_id}
-        story = _with_runtime_availability(_attach_previews(module.story(), module, config), lab_mode)
+        story = _with_runtime_availability(_attach_previews(_with_source_system(module.story()), module, config), lab_mode)
         return {"story": story, "lab_mode": lab_mode, "runnable": _is_runnable(story, lab_mode)}
     return {
         "lab_mode": lab_mode,
@@ -121,6 +178,7 @@ def scenario_payload(config: dict[str, Any], scenario_id: str | None = None, lab
                 "availability": story.get("availability", "hosted"),
                 "availability_state": _with_runtime_availability(story, lab_mode)["availability_state"],
                 "availability_note": story.get("availability_note", ""),
+                "source_system": story.get("source_system", {}),
                 "requested_attestations": story.get("requested_attestations", []),
                 "steps": len(story.get("steps", [])),
                 "runnable": _is_runnable(story, lab_mode),
@@ -211,12 +269,15 @@ def scenario_cards_html(lab_mode: str = "hosted") -> str:
         card_class = "scenario-card scenario-card--default" if is_default else "scenario-card"
         availability_label = "Local only" if item["availability"] == "local-only" else "Hosted"
         note = html.escape(item["availability_note"])
+        source_system = item.get("source_system") or {}
+        source_label = str(source_system.get("label") or "")
         cards.append(
             f'<article class="{card_class}">'
             + ('<span class="start-here-badge">Start here</span>' if is_default else "")
             + f'<span class="availability {html.escape(item["availability"])}">{availability_label}</span>'
             + (f'<span class="domain-tag">{html.escape(item["domain"])}</span>' if item["domain"] else "")
             + f'<div><h3>{html.escape(item["title"])}</h3><p>{html.escape(item["proves"])}</p></div>'
+            + (f'<p class="card-meta"><strong>Evidence source:</strong> {html.escape(source_label)}</p>' if source_label else "")
             + (f'<p class="card-meta">{note}</p>' if note else "")
             + f'<p class="card-meta">{item["steps"]} steps</p>'
             + f'<div class="actions"><a class="button primary" href="/scenarios/{html.escape(item["id"], quote=True)}">'
