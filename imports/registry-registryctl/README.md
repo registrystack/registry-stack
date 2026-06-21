@@ -5,7 +5,8 @@
 Install a pinned release without cloning this repo:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/jeremi/registry-registryctl/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/jeremi/registry-registryctl/v0.2.0/install.sh \
+  | REGISTRYCTL_VERSION=v0.2.0 sh
 ```
 
 Then create and start your first secured spreadsheet API:
@@ -44,11 +45,12 @@ source-adapter contract and defaults the sidecar URL to
 `http://host.docker.internal:4360`. It does not start a FHIR server or the
 FHIR sidecar for you.
 
-The installer defaults to `v0.1.0`. To install a different pinned release, set
+The installer defaults to `v0.2.0`. To install a different pinned release, set
 `REGISTRYCTL_VERSION`:
 
 ```sh
-REGISTRYCTL_VERSION=vX.Y.Z curl -fsSL https://raw.githubusercontent.com/jeremi/registry-registryctl/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/jeremi/registry-registryctl/vX.Y.Z/install.sh \
+  | REGISTRYCTL_VERSION=vX.Y.Z sh
 ```
 
 Binaries are published for Linux x86_64, Linux aarch64, and macOS aarch64.
@@ -129,15 +131,14 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-`registryctl` consumes `registry-platform-authcommon` from the `main` branch of
-`registry-platform`, so a registryctl checkout does not need a sibling Registry
-Platform source checkout. This intentionally tracks current main until the
-shared crates have fresh release tags.
+`registryctl` consumes pinned `registry-platform-authcommon` and
+`registry-config-report` revisions from `registry-platform`, so a registryctl
+checkout does not need a sibling Registry Platform source checkout.
 
 ## End-to-end smoke
 
-The generated project uses the public Relay image published from current main:
-`ghcr.io/jeremi/registry-relay:snapshot`. With Docker Compose available, run:
+The generated project uses the digest-pinned Relay image embedded in this
+registryctl release. With Docker Compose available, run:
 
 ```sh
 tmpdir="$(mktemp -d)"

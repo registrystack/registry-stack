@@ -715,8 +715,8 @@ dependencies = [
 
 [[package]]
 name = "registry-config-report"
-version = "0.3.0"
-source = "git+https://github.com/jeremi/registry-platform?rev=e5b646f5979a41a65155b674f4769ff063910dba#e5b646f5979a41a65155b674f4769ff063910dba"
+version = "0.3.1"
+source = "git+https://github.com/jeremi/registry-platform?rev=0abc4fde81764f6c81143b622624415232197129#0abc4fde81764f6c81143b622624415232197129"
 dependencies = [
  "serde",
  "serde_json",
@@ -724,8 +724,8 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-authcommon"
-version = "0.3.0"
-source = "git+https://github.com/jeremi/registry-platform?rev=e5b646f5979a41a65155b674f4769ff063910dba#e5b646f5979a41a65155b674f4769ff063910dba"
+version = "0.3.1"
+source = "git+https://github.com/jeremi/registry-platform?rev=0abc4fde81764f6c81143b622624415232197129#0abc4fde81764f6c81143b622624415232197129"
 dependencies = [
  "serde",
  "serde_json",
@@ -737,7 +737,7 @@ dependencies = [
 
 [[package]]
 name = "registryctl"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "base64",

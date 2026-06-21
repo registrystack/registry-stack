@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Semver tag to validate, for example v0.1.0"
+        description: "Semver tag to validate, for example v0.2.0"
         required: true
-        default: "v0.1.0"
+        default: "v0.2.0"
       dry_run:
         description: "Build and verify artifacts without creating a GitHub release"
         required: true
@@ -21,6 +21,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
   RUST_TOOLCHAIN: 1.95.0
@@ -49,6 +50,27 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release ref
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$DRY_RUN" == "true" ]]; then
+            echo "Dry-run build uses checked-out ref ${GITHUB_SHA} with release tag name ${RELEASE_TAG}."
+            exit 0
+          fi
+
+          git fetch --force origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          tag_sha="$(git rev-list -n 1 "$RELEASE_TAG")"
+          if ! git merge-base --is-ancestor "$tag_sha" origin/main; then
+            echo "Release tag ${RELEASE_TAG} (${tag_sha}) is not reachable from origin/main." >&2
+            exit 1
+          fi
+          git checkout --detach "$tag_sha"
 
       - name: Install Rust
         shell: bash
@@ -64,7 +86,7 @@ jobs:
           case "$RELEASE_TAG" in
             v[0-9]*.[0-9]*.[0-9]*) ;;
             *)
-              echo "Release tag must be semver-like, for example v0.1.0: $RELEASE_TAG" >&2
+              echo "Release tag must be semver-like, for example v0.2.0: $RELEASE_TAG" >&2
               exit 1
               ;;
           esac
@@ -104,11 +126,11 @@ jobs:
     needs: build
     permissions:
       contents: write
-    env:
-      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
 
       - name: Download artifacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -126,6 +148,33 @@ jobs:
               shasum -a 256 -c "$(basename "$sum_file")"
             )
           done
+
+      - name: Verify release tag ancestry
+        if: env.DRY_RUN != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --force origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          tag_sha="$(git rev-list -n 1 "$RELEASE_TAG")"
+          if ! git merge-base --is-ancestor "$tag_sha" origin/main; then
+            echo "Release tag ${RELEASE_TAG} (${tag_sha}) is not reachable from origin/main." >&2
+            exit 1
+          fi
+
+      - name: Prepare checksum manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          (
+            cd release-assets
+            find . -maxdepth 1 -type f ! -name SHA256SUMS -print \
+              | sort \
+              | xargs shasum -a 256 \
+              | sed 's#  \./#  #' > SHA256SUMS
+            shasum -a 256 -c SHA256SUMS
+          )
 
       - name: Dry-run release
         if: env.DRY_RUN == 'true'

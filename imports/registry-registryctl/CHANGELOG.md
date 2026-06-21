@@ -4,13 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [0.2.0] - 2026-06-21
 
 ### Added
 
 - `registryctl init notary <dir> --source-kind fhir-sidecar` - scaffold a standalone Notary
   project pointing at an existing FHIR source-adapter sidecar, with a starter
   `patient-record-exists` claim and generated smoke request target.
+- `registryctl init notary <dir> --recipe opencrvs-dci` - scaffold a local Notary
+  project that reads OpenCRVS DCI credentials from an env file, validates the
+  generated config, and writes a smoke target for the live birth-record claim path.
+
+### Changed
+
+- Pinned `registry-platform-authcommon` and `registry-config-report` to the
+  Registry Platform `0.3.1` source SHA used by the beta-3 release train.
+- Update notices, README smoke guidance, installer examples, and docs fallbacks
+  now use tag-pinned `v0.2.0` installer/source paths instead of mutable `main`
+  or `snapshot` references.
 
 ## [0.1.0] - 2026-06-12
 
