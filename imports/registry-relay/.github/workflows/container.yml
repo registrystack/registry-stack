@@ -136,6 +136,14 @@ jobs:
             exit 1
           fi
 
+          if [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            crate_version="$(python3 -c 'import pathlib, tomllib; print(tomllib.load(pathlib.Path("Cargo.toml").open("rb"))["package"]["version"])')"
+            if [[ "$GITHUB_REF_NAME" != "v${crate_version}" ]]; then
+              echo "Release tag ${GITHUB_REF_NAME} does not match Cargo.toml package version ${crate_version}." >&2
+              exit 1
+            fi
+          fi
+
           # Ancestry via the compare API: the checkout has no persisted
           # credentials (persist-credentials: false), so a git fetch here
           # cannot authenticate, while the job token works against the
