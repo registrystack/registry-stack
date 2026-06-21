@@ -8087,14 +8087,25 @@ async fn oid4vci_type_metadata_is_public_and_matches_configured_vct() {
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let app = standalone_router(self_attestation_oid4vci_config(
+    let mut config = self_attestation_oid4vci_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
         &idp.jwks_uri(),
-    ))
-    .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    );
+    // Forwarded host/proto are honored only from trusted proxies; the
+    // axum-test client connects over loopback, so trust the loopback peer.
+    config.server.trusted_proxy_ips = vec![
+        "127.0.0.1".parse().expect("ipv4 loopback parses"),
+        "::1".parse().expect("ipv6 loopback parses"),
+    ];
+    let app = standalone_router(config).expect("standalone router builds");
+    // Serve with connect-info so the forwarded-host trust gate can see the
+    // loopback peer; a plain `Router` over http_transport injects no
+    // `ConnectInfo`, which would make the trust gate reject every request.
+    let server = TestServer::builder()
+        .http_transport()
+        .build(app.into_make_service_with_connect_info::<std::net::SocketAddr>());
 
     let response = server
         .get("/credentials/civil-status")
@@ -8190,8 +8201,19 @@ async fn oid4vci_type_metadata_normalizes_forwarded_scheme_and_host_case() {
         .get_mut("person_is_alive_sd_jwt")
         .expect("credential configuration exists")
         .vct = vct.to_string();
+    // Forwarded host/proto are honored only from trusted proxies; the
+    // axum-test client connects over loopback, so trust the loopback peer.
+    config.server.trusted_proxy_ips = vec![
+        "127.0.0.1".parse().expect("ipv4 loopback parses"),
+        "::1".parse().expect("ipv6 loopback parses"),
+    ];
     let app = standalone_router(config).expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    // Serve with connect-info so the forwarded-host trust gate can see the
+    // loopback peer; a plain `Router` over http_transport injects no
+    // `ConnectInfo`, which would make the trust gate reject every request.
+    let server = TestServer::builder()
+        .http_transport()
+        .build(app.into_make_service_with_connect_info::<std::net::SocketAddr>());
 
     let response = server
         .get("/credentials/civil-status")
@@ -8290,8 +8312,19 @@ async fn oid4vci_type_metadata_supports_path_prefixed_issuer_behind_stripping_pr
         .get_mut("person_is_alive_sd_jwt")
         .expect("credential configuration exists")
         .vct = prefixed_vct.to_string();
+    // Forwarded host/proto are honored only from trusted proxies; the
+    // axum-test client connects over loopback, so trust the loopback peer.
+    config.server.trusted_proxy_ips = vec![
+        "127.0.0.1".parse().expect("ipv4 loopback parses"),
+        "::1".parse().expect("ipv6 loopback parses"),
+    ];
     let app = standalone_router(config).expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    // Serve with connect-info so the forwarded-host trust gate can see the
+    // loopback peer; a plain `Router` over http_transport injects no
+    // `ConnectInfo`, which would make the trust gate reject every request.
+    let server = TestServer::builder()
+        .http_transport()
+        .build(app.into_make_service_with_connect_info::<std::net::SocketAddr>());
 
     let response = server
         .get("/credentials/civil-status")
@@ -8344,14 +8377,25 @@ async fn oid4vci_type_metadata_well_known_is_public_and_matches_configured_vct()
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let app = standalone_router(self_attestation_oid4vci_config(
+    let mut config = self_attestation_oid4vci_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
         &idp.jwks_uri(),
-    ))
-    .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    );
+    // Forwarded host/proto are honored only from trusted proxies; the
+    // axum-test client connects over loopback, so trust the loopback peer.
+    config.server.trusted_proxy_ips = vec![
+        "127.0.0.1".parse().expect("ipv4 loopback parses"),
+        "::1".parse().expect("ipv6 loopback parses"),
+    ];
+    let app = standalone_router(config).expect("standalone router builds");
+    // Serve with connect-info so the forwarded-host trust gate can see the
+    // loopback peer; a plain `Router` over http_transport injects no
+    // `ConnectInfo`, which would make the trust gate reject every request.
+    let server = TestServer::builder()
+        .http_transport()
+        .build(app.into_make_service_with_connect_info::<std::net::SocketAddr>());
 
     let response = server
         .get("/.well-known/vct/credentials/civil-status")
