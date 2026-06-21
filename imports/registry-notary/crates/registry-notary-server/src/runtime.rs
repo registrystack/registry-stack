@@ -589,6 +589,19 @@ async fn prefetch_bulk_bindings(
                 fields,
             );
             for context in contexts {
+                if source_scoped_trusted_policy(
+                    &evidence,
+                    claim,
+                    context,
+                    trusted_policy,
+                    purpose,
+                    disclosure,
+                    format,
+                )
+                .is_err()
+                {
+                    continue;
+                }
                 let policy_effect = match validate_matching_policy(
                     &evidence,
                     &source_capability,

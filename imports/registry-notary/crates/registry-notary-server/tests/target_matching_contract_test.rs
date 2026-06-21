@@ -1825,6 +1825,64 @@ async fn source_policy_rejects_claim_mismatched_authorization_details_before_sou
 }
 
 #[tokio::test]
+async fn batch_prefetch_rejects_broadened_authorization_details_before_bulk_read() {
+    let runtime = RegistryNotaryRuntime::new();
+    let source = Arc::new(BatchContextRecordingSource::new());
+    let mut claim = person_claim();
+    let binding = claim
+        .source_bindings
+        .get_mut("src")
+        .expect("source binding exists");
+    binding.connector = SourceConnectorKind::OpenFnSidecar;
+    binding.connection = Some("openfn_crvs".to_string());
+    binding.matching.allowed_assurance = vec!["substantial".to_string()];
+
+    let mut principal = principal_with_policy_context(Some("substantial"), None, None, None);
+    principal
+        .authorization_details
+        .as_mut()
+        .expect("authorization details exist")
+        .claims
+        .push(ClaimRef::with_version("date-of-birth", "1.0.0"));
+
+    let response = runtime
+        .batch_evaluate(
+            evidence_config_with_openfn_batch_connection(vec![claim]),
+            source.clone(),
+            &EvidenceStore::default(),
+            &principal,
+            BatchEvaluateRequest {
+                items: vec![BatchEvaluateItemRequest {
+                    requester: None,
+                    target: person_target("Amina", "Diallo", Some("1984-02-10")),
+                    relationship: Some(EvidenceRelationship {
+                        relationship_type: "self".to_string(),
+                        attributes: BTreeMap::new(),
+                    }),
+                    on_behalf_of: None,
+                    purpose: Some("benefits".to_string()),
+                }],
+                claims: vec![ClaimRef::new("person-is-alive")],
+                disclosure: Some("value".to_string()),
+                format: None,
+                purpose: None,
+            },
+            BatchEvaluateOptions::default(),
+        )
+        .await
+        .expect("batch returns per-item authorization failure");
+
+    assert_eq!(source.read_many_calls(), 0);
+    assert_eq!(source.read_one_calls(), 0);
+    assert_eq!(response.summary.succeeded, 0);
+    assert_eq!(response.summary.failed, 1);
+    assert_eq!(
+        response.items[0].errors[0].code,
+        "target.matching_policy_rejected"
+    );
+}
+
+#[tokio::test]
 async fn minimum_assurance_policy_rejects_before_source_read_and_accepts_higher_rank() {
     let runtime = RegistryNotaryRuntime::new();
     let source = Arc::new(MatchingSource::new());
