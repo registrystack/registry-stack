@@ -4,7 +4,7 @@ set -eu
 image="${1:-registry-relay:local}"
 platform_dir="${REGISTRY_PLATFORM_DIR:-../registry-platform}"
 manifest_dir="${REGISTRY_MANIFEST_DIR:-../registry-manifest}"
-manifest_ref="${REGISTRY_MANIFEST_REF:-141efade265f453e15c967770286bafc5c3a3956}"
+manifest_ref="${REGISTRY_MANIFEST_REF:-19cf67ada5eb7325a8fb8b051a2acc266b41bbde}"
 # CEL_MAPPING_DIR is the deprecated name for CROSSWALK_DIR; remove the fallback
 # once operators have migrated.
 if [ -z "${CROSSWALK_DIR:-}" ] && [ -n "${CEL_MAPPING_DIR:-}" ]; then
