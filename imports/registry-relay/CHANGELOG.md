@@ -13,6 +13,8 @@
 
 - Advanced the Crosswalk input to the `0.2.0` release ref used by the beta-3
   train.
+- Advanced Registry Platform to `0.3.1` and Registry Manifest to `0.2.1` for
+  the beta-3 train.
 - Updated Relay operational docs and API description text to match the current
   beta-3 surface.
 
