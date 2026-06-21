@@ -12,11 +12,11 @@
       "products": {
         "registry-relay": {
           "version": "beta-3 candidate",
-          "ref": "f00ffad8a12512104b4bd80e4639444e8baf90c8"
+          "ref": "285b31d2e73cb2f32466c865b47d384ca79f0c0f"
         },
         "registry-notary": {
           "version": "beta-3 candidate",
-          "ref": "a742933b5f4d15b0fed3f7f4089943d1a400987a"
+          "ref": "c845d7b204af3e86a9fc515b1f347177cea490cb"
         },
         "registry-manifest": {
           "version": "beta-3 candidate",
@@ -43,15 +43,15 @@
         },
         "registry-notary": {
           "version": "beta-3 candidate",
-          "ref": "a742933b5f4d15b0fed3f7f4089943d1a400987a"
+          "ref": "c845d7b204af3e86a9fc515b1f347177cea490cb"
         },
         "registry-relay": {
           "version": "beta-3 candidate",
-          "ref": "f00ffad8a12512104b4bd80e4639444e8baf90c8"
+          "ref": "285b31d2e73cb2f32466c865b47d384ca79f0c0f"
         },
         "registry-lab": {
           "version": "beta-3 candidate",
-          "ref": "5f0e322f67fb4334646ec1e73343beb472eccc9d"
+          "ref": "a6dfa0acf85d2c6badf43be08ec247362d479e2b"
         },
         "registry-registryctl": {
           "version": "v0.2.0 candidate",

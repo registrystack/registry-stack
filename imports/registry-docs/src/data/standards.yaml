@@ -354,7 +354,7 @@
     - label: Registry Platform PDP ODRL enforcement profile constants
       url: https://github.com/jeremi/registry-platform/blob/8bd2ede0d1b58761f78d8129a59e366eb59929ea/crates/registry-platform-pdp/src/lib.rs
     - label: Registry Relay governed evidence PDP path
-      url: https://github.com/jeremi/registry-relay/blob/f00ffad8a12512104b4bd80e4639444e8baf90c8/src/api/governed.rs
+      url: https://github.com/jeremi/registry-relay/blob/285b31d2e73cb2f32466c865b47d384ca79f0c0f/src/api/governed.rs
   last_checked: 2026-06-20
   notes: Relay catalog JSON-LD can include dataset-scoped ODRL Offers, and Manifest renders ODRL policy metadata. That publication surface is descriptive and is not itself an access grant. Separately, Relay's governed Evidence Gateway runtime path can select a governed-evidence binding and call the shared PDP using the `registry-evidence-gateway-pdp/v1` profile; the implemented runtime enforcement terms are currently `odrl:purpose` and `odrl:spatial`, while unsupported ODRL terms are denied rather than treated as enforced.
 - id: sdmx

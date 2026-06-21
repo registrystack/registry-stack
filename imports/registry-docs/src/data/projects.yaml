@@ -59,9 +59,9 @@
     - label: README
       url: https://github.com/jeremi/registry-relay
     - label: Local API docs
-      url: https://github.com/jeremi/registry-relay/blob/f00ffad8a12512104b4bd80e4639444e8baf90c8/docs/api.md
+      url: https://github.com/jeremi/registry-relay/blob/285b31d2e73cb2f32466c865b47d384ca79f0c0f/docs/api.md
     - label: Local metadata docs
-      url: https://github.com/jeremi/registry-relay/blob/f00ffad8a12512104b4bd80e4639444e8baf90c8/docs/metadata.md
+      url: https://github.com/jeremi/registry-relay/blob/285b31d2e73cb2f32466c865b47d384ca79f0c0f/docs/metadata.md
   rename_status: Local checkout renamed to `registry-relay`; old worktrees under `registry_relay-*` remain for historical evidence.
 - id: registry-notary
   name: Registry Notary
@@ -86,7 +86,7 @@
     - label: README
       url: https://github.com/jeremi/registry-notary
     - label: OpenAPI source
-      url: https://github.com/jeremi/registry-notary/blob/a742933b5f4d15b0fed3f7f4089943d1a400987a/crates/registry-notary-server/src/openapi.rs
+      url: https://github.com/jeremi/registry-notary/blob/c845d7b204af3e86a9fc515b1f347177cea490cb/crates/registry-notary-server/src/openapi.rs
   rename_status: Already using the target repo name locally.
 - id: registry-lab
   name: Registry Lab
@@ -104,7 +104,7 @@
     - Real product integrations for OpenCRVS, OpenSPP, DHIS2, OpenIMIS, MOSIP, or other systems.
   source_docs:
     - label: README
-      url: https://github.com/jeremi/registry-lab/blob/5f0e322f67fb4334646ec1e73343beb472eccc9d/README.md
+      url: https://github.com/jeremi/registry-lab/blob/a6dfa0acf85d2c6badf43be08ec247362d479e2b/README.md
     - label: Rename plan
       url: https://github.com/jeremi/registry-docs/blob/e926f05441f39eb2d633979c3bc5a3552f5cf6e2/rename-plan-2026-05-23.md
   rename_status: Local checkout renamed to `registry-lab`; stable demo identifiers may still contain `decentralized-demo` as protocol and artifact values.
