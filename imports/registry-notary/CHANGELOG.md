@@ -5,10 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.5.0] - Unreleased
+## [0.5.0] - 2026-06-21
 
 ### Added
 
+- **Dependent source lookups for civil-registration evidence packs**: claim
+  evaluation can precompute source lookup dependencies needed by the OpenCRVS
+  certificate evidence path.
+- **OpenCRVS Notary onboarding documentation**: operator-facing guidance now
+  covers the standalone OpenCRVS DCI claim path used by the beta-3 tutorials.
 - **Built-in DHIS2 health-programme and civil source-adapter examples**: the
   source-adapter sidecar gains `http_json` manifests
   (`examples/dhis2-health-sidecar.yaml`, `examples/civil-http-json-sidecar.yaml`)
@@ -16,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   built-in engine plus CEL collection macros, a live DHIS2 health canary
   (`scripts/smoke-http-json-dhis2-health-sidecar.sh`), and a parity gate note
   (`docs/dhis2-health-parity.md`).
+
+### Changed
+
+- Advanced the Crosswalk input to the `0.2.0` release ref used by the beta-3
+  train.
 
 ### Removed
 
@@ -42,6 +52,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a coordinated governed-config apply: re-render and re-sign the runtime target,
   and update the `expected_sidecar.config_hash` that Notary pins for each
   source connection, before rollout.
+
+### Security
+
+- Hardened token replay handling, forwarded-host trust, and approval-reference
+  checks.
+- Gated source-adapter sidecar metrics behind optional bearer-token auth.
+- Tightened OpenFn egress-hardening guidance while the integration remains
+  available as a caller-side path.
 
 ## [0.4.0] - 2026-06-13
 
