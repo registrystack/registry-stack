@@ -1086,7 +1086,9 @@ Selective-disclosure presentations may include a subset of disclosures. Each
 presented disclosure must hash to a digest in the credential. When a
 presentation includes a key-binding JWT, the verifier separates it from
 disclosures and verifies its holder proof signature against the credential
-`cnf.jwk`.
+`cnf.jwk`. When required holder binding is paired with
+`VerifyOptions::key_binding_challenge`, the trailing key-binding JWT is
+mandatory and must match the expected audience and nonce.
 
 Verifier errors are redacted and safe for policy mapping by code. Stable codes
 include `signature.invalid`, `key.unknown`, `algorithm.disallowed`,

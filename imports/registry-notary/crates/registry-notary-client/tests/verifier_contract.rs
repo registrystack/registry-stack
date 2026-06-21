@@ -154,6 +154,22 @@ async fn verify_sd_jwt_vc_rejects_key_binding_without_expected_challenge() {
 }
 
 #[tokio::test]
+async fn verify_sd_jwt_vc_rejects_missing_key_binding_for_expected_challenge() {
+    let compact = issue_sd_jwt(ISSUER_JWK, ISSUER, NOW, NOW + 50, Some(&holder_did())).await;
+
+    let error = verifier::verify_sd_jwt_vc(
+        &compact,
+        &jwks(ISSUER_JWK),
+        &options()
+            .holder_binding(HolderBindingPolicy::Required)
+            .key_binding_challenge(KB_AUD, KB_NONCE),
+    )
+    .expect_err("missing key binding jwt is rejected for verifier challenge");
+
+    assert_code(error, "holder_binding.challenge_required");
+}
+
+#[tokio::test]
 async fn verify_sd_jwt_vc_accepts_optional_key_binding_without_challenge() {
     let compact = issue_sd_jwt(ISSUER_JWK, ISSUER, NOW, NOW + 50, Some(&holder_did())).await;
     let presentation = format!("{compact}{}", signed_key_binding_jwt(&compact));
