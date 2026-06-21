@@ -420,6 +420,16 @@ fn layer_notary_routes(
     wallet_cors_policy: SelfAttestationWalletCorsPolicy,
     http_limits: NotaryHttpLimits,
 ) -> Router {
+    let cors_layer = match cors_policy.try_layer() {
+        Ok(layer) => layer,
+        Err(err) => {
+            tracing::error!(
+                error = %err,
+                "cors policy failed platform validation; falling back to deny-all"
+            );
+            tower_http::cors::CorsLayer::new()
+        }
+    };
     routes
         .layer(TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
@@ -435,7 +445,7 @@ fn layer_notary_routes(
         .layer(registry_platform_httpsec::security_headers(
             registry_platform_httpsec::CspBuilder::restrictive(),
         ))
-        .layer(cors_policy.layer())
+        .layer(cors_layer)
         .layer(from_fn_with_state(
             wallet_cors_policy,
             self_attestation_wallet_cors_middleware,
