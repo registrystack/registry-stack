@@ -6,6 +6,8 @@ WORKDIR /app
 
 ARG REGISTRY_MANIFEST_REPO_URL=https://github.com/jeremi/registry-manifest.git
 ARG REGISTRY_MANIFEST_REF=141efade265f453e15c967770286bafc5c3a3956
+ARG REGISTRY_PLATFORM_REPO_URL=https://github.com/jeremi/registry-platform.git
+ARG REGISTRY_PLATFORM_REF=0abc4fde81764f6c81143b622624415232197129
 ARG REGISTRY_RELAY_REPO_URL=https://github.com/jeremi/registry-relay.git
 ARG REGISTRY_RELAY_REF=380261c386309a4194b131913525f6cf70611adb
 
@@ -17,6 +19,12 @@ RUN git init /app/vendor/registry-manifest && \
     cd /app/vendor/registry-manifest && \
     git remote add origin "${REGISTRY_MANIFEST_REPO_URL}" && \
     git fetch --depth 1 origin "${REGISTRY_MANIFEST_REF}" && \
+    git checkout --detach FETCH_HEAD && \
+    rm -rf .git && \
+    git init /app/vendor/registry-platform && \
+    cd /app/vendor/registry-platform && \
+    git remote add origin "${REGISTRY_PLATFORM_REPO_URL}" && \
+    git fetch --depth 1 origin "${REGISTRY_PLATFORM_REF}" && \
     git checkout --detach FETCH_HEAD && \
     rm -rf .git && \
     git init /app/vendor/registry-relay && \
