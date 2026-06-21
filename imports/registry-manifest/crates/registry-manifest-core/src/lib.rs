@@ -110,9 +110,189 @@ pub const RUNTIME_ONLY_KEYS: &[&str] = &[
     "visibility",
 ];
 
+const SECRET_BEARING_KEYS: &[&str] = &[
+    "api_key",
+    "client_secret",
+    "credentials",
+    "password",
+    "private_key",
+    "secret",
+    "token",
+];
+
+const SECRET_COMPACT_SUFFIXES: &[&str] = &[
+    "credential",
+    "credentials",
+    "env",
+    "key",
+    "keys",
+    "password",
+    "passwords",
+    "secret",
+    "secrets",
+    "token",
+    "tokens",
+    "value",
+    "values",
+];
+
+const CREDENTIAL_SECRET_SUFFIXES: &[&str] = &[
+    "env",
+    "key",
+    "keys",
+    "password",
+    "passwords",
+    "secret",
+    "secrets",
+    "token",
+    "tokens",
+    "value",
+    "values",
+];
+
 #[must_use]
 pub fn is_runtime_only_key(key: &str) -> bool {
     RUNTIME_ONLY_KEYS.contains(&key)
+}
+
+fn is_secret_bearing_key(key: &str) -> bool {
+    let normalized = normalize_manifest_key(key);
+    let segments = normalized
+        .split('_')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    let compact = normalized.replace('_', "");
+    if credential_secret_key(&compact) {
+        return true;
+    }
+    SECRET_BEARING_KEYS.iter().any(|secret| {
+        secret_matches_segments(&segments, secret) || secret_matches_compact(&compact, secret)
+    })
+}
+
+fn credential_secret_key(compact: &str) -> bool {
+    if compact == "credential" || compact == "credentials" {
+        return true;
+    }
+    if compact
+        .strip_prefix("credential")
+        .is_some_and(secret_numeric_suffix)
+        || compact
+            .strip_prefix("credentials")
+            .is_some_and(secret_numeric_suffix)
+    {
+        return true;
+    }
+    if credential_secret_occurrence(compact, "credential")
+        || credential_secret_occurrence(compact, "credentials")
+    {
+        return true;
+    }
+    if compact.len() > "credential".len() && compact.ends_with("credential") {
+        return true;
+    }
+    if compact.len() > "credentials".len() && compact.ends_with("credentials") {
+        return true;
+    }
+    for prefix in ["credential", "credentials"] {
+        let Some(suffix) = compact.strip_prefix(prefix) else {
+            continue;
+        };
+        if !suffix.is_empty()
+            && CREDENTIAL_SECRET_SUFFIXES
+                .iter()
+                .any(|secret_suffix| suffix.starts_with(secret_suffix))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn credential_secret_occurrence(compact: &str, secret: &str) -> bool {
+    compact.match_indices(secret).any(|(index, _)| {
+        let suffix_start = index + secret.len();
+        let prefix = &compact[..index];
+        let suffix = &compact[suffix_start..];
+        !prefix.is_empty()
+            && !suffix.is_empty()
+            && (secret_numeric_suffix(suffix)
+                || CREDENTIAL_SECRET_SUFFIXES
+                    .iter()
+                    .any(|secret_suffix| suffix.starts_with(secret_suffix)))
+    })
+}
+
+fn secret_matches_segments(segments: &[&str], secret: &str) -> bool {
+    let secret_segments = secret.split('_').collect::<Vec<_>>();
+    if secret_segments.len() == 1 {
+        return segments.contains(&secret_segments[0]);
+    }
+
+    segments
+        .windows(secret_segments.len())
+        .any(|window| window == secret_segments.as_slice())
+}
+
+fn secret_matches_compact(compact: &str, secret: &str) -> bool {
+    let compact_secret = secret.replace('_', "");
+    if compact == compact_secret || compact.ends_with(&compact_secret) {
+        return true;
+    }
+    if compact
+        .strip_prefix(&compact_secret)
+        .is_some_and(secret_numeric_suffix)
+        || compact
+            .strip_suffix(&compact_secret)
+            .is_some_and(secret_numeric_prefix)
+    {
+        return true;
+    }
+
+    if secret.contains('_') && compact.contains(&compact_secret) {
+        return true;
+    }
+
+    for suffix in secret_compact_suffixes(compact, &compact_secret) {
+        if !suffix.is_empty()
+            && SECRET_COMPACT_SUFFIXES
+                .iter()
+                .any(|credential_suffix| suffix.starts_with(credential_suffix))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn secret_compact_suffixes<'a>(
+    compact: &'a str,
+    compact_secret: &'a str,
+) -> impl Iterator<Item = &'a str> {
+    compact.match_indices(compact_secret).map(|(index, _)| {
+        let suffix_start = index + compact_secret.len();
+        &compact[suffix_start..]
+    })
+}
+
+fn secret_numeric_suffix(value: &str) -> bool {
+    !value.is_empty() && value.chars().all(|ch| ch.is_ascii_digit())
+}
+
+fn secret_numeric_prefix(value: &str) -> bool {
+    !value.is_empty() && value.chars().next().is_some_and(|ch| ch.is_ascii_digit())
+}
+
+fn normalize_manifest_key(key: &str) -> String {
+    key.chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 #[derive(Debug, Error)]
@@ -261,13 +441,22 @@ impl<'de> Deserialize<'de> for MetadataManifest {
     {
         let value = Value::deserialize(deserializer)?;
         let mut runtime_keys = Vec::new();
-        collect_runtime_only_json_keys(&value, &mut runtime_keys);
+        let mut secret_keys = Vec::new();
+        collect_disallowed_json_keys(&value, &mut runtime_keys, &mut secret_keys);
         if !runtime_keys.is_empty() {
             runtime_keys.sort();
             runtime_keys.dedup();
             return Err(de::Error::custom(format!(
                 "runtime-only keys are not allowed in metadata manifests: {}",
                 runtime_keys.join(", ")
+            )));
+        }
+        if !secret_keys.is_empty() {
+            secret_keys.sort();
+            secret_keys.dedup();
+            return Err(de::Error::custom(format!(
+                "secret-bearing keys are not allowed in metadata manifests: {}",
+                secret_keys.join(", ")
             )));
         }
         let fields = MetadataManifestFields::deserialize(value).map_err(de::Error::custom)?;
@@ -329,19 +518,26 @@ impl From<MetadataManifestFields> for MetadataManifest {
     }
 }
 
-fn collect_runtime_only_json_keys(value: &Value, keys: &mut Vec<String>) {
+fn collect_disallowed_json_keys(
+    value: &Value,
+    runtime_keys: &mut Vec<String>,
+    secret_keys: &mut Vec<String>,
+) {
     match value {
         Value::Object(map) => {
             for (key, child) in map {
                 if is_runtime_only_key(key) {
-                    keys.push(key.clone());
+                    runtime_keys.push(key.clone());
                 }
-                collect_runtime_only_json_keys(child, keys);
+                if is_secret_bearing_key(key) {
+                    secret_keys.push(key.clone());
+                }
+                collect_disallowed_json_keys(child, runtime_keys, secret_keys);
             }
         }
         Value::Array(values) => {
             for child in values {
-                collect_runtime_only_json_keys(child, keys);
+                collect_disallowed_json_keys(child, runtime_keys, secret_keys);
             }
         }
         Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
@@ -1630,6 +1826,20 @@ fn validate_federation(federation: Option<&FederationManifest>, errors: &mut Vec
         "federation.federation_api",
         errors,
     );
+    if let Some(issuer_host) = https_url_host(&federation.issuer) {
+        validate_federation_endpoint_host(
+            &federation.jwks_uri,
+            "federation.jwks_uri",
+            &issuer_host,
+            errors,
+        );
+        validate_federation_endpoint_host(
+            &federation.federation_api,
+            "federation.federation_api",
+            &issuer_host,
+            errors,
+        );
+    }
     if !federation
         .supported_protocol_versions
         .iter()
@@ -1665,6 +1875,22 @@ fn validate_federation(federation: Option<&FederationManifest>, errors: &mut Vec
             "federation.node_id",
             "federation node id must be a did:web identifier",
         )),
+    }
+}
+
+fn validate_federation_endpoint_host(
+    value: &str,
+    path: impl Into<String>,
+    issuer_host: &str,
+    errors: &mut Vec<ValidationError>,
+) {
+    if let Some(endpoint_host) = https_url_host(value) {
+        if !issuer_host.eq_ignore_ascii_case(&endpoint_host) {
+            errors.push(ValidationError::new(
+                path,
+                "federation endpoint host must bind to federation issuer host",
+            ));
+        }
     }
 }
 

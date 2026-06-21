@@ -175,6 +175,105 @@ codelists: []
 }
 
 #[test]
+fn secret_bearing_unknown_manifest_fields_are_rejected_before_unknown_fields_are_ignored() {
+    for key in [
+        "client_secret",
+        "password",
+        "credential",
+        "credentials",
+        "api_key",
+        "private_key",
+        "token",
+        "secret",
+        "secret_key",
+        "credential_env",
+        "password_env",
+        "client_secret_env",
+        "api_key_env",
+        "private_key_env",
+        "access_token_env",
+        "secretKey",
+        "clientCredential",
+        "partnerCredential",
+        "credential1",
+        "credentials1",
+        "clientCredential1",
+        "partnerCredential1",
+        "password1",
+        "token1",
+        "passwordEnv",
+        "clientSecretEnv",
+        "apiKeyEnv",
+    ] {
+        let raw = format!(
+            r#"
+schema_version: registry-manifest/v1
+{key}: leaked
+catalog:
+  id: secret-bearing-direct-parse
+  base_url: https://registry.example.test
+  title: Secret-bearing Direct Parse
+  publisher:
+    name: Publisher
+datasets: []
+codelists: []
+"#
+        );
+        let error = serde_yaml_ng::from_str::<MetadataManifest>(&raw)
+            .expect_err("secret-bearing keys are rejected during manifest parsing");
+
+        assert!(
+            error.to_string().contains("secret-bearing keys"),
+            "unexpected parse error for {key}: {error}"
+        );
+        assert!(
+            error.to_string().contains(key),
+            "secret-bearing key should be named in parse error for {key}: {error}"
+        );
+    }
+}
+
+#[test]
+fn secret_bearing_extension_map_keys_are_rejected() {
+    let raw = r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: secret-bearing-extension
+  base_url: https://registry.example.test
+  title: Secret-bearing Extension
+  publisher:
+    name: Publisher
+evaluation_profiles:
+  - id: eligibility_profile
+    ruleset: eligibility-rules-v1
+    claim_id: eligibility
+    subject_id_type: national_id
+    evidence_pack:
+      source_basis:
+        partnerCredentials:
+          username: partner
+          password: leaked
+datasets: []
+codelists: []
+"#;
+    let error = serde_yaml_ng::from_str::<MetadataManifest>(raw)
+        .expect_err("secret-bearing extension keys are rejected during manifest parsing");
+
+    assert!(
+        error.to_string().contains("secret-bearing keys"),
+        "unexpected parse error: {error}"
+    );
+    assert!(
+        error.to_string().contains("partnerCredentials"),
+        "extension key should be named in parse error: {error}"
+    );
+    assert!(
+        error.to_string().contains("password"),
+        "nested secret key should be named in parse error: {error}"
+    );
+}
+
+#[test]
 fn runtime_only_rejection_covers_representative_product_configs() {
     let cases = [
         (
@@ -3129,6 +3228,48 @@ fn validation_rejects_invalid_federation_urls_and_did_web_binding() {
                 .message
                 .contains("must bind to federation issuer host")
     }));
+}
+
+#[test]
+fn validation_accepts_federation_endpoints_on_issuer_host() {
+    let mut manifest = federated_evaluation_manifest();
+    let federation = manifest.federation.as_mut().expect("federation");
+    federation.issuer = "https://registry.example.test/issuer".to_string();
+    federation.jwks_uri = "https://registry.example.test/.well-known/jwks.json".to_string();
+    federation.federation_api = "https://registry.example.test/federation".to_string();
+
+    validate_manifest(&manifest).expect("federation endpoints bind to issuer host");
+}
+
+#[test]
+fn validation_rejects_federation_endpoints_on_cross_hosts() {
+    let mut manifest = federated_evaluation_manifest();
+    let federation = manifest.federation.as_mut().expect("federation");
+    federation.jwks_uri = "https://keys.example.test/.well-known/jwks.json".to_string();
+    federation.federation_api = "https://api.example.test/federation".to_string();
+
+    let error = validate_manifest(&manifest).expect_err("cross-host federation endpoints rejected");
+    let MetadataError::Validation { errors } = error else {
+        panic!("unexpected error: {error:?}");
+    };
+    assert!(
+        errors.iter().any(|error| {
+            error.path == "federation.jwks_uri"
+                && error
+                    .message
+                    .contains("must bind to federation issuer host")
+        }),
+        "expected JWKS host binding error, got: {errors:?}"
+    );
+    assert!(
+        errors.iter().any(|error| {
+            error.path == "federation.federation_api"
+                && error
+                    .message
+                    .contains("must bind to federation issuer host")
+        }),
+        "expected federation API host binding error, got: {errors:?}"
+    );
 }
 
 #[test]

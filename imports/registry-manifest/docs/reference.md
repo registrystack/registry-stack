@@ -148,8 +148,8 @@ Fields of `FederationManifest`.
 | --- | --- | --- |
 | `node_id` | Yes | Publishing Notary node id. MVP validation requires `did:web`. |
 | `issuer` | Yes | HTTPS issuer URL. Host must bind to the `did:web` node id. |
-| `jwks_uri` | Yes | HTTPS JWKS URL partners use to verify signed federation responses. |
-| `federation_api` | Yes | HTTPS federation API base URL. |
+| `jwks_uri` | Yes | HTTPS JWKS URL partners use to verify signed federation responses. Host must bind to the issuer host. |
+| `federation_api` | Yes | HTTPS federation API base URL. Host must bind to the issuer host. |
 | `supported_protocol_versions` | Yes | Must include `registry-notary-federation/v0.1`. |
 
 Fields of `EvaluationProfileManifest`.
@@ -223,7 +223,12 @@ fields to existing mapping objects without requiring a new major schema version.
 Beta-era readers must ignore unrecognized fields while continuing to require and
 validate the fields they understand. Unknown fields do not relax existing validation:
 required fields, identifier syntax, URI syntax, reference integrity, collection limits,
-and runtime-only key rejection still apply.
+runtime-only key rejection, and secret-bearing key rejection still apply.
+
+Readers must reject unrecognized or extension keys that look credential-bearing,
+including keys such as `client_secret`, `password`, `credential`, `credentials`,
+`api_key`, `private_key`, `token`, or `secret`, plus compound variants such as
+`secret_key`, `credential_env`, `password_env`, and `client_secret_env`.
 
 Readers must treat unrecognized fields as advisory extension data. A reader may expose
 or preserve extension data when it has a typed extension model, but it must not fail
