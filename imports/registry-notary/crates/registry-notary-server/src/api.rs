@@ -5855,6 +5855,7 @@ async fn evaluate(
                     evaluation_id,
                     &requested_claims,
                     Some(1),
+                    None,
                     self_attestation_policy_hash,
                 );
             } else {
@@ -6130,18 +6131,20 @@ async fn render(
                     Some(evaluation_id),
                     requested_claims.as_deref().unwrap_or(&evaluation.claim_ids),
                     None,
+                    Some(vec![evaluation.purpose.clone()]),
                     evaluation
                         .self_attestation
                         .as_ref()
                         .and_then(|metadata| metadata.policy_hash.clone()),
                 );
             } else {
-                attach_evidence_audit(
+                attach_evidence_audit_with_purposes(
                     &mut response,
                     "render",
                     Some(evaluation_id),
                     requested_claims.as_deref().unwrap_or(&[]),
                     None,
+                    Some(vec![evaluation.purpose.clone()]),
                 );
             }
             response
@@ -6154,6 +6157,7 @@ async fn render(
                     "render_failed",
                     Some(evaluation_id),
                     requested_claims.as_deref().unwrap_or(&evaluation.claim_ids),
+                    None,
                     None,
                     evaluation
                         .self_attestation
@@ -8635,13 +8639,14 @@ fn attach_self_attestation_success_audit(
     verification_id: Option<String>,
     claim_ids: &[String],
     row_count: Option<u64>,
+    purposes: Option<Vec<String>>,
     policy_hash: Option<Hashed<PolicyIdentifier>>,
 ) {
     response.extensions_mut().insert(EvidenceAuditContext {
         verification_id,
         verification_decision: Some(decision.to_string()),
         claim_hash: (!claim_ids.is_empty()).then(|| evidence_claim_hash(claim_ids)),
-        purposes: None,
+        purposes,
         row_count,
         access_mode: Some(AccessMode::SelfAttestation),
         denial_code: None,

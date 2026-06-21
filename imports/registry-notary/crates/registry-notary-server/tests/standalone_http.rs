@@ -7945,6 +7945,10 @@ async fn oidc_self_attestation_evaluates_renders_and_audits_access_mode() {
         })
         .expect("render audit record exists");
     assert_eq!(render_audit["access_mode"], json!("self_attestation"));
+    assert_eq!(
+        render_audit["purposes"],
+        json!(["citizen_self_attestation"])
+    );
     assert!(render_audit["policy_hash"].is_string());
     assert!(render_audit.get("correlation_id").is_none());
     assert!(render_audit["correlation_id_hash"]
