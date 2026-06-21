@@ -7,7 +7,7 @@ source_repos:
   - registry-platform
   - registry-relay
   - registry-notary
-last_reviewed: "2026-06-13"
+last_reviewed: "2026-06-21"
 doc_type: specification
 doc_id: RS-SEC-G
 category: normative
@@ -35,6 +35,7 @@ The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 
 | Version | Date | Status | Change |
 | --- | --- | --- | --- |
 | 0.1.0 | 2026-06-13 | draft | Initial security model, distilled from the boundary map, the architecture overview, the Registry Relay and Registry Notary API references, the Registry Notary signing-key reference, and the two protocol specifications. |
+| 0.1.1 | 2026-06-21 | draft | Clarified key custody, readiness, public error detail, and principal-scoped cache boundaries. |
 
 ## 1. Scope and references
 
@@ -104,6 +105,8 @@ REQ-SEC-G-007: An issuer MUST sign with an asymmetric key and MUST publish only 
 
 The custody mechanism for the private key (environment, file, or hardware module) is a deployment choice, described in the [signing-key reference](../../products/registry-notary/signing-key-provider/) and out of scope here (Section 9).
 
+Readiness, liveness, and protocol conformance checks show that a service has loaded configuration and can serve the expected protocol surface. They do not certify production-grade private-key custody. A deployment that uses software keys, local JWK files, or demo-generated keys can still be reachable and internally consistent; production custody, rotation, and approval of a key provider remain operator responsibilities under Section 9.
+
 ## 6. Audit
 
 Every request that touches person-level data is recorded. Audit is a security control, not best-effort logging: a deployment can require that a request which cannot be recorded does not succeed.
@@ -125,6 +128,8 @@ Services present a consistent error surface and constrain the calls they make ou
 REQ-SEC-G-011: Error responses MUST use the problem-details media type `application/problem+json` ([RFC 9457](https://www.rfc-editor.org/info/rfc9457)), except on a route whose own protocol defines a different error envelope (for example the OID4VCI routes, per REQ-PR-NOTARY-022).
 
 REQ-SEC-G-012: A runtime service SHOULD apply the Registry Platform HTTP-security primitive (security response headers) on its served surface, and outbound source fetches SHOULD be governed by the Registry Platform outbound-HTTP-policy primitive, which constrains the destinations a source connector may reach. The concrete header set and the outbound allow and deny rules are operational detail (Section 1).
+
+Problem details are a client-facing protocol surface, not an operator diagnostic channel. Stable problem codes and titles belong in responses; raw bearer tokens, private keys, source values, local filesystem paths, and unbounded internal error chains belong in protected operator logs. Principal-scoped responses, including scoped metadata and claim results, are not public cache entries: where a response varies by authenticated principal, scope, purpose, or authorization context, deployments use cache controls appropriate to that sensitivity, such as private or no-store semantics and `Vary: Authorization` where a response is cacheable.
 
 ## 9. The operator boundary
 

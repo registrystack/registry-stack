@@ -5,7 +5,7 @@ status: draft
 owner: registry-docs
 source_repos:
   - registry-manifest
-last_reviewed: "2026-06-20"
+last_reviewed: "2026-06-21"
 doc_type: specification
 doc_id: RS-DM-MANIFEST
 category: normative
@@ -41,6 +41,7 @@ The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 
 | --- | --- | --- | --- |
 | 0.1.0 | 2026-06-13 | draft | Initial portable metadata data model, distilled from the Registry Manifest overview, the validate-and-render guide, and the reference, and graded against the schema types and the load-time validator the Registry Manifest core enforces. |
 | 0.2.0 | 2026-06-20 | draft | Added governed evidence gateway metadata, policy id/hash binding, ODRL enforcement profile validation, and the runtime PDP boundary. |
+| 0.2.1 | 2026-06-21 | draft | Clarified federation discovery trust boundaries, manifest validation limits, and static publication provenance. |
 
 ## 1. Scope and references
 
@@ -128,6 +129,8 @@ A manifest MAY advertise the metadata a partner needs to configure Registry Nota
 
 REQ-DM-MANIFEST-010: Where an evidence offering declares `access.kind: registry-notary`, the manifest MUST carry a `federation` block with HTTPS issuer, JWKS, and federation-API URLs, a `did:web` node identifier bound to the issuer host, the supported protocol version `registry-notary-federation/v0.1`, and an `access.ruleset` that names a declared evaluation profile. This metadata is public discovery only and MUST NOT be read as an access grant: peer authorization remains with Registry Notary, which decides at runtime which peers may call it (REQ-ARC-G-009).
 
+Federation discovery metadata is also not a trust bootstrap by itself. A consumer that reads federation metadata from an external manifest validates the issuer, JWKS, federation API, and `did:web` host against local trust policy before treating any key or endpoint as authoritative. In the registry stack's runtime path, trusted peer keys and endpoints come from Registry Notary configuration, not from accepting an arbitrary published manifest.
+
 ## 8. Rendered artifacts and standards
 
 From a valid manifest, Registry Manifest renders a set of standards-shaped artifacts. The renderers are the reason the manifest exists: one authored document becomes the catalog, schema, policy, and service descriptions other systems already know how to read.
@@ -139,6 +142,8 @@ REQ-DM-MANIFEST-011: Registry Manifest MUST render its discovery artifacts as a 
 The `publish` operation writes the rendered artifacts as a static bundle that can be hosted as files and pinned by digest, with no runtime service in the loop. The bundle describes itself through an index.
 
 REQ-DM-MANIFEST-012: The `publish` operation MUST produce a self-describing static bundle whose `index.json` (schema version `registry-manifest-index/v1`) carries a canonical `source_manifest_digest` over the typed manifest (insensitive to YAML formatting, comments, and key order, but sensitive to semantic change), a `package_digest` over the published artifact inventory, and a per-artifact `sha256` for every published artifact, including the OGC Records item collection. The digests MUST let a reader pin and compare a bundle without running Registry Relay or any other runtime service.
+
+The digest inventory describes the bundle that was published, not the history of the output directory. Release publication workflows use an empty output directory or remove prior generated files before publishing, so the package digest cannot accidentally bless stale local files that happened to be present beside the newly rendered artifacts.
 
 ## 10. Compatibility and evolution
 
@@ -153,6 +158,10 @@ These constraints are stated so a reader does not infer an invariant the reviewe
 - **Runtime-binding exclusion is an enumerated list.** Registry Manifest rejects the runtime-only keys it enumerates, not every conceivable runtime key. The manifest schema does not reject unknown keys in general (it carries no `deny_unknown_fields`), so an unrecognized key whose name is outside the runtime-only list is ignored rather than rejected. This is the same additive-evolution behavior REQ-DM-MANIFEST-013 relies on (REQ-DM-MANIFEST-002).
 - **Standards conformance is not validated.** The renderers emit standards-shaped artifacts but do not validate them against the external standard bodies. A rendered CPSV-AP, DCAT, or SHACL document is well-formed by construction, not certified against the standard (REQ-DM-MANIFEST-011).
 - **URI checks are shallow.** A field required to be a URI is checked for an HTTP or HTTPS scheme or for the identifier pattern, not for full RFC 3987 IRI validity (REQ-DM-MANIFEST-004, REQ-DM-MANIFEST-005).
+- **Federation metadata is not a trust anchor.** Registry Manifest validates required federation fields and selected URL shapes, but a published manifest does not bind an external consumer to trust a JWKS endpoint, a federation API host, or a peer identity. Host pinning and trust bootstrap belong to the consumer's local policy and Registry Notary peer configuration (REQ-DM-MANIFEST-010).
+- **Library callers own untrusted-input resource limits.** The command-line path may impose its own input limits, but callers that embed Registry Manifest as a library and accept manifests from untrusted parties still need request size, nesting, collection-count, and time limits appropriate to their service boundary. Manifest validation is not a general resource sandbox.
+- **Notary-specific validation depends on Notary access semantics.** The Notary federation checks apply where the manifest declares a Registry Notary evidence access path. A generic `conforms_to` value or generic URI metadata alone must not be treated by consumers as proof that the Notary endpoint set is complete and safe to trust.
+- **Publication provenance depends on a clean destination.** The `package_digest` pins the artifact inventory it sees. It is not proof that every file was created by the current publish invocation if the output directory already contained local files.
 - **Evidence pack metadata remains partly opaque.** Governed evidence packs require key metadata and validate selected object shapes, supported gate names, supported output names, policy digest shape, inline-policy digest binding, and supported ODRL enforcement terms. The implementation still represents several fields as JSON values rather than a fully typed external evidence-pack schema (REQ-DM-MANIFEST-007 through REQ-DM-MANIFEST-009).
 - **Profile fixtures are non-normative.** The example profiles shipped with Registry Manifest are illustrative until reviewed against official artifacts; they are not authoritative profiles for any named external system (see the [profile fixtures guide](../../products/registry-manifest/profile-fixtures/)).
 

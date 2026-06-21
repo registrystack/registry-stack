@@ -6,7 +6,7 @@ owner: registry-docs
 source_repos:
   - registry-notary
   - registry-platform
-last_reviewed: "2026-06-20"
+last_reviewed: "2026-06-21"
 doc_type: specification
 doc_id: RS-PR-NOTARY
 category: normative
@@ -41,6 +41,7 @@ The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 
 | --- | --- | --- | --- |
 | 0.1.0 | 2026-06-13 | draft | Initial protocol contract, distilled from the Registry Notary API reference, the evidence-issuance explanation, and the generated OpenAPI document. |
 | 0.1.1 | 2026-06-20 | draft | Document governed source policy decisions, source-bound purpose and freshness constraints, self-attestation trust context, audit provenance, and scoped OID4VCI behavior. |
+| 0.1.2 | 2026-06-21 | draft | Clarified source adapter sidecar isolation assumptions and demo/template freshness boundaries. |
 
 ## 1. Scope and references
 
@@ -113,6 +114,8 @@ The diagram restates the pipeline: a caller supplies a subject identifier and a 
 REQ-PR-NOTARY-005: Claim evaluation MUST be performed by Registry Notary against its configured sources. The caller supplies a subject identifier and a claim id and MUST NOT supply the evaluated value. This is the protocol-level form of REQ-ARC-G-007.
 
 REQ-PR-NOTARY-006: A source connector MUST reach its target over HTTP. The supported connector kinds are `registry_data_api` (a Registry Relay instance), `dci` (an SP DCI search source), and the source adapter sidecar (which uses built-in `http_json`, `http_flow`, or `fhir` engines to reach external sources such as DHIS2 or FHIR servers). There is no file-based or database connector, and a conforming deployment MUST NOT assume one.
+
+The source adapter sidecar is a private deployment surface behind Registry Notary, not a public subject-facing API. A static bearer token on the Notary-to-sidecar hop authenticates that internal hop; it is not by itself an end-user, tenant, or subject authorization boundary. Deployments keep direct sidecar access off the public network, scope sidecar credentials to the configured source, and scope cache, retry, and backoff state so one caller or source path cannot make authorization-relevant decisions for another.
 
 REQ-PR-NOTARY-007: A claim's rule MUST be one of the implemented rule types: `extract`, `exists`, or `cel`. The `plugin` rule type is declared in configuration but is unimplemented at the reviewed commit; a conforming claim MUST NOT depend on it.
 
@@ -197,6 +200,8 @@ These constraints are stated so a reader does not infer a capability from the ro
 - **Holder binding.** `did:jwk` is the only supported proof-of-possession binding method (REQ-PR-NOTARY-015).
 - **OID4VCI profile.** The OID4VCI surface is a scoped self-attestation issuance profile, not a full issuer or general external-wallet interoperability claim (REQ-PR-NOTARY-016, REQ-PR-NOTARY-027).
 - **Federation.** Static-peer delegated evaluation only; no dynamic discovery, shared replay storage, or federated credential issuance (REQ-PR-NOTARY-019).
+- **Source adapter sidecar.** The sidecar is an internal source connector surface. Direct public access, broad reuse of one sidecar token across unrelated sources, or shared cache/backoff state across authorization contexts is outside the security model (REQ-PR-NOTARY-006).
+- **Demo and template integrations.** Demo helper code and generated workflow snippets are integration examples, not a production freshness or replay-protection profile. Teams that copy them into production must add request freshness, expiry, or nonce checks appropriate to their workflow.
 - **Admin reload.** The admin reload route returns HTTP 501 with code `registry.admin.capability.not_supported` in the standalone router; it performs no reload, and key and configuration changes require a service restart.
 
 ## Conformance
