@@ -86,7 +86,7 @@
     - label: README
       url: https://github.com/jeremi/registry-notary
     - label: OpenAPI source
-      url: https://github.com/jeremi/registry-notary/blob/c845d7b204af3e86a9fc515b1f347177cea490cb/crates/registry-notary-server/src/openapi.rs
+      url: https://github.com/jeremi/registry-notary/blob/18b30ec45086a12d8b518eca9bfe838c7cff780e/crates/registry-notary-server/src/openapi.rs
   rename_status: Already using the target repo name locally.
 - id: registry-lab
   name: Registry Lab

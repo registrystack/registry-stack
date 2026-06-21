@@ -13,7 +13,7 @@ docsets:
         ref: 256d281829a502725ca2b327c24b444f66126122
       registry-notary:
         version: beta-3 candidate
-        ref: c845d7b204af3e86a9fc515b1f347177cea490cb
+        ref: 18b30ec45086a12d8b518eca9bfe838c7cff780e
       registry-manifest:
         version: beta-3 candidate
         ref: 71c9ead582ea81a82022c37357b38b98d3f18f48
@@ -33,7 +33,7 @@ docsets:
         ref: 71c9ead582ea81a82022c37357b38b98d3f18f48
       registry-notary:
         version: beta-3 candidate
-        ref: c845d7b204af3e86a9fc515b1f347177cea490cb
+        ref: 18b30ec45086a12d8b518eca9bfe838c7cff780e
       registry-relay:
         version: beta-3 candidate
         ref: 256d281829a502725ca2b327c24b444f66126122

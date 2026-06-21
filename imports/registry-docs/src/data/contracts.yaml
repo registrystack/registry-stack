@@ -23,7 +23,7 @@
   surface: Claim discovery, claim evaluation, batch evaluation, federated delegated evaluation, rendering, JWKS, service metadata, and credential issuance.
   source_of_truth:
     label: Registry Notary OpenAPI generator
-    url: https://github.com/jeremi/registry-notary/blob/c845d7b204af3e86a9fc515b1f347177cea490cb/crates/registry-notary-server/src/openapi.rs
+    url: https://github.com/jeremi/registry-notary/blob/18b30ec45086a12d8b518eca9bfe838c7cff780e/crates/registry-notary-server/src/openapi.rs
   consumer_note: Generate with `cargo run -p registry-notary-bin -- openapi`.
 - id: registry-notary.oid4vci
   name: Registry Notary OID4VCI surface
@@ -32,7 +32,7 @@
   surface: OID4VCI offer start and callback (`/oid4vci/offer/start`, `/oid4vci/offer/callback`), credential offer (`GET /oid4vci/credential-offer`), nonce (`POST /oid4vci/nonce`), token (`POST /oid4vci/token`), credential request (`POST /oid4vci/credential`), VCT credential and metadata routes (`/credentials/{vct_path}`, `/.well-known/vct/{vct_path}`), and issuer metadata (`GET /.well-known/openid-credential-issuer`). Primitives sourced from the `registry-platform-oid4vci` crate.
   source_of_truth:
     label: Registry Notary OID4VCI routes
-    url: https://github.com/jeremi/registry-notary/blob/c845d7b204af3e86a9fc515b1f347177cea490cb/crates/registry-notary-server/src/api.rs
+    url: https://github.com/jeremi/registry-notary/blob/18b30ec45086a12d8b518eca9bfe838c7cff780e/crates/registry-notary-server/src/api.rs
   consumer_note: OID4VCI flow advertising `dc+sd-jwt` credential format. Registry Lab exercises the full path through the `just citizen-oid4vci-*` recipes. Full OID4VCI Draft 13 `vc+sd-jwt` wallet conformance is not asserted at this version.
 - id: registry-notary.federated-evaluation
   name: Registry Notary Federated Evaluation MVP
@@ -41,7 +41,7 @@
   surface: Static-peer delegated evaluation over `POST /federation/v1/evaluations`, compact JWS request and response JWTs, peer policy checks, pairwise subject handles, replay protection, and federation audit fields.
   source_of_truth:
     label: Registry Notary federation module
-    url: https://github.com/jeremi/registry-notary/tree/c845d7b204af3e86a9fc515b1f347177cea490cb/crates/registry-notary-server/src/federation
+    url: https://github.com/jeremi/registry-notary/tree/18b30ec45086a12d8b518eca9bfe838c7cff780e/crates/registry-notary-server/src/federation
   consumer_note: This is delegated evaluation only. Open federation, trust-chain discovery, shared replay storage, audit checkpoint exchange, and federated credential issuance are outside the MVP.
 - id: registry-manifest.metadata-yaml
   name: Metadata Manifest
