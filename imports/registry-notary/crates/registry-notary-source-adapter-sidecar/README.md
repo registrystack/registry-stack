@@ -50,6 +50,10 @@ auth:
   bearer_tokens:
     - id: notary
       hash_env: OPENFN_SIDECAR_TOKEN_HASH
+audit:
+  sink: file
+  path: /var/log/registry-notary-source-adapter-sidecar/audit.jsonl
+  hash_secret_env: OPENFN_SIDECAR_AUDIT_HASH_SECRET
 config_trust:
   product: registry-notary-source-adapter-sidecar
   instance_id: demo
@@ -69,6 +73,10 @@ must list the trusted TUF root, accepted signer keys, roles, thresholds, and
 allowed change classes. Startup fails closed if the target is not verified,
 authorized, bound to the configured product/instance/environment/stream, marked
 `restart_required`, or accepted by anti-rollback after runtime checks pass.
+Governed startup also requires a durable audit sink. Protected data routes
+write a pre-access audit event before dispatching to a source and write an
+outcome event before returning to the caller; audit write failure returns
+`500` with `audit.write_failed`.
 
 The signed target uses schema `registry.notary.openfn_sidecar.runtime.v1` and
 always contains `limits` and `sources`.

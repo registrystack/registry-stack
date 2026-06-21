@@ -40,6 +40,8 @@ use tough::schema::Target;
 const TOKEN_HASH_ENV: &str = "GOVERNED_RUNTIME_VALIDATION_TOKEN_HASH";
 const TOKEN: &str = "contract-sidecar-token";
 const TOKEN_HASH: &str = "sha256:98808b694f3b431dcc2459db07bbfb61b8e3287ad0ab7364a2ff510d35e21418";
+const AUDIT_HASH_SECRET_ENV: &str = "GOVERNED_RUNTIME_VALIDATION_AUDIT_HASH_SECRET";
+const AUDIT_HASH_SECRET: &str = "0123456789abcdef0123456789abcdef";
 const CREDENTIAL_ENV: &str = "GOVERNED_RUNTIME_VALIDATION_CREDENTIAL_JSON";
 const PRODUCT: &str = "registry-notary-source-adapter-sidecar";
 const INSTANCE_ID: &str = "demo";
@@ -97,6 +99,7 @@ impl Harness {
             .build(Router::new().route("/people", get(person_lookup)));
         let upstream_url = server_base_url(&upstream);
         std::env::set_var(TOKEN_HASH_ENV, TOKEN_HASH);
+        std::env::set_var(AUDIT_HASH_SECRET_ENV, AUDIT_HASH_SECRET);
         std::env::set_var(
             CREDENTIAL_ENV,
             json!({ "baseUrl": upstream_url, "apiToken": "fixture-token" }).to_string(),
@@ -735,6 +738,10 @@ auth:
   bearer_tokens:
     - id: notary-contract
       hash_env: {token_hash_env}
+audit:
+  sink: file
+  path: {audit_path}
+  hash_secret_env: {audit_hash_secret_env}
 config_trust:
   product: {product}
   instance_id: {instance_id}
@@ -763,6 +770,8 @@ config_trust:
             - {change_class}
 "#,
         token_hash_env = yaml_string(TOKEN_HASH_ENV),
+        audit_path = yaml_path(&repo.datastore_dir.join("sidecar-audit.jsonl")),
+        audit_hash_secret_env = yaml_string(AUDIT_HASH_SECRET_ENV),
         product = yaml_string(PRODUCT),
         instance_id = yaml_string(INSTANCE_ID),
         environment = yaml_string(ENVIRONMENT),

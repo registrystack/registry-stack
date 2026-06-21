@@ -14,6 +14,7 @@ use hyper_util::{
     rt::{TokioExecutor, TokioIo, TokioTimer},
     server::conn::auto::Builder as HyperBuilder,
 };
+use registry_platform_audit::{AuditProfile, ChainState, JsonlFileSink};
 use registry_platform_authcommon::{parse_bearer_token, parse_fingerprint, verify_api_key};
 use registry_platform_config::{
     ConfigTargetMetadata, LocalTufRepositoryInput, RegistryAcceptedTrustRoots, RegistryTrustRoot,
@@ -33,7 +34,7 @@ use std::{
     time::{Duration, Instant},
 };
 use thiserror::Error;
-use tokio::sync::{watch, Mutex, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{watch, Mutex, OnceCell, OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinSet;
 use tough::{
     editor::{signed::PathExists, RepositoryEditor},
@@ -48,6 +49,8 @@ use tracing::{info, warn};
 pub struct SidecarConfig {
     pub server: ServerConfig,
     pub auth: AuthConfig,
+    #[serde(default)]
+    pub audit: SidecarAuditConfig,
     #[serde(default)]
     pub config_trust: Option<SidecarConfigTrustConfig>,
     pub limits: LimitConfig,
@@ -79,6 +82,50 @@ pub struct ServerConfig {
 #[derive(Clone, Debug, Deserialize)]
 pub struct AuthConfig {
     pub bearer_tokens: Vec<BearerTokenConfig>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SidecarAuditConfig {
+    #[serde(default = "default_sidecar_audit_sink")]
+    pub sink: String,
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub hash_secret_env: Option<String>,
+    #[serde(default)]
+    pub max_size_mb: Option<u64>,
+    #[serde(default)]
+    pub max_files: Option<u32>,
+}
+
+impl Default for SidecarAuditConfig {
+    fn default() -> Self {
+        Self {
+            sink: default_sidecar_audit_sink(),
+            path: None,
+            hash_secret_env: None,
+            max_size_mb: None,
+            max_files: None,
+        }
+    }
+}
+
+impl SidecarAuditConfig {
+    const DEFAULT_MAX_SIZE_MB: u64 = 100;
+    const DEFAULT_MAX_FILES: u32 = 14;
+
+    fn max_size_bytes(&self) -> u64 {
+        self.max_size_mb.unwrap_or(Self::DEFAULT_MAX_SIZE_MB) * 1024 * 1024
+    }
+
+    fn max_files(&self) -> u32 {
+        self.max_files.unwrap_or(Self::DEFAULT_MAX_FILES)
+    }
+}
+
+fn default_sidecar_audit_sink() -> String {
+    "none".to_string()
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -544,6 +591,8 @@ pub enum SidecarError {
     StartupCheck(String),
     #[error("smoke lookup for source {source_id} failed: {reason}")]
     SmokeLookup { source_id: String, reason: String },
+    #[error("audit setup or write failed: {0}")]
+    Audit(#[from] registry_platform_audit::AuditError),
 }
 
 #[derive(Clone)]
@@ -556,6 +605,58 @@ struct AppState {
     source_runtime: Arc<BTreeMap<String, Arc<SourceRuntimeState>>>,
     http_json_clients: Arc<Mutex<BTreeMap<String, reqwest::Client>>>,
     metrics: Arc<Mutex<BTreeMap<MetricKey, MetricValue>>>,
+    audit: Option<Arc<SidecarAuditPipeline>>,
+}
+
+struct SidecarAuditPipeline {
+    sink: JsonlFileSink,
+    chain: OnceCell<ChainState>,
+    profile: AuditProfile,
+}
+
+impl SidecarAuditPipeline {
+    fn from_config(config: &SidecarAuditConfig) -> Result<Option<Self>, SidecarError> {
+        match config.sink.as_str() {
+            "none" => Ok(None),
+            "file" | "jsonl" => {
+                let path = config.path.as_deref().ok_or_else(|| {
+                    SidecarError::Config(
+                        "audit.path is required when audit.sink is file or jsonl".to_string(),
+                    )
+                })?;
+                let hash_secret_env = config.hash_secret_env.as_deref().ok_or_else(|| {
+                    SidecarError::Config(
+                        "audit.hash_secret_env is required when audit.sink is file or jsonl"
+                            .to_string(),
+                    )
+                })?;
+                let profile = AuditProfile::production_from_env(hash_secret_env)?;
+                let sink =
+                    JsonlFileSink::with_rotation(path, config.max_size_bytes(), config.max_files());
+                Ok(Some(Self {
+                    sink,
+                    chain: OnceCell::new(),
+                    profile,
+                }))
+            }
+            sink => Err(SidecarError::Config(format!(
+                "audit.sink {sink} is unsupported"
+            ))),
+        }
+    }
+
+    async fn emit(&self, record: Value) -> Result<(), registry_platform_audit::AuditError> {
+        let chain = self
+            .chain
+            .get_or_try_init(|| async { self.profile.bootstrap_or_start_empty(&self.sink).await })
+            .await?;
+        chain.append(&self.sink, record).await?;
+        Ok(())
+    }
+
+    fn hash(&self, value: &str) -> String {
+        self.profile.key_hasher().hash(value)
+    }
 }
 
 struct SourceRuntimeState {
@@ -694,6 +795,8 @@ struct SidecarConfigTrustProbe {
 struct SidecarBootstrapConfig {
     server: ServerConfig,
     auth: AuthConfig,
+    #[serde(default)]
+    audit: SidecarAuditConfig,
     config_trust: SidecarConfigTrustConfig,
 }
 
@@ -1107,6 +1210,7 @@ fn materialize_governed_config(
     Ok(SidecarConfig {
         server: bootstrap.server,
         auth: bootstrap.auth,
+        audit: bootstrap.audit,
         config_trust: Some(bootstrap.config_trust.clone()),
         limits: target.limits,
         sources: target.sources,
@@ -1149,6 +1253,7 @@ fn validate_governed_runtime_target(target: &GovernedRuntimeTarget) -> Result<()
                 ),
             }],
         },
+        audit: SidecarAuditConfig::default(),
         config_trust: None,
         limits: target.limits.clone(),
         sources: target.sources.clone(),
@@ -1189,6 +1294,12 @@ pub async fn sidecar_router(config: SidecarConfig) -> Result<Router, SidecarErro
     validate_config(&config)?;
     let auth_tokens = resolve_auth_tokens(&config)?;
     let fhir_bearer_tokens = resolve_fhir_bearer_tokens(&config)?;
+    let audit = SidecarAuditPipeline::from_config(&config.audit)?;
+    if config.assurance.is_some() && audit.is_none() {
+        return Err(SidecarError::Config(
+            "governed sidecar runtime requires durable audit configuration".to_string(),
+        ));
+    }
     let request_timeout = Duration::from_millis(config.server.request_timeout_ms);
     let request_body_timeout = Duration::from_millis(config.server.request_body_timeout_ms);
 
@@ -1220,6 +1331,7 @@ pub async fn sidecar_router(config: SidecarConfig) -> Result<Router, SidecarErro
         source_runtime: Arc::new(source_runtime),
         http_json_clients: Arc::new(Mutex::new(BTreeMap::new())),
         metrics: Arc::new(Mutex::new(BTreeMap::new())),
+        audit: audit.map(Arc::new),
     });
     run_smoke_lookups(&state).await?;
     accept_governed_config(&state.config)?;
@@ -1237,7 +1349,11 @@ pub async fn sidecar_router(config: SidecarConfig) -> Result<Router, SidecarErro
             "/v1/datasets/{dataset}/entities/{entity}/records:batchMatch",
             post(batch_match),
         )
-        .with_state(state)
+        .with_state(Arc::clone(&state))
+        .layer(middleware::from_fn_with_state(
+            Arc::clone(&state),
+            sidecar_audit_middleware,
+        ))
         .layer(middleware::from_fn(enforce_uri_limit))
         .layer(RequestBodyTimeoutLayer::new(request_body_timeout))
         .layer(TimeoutLayer::with_status_code(
@@ -4600,6 +4716,127 @@ fn metric_labels(key: &MetricKey) -> String {
     labels.join(",")
 }
 
+async fn sidecar_audit_middleware(
+    State(state): State<Arc<AppState>>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    let method = request.method().as_str().to_string();
+    let path = request.uri().path().to_string();
+    let purpose = request
+        .headers()
+        .get("data-purpose")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let correlation_id = request
+        .headers()
+        .get("x-correlation-id")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    if !is_sidecar_data_route(&path) {
+        return next.run(request).await;
+    }
+    let Some(audit) = state.audit.as_ref() else {
+        return next.run(request).await;
+    };
+    let attempted = sidecar_audit_record(
+        audit,
+        "attempt",
+        &method,
+        &path,
+        None,
+        purpose.clone(),
+        correlation_id.clone(),
+    );
+    if let Err(error) = audit.emit(attempted).await {
+        return sidecar_audit_write_failed(error, &method, &path);
+    }
+
+    let response = next.run(request).await;
+    let status = response.status().as_u16();
+    let event = sidecar_audit_record(
+        audit,
+        "outcome",
+        &method,
+        &path,
+        Some(status),
+        purpose,
+        correlation_id,
+    );
+    match audit.emit(event).await {
+        Ok(()) => response,
+        Err(error) => sidecar_audit_write_failed(error, &method, &path),
+    }
+}
+
+fn sidecar_audit_write_failed(
+    error: registry_platform_audit::AuditError,
+    method: &str,
+    path: &str,
+) -> Response {
+    warn!(
+        error = %error,
+        method = method,
+        path = path,
+        "sidecar audit write failed"
+    );
+    problem_with_code(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "sidecar audit write failed",
+        "audit.write_failed",
+    )
+}
+
+fn is_sidecar_data_route(path: &str) -> bool {
+    path.starts_with("/v1/datasets/") && path.contains("/records")
+}
+
+fn sidecar_audit_record(
+    audit: &SidecarAuditPipeline,
+    phase: &str,
+    method: &str,
+    path: &str,
+    status: Option<u16>,
+    purpose: Option<String>,
+    correlation_id: Option<String>,
+) -> Value {
+    let (dataset, entity) = sidecar_dataset_entity(path);
+    json!({
+        "event_type": "registry-notary-source-adapter-sidecar.data_route",
+        "phase": phase,
+        "method": method,
+        "path": path,
+        "status": status,
+        "decision": match status {
+            Some(status) if status < 400 => "permitted",
+            Some(_) => "denied",
+            None => "attempted",
+        },
+        "dataset": dataset,
+        "entity": entity,
+        "purpose_hash": purpose.as_deref().map(|value| audit.hash(value)),
+        "correlation_id_hash": correlation_id.as_deref().map(|value| audit.hash(value)),
+    })
+}
+
+fn sidecar_dataset_entity(path: &str) -> (Option<String>, Option<String>) {
+    let mut segments = path.split('/').filter(|segment| !segment.is_empty());
+    match (
+        segments.next(),
+        segments.next(),
+        segments.next(),
+        segments.next(),
+        segments.next(),
+    ) {
+        (Some("v1"), Some("datasets"), Some(dataset), Some("entities"), Some(entity)) => {
+            (Some(dataset.to_string()), Some(entity.to_string()))
+        }
+        _ => (None, None),
+    }
+}
+
 async fn lookup(
     State(state): State<Arc<AppState>>,
     Path((dataset, entity)): Path<(String, String)>,
@@ -5636,6 +5873,7 @@ mod tests {
                     hash_env: Some("TEST_OPENFN_SIDECAR_TOKEN_HASH".to_string()),
                 }],
             },
+            audit: SidecarAuditConfig::default(),
             config_trust: None,
             limits: LimitConfig {
                 max_workers: 1,
@@ -5956,7 +6194,145 @@ mod tests {
             source_runtime: Arc::new(BTreeMap::new()),
             http_json_clients: Arc::new(Mutex::new(BTreeMap::new())),
             metrics: Arc::new(Mutex::new(BTreeMap::new())),
+            audit: None,
         }
+    }
+
+    #[test]
+    fn sidecar_audit_record_hashes_purpose_and_correlation_without_lookup_values() {
+        let pipeline = SidecarAuditPipeline {
+            sink: JsonlFileSink::new("unused.jsonl"),
+            chain: OnceCell::new(),
+            profile: AuditProfile::unkeyed_dev_only(),
+        };
+        let record = sidecar_audit_record(
+            &pipeline,
+            "outcome",
+            "GET",
+            "/v1/datasets/civil_registry/entities/person/records",
+            Some(StatusCode::OK.as_u16()),
+            Some("benefits".to_string()),
+            Some("corr-123".to_string()),
+        );
+
+        assert_eq!(
+            record["event_type"],
+            "registry-notary-source-adapter-sidecar.data_route"
+        );
+        assert_eq!(record["phase"], "outcome");
+        assert_eq!(record["dataset"], "civil_registry");
+        assert_eq!(record["entity"], "person");
+        assert_eq!(record["decision"], "permitted");
+        assert!(record["purpose_hash"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("sha256:")));
+        assert!(record["correlation_id_hash"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("sha256:")));
+        assert!(!record.to_string().contains("person-123"));
+        assert!(!record.to_string().contains("benefits"));
+        assert!(!record.to_string().contains("corr-123"));
+    }
+
+    #[tokio::test]
+    async fn sidecar_data_route_fails_closed_when_preaccess_audit_write_fails() {
+        std::env::set_var(
+            "TEST_OPENFN_SIDECAR_TOKEN_HASH",
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        );
+        std::env::set_var(
+            "TEST_SIDECAR_AUDIT_HASH_SECRET",
+            "0123456789abcdef0123456789abcdef",
+        );
+        let upstream =
+            axum_test::TestServer::builder()
+                .http_transport()
+                .build(Router::new().route(
+                    "/records",
+                    get(|| async {
+                        Json(json!({
+                            "results": [
+                                {
+                                    "national_id": "person-1"
+                                }
+                            ]
+                        }))
+                    }),
+                ));
+        let upstream_url = upstream
+            .server_address()
+            .expect("HTTP transport exposes server address")
+            .to_string()
+            .trim_end_matches('/')
+            .to_string();
+        let audit_dir = tempfile::TempDir::new().expect("audit temp dir");
+        std::env::set_var(
+            "TEST_HTTP_JSON_SOURCE_CREDENTIAL",
+            json!({ "baseUrl": upstream_url }).to_string(),
+        );
+        let mut config = minimal_config();
+        let source = config.sources.get_mut("people").expect("source exists");
+        source.allowed_base_urls = vec![upstream_url];
+        source.allow_insecure_localhost = true;
+        config.audit = SidecarAuditConfig {
+            sink: "file".to_string(),
+            path: Some(audit_dir.path().to_string_lossy().into_owned()),
+            hash_secret_env: Some("TEST_SIDECAR_AUDIT_HASH_SECRET".to_string()),
+            max_size_mb: None,
+            max_files: None,
+        };
+        let app = sidecar_router(config).await.expect("sidecar starts");
+        let server = axum_test::TestServer::builder().http_transport().build(app);
+
+        let response = server
+            .get("/v1/datasets/civil_registry/entities/person/records")
+            .await;
+
+        response.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+        let body: Value = response.json();
+        assert_eq!(body["code"], "audit.write_failed");
+    }
+
+    #[tokio::test]
+    async fn governed_sidecar_requires_audit_pipeline() {
+        std::env::set_var(
+            "TEST_OPENFN_SIDECAR_TOKEN_HASH",
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        );
+        let mut config = minimal_config();
+        config.assurance = Some(SidecarAssurance {
+            status: "ready".to_string(),
+            product: "registry-notary-source-adapter-sidecar".to_string(),
+            instance_id: "sidecar-1".to_string(),
+            environment: "test".to_string(),
+            stream_id: "stream".to_string(),
+            bundle_id: "bundle".to_string(),
+            sequence: 1,
+            config_hash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                .to_string(),
+            tuf_root_sha256:
+                "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                    .to_string(),
+            root_version: 1,
+            targets_version: 1,
+            snapshot_version: 1,
+            timestamp_version: 1,
+            change_classes: BTreeSet::new(),
+            signer_kids: Vec::new(),
+            expression_hashes_verified: true,
+            runtime_verified: true,
+            smoke_verified: true,
+            apply_policy: "strict".to_string(),
+        });
+
+        let error = sidecar_router(config)
+            .await
+            .expect_err("governed sidecar without audit is rejected");
+
+        assert!(
+            error.to_string().contains("requires durable audit"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]

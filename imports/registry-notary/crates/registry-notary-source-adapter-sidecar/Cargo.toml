@@ -20,6 +20,7 @@ serde.workspace = true
 serde_json.workspace = true
 serde_norway.workspace = true
 registry-platform-authcommon.workspace = true
+registry-platform-audit.workspace = true
 registry-platform-config.workspace = true
 registry-platform-ops.workspace = true
 thiserror.workspace = true
