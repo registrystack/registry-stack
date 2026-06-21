@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.4.0 - 2026-06-21
+
+### Added
+
+- Governed identity attribute release profiles for Evidence Gateway and
+  cross-registry attribute-release scenarios.
+- A config-schema command and shared config-report output alignment with the
+  beta-3 Platform config contracts.
+
+### Changed
+
+- Advanced the Crosswalk input to the `0.2.0` release ref used by the beta-3
+  train.
+- Updated Relay operational docs and API description text to match the current
+  beta-3 surface.
+
+### Security
+
+- Fail closed when source size is unknown.
+- Cap CSV column and cell counts, cap SP DCI search-request item fan-out, and
+  bound OGC EDR area geometry scans.
+- Redact URL userinfo and hard secret markers in config explanation output.
+
 ## 0.3.0 - 2026-06-13
 
 ### Added
