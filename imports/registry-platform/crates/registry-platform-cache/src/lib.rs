@@ -87,6 +87,17 @@ pub enum CacheSetOutcome {
     AlreadyExists,
 }
 
+/// Result of updating a live cache record only when its bytes match exactly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CacheCompareAndSetOutcome {
+    /// The current value matched `expected` and the new value was stored.
+    Stored,
+    /// The key exists and has not expired, but its bytes did not match.
+    Mismatch,
+    /// The key was absent or the stored record had expired.
+    Missing,
+}
+
 #[async_trait]
 pub trait CacheStore: Send + Sync {
     async fn get(&self, key: &CacheKey) -> Result<Option<Vec<u8>>, CacheStoreError>;
@@ -104,6 +115,14 @@ pub trait CacheStore: Send + Sync {
         value: &[u8],
         expires_at: OffsetDateTime,
     ) -> Result<CacheSetOutcome, CacheStoreError>;
+
+    async fn compare_and_set(
+        &self,
+        key: &CacheKey,
+        expected: &[u8],
+        value: &[u8],
+        expires_at: OffsetDateTime,
+    ) -> Result<CacheCompareAndSetOutcome, CacheStoreError>;
 
     async fn delete(&self, key: &CacheKey) -> Result<bool, CacheStoreError>;
 
@@ -263,6 +282,34 @@ impl CacheStore for InMemoryCacheStore {
         Ok(CacheSetOutcome::Stored)
     }
 
+    async fn compare_and_set(
+        &self,
+        key: &CacheKey,
+        expected: &[u8],
+        value: &[u8],
+        expires_at: OffsetDateTime,
+    ) -> Result<CacheCompareAndSetOutcome, CacheStoreError> {
+        Self::check_expiry(expires_at)?;
+        let now = OffsetDateTime::now_utc();
+        let mut records = self
+            .records
+            .lock()
+            .expect("in-memory cache store lock is healthy");
+        let Some(record) = records.get_mut(key) else {
+            return Ok(CacheCompareAndSetOutcome::Missing);
+        };
+        if record.expires_at <= now {
+            records.remove(key);
+            return Ok(CacheCompareAndSetOutcome::Missing);
+        }
+        if record.value != expected {
+            return Ok(CacheCompareAndSetOutcome::Mismatch);
+        }
+        record.value = value.to_vec();
+        record.expires_at = expires_at;
+        Ok(CacheCompareAndSetOutcome::Stored)
+    }
+
     async fn delete(&self, key: &CacheKey) -> Result<bool, CacheStoreError> {
         let mut records = self
             .records
@@ -370,6 +417,19 @@ impl fmt::Debug for RedisCacheStore {
 }
 
 #[cfg(feature = "redis")]
+const REDIS_COMPARE_AND_SET_SCRIPT: &str = r#"
+local current = redis.call("GET", KEYS[1])
+if not current then
+  return "missing"
+end
+if current ~= ARGV[1] then
+  return "mismatch"
+end
+redis.call("PSETEX", KEYS[1], ARGV[3], ARGV[2])
+return "stored"
+"#;
+
+#[cfg(feature = "redis")]
 #[async_trait]
 impl CacheStore for RedisCacheStore {
     async fn get(&self, key: &CacheKey) -> Result<Option<Vec<u8>>, CacheStoreError> {
@@ -425,6 +485,34 @@ impl CacheStore for RedisCacheStore {
         Ok(match set.as_deref() {
             Some("OK") => CacheSetOutcome::Stored,
             _ => CacheSetOutcome::AlreadyExists,
+        })
+    }
+
+    async fn compare_and_set(
+        &self,
+        key: &CacheKey,
+        expected: &[u8],
+        value: &[u8],
+        expires_at: OffsetDateTime,
+    ) -> Result<CacheCompareAndSetOutcome, CacheStoreError> {
+        let ttl_ms = Self::ttl_ms(expires_at)?;
+        let mut connection = self.connection().await?;
+        let outcome: String = self
+            .redis_call(
+                redis::cmd("EVAL")
+                    .arg(REDIS_COMPARE_AND_SET_SCRIPT)
+                    .arg(1)
+                    .arg(key.as_str())
+                    .arg(expected)
+                    .arg(value)
+                    .arg(ttl_ms)
+                    .query_async(&mut connection),
+            )
+            .await?;
+        Ok(match outcome.as_str() {
+            "stored" => CacheCompareAndSetOutcome::Stored,
+            "mismatch" => CacheCompareAndSetOutcome::Mismatch,
+            _ => CacheCompareAndSetOutcome::Missing,
         })
     }
 
@@ -579,6 +667,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn in_memory_compare_and_set_distinguishes_outcomes() {
+        let store = InMemoryCacheStore::new();
+        let key = CacheKey::new("test:key").expect("key is valid");
+
+        assert_eq!(
+            store
+                .compare_and_set(&key, b"one", b"two", future())
+                .await
+                .expect("missing compare succeeds"),
+            CacheCompareAndSetOutcome::Missing
+        );
+
+        store
+            .set(&key, b"one", future())
+            .await
+            .expect("set succeeds");
+        assert_eq!(
+            store
+                .compare_and_set(&key, b"wrong", b"two", future())
+                .await
+                .expect("mismatch compare succeeds"),
+            CacheCompareAndSetOutcome::Mismatch
+        );
+        assert_eq!(
+            store.get(&key).await.expect("get succeeds"),
+            Some(b"one".to_vec())
+        );
+        assert_eq!(
+            store
+                .compare_and_set(&key, b"one", b"two", future())
+                .await
+                .expect("matching compare succeeds"),
+            CacheCompareAndSetOutcome::Stored
+        );
+        assert_eq!(
+            store.get(&key).await.expect("get succeeds"),
+            Some(b"two".to_vec())
+        );
+
+        let expired_key = CacheKey::new("test:expired").expect("key is valid");
+        store.records.lock().unwrap().insert(
+            expired_key.clone(),
+            CacheRecord {
+                value: b"old".to_vec(),
+                expires_at: OffsetDateTime::UNIX_EPOCH,
+            },
+        );
+        assert_eq!(
+            store
+                .compare_and_set(&expired_key, b"old", b"new", future())
+                .await
+                .expect("expired compare succeeds"),
+            CacheCompareAndSetOutcome::Missing
+        );
+        assert_eq!(store.get(&expired_key).await.expect("get succeeds"), None);
+    }
+
+    #[tokio::test]
     async fn in_memory_cache_enforces_optional_capacity() {
         let store = InMemoryCacheStore::with_max_entries(1);
         let first = CacheKey::new("test:first").expect("key is valid");
@@ -621,5 +767,57 @@ mod tests {
 
         assert!(!debug.contains("secret:key:material"));
         assert!(debug.contains("len"));
+    }
+
+    #[cfg(feature = "redis")]
+    #[tokio::test]
+    async fn redis_compare_and_set_round_trips_when_env_is_set() {
+        let Ok(url) = std::env::var("REGISTRY_PLATFORM_REDIS_TEST_URL") else {
+            return;
+        };
+        let store =
+            RedisCacheStore::new(&url, Duration::from_millis(500), Duration::from_millis(500))
+                .expect("redis cache store builds");
+        store.check_ready().await.expect("redis is ready");
+        let key = CacheKey::new(format!(
+            "registry-platform-cache-test:cas:{}",
+            OffsetDateTime::now_utc().unix_timestamp_nanos()
+        ))
+        .expect("key is valid");
+
+        assert_eq!(
+            store
+                .compare_and_set(&key, b"one", b"two", future())
+                .await
+                .expect("missing compare succeeds"),
+            CacheCompareAndSetOutcome::Missing
+        );
+        store
+            .set(&key, b"one", future())
+            .await
+            .expect("set succeeds");
+        assert_eq!(
+            store
+                .compare_and_set(&key, b"wrong", b"two", future())
+                .await
+                .expect("mismatch compare succeeds"),
+            CacheCompareAndSetOutcome::Mismatch
+        );
+        assert_eq!(
+            store.get(&key).await.expect("get succeeds"),
+            Some(b"one".to_vec())
+        );
+        assert_eq!(
+            store
+                .compare_and_set(&key, b"one", b"two", future())
+                .await
+                .expect("matching compare succeeds"),
+            CacheCompareAndSetOutcome::Stored
+        );
+        assert_eq!(
+            store.get(&key).await.expect("get succeeds"),
+            Some(b"two".to_vec())
+        );
+        assert!(store.delete(&key).await.expect("delete succeeds"));
     }
 }
