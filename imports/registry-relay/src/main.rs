@@ -2186,9 +2186,7 @@ mod tests {
     use axum::http::{HeaderMap, StatusCode};
     use axum::routing::{get, post};
     use axum::{Json, Router};
-    use registry_platform_audit::{
-        verify_jsonl_lines, verify_jsonl_lines_with_hasher, AuditChainHasher,
-    };
+    use registry_platform_audit::{verify_jsonl_lines_with_hasher, AuditChainHasher};
     use registry_platform_ops::DeploymentProfile;
     use registry_relay::audit::{AuditRecord, EndpointKind};
     use registry_relay::config::Config;
@@ -3356,10 +3354,12 @@ audit:
 
         let contents = std::fs::read_to_string(&path).expect("audit file was written");
         assert!(
-            verify_jsonl_lines(contents.lines()).is_err(),
+            verify_jsonl_lines_with_hasher(contents.lines(), &AuditChainHasher::unkeyed_dev_only())
+                .is_err(),
             "runtime audit chain must not verify with the dev-only unkeyed hasher"
         );
-        let hasher = AuditChainHasher::from_env(env_name).expect("audit chain secret loads");
+        let hasher =
+            AuditChainHasher::from_env_derived(env_name).expect("audit chain secret loads");
         verify_jsonl_lines_with_hasher(contents.lines(), &hasher)
             .expect("audit chain verifies with configured secret");
     }

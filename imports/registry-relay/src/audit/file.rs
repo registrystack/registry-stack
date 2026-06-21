@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use registry_platform_audit::{AuditSink as PlatformAuditSink, JsonlFileSink};
+use registry_platform_audit::{AuditChainHasher, AuditSink as PlatformAuditSink, JsonlFileSink};
 
 use super::AuditError;
 
@@ -43,7 +43,9 @@ impl PlatformAuditSink for FileSink {
     }
 
     async fn tail_hash(&self) -> Result<Option<[u8; 32]>, AuditError> {
-        self.inner.tail_hash().await
+        self.inner
+            .tail_hash_with_hasher(&AuditChainHasher::unkeyed_dev_only())
+            .await
     }
 
     async fn tail_hash_with_hasher(

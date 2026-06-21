@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use registry_platform_audit::{
-    verify_chain, verify_jsonl_lines, AuditChainHasher, ChainState, ChainVerificationError,
+    verify_chain, verify_jsonl_lines_with_hasher, AuditChainHasher, ChainState,
+    ChainVerificationError,
 };
 use registry_platform_testing::assert_json_absent_strings;
 use registry_relay::audit::redact::{
@@ -176,8 +177,9 @@ async fn platform_verification_rejects_rotation_segment_without_genesis() {
         .to_jsonl()
         .expect("rotated jsonl");
 
-    let err = verify_jsonl_lines([rotated.as_str()])
-        .expect_err("public verification requires the retained genesis chain");
+    let err =
+        verify_jsonl_lines_with_hasher([rotated.as_str()], &AuditChainHasher::unkeyed_dev_only())
+            .expect_err("public verification requires the retained genesis chain");
     assert!(matches!(
         err,
         ChainVerificationError::PrevHashMismatch {
@@ -198,7 +200,11 @@ async fn ten_thousand_platform_record_chain_verification_smoke_is_quick() {
     }
 
     let lines = sink.snapshot();
-    let result = verify_jsonl_lines(lines.iter().map(String::as_str)).expect("valid chain");
+    let result = verify_jsonl_lines_with_hasher(
+        lines.iter().map(String::as_str),
+        &AuditChainHasher::unkeyed_dev_only(),
+    )
+    .expect("valid chain");
     assert_eq!(result.records, 10_000);
     assert!(result.last_hash.is_some());
 }

@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use registry_platform_audit::AuditSink as PlatformAuditSink;
+use registry_platform_audit::{AuditChainHasher, AuditSink as PlatformAuditSink};
 
 use super::AuditError;
 
@@ -45,6 +45,8 @@ impl PlatformAuditSink for SyslogSink {
     }
 
     async fn tail_hash(&self) -> Result<Option<[u8; 32]>, AuditError> {
-        self.inner.tail_hash().await
+        self.inner
+            .tail_hash_with_hasher(&AuditChainHasher::unkeyed_dev_only())
+            .await
     }
 }

@@ -712,15 +712,17 @@ fn build_cors_layer(cors: &CorsConfig) -> CorsLayer {
 
 fn build_cors_layer_with_status(cors: &CorsConfig) -> (CorsLayer, bool) {
     let policy = platform_cors_policy(cors);
-    if let Err(err) = policy.validate() {
-        tracing::error!(
-            code = %Error::from(ConfigError::ValidationError).code(),
-            error = %err,
-            "cors policy failed platform validation; falling back to deny-all"
-        );
-        return (CorsLayer::new(), true);
+    match policy.try_layer() {
+        Ok(layer) => (layer, false),
+        Err(err) => {
+            tracing::error!(
+                code = %Error::from(ConfigError::ValidationError).code(),
+                error = %err,
+                "cors policy failed platform validation; falling back to deny-all"
+            );
+            (CorsLayer::new(), true)
+        }
     }
-    (policy.layer(), false)
 }
 
 fn spawn_operational_audit_event(audit_sink: Arc<AuditPipeline>, event: OperationalAuditEvent) {

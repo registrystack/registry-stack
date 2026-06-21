@@ -5,7 +5,7 @@ use std::fs;
 use std::path::Path;
 
 use registry_platform_audit::{
-    verify_jsonl_lines, verify_jsonl_lines_with_hasher, AuditChainProfile,
+    verify_jsonl_lines_with_hasher, AuditChainHasher, AuditChainProfile,
 };
 use registry_relay::audit::{AuditPipeline, AuditRecord, EndpointKind, FileSink, SyslogSink};
 use serde_json::Value;
@@ -182,7 +182,8 @@ async fn file_sink_bootstraps_keyed_chain_from_existing_tail() {
 
     let contents = fs::read_to_string(&path).expect("audit file");
     assert!(
-        verify_jsonl_lines(contents.lines()).is_err(),
+        verify_jsonl_lines_with_hasher(contents.lines(), &AuditChainHasher::unkeyed_dev_only())
+            .is_err(),
         "keyed audit chain must not verify with the dev-only unkeyed hasher"
     );
     verify_jsonl_lines_with_hasher(contents.lines(), &profile.hasher())
