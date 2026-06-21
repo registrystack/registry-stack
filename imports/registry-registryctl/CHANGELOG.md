@@ -17,8 +17,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
-- Pinned `registry-platform-authcommon` and `registry-config-report` to the beta-3
-  Platform candidate SHA used by the release train.
+- Pinned `registry-platform-authcommon` and `registry-config-report` to the
+  Registry Platform `0.3.1` source SHA used by the beta-3 release train.
 - Update notices, README smoke guidance, installer examples, and docs fallbacks
   now use tag-pinned `v0.2.0` installer/source paths instead of mutable `main`
   or `snapshot` references.
