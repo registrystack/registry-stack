@@ -3161,12 +3161,21 @@ impl StatusListJwtCache {
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = Result<String, EvidenceError>>,
     {
+        {
+            let mut entries = self.entries.lock().await;
+            entries.retain(|_, entry| entry.expires_at > now);
+            if let Some(entry) = entries.get(&key) {
+                return Ok(entry.token.clone());
+            }
+        }
+
+        let token = sign().await?;
+
         let mut entries = self.entries.lock().await;
         entries.retain(|_, entry| entry.expires_at > now);
         if let Some(entry) = entries.get(&key) {
             return Ok(entry.token.clone());
         }
-        let token = sign().await?;
         if expires_at > now {
             entries.insert(
                 key,
@@ -11966,6 +11975,31 @@ mod tests {
         assert_eq!(first.status(), StatusCode::OK);
         assert_eq!(second.status(), StatusCode::OK);
         assert_eq!(sign_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn status_list_jwt_cache_does_not_hold_lock_while_signing() {
+        let cache = Arc::new(StatusListJwtCache::default());
+        let nested_cache = Arc::clone(&cache);
+        let now = OffsetDateTime::now_utc();
+        let expires_at = now + time::Duration::seconds(60);
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            cache.get_or_insert_with("outer".to_string(), now, expires_at, || async move {
+                nested_cache
+                    .get_or_insert_with("inner".to_string(), now, expires_at, || async {
+                        Ok("inner-token".to_string())
+                    })
+                    .await?;
+                Ok("outer-token".to_string())
+            }),
+        )
+        .await
+        .expect("cache lookup should not block behind its own signing future")
+        .expect("outer token signs");
+
+        assert_eq!(result, "outer-token");
     }
 
     #[test]
