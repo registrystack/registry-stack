@@ -24,8 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Advanced the Crosswalk input to the `0.2.0` release ref used by the beta-3
-  train.
+- **Crosswalk input alignment**: advanced the Crosswalk input to the `0.2.0`
+  release ref used by the beta-3 train.
 
 ### Removed
 
@@ -55,11 +55,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- Hardened token replay handling, forwarded-host trust, and approval-reference
-  checks.
-- Gated source-adapter sidecar metrics behind optional bearer-token auth.
-- Tightened OpenFn egress-hardening guidance while the integration remains
-  available as a caller-side path.
+- **Hardened security checks**: tightened token replay handling, forwarded-host
+  trust, and approval-reference checks.
+- **Gated sidecar metrics**: gated source-adapter sidecar metrics behind optional
+  bearer-token auth.
+- **Egress-hardening guidance**: tightened OpenFn egress-hardening guidance while
+  the integration remains available as a caller-side path.
 
 ## [0.4.0] - 2026-06-13
 
