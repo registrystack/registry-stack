@@ -184,6 +184,16 @@ fn secret_bearing_unknown_manifest_fields_are_rejected_before_unknown_fields_are
         "private_key",
         "token",
         "secret",
+        "secret_key",
+        "password_env",
+        "client_secret_env",
+        "api_key_env",
+        "private_key_env",
+        "access_token_env",
+        "secretKey",
+        "passwordEnv",
+        "clientSecretEnv",
+        "apiKeyEnv",
     ] {
         let raw = format!(
             r#"

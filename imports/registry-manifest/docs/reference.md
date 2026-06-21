@@ -227,7 +227,8 @@ runtime-only key rejection, and secret-bearing key rejection still apply.
 
 Readers must reject unrecognized or extension keys that look credential-bearing,
 including keys such as `client_secret`, `password`, `credentials`, `api_key`,
-`private_key`, `token`, or `secret`.
+`private_key`, `token`, or `secret`, plus compound variants such as `secret_key`,
+`password_env`, and `client_secret_env`.
 
 Readers must treat unrecognized fields as advisory extension data. A reader may expose
 or preserve extension data when it has a typed extension model, but it must not fail

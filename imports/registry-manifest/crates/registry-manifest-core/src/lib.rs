@@ -120,6 +120,22 @@ const SECRET_BEARING_KEYS: &[&str] = &[
     "token",
 ];
 
+const SECRET_COMPACT_SUFFIXES: &[&str] = &[
+    "credential",
+    "credentials",
+    "env",
+    "key",
+    "keys",
+    "password",
+    "passwords",
+    "secret",
+    "secrets",
+    "token",
+    "tokens",
+    "value",
+    "values",
+];
+
 #[must_use]
 pub fn is_runtime_only_key(key: &str) -> bool {
     RUNTIME_ONLY_KEYS.contains(&key)
@@ -127,15 +143,56 @@ pub fn is_runtime_only_key(key: &str) -> bool {
 
 fn is_secret_bearing_key(key: &str) -> bool {
     let normalized = normalize_manifest_key(key);
+    let segments = normalized
+        .split('_')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
     let compact = normalized.replace('_', "");
     SECRET_BEARING_KEYS.iter().any(|secret| {
-        let compact_secret = secret.replace('_', "");
-        normalized == *secret
-            || normalized
-                .strip_suffix(secret)
-                .is_some_and(|prefix| prefix.ends_with('_'))
-            || compact == compact_secret
-            || compact.ends_with(&compact_secret)
+        secret_matches_segments(&segments, secret) || secret_matches_compact(&compact, secret)
+    })
+}
+
+fn secret_matches_segments(segments: &[&str], secret: &str) -> bool {
+    let secret_segments = secret.split('_').collect::<Vec<_>>();
+    if secret_segments.len() == 1 {
+        return segments.contains(&secret_segments[0]);
+    }
+
+    segments
+        .windows(secret_segments.len())
+        .any(|window| window == secret_segments.as_slice())
+}
+
+fn secret_matches_compact(compact: &str, secret: &str) -> bool {
+    let compact_secret = secret.replace('_', "");
+    if compact == compact_secret || compact.ends_with(&compact_secret) {
+        return true;
+    }
+
+    if secret.contains('_') && compact.contains(&compact_secret) {
+        return true;
+    }
+
+    for suffix in secret_compact_suffixes(compact, &compact_secret) {
+        if !suffix.is_empty()
+            && SECRET_COMPACT_SUFFIXES
+                .iter()
+                .any(|credential_suffix| suffix.starts_with(credential_suffix))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn secret_compact_suffixes<'a>(
+    compact: &'a str,
+    compact_secret: &'a str,
+) -> impl Iterator<Item = &'a str> {
+    compact.match_indices(compact_secret).map(|(index, _)| {
+        let suffix_start = index + compact_secret.len();
+        &compact[suffix_start..]
     })
 }
 
