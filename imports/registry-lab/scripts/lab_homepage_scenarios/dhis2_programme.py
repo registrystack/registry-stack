@@ -113,9 +113,9 @@ def story() -> dict[str, Any]:
             {
                 "id": "reconcile",
                 "label": "Reconcile with fresh online evidence",
-                "prompt": "Use the reconciliation reference to ask the Notary for a fresh predicate answer.",
+                "prompt": "Use the tracked entity behind the reconciliation reference to ask the Notary for a fresh predicate answer.",
                 "button": "Reconcile evidence",
-                "request_summary": "POST the Health Programme Participation Attestation request with predicate disclosure using the reconciliation reference.",
+                "request_summary": "POST the Health Programme Participation Attestation request with predicate disclosure using the tracked entity behind the reconciliation reference.",
                 "reuses": [{"label": "Reconciliation ref", "value": RECONCILIATION_REF}],
             },
             {
@@ -170,7 +170,7 @@ def preview_step(config: dict[str, Any], step_id: str) -> dict[str, Any]:
         return simulated_request_source(url, request_body)
     if step_id == "reconcile":
         url = _url(config, "/v1/evaluations")
-        body = _tracked_entity_body(RECONCILIATION_REF, ["dhis2-child-program-active"], "predicate", CLAIM_RESULT_FORMAT)
+        body = _tracked_entity_body(SUBJECT_ID, ["dhis2-child-program-active"], "predicate", CLAIM_RESULT_FORMAT)
         _, display_headers = _headers(config, {"Content-Type": "application/json", "Data-Purpose": PURPOSE})
         return request_source("POST", url, display_headers, body)
     if step_id == "negative-control":
@@ -203,7 +203,14 @@ def run_step(config: dict[str, Any], step_id: str) -> dict[str, Any]:
     if step_id == "preview-vc":
         return _preview_vc(config, step_id)
     if step_id == "reconcile":
-        return _evaluate_single(config, step_id, RECONCILIATION_REF, "Fresh reconciliation", True)
+        return _evaluate_single(
+            config,
+            step_id,
+            SUBJECT_ID,
+            "Fresh reconciliation",
+            True,
+            reconciliation_ref=RECONCILIATION_REF,
+        )
     if step_id == "negative-control":
         return _evaluate_single(config, step_id, NEGATIVE_SUBJECT_ID, "Inactive programme control", False)
     if step_id == "render-cccev":
@@ -370,26 +377,36 @@ def _preview_vc(config: dict[str, Any], step_id: str) -> dict[str, Any]:
     }
 
 
-def _evaluate_single(config: dict[str, Any], step_id: str, subject: str, label: str, expected: bool) -> dict[str, Any]:
+def _evaluate_single(
+    config: dict[str, Any],
+    step_id: str,
+    subject: str,
+    label: str,
+    expected: bool,
+    reconciliation_ref: str | None = None,
+) -> dict[str, Any]:
     url = _url(config, "/v1/evaluations")
     body = _tracked_entity_body(subject, ["dhis2-child-program-active"], "predicate", CLAIM_RESULT_FORMAT)
     real_headers, display_headers = _headers(config, {"Content-Type": "application/json", "Data-Purpose": PURPOSE})
     result = http_json("POST", url, real_headers, body)
     item = result_item(result.body, "dhis2-child-program-active")
     answer = observed_answer(item)
+    facts = [
+        {"label": "HTTP status", "value": result.status if result.status is not None else "No response"},
+        {"label": "Tracked entity", "value": subject},
+        {"label": "Expected", "value": "Active" if expected else "Not active"},
+        {"label": "Observed", "value": "Active" if answer is True else ("Not active" if answer is False else "Unknown")},
+        {"label": "Source count", "value": item.get("provenance", {}).get("source_count", "Check source")},
+    ]
+    if reconciliation_ref:
+        facts.insert(2, {"label": "Reconciliation ref", "value": reconciliation_ref})
     return {
         "step_id": step_id,
         "friendly": {
             "title": f"{label}: {'active' if answer is True else 'not active' if answer is False else 'check source'}.",
             "message": "The Notary recomputes the predicate from DHIS2-backed evidence and returns a decision-ready attestation answer.",
             "status": "done" if ok_status(result.status) and answer is expected else "needs_attention",
-            "facts": [
-                {"label": "HTTP status", "value": result.status if result.status is not None else "No response"},
-                {"label": "Tracked entity", "value": subject},
-                {"label": "Expected", "value": "Active" if expected else "Not active"},
-                {"label": "Observed", "value": "Active" if answer is True else ("Not active" if answer is False else "Unknown")},
-                {"label": "Source count", "value": item.get("provenance", {}).get("source_count", "Check source")},
-            ],
+            "facts": facts,
         },
         "request_source": request_source("POST", url, display_headers, body),
         "response_source": {
