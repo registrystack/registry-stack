@@ -612,11 +612,12 @@ pub struct AuditConfig {
     pub include_health: bool,
     /// Behavior when an audit record fails to write.
     ///
-    /// `availability_first` (default) logs the failure and lets the request
-    /// succeed, exactly as the relay has always behaved. `fail_closed` instead
-    /// fails the request with a stable error code so that no request outcome is
-    /// returned without a durable audit record. Per-route-family selection is
-    /// out of scope; this is a single deployment-wide policy.
+    /// `fail_closed` (default) fails the request with a stable error code so
+    /// that no request outcome is returned without a durable audit record.
+    /// `availability_first` logs the failure and lets the request succeed for
+    /// deployments that explicitly accept best-effort audit durability.
+    /// Per-route-family selection is out of scope; this is a single
+    /// deployment-wide policy.
     #[serde(default = "default_audit_write_policy")]
     pub write_policy: AuditWritePolicy,
     /// Name of the environment variable holding the per-deploy secret
@@ -634,7 +635,7 @@ fn default_audit_format() -> AuditFormat {
 }
 
 fn default_audit_write_policy() -> AuditWritePolicy {
-    AuditWritePolicy::AvailabilityFirst
+    AuditWritePolicy::FailClosed
 }
 
 /// Audit serialisation format. JSONL is the only V1 format.

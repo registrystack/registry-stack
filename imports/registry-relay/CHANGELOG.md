@@ -20,6 +20,8 @@
 
 ### Security
 
+- Default audit write failures to fail-closed; `availability_first` is now an
+  explicit best-effort opt-out.
 - Fail closed when source size is unknown.
 - Cap CSV column and cell counts, cap SP DCI search-request item fan-out, and
   bound OGC EDR area geometry scans.

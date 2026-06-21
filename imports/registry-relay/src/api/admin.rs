@@ -3082,8 +3082,8 @@ datasets: []
                 "audit assurance must report the `{field}` fact"
             );
         }
-        // Default config: availability-first, stdout sink, no keyed integrity.
-        assert_eq!(audit["write_policy"], "availability_first");
+        // Default config: fail-closed, stdout sink, no keyed integrity.
+        assert_eq!(audit["write_policy"], "fail_closed");
         assert_eq!(audit["sink_class"], "stdout");
         assert_eq!(audit["keyed_integrity"], "none");
         assert_eq!(audit["hash_chain"], "process_local");
@@ -3094,9 +3094,9 @@ datasets: []
     #[test]
     fn audit_assurance_write_policy_follows_config() {
         let mut config = parse_minimal_config(&minimal_config_yaml());
-        config.audit.write_policy = AuditWritePolicy::FailClosed;
+        config.audit.write_policy = AuditWritePolicy::AvailabilityFirst;
         let audit = audit_assurance(&config);
-        assert_eq!(audit["write_policy"], "fail_closed");
+        assert_eq!(audit["write_policy"], "availability_first");
     }
 
     /// An undeclared profile (the minimal config default) omits `profile`,
@@ -3295,7 +3295,7 @@ datasets: []
         assert_eq!(
             posture["audit"],
             json!({
-                "write_policy": "availability_first",
+                "write_policy": "fail_closed",
                 "redaction_mode": "redacted",
                 "hash_chain": "process_local",
                 "keyed_integrity": "none",
