@@ -26,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Crosswalk input alignment**: advanced the Crosswalk input to the `0.2.0`
   release ref used by the beta-3 train.
+- **Platform input alignment**: advanced the Registry Platform input to the
+  `0.3.1` release ref used by the beta-3 train.
 
 ### Removed
 
