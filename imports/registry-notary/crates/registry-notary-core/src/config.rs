@@ -2877,11 +2877,13 @@ impl SelfAttestationDelegatedRelationshipConfig {
                     ),
                 });
             }
-            let claim = evidence
-                .claims
-                .iter()
-                .find(|claim| claim.id == *claim_id)
-                .expect("claim id was checked above");
+            let Some(claim) = evidence.claims.iter().find(|claim| claim.id == *claim_id) else {
+                return Err(EvidenceConfigError::InvalidSelfAttestationConfig {
+                    reason: format!(
+                        "self_attestation.delegation allowed_claims references unknown claim '{claim_id}'"
+                    ),
+                });
+            };
             if !claim.depends_on.iter().any(|dep| dep == &self.proof_claim) {
                 return Err(EvidenceConfigError::InvalidSelfAttestationConfig {
                     reason: format!(
