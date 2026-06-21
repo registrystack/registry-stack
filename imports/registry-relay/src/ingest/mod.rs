@@ -42,8 +42,8 @@ use crate::ingest::refresh::{run_refresh_loop, RefreshPolicy};
 use crate::ingest::validation::validate;
 use crate::source::Source;
 use crate::table_provider::{
-    publication_write_guard, register_or_replace_versioned_table, restore_versioned_table,
-    table_snapshot, TableSnapshot,
+    mark_versioned_table_unavailable, publication_write_guard, register_or_replace_versioned_table,
+    restore_versioned_table, table_snapshot, TableSnapshot,
 };
 
 pub use crate::table_provider::{register_versioned_table, table_name};
@@ -1053,6 +1053,20 @@ impl IngestRegistry {
                     resource
                         .plan
                         .store_failed("ingest.reload_rollback_failed", &resource.prior_readiness);
+                    if let Err(mark_error) = mark_versioned_table_unavailable(
+                        &resource.plan.df_ctx,
+                        &resource.prepared.table_name,
+                        "ingest.reload_rollback_failed",
+                    )
+                    .await
+                    {
+                        tracing::error!(
+                            event = "ingest.reload_fail_closed_failed",
+                            dataset_id = %resource.dataset_id,
+                            resource_id = %resource.resource_id,
+                            error = %mark_error,
+                        );
+                    }
                 }
             }
         }
