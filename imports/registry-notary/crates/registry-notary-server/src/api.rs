@@ -29,15 +29,15 @@ use registry_notary_core::RegistryNotaryCelConfig;
 use registry_notary_core::{
     AccessMode, BatchEvaluateItemRequest, BatchEvaluateRequest, BoundedClaimId,
     BoundedCorrelationId, ClaimRef, ClaimResultView, ClaimSet, ConfigAuditEvent, ConfigMetadata,
-    CredentialIssueRequest, CredentialProfileConfig, EvaluateRequest, EvidenceAuthMode,
-    EvidenceBatchItemAuditEvent, EvidenceConfig, EvidenceEntity, EvidenceEntityReference,
-    EvidenceError, EvidencePrincipal, EvidenceRelationship, FederationConfig, Hashed,
-    HolderRequest, Oid4vciConfig, Oid4vciCredentialConfigurationConfig, Oid4vciDisplayImageConfig,
-    Oid4vciIssuerDisplayConfig, PolicyIdentifier, RateLimitBucket, RegistryNotaryAdminListenerMode,
-    RenderEvaluationRequest, SelfAttestationConfig, SelfAttestationDenialCode,
-    SelfAttestationScopePolicy, SigningKeyStatus, SourceCapability, StandaloneRegistryNotaryConfig,
-    StoredSelfAttestationMetadata, SubjectRequest, VerifiedClaimValue, FORMAT_CLAIM_RESULT_JSON,
-    FORMAT_SD_JWT_VC,
+    CredentialIssueRequest, CredentialProfileConfig, EvaluateRequest, EvidenceAuditEvent,
+    EvidenceAuthMode, EvidenceBatchItemAuditEvent, EvidenceConfig, EvidenceEntity,
+    EvidenceEntityReference, EvidenceError, EvidencePrincipal, EvidenceRelationship,
+    FederationConfig, Hashed, HolderRequest, Oid4vciConfig, Oid4vciCredentialConfigurationConfig,
+    Oid4vciDisplayImageConfig, Oid4vciIssuerDisplayConfig, PolicyIdentifier, RateLimitBucket,
+    RegistryNotaryAdminListenerMode, RenderEvaluationRequest, SelfAttestationConfig,
+    SelfAttestationDenialCode, SelfAttestationScopePolicy, SigningKeyStatus, SourceCapability,
+    StandaloneRegistryNotaryConfig, StoredSelfAttestationMetadata, SubjectRequest,
+    VerifiedClaimValue, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
 };
 use registry_platform_audit::AuditKeyHasher;
 use registry_platform_config::RegistryTrustRoot;
@@ -4786,22 +4786,52 @@ async fn oid4vci_token(
     let client_address = token_client_address(&state, &headers, connect_info.as_deref());
     let request = match parse_token_request(&headers, &body) {
         Ok(request) => request,
-        Err(error) => return token_error_response(error),
+        Err(error) => {
+            return token_error_with_audit(
+                &preauth,
+                path,
+                None,
+                SelfAttestationDenialCode::OperationDenied,
+                error,
+            )
+            .await;
+        }
     };
     if request.grant_type != PRE_AUTHORIZED_CODE_GRANT_TYPE {
-        return token_error_response(TokenWireError::UnsupportedGrantType);
+        return token_error_with_audit(
+            &preauth,
+            path,
+            None,
+            SelfAttestationDenialCode::OperationDenied,
+            TokenWireError::UnsupportedGrantType,
+        )
+        .await;
     }
     let Some(code) = request
         .pre_authorized_code
         .as_deref()
         .filter(|c| !c.is_empty())
     else {
-        return token_error_response(TokenWireError::InvalidRequest);
+        return token_error_with_audit(
+            &preauth,
+            path,
+            None,
+            SelfAttestationDenialCode::OperationDenied,
+            TokenWireError::InvalidRequest,
+        )
+        .await;
     };
     // Throttle random-code floods per client address (reuse the existing
     // invalid-token-per-address limiter bucket).
     if check_token_client_address_rate_limit(&state, &client_address).is_err() {
-        return token_error_response(TokenWireError::SlowDown);
+        return token_error_with_audit(
+            &preauth,
+            path,
+            None,
+            SelfAttestationDenialCode::RateLimited,
+            TokenWireError::SlowDown,
+        )
+        .await;
     }
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let verified = match preauth
@@ -4903,10 +4933,26 @@ async fn oid4vci_token(
     // optional tx_code mode did not create one.
     preauth.tx_code_sessions().remove(&jti);
     let Some(bound_subject) = bound_subject_from_code(&verified, &state) else {
-        return token_error_response(TokenWireError::InvalidGrant);
+        return token_error_after_invalid_attempt(
+            &state,
+            &preauth,
+            path,
+            &client_address,
+            configuration_id.as_deref(),
+            TokenWireError::InvalidGrant,
+        )
+        .await;
     };
     let Some(configuration_id) = configuration_id else {
-        return token_error_response(TokenWireError::InvalidGrant);
+        return token_error_after_invalid_attempt(
+            &state,
+            &preauth,
+            path,
+            &client_address,
+            None,
+            TokenWireError::InvalidGrant,
+        )
+        .await;
     };
     let access_token_claims = AccessTokenClaims {
         issuer: preauth.notary_issuer().to_string(),
@@ -4929,11 +4975,29 @@ async fn oid4vci_token(
     .await
     {
         Ok(token) => token,
-        Err(_) => return token_error_response(TokenWireError::ServerError),
+        Err(_) => {
+            return token_error_with_audit(
+                &preauth,
+                path,
+                Some(&configuration_id),
+                SelfAttestationDenialCode::OperationDenied,
+                TokenWireError::ServerError,
+            )
+            .await;
+        }
     };
     let c_nonce = match issue_c_nonce(&state, &configuration_id).await {
         Some(c_nonce) => c_nonce,
-        None => return token_error_response(TokenWireError::ServerError),
+        None => {
+            return token_error_with_audit(
+                &preauth,
+                path,
+                Some(&configuration_id),
+                SelfAttestationDenialCode::OperationDenied,
+                TokenWireError::ServerError,
+            )
+            .await;
+        }
     };
     let audit = pre_auth_audit_event(
         "POST",
@@ -5326,21 +5390,62 @@ async fn token_error_after_invalid_attempt(
             .self_attestation_rate_limiter
             .check_invalid_token_for_client_address(&hashed);
     }
+    token_error_with_audit(
+        preauth,
+        path,
+        credential_configuration_id,
+        SelfAttestationDenialCode::InvalidToken,
+        error,
+    )
+    .await
+}
+
+async fn token_error_with_audit(
+    preauth: &PreAuthRuntime,
+    path: &str,
+    credential_configuration_id: Option<&str>,
+    denial_code: SelfAttestationDenialCode,
+    error: TokenWireError,
+) -> Response {
     let response = token_error_response(error);
-    let audit = pre_auth_audit_event(
-        "POST",
+    let audit = token_error_audit_event(
         path,
         response.status().as_u16(),
+        credential_configuration_id,
+        denial_code,
+    );
+    if preauth.emit_audit(&audit).await.is_err() {
+        return token_error_after_audit_result(response, true);
+    }
+    token_error_after_audit_result(response, false)
+}
+
+fn token_error_after_audit_result(response: Response, audit_failed: bool) -> Response {
+    if audit_failed {
+        token_error_response(TokenWireError::ServerError)
+    } else {
+        response
+    }
+}
+
+fn token_error_audit_event(
+    path: &str,
+    status: u16,
+    credential_configuration_id: Option<&str>,
+    denial_code: SelfAttestationDenialCode,
+) -> EvidenceAuditEvent {
+    pre_auth_audit_event(
+        "POST",
+        path,
+        status,
         "denied",
         PreAuthAuditFields {
             credential_configuration_id: credential_configuration_id
                 .and_then(|id| registry_notary_core::ConfigMetadata::new(id).ok()),
-            denial_code: Some(SelfAttestationDenialCode::InvalidToken),
+            denial_code: Some(denial_code),
             ..PreAuthAuditFields::default()
         },
-    );
-    let _ = preauth.emit_audit(&audit).await;
-    response
+    )
 }
 
 /// OAuth 2.0 token-endpoint errors per RFC 6749 / OID4VCI.
@@ -10213,6 +10318,51 @@ mod tests {
 
         assert_eq!(body["error"], "invalid_proof");
         assert!(body.get("code").is_none());
+    }
+
+    #[test]
+    fn oid4vci_token_denial_audit_records_public_token_path() {
+        let audit = token_error_audit_event(
+            "/oid4vci/token",
+            StatusCode::BAD_REQUEST.as_u16(),
+            Some("person_is_alive_sd_jwt"),
+            SelfAttestationDenialCode::OperationDenied,
+        );
+
+        assert_eq!(audit.method, "POST");
+        assert_eq!(audit.path, "/oid4vci/token");
+        assert_eq!(audit.status, StatusCode::BAD_REQUEST.as_u16());
+        assert_eq!(audit.decision, "denied");
+        assert_eq!(
+            audit.denial_code,
+            Some(SelfAttestationDenialCode::OperationDenied)
+        );
+        assert_eq!(
+            audit.protocol.as_ref().map(|value| value.as_str()),
+            Some("openid4vci")
+        );
+        assert_eq!(
+            audit
+                .credential_configuration_id
+                .as_ref()
+                .map(|value| value.as_str()),
+            Some("person_is_alive_sd_jwt")
+        );
+    }
+
+    #[tokio::test]
+    async fn oid4vci_token_error_fails_closed_when_denial_audit_fails() {
+        let response = token_error_after_audit_result(
+            token_error_response(TokenWireError::InvalidRequest),
+            true,
+        );
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body reads");
+        let body: Value = serde_json::from_slice(&body).expect("error body parses");
+        assert_eq!(body["error"], "server_error");
     }
 
     #[cfg(feature = "registry-notary-cel")]
