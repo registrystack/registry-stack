@@ -978,11 +978,11 @@ fn effective_delegation_ref<'a>(
     context: &'a ExchangeContext,
     subject: &'a VerifiedSubjectToken,
 ) -> Option<&'a str> {
-    subject
-        .actor
-        .as_ref()
-        .and_then(|actor| actor.delegation_ref.as_deref())
-        .or(context.delegation_ref.as_deref())
+    if let Some(actor) = subject.actor.as_ref() {
+        actor.delegation_ref.as_deref()
+    } else {
+        context.delegation_ref.as_deref()
+    }
 }
 
 fn canonical_required_text(value: Option<&str>) -> Result<String, StsError> {
@@ -1919,6 +1919,53 @@ mod tests {
         wrong_subject.actor.as_mut().unwrap().delegation_ref = Some("other-delegation".to_string());
         assert!(matches!(
             validate_exchange_context(&context, &config, &wrong_subject),
+            Err(StsError::SessionBindingInvalid)
+        ));
+    }
+
+    #[test]
+    fn session_binding_mac_matches_signed_actor_delegation_source() {
+        let config = TokenExchangeConfig::notary_transaction_token(
+            "https://sts.example.test",
+            "https://notary.example.test",
+        )
+        .with_session_binding_secret("session-binding-secret")
+        .with_subject_binding_claim("national_id");
+        let mut subject = verified_subject();
+        subject.actor.as_mut().unwrap().delegation_ref = None;
+        let mut context = bound_context();
+        context.delegation_ref = Some("context-delegation".to_string());
+        context.session_binding = Some(session_binding_mac(
+            "session-binding-secret",
+            SessionBindingMacInput {
+                session_id: "sess_123",
+                correlation_id: "corr_123",
+                verified_subject: "hmac-sha256:subject",
+                subject_id_hash: "hmac-sha256:subject-id",
+                client_id: "assisted-access-client",
+                tenant: "tenant-a",
+                actor_id_hash: "hmac-sha256:actor",
+                delegation_ref: "",
+            },
+        ));
+
+        validate_exchange_context(&context, &config, &subject).unwrap();
+
+        context.session_binding = Some(session_binding_mac(
+            "session-binding-secret",
+            SessionBindingMacInput {
+                session_id: "sess_123",
+                correlation_id: "corr_123",
+                verified_subject: "hmac-sha256:subject",
+                subject_id_hash: "hmac-sha256:subject-id",
+                client_id: "assisted-access-client",
+                tenant: "tenant-a",
+                actor_id_hash: "hmac-sha256:actor",
+                delegation_ref: "context-delegation",
+            },
+        ));
+        assert!(matches!(
+            validate_exchange_context(&context, &config, &subject),
             Err(StsError::SessionBindingInvalid)
         ));
     }
