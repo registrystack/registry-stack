@@ -24,8 +24,9 @@ the Notary-bound transaction token.
 
 When `session_binding_secret` is configured, `session_binding` must be an
 `hmac-sha256:<hex>` value over the session id, correlation id, verified subject,
-subject id hash, and actor id hash. This prevents a leaked subject token plus
-arbitrary request-body session strings from minting a Notary-bound token.
+subject id hash, client id, tenant, actor id hash, and delegation reference.
+This prevents a leaked subject token plus arbitrary request-body caller context
+from minting a Notary-bound token.
 
 Current limits: the bridge does not yet verify UserInfo JWT continuity and the
 binary uses local JWK signing material. Do not claim external OAuth/OIDC/FAPI
