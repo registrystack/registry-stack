@@ -174,6 +174,20 @@ fn credential_secret_key(compact: &str) -> bool {
     if compact == "credential" || compact == "credentials" {
         return true;
     }
+    if compact
+        .strip_prefix("credential")
+        .is_some_and(secret_numeric_suffix)
+        || compact
+            .strip_prefix("credentials")
+            .is_some_and(secret_numeric_suffix)
+    {
+        return true;
+    }
+    if credential_secret_occurrence(compact, "credential")
+        || credential_secret_occurrence(compact, "credentials")
+    {
+        return true;
+    }
     if compact.len() > "credential".len() && compact.ends_with("credential") {
         return true;
     }
@@ -195,6 +209,20 @@ fn credential_secret_key(compact: &str) -> bool {
     false
 }
 
+fn credential_secret_occurrence(compact: &str, secret: &str) -> bool {
+    compact.match_indices(secret).any(|(index, _)| {
+        let suffix_start = index + secret.len();
+        let prefix = &compact[..index];
+        let suffix = &compact[suffix_start..];
+        !prefix.is_empty()
+            && !suffix.is_empty()
+            && (secret_numeric_suffix(suffix)
+                || CREDENTIAL_SECRET_SUFFIXES
+                    .iter()
+                    .any(|secret_suffix| suffix.starts_with(secret_suffix)))
+    })
+}
+
 fn secret_matches_segments(segments: &[&str], secret: &str) -> bool {
     let secret_segments = secret.split('_').collect::<Vec<_>>();
     if secret_segments.len() == 1 {
@@ -209,6 +237,15 @@ fn secret_matches_segments(segments: &[&str], secret: &str) -> bool {
 fn secret_matches_compact(compact: &str, secret: &str) -> bool {
     let compact_secret = secret.replace('_', "");
     if compact == compact_secret || compact.ends_with(&compact_secret) {
+        return true;
+    }
+    if compact
+        .strip_prefix(&compact_secret)
+        .is_some_and(secret_numeric_suffix)
+        || compact
+            .strip_suffix(&compact_secret)
+            .is_some_and(secret_numeric_prefix)
+    {
         return true;
     }
 
@@ -236,6 +273,14 @@ fn secret_compact_suffixes<'a>(
         let suffix_start = index + compact_secret.len();
         &compact[suffix_start..]
     })
+}
+
+fn secret_numeric_suffix(value: &str) -> bool {
+    !value.is_empty() && value.chars().all(|ch| ch.is_ascii_digit())
+}
+
+fn secret_numeric_prefix(value: &str) -> bool {
+    !value.is_empty() && value.chars().next().is_some_and(|ch| ch.is_ascii_digit())
 }
 
 fn normalize_manifest_key(key: &str) -> String {
