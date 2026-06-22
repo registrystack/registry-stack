@@ -77,16 +77,17 @@ SOURCE_SYSTEM_BY_SCENARIO_ID = {
 
 
 def _with_source_system(story: dict[str, Any]) -> dict[str, Any]:
+    default_system = SOURCE_SYSTEM_BY_SCENARIO_ID.get(
+        story.get("id", ""),
+        {
+            "label": "Registry Relay demo source",
+            "summary": "Uses Registry Relay over hosted lab fixtures. It does not call FHIR, OpenCRVS, or DHIS2.",
+        },
+    )
+    story_system = story.get("source_system")
     return {
         **story,
-        "source_system": story.get("source_system")
-        or SOURCE_SYSTEM_BY_SCENARIO_ID.get(
-            story.get("id", ""),
-            {
-                "label": "Registry Relay demo source",
-                "summary": "Uses Registry Relay over hosted lab fixtures. It does not call FHIR, OpenCRVS, or DHIS2.",
-            },
-        ),
+        "source_system": {**default_system, **story_system} if isinstance(story_system, dict) else default_system,
     }
 
 
