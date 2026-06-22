@@ -238,6 +238,7 @@ hosted-preflight:
     python3 scripts/test_credential_commitment.py
     python3 scripts/test_generate_demo_secrets.py
     python3 scripts/test_hosted_smoke.py
+    python3 scripts/test_sync_coolify_compose_domains.py
     python3 scripts/test_validate_public_api_workspace.py
     python3 scripts/validate-public-api-workspace.py
 
