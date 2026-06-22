@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -79,6 +80,7 @@ def extract_stored_domains(payload: Any) -> dict[str, str]:
         for field in DOMAIN_FIELDS:
             if field in payload:
                 return normalize_domain_mapping(payload[field])
+        return {}
     return normalize_domain_mapping(payload)
 
 
@@ -142,6 +144,40 @@ def patch_compose_domains(api_base_url: str, app_uuid: str, token: str, domains:
     )
 
 
+def sync_required_domains(
+    api_base_url: str,
+    app_uuid: str,
+    token: str,
+    desired: dict[str, str],
+    *,
+    attempts: int = 1,
+    retry_delay: float = 10.0,
+) -> None:
+    attempts = max(1, attempts)
+    last_error: DomainSyncError | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            current = extract_stored_domains(fetch_application(api_base_url, app_uuid, token))
+            merged = {**current, **desired}
+            patch_compose_domains(api_base_url, app_uuid, token, merged)
+            stored = extract_stored_domains(fetch_application(api_base_url, app_uuid, token))
+            assert_desired_stored(stored, desired)
+            return
+        except DomainSyncError as exc:
+            last_error = exc
+            if attempt >= attempts:
+                break
+            print(
+                f"Coolify compose domain sync pending "
+                f"(attempt {attempt}/{attempts}): {exc}",
+                file=sys.stderr,
+            )
+            time.sleep(retry_delay)
+
+    if last_error:
+        raise last_error
+
+
 def request_json(method: str, url: str, token: str, body: Any | None = None) -> Any:
     data = None
     headers = {
@@ -192,6 +228,18 @@ def parse_args() -> argparse.Namespace:
         default="COOLIFY_API_TOKEN",
         help="environment variable that contains the Coolify API token",
     )
+    parser.add_argument(
+        "--attempts",
+        type=int,
+        default=1,
+        help="number of API sync attempts before failing",
+    )
+    parser.add_argument(
+        "--retry-delay",
+        type=float,
+        default=10.0,
+        help="seconds to wait between sync attempts",
+    )
     return parser.parse_args()
 
 
@@ -204,13 +252,14 @@ def main() -> int:
     desired = parse_domain_specs(args.domain)
     require_compose_hosts(load_yaml_mapping(args.compose), desired)
 
-    current = extract_stored_domains(fetch_application(args.api_base_url, args.app_uuid, token))
-    merged = {**current, **desired}
-    response = patch_compose_domains(args.api_base_url, args.app_uuid, token, merged)
-    stored = extract_stored_domains(response)
-    if not stored:
-        stored = extract_stored_domains(fetch_application(args.api_base_url, args.app_uuid, token))
-    assert_desired_stored(stored, desired)
+    sync_required_domains(
+        args.api_base_url,
+        args.app_uuid,
+        token,
+        desired,
+        attempts=args.attempts,
+        retry_delay=args.retry_delay,
+    )
 
     services = ", ".join(f"{service}={domain}" for service, domain in sorted(desired.items()))
     print(f"Coolify compose domains include required service domain(s): {services}")
