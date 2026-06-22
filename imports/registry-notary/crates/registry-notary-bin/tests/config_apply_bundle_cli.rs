@@ -29,6 +29,8 @@ const TEST_AUDIT_SECRET: &str = "notary-cli-audit-secret-32-bytes-min";
 const TUF_TARGETS_SIGNER_KID: &str =
     "8ec3a843a0f9328c863cac4046ab1cacbbc67888476ac7acf73d9bcd9a223ada";
 
+static LIVE_SERVER_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 struct SignedConfigFixture {
     root_path: PathBuf,
     metadata_dir: PathBuf,
@@ -623,6 +625,7 @@ async fn config_apply_bundle_cli_rejects_http_admin_url_without_dev_opt_in() {
 
 #[tokio::test]
 async fn config_apply_bundle_cli_drives_live_admin_root_transition_with_local_approval() {
+    let _live_server_lock = LIVE_SERVER_TEST_LOCK.lock().await;
     let tmp = TempDir::new().expect("tempdir");
     let bind = allocate_loopback_addr();
     let admin_bind = allocate_loopback_addr();
@@ -722,6 +725,7 @@ async fn config_apply_bundle_cli_drives_live_admin_root_transition_with_local_ap
 
 #[tokio::test]
 async fn config_apply_bundle_cli_drives_live_admin_remote_root_transition_with_local_approval() {
+    let _live_server_lock = LIVE_SERVER_TEST_LOCK.lock().await;
     let tmp = TempDir::new().expect("tempdir");
     let bind = allocate_loopback_addr();
     let admin_bind = allocate_loopback_addr();

@@ -11,7 +11,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 rust-version = "1.95"
 license = "Apache-2.0"
@@ -29,9 +29,9 @@ axum = { version = "0.8" }
 async-trait = { version = "0.1" }
 base64 = { version = "0.22" }
 clap = { version = "4", features = ["derive", "env"] }
-registry-notary-core = { version = "0.5.0", path = "crates/registry-notary-core" }
-registry-notary-server = { version = "0.5.0", path = "crates/registry-notary-server", default-features = false }
-registry-notary-worker-harness = { version = "0.5.0", path = "crates/registry-notary-worker-harness" }
+registry-notary-core = { version = "0.6.0", path = "crates/registry-notary-core" }
+registry-notary-server = { version = "0.6.0", path = "crates/registry-notary-server", default-features = false }
+registry-notary-worker-harness = { version = "0.6.0", path = "crates/registry-notary-worker-harness" }
 crosswalk-core = { version = "0.2.0", path = "../crosswalk/crates/crosswalk-core" }
 cryptoki = { version = "0.12" }
 getrandom = { version = "0.4" }
@@ -40,21 +40,21 @@ humantime-serde = { version = "1" }
 hyper = { version = "1", features = ["http1", "http2", "server"] }
 hyper-util = { version = "0.1", features = ["server-auto", "tokio"] }
 jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
-registry-platform-audit = { version = "0.3.1", path = "../registry-platform/crates/registry-platform-audit" }
-registry-platform-authcommon = { version = "0.3.1", path = "../registry-platform/crates/registry-platform-authcommon" }
-registry-config-report = { version = "0.3.1", path = "../registry-platform/crates/registry-config-report" }
-registry-platform-cache = { version = "0.3.1", path = "../registry-platform/crates/registry-platform-cache", features = ["redis"] }
-registry-platform-config = { version = "0.3.1", path = "../registry-platform/crates/registry-platform-config" }
-registry-platform-crypto = { version = "0.3.1", path = "../registry-platform/crates/registry-platform-crypto" }
-registry-platform-httpsec = { version = "0.3.1", path = "../registry-platform/crates/registry-platform-httpsec" }
-registry-platform-httputil = { version = "0.3.1", path = "../registry-platform/crates/registry-platform-httputil" }
-registry-platform-oid4vci = { version = "0.3.1", path = "../registry-platform/crates/registry-platform-oid4vci" }
-registry-platform-oidc = { version = "0.3.1", path = "../registry-platform/crates/registry-platform-oidc" }
-registry-platform-pdp = { version = "0.3.1", path = "../registry-platform/crates/registry-platform-pdp" }
-registry-platform-replay = { version = "0.3.1", path = "../registry-platform/crates/registry-platform-replay", features = ["redis"] }
-registry-platform-sdjwt = { version = "0.3.1", path = "../registry-platform/crates/registry-platform-sdjwt" }
-registry-platform-testing = { version = "0.3.1", path = "../registry-platform/crates/registry-platform-testing", features = ["test-utils"] }
-registry-platform-ops = { version = "0.3.1", path = "../registry-platform/crates/registry-platform-ops" }
+registry-platform-audit = { version = "0.3.2", path = "../registry-platform/crates/registry-platform-audit" }
+registry-platform-authcommon = { version = "0.3.2", path = "../registry-platform/crates/registry-platform-authcommon" }
+registry-config-report = { version = "0.3.2", path = "../registry-platform/crates/registry-config-report" }
+registry-platform-cache = { version = "0.3.2", path = "../registry-platform/crates/registry-platform-cache", features = ["redis"] }
+registry-platform-config = { version = "0.3.2", path = "../registry-platform/crates/registry-platform-config" }
+registry-platform-crypto = { version = "0.3.2", path = "../registry-platform/crates/registry-platform-crypto" }
+registry-platform-httpsec = { version = "0.3.2", path = "../registry-platform/crates/registry-platform-httpsec" }
+registry-platform-httputil = { version = "0.3.2", path = "../registry-platform/crates/registry-platform-httputil" }
+registry-platform-oid4vci = { version = "0.3.2", path = "../registry-platform/crates/registry-platform-oid4vci" }
+registry-platform-oidc = { version = "0.3.2", path = "../registry-platform/crates/registry-platform-oidc" }
+registry-platform-pdp = { version = "0.3.2", path = "../registry-platform/crates/registry-platform-pdp" }
+registry-platform-replay = { version = "0.3.2", path = "../registry-platform/crates/registry-platform-replay", features = ["redis"] }
+registry-platform-sdjwt = { version = "0.3.2", path = "../registry-platform/crates/registry-platform-sdjwt" }
+registry-platform-testing = { version = "0.3.2", path = "../registry-platform/crates/registry-platform-testing", features = ["test-utils"] }
+registry-platform-ops = { version = "0.3.2", path = "../registry-platform/crates/registry-platform-ops" }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 secrecy = { version = "0.10" }
 serde = { version = "1", features = ["derive"] }

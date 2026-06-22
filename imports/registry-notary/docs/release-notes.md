@@ -1,5 +1,18 @@
 # Release Notes
 
+## 0.6.0
+
+- Added delegated self-attestation support with explicit requester-side target
+  binding, canonicalized delegated targets, and claim-lookup validation.
+- Bound delegated authorization details to the requested identifier type so a
+  delegated attestation cannot drift across supported identity forms.
+- Hardened authorization-details handling before batch prefetch, credential
+  issuance, render, evaluate, pre-authorization, status-list, and data-route
+  audit paths.
+- Added cache compare-and-set support for credential status transitions and
+  status-list signing so concurrent updates fail closed.
+- Refreshed the Registry Platform pin to the beta-4 platform release.
+
 ## 0.3.0
 
 - Added citizen self-attestation flows, including bearer-token subject binding,
