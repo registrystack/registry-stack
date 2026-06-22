@@ -40,7 +40,7 @@ x-relay-common: &relay-common
     start_period: 10s
 
 x-notary-common: &notary-common
-  image: ${REGISTRY_NOTARY_IMAGE:-ghcr.io/jeremi/registry-notary@sha256:84e496c1ed5aabc98e6edfa7c4c5ed0dfd09ffb7596bd84ba99ac957b5a011a3}
+  image: ${REGISTRY_NOTARY_IMAGE:-ghcr.io/jeremi/registry-notary@sha256:81c97e192daa066476f220f0f5d3a8f0c9b0c383a289d2db76e12539099c59bb}
   environment: &notary-env
     RUST_LOG: ${RUST_LOG:-info}
     REGISTRY_NOTARY_REPLAY_REDIS_URL: ${REGISTRY_NOTARY_REPLAY_REDIS_URL:-redis://redis:6379/0}
