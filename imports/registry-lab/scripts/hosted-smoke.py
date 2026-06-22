@@ -154,6 +154,7 @@ DEFAULT_EVALUATED_CLAIM_SERVICES = {
     "dhis2-notary",
     "agriculture-notary",
 }
+DISCOVERY_REQUIRED_AGRICULTURE_CLAIM = "active-smallholder-farmer"
 
 SENSITIVE_KEYS = {
     "authorization",
@@ -712,6 +713,7 @@ def run_explorer_smoke(client: JsonClient, base_url: str) -> dict[str, Any]:
 
     registry_summary: dict[str, Any] = {}
     checks = 1
+    live_registry_discovery = 0
     for registry in registries:
         if not isinstance(registry, dict):
             continue
@@ -720,6 +722,9 @@ def run_explorer_smoke(client: JsonClient, base_url: str) -> dict[str, Any]:
         entity_id = str(registry.get("default_entity") or "")
         default_limit = registry.get("default_limit", 1)
         require(registry_id and dataset_id and entity_id, "registry-explorer-defaults-missing", registry)
+        discovery = registry.get("discovery") if isinstance(registry.get("discovery"), dict) else {}
+        if discovery.get("status") == "live":
+            live_registry_discovery += 1
 
         metadata = client.get(joined_url(base_url, f"/api/explorer/registries/{registry_id}/metadata.json"))
         require_ok(metadata, "registry-explorer-metadata-unavailable")
@@ -770,7 +775,17 @@ def run_explorer_smoke(client: JsonClient, base_url: str) -> dict[str, Any]:
             aggregate_count = len(aggregate_rows)
             checks += 2
 
-        registry_summary[registry_id] = {"records": len(rows), "aggregate_records": aggregate_count}
+        registry_summary[registry_id] = {
+            "records": len(rows),
+            "aggregate_records": aggregate_count,
+            "discovery": discovery.get("status", "unknown"),
+        }
+
+    require(
+        live_registry_discovery > 0,
+        "registry-explorer-discovery-not-live",
+        {"registries": registry_summary},
+    )
 
     claims_catalog = client.get(joined_url(base_url, "/api/explorer/claims.json"))
     require_ok(claims_catalog, "claims-explorer-catalogue-unavailable")
@@ -793,6 +808,19 @@ def run_explorer_smoke(client: JsonClient, base_url: str) -> dict[str, Any]:
         claims = items_from(claim_service, "claims")
         require(bool(claims), "claims-explorer-claims-empty", {"service": service_id})
         checks += 1
+        discovery = claim_service.get("discovery") if isinstance(claim_service.get("discovery"), dict) else {}
+        claim_ids = {str(claim.get("id")) for claim in claims if isinstance(claim, dict)}
+        if service_id == "agriculture-notary":
+            require(
+                discovery.get("status") == "live",
+                "claims-explorer-agriculture-discovery-not-live",
+                {"service": service_id, "discovery": discovery},
+            )
+            require(
+                DISCOVERY_REQUIRED_AGRICULTURE_CLAIM in claim_ids,
+                "claims-explorer-agriculture-discovery-claim-missing",
+                {"claim_id": DISCOVERY_REQUIRED_AGRICULTURE_CLAIM, "claims": sorted(claim_ids)},
+            )
 
         mode = "metadata"
         if service_id in DEFAULT_EVALUATED_CLAIM_SERVICES:
@@ -821,7 +849,11 @@ def run_explorer_smoke(client: JsonClient, base_url: str) -> dict[str, Any]:
             )
             mode = str(evaluation.body.get("mode", "unknown")) if isinstance(evaluation.body, dict) else "unknown"
             checks += 1
-        claim_summary[service_id] = {"claims": len(claims), "default_evaluation": mode}
+        claim_summary[service_id] = {
+            "claims": len(claims),
+            "default_evaluation": mode,
+            "discovery": discovery.get("status", "unknown"),
+        }
 
     return {"checks": checks, "registries": registry_summary, "claims": claim_summary}
 
