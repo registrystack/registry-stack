@@ -979,7 +979,57 @@ The config keys unique to this page are: `subject_binding.token_claim`,
 `token_policy` ceilings, `allowed_operations`, `allowed_purposes`,
 `allowed_claims`, `allowed_formats`, `allowed_disclosures`,
 `credential_profiles`, `scope_policy`, `required_scopes`,
-`allowed_wallet_origins`, and `rate_limits`.
+`allowed_wallet_origins`, `delegation`, and `rate_limits`.
+
+Delegated self-attestation is configured under `self_attestation.delegation`.
+It lets a token-bound requester evaluate configured dependent claims only when a
+configured relationship proof claim passes:
+
+```yaml
+self_attestation:
+  delegation:
+    enabled: true
+    allowed_relationships:
+      - relationship_type: guardian
+        proof_claim: guardian-link-established
+        target_id_type: UIN
+        allowed_claims:
+          - dependent-person-is-alive
+        allowed_purposes:
+          - dependent_attestation
+        allowed_formats:
+          - application/vnd.registry-notary.claim-result+json
+        allowed_disclosures:
+          - predicate
+        credential_profiles:
+          - dependent_status_sd_jwt
+```
+
+| Field | Purpose |
+| --- | --- |
+| `delegation.enabled` | Enables delegated self-attestation. When false, `allowed_relationships` must be empty. |
+| `allowed_relationships[].relationship_type` | Relationship type accepted from scoped authorization details, for example `guardian`. |
+| `allowed_relationships[].proof_claim` | Existing claim that proves the requester-target relationship. |
+| `allowed_relationships[].target_id_type` | Optional dependent target id type. Defaults to `subject_binding.id_type`. |
+| `allowed_relationships[].allowed_claims` | Dependent claim ids this relationship may evaluate. |
+| `allowed_relationships[].allowed_purposes` | Purpose allow-list for dependent claims under this relationship. |
+| `allowed_relationships[].allowed_formats` | Response and credential formats allowed for this relationship. |
+| `allowed_relationships[].allowed_disclosures` | Disclosure modes allowed for this relationship. |
+| `allowed_relationships[].credential_profiles` | Credential profiles allowed for delegated issuance from this relationship. |
+
+Delegated validation fails closed:
+
+- `delegation.enabled: true` requires at least one relationship.
+- Relationship types must be unique.
+- `proof_claim` must exist, enable evaluation, and read a relationship source.
+- At least one `proof_claim` source binding must derive lookup input from both
+  `requester.*` and `target.*` paths.
+- Each delegated claim must exist, enable evaluation, and list the proof claim
+  in `depends_on`.
+- Each delegated claim must declare a purpose that appears in the relationship's
+  `allowed_purposes`.
+- Each configured format, disclosure, and credential profile must be supported by
+  the delegated claims or profiles it names.
 
 See the [self-attestation operator guide](self-attestation-operator-guide.md)
 for the full config blocks, identity-provider requirements, scope policy,
@@ -991,7 +1041,8 @@ OID4VCI depends on self-attestation. Enable it when a wallet should retrieve
 Notary-issued credentials through OpenID4VCI-style metadata, offers, nonces,
 and credential requests. The facade is narrow: credential format is `dc+sd-jwt`,
 proof type is JWT with EdDSA, holder binding is `did:jwk`, and issuance is
-backed by self-attestation policy.
+backed by direct self-attestation policy. Delegated transaction tokens are
+rejected by the OID4VCI credential endpoint in this version.
 
 ```yaml
 oid4vci:

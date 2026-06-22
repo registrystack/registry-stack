@@ -4,6 +4,11 @@
 > config and format details below have been reconciled to the shipped code; for
 > current behavior see the code and docs/. Do not treat the broader design
 > narrative as current.
+>
+> **Supersession note (2026-06-22).** The archived V1 non-goal for delegated
+> access no longer describes the delegated self-attestation work. Current
+> operator guidance lives in `docs/self-attestation-operator-guide.md`; the
+> OID4VCI facade still rejects delegated attestation transaction tokens.
 
 Current status: implemented for evaluation, render, credential issuance, batch
 denial, rate-limit guard, and OpenID4VCI facade integration in 0.3.0. External

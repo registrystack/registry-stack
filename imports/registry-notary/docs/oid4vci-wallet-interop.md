@@ -20,7 +20,10 @@ The facade is intentionally narrow:
 - Proof type is JWT.
 - Supported proof algorithm is `EdDSA`.
 - Supported holder binding method is `did:jwk`.
-- Issuance is backed by self-attestation policy and configured evidence claims.
+- Issuance is backed by direct self-attestation policy and configured evidence
+  claims.
+- Delegated attestation transaction tokens are rejected. Delegated wallet
+  issuance is not part of this OID4VCI facade version.
 
 It is not a full OpenID4VCI issuer product. It is an interoperability facade for
 Registry Notary's current SD-JWT VC issuance path.
@@ -110,6 +113,9 @@ The current wallet-facing flow is:
 The credential request should not carry a raw subject id as a free-form wallet
 choice. The subject comes from the OIDC token claim configured in
 `self_attestation.subject_binding` and must match the Notary request context.
+If the access token's scoped authorization details select
+`access_mode: delegated_attestation`, the credential endpoint rejects the
+request rather than issuing for a dependent target.
 
 ## Authenticated Pre-Authorized-Code Flow
 
@@ -386,6 +392,7 @@ logging boundaries, see the
 | --- | --- | --- |
 | Metadata route is unavailable | `oid4vci.enabled` is false or self-attestation is disabled | Expanded config and startup logs |
 | Config fails validation | OID4VCI references a claim or credential profile outside self-attestation allow-lists | `credential_configurations`, `self_attestation.allowed_claims`, `self_attestation.credential_profiles` |
+| Delegated token is rejected | The credential endpoint only accepts direct self-attestation access tokens | Token authorization details, `self_attestation.delegation` |
 | Wallet token rejected | Audience, issuer, client id, scope, or algorithm mismatch | `auth.oidc`, `oid4vci.accepted_token_audiences`, wallet token header and claims |
 | Wallet never asks for PIN | Offer is still `authorization_code`, pre-authorized-code flow is disabled, or wallet ignored the grant | Issuer metadata `token_endpoint`, offer `grants`, `oid4vci.pre_authorized_code.enabled` |
 | PIN is rejected | Wrong `tx_code`, expired code, reused code, or rate-limit lockout | Offer age, token endpoint response, `tx_code_attempts_per_code_per_minute` |
