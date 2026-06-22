@@ -238,7 +238,7 @@ async fn handle_federated_evaluate(
         scopes: peer.config.source_scopes.clone(),
         access_mode: AccessMode::MachineClient,
         verified_claims: None,
-        authorization_details: federation_authorization_details(profile, &purpose),
+        authorization_details: federation_authorization_details(profile),
     };
     let source_capability = SourceCapability::Machine {
         scopes: peer
@@ -318,7 +318,6 @@ async fn handle_federated_evaluate(
 
 fn federation_authorization_details(
     profile: &FederationEvaluationProfileConfig,
-    purpose: &str,
 ) -> Option<EvidenceAuthorizationDetails> {
     if profile.legal_basis_ref.is_none()
         && profile.consent_ref.is_none()
@@ -330,7 +329,6 @@ fn federation_authorization_details(
     Some(EvidenceAuthorizationDetails {
         detail_type: "registry-notary/evidence-authorization/v1".to_string(),
         schema_version: "v1".to_string(),
-        purpose: Some(purpose.to_string()),
         legal_basis_ref: profile.legal_basis_ref.clone(),
         consent_ref: profile.consent_ref.clone(),
         jurisdiction: profile.jurisdiction.clone(),
@@ -354,21 +352,15 @@ mod tests {
             ..FederationEvaluationProfileConfig::default()
         };
 
-        let details = federation_authorization_details(
-            &profile,
-            "https://demo.example.gov/purpose/decentralized-evidence-demo",
-        )
-        .expect("profile context should produce authorization details");
+        let details = federation_authorization_details(&profile)
+            .expect("profile context should produce authorization details");
 
         assert_eq!(
             details.detail_type,
             "registry-notary/evidence-authorization/v1"
         );
         assert_eq!(details.schema_version, "v1");
-        assert_eq!(
-            details.purpose.as_deref(),
-            Some("https://demo.example.gov/purpose/decentralized-evidence-demo")
-        );
+        assert_eq!(details.purpose.as_deref(), None);
         assert_eq!(
             details.legal_basis_ref.as_deref(),
             Some("demo:child-support-eligibility")
@@ -379,16 +371,13 @@ mod tests {
         );
         assert_eq!(details.jurisdiction.as_deref(), Some("ZZ"));
         assert_eq!(details.assurance_level.as_deref(), Some("substantial"));
+        assert!(!crate::authz_details::has_transaction_scope(&details));
     }
 
     #[test]
     fn federation_profile_without_policy_context_uses_peer_scopes_only() {
         let profile = FederationEvaluationProfileConfig::default();
 
-        assert!(federation_authorization_details(
-            &profile,
-            "https://demo.example.gov/purpose/decentralized-evidence-demo",
-        )
-        .is_none());
+        assert!(federation_authorization_details(&profile).is_none());
     }
 }

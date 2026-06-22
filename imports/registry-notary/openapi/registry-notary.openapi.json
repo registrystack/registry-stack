@@ -1797,7 +1797,7 @@
     },
     "summary": "Standalone evidence evaluation, rendering, and credential issuance service.",
     "title": "Registry Notary API",
-    "version": "0.6.1"
+    "version": "0.6.2"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -3395,7 +3395,7 @@
                 "example": {
                   "info": {
                     "title": "Registry Notary API",
-                    "version": "0.6.1"
+                    "version": "0.6.2"
                   },
                   "openapi": "3.1.0",
                   "paths": {

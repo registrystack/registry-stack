@@ -2831,7 +2831,7 @@ dependencies = [
 
 [[package]]
 name = "registry-notary-bin"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "axum",
  "axum-test",
@@ -2868,7 +2868,7 @@ dependencies = [
 
 [[package]]
 name = "registry-notary-client"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "async-trait",
  "axum",
@@ -2895,7 +2895,7 @@ dependencies = [
 
 [[package]]
 name = "registry-notary-core"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "base64",
  "humantime-serde",
@@ -2917,7 +2917,7 @@ dependencies = [
 
 [[package]]
 name = "registry-notary-server"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -2971,7 +2971,7 @@ dependencies = [
 
 [[package]]
 name = "registry-notary-source-adapter-sidecar"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "axum",
  "axum-test",
@@ -3001,7 +3001,7 @@ dependencies = [
 
 [[package]]
 name = "registry-notary-worker-harness"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "libc",
  "serde",

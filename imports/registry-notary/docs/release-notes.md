@@ -1,5 +1,13 @@
 # Release Notes
 
+## 0.6.2
+
+- Fixed federated evaluation policy-context handling so federation profiles can
+  satisfy source matching gates for legal basis, consent, jurisdiction, and
+  assurance without being treated as scoped transaction authorization details.
+- Restores beta-4 lab delegated federation evaluations that use governed
+  source-policy gates.
+
 ## 0.6.1
 
 - Fixed static credential policy-context compatibility for source matching:

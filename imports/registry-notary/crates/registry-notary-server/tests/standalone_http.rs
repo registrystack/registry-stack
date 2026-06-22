@@ -1443,6 +1443,37 @@ evaluation_profiles:
     config
 }
 
+#[cfg(feature = "registry-notary-cel")]
+fn add_governed_federation_policy_context(
+    config: &mut StandaloneRegistryNotaryConfig,
+    profile_jurisdiction: &str,
+) {
+    let binding = config
+        .evidence
+        .claims
+        .iter_mut()
+        .find(|claim| claim.id == "farmed-land-size")
+        .expect("farmed-land-size claim exists")
+        .source_bindings
+        .get_mut("farmer")
+        .expect("farmer binding exists");
+    binding.matching.allowed_assurance = vec!["substantial".to_string()];
+    binding.matching.permitted_jurisdictions = vec!["ZZ".to_string()];
+    binding.matching.require_legal_basis = true;
+    binding.matching.require_consent = true;
+
+    let profile = config
+        .federation
+        .evaluation_profiles
+        .first_mut()
+        .expect("federation profile exists");
+    profile.disclosure = Some("predicate".to_string());
+    profile.legal_basis_ref = Some("demo:benefits-eligibility".to_string());
+    profile.consent_ref = Some("demo:benefits-consent".to_string());
+    profile.jurisdiction = Some(profile_jurisdiction.to_string());
+    profile.assurance_level = Some("substantial".to_string());
+}
+
 fn federation_request_jwt(jti: &str, purpose: &str) -> String {
     federation_request_jwt_with_claims(jti, purpose, json!(["farmer-under-4ha"]))
 }
@@ -2178,6 +2209,93 @@ async fn federation_evaluation_returns_signed_response_and_rejects_replay() {
     assert!(!metrics_body.contains("01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q6Q6"));
     assert!(!metrics_body.contains("person-1"));
     assert!(!metrics_body.contains("source-token"));
+}
+
+#[tokio::test]
+#[cfg(feature = "registry-notary-cel")]
+async fn federation_policy_context_satisfies_governed_source_matching() {
+    set_federation_env();
+    let upstream = TestServer::builder()
+        .http_transport()
+        .build(Router::new().route(
+            "/v1/datasets/farmer_registry/entities/farmer/records",
+            get(registry_data_api),
+        ));
+    let base_url = upstream
+        .server_address()
+        .expect("HTTP transport exposes upstream address")
+        .to_string();
+    let peer_jwks = MockHttpUpstream::start().await;
+    let (peer_private, _) = fixtures::ed25519_pair();
+    peer_jwks
+        .expect("GET", "/jwks")
+        .respond_json(200, jwks_from_private_jwk(&peer_private))
+        .await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = federation_config(
+        base_url.trim_end_matches('/'),
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &format!("{}/jwks", peer_jwks.url()),
+    );
+    add_governed_federation_policy_context(&mut config, "ZZ");
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+    let token = federation_request_jwt(
+        "01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6G0V1",
+        "https://purpose.example.test/eligibility",
+    );
+
+    let response = server
+        .post("/federation/v1/evaluations")
+        .add_header("content-type", "application/jwt")
+        .bytes(Bytes::from(token))
+        .await;
+
+    response.assert_status_ok();
+    let claims = verified_federation_response_claims(&response.text());
+    assert_eq!(
+        claims["result"]["claims"]["farmer-under-4ha"]["disclosure"],
+        json!("predicate")
+    );
+    assert_eq!(
+        claims["result"]["claims"]["farmer-under-4ha"]["satisfied"],
+        json!(true)
+    );
+    let records = audit_records(&audit_path);
+    assert!(records
+        .iter()
+        .any(|record| record["decision"] == json!("federated_evaluate")));
+
+    let denied_peer_jwks = MockHttpUpstream::start().await;
+    let (denied_peer_private, _) = fixtures::ed25519_pair();
+    denied_peer_jwks
+        .expect("GET", "/jwks")
+        .respond_json(200, jwks_from_private_jwk(&denied_peer_private))
+        .await;
+    let denied_audit_path = tmp.path().join("denied-audit.jsonl");
+    let mut denied_config = federation_config(
+        base_url.trim_end_matches('/'),
+        denied_audit_path.to_str().expect("audit path is UTF-8"),
+        &format!("{}/jwks", denied_peer_jwks.url()),
+    );
+    add_governed_federation_policy_context(&mut denied_config, "XY");
+    let denied_app = standalone_router(denied_config).expect("standalone router builds");
+    let denied_server = TestServer::builder().http_transport().build(denied_app);
+    let denied_token = federation_request_jwt(
+        "01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6G0W1",
+        "https://purpose.example.test/eligibility",
+    );
+
+    let denied = denied_server
+        .post("/federation/v1/evaluations")
+        .add_header("content-type", "application/jwt")
+        .bytes(Bytes::from(denied_token))
+        .await;
+
+    denied.assert_status(StatusCode::FORBIDDEN);
+    let body: Value = denied.json();
+    assert_eq!(body["code"], json!("pdp.jurisdiction_not_permitted"));
 }
 
 #[tokio::test]
