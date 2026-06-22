@@ -123,7 +123,7 @@ jobs:
         working-directory: portal
         run: |
           corepack enable
-          corepack prepare pnpm@9.15.9 --activate
+          corepack prepare pnpm@11.3.0 --activate
           pnpm install --frozen-lockfile
           pnpm check
           pnpm test

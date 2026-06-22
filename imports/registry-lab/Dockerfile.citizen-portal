@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM node:22.12.0-bookworm-slim AS base
+FROM node:22.13.1-bookworm-slim AS base
 
 ENV PNPM_HOME=/pnpm
 ENV PATH="${PNPM_HOME}:${PATH}"
@@ -9,7 +9,7 @@ WORKDIR /app
 
 RUN npm install -g corepack@0.31.0 && \
     corepack enable && \
-    corepack prepare pnpm@9.15.9 --activate && \
+    corepack prepare pnpm@11.3.0 --activate && \
     mkdir -p /app /pnpm/store && \
     chown -R node:node /app /pnpm
 
@@ -19,12 +19,12 @@ USER node
 
 COPY --chown=node:node package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN --mount=type=cache,target=/pnpm/store,uid=1000,gid=1000 \
-    corepack pnpm@9.15.9 install --frozen-lockfile
+    corepack pnpm@11.3.0 install --frozen-lockfile
 
 FROM deps AS build
 
 COPY --chown=node:node . .
-RUN corepack pnpm@9.15.9 run build && CI=true corepack pnpm@9.15.9 prune --prod
+RUN corepack pnpm@11.3.0 run build && CI=true corepack pnpm@11.3.0 prune --prod
 
 FROM base AS runtime
 

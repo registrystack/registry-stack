@@ -364,8 +364,7 @@ services:
       start_period: 10s
 
   citizen-portal:
-    # Temporary digest placeholder until the first hosted portal image is pushed.
-    image: ${REGISTRY_LAB_CITIZEN_PORTAL_IMAGE:-ghcr.io/jeremi/citizen-portal@sha256:0000000000000000000000000000000000000000000000000000000000000000}
+    image: ${REGISTRY_LAB_CITIZEN_PORTAL_IMAGE:-ghcr.io/jeremi/citizen-portal@sha256:386086aa9a5645050441f4197e79d6f047b03230adecc92fc1b067340604f939}
     restart: unless-stopped
     expose:
       - "3000"
