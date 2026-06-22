@@ -311,12 +311,6 @@ jobs:
             --api-base-url "${api_base}" \
             --app-uuid "${COOLIFY_HOSTED_AGRI_APP_UUID}"
 
-          python3 scripts/sync-coolify-compose-domains.py \
-            --compose compose.coolify.yaml \
-            --api-base-url "${api_base}" \
-            --app-uuid "${COOLIFY_REGISTRY_LAB_APP_UUID}" \
-            --domain citizen-portal=https://portal.lab.registrystack.org:3000
-
           # App deploy targets: "uuid|label|health_url|probe_attempts".
           # Health URLs mirror the x-hosted-domains headers in each compose file;
           # keep them in sync if a public domain changes. JVM-heavy apps get a
@@ -446,6 +440,72 @@ jobs:
               exit 1
             fi
           done < "$deployments_file"
+
+          # Coolify only persists docker_compose_domains for services already
+          # present in its parsed docker_compose_raw. The deploy above loads
+          # this commit's compose, then this sync attaches the new service
+          # route and a targeted monolith redeploy applies the proxy labels.
+          python3 scripts/sync-coolify-compose-domains.py \
+            --compose compose.coolify.yaml \
+            --api-base-url "${api_base}" \
+            --app-uuid "${COOLIFY_REGISTRY_LAB_APP_UUID}" \
+            --domain citizen-portal=https://portal.lab.registrystack.org:3000 \
+            --attempts 6 \
+            --retry-delay 10
+
+          deployment_uuid="$(
+            curl -fsS \
+              -H "Authorization: Bearer ${COOLIFY_API_TOKEN}" \
+              "${api_base}/deploy?uuid=${COOLIFY_REGISTRY_LAB_APP_UUID}&force=true" \
+              | python3 -c 'import json, sys; print(json.load(sys.stdin)["deployments"][0]["deployment_uuid"])'
+          )"
+          echo "triggered app=monolith-domain-sync (${COOLIFY_REGISTRY_LAB_APP_UUID}) deployment_uuid=${deployment_uuid}"
+          deadline=$((SECONDS + 1200))
+          while true; do
+            status="$(
+              curl -fsS \
+                -H "Authorization: Bearer ${COOLIFY_API_TOKEN}" \
+                "${api_base}/deployments/${deployment_uuid}" \
+                | python3 -c 'import json, sys; data=json.load(sys.stdin); print((data.get("status") or data.get("deployment", {}).get("status") or "").lower())'
+            )"
+            echo "status app=monolith-domain-sync (${COOLIFY_REGISTRY_LAB_APP_UUID}) deployment_uuid=${deployment_uuid} status=${status}"
+            case "$status" in
+              finished)
+                break
+                ;;
+              failed|cancelled|canceled|error)
+                echo "::error::Coolify deployment failed for monolith-domain-sync (${COOLIFY_REGISTRY_LAB_APP_UUID}): ${status}"
+                detail="$(curl -fsS -H "Authorization: Bearer ${COOLIFY_API_TOKEN}" "${api_base}/deployments/${deployment_uuid}" 2>/dev/null || true)"
+                if printf '%s' "$detail" | grep -qE 'E2BIG|posix_spawn|Argument list too long'; then
+                  echo "::error::monolith-domain-sync: the rendered compose hit the kernel single-arg limit (E2BIG, ~128 KiB after base64). Coolify execs the whole compose as one base64 argument; shrink it by splitting a track or trimming per-service env."
+                fi
+                exit 1
+                ;;
+            esac
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::Timed out waiting for Coolify deployment ${deployment_uuid}"
+              exit 1
+            fi
+            sleep 15
+          done
+
+          ok=0
+          for attempt in $(seq 1 18); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "https://lab.registrystack.org" || true)"
+            case "$code" in
+              2*|3*|4*)
+                echo "health ok app=monolith-domain-sync url=https://lab.registrystack.org http=${code} (attempt ${attempt}/18)"
+                ok=1
+                break
+                ;;
+            esac
+            echo "health pending app=monolith-domain-sync url=https://lab.registrystack.org http=${code:-000} (attempt ${attempt}/18)"
+            sleep 10
+          done
+          if [ "$ok" -ne 1 ]; then
+            echo "::error::monolith-domain-sync: deployment finished but https://lab.registrystack.org did not return a healthy HTTP status (2xx/3xx/4xx) after 18 attempts."
+            exit 1
+          fi
 
           # The monolith has multiple public routes. Probe the new portal route
           # explicitly so a missing service-domain binding is caught here, before

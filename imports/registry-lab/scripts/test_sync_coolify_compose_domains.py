@@ -83,6 +83,9 @@ class SyncCoolifyComposeDomainsTest(unittest.TestCase):
             self.script.extract_stored_domains(payload),
         )
 
+    def test_ignores_application_update_uuid_response_as_domains(self) -> None:
+        self.assertEqual({}, self.script.extract_stored_domains({"uuid": "app-uuid"}))
+
     def test_preserves_schemeless_existing_domain_values(self) -> None:
         self.assertEqual(
             {"lab-homepage": "lab.registrystack.org"},
@@ -103,6 +106,47 @@ class SyncCoolifyComposeDomainsTest(unittest.TestCase):
             ],
             self.script.as_patch_entries(merged),
         )
+
+    def test_sync_required_domains_retries_until_coolify_persists_domain(self) -> None:
+        calls = []
+        sleeps = []
+        desired = {"citizen-portal": "https://portal.lab.registrystack.org:3000"}
+        original_request_json = self.script.request_json
+        original_sleep = self.script.time.sleep
+
+        def fake_request_json(method, url, token, body=None):
+            calls.append((method, url, token, body))
+            patch_count = sum(1 for call in calls if call[0] == "PATCH")
+            if method == "GET" and patch_count >= 2:
+                return {
+                    "docker_compose_domains": [
+                        {
+                            "name": "citizen-portal",
+                            "domain": "https://portal.lab.registrystack.org:3000",
+                        }
+                    ]
+                }
+            if method == "PATCH":
+                return {"uuid": "app-uuid"}
+            return {"docker_compose_domains": []}
+
+        self.script.request_json = fake_request_json
+        self.script.time.sleep = lambda delay: sleeps.append(delay)
+        try:
+            self.script.sync_required_domains(
+                "https://coolify.example/api/v1",
+                "app-uuid",
+                "token-value",
+                desired,
+                attempts=2,
+                retry_delay=0.25,
+            )
+        finally:
+            self.script.request_json = original_request_json
+            self.script.time.sleep = original_sleep
+
+        self.assertEqual([0.25], sleeps)
+        self.assertEqual(2, sum(1 for call in calls if call[0] == "PATCH"))
 
     def test_patches_compose_domains_through_application_update_endpoint(self) -> None:
         calls = []
