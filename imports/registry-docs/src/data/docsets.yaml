@@ -5,18 +5,50 @@ docsets:
     path: /
     status: current
     source: main
-    published_at: 2026-06-13
-    description: Current Registry Docs build from the main branch.
+    published_at: 2026-06-22
+    description: Current Registry Docs build for the beta-4 source release.
     products:
       registry-relay:
-        version: v0.4.0
-        ref: 380261c386309a4194b131913525f6cf70611adb
+        version: v0.4.1
+        ref: cfb1b735c6a2b3a50f5204e49660a859ceabb87d
       registry-notary:
-        version: v0.5.0
-        ref: 4a5a7fb89acf7788bd1d540759dedb2f25419c2c
+        version: v0.6.2
+        ref: 629c901c6ae49c86c6df907b876be267ecf05c72
       registry-manifest:
+        version: v0.2.2
+        ref: 52da5e913d8652e98ce8e443102c5d23b1a0974f
+  - id: beta-4
+    label: Beta 4
+    path: /v/beta-4/
+    status: archived
+    source: registry-stack-beta-4
+    published_at: 2026-06-22
+    description: Beta-4 source-release documentation set prepared for release proof.
+    products:
+      registry-platform:
+        version: v0.3.2
+        ref: 88d1a798043673dac30d809d87badb083c6e1a26
+      registry-manifest:
+        version: v0.2.2
+        ref: 52da5e913d8652e98ce8e443102c5d23b1a0974f
+      registry-notary:
+        version: v0.6.2
+        ref: 629c901c6ae49c86c6df907b876be267ecf05c72
+      registry-relay:
+        version: v0.4.1
+        ref: cfb1b735c6a2b3a50f5204e49660a859ceabb87d
+      registry-lab:
+        version: registry-stack-beta-4-2026-06-22
+        ref: 9814a8e3286b324616b887f7258a902efefcfb00
+      registry-registryctl:
         version: v0.2.1
-        ref: 141efade265f453e15c967770286bafc5c3a3956
+        ref: 519c809e71c5b46c2557f7b17d517c0054c7f688
+      crosswalk:
+        version: crosswalk-core-v0.2.0
+        ref: 1d44ec735fdc8a7c719264b339574371e8330337
+      registry-atlas:
+        version: beta-4 vendor input
+        ref: d46f943b9fdcbab787d1d4eed114058aa43980be
   - id: beta-3
     label: Beta 3
     path: /v/beta-3/
