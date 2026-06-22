@@ -23,6 +23,8 @@ on:
         options:
           - all
           - citizen-portal
+          - esignet-relay
+          - esignet-seed
       relay_features:
         description: "Cargo features for registry-relay"
         default: "spdci-api-standards,standards-cel-mapping,ogcapi-edr"
@@ -139,6 +141,42 @@ jobs:
           cache-from: type=gha,scope=registry-lab-citizen-portal
           cache-to: type=gha,mode=max,scope=registry-lab-citizen-portal
 
+      - name: Build & push registry-lab-esignet-relay
+        if: ${{ inputs.image_target == 'all' || inputs.image_target == 'esignet-relay' }}
+        id: esignet_relay
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.esignet-relay
+          platforms: linux/amd64
+          provenance: false
+          sbom: false
+          push: true
+          build-contexts: |
+            esignet_relay_authenticator_src=vendor/esignet-relay-authenticator
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/registry-lab-esignet-relay:relay
+            ghcr.io/${{ github.repository_owner }}/registry-lab-esignet-relay:sha-${{ github.sha }}
+          cache-from: type=gha,scope=esignet-relay
+          cache-to: type=gha,mode=max,scope=esignet-relay
+
+      - name: Build & push registry-lab-esignet-seed
+        if: ${{ inputs.image_target == 'all' || inputs.image_target == 'esignet-seed' }}
+        id: esignet_seed
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.esignet-seed
+          platforms: linux/amd64
+          provenance: false
+          sbom: false
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/registry-lab-esignet-seed:seed
+            ghcr.io/${{ github.repository_owner }}/registry-lab-esignet-seed:sha-${{ github.sha }}
+          cache-from: type=gha,scope=esignet-seed
+          cache-to: type=gha,mode=max,scope=esignet-seed
+
       - name: Image digests
         run: |
           owner='${{ github.repository_owner }}'
@@ -152,6 +190,14 @@ jobs:
               echo "REGISTRY_NOTARY_IMAGE=ghcr.io/${owner}/registry-notary@${{ steps.notary.outputs.digest }}"
               echo "REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE=ghcr.io/${owner}/registry-notary-openfn-sidecar@${{ steps.sidecar.outputs.digest }}"
             fi
-            echo "REGISTRY_LAB_CITIZEN_PORTAL_IMAGE=ghcr.io/${owner}/registry-lab-citizen-portal@${{ steps.citizen_portal.outputs.digest }}"
+            if [ '${{ inputs.image_target }}' = 'all' ] || [ '${{ inputs.image_target }}' = 'citizen-portal' ]; then
+              echo "REGISTRY_LAB_CITIZEN_PORTAL_IMAGE=ghcr.io/${owner}/registry-lab-citizen-portal@${{ steps.citizen_portal.outputs.digest }}"
+            fi
+            if [ '${{ inputs.image_target }}' = 'all' ] || [ '${{ inputs.image_target }}' = 'esignet-relay' ]; then
+              echo "REGISTRY_LAB_ESIGNET_RELAY_IMAGE=ghcr.io/${owner}/registry-lab-esignet-relay@${{ steps.esignet_relay.outputs.digest }}"
+            fi
+            if [ '${{ inputs.image_target }}' = 'all' ] || [ '${{ inputs.image_target }}' = 'esignet-seed' ]; then
+              echo "REGISTRY_LAB_ESIGNET_SEED_IMAGE=ghcr.io/${owner}/registry-lab-esignet-seed@${{ steps.esignet_seed.outputs.digest }}"
+            fi
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

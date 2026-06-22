@@ -205,6 +205,24 @@ datasets:
     update_frequency: daily
     conforms_to:
       - spdci:extensions/crvs/v1/Person
+    policy:
+      uid: https://metadata.lab.registrystack.org/policies/civil-row-purpose
+      assigner: did:web:civil-relay.lab.registrystack.org
+      permissions:
+        - action: odrl:use
+          constraints:
+            - left_operand: odrl:purpose
+              operator: odrl:isA
+              right_operand:
+                iri: https://demo.example.gov/purpose/decentralized-evidence-demo
+            - left_operand: odrl:purpose
+              operator: odrl:isA
+              right_operand:
+                iri: https://demo.example.gov/purpose/civil-certificate-evidence
+            - left_operand: odrl:purpose
+              operator: odrl:isA
+              right_operand:
+                iri: https://demo.example.gov/purpose/esignet-identity-verification
     evidence_offerings:
       - id: civil_child_status_evidence_service
         iri: https://metadata.lab.registrystack.org/evidence-offerings/civil-child-status

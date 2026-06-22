@@ -114,6 +114,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          token: ${{ secrets.SUBMODULES_PAT || github.token }}
 
       - name: Set up Node for citizen portal
         uses: actions/setup-node@v4
@@ -198,6 +199,9 @@ jobs:
         run: docker compose -f compose.coolify.yaml config >/tmp/compose.coolify.config.yaml
 
       - name: Render hosted eSignet compose
+        env:
+          REGISTRY_LAB_ESIGNET_RELAY_IMAGE: ghcr.io/jeremi/registry-lab-esignet-relay@sha256:1111111111111111111111111111111111111111111111111111111111111111
+          REGISTRY_LAB_ESIGNET_SEED_IMAGE: ghcr.io/jeremi/registry-lab-esignet-seed@sha256:2222222222222222222222222222222222222222222222222222222222222222
         run: docker compose -f compose.esignet-hosted.yaml config >/tmp/compose.esignet-hosted.config.yaml
 
       - name: Render hosted social compose

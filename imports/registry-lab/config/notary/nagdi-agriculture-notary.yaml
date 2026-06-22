@@ -14,7 +14,7 @@ auth:
       fingerprint:
         provider: env
         name: AGRI_EVIDENCE_CLIENT_TOKEN_HASH
-        commitment: sha256:7e17725a4687789c12fd1d3789f53040801a42fc36397d86f242a57824347e58
+        commitment: sha256:54429654053e337deebb7953a368dafb1359ae0544cbb3826bcf24069b408f0d
       scopes:
         - agri_registry:evidence_verification
   bearer_tokens:
@@ -22,7 +22,7 @@ auth:
       fingerprint:
         provider: env
         name: AGRI_EVIDENCE_CLIENT_BEARER_HASH
-        commitment: sha256:68342d923b461ef8a4a8d2bb2eef4ae76fd701b9e3edd38f72fae4762e197153
+        commitment: sha256:34565315882df52ccd7f74826c529190daef9744dbf25cf01a38bf1d2b5694c7
       scopes:
         - agri_registry:evidence_verification
 

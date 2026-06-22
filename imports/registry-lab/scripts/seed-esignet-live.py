@@ -14,22 +14,17 @@ import time
 from pathlib import Path
 
 
-CLIENT_ID = "registry-lab-live-client"
-CLIENT_KEY_ID = "registry-lab-live-client-key-1"
-RELYING_PARTY_ID = "registry-lab"
+CLIENT_ID = os.environ.get("ESIGNET_CLIENT_ID", "registry-lab-live-client")
+CLIENT_KEY_ID = os.environ.get("ESIGNET_CLIENT_KEY_ID", "registry-lab-live-client-key-1")
+RELYING_PARTY_ID = os.environ.get("ESIGNET_RELYING_PARTY_ID", "registry-lab")
 CLIENT_DETAIL_CACHE_KEY = f"esignet:clientdetails::{CLIENT_ID}"
-DEMO_PIN = "545411"
-DEMO_USERS = [
-    ("NID-1001", "Miguel", "Santos", "2016/01/15", "Male", "north"),
-    ("NID-1002", "Maria", "Dela Cruz", "2018/01/15", "Female", "south"),
-    ("NID-1003", "Cara", "Okafor", "1957/02/14", "Female", "central"),
-    ("NID-1004", "Rafael", "Aquino", "2019/01/15", "Male", "east"),
-    ("NID-1005", "Rosalie", "Bautista", "2013/01/15", "Female", "west"),
-    ("NID-1006", "Miguel", "Martinez", "2014/01/15", "Male", "north"),
-    ("NID-1007", "Lola", "Santos", "1958/01/15", "Female", "north"),
-    ("NID-1008", "Rosa", "Garcia", "1954/01/15", "Female", "west"),
-    ("NID-1009", "Ana", "Mendoza", "1998/01/15", "Female", "east"),
-    ("NID-2001", "Maria", "Santos", "1984/01/15", "Female", "north"),
+DEFAULT_CLIENT_CLAIMS = [
+    "individual_id",
+    "name",
+    "given_name",
+    "family_name",
+    "gender",
+    "birthdate",
 ]
 
 
@@ -144,7 +139,32 @@ def sql_literal(value: object) -> str:
 
 
 def seed_esignet(jwk: str, key_hash: str) -> None:
-    client_name = {"@none": "Registry Lab Live eSignet Client"}
+    client_name = {
+        "@none": os.environ.get("ESIGNET_CLIENT_NAME", "Registry Lab Live eSignet Client")
+    }
+    redirect_uris = json.loads(
+        os.environ.get(
+            "ESIGNET_CLIENT_REDIRECT_URIS_JSON",
+            json.dumps(
+                [
+                    "http://127.0.0.1:4325/callback",
+                    "http://localhost:5000/callback",
+                    "http://localhost:5000/**",
+                    "http://localhost:8765/callback",
+                    "http://localhost:8765/**",
+                    "http://localhost:8766/callback",
+                    "http://localhost:8766/**",
+                ],
+                separators=(",", ":"),
+            ),
+        )
+    )
+    claims = json.loads(
+        os.environ.get(
+            "ESIGNET_CLIENT_CLAIMS_JSON",
+            json.dumps(DEFAULT_CLIENT_CLAIMS, separators=(",", ":")),
+        )
+    )
     additional_config = {
         "userinfo_response_type": "JWS",
         "purpose": {"type": "verify"},
@@ -162,16 +182,8 @@ insert into esignet.client_detail (
   {sql_literal(client_name)},
   {sql_literal(RELYING_PARTY_ID)},
   'https://example.invalid/logo.png',
-  {sql_literal([
-      "http://127.0.0.1:4325/callback",
-      "http://localhost:5000/callback",
-      "http://localhost:5000/**",
-      "http://localhost:8765/callback",
-      "http://localhost:8765/**",
-      "http://localhost:8766/callback",
-      "http://localhost:8766/**",
-  ])},
-  {sql_literal(["individual_id", "name", "email", "gender", "phone_number", "picture", "birthdate"])},
+  {sql_literal(redirect_uris)},
+  {sql_literal(claims)},
   {sql_literal(["mosip:idp:acr:generated-code", "mosip:idp:acr:password", "mosip:idp:acr:linked-wallet"])},
   {sql_literal(jwk)},
   {sql_literal(key_hash)},
@@ -220,52 +232,21 @@ def redis_command(*parts: str) -> bytes:
     return b"".join(payload)
 
 
-def demo_identity(user: tuple[str, str, str, str, str, str]) -> dict[str, object]:
-    individual_id, given_name, family_name, date_of_birth, gender, region = user
-    full_name = f"{given_name} {family_name}"
-    return {
-        "individualId": individual_id,
-        "pin": DEMO_PIN,
-        "password": DEMO_PIN,
-        "email": f"{individual_id.lower()}@example.test",
-        "phone": "+919427357934",
-        "fullName": [{"language": "eng", "value": full_name}],
-        "givenName": [{"language": "eng", "value": given_name}],
-        "familyName": [{"language": "eng", "value": family_name}],
-        "preferredUsername": [{"language": "eng", "value": full_name.lower().replace(" ", ".")}],
-        "gender": [{"language": "eng", "value": gender}],
-        "dateOfBirth": date_of_birth,
-        "region": [{"language": "eng", "value": region}],
-        "preferredLang": "eng",
-        "locale": "eng",
-    }
-
-
-def seed_mock_identities() -> None:
-    values = ",\n".join(
-        f"({sql_literal(individual_id)}, {sql_literal(demo_identity(user))})"
-        for user in DEMO_USERS
-        for individual_id in [user[0]]
-    )
-    sql = f"""
-insert into mockidentitysystem.mock_identity (individual_id, identity_json)
-values
-{values}
-on conflict (individual_id) do update set identity_json = excluded.identity_json;
-"""
-    psql("mosip_mockidentitysystem", sql)
-
-
 def main() -> int:
     key_file, jwk, key_hash = ensure_private_key()
     wait_for_table("mosip_esignet", "esignet.client_detail")
-    wait_for_table("mosip_mockidentitysystem", "mockidentitysystem.mock_identity")
     seed_esignet(jwk, key_hash)
     clear_esignet_client_cache()
-    seed_mock_identities()
     print(f"Seeded eSignet lab client {CLIENT_ID}.")
     print(f"Cleared eSignet client cache key {CLIENT_DETAIL_CACHE_KEY}.")
-    print(f"Seeded {len(DEMO_USERS)} mock identities: {', '.join(user[0] for user in DEMO_USERS)}.")
+    account_source = os.environ.get(
+        "ESIGNET_ACCOUNT_SOURCE_LABEL",
+        "Relay profile esignet-civil-userinfo",
+    )
+    demo_subject = os.environ.get("ESIGNET_DEMO_SUBJECT", "NID-2001")
+    demo_otp = os.environ.get("ESIGNET_DEMO_OTP", "111111")
+    print(f"Relay-backed account source: {account_source}.")
+    print(f"Demo subject available through Relay: {demo_subject}. Local static OTP: {demo_otp}.")
     print(f"Client private key: {key_file}")
     return 0
 

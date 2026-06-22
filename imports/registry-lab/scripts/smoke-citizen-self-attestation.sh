@@ -26,9 +26,9 @@ self_subject="${ESIGNET_CITIZEN_SUBJECT:-NID-2001}"
 other_subject="${ESIGNET_OTHER_SUBJECT:-NID-1001}"
 demo_login_id="${ESIGNET_DEMO_LOGIN_ID:-${self_subject}}"
 demo_login_code="${ESIGNET_DEMO_OTP:-111111}"
-demo_login_pin="${ESIGNET_DEMO_PIN:-545411}"
 self_attestation_scope="${ESIGNET_SELF_ATTESTATION_SCOPE:-self_attestation}"
 self_attestation_scope_policy="${ESIGNET_SELF_ATTESTATION_SCOPE_POLICY:-disabled}"
+self_attestation_purpose="${ESIGNET_SELF_ATTESTATION_PURPOSE:-https://demo.example.gov/purpose/civil-certificate-evidence}"
 if [[ "${self_attestation_scope_policy}" == "disabled" ]]; then
   authorize_scope="${ESIGNET_AUTHORIZE_SCOPE:-openid}"
 else
@@ -321,7 +321,6 @@ this terminal running. The callback listener will capture the code.
 Use these local demo login values:
   ID / VID: ${demo_login_id}
   OTP / generated code: ${demo_login_code}
-  PIN / static code, if asked: ${demo_login_pin}
 The PKCE verifier was saved to:
   ${pkce_file}
 
@@ -336,7 +335,6 @@ rerun this script with ESIGNET_AUTHORIZATION_CODE set to the callback code.
 Use these local demo login values:
   ID / VID: ${demo_login_id}
   OTP / generated code: ${demo_login_code}
-  PIN / static code, if asked: ${demo_login_pin}
 The PKCE verifier was saved to:
   ${pkce_file}
 
@@ -485,7 +483,7 @@ subject = claims.get(subject_claim)
 if subject != expected_subject:
     raise SystemExit(
         f"UserInfo claim {subject_claim!r} must equal {expected_subject!r}; got {subject!r}. "
-        "For local eSignet mock identity, verify MOSIP_MOCK_IDA_IDENTITY_OPENID_CLAIMS_MAPPING maps individualId to individual_id."
+        "For local Relay-backed eSignet, verify the Relay attribute-release profile releases individual_id for this subject."
     )
 PY
 }
@@ -630,12 +628,16 @@ import sys
 
 body = json.load(open(sys.argv[1], encoding="utf-8"))
 result = (body.get("results") or [{}])[0]
+provenance = result.get("provenance") or {}
+source_count = provenance.get("source_count")
+if source_count is None:
+    source_count = (provenance.get("used") or {}).get("source_count")
 print(
     "    Self claim OK: "
     f"claim={result.get('claim_id', '')}, "
     f"value={result.get('value')}, "
     f"evaluation_id={result.get('evaluation_id', '')}, "
-    f"source_count={result.get('provenance', {}).get('source_count', '')}"
+    f"source_count={source_count if source_count is not None else ''}"
 )
 PY
 }
@@ -871,12 +873,12 @@ write_notary_config() {
   local userinfo_issuer="$8"
   local userinfo_alg="$9"
   local token_typ="${10}"
-  python3 - "${config_path}" "${port}" "${issuer}" "${jwks_uri}" "${userinfo_endpoint}" "${userinfo_issuer}" "${alg}" "${userinfo_alg}" "${token_typ}" "${client_id}" "${audience_json}" "${scope}" "${self_attestation_scope_policy}" "${subject_claim}" "${subject_claim_source}" "${assurance_claim_source}" <<'PY'
+  python3 - "${config_path}" "${port}" "${issuer}" "${jwks_uri}" "${userinfo_endpoint}" "${userinfo_issuer}" "${alg}" "${userinfo_alg}" "${token_typ}" "${client_id}" "${audience_json}" "${scope}" "${self_attestation_scope_policy}" "${subject_claim}" "${subject_claim_source}" "${assurance_claim_source}" "${self_attestation_purpose}" <<'PY'
 import json
 import os
 import sys
 
-path, port, issuer, jwks_uri, userinfo_endpoint, userinfo_issuer, alg, userinfo_alg, token_typ, client_id, audience_json, scope, scope_policy, subject_claim, subject_claim_source, assurance_claim_source = sys.argv[1:]
+path, port, issuer, jwks_uri, userinfo_endpoint, userinfo_issuer, alg, userinfo_alg, token_typ, client_id, audience_json, scope, scope_policy, subject_claim, subject_claim_source, assurance_claim_source, self_attestation_purpose = sys.argv[1:]
 audiences = json.loads(audience_json)
 if not audiences:
     audiences = [client_id]
@@ -1028,6 +1030,7 @@ evidence:
       token_env: CIVIL_EVIDENCE_SOURCE_RAW
       dci:
         search_path: /dci/crvs/registry/sync/search
+        version: "1.0.0"
         query_type: idtype-value
         records_path: /message/search_response/0/data/reg_records
         field_paths:
@@ -1062,7 +1065,7 @@ evidence:
       title: Person is alive
       version: 2026-05
       subject_type: person
-      purpose: citizen_self_attestation
+      purpose: {json.dumps(self_attestation_purpose)}
       value:
         type: boolean
       source_bindings:
@@ -1120,7 +1123,7 @@ self_attestation:
     issue_credential: {oid4vci_issue_credential}
     batch_evaluate: false
   allowed_purposes:
-    - citizen_self_attestation
+    - {json.dumps(self_attestation_purpose)}
   allowed_claims:
     - person-is-alive
   allowed_formats:
@@ -1172,6 +1175,7 @@ curl_json() {
 }
 
 need curl
+need jq
 need python3
 need openssl
 
@@ -1196,6 +1200,9 @@ case "${self_attestation_scope_policy}" in
   required | optional | disabled) ;;
   *) fail "ESIGNET_SELF_ATTESTATION_SCOPE_POLICY must be required, optional, or disabled" ;;
 esac
+if [[ -z "${self_attestation_purpose}" ]]; then
+  fail "ESIGNET_SELF_ATTESTATION_PURPOSE must not be empty"
+fi
 
 if [[ -f "${demo_dir}/.env" ]]; then
   set -a
@@ -1355,18 +1362,18 @@ PY
 )"
 
 step 6 "Start civil Relay and citizen Notary" "Notary listens on http://127.0.0.1:${port}."
-docker compose -f "${compose_file}" up -d civil-registry-relay
+docker compose -f "${compose_file}" up -d --force-recreate civil-registry-relay
 wait_http "civil relay health" "http://127.0.0.1:4311/healthz" "${CIVIL_METADATA_CLIENT_RAW}"
 
 rm -f "${log_path}"
 (
   cd "${notary_dir}"
-  cargo run -p registry-notary-bin -- --config "${config_path}"
+  cargo run -p registry-notary-bin --features registry-notary-cel -- --config "${config_path}"
 ) >"${log_path}" 2>&1 &
 notary_pid="$!"
 trap 'kill "${notary_pid}" >/dev/null 2>&1 || true' EXIT
 
-wait_http "citizen civil notary discovery" "http://127.0.0.1:${port}/.well-known/evidence-service" "${access_token}"
+wait_http "citizen civil notary health" "http://127.0.0.1:${port}/healthz"
 
 step 7 "Call Notary discovery" "Confirming the citizen token can see the self-attestation capability."
 curl_json GET "http://127.0.0.1:${port}/.well-known/evidence-service" "${discovery_path}" 200
@@ -1386,7 +1393,11 @@ assert len(results) == 1, body
 result = results[0]
 assert result.get("claim_id") == "person-is-alive", body
 assert result.get("value") is True, body
-assert result.get("provenance", {}).get("source_count") == 1, body
+provenance = result.get("provenance") or {}
+source_count = provenance.get("source_count")
+if source_count is None:
+    source_count = (provenance.get("used") or {}).get("source_count")
+assert source_count == 1, body
 PY
 print_self_evaluation_status
 

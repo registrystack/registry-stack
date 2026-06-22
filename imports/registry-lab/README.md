@@ -374,7 +374,7 @@ missing access-token `typ`, or a 1200s token lifetime, the script detects or
 accepts explicit env overrides for those settings. The script generates
 `output/citizen-self-attestation/citizen-civil-notary.yaml`, starts a host-side
 Notary against the existing civil Relay, evaluates `person-is-alive` for the
-token-bound citizen, and proves `NID-1002` is denied by subject binding. See
+token-bound citizen, and proves `NID-1001` is denied by subject binding. See
 `output/citizen-self-attestation/report.md` and
 `output/citizen-self-attestation/flow-transcript.txt` for the evidence trail,
 and `docs/citizen-self-attestation-esignet-use-case.md` for the use case and
@@ -389,13 +389,14 @@ just esignet-up
 just citizen-login
 ```
 
-`just esignet-up` starts a separate MOSIP eSignet Compose project from
-`compose.esignet-live.yaml`: eSignet on port `8088`, the browser UI on port
-`3000`, mock identity on port `8082`, and a Postgres database on port `5455`.
-It also seeds the `registry-lab-live-client` OIDC client and writes the matching
-demo private key to `output/esignet-live/client-private.pem`. The mock identity
-store is seeded with the civil fixture people `NID-1001` through `NID-1009`;
-the local generated code is `111111`, and the static PIN is `545411`.
+`just esignet-up` starts the Population Registry Relay from `compose.yaml`, then
+starts the MOSIP eSignet Compose project from `compose.esignet-live.yaml`:
+eSignet on port `8088`, the browser UI on port `3000`, and a Postgres database
+on port `5455`. The eSignet image is built with the
+`esignet-relay-authenticator` plugin and uses the population Relay
+`esignet-civil-userinfo` profile as the account source. It also seeds the
+`registry-lab-live-client` OIDC client and writes the matching demo private key
+to `output/esignet-live/client-private.pem`. The local static OTP is `111111`.
 
 Open the printed `http://localhost:3000/authorize?...` URL, authenticate as the
 citizen, and leave the terminal running. The recipe waits on
@@ -403,9 +404,17 @@ citizen, and leave the terminal running. The recipe waits on
 `output/citizen-self-attestation/esignet-callback.env`. The local wrapper also
 requests `scope=openid profile`, `acr_values=mosip:idp:acr:generated-code`, and
 the OIDC `claims` parameter needed for signed UserInfo to include
-`individual_id`. The login command prints the seeded demo login values:
-`NID-1001` with generated code `111111`, and PIN `545411` if the UI asks for a
-static code.
+`individual_id`. The login command prints the demo login values:
+`NID-2001` with OTP/generated code `111111`. The Relay-backed profile releases
+UserInfo for active, living population registry subjects and denies inactive or
+missing subjects before the citizen self-attestation flow can bind to them.
+
+The compose files still load `esignet-mock-plugin.jar`,
+`io.mosip.esignet.mock.integration`, and `MockKeyBindingWrapperService` because
+the MOSIP eSignet runtime uses that SPI path for local key-binding behavior.
+Those references are not the account source: the active authenticator is
+`RelayAuthenticationService`, and subject lookup/UserInfo release comes from
+Registry Relay.
 
 Then run:
 
@@ -420,6 +429,18 @@ stacks, or accepts `ESIGNET_CLIENT_PRIVATE_KEY_FILE=/path/to/client-private-key.
 The command narrates the verified token metadata, UserInfo subject binding,
 Notary discovery, successful self claim, other-person denial, and audit check
 without printing raw tokens.
+
+Local eSignet uses the population Relay on port `4315` so the account source is
+an explicit person/account projection. Hosted eSignet deliberately keeps the
+hosted civil Relay at `https://civil-relay.lab.registrystack.org` with the same
+`esignet-civil-userinfo` profile name to avoid adding another public Relay
+application in this issue.
+
+Hosted `compose.esignet-hosted.yaml` consumes pre-built images only. Build and
+push `Dockerfile.esignet-relay` and `Dockerfile.esignet-seed` through
+`.github/workflows/build-images.yml`, then set digest-pinned
+`REGISTRY_LAB_ESIGNET_RELAY_IMAGE` and `REGISTRY_LAB_ESIGNET_SEED_IMAGE` in the
+Coolify eSignet app before deploy.
 
 If you already have tokens:
 

@@ -70,6 +70,7 @@ evidence:
       token_env: CIVIL_EVIDENCE_SOURCE_RAW
       dci:
         search_path: /dci/crvs/registry/sync/search
+        version: "1.0.0"
         query_type: idtype-value
         records_path: /message/search_response/0/data/reg_records
         field_paths:
@@ -116,7 +117,7 @@ evidence:
       title: Vital Status Attestation
       version: 2026-05
       subject_type: person
-      purpose: citizen_self_attestation
+      purpose: https://demo.example.gov/purpose/civil-certificate-evidence
       value:
         type: boolean
       source_bindings:
@@ -174,7 +175,7 @@ self_attestation:
     issue_credential: true
     batch_evaluate: false
   allowed_purposes:
-    - citizen_self_attestation
+    - https://demo.example.gov/purpose/civil-certificate-evidence
   allowed_claims:
     - person-is-alive
   allowed_formats:

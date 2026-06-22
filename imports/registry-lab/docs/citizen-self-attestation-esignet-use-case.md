@@ -50,7 +50,10 @@ only the configured registry fact, and returns a bounded attestation result.
   identifier does not match the token-bound subject.
 - Self-attestation can evaluate only explicitly allowed claims, purposes,
   disclosures, formats, and credential profiles.
-- A request for another identifier, such as `NID-1002`, is rejected even if the
+- The allowed self-attestation purpose defaults to the civil Relay evidence
+  purpose `https://demo.example.gov/purpose/civil-certificate-evidence`, so the
+  purpose authorized at Notary is the purpose enforced by the source Relay.
+- A request for another identifier, such as `NID-1001`, is rejected even if the
   token is otherwise valid.
 - Audit events carry `access_mode=self_attestation` and do not write raw bearer
   tokens or raw citizen identifiers.
@@ -72,7 +75,7 @@ share them without redaction.
 - `citizen-notary-discovery.json`: authenticated Notary discovery.
 - `citizen-self-evaluation.json`: successful `person-is-alive` evaluation for
   `NID-2001`.
-- `citizen-other-subject-denied.json`: denied evaluation for `NID-1002`.
+- `citizen-other-subject-denied.json`: denied evaluation for `NID-1001`.
 - `citizen-access-token-claims.json`: decoded non-secret JWT header and claims.
 - `citizen-id-token-claims.json`: decoded ID token header and claims when
   `ESIGNET_ASSURANCE_CLAIM_SOURCE=id_token`.
@@ -137,11 +140,12 @@ Notary fetches the UserInfo endpoint itself with the access token and verifies
 the returned signed JWT before accepting the subject-binding claim. The UserInfo
 response must be JWS/JWT, not an encrypted JWE, for this lab path.
 
-### Local eSignet mock identity
+### Local Relay-backed eSignet identity
 
-When testing against a local eSignet mock identity store, seed the authenticated
-citizen so the signed UserInfo JWT contains the same national identifier used by
-the lab fixtures:
+The local eSignet stack authenticates against the Registry Relay authenticator
+plugin. Account lookup and signed UserInfo come from the population Relay
+`esignet-civil-userinfo` attribute-release profile, not from mock IDA rows. The
+demo subject is:
 
 ```json
 {
@@ -185,9 +189,9 @@ code is saved to `output/citizen-self-attestation/esignet-callback.env`. The
 second command exchanges the saved code and runs the Notary smoke. If the local
 live eSignet setup did not create `/tmp/esignet-live-test/client-private.pem`,
 set `ESIGNET_CLIENT_PRIVATE_KEY_FILE` when running `just citizen-code`.
-The login command prints the local demo values (`NID-2001`, generated code
-`111111`, and PIN `545411` if static-code auth appears). The code command prints
-safe, redacted checkpoints for the access token, ID token assurance, signed
+The login command prints the local demo values (`NID-2001` and OTP/generated
+code `111111`). The code command prints safe, redacted checkpoints for the
+access token, ID token assurance, signed
 UserInfo binding, discovery, successful self claim, failed other-person control,
 and audit proof.
 
