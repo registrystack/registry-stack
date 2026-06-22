@@ -21,6 +21,7 @@ LOCAL_CIVIL_NOTARY = ROOT / "config/notary/openfn-civil-notary.yaml"
 LOCAL_DHIS2_NOTARY = ROOT / "config/notary/dhis2-health-notary.yaml"
 HOSTED_DHIS2_NOTARY = ROOT / "config/coolify/notary/dhis2-health-notary.yaml"
 HOSTED_OPENFN_TEMPLATE = ROOT / "config/coolify/openfn/openfn-dhis2-sidecar.yaml.template"
+HOSTED_OPENFN_BOOTSTRAP = ROOT / "config/coolify/openfn/openfn-dhis2-sidecar.bootstrap.yaml"
 # Primary smoke scripts (shims smoke-openfn.sh / smoke-dhis2-openfn.sh delegate here).
 LOCAL_CIVIL_SMOKE = ROOT / "scripts/smoke-civil.sh"
 LOCAL_DHIS2_SMOKE = ROOT / "scripts/smoke-dhis2.sh"
@@ -51,10 +52,20 @@ class BuiltinSidecarLabConfigTest(unittest.TestCase):
         self.assertIn("/etc/registry-notary-openfn/openfn-dhis2-sidecar.bootstrap.yaml", body)
         self.assertIn("openfn-sidecar-tuf-state:/var/lib/registry-notary-openfn-sidecar/tuf", body)
         self.assertIn("openfn-sidecar-config-state:/var/lib/registry-notary-openfn-sidecar/config-trust", body)
+        self.assertIn("openfn-sidecar-audit-state:/var/lib/registry-notary-openfn-sidecar/audit", body)
         self.assertNotIn("cfg-openfn-jobs:/tmp/registry-lab-openfn-jobs:ro", body)
         self.assertNotIn("/tmp/registry-lab-openfn-jobs", body)
         hosted_service = body.split("  openfn-dhis2-sidecar:", 1)[1].split("\n  dhis2-health-notary:", 1)[0]
         self.assertNotIn("--allow-unsigned-dev-config", hosted_service)
+
+        bootstrap = read(HOSTED_OPENFN_BOOTSTRAP)
+        self.assertIn("audit:", bootstrap)
+        self.assertIn("sink: file", bootstrap)
+        self.assertIn(
+            "path: /var/lib/registry-notary-openfn-sidecar/audit/dhis2-openfn-sidecar-audit.jsonl",
+            bootstrap,
+        )
+        self.assertIn("hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET", bootstrap)
 
     def test_smoke_scripts_mirror_just_source_defaults(self) -> None:
         for path in (LOCAL_CIVIL_SMOKE, LOCAL_DHIS2_SMOKE):

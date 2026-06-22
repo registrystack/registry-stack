@@ -248,6 +248,7 @@ class HostedDeployValidationTest(unittest.TestCase):
             for volume in compose["services"]["config-loader"]["volumes"]
             if not volume.startswith("openfn-sidecar-tuf-state:")
             and not volume.startswith("openfn-sidecar-config-state:")
+            and not volume.startswith("openfn-sidecar-audit-state:")
         ]
         issues = self._validate(compose, self._valid_esignet())
         self.assertIssue(issues, "runtime-state-not-chowned")
@@ -1507,6 +1508,16 @@ oid4vci:
         issues = self._validate(compose, self._valid_esignet())
         self.assertIssue(issues, "missing-openfn-governed-mount")
 
+    def test_rejects_missing_openfn_audit_mount(self) -> None:
+        compose = self._valid_registry_lab()
+        compose["services"]["openfn-dhis2-sidecar"]["volumes"] = [
+            volume
+            for volume in compose["services"]["openfn-dhis2-sidecar"]["volumes"]
+            if not volume.startswith("openfn-sidecar-audit-state:")
+        ]
+        issues = self._validate(compose, self._valid_esignet())
+        self.assertIssue(issues, "missing-openfn-governed-mount")
+
     def test_rejects_hosted_openfn_unsigned_dev_config(self) -> None:
         compose = self._valid_registry_lab()
         compose["services"]["openfn-dhis2-sidecar"]["command"] = [
@@ -1517,6 +1528,56 @@ oid4vci:
         issues = self._validate(compose, self._valid_esignet())
         self.assertIssue(issues, "hosted-openfn-unsigned-dev-config")
         self.assertIssue(issues, "missing-openfn-governed-bootstrap")
+
+    def test_rejects_hosted_openfn_missing_audit_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            notary_dir = root / "config" / "coolify" / "notary"
+            openfn_dir = root / "config" / "coolify" / "openfn"
+            governed_dir = openfn_dir / "governed"
+            notary_dir.mkdir(parents=True)
+            governed_dir.mkdir(parents=True)
+            (openfn_dir / "openfn-dhis2-sidecar.bootstrap.yaml").write_text(
+                """
+config_trust:
+  product: registry-notary-openfn-sidecar
+  instance_id: hosted-dhis2-openfn-sidecar
+  environment: hosted-lab
+  stream_id: dhis2-openfn-sidecar-runtime
+  accepted_roots:
+    - root_id: demo
+""",
+                encoding="utf-8",
+            )
+            (governed_dir / "openfn-dhis2-sidecar-runtime.report.json").write_text(
+                '{"config_hash":"sha256:1111111111111111111111111111111111111111111111111111111111111111"}',
+                encoding="utf-8",
+            )
+            (notary_dir / "dhis2-health-notary.yaml").write_text(
+                """
+evidence:
+  source_connections:
+    dhis2_openfn:
+      expected_sidecar:
+        product: registry-notary-openfn-sidecar
+        instance_id: hosted-dhis2-openfn-sidecar
+        environment: hosted-lab
+        stream_id: dhis2-openfn-sidecar-runtime
+        config_hash: sha256:1111111111111111111111111111111111111111111111111111111111111111
+        require_expression_hashes_verified: true
+        require_runtime_verified: true
+        require_smoke_verified: true
+""",
+                encoding="utf-8",
+            )
+            issues = self.validator.validate_artifacts(
+                {
+                    "registry-lab": self._valid_registry_lab(),
+                    "esignet": self._valid_esignet(),
+                },
+                {"registry-lab": root, "esignet": root},
+            )
+        self.assertIssue(issues, "missing-openfn-audit-config")
 
     def test_rejects_hosted_openfn_expected_sidecar_hash_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1727,7 +1788,7 @@ for d in civil-cache health-cache; do
   mkdir -p "/out/$d"
   chown -R 65532:65532 "/out/$d"
 done
-for d in openfn-tuf-state openfn-config-state; do
+for d in openfn-tuf-state openfn-config-state openfn-audit-state; do
   mkdir -p "/out/$d"
   chown -R 1000:1000 "/out/$d"
 done
@@ -1749,6 +1810,7 @@ cp -a /tmp/repo/scripts/lab_homepage_static /out/static-scripts/
                         "health-registry-cache:/out/health-cache",
                         "openfn-sidecar-tuf-state:/out/openfn-tuf-state",
                         "openfn-sidecar-config-state:/out/openfn-config-state",
+                        "openfn-sidecar-audit-state:/out/openfn-audit-state",
                     ],
                 },
                 "postgres": {"image": "postgres:16-alpine", "environment": required_env},
@@ -1917,6 +1979,7 @@ cp -a /tmp/repo/scripts/lab_homepage_static /out/static-scripts/
                         "cfg-openfn-tmpl:/etc/registry-notary-openfn:ro",
                         "openfn-sidecar-tuf-state:/var/lib/registry-notary-openfn-sidecar/tuf",
                         "openfn-sidecar-config-state:/var/lib/registry-notary-openfn-sidecar/config-trust",
+                        "openfn-sidecar-audit-state:/var/lib/registry-notary-openfn-sidecar/audit",
                     ],
                 },
                 "dhis2-health-notary": {

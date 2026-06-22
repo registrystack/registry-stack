@@ -727,6 +727,7 @@ def validate_openfn_sidecar_governance(
         "/etc/registry-notary-openfn",
         "/var/lib/registry-notary-openfn-sidecar/tuf",
         "/var/lib/registry-notary-openfn-sidecar/config-trust",
+        "/var/lib/registry-notary-openfn-sidecar/audit",
     }
     for target in sorted(required_mounts):
         if not service_mounts_target(openfn, target):
@@ -766,6 +767,21 @@ def validate_openfn_sidecar_governance(
                 artifact,
                 "config/coolify/openfn/openfn-dhis2-sidecar.bootstrap.yaml",
                 "hosted OpenFn sidecar bootstrap must include config_trust.accepted_roots",
+            )
+        )
+    audit = bootstrap_config.get("audit")
+    if (
+        not isinstance(audit, dict)
+        or audit.get("sink") not in ("file", "jsonl")
+        or not audit.get("path")
+        or not audit.get("hash_secret_env")
+    ):
+        issues.append(
+            Issue(
+                "missing-openfn-audit-config",
+                artifact,
+                "config/coolify/openfn/openfn-dhis2-sidecar.bootstrap.yaml",
+                "governed OpenFn sidecar bootstrap must include a durable file audit sink",
             )
         )
 
@@ -1298,6 +1314,7 @@ def validate_config_loader_hosted_outputs(
             ("health-registry-cache", "/out/health-cache"),
             ("openfn-sidecar-tuf-state", "/out/openfn-tuf-state"),
             ("openfn-sidecar-config-state", "/out/openfn-config-state"),
+            ("openfn-sidecar-audit-state", "/out/openfn-audit-state"),
         )
     ) or not all(
         token in command_text
@@ -1305,7 +1322,7 @@ def validate_config_loader_hosted_outputs(
             "chown -R 65532:65532",
             "civil-cache health-cache",
             "chown -R 1000:1000",
-            "openfn-tuf-state openfn-config-state",
+            "openfn-tuf-state openfn-config-state openfn-audit-state",
             "dhis2-openfn-sidecar-antirollback.json",
             "last_sequence\":0",
             "sha256:0000000000000000000000000000000000000000000000000000000000000000",

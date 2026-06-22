@@ -8,6 +8,11 @@ auth:
     - id: dhis2_health_notary
       hash_env: OPENFN_SIDECAR_TOKEN_HASH
 
+audit:
+  sink: file
+  path: /var/lib/registry-notary-openfn-sidecar/audit/dhis2-openfn-sidecar-audit.jsonl
+  hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
+
 config_trust:
   product: registry-notary-openfn-sidecar
   instance_id: hosted-dhis2-openfn-sidecar
