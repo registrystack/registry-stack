@@ -1,5 +1,14 @@
 # Release Notes
 
+## 0.6.1
+
+- Fixed static credential policy-context compatibility for source matching:
+  static credentials can again carry configured legal basis, consent,
+  jurisdiction, and assurance context for PDP gates without being treated as
+  exact per-transaction authorization scopes.
+- Kept OIDC/RAR authorization details fail-closed unless transaction scope
+  fields are present.
+
 ## 0.6.0
 
 - Added delegated self-attestation support with explicit requester-side target
