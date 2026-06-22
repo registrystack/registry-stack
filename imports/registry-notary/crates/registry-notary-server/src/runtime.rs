@@ -8867,6 +8867,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn delegated_attestation_binds_requester_id_type_not_just_value() {
+        let source = Arc::new(CountingSource::default());
+        let mut evidence_config = (*test_evidence(vec![
+            test_claim("selected", vec!["guardian-link"], true),
+            test_claim("guardian-link", Vec::new(), true),
+        ]))
+        .clone();
+        evidence_config.allowed_purposes = vec!["test".to_string()];
+        let evidence = Arc::new(evidence_config);
+        let store = EvidenceStore::default();
+        let keys = Arc::new(SelfAttestationRateLimitKeys::new(
+            AuditKeyHasher::unkeyed_dev_only(),
+        ));
+        let runtime = RegistryNotaryRuntime::new_with_self_attestation_rate_keys(Arc::clone(&keys));
+
+        // Mirror of the dependent-target test for the requester binding. The
+        // capability pins the requester value NAT-123 under the civil_registration_id
+        // scheme, but the live request presents the same value under national_id (and
+        // the dependent target matches). Value-only hashing would have collided and
+        // let the request through; binding the (id_type, id) pair fails closed before
+        // any source read.
+        let capability = delegated_attestation_capability_with_id_types(
+            &keys,
+            "civil_registration_id",
+            "NAT-123",
+            "civil_registration_id",
+            "CHILD-123",
+        );
+
+        let err = runtime
+            .evaluate_with_source_capability(
+                evidence,
+                source.clone() as Arc<dyn SourceReader>,
+                &store,
+                &delegated_principal(),
+                capability,
+                delegated_runtime_request(),
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect_err("requester id_type must bind the delegated request context");
+
+        assert!(matches!(
+            err,
+            EvidenceError::SelfAttestationDenied {
+                reason: SelfAttestationDenialCode::DelegatedSubjectNotPermitted
+            }
+        ));
+        assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
     async fn self_attestation_capability_rejects_arbitrary_requested_claim() {
         let source = Arc::new(CountingSource::default());
         let evidence = test_evidence(vec![
