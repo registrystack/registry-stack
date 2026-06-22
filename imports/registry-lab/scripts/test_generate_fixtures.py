@@ -465,6 +465,13 @@ class GenerateFixturesTest(unittest.TestCase):
                         with (civil_dir / filename).open(newline="", encoding="utf-8") as handle:
                             self.assertEqual(list(csv.reader(handle)), self._stringified_rows(expected_rows))
 
+                population_path = self.generator.DATA_DIR / "population" / "population-persons.csv"
+                with population_path.open(newline="", encoding="utf-8") as handle:
+                    self.assertEqual(
+                        list(csv.reader(handle)),
+                        self._stringified_rows(self.generator.POPULATION_PERSONS),
+                    )
+
                 workbook = load_workbook(self.generator.DATA_DIR / "social-protection" / "social-protection.xlsx", data_only=True)
                 for sheet_name, expected_rows in {
                     "GroupMemberships": self.generator.GROUP_MEMBERSHIPS,

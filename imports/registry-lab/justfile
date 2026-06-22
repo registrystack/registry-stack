@@ -1,23 +1,26 @@
 set dotenv-load := true
 set positional-arguments := true
 
-default_relay_src := if path_exists("../registry-relay/Cargo.toml") == "true" { "../registry-relay" } else { "./vendor/registry-relay" }
-default_notary_src := if path_exists("../registry-notary/Cargo.toml") == "true" { "../registry-notary" } else { "./vendor/registry-notary" }
-default_platform_src := if path_exists("../registry-platform/Cargo.toml") == "true" { "../registry-platform" } else { "./vendor/registry-platform" }
-default_manifest_src := if path_exists("../registry-manifest/Cargo.toml") == "true" { "../registry-manifest" } else { "./vendor/registry-manifest" }
+default_relay_src := if path_exists("../registry-relay/Cargo.toml") == "true" { "../registry-relay" } else { if path_exists("../../registry-relay/Cargo.toml") == "true" { "../../registry-relay" } else { "./vendor/registry-relay" } }
+default_notary_src := if path_exists("../registry-notary/Cargo.toml") == "true" { "../registry-notary" } else { if path_exists("../../registry-notary/Cargo.toml") == "true" { "../../registry-notary" } else { "./vendor/registry-notary" } }
+default_platform_src := if path_exists("../registry-platform/Cargo.toml") == "true" { "../registry-platform" } else { if path_exists("../../registry-platform/Cargo.toml") == "true" { "../../registry-platform" } else { "./vendor/registry-platform" } }
+default_manifest_src := if path_exists("../registry-manifest/Cargo.toml") == "true" { "../registry-manifest" } else { if path_exists("../../registry-manifest/Cargo.toml") == "true" { "../../registry-manifest" } else { "./vendor/registry-manifest" } }
+default_esignet_relay_authenticator_src := "./vendor/esignet-relay-authenticator"
 
 relay_src := env_var_or_default("REGISTRY_RELAY_SOURCE_DIR", default_relay_src)
 notary_src := env_var_or_default("REGISTRY_NOTARY_SOURCE_DIR", default_notary_src)
 openfn_notary_src := env_var_or_default("REGISTRY_OPENFN_NOTARY_SOURCE_DIR", notary_src)
 platform_src := env_var_or_default("REGISTRY_PLATFORM_SOURCE_DIR", default_platform_src)
 manifest_src := env_var_or_default("REGISTRY_MANIFEST_REPO", default_manifest_src)
+esignet_relay_authenticator_src := env_var_or_default("ESIGNET_RELAY_AUTHENTICATOR_SOURCE_DIR", default_esignet_relay_authenticator_src)
 # CEL_MAPPING_SOURCE_DIR is the deprecated name for CROSSWALK_SOURCE_DIR; the
 # fallback keeps old operator environments working until they migrate.
 deprecated_crosswalk_src := env_var_or_default("CEL_MAPPING_SOURCE_DIR", "")
 deprecated_crosswalk_exists := if deprecated_crosswalk_src != "" { path_exists(deprecated_crosswalk_src) } else { "false" }
 deprecated_crosswalk_is_old_default := if deprecated_crosswalk_src == "./vendor/cel-mapping" { "true" } else { if deprecated_crosswalk_src == "vendor/cel-mapping" { "true" } else { "false" } }
 deprecated_crosswalk_is_usable := if deprecated_crosswalk_exists == "true" { if deprecated_crosswalk_is_old_default == "true" { "false" } else { "true" } } else { "false" }
-crosswalk_src := env_var_or_default("CROSSWALK_SOURCE_DIR", if deprecated_crosswalk_is_usable == "true" { deprecated_crosswalk_src } else { "./vendor/crosswalk" })
+default_crosswalk_src := if path_exists("../crosswalk/Cargo.toml") == "true" { "../crosswalk" } else { if path_exists("../../crosswalk/Cargo.toml") == "true" { "../../crosswalk" } else { "./vendor/crosswalk" } }
+crosswalk_src := env_var_or_default("CROSSWALK_SOURCE_DIR", if deprecated_crosswalk_is_usable == "true" { deprecated_crosswalk_src } else { default_crosswalk_src })
 relay_features := env_var_or_default("REGISTRY_RELAY_FEATURES", "spdci-api-standards,standards-cel-mapping,ogcapi-edr")
 
 export REGISTRY_RELAY_SOURCE_DIR := relay_src
@@ -29,6 +32,7 @@ export REGISTRY_NOTARY_PLATFORM_SOURCE_DIR := platform_src
 export REGISTRY_MANIFEST_REPO := manifest_src
 export CROSSWALK_SOURCE_DIR := crosswalk_src
 export REGISTRY_RELAY_FEATURES := relay_features
+export ESIGNET_RELAY_AUTHENTICATOR_SOURCE_DIR := esignet_relay_authenticator_src
 
 # List available demo commands.
 default:
@@ -59,9 +63,12 @@ down:
 
 # Start the local MOSIP eSignet stack used by citizen wallet/self-attestation demos.
 esignet-up:
-    docker compose -f compose.esignet-live.yaml up -d
+    @test -f .env || (echo "Run just generate before just esignet-up." >&2; exit 1)
+    docker compose -f compose.yaml up -d population-registry-relay
+    docker buildx build --load --no-cache --build-context esignet_relay_authenticator_src="${ESIGNET_RELAY_AUTHENTICATOR_SOURCE_DIR}" -t registry-lab-esignet-relay:demo -f Dockerfile.esignet-relay .
+    docker compose -f compose.esignet-live.yaml up -d --no-build
 
-# Stop the local MOSIP eSignet stack and remove its demo volumes.
+# Stop the local MOSIP eSignet stack and remove its demo volumes. The shared population Relay is left running.
 esignet-down:
     docker compose -f compose.esignet-live.yaml down -v
 
@@ -212,26 +219,27 @@ citizen-self-attestation:
 
 # Validate hosted Coolify compose artifacts before deployment.
 hosted-validate:
-    CONFIG_REPO_REF="${CONFIG_REPO_REF:-hosted-validation-placeholder}" docker compose -f compose.coolify.yaml config >/dev/null
-    CONFIG_REPO_REF="${CONFIG_REPO_REF:-hosted-validation-placeholder}" REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD="${REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD:-hosted-validation-placeholder}" docker compose -f compose.esignet-hosted.yaml config >/dev/null
+    CONFIG_REPO_REF="${CONFIG_REPO_REF:-hosted-validation-placeholder}" REGISTRY_NOTARY_REPLAY_REDIS_URL=redis://redis:6379/0 docker compose -f compose.coolify.yaml config >/dev/null
+    CONFIG_REPO_REF="${CONFIG_REPO_REF:-hosted-validation-placeholder}" REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD="${REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD:-hosted-validation-placeholder}" REGISTRY_LAB_ESIGNET_RELAY_IMAGE="${REGISTRY_LAB_ESIGNET_RELAY_IMAGE:-ghcr.io/jeremi/registry-lab-esignet-relay@sha256:1111111111111111111111111111111111111111111111111111111111111111}" REGISTRY_LAB_ESIGNET_SEED_IMAGE="${REGISTRY_LAB_ESIGNET_SEED_IMAGE:-ghcr.io/jeremi/registry-lab-esignet-seed@sha256:2222222222222222222222222222222222222222222222222222222222222222}" docker compose -f compose.esignet-hosted.yaml config >/dev/null
     CONFIG_REPO_REF="${CONFIG_REPO_REF:-hosted-validation-placeholder}" WALT_DB_PASSWORD="${WALT_DB_PASSWORD:-hosted-validation-placeholder}" WALT_AUTH_ENCRYPTION_KEY="${WALT_AUTH_ENCRYPTION_KEY:-hosted-validation-placeholder}" WALT_AUTH_SIGN_KEY="${WALT_AUTH_SIGN_KEY:-hosted-validation-placeholder}" WALT_AUTH_TOKEN_KEY="${WALT_AUTH_TOKEN_KEY:-hosted-validation-placeholder}" WALT_KTOR_SIGNING_KEY="${WALT_KTOR_SIGNING_KEY:-hosted-validation-placeholder}" WALT_KTOR_VERIFICATION_KEY="${WALT_KTOR_VERIFICATION_KEY:-hosted-validation-placeholder}" docker compose -f compose.walt-hosted.yaml config >/dev/null
-    CONFIG_REPO_REF="${CONFIG_REPO_REF:-hosted-validation-placeholder}" REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD="${REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD:-hosted-validation-placeholder}" uv run scripts/validate-hosted-deploy.py
+    CONFIG_REPO_REF="${CONFIG_REPO_REF:-hosted-validation-placeholder}" REGISTRY_NOTARY_REPLAY_REDIS_URL=redis://redis:6379/0 REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD="${REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD:-hosted-validation-placeholder}" REGISTRY_LAB_ESIGNET_RELAY_IMAGE="${REGISTRY_LAB_ESIGNET_RELAY_IMAGE:-ghcr.io/jeremi/registry-lab-esignet-relay@sha256:1111111111111111111111111111111111111111111111111111111111111111}" REGISTRY_LAB_ESIGNET_SEED_IMAGE="${REGISTRY_LAB_ESIGNET_SEED_IMAGE:-ghcr.io/jeremi/registry-lab-esignet-seed@sha256:2222222222222222222222222222222222222222222222222222222222222222}" uv run scripts/validate-hosted-deploy.py
 
 # Validate hosted artifacts and require real secret values in the current environment.
 hosted-validate-strict:
     CONFIG_REPO_REF="${CONFIG_REPO_REF:?set CONFIG_REPO_REF}" docker compose -f compose.coolify.yaml config >/dev/null
-    CONFIG_REPO_REF="${CONFIG_REPO_REF:?set CONFIG_REPO_REF}" REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD="${REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD:?set REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD}" docker compose -f compose.esignet-hosted.yaml config >/dev/null
+    CONFIG_REPO_REF="${CONFIG_REPO_REF:?set CONFIG_REPO_REF}" REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD="${REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD:?set REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD}" REGISTRY_LAB_ESIGNET_RELAY_IMAGE="${REGISTRY_LAB_ESIGNET_RELAY_IMAGE:?set REGISTRY_LAB_ESIGNET_RELAY_IMAGE}" REGISTRY_LAB_ESIGNET_SEED_IMAGE="${REGISTRY_LAB_ESIGNET_SEED_IMAGE:?set REGISTRY_LAB_ESIGNET_SEED_IMAGE}" docker compose -f compose.esignet-hosted.yaml config >/dev/null
     CONFIG_REPO_REF="${CONFIG_REPO_REF:?set CONFIG_REPO_REF}" WALT_DB_PASSWORD="${WALT_DB_PASSWORD:?set WALT_DB_PASSWORD}" WALT_AUTH_ENCRYPTION_KEY="${WALT_AUTH_ENCRYPTION_KEY:?set WALT_AUTH_ENCRYPTION_KEY}" WALT_AUTH_SIGN_KEY="${WALT_AUTH_SIGN_KEY:?set WALT_AUTH_SIGN_KEY}" WALT_AUTH_TOKEN_KEY="${WALT_AUTH_TOKEN_KEY:?set WALT_AUTH_TOKEN_KEY}" WALT_KTOR_SIGNING_KEY="${WALT_KTOR_SIGNING_KEY:?set WALT_KTOR_SIGNING_KEY}" WALT_KTOR_VERIFICATION_KEY="${WALT_KTOR_VERIFICATION_KEY:?set WALT_KTOR_VERIFICATION_KEY}" docker compose -f compose.walt-hosted.yaml config >/dev/null
     uv run scripts/validate-hosted-deploy.py --require-secret-values
 
 # Run focused tests for hosted deployment validation.
 hosted-validate-test:
-    python3 scripts/test_validate_hosted_deploy.py
+    python3 -m unittest scripts.test_validate_hosted_deploy scripts.test_esignet_relay_lab
 
 # Run the hosted lab preflight suite before opening or merging a deployment PR.
 hosted-preflight:
     just hosted-validate
     python3 scripts/test_validate_hosted_deploy.py
+    python3 scripts/test_esignet_relay_lab.py
     python3 scripts/test_lab_homepage_server.py
     python3 scripts/test_static_metadata_server.py
     python3 scripts/test_dhis2_programme_vc_config.py
@@ -308,7 +316,9 @@ citizen-self-attestation-esignet-code:
 citizen-self-attestation-esignet-token:
     @test -n "${ESIGNET_CITIZEN_ACCESS_TOKEN:-}" || (echo "Set ESIGNET_CITIZEN_ACCESS_TOKEN." >&2; exit 1)
     @test -n "${ESIGNET_CITIZEN_ID_TOKEN:-}" || (echo "Set ESIGNET_CITIZEN_ID_TOKEN." >&2; exit 1)
-    @ESIGNET_ISSUER=http://localhost:8088 \
+    @ESIGNET_CITIZEN_ACCESS_TOKEN="${ESIGNET_CITIZEN_ACCESS_TOKEN}" \
+    ESIGNET_CITIZEN_ID_TOKEN="${ESIGNET_CITIZEN_ID_TOKEN}" \
+    ESIGNET_ISSUER=http://localhost:8088 \
     ESIGNET_DISCOVERY_URL=http://localhost:8088/v1/esignet/oidc/.well-known/openid-configuration \
     ESIGNET_AUTHORIZATION_URL=http://localhost:3000/authorize \
     ESIGNET_JWKS_URI=http://localhost:8088/v1/esignet/oauth/.well-known/jwks.json \

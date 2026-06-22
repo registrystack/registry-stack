@@ -1,0 +1,83 @@
+# SPDX-License-Identifier: Apache-2.0
+
+schema_version: registry-manifest/v1
+catalog:
+  id: decentralized-population-registry
+  base_url: http://population-registry-relay:8080
+  title: Population Registry Relay (Decentralized Demo)
+  description: Current civil identity/account projection derived from civil registration events for identity verification demos.
+  publisher:
+    name: Population Registry Authority (Demo)
+  participant_id: did:web:population-registry.demo.example.gov
+  standards:
+    dcat: '3.0'
+    shacl: '1.1'
+    json_schema: 2020-12
+  application_profiles:
+    - id: bregdcat-ap
+      version: '3.0'
+vocabularies:
+  demo: https://demo.example.gov/vocab/
+federation:
+  node_id: did:web:population-registry.demo.example.gov
+  issuer: https://population-registry.demo.example.gov
+  jwks_uri: https://population-registry.demo.example.gov/.well-known/jwks.json
+  federation_api: https://population-registry.demo.example.gov/federation
+  supported_protocol_versions:
+    - registry-notary-federation/v0.1
+datasets:
+  - id: population_registry
+    title: Population Registry
+    description: Current person/account projection used for civil eSignet identity verification.
+    owner: Population Registry Authority
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: daily
+    policy:
+      uid: https://demo.example.gov/policies/population-identity-release-purpose
+      assigner: did:web:population-registry.demo.example.gov
+      permissions:
+        - action: odrl:use
+          constraints:
+            - left_operand: odrl:purpose
+              operator: odrl:isA
+              right_operand:
+                iri: https://demo.example.gov/purpose/esignet-identity-verification
+    entities:
+      - name: person
+        title: Population Registry Person
+        description: Current person record for identity account lookup and minimized UserInfo release.
+        concept_uri: demo:Person
+        identifiers:
+          - name: id
+            kind: primary
+          - name: national_id
+            kind: national_id
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: national_id
+            type: string
+            required: true
+          - name: given_name
+            type: string
+            required: true
+          - name: family_name
+            type: string
+            required: true
+          - name: birth_date
+            type: date
+            required: true
+          - name: gender
+            type: string
+            required: true
+          - name: district
+            type: string
+            required: true
+          - name: identity_status
+            type: string
+            required: true
+          - name: alive
+            type: boolean
+            required: true

@@ -126,6 +126,34 @@ CIVIL_IDENTIFIERS = [
     ],
 ]
 
+POPULATION_PERSONS = [
+    [
+        "person_id",
+        "national_id",
+        "given_name",
+        "family_name",
+        "birth_date",
+        "gender",
+        "district",
+        "identity_status",
+        "alive",
+    ],
+    *[
+        [
+            row[0],
+            row[1],
+            row[2],
+            row[3],
+            row[4],
+            row[5],
+            row[6],
+            "active" if row[9] == "false" else "deceased",
+            "true" if row[9] == "false" else "false",
+        ]
+        for row in CIVIL_PERSON_DETAILS[1:]
+    ],
+]
+
 BIRTH_EVENTS = [
     [
         "event_id",
@@ -765,6 +793,11 @@ def write_civil_csv() -> None:
         write_csv(civil_dir / filename, rows)
 
 
+def write_population_csv() -> None:
+    population_dir = DATA_DIR / "population"
+    write_csv(population_dir / "population-persons.csv", POPULATION_PERSONS)
+
+
 def canonicalize_xlsx(raw: bytes) -> bytes:
     with zipfile.ZipFile(io.BytesIO(raw), "r") as src:
         buffer = io.BytesIO()
@@ -841,6 +874,7 @@ def write_health_parquet() -> None:
 def main() -> int:
     validate_fixture_coverage()
     write_civil_csv()
+    write_population_csv()
     write_social_xlsx()
     write_health_parquet()
     print(f"Generated decentralized demo fixtures under {DATA_DIR}")

@@ -943,6 +943,14 @@ datasets:
         issues = self._validate(compose, self._valid_esignet())
         self.assertIssue(issues, "missing-service")
 
+    def test_rejects_missing_required_esignet_bootstrap_services(self) -> None:
+        for service in ("config-loader", "esignet-seed"):
+            with self.subTest(service=service):
+                esignet = self._valid_esignet()
+                del esignet["services"][service]
+                issues = self._validate(self._valid_registry_lab(), esignet)
+                self.assertIssue(issues, "missing-service")
+
     def test_rejects_missing_civil_alive_notary_wiring(self) -> None:
         compose = self._valid_registry_lab()
         del compose["services"]["lab-homepage"]["environment"]["CIVIL_EVIDENCE_URL"]
@@ -1157,13 +1165,26 @@ evidence:
     def test_image_pin_workflow_validates_digest_inputs_and_smokes(self) -> None:
         workflow = IMAGE_PIN_WORKFLOW_PATH.read_text(encoding="utf-8")
         self.assertIn("validate_image REGISTRY_RELAY_IMAGE", workflow)
+        self.assertIn("validate_image REGISTRY_LAB_ESIGNET_RELAY_IMAGE", workflow)
+        self.assertIn("validate_image REGISTRY_LAB_ESIGNET_SEED_IMAGE", workflow)
         self.assertIn("@sha256:[0-9a-f]{64}", workflow)
+        self.assertIn("COOLIFY_HOSTED_ESIGNET_APP_UUID", workflow)
         self.assertIn("COOLIFY_HOSTED_SOCIAL_APP_UUID", workflow)
         self.assertIn("COOLIFY_HOSTED_AGRI_APP_UUID", workflow)
+        self.assertIn('patch_env "${COOLIFY_HOSTED_ESIGNET_APP_UUID}" esignet REGISTRY_LAB_ESIGNET_RELAY_IMAGE', workflow)
+        self.assertIn('patch_env "${COOLIFY_HOSTED_ESIGNET_APP_UUID}" esignet REGISTRY_LAB_ESIGNET_SEED_IMAGE', workflow)
         self.assertIn('patch_product_images "${COOLIFY_HOSTED_SOCIAL_APP_UUID}" social', workflow)
         self.assertIn('patch_product_images "${COOLIFY_HOSTED_AGRI_APP_UUID}" agri', workflow)
         self.assertIn("/deployments/${deployment_uuid}", workflow)
         self.assertIn("python3 scripts/hosted-smoke.py", workflow)
+
+    def test_build_images_workflow_publishes_esignet_images(self) -> None:
+        workflow = (SCRIPT_DIR.parent / ".github" / "workflows" / "build-images.yml").read_text(encoding="utf-8")
+        self.assertIn("Dockerfile.esignet-relay", workflow)
+        self.assertIn("Dockerfile.esignet-seed", workflow)
+        self.assertIn("esignet_relay_authenticator_src=vendor/esignet-relay-authenticator", workflow)
+        self.assertIn("REGISTRY_LAB_ESIGNET_RELAY_IMAGE=ghcr.io/${owner}/registry-lab-esignet-relay@", workflow)
+        self.assertIn("REGISTRY_LAB_ESIGNET_SEED_IMAGE=ghcr.io/${owner}/registry-lab-esignet-seed@", workflow)
 
     def test_hosted_workflow_paths_cover_deployment_automation(self) -> None:
         workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
@@ -1635,6 +1656,7 @@ evidence:
             "CIVIL_EVIDENCE_CLIENT_BEARER": "${CIVIL_EVIDENCE_CLIENT_BEARER:-}",
             "CIVIL_EVIDENCE_CLIENT_BEARER_HASH": "${CIVIL_EVIDENCE_CLIENT_BEARER_HASH:-}",
             "CIVIL_EVIDENCE_SOURCE_RAW": "${CIVIL_EVIDENCE_SOURCE_RAW:-}",
+            "CIVIL_ESIGNET_IDENTITY_RELEASE_RAW": "${CIVIL_ESIGNET_IDENTITY_RELEASE_RAW:-}",
             "CIVIL_METADATA_CLIENT_RAW": "${CIVIL_METADATA_CLIENT_RAW:-}",
             "CIVIL_EVIDENCE_ONLY_RAW": "${CIVIL_EVIDENCE_ONLY_RAW:-}",
             "CIVIL_ROW_READER_RAW": "${CIVIL_ROW_READER_RAW:-}",
@@ -1669,6 +1691,7 @@ evidence:
             "REGISTRY_RELAY_AUDIT_HASH_SECRET": "${REGISTRY_RELAY_AUDIT_HASH_SECRET:-}",
             "CIVIL_METADATA_CLIENT_HASH": "${CIVIL_METADATA_CLIENT_HASH:-}",
             "CIVIL_EVIDENCE_SOURCE_HASH": "${CIVIL_EVIDENCE_SOURCE_HASH:-}",
+            "CIVIL_ESIGNET_IDENTITY_RELEASE_HASH": "${CIVIL_ESIGNET_IDENTITY_RELEASE_HASH:-}",
             "CIVIL_EVIDENCE_ONLY_HASH": "${CIVIL_EVIDENCE_ONLY_HASH:-}",
             "CIVIL_ROW_READER_HASH": "${CIVIL_ROW_READER_HASH:-}",
             "SHARED_CIVIL_EVIDENCE_SOURCE_HASH": "${SHARED_CIVIL_EVIDENCE_SOURCE_HASH:-}",
@@ -1952,19 +1975,23 @@ cp -a /tmp/repo/scripts/lab_homepage_static /out/static-scripts/
                     },
                 },
                 "redis": {"image": "redis:6.0"},
-                "mock-identity-system": {
-                    "image": "mosipid/mock-identity-system:0.13.0",
-                    "environment": {"MOSIP_ESIGNET_HOST": f"esignet.{lab}"},
-                },
                 "esignet": {
-                    "image": "mosipid/esignet-with-plugins:1.8.0",
+                    "image": "${REGISTRY_LAB_ESIGNET_RELAY_IMAGE:-ghcr.io/jeremi/registry-lab-esignet-relay@sha256:" + ("1" * 64) + "}",
                     "expose": ["8088"],
                     "environment": {
                         "MOSIP_ESIGNET_PUBLIC_URL": f"https://esignet.{lab}",
                         "MOSIP_ESIGNET_UI_PUBLIC_URL": f"https://esignet-ui.{lab}",
                         "MOSIP_ESIGNET_DISCOVERY_ISSUER_ID": f"https://esignet.{lab}",
                         "MOSIP_ESIGNET_DISCOVERY_KEY_VALUES": "{'issuer':'https://esignet.lab.registrystack.org'}",
-                        "MOSIP_ESIGNET_MOCK_DOMAIN_URL": "http://mock-identity-system:8082",
+                        "MOSIP_ESIGNET_INTEGRATION_AUTHENTICATOR": "RelayAuthenticationService",
+                        "MOSIP_ESIGNET_INTEGRATION_SCAN_BASE_PACKAGE": "io.mosip.esignet.mock.integration,io.registry.esignet.relay",
+                        "REGISTRY_RELAY_BASE_URL": f"https://civil-relay.{lab}",
+                        "REGISTRY_RELAY_AUTH_BEARER_TOKEN": "${CIVIL_ESIGNET_IDENTITY_RELEASE_RAW:-replace-in-coolify}",
+                        "REGISTRY_ESIGNET_KYC_TOKEN_HMAC_SECRET": "${REGISTRY_ESIGNET_KYC_TOKEN_SECRET:-replace-in-coolify-kyc-token-secret-32}",
+                        "REGISTRY_ESIGNET_PSUT_HMAC_SECRET": "${REGISTRY_ESIGNET_PSUT_SECRET:-replace-in-coolify-psut-secret-32chars}",
+                        "REGISTRY_ESIGNET_USER_INFO_ISSUER": f"https://esignet.{lab}",
+                        "REGISTRY_ESIGNET_KYC_SIGNING_KEYSTORE_PASSWORD": "${REGISTRY_ESIGNET_KYC_KEYSTORE_PASSWORD:-replace-in-coolify}",
+                        "REGISTRY_ESIGNET_KYC_SIGNING_KEY_PASSWORD": "${REGISTRY_ESIGNET_KYC_KEYSTORE_PASSWORD:-replace-in-coolify}",
                     },
                     "healthcheck": {
                         "test": [
@@ -1983,7 +2010,7 @@ cp -a /tmp/repo/scripts/lab_homepage_static /out/static-scripts/
                     },
                 },
                 "esignet-seed": {
-                    "image": "python:3.12-alpine",
+                    "image": "${REGISTRY_LAB_ESIGNET_SEED_IMAGE:-ghcr.io/jeremi/registry-lab-esignet-seed@sha256:" + ("2" * 64) + "}",
                     "environment": {
                         "REGISTRY_LAB_ESIGNET_CLIENT_REDIRECT_URIS_JSON": "${REGISTRY_LAB_ESIGNET_CLIENT_REDIRECT_URIS_JSON:-}",
                     },

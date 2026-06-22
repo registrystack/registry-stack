@@ -28,7 +28,7 @@ auth:
       fingerprint:
         provider: env
         name: OPENCRVS_EVIDENCE_DENY_ASSURANCE_TOKEN_HASH
-        commitment: sha256:a112e10b3591738c2e7fca484a0414e572ff492667d5528573d793e13af656e6
+        commitment: sha256:2d7ed7ef7a3095414df08a857fdd3f18f6f0d984e6b0ad9c8998ca3918aa0f34
       scopes:
         - civil_registry:evidence_verification
       authorization_details:
@@ -42,7 +42,7 @@ auth:
       fingerprint:
         provider: env
         name: OPENCRVS_EVIDENCE_DENY_JURISDICTION_TOKEN_HASH
-        commitment: sha256:6e66c00a61403d7c4c4fe6d997e9ab28e4da85fffe2c5b5f5f4c2485323a8659
+        commitment: sha256:24d5f8875d7db37e8735c60fc10a405324d291cf62c0e5a3d0065b6392dd2ad4
       scopes:
         - civil_registry:evidence_verification
       authorization_details:
@@ -56,7 +56,7 @@ auth:
       fingerprint:
         provider: env
         name: OPENCRVS_EVIDENCE_DENY_LEGAL_BASIS_TOKEN_HASH
-        commitment: sha256:f134d8669b6e4c179c151e491d35cfe8b6c3625cb97dd07f50721177bf262bfa
+        commitment: sha256:2e201b51677467f83d8d80cc73bc93cdbb8ab52cc000f70debc78bf2e671d30a
       scopes:
         - civil_registry:evidence_verification
       authorization_details:
@@ -69,7 +69,7 @@ auth:
       fingerprint:
         provider: env
         name: OPENCRVS_EVIDENCE_DENY_CONSENT_TOKEN_HASH
-        commitment: sha256:6276285e525fdeb800ce20873919805766bfd0ab5498f717e26e3556147dcfff
+        commitment: sha256:ede1434e48c3284bc2978cb9722f861fb6e2bbd8c2ad60ee0e1f41e7dedd5e75
       scopes:
         - civil_registry:evidence_verification
       authorization_details:

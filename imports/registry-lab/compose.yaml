@@ -159,6 +159,16 @@ services:
       - ./data/civil:/demo/data/civil:ro
       - civil-registry-cache:/var/lib/registry-relay/cache
 
+  population-registry-relay:
+    <<: *relay-common
+    command: ["--config", "/etc/registry-relay/population-registry-relay.yaml"]
+    ports:
+      - "4315:8080"
+    volumes:
+      - ./config/relay:/etc/registry-relay:ro
+      - ./data/population:/demo/data/population:ro
+      - population-registry-cache:/var/lib/registry-relay/cache
+
   social-protection-registry-relay:
     <<: *relay-common
     command: ["--config", "/etc/registry-relay/social-protection-registry-relay.yaml"]
@@ -577,6 +587,7 @@ volumes:
   redis-data:
   zitadel-seed:
   civil-registry-cache:
+  population-registry-cache:
   social-protection-registry-cache:
   health-registry-cache:
   agri-registry-cache:

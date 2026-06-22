@@ -12,6 +12,12 @@ on:
       registry_notary_openfn_sidecar_image:
         description: "Digest-pinned REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE value"
         required: true
+      registry_lab_esignet_relay_image:
+        description: "Digest-pinned REGISTRY_LAB_ESIGNET_RELAY_IMAGE value"
+        required: true
+      registry_lab_esignet_seed_image:
+        description: "Digest-pinned REGISTRY_LAB_ESIGNET_SEED_IMAGE value"
+        required: true
 
 permissions:
   contents: read
@@ -28,6 +34,8 @@ jobs:
           REGISTRY_RELAY_IMAGE: ${{ inputs.registry_relay_image }}
           REGISTRY_NOTARY_IMAGE: ${{ inputs.registry_notary_image }}
           REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE: ${{ inputs.registry_notary_openfn_sidecar_image }}
+          REGISTRY_LAB_ESIGNET_RELAY_IMAGE: ${{ inputs.registry_lab_esignet_relay_image }}
+          REGISTRY_LAB_ESIGNET_SEED_IMAGE: ${{ inputs.registry_lab_esignet_seed_image }}
         run: |
           set -euo pipefail
 
@@ -43,17 +51,22 @@ jobs:
           validate_image REGISTRY_RELAY_IMAGE "${REGISTRY_RELAY_IMAGE}"
           validate_image REGISTRY_NOTARY_IMAGE "${REGISTRY_NOTARY_IMAGE}"
           validate_image REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE "${REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE}"
+          validate_image REGISTRY_LAB_ESIGNET_RELAY_IMAGE "${REGISTRY_LAB_ESIGNET_RELAY_IMAGE}"
+          validate_image REGISTRY_LAB_ESIGNET_SEED_IMAGE "${REGISTRY_LAB_ESIGNET_SEED_IMAGE}"
 
       - name: Patch Coolify image env vars
         env:
           COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
           COOLIFY_API_BASE_URL: ${{ vars.COOLIFY_API_BASE_URL }}
           COOLIFY_REGISTRY_LAB_APP_UUID: ${{ vars.COOLIFY_REGISTRY_LAB_APP_UUID }}
+          COOLIFY_HOSTED_ESIGNET_APP_UUID: ${{ vars.COOLIFY_HOSTED_ESIGNET_APP_UUID }}
           COOLIFY_HOSTED_SOCIAL_APP_UUID: ${{ vars.COOLIFY_HOSTED_SOCIAL_APP_UUID }}
           COOLIFY_HOSTED_AGRI_APP_UUID: ${{ vars.COOLIFY_HOSTED_AGRI_APP_UUID }}
           REGISTRY_RELAY_IMAGE: ${{ inputs.registry_relay_image }}
           REGISTRY_NOTARY_IMAGE: ${{ inputs.registry_notary_image }}
           REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE: ${{ inputs.registry_notary_openfn_sidecar_image }}
+          REGISTRY_LAB_ESIGNET_RELAY_IMAGE: ${{ inputs.registry_lab_esignet_relay_image }}
+          REGISTRY_LAB_ESIGNET_SEED_IMAGE: ${{ inputs.registry_lab_esignet_seed_image }}
         run: |
           set -euo pipefail
 
@@ -62,7 +75,7 @@ jobs:
             exit 1
           fi
           missing=0
-          for name in COOLIFY_API_BASE_URL COOLIFY_REGISTRY_LAB_APP_UUID COOLIFY_HOSTED_SOCIAL_APP_UUID COOLIFY_HOSTED_AGRI_APP_UUID; do
+          for name in COOLIFY_API_BASE_URL COOLIFY_REGISTRY_LAB_APP_UUID COOLIFY_HOSTED_ESIGNET_APP_UUID COOLIFY_HOSTED_SOCIAL_APP_UUID COOLIFY_HOSTED_AGRI_APP_UUID; do
             if [ -z "${!name:-}" ]; then
               echo "::error::${name} is not configured."
               missing=1
@@ -97,6 +110,8 @@ jobs:
 
           patch_product_images "${COOLIFY_REGISTRY_LAB_APP_UUID}" monolith
           patch_env "${COOLIFY_REGISTRY_LAB_APP_UUID}" monolith REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE "${REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE}"
+          patch_env "${COOLIFY_HOSTED_ESIGNET_APP_UUID}" esignet REGISTRY_LAB_ESIGNET_RELAY_IMAGE "${REGISTRY_LAB_ESIGNET_RELAY_IMAGE}"
+          patch_env "${COOLIFY_HOSTED_ESIGNET_APP_UUID}" esignet REGISTRY_LAB_ESIGNET_SEED_IMAGE "${REGISTRY_LAB_ESIGNET_SEED_IMAGE}"
           patch_product_images "${COOLIFY_HOSTED_SOCIAL_APP_UUID}" social
           patch_product_images "${COOLIFY_HOSTED_AGRI_APP_UUID}" agri
 
@@ -106,6 +121,7 @@ jobs:
           COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
           COOLIFY_API_BASE_URL: ${{ vars.COOLIFY_API_BASE_URL }}
           COOLIFY_REGISTRY_LAB_APP_UUID: ${{ vars.COOLIFY_REGISTRY_LAB_APP_UUID }}
+          COOLIFY_HOSTED_ESIGNET_APP_UUID: ${{ vars.COOLIFY_HOSTED_ESIGNET_APP_UUID }}
           COOLIFY_HOSTED_SOCIAL_APP_UUID: ${{ vars.COOLIFY_HOSTED_SOCIAL_APP_UUID }}
           COOLIFY_HOSTED_AGRI_APP_UUID: ${{ vars.COOLIFY_HOSTED_AGRI_APP_UUID }}
         run: |
@@ -114,6 +130,7 @@ jobs:
           deployments_file="$(mktemp)"
           apps=(
             "${COOLIFY_REGISTRY_LAB_APP_UUID}|monolith"
+            "${COOLIFY_HOSTED_ESIGNET_APP_UUID}|esignet"
             "${COOLIFY_HOSTED_SOCIAL_APP_UUID}|social"
             "${COOLIFY_HOSTED_AGRI_APP_UUID}|agri"
           )

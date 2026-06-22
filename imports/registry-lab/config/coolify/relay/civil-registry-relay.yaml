@@ -15,7 +15,7 @@ config_trust:
 metadata:
   source:
     path: civil-registry-relay.metadata.yaml
-    digest: sha256:e50609d05aeeef6f051bad168262537e3f573f99e54e24154058b3609352c13d
+    digest: sha256:de2c383891bf77d45ea7ad5fb1818cc1743ea969cb93993a0017881ece9418de
   ecosystem_binding:
     id: combined-support-eligibility/v1
     version: v1
@@ -65,6 +65,14 @@ auth:
       scopes:
         - civil_registry:metadata
         - civil_registry:rows
+    - id: esignet_identity_release
+      fingerprint:
+        provider: env
+        name: CIVIL_ESIGNET_IDENTITY_RELEASE_HASH
+        commitment: sha256:0000000000000000000000000000000000000000000000000000000000000000
+      scopes:
+        - civil_registry:metadata
+        - civil_registry:identity_release
     - id: shared_evidence_source
       fingerprint:
         provider: env
@@ -525,6 +533,54 @@ datasets:
               ops: [eq]
             - field: deceased
               ops: [eq]
+        attribute_release_profiles:
+          - id: esignet-civil-userinfo
+            version: v1
+            title: eSignet civil UserInfo
+            description: Minimized civil identity claims for the relay-backed eSignet authenticator in hosted labs.
+            purpose: https://demo.example.gov/purpose/esignet-identity-verification
+            release_scope: civil_registry:identity_release
+            subject:
+              input: individual_id
+              source_field: national_id
+              id_type: national_id
+              cardinality: one
+            release_conditions:
+              expression:
+                cel: "source.deceased == false"
+              denied_code: subject_inactive
+            claims:
+              - name: individual_id
+                source_field: national_id
+                required: true
+                sensitivity: direct_identifier
+                shareable: false
+              - name: name
+                expression:
+                  cel: "source.given_name + ' ' + source.surname"
+                required: true
+                sensitivity: personal
+              - name: given_name
+                source_field: given_name
+                required: true
+                sensitivity: personal
+              - name: family_name
+                source_field: surname
+                required: true
+                sensitivity: personal
+              - name: birthdate
+                source_field: birth_date
+                required: true
+                sensitivity: personal
+                format: date
+              - name: gender
+                source_field: sex
+                required: false
+                sensitivity: personal
+              - name: address.region
+                source_field: district
+                required: false
+                sensitivity: personal
       - name: civil_identifier
         title: Civil Identifier
         description: Identifier records linked to civil persons.
