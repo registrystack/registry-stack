@@ -303,7 +303,7 @@ def _merge_notary_claims(service: dict[str, Any], discovered_claims: list[dict[s
             item["target_inputs"] = deepcopy(claim["target_inputs"])
         elif fallback.get("target_inputs"):
             item["target_inputs"] = deepcopy(fallback["target_inputs"])
-        for key in ("default_subject", "default_identifier_scheme"):
+        for key in ("default_subject", "default_identifier_scheme", "default_purpose"):
             if fallback.get(key):
                 item[key] = fallback[key]
         merged[claim_id] = item

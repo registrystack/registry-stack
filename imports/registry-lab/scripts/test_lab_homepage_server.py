@@ -465,6 +465,8 @@ class GroupCredentialsTest(unittest.TestCase):
             credentials["opencrvs-api-key"]["default_purpose"],
             "https://demo.example.gov/purpose/opencrvs-dci-lab",
         )
+        self.assertEqual(credentials["opencrvs-api-key"]["default_identifier_scheme"], "UIN")
+        self.assertEqual(credentials["opencrvs-api-key"]["default_subject"], "9658342302")
 
 
 class ScenarioPayloadTest(unittest.TestCase):
@@ -1363,6 +1365,11 @@ class ExplorerPageHtmlTest(unittest.TestCase):
         self.assertIn("target_inputs", CLAIMS_EXPLORER_JS)
         self.assertIn("target.identifiers", CLAIMS_EXPLORER_JS)
         self.assertIn("payload.target = targetFromInputs(group)", CLAIMS_EXPLORER_JS)
+        self.assertIn("state.purpose = claim.default_purpose || state.purpose", CLAIMS_EXPLORER_JS)
+        self.assertIn(
+            "state.purpose = claim.default_purpose || selectedServiceSummary().default_purpose || state.purpose",
+            CLAIMS_EXPLORER_JS,
+        )
 
     def test_claims_explorer_js_reads_target_values_from_state_during_render(self) -> None:
         self.assertIn("return state.targetValues[key] ?? defaultTargetValue(input)", CLAIMS_EXPLORER_JS)
@@ -1450,9 +1457,14 @@ class ExplorerApiPayloadTest(unittest.TestCase):
         self.assertEqual(dhis2_titles["dhis2-child-program-active"], "Health Programme Participation Attestation")
 
         opencrvs = server.claims_explorer.claim_metadata_payload(self.config, "opencrvs-notary")["claim_service"]
+        self.assertEqual(opencrvs["default_purpose"], "https://demo.example.gov/purpose/opencrvs-dci-lab")
+        self.assertEqual(opencrvs["default_identifier_scheme"], "UIN")
+        self.assertEqual(opencrvs["default_subject"], "9658342302")
         opencrvs_titles = {claim["id"]: claim["title"] for claim in opencrvs["claims"]}
         self.assertEqual(opencrvs_titles["opencrvs-birth-record-exists"], "Birth Registration Attestation")
         self.assertEqual(opencrvs_titles["opencrvs-age-band"], "Age Eligibility Attestation")
+        opencrvs_claims = {claim["id"]: claim for claim in opencrvs["claims"]}
+        self.assertEqual(opencrvs_claims["opencrvs-age-band"]["source"]["lookup_field"], "UIN")
 
         civil_claims = {claim["id"]: claim for claim in civil["claims"]}
         self.assertEqual(civil_claims["birth.certificate_summary"]["title"], "Birth certificate summary")
@@ -1461,6 +1473,14 @@ class ExplorerApiPayloadTest(unittest.TestCase):
             "Birth Evidence by demographics",
         )
         self.assertEqual(civil_claims["marriage.certificate_summary"]["title"], "Marriage certificate summary")
+        self.assertEqual(
+            civil_claims["birth.certificate_summary_by_demographics"]["default_purpose"],
+            "https://demo.example.gov/purpose/civil-certificate-evidence",
+        )
+        self.assertEqual(
+            civil_claims["marriage.certificate_summary"]["default_purpose"],
+            "https://demo.example.gov/purpose/civil-certificate-evidence",
+        )
         self.assertEqual(
             civil_claims["birth.certificate_summary"]["target_inputs"][0]["groups"][0]["inputs"][0]["path"],
             "target.identifiers.registration_number",
@@ -1475,6 +1495,50 @@ class ExplorerApiPayloadTest(unittest.TestCase):
         self.assertEqual(agriculture["default_subject"], "FARMER-1001")
         agri_claims = {claim["id"]: claim for claim in agriculture["claims"]}
         self.assertEqual(agri_claims["eligible-for-climate-smart-input-voucher"]["source"]["lookup_field"], "farmer_id")
+        self.assertEqual(agri_claims["eligible-for-livestock-movement-permit"]["default_identifier_scheme"], "herd_id")
+        self.assertEqual(
+            agri_claims["eligible-for-livestock-movement-permit"]["default_purpose"],
+            "https://demo.example.gov/purpose/nagdi/livestock-movement-permit-review",
+        )
+
+    def test_opencrvs_evaluation_request_uses_dci_purpose_and_uin(self) -> None:
+        request = server.claims_explorer.build_evaluation_request(
+            self.config,
+            "opencrvs-notary",
+            "opencrvs-age-band",
+            subject="9658342302",
+            identifier_scheme="UIN",
+            disclosure="value",
+            result_format=server.claims_explorer.CLAIM_RESULT_FORMAT,
+            purpose="https://demo.example.gov/purpose/opencrvs-dci-lab",
+        )
+
+        self.assertEqual(
+            request["request_source"]["headers"]["Data-Purpose"],
+            "https://demo.example.gov/purpose/opencrvs-dci-lab",
+        )
+        self.assertEqual(
+            request["request_source"]["body"]["target"],
+            {"type": "Person", "identifiers": [{"scheme": "UIN", "value": "9658342302"}]},
+        )
+
+    def test_civil_certificate_claim_defaults_to_certificate_purpose(self) -> None:
+        request = server.claims_explorer.build_evaluation_request(
+            self.config,
+            "civil-notary",
+            "birth.certificate_summary_by_demographics",
+            subject="metadata-target",
+            identifier_scheme="target_inputs",
+            disclosure="value",
+            result_format=server.claims_explorer.CLAIM_RESULT_FORMAT,
+            purpose="",
+            target={"type": "Person", "attributes": {"given_name": "Rafael", "surname": "Aquino", "birth_date": "2019-01-15"}},
+        )
+
+        self.assertEqual(
+            request["request_source"]["headers"]["Data-Purpose"],
+            "https://demo.example.gov/purpose/civil-certificate-evidence",
+        )
 
     def test_registry_metadata_tracks_pr65_relay_entities(self) -> None:
         civil = server.registry_explorer.registry_metadata_payload(self.config, "civil")["registry"]

@@ -14,6 +14,7 @@ from .common import (
     PURPOSE,
     ExplorerInputError,
     auth_header_pair,
+    credential_by_id,
     credential_display,
     credential_for_execution,
     display_auth_header_pair,
@@ -48,6 +49,10 @@ DISCLOSURE_LABELS = {
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CivilRow = dict[str, str]
+CERTIFICATE_EVIDENCE_PURPOSE = "https://demo.example.gov/purpose/civil-certificate-evidence"
+OPENCRVS_DCI_PURPOSE = "https://demo.example.gov/purpose/opencrvs-dci-lab"
+AGRI_MARKET_SIZING_PURPOSE = "https://demo.example.gov/purpose/nagdi/agricultural-market-sizing"
+AGRI_LIVESTOCK_PURPOSE = "https://demo.example.gov/purpose/nagdi/livestock-movement-permit-review"
 
 
 def _source(registry: str, dataset: str, entity: str, lookup_field: str, required_scope: str, connector_type: str) -> dict[str, str]:
@@ -72,6 +77,7 @@ def _claim(
     target_inputs: list[dict[str, Any]] | None = None,
     default_subject: str = "",
     default_identifier_scheme: str = "",
+    default_purpose: str = "",
 ) -> dict[str, Any]:
     default_disclosure = "predicate" if "predicate" in disclosures else disclosures[0]
     claim = {
@@ -90,6 +96,8 @@ def _claim(
         claim["default_subject"] = default_subject
     if default_identifier_scheme:
         claim["default_identifier_scheme"] = default_identifier_scheme
+    if default_purpose:
+        claim["default_purpose"] = default_purpose
     return claim
 
 
@@ -189,6 +197,7 @@ CLAIM_SERVICES: dict[str, dict[str, Any]] = {
                 target_inputs=REGISTRATION_NUMBER_INPUTS,
                 default_subject="B-2016-N-1001",
                 default_identifier_scheme="registration_number",
+                default_purpose=CERTIFICATE_EVIDENCE_PURPOSE,
             ),
             "birth.event_exists": _claim(
                 "birth.event_exists",
@@ -199,6 +208,7 @@ CLAIM_SERVICES: dict[str, dict[str, Any]] = {
                 target_inputs=REGISTRATION_NUMBER_INPUTS,
                 default_subject="B-2016-N-1001",
                 default_identifier_scheme="registration_number",
+                default_purpose=CERTIFICATE_EVIDENCE_PURPOSE,
             ),
             "birth.certificate_summary_by_demographics": _claim(
                 "birth.certificate_summary_by_demographics",
@@ -208,6 +218,7 @@ CLAIM_SERVICES: dict[str, dict[str, Any]] = {
                 _source("Civil Registry", "civil_registry", "civil_person_detail", "given_name+surname+birth_date", "civil_registry:evidence_verification", "registry_data_api"),
                 value_type="object",
                 target_inputs=BIRTH_DEMOGRAPHIC_INPUTS,
+                default_purpose=CERTIFICATE_EVIDENCE_PURPOSE,
             ),
             "marriage.certificate_summary": _claim(
                 "marriage.certificate_summary",
@@ -218,6 +229,7 @@ CLAIM_SERVICES: dict[str, dict[str, Any]] = {
                 target_inputs=MARRIAGE_REGISTRATION_NUMBER_INPUTS,
                 default_subject="MR-2026-2001",
                 default_identifier_scheme="registration_number",
+                default_purpose=CERTIFICATE_EVIDENCE_PURPOSE,
             ),
             "marriage.event_exists": _claim(
                 "marriage.event_exists",
@@ -228,6 +240,7 @@ CLAIM_SERVICES: dict[str, dict[str, Any]] = {
                 target_inputs=MARRIAGE_REGISTRATION_NUMBER_INPUTS,
                 default_subject="MR-2026-2001",
                 default_identifier_scheme="registration_number",
+                default_purpose=CERTIFICATE_EVIDENCE_PURPOSE,
             ),
         },
     },
@@ -362,16 +375,16 @@ CLAIM_SERVICES: dict[str, dict[str, Any]] = {
         "service_id": "opencrvs-notary",
         "base_url": "https://opencrvs-notary.lab.registrystack.org",
         "client_credential_id": "opencrvs-api-key",
-        "default_subject": "BIRTH-1001",
-        "default_identifier_scheme": "birth_registration_id",
-        "default_purpose": PURPOSE,
+        "default_subject": "9658342302",
+        "default_identifier_scheme": "UIN",
+        "default_purpose": OPENCRVS_DCI_PURPOSE,
         "related_registry_ids": ["civil"],
         "availability": "hosted",
         "default_claim": "opencrvs-birth-record-exists",
         "claims": {
-            "opencrvs-birth-record-exists": _claim("opencrvs-birth-record-exists", "Birth Registration Attestation", ["predicate", "redacted"], ["record_id"], _source("OpenCRVS", "civil_registry", "birth_registration", "registration_id", "civil_registry:evidence_verification", "dci")),
-            "opencrvs-date-of-birth": _claim("opencrvs-date-of-birth", "Date of birth", ["value", "redacted"], ["birth_date"], _source("OpenCRVS", "civil_registry", "birth_registration", "registration_id", "civil_registry:evidence_verification", "dci"), value_type="date"),
-            "opencrvs-age-band": _claim("opencrvs-age-band", "Age Eligibility Attestation", ["value", "redacted"], ["birth_date"], _source("OpenCRVS", "civil_registry", "birth_registration", "registration_id", "civil_registry:evidence_verification", "dci"), value_type="string"),
+            "opencrvs-birth-record-exists": _claim("opencrvs-birth-record-exists", "Birth Registration Attestation", ["predicate", "redacted"], ["record_id"], _source("OpenCRVS", "civil_registry", "birth_registration", "UIN", "civil_registry:evidence_verification", "dci")),
+            "opencrvs-date-of-birth": _claim("opencrvs-date-of-birth", "Date of birth", ["value", "redacted"], ["birth_date"], _source("OpenCRVS", "civil_registry", "birth_registration", "UIN", "civil_registry:evidence_verification", "dci"), value_type="date"),
+            "opencrvs-age-band": _claim("opencrvs-age-band", "Age Eligibility Attestation", ["value", "redacted"], ["birth_date"], _source("OpenCRVS", "civil_registry", "birth_registration", "UIN", "civil_registry:evidence_verification", "dci"), value_type="string"),
         },
     },
     "agriculture-notary": {
@@ -392,7 +405,15 @@ CLAIM_SERVICES: dict[str, dict[str, Any]] = {
         "claims": {
             "farmer-registered": _claim("farmer-registered", "Farmer registered", ["predicate", "redacted"], ["registration_status"], _source("NAgDI Agricultural Registries", "agri_registry", "farmer", "farmer_id", "agri_registry:evidence_verification", "registry_data_api")),
             "eligible-for-climate-smart-input-voucher": _claim("eligible-for-climate-smart-input-voucher", "Eligible for climate-smart input voucher", ["predicate", "redacted"], ["farmer-registered", "active-farm-parcel", "voucher-entitlement-current"], _source("NAgDI Agricultural Registries", "agri_registry", "voucher_eligibility_snapshot", "farmer_id", "agri_registry:evidence_verification", "registry_data_api")),
-            "eligible-for-livestock-movement-permit": _claim("eligible-for-livestock-movement-permit", "Eligible for livestock movement permit", ["predicate", "redacted"], ["registered-livestock-holder", "registered-herd", "herd-vaccination-current"], _source("NAgDI Agricultural Registries", "agri_registry", "livestock_movement_snapshot", "farmer_id", "agri_registry:evidence_verification", "registry_data_api")),
+            "market-sizing-aggregate-controls": _claim("market-sizing-aggregate-controls", "Market sizing aggregate controls", ["predicate", "redacted"], ["minimum_cell_count", "geography_floor", "suppression_policy"], _source("NAgDI Agricultural Registries", "agri_registry", "purpose_policy", "id", "agri_registry:evidence_verification", "registry_data_api"), default_subject="market-sizing-policy", default_identifier_scheme="id", default_purpose=AGRI_MARKET_SIZING_PURPOSE),
+            "registered-livestock-holder": _claim("registered-livestock-holder", "Registered livestock holder", ["predicate", "redacted"], ["registered_livestock_holder"], _source("NAgDI Agricultural Registries", "agri_registry", "livestock_movement_snapshot", "herd_id", "agri_registry:evidence_verification", "registry_data_api"), default_subject="HERD-2001", default_identifier_scheme="herd_id", default_purpose=AGRI_LIVESTOCK_PURPOSE),
+            "registered-herd": _claim("registered-herd", "Registered herd", ["predicate", "redacted"], ["registered_herd"], _source("NAgDI Agricultural Registries", "agri_registry", "livestock_movement_snapshot", "herd_id", "agri_registry:evidence_verification", "registry_data_api"), default_subject="HERD-2001", default_identifier_scheme="herd_id", default_purpose=AGRI_LIVESTOCK_PURPOSE),
+            "herd-vaccination-current": _claim("herd-vaccination-current", "Herd vaccination current", ["predicate", "redacted"], ["herd_vaccination_current"], _source("NAgDI Agricultural Registries", "agri_registry", "livestock_movement_snapshot", "herd_id", "agri_registry:evidence_verification", "registry_data_api"), default_subject="HERD-2001", default_identifier_scheme="herd_id", default_purpose=AGRI_LIVESTOCK_PURPOSE),
+            "origin-district-not-quarantined": _claim("origin-district-not-quarantined", "Origin district not quarantined", ["predicate", "redacted"], ["origin_district_not_quarantined"], _source("NAgDI Agricultural Registries", "agri_registry", "livestock_movement_snapshot", "herd_id", "agri_registry:evidence_verification", "registry_data_api"), default_subject="HERD-2001", default_identifier_scheme="herd_id", default_purpose=AGRI_LIVESTOCK_PURPOSE),
+            "destination-district-open": _claim("destination-district-open", "Destination district open", ["predicate", "redacted"], ["destination_district_open"], _source("NAgDI Agricultural Registries", "agri_registry", "livestock_movement_snapshot", "herd_id", "agri_registry:evidence_verification", "registry_data_api"), default_subject="HERD-2001", default_identifier_scheme="herd_id", default_purpose=AGRI_LIVESTOCK_PURPOSE),
+            "no-conflicting-open-movement-permit": _claim("no-conflicting-open-movement-permit", "No conflicting open movement permit", ["predicate", "redacted"], ["no_conflicting_open_movement_permit"], _source("NAgDI Agricultural Registries", "agri_registry", "livestock_movement_snapshot", "herd_id", "agri_registry:evidence_verification", "registry_data_api"), default_subject="HERD-2001", default_identifier_scheme="herd_id", default_purpose=AGRI_LIVESTOCK_PURPOSE),
+            "livestock-movement-reason-code": _claim("livestock-movement-reason-code", "Livestock movement reason code", ["value", "redacted"], ["reason_code"], _source("NAgDI Agricultural Registries", "agri_registry", "livestock_movement_snapshot", "herd_id", "agri_registry:evidence_verification", "registry_data_api"), value_type="string", default_subject="HERD-2001", default_identifier_scheme="herd_id", default_purpose=AGRI_LIVESTOCK_PURPOSE),
+            "eligible-for-livestock-movement-permit": _claim("eligible-for-livestock-movement-permit", "Eligible for livestock movement permit", ["predicate", "redacted"], ["registered-livestock-holder", "registered-herd", "herd-vaccination-current"], _source("NAgDI Agricultural Registries", "agri_registry", "livestock_movement_snapshot", "herd_id", "agri_registry:evidence_verification", "registry_data_api"), default_subject="HERD-2001", default_identifier_scheme="herd_id", default_purpose=AGRI_LIVESTOCK_PURPOSE),
         },
     },
 }
@@ -405,7 +426,18 @@ def claim_service_ids() -> list[str]:
 def _claim_service_catalog(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
     if not config:
         return CLAIM_SERVICES
-    return discovery.discover_claim_services(config, CLAIM_SERVICES, CLAIM_SERVICE_ORDER)
+    services = discovery.discover_claim_services(config, CLAIM_SERVICES, CLAIM_SERVICE_ORDER)
+    for service in services.values():
+        _apply_credential_defaults(config, service)
+    return services
+
+
+def _apply_credential_defaults(config: dict[str, Any], service: dict[str, Any]) -> None:
+    credential = credential_by_id(config, str(service.get("client_credential_id", "")))
+    for key in ("default_purpose", "default_subject", "default_identifier_scheme"):
+        value = str(credential.get(key, "")).strip()
+        if value:
+            service[key] = value
 
 
 def claim_service_config(service_id: str) -> dict[str, Any]:
@@ -597,6 +629,7 @@ def validate_evaluation_input(service_id: str, body: dict[str, Any], config: dic
             field="format",
             allowed=claim["formats"],
         )
+    purpose = str(body.get("purpose", "")).strip() or str(claim.get("default_purpose", service["default_purpose"]))
     return {
         "service": service,
         "claim": claim,
@@ -606,7 +639,7 @@ def validate_evaluation_input(service_id: str, body: dict[str, Any], config: dic
         "target": deepcopy(target) if isinstance(target, dict) else None,
         "disclosure": disclosure,
         "format": result_format,
-        "purpose": str(body.get("purpose", service["default_purpose"])),
+        "purpose": purpose,
     }
 
 
@@ -821,6 +854,7 @@ def _service_summary(service: dict[str, Any], config: dict[str, Any]) -> dict[st
                 "allowed_disclosures": list(claim["allowed_disclosures"]),
                 "formats": list(claim["formats"]),
                 "source": deepcopy(claim["source"]),
+                **({"default_purpose": claim["default_purpose"]} if "default_purpose" in claim else {}),
                 **({"target_inputs": deepcopy(claim["target_inputs"])} if "target_inputs" in claim else {}),
                 **({"default_subject": claim["default_subject"]} if "default_subject" in claim else {}),
                 **({"default_identifier_scheme": claim["default_identifier_scheme"]} if "default_identifier_scheme" in claim else {}),

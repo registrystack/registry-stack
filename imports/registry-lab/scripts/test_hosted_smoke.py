@@ -283,9 +283,14 @@ def base_routes() -> dict[tuple[str, str], Any]:
         ("social-protection-notary", "beneficiary-active", "NID-1001", "national_id"),
         ("shared-eligibility-notary", "eligible-for-combined-support", "NID-1001", "national_id"),
         ("dhis2-notary", "dhis2-child-program-active", "PQfMcpmXeFE", "dhis2_tracked_entity"),
-        ("opencrvs-notary", "opencrvs-birth-record-exists", "BIRTH-1001", "birth_registration_id"),
+        ("opencrvs-notary", "opencrvs-birth-record-exists", "9658342302", "UIN"),
         ("agriculture-notary", "eligible-for-climate-smart-input-voucher", "FARMER-1001", "farmer_id"),
     ]:
+        default_purpose = (
+            "https://demo.example.gov/purpose/opencrvs-dci-lab"
+            if service_id == "opencrvs-notary"
+            else "https://demo.example.gov/purpose/decentralized-evidence-demo"
+        )
         routes[("GET", f"/api/explorer/claims/{service_id}/metadata.json")] = (
             200,
             {
@@ -295,7 +300,7 @@ def base_routes() -> dict[tuple[str, str], Any]:
                     "default_claim": default_claim,
                     "default_subject": subject,
                     "default_identifier_scheme": scheme,
-                    "default_purpose": "https://demo.example.gov/purpose/decentralized-evidence-demo",
+                    "default_purpose": default_purpose,
                     "discovery": (
                         {"status": "live", "source": "notary"}
                         if service_id == "agriculture-notary"

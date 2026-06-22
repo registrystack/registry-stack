@@ -558,6 +558,7 @@ async function loadSelectedService(root, serviceId) {
   state.subjectValue = selected.default_subject || CIVIL_NOTARY_DEFAULT.subjectValue;
   state.purpose = selected.default_purpose || CIVIL_NOTARY_DEFAULT.purpose;
   const claim = selectedClaimSummary();
+  state.purpose = claim.default_purpose || state.purpose;
   state.subjectScheme = claim.default_identifier_scheme || state.subjectScheme;
   state.subjectValue = claim.default_subject || state.subjectValue;
   resetTargetValues(claim);
@@ -645,6 +646,7 @@ function wire(root) {
     const claim = selectedClaimSummary();
     state.subjectScheme = claim.default_identifier_scheme || selectedServiceSummary().default_identifier_scheme || state.subjectScheme;
     state.subjectValue = claim.default_subject || selectedServiceSummary().default_subject || state.subjectValue;
+    state.purpose = claim.default_purpose || selectedServiceSummary().default_purpose || state.purpose;
     resetTargetValues(claim);
     state.disclosure = claim.default_disclosure || state.disclosure;
     state.format = normalizeCollection(claim.formats)[0] || state.format;
