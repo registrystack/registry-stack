@@ -64,7 +64,7 @@ Product names are always in English, including on future translated pages.
   <dd>Decentralized Identifier. W3C DID Core 1.0. Registry Relay publishes a `did:web` document at `/.well-known/did.json` when signed response credentials are enabled (config key: `provenance`). Registry Notary parses `did:jwk` values for credential subjects.</dd>
 
   <dt id="delegated-self-attestation">delegated self-attestation</dt>
-  <dd>Registry Notary self-attestation access mode `delegated_attestation`. The authenticated principal is the requester, the request target is a configured dependent subject, and the dependent claim can read sources only after a configured relationship proof claim evaluates to boolean `true`. This is separate from static-peer delegated evaluation under Notary federation.</dd>
+  <dd>Registry Notary self-attestation access mode `delegated_attestation`. The authenticated principal is the requester, the request target and scoped authorization details identify the same configured dependent subject, and the dependent claim can read sources only after a configured relationship proof claim evaluates to boolean `true`. This is separate from static-peer delegated evaluation under Notary federation.</dd>
 
   <dt>disclosure profile</dt>
   <dd>Registry Notary control over what the caller receives: `Value` (full value disclosed), `Predicate` (only true/false satisfaction), or `Redacted` (value fully hidden).</dd>

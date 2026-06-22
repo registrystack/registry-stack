@@ -42,7 +42,7 @@ The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 
 | 0.1.0 | 2026-06-13 | draft | Initial protocol contract, distilled from the Registry Notary API reference, the evidence-issuance explanation, and the generated OpenAPI document. |
 | 0.1.1 | 2026-06-20 | draft | Document governed source policy decisions, source-bound purpose and freshness constraints, self-attestation trust context, audit provenance, and scoped OID4VCI behavior. |
 | 0.1.2 | 2026-06-21 | draft | Clarified source adapter sidecar isolation assumptions and demo/template freshness boundaries. |
-| 0.1.3 | 2026-06-22 | draft | Document delegated self-attestation, proof-claim gating, delegated denial reasons, and the OID4VCI delegated-token rejection boundary. |
+| 0.1.3 | 2026-06-22 | draft | Document delegated self-attestation, proof-claim gating, explicit dependent-target binding, delegated denial reasons, and the OID4VCI delegated-token rejection boundary. |
 
 ## 1. Scope and references
 
@@ -167,15 +167,15 @@ REQ-PR-NOTARY-026: For self-attestation flows, Registry Notary MUST derive the s
 Registry Notary has two self-attestation access modes:
 
 - `self_attestation`: the authenticated principal is the credential subject.
-- `delegated_attestation`: the authenticated principal is the requester, and a configured dependent target can be evaluated only under a configured relationship and proof claim.
+- `delegated_attestation`: the authenticated principal is the requester, and a configured dependent target can be evaluated only when scoped authorization details name the same target, relationship, and proof claim.
 
 Delegated self-attestation is distinct from Section 9 federation. It does not delegate trust to a peer Notary. It stays inside the citizen/OIDC trust context and uses relationship proof evaluation before dependent source access.
 
-REQ-PR-NOTARY-029: For delegated self-attestation, Registry Notary MUST derive the requester from the authenticated principal, derive the relationship from scoped authorization details, and reject caller-supplied `requester`, `relationship`, or `on_behalf_of` fields before any source read.
+REQ-PR-NOTARY-029: For delegated self-attestation, Registry Notary MUST derive the requester from the authenticated principal, derive the relationship from scoped authorization details, require the scoped authorization details to bind the same dependent target by `target.id_type` and `target.id`, and reject caller-supplied `requester`, `relationship`, or `on_behalf_of` fields before any source read.
 
 REQ-PR-NOTARY-030: A delegated relationship MUST be enabled in `self_attestation.delegation.allowed_relationships`. The relationship MUST name a `proof_claim`; that proof claim MUST read a source binding whose lookup inputs bind both `requester.*` and `target.*`. Every dependent claim allowed for that relationship MUST be explicitly allow-listed and MUST list the proof claim in `depends_on`.
 
-REQ-PR-NOTARY-031: A delegated source-read capability MUST bind the requester subject and dependent target with keyed hashes. Registry Notary MUST evaluate the proof claim before the dependent claim reads its source, and MUST deny the dependent claim when the proof claim is missing, fails, or returns anything other than boolean `true`. Rendering or issuing from a stored delegated evaluation MUST revalidate the current delegated authorization details against the stored metadata.
+REQ-PR-NOTARY-031: A delegated source-read capability MUST bind the requester subject and dependent target with keyed hashes. Registry Notary MUST evaluate the proof claim before the dependent claim reads its source, and MUST deny the dependent claim when the proof claim is missing, fails, or returns anything other than boolean `true`. Rendering or issuing from a stored delegated evaluation MUST revalidate the current delegated authorization details, including the dependent-target binding, against the stored metadata.
 
 ## 8. OID4VCI issuance flow
 
@@ -250,9 +250,9 @@ This specification is `verified`: every requirement describes shipped behavior a
 - [Evidence issuance, end to end](../../explanation/evidence-issuance/) walks the claim pipeline, the four consume paths, and the selective-disclosure mechanics that Sections 4 through 9 make precise.
 - The [standards register](../../reference/standards/) records the adoption mode for SD-JWT VC, OID4VCI, CCCEV, and the other standards listed in `standards_referenced`, including the profiled-subset claims this document refers to.
 - [RS-ARC-G](../rs-arc-g/) Section 3 and Section 5 hold the architectural invariants (REQ-ARC-G-004/007/008/009) that this document refines.
-- Delegated self-attestation access modes, source capabilities, stored metadata, and denial reasons are implemented in [`model.rs`](https://github.com/jeremi/registry-notary/blob/37215c8543f4704a88b6e7228cb984b3cbf3f5ab/crates/registry-notary-core/src/model.rs).
-- Delegated relationship configuration validation is implemented in [`config.rs`](https://github.com/jeremi/registry-notary/blob/37215c8543f4704a88b6e7228cb984b3cbf3f5ab/crates/registry-notary-core/src/config.rs).
-- Request context derivation, stored-evaluation revalidation, OID4VCI delegated-token rejection, and proof-gated source reads are implemented in [`api.rs`](https://github.com/jeremi/registry-notary/blob/37215c8543f4704a88b6e7228cb984b3cbf3f5ab/crates/registry-notary-server/src/api.rs) and [`runtime.rs`](https://github.com/jeremi/registry-notary/blob/37215c8543f4704a88b6e7228cb984b3cbf3f5ab/crates/registry-notary-server/src/runtime.rs).
+- Delegated self-attestation access modes, source capabilities, stored metadata, and denial reasons are implemented in [`model.rs`](https://github.com/jeremi/registry-notary/blob/de16328c4901de00390c62e94a64df4e504e2436/crates/registry-notary-core/src/model.rs).
+- Delegated relationship configuration validation is implemented in [`config.rs`](https://github.com/jeremi/registry-notary/blob/de16328c4901de00390c62e94a64df4e504e2436/crates/registry-notary-core/src/config.rs).
+- Request context derivation, stored-evaluation revalidation, OID4VCI delegated-token rejection, explicit target binding, and proof-gated source reads are implemented in [`api.rs`](https://github.com/jeremi/registry-notary/blob/de16328c4901de00390c62e94a64df4e504e2436/crates/registry-notary-server/src/api.rs) and [`runtime.rs`](https://github.com/jeremi/registry-notary/blob/de16328c4901de00390c62e94a64df4e504e2436/crates/registry-notary-server/src/runtime.rs).
 
 ## Next
 
