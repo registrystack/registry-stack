@@ -212,6 +212,7 @@ for policy mapping. Map on `code`, not on prose. Safe fields for logs are
 | `claim.format_not_supported` | Claim |
 | `auth.purpose_required` | Auth |
 | `auth.missing_credential` | Auth |
+| `self_attestation.denied` | Self-attestation |
 | `idempotency.conflict` | Idempotency |
 | `batch.too_large` | Batch |
 | `jwks.unavailable` | Verifier |
@@ -267,3 +268,23 @@ binding and matching method. It is returned verbatim for successful matches
 against that binding, so it does not measure the quality of an individual match.
 Future measured match-quality fields can be added alongside it without changing
 this field's meaning.
+
+### Self-attestation denial reasons
+
+Self-attestation policy denials return the public problem code
+`self_attestation.denied`. The audit trail and internal denial context preserve
+the granular reason so operators can distinguish policy failures without giving
+callers an identifier oracle.
+
+Direct self-attestation reasons include `self_attestation.disabled`,
+`self_attestation.operation_denied`, `self_attestation.claim_denied`,
+`self_attestation.disclosure_denied`, `self_attestation.format_denied`,
+`self_attestation.profile_denied`, `self_attestation.subject_claim_missing`,
+`self_attestation.subject_mismatch`, `self_attestation.rate_limited`,
+`self_attestation.invalid_token`, `self_attestation.assurance_denied`, and
+`self_attestation.batch_denied`.
+
+Delegated self-attestation reasons include
+`delegated.relationship_unproven`, `delegated.relationship_not_allowed`,
+`delegated.claim_denied`, `delegated.subject_not_permitted`, and
+`delegated.proof_denied`.

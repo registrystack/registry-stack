@@ -2,7 +2,8 @@
 //! Shared authorization_details enforcement for Notary transaction scopes.
 
 use registry_notary_core::{
-    AccessMode, ClaimRef, EvidenceAuthorizationDetails, EvidenceAuthorizationSubject, EvidenceError,
+    AccessMode, ClaimRef, EvidenceAuthorizationDetails, EvidenceAuthorizationSubject,
+    EvidenceAuthorizationTarget, EvidenceError,
 };
 use serde_json::Value;
 
@@ -17,11 +18,17 @@ pub(crate) enum ScopedAuthorizationError {
     Purpose,
     AccessMode,
     Subject,
+    Target,
 }
 
 pub(crate) struct ScopedAuthorizationSubject {
     pub(crate) binding_claim: String,
     pub(crate) id_type: String,
+}
+
+pub(crate) struct ScopedAuthorizationTarget {
+    pub(crate) id_type: String,
+    pub(crate) id: String,
 }
 
 pub(crate) struct ScopedAuthorizationRequest<'a> {
@@ -33,6 +40,7 @@ pub(crate) struct ScopedAuthorizationRequest<'a> {
     pub(crate) purpose: &'a str,
     pub(crate) access_mode: AccessMode,
     pub(crate) subject: Option<ScopedAuthorizationSubject>,
+    pub(crate) target: Option<ScopedAuthorizationTarget>,
     pub(crate) allow_subset_claims: bool,
     pub(crate) allowed_claims: Option<&'a [ClaimRef]>,
 }
@@ -112,6 +120,9 @@ pub(crate) fn validate_scoped_authorization_details(
     if !subject_matches(details.subject.as_ref(), expected.subject.as_ref()) {
         return Err(ScopedAuthorizationError::Subject);
     }
+    if !target_matches(details.target.as_ref(), expected.target.as_ref()) {
+        return Err(ScopedAuthorizationError::Target);
+    }
     Ok(())
 }
 
@@ -129,6 +140,17 @@ fn subject_matches(
         }
         (None, None) => true,
         _ => false,
+    }
+}
+
+fn target_matches(
+    actual: Option<&EvidenceAuthorizationTarget>,
+    expected: Option<&ScopedAuthorizationTarget>,
+) -> bool {
+    match expected {
+        Some(expected) => actual
+            .is_some_and(|actual| actual.id_type == expected.id_type && actual.id == expected.id),
+        None => true,
     }
 }
 
@@ -161,6 +183,8 @@ mod tests {
                 binding_claim: "national_id".to_string(),
                 id_type: "national_id".to_string(),
             }),
+            target: None,
+            relationship: None,
             access_mode: Some(AccessMode::SelfAttestation),
             assisted_access_context: None,
         }
@@ -183,6 +207,7 @@ mod tests {
                 binding_claim: "national_id".to_string(),
                 id_type: "national_id".to_string(),
             }),
+            target: None,
             allow_subset_claims,
             allowed_claims,
         }
@@ -234,6 +259,31 @@ mod tests {
                 &request(&expected_claims, true, Some(&request_claims)),
             ),
             Err(ScopedAuthorizationError::Claim)
+        );
+    }
+
+    #[test]
+    fn target_validation_requires_exact_delegated_target() {
+        let claim_a = claim("person-is-alive");
+        let request_claims = [claim_a.clone()];
+        let mut token_details = details(vec![claim_a]);
+        token_details.target = Some(EvidenceAuthorizationTarget {
+            id_type: "civil_registration_id".to_string(),
+            id: "CHILD-123".to_string(),
+        });
+        let mut request = request(&request_claims, false, None);
+        request.target = Some(ScopedAuthorizationTarget {
+            id_type: "civil_registration_id".to_string(),
+            id: "CHILD-123".to_string(),
+        });
+
+        validate_scoped_authorization_details(&token_details, &request)
+            .expect("exact target is accepted");
+
+        token_details.target.as_mut().expect("target is present").id = "OTHER-CHILD".to_string();
+        assert_eq!(
+            validate_scoped_authorization_details(&token_details, &request),
+            Err(ScopedAuthorizationError::Target)
         );
     }
 }

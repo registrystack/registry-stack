@@ -3,9 +3,11 @@
 > **Page type:** How-to · **Product:** Registry Notary · **Layer:** credential · **Audience:** operator
 
 Self-attestation lets a citizen use their own OIDC token to evaluate, render, or
-issue only the claims that policy allows for the subject bound to that token.
-This guide is for operators configuring that flow with an identity provider,
-source registries, and relying-party or wallet clients.
+issue only the claims that policy allows. In direct mode, the subject is bound to
+the token. In delegated mode, the authenticated requester may ask about a
+configured dependent target only after a configured relationship proof claim
+passes. This guide is for operators configuring those flows with an identity
+provider, source registries, and relying-party or wallet clients.
 
 Use [`oid4vci-wallet-interop.md`](oid4vci-wallet-interop.md) when the caller is
 a wallet using the OID4VCI facade. Use this guide for the shared
@@ -16,13 +18,15 @@ flows.
 
 The core guarantee is:
 
-> A citizen token can only be used for the exact subject it is bound to, and
-> only for explicitly allowed claims, purposes, formats, disclosures, and
-> credential profiles.
+> A citizen token can only be used for the exact self or dependent subject
+> authorized by policy, and only for explicitly allowed claims, purposes,
+> formats, disclosures, and credential profiles.
 
 Notary validates the token, checks client and audience policy, checks subject
 binding, checks scopes and operation allow-lists, then reads sources. Source
-reads should not happen before those gates pass.
+reads must not happen before those gates pass. Delegated requests add a
+relationship configuration check and a proof claim that must evaluate before the
+dependent claim reads its source.
 
 ```mermaid
 flowchart TD
@@ -30,22 +34,35 @@ flowchart TD
   V -- "ok" --> C{"Client and audience policy"}
   C -- "ok" --> S{"Subject binding<br/>derive subject from token claim"}
   S -- "ok" --> Sc{"Scopes and operation allow-lists"}
-  Sc -- "ok" --> Read["Read configured source for the bound subject"]
+  Sc -- "ok" --> M{"Access mode"}
+  M -- "self_attestation" --> Read["Read configured source for the bound subject"]
+  M -- "delegated_attestation" --> P{"Evaluate relationship proof claim"}
+  P -- "proven" --> ReadDep["Read dependent source for the configured target"]
   Read --> Op["Evaluate, render, or issue within the allow-lists"]
+  ReadDep --> Op
   V -- "fail" --> X["Reject before any source read"]
   C -- "fail" --> X
   S -- "conflicting caller identity" --> X
   Sc -- "fail" --> X
+  P -- "not proven" --> X
 ```
 
 *Self-attestation gates a request through token validation, client and audience
 policy, subject binding, and scope and operation allow-lists. Any gate failure
-rejects the request before a source is read.*
+rejects the request before a source is read. Delegated mode also gates dependent
+source reads on a configured proof claim.*
 
 For `/v1/evaluations`, citizen callers do not need to send their own target
 identity. Registry Notary derives `requester`, `target`, and
 `relationship: self` from the verified subject-binding token claim. Conflicting
 caller-supplied identity context is rejected before any source read.
+
+For delegated self-attestation, the caller sends only the dependent `target`.
+Registry Notary derives `requester`, `relationship`, and `on_behalf_of` from the
+authenticated principal and scoped authorization details. The scoped
+authorization details must also name the same dependent target by `id_type` and
+`id`. Caller-supplied `requester`, `relationship`, or `on_behalf_of` fields are
+rejected before any source read.
 
 ## When To Use It
 
@@ -53,14 +70,17 @@ Use self-attestation when:
 
 - A citizen portal evaluates eligibility from the citizen's own token.
 - A wallet flow issues a credential for the token-bound subject.
+- A parent, guardian, caregiver, or similar requester needs a configured
+  dependent attestation and the source owner has approved the relationship proof
+  source.
 - The identity provider can provide a stable, reviewed subject-binding claim.
 - The source owner accepts citizen-initiated reads for the configured purpose.
 
 Do not use it when:
 
 - The token has no trustworthy subject identifier.
-- The same endpoint needs to evaluate arbitrary subjects on behalf of a case
-  worker or service. Use machine auth for that.
+- The same endpoint needs to evaluate arbitrary subjects for a case worker or
+  service. Use machine auth for that.
 - Claims require batch evaluation. Batch evaluation is not supported for self-attestation.
 - The source owner has not approved citizen-token driven access.
 
@@ -224,6 +244,69 @@ Rules:
 - Claims and profiles must agree that the credential profile can issue that
   claim.
 
+## Delegated Self-Attestation
+
+Delegated self-attestation is optional and disabled by default. Enable it only
+when the source owner has approved a relationship proof claim and the identity
+provider or transaction-token issuer can scope the requester to the delegated
+access mode.
+
+```yaml
+self_attestation:
+  delegation:
+    enabled: true
+    allowed_relationships:
+      - relationship_type: guardian
+        proof_claim: guardian-link-established
+        target_id_type: UIN
+        allowed_claims:
+          - dependent-person-is-alive
+        allowed_purposes:
+          - dependent_attestation
+        allowed_formats:
+          - application/vnd.registry-notary.claim-result+json
+          - application/dc+sd-jwt
+        allowed_disclosures:
+          - predicate
+          - redacted
+        credential_profiles:
+          - dependent_status_sd_jwt
+```
+
+Rules:
+
+- `delegation.enabled: false` requires `allowed_relationships` to be empty.
+- `delegation.enabled: true` requires at least one relationship.
+- Each `relationship_type` must be unique.
+- `proof_claim` must reference an existing claim that reads a relationship
+  source binding.
+- At least one source binding for `proof_claim` must bind both `requester.*` and
+  `target.*` inputs.
+- Each delegated claim in `allowed_claims` must declare `depends_on` for the
+  `proof_claim`.
+- `target_id_type` defaults to `subject_binding.id_type` when omitted.
+- `allowed_purposes`, `allowed_formats`, `allowed_disclosures`, and
+  `credential_profiles` are scoped to the relationship.
+
+Runtime behavior:
+
+- The token-bound subject is the requester.
+- The request target is the dependent subject.
+- The relationship type and proof claim come from scoped authorization details,
+  not from caller-supplied request fields.
+- The scoped authorization details must include a `target` object for the
+  dependent subject. Notary compares that target to the request target during
+  evaluation and re-hashes it against the stored dependent target before render
+  or credential issuance.
+- Notary stores keyed hashes for the requester subject binding and dependent
+  target, then rechecks them before delegated source reads.
+- The dependent claim is not read unless the proof claim evaluates to boolean
+  `true`.
+- Render and credential issuance from a stored delegated evaluation recheck the
+  current scoped authorization details against the stored metadata.
+- OID4VCI credential issuance rejects delegated transaction tokens in this
+  version. Use direct self-attestation for wallet issuance.
+
 ## Scope Policy
 
 Use scope policy to require citizen tokens to carry an explicit permission:
@@ -305,6 +388,8 @@ claim boundaries and source bindings.
   proof or nonce traffic.
 - `doctor` passes, then a controlled self-attestation test passes with a test
   subject.
+- Delegated claims depend on the configured proof claim, and the proof claim
+  source binding uses both requester and target inputs.
 
 ## Troubleshooting
 
@@ -314,6 +399,8 @@ claim boundaries and source bindings.
 | Token rejected | Issuer, audience, client id, algorithm, or scope mismatch | Token header and claims, `auth.oidc`, `scope_map` |
 | Subject mismatch | Token claim is missing or caller-supplied identity context conflicts with the derived subject | `subject_binding.token_claim`, token claims, request body identity fields |
 | Userinfo subject not found | `claim_source: userinfo` without a usable endpoint or issuer | `auth.oidc.userinfo_endpoint`, `userinfo_issuers` |
+| Delegated relationship denied | Delegation is disabled, relationship type is not configured, authorization details do not name the configured proof claim, or caller supplied requester/relationship context | `delegation.enabled`, `allowed_relationships`, token authorization details, request body |
+| Delegated relationship unproven | The proof claim failed or returned anything other than boolean `true` | `proof_claim`, relationship source data, proof claim rule |
 | Credential issuance denied | Profile or claim missing from allow-lists | `allowed_claims`, `credential_profiles`, claim/profile cross references |
 | Batch request denied | Batch evaluation is not supported for self-attestation | Keep `batch_evaluate: false` |
 | Works locally but fails active-active | In-process rate limits or replay state are not shared | Add gateway limits and Redis replay storage |

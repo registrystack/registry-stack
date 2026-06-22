@@ -2553,6 +2553,8 @@ pub struct SelfAttestationConfig {
     #[serde(default)]
     pub credential_profiles: Vec<String>,
     #[serde(default)]
+    pub delegation: SelfAttestationDelegationConfig,
+    #[serde(default)]
     pub rate_limits: SelfAttestationRateLimitsConfig,
 }
 
@@ -2577,6 +2579,7 @@ impl Default for SelfAttestationConfig {
             required_scopes: Vec::new(),
             allowed_wallet_origins: Vec::new(),
             credential_profiles: Vec::new(),
+            delegation: SelfAttestationDelegationConfig::default(),
             rate_limits: SelfAttestationRateLimitsConfig::default(),
         }
     }
@@ -2647,6 +2650,7 @@ impl SelfAttestationConfig {
             "self_attestation.credential_profiles",
             &self.credential_profiles,
         )?;
+        self.delegation.validate(evidence)?;
         self.rate_limits.validate()?;
         validate_exact_wallet_origins(&self.allowed_wallet_origins)?;
 
@@ -2736,6 +2740,205 @@ impl SelfAttestationConfig {
         Err(EvidenceConfigError::InvalidSelfAttestationConfig {
             reason: reason.into(),
         })
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SelfAttestationDelegationConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub allowed_relationships: Vec<SelfAttestationDelegatedRelationshipConfig>,
+}
+
+impl SelfAttestationDelegationConfig {
+    fn validate(&self, evidence: &EvidenceConfig) -> Result<(), EvidenceConfigError> {
+        if !self.enabled {
+            if !self.allowed_relationships.is_empty() {
+                return Err(EvidenceConfigError::InvalidSelfAttestationConfig {
+                    reason:
+                        "self_attestation.delegation.enabled=false requires allowed_relationships to be empty"
+                            .to_string(),
+                });
+            }
+            return Ok(());
+        }
+        if self.allowed_relationships.is_empty() {
+            return Err(EvidenceConfigError::InvalidSelfAttestationConfig {
+                reason: "self_attestation.delegation.enabled requires allowed_relationships"
+                    .to_string(),
+            });
+        }
+        let claim_ids: HashSet<&str> = evidence
+            .claims
+            .iter()
+            .map(|claim| claim.id.as_str())
+            .collect();
+        let mut relationship_types = HashSet::new();
+        for relationship in &self.allowed_relationships {
+            relationship.validate(evidence, &claim_ids)?;
+            if !relationship_types.insert(relationship.relationship_type.as_str()) {
+                return Err(EvidenceConfigError::InvalidSelfAttestationConfig {
+                    reason: format!(
+                        "self_attestation.delegation.allowed_relationships contains duplicate relationship_type '{}'",
+                        relationship.relationship_type
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn relationship(
+        &self,
+        relationship_type: &str,
+    ) -> Option<&SelfAttestationDelegatedRelationshipConfig> {
+        self.allowed_relationships
+            .iter()
+            .find(|relationship| relationship.relationship_type == relationship_type)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SelfAttestationDelegatedRelationshipConfig {
+    pub relationship_type: String,
+    pub proof_claim: String,
+    #[serde(default)]
+    pub target_id_type: Option<String>,
+    #[serde(default)]
+    pub allowed_claims: Vec<String>,
+    #[serde(default)]
+    pub allowed_purposes: Vec<String>,
+    #[serde(default)]
+    pub allowed_formats: Vec<String>,
+    #[serde(default)]
+    pub allowed_disclosures: Vec<String>,
+    #[serde(default)]
+    pub credential_profiles: Vec<String>,
+}
+
+impl SelfAttestationDelegatedRelationshipConfig {
+    fn validate(
+        &self,
+        evidence: &EvidenceConfig,
+        claim_ids: &HashSet<&str>,
+    ) -> Result<(), EvidenceConfigError> {
+        if self.relationship_type.trim().is_empty() {
+            return Err(EvidenceConfigError::InvalidSelfAttestationConfig {
+                reason:
+                    "self_attestation.delegation.allowed_relationships.relationship_type is required"
+                        .to_string(),
+            });
+        }
+        if self.proof_claim.trim().is_empty() || !claim_ids.contains(self.proof_claim.as_str()) {
+            return Err(EvidenceConfigError::InvalidSelfAttestationConfig {
+                reason: format!(
+                    "self_attestation.delegation proof_claim references unknown claim '{}'",
+                    self.proof_claim
+                ),
+            });
+        }
+        let Some(proof_claim) = evidence
+            .claims
+            .iter()
+            .find(|claim| claim.id == self.proof_claim)
+        else {
+            return Err(EvidenceConfigError::InvalidSelfAttestationConfig {
+                reason: format!(
+                    "self_attestation.delegation proof_claim references unknown claim '{}'",
+                    self.proof_claim
+                ),
+            });
+        };
+        validate_delegated_proof_claim_binding(self, proof_claim)?;
+        if let Some(target_id_type) = self.target_id_type.as_deref() {
+            if target_id_type.trim().is_empty() {
+                return Err(EvidenceConfigError::InvalidSelfAttestationConfig {
+                    reason: "self_attestation.delegation target_id_type must not be blank"
+                        .to_string(),
+                });
+            }
+        }
+        validate_non_empty_entries(
+            "self_attestation.delegation.allowed_claims",
+            &self.allowed_claims,
+        )?;
+        validate_non_empty_entries(
+            "self_attestation.delegation.allowed_purposes",
+            &self.allowed_purposes,
+        )?;
+        validate_non_empty_entries(
+            "self_attestation.delegation.allowed_formats",
+            &self.allowed_formats,
+        )?;
+        validate_non_empty_entries(
+            "self_attestation.delegation.allowed_disclosures",
+            &self.allowed_disclosures,
+        )?;
+        validate_entries(
+            "self_attestation.delegation.credential_profiles",
+            &self.credential_profiles,
+        )?;
+        let allowed_purposes: HashSet<&str> =
+            self.allowed_purposes.iter().map(String::as_str).collect();
+        let allowed_formats: HashSet<&str> =
+            self.allowed_formats.iter().map(String::as_str).collect();
+        let allowed_disclosures: HashSet<&str> = self
+            .allowed_disclosures
+            .iter()
+            .map(String::as_str)
+            .collect();
+        let allowed_profiles: HashSet<&str> = self
+            .credential_profiles
+            .iter()
+            .map(String::as_str)
+            .collect();
+        for claim_id in &self.allowed_claims {
+            if !claim_ids.contains(claim_id.as_str()) {
+                return Err(EvidenceConfigError::InvalidSelfAttestationConfig {
+                    reason: format!(
+                        "self_attestation.delegation allowed_claims references unknown claim '{claim_id}'"
+                    ),
+                });
+            }
+            let Some(claim) = evidence.claims.iter().find(|claim| claim.id == *claim_id) else {
+                return Err(EvidenceConfigError::InvalidSelfAttestationConfig {
+                    reason: format!(
+                        "self_attestation.delegation allowed_claims references unknown claim '{claim_id}'"
+                    ),
+                });
+            };
+            if !claim.depends_on.iter().any(|dep| dep == &self.proof_claim) {
+                return Err(EvidenceConfigError::InvalidSelfAttestationConfig {
+                    reason: format!(
+                        "delegated claim '{claim_id}' must depend_on proof_claim '{}'",
+                        self.proof_claim
+                    ),
+                });
+            }
+            validate_delegated_attestation_claim(
+                self,
+                claim,
+                &allowed_purposes,
+                &allowed_formats,
+                &allowed_disclosures,
+                &allowed_profiles,
+            )?;
+        }
+        for profile_id in &self.credential_profiles {
+            if !evidence.credential_profiles.contains_key(profile_id) {
+                return Err(EvidenceConfigError::InvalidSelfAttestationConfig {
+                    reason: format!(
+                        "self_attestation.delegation credential_profiles references unknown profile '{profile_id}'"
+                    ),
+                });
+            }
+        }
+        validate_delegated_attestation_allow_lists_are_supported(self, evidence)?;
+        Ok(())
     }
 }
 
@@ -3224,6 +3427,177 @@ fn validate_self_attestation_allow_lists_are_supported(
         if !supported_by_claim && !supported_by_profile {
             return invalid_self_attestation(format!(
                 "allowed_disclosures entry '{disclosure}' is not supported by any allowed claim or profile"
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_delegated_proof_claim_binding(
+    relationship: &SelfAttestationDelegatedRelationshipConfig,
+    proof_claim: &ClaimDefinition,
+) -> Result<(), EvidenceConfigError> {
+    if proof_claim.source_bindings.is_empty() {
+        return invalid_self_attestation(format!(
+            "delegated proof_claim '{}' must read a relationship source binding",
+            relationship.proof_claim
+        ));
+    }
+    if !proof_claim
+        .source_bindings
+        .values()
+        .any(source_binding_lookup_references_requester_and_target)
+    {
+        return invalid_self_attestation(format!(
+            "delegated proof_claim '{}' must bind both requester and target source inputs",
+            relationship.proof_claim
+        ));
+    }
+    Ok(())
+}
+
+fn source_binding_lookup_references_requester_and_target(binding: &SourceBindingConfig) -> bool {
+    let input_paths = std::iter::once(binding.lookup.input.as_str()).chain(
+        binding
+            .query_fields
+            .iter()
+            .map(|field| field.input.as_str()),
+    );
+    let mut has_requester = false;
+    let mut has_target = false;
+    for path in input_paths {
+        has_requester |= source_binding_input_is_under(path, "requester");
+        has_target |= source_binding_input_is_under(path, "target");
+    }
+    has_requester && has_target
+}
+
+fn source_binding_input_is_under(path: &str, root: &str) -> bool {
+    path == root
+        || path
+            .strip_prefix(root)
+            .is_some_and(|rest| rest.starts_with('.'))
+}
+
+fn validate_delegated_attestation_claim(
+    relationship: &SelfAttestationDelegatedRelationshipConfig,
+    claim: &ClaimDefinition,
+    allowed_purposes: &HashSet<&str>,
+    allowed_formats: &HashSet<&str>,
+    allowed_disclosures: &HashSet<&str>,
+    allowed_profiles: &HashSet<&str>,
+) -> Result<(), EvidenceConfigError> {
+    if !claim.operations.evaluate.enabled {
+        return invalid_self_attestation(format!(
+            "delegated claim '{}' must enable evaluate",
+            claim.id
+        ));
+    }
+    let purpose = claim.purpose.as_deref().ok_or_else(|| {
+        EvidenceConfigError::InvalidSelfAttestationConfig {
+            reason: format!("delegated claim '{}' must declare purpose", claim.id),
+        }
+    })?;
+    if !allowed_purposes.contains(purpose) {
+        return invalid_self_attestation(format!(
+            "delegated claim '{}' declares unallowed purpose '{}'",
+            claim.id, purpose
+        ));
+    }
+    if !claim
+        .formats
+        .iter()
+        .any(|format| allowed_formats.contains(format.as_str()))
+    {
+        return invalid_self_attestation(format!(
+            "delegated claim '{}' must support at least one allowed format",
+            claim.id
+        ));
+    }
+    if !claim
+        .disclosure
+        .allowed
+        .iter()
+        .any(|disclosure| allowed_disclosures.contains(disclosure.as_str()))
+    {
+        return invalid_self_attestation(format!(
+            "delegated claim '{}' must support at least one allowed disclosure",
+            claim.id
+        ));
+    }
+    if !relationship.credential_profiles.is_empty()
+        && !claim
+            .credential_profiles
+            .iter()
+            .any(|profile| allowed_profiles.contains(profile.as_str()))
+    {
+        return invalid_self_attestation(format!(
+            "delegated claim '{}' must reference an allowed credential profile",
+            claim.id
+        ));
+    }
+    Ok(())
+}
+
+fn validate_delegated_attestation_allow_lists_are_supported(
+    relationship: &SelfAttestationDelegatedRelationshipConfig,
+    evidence: &EvidenceConfig,
+) -> Result<(), EvidenceConfigError> {
+    let allowed_claims: Vec<&ClaimDefinition> = relationship
+        .allowed_claims
+        .iter()
+        .filter_map(|claim_id| evidence.claims.iter().find(|claim| claim.id == *claim_id))
+        .collect();
+    let allowed_profiles: Vec<&CredentialProfileConfig> = relationship
+        .credential_profiles
+        .iter()
+        .filter_map(|profile_id| evidence.credential_profiles.get(profile_id))
+        .collect();
+
+    for purpose in &relationship.allowed_purposes {
+        if !allowed_claims
+            .iter()
+            .any(|claim| claim.purpose.as_deref() == Some(purpose.as_str()))
+        {
+            return invalid_self_attestation(format!(
+                "self_attestation.delegation allowed_purposes entry '{purpose}' is not used by any allowed claim"
+            ));
+        }
+    }
+
+    for format in &relationship.allowed_formats {
+        let supported_by_claim = allowed_claims
+            .iter()
+            .any(|claim| claim.formats.iter().any(|candidate| candidate == format));
+        let supported_by_profile = allowed_profiles
+            .iter()
+            .any(|profile| profile.format == *format);
+        if !supported_by_claim && !supported_by_profile {
+            return invalid_self_attestation(format!(
+                "self_attestation.delegation allowed_formats entry '{format}' is not supported by any allowed claim or profile"
+            ));
+        }
+    }
+
+    for disclosure in &relationship.allowed_disclosures {
+        let supported_by_claim = allowed_claims.iter().any(|claim| {
+            claim
+                .disclosure
+                .allowed
+                .iter()
+                .any(|candidate| candidate == disclosure)
+        });
+        let supported_by_profile = allowed_profiles.iter().any(|profile| {
+            profile
+                .disclosure
+                .allowed
+                .iter()
+                .any(|candidate| candidate == disclosure)
+        });
+        if !supported_by_claim && !supported_by_profile {
+            return invalid_self_attestation(format!(
+                "self_attestation.delegation allowed_disclosures entry '{disclosure}' is not supported by any allowed claim or profile"
             ));
         }
     }
@@ -6750,6 +7124,57 @@ self_attestation:
         .expect("self-attestation config is valid YAML")
     }
 
+    fn valid_delegated_self_attestation_config() -> StandaloneRegistryNotaryConfig {
+        let mut config = valid_self_attestation_config();
+        let mut proof = config.evidence.claims[0].clone();
+        proof.id = "guardian-link".to_string();
+        proof.title = "Guardian link".to_string();
+        proof.subject_type = "relationship".to_string();
+        proof.purpose = Some("dependent_attestation".to_string());
+        proof.rule = RuleConfig::Exists {
+            source: "crvs".to_string(),
+        };
+        let proof_binding = proof
+            .source_bindings
+            .get_mut("crvs")
+            .expect("proof source binding exists");
+        proof_binding.connector = SourceConnectorKind::RegistryDataApi;
+        proof_binding.entity = "guardian_link".to_string();
+        proof_binding.lookup.input = "target.identifiers.civil_registration_id".to_string();
+        proof_binding.lookup.field = "DEPENDENT_ID".to_string();
+        proof_binding.query_fields = vec![SourceQueryFieldConfig {
+            input: "requester.identifiers.national_id".to_string(),
+            field: "GUARDIAN_ID".to_string(),
+            op: "eq".to_string(),
+        }];
+
+        let mut dependent = config.evidence.claims[0].clone();
+        dependent.id = "dependent-date-of-birth".to_string();
+        dependent.title = "Dependent date of birth".to_string();
+        dependent.purpose = Some("dependent_attestation".to_string());
+        dependent.depends_on = vec!["guardian-link".to_string()];
+
+        config.evidence.claims.push(proof);
+        config.evidence.claims.push(dependent);
+        config.self_attestation.delegation = SelfAttestationDelegationConfig {
+            enabled: true,
+            allowed_relationships: vec![SelfAttestationDelegatedRelationshipConfig {
+                relationship_type: "guardian".to_string(),
+                proof_claim: "guardian-link".to_string(),
+                target_id_type: Some("civil_registration_id".to_string()),
+                allowed_claims: vec!["dependent-date-of-birth".to_string()],
+                allowed_purposes: vec!["dependent_attestation".to_string()],
+                allowed_formats: vec![
+                    "application/vnd.registry-notary.claim-result+json".to_string(),
+                    "application/dc+sd-jwt".to_string(),
+                ],
+                allowed_disclosures: vec!["value".to_string()],
+                credential_profiles: vec!["civil_status_sd_jwt".to_string()],
+            }],
+        };
+        config
+    }
+
     fn valid_oid4vci_config() -> StandaloneRegistryNotaryConfig {
         let mut config = valid_self_attestation_config();
         config
@@ -9355,6 +9780,42 @@ allowed_claims: ["", "   "]
     fn valid_self_attestation_config_passes_validation() {
         let config = valid_self_attestation_config();
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn delegated_attestation_requires_bound_proof_claim_source_inputs() {
+        let mut config = valid_delegated_self_attestation_config();
+        let proof = config
+            .evidence
+            .claims
+            .iter_mut()
+            .find(|claim| claim.id == "guardian-link")
+            .expect("proof claim exists");
+        proof
+            .source_bindings
+            .get_mut("crvs")
+            .expect("proof binding exists")
+            .query_fields
+            .clear();
+
+        let reason = expect_self_attestation_error(&config);
+        assert!(
+            reason.contains("must bind both requester and target source inputs"),
+            "unexpected: {reason}"
+        );
+    }
+
+    #[test]
+    fn delegated_attestation_rejects_unsupported_allowed_disclosure() {
+        let mut config = valid_delegated_self_attestation_config();
+        config.self_attestation.delegation.allowed_relationships[0].allowed_disclosures =
+            vec!["predicate".to_string()];
+
+        let reason = expect_self_attestation_error(&config);
+        assert!(
+            reason.contains("must support at least one allowed disclosure"),
+            "unexpected: {reason}"
+        );
     }
 
     #[test]

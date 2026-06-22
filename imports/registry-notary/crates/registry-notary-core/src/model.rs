@@ -50,6 +50,7 @@ pub enum AccessMode {
     #[default]
     MachineClient,
     SelfAttestation,
+    DelegatedAttestation,
 }
 
 impl AccessMode {
@@ -59,6 +60,7 @@ impl AccessMode {
             Self::Unknown => "unknown",
             Self::MachineClient => "machine_client",
             Self::SelfAttestation => "self_attestation",
+            Self::DelegatedAttestation => "delegated_attestation",
         }
     }
 
@@ -68,6 +70,7 @@ impl AccessMode {
             "unknown" => Some(Self::Unknown),
             "machine_client" => Some(Self::MachineClient),
             "self_attestation" => Some(Self::SelfAttestation),
+            "delegated_attestation" => Some(Self::DelegatedAttestation),
             _ => None,
         }
     }
@@ -87,6 +90,11 @@ pub enum SelfAttestationDenialCode {
     InvalidToken,
     AssuranceDenied,
     BatchDenied,
+    DelegatedRelationshipUnproven,
+    DelegatedRelationshipNotAllowed,
+    DelegatedClaimDenied,
+    DelegatedSubjectNotPermitted,
+    DelegatedProofDenied,
 }
 
 impl SelfAttestationDenialCode {
@@ -105,6 +113,11 @@ impl SelfAttestationDenialCode {
             Self::InvalidToken => "self_attestation.invalid_token",
             Self::AssuranceDenied => "self_attestation.assurance_denied",
             Self::BatchDenied => "self_attestation.batch_denied",
+            Self::DelegatedRelationshipUnproven => "delegated.relationship_unproven",
+            Self::DelegatedRelationshipNotAllowed => "delegated.relationship_not_allowed",
+            Self::DelegatedClaimDenied => "delegated.claim_denied",
+            Self::DelegatedSubjectNotPermitted => "delegated.subject_not_permitted",
+            Self::DelegatedProofDenied => "delegated.proof_denied",
         }
     }
 
@@ -123,6 +136,11 @@ impl SelfAttestationDenialCode {
             "self_attestation.invalid_token" => Some(Self::InvalidToken),
             "self_attestation.assurance_denied" => Some(Self::AssuranceDenied),
             "self_attestation.batch_denied" => Some(Self::BatchDenied),
+            "delegated.relationship_unproven" => Some(Self::DelegatedRelationshipUnproven),
+            "delegated.relationship_not_allowed" => Some(Self::DelegatedRelationshipNotAllowed),
+            "delegated.claim_denied" => Some(Self::DelegatedClaimDenied),
+            "delegated.subject_not_permitted" => Some(Self::DelegatedSubjectNotPermitted),
+            "delegated.proof_denied" => Some(Self::DelegatedProofDenied),
             _ => None,
         }
     }
@@ -433,6 +451,14 @@ pub enum SourceCapability {
         claim_id: BoundedClaimId,
         subject_binding_hash: Hashed<SubjectBinding>,
     },
+    DelegatedAttestation {
+        proof_claim_id: BoundedClaimId,
+        #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+        allowed_claim_ids: BTreeSet<BoundedClaimId>,
+        requester_subject_binding_hash: Hashed<SubjectBinding>,
+        dependent_target_hash: Hashed<SubjectBinding>,
+        relationship_type: ConfigMetadata,
+    },
 }
 
 impl SourceCapability {
@@ -441,6 +467,7 @@ impl SourceCapability {
         match self {
             Self::Machine { .. } => AccessMode::MachineClient,
             Self::SelfAttestation { .. } => AccessMode::SelfAttestation,
+            Self::DelegatedAttestation { .. } => AccessMode::DelegatedAttestation,
         }
     }
 
@@ -449,6 +476,7 @@ impl SourceCapability {
         match self {
             Self::Machine { scopes } => scopes.contains(scope),
             Self::SelfAttestation { .. } => false,
+            Self::DelegatedAttestation { .. } => false,
         }
     }
 
@@ -459,6 +487,52 @@ impl SourceCapability {
             Self::SelfAttestation {
                 claim_id: allowed, ..
             } => allowed.as_str() == claim_id,
+            Self::DelegatedAttestation { .. } => false,
+        }
+    }
+
+    #[must_use]
+    pub fn allows_delegated_claim(&self, claim_id: &str) -> bool {
+        match self {
+            Self::DelegatedAttestation {
+                proof_claim_id,
+                allowed_claim_ids,
+                ..
+            } => {
+                proof_claim_id.as_str() == claim_id
+                    || allowed_claim_ids
+                        .iter()
+                        .any(|allowed| allowed.as_str() == claim_id)
+            }
+            Self::Machine { .. } | Self::SelfAttestation { .. } => false,
+        }
+    }
+
+    #[must_use]
+    pub fn required_delegated_proof_for_claim(&self, claim_id: &str) -> Option<&str> {
+        match self {
+            Self::DelegatedAttestation {
+                proof_claim_id,
+                allowed_claim_ids,
+                ..
+            } if proof_claim_id.as_str() != claim_id
+                && allowed_claim_ids
+                    .iter()
+                    .any(|allowed| allowed.as_str() == claim_id) =>
+            {
+                Some(proof_claim_id.as_str())
+            }
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn is_delegated_proof_claim(&self, claim_id: &str) -> bool {
+        match self {
+            Self::DelegatedAttestation { proof_claim_id, .. } => {
+                proof_claim_id.as_str() == claim_id
+            }
+            Self::Machine { .. } | Self::SelfAttestation { .. } => false,
         }
     }
 }
@@ -1367,6 +1441,12 @@ pub struct StoredSelfAttestationMetadata {
     pub subject_id_type: ConfigMetadata,
     pub subject_binding_claim: ConfigMetadata,
     pub subject_binding_hash: Hashed<SubjectBinding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dependent_target_hash: Option<Hashed<SubjectBinding>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relationship_type: Option<ConfigMetadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proof_claim_id: Option<BoundedClaimId>,
     pub requested_claims_hash: Hashed<ClaimSet>,
     pub disclosure: ConfigMetadata,
     pub result_format: ConfigMetadata,
@@ -1415,6 +1495,10 @@ pub struct EvidenceAuthorizationDetails {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subject: Option<EvidenceAuthorizationSubject>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<EvidenceAuthorizationTarget>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relationship: Option<EvidenceAuthorizationRelationship>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub access_mode: Option<AccessMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assisted_access_context: Option<EvidenceAssistedAccessContext>,
@@ -1424,6 +1508,18 @@ pub struct EvidenceAuthorizationDetails {
 pub struct EvidenceAuthorizationSubject {
     pub binding_claim: String,
     pub id_type: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct EvidenceAuthorizationTarget {
+    pub id_type: String,
+    pub id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct EvidenceAuthorizationRelationship {
+    pub relationship_type: String,
+    pub proof_claim: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -1458,7 +1554,10 @@ impl EvidencePrincipal {
 
     #[must_use]
     pub const fn is_self_attestation(&self) -> bool {
-        matches!(self.access_mode, AccessMode::SelfAttestation)
+        matches!(
+            self.access_mode,
+            AccessMode::SelfAttestation | AccessMode::DelegatedAttestation
+        )
     }
 
     #[must_use]
