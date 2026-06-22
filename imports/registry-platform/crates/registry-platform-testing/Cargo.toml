@@ -17,13 +17,13 @@ axum.workspace = true
 base64.workspace = true
 bytes.workspace = true
 jsonwebtoken.workspace = true
-registry-platform-audit = { version = "0.3.2", path = "../registry-platform-audit" }
-registry-platform-crypto = { version = "0.3.2", path = "../registry-platform-crypto" }
-registry-platform-httpsec = { version = "0.3.2", path = "../registry-platform-httpsec" }
-registry-platform-httputil = { version = "0.3.2", path = "../registry-platform-httputil" }
-registry-platform-oid4vci = { version = "0.3.2", path = "../registry-platform-oid4vci" }
-registry-platform-oidc = { version = "0.3.2", path = "../registry-platform-oidc" }
-registry-platform-replay = { version = "0.3.2", path = "../registry-platform-replay" }
+registry-platform-audit.workspace = true
+registry-platform-crypto.workspace = true
+registry-platform-httpsec.workspace = true
+registry-platform-httputil.workspace = true
+registry-platform-oid4vci.workspace = true
+registry-platform-oidc.workspace = true
+registry-platform-replay.workspace = true
 reqwest.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

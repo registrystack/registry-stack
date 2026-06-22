@@ -10,8 +10,8 @@ publish = false
 [dependencies]
 base64.workspace = true
 jsonwebtoken.workspace = true
-registry-platform-crypto = { version = "0.3.2", path = "../registry-platform-crypto" }
-registry-platform-httputil = { version = "0.3.2", path = "../registry-platform-httputil" }
+registry-platform-crypto.workspace = true
+registry-platform-httputil.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
