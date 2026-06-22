@@ -6,6 +6,7 @@ const journeyTargets = new Map([
   ["docs.registrystack.org", "docs"],
   ["github.com", "github"],
   ["wallet.lab.registrystack.org", "wallet"],
+  ["portal.lab.registrystack.org", "citizen-portal"],
   ["citizen-notary.lab.registrystack.org", "notary"],
 ]);
 

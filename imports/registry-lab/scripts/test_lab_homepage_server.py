@@ -1178,6 +1178,11 @@ class HomepageHtmlTest(unittest.TestCase):
         self.assertIn("Run a guided scenario", self.html)
         self.assertNotIn('id="scenario-grid"', self.html)
 
+    def test_homepage_links_to_citizen_portal(self) -> None:
+        self.assertIn("https://portal.lab.registrystack.org/", self.html)
+        self.assertIn("Citizen Portal", self.html)
+        self.assertIn("portal.lab.registrystack.org", HOMEPAGE_JS)
+
 
 class UmamiAnalyticsTest(unittest.TestCase):
     """Umami is opt-in at runtime and keeps the default CSP locked down."""

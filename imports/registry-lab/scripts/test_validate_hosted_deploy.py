@@ -67,6 +67,12 @@ class HostedDeployValidationTest(unittest.TestCase):
         issues = self._validate(compose, self._valid_esignet())
         self.assertIssue(issues, "floating-product-image-tag")
 
+    def test_rejects_floating_citizen_portal_image_tags(self) -> None:
+        compose = self._valid_registry_lab()
+        compose["services"]["citizen-portal"]["image"] = "ghcr.io/jeremi/citizen-portal:main"
+        issues = self._validate(compose, self._valid_esignet())
+        self.assertIssue(issues, "floating-product-image-tag")
+
     def test_rejects_hardcoded_product_image_digests(self) -> None:
         compose = self._valid_registry_lab()
         compose["services"]["civil-registry-relay"][
@@ -75,8 +81,15 @@ class HostedDeployValidationTest(unittest.TestCase):
         issues = self._validate(compose, self._valid_esignet())
         self.assertIssue(issues, "product-image-env-var")
 
+    def test_rejects_hardcoded_citizen_portal_image_digests(self) -> None:
+        compose = self._valid_registry_lab()
+        compose["services"]["citizen-portal"]["image"] = "ghcr.io/jeremi/citizen-portal@sha256:abc"
+        issues = self._validate(compose, self._valid_esignet())
+        self.assertIssue(issues, "product-image-env-var")
+
     def test_allows_interim_local_hosted_product_tags(self) -> None:
         compose = self._valid_registry_lab()
+        compose["services"]["citizen-portal"]["image"] = "citizen-portal:hosted"
         compose["services"]["civil-registry-relay"]["image"] = "registry-relay:hosted"
         compose["services"]["citizen-civil-notary"]["image"] = "registry-notary:hosted"
         compose["services"]["openfn-dhis2-sidecar"][
@@ -87,6 +100,7 @@ class HostedDeployValidationTest(unittest.TestCase):
 
     def test_strict_mode_rejects_interim_local_hosted_product_tags(self) -> None:
         compose = self._valid_registry_lab()
+        compose["services"]["citizen-portal"]["image"] = "citizen-portal:hosted"
         compose["services"]["civil-registry-relay"]["image"] = "registry-relay:hosted"
         compose["services"]["citizen-civil-notary"]["image"] = "registry-notary:hosted"
         compose["services"]["openfn-dhis2-sidecar"][
@@ -1771,6 +1785,26 @@ cp -a /tmp/repo/scripts/lab_homepage_static /out/static-scripts/
                         "AGRI_AGGREGATE_READER_RAW": "${AGRI_AGGREGATE_READER_RAW:-}",
                     },
                 },
+                "citizen-portal": {
+                    "image": "${REGISTRY_LAB_CITIZEN_PORTAL_IMAGE:-ghcr.io/jeremi/citizen-portal@sha256:abc}",
+                    "expose": ["3000"],
+                    "environment": {
+                        "ORIGIN": f"https://portal.{lab}",
+                        "PORT": "3000",
+                        "HOST": "0.0.0.0",
+                        "PORTAL_PROVIDER": "mock",
+                        "PORTAL_SECURE_COOKIES": "true",
+                        "PROTOCOL_HEADER": "x-forwarded-proto",
+                        "HOST_HEADER": "x-forwarded-host",
+                        "PORT_HEADER": "x-forwarded-port",
+                    },
+                    "healthcheck": {
+                        "test": [
+                            "CMD-SHELL",
+                            "node -e 'fetch(\"http://127.0.0.1:3000/\").then((r) => { if (!r.ok) process.exit(1); }).catch(() => process.exit(1));'",
+                        ]
+                    },
+                },
                 "shared-eligibility-notary": {
                     "image": "${REGISTRY_NOTARY_IMAGE:-ghcr.io/registrystack/registry-notary@sha256:abc}",
                     "command": [
@@ -1839,6 +1873,7 @@ cp -a /tmp/repo/scripts/lab_homepage_static /out/static-scripts/
                 },
             },
             "x-hosted-domains": {
+                "citizen-portal": f"portal.{lab}",
                 "citizen-civil-notary": f"citizen-notary.{lab}",
                 "social-protection-notary": f"social-notary.{lab}",
                 "civil-registry-relay": f"civil-relay.{lab}",

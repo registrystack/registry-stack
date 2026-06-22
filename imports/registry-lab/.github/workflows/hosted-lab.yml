@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/hosted-lab.yml"
+      - "Dockerfile.citizen-portal"
       - "Dockerfile.static-metadata"
       - "compose.coolify.yaml"
       - "compose.agri-hosted.yaml"
@@ -16,6 +17,7 @@ on:
       - "config/lab-homepage/**"
       - "config/esignet/nginx-hosted.conf"
       - "config/walt/**"
+      - "portal/**"
       - "docs/README.md"
       - "docs/public-api-workspace.md"
       - "requests/registry-lab/**"
@@ -50,6 +52,7 @@ on:
       - staging
     paths:
       - ".github/workflows/hosted-lab.yml"
+      - "Dockerfile.citizen-portal"
       - "Dockerfile.static-metadata"
       - "compose.coolify.yaml"
       - "compose.agri-hosted.yaml"
@@ -62,6 +65,7 @@ on:
       - "config/lab-homepage/**"
       - "config/esignet/nginx-hosted.conf"
       - "config/walt/**"
+      - "portal/**"
       - "docs/README.md"
       - "docs/public-api-workspace.md"
       - "requests/registry-lab/**"
@@ -107,14 +111,32 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Set up Node for citizen portal
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
       - name: Show Docker Compose version
         run: docker compose version
+
+      - name: Run citizen portal gates
+        working-directory: portal
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.3.0 --activate
+          pnpm install --frozen-lockfile
+          pnpm check
+          pnpm test
+          pnpm build
+          pnpm exec playwright install --with-deps chromium
+          pnpm e2e
 
       - name: Check whitespace
         run: |
           # shellcheck disable=SC2016
           git ls-files -z \
             .github/workflows/hosted-lab.yml \
+            Dockerfile.citizen-portal \
             Dockerfile.static-metadata \
             compose.coolify.yaml \
             compose.agri-hosted.yaml \
@@ -127,6 +149,7 @@ jobs:
             config/lab-homepage \
             config/esignet/nginx-hosted.conf \
             config/walt \
+            portal \
             docs/README.md \
             docs/public-api-workspace.md \
             requests/registry-lab \

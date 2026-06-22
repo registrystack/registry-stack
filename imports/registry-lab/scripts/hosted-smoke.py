@@ -5,21 +5,25 @@ from __future__ import annotations
 
 import argparse
 import base64
+import http.cookiejar
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode, urljoin
+from urllib.parse import urlencode, urljoin, urlparse, urlunparse
 
 
 DEFAULT_BASE_URL = "https://lab.registrystack.org"
+DEFAULT_CITIZEN_PORTAL_URL = "https://portal.lab.registrystack.org"
 DEFAULT_CITIZEN_ISSUER = "https://citizen-notary.lab.registrystack.org"
 DEFAULT_DHIS2_NOTARY = "https://dhis2-notary.lab.registrystack.org"
 DEFAULT_DHIS2_SERVICE_ID = "dhis2-health-notary"
@@ -133,6 +137,16 @@ EXPECTED_STEP_STATUSES = {
     },
 }
 
+CITIZEN_PORTAL_EXPECTED_STEPS = {
+    "citizen-portal": [
+        "landing",
+        "solmaraid-sign-in",
+        "mock-login",
+        "evaluate-field",
+        "sse-redacted-trace",
+    ],
+}
+
 DEFAULT_EVALUATED_CLAIM_SERVICES = {
     "civil-notary",
     "social-protection-notary",
@@ -171,12 +185,16 @@ DID_JWK_RE = re.compile(r"\bdid:jwk:[A-Za-z0-9_-]{24,}\b")
 JSON_SECRET_RE = re.compile(
     r'(?i)("?(?:authorization|auth_header|token|credential|disclosures?|holder|proof|secret)"?\s*[:=]\s*)("[^"]+"|[^,\s}]+)'
 )
+PORTAL_RAW_IDENTIFIER_RE = re.compile(r"\b(?:NID|CP)-[A-Za-z0-9-]+\b")
+PORTAL_RAW_BEARER_RE = re.compile(r"(?i)\b(?:authorization\s*[:=]\s*)?bearer\s+[A-Za-z0-9._~+/=-]{8,}")
 
 
 @dataclass(frozen=True)
 class SmokeConfig:
     base_url: str = DEFAULT_BASE_URL
+    citizen_portal_smoke: bool = True
     credential_smoke: bool = False
+    portal_url: str | None = None
     timeout: float = 12.0
 
 
@@ -203,8 +221,9 @@ class SmokeFailure(Exception):
 
 
 class JsonClient:
-    def __init__(self, timeout: float) -> None:
+    def __init__(self, timeout: float, opener: urllib.request.OpenerDirector | None = None) -> None:
         self.timeout = timeout
+        self.opener = opener or urllib.request.build_opener()
 
     def get(self, url: str, headers: dict[str, str] | None = None) -> HttpJsonResponse:
         return self.request("GET", url, headers=headers)
@@ -219,20 +238,15 @@ class JsonClient:
         headers: dict[str, str] | None = None,
         body: Any | None = None,
     ) -> HttpJsonResponse:
-        request_headers = {"User-Agent": "registry-lab-hosted-smoke/1.0", **(headers or {})}
-        data = None
-        if body is not None:
-            data = json.dumps(body).encode("utf-8")
-            request_headers.setdefault("Content-Type", "application/json")
-        request = urllib.request.Request(url, headers=request_headers, data=data, method=method)
+        request = self.build_request(method, url, headers=headers, body=body)
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            with self.opener.open(request, timeout=self.timeout) as response:
                 raw = response.read()
                 return HttpJsonResponse(
                     status=response.status,
                     body=parse_json_body(raw),
                     headers={key.lower(): value for key, value in response.headers.items()},
-                    url=url,
+                    url=response.geturl(),
                     method=method,
                 )
         except urllib.error.HTTPError as error:
@@ -241,7 +255,7 @@ class JsonClient:
                 status=error.code,
                 body=parse_json_body(raw),
                 headers={key.lower(): value for key, value in error.headers.items()},
-                url=url,
+                url=error.geturl(),
                 method=method,
             )
         except Exception as error:  # noqa: BLE001
@@ -253,6 +267,29 @@ class JsonClient:
                 method=method,
                 error=error.__class__.__name__,
             )
+
+    def open_response(
+        self,
+        method: str,
+        url: str,
+        headers: dict[str, str] | None = None,
+        body: Any | None = None,
+    ) -> Any:
+        return self.opener.open(self.build_request(method, url, headers=headers, body=body), timeout=self.timeout)
+
+    def build_request(
+        self,
+        method: str,
+        url: str,
+        headers: dict[str, str] | None = None,
+        body: Any | None = None,
+    ) -> urllib.request.Request:
+        request_headers = {"User-Agent": "registry-lab-hosted-smoke/1.0", **(headers or {})}
+        data = None
+        if body is not None:
+            data = json.dumps(body).encode("utf-8")
+            request_headers.setdefault("Content-Type", "application/json")
+        return urllib.request.Request(url, headers=request_headers, data=data, method=method)
 
 
 def joined_url(base_url: str, path: str) -> str:
@@ -393,6 +430,183 @@ def claim_answer_available(answer: Any) -> bool:
     return answer.get("preview") is True and answer.get("subject_found") is True
 
 
+def resolve_citizen_portal_url(config: SmokeConfig, base_url: str) -> str:
+    configured = (
+        config.portal_url
+        or os.environ.get("REGISTRY_LAB_CITIZEN_PORTAL_URL")
+        or os.environ.get("CITIZEN_PORTAL_URL")
+        or ""
+    ).strip()
+    if configured:
+        return configured.rstrip("/")
+    if base_url.rstrip("/") == DEFAULT_BASE_URL:
+        return DEFAULT_CITIZEN_PORTAL_URL
+
+    parsed = urlparse(base_url)
+    host = parsed.hostname or ""
+    if host.startswith("lab."):
+        netloc = "portal." + host
+        if parsed.port:
+            netloc = f"{netloc}:{parsed.port}"
+        return urlunparse((parsed.scheme, netloc, "", "", "", "")).rstrip("/")
+    return ""
+
+
+def cookie_client(timeout: float) -> JsonClient:
+    jar = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    return JsonClient(timeout, opener)
+
+
+def run_citizen_portal_smoke(config: SmokeConfig, base_url: str) -> dict[str, Any]:
+    expected_steps = CITIZEN_PORTAL_EXPECTED_STEPS["citizen-portal"]
+    if not config.citizen_portal_smoke:
+        return {"status": "skipped", "reason": "disabled", "checks": 0, "steps": expected_steps}
+
+    portal_url = resolve_citizen_portal_url(config, base_url)
+    if not portal_url:
+        return {
+            "status": "skipped",
+            "reason": "portal_url_not_configured",
+            "checks": 0,
+            "steps": expected_steps,
+        }
+
+    client = cookie_client(config.timeout)
+    landing = client.get(joined_url(portal_url, "/"))
+    require_ok(landing, "citizen-portal-landing-unavailable")
+    require(
+        isinstance(landing.body, str) and "Sign in with SolmaraID" in landing.body,
+        "citizen-portal-sign-in-missing",
+        {"url": landing.url, "status": landing.status, "body": landing.body},
+    )
+
+    login = client.get(joined_url(portal_url, "/auth/login"))
+    require_ok(login, "citizen-portal-login-unavailable")
+    require(
+        urlparse(login.url).path.rstrip("/") == "/services",
+        "citizen-portal-login-redirect-mismatch",
+        {"url": login.url, "status": login.status},
+    )
+
+    trace, trace_text = run_citizen_portal_evaluation_round_trip(client, portal_url, config.timeout)
+    assert_no_portal_sensitive_material(trace_text, "citizen-portal-sse-sensitive-material")
+
+    return {
+        "status": "done",
+        "url": portal_url,
+        "checks": len(expected_steps),
+        "steps": expected_steps,
+        "evaluation": {
+            "field_id": trace.get("fieldId"),
+            "status": trace.get("status"),
+            "trace_id": trace.get("id"),
+        },
+    }
+
+
+def run_citizen_portal_evaluation_round_trip(
+    client: JsonClient,
+    portal_url: str,
+    timeout: float,
+) -> tuple[dict[str, Any], str]:
+    stream_url = joined_url(portal_url, "/proof/stream")
+    try:
+        stream = client.open_response("GET", stream_url, headers={"Accept": "text/event-stream"})
+    except Exception as error:  # noqa: BLE001
+        raise SmokeFailure("citizen-portal-sse-unavailable", {"url": stream_url, "error": error.__class__.__name__}) from error
+
+    try:
+        require(stream.status == 200, "citizen-portal-sse-unavailable", {"url": stream_url, "status": stream.status})
+        content_type = stream.headers.get("content-type", "")
+        require(
+            "text/event-stream" in content_type,
+            "citizen-portal-sse-content-type-mismatch",
+            {"url": stream_url, "content_type": content_type},
+        )
+
+        evaluation_body = {"slug": "agri-subsidy", "fieldId": "registered-farmer"}
+        evaluation = client.post(joined_url(portal_url, "/api/evaluate"), evaluation_body)
+        require_ok(evaluation, "citizen-portal-evaluation-unavailable")
+        require(
+            isinstance(evaluation.body, dict) and evaluation.body.get("state") == "verified",
+            "citizen-portal-evaluation-unexpected",
+            {"status": evaluation.status, "body": evaluation.body},
+        )
+        trace_id = evaluation.body.get("traceId") if isinstance(evaluation.body, dict) else None
+        require(
+            isinstance(trace_id, str) and trace_id,
+            "citizen-portal-evaluation-trace-id-missing",
+            {"status": evaluation.status, "body": evaluation.body},
+        )
+
+        trace, trace_text = read_sse_trace(stream, timeout, "registered-farmer", trace_id)
+        require(
+            trace.get("fieldId") == "registered-farmer",
+            "citizen-portal-sse-trace-field-mismatch",
+            trace,
+        )
+        require(
+            trace.get("status") in {"ok", "false", "denied"},
+            "citizen-portal-sse-trace-status-mismatch",
+            trace,
+        )
+        return trace, trace_text
+    finally:
+        stream.close()
+
+
+def read_sse_trace(stream: Any, timeout: float, field_id: str, trace_id: str) -> tuple[dict[str, Any], str]:
+    deadline = time.monotonic() + timeout
+    event_name = ""
+    data_lines: list[str] = []
+    seen_events: list[str] = []
+
+    while time.monotonic() < deadline:
+        try:
+            raw = stream.readline()
+        except socket.timeout as error:
+            raise SmokeFailure("citizen-portal-sse-trace-timeout", {"seen_events": seen_events}) from error
+        if raw == b"":
+            break
+        line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+        if line == "":
+            if event_name:
+                seen_events.append(event_name)
+            if event_name == "trace":
+                data_text = "\n".join(data_lines)
+                assert_no_portal_sensitive_material(data_text, "citizen-portal-sse-sensitive-material")
+                try:
+                    payload = json.loads(data_text)
+                except json.JSONDecodeError as error:
+                    raise SmokeFailure("citizen-portal-sse-trace-invalid-json", data_text) from error
+                require(isinstance(payload, dict), "citizen-portal-sse-trace-shape-mismatch", payload)
+                if payload.get("fieldId") == field_id and payload.get("id") == trace_id:
+                    return payload, data_text
+            event_name = ""
+            data_lines = []
+            continue
+        if line.startswith("event:"):
+            event_name = line.split(":", 1)[1].strip()
+        elif line.startswith("data:"):
+            data_lines.append(line.split(":", 1)[1].lstrip())
+
+    raise SmokeFailure("citizen-portal-sse-trace-timeout", {"seen_events": seen_events})
+
+
+def assert_no_portal_sensitive_material(text: str, code: str) -> None:
+    identifier = PORTAL_RAW_IDENTIFIER_RE.search(text)
+    bearer = PORTAL_RAW_BEARER_RE.search(text)
+    require(
+        identifier is None and bearer is None,
+        code,
+        {
+            "identifier": identifier.group(0) if identifier else "",
+            "bearer": bearer.group(0) if bearer else "",
+        },
+    )
+
+
 def run_smoke(config: SmokeConfig) -> dict[str, Any]:
     base_url = config.base_url.rstrip("/")
     client = JsonClient(config.timeout)
@@ -464,6 +678,7 @@ def run_smoke(config: SmokeConfig) -> dict[str, Any]:
             step_summaries[scenario_id][step_id] = actual_status
 
     explorer_summary = run_explorer_smoke(client, base_url)
+    citizen_portal_summary = run_citizen_portal_smoke(config, base_url)
 
     summary: dict[str, Any] = {
         "base_url": base_url,
@@ -475,7 +690,9 @@ def run_smoke(config: SmokeConfig) -> dict[str, Any]:
             + sum(len(steps) for steps in EXPECTED_STEP_STATUSES.values())
             + len(EXPECTED_STEPS)
             + explorer_summary["checks"]
+            + citizen_portal_summary["checks"]
         ),
+        "citizen_portal": citizen_portal_summary,
         "credential_smoke": "skipped",
         "explorers": explorer_summary,
         "scenarios": step_summaries,
@@ -850,10 +1067,25 @@ def parse_datetime(value: Any) -> datetime | None:
 def parse_args(argv: list[str]) -> SmokeConfig:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
+    parser.add_argument(
+        "--portal-url",
+        default=None,
+        help=(
+            "Citizen portal base URL. Defaults to the hosted portal for the default lab URL, "
+            "or to portal.<lab-host> when the lab host starts with lab."
+        ),
+    )
+    parser.add_argument("--skip-citizen-portal-smoke", action="store_true")
     parser.add_argument("--credential-smoke", action="store_true")
     parser.add_argument("--timeout", type=float, default=12.0)
     args = parser.parse_args(argv)
-    return SmokeConfig(base_url=args.base_url, credential_smoke=args.credential_smoke, timeout=args.timeout)
+    return SmokeConfig(
+        base_url=args.base_url,
+        citizen_portal_smoke=not args.skip_citizen_portal_smoke,
+        credential_smoke=args.credential_smoke,
+        portal_url=args.portal_url,
+        timeout=args.timeout,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
