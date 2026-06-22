@@ -41,7 +41,7 @@ x-coolify-required-env:
   - SOCIAL_ROW_READER_HASH
 
 x-relay-common: &relay-common
-  image: ${REGISTRY_RELAY_IMAGE:-ghcr.io/jeremi/registry-relay@sha256:a7d6e9eb734751e0fd35993a1a59f251c25bbe0c4929f38efd0000c799ed9f26}
+  image: ${REGISTRY_RELAY_IMAGE:-ghcr.io/jeremi/registry-relay@sha256:67746141b44b3f9efa25482ccbf91373efc79efc9e3e8cd5c1df5655a0a1f3cd}
   environment: &relay-env
     RUST_LOG: ${RUST_LOG:-info}
     # Relay config and workbook fixtures are copied by config-loader into named
@@ -59,7 +59,7 @@ x-relay-common: &relay-common
     start_period: 10s
 
 x-notary-common: &notary-common
-  image: ${REGISTRY_NOTARY_IMAGE:-ghcr.io/jeremi/registry-notary@sha256:adbcf6ce1fac6ee86c8ee9873e92edab5fdc75483d5cf85b70717a446f0b1fc8}
+  image: ${REGISTRY_NOTARY_IMAGE:-ghcr.io/jeremi/registry-notary@sha256:81c97e192daa066476f220f0f5d3a8f0c9b0c383a289d2db76e12539099c59bb}
   environment: &notary-env
     RUST_LOG: ${RUST_LOG:-info}
     REGISTRY_NOTARY_REPLAY_REDIS_URL: ${REGISTRY_NOTARY_REPLAY_REDIS_URL:-redis://redis:6379/0}

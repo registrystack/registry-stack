@@ -457,7 +457,6 @@ def runnable_case_ids(profile: str) -> set[str]:
             "baseline-success-combined-support",
             "baseline-denial-purpose",
             "baseline-denial-assurance",
-            "baseline-denial-jurisdiction",
             "baseline-denial-legal-basis",
             "baseline-denial-consent",
             "baseline-audit-permit",

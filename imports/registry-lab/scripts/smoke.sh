@@ -519,7 +519,7 @@ import sys
 
 log_path = sys.argv[1]
 expected_policy_id = "lab.combined-support-eligibility.governed-evidence.v1"
-expected_policy_hash = "sha256:4a680200c1095d2dbee608046d78d2399db5dfae7426c36a4580fe81e50dbeb9"
+expected_policy_hash = "sha256:77a93c25e2d8b3c734176a8646628af65dd2a50396f2710e2fc26c5847259e5c"
 expected_datasets = {
     "civil_registry",
     "health_registry",

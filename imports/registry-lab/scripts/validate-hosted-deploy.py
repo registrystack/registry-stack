@@ -223,11 +223,13 @@ ALLOWED_INTERIM_PRODUCT_IMAGES = {
     "registry-relay:hosted",
     "registry-notary:hosted",
     "registry-notary-openfn-sidecar:hosted",
+    "registry-notary-source-adapter-sidecar:hosted",
 }
 
 PRODUCT_IMAGE_NAMES = (
     "registry-lab-citizen-portal",
     "registry-notary-openfn-sidecar",
+    "registry-notary-source-adapter-sidecar",
     "registry-relay",
     "registry-notary",
 )
@@ -236,6 +238,7 @@ PRODUCT_IMAGE_ENV_BY_NAME = {
     "registry-relay": "REGISTRY_RELAY_IMAGE",
     "registry-notary": "REGISTRY_NOTARY_IMAGE",
     "registry-notary-openfn-sidecar": "REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE",
+    "registry-notary-source-adapter-sidecar": "REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE",
 }
 
 PUBLIC_KEYWORDS = (
@@ -2625,6 +2628,10 @@ def load_compose(path: Path) -> dict[str, Any]:
 
 def render_compose_json(path: Path) -> dict[str, Any]:
     env = os.environ.copy()
+    # The release check generates a local ignored .env with loopback secrets.
+    # Hosted artifact validation must read the compose artifact, not that local
+    # runtime state, when PyYAML is unavailable and Docker Compose is the parser.
+    env["COMPOSE_DISABLE_ENV_FILE"] = "1"
     missing_vars: set[str] = set()
     for _attempt in range(20):
         try:

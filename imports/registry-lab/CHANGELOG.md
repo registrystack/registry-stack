@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## registry-stack-beta-4-2026-06-22
+
+- Advanced vendor pins for Platform, Manifest, Notary, and Relay to the beta-4
+  release refs.
+- Updated hosted/demo image fallbacks to the beta-4 Registry Relay, Registry
+  Notary, and Notary source-adapter sidecar release digests.
+- Refreshed the Lab governed-config helper to consume Registry Platform
+  `v0.3.2`.
+
 ## registry-stack-beta-3-2026-06-21
 
 - Added first-release readiness guidance for treating Registry Lab as the

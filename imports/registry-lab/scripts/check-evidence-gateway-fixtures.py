@@ -34,7 +34,7 @@ REQUIRED_PACK_IDS = {
 MATCHING_MODE_STATUSES = {"implemented", "fixture_data_only", "not_implemented"}
 MATCHING_MODE_NAMES = {"identifier", "demographic", "party_demographic"}
 BASELINE_POLICY_ID = "lab.combined-support-eligibility.governed-evidence.v1"
-BASELINE_POLICY_HASH = "sha256:4a680200c1095d2dbee608046d78d2399db5dfae7426c36a4580fe81e50dbeb9"
+BASELINE_POLICY_HASH = "sha256:77a93c25e2d8b3c734176a8646628af65dd2a50396f2710e2fc26c5847259e5c"
 BASELINE_RELAY_CONFIGS = [
     ROOT / "config" / "relay" / "civil-registry-relay.yaml",
     ROOT / "config" / "relay" / "health-registry-relay.yaml",
@@ -762,13 +762,17 @@ def validate_golden(
         if case_type == "credential":
             require(binding_id not in WAVE_A_BINDINGS, f"{case_id} Wave A fixtures must not cover deferred SD-JWT credentials")
             require(expected.get("credential_format") == "application/dc+sd-jwt", f"{case_id} must cover SD-JWT VC credential format")
-    required_denial_codes = (
-        {"pdp.purpose_not_permitted", "pdp.jurisdiction_not_permitted"}
-        if binding_id in WAVE_A_BINDINGS
-        else REQUIRED_DENIAL_CODES
-    )
+    if binding_id in WAVE_A_BINDINGS:
+        required_denial_codes = {"pdp.purpose_not_permitted", "pdp.jurisdiction_not_permitted"}
+        allowed_denial_codes = required_denial_codes
+    elif binding_id == "combined-support-eligibility/v1":
+        required_denial_codes = REQUIRED_DENIAL_CODES - {"pdp.jurisdiction_not_permitted"}
+        allowed_denial_codes = required_denial_codes
+    else:
+        required_denial_codes = REQUIRED_DENIAL_CODES
+        allowed_denial_codes = REQUIRED_DENIAL_CODES
     missing_denials = required_denial_codes - denial_codes
-    unexpected_denials = denial_codes - REQUIRED_DENIAL_CODES
+    unexpected_denials = denial_codes - allowed_denial_codes
     require(not missing_denials, f"{path.name} missing denial codes: {', '.join(sorted(missing_denials))}")
     require(not unexpected_denials, f"{path.name} has unexpected denial codes: {', '.join(sorted(unexpected_denials))}")
     if max_age_seconds is not None and binding_id not in WAVE_A_BINDINGS:

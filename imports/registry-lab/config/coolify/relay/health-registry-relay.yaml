@@ -15,7 +15,7 @@ config_trust:
 metadata:
   source:
     path: health-registry-relay.metadata.yaml
-    digest: sha256:dedfc882857de43198c553caeb3fb0b00195acf95b01efdc2b768b05314050b2
+    digest: sha256:a25d005bce2bc68c51de682906d47674c1922ae22d2173e2996f8670484c20aa
   ecosystem_binding:
     id: combined-support-eligibility/v1
     version: v1

@@ -2,7 +2,7 @@
   "schema_version": "registry-lab/evidence-gateway-golden-fixtures/v1",
   "binding_id": "combined-support-eligibility/v1",
   "policy_id": "lab.combined-support-eligibility.governed-evidence.v1",
-  "policy_hash": "sha256:4a680200c1095d2dbee608046d78d2399db5dfae7426c36a4580fe81e50dbeb9",
+  "policy_hash": "sha256:77a93c25e2d8b3c734176a8646628af65dd2a50396f2710e2fc26c5847259e5c",
   "freshness_reference_time": "2026-06-19T00:00:00Z",
   "cases": [
     {
@@ -44,7 +44,7 @@
           "binding_id": "combined-support-eligibility/v1",
           "binding_version": "v1",
           "policy_id": "lab.combined-support-eligibility.governed-evidence.v1",
-          "policy_hash": "sha256:4a680200c1095d2dbee608046d78d2399db5dfae7426c36a4580fe81e50dbeb9",
+          "policy_hash": "sha256:77a93c25e2d8b3c734176a8646628af65dd2a50396f2710e2fc26c5847259e5c",
           "evaluated_rule_ids": [
             "source-binding-policy:*"
           ]
@@ -87,7 +87,7 @@
         "audit": {
           "binding_id": "combined-support-eligibility/v1",
           "policy_id": "lab.combined-support-eligibility.governed-evidence.v1",
-          "policy_hash": "sha256:4a680200c1095d2dbee608046d78d2399db5dfae7426c36a4580fe81e50dbeb9",
+          "policy_hash": "sha256:77a93c25e2d8b3c734176a8646628af65dd2a50396f2710e2fc26c5847259e5c",
           "decision": "deny"
         }
       }
@@ -128,7 +128,7 @@
         "audit": {
           "binding_id": "combined-support-eligibility/v1",
           "policy_id": "lab.combined-support-eligibility.governed-evidence.v1",
-          "policy_hash": "sha256:4a680200c1095d2dbee608046d78d2399db5dfae7426c36a4580fe81e50dbeb9",
+          "policy_hash": "sha256:77a93c25e2d8b3c734176a8646628af65dd2a50396f2710e2fc26c5847259e5c",
           "decision": "deny"
         }
       }
@@ -169,7 +169,7 @@
         "audit": {
           "binding_id": "combined-support-eligibility/v1",
           "policy_id": "lab.combined-support-eligibility.governed-evidence.v1",
-          "policy_hash": "sha256:4a680200c1095d2dbee608046d78d2399db5dfae7426c36a4580fe81e50dbeb9",
+          "policy_hash": "sha256:77a93c25e2d8b3c734176a8646628af65dd2a50396f2710e2fc26c5847259e5c",
           "decision": "deny"
         }
       }
@@ -210,48 +210,7 @@
         "audit": {
           "binding_id": "combined-support-eligibility/v1",
           "policy_id": "lab.combined-support-eligibility.governed-evidence.v1",
-          "policy_hash": "sha256:4a680200c1095d2dbee608046d78d2399db5dfae7426c36a4580fe81e50dbeb9",
-          "decision": "deny"
-        }
-      }
-    },
-    {
-      "id": "baseline-denial-jurisdiction",
-      "type": "denial",
-      "synthetic_data_refs": [
-        "baseline-denied-purpose"
-      ],
-      "request": {
-        "purpose": "https://demo.example.gov/purpose/decentralized-evidence-demo",
-        "binding_id": "combined-support-eligibility/v1",
-        "jurisdiction": "XY",
-        "assurance_level": "substantial",
-        "legal_basis_ref": "demo:child-support-eligibility",
-        "consent_ref": "demo:child-support-consent",
-        "target": {
-          "type": "Person",
-          "identifiers": [
-            {
-              "scheme": "national_id",
-              "value": "NID-1009"
-            }
-          ]
-        },
-        "claims": [
-          "eligible-for-combined-support"
-        ],
-        "disclosure": "predicate"
-      },
-      "expected": {
-        "status": 403,
-        "problem": {
-          "code": "pdp.jurisdiction_not_permitted"
-        },
-        "zero_source_reads": true,
-        "audit": {
-          "binding_id": "combined-support-eligibility/v1",
-          "policy_id": "lab.combined-support-eligibility.governed-evidence.v1",
-          "policy_hash": "sha256:4a680200c1095d2dbee608046d78d2399db5dfae7426c36a4580fe81e50dbeb9",
+          "policy_hash": "sha256:77a93c25e2d8b3c734176a8646628af65dd2a50396f2710e2fc26c5847259e5c",
           "decision": "deny"
         }
       }
@@ -292,7 +251,7 @@
         "audit": {
           "binding_id": "combined-support-eligibility/v1",
           "policy_id": "lab.combined-support-eligibility.governed-evidence.v1",
-          "policy_hash": "sha256:4a680200c1095d2dbee608046d78d2399db5dfae7426c36a4580fe81e50dbeb9",
+          "policy_hash": "sha256:77a93c25e2d8b3c734176a8646628af65dd2a50396f2710e2fc26c5847259e5c",
           "decision": "deny"
         }
       }
@@ -333,7 +292,7 @@
         "audit": {
           "binding_id": "combined-support-eligibility/v1",
           "policy_id": "lab.combined-support-eligibility.governed-evidence.v1",
-          "policy_hash": "sha256:4a680200c1095d2dbee608046d78d2399db5dfae7426c36a4580fe81e50dbeb9",
+          "policy_hash": "sha256:77a93c25e2d8b3c734176a8646628af65dd2a50396f2710e2fc26c5847259e5c",
           "decision": "deny"
         }
       }
@@ -377,7 +336,7 @@
         "audit": {
           "binding_id": "combined-support-eligibility/v1",
           "policy_id": "lab.combined-support-eligibility.governed-evidence.v1",
-          "policy_hash": "sha256:4a680200c1095d2dbee608046d78d2399db5dfae7426c36a4580fe81e50dbeb9",
+          "policy_hash": "sha256:77a93c25e2d8b3c734176a8646628af65dd2a50396f2710e2fc26c5847259e5c",
           "decision": "deny"
         }
       }
@@ -490,12 +449,11 @@
           "binding_id": "combined-support-eligibility/v1",
           "binding_version": "v1",
           "policy_id": "lab.combined-support-eligibility.governed-evidence.v1",
-          "policy_hash": "sha256:4a680200c1095d2dbee608046d78d2399db5dfae7426c36a4580fe81e50dbeb9",
+          "policy_hash": "sha256:77a93c25e2d8b3c734176a8646628af65dd2a50396f2710e2fc26c5847259e5c",
           "evaluated_rule_ids": [
             "source-binding-policy:health_facility.policy_identity",
             "source-binding-policy:health_facility.odrl_terms",
             "source-binding-policy:health_facility.purpose",
-            "source-binding-policy:health_facility.jurisdiction",
             "source-binding-policy:health_facility.assurance_allowed_set",
             "source-binding-policy:health_facility.legal_basis_required",
             "source-binding-policy:health_facility.consent_required",

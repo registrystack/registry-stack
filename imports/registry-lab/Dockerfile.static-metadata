@@ -5,11 +5,11 @@ FROM rust:1-bookworm AS publisher
 WORKDIR /app
 
 ARG REGISTRY_MANIFEST_REPO_URL=https://github.com/jeremi/registry-manifest.git
-ARG REGISTRY_MANIFEST_REF=141efade265f453e15c967770286bafc5c3a3956
+ARG REGISTRY_MANIFEST_REF=52da5e913d8652e98ce8e443102c5d23b1a0974f
 ARG REGISTRY_PLATFORM_REPO_URL=https://github.com/jeremi/registry-platform.git
-ARG REGISTRY_PLATFORM_REF=0abc4fde81764f6c81143b622624415232197129
+ARG REGISTRY_PLATFORM_REF=88d1a798043673dac30d809d87badb083c6e1a26
 ARG REGISTRY_RELAY_REPO_URL=https://github.com/jeremi/registry-relay.git
-ARG REGISTRY_RELAY_REF=380261c386309a4194b131913525f6cf70611adb
+ARG REGISTRY_RELAY_REF=cfb1b735c6a2b3a50f5204e49660a859ceabb87d
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates git openssl python3 && \

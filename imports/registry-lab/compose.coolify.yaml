@@ -83,7 +83,7 @@ x-coolify-required-env:
   - SOCIAL_ROW_READER_RAW
 
 x-relay-common: &relay-common
-  image: ${REGISTRY_RELAY_IMAGE:-ghcr.io/jeremi/registry-relay@sha256:a7d6e9eb734751e0fd35993a1a59f251c25bbe0c4929f38efd0000c799ed9f26}
+  image: ${REGISTRY_RELAY_IMAGE:-ghcr.io/jeremi/registry-relay@sha256:67746141b44b3f9efa25482ccbf91373efc79efc9e3e8cd5c1df5655a0a1f3cd}
   environment: &relay-env
     RUST_LOG: ${RUST_LOG:-info}
     # Relay config and workbook fixtures are copied by config-loader into named
@@ -101,7 +101,7 @@ x-relay-common: &relay-common
     start_period: 10s
 
 x-notary-common: &notary-common
-  image: ${REGISTRY_NOTARY_IMAGE:-ghcr.io/jeremi/registry-notary@sha256:adbcf6ce1fac6ee86c8ee9873e92edab5fdc75483d5cf85b70717a446f0b1fc8}
+  image: ${REGISTRY_NOTARY_IMAGE:-ghcr.io/jeremi/registry-notary@sha256:81c97e192daa066476f220f0f5d3a8f0c9b0c383a289d2db76e12539099c59bb}
   environment: &notary-env
     RUST_LOG: ${RUST_LOG:-info}
     REGISTRY_NOTARY_REPLAY_REDIS_URL: ${REGISTRY_NOTARY_REPLAY_REDIS_URL:-redis://redis:6379/0}
@@ -291,9 +291,9 @@ services:
       context: .
       dockerfile: Dockerfile.static-metadata
       args:
-        REGISTRY_MANIFEST_REF: 141efade265f453e15c967770286bafc5c3a3956
-        REGISTRY_PLATFORM_REF: 0abc4fde81764f6c81143b622624415232197129
-        REGISTRY_RELAY_REF: 380261c386309a4194b131913525f6cf70611adb
+        REGISTRY_MANIFEST_REF: 52da5e913d8652e98ce8e443102c5d23b1a0974f
+        REGISTRY_PLATFORM_REF: 88d1a798043673dac30d809d87badb083c6e1a26
+        REGISTRY_RELAY_REF: cfb1b735c6a2b3a50f5204e49660a859ceabb87d
     restart: unless-stopped
     expose:
       - "8080"
@@ -419,7 +419,7 @@ services:
         condition: service_healthy
 
   openfn-dhis2-sidecar:
-    image: ${REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE:-ghcr.io/jeremi/registry-notary-openfn-sidecar@sha256:61d1fad82b3a0ff605ebef0be52f1d4200711892a1fb81cb7058027215612999}
+    image: ${REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE:-ghcr.io/jeremi/registry-notary-source-adapter-sidecar@sha256:73afec9039d99563728417adf13d3ecfea2b5ecb40873b700d85c7dc9cc934e7}
     command:
       - --config
       - /etc/registry-notary-openfn/openfn-dhis2-sidecar.bootstrap.yaml

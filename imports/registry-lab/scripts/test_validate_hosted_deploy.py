@@ -94,7 +94,7 @@ class HostedDeployValidationTest(unittest.TestCase):
         compose["services"]["citizen-civil-notary"]["image"] = "registry-notary:hosted"
         compose["services"]["openfn-dhis2-sidecar"][
             "image"
-        ] = "registry-notary-openfn-sidecar:hosted"
+        ] = "registry-notary-source-adapter-sidecar:hosted"
         issues = self._validate(compose, self._valid_esignet())
         self.assertEqual([], issues)
 
@@ -105,7 +105,7 @@ class HostedDeployValidationTest(unittest.TestCase):
         compose["services"]["citizen-civil-notary"]["image"] = "registry-notary:hosted"
         compose["services"]["openfn-dhis2-sidecar"][
             "image"
-        ] = "registry-notary-openfn-sidecar:hosted"
+        ] = "registry-notary-source-adapter-sidecar:hosted"
 
         issues = self.validator.validate_artifacts(
             {
@@ -124,6 +124,26 @@ class HostedDeployValidationTest(unittest.TestCase):
         self.assertFalse(self.validator.truthy_env(""))
         self.assertFalse(self.validator.truthy_env(None))
 
+    def test_docker_compose_fallback_ignores_default_dotenv(self) -> None:
+        captured_envs: list[dict[str, str]] = []
+        original_run = self.validator.subprocess.run
+
+        class Result:
+            stdout = "{}"
+            stderr = ""
+
+        def fake_run(*_args, **kwargs):
+            captured_envs.append(dict(kwargs["env"]))
+            return Result()
+
+        try:
+            self.validator.subprocess.run = fake_run
+            self.assertEqual({}, self.validator.render_compose_json(Path("compose.yaml")))
+        finally:
+            self.validator.subprocess.run = original_run
+
+        self.assertEqual("1", captured_envs[0]["COMPOSE_DISABLE_ENV_FILE"])
+
     def test_allows_env_overridable_digest_pinned_product_images(self) -> None:
         compose = self._valid_registry_lab()
         compose["services"]["civil-registry-relay"][
@@ -134,7 +154,7 @@ class HostedDeployValidationTest(unittest.TestCase):
         ] = "${REGISTRY_NOTARY_IMAGE:-ghcr.io/jeremi/registry-notary@sha256:abc}"
         compose["services"]["openfn-dhis2-sidecar"][
             "image"
-        ] = "${REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE:-ghcr.io/jeremi/registry-notary-openfn-sidecar@sha256:abc}"
+        ] = "${REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE:-ghcr.io/jeremi/registry-notary-source-adapter-sidecar@sha256:abc}"
 
         issues = self._validate(compose, self._valid_esignet())
         self.assertEqual([], issues)
@@ -1839,7 +1859,7 @@ cp -a /tmp/repo/scripts/lab_homepage_static /out/static-scripts/
                     },
                 },
                 "openfn-dhis2-sidecar": {
-                    "image": "${REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE:-ghcr.io/registrystack/registry-notary-openfn-sidecar@sha256:abc}",
+                    "image": "${REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE:-ghcr.io/registrystack/registry-notary-source-adapter-sidecar@sha256:abc}",
                     "command": [
                         "--config",
                         "/etc/registry-notary-openfn/openfn-dhis2-sidecar.bootstrap.yaml",
