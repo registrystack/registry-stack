@@ -891,6 +891,25 @@ fn principal_with_policy_context(
     principal
 }
 
+fn principal_with_context_only_policy_context(
+    assurance_level: Option<&str>,
+    jurisdiction: Option<&str>,
+    legal_basis_ref: Option<&str>,
+    consent_ref: Option<&str>,
+) -> EvidencePrincipal {
+    let mut principal = principal();
+    principal.authorization_details = Some(EvidenceAuthorizationDetails {
+        detail_type: "registry-notary/evidence-authorization/v1".to_string(),
+        schema_version: "v1".to_string(),
+        legal_basis_ref: legal_basis_ref.map(ToOwned::to_owned),
+        consent_ref: consent_ref.map(ToOwned::to_owned),
+        jurisdiction: jurisdiction.map(ToOwned::to_owned),
+        assurance_level: assurance_level.map(ToOwned::to_owned),
+        ..EvidenceAuthorizationDetails::default()
+    });
+    principal
+}
+
 fn evaluate_request(target: EvidenceEntity, claim: &str) -> EvaluateRequest {
     EvaluateRequest {
         requester: None,
@@ -1711,6 +1730,86 @@ async fn assurance_policy_accepts_trusted_authorization_details() {
 
     assert_eq!(results[0].value, Some(json!(true)));
     assert_eq!(source.reads(), 1);
+}
+
+#[tokio::test]
+async fn context_only_authorization_details_supply_policy_context_without_transaction_scope() {
+    let runtime = RegistryNotaryRuntime::new();
+    let source = Arc::new(MatchingSource::new());
+    let mut claim = person_claim();
+    let matching = &mut claim
+        .source_bindings
+        .get_mut("src")
+        .expect("source binding exists")
+        .matching;
+    matching.allowed_assurance = vec!["substantial".to_string()];
+    matching.permitted_jurisdictions = vec!["ZZ".to_string()];
+    matching.require_legal_basis = true;
+    matching.require_consent = true;
+    let principal = principal_with_context_only_policy_context(
+        Some("substantial"),
+        Some("ZZ"),
+        Some("demo:casework"),
+        Some("demo:consent"),
+    );
+
+    let results = runtime
+        .evaluate(
+            evidence_config(vec![claim]),
+            source.clone(),
+            &EvidenceStore::default(),
+            &principal,
+            evaluate_request(
+                person_target("Amina", "Diallo", Some("1984-02-10")),
+                "person-is-alive",
+            ),
+            None,
+        )
+        .await
+        .expect("context-only policy details permit source read");
+
+    assert_eq!(results[0].value, Some(json!(true)));
+    assert_eq!(source.reads(), 1);
+}
+
+#[tokio::test]
+async fn context_only_authorization_details_missing_consent_reject_before_source_read() {
+    let runtime = RegistryNotaryRuntime::new();
+    let source = Arc::new(MatchingSource::new());
+    let mut claim = person_claim();
+    let matching = &mut claim
+        .source_bindings
+        .get_mut("src")
+        .expect("source binding exists")
+        .matching;
+    matching.allowed_assurance = vec!["substantial".to_string()];
+    matching.permitted_jurisdictions = vec!["ZZ".to_string()];
+    matching.require_legal_basis = true;
+    matching.require_consent = true;
+    let principal = principal_with_context_only_policy_context(
+        Some("substantial"),
+        Some("ZZ"),
+        Some("demo:casework"),
+        None,
+    );
+
+    let error = runtime
+        .evaluate(
+            evidence_config(vec![claim]),
+            source.clone(),
+            &EvidenceStore::default(),
+            &principal,
+            evaluate_request(
+                person_target("Amina", "Diallo", Some("1984-02-10")),
+                "person-is-alive",
+            ),
+            None,
+        )
+        .await
+        .expect_err("context-only details without consent still fail PDP gates");
+
+    assert_eq!(error.code(), "pdp.consent_required");
+    assert_eq!(source.reads(), 0);
 }
 
 #[tokio::test]

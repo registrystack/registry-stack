@@ -5031,7 +5031,14 @@ fn authorization_details_from_oidc(
     let Some(details) = verified.claims.extra.get("authorization_details") else {
         return Ok(None);
     };
-    crate::authz_details::extract_notary_transaction_authorization_details(details)
+    let details = crate::authz_details::extract_notary_transaction_authorization_details(details)?;
+    if details
+        .as_ref()
+        .is_some_and(|details| !crate::authz_details::has_transaction_scope(details))
+    {
+        return Err(EvidenceError::MissingCredential);
+    }
+    Ok(details)
 }
 
 fn bounded_verified_claims_from_oidc(
@@ -7468,6 +7475,8 @@ mod tests {
                 authorization_details: vec![json!({
                     "type": NOTARY_AUTHORIZATION_DETAILS_TYPE,
                     "schema_version": NOTARY_AUTHORIZATION_DETAILS_SCHEMA_VERSION,
+                    "actions": ["evaluate"],
+                    "locations": ["registry-notary"],
                 })],
                 confirmation: None,
                 actor: Some(json!({"actor_id_hash": "hmac-sha256:actor"})),
@@ -10338,6 +10347,37 @@ config_trust:
             SelfAttestationAssuranceClaimSource::AccessToken,
         )
         .expect_err("duplicate matching authorization_details must fail auth");
+
+        assert!(matches!(error, EvidenceError::MissingCredential));
+    }
+
+    #[test]
+    fn oidc_principal_rejects_context_only_matching_authorization_details() {
+        let mut extra = Map::new();
+        extra.insert(
+            "authorization_details".to_string(),
+            json!([{
+                "type": registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_TYPE,
+                "schema_version": registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_SCHEMA_VERSION,
+                "legal_basis_ref": "demo:casework",
+                "consent_ref": "demo:consent",
+                "jurisdiction": "ZZ",
+                "assurance_level": "substantial"
+            }]),
+        );
+        let verified = verified_token_with_extra(extra);
+
+        let error = principal_from_oidc(
+            &verified,
+            None,
+            None,
+            verified_claim_value("JWT"),
+            "sub",
+            None,
+            SelfAttestationClaimSource::AccessToken,
+            SelfAttestationAssuranceClaimSource::AccessToken,
+        )
+        .expect_err("OIDC authorization_details must be transaction scoped");
 
         assert!(matches!(error, EvidenceError::MissingCredential));
     }

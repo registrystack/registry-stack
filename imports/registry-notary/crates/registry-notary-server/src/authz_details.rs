@@ -72,6 +72,20 @@ pub(crate) fn extract_notary_transaction_authorization_details(
     Ok(matched)
 }
 
+pub(crate) fn has_transaction_scope(details: &EvidenceAuthorizationDetails) -> bool {
+    !details.actions.is_empty()
+        || !details.locations.is_empty()
+        || !details.claims.is_empty()
+        || details.disclosure.is_some()
+        || details.format.is_some()
+        || details.purpose.is_some()
+        || details.subject.is_some()
+        || details.target.is_some()
+        || details.relationship.is_some()
+        || details.access_mode.is_some()
+        || details.assisted_access_context.is_some()
+}
+
 pub(crate) fn validate_scoped_authorization_details(
     details: &EvidenceAuthorizationDetails,
     expected: &ScopedAuthorizationRequest<'_>,
@@ -157,6 +171,7 @@ fn target_matches(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use registry_notary_core::{EvidenceAssistedAccessContext, EvidenceAuthorizationRelationship};
 
     fn claim(id: &str) -> ClaimRef {
         ClaimRef::with_version(id, "1")
@@ -190,6 +205,21 @@ mod tests {
         }
     }
 
+    fn context_only_details() -> EvidenceAuthorizationDetails {
+        EvidenceAuthorizationDetails {
+            detail_type: registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_TYPE
+                .to_string(),
+            schema_version:
+                registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_SCHEMA_VERSION
+                    .to_string(),
+            legal_basis_ref: Some("demo:casework".to_string()),
+            consent_ref: Some("demo:consent".to_string()),
+            jurisdiction: Some("ZZ".to_string()),
+            assurance_level: Some("substantial".to_string()),
+            ..EvidenceAuthorizationDetails::default()
+        }
+    }
+
     fn request<'a>(
         claims: &'a [ClaimRef],
         allow_subset_claims: bool,
@@ -211,6 +241,70 @@ mod tests {
             allow_subset_claims,
             allowed_claims,
         }
+    }
+
+    #[test]
+    fn context_only_authorization_details_are_not_transaction_scoped() {
+        let mut details = context_only_details();
+
+        assert!(!has_transaction_scope(&details));
+
+        details.actions = vec!["evaluate".to_string()];
+        assert!(has_transaction_scope(&details));
+    }
+
+    #[test]
+    fn every_transaction_scope_field_marks_authorization_details_as_transaction_scoped() {
+        let mut details = context_only_details();
+        details.locations = vec!["https://notary.example.test".to_string()];
+        assert!(has_transaction_scope(&details));
+
+        let mut details = context_only_details();
+        details.claims = vec![claim("person-is-alive")];
+        assert!(has_transaction_scope(&details));
+
+        let mut details = context_only_details();
+        details.disclosure = Some("predicate".to_string());
+        assert!(has_transaction_scope(&details));
+
+        let mut details = context_only_details();
+        details.format = Some("application/vnd.registry-notary.claim-result+json".to_string());
+        assert!(has_transaction_scope(&details));
+
+        let mut details = context_only_details();
+        details.purpose = Some("citizen_self_attestation".to_string());
+        assert!(has_transaction_scope(&details));
+
+        let mut details = context_only_details();
+        details.subject = Some(EvidenceAuthorizationSubject {
+            binding_claim: "national_id".to_string(),
+            id_type: "national_id".to_string(),
+        });
+        assert!(has_transaction_scope(&details));
+
+        let mut details = context_only_details();
+        details.target = Some(EvidenceAuthorizationTarget {
+            id_type: "national_id".to_string(),
+            id: "NID-1001".to_string(),
+        });
+        assert!(has_transaction_scope(&details));
+
+        let mut details = context_only_details();
+        details.relationship = Some(EvidenceAuthorizationRelationship {
+            relationship_type: "parent_or_guardian".to_string(),
+            proof_claim: "caregiver-link".to_string(),
+        });
+        assert!(has_transaction_scope(&details));
+
+        let mut details = context_only_details();
+        details.access_mode = Some(AccessMode::MachineClient);
+        assert!(has_transaction_scope(&details));
+
+        let mut details = context_only_details();
+        details.assisted_access_context = Some(EvidenceAssistedAccessContext {
+            channel: "assisted-service-desk".to_string(),
+        });
+        assert!(has_transaction_scope(&details));
     }
 
     #[test]

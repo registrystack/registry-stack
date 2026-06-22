@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2026-06-22
+
+### Fixed
+
+- **Static credential policy context compatibility**: static credentials can
+  again carry configured legal basis, consent, jurisdiction, and assurance
+  context for source matching PDP gates without being treated as exact
+  per-transaction authorization scopes. OIDC/RAR authorization details remain
+  fail-closed unless they include transaction scope fields.
+
 ## [0.5.0] - 2026-06-21
 
 ### Added
