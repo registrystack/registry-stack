@@ -1059,6 +1059,7 @@ class CivilBirthDemographicsScenarioTest(unittest.TestCase):
         self.assertEqual(result["friendly"]["status"], "done")
         self.assertEqual(captured["req"].full_url, "https://notary.example/v1/claims")
         self.assertEqual(captured["req"].get_header("Authorization"), "Bearer notary-token")
+        self.assertTrue(result["request_source"].get("internal"))
         facts = {item["label"]: item["value"] for item in result["friendly"]["facts"]}
         self.assertEqual(facts["Target inputs"], "Given name + Surname + Birth date")
         self.assertEqual(facts["Input metadata"], "Published by Notary claim discovery")
@@ -1080,6 +1081,7 @@ class CivilBirthDemographicsScenarioTest(unittest.TestCase):
         self.assertEqual(result["friendly"]["status"], "done")
         self.assertEqual([req.full_url for req in captured], ["https://notary.example/v1/claims", "https://notary.example/v1/evaluations"])
         self.assertEqual(captured[1].get_header("Authorization"), "Bearer notary-token")
+        self.assertTrue(result["request_source"].get("internal"))
         body = json.loads(captured[1].data.decode("utf-8"))
         self.assertEqual(body["claims"], ["civil-person-is-alive-by-demographics"])
         self.assertEqual(body["disclosure"], "predicate")
@@ -1132,6 +1134,8 @@ class CivilCrvsEvidenceScenarioTest(unittest.TestCase):
         self.assertEqual(story["id"], "civil-birth-evidence")
         self.assertEqual([step["id"] for step in story["steps"]], ["discover", "evaluate"])
         preview = story["steps"][1]["request_preview"]
+        self.assertTrue(story["steps"][0]["request_preview"].get("internal"))
+        self.assertTrue(preview.get("internal"))
         self.assertEqual(preview["target_input_selection"]["group"], "Registration number")
         self.assertEqual(
             preview["body"]["target"]["identifiers"],
@@ -2312,6 +2316,16 @@ class InternalRequestSourceTest(unittest.TestCase):
         self.assertIn("renderInputContract", SCENARIOS_JS, "renderStep must show the target input contract outside JSON")
         self.assertIn("data-input-contract-for", SCENARIOS_JS, "runStep must be able to refresh the visible input contract")
         self.assertIn("Internal lab call.", SCENARIOS_JS, "renderRequestSource must render the internal-note text")
+
+    def test_scenario_page_html_masks_internal_request_url(self) -> None:
+        self.assertIn("function requestLine", SCENARIOS_JS, "renderRequestSource must format request lines centrally")
+        self.assertIn("internal lab service", SCENARIOS_JS, "internal requests must not print raw service URLs")
+        self.assertIn("escapeHtml(requestLine(value))", SCENARIOS_JS, "request lines must use the masked formatter")
+        self.assertNotIn(
+            'escapeHtml(value.method || "")} ${escapeHtml(value.url || "")',
+            SCENARIOS_JS,
+            "renderRequestSource must not print raw internal URLs",
+        )
 
     def test_scenario_page_html_internal_branch_suppresses_curl_button(self) -> None:
         # The canCurl logic must exclude internal requests.
