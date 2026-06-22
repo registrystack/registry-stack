@@ -9,7 +9,7 @@ publish = false
 
 [dependencies]
 async-trait.workspace = true
-registry-platform-cache = { version = "0.3.1", path = "../registry-platform-cache" }
+registry-platform-cache = { version = "0.3.2", path = "../registry-platform-cache" }
 thiserror.workspace = true
 time.workspace = true
 
