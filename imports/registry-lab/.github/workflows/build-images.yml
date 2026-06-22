@@ -16,6 +16,13 @@ name: build-hosted-images
 on:
   workflow_dispatch:
     inputs:
+      image_target:
+        description: "Image target to build"
+        default: "all"
+        type: choice
+        options:
+          - all
+          - citizen-portal
       relay_features:
         description: "Cargo features for registry-relay"
         default: "spdci-api-standards,standards-cel-mapping,ogcapi-edr"
@@ -48,6 +55,7 @@ jobs:
           password: ${{ secrets.SUBMODULES_PAT }}
 
       - name: Build & push registry-relay
+        if: ${{ inputs.image_target == 'all' }}
         id: relay
         uses: docker/build-push-action@v6
         with:
@@ -71,6 +79,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=relay
 
       - name: Build & push registry-notary
+        if: ${{ inputs.image_target == 'all' }}
         id: notary
         uses: docker/build-push-action@v6
         with:
@@ -93,6 +102,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=notary
 
       - name: Build & push registry-notary-openfn-sidecar
+        if: ${{ inputs.image_target == 'all' }}
         id: sidecar
         uses: docker/build-push-action@v6
         with:
@@ -112,6 +122,23 @@ jobs:
           cache-from: type=gha,scope=sidecar
           cache-to: type=gha,mode=max,scope=sidecar
 
+      - name: Build & push citizen portal
+        if: ${{ inputs.image_target == 'all' || inputs.image_target == 'citizen-portal' }}
+        id: citizen_portal
+        uses: docker/build-push-action@v6
+        with:
+          context: portal
+          file: Dockerfile.citizen-portal
+          platforms: linux/amd64
+          provenance: false
+          sbom: false
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/citizen-portal:hosted
+            ghcr.io/${{ github.repository_owner }}/citizen-portal:sha-${{ github.sha }}
+          cache-from: type=gha,scope=citizen-portal
+          cache-to: type=gha,mode=max,scope=citizen-portal
+
       - name: Image digests
         run: |
           owner='${{ github.repository_owner }}'
@@ -120,8 +147,11 @@ jobs:
             echo ""
             echo "Paste these into the Coolify app env, then redeploy:"
             echo '```'
-            echo "REGISTRY_RELAY_IMAGE=ghcr.io/${owner}/registry-relay@${{ steps.relay.outputs.digest }}"
-            echo "REGISTRY_NOTARY_IMAGE=ghcr.io/${owner}/registry-notary@${{ steps.notary.outputs.digest }}"
-            echo "REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE=ghcr.io/${owner}/registry-notary-openfn-sidecar@${{ steps.sidecar.outputs.digest }}"
+            if [ '${{ inputs.image_target }}' = 'all' ]; then
+              echo "REGISTRY_RELAY_IMAGE=ghcr.io/${owner}/registry-relay@${{ steps.relay.outputs.digest }}"
+              echo "REGISTRY_NOTARY_IMAGE=ghcr.io/${owner}/registry-notary@${{ steps.notary.outputs.digest }}"
+              echo "REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE=ghcr.io/${owner}/registry-notary-openfn-sidecar@${{ steps.sidecar.outputs.digest }}"
+            fi
+            echo "REGISTRY_LAB_CITIZEN_PORTAL_IMAGE=ghcr.io/${owner}/citizen-portal@${{ steps.citizen_portal.outputs.digest }}"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

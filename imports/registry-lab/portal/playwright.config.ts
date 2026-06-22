@@ -2,11 +2,9 @@ import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
   // The portal BFF is a single-process server whose proof feed is an in-process
-  // singleton that accumulates traces across requests (and a long-lived SSE feed on
-  // /proof/stream). Parallel browser contexts would see each other's traces and
-  // contend on that shared state. The live demo is single-user (one context), so we
-  // run the e2e suite serially to mirror the real flow and keep the shared feed
-  // predictable across tests.
+  // store with a long-lived SSE feed on /proof/stream. Hosted sessions are scoped
+  // per opaque cookie, but the e2e suite still runs serially so trace timing stays
+  // deterministic across tests.
   workers: 1,
   fullyParallel: false,
   webServer: {

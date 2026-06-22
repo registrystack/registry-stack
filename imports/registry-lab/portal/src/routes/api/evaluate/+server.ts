@@ -16,7 +16,7 @@ import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import type { Field } from '$lib/types';
 import { teeToFeeds } from '$lib/server/bff';
-import { getSession } from '$lib/server/session';
+import { getSession, getSessionId } from '$lib/server/session';
 import { getProvider } from '$lib/server/provider';
 
 type EvaluateBody = {
@@ -28,7 +28,8 @@ type EvaluateBody = {
 
 export const POST: RequestHandler = async ({ request, cookies }) => {
   const session = getSession(cookies);
-  if (!session) {
+  const sessionId = getSessionId(cookies);
+  if (!session || !sessionId) {
     throw error(401, 'not signed in');
   }
 
@@ -68,7 +69,7 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
     });
 
     // Tee a REDACTED trace + rail event to the feeds (the SSE stream replays it).
-    teeToFeeds(evaluation, { fieldId });
+    teeToFeeds(evaluation, { sessionId, fieldId });
 
     // Return only the portal-facing ClaimResult; raw wire stays server-side.
     return json(evaluation.result);

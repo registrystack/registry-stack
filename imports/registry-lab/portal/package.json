@@ -2,6 +2,7 @@
   "name": "portal",
   "version": "0.0.1",
   "private": true,
+  "packageManager": "pnpm@9.15.9",
   "type": "module",
   "scripts": {
     "dev": "vite dev",
@@ -31,5 +32,10 @@
     "@fontsource/ibm-plex-mono": "^5.1.1",
     "@fontsource/public-sans": "^5.1.1",
     "qrcode-generator": "^2.0.4"
+  },
+  "pnpm": {
+    "overrides": {
+      "vite": "6.4.3"
+    }
   }
 }

@@ -6,10 +6,15 @@
 import type { ProofFeed, RailFeed } from '$lib/providers/EvidenceProvider';
 import type { ProofTrace, RailEvent } from '$lib/types';
 
+export type FeedSessionId = string;
+
+const DEFAULT_PROOF_SESSION_TTL_MS = 30 * 60 * 1000;
+const DEFAULT_PROOF_SESSION_LIMIT = 100;
+
 // ---------------------------------------------------------------------------
 // Proof feed: an append/update log of redacted ProofTraces.
 // ---------------------------------------------------------------------------
-class ProofFeedStore implements ProofFeed {
+export class ProofFeedStore implements ProofFeed {
   #traces = $state<ProofTrace[]>([]);
 
   get traces(): ProofTrace[] {
@@ -35,10 +40,89 @@ class ProofFeedStore implements ProofFeed {
   }
 }
 
+type ProofSessionBucket = {
+  feed: ProofFeedStore;
+  lastAccessedAt: number;
+};
+
+export class SessionScopedProofFeedStore {
+  readonly #ttlMs: number;
+  readonly #maxSessions: number;
+  #sessions = new Map<FeedSessionId, ProofSessionBucket>();
+
+  constructor(opts?: { ttlMs?: number; maxSessions?: number }) {
+    this.#ttlMs = opts?.ttlMs ?? DEFAULT_PROOF_SESSION_TTL_MS;
+    this.#maxSessions = opts?.maxSessions ?? DEFAULT_PROOF_SESSION_LIMIT;
+  }
+
+  forSession(sessionId: FeedSessionId, now = Date.now()): ProofFeedStore {
+    this.reclaimAbandonedSessions(now);
+    const existing = this.#sessions.get(sessionId);
+    if (existing) {
+      existing.lastAccessedAt = now;
+      return existing.feed;
+    }
+
+    const bucket: ProofSessionBucket = {
+      feed: new ProofFeedStore(),
+      lastAccessedAt: now
+    };
+    this.#sessions.set(sessionId, bucket);
+    this.#evictLeastRecentlyUsed();
+    return bucket.feed;
+  }
+
+  pushTrace(sessionId: FeedSessionId, trace: ProofTrace): void {
+    this.forSession(sessionId).pushTrace(trace);
+  }
+
+  updateTrace(sessionId: FeedSessionId, id: string, patch: Partial<ProofTrace>): void {
+    this.forSession(sessionId).updateTrace(id, patch);
+  }
+
+  reclaimAbandonedSessions(now = Date.now()): number {
+    let reclaimed = 0;
+    for (const [sessionId, bucket] of this.#sessions) {
+      if (now - bucket.lastAccessedAt > this.#ttlMs) {
+        this.#sessions.delete(sessionId);
+        reclaimed += 1;
+      }
+    }
+    return reclaimed;
+  }
+
+  get sessionCount(): number {
+    return this.#sessions.size;
+  }
+
+  reset(sessionId?: FeedSessionId): void {
+    if (sessionId) {
+      this.#sessions.delete(sessionId);
+      return;
+    }
+    this.#sessions.clear();
+  }
+
+  #evictLeastRecentlyUsed(): void {
+    while (this.#sessions.size > this.#maxSessions) {
+      let oldestSessionId: FeedSessionId | undefined;
+      let oldestAccess = Infinity;
+      for (const [sessionId, bucket] of this.#sessions) {
+        if (bucket.lastAccessedAt < oldestAccess) {
+          oldestSessionId = sessionId;
+          oldestAccess = bucket.lastAccessedAt;
+        }
+      }
+      if (!oldestSessionId) return;
+      this.#sessions.delete(oldestSessionId);
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Rail feed: the ministry constellation event stream.
 // ---------------------------------------------------------------------------
-class RailFeedStore implements RailFeed {
+export class RailFeedStore implements RailFeed {
   #events = $state<RailEvent[]>([]);
 
   get events(): RailEvent[] {
@@ -54,17 +138,11 @@ class RailFeedStore implements RailFeed {
   }
 }
 
-// Singletons the UI and BFF share. Exported as the concrete stores so callers can
-// use the push/update methods; the read-only ProofFeed/RailFeed views are the
-// interface the proof + rail components depend on.
-//
-// NOTE (Phase 0 single-tenant assumption): on the server these are process-global
-// and the SSE stream replays the whole accumulated history to each new connection.
-// That is correct for the single-presenter local demo. A hosted, multi-viewer build
-// must scope the feed per session (key by the session cookie and stream only that
-// session's traces) so viewers never see each other's activity. Tracked as a Phase 1
-// / hosted-profile follow-up.
-export const proofFeed = new ProofFeedStore();
+// Singletons the UI and BFF share. The proof feed is keyed by the opaque
+// solmara_session id, so a hosted viewer only replays traces from their own
+// server session. The read-only ProofFeed/RailFeed views are the interface the
+// proof + rail components depend on.
+export const proofFeed = new SessionScopedProofFeedStore();
 export const railFeed = new RailFeedStore();
 
 // Convenience reset for tests and the "nothing shared yet" landing reset.
@@ -72,5 +150,3 @@ export function resetFeeds(): void {
   proofFeed.reset();
   railFeed.reset();
 }
-
-export type { ProofFeedStore, RailFeedStore };

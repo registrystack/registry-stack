@@ -49,11 +49,14 @@ class StubServer:
                 if route is None:
                     self.send_error(HTTPStatus.NOT_FOUND)
                     return
-                status, payload = route(outer, method, self.path, body) if callable(route) else route
-                data = json.dumps(payload).encode("utf-8")
+                result = route(outer, method, self.path, body) if callable(route) else route
+                status, payload, content_type, headers = normalize_response(result)
+                data = payload if isinstance(payload, bytes) else json.dumps(payload).encode("utf-8")
                 self.send_response(status)
-                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Type", content_type)
                 self.send_header("Content-Length", str(len(data)))
+                for key, value in headers.items():
+                    self.send_header(key, value)
                 self.end_headers()
                 self.wfile.write(data)
 
@@ -77,6 +80,13 @@ class StubServer:
         assert self.server is not None
         host, port = self.server.server_address
         return f"http://{host}:{port}"
+
+
+def normalize_response(result: Any) -> tuple[int, Any, str, dict[str, str]]:
+    status, payload, *rest = result
+    content_type = rest[0] if rest else "application/json"
+    headers = rest[1] if len(rest) > 1 else {}
+    return status, payload, content_type, headers
 
 
 def base_routes() -> dict[tuple[str, str], Any]:
@@ -328,12 +338,52 @@ def lab_route(server: StubServer, method: str, path: str, body: Any) -> tuple[in
     )
 
 
+def portal_routes(*, raw_identifier: bool = False) -> dict[tuple[str, str], Any]:
+    trace = {
+        "id": "trace-hosted-smoke",
+        "fieldId": "registered-farmer",
+        "status": "ok",
+        "request": {"body": {"claim": "registered-farmer"}},
+        "response": {"body": {"result": True}},
+    }
+    if raw_identifier:
+        trace["request"] = {"body": {"subject": "NID-2001"}}
+    stream = (
+        "event: heartbeat\n"
+        "data: 1782100000000\n\n"
+        "event: trace\n"
+        f"data: {json.dumps(trace, separators=(',', ':'))}\n\n"
+    ).encode("utf-8")
+    return {
+        ("GET", "/"): (200, "<a>Sign in with SolmaraID</a>", "text/html; charset=utf-8"),
+        ("GET", "/auth/login"): (
+            302,
+            "",
+            "text/plain; charset=utf-8",
+            {"Location": "/auth/callback"},
+        ),
+        ("GET", "/auth/callback"): (
+            302,
+            "",
+            "text/plain; charset=utf-8",
+            {
+                "Location": "/services",
+                "Set-Cookie": "solmara_session=session-hosted-smoke; Path=/; HttpOnly; SameSite=Lax",
+            },
+        ),
+        ("GET", "/services"): (200, "<h1>Services</h1>", "text/html; charset=utf-8"),
+        ("GET", "/proof/stream"): (200, stream, "text/event-stream"),
+        ("POST", "/api/evaluate"): (200, {"state": "verified", "traceId": "trace-hosted-smoke"}),
+    }
+
+
 class HostedSmokeTest(unittest.TestCase):
     def test_success_smoke_checks_public_contract(self) -> None:
         with StubServer(base_routes()) as server:
             summary = hosted_smoke.run_smoke(hosted_smoke.SmokeConfig(base_url=server.url))
 
         self.assertEqual(summary["credential_smoke"], "skipped")
+        self.assertEqual(summary["citizen_portal"]["status"], "skipped")
         self.assertEqual(summary["scenarios"]["alive-proof"]["deny-row"], "denied_as_expected")
         self.assertEqual(summary["scenarios"]["civil-birth-demographics"]["lookup"], "done")
         self.assertEqual(summary["scenarios"]["social-aggregate"]["deny-row-with-aggregate"], "denied_as_expected")
@@ -353,6 +403,31 @@ class HostedSmokeTest(unittest.TestCase):
         self.assertIn("/api/explorer/registries/civil/records.json?dataset=civil_registry&entity=civil_person&limit=1", requested_paths)
         self.assertIn("/api/explorer/claims/agriculture-notary/evaluate.json", requested_paths)
         self.assertIn("/.well-known/openid-credential-issuer", requested_paths)
+
+    def test_citizen_portal_smoke_drives_login_evaluate_and_redacted_sse(self) -> None:
+        with StubServer(portal_routes()) as server:
+            summary = hosted_smoke.run_citizen_portal_smoke(
+                hosted_smoke.SmokeConfig(base_url="https://lab.registrystack.org", portal_url=server.url),
+                "https://lab.registrystack.org",
+            )
+            requested_paths = [path for _, path, _ in server.requests]
+
+        self.assertEqual(summary["status"], "done")
+        self.assertEqual(summary["evaluation"]["field_id"], "registered-farmer")
+        self.assertIn("/auth/login", requested_paths)
+        self.assertIn("/auth/callback", requested_paths)
+        self.assertIn("/proof/stream", requested_paths)
+        self.assertIn("/api/evaluate", requested_paths)
+
+    def test_citizen_portal_smoke_rejects_raw_identifier_on_sse_wire(self) -> None:
+        with StubServer(portal_routes(raw_identifier=True)) as server:
+            with self.assertRaises(hosted_smoke.SmokeFailure) as raised:
+                hosted_smoke.run_citizen_portal_smoke(
+                    hosted_smoke.SmokeConfig(base_url="https://lab.registrystack.org", portal_url=server.url),
+                    "https://lab.registrystack.org",
+                )
+
+        self.assertIn("citizen-portal-sse-sensitive-material", str(raised.exception))
 
     def test_scenario_catalogue_order_does_not_matter(self) -> None:
         routes = base_routes()

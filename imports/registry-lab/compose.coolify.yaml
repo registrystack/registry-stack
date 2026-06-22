@@ -8,6 +8,7 @@ name: registry-lab
 # moving them out keeps the monolith under the limit.
 x-hosted-domains:
   lab-homepage: lab.registrystack.org
+  citizen-portal: portal.lab.registrystack.org
   citizen-civil-notary: citizen-notary.lab.registrystack.org
   civil-registry-relay: civil-relay.lab.registrystack.org
   health-registry-relay: health-relay.lab.registrystack.org
@@ -357,6 +358,30 @@ services:
       test:
         - CMD-SHELL
         - "python -c 'import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:8080/healthz\", timeout=2).read()'"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  citizen-portal:
+    # Temporary digest placeholder until the first hosted portal image is pushed.
+    image: ${REGISTRY_LAB_CITIZEN_PORTAL_IMAGE:-ghcr.io/jeremi/citizen-portal@sha256:0000000000000000000000000000000000000000000000000000000000000000}
+    restart: unless-stopped
+    expose:
+      - "3000"
+    environment:
+      ORIGIN: https://portal.lab.registrystack.org
+      PORT: "3000"
+      HOST: 0.0.0.0
+      PORTAL_PROVIDER: mock
+      PORTAL_SECURE_COOKIES: "true"
+      PROTOCOL_HEADER: x-forwarded-proto
+      HOST_HEADER: x-forwarded-host
+      PORT_HEADER: x-forwarded-port
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "node -e 'fetch(\"http://127.0.0.1:3000/\").then((r) => { if (!r.ok) process.exit(1); }).catch(() => process.exit(1));'"
       interval: 30s
       timeout: 5s
       retries: 3

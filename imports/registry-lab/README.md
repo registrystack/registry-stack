@@ -553,6 +553,15 @@ This lab does not call OOTS Evidence Broker or Data Service Directory services.
 Those remain future cross-border integration points rather than hidden demo
 behavior.
 
+## Hosted Citizen Services Portal
+
+The hosted Citizen Services Portal is published at
+`https://portal.lab.registrystack.org/` with `PORTAL_PROVIDER=mock`. Its proof
+feed uses the public-link posture from the hosted integration spec: Option B,
+scoped per opaque `solmara_session`. Each browser session replays only its own
+redacted proof traces, abandoned feed buckets are reclaimed with TTL/LRU cleanup,
+and the SSE route disables proxy buffering with `X-Accel-Buffering: no`.
+
 ## Governed configuration baseline
 
 The committed Relay and Notary YAML files remain simple static configs. They

@@ -9,13 +9,21 @@
 // wire bytes never carry raw identifiers or bearer material.
 
 import type { RequestHandler } from './$types';
+import { error } from '@sveltejs/kit';
 import { proofFeed } from '$lib/providers/feeds.svelte';
 import { heartbeatFrame, serializeTraceEvent } from '$lib/server/bff';
+import { getSession, getSessionId } from '$lib/server/session';
 
 const HEARTBEAT_MS = 10_000;
 const POLL_MS = 250;
 
-export const GET: RequestHandler = () => {
+export const GET: RequestHandler = ({ cookies }) => {
+  const session = getSession(cookies);
+  const sessionId = getSessionId(cookies);
+  if (!session || !sessionId) {
+    throw error(401, 'not signed in');
+  }
+
   const encoder = new TextEncoder();
   let lastSent = 0;
   let pollTimer: ReturnType<typeof setInterval> | undefined;
@@ -31,7 +39,7 @@ export const GET: RequestHandler = () => {
       // story), then poll for new ones. Polling the in-process store is the
       // Phase 0 transport; the live build pushes off an emitter.
       const flush = () => {
-        const traces = proofFeed.traces;
+        const traces = proofFeed.forSession(sessionId).traces;
         for (let i = lastSent; i < traces.length; i++) {
           enqueue(serializeTraceEvent(traces[i]));
         }
@@ -55,6 +63,7 @@ export const GET: RequestHandler = () => {
     headers: {
       'content-type': 'text/event-stream',
       'cache-control': 'no-cache, no-transform',
+      'x-accel-buffering': 'no',
       connection: 'keep-alive'
     }
   });

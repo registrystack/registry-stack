@@ -76,9 +76,12 @@ export function buildRailEvent(ev: MockEvaluation): RailEvent {
 
 // Tee a redacted trace + rail event to the feeds. Returns the trace so the route
 // can also serialize it for the SSE stream.
-export function teeToFeeds(ev: MockEvaluation, opts?: { fieldId?: string }): ProofTrace {
+export function teeToFeeds(
+  ev: MockEvaluation,
+  opts: { sessionId: string; fieldId?: string }
+): ProofTrace {
   const trace = buildRedactedTrace(ev, opts);
-  proofFeed.pushTrace(trace);
+  proofFeed.pushTrace(opts.sessionId, trace);
   railFeed.pushRailEvent(buildRailEvent(ev));
   return trace;
 }

@@ -27,6 +27,7 @@ REQUIRED_SERVICES = {
         "postgres",
         "redis",
         "civil-notary",
+        "citizen-portal",
         "citizen-civil-notary",
         "civil-registry-relay",
         "health-registry-relay",
@@ -67,6 +68,7 @@ REQUIRED_SERVICES = {
 
 REQUIRED_DOMAINS = {
     "registry-lab": {
+        "citizen-portal": f"portal.{LAB_DOMAIN}",
         "citizen-civil-notary": f"citizen-notary.{LAB_DOMAIN}",
         "civil-registry-relay": f"civil-relay.{LAB_DOMAIN}",
         "health-registry-relay": f"health-relay.{LAB_DOMAIN}",
@@ -217,17 +219,20 @@ REQUIRED_HOSTED_VARIABLES = {
 }
 
 ALLOWED_INTERIM_PRODUCT_IMAGES = {
+    "citizen-portal:hosted",
     "registry-relay:hosted",
     "registry-notary:hosted",
     "registry-notary-openfn-sidecar:hosted",
 }
 
 PRODUCT_IMAGE_NAMES = (
+    "citizen-portal",
     "registry-notary-openfn-sidecar",
     "registry-relay",
     "registry-notary",
 )
 PRODUCT_IMAGE_ENV_BY_NAME = {
+    "citizen-portal": "REGISTRY_LAB_CITIZEN_PORTAL_IMAGE",
     "registry-relay": "REGISTRY_RELAY_IMAGE",
     "registry-notary": "REGISTRY_NOTARY_IMAGE",
     "registry-notary-openfn-sidecar": "REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE",
