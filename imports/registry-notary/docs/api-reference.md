@@ -85,10 +85,10 @@ dataset/entity names, source field names, or raw source binding configuration.
 ## Source Adapter Sidecar API
 
 This section documents the private sidecar API that Registry Notary calls when a
-source binding uses the compatibility connector value
-`connector: openfn_sidecar`. It is not a caller-facing Registry Notary route.
+source binding uses the source-adapter connector value
+`connector: source_adapter_sidecar`. It is not a caller-facing Registry Notary route.
 The sidecar can run the built-in `http_json`, `http_flow`, and `fhir` engines,
-or a pinned OpenFn workflow. It must run on localhost or a private pod network
+or another governed adapter implementation. It must run on localhost or a private pod network
 and must not be publicly exposed.
 
 Single reads use the Registry Data API-shaped source route:
@@ -166,8 +166,8 @@ Contract rules:
   fields are not returned to Notary.
 - Documented per-item sidecar error codes are `target_auth` and
   `target_rate_limit`; unknown per-item error codes map to source unavailable.
-- Adapter execution failures, invalid output, oversized output, worker crashes
-  when OpenFn is used, and timeouts are not retried for the same batch request.
+- Adapter execution failures, invalid output, oversized output, worker crashes,
+  and timeouts are not retried for the same batch request.
 
 The sidecar rejects missing or malformed bearer tokens with `401` and a
 `WWW-Authenticate: Bearer` header, rejected tokens with `403`, missing

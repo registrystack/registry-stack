@@ -27,8 +27,8 @@ shell-free, package-manager-free, and compatible with a binary healthcheck and
 JSON-array entrypoint. The container CI guard enforces the runtime base,
 `registry-notary healthcheck`, and `ENTRYPOINT ["/usr/local/bin/registry-notary"]`.
 
-`Dockerfile.openfn-sidecar` is a distroless Rust image now that the OpenFn
-execution engine is retired; sources run through the built-in http_json,
+`Dockerfile.source-adapter-sidecar` is a distroless Rust image now that the
+worker execution engine is retired; sources run through the built-in http_json,
 http_flow, and fhir engines, so the image no longer ships Node or npm. Its
 runtime stage stays `gcr.io/distroless/cc-debian12:nonroot` pinned by digest,
 shell-free, package-manager-free, and uses a JSON-array entrypoint. Liveness and

@@ -753,8 +753,9 @@ async fn http_json_reuses_clients_per_source_without_leaking_targets_in_metrics(
     let metrics = harness.sidecar.get("/metrics").await;
     metrics.assert_status_ok();
     let metrics = metrics.text();
-    assert!(metrics
-        .contains("registry_notary_openfn_sidecar_http_json_clients{source_id=\"http_people\"} 1"));
+    assert!(metrics.contains(
+        "registry_notary_source_adapter_sidecar_http_json_clients{source_id=\"http_people\"} 1"
+    ));
     assert!(!metrics.contains("target-secret"));
     assert!(!metrics.contains("person-123"));
 }
@@ -839,7 +840,7 @@ async fn http_json_source_rate_limit_blocks_before_upstream_dispatch() {
     metrics.assert_status_ok();
     let metrics = metrics.text();
     assert!(metrics.contains(
-        "registry_notary_openfn_sidecar_lookup_total{source_id=\"http_people\",outcome=\"source_rate_limited\"} 1"
+        "registry_notary_source_adapter_sidecar_lookup_total{source_id=\"http_people\",outcome=\"source_rate_limited\"} 1"
     ));
     assert!(
         !metrics.contains("outcome=\"source_backoff\""),
@@ -1066,8 +1067,8 @@ async fn http_json_health_ready_and_metrics_are_available_without_secret_disclos
     let metrics = harness.sidecar.get("/metrics").await;
     metrics.assert_status_ok();
     let metrics_body = metrics.text();
-    assert!(metrics_body.contains("registry_notary_openfn_sidecar_source_permits"));
-    assert!(metrics_body.contains("registry_notary_openfn_sidecar_lookup_total"));
+    assert!(metrics_body.contains("registry_notary_source_adapter_sidecar_source_permits"));
+    assert!(metrics_body.contains("registry_notary_source_adapter_sidecar_lookup_total"));
     assert!(
         !metrics_body.contains("target-secret"),
         "metrics must not disclose credential secrets"
@@ -1867,10 +1868,10 @@ async fn http_json_cache_is_explicit_and_scoped_to_lookup_shape() {
     metrics.assert_status_ok();
     let metrics = metrics.text();
     assert!(metrics.contains(
-        "registry_notary_openfn_sidecar_lookup_total{source_id=\"http_people\",outcome=\"source_cache_hit\"} 2"
+        "registry_notary_source_adapter_sidecar_lookup_total{source_id=\"http_people\",outcome=\"source_cache_hit\"} 2"
     ));
     assert!(metrics.contains(
-        "registry_notary_openfn_sidecar_lookup_total{source_id=\"http_people\",outcome=\"source_cache_miss\"} 4"
+        "registry_notary_source_adapter_sidecar_lookup_total{source_id=\"http_people\",outcome=\"source_cache_miss\"} 4"
     ));
     assert!(!metrics.contains("person-123"));
     assert!(!metrics.contains("target-secret"));

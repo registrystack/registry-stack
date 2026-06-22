@@ -5,7 +5,7 @@ Notary claims. It does not become a FHIR server and it does not use the FHIR
 `Evidence` resource as its claim model.
 
 In the current implementation, FHIR access runs through the governed source
-adapter runtime. Notary configs still use `connector: openfn_sidecar`; FHIR
+adapter runtime. Notary configs still use `connector: source_adapter_sidecar`; FHIR
 request construction, Bundle parsing, graph traversal, and projection stay
 inside that governed runtime bundle.
 
@@ -172,13 +172,13 @@ source_connections:
     base_url: http://127.0.0.1:9191
     allow_insecure_localhost: true
     retry_on_5xx: false
-    bulk_mode: openfn_sidecar_batch
+    bulk_mode: source_adapter_sidecar_batch
     token_env: FHIR_SIDECAR_TOKEN
     expected_sidecar:
       product: registry-notary-source-adapter-sidecar
       instance_id: demo
       environment: staging
-      stream_id: openfn-sidecar-runtime
+      stream_id: source-adapter-sidecar-runtime
       config_hash: sha256:0000000000000000000000000000000000000000000000000000000000000000
       require_expression_hashes_verified: true
       require_runtime_verified: true
@@ -187,7 +187,7 @@ claims:
   - id: coverage-active
     source_bindings:
       coverage:
-        connector: openfn_sidecar
+        connector: source_adapter_sidecar
         connection: fhir_sidecar
         required_scope: health_registry:evidence_verification
         dataset: health_registry

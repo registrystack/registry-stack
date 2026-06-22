@@ -83,7 +83,7 @@ jobs:
       - name: Run hadolint
         run: |
           docker run --rm -i hadolint/hadolint:v2.12.0 /bin/hadolint --ignore DL3022 - < Dockerfile
-          docker run --rm -i hadolint/hadolint:v2.12.0 /bin/hadolint --ignore DL3022 - < Dockerfile.openfn-sidecar
+          docker run --rm -i hadolint/hadolint:v2.12.0 /bin/hadolint --ignore DL3022 - < Dockerfile.source-adapter-sidecar
 
       - name: Run Semgrep
         run: uvx semgrep --config .semgrep.yml --error .

@@ -49,8 +49,8 @@ That path creates a standalone Notary project and points it at an API you operat
   process startup, config loading, bind address, tracing, graceful shutdown, and
   OpenAPI generation.
 - [`crates/registry-notary-source-adapter-sidecar`](crates/registry-notary-source-adapter-sidecar/README.md):
-  synchronous Registry Data API-shaped sidecar for governed OpenFn, HTTP JSON,
-  HTTP flow, and FHIR source lookups.
+  synchronous Registry Data API-shaped sidecar for governed HTTP JSON, HTTP
+  flow, and FHIR source lookups.
 - [`bindings/python`](bindings/python): `registry-notary` sync and async
   dictionary-friendly Python wrapper.
 - [`bindings/node`](bindings/node): `@registry-notary/client` Promise client
@@ -187,7 +187,7 @@ behavior remains config-gated. Release images publish to
 `ghcr.io/jeremi/registry-notary` from stable `vX.Y.Z` tags and
 `registry-stack-technical-preview-<date-or-version>` tags; deployments should
 consume release tags or immutable digests. The source adapter sidecar image
-builds from `Dockerfile.openfn-sidecar` with the same named contexts.
+builds from `Dockerfile.source-adapter-sidecar` with the same named contexts.
 
 See [`docs/deployment-hardening-runbook.md`](docs/deployment-hardening-runbook.md)
 for listener, admin port, healthcheck, config expansion, and rollback guidance.

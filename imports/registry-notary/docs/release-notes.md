@@ -38,8 +38,8 @@
   metadata, SD-JWT VC Type Metadata at configured `vct` URLs, credential offers,
   nonce creation, and credential issuance.
 - Added the source adapter sidecar path for private source reads, including
-  built-in `http_json` and `http_flow` engines, governed OpenFn worker
-  execution, source concurrency controls, target rate limits, `Retry-After`
+  built-in `http_json`, `http_flow`, and `fhir` engines, source concurrency
+  controls, target rate limits, `Retry-After`
   backoff handling, bounded result caching, and DHIS2 canary smoke scripts.
 - Kept CEL out of default builds while adding an opt-in CEL production image
   profile with hardened worker execution, startup expression preflight,

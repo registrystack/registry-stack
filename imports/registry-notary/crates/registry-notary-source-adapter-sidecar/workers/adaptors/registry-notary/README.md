@@ -1,6 +1,6 @@
 # @registry/notary-openfn
 
-OpenFn authoring helpers for Registry Notary OpenFn sidecar workflows.
+OpenFn authoring helpers for Registry Notary source-adapter sidecar workflows.
 
 The sidecar owns HTTP auth, worker isolation, credential loading, projection,
 and Registry Data API normalization. This adaptor gives OpenFn authors a small

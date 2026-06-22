@@ -226,8 +226,8 @@ jq -e \
 
 curl -fsS "http://127.0.0.1:$port/metrics" >"$metrics_txt"
 # Metric name prefix is what the sidecar binary actually emits today
-# (registry_notary_openfn_sidecar_*); kept stable this round, see CHANGELOG.
-grep 'registry_notary_openfn_sidecar_lookup_total{source_id="dhis2_health"' "$metrics_txt" >/dev/null
+# (registry_notary_source_adapter_sidecar_*); kept stable this round, see CHANGELOG.
+grep 'registry_notary_source_adapter_sidecar_lookup_total{source_id="dhis2_health"' "$metrics_txt" >/dev/null
 
 for secret in "$dhis2_password" "$sidecar_token" "http-json-dhis2-health-canary-correlation"; do
   if grep -F "$secret" "$response_json" "$metrics_txt" "$log" >/dev/null 2>&1; then

@@ -77,8 +77,8 @@ on the first failure:
 4. the sequence is not older than what was last accepted (anti-rollback);
 5. the runtime material matches the recorded content hash, and every workflow
    expression file matches its recorded SHA-256 hash;
-6. the pinned OpenFn runtime and adaptor versions match what is installed, when
-   the bundle contains OpenFn sources;
+6. the pinned sidecar runtime and adapter versions match what is installed, when
+   the bundle contains source-adapter sources;
 7. startup readiness (including a smoke lookup against the source) succeeds.
 
 Only after all readiness-critical checks pass is the bundle recorded as accepted
@@ -115,7 +115,7 @@ credential is allowed to target, never the value. At startup the sidecar loads
 the credential, checks its base URL against the allow-list, and holds it in
 memory.
 
-For OpenFn sources, the credential reaches a workflow only through the
+For source-adapter sources, the credential reaches a workflow only through the
 per-request input passed to the worker over a private channel, scoped to that
 single execution. The worker process runs with a cleared environment, so it does
 not inherit the sidecar host's secrets, and configured credential and token
@@ -144,9 +144,9 @@ controls.
   the sidecar as a trusted component behind a private boundary, and rely on
   network controls and the bearer token for that boundary.
 - **Configuration integrity is not runtime-code integrity.** The signature
-  proves the configuration bundle is authentic, including OpenFn workflow
-  expression files when they are used. Those files are content-hashed. The
-  OpenFn worker runtime and its adaptors are pinned by version and verified
+  proves the configuration bundle is authentic, including source mapping
+  expressions when they are used. Those files are content-hashed. The sidecar
+  runtime and adapters are pinned by version and verified
   against the installed versions, but their contents are not hashed by the
   configuration signature. A compromised dependency published at a pinned version
   is outside what the config signature covers; manage that with your image build

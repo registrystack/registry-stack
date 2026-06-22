@@ -28,7 +28,7 @@ class SecurityAssuranceCheckTest(unittest.TestCase):
             'pub fn router<S>() -> Router<S> { Router::new().route("/x", get(handler)) }\n'
         )
         (self.root / "Dockerfile").write_text("FROM scratch\n")
-        (self.root / "Dockerfile.openfn-sidecar").write_text("FROM scratch\n")
+        (self.root / "Dockerfile.source-adapter-sidecar").write_text("FROM scratch\n")
         (self.root / "openapi").mkdir()
         (self.root / "openapi" / "registry-notary.openapi.json").write_text(json.dumps({
             "openapi": "3.0.3",
@@ -236,7 +236,7 @@ class SecurityAssuranceCheckTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self.module.check_dockerfile_secret_patterns()
         (self.root / "Dockerfile").write_text("FROM scratch\n")
-        (self.root / "Dockerfile.openfn-sidecar").unlink()
+        (self.root / "Dockerfile.source-adapter-sidecar").unlink()
         with self.assertRaises(SystemExit):
             self.module.check_dockerfile_secret_patterns()
 

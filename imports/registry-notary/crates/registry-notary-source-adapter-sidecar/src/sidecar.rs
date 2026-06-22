@@ -771,8 +771,8 @@ struct PreparedHttpJsonRequest {
 }
 
 // All variants are http_json-engine error categories; the shared prefix is
-// intentional now that the OpenFn engine (and its differently-prefixed
-// variants) is retired. Renaming would churn ~110 call sites for no clarity.
+// intentional now that the older worker engine variants are retired. Renaming
+// would churn ~110 call sites for no clarity.
 #[allow(clippy::enum_variant_names)]
 enum SourceExecutionError {
     HttpJson,
@@ -860,7 +860,7 @@ pub fn render_governed_runtime_target_json(raw_manifest: &str) -> Result<Vec<u8>
     let config: SidecarConfig = serde_norway::from_str(raw_manifest)
         .map_err(|error| SidecarError::Config(error.to_string()))?;
     let target = GovernedRuntimeTarget {
-        schema: "registry.notary.openfn_sidecar.runtime.v1".to_string(),
+        schema: "registry.notary.source_adapter_sidecar.runtime.v1".to_string(),
         limits: config.limits,
         sources: config.sources,
     };
@@ -1185,7 +1185,7 @@ fn materialize_governed_config(
     metadata: ConfigTargetMetadata,
     target: GovernedRuntimeTarget,
 ) -> Result<SidecarConfig, SidecarError> {
-    if target.schema != "registry.notary.openfn_sidecar.runtime.v1" {
+    if target.schema != "registry.notary.source_adapter_sidecar.runtime.v1" {
         return Err(SidecarError::StartupCheck(
             "governed runtime target schema is unsupported".to_string(),
         ));
@@ -1250,7 +1250,7 @@ fn governed_target_from_bytes(target_bytes: &[u8]) -> Result<GovernedRuntimeTarg
 }
 
 fn validate_governed_runtime_target(target: &GovernedRuntimeTarget) -> Result<(), SidecarError> {
-    if target.schema != "registry.notary.openfn_sidecar.runtime.v1" {
+    if target.schema != "registry.notary.source_adapter_sidecar.runtime.v1" {
         return Err(SidecarError::StartupCheck(
             "governed runtime target schema is unsupported".to_string(),
         ));
@@ -1269,7 +1269,7 @@ fn validate_governed_runtime_target(target: &GovernedRuntimeTarget) -> Result<()
                 id: "release-helper".to_string(),
                 token: None,
                 hash_env: Some(
-                    "REGISTRY_NOTARY_OPENFN_SIDECAR_RELEASE_HELPER_TOKEN_HASH".to_string(),
+                    "REGISTRY_NOTARY_SOURCE_ADAPTER_SIDECAR_RELEASE_HELPER_TOKEN_HASH".to_string(),
                 ),
             }],
         },
@@ -1738,7 +1738,7 @@ fn validate_http_json_source(source_id: &str, source: &SourceConfig) -> Result<(
     }
     if source.batch.mode == SourceBatchMode::WorkflowBatch {
         return Err(SidecarError::Config(format!(
-            "source {source_id} batch.mode workflow_batch is only supported for OpenFn sources"
+            "source {source_id} batch.mode workflow_batch was retired with the worker engine"
         )));
     }
     if source.batch.mode != SourceBatchMode::ParallelLookup && source.batch.max_parallel.is_some() {
@@ -4651,7 +4651,7 @@ async fn metrics(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Resp
         }
     }
     let mut body = String::new();
-    body.push_str("# TYPE registry_notary_openfn_sidecar_source_permits gauge\n");
+    body.push_str("# TYPE registry_notary_source_adapter_sidecar_source_permits gauge\n");
     for (source_id, source) in &state.config.sources {
         let max_permits = source
             .limits
@@ -4669,7 +4669,7 @@ async fn metrics(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Resp
             ("in_flight", in_flight),
         ] {
             body.push_str(&format!(
-                "registry_notary_openfn_sidecar_source_permits{{source_id=\"{}\",state=\"{}\"}} {}\n",
+                "registry_notary_source_adapter_sidecar_source_permits{{source_id=\"{}\",state=\"{}\"}} {}\n",
                 escape_metric_label(source_id),
                 label,
                 value
@@ -4687,10 +4687,10 @@ async fn metrics(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Resp
         counts
     };
     if !client_counts.is_empty() {
-        body.push_str("# TYPE registry_notary_openfn_sidecar_http_json_clients gauge\n");
+        body.push_str("# TYPE registry_notary_source_adapter_sidecar_http_json_clients gauge\n");
         for (source_id, count) in client_counts {
             body.push_str(&format!(
-                "registry_notary_openfn_sidecar_http_json_clients{{source_id=\"{}\"}} {}\n",
+                "registry_notary_source_adapter_sidecar_http_json_clients{{source_id=\"{}\"}} {}\n",
                 escape_metric_label(&source_id),
                 count
             ));
@@ -4698,22 +4698,24 @@ async fn metrics(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Resp
     }
     let metrics = state.metrics.lock().await;
     if !metrics.is_empty() {
-        body.push_str("# TYPE registry_notary_openfn_sidecar_lookup_total counter\n");
-        body.push_str("# TYPE registry_notary_openfn_sidecar_lookup_duration_ms_total counter\n");
-        body.push_str("# TYPE registry_notary_openfn_sidecar_lookup_items_total counter\n");
+        body.push_str("# TYPE registry_notary_source_adapter_sidecar_lookup_total counter\n");
+        body.push_str(
+            "# TYPE registry_notary_source_adapter_sidecar_lookup_duration_ms_total counter\n",
+        );
+        body.push_str("# TYPE registry_notary_source_adapter_sidecar_lookup_items_total counter\n");
     }
     for (key, value) in metrics.iter() {
         let labels = metric_labels(key);
         body.push_str(&format!(
-            "registry_notary_openfn_sidecar_lookup_total{{{labels}}} {}\n",
+            "registry_notary_source_adapter_sidecar_lookup_total{{{labels}}} {}\n",
             value.count
         ));
         body.push_str(&format!(
-            "registry_notary_openfn_sidecar_lookup_duration_ms_total{{{labels}}} {}\n",
+            "registry_notary_source_adapter_sidecar_lookup_duration_ms_total{{{labels}}} {}\n",
             value.duration_ms_total
         ));
         body.push_str(&format!(
-            "registry_notary_openfn_sidecar_lookup_items_total{{{labels}}} {}\n",
+            "registry_notary_source_adapter_sidecar_lookup_items_total{{{labels}}} {}\n",
             value.items_total
         ));
     }
@@ -5893,7 +5895,7 @@ mod tests {
                 bearer_tokens: vec![BearerTokenConfig {
                     id: "notary".to_string(),
                     token: None,
-                    hash_env: Some("TEST_OPENFN_SIDECAR_TOKEN_HASH".to_string()),
+                    hash_env: Some("TEST_SOURCE_ADAPTER_SIDECAR_TOKEN_HASH".to_string()),
                 }],
             },
             audit: SidecarAuditConfig::default(),
@@ -6260,7 +6262,7 @@ mod tests {
     #[tokio::test]
     async fn sidecar_data_route_fails_closed_when_preaccess_audit_write_fails() {
         std::env::set_var(
-            "TEST_OPENFN_SIDECAR_TOKEN_HASH",
+            "TEST_SOURCE_ADAPTER_SIDECAR_TOKEN_HASH",
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         );
         std::env::set_var(
@@ -6319,7 +6321,7 @@ mod tests {
     #[tokio::test]
     async fn governed_sidecar_requires_audit_pipeline() {
         std::env::set_var(
-            "TEST_OPENFN_SIDECAR_TOKEN_HASH",
+            "TEST_SOURCE_ADAPTER_SIDECAR_TOKEN_HASH",
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         );
         let mut config = minimal_config();

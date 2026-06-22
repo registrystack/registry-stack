@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Registry Notary source adapter sidecar entrypoint.
 
-use std::{env, path::PathBuf};
+use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use registry_notary_source_adapter_sidecar::{
@@ -54,7 +54,7 @@ enum Command {
 
 #[derive(Debug, Subcommand)]
 enum ConfigCommand {
-    /// Render a governed runtime target from a sidecar manifest and jobs root.
+    /// Render a governed runtime target from a sidecar manifest.
     RenderTarget(RenderTargetArgs),
     /// Create a signed local TUF repository for demo and local verification.
     CreateLocalTufRepo(Box<CreateLocalTufRepoArgs>),
@@ -66,9 +66,6 @@ enum ConfigCommand {
 struct RenderTargetArgs {
     #[arg(long)]
     manifest: PathBuf,
-    // --jobs-root is accepted for compatibility but ignored now that the OpenFn engine is removed.
-    #[arg(long)]
-    jobs_root: Option<PathBuf>,
     #[arg(short, long)]
     output: Option<PathBuf>,
 }
@@ -153,34 +150,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             allow_unsigned_dev_config,
         }) => {
             let config = resolve_config(config)?;
-            serve(
-                config,
-                allow_unsigned_dev_config || legacy_allow_unsigned_dev_config(),
-            )
-            .await
+            serve(config, allow_unsigned_dev_config).await
         }
         Some(Command::Config { command }) => config_command(*command).await,
         None => {
             let config = resolve_config(args.config)?;
-            serve(
-                config,
-                args.allow_unsigned_dev_config || legacy_allow_unsigned_dev_config(),
-            )
-            .await
+            serve(config, args.allow_unsigned_dev_config).await
         }
     }
 }
 
 fn resolve_config(config: Option<PathBuf>) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    config
-        .or_else(|| env::var_os("REGISTRY_NOTARY_OPENFN_SIDECAR_CONFIG").map(PathBuf::from))
-        .ok_or_else(|| "missing --config or subcommand".into())
-}
-
-fn legacy_allow_unsigned_dev_config() -> bool {
-    env::var("REGISTRY_NOTARY_OPENFN_SIDECAR_ALLOW_UNSIGNED_DEV_CONFIG")
-        .ok()
-        .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+    config.ok_or_else(|| "missing --config or subcommand".into())
 }
 
 async fn serve(
@@ -194,11 +175,7 @@ async fn serve(
 
 async fn config_command(command: ConfigCommand) -> Result<(), Box<dyn std::error::Error>> {
     match command {
-        ConfigCommand::RenderTarget(RenderTargetArgs {
-            manifest,
-            jobs_root: _,
-            output,
-        }) => {
+        ConfigCommand::RenderTarget(RenderTargetArgs { manifest, output }) => {
             let raw = tokio::fs::read_to_string(manifest).await?;
             let target = render_governed_runtime_target_json(&raw)?;
             write_or_print(output, &target).await?;

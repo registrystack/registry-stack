@@ -7286,13 +7286,13 @@ async fn admin_posture_redacts_runtime_config_secrets_and_private_topology() {
     enable_shared_admin_listener(&mut config);
     let mut unused_connection = config.evidence.source_connections["farmer_registry"].clone();
     unused_connection.base_url =
-        "http://10.24.0.9/internal/openfn?token=unused-url-secret".to_string();
+        "http://10.24.0.9/internal/source-adapter?token=unused-url-secret".to_string();
     unused_connection.token_env = "TEST_UNUSED_SOURCE_TOKEN".to_string();
-    unused_connection.bulk_mode = BulkMode::OpenFnSidecarBatch;
-    config
-        .evidence
-        .source_connections
-        .insert("private_unused_openfn".to_string(), unused_connection);
+    unused_connection.bulk_mode = BulkMode::SourceAdapterSidecarBatch;
+    config.evidence.source_connections.insert(
+        "private_unused_source_adapter".to_string(),
+        unused_connection,
+    );
     config.evidence.signing_keys.insert(
         "issuer".to_string(),
         SigningKeyConfig {
@@ -7340,7 +7340,7 @@ async fn admin_posture_redacts_runtime_config_secrets_and_private_topology() {
     assert!(!text.contains("source-url-secret"));
     assert!(!text.contains("unused-url-secret"));
     assert!(!text.contains("http://127.0.0.1:1/private-source"));
-    assert!(!text.contains("http://10.24.0.9/internal/openfn"));
+    assert!(!text.contains("http://10.24.0.9/internal/source-adapter"));
     assert!(!text.contains("TEST_EVIDENCE_SOURCE_TOKEN"));
     assert!(!text.contains("TEST_UNUSED_SOURCE_TOKEN"));
     assert!(!text.contains("TEST_EVIDENCE_API_KEY_HASH"));

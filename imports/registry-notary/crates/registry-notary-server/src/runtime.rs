@@ -216,7 +216,7 @@ fn cache_key_for_binding(
     let connector = match binding.connector {
         SourceConnectorKind::RegistryDataApi => "rda",
         SourceConnectorKind::Dci => "dci",
-        SourceConnectorKind::OpenFnSidecar => "openfn_sidecar",
+        SourceConnectorKind::SourceAdapterSidecar => "source_adapter_sidecar",
     };
     // Sorted projected fields set (what the upstream is asked to return).
     let mut fields: Vec<String> = binding.fields.values().map(|f| f.field.clone()).collect();
@@ -319,7 +319,7 @@ pub trait SourceReader: Send + Sync {
     }
 
     /// Minimized public summaries of any source runtimes a claim crosses that
-    /// represent an external execution boundary (the OpenFn sidecar). Returned
+    /// represent an external execution boundary (the source-adapter sidecar). Returned
     /// per claim so each claim's provenance reports only the runtimes it used.
     /// The default is empty; only the standalone reader observes real sidecars.
     fn observed_source_runtimes<'a>(
@@ -5444,7 +5444,9 @@ fn cel_meta(evidence: &EvidenceConfig, claim: &ClaimDefinition) -> Value {
                 "registry_data_api"
             }
             registry_notary_core::config::SourceConnectorKind::Dci => "dci",
-            registry_notary_core::config::SourceConnectorKind::OpenFnSidecar => "openfn_sidecar",
+            registry_notary_core::config::SourceConnectorKind::SourceAdapterSidecar => {
+                "source_adapter_sidecar"
+            }
         };
         sources.insert(
             alias.clone(),
@@ -5850,6 +5852,7 @@ mod tests {
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;
     use registry_notary_core::Hashed;
+    use registry_notary_core::SOURCE_RUNTIME_KIND_SOURCE_ADAPTER_SIDECAR;
 
     #[derive(Debug, Default)]
     struct CountingSource {
@@ -5970,7 +5973,7 @@ mod tests {
                     return Vec::new();
                 }
                 vec![SourceRuntimeSummary {
-                    kind: "openfn_sidecar".to_string(),
+                    kind: SOURCE_RUNTIME_KIND_SOURCE_ADAPTER_SIDECAR.to_string(),
                     config_hash:
                         "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                             .to_string(),
@@ -6408,7 +6411,7 @@ mod tests {
             dci: registry_notary_core::DciSourceConnectionConfig::default(),
             max_in_flight: 1,
             retry_on_5xx: false,
-            bulk_mode: BulkMode::OpenFnSidecarBatch,
+            bulk_mode: BulkMode::SourceAdapterSidecarBatch,
             bulk_mode_lookup_unique: true,
             bulk_timeout_max_ms: 1_000,
         }
@@ -9051,7 +9054,7 @@ mod tests {
         assert_eq!(source.inner.read_count.load(Ordering::SeqCst), 1);
         let runtimes = &results[0].provenance.used.source_runtimes;
         assert_eq!(runtimes.len(), 1);
-        assert_eq!(runtimes[0].kind, "openfn_sidecar");
+        assert_eq!(runtimes[0].kind, SOURCE_RUNTIME_KIND_SOURCE_ADAPTER_SIDECAR);
         assert_eq!(
             runtimes[0].config_hash,
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"

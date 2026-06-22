@@ -2367,7 +2367,7 @@ fn provenance_used_schema() -> Value {
             },
             "source_runtimes": {
                 "type": "array",
-                "description": "Minimized summaries for connectors that cross an external execution boundary (the OpenFn sidecar). The full assurance document stays in restricted audit.",
+                "description": "Minimized summaries for connectors that cross an external execution boundary (the source-adapter sidecar). The full assurance document stays in restricted audit.",
                 "items": { "$ref": "#/components/schemas/SourceRuntimeSummary" }
             }
         },
@@ -2382,7 +2382,8 @@ fn source_runtime_summary_schema() -> Value {
         "properties": {
             "kind": {
                 "type": "string",
-                "enum": ["openfn_sidecar"]
+                "description": "Source-adapter sidecar runtime.",
+                "enum": ["source_adapter_sidecar"]
             },
             "config_hash": {
                 "type": "string",

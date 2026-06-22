@@ -50,9 +50,9 @@ struct ConfigBuilder {
     private_network_source: bool,
     /// Disable OpenAPI auth (triggers openapi_public gate).
     openapi_public: bool,
-    /// Add an OpenFn source connection without an expected_sidecar (triggers
+    /// Add an source-adapter source connection without an expected_sidecar (triggers
     /// notary.sidecar.expected_sidecar_missing).
-    openfn_no_sidecar: bool,
+    source_adapter_no_sidecar: bool,
 }
 
 impl ConfigBuilder {
@@ -63,7 +63,7 @@ impl ConfigBuilder {
             deployment_block: String::new(),
             private_network_source: false,
             openapi_public: false,
-            openfn_no_sidecar: false,
+            source_adapter_no_sidecar: false,
         }
     }
 
@@ -87,8 +87,8 @@ impl ConfigBuilder {
         self
     }
 
-    fn openfn_no_sidecar(mut self, enable: bool) -> Self {
-        self.openfn_no_sidecar = enable;
+    fn source_adapter_no_sidecar(mut self, enable: bool) -> Self {
+        self.source_adapter_no_sidecar = enable;
         self
     }
 
@@ -114,15 +114,15 @@ impl ConfigBuilder {
                 "      token_env: REGISTRY_NOTARY_GATES_SOURCE_TOKEN\n",
             ));
         }
-        if self.openfn_no_sidecar {
-            // A source connection with bulk_mode = openfn_sidecar_batch and no
+        if self.source_adapter_no_sidecar {
+            // A source connection with bulk_mode = source_adapter_sidecar_batch and no
             // expected_sidecar triggers notary.sidecar.expected_sidecar_missing.
             // No claim references this connection, so the bulk_mode connector
             // validation does not fire.
             extra.push_str(concat!(
-                "    openfn_src:\n",
-                "      base_url: \"https://openfn.example.test\"\n",
-                "      bulk_mode: openfn_sidecar_batch\n",
+                "    source_adapter_src:\n",
+                "      base_url: \"https://source-adapter.example.test\"\n",
+                "      bulk_mode: source_adapter_sidecar_batch\n",
                 "      token_env: REGISTRY_NOTARY_GATES_SOURCE_TOKEN\n",
             ));
         }
@@ -625,10 +625,10 @@ fn private_network_source_absent_from_posture_when_flag_not_set() {
 }
 
 #[tokio::test]
-async fn hosted_lab_openfn_no_sidecar_reports_finding_warn() {
+async fn hosted_lab_source_adapter_no_sidecar_reports_finding_warn() {
     let tmp = tempfile::TempDir::new().expect("tempdir");
     let config = ConfigBuilder::new(&audit_path(&tmp))
-        .openfn_no_sidecar(true)
+        .source_adapter_no_sidecar(true)
         .deployment("deployment:\n  profile: hosted_lab\n")
         .build();
 
@@ -644,15 +644,15 @@ async fn hosted_lab_openfn_no_sidecar_reports_finding_warn() {
         .expect("notary.sidecar.expected_sidecar_missing present under hosted_lab");
     assert_eq!(
         found["severity"], "finding_warn",
-        "hosted_lab openfn_no_sidecar must be finding_warn"
+        "hosted_lab source_adapter_no_sidecar must be finding_warn"
     );
 }
 
 #[tokio::test]
-async fn production_openfn_no_sidecar_reports_finding_error() {
+async fn production_source_adapter_no_sidecar_reports_finding_error() {
     let tmp = tempfile::TempDir::new().expect("tempdir");
     let config = ConfigBuilder::new(&audit_path(&tmp))
-        .openfn_no_sidecar(true)
+        .source_adapter_no_sidecar(true)
         .deployment("deployment:\n  profile: production\n")
         .build();
 
@@ -668,12 +668,12 @@ async fn production_openfn_no_sidecar_reports_finding_error() {
         .expect("notary.sidecar.expected_sidecar_missing present under production");
     assert_eq!(
         found["severity"], "finding_error",
-        "production openfn_no_sidecar must be finding_error"
+        "production source_adapter_no_sidecar must be finding_error"
     );
 }
 
 #[test]
-fn openfn_no_sidecar_is_readiness_fail_gate_binding_under_evidence_grade() {
+fn source_adapter_no_sidecar_is_readiness_fail_gate_binding_under_evidence_grade() {
     // evidence_grade + sidecar_expected_missing = readiness_fail (not startup_fail).
     // The minimal config also triggers notary.config.unsigned (startup_fail) under
     // evidence_grade, so we verify the gate binding directly rather than via compile.
@@ -682,7 +682,7 @@ fn openfn_no_sidecar_is_readiness_fail_gate_binding_under_evidence_grade() {
         FINDING_SIDECAR_EXPECTED_MISSING,
     };
     let input = GateInput {
-        openfn_source_without_expected_sidecar: true,
+        source_adapter_sidecar_without_expected_sidecar: true,
         ..GateInput::default()
     };
     let evaluation = evaluate_gates(
@@ -699,7 +699,7 @@ fn openfn_no_sidecar_is_readiness_fail_gate_binding_under_evidence_grade() {
     assert_eq!(
         found.severity,
         GateSeverity::ReadinessFail,
-        "evidence_grade openfn_no_sidecar must be readiness_fail"
+        "evidence_grade source_adapter_no_sidecar must be readiness_fail"
     );
     assert!(
         evaluation
@@ -713,14 +713,15 @@ fn openfn_no_sidecar_is_readiness_fail_gate_binding_under_evidence_grade() {
 }
 
 #[test]
-fn openfn_with_expected_sidecar_clears_the_gate() {
+fn source_adapter_with_expected_sidecar_clears_the_gate() {
     let tmp = tempfile::TempDir::new().expect("tempdir");
     let config = ConfigBuilder::new(&audit_path(&tmp))
         .deployment("deployment:\n  profile: production\n")
         .build();
 
-    // Without openfn_no_sidecar the gate is not triggered; compile must succeed.
-    compile_notary_runtime(config).expect("config without openfn_no_sidecar clears sidecar gate");
+    // Without source_adapter_no_sidecar the gate is not triggered; compile must succeed.
+    compile_notary_runtime(config)
+        .expect("config without source_adapter_no_sidecar clears sidecar gate");
 }
 
 #[tokio::test]

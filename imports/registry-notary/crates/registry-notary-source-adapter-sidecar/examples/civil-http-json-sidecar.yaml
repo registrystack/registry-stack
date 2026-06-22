@@ -9,7 +9,7 @@
 # array; http_json uses LITERAL paths, so the id is passed as a query parameter
 # instead and the response array is projected directly as the RDA records.
 #
-# Notary still connects with the `openfn_sidecar` source connector name (kept
+# Notary still connects with the `source_adapter_sidecar` source connector name (kept
 # stable this round); only the engine behind the source changed.
 server:
   bind: "127.0.0.1:9191"

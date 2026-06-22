@@ -351,7 +351,7 @@ def infer_methods(handler_expr: str) -> set[str]:
 
 
 def check_dockerfile_secret_patterns() -> None:
-    for path in [ROOT / "Dockerfile", ROOT / "Dockerfile.openfn-sidecar"]:
+    for path in [ROOT / "Dockerfile", ROOT / "Dockerfile.source-adapter-sidecar"]:
         if not path.is_file():
             fail(f"missing required Dockerfile: {path.relative_to(ROOT)}")
         for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
