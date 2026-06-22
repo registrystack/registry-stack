@@ -306,6 +306,11 @@ jobs:
             --app-uuid "${COOLIFY_REGISTRY_LAB_APP_UUID}"
 
           python3 scripts/check-coolify-required-env.py \
+            --compose compose.esignet-hosted.yaml \
+            --api-base-url "${api_base}" \
+            --app-uuid "${COOLIFY_HOSTED_ESIGNET_APP_UUID}"
+
+          python3 scripts/check-coolify-required-env.py \
             --compose compose.social-hosted.yaml \
             --api-base-url "${api_base}" \
             --app-uuid "${COOLIFY_HOSTED_SOCIAL_APP_UUID}"

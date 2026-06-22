@@ -186,6 +186,29 @@ class EsignetRelayLabTest(unittest.TestCase):
         self.assertIn("require_purpose_header: true", civil_person)
         self.assertNotIn("governed_policy:", civil_person)
 
+    def test_hosted_esignet_identity_release_uses_real_commitment(self) -> None:
+        hosted = text("config/coolify/relay/civil-registry-relay.yaml")
+        start = hosted.index("    - id: esignet_identity_release\n")
+        end = hosted.index("    - id:", start + 1)
+        block = hosted[start:end]
+
+        self.assertIn("name: CIVIL_ESIGNET_IDENTITY_RELEASE_HASH", block)
+        self.assertNotIn("commitment: sha256:" + ("0" * 64), block)
+
+    def test_hosted_esignet_compose_declares_required_env(self) -> None:
+        hosted = text("compose.esignet-hosted.yaml")
+
+        for key in (
+            "CIVIL_ESIGNET_IDENTITY_RELEASE_RAW",
+            "REGISTRY_ESIGNET_KYC_KEYSTORE_PASSWORD",
+            "REGISTRY_ESIGNET_KYC_TOKEN_SECRET",
+            "REGISTRY_ESIGNET_PSUT_SECRET",
+            "REGISTRY_LAB_ESIGNET_RELAY_IMAGE",
+            "REGISTRY_LAB_ESIGNET_SEED_IMAGE",
+        ):
+            with self.subTest(key=key):
+                self.assertIn(f"  - {key}", hosted)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -69,7 +69,7 @@ auth:
       fingerprint:
         provider: env
         name: CIVIL_ESIGNET_IDENTITY_RELEASE_HASH
-        commitment: sha256:0000000000000000000000000000000000000000000000000000000000000000
+        commitment: sha256:251cf31a4954758c1e7bab8b321cc5efd535a72cdeed3296ccee20c21c21d36f
       scopes:
         - civil_registry:metadata
         - civil_registry:identity_release

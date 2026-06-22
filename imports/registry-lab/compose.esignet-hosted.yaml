@@ -1,5 +1,15 @@
 name: registry-lab-esignet-hosted
 
+x-coolify-required-env:
+  - CIVIL_ESIGNET_IDENTITY_RELEASE_RAW
+  - REGISTRY_ESIGNET_KYC_KEYSTORE_PASSWORD
+  - REGISTRY_ESIGNET_KYC_TOKEN_SECRET
+  - REGISTRY_ESIGNET_PSUT_SECRET
+  - REGISTRY_LAB_ESIGNET_CLIENT_REDIRECT_URIS_JSON
+  - REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD
+  - REGISTRY_LAB_ESIGNET_RELAY_IMAGE
+  - REGISTRY_LAB_ESIGNET_SEED_IMAGE
+
 x-hosted-domains:
   esignet: esignet.lab.registrystack.org
   esignet-ui: esignet-ui.lab.registrystack.org

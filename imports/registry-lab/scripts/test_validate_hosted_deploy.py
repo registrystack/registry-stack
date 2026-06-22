@@ -1122,6 +1122,7 @@ evidence:
         self.assertIn("scripts/sync-coolify-compose-domains.py", workflow)
         self.assertIn("citizen-portal=https://portal.lab.registrystack.org:3000", workflow)
         self.assertIn("--compose compose.coolify.yaml", workflow)
+        self.assertIn("--compose compose.esignet-hosted.yaml", workflow)
         self.assertIn("--attempts 6", workflow)
         self.assertIn("monolith-domain-sync", workflow)
         self.assertIn(
