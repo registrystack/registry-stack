@@ -1,3 +1,4 @@
+.env
 secrets/
 output/
 bruno/registry-api/environments/local.bru

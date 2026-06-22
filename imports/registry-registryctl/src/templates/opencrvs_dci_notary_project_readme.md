@@ -11,8 +11,9 @@ registryctl notary smoke --target-id <test-uin>
 registryctl notary open
 ```
 
-The OpenCRVS credentials stay in `.env`. The generated local Registry
-Notary demo credentials live in `secrets/notary.local.env`.
+The OpenCRVS credentials stay in `.env`, which is ignored by the generated
+project. The generated local Registry Notary demo credentials live in
+`secrets/notary.local.env`.
 
 `OPENCRVS_DEMO_SUBJECT_UIN` is optional. Use it only for live smoke checks:
 
