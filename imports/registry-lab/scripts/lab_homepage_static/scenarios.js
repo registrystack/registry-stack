@@ -89,6 +89,20 @@ function curlCommand(value) {
   return parts.join(" ");
 }
 
+function requestLine(value) {
+  const method = value.method || "";
+  if (!value.internal) return `${method} ${value.url || ""}`.trim();
+
+  let path = "";
+  try {
+    path = new URL(value.url || "").pathname;
+  } catch {
+    path = "";
+  }
+  const suffix = path ? ` (${path})` : "";
+  return `${method} internal lab service${suffix}`.trim();
+}
+
 function sourceRows(entries) {
   const rows = Object.entries(entries || {});
   if (!rows.length) return `<div class="source-note">No values captured.</div>`;
@@ -156,7 +170,7 @@ function renderRequestSource(value, isPreview) {
     ${previewLabel}
     ${canCurl ? `<div class="source-toolbar"><button class="copy-curl" type="button" data-copy-curl="${escapeHtml(curlCommand(value))}">Copy as curl</button></div>` : ""}
     ${value.internal ? `<div class="source-note">Internal lab call. It authenticates with a runtime-only credential that is never published, so there is no runnable curl for it.</div>` : ""}
-    <div class="source-line">${escapeHtml(value.method || "")} ${escapeHtml(value.url || "")}</div>
+    <div class="source-line">${escapeHtml(requestLine(value))}</div>
     ${value.target_input_selection ? sourceSection("Target inputs", renderTargetInputSelection(value.target_input_selection)) : ""}
     ${sourceSection("Headers", sourceRows(value.headers || {}))}
     ${value.body == null ? "" : sourceSection("Body", `<pre class="source-code">${escapeHtml(prettyJson(value.body))}</pre>`)}
