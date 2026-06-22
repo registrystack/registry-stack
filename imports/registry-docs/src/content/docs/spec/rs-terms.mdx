@@ -48,6 +48,7 @@ REQ-TERMS-001: The definitions in this document apply wherever a registry stack 
 | 0.2.0 | 2026-06-13 | draft | Added the adoption mode term (Section 3) and the documentation declaration terms, layer and audience (Section 6). |
 | 0.3.0 | 2026-06-20 | draft | Added governed Evidence Gateway and PDP enforcement terms. |
 | 0.3.1 | 2026-06-20 | draft | Added PDP, PEP, trust context, source binding, route identity, checked scope, ecosystem binding, ODRL enforcement profile, audit provenance, and fail-closed definitions. |
+| 0.3.2 | 2026-06-22 | draft | Added delegated self-attestation and clarified direct self-attestation. |
 
 ## 1. Products
 
@@ -75,7 +76,9 @@ The five related projects that form the registry stack are listed below. Product
 
 **wallet**: A holder-owned application that stores credentials and presents them to verifiers. Registry Notary issues credentials; the wallet that stores, unlocks, and presents them is a separate component owned by the holder.
 
-**self-attestation**: Credential issuance pattern where the credential subject is bound to the identity the requester authenticated as. The hosted lab issues a `person_is_alive` self-attestation: Registry Notary will not issue a credential for a subject the caller did not sign in as. Registry Stack product term.
+**self-attestation**: Registry Notary access pattern where an authenticated OIDC principal is the protected requester for configured claim evaluation or credential issuance. In direct self-attestation, the subject is the authenticated requester. In delegated self-attestation, the authenticated requester acts for a configured dependent target only when the relationship proof passes. Registry Stack product term.
+
+**delegated self-attestation**: Registry Notary self-attestation access mode `delegated_attestation`. The requester is derived from the authenticated principal, the target is a configured dependent subject, the relationship is derived from scoped authorization details, and the dependent claim can read sources only after the configured proof claim evaluates to boolean `true`. This is distinct from static-peer delegated evaluation under Notary federation. Registry Stack product term.
 
 **signed response credentials**: Opt-in Registry Relay feature that attaches a W3C Verifiable Credentials Data Model (VCDM) 2.0 VC-JWT signed credential to entity record and aggregate responses when the caller requests `Accept: application/vc+jwt`. The config key is `provenance` for backward compatibility. The Decentralized Identifier (DID) document is served at `/.well-known/did.json` in gateway issuer mode, JSON Schemas are served under `/schemas/...`, and JSON-LD contexts are served under `/contexts/...`. Enabled by the `crosswalk-runtime` Cargo feature group.
 

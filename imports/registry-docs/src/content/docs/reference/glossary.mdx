@@ -63,6 +63,9 @@ Product names are always in English, including on future translated pages.
   <dt>DID</dt>
   <dd>Decentralized Identifier. W3C DID Core 1.0. Registry Relay publishes a `did:web` document at `/.well-known/did.json` when signed response credentials are enabled (config key: `provenance`). Registry Notary parses `did:jwk` values for credential subjects.</dd>
 
+  <dt id="delegated-self-attestation">delegated self-attestation</dt>
+  <dd>Registry Notary self-attestation access mode `delegated_attestation`. The authenticated principal is the requester, the request target is a configured dependent subject, and the dependent claim can read sources only after a configured relationship proof claim evaluates to boolean `true`. This is separate from static-peer delegated evaluation under Notary federation.</dd>
+
   <dt>disclosure profile</dt>
   <dd>Registry Notary control over what the caller receives: `Value` (full value disclosed), `Predicate` (only true/false satisfaction), or `Redacted` (value fully hidden).</dd>
 
@@ -205,7 +208,7 @@ Product names are always in English, including on future translated pages.
   <dd>Selective Disclosure JWT Verifiable Credential (IETF draft). Registry Notary issues SD-JWT VC credentials signed with EdDSA. Media type: `application/dc+sd-jwt`.</dd>
 
   <dt>self-attestation</dt>
-  <dd>Credential issuance pattern where the credential subject is bound to the identity the requester authenticated as. The hosted lab issues a `person_is_alive` self-attestation: Registry Notary will not issue a credential for a subject the caller did not sign in as.</dd>
+  <dd>Registry Notary access pattern where an authenticated OIDC principal is the protected requester for configured claim evaluation or credential issuance. In direct self-attestation, the subject is the authenticated requester. In delegated self-attestation, the requester acts for a configured dependent target only when the relationship proof passes.</dd>
 
   <dt>signed response credentials</dt>
   <dd>Opt-in Registry Relay feature that attaches a W3C VCDM 2.0 VC-JWT signed credential to entity record and aggregate responses when the caller requests `Accept: application/vc+jwt`. The config key is `provenance` for backward compatibility. The DID document is served at `/.well-known/did.json` in gateway issuer mode, JSON Schemas are served under `/schemas/...`, and JSON-LD contexts are served under `/contexts/...`. Enabled by the `crosswalk-runtime` Cargo feature group.</dd>
