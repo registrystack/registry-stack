@@ -229,7 +229,7 @@ def require_outcome(evaluation: dict[str, Any], expected: str, label: str) -> di
     return result
 
 
-def require_value(evaluation: dict[str, Any], expected: str, label: str) -> dict[str, Any]:
+def require_value(evaluation: dict[str, Any], expected: Any, label: str) -> dict[str, Any]:
     result = first_result(evaluation)
     actual = outcome(result)
     if actual != expected:
@@ -471,6 +471,7 @@ def scenario_summary(
     reasons: dict[str, str],
     livestock_evaluations: dict[str, tuple[str, dict[str, Any]]],
     livestock_reasons: dict[str, str],
+    land_areas: dict[str, float],
     denied_controls: dict[str, int],
     manual_review_reasons: dict[str, str],
     credential: dict[str, Any],
@@ -515,6 +516,7 @@ def scenario_summary(
                 "expected": expected,
                 "observed": observed_label(body),
                 "reason_code": reasons.get(subject),
+                "holding_total_area_ha": land_areas.get(subject),
                 "reason_codes": first_result(body).get("reason_codes") or first_result(body).get("reasons") or [],
             }
             for subject, (expected, body) in evaluations.items()
@@ -578,6 +580,7 @@ def main() -> int:
     entity = env("AGRI_FARMER_ENTITY", "farmer")
     claim = env("AGRI_INPUT_VOUCHER_CLAIM", "eligible-for-climate-smart-input-voucher")
     manual_review_claim = env("AGRI_INPUT_VOUCHER_REASON_CLAIM", "voucher-eligibility-reason-code")
+    land_area_claim = env("AGRI_FARMER_HOLDING_AREA_CLAIM", "farmer-holding-total-area-hectares")
     livestock_claim = env("AGRI_LIVESTOCK_MOVEMENT_CLAIM", "eligible-for-livestock-movement-permit")
     livestock_reason_claim = env("AGRI_LIVESTOCK_MOVEMENT_REASON_CLAIM", "livestock-movement-reason-code")
     aggregate_path = env(
@@ -777,6 +780,7 @@ def main() -> int:
     }
     evaluations: dict[str, tuple[str, dict[str, Any]]] = {}
     voucher_reasons: dict[str, str] = {}
+    land_areas: dict[str, float] = {}
     for subject, expected in eval_specs.items():
         body = require(
             request(
@@ -795,6 +799,24 @@ def main() -> int:
         evaluations[subject] = (expected, body)
         add_transcript(transcript, f"`{subject}` evaluated as `{expected}` for voucher review evidence.")
         step += 1
+
+    land_area_body = require(
+        request(
+            "POST",
+            notary.url,
+            "/v1/evaluations",
+            notary_token,
+            evaluation_payload("FARMER-1001", land_area_claim, "value"),
+            {"Data-Purpose": PURPOSE, "Accept": CLAIM_RESULT_FORMAT},
+        ),
+        200,
+        "FARMER-1001 holding area",
+    )
+    save(out, step, "evaluation-farmer-1001-holding-area", land_area_body)
+    land_area_result = require_value(land_area_body, 1.8, "FARMER-1001 holding area")
+    land_areas["FARMER-1001"] = float(outcome(land_area_result))
+    add_transcript(transcript, "`FARMER-1001` disclosed a Notary value claim for total holding area of `1.8` hectares.")
+    step += 1
 
     reason_expectations = {
         "FARMER-1002": "parcel.status:not_active",
@@ -1013,6 +1035,7 @@ def main() -> int:
         voucher_reasons,
         livestock_evaluations,
         livestock_reasons,
+        land_areas,
         denied_controls,
         manual_review_reasons,
         credential,
