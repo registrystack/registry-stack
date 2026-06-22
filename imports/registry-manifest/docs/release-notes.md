@@ -1,5 +1,13 @@
 # Release Notes
 
+## 0.2.2
+
+- Rejected secret-bearing manifest fields more aggressively, including singular,
+  compound, and numbered secret-key variants.
+- Bound federation endpoint validation to the declared issuer host so manifest
+  metadata cannot silently advertise off-issuer federation routes.
+- Refreshed the Registry Platform pin to the beta-4 platform release.
+
 ## 0.1.2
 
 - `publish` now writes `.well-known/api-catalog` and `.well-known/registry-manifest.json` inside `--out` by default. Pass `--site-root <dir>` to write discovery files under a separate site root when the metadata bundle is a sibling of the site root.
