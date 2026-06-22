@@ -1113,9 +1113,23 @@ evidence:
         self.assertIn("scripts/check-coolify-required-env.py", workflow)
         self.assertIn("scripts/sync-coolify-compose-domains.py", workflow)
         self.assertIn("citizen-portal=https://portal.lab.registrystack.org:3000", workflow)
+        self.assertIn("--compose compose.coolify.yaml", workflow)
         self.assertIn("--attempts 6", workflow)
         self.assertIn("monolith-domain-sync", workflow)
+        self.assertIn(
+            '"${api_base}/deploy?uuid=${COOLIFY_REGISTRY_LAB_APP_UUID}&force=false"',
+            workflow,
+        )
+        self.assertNotIn(
+            '"${api_base}/deploy?uuid=${COOLIFY_REGISTRY_LAB_APP_UUID}&force=true"',
+            workflow,
+        )
         self.assertIn("https://portal.lab.registrystack.org|24", workflow)
+        compose = self.validator.load_yaml_mapping(SCRIPT_DIR.parent / "compose.coolify.yaml")
+        hosted_domains = compose["x-hosted-domains"]
+        for service, domain in self.validator.REQUIRED_DOMAINS["registry-lab"].items():
+            with self.subTest(service=service):
+                self.assertEqual(domain, hosted_domains[service])
         initial_deploy_done = workflow.index('done < "$deployments_file"')
         domain_sync = workflow.rindex("python3 scripts/sync-coolify-compose-domains.py")
         portal_route_probe = workflow.index('"citizen-portal|https://portal.lab.registrystack.org|24"')

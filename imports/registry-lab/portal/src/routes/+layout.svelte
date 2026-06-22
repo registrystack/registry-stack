@@ -4,8 +4,9 @@
   import { MinistryRail } from '$lib/rail';
   import { ProofInspector, ProofTicker } from '$lib/proof';
   import { clientFeed, ui } from '$lib/forms';
+  import type { LayoutData } from './$types';
 
-  let { children } = $props();
+  let { children, data }: { children: import('svelte').Snippet; data: LayoutData } = $props();
 
   // The footer audit log is a drawer: collapsed to its most-recent rows by default,
   // expanded (and scrollable) on demand so the full proof history is reachable.
@@ -15,6 +16,10 @@
   // never runs during SSR), so EventSource is safe here. The rail, ticker, and
   // inspector all read the client mirror; the BFF tees redacted traces server-side.
   onMount(() => {
+    if (!data.proofFeedEnabled) {
+      clientFeed.disconnect();
+      return;
+    }
     clientFeed.connect();
     return () => clientFeed.disconnect();
   });
