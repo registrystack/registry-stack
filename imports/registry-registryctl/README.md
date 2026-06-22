@@ -5,8 +5,8 @@
 Install a pinned release without cloning this repo:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/jeremi/registry-registryctl/v0.2.0/install.sh \
-  | REGISTRYCTL_VERSION=v0.2.0 sh
+curl -fsSL https://raw.githubusercontent.com/jeremi/registry-registryctl/v0.2.1/install.sh \
+  | REGISTRYCTL_VERSION=v0.2.1 sh
 ```
 
 Then create and start your first secured spreadsheet API:
@@ -45,7 +45,7 @@ source-adapter contract and defaults the sidecar URL to
 `http://host.docker.internal:4360`. It does not start a FHIR server or the
 FHIR sidecar for you.
 
-The installer defaults to `v0.2.0`. To install a different pinned release, set
+The installer defaults to `v0.2.1`. To install a different pinned release, set
 `REGISTRYCTL_VERSION`:
 
 ```sh

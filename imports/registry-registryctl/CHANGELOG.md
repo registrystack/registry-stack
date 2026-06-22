@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.2.1] - 2026-06-22
+
+### Changed
+
+- Pinned `registry-platform-authcommon` and `registry-config-report` to the
+  Registry Platform `0.3.2` source SHA used by the beta-4 release train.
+- Updated installer defaults, README examples, and release workflow defaults to
+  the `v0.2.1` tag.
+
 ## [0.2.0] - 2026-06-21
 
 ### Added

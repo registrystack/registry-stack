@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Semver tag to validate, for example v0.2.0"
+        description: "Semver tag to validate, for example v0.2.1"
         required: true
-        default: "v0.2.0"
+        default: "v0.2.1"
       dry_run:
         description: "Build and verify artifacts without creating a GitHub release"
         required: true
@@ -86,7 +86,7 @@ jobs:
           case "$RELEASE_TAG" in
             v[0-9]*.[0-9]*.[0-9]*) ;;
             *)
-              echo "Release tag must be semver-like, for example v0.2.0: $RELEASE_TAG" >&2
+              echo "Release tag must be semver-like, for example v0.2.1: $RELEASE_TAG" >&2
               exit 1
               ;;
           esac
