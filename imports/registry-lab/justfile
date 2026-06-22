@@ -241,7 +241,8 @@ hosted-preflight:
     python3 scripts/test_validate_public_api_workspace.py
     python3 scripts/validate-public-api-workspace.py
 
-# Run public hosted smoke checks. Pass extra args after `--`, for example: just hosted-smoke -- --credential-smoke.
+# Run public hosted smoke checks. Pass extra args directly, for example: just hosted-smoke --credential-smoke.
+# The credential smoke also requires DHIS2_EVIDENCE_CLIENT_BEARER in the environment.
 hosted-smoke *args:
     python3 scripts/hosted-smoke.py {{args}}
 

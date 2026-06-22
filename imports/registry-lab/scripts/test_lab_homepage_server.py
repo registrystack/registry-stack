@@ -577,6 +577,7 @@ class ScenarioPayloadTest(unittest.TestCase):
         self.assertEqual(alive["title"], "Vital Status Attestation")
         self.assertEqual(alive["availability_state"]["state"], "hosted")
         self.assertTrue(alive["availability_state"]["runnable"])
+        self.assertEqual(alive["source_system"]["label"], "Registry Relay demo source")
         self.assertEqual(alive["requested_attestations"][0]["offering_id"], "vital-status-attestation")
         self.assertEqual(alive["requested_attestations"][0]["lookup_profiles"], ["by-national-id"])
 
@@ -584,6 +585,8 @@ class ScenarioPayloadTest(unittest.TestCase):
         story = server.scenario_payload(self._payload_config(), "alive-proof")["story"]
         self.assertEqual(story["requested_attestations"][0]["display_name"], "Vital Status Attestation")
         self.assertEqual(story["lookup_profile"]["id"], "by-national-id")
+        self.assertEqual(story["source_system"]["label"], "Registry Relay demo source")
+        self.assertIn("does not call OpenCRVS", story["source_system"]["summary"])
         self.assertIn("Full civil registry row", story["non_disclosure"])
         self.assertTrue(any("CivilStatusRecord" in fact for fact in story["proof_facts"]))
         self.assertEqual(story["availability_state"]["label"], "Hosted")
@@ -1371,7 +1374,21 @@ class ExplorerApiPayloadTest(unittest.TestCase):
     """Explorer APIs are allowlisted, bounded, and safe to render in the public lab."""
 
     def setUp(self) -> None:
+        self._saved = dict(os.environ)
+        for key in (
+            "AGRI_EVIDENCE_CLIENT_BEARER",
+            "CIVIL_EVIDENCE_CLIENT_BEARER",
+            "DHIS2_EVIDENCE_CLIENT_BEARER",
+            "SHARED_EVIDENCE_CLIENT_BEARER",
+            "SOCIAL_EVIDENCE_CLIENT_BEARER",
+            "SOCIAL_PROTECTION_EVIDENCE_CLIENT_BEARER",
+        ):
+            os.environ.pop(key, None)
         self.config = server.enrich_config(server.load_config(server.DEFAULT_CONFIG))
+
+    def tearDown(self) -> None:
+        os.environ.clear()
+        os.environ.update(self._saved)
 
     def test_registry_catalog_uses_exact_allowlist(self) -> None:
         payload = server.registry_explorer.registry_catalog_payload(self.config)
@@ -2389,6 +2406,18 @@ class ChooserAndMetadataTest(unittest.TestCase):
         story = server.scenario_payload(self._config, "dhis2-programme-vc")["story"]
         self.assertEqual(story["domain"], "Health")
 
+    def test_dhis2_story_marks_live_upstream_source(self) -> None:
+        story = server.scenario_payload(self._config, "dhis2-programme-vc")["story"]
+        self.assertEqual(story["source_system"]["label"], "Live DHIS2 via built-in http_json sidecar")
+        self.assertIn("public DHIS2 sandbox", story["source_system"]["summary"])
+        self.assertIn("Registry Relay is not on this source path", story["source_system"]["summary"])
+
+    def test_crvs_certificate_story_points_to_relay_not_opencrvs(self) -> None:
+        story = server.scenario_payload(self._config, "civil-birth-evidence")["story"]
+        self.assertEqual(story["source_system"]["label"], "Registry Relay CRVS fixtures")
+        self.assertIn("Relay-backed birth fixtures", story["source_system"]["summary"])
+        self.assertIn("OpenCRVS DCI tutorial", story["source_system"]["summary"])
+
     def test_social_aggregate_story_has_domain(self) -> None:
         story = server.scenario_payload(self._config, "social-aggregate")["story"]
         self.assertEqual(story["domain"], "Social protection")
@@ -2407,12 +2436,26 @@ class ChooserAndMetadataTest(unittest.TestCase):
             self.assertIn("domain", item, f"catalogue entry {item['id']!r} missing domain")
             self.assertTrue(item["domain"], f"catalogue entry {item['id']!r} has empty domain")
 
+    def test_catalogue_entries_all_have_source_system(self) -> None:
+        payload = server.scenario_payload(self._config)
+        for item in payload["scenarios"]:
+            self.assertIn("source_system", item, f"catalogue entry {item['id']!r} missing source_system")
+            self.assertTrue(item["source_system"].get("label"), f"catalogue entry {item['id']!r} has no source label")
+            self.assertTrue(item["source_system"].get("summary"), f"catalogue entry {item['id']!r} has no source summary")
+
     def test_chooser_renders_domain_tag(self) -> None:
         # domain-tag class must be defined in CSS and referenced in the renderChooser template.
         self.assertIn("domain-tag", SCENARIOS_JS)
         self.assertIn(".domain-tag", SHARED_CSS)
         # The JS template must reference item.domain so the value is rendered at runtime.
         self.assertIn("item.domain", SCENARIOS_JS)
+
+    def test_chooser_renders_source_system(self) -> None:
+        self.assertIn("Evidence source", SCENARIOS_JS)
+        self.assertIn("item.source_system", SCENARIOS_JS)
+        self.assertIn("story.source_system", SCENARIOS_JS)
+        self.assertIn(".card-meta strong", SHARED_CSS)
+        self.assertIn(".setup-item p", SCENARIOS_CSS)
 
     def test_chooser_domain_tag_has_css_class(self) -> None:
         self.assertIn(".domain-tag", SHARED_CSS)

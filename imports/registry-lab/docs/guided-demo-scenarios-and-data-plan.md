@@ -81,6 +81,28 @@ owning pull request or change set:
 - Do not imply automatic entitlement, automatic permit issuance, or automatic
   credential trust. The lab returns evidence for review.
 
+## Hosted Source Modes
+
+Every hosted guided story should say whether it is using Registry Relay demo
+sources or a live upstream adapter before the user runs a step.
+
+- Use **Registry Relay demo source** for the default civil, social protection,
+  health projection, agriculture, and wallet stories. These paths call Relay or
+  a Notary backed by Relay-managed synthetic fixtures. They do not call real
+  FHIR, OpenCRVS, DHIS2, OpenSPP, OpenIMIS, or NAgDI services unless the story
+  explicitly says so.
+- Use **Live DHIS2 via built-in http_json sidecar** only for the DHIS2
+  Programme Participation story. That hosted path calls the DHIS2 Notary, which
+  reads the public DHIS2 sandbox through a private built-in source-adapter
+  sidecar; Registry Relay is not on the source-read path.
+- Treat **OpenCRVS DCI** as a separate live-service tutorial and smoke path
+  until a hosted guided OpenCRVS story is added. The hosted CRVS birth and
+  marriage evidence cards remain Relay-backed lab fixtures, even when their
+  domain language says birth, marriage, or CRVS.
+- Treat **FHIR** as the deterministic FHIR fixture-server profile unless a
+  future hosted guided story says otherwise. The current FHIR tutorial does not
+  call a public clinical FHIR server.
+
 ## Credibility Corrections
 
 The fixture and metadata cleanup is part of the demo, not a side quest. These

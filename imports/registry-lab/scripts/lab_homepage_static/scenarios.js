@@ -212,6 +212,7 @@ function renderStoryMetadata(story) {
   const lookup = story.lookup_profile || {};
   const availability = story.availability_state || {};
   const requester = story.requester || {};
+  const sourceSystem = story.source_system || {};
   return `
     <section class="story-setup">
       <div>
@@ -226,6 +227,7 @@ function renderStoryMetadata(story) {
         <div class="setup-item"><span>Subject</span><strong>${escapeHtml(story.subject.name)} · ${escapeHtml(story.subject.identifier)}</strong></div>
         <div class="setup-item"><span>Lookup profile</span><strong>${escapeHtml(lookup.id || lookup.label || "")}</strong></div>
         <div class="setup-item"><span>Availability</span><strong>${escapeHtml(availability.label || story.availability || "")}</strong></div>
+        ${sourceSystem.label ? `<div class="setup-item"><span>Evidence source</span><strong>${escapeHtml(sourceSystem.label)}</strong>${sourceSystem.summary ? `<p>${escapeHtml(sourceSystem.summary)}</p>` : ""}</div>` : ""}
         <div class="setup-item"><span>Requested attestations</span><strong>${escapeHtml(attestations.join(", ") || "None")}</strong></div>
         <div class="setup-item"><span>Allowed</span><strong>${escapeHtml(story.boundary.allowed)}</strong></div>
         <div class="setup-item"><span>Not allowed</span><strong>${escapeHtml(story.boundary.not_allowed)}</strong></div>
@@ -262,11 +264,13 @@ function renderChooser(items, defaultId) {
     ${sorted.map((item) => {
       const isDefault = item.id === defaultId;
       const cardClass = isDefault ? "scenario-card scenario-card--default" : "scenario-card";
+      const sourceSystem = item.source_system || {};
       return `<article class="${cardClass}">
         ${isDefault ? `<span class="start-here-badge">Start here</span>` : ""}
         <span class="availability ${escapeHtml(item.availability)}">${escapeHtml(item.availability === "local-only" ? "Local only" : "Hosted")}</span>
         ${item.domain ? `<span class="domain-tag">${escapeHtml(item.domain)}</span>` : ""}
         <div><h2>${escapeHtml(item.title)}</h2><p>${escapeHtml(item.proves)}</p></div>
+        ${sourceSystem.label ? `<p class="card-meta"><strong>Evidence source:</strong> ${escapeHtml(sourceSystem.label)}</p>` : ""}
         ${attestationNames(item.requested_attestations || []).length ? `<p class="card-meta">${escapeHtml(attestationNames(item.requested_attestations || []).join(", "))}</p>` : ""}
         ${item.availability_note ? `<p class="card-meta">${escapeHtml(item.availability_note)}</p>` : ""}
         <p class="card-meta">${escapeHtml(item.steps)} steps</p>

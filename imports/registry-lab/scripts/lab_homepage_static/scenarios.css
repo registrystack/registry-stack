@@ -47,6 +47,7 @@ h4 { color: var(--registry-ink); font-size: 16px; margin: 0 0 6px; }
 .setup-item, .fact { border: 1px solid var(--registry-rule); display: grid; gap: 4px; padding: 12px; }
 .setup-item span, .fact span { color: var(--registry-muted); font-family: var(--registry-mono); font-size: 12px; text-transform: uppercase; }
 .setup-item strong, .fact strong { color: var(--registry-ink); overflow-wrap: anywhere; }
+.setup-item p { color: var(--registry-body); font-size: 13px; line-height: 1.4; margin: 0; }
 .step-list { display: grid; gap: 14px; }
 .step.locked { opacity: .62; }
 .step-head { align-items: start; border-bottom: 1px solid var(--registry-rule); display: grid; gap: 14px; grid-template-columns: 42px minmax(0, 1fr) auto; padding: 18px; }
