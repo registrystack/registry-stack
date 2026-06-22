@@ -15,6 +15,7 @@ market_purpose="${AGRI_MARKET_DATA_PURPOSE:-https://demo.example.gov/purpose/nag
 livestock_purpose="${AGRI_LIVESTOCK_DATA_PURPOSE:-https://demo.example.gov/purpose/nagdi/livestock-movement-permit-review}"
 claim="${AGRI_INPUT_VOUCHER_CLAIM:-eligible-for-climate-smart-input-voucher}"
 manual_review_claim="${AGRI_INPUT_VOUCHER_REASON_CLAIM:-voucher-eligibility-reason-code}"
+land_area_claim="${AGRI_FARMER_HOLDING_AREA_CLAIM:-farmer-holding-total-area-hectares}"
 livestock_claim="${AGRI_LIVESTOCK_MOVEMENT_CLAIM:-eligible-for-livestock-movement-permit}"
 livestock_reason_claim="${AGRI_LIVESTOCK_MOVEMENT_REASON_CLAIM:-livestock-movement-reason-code}"
 dataset="${AGRI_FARMER_DATASET:-agri_registry}"
@@ -224,6 +225,10 @@ import sys
 path, claim, expected = sys.argv[1], sys.argv[2], sys.argv[3]
 with open(path, encoding="utf-8") as fh:
     body = json.load(fh)
+try:
+    expected_value = json.loads(expected)
+except json.JSONDecodeError:
+    expected_value = expected
 results = body.get("results") or body.get("claim_results") or []
 if not results:
     raise SystemExit("evaluation has no results")
@@ -240,8 +245,8 @@ for key in ("value", "satisfied", "outcome", "result", "decision", "status"):
         break
 else:
     value = None
-if value != expected:
-    raise SystemExit(f"{claim} expected value {expected!r}, got {value!r}: {matched}")
+if value != expected_value:
+    raise SystemExit(f"{claim} expected value {expected_value!r}, got {value!r}: {matched}")
 PY
 }
 
@@ -408,6 +413,8 @@ for subject, (observed, reason) in expected_farmers.items():
     got = body["golden_subjects"][subject]
     if got.get("observed") != observed or got.get("reason_code") != reason:
         raise SystemExit(f"{subject} summary mismatch: {got!r}")
+if body["golden_subjects"]["FARMER-1001"].get("holding_total_area_ha") != 1.8:
+    raise SystemExit(f"FARMER-1001 holding area missing from summary: {body['golden_subjects']['FARMER-1001']!r}")
 expected_herds = {
     "HERD-2001": ("eligible", None),
     "HERD-2002": ("not_eligible", "livestock.vaccination:expired"),
@@ -523,6 +530,13 @@ check "FARMER-1002 reason evaluation" curl_json POST "${notary_url}/v1/evaluatio
   -H "Accept: ${claim_result_format}" \
   --data "$(evaluation_payload "FARMER-1002" "farmer_id" "${manual_review_claim}" "value")"
 check "FARMER-1002 inactive parcel reason" assert_claim_value "${output_dir}/agri-evaluation-farmer-1002-reason.json" "${manual_review_claim}" "parcel.status:not_active"
+
+check "FARMER-1001 holding area evaluation" curl_json POST "${notary_url}/v1/evaluations" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-evaluation-farmer-1001-holding-area.json" \
+  -H "Content-Type: application/json" \
+  -H "Data-Purpose: ${purpose}" \
+  -H "Accept: ${claim_result_format}" \
+  --data "$(evaluation_payload "FARMER-1001" "farmer_id" "${land_area_claim}" "value")"
+check "FARMER-1001 holding area is disclosed" assert_claim_value "${output_dir}/agri-evaluation-farmer-1001-holding-area.json" "${land_area_claim}" "1.8"
 
 check "already-redeemed farmer evaluation" curl_json POST "${notary_url}/v1/evaluations" "${AGRI_EVIDENCE_CLIENT_BEARER}" "${output_dir}/agri-evaluation-farmer-1003.json" \
   -H "Content-Type: application/json" \

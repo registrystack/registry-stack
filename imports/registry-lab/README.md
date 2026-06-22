@@ -203,6 +203,7 @@ The default agricultural smoke/client paths follow the NAgDI spec:
 
 - purpose: `https://demo.example.gov/purpose/nagdi/climate-smart-input-support`
 - voucher claim: `eligible-for-climate-smart-input-voucher`
+- land-size value claim: `farmer-holding-total-area-hectares`
 - positive subject: `FARMER-1001`
 - negative subjects: `FARMER-1002`, `FARMER-1003`, `FARMER-1004`
 - manual-review subject: `FARMER-1005`

@@ -376,6 +376,42 @@ evidence:
           - value
           - redacted
       formats: *json_formats
+    - id: farmer-holding-total-area-hectares
+      title: Farmer holding total area hectares
+      version: 2026-05
+      subject_type: farmer
+      value:
+        type: number
+      source_bindings:
+        holding:
+          connector: registry_data_api
+          connection: agriculture
+          required_scope: agri_registry:evidence_verification
+          dataset: agri_registry
+          entity: holding
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/nagdi/climate-smart-input-support
+          lookup:
+            input: target.identifiers.farmer_id
+            field: farmer_id
+            op: eq
+            cardinality: one
+          fields:
+            total_area_ha:
+              field: total_area_ha
+              type: number
+              required: true
+      rule:
+        type: extract
+        source: holding
+        field: total_area_ha
+      disclosure:
+        default: value
+        allowed:
+          - value
+          - redacted
+      formats: *json_formats
     - id: no-manual-review-required
       title: No manual review required
       version: 2026-05
