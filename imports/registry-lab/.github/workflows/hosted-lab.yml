@@ -41,6 +41,8 @@ on:
       - "scripts/test_hosted_smoke.py"
       - "scripts/check-coolify-required-env.py"
       - "scripts/test_coolify_required_env.py"
+      - "scripts/sync-coolify-compose-domains.py"
+      - "scripts/test_sync_coolify_compose_domains.py"
       - "scripts/validate-hosted-deploy.py"
       - "scripts/test_validate_hosted_deploy.py"
       - "scripts/validate-public-api-workspace.py"
@@ -89,6 +91,8 @@ on:
       - "scripts/test_hosted_smoke.py"
       - "scripts/check-coolify-required-env.py"
       - "scripts/test_coolify_required_env.py"
+      - "scripts/sync-coolify-compose-domains.py"
+      - "scripts/test_sync_coolify_compose_domains.py"
       - "scripts/validate-hosted-deploy.py"
       - "scripts/test_validate_hosted_deploy.py"
       - "scripts/validate-public-api-workspace.py"
@@ -156,6 +160,8 @@ jobs:
             scripts/check-service-first-deps.sh \
             scripts/generate-demo-secrets.py \
             scripts/generate-holder-proof.js \
+            scripts/sync-coolify-compose-domains.py \
+            scripts/test_sync_coolify_compose_domains.py \
             scripts/publish-static-metadata.sh \
             scripts/static-metadata-server.py \
             scripts/lab-homepage-server.py \
@@ -237,6 +243,9 @@ jobs:
       - name: Run Coolify required env gate tests
         run: python3 scripts/test_coolify_required_env.py
 
+      - name: Run Coolify compose domain sync tests
+        run: python3 scripts/test_sync_coolify_compose_domains.py
+
       - name: Validate hosted deploy artifacts
         run: python3 scripts/validate-hosted-deploy.py --reject-interim-product-images
 
@@ -301,6 +310,12 @@ jobs:
             --compose compose.agri-hosted.yaml \
             --api-base-url "${api_base}" \
             --app-uuid "${COOLIFY_HOSTED_AGRI_APP_UUID}"
+
+          python3 scripts/sync-coolify-compose-domains.py \
+            --compose compose.coolify.yaml \
+            --api-base-url "${api_base}" \
+            --app-uuid "${COOLIFY_REGISTRY_LAB_APP_UUID}" \
+            --domain citizen-portal=https://portal.lab.registrystack.org:3000
 
           # App deploy targets: "uuid|label|health_url|probe_attempts".
           # Health URLs mirror the x-hosted-domains headers in each compose file;
@@ -431,6 +446,33 @@ jobs:
               exit 1
             fi
           done < "$deployments_file"
+
+          # The monolith has multiple public routes. Probe the new portal route
+          # explicitly so a missing service-domain binding is caught here, before
+          # the aggregate smoke test starts exercising portal behavior.
+          routes=(
+            "citizen-portal|https://portal.lab.registrystack.org|24"
+          )
+          for entry in "${routes[@]}"; do
+            IFS='|' read -r label health_url probe_attempts <<<"$entry"
+            ok=0
+            for attempt in $(seq 1 "${probe_attempts}"); do
+              code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${health_url}" || true)"
+              case "$code" in
+                2*|3*|4*)
+                  echo "route ok app=${label} url=${health_url} http=${code} (attempt ${attempt}/${probe_attempts})"
+                  ok=1
+                  break
+                  ;;
+              esac
+              echo "route pending app=${label} url=${health_url} http=${code:-000} (attempt ${attempt}/${probe_attempts})"
+              sleep 10
+            done
+            if [ "$ok" -ne 1 ]; then
+              echo "::error::${label}: deployment finished but ${health_url} did not return a healthy HTTP status (2xx/3xx/4xx) after ${probe_attempts} attempts."
+              exit 1
+            fi
+          done
 
       - name: Upload rollback targets
         if: always()

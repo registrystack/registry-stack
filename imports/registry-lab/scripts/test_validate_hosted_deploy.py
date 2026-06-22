@@ -1091,6 +1091,9 @@ evidence:
         self.assertIn("::error::COOLIFY_API_TOKEN is not configured.", workflow)
         self.assertNotIn("hosted deploy trigger skipped", workflow)
         self.assertIn("scripts/check-coolify-required-env.py", workflow)
+        self.assertIn("scripts/sync-coolify-compose-domains.py", workflow)
+        self.assertIn("citizen-portal=https://portal.lab.registrystack.org:3000", workflow)
+        self.assertIn("https://portal.lab.registrystack.org|24", workflow)
         self.assertNotIn("COOLIFY_DEPLOY_WEBHOOK_URL", workflow)
         self.assertIn("${{ vars.COOLIFY_REGISTRY_LAB_APP_UUID }}", workflow)
         self.assertIn("${{ vars.COOLIFY_HOSTED_ESIGNET_APP_UUID }}", workflow)
@@ -1131,6 +1134,8 @@ evidence:
             "scripts/summarize-dhis2-programme-vc.py",
             "scripts/hosted-smoke.py",
             "scripts/test_hosted_smoke.py",
+            "scripts/sync-coolify-compose-domains.py",
+            "scripts/test_sync_coolify_compose_domains.py",
         ):
             self.assertIn(path, workflow)
 
