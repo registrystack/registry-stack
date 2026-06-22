@@ -627,6 +627,7 @@ class LabHomepageHandler(BaseHTTPRequestHandler):
                     registry_id,
                     _single_query_value(query, "dataset"),
                     _single_query_value(query, "entity"),
+                    config,
                 )
             if route == "records.json":
                 return registry_explorer.record_query_payload(
@@ -643,6 +644,7 @@ class LabHomepageHandler(BaseHTTPRequestHandler):
                 return registry_explorer.aggregates_payload(
                     registry_id,
                     _single_query_value(query, "dataset"),
+                    config,
                 )
             if route == "aggregate.json":
                 return registry_explorer.aggregate_payload(

@@ -8,6 +8,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from . import discovery
 from .common import (
     CLAIM_RESULT_FORMAT,
     PURPOSE,
@@ -401,21 +402,33 @@ def claim_service_ids() -> list[str]:
     return list(CLAIM_SERVICE_ORDER)
 
 
+def _claim_service_catalog(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    if not config:
+        return CLAIM_SERVICES
+    return discovery.discover_claim_services(config, CLAIM_SERVICES, CLAIM_SERVICE_ORDER)
+
+
 def claim_service_config(service_id: str) -> dict[str, Any]:
-    if service_id not in CLAIM_SERVICES:
+    return claim_service_config_for({}, service_id)
+
+
+def claim_service_config_for(config: dict[str, Any], service_id: str) -> dict[str, Any]:
+    services = _claim_service_catalog(config)
+    if service_id not in services:
         raise ExplorerInputError(
             "explorer.unknown_claim_service",
             "Unknown claim service id.",
             field="service_id",
             allowed=claim_service_ids(),
         )
-    return CLAIM_SERVICES[service_id]
+    return services[service_id]
 
 
 def claim_catalog_payload(config: dict[str, Any]) -> dict[str, Any]:
+    services = _claim_service_catalog(config)
     return {
         "ok": True,
-        "claim_services": [_service_summary(CLAIM_SERVICES[service_id], config) for service_id in CLAIM_SERVICE_ORDER],
+        "claim_services": [_service_summary(services[service_id], config) for service_id in CLAIM_SERVICE_ORDER],
         "default_service_id": "civil-notary",
         "default_format": CLAIM_RESULT_FORMAT,
     }
@@ -424,14 +437,14 @@ def claim_catalog_payload(config: dict[str, Any]) -> dict[str, Any]:
 def claim_metadata_payload(config: dict[str, Any], service_id: str) -> dict[str, Any]:
     if service_id not in CLAIM_SERVICES:
         return unknown_id_error("claim_service", service_id, claim_service_ids())
-    service = CLAIM_SERVICES[service_id]
+    service = claim_service_config_for(config, service_id)
     payload = _service_summary(service, config)
     payload["claims"] = deepcopy(list(service["claims"].values()))
     return {"ok": True, "claim_service": payload}
 
 
 def default_civil_claims_payload(config: dict[str, Any], *, run_live: bool = False, timeout: float = 8.0) -> dict[str, Any]:
-    service = CLAIM_SERVICES["civil-notary"]
+    service = claim_service_config_for(config, "civil-notary")
     claim = service["claims"][service["default_claim"]]
     request = build_evaluation_request(
         config,
@@ -538,7 +551,7 @@ def _civil_person_by_national_id(national_id: str) -> CivilRow | None:
     return None
 
 
-def validate_evaluation_input(service_id: str, body: dict[str, Any]) -> dict[str, Any]:
+def validate_evaluation_input(service_id: str, body: dict[str, Any], config: dict[str, Any] | None = None) -> dict[str, Any]:
     # require_keys is an allowlist guard, not a presence check. Legacy subject
     # inputs and metadata target inputs are alternative request shapes, and
     # internal previews may carry both while preserving the target payload.
@@ -546,7 +559,7 @@ def validate_evaluation_input(service_id: str, body: dict[str, Any]) -> dict[str
         body,
         {"claim_id", "subject", "identifier_scheme", "target", "disclosure", "format", "purpose"},
     )
-    service = claim_service_config(service_id)
+    service = claim_service_config_for(config or {}, service_id)
     claim_id = str(body.get("claim_id", service["default_claim"]))
     if claim_id not in service["claims"]:
         raise ExplorerInputError(
@@ -619,7 +632,7 @@ def build_evaluation_request(
     }
     if target is not None:
         validation_body["target"] = target
-    validated = validate_evaluation_input(service_id, validation_body)
+    validated = validate_evaluation_input(service_id, validation_body, config)
     service = validated["service"]
     credential = credential_for_execution(
         config,
@@ -654,7 +667,7 @@ def build_evaluation_request(
 
 
 def run_evaluation(config: dict[str, Any], service_id: str, body: dict[str, Any], *, timeout: float = 8.0) -> dict[str, Any]:
-    validated = validate_evaluation_input(service_id, body)
+    validated = validate_evaluation_input(service_id, body, config)
     built = build_evaluation_request(
         config,
         service_id,
@@ -799,6 +812,7 @@ def _service_summary(service: dict[str, Any], config: dict[str, Any]) -> dict[st
             service["client_credential_id"],
             runtime_env=service.get("runtime_token_env", ""),
         ),
+        "discovery": deepcopy(service.get("discovery", {"status": "overlay", "source": "overlay"})),
         "claims": [
             {
                 "id": claim["id"],

@@ -221,6 +221,7 @@ def base_routes() -> dict[tuple[str, str], Any]:
                         "default_dataset": "civil_registry",
                         "default_entity": "civil_person",
                         "default_limit": 1,
+                        "discovery": {"status": "live", "source": "relay"},
                     },
                     {
                         "id": "social-protection",
@@ -228,6 +229,7 @@ def base_routes() -> dict[tuple[str, str], Any]:
                         "default_entity": "household",
                         "default_aggregate": "households_by_eligibility_band",
                         "default_limit": 1,
+                        "discovery": {"status": "live", "source": "relay"},
                     },
                 ]
             },
@@ -294,13 +296,29 @@ def base_routes() -> dict[tuple[str, str], Any]:
                     "default_subject": subject,
                     "default_identifier_scheme": scheme,
                     "default_purpose": "https://demo.example.gov/purpose/decentralized-evidence-demo",
+                    "discovery": (
+                        {"status": "live", "source": "notary"}
+                        if service_id == "agriculture-notary"
+                        else {"status": "overlay", "source": "overlay"}
+                    ),
                     "claims": [
                         {
                             "id": default_claim,
                             "default_disclosure": "predicate",
                             "formats": ["application/vnd.registry-notary.claim-result+json"],
                         }
-                    ],
+                    ]
+                    + (
+                        [
+                            {
+                                "id": hosted_smoke.DISCOVERY_REQUIRED_AGRICULTURE_CLAIM,
+                                "default_disclosure": "predicate",
+                                "formats": ["application/vnd.registry-notary.claim-result+json"],
+                            }
+                        ]
+                        if service_id == "agriculture-notary"
+                        else []
+                    ),
                 },
             },
         )
@@ -468,6 +486,7 @@ class HostedSmokeTest(unittest.TestCase):
                         "default_entity": "civil_person",
                         "default_aggregate": None,
                         "default_limit": 1,
+                        "discovery": {"status": "live", "source": "relay"},
                     }
                 ]
             },
@@ -479,6 +498,58 @@ class HostedSmokeTest(unittest.TestCase):
 
         self.assertEqual(summary["explorers"]["registries"]["civil"]["aggregate_records"], 0)
         self.assertFalse(any("/aggregates" in path or "/aggregate.json" in path for path in requested_paths))
+
+    def test_overlay_only_registry_discovery_fails(self) -> None:
+        routes = base_routes()
+        status, body = routes[("GET", "/api/explorer/registries.json")]
+        body = dict(body)
+        body["registries"] = [
+            {**registry, "discovery": {"status": "overlay", "source": "overlay"}}
+            for registry in body["registries"]
+        ]
+        routes[("GET", "/api/explorer/registries.json")] = (status, body)
+
+        with StubServer(routes) as server:
+            with self.assertRaises(hosted_smoke.SmokeFailure) as raised:
+                hosted_smoke.run_smoke(hosted_smoke.SmokeConfig(base_url=server.url))
+
+        self.assertIn("registry-explorer-discovery-not-live", str(raised.exception))
+
+    def test_agriculture_claim_discovery_must_be_live(self) -> None:
+        routes = base_routes()
+        status, body = routes[("GET", "/api/explorer/claims/agriculture-notary/metadata.json")]
+        claim_service = dict(body["claim_service"])
+        claim_service["discovery"] = {"status": "overlay", "source": "overlay"}
+        routes[("GET", "/api/explorer/claims/agriculture-notary/metadata.json")] = (
+            status,
+            {"ok": True, "claim_service": claim_service},
+        )
+
+        with StubServer(routes) as server:
+            with self.assertRaises(hosted_smoke.SmokeFailure) as raised:
+                hosted_smoke.run_smoke(hosted_smoke.SmokeConfig(base_url=server.url))
+
+        self.assertIn("claims-explorer-agriculture-discovery-not-live", str(raised.exception))
+
+    def test_agriculture_claim_discovery_requires_live_only_claim(self) -> None:
+        routes = base_routes()
+        status, body = routes[("GET", "/api/explorer/claims/agriculture-notary/metadata.json")]
+        claim_service = dict(body["claim_service"])
+        claim_service["claims"] = [
+            claim
+            for claim in claim_service["claims"]
+            if claim["id"] != hosted_smoke.DISCOVERY_REQUIRED_AGRICULTURE_CLAIM
+        ]
+        routes[("GET", "/api/explorer/claims/agriculture-notary/metadata.json")] = (
+            status,
+            {"ok": True, "claim_service": claim_service},
+        )
+
+        with StubServer(routes) as server:
+            with self.assertRaises(hosted_smoke.SmokeFailure) as raised:
+                hosted_smoke.run_smoke(hosted_smoke.SmokeConfig(base_url=server.url))
+
+        self.assertIn("claims-explorer-agriculture-discovery-claim-missing", str(raised.exception))
 
     def test_none_claim_service_id_fails_without_none_url_requests(self) -> None:
         routes = base_routes()

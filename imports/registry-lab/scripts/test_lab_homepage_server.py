@@ -1511,6 +1511,182 @@ class ExplorerApiPayloadTest(unittest.TestCase):
             }.issubset(social_entities)
         )
 
+    def test_registry_metadata_can_be_derived_from_relay_discovery(self) -> None:
+        self._set_credential_token("civil-metadata", "metadata-token")
+        calls: list[str] = []
+
+        def fake_http_json(method: str, url: str, headers: dict, body=None, timeout=8.0):
+            calls.append(url)
+            self.assertEqual(method, "GET")
+            self.assertEqual(headers["X-Api-Key"], "metadata-token")
+            if url.endswith("/v1/datasets"):
+                return server.registry_explorer.discovery.ExplorerHttpResult(
+                    200,
+                    {
+                        "datasets": [
+                            {
+                                "id": "civil_registry",
+                                "title": "Civil Registry From Discovery",
+                                "entities": [{"id": "civil_person", "title": "Civil Person From Discovery"}],
+                            }
+                        ]
+                    },
+                    {},
+                )
+            if url.endswith("/v1/datasets/civil_registry/entities/civil_person/schema"):
+                return server.registry_explorer.discovery.ExplorerHttpResult(
+                    200,
+                    {"fields": [{"name": "national_id", "type": "string"}, {"name": "discovered_only", "type": "integer"}]},
+                    {},
+                )
+            if url.endswith("/v1/datasets/civil_registry/aggregates"):
+                return server.registry_explorer.discovery.ExplorerHttpResult(200, {"aggregates": []}, {})
+            return server.registry_explorer.discovery.ExplorerHttpResult(404, {}, {})
+
+        with mock.patch.object(server.registry_explorer.discovery, "HTTP_JSON", side_effect=fake_http_json):
+            server.registry_explorer.discovery.clear_discovery_cache()
+            payload = server.registry_explorer.registry_metadata_payload(self.config, "civil")
+            schema = server.registry_explorer.entity_schema_payload(
+                "civil",
+                "civil_registry",
+                "civil_person",
+                self.config,
+            )
+            server.registry_explorer.discovery.clear_discovery_cache()
+
+        registry = payload["registry"]
+        self.assertEqual(registry["datasets"][0]["title"], "Civil Registry From Discovery")
+        self.assertEqual(schema["entity"]["title"], "Civil Person From Discovery")
+        fields = {field["name"]: field for field in schema["fields"]}
+        self.assertEqual(fields["discovered_only"]["type"], "integer")
+        self.assertEqual(fields["national_id"]["filter_ops"], ["eq", "in"])
+        self.assertTrue(fields["national_id"]["sensitive"])
+        self.assertTrue(any(url.endswith("/v1/datasets") for url in calls))
+
+    def test_claim_metadata_can_be_derived_from_notary_discovery(self) -> None:
+        self._set_credential_token("agri-evidence", "agri-token")
+        calls: list[str] = []
+
+        def fake_http_json(method: str, url: str, headers: dict, body=None, timeout=8.0):
+            calls.append(url)
+            self.assertEqual(method, "GET")
+            self.assertEqual(headers["Authorization"], "Bearer agri-token")
+            if url.endswith("/.well-known/evidence-service"):
+                return server.claims_explorer.discovery.ExplorerHttpResult(
+                    200,
+                    {"claims_url": "http://127.0.0.1/private-claims"},
+                    {},
+                )
+            if url.endswith("/v1/claims"):
+                return server.claims_explorer.discovery.ExplorerHttpResult(
+                    200,
+                    {
+                        "claims": [
+                            {
+                                "id": "farmer-holding-total-area-hectares",
+                                "title": "Farmer holding total area hectares",
+                                "value": {"type": "number"},
+                                "disclosure": {"default": "value", "allowed": ["value", "redacted"]},
+                                "formats": [server.claims_explorer.CLAIM_RESULT_FORMAT],
+                            }
+                        ]
+                    },
+                    {},
+                )
+            return server.claims_explorer.discovery.ExplorerHttpResult(404, {}, {})
+
+        with mock.patch.object(server.claims_explorer.discovery, "HTTP_JSON", side_effect=fake_http_json):
+            server.claims_explorer.discovery.clear_discovery_cache()
+            service = server.claims_explorer.claim_metadata_payload(self.config, "agriculture-notary")["claim_service"]
+            validated = server.claims_explorer.validate_evaluation_input(
+                "agriculture-notary",
+                {
+                    "claim_id": "farmer-holding-total-area-hectares",
+                    "subject": "FARMER-1001",
+                    "identifier_scheme": "farmer_id",
+                    "disclosure": "value",
+                    "format": server.claims_explorer.CLAIM_RESULT_FORMAT,
+                    "purpose": server.claims_explorer.PURPOSE,
+                },
+                self.config,
+            )
+            server.claims_explorer.discovery.clear_discovery_cache()
+
+        claims = {claim["id"]: claim for claim in service["claims"]}
+        self.assertEqual(service["default_claim"], "farmer-holding-total-area-hectares")
+        self.assertEqual(claims["farmer-holding-total-area-hectares"]["value_type"], "number")
+        self.assertEqual(claims["farmer-holding-total-area-hectares"]["default_disclosure"], "value")
+        self.assertEqual(validated["claim"]["id"], "farmer-holding-total-area-hectares")
+        self.assertFalse(any("127.0.0.1" in url for url in calls))
+        self.assertTrue(any(url.endswith("/v1/claims") for url in calls))
+
+    def test_discovery_rejects_absolute_discovery_paths(self) -> None:
+        self._set_credential_token("agri-evidence", "agri-token")
+        with self.assertRaises(server.claims_explorer.discovery.DiscoveryUnavailable):
+            server.claims_explorer.discovery._discovery_get(
+                self.config,
+                "agri-evidence",
+                "https://agriculture-notary.lab.registrystack.org",
+                "http://127.0.0.1/private-claims",
+            )
+
+    def test_claim_discovery_can_use_runtime_hidden_token(self) -> None:
+        calls: list[dict[str, Any]] = []
+
+        def fake_http_json(method: str, url: str, headers: dict, body=None, timeout=8.0):
+            calls.append({"url": url, "headers": headers})
+            if url.endswith("/.well-known/evidence-service"):
+                return server.claims_explorer.discovery.ExplorerHttpResult(200, {}, {})
+            if url.endswith("/v1/claims"):
+                return server.claims_explorer.discovery.ExplorerHttpResult(
+                    200,
+                    {
+                        "claims": [
+                            {
+                                "id": "person-is-alive",
+                                "title": "Person is alive",
+                                "disclosure": {"default": "predicate", "allowed": ["predicate", "redacted"]},
+                                "formats": [server.claims_explorer.CLAIM_RESULT_FORMAT],
+                            }
+                        ]
+                    },
+                    {},
+                )
+            return server.claims_explorer.discovery.ExplorerHttpResult(404, {}, {})
+
+        with mock.patch.dict(os.environ, {"CIVIL_EVIDENCE_CLIENT_BEARER": "runtime-token"}):
+            with mock.patch.object(server.claims_explorer.discovery, "HTTP_JSON", side_effect=fake_http_json):
+                server.claims_explorer.discovery.clear_discovery_cache()
+                service = server.claims_explorer.claim_metadata_payload(self.config, "civil-notary")["claim_service"]
+                server.claims_explorer.discovery.clear_discovery_cache()
+
+        self.assertEqual(service["discovery"]["status"], "live")
+        self.assertTrue(calls)
+        self.assertEqual(calls[0]["headers"]["Authorization"], "Bearer runtime-token")
+
+    def test_discovery_failure_reports_sanitized_error_code(self) -> None:
+        self._set_credential_token("civil-metadata", "metadata-token")
+
+        def fake_http_json(method: str, url: str, headers: dict, body=None, timeout=8.0):
+            return server.registry_explorer.discovery.ExplorerHttpResult(401, {"detail": "secret-ish upstream body"}, {})
+
+        with mock.patch.object(server.registry_explorer.discovery, "HTTP_JSON", side_effect=fake_http_json):
+            server.registry_explorer.discovery.clear_discovery_cache()
+            payload = server.registry_explorer.registry_metadata_payload(self.config, "civil")
+            server.registry_explorer.discovery.clear_discovery_cache()
+
+        discovery = payload["registry"]["discovery"]
+        self.assertEqual(discovery["status"], "overlay")
+        self.assertEqual(discovery["error"], {"code": "http_error", "status": 401})
+        self.assertNotIn("secret-ish upstream body", str(discovery))
+
+    def test_discovery_read_boundary_rejects_large_response(self) -> None:
+        class LargeResponse:
+            def read(self, size: int) -> bytes:
+                return b"x" * size
+
+        self.assertIsNone(server.claims_explorer.discovery._read_bounded(LargeResponse(), max_bytes=3))
+
     def test_unknown_registry_id_returns_controlled_error(self) -> None:
         payload = server.registry_explorer.registry_metadata_payload(self.config, "not-a-registry")
         self.assertFalse(payload["ok"])
@@ -1879,6 +2055,16 @@ class ExplorerApiPayloadTest(unittest.TestCase):
         )
         for excluded in self.config.get("excluded_env", []):
             self.assertNotIn(excluded["env"], body)
+
+    def _set_credential_token(self, credential_id: str, token: str) -> None:
+        for credential in self.config["credentials"]:
+            if credential["id"] == credential_id:
+                credential["token"] = token
+                name, value = server.auth_header_pair(credential, token)
+                credential["auth_header"] = f"{name}: {value}"
+                credential["configured"] = True
+                return
+        self.fail(f"Missing credential {credential_id}")
 
 
 class LabModePayloadTest(unittest.TestCase):

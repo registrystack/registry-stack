@@ -12,6 +12,7 @@ from urllib.parse import urlencode
 from zipfile import ZipFile
 import xml.etree.ElementTree as ET
 
+from . import discovery
 from .common import (
     EXPLORER_MAX_LIMIT,
     PURPOSE,
@@ -482,21 +483,33 @@ def registry_ids() -> list[str]:
     return list(REGISTRY_ORDER)
 
 
+def _registry_catalog(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    if not config:
+        return REGISTRIES
+    return discovery.discover_relay_registries(config, REGISTRIES, REGISTRY_ORDER)
+
+
 def registry_config(registry_id: str) -> dict[str, Any]:
-    if registry_id not in REGISTRIES:
+    return registry_config_for({}, registry_id)
+
+
+def registry_config_for(config: dict[str, Any], registry_id: str) -> dict[str, Any]:
+    registries = _registry_catalog(config)
+    if registry_id not in registries:
         raise ExplorerInputError(
             "explorer.unknown_registry",
             "Unknown registry id.",
             field="registry_id",
             allowed=registry_ids(),
         )
-    return REGISTRIES[registry_id]
+    return registries[registry_id]
 
 
 def registry_catalog_payload(config: dict[str, Any]) -> dict[str, Any]:
+    registries = _registry_catalog(config)
     return {
         "ok": True,
-        "registries": [_registry_summary(REGISTRIES[registry_id], config) for registry_id in REGISTRY_ORDER],
+        "registries": [_registry_summary(registries[registry_id], config) for registry_id in REGISTRY_ORDER],
         "default_registry_id": "civil",
         "max_limit": EXPLORER_MAX_LIMIT,
     }
@@ -505,14 +518,14 @@ def registry_catalog_payload(config: dict[str, Any]) -> dict[str, Any]:
 def registry_metadata_payload(config: dict[str, Any], registry_id: str) -> dict[str, Any]:
     if registry_id not in REGISTRIES:
         return unknown_id_error("registry", registry_id, registry_ids())
-    registry = REGISTRIES[registry_id]
+    registry = registry_config_for(config, registry_id)
     payload = _registry_summary(registry, config)
     payload["datasets"] = deepcopy(list(registry["datasets"].values()))
     return {"ok": True, "registry": payload}
 
 
 def default_civil_relay_payload(config: dict[str, Any]) -> dict[str, Any]:
-    registry = REGISTRIES["civil"]
+    registry = registry_config_for(config, "civil")
     dataset_id = registry["default_dataset"]
     entity_id = registry["default_entity"]
     limit = registry["default_limit"]
@@ -541,8 +554,8 @@ def default_civil_relay_payload(config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def entity_schema_payload(registry_id: str, dataset_id: str, entity_id: str) -> dict[str, Any]:
-    registry = registry_config(registry_id)
+def entity_schema_payload(registry_id: str, dataset_id: str, entity_id: str, config: dict[str, Any] | None = None) -> dict[str, Any]:
+    registry = registry_config_for(config or {}, registry_id)
     dataset = _dataset(registry, dataset_id)
     entity = _entity(dataset, entity_id)
     return {
@@ -577,10 +590,10 @@ def record_query_payload(
         purpose=purpose,
     )
     validated = built["validated"]
-    registry = registry_config(registry_id)
+    registry = registry_config_for(config, registry_id)
     dataset = _dataset(registry, dataset_id)
     entity = _entity(dataset, entity_id)
-    sample_rows = _sample_records(registry_id, dataset_id, entity_id, EXPLORER_MAX_LIMIT)
+    sample_rows = _sample_records(registry_id, dataset_id, entity_id, EXPLORER_MAX_LIMIT, config=config)
     rows = _filter_sample_records(sample_rows, validated["filters"])[:validated["limit"]]
     fields = deepcopy(entity.get("fields", []))
     response = {
@@ -621,8 +634,8 @@ def record_query_payload(
     }
 
 
-def aggregates_payload(registry_id: str, dataset_id: str) -> dict[str, Any]:
-    registry = registry_config(registry_id)
+def aggregates_payload(registry_id: str, dataset_id: str, config: dict[str, Any] | None = None) -> dict[str, Any]:
+    registry = registry_config_for(config or {}, registry_id)
     dataset = _dataset(registry, dataset_id)
     return {
         "ok": True,
@@ -649,7 +662,7 @@ def aggregate_payload(
         filters=filters,
         purpose=purpose,
     )
-    validated = validate_aggregate_query(registry_id, dataset_id, aggregate_id, filters)
+    validated = validate_aggregate_query(registry_id, dataset_id, aggregate_id, filters, config)
     rows = _sample_aggregate_records(registry_id, aggregate_id)
     response = {
         "status": "preview",
@@ -679,8 +692,9 @@ def validate_record_query(
     entity_id: str,
     raw_limit: Any,
     filters: list[dict[str, str]],
+    config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    registry = registry_config(registry_id)
+    registry = registry_config_for(config or {}, registry_id)
     dataset = _dataset(registry, dataset_id)
     entity = _entity(dataset, entity_id)
     limit = validate_limit(raw_limit, default=registry.get("default_limit", 1), max_limit=EXPLORER_MAX_LIMIT)
@@ -706,7 +720,7 @@ def build_record_request(
     credential_id: str = "",
     purpose: str = "",
 ) -> dict[str, Any]:
-    validated = validate_record_query(registry_id, dataset_id, entity_id, limit, filters or [])
+    validated = validate_record_query(registry_id, dataset_id, entity_id, limit, filters or [], config)
     registry = validated["registry"]
     selected_credential = credential_id or registry.get("row_reader_credential_id", "")
     _validate_registry_credential(registry, selected_credential)
@@ -759,8 +773,9 @@ def validate_aggregate_query(
     dataset_id: str,
     aggregate_id: str,
     filters: list[dict[str, str]] | None = None,
+    config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    registry = registry_config(registry_id)
+    registry = registry_config_for(config or {}, registry_id)
     dataset = _dataset(registry, dataset_id)
     aggregate = _aggregate(dataset, aggregate_id)
     validated_filters = validate_filters(filters or [], aggregate.get("allowed_filters", {}))
@@ -776,7 +791,7 @@ def build_aggregate_request(
     filters: list[dict[str, str]] | None = None,
     purpose: str = "",
 ) -> dict[str, Any]:
-    validated = validate_aggregate_query(registry_id, dataset_id, aggregate_id, filters)
+    validated = validate_aggregate_query(registry_id, dataset_id, aggregate_id, filters, config)
     registry = validated["registry"]
     credential_id = registry.get("aggregate_reader_credential_id", "")
     _validate_registry_credential(registry, credential_id)
@@ -842,6 +857,7 @@ def _registry_summary(registry: dict[str, Any], config: dict[str, Any]) -> dict[
             if credential_id
         ],
         "comparison": deepcopy(registry["comparison"]),
+        "discovery": deepcopy(registry.get("discovery", {"status": "overlay", "source": "overlay"})),
     }
 
 
@@ -889,8 +905,8 @@ def _allowed_entity_filters(entity: dict[str, Any]) -> dict[str, list[str]]:
     }
 
 
-def _entity_field_types(registry_id: str, dataset_id: str, entity_id: str) -> dict[str, str]:
-    entity = REGISTRIES[registry_id]["datasets"][dataset_id]["entities"][entity_id]
+def _entity_field_types(registry_id: str, dataset_id: str, entity_id: str, config: dict[str, Any] | None = None) -> dict[str, str]:
+    entity = _registry_catalog(config or {})[registry_id]["datasets"][dataset_id]["entities"][entity_id]
     return {field["name"]: field.get("type", "string") for field in entity.get("fields", [])}
 
 
@@ -1007,7 +1023,7 @@ def _xlsx_cell_value(cell: ET.Element, shared_strings: list[str], ns: dict[str, 
     return text
 
 
-def _sample_records(registry_id: str, dataset_id: str, entity_id: str, limit: int) -> list[dict[str, Any]]:
+def _sample_records(registry_id: str, dataset_id: str, entity_id: str, limit: int, *, config: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     if registry_id == "civil" and dataset_id == "civil_registry":
         files = {
             "civil_person": ("civil-persons.csv", {}),
@@ -1026,7 +1042,7 @@ def _sample_records(registry_id: str, dataset_id: str, entity_id: str, limit: in
         path = REPO_ROOT / "data" / "civil" / filename
         if path.exists():
             with path.open(encoding="utf-8", newline="") as handle:
-                fields = _entity_field_types(registry_id, dataset_id, entity_id)
+                fields = _entity_field_types(registry_id, dataset_id, entity_id, config)
                 return [_shape_record(dict(row), aliases, fields) for _, row in zip(range(limit), csv.DictReader(handle))]
         if entity_id == "civil_person":
             return [
@@ -1060,7 +1076,7 @@ def _sample_records(registry_id: str, dataset_id: str, entity_id: str, limit: in
         sheet_name, aliases = sheets[entity_id]
         path = REPO_ROOT / "data" / "social-protection" / "social-protection.xlsx"
         if path.exists():
-            fields = _entity_field_types(registry_id, dataset_id, entity_id)
+            fields = _entity_field_types(registry_id, dataset_id, entity_id, config)
             return [_shape_record(row, aliases, fields) for row in _sample_xlsx_sheet(path, sheet_name, limit)]
         if entity_id == "household":
             return [
