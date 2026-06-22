@@ -225,10 +225,6 @@ import sys
 path, claim, expected = sys.argv[1], sys.argv[2], sys.argv[3]
 with open(path, encoding="utf-8") as fh:
     body = json.load(fh)
-try:
-    expected_value = json.loads(expected)
-except json.JSONDecodeError:
-    expected_value = expected
 results = body.get("results") or body.get("claim_results") or []
 if not results:
     raise SystemExit("evaluation has no results")
@@ -245,6 +241,25 @@ for key in ("value", "satisfied", "outcome", "result", "decision", "status"):
         break
 else:
     value = None
+if isinstance(value, bool):
+    if expected.lower() in ("true", "1"):
+        expected_value = True
+    elif expected.lower() in ("false", "0"):
+        expected_value = False
+    else:
+        expected_value = expected
+elif isinstance(value, int):
+    try:
+        expected_value = int(expected)
+    except ValueError:
+        expected_value = expected
+elif isinstance(value, float):
+    try:
+        expected_value = float(expected)
+    except ValueError:
+        expected_value = expected
+else:
+    expected_value = expected
 if value != expected_value:
     raise SystemExit(f"{claim} expected value {expected_value!r}, got {value!r}: {matched}")
 PY
