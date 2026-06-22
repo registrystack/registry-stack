@@ -21,7 +21,7 @@ struct TestConfigOptions<'a> {
     openapi_requires_auth: Option<bool>,
     source_base_url: Option<&'a str>,
     source_allows_private_network: bool,
-    openfn_batch_without_expected_sidecar: bool,
+    source_adapter_batch_without_expected_sidecar: bool,
     config_trust: bool,
     multi_instance: bool,
     durable_audit: Option<bool>,
@@ -77,15 +77,15 @@ fn write_config_with_options(tmp: &TempDir, options: TestConfigOptions<'_>) -> P
         .to_string()
     };
     let source_base_url = options.source_base_url.or(options
-        .openfn_batch_without_expected_sidecar
-        .then_some("https://openfn.example.test"));
+        .source_adapter_batch_without_expected_sidecar
+        .then_some("https://source-adapter.example.test"));
     let source_private_network = if options.source_allows_private_network {
         "      allow_insecure_private_network: true\n"
     } else {
         ""
     };
-    let openfn_bulk_mode = if options.openfn_batch_without_expected_sidecar {
-        "      bulk_mode: openfn_sidecar_batch\n      retry_on_5xx: false\n"
+    let source_adapter_bulk_mode = if options.source_adapter_batch_without_expected_sidecar {
+        "      bulk_mode: source_adapter_sidecar_batch\n      retry_on_5xx: false\n"
     } else {
         ""
     };
@@ -95,7 +95,7 @@ fn write_config_with_options(tmp: &TempDir, options: TestConfigOptions<'_>) -> P
                 r#"  source_connections:
     profile_gate_test:
       base_url: "{base_url}"
-{source_private_network}{openfn_bulk_mode}
+{source_private_network}{source_adapter_bulk_mode}
       token_env: TEST_DOCTOR_JSON_SOURCE_TOKEN
 "#
             )
@@ -623,12 +623,12 @@ fn doctor_json_production_private_network_source_escape_reports_error() {
 }
 
 #[test]
-fn doctor_json_evidence_grade_openfn_without_expected_sidecar_fails_readiness() {
+fn doctor_json_evidence_grade_source_adapter_without_expected_sidecar_fails_readiness() {
     let tmp = TempDir::new().expect("tempdir");
     let config = write_config_with_options(
         &tmp,
         TestConfigOptions {
-            openfn_batch_without_expected_sidecar: true,
+            source_adapter_batch_without_expected_sidecar: true,
             config_trust: true,
             ..TestConfigOptions::default()
         },
@@ -642,7 +642,7 @@ fn doctor_json_evidence_grade_openfn_without_expected_sidecar_fails_readiness() 
 
     assert!(
         !output.status.success(),
-        "evidence_grade OpenFn batch without expected sidecar should fail readiness\nstdout:\n{}\nstderr:\n{}",
+        "evidence_grade source-adapter batch without expected sidecar should fail readiness\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );

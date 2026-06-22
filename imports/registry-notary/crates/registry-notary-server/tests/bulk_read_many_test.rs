@@ -201,9 +201,9 @@ async fn dci_batched_handler(
     .into_response()
 }
 
-/// OpenFn sidecar batchMatch endpoint: records the POST body and returns one
+/// source-adapter sidecar batchMatch endpoint: records the POST body and returns one
 /// successful item per request item, echoing the query values into the record.
-async fn openfn_batch_match_handler(
+async fn source_adapter_batch_match_handler(
     State(rec): State<UpstreamRecorder>,
     method: axum::http::Method,
     axum::extract::OriginalUri(uri): axum::extract::OriginalUri,
@@ -501,7 +501,10 @@ evidence:
     serde_norway::from_str(&raw).expect("dci bulk config deserializes")
 }
 
-fn openfn_sidecar_bulk_config(base_url: &str, audit_path: &str) -> StandaloneRegistryNotaryConfig {
+fn source_adapter_sidecar_bulk_config(
+    base_url: &str,
+    audit_path: &str,
+) -> StandaloneRegistryNotaryConfig {
     set_audit_secret();
     let api_key_fingerprint = test_api_key_fingerprint_ref_yaml(
         "caseworker",
@@ -531,13 +534,13 @@ evidence:
     subjects: 256
     bindings: 32
   source_connections:
-    openfn_crvs:
+    source_adapter_crvs:
       base_url: "{base_url}"
       allow_insecure_localhost: true
       token_env: TEST_BULK_SOURCE_TOKEN
       max_in_flight: 64
       retry_on_5xx: false
-      bulk_mode: openfn_sidecar_batch
+      bulk_mode: source_adapter_sidecar_batch
   claims:
     - id: date-of-birth
       title: Date of birth
@@ -549,8 +552,8 @@ evidence:
           max_subjects: 200
       source_bindings:
         crvs:
-          connector: openfn_sidecar
-          connection: openfn_crvs
+          connector: source_adapter_sidecar
+          connection: source_adapter_crvs
           required_scope: civil_registry:evidence_verification
           dataset: civil_registry
           entity: civil_person
@@ -585,10 +588,10 @@ evidence:
         - application/vnd.registry-notary.claim-result+json
 "#
     );
-    serde_norway::from_str(&raw).expect("OpenFn sidecar bulk config deserializes")
+    serde_norway::from_str(&raw).expect("source-adapter sidecar bulk config deserializes")
 }
 
-fn openfn_sidecar_identifier_bulk_config(
+fn source_adapter_sidecar_identifier_bulk_config(
     base_url: &str,
     audit_path: &str,
 ) -> StandaloneRegistryNotaryConfig {
@@ -621,13 +624,13 @@ evidence:
     subjects: 256
     bindings: 32
   source_connections:
-    openfn_crvs:
+    source_adapter_crvs:
       base_url: "{base_url}"
       allow_insecure_localhost: true
       token_env: TEST_BULK_SOURCE_TOKEN
       max_in_flight: 64
       retry_on_5xx: false
-      bulk_mode: openfn_sidecar_batch
+      bulk_mode: source_adapter_sidecar_batch
   claims:
     - id: date-of-birth
       title: Date of birth
@@ -639,8 +642,8 @@ evidence:
           max_subjects: 200
       source_bindings:
         crvs:
-          connector: openfn_sidecar
-          connection: openfn_crvs
+          connector: source_adapter_sidecar
+          connection: source_adapter_crvs
           required_scope: civil_registry:evidence_verification
           dataset: civil_registry
           entity: civil_person
@@ -665,10 +668,10 @@ evidence:
         - application/vnd.registry-notary.claim-result+json
 "#
     );
-    serde_norway::from_str(&raw).expect("OpenFn sidecar identifier config deserializes")
+    serde_norway::from_str(&raw).expect("source-adapter sidecar identifier config deserializes")
 }
 
-fn openfn_sidecar_relationship_bulk_config(
+fn source_adapter_sidecar_relationship_bulk_config(
     base_url: &str,
     audit_path: &str,
 ) -> StandaloneRegistryNotaryConfig {
@@ -701,13 +704,13 @@ evidence:
     subjects: 256
     bindings: 32
   source_connections:
-    openfn_crvs:
+    source_adapter_crvs:
       base_url: "{base_url}"
       allow_insecure_localhost: true
       token_env: TEST_BULK_SOURCE_TOKEN
       max_in_flight: 64
       retry_on_5xx: false
-      bulk_mode: openfn_sidecar_batch
+      bulk_mode: source_adapter_sidecar_batch
   claims:
     - id: date-of-birth
       title: Date of birth
@@ -719,8 +722,8 @@ evidence:
           max_subjects: 200
       source_bindings:
         crvs:
-          connector: openfn_sidecar
-          connection: openfn_crvs
+          connector: source_adapter_sidecar
+          connection: source_adapter_crvs
           required_scope: civil_registry:evidence_verification
           dataset: civil_registry
           entity: civil_person
@@ -749,10 +752,10 @@ evidence:
         - application/vnd.registry-notary.claim-result+json
 "#
     );
-    serde_norway::from_str(&raw).expect("OpenFn sidecar relationship config deserializes")
+    serde_norway::from_str(&raw).expect("source-adapter sidecar relationship config deserializes")
 }
 
-fn openfn_sidecar_requester_bulk_config(
+fn source_adapter_sidecar_requester_bulk_config(
     base_url: &str,
     audit_path: &str,
 ) -> StandaloneRegistryNotaryConfig {
@@ -785,13 +788,13 @@ evidence:
     subjects: 256
     bindings: 32
   source_connections:
-    openfn_crvs:
+    source_adapter_crvs:
       base_url: "{base_url}"
       allow_insecure_localhost: true
       token_env: TEST_BULK_SOURCE_TOKEN
       max_in_flight: 64
       retry_on_5xx: false
-      bulk_mode: openfn_sidecar_batch
+      bulk_mode: source_adapter_sidecar_batch
   claims:
     - id: date-of-birth
       title: Date of birth
@@ -803,8 +806,8 @@ evidence:
           max_subjects: 200
       source_bindings:
         crvs:
-          connector: openfn_sidecar
-          connection: openfn_crvs
+          connector: source_adapter_sidecar
+          connection: source_adapter_crvs
           required_scope: civil_registry:evidence_verification
           dataset: civil_registry
           entity: civil_person
@@ -833,7 +836,7 @@ evidence:
         - application/vnd.registry-notary.claim-result+json
 "#
     );
-    serde_norway::from_str(&raw).expect("OpenFn sidecar requester config deserializes")
+    serde_norway::from_str(&raw).expect("source-adapter sidecar requester config deserializes")
 }
 
 // ---------------------------------------------------------------------------
@@ -981,18 +984,18 @@ async fn rda_bulk_falls_back_to_per_subject_on_collision() {
 }
 
 // ---------------------------------------------------------------------------
-// OpenFn sidecar batchMatch specialization
+// source-adapter sidecar batchMatch specialization
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn openfn_sidecar_batch_by_identifier_posts_one_batch_match_request() {
+async fn source_adapter_sidecar_batch_by_identifier_posts_one_batch_match_request() {
     setup_env();
     let recorder = UpstreamRecorder::new();
     let upstream = TestServer::builder().http_transport().build(
         Router::new()
             .route(
                 "/v1/datasets/civil_registry/entities/civil_person/records:batchMatch",
-                post(openfn_batch_match_handler),
+                post(source_adapter_batch_match_handler),
             )
             .with_state(recorder.clone()),
     );
@@ -1000,7 +1003,7 @@ async fn openfn_sidecar_batch_by_identifier_posts_one_batch_match_request() {
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
 
-    let app = standalone_router(openfn_sidecar_identifier_bulk_config(
+    let app = standalone_router(source_adapter_sidecar_identifier_bulk_config(
         base_url.to_string().trim_end_matches('/'),
         audit_path.to_str().expect("utf-8 path"),
     ))
@@ -1024,7 +1027,7 @@ async fn openfn_sidecar_batch_by_identifier_posts_one_batch_match_request() {
     assert_eq!(
         recorder.total(),
         1,
-        "expected exactly one OpenFn identifier batchMatch POST, got {}",
+        "expected exactly one source-adapter identifier batchMatch POST, got {}",
         recorder.total(),
     );
     let requests = recorder.snapshot();
@@ -1081,14 +1084,14 @@ async fn openfn_sidecar_batch_by_identifier_posts_one_batch_match_request() {
 }
 
 #[tokio::test]
-async fn openfn_sidecar_batch_groups_query_fields_into_one_batch_match_post() {
+async fn source_adapter_sidecar_batch_groups_query_fields_into_one_batch_match_post() {
     setup_env();
     let recorder = UpstreamRecorder::new();
     let upstream = TestServer::builder().http_transport().build(
         Router::new()
             .route(
                 "/v1/datasets/civil_registry/entities/civil_person/records:batchMatch",
-                post(openfn_batch_match_handler),
+                post(source_adapter_batch_match_handler),
             )
             .with_state(recorder.clone()),
     );
@@ -1096,7 +1099,7 @@ async fn openfn_sidecar_batch_groups_query_fields_into_one_batch_match_post() {
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
 
-    let app = standalone_router(openfn_sidecar_bulk_config(
+    let app = standalone_router(source_adapter_sidecar_bulk_config(
         base_url.to_string().trim_end_matches('/'),
         audit_path.to_str().expect("utf-8 path"),
     ))
@@ -1124,7 +1127,7 @@ async fn openfn_sidecar_batch_groups_query_fields_into_one_batch_match_post() {
     assert_eq!(
         recorder.total(),
         1,
-        "expected exactly one OpenFn sidecar batchMatch POST, got {}",
+        "expected exactly one source-adapter sidecar batchMatch POST, got {}",
         recorder.total(),
     );
     let requests = recorder.snapshot();
@@ -1165,19 +1168,19 @@ async fn openfn_sidecar_batch_groups_query_fields_into_one_batch_match_post() {
     }
     assert!(
         !response_body.to_string().contains("unrequested_secret"),
-        "OpenFn sidecar response must be projected before Notary uses it"
+        "source-adapter sidecar response must be projected before Notary uses it"
     );
 }
 
 #[tokio::test]
-async fn openfn_sidecar_batch_supports_relationship_derived_query_fields() {
+async fn source_adapter_sidecar_batch_supports_relationship_derived_query_fields() {
     setup_env();
     let recorder = UpstreamRecorder::new();
     let upstream = TestServer::builder().http_transport().build(
         Router::new()
             .route(
                 "/v1/datasets/civil_registry/entities/civil_person/records:batchMatch",
-                post(openfn_batch_match_handler),
+                post(source_adapter_batch_match_handler),
             )
             .with_state(recorder.clone()),
     );
@@ -1185,7 +1188,7 @@ async fn openfn_sidecar_batch_supports_relationship_derived_query_fields() {
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
 
-    let app = standalone_router(openfn_sidecar_relationship_bulk_config(
+    let app = standalone_router(source_adapter_sidecar_relationship_bulk_config(
         base_url.to_string().trim_end_matches('/'),
         audit_path.to_str().expect("utf-8 path"),
     ))
@@ -1220,7 +1223,7 @@ async fn openfn_sidecar_batch_supports_relationship_derived_query_fields() {
     assert_eq!(
         recorder.total(),
         1,
-        "relationship query fields should still use one OpenFn batchMatch POST"
+        "relationship query fields should still use one source-adapter sidecar batchMatch POST"
     );
     let last_body = recorder.last_body().expect("body recorded");
     assert_eq!(
@@ -1242,14 +1245,14 @@ async fn openfn_sidecar_batch_supports_relationship_derived_query_fields() {
 }
 
 #[tokio::test]
-async fn openfn_sidecar_batch_supports_requester_derived_query_fields() {
+async fn source_adapter_sidecar_batch_supports_requester_derived_query_fields() {
     setup_env();
     let recorder = UpstreamRecorder::new();
     let upstream = TestServer::builder().http_transport().build(
         Router::new()
             .route(
                 "/v1/datasets/civil_registry/entities/civil_person/records:batchMatch",
-                post(openfn_batch_match_handler),
+                post(source_adapter_batch_match_handler),
             )
             .with_state(recorder.clone()),
     );
@@ -1257,7 +1260,7 @@ async fn openfn_sidecar_batch_supports_requester_derived_query_fields() {
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
 
-    let app = standalone_router(openfn_sidecar_requester_bulk_config(
+    let app = standalone_router(source_adapter_sidecar_requester_bulk_config(
         base_url.to_string().trim_end_matches('/'),
         audit_path.to_str().expect("utf-8 path"),
     ))
@@ -1296,7 +1299,7 @@ async fn openfn_sidecar_batch_supports_requester_derived_query_fields() {
     assert_eq!(
         recorder.total(),
         1,
-        "requester query fields should still use one OpenFn batchMatch POST"
+        "requester query fields should still use one source-adapter sidecar batchMatch POST"
     );
     let last_body = recorder.last_body().expect("body recorded");
     assert_eq!(

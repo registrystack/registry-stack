@@ -739,7 +739,7 @@
       "openapi": false,
       "stability": "beta",
       "data_classification": "operational",
-      "notes": "Intentionally unauthenticated OpenFn sidecar operational route.",
+      "notes": "Intentionally unauthenticated source-adapter sidecar operational route.",
       "source": "manual",
       "enforcement_tests": [],
       "waiver": null
@@ -758,7 +758,7 @@
       "openapi": false,
       "stability": "beta",
       "data_classification": "operational",
-      "notes": "Intentionally unauthenticated OpenFn sidecar operational route.",
+      "notes": "Intentionally unauthenticated source-adapter sidecar operational route.",
       "source": "manual",
       "enforcement_tests": [],
       "waiver": null
@@ -777,7 +777,7 @@
       "openapi": false,
       "stability": "beta",
       "data_classification": "operational",
-      "notes": "Intentionally unauthenticated OpenFn sidecar operational route.",
+      "notes": "Intentionally unauthenticated source-adapter sidecar operational route.",
       "source": "manual",
       "enforcement_tests": [],
       "waiver": null
@@ -787,7 +787,7 @@
       "listener": "sidecar",
       "method": "GET",
       "path": "/v1/assurance",
-      "feature": "openfn_sidecar.config_trust.enabled",
+      "feature": "source_adapter_sidecar.config_trust.enabled",
       "audience": "internal",
       "auth": "bearer",
       "scopes": [
@@ -798,7 +798,7 @@
       "openapi": false,
       "stability": "beta",
       "data_classification": "operational",
-      "notes": "OpenFn sidecar assurance route. Bearer auth protects verified runtime and config hash state used by Notary expected-sidecar checks.",
+      "notes": "source-adapter sidecar assurance route. Bearer auth protects verified runtime and config hash state used by Notary expected-sidecar checks.",
       "source": "manual",
       "enforcement_tests": [
         "crates/registry-notary-source-adapter-sidecar/tests/governed_runtime_validation.rs::governed_startup_loads_signed_tuf_target_reports_assurance_and_accepts_antirollback"
@@ -821,7 +821,7 @@
       "openapi": false,
       "stability": "beta",
       "data_classification": "personal",
-      "notes": "OpenFn sidecar route.",
+      "notes": "source-adapter sidecar route.",
       "source": "manual",
       "enforcement_tests": [
         "crates/registry-notary-source-adapter-sidecar/tests/http_json_adapter.rs::http_json_health_ready_and_metrics_are_available_without_secret_disclosure",
@@ -845,7 +845,7 @@
       "openapi": false,
       "stability": "beta",
       "data_classification": "personal",
-      "notes": "OpenFn sidecar batch-match route. Bearer auth, data-purpose validation, request minimization, and worker-dispatch guards are enforced before source access.",
+      "notes": "source-adapter sidecar batch-match route. Bearer auth, data-purpose validation, request minimization, and worker-dispatch guards are enforced before source access.",
       "source": "manual",
       "enforcement_tests": [
         "crates/registry-notary-source-adapter-sidecar/tests/http_json_adapter.rs::http_json_batch_match_runs_sequential_lookups_and_preserves_item_order",

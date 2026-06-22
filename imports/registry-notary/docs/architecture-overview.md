@@ -24,9 +24,8 @@ Source adapter sidecars are source-read adapters, not embedded workflow engines
 inside Notary. Notary owns caller policy, matching policy, minimization, audit,
 disclosure, and credential issuance. The sidecar owns request shaping,
 target-service credentials, source comparison, normalization, adapter runtime
-verification, and worker isolation when OpenFn is used. A sidecar source can use
-the built-in `http_json` engine, the built-in `http_flow` engine, or pinned
-OpenFn workflow execution. Batch matching through a sidecar is only a way to
+verification, and worker isolation when a worker runtime is used. A sidecar source can use
+the built-in `http_json`, `http_flow`, or `fhir` engines. Batch matching through a sidecar is only a way to
 combine compatible source reads; it does not change the matching,
 authorization, disclosure, identity proof, or credential model.
 

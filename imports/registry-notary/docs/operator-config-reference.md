@@ -25,9 +25,9 @@ Before editing YAML, decide these items:
 | Multi-instance deployment | More than one Notary process serves traffic | `replay.storage: redis`, usually `credential_status.storage: redis` |
 | Credential suspension or revocation | Verifiers need a live status URL | `credential_status.enabled: true` |
 | Audit retention | Operators need traceability without raw personal data | `audit` |
-| Source adapter sidecar reads | A target system needs governed HTTP JSON mapping, a short dependent HTTP JSON flow, pinned OpenFn adaptor execution, or normalization outside Notary | `connector: openfn_sidecar`, `retry_on_5xx: false` |
+| Source adapter sidecar reads | A target system needs governed HTTP JSON mapping, a short dependent HTTP JSON flow, FHIR mapping, or normalization outside Notary | `connector: source_adapter_sidecar`, `retry_on_5xx: false` |
 | Source adapter sidecar assurance | Notary must fail closed unless it is talking to the approved sidecar runtime | `source_connections.<id>.expected_sidecar` |
-| Sidecar batch matching | Batch evaluation should share one sidecar read across compatible items | `bulk_mode: openfn_sidecar_batch`, binding `query_fields` |
+| Sidecar batch matching | Batch evaluation should share one sidecar read across compatible items | `bulk_mode: source_adapter_sidecar_batch`, binding `query_fields` |
 
 Start with one narrow claim, one source connection, one signing key, and one
 credential profile. Add federation, wallet issuance, and batch evaluation after
@@ -106,7 +106,7 @@ The gates bound for Registry Notary:
 | `notary.audit.sink_missing` | No durable, retained audit sink | error | startup_fail | startup_fail |
 | `notary.source.insecure_url` | Source connection over a plain `http://` URL with no localhost or private-network allowance | error | readiness_fail | startup_fail |
 | `notary.source.private_network_escape` | A source enables the private-network escape hatch | warn | error | error |
-| `notary.sidecar.expected_sidecar_missing` | An OpenFn source omits `expected_sidecar` | warn | error | readiness_fail |
+| `notary.sidecar.expected_sidecar_missing` | A source-adapter source omits `expected_sidecar` | warn | error | readiness_fail |
 | `notary.admin.shared_exposure` | The admin surface shares the public listener | error | readiness_fail | startup_fail |
 | `notary.openapi.public` | OpenAPI is served without authentication | warn | error | error |
 | `notary.config.unsigned` | Local YAML config rather than signed governed config | warn | error | startup_fail |
@@ -478,7 +478,7 @@ For DCI sources, check these fields carefully:
 For any source binding, `query_fields` can replace the single-field `lookup`
 wire query when the source supports multi-field lookup. `registry_data_api`
 sends them as query parameters, and DCI `expression` sends them inside the DCI
-query envelope. For `openfn_sidecar`, Notary sends single reads through the
+query envelope. For `source_adapter_sidecar`, Notary sends single reads through the
 sidecar's Registry Data API-shaped read endpoint, and sends batch reads through
 the sidecar's `records:batchMatch` endpoint. Leave `query_fields` empty for the
 legacy single-field lookup.
@@ -490,11 +490,10 @@ Docker Compose style setups.
 
 ### Source Adapter Sidecar Source Connections
 
-Use `connector: openfn_sidecar` when a target system needs governed HTTP JSON
-mapping, a short dependent HTTP JSON flow, OpenFn adaptor execution, target
-credential handling, or output normalization outside Notary. The connector
-value remains `openfn_sidecar` for compatibility; the sidecar source chooses
-`engine: http_json`, `engine: http_flow`, `engine: fhir`, or `engine: openfn`
+Use `connector: source_adapter_sidecar` when a target system needs governed HTTP JSON
+mapping, a short dependent HTTP JSON flow, FHIR mapping, target credential
+handling, or output normalization outside Notary. The sidecar source chooses
+`engine: http_json`, `engine: http_flow`, or `engine: fhir`
 in its own signed manifest. The source connection must use static sidecar bearer auth through
 `token_env`. Do not configure target-service credentials in Notary; keep them
 in the sidecar environment or secret store. Configure performance and
@@ -517,17 +516,17 @@ Single-read sidecar example:
 ```yaml
 evidence:
   source_connections:
-    openfn_crvs:
+    source_adapter_crvs:
       base_url: http://127.0.0.1:9191
       allow_insecure_localhost: true
-      token_env: OPENFN_SIDECAR_TOKEN
+      token_env: SOURCE_ADAPTER_SIDECAR_TOKEN
       retry_on_5xx: false
       bulk_mode: none
       expected_sidecar:
         product: registry-notary-source-adapter-sidecar
         instance_id: civil-registry-sidecar
         environment: production
-        stream_id: openfn-sidecar-runtime
+        stream_id: source-adapter-sidecar-runtime
         config_hash: sha256:2222222222222222222222222222222222222222222222222222222222222222
         require_expression_hashes_verified: true
         require_runtime_verified: true
@@ -548,8 +547,8 @@ evidence:
           type: string
       source_bindings:
         crvs:
-          connector: openfn_sidecar
-          connection: openfn_crvs
+          connector: source_adapter_sidecar
+          connection: source_adapter_crvs
           required_scope: civil_registry:evidence_verification
           dataset: civil_registry
           entity: civil_person
@@ -575,18 +574,18 @@ Sidecar batch matching example with `query_fields`:
 ```yaml
 evidence:
   source_connections:
-    openfn_crvs:
+    source_adapter_crvs:
       base_url: http://127.0.0.1:9191
       allow_insecure_localhost: true
-      token_env: OPENFN_SIDECAR_TOKEN
+      token_env: SOURCE_ADAPTER_SIDECAR_TOKEN
       retry_on_5xx: false
-      bulk_mode: openfn_sidecar_batch
+      bulk_mode: source_adapter_sidecar_batch
       bulk_timeout_max_ms: 30000
       expected_sidecar:
         product: registry-notary-source-adapter-sidecar
         instance_id: civil-registry-sidecar
         environment: production
-        stream_id: openfn-sidecar-runtime
+        stream_id: source-adapter-sidecar-runtime
         config_hash: sha256:2222222222222222222222222222222222222222222222222222222222222222
         require_expression_hashes_verified: true
         require_runtime_verified: true
@@ -611,8 +610,8 @@ evidence:
           type: date
       source_bindings:
         crvs:
-          connector: openfn_sidecar
-          connection: openfn_crvs
+          connector: source_adapter_sidecar
+          connection: source_adapter_crvs
           required_scope: civil_registry:evidence_verification
           dataset: civil_registry
           entity: civil_person
@@ -663,7 +662,7 @@ For sidecar connections:
 
 - Set `retry_on_5xx: false`. Notary does not retry sidecar adapter execution
   failures.
-- Use `bulk_mode: openfn_sidecar_batch` only after sidecar contract tests cover
+- Use `bulk_mode: source_adapter_sidecar_batch` only after sidecar contract tests cover
   per-item not found, exact match, ambiguous match, missing response item,
   duplicate response item id, adapter timeout, adapter failure, and output
   projection.

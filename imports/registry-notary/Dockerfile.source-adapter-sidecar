@@ -2,11 +2,9 @@
 
 # syntax=docker/dockerfile:1.7
 
-# The sidecar image is pure Rust now that the OpenFn execution engine is
+# The sidecar image is pure Rust now that the worker execution engine is
 # retired. Sources run through the built-in http_json, http_flow, and fhir
-# engines, so the image no longer ships Node, npm, or the OpenFn worker runtime.
-# The Dockerfile filename and the built image name/tag conventions are kept
-# stable (registry-lab and the container workflow depend on them).
+# engines, so the image no longer ships Node, npm, or a worker runtime.
 
 # Keep the tag for humans and the digest for reproducible pulls.
 FROM rust:1-bookworm@sha256:54152db00aafd37bc5ce1f3585aaa42f17cdd5c8e5ef9eabfbc0718b42bce312 AS builder

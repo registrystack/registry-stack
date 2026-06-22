@@ -1,6 +1,6 @@
 # Synchronous Adaptor Source Sidecar Spec
 
-> **Status: Archived (2026-05-31).** The OpenFn sidecar source described here has shipped; the sidecar crate is fully built and tested. This file is kept as a
+> **Status: Archived (2026-05-31).** The source-adapter sidecar source described here has shipped; the sidecar crate is fully built and tested. This file is kept as a
 > design record and is not the source of truth. For current behavior see the code
 > and crates/registry-notary-source-adapter-sidecar/README.md.
 
@@ -86,7 +86,7 @@ limits:
   worker_timeout_ms: 10000
   max_worker_memory_mb: 512
 sources:
-  openfn_crvs:
+  source_adapter_crvs:
     dataset: civil_registry
     entity: civil_person
     workflow:

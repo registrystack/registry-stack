@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **BREAKING: removed OpenFn sidecar naming from the current source-adapter
+  path.** Claim provenance, config connector values, batch-mode values,
+  examples, Dockerfile naming, metrics, security inventories, and operator docs
+  now use `source_adapter_sidecar` naming instead of the retired OpenFn sidecar
+  name. Operators must update Notary YAML from `connector: openfn_sidecar` to
+  `connector: source_adapter_sidecar`, update sidecar batch connections from
+  `bulk_mode: openfn_sidecar_batch` to
+  `bulk_mode: source_adapter_sidecar_batch`, rebuild any dashboards or alerts that use the
+  old `registry_notary_openfn_sidecar_*` Prometheus metric names, re-render and
+  re-sign governed runtime targets with the
+  `registry.notary.source_adapter_sidecar.runtime.v1` schema id, and update
+  deployment environment variables such as
+  `REGISTRY_NOTARY_SOURCE_ADAPTER_SIDECAR_CONFIG`.
+- **BREAKING: removed the ignored source-adapter sidecar `--jobs-root` CLI
+  flag.** Built-in adapter manifests are self-contained; wrappers that still
+  pass `--jobs-root` must drop it.
+
 ## [0.6.2] - 2026-06-22
 
 ### Fixed
@@ -153,7 +174,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   preauth `tx_code`; eSignet `userinfo` without `exp` accepted.
 - **SD-JWT VC Type Metadata** (PRs #93–#94): served at `/.well-known/vct` and
   VCT URL paths; CCCEV evidence type metadata exposed.
-- **OpenFn sidecar** (PRs #102, #150–#152, #159): batch matching; governed assurance
+- **source-adapter sidecar** (PRs #102, #150–#152, #159): batch matching; governed assurance
   with antirollback; idempotent antirollback restarts; scalable batch controls;
   Notary sidecar adaptor and perf smoke.
 - **Registry Notary client SDK** (#73): client SDK with documented API.

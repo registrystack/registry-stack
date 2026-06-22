@@ -6,7 +6,7 @@ for governed source reads. The Rust sidecar owns the HTTP contract, manifest
 validation, concurrency limits, timeouts, normalization, health checks, and
 credential non-disclosure boundary.
 
-Registry Notary should connect to this sidecar with the `openfn_sidecar`
+Registry Notary should connect to this sidecar with the `source_adapter_sidecar`
 source connector:
 
 ```text
@@ -49,21 +49,21 @@ server:
 auth:
   bearer_tokens:
     - id: notary
-      hash_env: OPENFN_SIDECAR_TOKEN_HASH
+      hash_env: SOURCE_ADAPTER_SIDECAR_TOKEN_HASH
 audit:
   sink: file
   path: /var/log/registry-notary-source-adapter-sidecar/audit.jsonl
-  hash_secret_env: OPENFN_SIDECAR_AUDIT_HASH_SECRET
+  hash_secret_env: SOURCE_ADAPTER_SIDECAR_AUDIT_HASH_SECRET
 config_trust:
   product: registry-notary-source-adapter-sidecar
   instance_id: demo
   environment: staging
-  stream_id: openfn-sidecar-runtime
+  stream_id: source-adapter-sidecar-runtime
   root_path: /etc/registry-notary-source-adapter-sidecar/tuf/root.json
   metadata_dir: /etc/registry-notary-source-adapter-sidecar/tuf/metadata
   targets_dir: /etc/registry-notary-source-adapter-sidecar/tuf/targets
   datastore_dir: /var/lib/registry-notary-source-adapter-sidecar/tuf
-  target_name: openfn-sidecar-runtime.json
+  target_name: source-adapter-sidecar-runtime.json
   antirollback_state_path: /var/lib/registry-notary-source-adapter-sidecar/config-trust/antirollback.json
   accepted_roots: []
 ```
@@ -78,7 +78,7 @@ write a pre-access audit event before dispatching to a source and write an
 outcome event before returning to the caller; audit write failure returns
 `500` with `audit.write_failed`.
 
-The signed target uses schema `registry.notary.openfn_sidecar.runtime.v1` and
+The signed target uses schema `registry.notary.source_adapter_sidecar.runtime.v1` and
 always contains `limits` and `sources`.
 
 The sidecar exposes `GET /v1/assurance` with the verified product identity,
@@ -93,16 +93,14 @@ Release helpers render, locally sign, and verify governed runtime material:
 cargo run -p registry-notary-source-adapter-sidecar -- \
   config render-target \
   --manifest /path/to/sidecar.yaml \
-  --jobs-root /opt/openfn/jobs \
-  --output /tmp/openfn-sidecar-runtime.json
+  --output /tmp/source-adapter-sidecar-runtime.json
 
 cargo run -p registry-notary-source-adapter-sidecar -- \
   config verify-bundle \
-  --target /tmp/openfn-sidecar-runtime.json
+  --target /tmp/source-adapter-sidecar-runtime.json
 ```
 
-`--jobs-root` is accepted for compatibility but ignored; built-in adapter
-targets carry no workflow expression material.
+Built-in adapter targets carry no workflow expression material.
 
 For local demos and release rehearsal, create a signed local TUF repository from
 the rendered target. This helper uses the supplied root and signing key. It is
@@ -111,20 +109,20 @@ not a substitute for production key custody or approval workflow.
 ```bash
 cargo run -p registry-notary-source-adapter-sidecar -- \
   config create-local-tuf-repo \
-  --target /tmp/openfn-sidecar-runtime.json \
-  --target-name openfn-sidecar-runtime.json \
+  --target /tmp/source-adapter-sidecar-runtime.json \
+  --target-name source-adapter-sidecar-runtime.json \
   --root-path /path/to/tuf/root.json \
   --signing-key-path /path/to/tuf/targets-signing-key.pem \
-  --metadata-dir /tmp/openfn-sidecar-tuf/metadata \
-  --targets-dir /tmp/openfn-sidecar-tuf/targets \
+  --metadata-dir /tmp/source-adapter-sidecar-tuf/metadata \
+  --targets-dir /tmp/source-adapter-sidecar-tuf/targets \
   --product registry-notary-source-adapter-sidecar \
   --instance-id demo \
   --environment staging \
-  --stream-id openfn-sidecar-runtime \
+  --stream-id source-adapter-sidecar-runtime \
   --bundle-id opencrvs-sidecar-2026-06-09 \
   --sequence 1 \
   --previous-config-hash sha256:0000000000000000000000000000000000000000000000000000000000000000 \
-  --change-class openfn_sidecar_workflow_bundle \
+  --change-class source_adapter_sidecar_workflow_bundle \
   --declared-signer-kid local-demo-signer
 ```
 
@@ -137,12 +135,12 @@ cargo run -p registry-notary-source-adapter-sidecar -- \
   --product registry-notary-source-adapter-sidecar \
   --instance-id demo \
   --environment staging \
-  --stream-id openfn-sidecar-runtime \
+  --stream-id source-adapter-sidecar-runtime \
   --root-path /etc/registry-notary-source-adapter-sidecar/tuf/root.json \
   --metadata-dir /etc/registry-notary-source-adapter-sidecar/tuf/metadata \
   --targets-dir /etc/registry-notary-source-adapter-sidecar/tuf/targets \
   --datastore-dir /var/lib/registry-notary-source-adapter-sidecar/tuf \
-  --target-name openfn-sidecar-runtime.json
+  --target-name source-adapter-sidecar-runtime.json
 ```
 
 The verification report includes the target `config_hash` and, for local TUF
@@ -152,15 +150,15 @@ Registry Notary pins the expected sidecar state in the source connection:
 
 ```yaml
 source_connections:
-  openfn_crvs:
+  source_adapter_crvs:
     base_url: http://127.0.0.1:9191
-    token_env: OPENFN_SIDECAR_TOKEN
+    token_env: SOURCE_ADAPTER_SIDECAR_TOKEN
     allow_insecure_localhost: true
     expected_sidecar:
       product: registry-notary-source-adapter-sidecar
       instance_id: demo
       environment: staging
-      stream_id: openfn-sidecar-runtime
+      stream_id: source-adapter-sidecar-runtime
       config_hash: sha256:2222222222222222222222222222222222222222222222222222222222222222
       require_expression_hashes_verified: true
       require_runtime_verified: true
@@ -517,7 +515,7 @@ sidecar provides:
 ## Container Image
 
 The repository owns the sidecar image through
-[`Dockerfile.openfn-sidecar`](../../Dockerfile.openfn-sidecar). The image is a
+[`Dockerfile.source-adapter-sidecar`](../../Dockerfile.source-adapter-sidecar). The image is a
 pure Rust build: it contains only the sidecar binary on a distroless base, with
 no Node runtime and no bundled worker scripts.
 
@@ -525,7 +523,7 @@ no Node runtime and no bundled worker scripts.
 docker build \
   --build-context registry-platform=../registry-platform \
   --build-context crosswalk=../crosswalk \
-  -f Dockerfile.openfn-sidecar \
+  -f Dockerfile.source-adapter-sidecar \
   -t registry-notary-source-adapter-sidecar .
 ```
 

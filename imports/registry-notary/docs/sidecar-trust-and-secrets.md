@@ -4,7 +4,7 @@
 
 Registry Notary reads source facts through the source adapter sidecar when a
 target system needs governed HTTP JSON mapping, a short dependent HTTP JSON
-flow, OpenFn adaptor execution, or normalization outside Notary. This page
+flow, FHIR mapping, or normalization outside Notary. This page
 covers what is specific to that source path: how the sidecar verifies the
 configuration it runs, how Notary confirms it is talking to the sidecar you
 expect, and how secrets are handled along the way.
@@ -72,7 +72,7 @@ credential is allowed to target, never the value. At startup the sidecar loads
 the credential, checks its base URL against the allow-list, and holds it in
 memory.
 
-For OpenFn sources, the credential reaches a workflow only through the
+For source-adapter sources, the credential reaches a workflow only through the
 per-request input passed to the worker over a private channel, scoped to that
 single execution. The worker process runs with a cleared environment, so it does
 not inherit the sidecar host's secrets, and configured credential and token
@@ -101,9 +101,9 @@ for them with deployment controls.
   the sidecar as a trusted component behind a private boundary, and rely on
   network controls and the bearer token for that boundary.
 - **Configuration integrity is not runtime-code integrity.** The signature proves
-  the configuration bundle is authentic, including OpenFn workflow expression
-  files when they are used. Those files are content-hashed. The OpenFn worker
-  runtime and its adaptors are pinned by version and verified against the
+  the configuration bundle is authentic, including source mapping expressions
+  when they are used. Those files are content-hashed. The sidecar runtime and
+  adapters are pinned by version and verified against the
   installed versions, but their contents are not hashed by the configuration
   signature. A compromised dependency published at a pinned version is outside
   what the config signature covers; manage that with your image build and

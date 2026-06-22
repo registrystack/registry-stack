@@ -33,8 +33,8 @@ that still tracks open work.
 - [`openid4vci-wallet-facade-spec.md`](openid4vci-wallet-facade-spec.md):
   OpenID4VCI wallet facade design and current compatibility profile.
   **[implemented]**
-- [`openfn-sidecar-source-spec.md`](openfn-sidecar-source-spec.md):
-  OpenFn sidecar source integration contract. **[implemented]**
+- [`source-adapter-sidecar-source-spec.md`](source-adapter-sidecar-source-spec.md):
+  source-adapter sidecar source integration contract. **[implemented]**
 - [`scalability-spec.md`](scalability-spec.md):
   scalability goals, constraints, and performance work plan. **[implemented]**
 - [`notary-capability-gaps.md`](notary-capability-gaps.md):

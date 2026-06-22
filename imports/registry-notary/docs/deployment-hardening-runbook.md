@@ -226,7 +226,7 @@ Deployment checks:
 
 When using source adapter sidecars, keep target credentials in the sidecar,
 configure target rate and concurrency limits, and avoid retrying
-non-idempotent adapter execution. For OpenFn sources, isolate worker execution
+non-idempotent adapter execution. For source-adapter sources, isolate worker execution
 and pin adaptor versions. The sidecar must be reachable only from Notary over
 localhost or a private pod network. Do not expose it publicly, put it behind an
 internet-facing ingress, or allow callers to invoke adapter execution directly.

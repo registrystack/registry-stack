@@ -4,9 +4,9 @@
 //! sidecar. These tests exercise the signed-TUF startup loader, assurance
 //! reporting, and anti-rollback enforcement that gate a real governed startup.
 //!
-//! The OpenFn engine that previously backed this file was retired; the governed
+//! The worker engine that previously backed this file was retired; the governed
 //! runtime target, the TUF signing harness, and the anti-rollback/identity/
-//! change-class/apply-policy enforcement are NOT OpenFn-specific and remain a
+//! change-class/apply-policy enforcement are NOT worker-engine-specific and remain a
 //! supported feature. The governed source here uses the `http_json` engine and
 //! is backed by a mock upstream so the startup smoke lookup performs a real
 //! request, just as a production governed startup would.
@@ -46,9 +46,9 @@ const CREDENTIAL_ENV: &str = "GOVERNED_RUNTIME_VALIDATION_CREDENTIAL_JSON";
 const PRODUCT: &str = "registry-notary-source-adapter-sidecar";
 const INSTANCE_ID: &str = "demo";
 const ENVIRONMENT: &str = "staging";
-const STREAM_ID: &str = "openfn-sidecar-runtime";
-const TARGET_NAME: &str = "openfn-sidecar-runtime.json";
-const CHANGE_CLASS: &str = "openfn_sidecar_workflow_bundle";
+const STREAM_ID: &str = "source-adapter-sidecar-runtime";
+const TARGET_NAME: &str = "source-adapter-sidecar-runtime.json";
+const CHANGE_CLASS: &str = "source_adapter_sidecar_workflow_bundle";
 const SOURCE_ID: &str = "http_people";
 
 // The governed-startup tests mutate process-wide environment variables and rely
@@ -187,16 +187,15 @@ struct SignedRepo {
 }
 
 #[tokio::test]
-async fn governed_target_renders_http_json_only_without_openfn_runtime() {
+async fn governed_target_renders_http_json_only_without_worker_runtime() {
     let harness = Harness::new().await;
     let target_bytes = harness.governed_runtime_target_bytes();
     let target: Value = serde_json::from_slice(&target_bytes).expect("target is JSON");
 
     assert_eq!(
         target["schema"],
-        "registry.notary.openfn_sidecar.runtime.v1"
+        "registry.notary.source_adapter_sidecar.runtime.v1"
     );
-    assert!(target["openfn"].is_null());
     assert!(target["worker"].is_null());
     assert!(target["jobs_root"].is_null());
     assert!(target["limits"]["max_worker_memory_mb"].is_null());
@@ -471,7 +470,7 @@ async fn governed_startup_rejects_unauthorized_change_class() {
         INSTANCE_ID,
         ENVIRONMENT,
         STREAM_ID,
-        vec!["openfn_sidecar_runtime"],
+        vec!["source_adapter_sidecar_runtime"],
     )
     .await;
     let raw = bootstrap_yaml(&repo);

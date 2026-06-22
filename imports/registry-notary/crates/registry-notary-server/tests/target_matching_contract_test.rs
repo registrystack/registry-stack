@@ -629,7 +629,7 @@ fn evidence_config(claims: Vec<ClaimDefinition>) -> Arc<EvidenceConfig> {
     })
 }
 
-fn evidence_config_with_openfn_batch_connection(
+fn evidence_config_with_source_adapter_batch_connection(
     claims: Vec<ClaimDefinition>,
 ) -> Arc<EvidenceConfig> {
     Arc::new(EvidenceConfig {
@@ -637,18 +637,18 @@ fn evidence_config_with_openfn_batch_connection(
         service_id: TEST_SERVICE_ID.to_string(),
         inline_batch_limit: 20,
         source_connections: BTreeMap::from([(
-            "openfn_crvs".to_string(),
+            "source_adapter_crvs".to_string(),
             SourceConnectionConfig {
                 base_url: "http://127.0.0.1:9191".to_string(),
                 allow_insecure_localhost: true,
                 allow_insecure_private_network: false,
-                token_env: "OPENFN_SIDECAR_TOKEN".to_string(),
+                token_env: "SOURCE_ADAPTER_SIDECAR_TOKEN".to_string(),
                 source_auth: None,
                 expected_sidecar: None,
                 dci: DciSourceConnectionConfig::default(),
                 max_in_flight: 8,
                 retry_on_5xx: false,
-                bulk_mode: BulkMode::OpenFnSidecarBatch,
+                bulk_mode: BulkMode::SourceAdapterSidecarBatch,
                 bulk_mode_lookup_unique: false,
                 bulk_timeout_max_ms: 30_000,
             },
@@ -1934,8 +1934,8 @@ async fn batch_prefetch_rejects_broadened_authorization_details_before_bulk_read
         .source_bindings
         .get_mut("src")
         .expect("source binding exists");
-    binding.connector = SourceConnectorKind::OpenFnSidecar;
-    binding.connection = Some("openfn_crvs".to_string());
+    binding.connector = SourceConnectorKind::SourceAdapterSidecar;
+    binding.connection = Some("source_adapter_crvs".to_string());
     binding.matching.allowed_assurance = vec!["substantial".to_string()];
 
     let mut principal = principal_with_policy_context(Some("substantial"), None, None, None);
@@ -1948,7 +1948,7 @@ async fn batch_prefetch_rejects_broadened_authorization_details_before_bulk_read
 
     let response = runtime
         .batch_evaluate(
-            evidence_config_with_openfn_batch_connection(vec![claim]),
+            evidence_config_with_source_adapter_batch_connection(vec![claim]),
             source.clone(),
             &EvidenceStore::default(),
             &principal,
@@ -3052,8 +3052,8 @@ async fn batch_prefetch_minimizes_context_and_excludes_policy_rejected_items() {
         .source_bindings
         .get_mut("src")
         .expect("source binding exists");
-    binding.connector = SourceConnectorKind::OpenFnSidecar;
-    binding.connection = Some("openfn_crvs".to_string());
+    binding.connector = SourceConnectorKind::SourceAdapterSidecar;
+    binding.connection = Some("source_adapter_crvs".to_string());
     binding.query_fields = vec![
         SourceQueryFieldConfig {
             input: "target.attributes.given_name".to_string(),
@@ -3085,7 +3085,7 @@ async fn batch_prefetch_minimizes_context_and_excludes_policy_rejected_items() {
 
     let response = runtime
         .batch_evaluate(
-            evidence_config_with_openfn_batch_connection(vec![claim]),
+            evidence_config_with_source_adapter_batch_connection(vec![claim]),
             source.clone(),
             &EvidenceStore::default(),
             &principal(),
@@ -3168,12 +3168,12 @@ async fn batch_memo_key_includes_minimized_requester_context() {
         .source_bindings
         .get_mut("src")
         .expect("source binding exists");
-    binding.connector = SourceConnectorKind::OpenFnSidecar;
-    binding.connection = Some("openfn_crvs".to_string());
+    binding.connector = SourceConnectorKind::SourceAdapterSidecar;
+    binding.connection = Some("source_adapter_crvs".to_string());
 
     let response = runtime
         .batch_evaluate(
-            evidence_config_with_openfn_batch_connection(vec![claim]),
+            evidence_config_with_source_adapter_batch_connection(vec![claim]),
             source.clone(),
             &EvidenceStore::default(),
             &principal(),
@@ -3238,8 +3238,8 @@ async fn batch_redaction_prefetch_skips_unmappable_value_disclosure() {
         .source_bindings
         .get_mut("src")
         .expect("source binding exists");
-    binding.connector = SourceConnectorKind::OpenFnSidecar;
-    binding.connection = Some("openfn_crvs".to_string());
+    binding.connector = SourceConnectorKind::SourceAdapterSidecar;
+    binding.connection = Some("source_adapter_crvs".to_string());
     binding.query_fields = vec![
         SourceQueryFieldConfig {
             input: "target.attributes.given_name".to_string(),
@@ -3261,7 +3261,7 @@ async fn batch_redaction_prefetch_skips_unmappable_value_disclosure() {
 
     let response = runtime
         .batch_evaluate(
-            evidence_config_with_openfn_batch_connection(vec![claim]),
+            evidence_config_with_source_adapter_batch_connection(vec![claim]),
             source.clone(),
             &EvidenceStore::default(),
             &principal(),

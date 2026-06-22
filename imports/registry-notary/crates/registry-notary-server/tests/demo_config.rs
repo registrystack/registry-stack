@@ -525,7 +525,7 @@ fn fhir_coverage_demo_config_loads_validates_and_builds_router() {
         .source_connections
         .get("fhir_sidecar")
         .expect("FHIR sidecar source exists");
-    assert_eq!(source.bulk_mode, BulkMode::OpenFnSidecarBatch);
+    assert_eq!(source.bulk_mode, BulkMode::SourceAdapterSidecarBatch);
     assert!(!source.retry_on_5xx);
     assert!(source.allow_insecure_localhost);
     let expected_sidecar = source
@@ -548,7 +548,7 @@ fn fhir_coverage_demo_config_loads_validates_and_builds_router() {
         .expect("coverage binding exists");
     assert_eq!(
         coverage_binding.connector,
-        SourceConnectorKind::OpenFnSidecar
+        SourceConnectorKind::SourceAdapterSidecar
     );
     assert_eq!(coverage_binding.connection.as_deref(), Some("fhir_sidecar"));
     assert_eq!(coverage_binding.lookup.input, "target.id");

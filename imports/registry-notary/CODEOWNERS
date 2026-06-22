@@ -3,4 +3,4 @@
 /security/exposure-manifest.json @PublicSchema/maintainers
 /.github/workflows/ @PublicSchema/maintainers
 /Dockerfile @PublicSchema/maintainers
-/Dockerfile.openfn-sidecar @PublicSchema/maintainers
+/Dockerfile.source-adapter-sidecar @PublicSchema/maintainers

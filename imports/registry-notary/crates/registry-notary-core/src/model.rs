@@ -1267,8 +1267,8 @@ pub const CLAIM_PROVENANCE_SCHEMA_VERSION: &str = "registry-notary-claim-provena
 pub const PROVENANCE_GENERATED_BY_CLAIM_EVALUATION: &str = "claim_evaluation";
 
 /// The `kind` of a source runtime that crosses an external execution boundary
-/// via the OpenFn sidecar.
-pub const SOURCE_RUNTIME_KIND_OPENFN_SIDECAR: &str = "openfn_sidecar";
+/// via the governed source-adapter sidecar.
+pub const SOURCE_RUNTIME_KIND_SOURCE_ADAPTER_SIDECAR: &str = "source_adapter_sidecar";
 
 /// Versioned claim provenance attached to every public claim result.
 ///
@@ -1363,7 +1363,7 @@ pub struct ProvenanceUsed {
     pub source_count: usize,
     pub source_versions: BTreeMap<String, String>,
     /// Minimized summaries for connectors that cross an external execution
-    /// boundary (the OpenFn sidecar). The full assurance document stays in
+    /// boundary (the source-adapter sidecar). The full assurance document stays in
     /// restricted audit.
     pub source_runtimes: Vec<SourceRuntimeSummary>,
 }
@@ -1984,7 +1984,7 @@ mod tests {
                 source_count: 1,
                 source_versions,
                 source_runtimes: vec![SourceRuntimeSummary {
-                    kind: SOURCE_RUNTIME_KIND_OPENFN_SIDECAR.to_string(),
+                    kind: SOURCE_RUNTIME_KIND_SOURCE_ADAPTER_SIDECAR.to_string(),
                     config_hash: "sha256:abc123".to_string(),
                     assurance: SourceRuntimeAssurance {
                         pinned: true,
@@ -2019,7 +2019,7 @@ mod tests {
         assert_eq!(used["source_count"], json!(1));
         assert_eq!(used["source_versions"]["civil_registry"], json!("2026-05"));
         let runtime = &used["source_runtimes"][0];
-        assert_eq!(runtime["kind"], json!("openfn_sidecar"));
+        assert_eq!(runtime["kind"], json!("source_adapter_sidecar"));
         assert_eq!(runtime["config_hash"], json!("sha256:abc123"));
         assert_eq!(runtime["assurance"]["pinned"], json!(true));
         assert_eq!(

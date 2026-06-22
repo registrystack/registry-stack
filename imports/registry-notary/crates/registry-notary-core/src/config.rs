@@ -361,15 +361,15 @@ impl StandaloneRegistryNotaryConfig {
                         }
                     }
                 }
-                BulkMode::OpenFnSidecarBatch => {
+                BulkMode::SourceAdapterSidecarBatch => {
                     for claim in &self.evidence.claims {
                         for (binding_id, binding) in &claim.source_bindings {
                             if binding.connection.as_deref() != Some(connection_id.as_str()) {
                                 continue;
                             }
-                            if binding.connector != SourceConnectorKind::OpenFnSidecar {
+                            if binding.connector != SourceConnectorKind::SourceAdapterSidecar {
                                 return Err(
-                                    EvidenceConfigError::BulkModeRequiresOpenFnSidecarConnector {
+                                    EvidenceConfigError::BulkModeRequiresSourceAdapterSidecarConnector {
                                         connection: connection_id.clone(),
                                         claim: claim.id.clone(),
                                         binding: binding_id.clone(),
@@ -421,35 +421,39 @@ impl StandaloneRegistryNotaryConfig {
                         },
                     );
                 }
-                if binding.connector == SourceConnectorKind::OpenFnSidecar {
+                if binding.connector == SourceConnectorKind::SourceAdapterSidecar {
                     let has_static_token = !connection.token_env.trim().is_empty();
                     if !has_static_token || connection.source_auth.is_some() {
                         return Err(EvidenceConfigError::InvalidSourceAuthConfig {
                             connection: binding.connection.clone().unwrap_or_default(),
                             reason:
-                                "openfn_sidecar requires static bearer token auth through token_env"
+                                "source_adapter_sidecar requires static bearer token auth through token_env"
                                     .to_string(),
                         });
                     }
                     if connection.retry_on_5xx {
-                        return Err(EvidenceConfigError::OpenFnSidecarRequiresNoRetry {
+                        return Err(EvidenceConfigError::SourceAdapterSidecarRequiresNoRetry {
                             connection: binding.connection.clone().unwrap_or_default(),
                         });
                     }
                     if binding.lookup.op != "eq" {
-                        return Err(EvidenceConfigError::OpenFnSidecarUnsupportedOperator {
-                            claim: claim.id.clone(),
-                            binding: binding_id.clone(),
-                            op: binding.lookup.op.clone(),
-                        });
+                        return Err(
+                            EvidenceConfigError::SourceAdapterSidecarUnsupportedOperator {
+                                claim: claim.id.clone(),
+                                binding: binding_id.clone(),
+                                op: binding.lookup.op.clone(),
+                            },
+                        );
                     }
                     for query_field in &binding.query_fields {
                         if query_field.op != "eq" {
-                            return Err(EvidenceConfigError::OpenFnSidecarUnsupportedOperator {
-                                claim: claim.id.clone(),
-                                binding: binding_id.clone(),
-                                op: query_field.op.clone(),
-                            });
+                            return Err(
+                                EvidenceConfigError::SourceAdapterSidecarUnsupportedOperator {
+                                    claim: claim.id.clone(),
+                                    binding: binding_id.clone(),
+                                    op: query_field.op.clone(),
+                                },
+                            );
                         }
                     }
                 }
@@ -599,12 +603,14 @@ impl StandaloneRegistryNotaryConfig {
                 .source_connections
                 .values()
                 .any(|connection| connection.allow_insecure_private_network),
-            openfn_source_without_expected_sidecar: self.evidence.source_connections.values().any(
-                |connection| {
-                    connection.bulk_mode == BulkMode::OpenFnSidecarBatch
+            source_adapter_sidecar_without_expected_sidecar: self
+                .evidence
+                .source_connections
+                .values()
+                .any(|connection| {
+                    connection.bulk_mode == BulkMode::SourceAdapterSidecarBatch
                         && connection.expected_sidecar.is_none()
-                },
-            ),
+                }),
             admin_shared_exposure: self.server.admin_listener.mode
                 == RegistryNotaryAdminListenerMode::SharedWithPublic,
             openapi_public: !self.server.openapi_requires_auth,
@@ -4416,23 +4422,23 @@ pub enum EvidenceConfigError {
         binding: String,
     },
     #[error(
-        "source_connection '{connection}': bulk_mode = openfn_sidecar_batch \
-         requires all bindings to use connector = openfn_sidecar (binding \
+        "source_connection '{connection}': bulk_mode = source_adapter_sidecar_batch \
+         requires all bindings to use connector = source_adapter_sidecar (binding \
          '{binding}' in claim '{claim}' uses a different connector)"
     )]
-    BulkModeRequiresOpenFnSidecarConnector {
+    BulkModeRequiresSourceAdapterSidecarConnector {
         connection: String,
         claim: String,
         binding: String,
     },
     #[error(
-        "source_connection '{connection}': connector = openfn_sidecar requires retry_on_5xx = false"
+        "source_connection '{connection}': connector = source_adapter_sidecar requires retry_on_5xx = false"
     )]
-    OpenFnSidecarRequiresNoRetry { connection: String },
+    SourceAdapterSidecarRequiresNoRetry { connection: String },
     #[error(
-        "claim '{claim}', binding '{binding}': connector = openfn_sidecar only supports lookup operator 'eq' (found '{op}')"
+        "claim '{claim}', binding '{binding}': connector = source_adapter_sidecar only supports lookup operator 'eq' (found '{op}')"
     )]
-    OpenFnSidecarUnsupportedOperator {
+    SourceAdapterSidecarUnsupportedOperator {
         claim: String,
         binding: String,
         op: String,
@@ -5445,8 +5451,8 @@ pub enum BulkMode {
     None,
     RdaInFilter,
     DciBatchedSearch,
-    #[serde(rename = "openfn_sidecar_batch")]
-    OpenFnSidecarBatch,
+    #[serde(rename = "source_adapter_sidecar_batch")]
+    SourceAdapterSidecarBatch,
 }
 
 /// Per-request fan-out caps. `subjects=1, bindings=1` reproduces the strictly
@@ -5568,8 +5574,8 @@ const fn default_dci_max_results() -> usize {
 pub enum SourceConnectorKind {
     RegistryDataApi,
     Dci,
-    #[serde(rename = "openfn_sidecar")]
-    OpenFnSidecar,
+    #[serde(rename = "source_adapter_sidecar")]
+    SourceAdapterSidecar,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -6167,7 +6173,7 @@ auth:
         // No source connections, so source gates are clear.
         assert!(!input.source_insecure_url);
         assert!(!input.source_private_network_escape);
-        assert!(!input.openfn_source_without_expected_sidecar);
+        assert!(!input.source_adapter_sidecar_without_expected_sidecar);
         // Local YAML config without config_trust is unsigned.
         assert!(input.config_unsigned);
         // Admin listener is disabled by default, so no shared exposure.
@@ -6258,36 +6264,40 @@ token_env: SRC_TOKEN
     }
 
     #[test]
-    fn gate_input_reports_openfn_source_without_expected_sidecar() {
+    fn gate_input_reports_source_adapter_sidecar_without_expected_sidecar() {
         let mut config = minimal_config();
-        // Insert a source connection with bulk_mode = openfn_sidecar_batch and
+        // Insert a source connection with bulk_mode = source_adapter_sidecar_batch and
         // no expected_sidecar. We call gate_input() directly without validate()
         // because this projection test only checks the GateInput field.
         let mut conn: SourceConnectionConfig = serde_norway::from_str(
             r#"
-base_url: https://openfn.example
+base_url: https://source-adapter.example
 token_env: SRC_TOKEN
 "#,
         )
         .expect("source connection parses");
-        conn.bulk_mode = BulkMode::OpenFnSidecarBatch;
+        conn.bulk_mode = BulkMode::SourceAdapterSidecarBatch;
         // expected_sidecar remains None by default.
         config
             .evidence
             .source_connections
-            .insert("openfn-src".to_string(), conn);
-        assert!(config.gate_input().openfn_source_without_expected_sidecar);
+            .insert("source-adapter-src".to_string(), conn);
+        assert!(
+            config
+                .gate_input()
+                .source_adapter_sidecar_without_expected_sidecar
+        );
     }
 
     #[test]
-    fn gate_input_clears_openfn_source_with_expected_sidecar() {
+    fn gate_input_clears_source_adapter_sidecar_with_expected_sidecar() {
         let mut config = minimal_config();
         let mut conn: SourceConnectionConfig = serde_norway::from_str(
             r#"
-base_url: https://openfn.example
+base_url: https://source-adapter.example
 token_env: SRC_TOKEN
 expected_sidecar:
-  product: openfn-notary-bridge
+  product: source-adapter-notary-bridge
   instance_id: bridge-1
   environment: lab
   stream_id: stream-a
@@ -6295,12 +6305,16 @@ expected_sidecar:
 "#,
         )
         .expect("source connection with expected_sidecar parses");
-        conn.bulk_mode = BulkMode::OpenFnSidecarBatch;
+        conn.bulk_mode = BulkMode::SourceAdapterSidecarBatch;
         config
             .evidence
             .source_connections
-            .insert("openfn-src".to_string(), conn);
-        assert!(!config.gate_input().openfn_source_without_expected_sidecar);
+            .insert("source-adapter-src".to_string(), conn);
+        assert!(
+            !config
+                .gate_input()
+                .source_adapter_sidecar_without_expected_sidecar
+        );
     }
 
     #[test]
@@ -8853,9 +8867,9 @@ source_auth:
         }
     }
 
-    fn openfn_sidecar_binding(connection: &str) -> SourceBindingConfig {
+    fn source_adapter_sidecar_binding(connection: &str) -> SourceBindingConfig {
         SourceBindingConfig {
-            connector: SourceConnectorKind::OpenFnSidecar,
+            connector: SourceConnectorKind::SourceAdapterSidecar,
             connection: Some(connection.to_string()),
             required_scope: None,
             dataset: "civil_registry".to_string(),
@@ -9238,26 +9252,26 @@ bulk_mode: unsupported_mode
     }
 
     #[test]
-    fn openfn_sidecar_connector_and_batch_mode_parse_and_validate_with_query_fields() {
+    fn source_adapter_sidecar_connector_and_batch_mode_parse_and_validate_with_query_fields() {
         let mut config = minimal_config();
         config.evidence.source_connections.insert(
-            "openfn_crvs".to_string(),
+            "source_adapter_crvs".to_string(),
             SourceConnectionConfig {
                 base_url: "http://127.0.0.1:9191".to_string(),
                 allow_insecure_localhost: true,
                 allow_insecure_private_network: false,
-                token_env: "OPENFN_SIDECAR_TOKEN".to_string(),
+                token_env: "SOURCE_ADAPTER_SIDECAR_TOKEN".to_string(),
                 source_auth: None,
                 expected_sidecar: None,
                 dci: DciSourceConnectionConfig::default(),
                 max_in_flight: 8,
                 retry_on_5xx: false,
-                bulk_mode: BulkMode::OpenFnSidecarBatch,
+                bulk_mode: BulkMode::SourceAdapterSidecarBatch,
                 bulk_mode_lookup_unique: false,
                 bulk_timeout_max_ms: 30_000,
             },
         );
-        let mut binding = openfn_sidecar_binding("openfn_crvs");
+        let mut binding = source_adapter_sidecar_binding("source_adapter_crvs");
         add_query_fields(&mut binding);
         let mut claim = minimal_claim("date-of-birth");
         claim.source_bindings.insert("crvs".to_string(), binding);
@@ -9267,7 +9281,7 @@ bulk_mode: unsupported_mode
     }
 
     #[test]
-    fn openfn_sidecar_yaml_names_parse_and_validate() {
+    fn source_adapter_sidecar_yaml_names_parse_and_validate() {
         let raw = r#"
 server:
   bind: 127.0.0.1:0
@@ -9284,17 +9298,17 @@ evidence:
   enabled: true
   service_id: evidence.test
   source_connections:
-    openfn_crvs:
+    source_adapter_crvs:
       base_url: http://127.0.0.1:9191
       allow_insecure_localhost: true
-      token_env: OPENFN_SIDECAR_TOKEN
+      token_env: SOURCE_ADAPTER_SIDECAR_TOKEN
       retry_on_5xx: false
-      bulk_mode: openfn_sidecar_batch
+      bulk_mode: source_adapter_sidecar_batch
       expected_sidecar:
         product: registry-notary-source-adapter-sidecar
         instance_id: demo
         environment: staging
-        stream_id: openfn-sidecar-runtime
+        stream_id: source-adapter-sidecar-runtime
         config_hash: sha256:2222222222222222222222222222222222222222222222222222222222222222
         require_expression_hashes_verified: true
         require_runtime_verified: true
@@ -9307,8 +9321,8 @@ evidence:
       subject_type: person
       source_bindings:
         crvs:
-          connector: openfn_sidecar
-          connection: openfn_crvs
+          connector: source_adapter_sidecar
+          connection: source_adapter_crvs
           required_scope: civil_registry:evidence_verification
           dataset: civil_registry
           entity: civil_person
@@ -9340,13 +9354,13 @@ evidence:
         - application/vnd.registry-notary.claim-result+json
 "#;
         let config: StandaloneRegistryNotaryConfig =
-            serde_norway::from_str(raw).expect("OpenFn YAML config deserializes");
+            serde_norway::from_str(raw).expect("source-adapter YAML config deserializes");
 
         assert_eq!(
-            config.evidence.source_connections["openfn_crvs"].bulk_mode,
-            BulkMode::OpenFnSidecarBatch
+            config.evidence.source_connections["source_adapter_crvs"].bulk_mode,
+            BulkMode::SourceAdapterSidecarBatch
         );
-        let expected_sidecar = config.evidence.source_connections["openfn_crvs"]
+        let expected_sidecar = config.evidence.source_connections["source_adapter_crvs"]
             .expected_sidecar
             .as_ref()
             .expect("expected_sidecar parses");
@@ -9360,27 +9374,27 @@ evidence:
         assert_eq!(expected_sidecar.assurance_ttl_ms, 60_000);
         assert_eq!(
             config.evidence.claims[0].source_bindings["crvs"].connector,
-            SourceConnectorKind::OpenFnSidecar
+            SourceConnectorKind::SourceAdapterSidecar
         );
         assert!(config.validate().is_ok());
     }
 
     #[test]
-    fn openfn_sidecar_expected_sidecar_rejects_invalid_config_hash() {
+    fn source_adapter_sidecar_expected_sidecar_rejects_invalid_config_hash() {
         let mut config = minimal_config();
         config.evidence.source_connections.insert(
-            "openfn_crvs".to_string(),
+            "source_adapter_crvs".to_string(),
             SourceConnectionConfig {
                 base_url: "http://127.0.0.1:9191".to_string(),
                 allow_insecure_localhost: true,
                 allow_insecure_private_network: false,
-                token_env: "OPENFN_SIDECAR_TOKEN".to_string(),
+                token_env: "SOURCE_ADAPTER_SIDECAR_TOKEN".to_string(),
                 source_auth: None,
                 expected_sidecar: Some(ExpectedSidecarConfig {
                     product: "registry-notary-source-adapter-sidecar".to_string(),
                     instance_id: "demo".to_string(),
                     environment: "staging".to_string(),
-                    stream_id: "openfn-sidecar-runtime".to_string(),
+                    stream_id: "source-adapter-sidecar-runtime".to_string(),
                     config_hash: "sha256:NOTLOWERHEX".to_string(),
                     require_expression_hashes_verified: true,
                     require_runtime_verified: true,
@@ -9390,15 +9404,16 @@ evidence:
                 dci: DciSourceConnectionConfig::default(),
                 max_in_flight: 8,
                 retry_on_5xx: false,
-                bulk_mode: BulkMode::OpenFnSidecarBatch,
+                bulk_mode: BulkMode::SourceAdapterSidecarBatch,
                 bulk_mode_lookup_unique: false,
                 bulk_timeout_max_ms: 30_000,
             },
         );
         let mut claim = minimal_claim("date-of-birth");
-        claim
-            .source_bindings
-            .insert("crvs".to_string(), openfn_sidecar_binding("openfn_crvs"));
+        claim.source_bindings.insert(
+            "crvs".to_string(),
+            source_adapter_sidecar_binding("source_adapter_crvs"),
+        );
         config.evidence.claims = vec![claim];
 
         let err = config
@@ -9406,7 +9421,7 @@ evidence:
             .expect_err("invalid expected_sidecar config_hash must fail");
         match err {
             EvidenceConfigError::InvalidExpectedSidecarConfig { connection, reason } => {
-                assert_eq!(connection, "openfn_crvs");
+                assert_eq!(connection, "source_adapter_crvs");
                 assert!(reason.contains("config_hash"));
             }
             other => panic!("unexpected error variant: {other}"),
@@ -9414,10 +9429,10 @@ evidence:
     }
 
     #[test]
-    fn openfn_sidecar_rejects_oauth_source_auth() {
+    fn source_adapter_sidecar_rejects_oauth_source_auth() {
         let mut config = minimal_config();
         config.evidence.source_connections.insert(
-            "openfn_crvs".to_string(),
+            "source_adapter_crvs".to_string(),
             SourceConnectionConfig {
                 base_url: "http://127.0.0.1:9191".to_string(),
                 allow_insecure_localhost: true,
@@ -9426,8 +9441,8 @@ evidence:
                 source_auth: Some(SourceAuthConfig::Oauth2ClientCredentials(
                     Oauth2ClientCredentialsSourceAuthConfig {
                         token_url: "https://sidecar.example/oauth/token".to_string(),
-                        client_id_env: "OPENFN_CLIENT_ID".to_string(),
-                        client_secret_env: "OPENFN_CLIENT_SECRET".to_string(),
+                        client_id_env: "SOURCE_ADAPTER_CLIENT_ID".to_string(),
+                        client_secret_env: "SOURCE_ADAPTER_CLIENT_SECRET".to_string(),
                         request_format: "json".to_string(),
                         scope: String::new(),
                         refresh_skew_seconds: 60,
@@ -9437,88 +9452,90 @@ evidence:
                 dci: DciSourceConnectionConfig::default(),
                 max_in_flight: 8,
                 retry_on_5xx: false,
-                bulk_mode: BulkMode::OpenFnSidecarBatch,
+                bulk_mode: BulkMode::SourceAdapterSidecarBatch,
                 bulk_mode_lookup_unique: false,
                 bulk_timeout_max_ms: 30_000,
             },
         );
         let mut claim = minimal_claim("date-of-birth");
-        claim
-            .source_bindings
-            .insert("crvs".to_string(), openfn_sidecar_binding("openfn_crvs"));
+        claim.source_bindings.insert(
+            "crvs".to_string(),
+            source_adapter_sidecar_binding("source_adapter_crvs"),
+        );
         config.evidence.claims = vec![claim];
 
         let err = config
             .validate()
-            .expect_err("OpenFn sidecar connections must use token_env auth");
+            .expect_err("source-adapter sidecar connections must use token_env auth");
         match err {
             EvidenceConfigError::InvalidSourceAuthConfig { connection, reason } => {
-                assert_eq!(connection, "openfn_crvs");
+                assert_eq!(connection, "source_adapter_crvs");
                 assert!(reason.contains("token_env"));
-                assert!(reason.contains("openfn_sidecar"));
+                assert!(reason.contains("source_adapter_sidecar"));
             }
             other => panic!("unexpected error variant: {other}"),
         }
     }
 
     #[test]
-    fn openfn_sidecar_rejects_retry_on_5xx() {
+    fn source_adapter_sidecar_rejects_retry_on_5xx() {
         let mut config = minimal_config();
         config.evidence.source_connections.insert(
-            "openfn_crvs".to_string(),
+            "source_adapter_crvs".to_string(),
             SourceConnectionConfig {
                 base_url: "http://127.0.0.1:9191".to_string(),
                 allow_insecure_localhost: true,
                 allow_insecure_private_network: false,
-                token_env: "OPENFN_SIDECAR_TOKEN".to_string(),
+                token_env: "SOURCE_ADAPTER_SIDECAR_TOKEN".to_string(),
                 source_auth: None,
                 expected_sidecar: None,
                 dci: DciSourceConnectionConfig::default(),
                 max_in_flight: 8,
                 retry_on_5xx: true,
-                bulk_mode: BulkMode::OpenFnSidecarBatch,
+                bulk_mode: BulkMode::SourceAdapterSidecarBatch,
                 bulk_mode_lookup_unique: false,
                 bulk_timeout_max_ms: 30_000,
             },
         );
         let mut claim = minimal_claim("date-of-birth");
-        claim
-            .source_bindings
-            .insert("crvs".to_string(), openfn_sidecar_binding("openfn_crvs"));
+        claim.source_bindings.insert(
+            "crvs".to_string(),
+            source_adapter_sidecar_binding("source_adapter_crvs"),
+        );
         config.evidence.claims = vec![claim];
 
         let err = config
             .validate()
-            .expect_err("OpenFn sidecar connections must not retry worker executions");
+            .expect_err("source-adapter sidecar connections must not retry worker executions");
         match err {
-            EvidenceConfigError::OpenFnSidecarRequiresNoRetry { connection } => {
-                assert_eq!(connection, "openfn_crvs");
+            EvidenceConfigError::SourceAdapterSidecarRequiresNoRetry { connection } => {
+                assert_eq!(connection, "source_adapter_crvs");
             }
             other => panic!("unexpected error variant: {other}"),
         }
     }
 
     #[test]
-    fn openfn_sidecar_rejects_non_eq_lookup_operator() {
+    fn source_adapter_sidecar_rejects_non_eq_lookup_operator() {
         let mut config = minimal_config();
         config.evidence.source_connections.insert(
-            "openfn_crvs".to_string(),
+            "source_adapter_crvs".to_string(),
             SourceConnectionConfig {
                 base_url: "http://127.0.0.1:9191".to_string(),
                 allow_insecure_localhost: true,
                 allow_insecure_private_network: false,
-                token_env: "OPENFN_SIDECAR_TOKEN".to_string(),
+                token_env: "SOURCE_ADAPTER_SIDECAR_TOKEN".to_string(),
                 source_auth: None,
                 expected_sidecar: None,
                 dci: DciSourceConnectionConfig::default(),
                 max_in_flight: 8,
                 retry_on_5xx: false,
-                bulk_mode: BulkMode::OpenFnSidecarBatch,
+                bulk_mode: BulkMode::SourceAdapterSidecarBatch,
                 bulk_mode_lookup_unique: false,
                 bulk_timeout_max_ms: 30_000,
             },
         );
-        let mut binding = openfn_sidecar_binding("openfn_crvs");
+        let mut binding = source_adapter_sidecar_binding("source_adapter_crvs");
         binding.lookup.op = "contains".to_string();
         let mut claim = minimal_claim("date-of-birth");
         claim.source_bindings.insert("crvs".to_string(), binding);
@@ -9526,9 +9543,9 @@ evidence:
 
         let err = config
             .validate()
-            .expect_err("OpenFn sidecar must reject non-eq lookup operators");
+            .expect_err("source-adapter sidecar must reject non-eq lookup operators");
         match err {
-            EvidenceConfigError::OpenFnSidecarUnsupportedOperator { claim, binding, op } => {
+            EvidenceConfigError::SourceAdapterSidecarUnsupportedOperator { claim, binding, op } => {
                 assert_eq!(claim, "date-of-birth");
                 assert_eq!(binding, "crvs");
                 assert_eq!(op, "contains");
@@ -9538,26 +9555,26 @@ evidence:
     }
 
     #[test]
-    fn openfn_sidecar_rejects_non_eq_query_field_operator() {
+    fn source_adapter_sidecar_rejects_non_eq_query_field_operator() {
         let mut config = minimal_config();
         config.evidence.source_connections.insert(
-            "openfn_crvs".to_string(),
+            "source_adapter_crvs".to_string(),
             SourceConnectionConfig {
                 base_url: "http://127.0.0.1:9191".to_string(),
                 allow_insecure_localhost: true,
                 allow_insecure_private_network: false,
-                token_env: "OPENFN_SIDECAR_TOKEN".to_string(),
+                token_env: "SOURCE_ADAPTER_SIDECAR_TOKEN".to_string(),
                 source_auth: None,
                 expected_sidecar: None,
                 dci: DciSourceConnectionConfig::default(),
                 max_in_flight: 8,
                 retry_on_5xx: false,
-                bulk_mode: BulkMode::OpenFnSidecarBatch,
+                bulk_mode: BulkMode::SourceAdapterSidecarBatch,
                 bulk_mode_lookup_unique: false,
                 bulk_timeout_max_ms: 30_000,
             },
         );
-        let mut binding = openfn_sidecar_binding("openfn_crvs");
+        let mut binding = source_adapter_sidecar_binding("source_adapter_crvs");
         add_query_fields(&mut binding);
         binding.query_fields[1].op = "contains".to_string();
         let mut claim = minimal_claim("date-of-birth");
@@ -9566,9 +9583,9 @@ evidence:
 
         let err = config
             .validate()
-            .expect_err("OpenFn sidecar must reject non-eq query field operators");
+            .expect_err("source-adapter sidecar must reject non-eq query field operators");
         match err {
-            EvidenceConfigError::OpenFnSidecarUnsupportedOperator { claim, binding, op } => {
+            EvidenceConfigError::SourceAdapterSidecarUnsupportedOperator { claim, binding, op } => {
                 assert_eq!(claim, "date-of-birth");
                 assert_eq!(binding, "crvs");
                 assert_eq!(op, "contains");

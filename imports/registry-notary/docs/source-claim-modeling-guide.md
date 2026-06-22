@@ -26,11 +26,11 @@ Keep source connectors narrow and keep claim semantics in Notary config.
 | --- | --- | --- |
 | DCI | The upstream speaks a DCI-style search envelope | `connector: dci` |
 | Registry Data API | The upstream exposes `/v1/datasets/{dataset}/entities/{entity}/records` lookups | `connector: registry_data_api` |
-| Source adapter sidecar | A private sidecar must normalize a target system outside Notary, using built-in `http_json` or `http_flow`, or pinned OpenFn workflow execution | `connector: openfn_sidecar` |
+| Source adapter sidecar | A private sidecar must normalize a target system outside Notary, using built-in `http_json`, `http_flow`, or `fhir` source engines | `connector: source_adapter_sidecar` |
 
 Prefer the simplest direct source. Add a sidecar when the target system needs
-private credentials, governed request shaping, output normalization, or OpenFn
-workflow execution outside Notary.
+private credentials, governed request shaping, or output normalization outside
+Notary.
 
 ## Source Connection Design
 
@@ -68,7 +68,7 @@ Design rules:
 - Leave `retry_on_5xx: true` for idempotent reads.
 - Set `retry_on_5xx: false` for sidecar worker flows that must not repeat.
 - Use `bulk_mode: none` until the source contract has been tested.
-- Use `bulk_mode: openfn_sidecar_batch` only for sidecar batch matching,
+- Use `bulk_mode: source_adapter_sidecar_batch` only for sidecar batch matching,
   after the sidecar contract and per-item cardinality have been tested.
 - Keep `field_paths` and claim-level `fields` limited to what claims need.
 
@@ -116,19 +116,18 @@ sidecar normalizes a target system into that shape.
 
 The source adapter sidecar is a separate private process that normalizes a target
 system into Notary's source-read contracts. The Notary connector value remains
-`openfn_sidecar` for compatibility. Inside the sidecar, a source can use the
-built-in `http_json` engine for straightforward HTTP JSON APIs, the built-in
-`http_flow` engine for short dependent GET-only HTTP JSON reads, or a pinned
-OpenFn workflow for adaptor-backed sources. Use the first-class connector for
-new configs:
+`source_adapter_sidecar`. Inside the sidecar, a source can use the built-in
+`http_json` engine for straightforward HTTP JSON APIs, the built-in `http_flow`
+engine for short dependent GET-only HTTP JSON reads, or the built-in `fhir`
+engine. Use the first-class connector for new configs:
 
 ```yaml
 evidence:
   source_connections:
-    openfn_crvs:
+    source_adapter_crvs:
       base_url: http://127.0.0.1:9191
       allow_insecure_localhost: true
-      token_env: OPENFN_SIDECAR_TOKEN
+      token_env: SOURCE_ADAPTER_SIDECAR_TOKEN
       retry_on_5xx: false
 
   claims:
@@ -143,8 +142,8 @@ evidence:
           type: string
       source_bindings:
         crvs:
-          connector: openfn_sidecar
-          connection: openfn_crvs
+          connector: source_adapter_sidecar
+          connection: source_adapter_crvs
           required_scope: civil_registry:evidence_verification
           dataset: civil_registry
           entity: civil_person
@@ -171,7 +170,7 @@ Use the sidecar when the target system needs:
 - Credential material that should stay out of Notary config.
 - Governed request shaping and response mapping.
 - Output normalization.
-- A private worker process boundary when OpenFn is used.
+- A private worker process boundary when a worker runtime is used.
 - Per-source smoke checks before Notary depends on it.
 
 Boundary rules:
@@ -181,7 +180,7 @@ Boundary rules:
   source result satisfies a claim.
 - The sidecar owns adaptor execution, target-service credentials, source
   comparison, output normalization, adapter runtime verification, and worker
-  isolation when OpenFn is used.
+  isolation when a worker runtime is used.
 - Sidecar batch matching is a source-read optimization. It is not a new
   matching model, authorization model, disclosure model, identity proof model,
   or credential issuance path. A batch match is semantically equivalent to
@@ -189,7 +188,7 @@ Boundary rules:
 - The sidecar must be reachable only over localhost or a private pod network
   from Notary. Do not expose it publicly or place it behind an internet-facing
   ingress.
-- Pin worker runtime and adaptor versions for OpenFn sources.
+- Pin worker runtime and adaptor versions for source-adapter sources.
 - Store sidecar target credentials in sidecar env, not in Notary config.
 - Return no more than two records for a lookup.
 - Return only normalized fields needed by Notary.
@@ -204,7 +203,7 @@ for sidecar manifest and worker details.
 ### Sidecar Batch Matching Contract
 
 Sidecar batch matching uses a dedicated POST contract. Notary calls this
-route when `bulk_mode: openfn_sidecar_batch` is set on a source connection and
+route when `bulk_mode: source_adapter_sidecar_batch` is set on a source connection and
 the request contains multiple subjects. The contract is semantically equivalent
 to running the same source binding as single reads for each item. For the full
 request and response shapes, field rules, cardinality semantics, and HTTP error
@@ -213,19 +212,19 @@ codes, see the
 
 ### Sidecar Batch Config
 
-Use `bulk_mode: openfn_sidecar_batch` on the source connection and
-`connector: openfn_sidecar` on every binding that points to that connection.
+Use `bulk_mode: source_adapter_sidecar_batch` on the source connection and
+`connector: source_adapter_sidecar` on every binding that points to that connection.
 The binding may use either single-field `lookup` or multi-field `query_fields`.
 
 ```yaml
 evidence:
   source_connections:
-    openfn_crvs:
+    source_adapter_crvs:
       base_url: http://127.0.0.1:9191
       allow_insecure_localhost: true
-      token_env: OPENFN_SIDECAR_TOKEN
+      token_env: SOURCE_ADAPTER_SIDECAR_TOKEN
       retry_on_5xx: false
-      bulk_mode: openfn_sidecar_batch
+      bulk_mode: source_adapter_sidecar_batch
       bulk_timeout_max_ms: 30000
 
   claims:
@@ -248,8 +247,8 @@ evidence:
           type: date
       source_bindings:
         crvs:
-          connector: openfn_sidecar
-          connection: openfn_crvs
+          connector: source_adapter_sidecar
+          connection: source_adapter_crvs
           required_scope: civil_registry:evidence_verification
           dataset: civil_registry
           entity: civil_person
@@ -499,7 +498,7 @@ Bulk source modes are separate from API batch evaluation:
 - `dci_batched_search`: DCI source supports a batched search envelope.
 - `rda_in_filter`: Registry Data API source supports an `in` style filter and
   the operator attests that each lookup is unique.
-- `openfn_sidecar_batch`: source adapter sidecar supports
+- `source_adapter_sidecar_batch`: source adapter sidecar supports
   `POST /v1/datasets/{dataset}/entities/{entity}/records:batchMatch` with a
   shared `query_signature`.
 

@@ -157,12 +157,12 @@ jobs:
             exit 1
           fi
 
-          # The sidecar image is pure Rust now that the OpenFn engine is
+          # The sidecar image is pure Rust now that the worker engine is
           # retired: distroless runtime, no Node, readiness served over HTTP.
-          require_literal registry-notary/Dockerfile.openfn-sidecar "FROM gcr.io/distroless/cc-debian12:nonroot@sha256:"
-          require_literal registry-notary/Dockerfile.openfn-sidecar 'ENTRYPOINT ["/usr/local/bin/registry-notary-source-adapter-sidecar"]'
-          if awk '/^FROM .* AS runtime$/ {runtime=1; next} runtime && /^RUN / {found=1} END {exit found ? 0 : 1}' registry-notary/Dockerfile.openfn-sidecar; then
-            echo "registry-notary/Dockerfile.openfn-sidecar runtime stage must stay distroless and must not add RUN/package-manager steps." >&2
+          require_literal registry-notary/Dockerfile.source-adapter-sidecar "FROM gcr.io/distroless/cc-debian12:nonroot@sha256:"
+          require_literal registry-notary/Dockerfile.source-adapter-sidecar 'ENTRYPOINT ["/usr/local/bin/registry-notary-source-adapter-sidecar"]'
+          if awk '/^FROM .* AS runtime$/ {runtime=1; next} runtime && /^RUN / {found=1} END {exit found ? 0 : 1}' registry-notary/Dockerfile.source-adapter-sidecar; then
+            echo "registry-notary/Dockerfile.source-adapter-sidecar runtime stage must stay distroless and must not add RUN/package-manager steps." >&2
             exit 1
           fi
       - name: Build release Docker image
@@ -194,6 +194,6 @@ jobs:
           assert response["value"] is True
           assert response["policy_hash"].startswith("sha256:")
           PY
-      - name: Build OpenFn sidecar Docker image
+      - name: Build source-adapter sidecar Docker image
         working-directory: ${{ github.workspace }}
-        run: docker build --build-context registry-platform=registry-platform --build-context crosswalk=crosswalk --file registry-notary/Dockerfile.openfn-sidecar --tag registry-notary-source-adapter-sidecar:ci registry-notary
+        run: docker build --build-context registry-platform=registry-platform --build-context crosswalk=crosswalk --file registry-notary/Dockerfile.source-adapter-sidecar --tag registry-notary-source-adapter-sidecar:ci registry-notary

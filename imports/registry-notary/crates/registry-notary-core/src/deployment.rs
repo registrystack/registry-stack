@@ -190,7 +190,7 @@ pub struct GateInput {
     pub audit_sink_class_durable: bool,
     pub source_insecure_url: bool,
     pub source_private_network_escape: bool,
-    pub openfn_source_without_expected_sidecar: bool,
+    pub source_adapter_sidecar_without_expected_sidecar: bool,
     pub admin_shared_exposure: bool,
     pub openapi_public: bool,
     pub config_unsigned: bool,
@@ -292,7 +292,7 @@ fn gate_catalog() -> &'static [Gate] {
             hosted_lab: Some(FindingWarn),
             production: Some(FindingError),
             evidence_grade: Some(ReadinessFail),
-            condition: |input| input.openfn_source_without_expected_sidecar,
+            condition: |input| input.source_adapter_sidecar_without_expected_sidecar,
         },
         Gate {
             id: FINDING_ADMIN_SHARED_EXPOSURE,
@@ -813,11 +813,11 @@ mod tests {
             GateCase {
                 id: FINDING_SIDECAR_EXPECTED_MISSING,
                 triggering: GateInput {
-                    openfn_source_without_expected_sidecar: true,
+                    source_adapter_sidecar_without_expected_sidecar: true,
                     ..GateInput::default()
                 },
                 non_triggering: GateInput {
-                    openfn_source_without_expected_sidecar: false,
+                    source_adapter_sidecar_without_expected_sidecar: false,
                     ..GateInput::default()
                 },
                 hosted_lab: GateSeverity::FindingWarn,

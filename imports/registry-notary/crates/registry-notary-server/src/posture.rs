@@ -667,7 +667,7 @@ fn unused_source_connection_kind(bulk_mode: BulkMode) -> &'static str {
     match bulk_mode {
         BulkMode::RdaInFilter => "registry_data_api",
         BulkMode::DciBatchedSearch => "dci",
-        BulkMode::OpenFnSidecarBatch => "openfn_sidecar",
+        BulkMode::SourceAdapterSidecarBatch => "source_adapter_sidecar",
         BulkMode::None => "unknown",
     }
 }
@@ -676,7 +676,7 @@ fn source_connector_kind(kind: registry_notary_core::SourceConnectorKind) -> &'s
     match kind {
         registry_notary_core::SourceConnectorKind::RegistryDataApi => "registry_data_api",
         registry_notary_core::SourceConnectorKind::Dci => "dci",
-        registry_notary_core::SourceConnectorKind::OpenFnSidecar => "openfn_sidecar",
+        registry_notary_core::SourceConnectorKind::SourceAdapterSidecar => "source_adapter_sidecar",
     }
 }
 

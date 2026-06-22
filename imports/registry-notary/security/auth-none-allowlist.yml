@@ -59,12 +59,12 @@ allowed:
   - listener: sidecar
     method: GET
     path: /healthz
-    reason: OpenFn sidecar health probe.
+    reason: source-adapter sidecar health probe.
   - listener: sidecar
     method: GET
     path: /ready
-    reason: OpenFn sidecar readiness probe.
+    reason: source-adapter sidecar readiness probe.
   - listener: sidecar
     method: GET
     path: /metrics
-    reason: OpenFn sidecar metrics expose bounded operational counters.
+    reason: source-adapter sidecar metrics expose bounded operational counters.

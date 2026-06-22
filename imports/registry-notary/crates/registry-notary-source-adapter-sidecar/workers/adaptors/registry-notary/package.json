@@ -1,7 +1,7 @@
 {
   "name": "@registry/notary-openfn",
   "version": "0.1.0",
-  "description": "OpenFn authoring helpers for Registry Notary OpenFn sidecar workflows.",
+  "description": "OpenFn authoring helpers for Registry Notary source-adapter sidecar workflows.",
   "license": "Apache-2.0",
   "type": "module",
   "main": "index.js",
