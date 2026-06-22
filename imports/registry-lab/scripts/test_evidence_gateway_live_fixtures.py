@@ -197,7 +197,6 @@ class FakeNotaryHandler(BaseHTTPRequestHandler):
             "source-binding-policy:health_facility.policy_identity",
             "source-binding-policy:health_facility.odrl_terms",
             "source-binding-policy:health_facility.purpose",
-            "source-binding-policy:health_facility.jurisdiction",
             "source-binding-policy:health_facility.assurance_allowed_set",
             "source-binding-policy:health_facility.legal_basis_required",
             "source-binding-policy:health_facility.consent_required",
@@ -246,7 +245,7 @@ class FakeNotaryHandler(BaseHTTPRequestHandler):
         policy = {
             "combined-support-eligibility/v1": (
                 "lab.combined-support-eligibility.governed-evidence.v1",
-                "sha256:4a680200c1095d2dbee608046d78d2399db5dfae7426c36a4580fe81e50dbeb9",
+                "sha256:77a93c25e2d8b3c734176a8646628af65dd2a50396f2710e2fc26c5847259e5c",
                 baseline_rule_ids,
             ),
             "birth-registration-evidence/v1": (
@@ -429,7 +428,6 @@ class EvidenceGatewayLiveFixtureRunnerTest(unittest.TestCase):
         executed = {item["id"] for item in summary["executed"]}
         self.assertIn("baseline-success-combined-support", executed)
         self.assertIn("baseline-denial-assurance", executed)
-        self.assertIn("baseline-denial-jurisdiction", executed)
         self.assertIn("baseline-denial-legal-basis", executed)
         self.assertIn("baseline-denial-consent", executed)
         self.assertIn("baseline-audit-permit", executed)

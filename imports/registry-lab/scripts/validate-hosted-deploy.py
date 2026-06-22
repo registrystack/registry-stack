@@ -2628,6 +2628,10 @@ def load_compose(path: Path) -> dict[str, Any]:
 
 def render_compose_json(path: Path) -> dict[str, Any]:
     env = os.environ.copy()
+    # The release check generates a local ignored .env with loopback secrets.
+    # Hosted artifact validation must read the compose artifact, not that local
+    # runtime state, when PyYAML is unavailable and Docker Compose is the parser.
+    env["COMPOSE_DISABLE_ENV_FILE"] = "1"
     missing_vars: set[str] = set()
     for _attempt in range(20):
         try:

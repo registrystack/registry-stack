@@ -124,6 +124,26 @@ class HostedDeployValidationTest(unittest.TestCase):
         self.assertFalse(self.validator.truthy_env(""))
         self.assertFalse(self.validator.truthy_env(None))
 
+    def test_docker_compose_fallback_ignores_default_dotenv(self) -> None:
+        captured_envs: list[dict[str, str]] = []
+        original_run = self.validator.subprocess.run
+
+        class Result:
+            stdout = "{}"
+            stderr = ""
+
+        def fake_run(*_args, **kwargs):
+            captured_envs.append(dict(kwargs["env"]))
+            return Result()
+
+        try:
+            self.validator.subprocess.run = fake_run
+            self.assertEqual({}, self.validator.render_compose_json(Path("compose.yaml")))
+        finally:
+            self.validator.subprocess.run = original_run
+
+        self.assertEqual("1", captured_envs[0]["COMPOSE_DISABLE_ENV_FILE"])
+
     def test_allows_env_overridable_digest_pinned_product_images(self) -> None:
         compose = self._valid_registry_lab()
         compose["services"]["civil-registry-relay"][

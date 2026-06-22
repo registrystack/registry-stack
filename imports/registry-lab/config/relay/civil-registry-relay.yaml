@@ -16,7 +16,7 @@ config_trust:
 metadata:
   source:
     path: civil-registry-relay.metadata.yaml
-    digest: sha256:0cf785b86c7d2ffe6633771af22e51aefe206301909a379fe3a999791dc1bc38
+    digest: sha256:0423681f9c6df1feb78f32624271e1d6a32f9ed73b13d7d20325a1f326ae422f
   ecosystem_binding:
     id: combined-support-eligibility/v1
     version: v1
