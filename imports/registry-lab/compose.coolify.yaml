@@ -364,7 +364,7 @@ services:
       start_period: 10s
 
   citizen-portal:
-    image: ${REGISTRY_LAB_CITIZEN_PORTAL_IMAGE:-ghcr.io/jeremi/citizen-portal@sha256:a451d85040ab3cf859224ef9d002e460263db15a5cf235ddaf86edd2d4e9e080}
+    image: ${REGISTRY_LAB_CITIZEN_PORTAL_IMAGE:-ghcr.io/jeremi/registry-lab-citizen-portal@sha256:a451d85040ab3cf859224ef9d002e460263db15a5cf235ddaf86edd2d4e9e080}
     restart: unless-stopped
     expose:
       - "3000"

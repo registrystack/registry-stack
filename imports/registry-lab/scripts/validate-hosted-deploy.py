@@ -219,20 +219,20 @@ REQUIRED_HOSTED_VARIABLES = {
 }
 
 ALLOWED_INTERIM_PRODUCT_IMAGES = {
-    "citizen-portal:hosted",
+    "registry-lab-citizen-portal:hosted",
     "registry-relay:hosted",
     "registry-notary:hosted",
     "registry-notary-openfn-sidecar:hosted",
 }
 
 PRODUCT_IMAGE_NAMES = (
-    "citizen-portal",
+    "registry-lab-citizen-portal",
     "registry-notary-openfn-sidecar",
     "registry-relay",
     "registry-notary",
 )
 PRODUCT_IMAGE_ENV_BY_NAME = {
-    "citizen-portal": "REGISTRY_LAB_CITIZEN_PORTAL_IMAGE",
+    "registry-lab-citizen-portal": "REGISTRY_LAB_CITIZEN_PORTAL_IMAGE",
     "registry-relay": "REGISTRY_RELAY_IMAGE",
     "registry-notary": "REGISTRY_NOTARY_IMAGE",
     "registry-notary-openfn-sidecar": "REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE",
