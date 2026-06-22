@@ -1495,6 +1495,8 @@ pub struct EvidenceAuthorizationDetails {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subject: Option<EvidenceAuthorizationSubject>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<EvidenceAuthorizationTarget>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relationship: Option<EvidenceAuthorizationRelationship>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub access_mode: Option<AccessMode>,
@@ -1506,6 +1508,12 @@ pub struct EvidenceAuthorizationDetails {
 pub struct EvidenceAuthorizationSubject {
     pub binding_claim: String,
     pub id_type: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct EvidenceAuthorizationTarget {
+    pub id_type: String,
+    pub id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

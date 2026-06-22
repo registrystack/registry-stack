@@ -983,7 +983,9 @@ The config keys unique to this page are: `subject_binding.token_claim`,
 
 Delegated self-attestation is configured under `self_attestation.delegation`.
 It lets a token-bound requester evaluate configured dependent claims only when a
-configured relationship proof claim passes:
+configured relationship proof claim passes. The scoped authorization details
+for delegated access must name the relationship and the dependent target by
+`target.id_type` and `target.id`:
 
 ```yaml
 self_attestation:

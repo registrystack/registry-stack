@@ -7698,6 +7698,7 @@ fn require_self_attestation_authorization_details(
                 binding_claim: config.subject_binding.token_claim.clone(),
                 id_type: config.subject_binding.id_type.clone(),
             }),
+            target: None,
             allow_subset_claims: false,
             allowed_claims: None,
         },
@@ -7871,6 +7872,17 @@ fn require_delegated_attestation_authorization_details(
             SelfAttestationDenialCode::DelegatedRelationshipNotAllowed,
         ));
     };
+    let target_subject = request.target_subject().ok_or_else(|| {
+        self_attestation_denied(SelfAttestationDenialCode::DelegatedSubjectNotPermitted)
+    })?;
+    let target_id_type = delegated_target_id_type(config, relationship_config);
+    if target_subject.id.trim().is_empty()
+        || target_subject.id_type.as_deref() != Some(target_id_type)
+    {
+        return Err(self_attestation_denied(
+            SelfAttestationDenialCode::DelegatedSubjectNotPermitted,
+        ));
+    }
     let authorized_claims = [
         ClaimRef::with_version(&claim.id, &claim.version),
         ClaimRef::with_version(&proof_claim.id, &proof_claim.version),
@@ -7888,6 +7900,10 @@ fn require_delegated_attestation_authorization_details(
             subject: Some(crate::authz_details::ScopedAuthorizationSubject {
                 binding_claim: config.subject_binding.token_claim.clone(),
                 id_type: config.subject_binding.id_type.clone(),
+            }),
+            target: Some(crate::authz_details::ScopedAuthorizationTarget {
+                id_type: target_id_type.to_string(),
+                id: target_subject.id.clone(),
             }),
             allow_subset_claims: true,
             allowed_claims: Some(&authorized_claims),
@@ -7943,6 +7959,9 @@ fn self_attestation_authorization_details_denial(
         crate::authz_details::ScopedAuthorizationError::Subject => {
             SelfAttestationDenialCode::SubjectMismatch
         }
+        crate::authz_details::ScopedAuthorizationError::Target => {
+            SelfAttestationDenialCode::SubjectMismatch
+        }
         crate::authz_details::ScopedAuthorizationError::DetailType
         | crate::authz_details::ScopedAuthorizationError::Action
         | crate::authz_details::ScopedAuthorizationError::Location
@@ -7965,6 +7984,9 @@ fn delegated_attestation_authorization_details_denial(
             SelfAttestationDenialCode::DelegatedClaimDenied
         }
         crate::authz_details::ScopedAuthorizationError::Subject => {
+            SelfAttestationDenialCode::DelegatedSubjectNotPermitted
+        }
+        crate::authz_details::ScopedAuthorizationError::Target => {
             SelfAttestationDenialCode::DelegatedSubjectNotPermitted
         }
         crate::authz_details::ScopedAuthorizationError::DetailType
@@ -8535,6 +8557,7 @@ fn require_self_attestation_stored_access(
         require_delegated_stored_authorization_details(
             evidence,
             &state.self_attestation,
+            &state.self_attestation_rate_keys,
             principal,
             evaluation,
             metadata,
@@ -8625,6 +8648,7 @@ fn require_self_attestation_stored_access(
 fn require_delegated_stored_authorization_details(
     evidence: &EvidenceConfig,
     config: &SelfAttestationConfig,
+    keys: &SelfAttestationRateLimitKeys,
     principal: &EvidencePrincipal,
     evaluation: &registry_notary_core::StoredEvaluation,
     metadata: &StoredSelfAttestationMetadata,
@@ -8648,6 +8672,7 @@ fn require_delegated_stored_authorization_details(
             SelfAttestationDenialCode::DelegatedRelationshipNotAllowed,
         ));
     }
+    require_delegated_authorization_target_binding(details, metadata, keys)?;
     let proof_claim = find_requested_claim(evidence, &ClaimRef::from(proof_claim_id.as_str()))
         .map_err(|_| self_attestation_denied(SelfAttestationDenialCode::DelegatedProofDenied))?;
     let mut authorized_claims = evaluation.selected_claim_refs();
@@ -8669,11 +8694,37 @@ fn require_delegated_stored_authorization_details(
                 binding_claim: config.subject_binding.token_claim.clone(),
                 id_type: config.subject_binding.id_type.clone(),
             }),
+            target: None,
             allow_subset_claims: true,
             allowed_claims: Some(&authorized_claims),
         },
     )
     .map_err(delegated_attestation_authorization_details_denial)
+}
+
+fn require_delegated_authorization_target_binding(
+    details: &registry_notary_core::EvidenceAuthorizationDetails,
+    metadata: &StoredSelfAttestationMetadata,
+    keys: &SelfAttestationRateLimitKeys,
+) -> Result<(), EvidenceError> {
+    let target = details
+        .target
+        .as_ref()
+        .ok_or(EvidenceError::EvaluationBindingMismatch)?;
+    let expected_hash = metadata
+        .dependent_target_hash
+        .as_ref()
+        .ok_or(EvidenceError::EvaluationBindingMismatch)?;
+    if target.id.trim().is_empty() || target.id_type != metadata.subject_id_type.as_str() {
+        return Err(EvidenceError::EvaluationBindingMismatch);
+    }
+    let target_hash = keys
+        .delegated_subject_binding(target.id_type.as_str(), target.id.as_str())
+        .map_err(|error| error.evidence_error())?;
+    if &target_hash != expected_hash {
+        return Err(EvidenceError::EvaluationBindingMismatch);
+    }
+    Ok(())
 }
 
 fn verified_audiences_match(left: &[VerifiedClaimValue], right: &[VerifiedClaimValue]) -> bool {
@@ -10979,6 +11030,10 @@ mod tests {
                 binding_claim: SUBJECT_BINDING_CLAIM.to_string(),
                 id_type: "national_id".to_string(),
             }),
+            target: Some(registry_notary_core::EvidenceAuthorizationTarget {
+                id_type: "civil_registration_id".to_string(),
+                id: "CHILD-123".to_string(),
+            }),
             relationship: Some(registry_notary_core::EvidenceAuthorizationRelationship {
                 relationship_type: "guardian".to_string(),
                 proof_claim: "guardian-link-established".to_string(),
@@ -11843,6 +11898,7 @@ mod tests {
                 binding_claim: SUBJECT_BINDING_CLAIM.to_string(),
                 id_type: "national_id".to_string(),
             }),
+            target: None,
             relationship: None,
             access_mode: Some(AccessMode::SelfAttestation),
             assisted_access_context: None,
@@ -12558,6 +12614,44 @@ mod tests {
     }
 
     #[test]
+    fn delegated_attestation_requires_transaction_details_target() {
+        let config = delegated_self_attestation_config();
+        let evidence = delegated_evidence_config();
+        let mut principal = delegated_transaction_principal(&config, &evidence);
+        principal
+            .authorization_details
+            .as_mut()
+            .expect("delegated details exist")
+            .target = None;
+        let state = RegistryNotaryApiState::new_with_self_attestation(
+            Arc::new(evidence.clone()),
+            Arc::new(config),
+            delegated_test_audit_hasher(),
+            Arc::new(CountingSource::default()),
+            Arc::new(EvidenceStore::default()),
+            Arc::new(NoopIssuerResolver),
+        );
+        let mut request = delegated_request();
+        derive_delegated_attestation_request_context(
+            &state.self_attestation,
+            &state.self_attestation_rate_keys,
+            &principal,
+            &mut request,
+        )
+        .expect("relationship context still derives before target-scoped authorization check");
+
+        let err = prepare_self_attestation_evaluate(&state, &evidence, &principal, &request)
+            .expect_err("delegated target must be explicit in authorization_details");
+
+        assert!(matches!(
+            err,
+            EvidenceError::SelfAttestationDenied {
+                reason: SelfAttestationDenialCode::DelegatedSubjectNotPermitted
+            }
+        ));
+    }
+
+    #[test]
     fn stored_delegated_attestation_rechecks_current_authorization_details() {
         let config = delegated_self_attestation_config();
         let evidence = delegated_evidence_config();
@@ -12613,6 +12707,60 @@ mod tests {
                 reason: SelfAttestationDenialCode::DelegatedClaimDenied
             }
         ));
+    }
+
+    #[test]
+    fn stored_delegated_attestation_rechecks_current_target_binding() {
+        let config = delegated_self_attestation_config();
+        let evidence = delegated_evidence_config();
+        let principal = delegated_transaction_principal(&config, &evidence);
+        let state = RegistryNotaryApiState::new_with_self_attestation(
+            Arc::new(evidence.clone()),
+            Arc::new(config),
+            delegated_test_audit_hasher(),
+            Arc::new(CountingSource::default()),
+            Arc::new(EvidenceStore::default()),
+            Arc::new(NoopIssuerResolver),
+        );
+        let mut request = delegated_request();
+        derive_delegated_attestation_request_context(
+            &state.self_attestation,
+            &state.self_attestation_rate_keys,
+            &principal,
+            &mut request,
+        )
+        .expect("delegated request context derives");
+        let context = prepare_self_attestation_evaluate(&state, &evidence, &principal, &request)
+            .expect("delegated context prepares");
+        let mut evaluation = evaluation_for_proof();
+        evaluation.client_id = context.metadata.principal_hash.as_str().to_string();
+        evaluation.purpose = context.purpose.clone();
+        evaluation.claim_ids = vec!["dependent-person-is-alive".to_string()];
+        evaluation.claim_refs = request.claims.clone();
+        evaluation.disclosure = context.metadata.disclosure.as_str().to_string();
+        evaluation.format = context.metadata.result_format.as_str().to_string();
+        evaluation.self_attestation = Some(context.metadata);
+        let mut different_target = principal.clone();
+        different_target
+            .authorization_details
+            .as_mut()
+            .and_then(|details| details.target.as_mut())
+            .expect("delegated authorization target exists")
+            .id = "OTHER-CHILD".to_string();
+
+        let err = require_self_attestation_stored_access(
+            &state,
+            &evidence,
+            &different_target,
+            &evaluation,
+            &evaluation.claim_ids,
+            &evaluation.disclosure,
+            &evaluation.format,
+            None,
+        )
+        .expect_err("stored delegated access must re-check current target binding");
+
+        assert!(matches!(err, EvidenceError::EvaluationBindingMismatch));
     }
 
     #[tokio::test]

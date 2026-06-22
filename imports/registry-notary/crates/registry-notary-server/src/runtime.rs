@@ -3053,6 +3053,8 @@ fn source_scoped_trusted_policy(
         request.context,
         request.source_capability,
     )?;
+    let target =
+        source_authorization_target_expectation(request.context, request.source_capability)?;
     crate::authz_details::validate_scoped_authorization_details(
         details,
         &crate::authz_details::ScopedAuthorizationRequest {
@@ -3067,6 +3069,7 @@ fn source_scoped_trusted_policy(
                 request.source_capability,
             ),
             subject,
+            target,
             allow_subset_claims: true,
             allowed_claims: Some(&request.trusted_policy.request_claims),
         },
@@ -3128,6 +3131,32 @@ fn source_authorization_subject_expectation(
     Ok(Some(crate::authz_details::ScopedAuthorizationSubject {
         binding_claim: binding_claim.to_string(),
         id_type: id_type.to_string(),
+    }))
+}
+
+fn source_authorization_target_expectation(
+    context: &EvidenceRequestContext,
+    source_capability: &SourceCapability,
+) -> Result<Option<crate::authz_details::ScopedAuthorizationTarget>, EvidenceError> {
+    if !matches!(
+        source_capability.access_mode(),
+        AccessMode::DelegatedAttestation
+    ) {
+        return Ok(None);
+    }
+    let target_subject = context
+        .target_subject()
+        .ok_or(EvidenceError::TargetMatchingPolicyRejected)?;
+    let id_type = target_subject
+        .id_type
+        .as_deref()
+        .ok_or(EvidenceError::TargetMatchingPolicyRejected)?;
+    if target_subject.id.trim().is_empty() {
+        return Err(EvidenceError::TargetMatchingPolicyRejected);
+    }
+    Ok(Some(crate::authz_details::ScopedAuthorizationTarget {
+        id_type: id_type.to_string(),
+        id: target_subject.id,
     }))
 }
 

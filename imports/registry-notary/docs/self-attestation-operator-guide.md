@@ -59,9 +59,10 @@ caller-supplied identity context is rejected before any source read.
 
 For delegated self-attestation, the caller sends only the dependent `target`.
 Registry Notary derives `requester`, `relationship`, and `on_behalf_of` from the
-authenticated principal and scoped authorization details. Caller-supplied
-`requester`, `relationship`, or `on_behalf_of` fields are rejected before any
-source read.
+authenticated principal and scoped authorization details. The scoped
+authorization details must also name the same dependent target by `id_type` and
+`id`. Caller-supplied `requester`, `relationship`, or `on_behalf_of` fields are
+rejected before any source read.
 
 ## When To Use It
 
@@ -293,6 +294,10 @@ Runtime behavior:
 - The request target is the dependent subject.
 - The relationship type and proof claim come from scoped authorization details,
   not from caller-supplied request fields.
+- The scoped authorization details must include a `target` object for the
+  dependent subject. Notary compares that target to the request target during
+  evaluation and re-hashes it against the stored dependent target before render
+  or credential issuance.
 - Notary stores keyed hashes for the requester subject binding and dependent
   target, then rechecks them before delegated source reads.
 - The dependent claim is not read unless the proof claim evaluates to boolean
