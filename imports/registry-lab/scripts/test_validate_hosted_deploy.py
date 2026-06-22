@@ -69,7 +69,7 @@ class HostedDeployValidationTest(unittest.TestCase):
 
     def test_rejects_floating_citizen_portal_image_tags(self) -> None:
         compose = self._valid_registry_lab()
-        compose["services"]["citizen-portal"]["image"] = "ghcr.io/jeremi/citizen-portal:main"
+        compose["services"]["citizen-portal"]["image"] = "ghcr.io/jeremi/registry-lab-citizen-portal:main"
         issues = self._validate(compose, self._valid_esignet())
         self.assertIssue(issues, "floating-product-image-tag")
 
@@ -83,13 +83,13 @@ class HostedDeployValidationTest(unittest.TestCase):
 
     def test_rejects_hardcoded_citizen_portal_image_digests(self) -> None:
         compose = self._valid_registry_lab()
-        compose["services"]["citizen-portal"]["image"] = "ghcr.io/jeremi/citizen-portal@sha256:abc"
+        compose["services"]["citizen-portal"]["image"] = "ghcr.io/jeremi/registry-lab-citizen-portal@sha256:abc"
         issues = self._validate(compose, self._valid_esignet())
         self.assertIssue(issues, "product-image-env-var")
 
     def test_allows_interim_local_hosted_product_tags(self) -> None:
         compose = self._valid_registry_lab()
-        compose["services"]["citizen-portal"]["image"] = "citizen-portal:hosted"
+        compose["services"]["citizen-portal"]["image"] = "registry-lab-citizen-portal:hosted"
         compose["services"]["civil-registry-relay"]["image"] = "registry-relay:hosted"
         compose["services"]["citizen-civil-notary"]["image"] = "registry-notary:hosted"
         compose["services"]["openfn-dhis2-sidecar"][
@@ -100,7 +100,7 @@ class HostedDeployValidationTest(unittest.TestCase):
 
     def test_strict_mode_rejects_interim_local_hosted_product_tags(self) -> None:
         compose = self._valid_registry_lab()
-        compose["services"]["citizen-portal"]["image"] = "citizen-portal:hosted"
+        compose["services"]["citizen-portal"]["image"] = "registry-lab-citizen-portal:hosted"
         compose["services"]["civil-registry-relay"]["image"] = "registry-relay:hosted"
         compose["services"]["citizen-civil-notary"]["image"] = "registry-notary:hosted"
         compose["services"]["openfn-dhis2-sidecar"][
@@ -1786,7 +1786,7 @@ cp -a /tmp/repo/scripts/lab_homepage_static /out/static-scripts/
                     },
                 },
                 "citizen-portal": {
-                    "image": "${REGISTRY_LAB_CITIZEN_PORTAL_IMAGE:-ghcr.io/jeremi/citizen-portal@sha256:abc}",
+                    "image": "${REGISTRY_LAB_CITIZEN_PORTAL_IMAGE:-ghcr.io/jeremi/registry-lab-citizen-portal@sha256:abc}",
                     "expose": ["3000"],
                     "environment": {
                         "ORIGIN": f"https://portal.{lab}",

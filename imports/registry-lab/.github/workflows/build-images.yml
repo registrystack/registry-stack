@@ -9,9 +9,9 @@ name: build-hosted-images
 # GITHUB_TOKEN cannot push to those pre-existing user-owned packages, so the
 # GHCR login below uses the PAT.
 #
-# After a run, copy the three digests from the job summary into the Coolify
-# app env (REGISTRY_RELAY_IMAGE / REGISTRY_NOTARY_IMAGE /
-# REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE) and redeploy.
+# After a run, copy the digests from the job summary into the Coolify app env
+# and redeploy. Citizen portal images are lab-demo scoped under
+# ghcr.io/jeremi/registry-lab-citizen-portal.
 
 on:
   workflow_dispatch:
@@ -134,10 +134,10 @@ jobs:
           sbom: false
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/citizen-portal:hosted
-            ghcr.io/${{ github.repository_owner }}/citizen-portal:sha-${{ github.sha }}
-          cache-from: type=gha,scope=citizen-portal
-          cache-to: type=gha,mode=max,scope=citizen-portal
+            ghcr.io/${{ github.repository_owner }}/registry-lab-citizen-portal:hosted
+            ghcr.io/${{ github.repository_owner }}/registry-lab-citizen-portal:sha-${{ github.sha }}
+          cache-from: type=gha,scope=registry-lab-citizen-portal
+          cache-to: type=gha,mode=max,scope=registry-lab-citizen-portal
 
       - name: Image digests
         run: |
@@ -152,6 +152,6 @@ jobs:
               echo "REGISTRY_NOTARY_IMAGE=ghcr.io/${owner}/registry-notary@${{ steps.notary.outputs.digest }}"
               echo "REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE=ghcr.io/${owner}/registry-notary-openfn-sidecar@${{ steps.sidecar.outputs.digest }}"
             fi
-            echo "REGISTRY_LAB_CITIZEN_PORTAL_IMAGE=ghcr.io/${owner}/citizen-portal@${{ steps.citizen_portal.outputs.digest }}"
+            echo "REGISTRY_LAB_CITIZEN_PORTAL_IMAGE=ghcr.io/${owner}/registry-lab-citizen-portal@${{ steps.citizen_portal.outputs.digest }}"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
