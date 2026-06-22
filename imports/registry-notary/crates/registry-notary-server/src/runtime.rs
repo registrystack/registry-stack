@@ -974,6 +974,7 @@ struct EvaluationPolicy {
 struct ClaimEvaluationContext {
     evidence: Arc<EvidenceConfig>,
     source: Arc<dyn SourceReader>,
+    self_attestation_rate_keys: Arc<SelfAttestationRateLimitKeys>,
     source_capability: SourceCapability,
     context: EvidenceRequestContext,
     trusted_policy: TrustedPolicyContext,
@@ -2012,6 +2013,7 @@ impl RegistryNotaryRuntime {
                 let ctx = ClaimEvaluationContext {
                     evidence: Arc::clone(&evidence),
                     source: Arc::clone(&source),
+                    self_attestation_rate_keys: Arc::clone(&self.self_attestation_rate_keys),
                     source_capability: source_capability.clone(),
                     context: context.clone(),
                     trusted_policy: trusted_policy.clone(),
@@ -2168,6 +2170,7 @@ async fn evaluate_claim_task(
     if !claim.operations.evaluate.enabled {
         return Err(EvidenceError::OperationUnsupported);
     }
+    ensure_delegated_capability_context_binding(&ctx)?;
     if let Some(proof_claim_id) = ctx
         .source_capability
         .required_delegated_proof_for_claim(claim_id)
@@ -2179,7 +2182,7 @@ async fn evaluate_claim_task(
             .and_then(|proof| proof.value.as_bool())
             .unwrap_or(false);
         if !proof_satisfied {
-            return Err(delegated_attestation_denied());
+            return Err(delegated_relationship_unproven());
         }
     }
     let delegated_proof_claim = ctx.source_capability.is_delegated_proof_claim(claim_id);
@@ -2199,7 +2202,7 @@ async fn evaluate_claim_task(
     .await;
     let (sources, observed_at, redaction_fields, matching_policy_audit) = match sources_result {
         Ok(loaded) => loaded,
-        Err(_) if delegated_proof_claim => return Err(delegated_attestation_denied()),
+        Err(_) if delegated_proof_claim => return Err(delegated_proof_denied()),
         Err(error) => return Err(error),
     };
     // When a memoized entry was used, `observed_at` carries the timestamp of
@@ -2257,11 +2260,11 @@ async fn evaluate_claim_task(
     };
     let value = match value_result {
         Ok(value) => value,
-        Err(_) if delegated_proof_claim => return Err(delegated_attestation_denied()),
+        Err(_) if delegated_proof_claim => return Err(delegated_proof_denied()),
         Err(error) => return Err(error),
     };
     if delegated_proof_claim && value.as_bool() != Some(true) {
-        return Err(delegated_attestation_denied());
+        return Err(delegated_relationship_unproven());
     }
     // The source_count for this claim is the number of direct sources it
     // read, plus the accumulated source_count from any dependency claims
@@ -2547,8 +2550,55 @@ fn require_machine_source_capability(capability: &SourceCapability) -> Result<()
 
 fn delegated_attestation_denied() -> EvidenceError {
     EvidenceError::SelfAttestationDenied {
-        reason: SelfAttestationDenialCode::SubjectMismatch,
+        reason: SelfAttestationDenialCode::DelegatedSubjectNotPermitted,
     }
+}
+
+fn delegated_relationship_unproven() -> EvidenceError {
+    EvidenceError::SelfAttestationDenied {
+        reason: SelfAttestationDenialCode::DelegatedRelationshipUnproven,
+    }
+}
+
+fn delegated_proof_denied() -> EvidenceError {
+    EvidenceError::SelfAttestationDenied {
+        reason: SelfAttestationDenialCode::DelegatedProofDenied,
+    }
+}
+
+fn ensure_delegated_capability_context_binding(
+    ctx: &ClaimEvaluationContext,
+) -> Result<(), EvidenceError> {
+    let SourceCapability::DelegatedAttestation {
+        requester_subject_binding_hash,
+        dependent_target_hash,
+        ..
+    } = &ctx.source_capability
+    else {
+        return Ok(());
+    };
+    let requester_subject = ctx
+        .context
+        .requester
+        .as_ref()
+        .and_then(EvidenceEntity::to_subject_request)
+        .ok_or_else(delegated_attestation_denied)?;
+    let target_subject = ctx
+        .context
+        .target_subject()
+        .ok_or_else(delegated_attestation_denied)?;
+    let requester_hash = ctx
+        .self_attestation_rate_keys
+        .subject_binding(requester_subject.id.as_str())
+        .map_err(|error| error.evidence_error())?;
+    let target_hash = ctx
+        .self_attestation_rate_keys
+        .subject_binding(target_subject.id.as_str())
+        .map_err(|error| error.evidence_error())?;
+    if &requester_hash != requester_subject_binding_hash || &target_hash != dependent_target_hash {
+        return Err(delegated_attestation_denied());
+    }
+    Ok(())
 }
 
 pub fn claim_summary(claim: &ClaimDefinition) -> Value {
@@ -2986,8 +3036,11 @@ fn source_scoped_trusted_policy(
         &request.claim.id,
         &request.claim.version,
     )];
-    let subject =
-        source_authorization_subject_expectation(request.trusted_policy, request.context)?;
+    let subject = source_authorization_subject_expectation(
+        request.trusted_policy,
+        request.context,
+        request.source_capability,
+    )?;
     crate::authz_details::validate_scoped_authorization_details(
         details,
         &crate::authz_details::ScopedAuthorizationRequest {
@@ -3031,6 +3084,7 @@ fn binding_policy_uses_authorization_details(
 fn source_authorization_subject_expectation(
     trusted_policy: &TrustedPolicyContext,
     context: &EvidenceRequestContext,
+    source_capability: &SourceCapability,
 ) -> Result<Option<crate::authz_details::ScopedAuthorizationSubject>, EvidenceError> {
     let (Some(binding_claim), Some(binding_value)) = (
         trusted_policy.subject_binding_claim.as_deref(),
@@ -3038,13 +3092,24 @@ fn source_authorization_subject_expectation(
     ) else {
         return Ok(None);
     };
-    let target_subject = context
-        .target_subject()
-        .ok_or(EvidenceError::TargetMatchingPolicyRejected)?;
-    if target_subject.id != binding_value {
+    let expected_subject = if matches!(
+        source_capability.access_mode(),
+        AccessMode::DelegatedAttestation
+    ) {
+        context
+            .requester
+            .as_ref()
+            .and_then(EvidenceEntity::to_subject_request)
+            .ok_or(EvidenceError::TargetMatchingPolicyRejected)?
+    } else {
+        context
+            .target_subject()
+            .ok_or(EvidenceError::TargetMatchingPolicyRejected)?
+    };
+    if expected_subject.id != binding_value {
         return Err(EvidenceError::TargetMatchingPolicyRejected);
     }
-    let id_type = target_subject
+    let id_type = expected_subject
         .id_type
         .as_deref()
         .ok_or(EvidenceError::TargetMatchingPolicyRejected)?;
@@ -6351,6 +6416,66 @@ mod tests {
         }
     }
 
+    fn delegated_attestation_capability(
+        keys: &SelfAttestationRateLimitKeys,
+        requester_subject: &str,
+        dependent_subject: &str,
+    ) -> SourceCapability {
+        SourceCapability::DelegatedAttestation {
+            proof_claim_id: BoundedClaimId::new("guardian-link")
+                .expect("proof claim id is bounded"),
+            allowed_claim_ids: BTreeSet::from([
+                BoundedClaimId::new("selected").expect("delegated claim id is bounded")
+            ]),
+            requester_subject_binding_hash: keys
+                .subject_binding(requester_subject)
+                .expect("requester hashes"),
+            dependent_target_hash: keys
+                .subject_binding(dependent_subject)
+                .expect("dependent hashes"),
+            relationship_type: registry_notary_core::ConfigMetadata::new("guardian")
+                .expect("relationship type is bounded"),
+        }
+    }
+
+    fn delegated_principal() -> EvidencePrincipal {
+        EvidencePrincipal {
+            principal_id: "guardian".to_string(),
+            scopes: Vec::new(),
+            access_mode: AccessMode::DelegatedAttestation,
+            verified_claims: None,
+            authorization_details: None,
+        }
+    }
+
+    fn delegated_runtime_request() -> EvaluateRequest {
+        EvaluateRequest {
+            requester: Some(EvidenceEntity::from_subject_request(
+                "Person",
+                SubjectRequest {
+                    id: "NAT-123".to_string(),
+                    id_type: Some("national_id".to_string()),
+                },
+            )),
+            target: Some(EvidenceEntity::from_subject_request(
+                "Person",
+                SubjectRequest {
+                    id: "CHILD-123".to_string(),
+                    id_type: Some("civil_registration_id".to_string()),
+                },
+            )),
+            relationship: Some(registry_notary_core::EvidenceRelationship {
+                relationship_type: "guardian".to_string(),
+                attributes: BTreeMap::new(),
+            }),
+            on_behalf_of: None,
+            claims: vec![ClaimRef::from("selected")],
+            disclosure: Some("value".to_string()),
+            format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
+            purpose: Some("test".to_string()),
+        }
+    }
+
     #[test]
     fn claim_summary_advertises_cccev_evidence_type_metadata() {
         let mut claim = test_claim("civil-child-status", Vec::new(), false);
@@ -8575,6 +8700,86 @@ mod tests {
             err,
             EvidenceError::SelfAttestationDenied {
                 reason: SelfAttestationDenialCode::ClaimDenied
+            }
+        ));
+        assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn delegated_attestation_rejects_context_hash_mismatch_before_source_read() {
+        let source = Arc::new(CountingSource::default());
+        let mut evidence_config = (*test_evidence(vec![
+            test_claim("selected", vec!["guardian-link"], true),
+            test_claim("guardian-link", Vec::new(), true),
+        ]))
+        .clone();
+        evidence_config.allowed_purposes = vec!["test".to_string()];
+        let evidence = Arc::new(evidence_config);
+        let store = EvidenceStore::default();
+        let keys = Arc::new(SelfAttestationRateLimitKeys::new(
+            AuditKeyHasher::unkeyed_dev_only(),
+        ));
+        let runtime = RegistryNotaryRuntime::new_with_self_attestation_rate_keys(Arc::clone(&keys));
+
+        let err = runtime
+            .evaluate_with_source_capability(
+                evidence,
+                source.clone() as Arc<dyn SourceReader>,
+                &store,
+                &delegated_principal(),
+                delegated_attestation_capability(&keys, "NAT-123", "OTHER-CHILD"),
+                delegated_runtime_request(),
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect_err("dependent target hash must bind the delegated request context");
+
+        assert!(matches!(
+            err,
+            EvidenceError::SelfAttestationDenied {
+                reason: SelfAttestationDenialCode::DelegatedSubjectNotPermitted
+            }
+        ));
+        assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn delegated_attestation_unproven_relationship_does_not_read_dependent_sources() {
+        let source = Arc::new(CountingSource::default());
+        let mut evidence_config = (*test_evidence(vec![
+            test_claim("selected", vec!["guardian-link"], true),
+            test_claim("guardian-link", Vec::new(), false),
+        ]))
+        .clone();
+        evidence_config.allowed_purposes = vec!["test".to_string()];
+        let evidence = Arc::new(evidence_config);
+        let store = EvidenceStore::default();
+        let keys = Arc::new(SelfAttestationRateLimitKeys::new(
+            AuditKeyHasher::unkeyed_dev_only(),
+        ));
+        let runtime = RegistryNotaryRuntime::new_with_self_attestation_rate_keys(Arc::clone(&keys));
+
+        let err = runtime
+            .evaluate_with_source_capability(
+                evidence,
+                source.clone() as Arc<dyn SourceReader>,
+                &store,
+                &delegated_principal(),
+                delegated_attestation_capability(&keys, "NAT-123", "CHILD-123"),
+                delegated_runtime_request(),
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect_err("false proof claim must deny delegated dependent evaluation");
+
+        assert!(matches!(
+            err,
+            EvidenceError::SelfAttestationDenied {
+                reason: SelfAttestationDenialCode::DelegatedRelationshipUnproven
             }
         ));
         assert_eq!(source.read_count.load(Ordering::SeqCst), 0);

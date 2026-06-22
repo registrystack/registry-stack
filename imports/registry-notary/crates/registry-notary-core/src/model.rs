@@ -90,6 +90,11 @@ pub enum SelfAttestationDenialCode {
     InvalidToken,
     AssuranceDenied,
     BatchDenied,
+    DelegatedRelationshipUnproven,
+    DelegatedRelationshipNotAllowed,
+    DelegatedClaimDenied,
+    DelegatedSubjectNotPermitted,
+    DelegatedProofDenied,
 }
 
 impl SelfAttestationDenialCode {
@@ -108,6 +113,11 @@ impl SelfAttestationDenialCode {
             Self::InvalidToken => "self_attestation.invalid_token",
             Self::AssuranceDenied => "self_attestation.assurance_denied",
             Self::BatchDenied => "self_attestation.batch_denied",
+            Self::DelegatedRelationshipUnproven => "delegated.relationship_unproven",
+            Self::DelegatedRelationshipNotAllowed => "delegated.relationship_not_allowed",
+            Self::DelegatedClaimDenied => "delegated.claim_denied",
+            Self::DelegatedSubjectNotPermitted => "delegated.subject_not_permitted",
+            Self::DelegatedProofDenied => "delegated.proof_denied",
         }
     }
 
@@ -126,6 +136,11 @@ impl SelfAttestationDenialCode {
             "self_attestation.invalid_token" => Some(Self::InvalidToken),
             "self_attestation.assurance_denied" => Some(Self::AssuranceDenied),
             "self_attestation.batch_denied" => Some(Self::BatchDenied),
+            "delegated.relationship_unproven" => Some(Self::DelegatedRelationshipUnproven),
+            "delegated.relationship_not_allowed" => Some(Self::DelegatedRelationshipNotAllowed),
+            "delegated.claim_denied" => Some(Self::DelegatedClaimDenied),
+            "delegated.subject_not_permitted" => Some(Self::DelegatedSubjectNotPermitted),
+            "delegated.proof_denied" => Some(Self::DelegatedProofDenied),
             _ => None,
         }
     }

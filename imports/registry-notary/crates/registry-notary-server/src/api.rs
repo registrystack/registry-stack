@@ -4222,6 +4222,18 @@ async fn oid4vci_credential(
             Ok(configuration) => configuration,
             Err(error) => return oid4vci_error_response(error),
         };
+    if requested_attestation_access_mode(&principal) == AccessMode::DelegatedAttestation {
+        let mut response = oid4vci_error_response(Oid4vciWireError::AccessDenied);
+        attach_oid4vci_self_attestation_denial_audit(
+            &mut response,
+            "oid4vci_credential_denied",
+            std::slice::from_ref(&configuration.claim_id),
+            configuration_id,
+            Some(SelfAttestationDenialCode::DelegatedRelationshipNotAllowed),
+            Some(state.self_attestation.subject_binding.token_claim.as_str()),
+        );
+        return response;
+    }
     let expected_nonce = if state.oid4vci.nonce.enabled {
         let Some(nonce) = validated_proof.nonce.as_deref() else {
             return oid4vci_error_response(Oid4vciWireError::InvalidProof);
@@ -5734,6 +5746,8 @@ async fn evaluate(
         };
     let mut self_attestation_context = None;
     if principal.is_self_attestation() {
+        // Classification only proves the caller is a citizen attester. The
+        // transaction token authorization details select self vs delegated.
         let attestation_access_mode = requested_attestation_access_mode(&principal);
         principal.access_mode = attestation_access_mode;
         let principal_hash = match state
@@ -5772,7 +5786,7 @@ async fn evaluate(
             )
         };
         if let Err(error) = context_result {
-            if denial_code_from_error(&error) == Some(SelfAttestationDenialCode::SubjectMismatch) {
+            if denial_code_from_error(&error).is_some_and(subject_mismatch_denial_code) {
                 if let Err(rate_error) = consume_subject_mismatch_denial(&state, &principal_hash) {
                     let mut response = evidence_error_response(rate_error.evidence_error());
                     attach_self_attestation_rate_limit_audit(
@@ -5803,9 +5817,7 @@ async fn evaluate(
                 self_attestation_context = Some(context);
             }
             Err(error) => {
-                if denial_code_from_error(&error)
-                    == Some(SelfAttestationDenialCode::SubjectMismatch)
-                {
+                if denial_code_from_error(&error).is_some_and(subject_mismatch_denial_code) {
                     if let Err(rate_error) =
                         consume_subject_mismatch_denial(&state, &principal_hash)
                     {
@@ -6114,7 +6126,10 @@ async fn render(
     };
     if let Some(metadata) = evaluation.self_attestation.as_ref() {
         if principal.is_self_attestation() {
-            principal.access_mode = metadata.access_mode;
+            if let Err(error) = apply_stored_self_attestation_access_mode(&mut principal, metadata)
+            {
+                return evidence_error_response(error);
+            }
         }
     }
     if !evaluation_client_matches(&state, &principal, &evaluation)
@@ -6260,7 +6275,10 @@ async fn issue_credential(
     };
     if let Some(metadata) = evaluation.self_attestation.as_ref() {
         if principal.is_self_attestation() {
-            principal.access_mode = metadata.access_mode;
+            if let Err(error) = apply_stored_self_attestation_access_mode(&mut principal, metadata)
+            {
+                return evidence_error_response(error);
+            }
         }
     }
     if !evaluation_client_matches(&state, &principal, &evaluation)
@@ -7084,6 +7102,18 @@ fn requested_attestation_access_mode(principal: &EvidencePrincipal) -> AccessMod
     }
 }
 
+fn apply_stored_self_attestation_access_mode(
+    principal: &mut EvidencePrincipal,
+    metadata: &StoredSelfAttestationMetadata,
+) -> Result<(), EvidenceError> {
+    let requested_access_mode = requested_attestation_access_mode(principal);
+    if requested_access_mode != metadata.access_mode {
+        return Err(EvidenceError::EvaluationBindingMismatch);
+    }
+    principal.access_mode = requested_access_mode;
+    Ok(())
+}
+
 fn derive_delegated_attestation_request_context(
     config: &SelfAttestationConfig,
     keys: &SelfAttestationRateLimitKeys,
@@ -7092,7 +7122,7 @@ fn derive_delegated_attestation_request_context(
 ) -> Result<(), EvidenceError> {
     if !config.delegation.enabled {
         return Err(self_attestation_denied(
-            SelfAttestationDenialCode::OperationDenied,
+            SelfAttestationDenialCode::DelegatedRelationshipNotAllowed,
         ));
     }
     if request.requester.is_some()
@@ -7100,39 +7130,41 @@ fn derive_delegated_attestation_request_context(
         || request.on_behalf_of.is_some()
     {
         return Err(self_attestation_denied(
-            SelfAttestationDenialCode::SubjectMismatch,
+            SelfAttestationDenialCode::DelegatedSubjectNotPermitted,
         ));
     }
     let Some(details) = principal.authorization_details.as_ref() else {
         return Err(self_attestation_denied(
-            SelfAttestationDenialCode::OperationDenied,
+            SelfAttestationDenialCode::DelegatedRelationshipNotAllowed,
         ));
     };
     let Some(relationship) = details.relationship.as_ref() else {
         return Err(self_attestation_denied(
-            SelfAttestationDenialCode::OperationDenied,
+            SelfAttestationDenialCode::DelegatedRelationshipNotAllowed,
         ));
     };
     let relationship_config = config
         .delegation
         .relationship(&relationship.relationship_type)
-        .ok_or_else(|| self_attestation_denied(SelfAttestationDenialCode::SubjectMismatch))?;
+        .ok_or_else(|| {
+            self_attestation_denied(SelfAttestationDenialCode::DelegatedRelationshipNotAllowed)
+        })?;
     if relationship_config.proof_claim != relationship.proof_claim {
         return Err(self_attestation_denied(
-            SelfAttestationDenialCode::SubjectMismatch,
+            SelfAttestationDenialCode::DelegatedRelationshipNotAllowed,
         ));
     }
     let target_id_type = delegated_target_id_type(config, relationship_config);
     let Some(target_subject) = request.target_subject() else {
         return Err(self_attestation_denied(
-            SelfAttestationDenialCode::SubjectMismatch,
+            SelfAttestationDenialCode::DelegatedSubjectNotPermitted,
         ));
     };
     if target_subject.id.trim().is_empty()
         || target_subject.id_type.as_deref() != Some(target_id_type)
     {
         return Err(self_attestation_denied(
-            SelfAttestationDenialCode::SubjectMismatch,
+            SelfAttestationDenialCode::DelegatedSubjectNotPermitted,
         ));
     }
 
@@ -7667,21 +7699,21 @@ fn delegated_relationship_config<'a>(
     config: &'a SelfAttestationConfig,
     principal: &EvidencePrincipal,
 ) -> Result<&'a SelfAttestationDelegatedRelationshipConfig, EvidenceError> {
-    let details = principal
-        .authorization_details
-        .as_ref()
-        .ok_or_else(|| self_attestation_denied(SelfAttestationDenialCode::OperationDenied))?;
-    let relationship = details
-        .relationship
-        .as_ref()
-        .ok_or_else(|| self_attestation_denied(SelfAttestationDenialCode::OperationDenied))?;
+    let details = principal.authorization_details.as_ref().ok_or_else(|| {
+        self_attestation_denied(SelfAttestationDenialCode::DelegatedRelationshipNotAllowed)
+    })?;
+    let relationship = details.relationship.as_ref().ok_or_else(|| {
+        self_attestation_denied(SelfAttestationDenialCode::DelegatedRelationshipNotAllowed)
+    })?;
     let relationship_config = config
         .delegation
         .relationship(&relationship.relationship_type)
-        .ok_or_else(|| self_attestation_denied(SelfAttestationDenialCode::SubjectMismatch))?;
+        .ok_or_else(|| {
+            self_attestation_denied(SelfAttestationDenialCode::DelegatedRelationshipNotAllowed)
+        })?;
     if relationship_config.proof_claim != relationship.proof_claim {
         return Err(self_attestation_denied(
-            SelfAttestationDenialCode::SubjectMismatch,
+            SelfAttestationDenialCode::DelegatedRelationshipNotAllowed,
         ));
     }
     Ok(relationship_config)
@@ -7695,38 +7727,38 @@ fn require_delegated_attestation_evaluate(
 ) -> Result<(), EvidenceError> {
     if !config.allowed_operations.evaluate || !config.delegation.enabled {
         return Err(self_attestation_denied(
-            SelfAttestationDenialCode::OperationDenied,
+            SelfAttestationDenialCode::DelegatedRelationshipNotAllowed,
         ));
     }
     if request.claims.len() != 1 {
         return Err(self_attestation_denied(
-            SelfAttestationDenialCode::ClaimDenied,
+            SelfAttestationDenialCode::DelegatedClaimDenied,
         ));
     }
     let relationship_config = delegated_relationship_config(config, principal)?;
     let requested_claim = request
         .claims
         .first()
-        .ok_or_else(|| self_attestation_denied(SelfAttestationDenialCode::ClaimDenied))?;
+        .ok_or_else(|| self_attestation_denied(SelfAttestationDenialCode::DelegatedClaimDenied))?;
     if !relationship_config
         .allowed_claims
         .iter()
         .any(|allowed| allowed == &requested_claim.id)
     {
         return Err(self_attestation_denied(
-            SelfAttestationDenialCode::ClaimDenied,
+            SelfAttestationDenialCode::DelegatedClaimDenied,
         ));
     }
     let claim = find_requested_claim(evidence, requested_claim)
-        .map_err(|_| self_attestation_denied(SelfAttestationDenialCode::ClaimDenied))?;
+        .map_err(|_| self_attestation_denied(SelfAttestationDenialCode::DelegatedClaimDenied))?;
     let proof_claim = find_requested_claim(
         evidence,
         &ClaimRef::from(relationship_config.proof_claim.as_str()),
     )
-    .map_err(|_| self_attestation_denied(SelfAttestationDenialCode::ClaimDenied))?;
+    .map_err(|_| self_attestation_denied(SelfAttestationDenialCode::DelegatedProofDenied))?;
     if !claim.operations.evaluate.enabled || !proof_claim.operations.evaluate.enabled {
         return Err(self_attestation_denied(
-            SelfAttestationDenialCode::OperationDenied,
+            SelfAttestationDenialCode::DelegatedClaimDenied,
         ));
     }
     if !claim
@@ -7735,14 +7767,14 @@ fn require_delegated_attestation_evaluate(
         .any(|depends_on| depends_on == &relationship_config.proof_claim)
     {
         return Err(self_attestation_denied(
-            SelfAttestationDenialCode::ClaimDenied,
+            SelfAttestationDenialCode::DelegatedClaimDenied,
         ));
     }
 
     let purpose = claim
         .purpose
         .as_deref()
-        .ok_or_else(|| self_attestation_denied(SelfAttestationDenialCode::OperationDenied))?;
+        .ok_or_else(|| self_attestation_denied(SelfAttestationDenialCode::DelegatedClaimDenied))?;
     if !relationship_config
         .allowed_purposes
         .iter()
@@ -7753,7 +7785,7 @@ fn require_delegated_attestation_evaluate(
             .is_some_and(|requested| requested != purpose)
     {
         return Err(self_attestation_denied(
-            SelfAttestationDenialCode::OperationDenied,
+            SelfAttestationDenialCode::DelegatedClaimDenied,
         ));
     }
     let format = request
@@ -7766,13 +7798,14 @@ fn require_delegated_attestation_evaluate(
         .any(|allowed| allowed == format)
     {
         return Err(self_attestation_denied(
-            SelfAttestationDenialCode::FormatDenied,
+            SelfAttestationDenialCode::DelegatedClaimDenied,
         ));
     }
     let request_claim_ids = claim_ids(&request.claims);
     let disclosure =
-        selected_disclosure(evidence, &request_claim_ids, request.disclosure.as_deref())
-            .map_err(|_| self_attestation_denied(SelfAttestationDenialCode::DisclosureDenied))?;
+        selected_disclosure(evidence, &request_claim_ids, request.disclosure.as_deref()).map_err(
+            |_| self_attestation_denied(SelfAttestationDenialCode::DelegatedClaimDenied),
+        )?;
     if !relationship_config
         .allowed_disclosures
         .iter()
@@ -7780,12 +7813,12 @@ fn require_delegated_attestation_evaluate(
         || !claim_allows_disclosure(evidence, requested_claim, &disclosure)
     {
         return Err(self_attestation_denied(
-            SelfAttestationDenialCode::DisclosureDenied,
+            SelfAttestationDenialCode::DelegatedClaimDenied,
         ));
     }
     let Some(target_subject) = request.target_subject() else {
         return Err(self_attestation_denied(
-            SelfAttestationDenialCode::SubjectMismatch,
+            SelfAttestationDenialCode::DelegatedSubjectNotPermitted,
         ));
     };
     if target_subject.id.trim().is_empty()
@@ -7793,7 +7826,7 @@ fn require_delegated_attestation_evaluate(
             != Some(delegated_target_id_type(config, relationship_config))
     {
         return Err(self_attestation_denied(
-            SelfAttestationDenialCode::SubjectMismatch,
+            SelfAttestationDenialCode::DelegatedSubjectNotPermitted,
         ));
     }
     require_delegated_attestation_authorization_details(
@@ -7825,7 +7858,7 @@ fn require_delegated_attestation_authorization_details(
 ) -> Result<(), EvidenceError> {
     let Some(details) = principal.authorization_details.as_ref() else {
         return Err(self_attestation_denied(
-            SelfAttestationDenialCode::OperationDenied,
+            SelfAttestationDenialCode::DelegatedRelationshipNotAllowed,
         ));
     };
     let authorized_claims = [
@@ -7850,16 +7883,15 @@ fn require_delegated_attestation_authorization_details(
             allowed_claims: Some(&authorized_claims),
         },
     )
-    .map_err(self_attestation_authorization_details_denial)?;
-    let relationship = details
-        .relationship
-        .as_ref()
-        .ok_or_else(|| self_attestation_denied(SelfAttestationDenialCode::OperationDenied))?;
+    .map_err(delegated_attestation_authorization_details_denial)?;
+    let relationship = details.relationship.as_ref().ok_or_else(|| {
+        self_attestation_denied(SelfAttestationDenialCode::DelegatedRelationshipNotAllowed)
+    })?;
     if relationship.relationship_type != relationship_config.relationship_type
         || relationship.proof_claim != relationship_config.proof_claim
     {
         return Err(self_attestation_denied(
-            SelfAttestationDenialCode::SubjectMismatch,
+            SelfAttestationDenialCode::DelegatedRelationshipNotAllowed,
         ));
     }
     if request
@@ -7869,7 +7901,7 @@ fn require_delegated_attestation_authorization_details(
         != Some(relationship_config.relationship_type.as_str())
     {
         return Err(self_attestation_denied(
-            SelfAttestationDenialCode::SubjectMismatch,
+            SelfAttestationDenialCode::DelegatedSubjectNotPermitted,
         ));
     }
     Ok(())
@@ -7907,6 +7939,29 @@ fn self_attestation_authorization_details_denial(
         | crate::authz_details::ScopedAuthorizationError::Purpose
         | crate::authz_details::ScopedAuthorizationError::AccessMode => {
             SelfAttestationDenialCode::OperationDenied
+        }
+    };
+    self_attestation_denied(reason)
+}
+
+fn delegated_attestation_authorization_details_denial(
+    error: crate::authz_details::ScopedAuthorizationError,
+) -> EvidenceError {
+    let reason = match error {
+        crate::authz_details::ScopedAuthorizationError::Claim
+        | crate::authz_details::ScopedAuthorizationError::Disclosure
+        | crate::authz_details::ScopedAuthorizationError::Format
+        | crate::authz_details::ScopedAuthorizationError::Purpose => {
+            SelfAttestationDenialCode::DelegatedClaimDenied
+        }
+        crate::authz_details::ScopedAuthorizationError::Subject => {
+            SelfAttestationDenialCode::DelegatedSubjectNotPermitted
+        }
+        crate::authz_details::ScopedAuthorizationError::DetailType
+        | crate::authz_details::ScopedAuthorizationError::Action
+        | crate::authz_details::ScopedAuthorizationError::Location
+        | crate::authz_details::ScopedAuthorizationError::AccessMode => {
+            SelfAttestationDenialCode::DelegatedRelationshipNotAllowed
         }
     };
     self_attestation_denied(reason)
@@ -8052,18 +8107,18 @@ fn prepare_delegated_attestation_evaluate(
         .claims
         .first()
         .ok_or(EvidenceError::SelfAttestationDenied {
-            reason: SelfAttestationDenialCode::ClaimDenied,
+            reason: SelfAttestationDenialCode::DelegatedClaimDenied,
         })?;
     let claim = find_requested_claim(evidence, claim_id).map_err(|_| {
         EvidenceError::SelfAttestationDenied {
-            reason: SelfAttestationDenialCode::ClaimDenied,
+            reason: SelfAttestationDenialCode::DelegatedClaimDenied,
         }
     })?;
     let purpose = claim
         .purpose
         .clone()
         .ok_or(EvidenceError::SelfAttestationDenied {
-            reason: SelfAttestationDenialCode::OperationDenied,
+            reason: SelfAttestationDenialCode::DelegatedClaimDenied,
         })?;
     let format = request
         .format
@@ -8074,7 +8129,7 @@ fn prepare_delegated_attestation_evaluate(
     let disclosure =
         selected_disclosure(evidence, &request_claim_ids, request.disclosure.as_deref()).map_err(
             |_| EvidenceError::SelfAttestationDenied {
-                reason: SelfAttestationDenialCode::DisclosureDenied,
+                reason: SelfAttestationDenialCode::DelegatedClaimDenied,
             },
         )?;
     let claims = principal
@@ -8089,7 +8144,7 @@ fn prepare_delegated_attestation_evaluate(
     let target_subject = request
         .target_subject()
         .ok_or(EvidenceError::SelfAttestationDenied {
-            reason: SelfAttestationDenialCode::SubjectMismatch,
+            reason: SelfAttestationDenialCode::DelegatedSubjectNotPermitted,
         })?;
     let principal_hash = state
         .self_attestation_rate_keys
@@ -8464,6 +8519,16 @@ fn require_self_attestation_stored_access(
         }
         None
     };
+    if let Some(relationship) = delegated_relationship {
+        require_delegated_stored_authorization_details(
+            evidence,
+            &state.self_attestation,
+            principal,
+            evaluation,
+            metadata,
+            relationship,
+        )?;
+    }
     let claims = principal
         .verified_claims
         .as_ref()
@@ -8532,6 +8597,60 @@ fn require_self_attestation_stored_access(
     Ok(())
 }
 
+fn require_delegated_stored_authorization_details(
+    evidence: &EvidenceConfig,
+    config: &SelfAttestationConfig,
+    principal: &EvidencePrincipal,
+    evaluation: &registry_notary_core::StoredEvaluation,
+    metadata: &StoredSelfAttestationMetadata,
+    relationship_config: &SelfAttestationDelegatedRelationshipConfig,
+) -> Result<(), EvidenceError> {
+    let details = principal.authorization_details.as_ref().ok_or_else(|| {
+        self_attestation_denied(SelfAttestationDenialCode::DelegatedRelationshipNotAllowed)
+    })?;
+    let relationship = details.relationship.as_ref().ok_or_else(|| {
+        self_attestation_denied(SelfAttestationDenialCode::DelegatedRelationshipNotAllowed)
+    })?;
+    let proof_claim_id = metadata
+        .proof_claim_id
+        .as_ref()
+        .ok_or_else(|| self_attestation_denied(SelfAttestationDenialCode::DelegatedProofDenied))?;
+    if relationship.relationship_type != relationship_config.relationship_type
+        || relationship.proof_claim != relationship_config.proof_claim
+        || relationship.proof_claim != proof_claim_id.as_str()
+    {
+        return Err(self_attestation_denied(
+            SelfAttestationDenialCode::DelegatedRelationshipNotAllowed,
+        ));
+    }
+    let proof_claim = find_requested_claim(evidence, &ClaimRef::from(proof_claim_id.as_str()))
+        .map_err(|_| self_attestation_denied(SelfAttestationDenialCode::DelegatedProofDenied))?;
+    let mut authorized_claims = evaluation.selected_claim_refs();
+    let proof_ref = ClaimRef::with_version(&proof_claim.id, &proof_claim.version);
+    if !authorized_claims.contains(&proof_ref) {
+        authorized_claims.push(proof_ref);
+    }
+    crate::authz_details::validate_scoped_authorization_details(
+        details,
+        &crate::authz_details::ScopedAuthorizationRequest {
+            service_id: evidence.service_id.as_str(),
+            action: "evaluate",
+            claims: &authorized_claims,
+            disclosure: &evaluation.disclosure,
+            format: &evaluation.format,
+            purpose: &evaluation.purpose,
+            access_mode: AccessMode::DelegatedAttestation,
+            subject: Some(crate::authz_details::ScopedAuthorizationSubject {
+                binding_claim: config.subject_binding.token_claim.clone(),
+                id_type: config.subject_binding.id_type.clone(),
+            }),
+            allow_subset_claims: true,
+            allowed_claims: Some(&authorized_claims),
+        },
+    )
+    .map_err(delegated_attestation_authorization_details_denial)
+}
+
 fn verified_audiences_match(left: &[VerifiedClaimValue], right: &[VerifiedClaimValue]) -> bool {
     let left = left.iter().collect::<std::collections::BTreeSet<_>>();
     let right = right.iter().collect::<std::collections::BTreeSet<_>>();
@@ -8576,6 +8695,14 @@ fn denial_code_from_error(error: &EvidenceError) -> Option<SelfAttestationDenial
         EvidenceError::SelfAttestationDenied { reason } => Some(*reason),
         _ => None,
     }
+}
+
+fn subject_mismatch_denial_code(reason: SelfAttestationDenialCode) -> bool {
+    matches!(
+        reason,
+        SelfAttestationDenialCode::SubjectMismatch
+            | SelfAttestationDenialCode::DelegatedSubjectNotPermitted
+    )
 }
 
 fn denial_code_from_response(response: &Response) -> Option<SelfAttestationDenialCode> {
@@ -10706,7 +10833,32 @@ mod tests {
                     "version": "1",
                     "subject_type": "relationship",
                     "purpose": "dependent_attestation",
-                    "rule": { "type": "cel", "expression": "true" },
+                    "source_bindings": {
+                        "link": {
+                            "connector": "registry_data_api",
+                            "dataset": "guardian_registry",
+                            "entity": "guardian_link",
+                            "lookup": {
+                                "input": "target.identifiers.civil_registration_id",
+                                "field": "dependent_id",
+                                "op": "eq",
+                                "cardinality": "one"
+                            },
+                            "query_fields": [{
+                                "input": "requester.identifiers.national_id",
+                                "field": "guardian_id",
+                                "op": "eq"
+                            }],
+                            "fields": {
+                                "value": {
+                                    "field": "value",
+                                    "type": "boolean",
+                                    "required": true
+                                }
+                            }
+                        }
+                    },
+                    "rule": { "type": "extract", "source": "link", "field": "value" },
                     "operations": {
                         "evaluate": { "enabled": true },
                         "batch_evaluate": { "enabled": false, "max_subjects": 1 }
@@ -10735,7 +10887,8 @@ mod tests {
                         "allowed": ["predicate"],
                         "downgrade": "deny"
                     },
-                    "formats": [FORMAT_CLAIM_RESULT_JSON]
+                    "formats": [FORMAT_CLAIM_RESULT_JSON],
+                    "credential_profiles": ["dependent_status_sd_jwt"]
                 }
             ],
             "credential_profiles": {
@@ -11004,6 +11157,62 @@ mod tests {
             json!(["EdDSA"]),
             "holder proof algorithms stay independent from issuer signing algorithms"
         );
+    }
+
+    #[tokio::test]
+    async fn oid4vci_credential_rejects_delegated_transaction_token() {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let store = Arc::new(EvidenceStore::default());
+        let mut oid4vci = oid4vci_config();
+        oid4vci.accepted_token_audiences = vec!["registry-notary-citizen".to_string()];
+        let state = Arc::new(
+            RegistryNotaryApiState::new_with_self_attestation_and_oid4vci(
+                Arc::new(oid4vci_evidence_config()),
+                Arc::new(delegated_self_attestation_config()),
+                Arc::new(oid4vci),
+                AuditKeyHasher::unkeyed_dev_only(),
+                Arc::new(CountingSource {
+                    reads: Arc::clone(&reads),
+                }),
+                Arc::clone(&store),
+                Arc::new(TestIssuerResolver),
+            ),
+        );
+        let mut principal =
+            fresh_oidc_principal(Some("client_id:citizen-portal"), &["self_attestation"]);
+        principal.authorization_details =
+            Some(delegated_authorization_details(&delegated_evidence_config()));
+        let nonce = "delegated-oid4vci-nonce";
+        let proof = sign_oid4vci_proof(&state.oid4vci.credential_issuer, nonce);
+        let response = oid4vci_credential(
+            Some(Extension(Arc::clone(&state))),
+            Some(Extension(principal)),
+            Some(Extension(validated_oid4vci_proof(
+                &state,
+                &proof,
+                Some(nonce),
+            ))),
+            Json(Oid4vciCredentialRequest {
+                format: SD_JWT_VC_FORMAT.to_string(),
+                credential_identifier: Some("person_is_alive_sd_jwt".to_string()),
+                credential_configuration_id: None,
+                vct: None,
+                proof: registry_platform_oid4vci::CredentialRequestProof {
+                    proof_type: PROOF_TYPE_JWT.to_string(),
+                    jwt: proof,
+                },
+                proofs: registry_platform_oid4vci::CredentialRequestProofs::default(),
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body reads");
+        let body: Value = serde_json::from_slice(&body).expect("error body parses");
+        assert_eq!(body["error"], "access_denied");
+        assert_eq!(reads.load(Ordering::SeqCst), 0);
     }
 
     #[test]
@@ -12200,7 +12409,7 @@ mod tests {
         assert!(matches!(
             err,
             EvidenceError::SelfAttestationDenied {
-                reason: SelfAttestationDenialCode::SubjectMismatch
+                reason: SelfAttestationDenialCode::DelegatedSubjectNotPermitted
             }
         ));
     }
@@ -12238,7 +12447,65 @@ mod tests {
         assert!(matches!(
             err,
             EvidenceError::SelfAttestationDenied {
-                reason: SelfAttestationDenialCode::ClaimDenied
+                reason: SelfAttestationDenialCode::DelegatedClaimDenied
+            }
+        ));
+    }
+
+    #[test]
+    fn stored_delegated_attestation_rechecks_current_authorization_details() {
+        let config = delegated_self_attestation_config();
+        let evidence = delegated_evidence_config();
+        let principal = delegated_transaction_principal(&config, &evidence);
+        let state = RegistryNotaryApiState::new_with_self_attestation(
+            Arc::new(evidence.clone()),
+            Arc::new(config),
+            delegated_test_audit_hasher(),
+            Arc::new(CountingSource::default()),
+            Arc::new(EvidenceStore::default()),
+            Arc::new(NoopIssuerResolver),
+        );
+        let mut request = delegated_request();
+        derive_delegated_attestation_request_context(
+            &state.self_attestation,
+            &state.self_attestation_rate_keys,
+            &principal,
+            &mut request,
+        )
+        .expect("delegated request context derives");
+        let context = prepare_self_attestation_evaluate(&state, &evidence, &principal, &request)
+            .expect("delegated context prepares");
+        let mut evaluation = evaluation_for_proof();
+        evaluation.client_id = context.metadata.principal_hash.as_str().to_string();
+        evaluation.purpose = context.purpose.clone();
+        evaluation.claim_ids = vec!["dependent-person-is-alive".to_string()];
+        evaluation.claim_refs = request.claims.clone();
+        evaluation.disclosure = context.metadata.disclosure.as_str().to_string();
+        evaluation.format = context.metadata.result_format.as_str().to_string();
+        evaluation.self_attestation = Some(context.metadata);
+        let mut narrowed = principal.clone();
+        narrowed
+            .authorization_details
+            .as_mut()
+            .expect("delegated authorization details exist")
+            .claims = vec![ClaimRef::with_version("dependent-person-is-alive", "1")];
+
+        let err = require_self_attestation_stored_access(
+            &state,
+            &evidence,
+            &narrowed,
+            &evaluation,
+            &evaluation.claim_ids,
+            &evaluation.disclosure,
+            &evaluation.format,
+            None,
+        )
+        .expect_err("stored delegated access must re-check current proof coverage");
+
+        assert!(matches!(
+            err,
+            EvidenceError::SelfAttestationDenied {
+                reason: SelfAttestationDenialCode::DelegatedClaimDenied
             }
         ));
     }
