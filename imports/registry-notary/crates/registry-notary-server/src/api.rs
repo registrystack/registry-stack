@@ -7167,6 +7167,16 @@ fn derive_delegated_attestation_request_context(
             SelfAttestationDenialCode::DelegatedSubjectNotPermitted,
         ));
     }
+    // Rebuild the target canonically from the validated (id, id_type) only,
+    // mirroring how the requester is derived below. This collapses
+    // to_subject_request(), target.identifiers.<id_type>, and target.id to a
+    // single value so the binding hash, the proof claim, and the dependent
+    // claim provably read the same subject. No arbitrary caller-supplied target
+    // context (extra identifiers, canonical id, attributes, profile) is trusted.
+    request.target = Some(EvidenceEntity::from_subject_request(
+        "Person",
+        target_subject,
+    ));
 
     let requester_subject = self_attestation_bound_subject(config, principal)?;
     let requester = EvidenceEntity::from_subject_request("Person", requester_subject);
@@ -8152,11 +8162,15 @@ fn prepare_delegated_attestation_evaluate(
         .map_err(|error| error.evidence_error())?;
     let requester_subject_binding_hash = state
         .self_attestation_rate_keys
-        .subject_binding(subject_binding_value)
+        .delegated_subject_binding(
+            state.self_attestation.subject_binding.id_type.as_str(),
+            subject_binding_value,
+        )
         .map_err(|error| error.evidence_error())?;
+    let target_id_type = delegated_target_id_type(&state.self_attestation, relationship_config);
     let dependent_target_hash = state
         .self_attestation_rate_keys
-        .subject_binding(target_subject.id.as_str())
+        .delegated_subject_binding(target_id_type, target_subject.id.as_str())
         .map_err(|error| error.evidence_error())?;
     let requested_claims_hash =
         Hashed::<ClaimSet>::from_hash(evidence_claim_hash(&request_claim_ids));
@@ -8187,10 +8201,8 @@ fn prepare_delegated_attestation_evaluate(
         audiences: claims.audiences.clone(),
         client_id: claims.client_id.clone(),
         principal_hash,
-        subject_id_type: ConfigMetadata::new(
-            delegated_target_id_type(&state.self_attestation, relationship_config).to_string(),
-        )
-        .map_err(|_| EvidenceError::InvalidRequest)?,
+        subject_id_type: ConfigMetadata::new(target_id_type.to_string())
+            .map_err(|_| EvidenceError::InvalidRequest)?,
         subject_binding_claim: ConfigMetadata::new(
             state.self_attestation.subject_binding.token_claim.clone(),
         )
@@ -8544,10 +8556,23 @@ fn require_self_attestation_stored_access(
         .ok_or(EvidenceError::SelfAttestationDenied {
             reason: SelfAttestationDenialCode::SubjectClaimMissing,
         })?;
-    let subject_binding_hash = state
-        .self_attestation_rate_keys
-        .subject_binding(subject_binding_value)
-        .map_err(|error| error.evidence_error())?;
+    // Delegated evaluations bind the requester subject over the (id_type, id)
+    // pair (see prepare_delegated_attestation_evaluate); non-delegated
+    // self-attestation keeps the value-only binding byte-for-byte unchanged.
+    let subject_binding_hash = if metadata.access_mode == AccessMode::DelegatedAttestation {
+        state
+            .self_attestation_rate_keys
+            .delegated_subject_binding(
+                state.self_attestation.subject_binding.id_type.as_str(),
+                subject_binding_value,
+            )
+            .map_err(|error| error.evidence_error())?
+    } else {
+        state
+            .self_attestation_rate_keys
+            .subject_binding(subject_binding_value)
+            .map_err(|error| error.evidence_error())?
+    };
     if subject_binding_hash != metadata.subject_binding_hash {
         return Err(EvidenceError::EvaluationBindingMismatch);
     }
@@ -12412,6 +12437,86 @@ mod tests {
                 reason: SelfAttestationDenialCode::DelegatedSubjectNotPermitted
             }
         ));
+    }
+
+    #[test]
+    fn delegated_attestation_canonicalizes_target_to_validated_subject() {
+        let config = delegated_self_attestation_config();
+        let evidence = delegated_evidence_config();
+        let principal = delegated_transaction_principal(&config, &evidence);
+        let state = RegistryNotaryApiState::new_with_self_attestation(
+            Arc::new(evidence),
+            Arc::new(config),
+            delegated_test_audit_hasher(),
+            Arc::new(CountingSource::default()),
+            Arc::new(EvidenceStore::default()),
+            Arc::new(NoopIssuerResolver),
+        );
+        // Caller pins the validated subject CHILD-123 via the configured id_type,
+        // but smuggles a divergent canonical id (VICTIM-A) plus an extra
+        // identifier and attribute that the binding hash would never see.
+        let mut request = delegated_request();
+        let target = request
+            .target
+            .as_mut()
+            .expect("delegated target is present");
+        target.id = Some("VICTIM-A".to_string());
+        target
+            .identifiers
+            .push(registry_notary_core::EvidenceIdentifier {
+                scheme: "national_id".to_string(),
+                value: "DIVERGENT-NID".to_string(),
+                issuer: None,
+                country: None,
+            });
+        target
+            .attributes
+            .insert("given_name".to_string(), json!("smuggled"));
+        target.profile = Some("smuggled-profile".to_string());
+
+        derive_delegated_attestation_request_context(
+            &state.self_attestation,
+            &state.self_attestation_rate_keys,
+            &principal,
+            &mut request,
+        )
+        .expect("delegated request context derives");
+
+        let canonical_target = request.target.as_ref().expect("target survives derivation");
+        // The canonical id field must be collapsed so an arbitrary lookup keyed on
+        // target.id can never read the smuggled VICTIM-A value.
+        assert!(
+            canonical_target.id.is_none(),
+            "divergent canonical id must be dropped"
+        );
+        assert!(
+            canonical_target.attributes.is_empty(),
+            "caller-supplied target attributes must be dropped"
+        );
+        assert!(
+            canonical_target.profile.is_none(),
+            "caller-supplied target profile must be dropped"
+        );
+        // The only surviving identifier is the validated (id_type, id) pair, so
+        // to_subject_request() and every configured lookup path resolve the same
+        // subject.
+        let subject = canonical_target
+            .to_subject_request()
+            .expect("canonical target resolves a subject");
+        assert_eq!(subject.id, "CHILD-123");
+        assert_eq!(subject.id_type.as_deref(), Some("civil_registration_id"));
+
+        let context = request
+            .request_context()
+            .expect("delegated request yields a context");
+        assert_eq!(
+            context.lookup_value("target.identifiers.civil_registration_id"),
+            Some(json!("CHILD-123"))
+        );
+        // The binding-hash projection and the proof/dependent lookups now agree:
+        // no path can observe VICTIM-A or DIVERGENT-NID.
+        assert_eq!(context.lookup_value("target.id"), None);
+        assert_eq!(context.lookup_value("target.identifiers.national_id"), None);
     }
 
     #[test]

@@ -155,6 +155,32 @@ impl SelfAttestationRateLimitKeys {
         self.hash_identifier("subject_binding", subject_binding)
     }
 
+    /// Hash a delegated subject binding over the `(id_type, id)` pair rather than
+    /// the bare value. Used only for the delegated requester and dependent target
+    /// bindings so the hash distinguishes subjects that share an id value across
+    /// different id-type schemes. Keyed under a dedicated domain class so it never
+    /// collides with the value-only [`Self::subject_binding`] keyspace, and the
+    /// non-delegated self-attestation hashing stays byte-for-byte unchanged.
+    pub fn delegated_subject_binding(
+        &self,
+        id_type: &str,
+        id: &str,
+    ) -> SelfAttestationRateLimitResult<Hashed<SubjectBinding>> {
+        if id_type.is_empty() || id.is_empty() {
+            return Err(SelfAttestationRateLimitError::Unavailable {
+                reason: "delegated subject binding identifier is empty".to_string(),
+            });
+        }
+        let canonical_input = format!(
+            "id_type\0{}\0{id_type}\0id\0{}\0{id}",
+            id_type.len(),
+            id.len()
+        );
+        let hashed = self.audit_reference_hash("delegated-subject-binding-v1", &canonical_input)?;
+        ensure_bounded(&hashed)?;
+        Ok(Hashed::from_hash(hashed))
+    }
+
     /// Hash a raw `pre-authorized_code` for use as a rate-limit key. The raw
     /// code is brute-forceable via its `tx_code` PIN, so the limiter must key
     /// by this hash and never by the raw code.
@@ -697,6 +723,60 @@ mod tests {
             first, second,
             "id_type and subject_ref must be encoded unambiguously before hashing"
         );
+    }
+
+    #[test]
+    fn delegated_subject_binding_distinguishes_id_type_for_same_value() {
+        let key_builder = keys();
+        let national = key_builder
+            .delegated_subject_binding("national_id", "CHILD-123")
+            .expect("national_id binding hashes");
+        let civil = key_builder
+            .delegated_subject_binding("civil_registration_id", "CHILD-123")
+            .expect("civil_registration_id binding hashes");
+
+        assert_ne!(
+            national, civil,
+            "delegated binding must distinguish the same id value across id-type schemes"
+        );
+        // The composition must be delimiter-collision resistant.
+        let split_value = key_builder
+            .delegated_subject_binding("national_id", "x:CHILD-123")
+            .expect("hashes");
+        let split_type = key_builder
+            .delegated_subject_binding("national_id:x", "CHILD-123")
+            .expect("hashes");
+        assert_ne!(
+            split_value, split_type,
+            "id_type and id must be encoded unambiguously before hashing"
+        );
+    }
+
+    #[test]
+    fn delegated_subject_binding_uses_separate_keyspace_from_subject_binding() {
+        let key_builder = keys();
+        let value_only = key_builder
+            .subject_binding("CHILD-123")
+            .expect("value-only binding hashes");
+        let composed = key_builder
+            .delegated_subject_binding("civil_registration_id", "CHILD-123")
+            .expect("composed binding hashes");
+
+        assert_ne!(
+            value_only, composed,
+            "delegated composition must not collide with the value-only subject_binding keyspace"
+        );
+    }
+
+    #[test]
+    fn delegated_subject_binding_rejects_empty_inputs() {
+        let key_builder = keys();
+        assert!(key_builder
+            .delegated_subject_binding("", "CHILD-123")
+            .is_err());
+        assert!(key_builder
+            .delegated_subject_binding("civil_registration_id", "")
+            .is_err());
     }
 
     #[test]

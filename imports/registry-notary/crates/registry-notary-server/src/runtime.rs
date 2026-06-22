@@ -2587,13 +2587,25 @@ fn ensure_delegated_capability_context_binding(
         .context
         .target_subject()
         .ok_or_else(delegated_attestation_denied)?;
+    // Re-derive the bindings over the (id_type, id) pair so they bind the
+    // subject scheme as well as the value. The id_types are pinned upstream
+    // (requester via subject_binding.id_type, target via the relationship's
+    // delegated_target_id_type); a missing id_type fails closed.
+    let requester_id_type = requester_subject
+        .id_type
+        .as_deref()
+        .ok_or_else(delegated_attestation_denied)?;
+    let target_id_type = target_subject
+        .id_type
+        .as_deref()
+        .ok_or_else(delegated_attestation_denied)?;
     let requester_hash = ctx
         .self_attestation_rate_keys
-        .subject_binding(requester_subject.id.as_str())
+        .delegated_subject_binding(requester_id_type, requester_subject.id.as_str())
         .map_err(|error| error.evidence_error())?;
     let target_hash = ctx
         .self_attestation_rate_keys
-        .subject_binding(target_subject.id.as_str())
+        .delegated_subject_binding(target_id_type, target_subject.id.as_str())
         .map_err(|error| error.evidence_error())?;
     if &requester_hash != requester_subject_binding_hash || &target_hash != dependent_target_hash {
         return Err(delegated_attestation_denied());
@@ -6421,6 +6433,22 @@ mod tests {
         requester_subject: &str,
         dependent_subject: &str,
     ) -> SourceCapability {
+        delegated_attestation_capability_with_id_types(
+            keys,
+            "national_id",
+            requester_subject,
+            "civil_registration_id",
+            dependent_subject,
+        )
+    }
+
+    fn delegated_attestation_capability_with_id_types(
+        keys: &SelfAttestationRateLimitKeys,
+        requester_id_type: &str,
+        requester_subject: &str,
+        dependent_id_type: &str,
+        dependent_subject: &str,
+    ) -> SourceCapability {
         SourceCapability::DelegatedAttestation {
             proof_claim_id: BoundedClaimId::new("guardian-link")
                 .expect("proof claim id is bounded"),
@@ -6428,10 +6456,10 @@ mod tests {
                 BoundedClaimId::new("selected").expect("delegated claim id is bounded")
             ]),
             requester_subject_binding_hash: keys
-                .subject_binding(requester_subject)
+                .delegated_subject_binding(requester_id_type, requester_subject)
                 .expect("requester hashes"),
             dependent_target_hash: keys
-                .subject_binding(dependent_subject)
+                .delegated_subject_binding(dependent_id_type, dependent_subject)
                 .expect("dependent hashes"),
             relationship_type: registry_notary_core::ConfigMetadata::new("guardian")
                 .expect("relationship type is bounded"),
@@ -8780,6 +8808,59 @@ mod tests {
             err,
             EvidenceError::SelfAttestationDenied {
                 reason: SelfAttestationDenialCode::DelegatedRelationshipUnproven
+            }
+        ));
+        assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn delegated_attestation_binds_target_id_type_not_just_value() {
+        let source = Arc::new(CountingSource::default());
+        let mut evidence_config = (*test_evidence(vec![
+            test_claim("selected", vec!["guardian-link"], true),
+            test_claim("guardian-link", Vec::new(), true),
+        ]))
+        .clone();
+        evidence_config.allowed_purposes = vec!["test".to_string()];
+        let evidence = Arc::new(evidence_config);
+        let store = EvidenceStore::default();
+        let keys = Arc::new(SelfAttestationRateLimitKeys::new(
+            AuditKeyHasher::unkeyed_dev_only(),
+        ));
+        let runtime = RegistryNotaryRuntime::new_with_self_attestation_rate_keys(Arc::clone(&keys));
+
+        // The capability pins the dependent target value CHILD-123 under the
+        // national_id scheme, but the live request presents the same value under
+        // civil_registration_id. Value-only hashing would have collided and let
+        // the request through; binding the (id_type, id) pair fails closed before
+        // any source read.
+        let capability = delegated_attestation_capability_with_id_types(
+            &keys,
+            "national_id",
+            "NAT-123",
+            "national_id",
+            "CHILD-123",
+        );
+
+        let err = runtime
+            .evaluate_with_source_capability(
+                evidence,
+                source.clone() as Arc<dyn SourceReader>,
+                &store,
+                &delegated_principal(),
+                capability,
+                delegated_runtime_request(),
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect_err("dependent target id_type must bind the delegated request context");
+
+        assert!(matches!(
+            err,
+            EvidenceError::SelfAttestationDenied {
+                reason: SelfAttestationDenialCode::DelegatedSubjectNotPermitted
             }
         ));
         assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
