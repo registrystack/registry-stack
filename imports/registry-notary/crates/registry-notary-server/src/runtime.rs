@@ -3044,6 +3044,9 @@ fn source_scoped_trusted_policy(
     let Some(details) = request.trusted_policy.authorization_details.as_ref() else {
         return Ok(request.trusted_policy.clone());
     };
+    if !crate::authz_details::has_transaction_scope(details) {
+        return Ok(request.trusted_policy.clone());
+    }
     let expected_claims = [ClaimRef::with_version(
         &request.claim.id,
         &request.claim.version,

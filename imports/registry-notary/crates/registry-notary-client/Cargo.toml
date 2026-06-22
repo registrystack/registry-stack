@@ -40,7 +40,7 @@ axum.workspace = true
 axum-test = { version = "20" }
 registry-platform-crypto.workspace = true
 registry-platform-sdjwt.workspace = true
-registry-notary-server = { version = "0.6.0", path = "../registry-notary-server" }
+registry-notary-server = { version = "0.6.1", path = "../registry-notary-server" }
 serde_norway.workspace = true
 tempfile = { version = "3" }
 tokio.workspace = true
