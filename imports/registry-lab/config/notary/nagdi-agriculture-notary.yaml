@@ -243,8 +243,9 @@ evidence:
         allowed:
           - predicate
           - redacted
-      formats: &json_formats
+      formats: &credential_formats
         - application/vnd.registry-notary.claim-result+json
+        - application/dc+sd-jwt
       credential_profiles:
         - climate_smart_input_voucher_sd_jwt
     - id: data-use-authorized-for-purpose
@@ -258,7 +259,7 @@ evidence:
         type: cel
         expression: "source.voucher_snapshot.data_use_authorized == true"
       disclosure: *predicate_disclosure
-      formats: *json_formats
+      formats: *credential_formats
       credential_profiles:
         - climate_smart_input_voucher_sd_jwt
     - id: active-smallholder-farmer
@@ -272,7 +273,7 @@ evidence:
         type: cel
         expression: "source.voucher_snapshot.active_smallholder_farmer == true"
       disclosure: *predicate_disclosure
-      formats: *json_formats
+      formats: *credential_formats
       credential_profiles:
         - climate_smart_input_voucher_sd_jwt
     - id: active-farm-parcel
@@ -286,7 +287,7 @@ evidence:
         type: cel
         expression: "source.voucher_snapshot.active_farm_parcel == true"
       disclosure: *predicate_disclosure
-      formats: *json_formats
+      formats: *credential_formats
       credential_profiles:
         - climate_smart_input_voucher_sd_jwt
     - id: crop-declared-for-season
@@ -300,7 +301,7 @@ evidence:
         type: cel
         expression: "source.voucher_snapshot.crop_declared_for_season == true"
       disclosure: *predicate_disclosure
-      formats: *json_formats
+      formats: *credential_formats
       credential_profiles:
         - climate_smart_input_voucher_sd_jwt
     - id: district-climate-risk-active
@@ -314,7 +315,7 @@ evidence:
         type: cel
         expression: "source.voucher_snapshot.district_climate_risk_active == true"
       disclosure: *predicate_disclosure
-      formats: *json_formats
+      formats: *credential_formats
       credential_profiles:
         - climate_smart_input_voucher_sd_jwt
     - id: voucher-entitlement-current
@@ -328,7 +329,7 @@ evidence:
         type: cel
         expression: "source.voucher_snapshot.voucher_entitlement_current == true"
       disclosure: *predicate_disclosure
-      formats: *json_formats
+      formats: *credential_formats
       credential_profiles:
         - climate_smart_input_voucher_sd_jwt
     - id: voucher-not-redeemed
@@ -342,7 +343,7 @@ evidence:
         type: cel
         expression: "source.voucher_snapshot.voucher_not_redeemed == true"
       disclosure: *predicate_disclosure
-      formats: *json_formats
+      formats: *credential_formats
       credential_profiles:
         - climate_smart_input_voucher_sd_jwt
     - id: supplier-license-active
@@ -356,7 +357,7 @@ evidence:
         type: cel
         expression: "source.voucher_snapshot.supplier_license_active == true"
       disclosure: *predicate_disclosure
-      formats: *json_formats
+      formats: *credential_formats
       credential_profiles:
         - climate_smart_input_voucher_sd_jwt
     - id: voucher-eligibility-reason-code
@@ -375,7 +376,8 @@ evidence:
         allowed:
           - value
           - redacted
-      formats: *json_formats
+      formats: &json_formats
+        - application/vnd.registry-notary.claim-result+json
     - id: farmer-holding-total-area-hectares
       title: Farmer holding total area hectares
       version: 2026-05
@@ -423,7 +425,7 @@ evidence:
         type: cel
         expression: "source.voucher_snapshot.manual_review_required == false"
       disclosure: *predicate_disclosure
-      formats: *json_formats
+      formats: *credential_formats
       credential_profiles:
         - climate_smart_input_voucher_sd_jwt
     - id: eligible-for-climate-smart-input-voucher
@@ -616,7 +618,7 @@ evidence:
         type: cel
         expression: "source.livestock_snapshot.registered_livestock_holder == true"
       disclosure: *predicate_disclosure
-      formats: *json_formats
+      formats: *credential_formats
       credential_profiles:
         - livestock_movement_sd_jwt
     - id: registered-herd
@@ -630,7 +632,7 @@ evidence:
         type: cel
         expression: "source.livestock_snapshot.registered_herd == true"
       disclosure: *predicate_disclosure
-      formats: *json_formats
+      formats: *credential_formats
       credential_profiles:
         - livestock_movement_sd_jwt
     - id: herd-vaccination-current
@@ -644,7 +646,7 @@ evidence:
         type: cel
         expression: "source.livestock_snapshot.herd_vaccination_current == true"
       disclosure: *predicate_disclosure
-      formats: *json_formats
+      formats: *credential_formats
       credential_profiles:
         - livestock_movement_sd_jwt
     - id: origin-district-not-quarantined
@@ -658,7 +660,7 @@ evidence:
         type: cel
         expression: "source.livestock_snapshot.origin_district_not_quarantined == true"
       disclosure: *predicate_disclosure
-      formats: *json_formats
+      formats: *credential_formats
       credential_profiles:
         - livestock_movement_sd_jwt
     - id: destination-district-open
@@ -672,7 +674,7 @@ evidence:
         type: cel
         expression: "source.livestock_snapshot.destination_district_open == true"
       disclosure: *predicate_disclosure
-      formats: *json_formats
+      formats: *credential_formats
       credential_profiles:
         - livestock_movement_sd_jwt
     - id: no-conflicting-open-movement-permit
@@ -686,7 +688,7 @@ evidence:
         type: cel
         expression: "source.livestock_snapshot.no_conflicting_open_movement_permit == true"
       disclosure: *predicate_disclosure
-      formats: *json_formats
+      formats: *credential_formats
       credential_profiles:
         - livestock_movement_sd_jwt
     - id: livestock-movement-reason-code
