@@ -1,5 +1,14 @@
 # Release Notes
 
+## 0.4.1
+
+- Failed closed on rollback restore, relay rollback, and spatial ODRL
+  constraint errors instead of continuing with ambiguous policy state.
+- Published reload-all generations atomically and fenced reload publication so
+  callers do not observe partially-applied runtime state.
+- Defaulted relay audit behavior to fail closed and refreshed companion
+  Platform, Manifest, and Crosswalk release pins.
+
 ## 0.1.0
 
 - Added the V1 protected consultation gateway over CSV, XLSX, Parquet, and bounded PostgreSQL sources.
