@@ -223,11 +223,13 @@ ALLOWED_INTERIM_PRODUCT_IMAGES = {
     "registry-relay:hosted",
     "registry-notary:hosted",
     "registry-notary-openfn-sidecar:hosted",
+    "registry-notary-source-adapter-sidecar:hosted",
 }
 
 PRODUCT_IMAGE_NAMES = (
     "registry-lab-citizen-portal",
     "registry-notary-openfn-sidecar",
+    "registry-notary-source-adapter-sidecar",
     "registry-relay",
     "registry-notary",
 )
@@ -236,6 +238,7 @@ PRODUCT_IMAGE_ENV_BY_NAME = {
     "registry-relay": "REGISTRY_RELAY_IMAGE",
     "registry-notary": "REGISTRY_NOTARY_IMAGE",
     "registry-notary-openfn-sidecar": "REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE",
+    "registry-notary-source-adapter-sidecar": "REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE",
 }
 
 PUBLIC_KEYWORDS = (
