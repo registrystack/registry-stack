@@ -53,6 +53,7 @@ For a narrative explanation with worked examples, see the [architecture overview
 | 0.1.0 | 2026-06-13 | draft | Initial architecture, distilled from the current architecture overview and boundary map. |
 | 0.2.0 | 2026-06-13 | draft | Added REQ-ARC-G-010: the portable metadata layer describes but does not authorize, enforce, or assert facts about live data. |
 | 0.3.0 | 2026-06-20 | draft | Clarified governed runtime PDP enforcement for the supported Evidence Gateway profile while preserving the descriptive metadata boundary. |
+| 0.3.1 | 2026-06-22 | draft | Clarified static-peer delegated evaluation as distinct from delegated self-attestation. |
 
 ## 1. Scope and audience
 
@@ -87,7 +88,7 @@ flowchart TD
 
     subgraph runtime["Runtime services layer"]
         relay["Registry Relay<br/>(registry-relay)<br/>Binds manifest artifacts to data sources;<br/>enforces read-only access control<br/>and governed PDP policy"]
-        notary["Registry Notary<br/>(registry-notary)<br/>Evaluates claims; issues SD-JWT VC credentials;<br/>handles delegated evaluation"]
+        notary["Registry Notary<br/>(registry-notary)<br/>Evaluates claims; issues SD-JWT VC credentials;<br/>handles static-peer delegated evaluation"]
     end
 
     subgraph support["Supporting components"]
@@ -123,7 +124,7 @@ Registry Relay is not an open-data portal; it serves restricted consultation API
 
 ### Registry Notary
 
-Registry Notary (`registry-notary`) is a standalone Rust service for claim evaluation, disclosure policy, credential issuance, and audit. It is decoupled from Registry Relay application code by design; it calls Registry Relay over HTTP using a `registry_data_api` or `dci` source connector and does not import or link Registry Relay libraries. Registry Notary evaluates configured evidence rules against data from one or more source services and returns evaluation results as `application/vnd.registry-notary.claim-result+json` or CCCEV-shaped JSON-LD (`application/ld+json; profile="cccev"`). It materializes SD-JWT VC credentials (`application/dc+sd-jwt`) through its credential issuance surfaces, including an OpenID for Verifiable Credential Issuance (OID4VCI) flow as a profiled subset of OID4VCI Draft 13. It supports static-peer delegated evaluation through `POST /federation/v1/evaluations`. Registry Notary does not produce DCAT, BRegDCAT-AP, SHACL, or OGC Records artifacts. The current federation implementation is static-peer only; dynamic trust-chain discovery, shared replay storage, and federated credential issuance are not part of this version.
+Registry Notary (`registry-notary`) is a standalone Rust service for claim evaluation, disclosure policy, credential issuance, and audit. It is decoupled from Registry Relay application code by design; it calls Registry Relay over HTTP using a `registry_data_api` or `dci` source connector and does not import or link Registry Relay libraries. Registry Notary evaluates configured evidence rules against data from one or more source services and returns evaluation results as `application/vnd.registry-notary.claim-result+json` or CCCEV-shaped JSON-LD (`application/ld+json; profile="cccev"`). It materializes SD-JWT VC credentials (`application/dc+sd-jwt`) through its credential issuance surfaces, including an OpenID for Verifiable Credential Issuance (OID4VCI) flow as a profiled subset of OID4VCI Draft 13. It supports static-peer delegated evaluation through `POST /federation/v1/evaluations`. Static-peer delegated evaluation is separate from delegated self-attestation, the local citizen/OIDC access mode defined in [RS-PR-NOTARY](../rs-pr-notary/). Registry Notary does not produce DCAT, BRegDCAT-AP, SHACL, or OGC Records artifacts. The current federation implementation is static-peer only; dynamic trust-chain discovery, shared replay storage, and federated credential issuance are not part of this version.
 
 ### Registry Lab
 
@@ -143,7 +144,7 @@ The following ordered flow describes how a request moves through the stack from 
 
 5. **Claim evaluation.** Registry Notary evaluates claims against configured HTTP sources (`registry_data_api` or `dci` connectors). It applies disclosure policy (value, predicate, or redacted), returns evaluation results as claim-result JSON or CCCEV-shaped JSON-LD, and can materialize eligible stored evaluations into SD-JWT VC credentials.
 
-6. **Delegated evaluation.** A trusted Registry Notary instance can call another trusted Registry Notary instance through `POST /federation/v1/evaluations` for signed delegated evaluation. Registry Manifest can publish discovery metadata for that relationship, but local Notary peer policy grants access. Peer lists are loaded from configuration at startup.
+6. **Static-peer delegated evaluation.** A trusted Registry Notary instance can call another trusted Registry Notary instance through `POST /federation/v1/evaluations` for signed delegated evaluation. Registry Manifest can publish discovery metadata for that relationship, but local Notary peer policy grants access. Peer lists are loaded from configuration at startup. This federation path is distinct from delegated self-attestation in the Notary citizen/OIDC flow.
 
 ## 5. Architectural invariants
 
