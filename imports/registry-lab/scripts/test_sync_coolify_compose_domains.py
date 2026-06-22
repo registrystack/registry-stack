@@ -104,6 +104,47 @@ class SyncCoolifyComposeDomainsTest(unittest.TestCase):
             self.script.as_patch_entries(merged),
         )
 
+    def test_patches_compose_domains_through_application_update_endpoint(self) -> None:
+        calls = []
+        original = self.script.request_json
+
+        def fake_request_json(method, url, token, body=None):
+            calls.append((method, url, token, body))
+            return {"ok": True}
+
+        self.script.request_json = fake_request_json
+        try:
+            self.assertEqual(
+                {"ok": True},
+                self.script.patch_compose_domains(
+                    "https://coolify.example/api/v1",
+                    "app-uuid",
+                    "token-value",
+                    {"citizen-portal": "https://portal.lab.registrystack.org:3000"},
+                ),
+            )
+        finally:
+            self.script.request_json = original
+
+        self.assertEqual(
+            [
+                (
+                    "PATCH",
+                    "https://coolify.example/api/v1/applications/app-uuid",
+                    "token-value",
+                    {
+                        "docker_compose_domains": [
+                            {
+                                "name": "citizen-portal",
+                                "domain": "https://portal.lab.registrystack.org:3000",
+                            }
+                        ]
+                    },
+                )
+            ],
+            calls,
+        )
+
     def test_rejects_missing_persisted_required_domain(self) -> None:
         with self.assertRaisesRegex(self.script.DomainSyncError, "did not persist"):
             self.script.assert_desired_stored(

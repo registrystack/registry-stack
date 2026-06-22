@@ -136,9 +136,9 @@ def fetch_application(api_base_url: str, app_uuid: str, token: str) -> Any:
 def patch_compose_domains(api_base_url: str, app_uuid: str, token: str, domains: dict[str, str]) -> Any:
     return request_json(
         "PATCH",
-        f"{api_base_url.rstrip('/')}/applications/{urllib.parse.quote(app_uuid, safe='')}/docker_compose_domains",
+        f"{api_base_url.rstrip('/')}/applications/{urllib.parse.quote(app_uuid, safe='')}",
         token,
-        as_patch_entries(domains),
+        {"docker_compose_domains": as_patch_entries(domains)},
     )
 
 
