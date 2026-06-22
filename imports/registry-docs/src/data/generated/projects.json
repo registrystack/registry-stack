@@ -23,7 +23,7 @@
       },
       {
         "label": "Registry Platform crates",
-        "url": "https://github.com/jeremi/registry-platform/tree/0abc4fde81764f6c81143b622624415232197129/crates"
+        "url": "https://github.com/jeremi/registry-platform/tree/88d1a798043673dac30d809d87badb083c6e1a26/crates"
       }
     ],
     "rename_status": "New shared workspace; not part of the 2026-05-23 rename wave."
@@ -52,7 +52,7 @@
       },
       {
         "label": "Local examples",
-        "url": "https://github.com/jeremi/registry-manifest/blob/141efade265f453e15c967770286bafc5c3a3956/examples/README.md"
+        "url": "https://github.com/jeremi/registry-manifest/blob/52da5e913d8652e98ce8e443102c5d23b1a0974f/examples/README.md"
       }
     ],
     "rename_status": "Already using the target repo name locally."
@@ -84,11 +84,11 @@
       },
       {
         "label": "Local API docs",
-        "url": "https://github.com/jeremi/registry-relay/blob/380261c386309a4194b131913525f6cf70611adb/docs/api.md"
+        "url": "https://github.com/jeremi/registry-relay/blob/cfb1b735c6a2b3a50f5204e49660a859ceabb87d/docs/api.md"
       },
       {
         "label": "Local metadata docs",
-        "url": "https://github.com/jeremi/registry-relay/blob/380261c386309a4194b131913525f6cf70611adb/docs/metadata.md"
+        "url": "https://github.com/jeremi/registry-relay/blob/cfb1b735c6a2b3a50f5204e49660a859ceabb87d/docs/metadata.md"
       }
     ],
     "rename_status": "Local checkout renamed to `registry-relay`; old worktrees under `registry_relay-*` remain for historical evidence."
@@ -122,7 +122,7 @@
       },
       {
         "label": "OpenAPI source",
-        "url": "https://github.com/jeremi/registry-notary/blob/4a5a7fb89acf7788bd1d540759dedb2f25419c2c/crates/registry-notary-server/src/openapi.rs"
+        "url": "https://github.com/jeremi/registry-notary/blob/629c901c6ae49c86c6df907b876be267ecf05c72/crates/registry-notary-server/src/openapi.rs"
       }
     ],
     "rename_status": "Already using the target repo name locally."
@@ -147,7 +147,7 @@
     "source_docs": [
       {
         "label": "README",
-        "url": "https://github.com/jeremi/registry-lab/blob/b4cc8eb37456d65003481929c48955e9a8eb7fb9/README.md"
+        "url": "https://github.com/jeremi/registry-lab/blob/9814a8e3286b324616b887f7258a902efefcfb00/README.md"
       },
       {
         "label": "Rename plan",
