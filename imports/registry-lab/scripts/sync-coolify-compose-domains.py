@@ -48,6 +48,20 @@ def parse_domain_specs(specs: list[str]) -> dict[str, str]:
     return domains
 
 
+def hosted_domains_from_compose(compose: dict[str, Any]) -> dict[str, str]:
+    hosted_domains = compose.get("x-hosted-domains")
+    if not isinstance(hosted_domains, dict):
+        raise DomainSyncError("compose file is missing x-hosted-domains")
+
+    domains: dict[str, str] = {}
+    for service, domain in sorted(hosted_domains.items()):
+        if not isinstance(domain, str) or not domain.strip():
+            raise DomainSyncError(f"{service}: compose x-hosted-domains entry is invalid")
+        stripped = domain.strip()
+        domains[str(service)] = stripped if "://" in stripped else f"https://{stripped}"
+    return domains
+
+
 def require_compose_hosts(compose: dict[str, Any], desired: dict[str, str]) -> None:
     hosted_domains = compose.get("x-hosted-domains")
     if not isinstance(hosted_domains, dict):
@@ -140,7 +154,10 @@ def patch_compose_domains(api_base_url: str, app_uuid: str, token: str, domains:
         "PATCH",
         f"{api_base_url.rstrip('/')}/applications/{urllib.parse.quote(app_uuid, safe='')}",
         token,
-        {"docker_compose_domains": as_patch_entries(domains)},
+        {
+            "docker_compose_domains": as_patch_entries(domains),
+            "force_domain_override": True,
+        },
     )
 
 
@@ -220,8 +237,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--domain",
         action="append",
-        required=True,
-        help="required service domain mapping, in SERVICE=https://host:port form",
+        default=[],
+        help="service domain override, in SERVICE=https://host:port form",
     )
     parser.add_argument(
         "--token-env",
@@ -249,8 +266,12 @@ def main() -> int:
     if not token:
         raise DomainSyncError(f"{args.token_env} is not configured")
 
-    desired = parse_domain_specs(args.domain)
-    require_compose_hosts(load_yaml_mapping(args.compose), desired)
+    compose = load_yaml_mapping(args.compose)
+    desired = {
+        **hosted_domains_from_compose(compose),
+        **parse_domain_specs(args.domain),
+    }
+    require_compose_hosts(compose, desired)
 
     sync_required_domains(
         args.api_base_url,

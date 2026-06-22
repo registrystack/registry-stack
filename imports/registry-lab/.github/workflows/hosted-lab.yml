@@ -443,8 +443,9 @@ jobs:
 
           # Coolify only persists docker_compose_domains for services already
           # present in its parsed docker_compose_raw. The deploy above loads
-          # this commit's compose, then this sync attaches the new service
-          # route and a targeted monolith redeploy applies the proxy labels.
+          # this commit's compose, then this sync rehydrates every monolith
+          # route from x-hosted-domains and overrides citizen-portal's target
+          # port before a targeted redeploy applies the proxy labels.
           python3 scripts/sync-coolify-compose-domains.py \
             --compose compose.coolify.yaml \
             --api-base-url "${api_base}" \
@@ -456,7 +457,7 @@ jobs:
           deployment_uuid="$(
             curl -fsS \
               -H "Authorization: Bearer ${COOLIFY_API_TOKEN}" \
-              "${api_base}/deploy?uuid=${COOLIFY_REGISTRY_LAB_APP_UUID}&force=true" \
+              "${api_base}/deploy?uuid=${COOLIFY_REGISTRY_LAB_APP_UUID}&force=false" \
               | python3 -c 'import json, sys; print(json.load(sys.stdin)["deployments"][0]["deployment_uuid"])'
           )"
           echo "triggered app=monolith-domain-sync (${COOLIFY_REGISTRY_LAB_APP_UUID}) deployment_uuid=${deployment_uuid}"

@@ -47,6 +47,21 @@ class SyncCoolifyComposeDomainsTest(unittest.TestCase):
             {"citizen-portal": "https://portal.lab.registrystack.org:3000"},
         )
 
+    def test_derives_https_domains_from_compose_extension(self) -> None:
+        compose = {
+            "x-hosted-domains": {
+                "lab-homepage": "lab.registrystack.org",
+                "citizen-portal": "portal.lab.registrystack.org",
+            }
+        }
+        self.assertEqual(
+            {
+                "citizen-portal": "https://portal.lab.registrystack.org",
+                "lab-homepage": "https://lab.registrystack.org",
+            },
+            self.script.hosted_domains_from_compose(compose),
+        )
+
     def test_rejects_domain_host_that_drifted_from_compose(self) -> None:
         compose = {"x-hosted-domains": {"citizen-portal": "portal.lab.registrystack.org"}}
         with self.assertRaisesRegex(self.script.DomainSyncError, "does not match"):
@@ -148,6 +163,58 @@ class SyncCoolifyComposeDomainsTest(unittest.TestCase):
         self.assertEqual([0.25], sleeps)
         self.assertEqual(2, sum(1 for call in calls if call[0] == "PATCH"))
 
+    def test_sync_restores_full_compose_domain_set_when_coolify_returns_empty_current_domains(
+        self,
+    ) -> None:
+        calls = []
+        desired = {
+            **self.script.hosted_domains_from_compose(
+                {
+                    "x-hosted-domains": {
+                        "lab-homepage": "lab.registrystack.org",
+                        "citizen-portal": "portal.lab.registrystack.org",
+                    }
+                }
+            ),
+            "citizen-portal": "https://portal.lab.registrystack.org:3000",
+        }
+        original_request_json = self.script.request_json
+
+        def fake_request_json(method, url, token, body=None):
+            calls.append((method, url, token, body))
+            if method == "PATCH":
+                return {"uuid": "app-uuid"}
+            if any(call[0] == "PATCH" for call in calls):
+                return {"docker_compose_domains": body_from_last_patch(calls)}
+            return {"docker_compose_domains": []}
+
+        def body_from_last_patch(recorded_calls):
+            for call in reversed(recorded_calls):
+                if call[0] == "PATCH":
+                    return call[3]["docker_compose_domains"]
+            return []
+
+        self.script.request_json = fake_request_json
+        try:
+            self.script.sync_required_domains(
+                "https://coolify.example/api/v1",
+                "app-uuid",
+                "token-value",
+                desired,
+            )
+        finally:
+            self.script.request_json = original_request_json
+
+        patch_body = next(call[3] for call in calls if call[0] == "PATCH")
+        self.assertEqual(
+            [
+                {"name": "citizen-portal", "domain": "https://portal.lab.registrystack.org:3000"},
+                {"name": "lab-homepage", "domain": "https://lab.registrystack.org"},
+            ],
+            patch_body["docker_compose_domains"],
+        )
+        self.assertIs(patch_body["force_domain_override"], True)
+
     def test_patches_compose_domains_through_application_update_endpoint(self) -> None:
         calls = []
         original = self.script.request_json
@@ -182,7 +249,8 @@ class SyncCoolifyComposeDomainsTest(unittest.TestCase):
                                 "name": "citizen-portal",
                                 "domain": "https://portal.lab.registrystack.org:3000",
                             }
-                        ]
+                        ],
+                        "force_domain_override": True,
                     },
                 )
             ],
