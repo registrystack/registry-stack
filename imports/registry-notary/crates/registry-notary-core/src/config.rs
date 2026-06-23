@@ -2367,7 +2367,7 @@ fn validate_oid4vci_projection_claims(
     let mut paths = BTreeSet::new();
     for claim in claims {
         validate_oid4vci_non_empty_value("credential_configurations.claims[].id", &claim.id)?;
-        if !ids.insert(claim.id.clone()) {
+        if !ids.insert(claim.id.as_str()) {
             return invalid_oid4vci(format!(
                 "credential configuration '{configuration_id}' contains duplicate claims[].id"
             ));
@@ -2402,7 +2402,7 @@ fn validate_oid4vci_projection_claims(
                 "credential configuration '{configuration_id}' claims[].output_path uses reserved claim name '{segment}'"
             ));
         }
-        if !paths.insert(claim.output_path.clone()) {
+        if !paths.insert(segment.as_str()) {
             return invalid_oid4vci(format!(
                 "credential configuration '{configuration_id}' contains duplicate claims[].output_path"
             ));
@@ -2443,8 +2443,11 @@ fn validate_oid4vci_credential_claim_reference<'a>(
         .claims
         .iter()
         .find(|claim| claim.id == claim_id)
-        // SAFETY: the claim_ids set above is built from evidence.claims.
-        .expect("claim id was checked above");
+        .ok_or_else(|| EvidenceConfigError::InvalidOid4vciConfig {
+            reason: format!(
+                "credential configuration '{configuration_id}' references unknown claim '{claim_id}'"
+            ),
+        })?;
     if !claim
         .credential_profiles
         .iter()

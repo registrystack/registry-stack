@@ -8178,13 +8178,12 @@ fn prepare_self_attestation_evaluate(
         evaluation_expires_at: Some(format_time(evaluation_expires_at)),
     };
     let mut allowed_claim_ids = BTreeSet::new();
-    for claim_id in &request_claim_ids {
-        allowed_claim_ids.insert(
-            BoundedClaimId::new(claim_id.clone()).map_err(|_| EvidenceError::InvalidRequest)?,
-        );
+    for claim_id in request_claim_ids {
+        allowed_claim_ids
+            .insert(BoundedClaimId::new(claim_id).map_err(|_| EvidenceError::InvalidRequest)?);
     }
     let source_capability = SourceCapability::SelfAttestation {
-        claim_id: if request_claim_ids.len() == 1 {
+        claim_id: if allowed_claim_ids.len() == 1 {
             allowed_claim_ids.iter().next().cloned()
         } else {
             None

@@ -192,7 +192,12 @@ fn disclosures_for_results(
                 if result.satisfied == Some(false) {
                     return Err(EvidenceError::CredentialIssuanceFailed);
                 }
-                let Some(value) = result.value.clone().filter(|value| !value.is_null()) else {
+                let Some(value) = result
+                    .value
+                    .as_ref()
+                    .filter(|value| !value.is_null())
+                    .cloned()
+                else {
                     return Err(EvidenceError::CredentialIssuanceFailed);
                 };
                 Ok(Disclosure {
