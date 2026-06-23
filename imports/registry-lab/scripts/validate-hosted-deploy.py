@@ -315,6 +315,11 @@ NOTARY_DCI_CONNECTION_KEYS = {
     "field_paths",
     "signature",
 }
+NOTARY_SOURCE_BINDING_CONNECTORS = {
+    "registry_data_api",
+    "dci",
+    "source_adapter_sidecar",
+}
 DHIS2_PROGRAMME_PROFILE = "dhis2_programme_participation_sd_jwt"
 DHIS2_PROGRAMME_CLAIMS = {
     "dhis2-tracked-entity-first-name",
@@ -1001,6 +1006,61 @@ def validate_hosted_notary_config_schema_contract(
                         f"hosted Notary DCI connection uses unsupported field {key!r}",
                     )
                 )
+        claim_purposes: dict[str, str] = {}
+        claims = evidence.get("claims")
+        if isinstance(claims, list):
+            for claim in claims:
+                if not isinstance(claim, dict):
+                    continue
+                claim_id = claim.get("id")
+                purpose = claim.get("purpose")
+                if isinstance(claim_id, str) and isinstance(purpose, str):
+                    claim_purposes[claim_id] = purpose
+                source_bindings = claim.get("source_bindings")
+                if not isinstance(source_bindings, dict):
+                    continue
+                for binding_name, binding in source_bindings.items():
+                    if not isinstance(binding, dict):
+                        continue
+                    connector = binding.get("connector")
+                    if (
+                        isinstance(connector, str)
+                        and connector not in NOTARY_SOURCE_BINDING_CONNECTORS
+                    ):
+                        issues.append(
+                            Issue(
+                                "unsupported-notary-source-connector",
+                                artifact,
+                                f"{config_path.relative_to(root)}:evidence.claims.{claim_id}.source_bindings.{binding_name}.connector",
+                                f"hosted Notary source binding uses unsupported connector {connector!r}",
+                            )
+                        )
+        self_attestation = config.get("self_attestation")
+        if isinstance(self_attestation, dict):
+            allowed_purposes = {
+                purpose
+                for purpose in self_attestation.get("allowed_purposes") or []
+                if isinstance(purpose, str)
+            }
+            allowed_claims = self_attestation.get("allowed_claims")
+            if allowed_purposes and isinstance(allowed_claims, list):
+                for claim_id in allowed_claims:
+                    if not isinstance(claim_id, str):
+                        continue
+                    purpose = claim_purposes.get(claim_id)
+                    if purpose is None or purpose in allowed_purposes:
+                        continue
+                    issues.append(
+                        Issue(
+                            "self-attestation-claim-purpose-unallowed",
+                            artifact,
+                            f"{config_path.relative_to(root)}:self_attestation.allowed_claims.{claim_id}",
+                            (
+                                f"hosted Notary self-attestation allows claim {claim_id!r} "
+                                f"with unallowed purpose {purpose!r}"
+                            ),
+                        )
+                    )
     return issues
 
 

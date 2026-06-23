@@ -169,7 +169,7 @@ evidence:
       title: CRVS Birth Certificate
       version: 2026-06
       subject_type: person
-      purpose: citizen_self_attestation
+      purpose: https://demo.example.gov/purpose/civil-certificate-evidence
       value:
         type: object
       source_bindings:
@@ -181,7 +181,7 @@ evidence:
           entity: civil_person_detail
           matching:
             allowed_purposes:
-              - citizen_self_attestation
+              - https://demo.example.gov/purpose/civil-certificate-evidence
             allowed_target_inputs:
               - target.identifiers.national_id
           lookup:
@@ -222,7 +222,7 @@ evidence:
           entity: civil_status_record
           matching:
             allowed_purposes:
-              - citizen_self_attestation
+              - https://demo.example.gov/purpose/civil-certificate-evidence
           lookup:
             input: sources.child_person.id
             field: person_id
@@ -261,7 +261,7 @@ evidence:
           entity: certificate
           matching:
             allowed_purposes:
-              - citizen_self_attestation
+              - https://demo.example.gov/purpose/civil-certificate-evidence
           lookup:
             input: sources.birth_record.id
             field: record_id
@@ -292,7 +292,7 @@ evidence:
           entity: birth_event
           matching:
             allowed_purposes:
-              - citizen_self_attestation
+              - https://demo.example.gov/purpose/civil-certificate-evidence
           lookup:
             input: sources.birth_record.event_id
             field: id
@@ -335,7 +335,7 @@ evidence:
           entity: civil_person_detail
           matching:
             allowed_purposes:
-              - citizen_self_attestation
+              - https://demo.example.gov/purpose/civil-certificate-evidence
           lookup:
             input: sources.birth_event.mother_person_id
             field: id
@@ -370,7 +370,7 @@ evidence:
           entity: civil_person_detail
           matching:
             allowed_purposes:
-              - citizen_self_attestation
+              - https://demo.example.gov/purpose/civil-certificate-evidence
           lookup:
             input: sources.birth_event.father_person_id
             field: id

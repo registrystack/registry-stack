@@ -3,8 +3,9 @@
 """Focused regression checks for Registry Lab built-in sidecar wiring.
 
 The DHIS2 and civil sidecars now use the built-in http_json engine instead of
-the OpenFn Node worker pool.  The connector key (openfn_sidecar), connection
-keys (dhis2_openfn, openfn_civil), image name, and service names are unchanged.
+the OpenFn Node worker pool. Local demo Notary configs retain the
+openfn_sidecar connector, while hosted DHIS2 tracks the deployed Notary image's
+source_adapter_sidecar connector spelling.
 """
 
 from __future__ import annotations
@@ -79,11 +80,16 @@ class BuiltinSidecarLabConfigTest(unittest.TestCase):
         self.assertIn("connection: openfn_civil", civil)
         self.assertIn("connector: openfn_sidecar", civil)
 
-        for path in (LOCAL_DHIS2_NOTARY, HOSTED_DHIS2_NOTARY):
-            body = read(path)
-            self.assertEqual(9, body.count("connection: dhis2_openfn"))
-            self.assertEqual(9, body.count("connector: openfn_sidecar"))
-            self.assertNotIn("connector: registry_data_api", body)
+        local_dhis2 = read(LOCAL_DHIS2_NOTARY)
+        self.assertEqual(9, local_dhis2.count("connection: dhis2_openfn"))
+        self.assertEqual(9, local_dhis2.count("connector: openfn_sidecar"))
+        self.assertNotIn("connector: registry_data_api", local_dhis2)
+
+        hosted_dhis2 = read(HOSTED_DHIS2_NOTARY)
+        self.assertEqual(9, hosted_dhis2.count("connection: dhis2_openfn"))
+        self.assertEqual(9, hosted_dhis2.count("connector: source_adapter_sidecar"))
+        self.assertNotIn("connector: openfn_sidecar", hosted_dhis2)
+        self.assertNotIn("connector: registry_data_api", hosted_dhis2)
 
     def test_hosted_notary_pins_generated_sidecar_hash(self) -> None:
         report = json.loads(read(HOSTED_OPENFN_REPORT))

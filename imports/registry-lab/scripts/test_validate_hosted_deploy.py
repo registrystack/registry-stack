@@ -1328,6 +1328,67 @@ evidence:
 
         self.assertIssue(issues, "unsupported-notary-dci-field")
 
+    def test_rejects_unsupported_hosted_notary_source_connectors(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_dir = root / "config" / "coolify" / "notary"
+            config_dir.mkdir(parents=True)
+            (config_dir / "dhis2-health-notary.yaml").write_text(
+                """
+evidence:
+  source_connections:
+    dhis2_openfn:
+      base_url: http://openfn-dhis2-sidecar:8080
+  claims:
+    - id: dhis2-tracked-entity-first-name
+      source_bindings:
+        dhis2:
+          connector: openfn_sidecar
+""",
+                encoding="utf-8",
+            )
+            issues = self.validator.validate_artifacts(
+                {
+                    "registry-lab": self._valid_registry_lab(),
+                    "esignet": self._valid_esignet(),
+                },
+                {"registry-lab": root, "esignet": root},
+            )
+
+        self.assertIssue(issues, "unsupported-notary-source-connector")
+
+    def test_rejects_self_attestation_claim_purpose_outside_allowlist(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_dir = root / "config" / "coolify" / "notary"
+            config_dir.mkdir(parents=True)
+            (config_dir / "citizen-civil-notary.yaml").write_text(
+                """
+evidence:
+  source_connections:
+    civil:
+      base_url: http://civil-registry-relay:8080
+  claims:
+    - id: birth.certificate_summary
+      purpose: citizen_self_attestation
+self_attestation:
+  allowed_purposes:
+    - https://demo.example.gov/purpose/civil-certificate-evidence
+  allowed_claims:
+    - birth.certificate_summary
+""",
+                encoding="utf-8",
+            )
+            issues = self.validator.validate_artifacts(
+                {
+                    "registry-lab": self._valid_registry_lab(),
+                    "esignet": self._valid_esignet(),
+                },
+                {"registry-lab": root, "esignet": root},
+            )
+
+        self.assertIssue(issues, "self-attestation-claim-purpose-unallowed")
+
     def test_rejects_overlong_bearer_offer_ttl(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

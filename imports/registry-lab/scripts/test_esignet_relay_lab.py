@@ -115,16 +115,11 @@ class EsignetRelayLabTest(unittest.TestCase):
         self.assertNotIn("purpose: citizen_self_attestation", hosted)
         self.assertNotIn("- citizen_self_attestation", hosted)
 
-    def test_citizen_notary_dci_config_declares_spdci_version(self) -> None:
-        checked_paths = [
-            "scripts/smoke-citizen-self-attestation.sh",
-            "config/coolify/notary/citizen-civil-notary.yaml",
-        ]
-        for path in checked_paths:
-            with self.subTest(path=path):
-                value = text(path)
-                self.assertIn("search_path: /dci/crvs/registry/sync/search", value)
-                self.assertIn('version: "1.0.0"', value)
+    def test_hosted_citizen_notary_dci_config_uses_supported_fields(self) -> None:
+        hosted = text("config/coolify/notary/citizen-civil-notary.yaml")
+
+        self.assertIn("search_path: /dci/crvs/registry/sync/search", hosted)
+        self.assertNotIn('version: "1.0.0"', hosted)
 
     def test_smoke_recreates_civil_relay_after_port_collision(self) -> None:
         smoke = text("scripts/smoke-citizen-self-attestation.sh")
