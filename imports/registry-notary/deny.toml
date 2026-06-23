@@ -50,9 +50,8 @@ allow = [
     "CDLA-Permissive-2.0",
     "ISC",
     "MIT",
-    # MPL-2.0 (weak, file-level copyleft) enters via `smartstring`, an
-    # unavoidable, unmodified transitive dependency of `rhai` (the script_rhai
-    # source-adapter engine). Its copyleft is confined to its own files.
+    # MPL-2.0 (weak, file-level copyleft) is allowed only for unmodified
+    # upstream crates such as `smartstring` (pulled in by the `rhai` runtime).
     "MPL-2.0",
     "Unicode-3.0",
     "Unicode-DFS-2016",
