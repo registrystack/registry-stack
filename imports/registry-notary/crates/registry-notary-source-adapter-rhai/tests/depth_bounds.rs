@@ -123,6 +123,46 @@ async fn xw_stringify_json_hostile_depth_is_rejected_not_aborted() {
     );
 }
 
+// (B1, xw.json.parse_json) The parse helper now routes its parsed value through
+// the bounded `json_to_dynamic` path, so a script that parses a JSON STRING that
+// nests past `MAX_JSON_DEPTH` must be rejected with a controlled error (not a
+// process abort). serde_json's own parser caps recursion at 128, so a ~100-deep
+// literal is chosen: deep enough to exceed our 64 cap, shallow enough that
+// serde_json parses it (handing a too-deep value to our guard) rather than
+// failing the parse outright. The error surfaces as a Runtime error because
+// `parse_json` maps the conversion failure to a Rhai `ErrorRuntime`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn xw_parse_json_deep_string_is_rejected_not_aborted() {
+    // Build a ~100-deep JSON array string in-script via concatenation, then parse
+    // it. 100 > MAX_JSON_DEPTH (64) yet < serde_json's 128 recursion cap.
+    let script = r#"
+        fn lookup(ctx) {
+            let s = "0";
+            for i in 0..100 {
+                s = "[" + s + "]";
+            }
+            let parsed = xw.json.parse_json(s);
+            [#{ d: parsed }]
+        }
+    "#;
+    let engine = ScriptEngine::compile(script, "lookup", &policy()).unwrap();
+    let host = Arc::new(MockScriptHost::echo(Duration::from_millis(1)));
+    let e = engine.execute(host, ctx()).await.unwrap_err();
+    // The depth rejection from `json_to_dynamic` is mapped to a Rhai
+    // `ErrorRuntime` by `parse_json`, which classifies as a Runtime error. The
+    // decisive proof is that this returns an error rather than aborting; the
+    // reason confirms the *depth* guard (not, e.g., a parser cap) fired.
+    match e {
+        SourceScriptError::Runtime { reason } => {
+            assert!(
+                reason.contains("JSON_PARSE") && reason.contains("depth"),
+                "deep parse_json must be rejected by the depth guard, got reason {reason:?}"
+            );
+        }
+        other => panic!("deep parse_json input must classify as a Runtime error, got {other:?}"),
+    }
+}
+
 // (B1, input direction) A host whose response `body` nests `HOSTILE_DEPTH`
 // levels deep must be rejected when converted into a Rhai `Dynamic` for the
 // script — `json_to_dynamic` checks depth before `to_dynamic`.
@@ -136,7 +176,7 @@ async fn host_body_with_hostile_depth_is_rejected_not_aborted() {
 
     let script = r#"
         fn lookup(ctx) {
-            source.get("t", "/path", #{ value: ctx.lookup.value })
+            source.get("t", "/path", #{ value: ctx.lookup.value }).body
         }
     "#;
     let engine = ScriptEngine::compile(script, "lookup", &policy()).unwrap();

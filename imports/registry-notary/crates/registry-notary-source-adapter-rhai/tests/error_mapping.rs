@@ -13,7 +13,7 @@ use serde_json::json;
 
 const CALL: &str = r#"
 fn lookup(ctx) {
-    source.get("t", "/path", #{ value: ctx.lookup.value })
+    source.get("t", "/path", #{ value: ctx.lookup.value }).body
 }
 "#;
 
@@ -95,7 +95,7 @@ async fn http_call_budget_is_enforced() {
         fn lookup(ctx) {
             let acc = [];
             for i in 0..10 {
-                let r = source.get("t", "/p", #{ value: i });
+                let r = source.get("t", "/p", #{ value: i }).body;
                 acc.push(r[0]);
             }
             acc

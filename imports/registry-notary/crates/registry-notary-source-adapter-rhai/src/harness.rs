@@ -23,6 +23,13 @@ enum Outcome {
     Echo { status: u16 },
     /// Return a fixed body with a fixed status.
     Fixed { status: u16, body: Value },
+    /// Return a `(status, body)` keyed on the requested `path`, falling back to
+    /// `fallback` for any path not present in the map. Lets a test exercise
+    /// path-dependent responses (e.g. 404 on `/a`, 200 on `/b`).
+    ByPath {
+        responses: std::collections::BTreeMap<String, (u16, Value)>,
+        fallback: (u16, Value),
+    },
     /// Fail at the transport layer.
     Transport,
 }
@@ -55,6 +62,25 @@ impl MockScriptHost {
         Self {
             delay,
             outcome: Outcome::Fixed { status, body },
+            calls_completed: Arc::new(AtomicU64::new(0)),
+            calls_started: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    /// A host that returns a `(status, body)` keyed on the requested `path`,
+    /// using `fallback` for any path not in `responses`, after `delay`. Useful
+    /// for path-dependent flows such as a 404-on-`/a`, 200-on-`/b` fallback.
+    pub fn by_path(
+        delay: Duration,
+        responses: std::collections::BTreeMap<String, (u16, Value)>,
+        fallback: (u16, Value),
+    ) -> Self {
+        Self {
+            delay,
+            outcome: Outcome::ByPath {
+                responses,
+                fallback,
+            },
             calls_completed: Arc::new(AtomicU64::new(0)),
             calls_started: Arc::new(AtomicU64::new(0)),
         }
@@ -111,6 +137,16 @@ impl ScriptSourceHost for MockScriptHost {
                 status: *status,
                 body: body.clone(),
             }),
+            Outcome::ByPath {
+                responses,
+                fallback,
+            } => {
+                let (status, body) = responses.get(path).unwrap_or(fallback);
+                Ok(SourceResponse {
+                    status: *status,
+                    body: body.clone(),
+                })
+            }
         }
     }
 }

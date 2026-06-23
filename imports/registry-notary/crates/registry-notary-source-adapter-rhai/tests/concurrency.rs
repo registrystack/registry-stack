@@ -19,7 +19,7 @@ use registry_notary_source_adapter_rhai::{
 const INFINITE: &str = r#"fn lookup(ctx) { let i = 0; while true { i += 1; } [#{ i: i }] }"#;
 const SLOW_CALL: &str = r#"
 fn lookup(ctx) {
-    let rows = source.get("t", "/path", #{ value: ctx.lookup.value });
+    let rows = source.get("t", "/path", #{ value: ctx.lookup.value }).body;
     rows
 }
 "#;
@@ -47,7 +47,10 @@ fn policy(timeout: Duration, permits: usize) -> RhaiPolicy {
         max_concurrent: permits,
         ..RhaiPolicy::default()
     };
-    p.limits.max_operations = 0; // 0 == unlimited in Rhai
+    // A very large finite budget makes the *deadline* (not the op budget) the
+    // deterministic trigger for these timing tests, without using `0` (which the
+    // engine now rejects as "unlimited" — it disables the runaway-loop backstop).
+    p.limits.max_operations = u64::MAX;
     p
 }
 

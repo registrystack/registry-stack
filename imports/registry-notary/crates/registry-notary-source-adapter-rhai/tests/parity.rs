@@ -12,7 +12,7 @@ use registry_notary_source_adapter_rhai::{
 const LOOKUP: &str = r#"
 fn lookup(ctx) {
     let v = ctx.lookup.value;
-    let rows = source.get("t", "/path", #{ value: v });
+    let rows = source.get("t", "/path", #{ value: v }).body;
     rows
 }
 "#;

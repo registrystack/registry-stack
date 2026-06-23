@@ -39,6 +39,14 @@ pub enum SourceScriptError {
         /// The entrypoint name that was requested.
         entrypoint: String,
     },
+    /// The supplied policy violated a configuration contract (caught at
+    /// compile/validation time, before any script runs). Fail-fast for
+    /// out-of-contract limits/budgets (e.g. an unlimited operation budget, a
+    /// zero concurrency pool, or an HTTP-call cap above the hard maximum).
+    Config {
+        /// Short, non-sensitive reason describing which contract was violated.
+        reason: String,
+    },
     /// A value crossing the host boundary had an unacceptable type/shape
     /// (e.g. a non-array return, a function/closure, an opaque handle, or a
     /// value that exceeds the configured size caps).
@@ -132,6 +140,7 @@ impl SourceScriptError {
         match self {
             SourceScriptError::Compile { .. } => "compile",
             SourceScriptError::Entrypoint { .. } => "entrypoint",
+            SourceScriptError::Config { .. } => "config",
             SourceScriptError::Type { .. } => "type",
             SourceScriptError::Runtime { .. } => "runtime",
             SourceScriptError::HostDenied { .. } => "host_denied",
@@ -151,6 +160,7 @@ impl fmt::Display for SourceScriptError {
             SourceScriptError::Entrypoint { entrypoint } => {
                 write!(f, "entrypoint `{entrypoint}` not found")
             }
+            SourceScriptError::Config { reason } => write!(f, "config error: {reason}"),
             SourceScriptError::Type { detail } => write!(f, "type error: {detail}"),
             SourceScriptError::Runtime { reason } => write!(f, "runtime error: {reason}"),
             SourceScriptError::HostDenied { reason } => write!(f, "host denied: {reason}"),
@@ -206,6 +216,20 @@ mod tests {
             .problem_code(),
             problem_code::UNAVAILABLE
         );
+        // A config error is a fail-fast, "unavailable"-class outcome.
+        assert_eq!(
+            SourceScriptError::Config { reason: "x".into() }.problem_code(),
+            problem_code::UNAVAILABLE
+        );
+    }
+
+    #[test]
+    fn config_error_kind_and_display_are_stable() {
+        let e = SourceScriptError::Config {
+            reason: "max_operations must be > 0".into(),
+        };
+        assert_eq!(e.kind(), "config");
+        assert_eq!(e.to_string(), "config error: max_operations must be > 0");
     }
 
     #[test]

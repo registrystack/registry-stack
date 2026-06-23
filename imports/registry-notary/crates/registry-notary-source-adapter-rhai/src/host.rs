@@ -10,6 +10,12 @@
 use crate::error::SourceScriptError;
 
 /// The result of a single host `source.get` call.
+///
+/// The engine surfaces a returned `Ok(SourceResponse)` to the script as a
+/// `#{ status, body }` map when the status is *observable* — 2xx, or in the
+/// engine's configured `visible_statuses`. A non-observable non-2xx status
+/// terminates the run as an upstream-status error. A host returns `Err` only for
+/// transport failures or denials, never to signal an ordinary HTTP status.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceResponse {
     /// The upstream HTTP status code.
@@ -26,6 +32,12 @@ pub struct SourceResponse {
 #[async_trait::async_trait]
 pub trait ScriptSourceHost: Send + Sync {
     /// Perform a single source read.
+    ///
+    /// The engine surfaces a returned `Ok(SourceResponse)` to the script as
+    /// `#{ status, body }` when the status is observable (2xx or in the engine's
+    /// configured `visible_statuses`); a non-observable non-2xx status
+    /// terminates the run as an upstream-status error. Return `Err` only for
+    /// transport failures or denials.
     ///
     /// * `target` — the logical upstream identifier the script selected.
     /// * `path` — a target-relative request path. The engine has already run it

@@ -33,7 +33,7 @@ fn ctx() -> ScriptCtx {
 /// host was (or was not) reached.
 async fn run_with_path(path: &str) -> (Result<Vec<serde_json::Value>, SourceScriptError>, u64) {
     let script = format!(
-        r#"fn lookup(ctx) {{ source.get("t", "{path}", #{{ value: ctx.lookup.value }}) }}"#
+        r#"fn lookup(ctx) {{ source.get("t", "{path}", #{{ value: ctx.lookup.value }}).body }}"#
     );
     let engine = ScriptEngine::compile(&script, "lookup", &RhaiPolicy::default()).unwrap();
     let host = Arc::new(MockScriptHost::echo(Duration::from_millis(1)));

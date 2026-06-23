@@ -60,13 +60,17 @@ pub fn push_into_scope(scope: &mut Scope) {
 }
 
 /// Register the `xw` type tree and all pure helper functions on `engine`.
-pub fn register(engine: &mut Engine) {
+///
+/// `caps` is threaded only to `register_json`, whose `parse_json` must convert
+/// the parsed value through the same bounded (depth- and size-capped) path every
+/// other ingress uses; the remaining namespaces are pure string helpers.
+pub fn register(engine: &mut Engine, caps: crate::convert::ConvertCaps) {
     register_types(engine);
     register_navigation(engine);
     register_text(engine);
     register_date(engine);
     register_ids(engine);
-    register_json(engine);
+    register_json(engine, caps);
     register_email(engine);
     register_redaction(engine);
 }
@@ -193,12 +197,17 @@ fn register_ids(engine: &mut Engine) {
     });
 }
 
-fn register_json(engine: &mut Engine) {
+fn register_json(engine: &mut Engine, caps: crate::convert::ConvertCaps) {
     engine.register_fn(
         "parse_json",
-        |_: XwJsonNs, s: ImmutableString| -> Result<Dynamic, Box<EvalAltResult>> {
+        // `caps` is `Copy`; move it into the closure so each parse runs through
+        // the bounded conversion. Routing the parsed value through
+        // `json_to_dynamic` (rather than `rhai::serde::to_dynamic`) enforces the
+        // crate's depth cap (`MAX_JSON_DEPTH`) and the string/array/map size
+        // caps, matching every other ingress (host body, ctx).
+        move |_: XwJsonNs, s: ImmutableString| -> Result<Dynamic, Box<EvalAltResult>> {
             let value: Value = cwjson::parse_json(&s).map_err(to_rhai_err)?;
-            rhai::serde::to_dynamic(value).map_err(|e| {
+            crate::convert::json_to_dynamic(&value, caps).map_err(|e| {
                 Box::new(EvalAltResult::ErrorRuntime(
                     Dynamic::from(format!("JSON_PARSE: {e}")),
                     Position::NONE,

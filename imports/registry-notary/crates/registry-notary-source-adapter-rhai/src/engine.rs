@@ -14,6 +14,7 @@
 //! The per-execution capability (`source.get`) and the termination callback are
 //! applied later, in the bridge, because they depend on per-run state.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -22,6 +23,11 @@ use tokio::sync::Semaphore;
 
 use crate::counters::ExecCounters;
 use crate::error::SourceScriptError;
+
+/// The hard upper bound on `max_http_calls` a policy may configure. A policy
+/// requesting more than this is rejected at validation time: the intended shape
+/// is a small default with a low ceiling, not an open-ended call budget.
+pub const MAX_HTTP_CALLS_HARD: u32 = 5;
 
 /// Resource limits applied to the Rhai engine (the sandbox axes).
 #[derive(Debug, Clone, Copy)]
@@ -55,13 +61,17 @@ impl Default for RhaiLimits {
 }
 
 /// The complete execution policy: resource limits plus host-enforced budgets.
-#[derive(Debug, Clone, Copy)]
+///
+/// Not `Copy`: it owns a [`BTreeSet`] of visible statuses. Clone it where a
+/// by-value policy is needed.
+#[derive(Debug, Clone)]
 pub struct RhaiPolicy {
     /// Rhai engine resource limits.
     pub limits: RhaiLimits,
     /// Wall-clock execution budget for a single run.
     pub timeout: Duration,
-    /// Maximum number of `source.get` calls a single run may dispatch.
+    /// Maximum number of `source.get` calls a single run may dispatch. Must be
+    /// in `1..=`[`MAX_HTTP_CALLS_HARD`]; validated at compile time.
     pub max_http_calls: u32,
     /// Maximum size, in bytes, of the serialized script output.
     pub max_output_bytes: usize,
@@ -69,6 +79,12 @@ pub struct RhaiPolicy {
     /// pool size). Bounds OS-thread usage independently of the shared blocking
     /// pool.
     pub max_concurrent: usize,
+    /// Non-2xx upstream statuses the script is allowed to *observe* rather than
+    /// having the run terminated. A `source.get` whose status is 2xx **or** in
+    /// this set returns a `#{ status, body }` map to the script; any other
+    /// non-2xx status terminates the run as an upstream-status error. Empty by
+    /// default, so by default every non-2xx status terminates.
+    pub visible_statuses: BTreeSet<u16>,
 }
 
 impl Default for RhaiPolicy {
@@ -76,9 +92,10 @@ impl Default for RhaiPolicy {
         Self {
             limits: RhaiLimits::default(),
             timeout: Duration::from_millis(2_000),
-            max_http_calls: 8,
+            max_http_calls: 3,
             max_output_bytes: 256 * 1024,
             max_concurrent: 8,
+            visible_statuses: BTreeSet::new(),
         }
     }
 }
@@ -111,6 +128,12 @@ impl ScriptEngine {
         entrypoint: &str,
         policy: &RhaiPolicy,
     ) -> Result<Self, SourceScriptError> {
+        // Fail fast on an out-of-contract policy BEFORE building the engine, so
+        // a misconfiguration (e.g. an unlimited operation budget, a zero
+        // concurrency pool, or an HTTP-call cap above the hard maximum) is
+        // rejected up front rather than silently coerced or deferred.
+        validate_policy(policy)?;
+
         // Build a hardened engine purely to compile + introspect. The same
         // hardening is re-applied per execution in the bridge.
         let mut engine = Engine::new();
@@ -132,13 +155,15 @@ impl ScriptEngine {
             });
         }
 
-        // A `max_concurrent` of 0 would deadlock every execution; treat it as 1.
-        let permits = policy.max_concurrent.max(1);
+        // `validate_policy` has already guaranteed `max_concurrent >= 1`, so the
+        // permit count is used directly — no silent coercion that could mask a
+        // misconfigured zero pool.
+        let permits = policy.max_concurrent;
 
         Ok(Self {
             ast,
             entrypoint: entrypoint.to_string(),
-            policy: *policy,
+            policy: policy.clone(),
             semaphore: Arc::new(Semaphore::new(permits)),
             counters: ExecCounters::new(),
         })
@@ -187,7 +212,67 @@ pub(crate) fn apply_hardening(engine: &mut Engine, limits: &RhaiLimits) {
     engine.on_debug(|_, _, _| {});
 
     // --- pure helper namespace, dotted access: xw.text.*, xw.date.*, ... ---
-    crate::xw::register(engine);
+    // Thread the conversion caps so `xw.json.parse_json` routes its parsed value
+    // through the bounded (depth- and size-capped) conversion path rather than
+    // an unbounded `to_dynamic`.
+    crate::xw::register(engine, crate::convert::ConvertCaps::from_limits(limits));
+}
+
+/// Validate that a policy is within its configuration contract.
+///
+/// This is fail-fast: an out-of-contract policy is rejected at [`compile`-time]
+/// rather than silently coerced (the old `max_concurrent == 0 -> 1`) or accepted
+/// with a footgun meaning (`max_operations == 0` disables the Rhai operation
+/// budget entirely). Reasons are short and non-sensitive (a field name and the
+/// constraint), never the policy values' provenance.
+///
+/// [`compile`-time]: ScriptEngine::compile
+fn validate_policy(policy: &RhaiPolicy) -> Result<(), SourceScriptError> {
+    let reject = |reason: &str| {
+        Err(SourceScriptError::Config {
+            reason: reason.to_string(),
+        })
+    };
+
+    let limits = &policy.limits;
+    // A `0` operation budget means *unlimited* in Rhai, removing the runaway-loop
+    // backstop entirely; require an explicit positive budget.
+    if limits.max_operations == 0 {
+        return reject("limits.max_operations must be greater than 0");
+    }
+    if limits.max_call_levels == 0 {
+        return reject("limits.max_call_levels must be greater than 0");
+    }
+    if limits.max_string_bytes == 0 {
+        return reject("limits.max_string_bytes must be greater than 0");
+    }
+    if limits.max_array_items == 0 {
+        return reject("limits.max_array_items must be greater than 0");
+    }
+    if limits.max_map_entries == 0 {
+        return reject("limits.max_map_entries must be greater than 0");
+    }
+    // v1 forbids module loading outright; any non-zero allowance is a contract
+    // violation, not merely a tighter limit.
+    if limits.max_modules != 0 {
+        return reject("limits.max_modules must be 0 (module loading is forbidden)");
+    }
+    if policy.max_http_calls == 0 {
+        return reject("max_http_calls must be greater than 0");
+    }
+    if policy.max_http_calls > MAX_HTTP_CALLS_HARD {
+        return reject("max_http_calls exceeds the hard maximum");
+    }
+    if policy.max_concurrent == 0 {
+        return reject("max_concurrent must be greater than 0");
+    }
+    if policy.timeout.is_zero() {
+        return reject("timeout must be greater than 0");
+    }
+    if policy.max_output_bytes == 0 {
+        return reject("max_output_bytes must be greater than 0");
+    }
+    Ok(())
 }
 
 /// Produce a short, non-sensitive compile reason. We avoid echoing the script

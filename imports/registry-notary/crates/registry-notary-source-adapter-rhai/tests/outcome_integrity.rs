@@ -109,7 +109,7 @@ async fn real_deadline_still_classifies_as_deadline() {
     };
     let script = r#"
         fn lookup(ctx) {
-            source.get("t", "/path", #{ value: ctx.lookup.value })
+            source.get("t", "/path", #{ value: ctx.lookup.value }).body
         }
     "#;
     let engine = ScriptEngine::compile(script, "lookup", &policy).unwrap();
@@ -132,7 +132,7 @@ async fn real_http_budget_breach_still_classifies_as_budget() {
         fn lookup(ctx) {
             let acc = [];
             for i in 0..10 {
-                let r = source.get("t", "/p", #{ value: i });
+                let r = source.get("t", "/p", #{ value: i }).body;
                 acc.push(r[0]);
             }
             acc
@@ -156,7 +156,7 @@ async fn real_http_budget_breach_still_classifies_as_budget() {
 async fn real_host_503_still_classifies_as_http_status() {
     let script = r#"
         fn lookup(ctx) {
-            source.get("t", "/path", #{ value: ctx.lookup.value })
+            source.get("t", "/path", #{ value: ctx.lookup.value }).body
         }
     "#;
     let engine = ScriptEngine::compile(script, "lookup", &RhaiPolicy::default()).unwrap();

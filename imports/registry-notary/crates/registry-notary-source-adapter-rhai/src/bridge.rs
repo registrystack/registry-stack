@@ -168,7 +168,7 @@ impl ScriptEngine {
         ctx: ScriptCtx,
         finished: Arc<AtomicBool>,
     ) -> Result<Vec<Value>, SourceScriptError> {
-        let policy = self.policy;
+        let policy = self.policy.clone();
         let caps = ConvertCaps::from_limits(&policy.limits);
 
         // --- admission control: a dedicated permit, never tokio's shared pool ---
@@ -203,6 +203,12 @@ impl ScriptEngine {
         let http_calls = Arc::new(AtomicU32::new(0));
         let max_http_calls = policy.max_http_calls;
 
+        // --- statuses the script may observe (shared into the capability) ---
+        // A non-2xx status in this set is surfaced to the script as
+        // `#{ status, body }` instead of terminating the run; an Arc keeps the
+        // set cheaply shareable into the (synchronous) `get` closure.
+        let visible = Arc::new(policy.visible_statuses.clone());
+
         // --- the bridge channel ---
         let (tx, mut rx) = mpsc::channel::<SourceGetCommand>(16);
 
@@ -217,6 +223,7 @@ impl ScriptEngine {
             max_http_calls,
             caps,
             outcome.clone(),
+            visible,
         );
 
         let ast = self.ast.clone();
@@ -397,6 +404,7 @@ fn install_source_capability(
     max_http_calls: u32,
     caps: ConvertCaps,
     outcome: OutcomeCell,
+    visible: Arc<std::collections::BTreeSet<u16>>,
 ) {
     engine.register_type_with_name::<SourceNs>("SourceNs");
     engine.register_fn(
@@ -457,7 +465,7 @@ fn install_source_capability(
                 return Err(host_abort(&outcome, HostOutcome::HttpTransport));
             }
             match reply_rx.blocking_recv() {
-                Ok(Ok(resp)) => map_response_to_dynamic(resp, caps, &outcome),
+                Ok(Ok(resp)) => map_response_to_dynamic(resp, caps, &outcome, &visible),
                 Ok(Err(host_err)) => Err(host_abort(&outcome, host_outcome_for(host_err))),
                 Err(_recv) => Err(host_abort(&outcome, HostOutcome::HttpTransport)),
             }
@@ -465,25 +473,37 @@ fn install_source_capability(
     );
 }
 
-/// Map a successful host response to the value the script receives. A non-2xx
-/// status records an `HttpStatus` outcome (with the real code) and unwinds, so
-/// the caller classifies it as [`SourceScriptError::HttpStatus`].
+/// Map a host response to the value the script receives.
+///
+/// A response is *observable* when its status is 2xx **or** is in the engine's
+/// configured `visible` set. An observable response is surfaced to the script as
+/// a `#{ status, body }` map, so a script can branch on the status (e.g. retry a
+/// second path on a visible 404). A non-observable non-2xx status records an
+/// `HttpStatus` outcome (with the real code) and unwinds, so the caller
+/// classifies it as [`SourceScriptError::HttpStatus`] — preserving the default
+/// (empty `visible`) behavior where every non-2xx terminates the run.
 fn map_response_to_dynamic(
     resp: SourceResponse,
     caps: ConvertCaps,
     outcome: &OutcomeCell,
+    visible: &std::collections::BTreeSet<u16>,
 ) -> Result<Dynamic, Box<EvalAltResult>> {
-    if !(200..300).contains(&resp.status) {
+    let observable = (200..300).contains(&resp.status) || visible.contains(&resp.status);
+    if !observable {
         return Err(host_abort(outcome, HostOutcome::HttpStatus(resp.status)));
     }
-    json_to_dynamic(&resp.body, caps).map_err(|e| {
+    let body = json_to_dynamic(&resp.body, caps).map_err(|e| {
         host_abort(
             outcome,
             HostOutcome::Type {
                 detail: type_detail(&e),
             },
         )
-    })
+    })?;
+    let mut m = rhai::Map::new();
+    m.insert("status".into(), Dynamic::from(resp.status as i64));
+    m.insert("body".into(), body);
+    Ok(Dynamic::from_map(m))
 }
 
 /// Translate a host-returned error into the authoritative [`HostOutcome`],
