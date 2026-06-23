@@ -121,6 +121,31 @@ class EsignetRelayLabTest(unittest.TestCase):
         self.assertIn("search_path: /dci/crvs/registry/sync/search", hosted)
         self.assertNotIn('version: "1.0.0"', hosted)
 
+    def test_hosted_birth_certificate_wallet_claim_keeps_birth_evidence_root(self) -> None:
+        hosted = text("config/coolify/notary/citizen-civil-notary.yaml")
+
+        for expected in (
+            "'type': 'BirthEvidence'",
+            "'display_summary': {'registration_number': source.birth_record.registration_number",
+            "'issue_date': source.birth_certificate.issue_date",
+            "'issuing_authority_name': source.birth_record.authority",
+            "'child_given_name': source.child_person.given_name",
+            "'child_family_name': source.child_person.surname",
+            "'child_birth_date': source.child_person.birth_date",
+            "'child_sex': source.child_person.sex",
+            "'place_of_birth': source.birth_event.place_of_birth",
+            "'mother_given_name': source.mother_person.given_name",
+            "'mother_family_name': source.mother_person.surname",
+            "'father_given_name': source.father_person.given_name",
+            "'father_family_name': source.father_person.surname",
+            "'identifier': source.birth_certificate.id",
+            "'certifies_birth': {'identifier': source.birth_record.registration_number",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, hosted)
+        self.assertNotIn("'type': 'CRVSBirthCertificate'", hosted)
+        self.assertNotIn("'birth_evidence': {'type': 'BirthEvidence'", hosted)
+
     def test_smoke_recreates_civil_relay_after_port_collision(self) -> None:
         smoke = text("scripts/smoke-citizen-self-attestation.sh")
 
