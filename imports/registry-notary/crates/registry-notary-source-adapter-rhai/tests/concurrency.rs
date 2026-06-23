@@ -176,6 +176,45 @@ async fn saturation_yields_clean_rejection_not_hang() {
     assert!(saturated >= 1, "expected a saturated outcome");
 }
 
+// (6) If the orchestrating future is dropped/cancelled by its caller, the
+//     blocking script thread must stop PROMPTLY (CancelOnDrop flips the cancel
+//     flag) instead of running to the full wall-clock deadline. The deadline is
+//     set long (10s) so that, were the guard missing, the thread would still be
+//     spinning well past the test's ~2s observation window.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn dropping_execute_future_stops_blocking_thread() {
+    let engine = Arc::new(
+        ScriptEngine::compile(INFINITE, "lookup", &policy(Duration::from_secs(10), 4)).unwrap(),
+    );
+    let host = Arc::new(MockScriptHost::echo(Duration::from_millis(1)));
+    let finished = Arc::new(AtomicBool::new(false));
+
+    let e = engine.clone();
+    let h = host.clone();
+    let f = finished.clone();
+    let task = tokio::spawn(async move { e.execute_observing(h, ctx("1"), f).await });
+
+    // Let the blocking thread spawn and start spinning, then drop the
+    // orchestrating future by aborting the task that holds it.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    task.abort();
+    let _ = task.await;
+
+    // The blocking thread must stop well before the 10s deadline.
+    let mut stopped = false;
+    for _ in 0..200 {
+        if finished.load(Ordering::SeqCst) {
+            stopped = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        stopped,
+        "dropping the execute future must stop the blocking thread promptly"
+    );
+}
+
 // (5) Counters classify outcomes: completed, timed_out, transport_failed, and
 //     saturated all increment distinctly.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

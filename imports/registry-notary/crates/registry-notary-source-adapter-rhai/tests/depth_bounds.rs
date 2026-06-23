@@ -96,6 +96,33 @@ async fn script_returning_hostile_depth_is_rejected_not_aborted() {
     );
 }
 
+// (B1, xw.json.stringify_json) The stringify helper has its OWN
+// `serde_json::to_value` on the script-value path, which the original B1 fix did
+// not cover. A script that builds a hostile-depth value and stringifies it must
+// be rejected with a controlled error (not abort), proving the depth guard is
+// wired into that helper too.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn xw_stringify_json_hostile_depth_is_rejected_not_aborted() {
+    let script = format!(
+        r#"
+        fn lookup(ctx) {{
+            let x = 0;
+            for i in 0..{HOSTILE_DEPTH} {{
+                x = [x];
+            }}
+            [#{{ s: xw.json.stringify_json(x) }}]
+        }}
+    "#
+    );
+    let engine = ScriptEngine::compile(&script, "lookup", &policy()).unwrap();
+    let host = Arc::new(MockScriptHost::echo(Duration::from_millis(1)));
+    let e = engine.execute(host, ctx()).await.unwrap_err();
+    assert!(
+        matches!(e, SourceScriptError::Runtime { .. }),
+        "hostile stringify depth must classify as a Runtime error, got {e:?}"
+    );
+}
+
 // (B1, input direction) A host whose response `body` nests `HOSTILE_DEPTH`
 // levels deep must be rejected when converted into a Rhai `Dynamic` for the
 // script — `json_to_dynamic` checks depth before `to_dynamic`.

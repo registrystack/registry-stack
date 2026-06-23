@@ -27,7 +27,7 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use rhai::{Dynamic, Engine, EvalAltResult, Position, Scope};
 use serde_json::Value;
@@ -188,6 +188,11 @@ impl ScriptEngine {
         // --- per-run termination state ---
         let deadline = Instant::now() + policy.timeout;
         let cancel = Arc::new(AtomicBool::new(false));
+        // If the orchestrating future is dropped/cancelled by its caller (e.g. an
+        // outer request timeout) this guard sets the cancel flag, so the detached
+        // blocking thread terminates at its next `on_progress` check and releases
+        // its permit promptly instead of running to the full deadline.
+        let _cancel_guard = CancelOnDrop(cancel.clone());
 
         // --- per-run authoritative outcome cell (M1) ---
         // Written only by host-trusted code (progress guard, capability budget
@@ -232,13 +237,14 @@ impl ScriptEngine {
         let dispatch = async move {
             while let Some(cmd) = rx.recv().await {
                 let remaining = deadline.saturating_duration_since(Instant::now());
-                let per_call = if remaining.is_zero() {
-                    Duration::from_millis(1)
-                } else {
-                    remaining
-                };
+                // Already past the deadline: fail fast without starting a host
+                // call we could never finish in time.
+                if remaining.is_zero() {
+                    let _ = cmd.reply.send(Err(SourceScriptError::Deadline));
+                    continue;
+                }
                 let result = match tokio::time::timeout(
-                    per_call,
+                    remaining,
                     host.source_get(&cmd.target, &cmd.path, cmd.query.clone()),
                 )
                 .await
@@ -525,6 +531,18 @@ impl Drop for SetOnDrop {
     }
 }
 
+/// Sets the cancel flag to `true` on drop, signalling the (possibly detached)
+/// blocking thread to stop at its next `on_progress` check. This makes the
+/// engine react to the orchestrating future being dropped/cancelled by its
+/// caller — without it, a dropped `execute` future would leave the blocking
+/// Rhai thread running, and its permit held, until the wall-clock deadline.
+struct CancelOnDrop(Arc<AtomicBool>);
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
 /// Run the compiled script synchronously and validate its output.
 fn run_script_blocking(
     engine: Engine,
@@ -544,11 +562,26 @@ fn run_script_blocking(
 
     let json = dynamic_to_json(&out, caps)?;
 
-    // Enforce the output byte cap before structural validation.
-    let serialized = serde_json::to_string(&json).map_err(|e| SourceScriptError::Type {
+    // Enforce the output byte cap before structural validation. Measure the
+    // serialized length with a counting writer so we never allocate the full
+    // output string just to read its length and throw it away.
+    struct CountingWriter {
+        count: usize,
+    }
+    impl std::io::Write for CountingWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.count += buf.len();
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut writer = CountingWriter { count: 0 };
+    serde_json::to_writer(&mut writer, &json).map_err(|e| SourceScriptError::Type {
         detail: format!("output not serializable: {e}"),
     })?;
-    if serialized.len() > max_output_bytes {
+    if writer.count > max_output_bytes {
         return Err(SourceScriptError::Budget {
             kind: BudgetKind::OutputBytes,
         });

@@ -209,6 +209,15 @@ fn register_json(engine: &mut Engine) {
     engine.register_fn(
         "stringify_json",
         |_: XwJsonNs, value: Dynamic| -> Result<String, Box<EvalAltResult>> {
+            // Reject deeply nested / non-data values BEFORE `serde_json::to_value`,
+            // which recurses and would otherwise overflow the blocking thread's
+            // stack (aborting the whole process) on a script-built deep value.
+            crate::convert::reject_non_data(&value, 0).map_err(|e| {
+                Box::new(EvalAltResult::ErrorRuntime(
+                    Dynamic::from(format!("JSON_STRINGIFY: {e}")),
+                    Position::NONE,
+                ))
+            })?;
             let json: Value = serde_json::to_value(&value).map_err(|e| {
                 Box::new(EvalAltResult::ErrorRuntime(
                     Dynamic::from(format!("JSON_STRINGIFY: {e}")),

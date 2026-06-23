@@ -94,7 +94,11 @@ fn depth_exceeded() -> SourceScriptError {
 /// `FnPtr` nested inside an array/map can serialize in surprising ways across
 /// Rhai versions; we walk the structure and reject explicitly so the contract
 /// ("plain data only") does not depend on serializer behavior.
-fn reject_non_data(value: &Dynamic, depth: usize) -> Result<(), SourceScriptError> {
+///
+/// `pub(crate)` so `xw.json.stringify_json` can run the same depth-bounded walk
+/// before its own `serde_json::to_value`, which recurses and would otherwise
+/// overflow the blocking thread's stack on a script-built deep value.
+pub(crate) fn reject_non_data(value: &Dynamic, depth: usize) -> Result<(), SourceScriptError> {
     if depth > MAX_JSON_DEPTH {
         return Err(depth_exceeded());
     }
@@ -180,7 +184,18 @@ fn check_json_bounds(
                     ),
                 });
             }
-            for v in map.values() {
+            for (k, v) in map.iter() {
+                // Object keys are strings too: hold them to the same byte cap so
+                // an oversized key cannot bypass the string-size limit.
+                if k.len() > caps.max_string_bytes {
+                    return Err(SourceScriptError::Type {
+                        detail: format!(
+                            "object key of {} bytes exceeds cap {}",
+                            k.len(),
+                            caps.max_string_bytes
+                        ),
+                    });
+                }
                 check_json_bounds(v, caps, depth + 1)?;
             }
         }
@@ -242,6 +257,16 @@ mod tests {
             m.insert(format!("k{i}"), json!(i));
         }
         assert!(json_to_dynamic(&Value::Object(m), caps()).is_err());
+    }
+
+    #[test]
+    fn input_object_key_size_cap_enforced() {
+        // An oversized *key* must be rejected too, so a long key cannot be used
+        // to smuggle bytes past the string-size cap.
+        let mut m = serde_json::Map::new();
+        m.insert("k".repeat(2000), json!(1));
+        let e = json_to_dynamic(&Value::Object(m), caps()).unwrap_err();
+        assert!(matches!(e, SourceScriptError::Type { .. }));
     }
 
     #[test]
