@@ -448,7 +448,10 @@ pub enum SourceCapability {
         scopes: BTreeSet<String>,
     },
     SelfAttestation {
-        claim_id: BoundedClaimId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        claim_id: Option<BoundedClaimId>,
+        #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+        allowed_claim_ids: BTreeSet<BoundedClaimId>,
         subject_binding_hash: Hashed<SubjectBinding>,
     },
     DelegatedAttestation {
@@ -485,8 +488,17 @@ impl SourceCapability {
         match self {
             Self::Machine { .. } => false,
             Self::SelfAttestation {
-                claim_id: allowed, ..
-            } => allowed.as_str() == claim_id,
+                claim_id: allowed,
+                allowed_claim_ids,
+                ..
+            } => {
+                allowed
+                    .as_ref()
+                    .is_some_and(|allowed| allowed.as_str() == claim_id)
+                    || allowed_claim_ids
+                        .iter()
+                        .any(|allowed| allowed.as_str() == claim_id)
+            }
             Self::DelegatedAttestation { .. } => false,
         }
     }
@@ -2240,7 +2252,8 @@ mod tests {
         assert!(!machine.allows_self_attestation_claim("person-is-alive"));
 
         let citizen = SourceCapability::SelfAttestation {
-            claim_id: bounded("person-is-alive"),
+            claim_id: Some(bounded("person-is-alive")),
+            allowed_claim_ids: BTreeSet::new(),
             subject_binding_hash: Hashed::from_hash("sha256:test"),
         };
         assert_eq!(citizen.access_mode(), AccessMode::SelfAttestation);

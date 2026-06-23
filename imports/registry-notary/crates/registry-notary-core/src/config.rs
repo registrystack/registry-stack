@@ -2,6 +2,7 @@
 //! Registry Notary configuration model.
 
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::collections::HashSet;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
@@ -2134,7 +2135,10 @@ const fn default_oid4vci_proof_max_clock_skew_seconds() -> u64 {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Oid4vciCredentialConfigurationConfig {
-    pub claim_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claim_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub claims: Vec<Oid4vciCredentialClaimConfig>,
     pub credential_profile: String,
     pub format: String,
     pub scope: String,
@@ -2148,7 +2152,56 @@ pub struct Oid4vciCredentialConfigurationConfig {
     pub cryptographic_binding_methods_supported: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Oid4vciCredentialClaimConfig {
+    pub id: String,
+    pub output_path: Vec<String>,
+    pub display_name: String,
+    pub sd: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Oid4vciCredentialClaimMode<'a> {
+    LegacyClaimWrapper {
+        claim_id: &'a str,
+    },
+    FieldProjection {
+        entries: &'a [Oid4vciCredentialClaimConfig],
+    },
+}
+
+impl Oid4vciCredentialClaimMode<'_> {
+    #[must_use]
+    pub fn is_field_projection(&self) -> bool {
+        matches!(self, Self::FieldProjection { .. })
+    }
+}
+
 impl Oid4vciCredentialConfigurationConfig {
+    #[must_use]
+    pub fn credential_claim_mode(&self) -> Oid4vciCredentialClaimMode<'_> {
+        if let Some(claim_id) = self.claim_id.as_deref() {
+            Oid4vciCredentialClaimMode::LegacyClaimWrapper { claim_id }
+        } else {
+            Oid4vciCredentialClaimMode::FieldProjection {
+                entries: &self.claims,
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn credential_claim_ids(&self) -> Vec<String> {
+        match self.credential_claim_mode() {
+            Oid4vciCredentialClaimMode::LegacyClaimWrapper { claim_id } => {
+                vec![claim_id.to_string()]
+            }
+            Oid4vciCredentialClaimMode::FieldProjection { entries } => {
+                entries.iter().map(|entry| entry.id.clone()).collect()
+            }
+        }
+    }
+
     fn validate(
         &self,
         configuration_id: &str,
@@ -2161,7 +2214,7 @@ impl Oid4vciCredentialConfigurationConfig {
         if configuration_id.trim().is_empty() {
             return invalid_oid4vci("credential_configurations must not contain a blank id");
         }
-        validate_oid4vci_non_empty_value("credential_configurations.claim_id", &self.claim_id)?;
+        let claim_mode = self.validate_claim_mode(configuration_id)?;
         validate_oid4vci_non_empty_value(
             "credential_configurations.credential_profile",
             &self.credential_profile,
@@ -2172,18 +2225,6 @@ impl Oid4vciCredentialConfigurationConfig {
             &self.display_name,
         )?;
         self.display.validate("credential_configurations.display")?;
-        if !claim_ids.contains(self.claim_id.as_str()) {
-            return invalid_oid4vci(format!(
-                "credential configuration '{configuration_id}' references unknown claim '{}'",
-                self.claim_id
-            ));
-        }
-        if !allowed_claim_ids.contains(self.claim_id.as_str()) {
-            return invalid_oid4vci(format!(
-                "credential configuration '{configuration_id}' references claim '{}' outside self_attestation.allowed_claims",
-                self.claim_id
-            ));
-        }
         let profile = evidence
             .credential_profiles
             .get(&self.credential_profile)
@@ -2199,33 +2240,6 @@ impl Oid4vciCredentialConfigurationConfig {
                 self.credential_profile
             ));
         }
-        if !profile
-            .allowed_claims
-            .iter()
-            .any(|claim_id| claim_id == &self.claim_id)
-        {
-            return invalid_oid4vci(format!(
-                "credential configuration '{configuration_id}' maps claim '{}' to credential profile '{}' but the profile does not allow that claim",
-                self.claim_id, self.credential_profile
-            ));
-        }
-        let claim = evidence
-            .claims
-            .iter()
-            .find(|claim| claim.id == self.claim_id)
-            // SAFETY: the loop above has already rejected every unknown
-            // credential configuration claim id before this lookup.
-            .expect("claim id was checked above");
-        if !claim
-            .credential_profiles
-            .iter()
-            .any(|profile_id| profile_id == &self.credential_profile)
-        {
-            return invalid_oid4vci(format!(
-                "credential configuration '{configuration_id}' maps claim '{}' to credential profile '{}' but the claim does not reference that profile",
-                self.claim_id, self.credential_profile
-            ));
-        }
         if self.format != OID4VCI_SD_JWT_VC_FORMAT {
             return invalid_oid4vci(format!(
                 "credential configuration '{configuration_id}' format must be dc+sd-jwt"
@@ -2236,6 +2250,41 @@ impl Oid4vciCredentialConfigurationConfig {
                 "credential configuration '{configuration_id}' references credential profile '{}' with unsupported format '{}'",
                 self.credential_profile, profile.format
             ));
+        }
+        let mut projection_purpose = None;
+        for claim_id in self.credential_claim_ids() {
+            let claim = validate_oid4vci_credential_claim_reference(
+                configuration_id,
+                &claim_id,
+                &self.credential_profile,
+                evidence,
+                profile,
+                claim_ids,
+                allowed_claim_ids,
+            )?;
+            if claim_mode.is_field_projection() {
+                let purpose = claim.purpose.as_deref().ok_or_else(|| {
+                    EvidenceConfigError::InvalidOid4vciConfig {
+                        reason: format!(
+                            "credential configuration '{configuration_id}' field projection claim '{claim_id}' must define purpose"
+                        ),
+                    }
+                })?;
+                if let Some(previous) = projection_purpose {
+                    if previous != purpose {
+                        return invalid_oid4vci(format!(
+                            "credential configuration '{configuration_id}' field projection claims must share one purpose"
+                        ));
+                    }
+                } else {
+                    projection_purpose = Some(purpose);
+                }
+                if claim.disclosure.default != "value" {
+                    return invalid_oid4vci(format!(
+                        "credential configuration '{configuration_id}' field projection claim '{claim_id}' must use value as the default disclosure"
+                    ));
+                }
+            }
         }
         if self.vct != profile.vct {
             return invalid_oid4vci(format!(
@@ -2284,6 +2333,154 @@ impl Oid4vciCredentialConfigurationConfig {
         }
         Ok(())
     }
+
+    fn validate_claim_mode(
+        &self,
+        configuration_id: &str,
+    ) -> Result<Oid4vciCredentialClaimMode<'_>, EvidenceConfigError> {
+        match (self.claim_id.as_deref(), self.claims.is_empty()) {
+            (Some(claim_id), true) => {
+                validate_oid4vci_non_empty_value("credential_configurations.claim_id", claim_id)?;
+                Ok(Oid4vciCredentialClaimMode::LegacyClaimWrapper { claim_id })
+            }
+            (None, false) => {
+                validate_oid4vci_projection_claims(configuration_id, &self.claims)?;
+                Ok(Oid4vciCredentialClaimMode::FieldProjection {
+                    entries: &self.claims,
+                })
+            }
+            (Some(_), false) => invalid_oid4vci(format!(
+                "credential configuration '{configuration_id}' must set exactly one of claim_id or claims"
+            )),
+            (None, true) => invalid_oid4vci(format!(
+                "credential configuration '{configuration_id}' must set exactly one of claim_id or claims"
+            )),
+        }
+    }
+}
+
+fn validate_oid4vci_projection_claims(
+    configuration_id: &str,
+    claims: &[Oid4vciCredentialClaimConfig],
+) -> Result<(), EvidenceConfigError> {
+    let mut ids = BTreeSet::new();
+    let mut paths = BTreeSet::new();
+    for claim in claims {
+        validate_oid4vci_non_empty_value("credential_configurations.claims[].id", &claim.id)?;
+        if !ids.insert(claim.id.as_str()) {
+            return invalid_oid4vci(format!(
+                "credential configuration '{configuration_id}' contains duplicate claims[].id"
+            ));
+        }
+        validate_oid4vci_non_empty_value(
+            "credential_configurations.claims[].display_name",
+            &claim.display_name,
+        )?;
+        validate_oid4vci_non_empty_value("credential_configurations.claims[].sd", &claim.sd)?;
+        if claim.sd != "always" {
+            return invalid_oid4vci(format!(
+                "credential configuration '{configuration_id}' claims[].sd must be always"
+            ));
+        }
+        if claim.output_path.is_empty() {
+            return invalid_oid4vci(format!(
+                "credential configuration '{configuration_id}' claims[].output_path must not be empty"
+            ));
+        }
+        if claim.output_path.len() != 1 {
+            return invalid_oid4vci(format!(
+                "credential configuration '{configuration_id}' claims[].output_path must be a single segment in V1"
+            ));
+        }
+        let segment = &claim.output_path[0];
+        validate_oid4vci_non_empty_value(
+            "credential_configurations.claims[].output_path",
+            segment,
+        )?;
+        if is_reserved_oid4vci_projection_output_name(segment) {
+            return invalid_oid4vci(format!(
+                "credential configuration '{configuration_id}' claims[].output_path uses reserved claim name '{segment}'"
+            ));
+        }
+        if !paths.insert(segment.as_str()) {
+            return invalid_oid4vci(format!(
+                "credential configuration '{configuration_id}' contains duplicate claims[].output_path"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_oid4vci_credential_claim_reference<'a>(
+    configuration_id: &str,
+    claim_id: &str,
+    credential_profile_id: &str,
+    evidence: &'a EvidenceConfig,
+    profile: &CredentialProfileConfig,
+    claim_ids: &HashSet<&str>,
+    allowed_claim_ids: &HashSet<&str>,
+) -> Result<&'a ClaimDefinition, EvidenceConfigError> {
+    if !claim_ids.contains(claim_id) {
+        return invalid_oid4vci(format!(
+            "credential configuration '{configuration_id}' references unknown claim '{claim_id}'"
+        ));
+    }
+    if !allowed_claim_ids.contains(claim_id) {
+        return invalid_oid4vci(format!(
+            "credential configuration '{configuration_id}' references claim '{claim_id}' outside self_attestation.allowed_claims"
+        ));
+    }
+    if !profile
+        .allowed_claims
+        .iter()
+        .any(|allowed_claim_id| allowed_claim_id == claim_id)
+    {
+        return invalid_oid4vci(format!(
+            "credential configuration '{configuration_id}' maps claim '{claim_id}' to credential profile '{credential_profile_id}' but the profile does not allow that claim"
+        ));
+    }
+    let claim = evidence
+        .claims
+        .iter()
+        .find(|claim| claim.id == claim_id)
+        .ok_or_else(|| EvidenceConfigError::InvalidOid4vciConfig {
+            reason: format!(
+                "credential configuration '{configuration_id}' references unknown claim '{claim_id}'"
+            ),
+        })?;
+    if !claim
+        .credential_profiles
+        .iter()
+        .any(|profile_id| profile_id == credential_profile_id)
+    {
+        return invalid_oid4vci(format!(
+            "credential configuration '{configuration_id}' maps claim '{claim_id}' to credential profile '{credential_profile_id}' but the claim does not reference that profile"
+        ));
+    }
+    Ok(claim)
+}
+
+fn is_reserved_oid4vci_projection_output_name(value: &str) -> bool {
+    const RESERVED: [&str; 17] = [
+        "iss",
+        "sub",
+        "aud",
+        "iat",
+        "nbf",
+        "exp",
+        "vct",
+        "vct#integrity",
+        "id",
+        "jti",
+        "_sd",
+        "_sd_alg",
+        "cnf",
+        "status",
+        "issuanceDate",
+        "expirationDate",
+        "credential_configuration_id",
+    ];
+    RESERVED.contains(&value)
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -7234,6 +7431,61 @@ credential_configurations:
         config
     }
 
+    fn add_oid4vci_projection_claim(
+        config: &mut StandaloneRegistryNotaryConfig,
+        claim_id: &str,
+        title: &str,
+    ) {
+        let mut claim = config
+            .evidence
+            .claims
+            .iter()
+            .find(|claim| claim.id == "date-of-birth")
+            .expect("base claim exists")
+            .clone();
+        claim.id = claim_id.to_string();
+        claim.title = title.to_string();
+        claim.credential_profiles = vec!["civil_status_sd_jwt".to_string()];
+        config.evidence.claims.push(claim);
+        config
+            .self_attestation
+            .allowed_claims
+            .push(claim_id.to_string());
+        config
+            .evidence
+            .credential_profiles
+            .get_mut("civil_status_sd_jwt")
+            .expect("profile exists")
+            .allowed_claims
+            .push(claim_id.to_string());
+    }
+
+    fn valid_oid4vci_projection_config() -> StandaloneRegistryNotaryConfig {
+        let mut config = valid_oid4vci_config();
+        add_oid4vci_projection_claim(&mut config, "birth-place", "Birth place");
+        let credential = config
+            .oid4vci
+            .credential_configurations
+            .get_mut("date_of_birth_sd_jwt")
+            .expect("credential configuration exists");
+        credential.claim_id = None;
+        credential.claims = vec![
+            Oid4vciCredentialClaimConfig {
+                id: "date-of-birth".to_string(),
+                output_path: vec!["birth_date".to_string()],
+                display_name: "Date of birth".to_string(),
+                sd: "always".to_string(),
+            },
+            Oid4vciCredentialClaimConfig {
+                id: "birth-place".to_string(),
+                output_path: vec!["birth_place_name".to_string()],
+                display_name: "Birth place".to_string(),
+                sd: "always".to_string(),
+            },
+        ];
+        config
+    }
+
     fn expect_self_attestation_error(config: &StandaloneRegistryNotaryConfig) -> String {
         match config
             .validate()
@@ -9842,6 +10094,209 @@ allowed_claims: ["", "   "]
     }
 
     #[test]
+    fn valid_oid4vci_projection_config_passes_validation() {
+        let config = valid_oid4vci_projection_config();
+        config
+            .validate()
+            .expect("projection credential config validates");
+    }
+
+    #[test]
+    fn oid4vci_projection_rejects_claim_id_and_claims_together() {
+        let mut config = valid_oid4vci_projection_config();
+        config
+            .oid4vci
+            .credential_configurations
+            .get_mut("date_of_birth_sd_jwt")
+            .unwrap()
+            .claim_id = Some("date-of-birth".to_string());
+
+        let reason = expect_oid4vci_error(&config);
+        assert!(
+            reason.contains("exactly one of claim_id or claims"),
+            "unexpected: {reason}"
+        );
+    }
+
+    #[test]
+    fn oid4vci_projection_rejects_missing_claim_mode() {
+        let mut config = valid_oid4vci_config();
+        let credential = config
+            .oid4vci
+            .credential_configurations
+            .get_mut("date_of_birth_sd_jwt")
+            .unwrap();
+        credential.claim_id = None;
+        credential.claims.clear();
+
+        let reason = expect_oid4vci_error(&config);
+        assert!(
+            reason.contains("exactly one of claim_id or claims"),
+            "unexpected: {reason}"
+        );
+    }
+
+    #[test]
+    fn oid4vci_projection_rejects_duplicate_output_paths() {
+        let mut config = valid_oid4vci_projection_config();
+        let credential = config
+            .oid4vci
+            .credential_configurations
+            .get_mut("date_of_birth_sd_jwt")
+            .unwrap();
+        credential.claims[1].output_path = vec!["birth_date".to_string()];
+
+        let reason = expect_oid4vci_error(&config);
+        assert!(
+            reason.contains("duplicate") && reason.contains("output_path"),
+            "unexpected: {reason}"
+        );
+    }
+
+    #[test]
+    fn oid4vci_projection_rejects_duplicate_claim_ids() {
+        let mut config = valid_oid4vci_projection_config();
+        let credential = config
+            .oid4vci
+            .credential_configurations
+            .get_mut("date_of_birth_sd_jwt")
+            .unwrap();
+        credential.claims[1].id = "date-of-birth".to_string();
+
+        let reason = expect_oid4vci_error(&config);
+        assert!(
+            reason.contains("duplicate") && reason.contains("claims[].id"),
+            "unexpected: {reason}"
+        );
+    }
+
+    #[test]
+    fn oid4vci_projection_rejects_reserved_output_paths() {
+        for reserved in [
+            "iss",
+            "sub",
+            "aud",
+            "iat",
+            "nbf",
+            "exp",
+            "vct",
+            "vct#integrity",
+            "id",
+            "jti",
+            "_sd",
+            "_sd_alg",
+            "cnf",
+            "status",
+            "issuanceDate",
+            "expirationDate",
+        ] {
+            let mut config = valid_oid4vci_projection_config();
+            config
+                .oid4vci
+                .credential_configurations
+                .get_mut("date_of_birth_sd_jwt")
+                .unwrap()
+                .claims[0]
+                .output_path = vec![reserved.to_string()];
+
+            let reason = expect_oid4vci_error(&config);
+            assert!(
+                reason.contains("reserved") && reason.contains(reserved),
+                "unexpected for {reserved}: {reason}"
+            );
+        }
+    }
+
+    #[test]
+    fn oid4vci_projection_rejects_nested_output_paths_in_v1() {
+        let mut config = valid_oid4vci_projection_config();
+        config
+            .oid4vci
+            .credential_configurations
+            .get_mut("date_of_birth_sd_jwt")
+            .unwrap()
+            .claims[0]
+            .output_path = vec!["birth".to_string(), "date".to_string()];
+
+        let reason = expect_oid4vci_error(&config);
+        assert!(reason.contains("single segment"), "unexpected: {reason}");
+    }
+
+    #[test]
+    fn oid4vci_projection_rejects_unknown_claim_reference() {
+        let mut config = valid_oid4vci_projection_config();
+        config
+            .oid4vci
+            .credential_configurations
+            .get_mut("date_of_birth_sd_jwt")
+            .unwrap()
+            .claims[0]
+            .id = "missing-claim".to_string();
+
+        let reason = expect_oid4vci_error(&config);
+        assert!(
+            reason.contains("unknown claim 'missing-claim'"),
+            "unexpected: {reason}"
+        );
+    }
+
+    #[test]
+    fn oid4vci_projection_rejects_claim_outside_profile_allow_list() {
+        let mut config = valid_oid4vci_projection_config();
+        config
+            .evidence
+            .credential_profiles
+            .get_mut("civil_status_sd_jwt")
+            .unwrap()
+            .allowed_claims
+            .retain(|claim_id| claim_id != "birth-place");
+
+        let reason = expect_oid4vci_error(&config);
+        assert!(
+            reason.contains("profile") && reason.contains("does not allow"),
+            "unexpected: {reason}"
+        );
+    }
+
+    #[test]
+    fn oid4vci_projection_rejects_mixed_claim_purposes() {
+        let mut config = valid_oid4vci_projection_config();
+        config
+            .self_attestation
+            .allowed_purposes
+            .push("other_purpose".to_string());
+        let claim = config
+            .evidence
+            .claims
+            .iter_mut()
+            .find(|claim| claim.id == "birth-place")
+            .expect("projection claim exists");
+        claim.purpose = Some("other_purpose".to_string());
+
+        let reason = expect_oid4vci_error(&config);
+        assert!(reason.contains("share one purpose"), "unexpected: {reason}");
+    }
+
+    #[test]
+    fn oid4vci_projection_rejects_non_value_default_disclosure() {
+        let mut config = valid_oid4vci_projection_config();
+        let claim = config
+            .evidence
+            .claims
+            .iter_mut()
+            .find(|claim| claim.id == "birth-place")
+            .expect("projection claim exists");
+        claim.disclosure.default = "redacted".to_string();
+        claim.disclosure.allowed = vec!["redacted".to_string(), "value".to_string()];
+
+        let reason = expect_oid4vci_error(&config);
+        assert!(
+            reason.contains("must use value as the default disclosure"),
+            "unexpected: {reason}"
+        );
+    }
+
+    #[test]
     fn claim_semantics_accepts_publicschema_property_mapping() {
         let mut config = minimal_config();
         config.evidence.source_connections.insert(
@@ -10017,7 +10472,7 @@ rule:
             .credential_configurations
             .get_mut("date_of_birth_sd_jwt")
             .unwrap()
-            .claim_id = "missing-claim".to_string();
+            .claim_id = Some("missing-claim".to_string());
 
         let reason = expect_oid4vci_error(&config);
         assert!(
