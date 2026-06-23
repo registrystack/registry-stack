@@ -1581,6 +1581,9 @@
                   },
                   "type": "array"
                 },
+                "mandatory": {
+                  "type": "boolean"
+                },
                 "path": {
                   "items": {
                     "type": "string"
@@ -1600,7 +1603,8 @@
               "required": [
                 "path",
                 "display",
-                "sd"
+                "sd",
+                "mandatory"
               ],
               "type": "object"
             },
@@ -2082,6 +2086,7 @@
                           "locale": "en-US"
                         }
                       ],
+                      "mandatory": true,
                       "path": [
                         "person-is-alive"
                       ],
@@ -2794,6 +2799,7 @@
                           "locale": "en-US"
                         }
                       ],
+                      "mandatory": true,
                       "path": [
                         "person-is-alive"
                       ],

@@ -20,10 +20,10 @@ use chrono::Utc;
 use registry_notary_core::FEDERATION_RESPONSE_JWT_TYP;
 use registry_notary_core::{
     BulkMode, ConfigTrustConfig, ConfigTrustRateLimit, EvidenceAuthMode, EvidenceCredentialConfig,
-    EvidenceOidcAuthConfig, Oid4vciConfig, RegistryNotaryAdminListenerMode,
-    RemoteTufRepositoryConfig, SelfAttestationClaimSource, SigningKeyConfig,
-    SigningKeyProviderConfig, SigningKeyStatus, StandaloneRegistryNotaryConfig,
-    SD_JWT_VC_SIGNING_ALG,
+    EvidenceOidcAuthConfig, Oid4vciConfig, Oid4vciCredentialClaimConfig,
+    RegistryNotaryAdminListenerMode, RemoteTufRepositoryConfig, RuleConfig,
+    SelfAttestationClaimSource, SigningKeyConfig, SigningKeyProviderConfig, SigningKeyStatus,
+    SourceFieldConfig, StandaloneRegistryNotaryConfig, SD_JWT_VC_SIGNING_ALG,
 };
 #[cfg(feature = "registry-notary-cel")]
 use registry_notary_server::cel_worker::{CelWorker, CelWorkerConfig};
@@ -1020,7 +1020,9 @@ async fn self_attestation_registry_data_api(
     Json(json!({
         "data": [{
             "id": "person-1",
-            "alive": true
+            "alive": true,
+            "given_name": "Miguel",
+            "birth_date": "2016-01-15"
         }]
     }))
     .into_response()
@@ -1807,6 +1809,99 @@ credential_configurations:
     )
     .expect("oid4vci config deserializes");
     config
+}
+
+fn add_self_attestation_projection_claim(
+    config: &mut StandaloneRegistryNotaryConfig,
+    claim_id: &str,
+    title: &str,
+    source_field: &str,
+    value_type: &str,
+) {
+    let mut claim = config
+        .evidence
+        .claims
+        .iter()
+        .find(|claim| claim.id == "person-is-alive")
+        .expect("base self-attestation claim exists")
+        .clone();
+    claim.id = claim_id.to_string();
+    claim.title = title.to_string();
+    claim.value.value_type = value_type.to_string();
+    claim.rule = RuleConfig::Extract {
+        source: "person".to_string(),
+        field: source_field.to_string(),
+    };
+    claim.formats = vec![
+        "application/vnd.registry-notary.claim-result+json".to_string(),
+        "application/dc+sd-jwt".to_string(),
+    ];
+    claim.credential_profiles = vec!["civil_status_sd_jwt".to_string()];
+    let binding = claim
+        .source_bindings
+        .get_mut("person")
+        .expect("person source binding exists");
+    binding.fields.insert(
+        source_field.to_string(),
+        SourceFieldConfig {
+            field: source_field.to_string(),
+            field_type: Some(value_type.to_string()),
+            unit: None,
+            required: true,
+            semantic_term: None,
+        },
+    );
+    config.evidence.claims.push(claim);
+    config
+        .self_attestation
+        .allowed_claims
+        .push(claim_id.to_string());
+    config
+        .evidence
+        .credential_profiles
+        .get_mut("civil_status_sd_jwt")
+        .expect("civil status profile exists")
+        .allowed_claims
+        .push(claim_id.to_string());
+}
+
+fn enable_oid4vci_field_projection(config: &mut StandaloneRegistryNotaryConfig) {
+    add_self_attestation_projection_claim(
+        config,
+        "person-given-name",
+        "Given name",
+        "given_name",
+        "string",
+    );
+    add_self_attestation_projection_claim(
+        config,
+        "person-birth-date",
+        "Birth date",
+        "birth_date",
+        "date",
+    );
+    config.self_attestation.allowed_operations.issue_credential = true;
+    let credential = config
+        .oid4vci
+        .credential_configurations
+        .get_mut("person_is_alive_sd_jwt")
+        .expect("OID4VCI credential configuration exists");
+    credential.claim_id = None;
+    credential.display_name = "Civil identity fields".to_string();
+    credential.claims = vec![
+        Oid4vciCredentialClaimConfig {
+            id: "person-given-name".to_string(),
+            output_path: vec!["given_name".to_string()],
+            display_name: "Given name".to_string(),
+            sd: "always".to_string(),
+        },
+        Oid4vciCredentialClaimConfig {
+            id: "person-birth-date".to_string(),
+            output_path: vec!["birth_date".to_string()],
+            display_name: "Birth date".to_string(),
+            sd: "always".to_string(),
+        },
+    ];
 }
 
 #[cfg(feature = "registry-notary-cel")]
@@ -8256,6 +8351,7 @@ async fn oid4vci_type_metadata_is_public_and_matches_configured_vct() {
         json!("Person is alive")
     );
     assert_eq!(body["claims"][0]["sd"], json!("always"));
+    assert_eq!(body["claims"][0]["mandatory"], json!(true));
 
     let query_response = server
         .get("/credentials/civil-status?cache_bust=1")
@@ -8546,6 +8642,7 @@ async fn oid4vci_type_metadata_well_known_is_public_and_matches_configured_vct()
         json!("Person is alive")
     );
     assert_eq!(body["claims"][0]["sd"], json!("always"));
+    assert_eq!(body["claims"][0]["mandatory"], json!(true));
 
     idp.stop().await;
 }
@@ -9282,6 +9379,122 @@ async fn oid4vci_credential_route_issues_holder_bound_sd_jwt() {
     assert!(credential_audit["target_ref_hash"].as_str().is_some());
     assert_eq!(credential_audit["requester_type"], json!("Person"));
     assert!(credential_audit["requester_ref_hash"].as_str().is_some());
+
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn oid4vci_field_projection_issues_separate_disclosures() {
+    set_audit_secret();
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+
+    let idp = MockIdp::start().await;
+    let upstream = TestServer::builder()
+        .http_transport()
+        .build(Router::new().route(
+            "/v1/datasets/people/entities/person/records",
+            get(self_attestation_registry_data_api),
+        ));
+    let base_url = upstream
+        .server_address()
+        .expect("HTTP transport exposes upstream address")
+        .to_string();
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = self_attestation_oid4vci_config(
+        base_url.trim_end_matches('/'),
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+    );
+    enable_oid4vci_field_projection(&mut config);
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let metadata = server
+        .get("/credentials/civil-status")
+        .add_header("host", "127.0.0.1:4325")
+        .add_header("x-forwarded-proto", "http")
+        .await;
+    metadata.assert_status_ok();
+    let metadata_body: Value = metadata.json();
+    assert_eq!(metadata_body["claims"][0]["path"], json!(["given_name"]));
+    assert_eq!(
+        metadata_body["claims"][0]["display"][0]["label"],
+        json!("Given name")
+    );
+    assert_eq!(metadata_body["claims"][0]["sd"], json!("always"));
+    assert_eq!(metadata_body["claims"][0]["mandatory"], json!(true));
+    assert_eq!(metadata_body["claims"][1]["path"], json!(["birth_date"]));
+    assert_eq!(
+        metadata_body["claims"][1]["display"][0]["label"],
+        json!("Birth date")
+    );
+    assert_eq!(metadata_body["claims"][1]["mandatory"], json!(true));
+
+    let nonce = server
+        .post("/oid4vci/nonce")
+        .json(&json!({"credential_configuration_id": "person_is_alive_sd_jwt"}))
+        .await;
+    nonce.assert_status_ok();
+    let nonce = nonce.json::<Value>()["c_nonce"]
+        .as_str()
+        .expect("nonce is returned")
+        .to_string();
+    let proof = sign_oid4vci_proof("http://127.0.0.1:4325", &nonce);
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let token = idp.mint_token(json!({
+        "sub": "citizen-subject",
+        "aud": "registry-notary-citizen",
+        "azp": "citizen-portal",
+        "scope": "self_attestation",
+        "national_id": "person-1",
+        "auth_time": now,
+        "iat": now,
+        "exp": now + 300,
+        "nbf": now,
+    }));
+
+    let response = server
+        .post("/oid4vci/credential")
+        .add_header("authorization", format!("Bearer {token}"))
+        .json(&json!({
+            "format": "dc+sd-jwt",
+            "credential_configuration_id": "person_is_alive_sd_jwt",
+            "proof": {
+                "proof_type": "jwt",
+                "jwt": proof
+            }
+        }))
+        .await;
+    response.assert_status_ok();
+    let body: Value = response.json();
+    let credential = body["credential"].as_str().expect("credential issued");
+    let payload = decode_sd_jwt_payload(credential);
+    assert_eq!(
+        payload["vct"],
+        json!("http://127.0.0.1:4325/credentials/civil-status")
+    );
+    assert_eq!(
+        payload["_sd"]
+            .as_array()
+            .expect("_sd digests are present")
+            .len(),
+        2
+    );
+    let payload_text = payload.to_string();
+    assert!(!payload_text.contains("Miguel"));
+    assert!(!payload_text.contains("2016-01-15"));
+
+    assert_eq!(
+        decode_disclosed_claim(credential, "given_name"),
+        json!("Miguel")
+    );
+    assert_eq!(
+        decode_disclosed_claim(credential, "birth_date"),
+        json!("2016-01-15")
+    );
 
     idp.stop().await;
 }

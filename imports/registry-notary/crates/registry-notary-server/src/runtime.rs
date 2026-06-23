@@ -2463,13 +2463,23 @@ fn source_capability_for_principal(
             scopes: principal.scopes.iter().cloned().collect(),
         }),
         AccessMode::SelfAttestation => {
-            if requested_claims.len() != 1 {
+            if requested_claims.is_empty() {
                 return Err(EvidenceError::SelfAttestationDenied {
                     reason: SelfAttestationDenialCode::ClaimDenied,
                 });
             }
-            let claim_id = BoundedClaimId::new(requested_claims[0].clone())
-                .map_err(|_| EvidenceError::InvalidRequest)?;
+            let mut allowed_claim_ids = BTreeSet::new();
+            for claim_id in requested_claims {
+                allowed_claim_ids.insert(
+                    BoundedClaimId::new(claim_id.clone())
+                        .map_err(|_| EvidenceError::InvalidRequest)?,
+                );
+            }
+            let claim_id = if requested_claims.len() == 1 {
+                allowed_claim_ids.iter().next().cloned()
+            } else {
+                None
+            };
             let claims =
                 principal
                     .verified_claims
@@ -2487,6 +2497,7 @@ fn source_capability_for_principal(
                 .map_err(|error| error.evidence_error())?;
             Ok(SourceCapability::SelfAttestation {
                 claim_id,
+                allowed_claim_ids,
                 subject_binding_hash,
             })
         }
@@ -2521,9 +2532,11 @@ fn require_source_read_capability(
 ) -> Result<(), EvidenceError> {
     match capability {
         SourceCapability::Machine { .. } => Ok(()),
-        SourceCapability::SelfAttestation {
-            claim_id: allowed, ..
-        } if allowed.as_str() == claim_id => Ok(()),
+        SourceCapability::SelfAttestation { .. }
+            if capability.allows_self_attestation_claim(claim_id) =>
+        {
+            Ok(())
+        }
         SourceCapability::DelegatedAttestation { .. }
             if capability.allows_delegated_claim(claim_id) =>
         {
@@ -6458,7 +6471,8 @@ mod tests {
 
     fn self_attestation_capability(claim_id: &str) -> SourceCapability {
         SourceCapability::SelfAttestation {
-            claim_id: BoundedClaimId::new(claim_id).expect("claim id is bounded"),
+            claim_id: Some(BoundedClaimId::new(claim_id).expect("claim id is bounded")),
+            allowed_claim_ids: BTreeSet::new(),
             subject_binding_hash: Hashed::from_hash("sha256:test"),
         }
     }
