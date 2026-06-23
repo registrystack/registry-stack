@@ -6,6 +6,7 @@ members = [
     "crates/registry-notary-bin",
     "crates/registry-notary-worker-harness",
     "crates/registry-notary-source-adapter-sidecar",
+    "crates/registry-notary-source-adapter-rhai",
     "xtask",
 ]
 resolver = "2"
@@ -33,6 +34,7 @@ registry-notary-core = { version = "0.6.2", path = "crates/registry-notary-core"
 registry-notary-server = { version = "0.6.2", path = "crates/registry-notary-server", default-features = false }
 registry-notary-worker-harness = { version = "0.6.2", path = "crates/registry-notary-worker-harness" }
 crosswalk-core = { version = "0.2.0", path = "../crosswalk/crates/crosswalk-core" }
+crosswalk-functions = { version = "0.2.0", path = "../crosswalk/crates/crosswalk-functions" }
 cryptoki = { version = "0.12" }
 getrandom = { version = "0.4" }
 hex = { version = "0.4" }
@@ -56,6 +58,7 @@ registry-platform-sdjwt = { version = "0.3.2", path = "../registry-platform/crat
 registry-platform-testing = { version = "0.3.2", path = "../registry-platform/crates/registry-platform-testing", features = ["test-utils"] }
 registry-platform-ops = { version = "0.3.2", path = "../registry-platform/crates/registry-platform-ops" }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+rhai = { version = "1.25.1", features = ["sync", "serde"] }
 secrecy = { version = "0.10" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
