@@ -70,7 +70,6 @@ evidence:
       token_env: CIVIL_EVIDENCE_SOURCE_RAW
       dci:
         search_path: /dci/crvs/registry/sync/search
-        version: "1.0.0"
         query_type: idtype-value
         records_path: /message/search_response/0/data/reg_records
         field_paths:

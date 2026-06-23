@@ -1302,6 +1302,32 @@ oid4vci:
         self.assertNoIssue(issues, "missing-credential-configuration")
         self.assertNoIssue(issues, "missing-oid4vci-format")
 
+    def test_rejects_unsupported_hosted_notary_dci_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_dir = root / "config" / "coolify" / "notary"
+            config_dir.mkdir(parents=True)
+            (config_dir / "citizen-civil-notary.yaml").write_text(
+                """
+evidence:
+  source_connections:
+    civil:
+      dci:
+        search_path: /dci/crvs/registry/sync/search
+        version: "1.0.0"
+""",
+                encoding="utf-8",
+            )
+            issues = self.validator.validate_artifacts(
+                {
+                    "registry-lab": self._valid_registry_lab(),
+                    "esignet": self._valid_esignet(),
+                },
+                {"registry-lab": root, "esignet": root},
+            )
+
+        self.assertIssue(issues, "unsupported-notary-dci-field")
+
     def test_rejects_overlong_bearer_offer_ttl(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

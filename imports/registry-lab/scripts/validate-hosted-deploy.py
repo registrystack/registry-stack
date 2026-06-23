@@ -301,6 +301,20 @@ HOSTED_CONFIG_DIRS = (
     Path("config/coolify/notary"),
     Path("config/coolify/relay"),
 )
+NOTARY_DCI_CONNECTION_KEYS = {
+    "search_path",
+    "sender_id",
+    "receiver_id",
+    "query_type",
+    "records_path",
+    "bulk_records_path",
+    "max_results",
+    "registry_type",
+    "registry_event_type",
+    "record_type",
+    "field_paths",
+    "signature",
+}
 DHIS2_PROGRAMME_PROFILE = "dhis2_programme_participation_sd_jwt"
 DHIS2_PROGRAMME_CLAIMS = {
     "dhis2-tracked-entity-first-name",
@@ -442,6 +456,7 @@ def validate_artifacts(
         issues.extend(validate_lab_homepage_config_ref(artifact, services))
         issues.extend(validate_config_loader_hosted_outputs(artifact, services))
         issues.extend(validate_hosted_yaml_files(artifact, root))
+        issues.extend(validate_hosted_notary_config_schema_contract(artifact, root))
         issues.extend(validate_dhis2_programme_vc_contract(artifact, root))
         issues.extend(validate_attestation_metadata_contract(artifact, root))
         if require_secret_values:
@@ -944,6 +959,46 @@ def validate_hosted_openapi_policy(
                         artifact,
                         str(config_path.relative_to(root)),
                         "hosted lab Relay and Notary OpenAPI endpoints must be public for demos",
+                    )
+                )
+    return issues
+
+
+def validate_hosted_notary_config_schema_contract(
+    artifact: str,
+    root: Path,
+) -> list[Issue]:
+    if artifact != "registry-lab":
+        return []
+    issues: list[Issue] = []
+    directory = root / "config/coolify/notary"
+    if not directory.exists():
+        return issues
+    for config_path in sorted(directory.glob("*.yaml")):
+        try:
+            config = load_yaml_mapping_strict(config_path)
+        except Exception:
+            continue
+        evidence = config.get("evidence")
+        if not isinstance(evidence, dict):
+            continue
+        source_connections = evidence.get("source_connections")
+        if not isinstance(source_connections, dict):
+            continue
+        for connection_name, connection in source_connections.items():
+            if not isinstance(connection, dict):
+                continue
+            dci = connection.get("dci")
+            if not isinstance(dci, dict):
+                continue
+            unsupported_keys = sorted(set(dci) - NOTARY_DCI_CONNECTION_KEYS)
+            for key in unsupported_keys:
+                issues.append(
+                    Issue(
+                        "unsupported-notary-dci-field",
+                        artifact,
+                        f"{config_path.relative_to(root)}:evidence.source_connections.{connection_name}.dci.{key}",
+                        f"hosted Notary DCI connection uses unsupported field {key!r}",
                     )
                 )
     return issues
