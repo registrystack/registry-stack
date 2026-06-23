@@ -85,28 +85,66 @@ async function copyValue(value, button) {
   setTimeout(() => button.textContent = previous, 1200);
 }
 
-function renderWallet(wallet) {
-  const issuer = wallet.issuer || "";
-  const credentialConfigurationId = wallet.credential_configuration_id || "";
-  const offerStart = wallet.offer_start_url || (
+function walletCredentialOptions(wallet) {
+  const configured = Array.isArray(wallet.credential_options) && wallet.credential_options.length
+    ? wallet.credential_options
+    : [wallet];
+  return configured.map((option) => ({
+    ...wallet,
+    ...option,
+    demo_identity: option.demo_identity || wallet.demo_identity || {},
+    negative_control: option.negative_control || wallet.negative_control || {},
+  }));
+}
+
+function credentialOfferStart(wallet, option) {
+  const issuer = option.issuer || wallet.issuer || "";
+  const credentialConfigurationId = option.credential_configuration_id || "";
+  return option.offer_start_url || (
     issuer && credentialConfigurationId
       ? `${issuer.replace(/\/$/, "")}/oid4vci/offer/start?credential_configuration_id=${encodeURIComponent(credentialConfigurationId)}`
-      : wallet.offer_url || ""
+      : option.offer_url || wallet.offer_url || ""
   );
+}
+
+function walletCredentialCard(wallet, option, index) {
+  const issuer = option.issuer || wallet.issuer || "";
+  const credentialConfigurationId = option.credential_configuration_id || "";
+  const offerStart = credentialOfferStart(wallet, option);
+  const identity = option.demo_identity || {};
+  const negative = option.negative_control || {};
+  return `
+    <div class="step-card">
+      <span class="step-number">${index + 2}</span>
+      <div>
+        <strong>${escapeHtml(option.credential_name || credentialConfigurationId)}</strong>
+        <p>${escapeHtml(option.user_story || "")}</p>
+        <div class="actions"><a class="button primary" href="${escapeHtml(offerStart)}" target="_blank" rel="noreferrer">Start issuance</a><button type="button" data-copy="${escapeHtml(offerStart)}">Copy start URL</button></div>
+        <div class="meta">Sign in as ${escapeHtml(identity.name)} (${escapeHtml(identity.identifier)}), OTP ${escapeHtml(identity.generated_code)}.</div>
+        <div class="meta">Wallet result: ${escapeHtml(identity.expected_result || "")}</div>
+        <div class="meta">Developer configuration: ${escapeHtml(issuer)} &middot; ${escapeHtml(credentialConfigurationId)}</div>
+        <div class="meta">Control: ${escapeHtml(negative.identifier || "")} ${escapeHtml(negative.expected_result || "")}</div>
+      </div>
+    </div>
+  `;
+}
+
+function renderWallet(wallet) {
   const walletUrl = wallet.wallet_url || "https://wallet.lab.registrystack.org/signup";
-  const identity = wallet.demo_identity || {};
-  const negative = wallet.negative_control || {};
+  const options = walletCredentialOptions(wallet);
+  const optionCards = options.map((option, index) => walletCredentialCard(wallet, option, index)).join("");
+  const credentialNames = options
+    .map((option) => option.credential_name || option.credential_configuration_id || "")
+    .filter(Boolean)
+    .join(", ");
   byId("wallet-grid").innerHTML = `
     <div class="step-list" aria-label="Wallet issuance steps">
       <div class="step-card"><span class="step-number">1</span><div><strong>Open the hosted wallet.</strong><p>Create or open a demo wallet, then use its scan or import-offer screen.</p><div class="actions"><a class="button" href="${escapeHtml(walletUrl)}" target="_blank" rel="noreferrer">Open wallet</a><button type="button" data-copy="${escapeHtml(walletUrl)}">Copy wallet URL</button></div></div></div>
-      <div class="step-card"><span class="step-number">2</span><div><strong>Start credential issuance.</strong><p>The Notary will redirect to eSignet before it renders the wallet offer.</p><div class="actions"><a class="button primary" href="${escapeHtml(offerStart)}" target="_blank" rel="noreferrer">Start issuance</a><button type="button" data-copy="${escapeHtml(offerStart)}">Copy start URL</button></div></div></div>
-      <div class="step-card"><span class="step-number">3</span><div><strong>Copy the generated offer into the wallet.</strong><p>After login, copy the <code>openid-credential-offer://</code> URI from the Notary page and paste it into the wallet scan/import screen within 300 seconds. The hosted demo no longer requires a separate issuer PIN.</p></div></div>
+      ${optionCards}
+      <div class="step-card"><span class="step-number">${options.length + 2}</span><div><strong>Copy the generated offer into the wallet.</strong><p>After login, copy the <code>openid-credential-offer://</code> URI from the Notary page and paste it into the wallet scan/import screen within 300 seconds. The hosted demo no longer requires a separate issuer PIN.</p></div></div>
     </div>
-    <div class="kv"><span>Sign in as</span><strong>${escapeHtml(identity.name)}</strong><div class="meta">Use ID ${escapeHtml(identity.identifier)} and OTP ${escapeHtml(identity.generated_code)}.</div></div>
-    <div class="kv"><span>Your wallet should receive</span><strong>${escapeHtml(wallet.credential_name || wallet.credential_configuration_id)}</strong><div class="meta">${escapeHtml(identity.expected_result || wallet.user_story || "")}</div></div>
-    <div class="kv"><span>Why this matters</span><strong>A service gets a yes/no proof, not the full civil record.</strong><div class="meta">${escapeHtml(wallet.user_story || "")}</div></div>
-    <div class="kv"><span>Test a rejected case</span><strong>${escapeHtml(negative.identifier)}</strong><div class="meta">${escapeHtml(negative.expected_result)}</div></div>
-    <div class="kv"><span>For developers</span><strong>Issuer and credential type</strong><div class="meta">${escapeHtml(issuer)} &middot; ${escapeHtml(credentialConfigurationId)}</div></div>
+    <div class="kv"><span>Your wallet can receive</span><strong>${escapeHtml(credentialNames)}</strong><div class="meta">Choose the simple vital-status proof or the richer CRVS birth certificate credential.</div></div>
+    <div class="kv"><span>Why this matters</span><strong>A service gets a signed answer, not a copied registry.</strong><div class="meta">The CRVS option carries proper BirthEvidence, while the wallet proof remains bound to the signed-in citizen.</div></div>
   `;
 }
 

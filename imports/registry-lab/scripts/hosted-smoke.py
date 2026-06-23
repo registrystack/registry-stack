@@ -28,6 +28,11 @@ DEFAULT_CITIZEN_ISSUER = "https://citizen-notary.lab.registrystack.org"
 DEFAULT_DHIS2_NOTARY = "https://dhis2-notary.lab.registrystack.org"
 DEFAULT_DHIS2_SERVICE_ID = "dhis2-health-notary"
 PERSON_ALIVE_CONFIGURATION = "person_is_alive_sd_jwt"
+CRVS_BIRTH_CERTIFICATE_CONFIGURATION = "crvs_birth_certificate_sd_jwt"
+WALLET_CONFIGURATIONS = (
+    PERSON_ALIVE_CONFIGURATION,
+    CRVS_BIRTH_CERTIFICATE_CONFIGURATION,
+)
 DHIS2_CREDENTIAL_PROFILE = "dhis2_programme_participation_sd_jwt"
 DHIS2_FORMAT = "application/dc+sd-jwt"
 CLAIM_RESULT_FORMAT = "application/vnd.registry-notary.claim-result+json"
@@ -377,6 +382,24 @@ def credential_configurations(metadata: Any) -> dict[str, Any]:
     return configurations if isinstance(configurations, dict) else {}
 
 
+def wallet_credential_configuration_ids(wallet: Any) -> list[str]:
+    if not isinstance(wallet, dict):
+        return []
+    ids: list[str] = []
+    top_level = wallet.get("credential_configuration_id")
+    if isinstance(top_level, str) and top_level:
+        ids.append(top_level)
+    options = wallet.get("credential_options")
+    if isinstance(options, list):
+        for option in options:
+            if not isinstance(option, dict):
+                continue
+            value = option.get("credential_configuration_id")
+            if isinstance(value, str) and value:
+                ids.append(value)
+    return sorted(set(ids))
+
+
 def scenario_step_ids(story_payload: Any) -> list[str]:
     if not isinstance(story_payload, dict):
         return []
@@ -630,20 +653,27 @@ def run_smoke(config: SmokeConfig) -> dict[str, Any]:
     require_ok(lab, "lab-metadata-unavailable")
     wallet = lab.body.get("wallet") if isinstance(lab.body, dict) else None
     require(isinstance(wallet, dict), "wallet-metadata-missing", lab.body)
+    wallet_configurations = wallet_credential_configuration_ids(wallet)
+    missing_wallet_configurations = [
+        configuration for configuration in WALLET_CONFIGURATIONS if configuration not in wallet_configurations
+    ]
     require(
-        wallet.get("credential_configuration_id") == PERSON_ALIVE_CONFIGURATION,
+        not missing_wallet_configurations,
         "wallet-credential-configuration-mismatch",
-        wallet,
+        {"missing": missing_wallet_configurations, "seen": wallet_configurations},
     )
 
     citizen_issuer = DEFAULT_CITIZEN_ISSUER if base_url == DEFAULT_BASE_URL else str(wallet.get("issuer") or DEFAULT_CITIZEN_ISSUER)
     citizen_metadata = client.get(joined_url(citizen_issuer, "/.well-known/openid-credential-issuer"))
     require_ok(citizen_metadata, "citizen-issuer-metadata-unavailable")
     configurations = credential_configurations(citizen_metadata.body)
+    missing_issuer_configurations = [
+        configuration for configuration in WALLET_CONFIGURATIONS if configuration not in configurations
+    ]
     require(
-        PERSON_ALIVE_CONFIGURATION in configurations,
+        not missing_issuer_configurations,
         "citizen-issuer-configuration-missing",
-        {"expected": PERSON_ALIVE_CONFIGURATION, "seen": sorted(configurations)},
+        {"missing": missing_issuer_configurations, "seen": sorted(configurations)},
     )
 
     story_summaries: dict[str, list[str]] = {}
@@ -699,6 +729,7 @@ def run_smoke(config: SmokeConfig) -> dict[str, Any]:
         "scenarios": step_summaries,
         "stories": {key: len(value) for key, value in story_summaries.items()},
         "wallet_configuration": PERSON_ALIVE_CONFIGURATION,
+        "wallet_configurations": list(WALLET_CONFIGURATIONS),
     }
     if config.credential_smoke:
         summary["credential_smoke"] = run_credential_smoke(client, lab.body)

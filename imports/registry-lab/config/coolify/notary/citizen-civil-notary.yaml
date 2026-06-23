@@ -112,6 +112,22 @@ evidence:
       disclosure:
         allowed:
           - predicate
+    citizen_birth_certificate_sd_jwt:
+      format: application/dc+sd-jwt
+      issuer: did:web:citizen-notary.lab.registrystack.org
+      signing_key: citizen-civil-hosted
+      vct: https://citizen-notary.lab.registrystack.org/credentials/crvs-birth-certificate/v1
+      validity_seconds: 31536000
+      allowed_claims:
+        - birth.certificate_summary
+      holder_binding:
+        mode: did
+        proof_of_possession: required
+        allowed_did_methods:
+          - did:jwk
+      disclosure:
+        allowed:
+          - value
   claims:
     - id: person-is-alive
       title: Vital Status Attestation
@@ -150,6 +166,250 @@ evidence:
         - application/dc+sd-jwt
       credential_profiles:
         - citizen_civil_status_sd_jwt
+    - id: birth.certificate_summary
+      title: CRVS Birth Certificate
+      version: 2026-06
+      subject_type: person
+      purpose: citizen_self_attestation
+      value:
+        type: object
+      source_bindings:
+        child_person:
+          connector: registry_data_api
+          connection: civil
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: civil_person_detail
+          matching:
+            allowed_purposes:
+              - citizen_self_attestation
+            allowed_target_inputs:
+              - target.identifiers.national_id
+          lookup:
+            input: target.identifiers.national_id
+            field: national_id
+            op: eq
+            cardinality: one
+          fields:
+            id:
+              field: id
+              type: string
+              required: true
+            national_id:
+              field: national_id
+              type: string
+              required: true
+            given_name:
+              field: given_name
+              type: string
+              required: true
+            surname:
+              field: surname
+              type: string
+              required: true
+            birth_date:
+              field: birth_date
+              type: date
+              required: true
+            sex:
+              field: sex
+              type: string
+              required: true
+        birth_record:
+          connector: registry_data_api
+          connection: civil
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: civil_status_record
+          matching:
+            allowed_purposes:
+              - citizen_self_attestation
+          lookup:
+            input: sources.child_person.id
+            field: person_id
+            op: eq
+            cardinality: one
+          fields:
+            id:
+              field: id
+              type: string
+              required: true
+            record_type:
+              field: record_type
+              type: string
+              required: true
+            registration_number:
+              field: registration_number
+              type: string
+              required: true
+            event_id:
+              field: event_id
+              type: string
+              required: true
+            authority:
+              field: authority
+              type: string
+              required: true
+            registration_status:
+              field: registration_status
+              type: string
+              required: true
+        birth_certificate:
+          connector: registry_data_api
+          connection: civil
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: certificate
+          matching:
+            allowed_purposes:
+              - citizen_self_attestation
+          lookup:
+            input: sources.birth_record.id
+            field: record_id
+            op: eq
+            cardinality: one
+          fields:
+            id:
+              field: id
+              type: string
+              required: true
+            issue_date:
+              field: issue_date
+              type: date
+              required: true
+            issuing_office:
+              field: issuing_office
+              type: string
+              required: true
+            certificate_type:
+              field: certificate_type
+              type: string
+              required: true
+        birth_event:
+          connector: registry_data_api
+          connection: civil
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: birth_event
+          matching:
+            allowed_purposes:
+              - citizen_self_attestation
+          lookup:
+            input: sources.birth_record.event_id
+            field: id
+            op: eq
+            cardinality: one
+          fields:
+            id:
+              field: id
+              type: string
+              required: true
+            child_person_id:
+              field: child_person_id
+              type: string
+              required: true
+            mother_person_id:
+              field: mother_person_id
+              type: string
+              required: true
+            father_person_id:
+              field: father_person_id
+              type: string
+              required: true
+            place_of_birth:
+              field: place_of_birth
+              type: string
+              required: true
+            date_of_birth:
+              field: date_of_birth
+              type: date
+              required: true
+            sex_at_birth:
+              field: sex_at_birth
+              type: string
+              required: true
+        mother_person:
+          connector: registry_data_api
+          connection: civil
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: civil_person_detail
+          matching:
+            allowed_purposes:
+              - citizen_self_attestation
+          lookup:
+            input: sources.birth_event.mother_person_id
+            field: id
+            op: eq
+            cardinality: one
+          fields:
+            id:
+              field: id
+              type: string
+              required: true
+            national_id:
+              field: national_id
+              type: string
+              required: true
+            given_name:
+              field: given_name
+              type: string
+              required: true
+            surname:
+              field: surname
+              type: string
+              required: true
+            birth_date:
+              field: birth_date
+              type: date
+              required: true
+        father_person:
+          connector: registry_data_api
+          connection: civil
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: civil_person_detail
+          matching:
+            allowed_purposes:
+              - citizen_self_attestation
+          lookup:
+            input: sources.birth_event.father_person_id
+            field: id
+            op: eq
+            cardinality: one
+          fields:
+            id:
+              field: id
+              type: string
+              required: true
+            national_id:
+              field: national_id
+              type: string
+              required: true
+            given_name:
+              field: given_name
+              type: string
+              required: true
+            surname:
+              field: surname
+              type: string
+              required: true
+            birth_date:
+              field: birth_date
+              type: date
+              required: true
+      rule:
+        type: cel
+        expression: "{'type': 'BirthEvidence', 'identifier': source.birth_certificate.id, 'issuing_date': source.birth_certificate.issue_date, 'issuing_authority': {'name': source.birth_record.authority}, 'issuing_place': {'name': source.birth_certificate.issuing_office}, 'is_about': [{'type': 'Person', 'id': source.child_person.id, 'identifiers': [{'scheme': 'national_id', 'value': source.child_person.national_id}], 'given_name': source.child_person.given_name, 'surname': source.child_person.surname, 'birth_date': source.child_person.birth_date}], 'is_conformant_to': ['https://semiceu.github.io/OOTS-EDM/birth-evidence/v1'], 'distribution': {'format': 'application/json'}, 'certifies_birth': {'identifier': source.birth_record.registration_number, 'date_of_birth': source.birth_event.date_of_birth, 'place_of_birth': source.birth_event.place_of_birth, 'child': {'type': 'Person', 'id': source.child_person.id, 'identifiers': [{'scheme': 'national_id', 'value': source.child_person.national_id}], 'given_name': source.child_person.given_name, 'surname': source.child_person.surname, 'birth_date': source.child_person.birth_date, 'sex': source.child_person.sex}, 'parents': [{'relationship': 'mother', 'type': 'Person', 'id': source.mother_person.id, 'identifiers': [{'scheme': 'national_id', 'value': source.mother_person.national_id}], 'given_name': source.mother_person.given_name, 'surname': source.mother_person.surname, 'birth_date': source.mother_person.birth_date}, {'relationship': 'father', 'type': 'Person', 'id': source.father_person.id, 'identifiers': [{'scheme': 'national_id', 'value': source.father_person.national_id}], 'given_name': source.father_person.given_name, 'surname': source.father_person.surname, 'birth_date': source.father_person.birth_date}]}}"
+      disclosure:
+        default: value
+        allowed:
+          - value
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+        - application/dc+sd-jwt
+      credential_profiles:
+        - citizen_birth_certificate_sd_jwt
 
 self_attestation:
   enabled: true
@@ -178,15 +438,18 @@ self_attestation:
     - https://demo.example.gov/purpose/civil-certificate-evidence
   allowed_claims:
     - person-is-alive
+    - birth.certificate_summary
   allowed_formats:
     - application/vnd.registry-notary.claim-result+json
     - application/dc+sd-jwt
   allowed_disclosures:
     - predicate
+    - value
     - redacted
   scope_policy: disabled
   credential_profiles:
     - citizen_civil_status_sd_jwt
+    - citizen_birth_certificate_sd_jwt
   allowed_wallet_origins: []
   rate_limits:
     mode: in_process
@@ -255,6 +518,28 @@ oid4vci:
           alt_text: Registry Stack logo
         description: Attestation that the civil registry currently records this person as alive.
         background_color: "#0057B8"
+        text_color: "#FFFFFF"
+        background_image:
+          url: https://registrystack.org/og-image.png
+          alt_text: Registry Stack public service delivery illustration
+      proof_signing_alg_values_supported:
+        - EdDSA
+      cryptographic_binding_methods_supported:
+        - did:jwk
+    crvs_birth_certificate_sd_jwt:
+      claim_id: birth.certificate_summary
+      credential_profile: citizen_birth_certificate_sd_jwt
+      format: dc+sd-jwt
+      scope: birth.certificate_summary
+      vct: https://citizen-notary.lab.registrystack.org/credentials/crvs-birth-certificate/v1
+      display_name: CRVS Birth Certificate
+      display:
+        locale: en-US
+        logo:
+          url: https://registrystack.org/favicon.svg
+          alt_text: Registry Stack logo
+        description: Holder-bound CRVS birth certificate evidence for the signed-in citizen.
+        background_color: "#173B7A"
         text_color: "#FFFFFF"
         background_image:
           url: https://registrystack.org/og-image.png

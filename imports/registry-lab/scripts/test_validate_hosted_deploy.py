@@ -1249,6 +1249,7 @@ evidence:
 
     def test_rejects_missing_oid4vci_configuration_assertions(self) -> None:
         compose = self._valid_registry_lab()
+        del compose["services"]["citizen-civil-notary"]["command"]
         compose["services"]["citizen-civil-notary"]["environment"][
             "CITIZEN_OID4VCI_CREDENTIAL_CONFIGURATION_ID"
         ] = "citizen_civil_status_sd_jwt"
@@ -1256,6 +1257,7 @@ evidence:
         self.assertIssue(issues, "missing-credential-configuration")
 
         compose = self._valid_registry_lab()
+        del compose["services"]["citizen-civil-notary"]["command"]
         compose["services"]["citizen-civil-notary"]["environment"][
             "CITIZEN_OID4VCI_FORMAT"
         ] = "jwt_vc_json"
@@ -1272,6 +1274,8 @@ evidence:
 oid4vci:
   credential_configurations:
     person_is_alive_sd_jwt:
+      format: dc+sd-jwt
+    crvs_birth_certificate_sd_jwt:
       format: dc+sd-jwt
 """,
                 encoding="utf-8",
@@ -1797,6 +1801,7 @@ if [ ! -s "$openfn_antirollback" ]; then
   printf '%s\n' '{"key":{"product":"registry-notary-openfn-sidecar","instance_id":"hosted-dhis2-openfn-sidecar","environment":"hosted-lab","stream_id":"dhis2-openfn-sidecar-runtime"},"last_sequence":0,"last_config_hash":"sha256:0000000000000000000000000000000000000000000000000000000000000000","root_version":1,"break_glass":{"accepted":[]},"local_approvals":{"accepted":[]}}' > "$openfn_antirollback"
 fi
 cp -a /tmp/repo/config/coolify/notary/civil-notary.yaml /out/notary/
+cp -a /tmp/repo/config/coolify/notary/citizen-civil-notary.yaml /out/notary/
 cp -a /tmp/repo/config/coolify/notary/social-protection-notary.yaml /out/notary/
 cp -a /tmp/repo/config/coolify/notary/shared-eligibility-notary.yaml /out/notary/
 cp -a /tmp/repo/scripts/lab_homepage_explorer /out/static-scripts/
@@ -1851,6 +1856,10 @@ cp -a /tmp/repo/scripts/lab_homepage_static /out/static-scripts/
                 },
                 "citizen-civil-notary": {
                     "image": "${REGISTRY_NOTARY_IMAGE:-ghcr.io/registrystack/registry-notary@sha256:abc}",
+                    "command": [
+                        "--config",
+                        "/etc/registry-notary/citizen-civil-notary.yaml",
+                    ],
                     "expose": ["8080"],
                     "environment": {
                         "CITIZEN_OID4VCI_CREDENTIAL_ISSUER": f"https://citizen-notary.{lab}",
@@ -1866,6 +1875,7 @@ cp -a /tmp/repo/scripts/lab_homepage_static /out/static-scripts/
                         "CITIZEN_OID4VCI_CREDENTIAL_CONFIGURATION_ID": "person_is_alive_sd_jwt",
                         "CITIZEN_OID4VCI_FORMAT": "dc+sd-jwt",
                     },
+                    "volumes": ["cfg-notary:/etc/registry-notary:ro"],
                     "healthcheck": {
                         "test": ["CMD", "registry-notary", "healthcheck"]
                     },

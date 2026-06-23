@@ -374,7 +374,7 @@ def homepage_html(title: str, lab_mode: str = "hosted") -> bytes:
         <div class="section-heading">
           <p class="eyebrow">Take it further</p>
           <h2>Put a signed proof in a real wallet.</h2>
-          <p>Start the citizen Notary flow, sign in as the demo citizen, then paste the generated credential offer into the hosted wallet. The wallet should receive a signed proof that the civil registry says the person is alive.</p>
+          <p>Start the citizen Notary flow, sign in as the matching demo citizen, then paste the generated credential offer into the hosted wallet. The wallet can receive a simple vital-status proof or Miguel's CRVS birth certificate credential.</p>
         </div>
         <div class="wallet-grid" id="wallet-grid"></div>
       </div>

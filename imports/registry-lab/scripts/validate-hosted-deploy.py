@@ -1959,15 +1959,19 @@ def validate_cross_artifact_contracts(
 
     text = collect_service_contract_text(registry_lab, registry_root, "citizen-civil-notary")
     if text:
-        if "person_is_alive_sd_jwt" not in text:
-            issues.append(
-                Issue(
-                    "missing-credential-configuration",
-                    "registry-lab",
-                    "services.citizen-civil-notary.oid4vci",
-                    "citizen OID4VCI contract must advertise person_is_alive_sd_jwt",
+        for credential_configuration in (
+            "person_is_alive_sd_jwt",
+            "crvs_birth_certificate_sd_jwt",
+        ):
+            if credential_configuration not in text:
+                issues.append(
+                    Issue(
+                        "missing-credential-configuration",
+                        "registry-lab",
+                        "services.citizen-civil-notary.oid4vci",
+                        f"citizen OID4VCI contract must advertise {credential_configuration}",
+                    )
                 )
-            )
         if "dc+sd-jwt" not in text:
             issues.append(
                 Issue(
