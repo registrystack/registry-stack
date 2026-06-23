@@ -14,6 +14,10 @@ use hyper_util::{
     rt::{TokioExecutor, TokioIo, TokioTimer},
     server::conn::auto::Builder as HyperBuilder,
 };
+use registry_notary_source_adapter_rhai::{
+    Lookup, RhaiLimits, RhaiPolicy, ScriptCtx, ScriptEngine, ScriptSourceHost, SourceResponse,
+    SourceScriptError,
+};
 use registry_platform_audit::{AuditProfile, ChainState, JsonlFileSink};
 use registry_platform_authcommon::{parse_bearer_token, parse_fingerprint, verify_api_key};
 use registry_platform_config::{
@@ -209,6 +213,8 @@ pub struct SourceConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fhir: Option<FhirSourceConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rhai: Option<RhaiScriptConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache: Option<SourceCacheConfig>,
     #[serde(default)]
     pub smoke_lookup: Option<SmokeLookupConfig>,
@@ -221,6 +227,7 @@ pub enum SourceEngine {
     HttpJson,
     HttpFlow,
     Fhir,
+    ScriptRhai,
 }
 
 impl SourceEngine {
@@ -229,6 +236,7 @@ impl SourceEngine {
             SourceEngine::HttpJson => "http_json",
             SourceEngine::HttpFlow => "http_flow",
             SourceEngine::Fhir => "fhir",
+            SourceEngine::ScriptRhai => "script_rhai",
         }
     }
 }
@@ -307,6 +315,165 @@ pub struct FhirProjectionConfig {
     pub pointer: String,
     #[serde(default, rename = "default", skip_serializing_if = "Option::is_none")]
     pub default_value: Option<Value>,
+}
+
+/// Configuration for the `script_rhai` engine: an inline sandboxed Rhai script
+/// plus the set of named upstream targets it may reach. The script resolves a
+/// lookup by calling `source.get(target, path, query)` against these targets;
+/// all outbound machinery (allow-listing, SSRF policy, auth, rate limiting) is
+/// reused from the `http_json` path and never exposed to the script.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RhaiScriptConfig {
+    /// Inline Rhai source (v1: inline only).
+    pub script: String,
+    /// The entrypoint function name. Defaults to `lookup`.
+    #[serde(default = "default_rhai_entrypoint")]
+    pub entrypoint: String,
+    /// Sandbox resource/budget limits mapped to the engine policy.
+    #[serde(default, skip_serializing_if = "RhaiLimitsConfig::is_default")]
+    pub limits: RhaiLimitsConfig,
+    /// The named upstream targets the script may select. Must be non-empty.
+    pub targets: BTreeMap<String, RhaiTargetConfig>,
+}
+
+/// A single named upstream target a `script_rhai` script may call. The
+/// `base_url` must appear in the source's `allowed_base_urls`; auth reuses the
+/// `http_json` credential machinery.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RhaiTargetConfig {
+    pub base_url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<HttpJsonAuthConfig>,
+    /// Non-2xx statuses this target's responses the script is allowed to
+    /// observe (rather than terminating the run). Per-target; the engine is
+    /// compiled with the union across all targets and the per-target gate is
+    /// applied in the host.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub visible_statuses: Vec<u16>,
+}
+
+/// Sandbox limits for a `script_rhai` source. Every field defaults to the
+/// matching value from the rhai engine's `RhaiPolicy::default()` /
+/// `RhaiLimits::default()`, so an omitted `limits` block yields the engine's
+/// own defaults. `max_modules` is always `0` (module loading is forbidden) and
+/// is therefore not configurable here.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RhaiLimitsConfig {
+    #[serde(default = "default_rhai_timeout_ms")]
+    pub timeout_ms: u64,
+    #[serde(default = "default_rhai_max_http_calls")]
+    pub max_http_calls: u32,
+    #[serde(default = "default_rhai_max_output_bytes")]
+    pub max_output_bytes: usize,
+    #[serde(default = "default_rhai_max_concurrent")]
+    pub max_concurrent: usize,
+    #[serde(default = "default_rhai_max_operations")]
+    pub max_operations: u64,
+    #[serde(default = "default_rhai_max_call_levels")]
+    pub max_call_levels: usize,
+    #[serde(default = "default_rhai_max_string_bytes")]
+    pub max_string_bytes: usize,
+    #[serde(default = "default_rhai_max_array_items")]
+    pub max_array_items: usize,
+    #[serde(default = "default_rhai_max_map_entries")]
+    pub max_map_entries: usize,
+}
+
+impl Default for RhaiLimitsConfig {
+    fn default() -> Self {
+        let policy = RhaiPolicy::default();
+        let limits = RhaiLimits::default();
+        Self {
+            timeout_ms: policy.timeout.as_millis() as u64,
+            max_http_calls: policy.max_http_calls,
+            max_output_bytes: policy.max_output_bytes,
+            max_concurrent: policy.max_concurrent,
+            max_operations: limits.max_operations,
+            max_call_levels: limits.max_call_levels,
+            max_string_bytes: limits.max_string_bytes,
+            max_array_items: limits.max_array_items,
+            max_map_entries: limits.max_map_entries,
+        }
+    }
+}
+
+impl RhaiLimitsConfig {
+    fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+
+    /// Build the engine policy from these limits. `visible_statuses` is the
+    /// union of every target's observable statuses; `max_modules` is always 0.
+    fn to_policy(&self, visible_statuses: BTreeSet<u16>) -> RhaiPolicy {
+        RhaiPolicy {
+            limits: RhaiLimits {
+                max_operations: self.max_operations,
+                max_call_levels: self.max_call_levels,
+                max_string_bytes: self.max_string_bytes,
+                max_array_items: self.max_array_items,
+                max_map_entries: self.max_map_entries,
+                max_modules: 0,
+            },
+            timeout: Duration::from_millis(self.timeout_ms),
+            max_http_calls: self.max_http_calls,
+            max_output_bytes: self.max_output_bytes,
+            max_concurrent: self.max_concurrent,
+            visible_statuses,
+        }
+    }
+}
+
+fn default_rhai_entrypoint() -> String {
+    "lookup".into()
+}
+
+fn default_rhai_timeout_ms() -> u64 {
+    RhaiPolicy::default().timeout.as_millis() as u64
+}
+
+fn default_rhai_max_http_calls() -> u32 {
+    RhaiPolicy::default().max_http_calls
+}
+
+fn default_rhai_max_output_bytes() -> usize {
+    RhaiPolicy::default().max_output_bytes
+}
+
+fn default_rhai_max_concurrent() -> usize {
+    RhaiPolicy::default().max_concurrent
+}
+
+fn default_rhai_max_operations() -> u64 {
+    RhaiLimits::default().max_operations
+}
+
+fn default_rhai_max_call_levels() -> usize {
+    RhaiLimits::default().max_call_levels
+}
+
+fn default_rhai_max_string_bytes() -> usize {
+    RhaiLimits::default().max_string_bytes
+}
+
+fn default_rhai_max_array_items() -> usize {
+    RhaiLimits::default().max_array_items
+}
+
+fn default_rhai_max_map_entries() -> usize {
+    RhaiLimits::default().max_map_entries
+}
+
+/// The union of every target's `visible_statuses`, used to compile the engine
+/// so it surfaces any status some target allows. Per-target gating is then
+/// applied in the host (see `execute_rhai`).
+fn rhai_union_visible_statuses(rhai: &RhaiScriptConfig) -> BTreeSet<u16> {
+    rhai.targets
+        .values()
+        .flat_map(|target| target.visible_statuses.iter().copied())
+        .collect()
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -604,6 +771,10 @@ struct AppState {
     source_limiters: Arc<BTreeMap<String, Arc<Semaphore>>>,
     source_runtime: Arc<BTreeMap<String, Arc<SourceRuntimeState>>>,
     http_json_clients: Arc<Mutex<BTreeMap<String, reqwest::Client>>>,
+    /// Compiled `script_rhai` engines, keyed by `source_id`. Each script is
+    /// compiled once at startup and reused for every request; a compile failure
+    /// is a configuration error that fails startup.
+    rhai_engines: Arc<BTreeMap<String, Arc<ScriptEngine>>>,
     metrics: Arc<Mutex<BTreeMap<MetricKey, MetricValue>>>,
     audit: Option<Arc<SidecarAuditPipeline>>,
 }
@@ -1345,6 +1516,7 @@ pub async fn sidecar_router(config: SidecarConfig) -> Result<Router, SidecarErro
             SourceRuntimeState::new(source).map(|runtime| (source_id.clone(), Arc::new(runtime)))
         })
         .collect::<Result<BTreeMap<_, _>, _>>()?;
+    let rhai_engines = compile_rhai_engines(&config)?;
     let state = Arc::new(AppState {
         config: Arc::new(config),
         auth_tokens: Arc::new(auth_tokens),
@@ -1353,6 +1525,7 @@ pub async fn sidecar_router(config: SidecarConfig) -> Result<Router, SidecarErro
         source_limiters: Arc::new(source_limiters),
         source_runtime: Arc::new(source_runtime),
         http_json_clients: Arc::new(Mutex::new(BTreeMap::new())),
+        rhai_engines: Arc::new(rhai_engines),
         metrics: Arc::new(Mutex::new(BTreeMap::new())),
         audit: audit.map(Arc::new),
     });
@@ -1701,6 +1874,7 @@ fn validate_source_execution(source_id: &str, source: &SourceConfig) -> Result<(
         SourceEngine::HttpJson => validate_http_json_source(source_id, source),
         SourceEngine::HttpFlow => validate_http_flow_source(source_id, source),
         SourceEngine::Fhir => validate_fhir_source(source_id, source),
+        SourceEngine::ScriptRhai => validate_rhai_source(source_id, source),
     }
 }
 
@@ -2113,6 +2287,106 @@ fn validate_fhir_source(source_id: &str, source: &SourceConfig) -> Result<(), Si
     Ok(())
 }
 
+fn validate_rhai_source(source_id: &str, source: &SourceConfig) -> Result<(), SidecarError> {
+    if source.http_json.is_some() {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} http_json config is not valid when engine is script_rhai"
+        )));
+    }
+    if source.http_flow.is_some() {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} http_flow config is not valid when engine is script_rhai"
+        )));
+    }
+    if source.fhir.is_some() {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} fhir config is not valid when engine is script_rhai"
+        )));
+    }
+    if matches!(
+        source.batch.mode,
+        SourceBatchMode::WorkflowBatch | SourceBatchMode::NativeBatch
+    ) {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} batch.mode is not supported for script_rhai sources"
+        )));
+    }
+    if source.batch.mode != SourceBatchMode::ParallelLookup && source.batch.max_parallel.is_some() {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} batch.max_parallel requires batch.mode parallel_lookup"
+        )));
+    }
+    if source.allowed_base_urls.is_empty() {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} allowed_base_urls is required for script_rhai"
+        )));
+    }
+    let rhai = source.rhai.as_ref().ok_or_else(|| {
+        SidecarError::Config(format!(
+            "source {source_id} engine script_rhai requires a rhai config"
+        ))
+    })?;
+    if rhai.targets.is_empty() {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} rhai.targets must not be empty"
+        )));
+    }
+    let mut requires_credential = false;
+    for (target_id, target) in &rhai.targets {
+        let base = reqwest::Url::parse(&target.base_url).map_err(|_| {
+            SidecarError::Config(format!(
+                "source {source_id} rhai.targets.{target_id}.base_url must be a URL"
+            ))
+        })?;
+        ensure_allowed_base_url(source_id, source, &base).map_err(|_| {
+            SidecarError::Config(format!(
+                "source {source_id} rhai.targets.{target_id}.base_url is not in allowed_base_urls"
+            ))
+        })?;
+        if let Some(auth) = &target.auth {
+            requires_credential = true;
+            match auth.kind {
+                HttpJsonAuthKind::Bearer => {
+                    validate_http_json_secret_ref(
+                        source_id,
+                        &format!("rhai.targets.{target_id}.auth.token.secret"),
+                        auth.token.as_ref(),
+                    )?;
+                }
+                HttpJsonAuthKind::Basic => {
+                    validate_http_json_secret_ref(
+                        source_id,
+                        &format!("rhai.targets.{target_id}.auth.username.secret"),
+                        auth.username.as_ref(),
+                    )?;
+                    validate_http_json_secret_ref(
+                        source_id,
+                        &format!("rhai.targets.{target_id}.auth.password.secret"),
+                        auth.password.as_ref(),
+                    )?;
+                }
+            }
+        }
+    }
+    // A credential env is only required when at least one target authenticates;
+    // an unauthenticated script_rhai source may omit it entirely.
+    if requires_credential && source.credential_env.trim().is_empty() {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} credential_env is required when a rhai target configures auth"
+        )));
+    }
+    // The script must compile under the same union policy used at runtime. This
+    // validates the entrypoint's existence and the policy bounds up front. The
+    // rhai error's Display is non-sensitive (no script source) and is surfaced.
+    let policy = rhai.limits.to_policy(rhai_union_visible_statuses(rhai));
+    ScriptEngine::compile(&rhai.script, &rhai.entrypoint, &policy).map_err(|error| {
+        SidecarError::Config(format!(
+            "source {source_id} rhai script failed to compile: {error}"
+        ))
+    })?;
+    Ok(())
+}
+
 fn validate_fhir_node(
     source_id: &str,
     label: &str,
@@ -2412,6 +2686,222 @@ async fn execute_source_json(
         SourceEngine::HttpJson => execute_http_json(state, source_id, source, request).await,
         SourceEngine::HttpFlow => execute_http_flow(state, source_id, source, request).await,
         SourceEngine::Fhir => execute_fhir(state, source_id, source, request).await,
+        SourceEngine::ScriptRhai => execute_rhai(state, source_id, source, request).await,
+    }
+}
+
+/// The async host backing a `script_rhai` run's `source.get(target, path, query)`
+/// capability. It owns everything the call needs by value (clones / `Arc`s), so
+/// it is `Send + Sync` and outlives the bridged blocking execution. Every effect
+/// — target resolution, allow-listing, SSRF policy, auth, rate limiting, bounded
+/// body read — is reused from the `http_json` machinery; the script never sees
+/// any of it.
+struct RhaiHttpHost {
+    state: AppState,
+    source: SourceConfig,
+    source_id: String,
+    /// The resolved per-source credential object (secret fields are read by
+    /// `apply_http_json_auth`). `Value::Null` when the source has no credential.
+    credential: Value,
+}
+
+#[async_trait::async_trait]
+impl ScriptSourceHost for RhaiHttpHost {
+    async fn source_get(
+        &self,
+        target: &str,
+        path: &str,
+        query: Value,
+    ) -> Result<SourceResponse, SourceScriptError> {
+        let rhai = self
+            .source
+            .rhai
+            .as_ref()
+            .ok_or(SourceScriptError::HostDenied {
+                reason: "missing rhai config".into(),
+            })?;
+        let target_config = rhai
+            .targets
+            .get(target)
+            .ok_or(SourceScriptError::HostDenied {
+                reason: "unknown target".into(),
+            })?;
+
+        // Reuse the http_json request preparation: it parses the base URL,
+        // enforces `allowed_base_urls`, joins the (already canonicalized) path,
+        // checks same-origin, and applies the SSRF/localhost client policy.
+        let prepared = prepare_http_json_request(
+            &self.state,
+            &self.source_id,
+            &self.source,
+            &target_config.base_url,
+            path,
+        )
+        .await
+        .map_err(map_source_execution_error)?;
+
+        let mut builder = prepared.client.get(prepared.url);
+        if let Value::Object(params) = &query {
+            for (name, value) in params {
+                if let Some(rendered) = rhai_query_param_value(value) {
+                    builder = builder.query(&[(name.as_str(), rendered)]);
+                }
+            }
+        }
+        builder = apply_http_json_auth(builder, target_config.auth.as_ref(), &self.credential)
+            .map_err(map_source_execution_error)?;
+
+        // Honour the same rate-limit/backoff gate as http_json. A limiter
+        // rejection is reported to the script as a 429 so `problem_code()`
+        // surfaces `source.target_rate_limit`.
+        if acquire_http_json_rate_or_error(&self.state, &self.source_id)
+            .await
+            .is_some()
+        {
+            return Err(SourceScriptError::HttpStatus { status: 429 });
+        }
+
+        let response = builder.send().await.map_err(|error| {
+            if error.is_timeout() {
+                SourceScriptError::Deadline
+            } else {
+                SourceScriptError::HttpTransport
+            }
+        })?;
+        let status = response.status();
+        let status_code = status.as_u16();
+        let body = read_limited_json_response(response, self.state.config.limits.max_output_bytes)
+            .await
+            .map_err(map_source_execution_error)?;
+
+        // Per-target visibility gate: a 2xx, or a status this target explicitly
+        // allows, is returned to the script; any other non-2xx terminates the
+        // run as an upstream-status error (the engine's union `visible_statuses`
+        // is only the ceiling — the host decides per target).
+        if status.is_success() || target_config.visible_statuses.contains(&status_code) {
+            Ok(SourceResponse {
+                status: status_code,
+                body,
+            })
+        } else {
+            Err(SourceScriptError::HttpStatus {
+                status: status_code,
+            })
+        }
+    }
+}
+
+/// Map the http_json outbound machinery's coarse error into the script host's
+/// taxonomy. A transport timeout becomes a deadline; everything else collapses
+/// to a transport failure (both ultimately surface as `source.unavailable`
+/// except the timeout, which surfaces as `source.timeout`).
+fn map_source_execution_error(error: SourceExecutionError) -> SourceScriptError {
+    match error {
+        SourceExecutionError::HttpJsonTimeout => SourceScriptError::Deadline,
+        SourceExecutionError::HttpJson | SourceExecutionError::HttpJsonBadRequest => {
+            SourceScriptError::HttpTransport
+        }
+    }
+}
+
+/// Stringify a scalar query-parameter value the way http_json does; non-scalar
+/// values (objects, arrays, null) are dropped, matching query-string semantics.
+fn rhai_query_param_value(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => Some(text.clone()),
+        Value::Number(number) => Some(number.to_string()),
+        Value::Bool(flag) => Some(flag.to_string()),
+        Value::Null | Value::Array(_) | Value::Object(_) => None,
+    }
+}
+
+async fn execute_rhai(
+    state: &AppState,
+    source_id: &str,
+    source: &SourceConfig,
+    request: Value,
+) -> Result<SourceExecution, SourceExecutionError> {
+    // Presence is also enforced at validation/compile time; guard here so a
+    // misconfigured source fails closed rather than reaching the host.
+    let _rhai = source.rhai.as_ref().ok_or(SourceExecutionError::HttpJson)?;
+    let lookup = request
+        .get("lookup")
+        .ok_or(SourceExecutionError::HttpJsonBadRequest)?;
+    let lookup_field = lookup
+        .get("field")
+        .and_then(Value::as_str)
+        .ok_or(SourceExecutionError::HttpJsonBadRequest)?;
+    let lookup_value = lookup
+        .get("value")
+        .and_then(Value::as_str)
+        .ok_or(SourceExecutionError::HttpJsonBadRequest)?;
+    let fields = request_fields(&request)?;
+    let limit = request.get("limit").and_then(Value::as_u64).unwrap_or(2);
+    let purpose = request
+        .get("purpose")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let dataset = request
+        .get("dataset")
+        .and_then(Value::as_str)
+        .unwrap_or(&source.dataset)
+        .to_string();
+    let entity = request
+        .get("entity")
+        .and_then(Value::as_str)
+        .unwrap_or(&source.entity)
+        .to_string();
+
+    let credential = state
+        .credentials
+        .get(source_id)
+        .cloned()
+        .unwrap_or(Value::Null);
+    // The script only ever sees the whitelisted public credential fields, never
+    // a raw secret (mirrors the http_json `public_credential` projection).
+    let credential_public = public_credential(source, &credential);
+
+    let ctx = ScriptCtx::new(
+        source_id,
+        dataset,
+        entity,
+        Lookup {
+            field: lookup_field.to_string(),
+            value: lookup_value.to_string(),
+        },
+        purpose,
+    )
+    .fields(fields)
+    .limit(limit)
+    .credential_public(credential_public);
+
+    let engine = state
+        .rhai_engines
+        .get(source_id)
+        .cloned()
+        .ok_or(SourceExecutionError::HttpJson)?;
+
+    let host = RhaiHttpHost {
+        state: state.clone(),
+        source: source.clone(),
+        source_id: source_id.to_string(),
+        credential,
+    };
+
+    match engine.execute(Arc::new(host), ctx).await {
+        Ok(records) => Ok(SourceExecution {
+            value: json!({ "data": records }),
+            worker_id: "script_rhai".to_string(),
+        }),
+        // Mirror http_json: a classified script error is returned as the
+        // sidecar's `{ "error": { "code": ... } }` envelope (never the script
+        // source, a response body, or a secret), and the public problem code is
+        // the engine's stable mapping.
+        Err(error) => Ok(SourceExecution {
+            value: json!({ "error": { "code": error.problem_code() } }),
+            worker_id: "script_rhai".to_string(),
+        }),
     }
 }
 
@@ -4465,6 +4955,38 @@ fn is_private_or_link_local_ip(ip: IpAddr) -> bool {
     }
 }
 
+/// Compile every `script_rhai` source's engine once, keyed by `source_id`.
+///
+/// The compile uses the union of all targets' `visible_statuses` so the engine
+/// surfaces any status some target allows; per-target gating then happens in the
+/// host. A compile failure is a configuration error that fails startup. The
+/// engine carries no script source in its error `Display`, so the message is
+/// safe to surface.
+fn compile_rhai_engines(
+    config: &SidecarConfig,
+) -> Result<BTreeMap<String, Arc<ScriptEngine>>, SidecarError> {
+    let mut engines = BTreeMap::new();
+    for (source_id, source) in &config.sources {
+        if source.engine != SourceEngine::ScriptRhai {
+            continue;
+        }
+        let rhai = source.rhai.as_ref().ok_or_else(|| {
+            SidecarError::Config(format!(
+                "source {source_id} engine script_rhai requires a rhai config"
+            ))
+        })?;
+        let policy = rhai.limits.to_policy(rhai_union_visible_statuses(rhai));
+        let engine =
+            ScriptEngine::compile(&rhai.script, &rhai.entrypoint, &policy).map_err(|error| {
+                SidecarError::Config(format!(
+                    "source {source_id} rhai script failed to compile: {error}"
+                ))
+            })?;
+        engines.insert(source_id.clone(), Arc::new(engine));
+    }
+    Ok(engines)
+}
+
 fn load_credentials(config: &SidecarConfig) -> Result<BTreeMap<String, Value>, SidecarError> {
     let mut credentials = BTreeMap::new();
     for (source_id, source) in &config.sources {
@@ -4482,7 +5004,13 @@ fn load_credentials(config: &SidecarConfig) -> Result<BTreeMap<String, Value>, S
                 env: source.credential_env.clone(),
                 source: error,
             })?;
-        validate_credential_base_url(source_id, source, &credential)?;
+        // The single-`baseUrl` credential gate is an http_json/http_flow/fhir
+        // shape. A `script_rhai` source binds its upstreams per-target via
+        // `rhai.targets[*].base_url` (each validated against `allowed_base_urls`
+        // up front), so it has no one credential `baseUrl` to pin here.
+        if source.engine != SourceEngine::ScriptRhai {
+            validate_credential_base_url(source_id, source, &credential)?;
+        }
         credentials.insert(source_id.clone(), credential);
     }
     Ok(credentials)
@@ -5943,6 +6471,7 @@ mod tests {
                     }),
                     http_flow: None,
                     fhir: None,
+                    rhai: None,
                     cache: None,
                     smoke_lookup: Some(SmokeLookupConfig {
                         field: "national_id".to_string(),
@@ -6218,6 +6747,7 @@ mod tests {
             source_limiters: Arc::new(BTreeMap::new()),
             source_runtime: Arc::new(BTreeMap::new()),
             http_json_clients: Arc::new(Mutex::new(BTreeMap::new())),
+            rhai_engines: Arc::new(BTreeMap::new()),
             metrics: Arc::new(Mutex::new(BTreeMap::new())),
             audit: None,
         }

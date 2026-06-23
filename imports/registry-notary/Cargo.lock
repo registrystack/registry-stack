@@ -3024,6 +3024,7 @@ dependencies = [
 name = "registry-notary-source-adapter-sidecar"
 version = "0.6.2"
 dependencies = [
+ "async-trait",
  "axum",
  "axum-test",
  "chrono",
@@ -3032,6 +3033,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "libc",
+ "registry-notary-source-adapter-rhai",
  "registry-platform-audit",
  "registry-platform-authcommon",
  "registry-platform-config",
