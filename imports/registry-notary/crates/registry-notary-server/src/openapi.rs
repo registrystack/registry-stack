@@ -2795,7 +2795,7 @@ fn sd_jwt_vc_type_metadata_schema() -> Value {
                 "type": "array",
                 "items": {
                     "type": "object",
-                    "required": ["path", "display", "sd"],
+                    "required": ["path", "display", "sd", "mandatory"],
                     "properties": {
                         "path": {
                             "type": "array",
@@ -2817,6 +2817,7 @@ fn sd_jwt_vc_type_metadata_schema() -> Value {
                             "type": "string",
                             "enum": ["always"]
                         },
+                        "mandatory": { "type": "boolean" },
                         "registry_notary_semantics": {
                             "$ref": "#/components/schemas/ClaimSemantics"
                         }
@@ -3393,6 +3394,7 @@ fn sd_jwt_vc_type_metadata_example() -> Value {
                     }
                 ],
                 "sd": "always",
+                "mandatory": true,
                 "registry_notary_semantics": {
                     "concept": "https://publicschema.org/Person",
                     "predicate": "urn:registry-notary:predicate:person-is-alive",

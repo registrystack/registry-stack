@@ -33,12 +33,12 @@ use registry_notary_core::{
     EvidenceAuditEvent, EvidenceAuthMode, EvidenceBatchItemAuditEvent, EvidenceConfig,
     EvidenceEntity, EvidenceEntityReference, EvidenceError, EvidenceOnBehalfOf, EvidencePrincipal,
     EvidenceRelationship, FederationConfig, Hashed, HolderRequest, Oid4vciConfig,
-    Oid4vciCredentialConfigurationConfig, Oid4vciDisplayImageConfig, Oid4vciIssuerDisplayConfig,
-    PolicyIdentifier, RateLimitBucket, RegistryNotaryAdminListenerMode, RenderEvaluationRequest,
-    SelfAttestationConfig, SelfAttestationDelegatedRelationshipConfig, SelfAttestationDenialCode,
-    SelfAttestationScopePolicy, SigningKeyStatus, SourceCapability, StandaloneRegistryNotaryConfig,
-    StoredSelfAttestationMetadata, SubjectRequest, VerifiedClaimValue, FORMAT_CLAIM_RESULT_JSON,
-    FORMAT_SD_JWT_VC,
+    Oid4vciCredentialClaimMode, Oid4vciCredentialConfigurationConfig, Oid4vciDisplayImageConfig,
+    Oid4vciIssuerDisplayConfig, PolicyIdentifier, RateLimitBucket, RegistryNotaryAdminListenerMode,
+    RenderEvaluationRequest, SelfAttestationConfig, SelfAttestationDelegatedRelationshipConfig,
+    SelfAttestationDenialCode, SelfAttestationScopePolicy, SigningKeyStatus, SourceCapability,
+    StandaloneRegistryNotaryConfig, StoredSelfAttestationMetadata, SubjectRequest,
+    VerifiedClaimValue, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
 };
 use registry_platform_audit::AuditKeyHasher;
 use registry_platform_config::RegistryTrustRoot;
@@ -4222,12 +4222,13 @@ async fn oid4vci_credential(
             Ok(configuration) => configuration,
             Err(error) => return oid4vci_error_response(error),
         };
+    let configuration_claim_ids = configuration.credential_claim_ids();
     if requested_attestation_access_mode(&principal) == AccessMode::DelegatedAttestation {
         let mut response = oid4vci_error_response(Oid4vciWireError::AccessDenied);
         attach_oid4vci_self_attestation_denial_audit(
             &mut response,
             "oid4vci_credential_denied",
-            std::slice::from_ref(&configuration.claim_id),
+            &configuration_claim_ids,
             configuration_id,
             Some(SelfAttestationDenialCode::DelegatedRelationshipNotAllowed),
             Some(state.self_attestation.subject_binding.token_claim.as_str()),
@@ -4306,7 +4307,7 @@ async fn oid4vci_credential(
         attach_self_attestation_rate_limit_audit(
             &mut response,
             "oid4vci_rate_limited",
-            std::slice::from_ref(&configuration.claim_id),
+            &configuration_claim_ids,
             error.bucket(),
         );
         return response;
@@ -4318,7 +4319,7 @@ async fn oid4vci_credential(
             attach_oid4vci_self_attestation_denial_audit(
                 &mut response,
                 "oid4vci_credential_denied",
-                std::slice::from_ref(&configuration.claim_id),
+                &configuration_claim_ids,
                 configuration_id,
                 Some(SelfAttestationDenialCode::InvalidToken),
                 Some(state.self_attestation.subject_binding.token_claim.as_str()),
@@ -4334,7 +4335,10 @@ async fn oid4vci_credential(
             attributes: Default::default(),
         }),
         on_behalf_of: None,
-        claims: vec![ClaimRef::from(configuration.claim_id.clone())],
+        claims: configuration_claim_ids
+            .iter()
+            .map(|claim_id| ClaimRef::from(claim_id.as_str()))
+            .collect(),
         disclosure: None,
         format: Some(FORMAT_SD_JWT_VC.to_string()),
         purpose: None,
@@ -4351,7 +4355,7 @@ async fn oid4vci_credential(
             attach_oid4vci_self_attestation_denial_audit(
                 &mut response,
                 "oid4vci_credential_denied",
-                std::slice::from_ref(&configuration.claim_id),
+                &configuration_claim_ids,
                 configuration_id,
                 denial_code,
                 Some(state.self_attestation.subject_binding.token_claim.as_str()),
@@ -4381,7 +4385,7 @@ async fn oid4vci_credential(
             attach_oid4vci_self_attestation_denial_audit(
                 &mut response,
                 "oid4vci_credential_denied",
-                std::slice::from_ref(&configuration.claim_id),
+                &configuration_claim_ids,
                 configuration_id,
                 denial_code,
                 Some(state.self_attestation.subject_binding.token_claim.as_str()),
@@ -4427,6 +4431,7 @@ async fn oid4vci_credential(
     let status_claim = credential_id
         .as_deref()
         .and_then(|credential_id| state.credential_status.status_claim(credential_id));
+    let projection = oid4vci_sd_jwt_projection(configuration);
     let signed = match sd_jwt::issue(
         profile,
         &issuer,
@@ -4437,6 +4442,7 @@ async fn oid4vci_credential(
         sd_jwt::IssueOptions {
             credential_id,
             status: status_claim,
+            projection,
         },
     )
     .await
@@ -6503,6 +6509,7 @@ async fn issue_credential(
         sd_jwt::IssueOptions {
             credential_id,
             status: status_claim,
+            projection: None,
         },
     )
     .await
@@ -6751,40 +6758,91 @@ fn oid4vci_credential_signing_alg(
     Ok(signing_key.alg.clone())
 }
 
+fn oid4vci_sd_jwt_projection(
+    configuration: &Oid4vciCredentialConfigurationConfig,
+) -> Option<Vec<sd_jwt::SdJwtProjectionClaim>> {
+    match configuration.credential_claim_mode() {
+        Oid4vciCredentialClaimMode::LegacyClaimWrapper { .. } => None,
+        Oid4vciCredentialClaimMode::FieldProjection { entries } => Some(
+            entries
+                .iter()
+                .map(|entry| sd_jwt::SdJwtProjectionClaim {
+                    claim_id: entry.id.clone(),
+                    output_name: entry.output_path[0].clone(),
+                })
+                .collect(),
+        ),
+    }
+}
+
 fn oid4vci_type_metadata_document(
     evidence: &EvidenceConfig,
     configuration: &Oid4vciCredentialConfigurationConfig,
 ) -> Value {
     let display = oid4vci_credential_type_display_metadata(configuration);
-    let claim_semantics = evidence
-        .claims
-        .iter()
-        .find(|claim| claim.id == configuration.claim_id)
-        .and_then(claim_semantics_metadata);
+    let locale = configuration.display.locale.as_deref().unwrap_or("en-US");
+    let claims = match configuration.credential_claim_mode() {
+        Oid4vciCredentialClaimMode::LegacyClaimWrapper { claim_id } => {
+            vec![oid4vci_type_metadata_claim(
+                evidence,
+                claim_id,
+                vec![claim_id.to_string()],
+                &configuration.display_name,
+                locale,
+            )]
+        }
+        Oid4vciCredentialClaimMode::FieldProjection { entries } => entries
+            .iter()
+            .map(|entry| {
+                oid4vci_type_metadata_claim(
+                    evidence,
+                    &entry.id,
+                    entry.output_path.clone(),
+                    &entry.display_name,
+                    locale,
+                )
+            })
+            .collect(),
+    };
     let mut document = json!({
         "vct": configuration.vct,
         "name": configuration.display_name,
         "display": [display],
-        "claims": [
-            {
-                "path": [configuration.claim_id],
-                "display": [
-                    {
-                        "locale": configuration.display.locale.as_deref().unwrap_or("en-US"),
-                        "label": configuration.display_name,
-                    }
-                ],
-                "sd": "always",
-            }
-        ],
+        "claims": claims,
     });
-    if let Some(semantics) = claim_semantics {
-        document["claims"][0]["registry_notary_semantics"] = semantics;
-    }
     if let Some(description) = configuration.display.description.as_deref() {
         document["description"] = json!(description);
     }
     document
+}
+
+fn oid4vci_type_metadata_claim(
+    evidence: &EvidenceConfig,
+    claim_id: &str,
+    path: Vec<String>,
+    label: &str,
+    locale: &str,
+) -> Value {
+    let mut claim = json!({
+        "path": path,
+        "display": [
+            {
+                "locale": locale,
+                "label": label,
+            }
+        ],
+        "sd": "always",
+        "mandatory": true,
+    });
+    if let Some(semantics) = evidence
+        .claims
+        .iter()
+        .find(|claim| claim.id == claim_id)
+        .and_then(claim_semantics_metadata)
+    {
+        claim["registry_notary_semantics"] = semantics;
+    }
+    claim
 }
 
 fn oid4vci_issuer_display_metadata(
@@ -7542,7 +7600,7 @@ fn require_self_attestation_evaluate(
         ));
     }
     let request_claim_ids = claim_ids(&request.claims);
-    if request.claims.len() != 1
+    if request.claims.is_empty()
         || !request.claims.iter().all(|claim_id| {
             config
                 .allowed_claims
@@ -7606,16 +7664,7 @@ fn require_self_attestation_evaluate(
         }
     }
 
-    let requested_claim = request
-        .claims
-        .first()
-        .ok_or_else(|| self_attestation_denied(SelfAttestationDenialCode::ClaimDenied))?;
-    let claim = find_requested_claim(evidence, requested_claim)
-        .map_err(|_| self_attestation_denied(SelfAttestationDenialCode::ClaimDenied))?;
-    let purpose = claim
-        .purpose
-        .as_deref()
-        .ok_or_else(|| self_attestation_denied(SelfAttestationDenialCode::OperationDenied))?;
+    let purpose = common_self_attestation_purpose(evidence, &request.claims)?;
     if request
         .purpose
         .as_deref()
@@ -7632,7 +7681,7 @@ fn require_self_attestation_evaluate(
         request,
         &disclosure,
         format,
-        purpose,
+        &purpose,
     )?;
 
     let subject_binding = &config.subject_binding;
@@ -8009,6 +8058,38 @@ fn find_requested_claim<'a>(
     }
 }
 
+fn common_self_attestation_purpose(
+    evidence: &EvidenceConfig,
+    claims: &[ClaimRef],
+) -> Result<String, EvidenceError> {
+    if claims.is_empty() {
+        return Err(self_attestation_denied(
+            SelfAttestationDenialCode::ClaimDenied,
+        ));
+    }
+    let mut purpose = None;
+    for claim_ref in claims {
+        let claim = find_requested_claim(evidence, claim_ref)
+            .map_err(|_| self_attestation_denied(SelfAttestationDenialCode::ClaimDenied))?;
+        let claim_purpose = claim
+            .purpose
+            .as_deref()
+            .ok_or_else(|| self_attestation_denied(SelfAttestationDenialCode::OperationDenied))?;
+        if let Some(existing) = purpose {
+            if existing != claim_purpose {
+                return Err(self_attestation_denied(
+                    SelfAttestationDenialCode::OperationDenied,
+                ));
+            }
+        } else {
+            purpose = Some(claim_purpose);
+        }
+    }
+    purpose
+        .map(str::to_string)
+        .ok_or_else(|| self_attestation_denied(SelfAttestationDenialCode::ClaimDenied))
+}
+
 fn prepare_self_attestation_evaluate(
     state: &RegistryNotaryApiState,
     evidence: &EvidenceConfig,
@@ -8021,23 +8102,7 @@ fn prepare_self_attestation_evaluate(
     require_self_attestation_evaluate(evidence, &state.self_attestation, principal, request)?;
     require_self_attestation_token_policy(&state.self_attestation, principal)?;
 
-    let claim_id = request
-        .claims
-        .first()
-        .ok_or(EvidenceError::SelfAttestationDenied {
-            reason: SelfAttestationDenialCode::ClaimDenied,
-        })?;
-    let claim = find_requested_claim(evidence, claim_id).map_err(|_| {
-        EvidenceError::SelfAttestationDenied {
-            reason: SelfAttestationDenialCode::ClaimDenied,
-        }
-    })?;
-    let purpose = claim
-        .purpose
-        .clone()
-        .ok_or(EvidenceError::SelfAttestationDenied {
-            reason: SelfAttestationDenialCode::OperationDenied,
-        })?;
+    let purpose = common_self_attestation_purpose(evidence, &request.claims)?;
     let format = request
         .format
         .as_deref()
@@ -8112,9 +8177,19 @@ fn prepare_self_attestation_evaluate(
         policy_hash: Some(policy_hash.clone()),
         evaluation_expires_at: Some(format_time(evaluation_expires_at)),
     };
+    let mut allowed_claim_ids = BTreeSet::new();
+    for claim_id in &request_claim_ids {
+        allowed_claim_ids.insert(
+            BoundedClaimId::new(claim_id.clone()).map_err(|_| EvidenceError::InvalidRequest)?,
+        );
+    }
     let source_capability = SourceCapability::SelfAttestation {
-        claim_id: BoundedClaimId::new(claim_id.id.clone())
-            .map_err(|_| EvidenceError::InvalidRequest)?,
+        claim_id: if request_claim_ids.len() == 1 {
+            allowed_claim_ids.iter().next().cloned()
+        } else {
+            None
+        },
+        allowed_claim_ids,
         subject_binding_hash,
     };
 

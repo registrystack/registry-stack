@@ -117,6 +117,13 @@ impl EvidenceIssuer {
 pub struct IssueOptions {
     pub credential_id: Option<String>,
     pub status: Option<Value>,
+    pub projection: Option<Vec<SdJwtProjectionClaim>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SdJwtProjectionClaim {
+    pub claim_id: String,
+    pub output_name: String,
 }
 
 pub async fn issue(
@@ -142,20 +149,7 @@ pub async fn issue(
         ("issuanceDate".to_string(), json!(format_time(iat))),
         ("expirationDate".to_string(), json!(format_time(expires_at))),
     ]);
-    let disclosures = results
-        .iter()
-        .map(|result| Disclosure {
-            name: result.claim_id.clone(),
-            value: json!({
-                "claim_id": result.claim_id,
-                "version": result.claim_version,
-                "value": result.value,
-                "satisfied": result.satisfied,
-                "subject_type": result.subject_type,
-                "issued_at": result.issued_at,
-            }),
-        })
-        .collect();
+    let disclosures = disclosures_for_results(results, options.projection.as_deref())?;
     let signed = issuer
         .issuer
         .issue(SdJwtIssuanceInput {
@@ -181,6 +175,48 @@ pub async fn issue(
         issuer_signed_jwt,
         disclosures,
     })
+}
+
+fn disclosures_for_results(
+    results: &[ClaimResultView],
+    projection: Option<&[SdJwtProjectionClaim]>,
+) -> Result<Vec<Disclosure>, EvidenceError> {
+    if let Some(projection) = projection {
+        return projection
+            .iter()
+            .map(|entry| {
+                let result = results
+                    .iter()
+                    .find(|result| result.claim_id == entry.claim_id)
+                    .ok_or(EvidenceError::CredentialIssuanceFailed)?;
+                if result.satisfied == Some(false) {
+                    return Err(EvidenceError::CredentialIssuanceFailed);
+                }
+                let Some(value) = result.value.clone().filter(|value| !value.is_null()) else {
+                    return Err(EvidenceError::CredentialIssuanceFailed);
+                };
+                Ok(Disclosure {
+                    name: entry.output_name.clone(),
+                    value,
+                })
+            })
+            .collect();
+    }
+
+    Ok(results
+        .iter()
+        .map(|result| Disclosure {
+            name: result.claim_id.clone(),
+            value: json!({
+                "claim_id": result.claim_id,
+                "version": result.claim_version,
+                "value": result.value,
+                "satisfied": result.satisfied,
+                "subject_type": result.subject_type,
+                "issued_at": result.issued_at,
+            }),
+        })
+        .collect())
 }
 
 #[must_use]
@@ -357,6 +393,7 @@ mod tests {
             IssueOptions {
                 credential_id: Some(credential_id.clone()),
                 status: Some(status.clone()),
+                projection: None,
             },
         )
         .expect("credential issues");
@@ -519,6 +556,149 @@ mod tests {
             !disclosure_json.contains("123-45-6789"),
             "{disclosure_json}"
         );
+    }
+
+    #[test]
+    fn legacy_credential_disclosure_keeps_notary_result_wrapper() {
+        let issuer = EvidenceIssuer::from_jwk_str(RAW_JWK, "did:web:issuer.test#key-1".to_string())
+            .expect("test issuer builds");
+        let mut result = claim_result("date-of-birth");
+        result.value = Some(json!("2016-01-15"));
+
+        let signed = issue(
+            &test_profile(),
+            &issuer,
+            &[result],
+            "subject-ref",
+            None,
+            OffsetDateTime::now_utc(),
+            IssueOptions::default(),
+        )
+        .expect("credential issues");
+        let disclosures = decoded_disclosures(&signed);
+        let disclosure = disclosures
+            .iter()
+            .find(|disclosure| disclosure.get(1) == Some(&json!("date-of-birth")))
+            .expect("date-of-birth disclosure exists");
+
+        assert_eq!(disclosure[2]["claim_id"], json!("date-of-birth"));
+        assert_eq!(disclosure[2]["version"], json!("1.0.0"));
+        assert_eq!(disclosure[2]["value"], json!("2016-01-15"));
+        assert_eq!(disclosure[2]["satisfied"], json!(true));
+    }
+
+    #[test]
+    fn projected_credential_disclosures_use_output_names_and_domain_values() {
+        let issuer = EvidenceIssuer::from_jwk_str(RAW_JWK, "did:web:issuer.test#key-1".to_string())
+            .expect("test issuer builds");
+        let mut date = claim_result("date-of-birth");
+        date.value = Some(json!("2016-01-15"));
+        date.satisfied = None;
+        let mut place = claim_result("place-of-birth");
+        place.value = Some(json!("North City"));
+        place.satisfied = None;
+
+        let signed = issue(
+            &test_profile(),
+            &issuer,
+            &[date, place],
+            "subject-ref",
+            None,
+            OffsetDateTime::now_utc(),
+            IssueOptions {
+                projection: Some(vec![
+                    SdJwtProjectionClaim {
+                        claim_id: "date-of-birth".to_string(),
+                        output_name: "birth_date".to_string(),
+                    },
+                    SdJwtProjectionClaim {
+                        claim_id: "place-of-birth".to_string(),
+                        output_name: "birth_place_name".to_string(),
+                    },
+                ]),
+                ..IssueOptions::default()
+            },
+        )
+        .expect("projected credential issues");
+        let disclosures = decoded_disclosures(&signed);
+        let birth_date = disclosures
+            .iter()
+            .find(|disclosure| disclosure.get(1) == Some(&json!("birth_date")))
+            .expect("birth_date disclosure exists");
+        let birth_place = disclosures
+            .iter()
+            .find(|disclosure| disclosure.get(1) == Some(&json!("birth_place_name")))
+            .expect("birth_place_name disclosure exists");
+
+        assert_eq!(birth_date[2], json!("2016-01-15"));
+        assert_eq!(birth_place[2], json!("North City"));
+        assert!(birth_date[2].get("claim_id").is_none());
+        assert!(birth_place[2].get("version").is_none());
+    }
+
+    #[test]
+    fn projected_credential_rejects_missing_failed_or_null_results() {
+        let issuer = EvidenceIssuer::from_jwk_str(RAW_JWK, "did:web:issuer.test#key-1".to_string())
+            .expect("test issuer builds");
+        let projection = vec![SdJwtProjectionClaim {
+            claim_id: "date-of-birth".to_string(),
+            output_name: "birth_date".to_string(),
+        }];
+
+        let missing = issue(
+            &test_profile(),
+            &issuer,
+            &[claim_result("other")],
+            "subject-ref",
+            None,
+            OffsetDateTime::now_utc(),
+            IssueOptions {
+                projection: Some(projection.clone()),
+                ..IssueOptions::default()
+            },
+        )
+        .expect_err("missing projected result rejects");
+        assert!(matches!(missing, EvidenceError::CredentialIssuanceFailed));
+
+        let mut failed = claim_result("date-of-birth");
+        failed.satisfied = Some(false);
+        let failed_error = issue(
+            &test_profile(),
+            &issuer,
+            &[failed],
+            "subject-ref",
+            None,
+            OffsetDateTime::now_utc(),
+            IssueOptions {
+                projection: Some(projection.clone()),
+                ..IssueOptions::default()
+            },
+        )
+        .expect_err("failed projected result rejects");
+        assert!(matches!(
+            failed_error,
+            EvidenceError::CredentialIssuanceFailed
+        ));
+
+        let mut null = claim_result("date-of-birth");
+        null.value = Some(Value::Null);
+        let null_error = issue(
+            &test_profile(),
+            &issuer,
+            &[null],
+            "subject-ref",
+            None,
+            OffsetDateTime::now_utc(),
+            IssueOptions {
+                projection: Some(projection),
+                ..IssueOptions::default()
+            },
+        )
+        .expect_err("null projected result rejects");
+        assert!(matches!(
+            null_error,
+            EvidenceError::CredentialIssuanceFailed
+        ));
     }
 
     #[test]
