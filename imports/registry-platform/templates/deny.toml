@@ -50,6 +50,11 @@ allow = [
     "CDLA-Permissive-2.0",
     "ISC",
     "MIT",
+    # MPL-2.0 is weak, file-level copyleft: its obligations attach only to the
+    # MPL-licensed files themselves, not to code that merely depends on them.
+    # Allowed workspace-wide; the motivating dependency is `smartstring`,
+    # pulled in transitively by the `rhai` script runtime.
+    "MPL-2.0",
     "Unicode-3.0",
     "Unicode-DFS-2016",
     "Unlicense",
