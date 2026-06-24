@@ -128,10 +128,11 @@ fn validate_compliance(config: &Config) -> Result<(), ConfigError> {
 
 /// Validate the deployment block and evaluate startup gates.
 ///
-/// Waiver finding ids must match the finding id pattern, waiver dates must be
-/// well-formed `YYYY-MM-DD`, reasons must be non-empty, active waivers must not
-/// name hard gates, and the deployment must not declare a profile under which
-/// any unwaived `startup_fail` gate triggers.
+/// Waiver finding ids must match the finding id pattern and name a catalog
+/// finding, waiver dates must be well-formed `YYYY-MM-DD`, reasons must be
+/// non-empty, waivers must not name hard gates under the declared profile, and
+/// the deployment must not declare a profile under which any unwaived
+/// `startup_fail` gate triggers.
 /// An invalid profile value is rejected earlier by `serde` (the parse error
 /// path); this check covers the conditions that only hold once the whole config
 /// is deserialised.
@@ -173,6 +174,26 @@ fn validate_deployment(config: &Config, source: ConfigSource) -> Result<(), Conf
             );
             return Err(ConfigError::ValidationError);
         }
+        match crate::deployment::catalog_severity_for(config.deployment.profile, &waiver.finding) {
+            None => {
+                tracing::error!(
+                    code = "config.validation_error",
+                    finding = %waiver.finding,
+                    "deployment waiver targets an unknown finding id"
+                );
+                return Err(ConfigError::ValidationError);
+            }
+            Some(Some(severity)) if !severity.is_waivable() => {
+                tracing::error!(
+                    code = "config.validation_error",
+                    finding = %waiver.finding,
+                    severity = severity.as_str(),
+                    "deployment waiver targets a non-waivable gate"
+                );
+                return Err(ConfigError::ValidationError);
+            }
+            Some(_) => {}
+        }
     }
 
     let facts = crate::deployment::facts_from_config(config, source);
@@ -183,23 +204,6 @@ fn validate_deployment(config: &Config, source: ConfigSource) -> Result<(), Conf
         &waivers,
         &crate::deployment::today_utc(),
     );
-    for active_waiver in &evaluation.active_waivers {
-        if let Some(finding) = evaluation
-            .findings
-            .iter()
-            .find(|finding| finding.id == active_waiver.finding)
-        {
-            if !finding.severity.is_waivable() {
-                tracing::error!(
-                    code = "config.validation_error",
-                    finding = %active_waiver.finding,
-                    severity = finding.severity.as_str(),
-                    "deployment waiver targets a non-waivable gate"
-                );
-                return Err(ConfigError::ValidationError);
-            }
-        }
-    }
     if evaluation.has_startup_failure() {
         tracing::error!(
             code = "config.validation_error",

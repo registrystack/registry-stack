@@ -163,6 +163,18 @@ pub fn evaluate(
     platform_ops::evaluate(profile, GATES, facts, waivers, today)
 }
 
+/// Look up the declared-profile severity for a finding id in the relay catalog.
+///
+/// `None` means the finding id is unknown. `Some(None)` means the gate exists
+/// but does not bind to the declared profile, or no profile was declared.
+pub fn catalog_severity_for(
+    profile: Option<DeploymentProfile>,
+    finding: &str,
+) -> Option<Option<GateSeverity>> {
+    let gate = GATES.iter().find(|gate| gate.id == finding)?;
+    Some(profile.and_then(|profile| gate.severity_for(profile)))
+}
+
 /// Project the runtime config into the profile-independent facts the gates
 /// read.
 ///
