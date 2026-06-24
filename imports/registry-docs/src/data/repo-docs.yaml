@@ -29,8 +29,8 @@
 repos:
   registry-relay:
     remote: https://github.com/jeremi/registry-relay
-    ref: cfb1b735c6a2b3a50f5204e49660a859ceabb87d
-    version: v0.4.1
+    ref: 917e8064b62b8f86f35425a61fe66d3a4b5db921
+    version: v0.5.0
     local: ../registry-relay
     docs:
       - src: docs/README.md
@@ -62,8 +62,8 @@ repos:
     #   docs/development.md                 contributor guide, repo-owned
   registry-notary:
     remote: https://github.com/jeremi/registry-notary
-    ref: 629c901c6ae49c86c6df907b876be267ecf05c72
-    version: v0.6.2
+    ref: 4fb5fcf137edb628f3dc4bfedd42891dbbdebb03
+    version: v0.7.0
     local: ../registry-notary
     docs:
       - src: docs/README.md
