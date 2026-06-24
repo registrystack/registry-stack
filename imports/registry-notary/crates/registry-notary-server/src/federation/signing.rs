@@ -21,6 +21,7 @@ use super::errors::{federation_problem_response, FederationProblem};
 pub(super) struct FederationSignedOutcome {
     claims: Value,
     audit: FederationAuditOutcome,
+    applies_denial_latency: bool,
 }
 
 impl FederationSignedOutcome {
@@ -86,6 +87,7 @@ impl FederationSignedOutcome {
                 request_jti: Some(request_jti.to_string()),
                 subject_ref_hash: Some(subject_ref_hash),
             },
+            applies_denial_latency: false,
         }
     }
 
@@ -130,7 +132,12 @@ impl FederationSignedOutcome {
                 request_jti: Some(request_jti.to_string()),
                 subject_ref_hash: Some(subject_hash),
             },
+            applies_denial_latency: true,
         }
+    }
+
+    pub(super) const fn applies_denial_latency(&self) -> bool {
+        self.applies_denial_latency
     }
 
     pub(super) async fn into_response(

@@ -144,8 +144,10 @@ Successful responses are compact signed JWTs with:
 - `result.subject_ref.hash` as a pairwise `hmac-sha256:` handle
 
 Stale source observations return HTTP 200 with a signed top-level `error`
-object. Transport denials use RFC 9457 Problem Details JSON and do not prove whether the
-subject exists.
+object. Signed evaluation errors and transport denials both use
+`response_shaping.minimum_denial_latency_ms` before responding. Transport
+denials use RFC 9457 Problem Details JSON and do not prove whether the subject
+exists.
 
 ## Replay Store
 
@@ -165,7 +167,9 @@ enabled. For the full Redis replay configuration block, see the
 
 `federation.replay.storage` is retained only for legacy configuration shape. If
 it is set to `redis`, startup validation requires top-level
-`replay.storage = redis` so the configured backend is unambiguous.
+`replay.storage = redis` so the configured backend is unambiguous. Federation
+replay capacity and eviction are owned by the selected top-level replay backend,
+not by `federation.replay`.
 
 ## Verification Checklist
 

@@ -333,12 +333,15 @@ For browser-based wallets or portals, list exact HTTPS origins:
 
 ```yaml
 self_attestation:
-  allowed_wallet_origins:
-    - https://wallet.example.gov
+  wallet_cors:
+    allowed_origins:
+      - https://wallet.example.gov
 ```
 
-Wildcards are rejected. HTTP origins are rejected. Empty origins are acceptable
-for non-browser or backend-mediated flows where CORS is not part of the path.
+`wallet_cors.allowed_origins` is only a browser CORS policy. It does not
+authorize issuance for missing-Origin or non-browser clients. Wildcards are
+rejected. HTTP origins are rejected. Empty origins are acceptable for
+non-browser or backend-mediated flows where CORS is not part of the path.
 
 ## Rate Limits
 

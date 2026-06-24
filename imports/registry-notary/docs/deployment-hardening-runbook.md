@@ -271,7 +271,8 @@ Deployment hardening checklist:
 - Require exact subject binding from a reviewed token claim.
 - Keep `allowed_claims`, `allowed_purposes`, `allowed_formats`,
   `allowed_disclosures`, and `credential_profiles` narrow.
-- Keep `allowed_wallet_origins` to exact HTTPS origins. No wildcards.
+- Keep `wallet_cors.allowed_origins` to exact HTTPS origins for browser CORS.
+  No wildcards. Do not treat CORS as non-browser issuance authorization.
 - Keep `allowed_operations.batch_evaluate: false`.
 - Configure `token_policy` ceilings for auth age, access-token lifetime,
   evaluation age, credential validity, and clock leeway.

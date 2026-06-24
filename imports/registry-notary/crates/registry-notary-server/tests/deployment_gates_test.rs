@@ -18,7 +18,7 @@ use registry_platform_authcommon::{
     credential_fingerprint_commitment, CredentialCommitmentContext, CredentialFingerprintProvider,
     CredentialFingerprintRef, CredentialProduct, CredentialType,
 };
-use serde_json::Value;
+use serde_json::{json, Value};
 
 const AUDIT_SECRET: &str = "0123456789abcdef0123456789abcdef";
 // The raw caseworker API-key fingerprint env value and its precomputed
@@ -436,6 +436,32 @@ async fn posture_renders_deployment_and_audit_assurance() {
             "audit assurance is missing {field}"
         );
     }
+}
+
+#[tokio::test]
+async fn posture_omits_compliance_until_regime_is_declared() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let mut config = ConfigBuilder::new(&audit_path(&tmp)).build();
+
+    let posture = fetch_posture(config.clone()).await;
+    assert_matches_posture_schema(&posture);
+    assert!(
+        posture.get("compliance").is_none(),
+        "compliance block must be omitted when no regime is declared"
+    );
+
+    config.compliance.regimes = vec!["gdpr".to_string()];
+    let posture = fetch_posture(config).await;
+    assert_matches_posture_schema(&posture);
+    assert_eq!(posture["compliance"]["regimes"], json!(["gdpr"]));
+    assert_eq!(posture["compliance"]["findings"], json!([]));
+    assert!(
+        posture["compliance"]["not_applicable"]
+            .as_array()
+            .expect("not_applicable is an array")
+            .len()
+            >= 4
+    );
 }
 
 #[tokio::test]

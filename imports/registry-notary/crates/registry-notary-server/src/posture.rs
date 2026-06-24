@@ -10,7 +10,8 @@ use registry_notary_core::{
     REPLAY_STORAGE_IN_MEMORY, REPLAY_STORAGE_REDIS,
 };
 use registry_platform_ops::{
-    filter_posture_for_tier, posture_safe_runtime_config_hash, PostureFilterError, PostureTier,
+    filter_posture_for_tier, posture_safe_runtime_config_hash, CompliancePosture,
+    PostureFilterError, PostureTier,
 };
 use serde_json::{json, Map, Value};
 use time::OffsetDateTime;
@@ -235,7 +236,7 @@ pub(crate) async fn posture_document(
     let audit_assurance = audit_assurance_object(state.runtime_config().as_deref());
     let configuration = configuration_object(&config_apply, &context);
 
-    let posture = json!({
+    let mut posture = json!({
         "schema": "registry.ops.posture.v1",
         "observed_at": format_time(OffsetDateTime::now_utc()),
         "component": "registry-notary",
@@ -300,6 +301,16 @@ pub(crate) async fn posture_document(
             },
         },
     });
+    if let Some(config) = state.runtime_config().as_deref() {
+        if let Some(compliance) =
+            CompliancePosture::for_declared_regimes(config.compliance.regimes.clone())
+        {
+            posture
+                .as_object_mut()
+                .expect("posture document is a JSON object")
+                .insert("compliance".to_string(), json!(compliance));
+        }
+    }
     filter_posture_for_tier(posture, tier).map_err(PostureDocumentError::Filter)
 }
 
@@ -648,7 +659,7 @@ fn self_attestation_posture(config: &SelfAttestationConfig) -> SelfAttestationPo
         allowed_claim_count: config.allowed_claims.len(),
         allowed_purpose_count: config.allowed_purposes.len(),
         credential_profile_count: config.credential_profiles.len(),
-        wallet_origin_count: config.allowed_wallet_origins.len(),
+        wallet_origin_count: config.wallet_cors.allowed_origins.len(),
         rate_limit_mode: if config.enabled {
             rate_limit_mode_label(config.rate_limits.mode).to_string()
         } else {

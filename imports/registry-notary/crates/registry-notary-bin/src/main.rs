@@ -38,6 +38,7 @@ use registry_notary_server::{
     compile_notary_runtime, notary_router_from_runtime, notary_routers_from_runtime,
     openapi_document, EvidenceIssuerRegistry,
 };
+use registry_platform_authcommon::fingerprint_api_key;
 use registry_platform_config::{expand_config_env_vars, reject_deprecated_config_fields};
 use registry_platform_crypto::{LocalJwkSigner, PrivateJwk, PublicJwk};
 use registry_platform_httputil::{url as httputil_url, FetchUrlPolicy};
@@ -1335,7 +1336,7 @@ fn deployment_finding_label(
         if let Some(waiver) = &finding.waiver {
             return format!(
                 "deployment waiver for '{}' expired on {}",
-                waiver.finding, waiver.expires
+                finding.id, waiver.expires
             );
         }
         return "deployment waiver expired".to_string();
@@ -1346,6 +1347,7 @@ fn deployment_finding_label(
     let status = match finding.status {
         DeploymentFindingStatus::Active => "active",
         DeploymentFindingStatus::Waived => "waived",
+        _ => "unknown",
     };
     format!(
         "{profile} deployment gate '{}' is {status} at severity {}",
@@ -2474,7 +2476,7 @@ fn init_dci(output: &Path, options: InitDciOptions) -> Result<(), Box<dyn std::e
     validate_init_dci_options(&options)?;
     fs::create_dir_all(output)?;
     let api_key = random_secret("rn_api");
-    let api_hash = sha256_hash(&api_key);
+    let api_hash = fingerprint_api_key(&api_key);
     let audit_secret = random_secret("rn_audit");
     let issuer_jwk = if options.demo_issuer {
         Some(demo_issuer_jwk("did:web:localhost#registry-notary-demo")?)
@@ -2765,7 +2767,7 @@ fn hash_api_key(
     if api_key.trim().is_empty() {
         return Err("api key must not be empty".into());
     }
-    let hash = sha256_hash(&api_key);
+    let hash = fingerprint_api_key(&api_key);
     if hash_only {
         println!("{hash}");
     } else if print_secret {
@@ -3172,10 +3174,18 @@ ESCAPED="client \"quoted\" value" # comment with "quote"
     }
 
     #[test]
-    fn hash_api_key_uses_runtime_sha256_shape() {
+    fn hash_api_key_uses_authcommon_fingerprint_shape() {
         assert_eq!(
-            sha256_hash("api-token"),
+            fingerprint_api_key("api-token"),
             "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51"
+        );
+    }
+
+    #[test]
+    fn internal_config_hash_keeps_sha256_shape() {
+        assert_eq!(
+            sha256_hash("config-bytes"),
+            "sha256:6f39480b93bd351dc32b494eb82a5d5ad422b65f65b56450c49c0448676146f3"
         );
     }
 

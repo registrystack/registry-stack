@@ -19,6 +19,8 @@ use registry_platform_oid4vci::{
     CREDENTIAL_SIGNING_ALG_EDDSA, CRYPTOGRAPHIC_BINDING_METHOD_DID_JWK,
     SD_JWT_VC_FORMAT as OID4VCI_SD_JWT_VC_FORMAT,
 };
+use registry_platform_ops::COMPLIANCE_REGIME_GDPR;
+use registry_platform_pdp::ContextConstraintsConfig;
 use serde::{Deserialize, Serialize};
 
 use crate::deployment::DeploymentConfig;
@@ -60,8 +62,29 @@ pub struct StandaloneRegistryNotaryConfig {
     pub oid4vci: Oid4vciConfig,
     #[serde(default, skip_serializing_if = "federation_config_is_default")]
     pub federation: FederationConfig,
+    #[serde(default, skip_serializing_if = "ComplianceConfig::is_default")]
+    pub compliance: ComplianceConfig,
     #[serde(default, skip_serializing_if = "DeploymentConfig::is_default")]
     pub deployment: DeploymentConfig,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ComplianceConfig {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub regimes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controller: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dpo_contact: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supervisory_authority: Option<String>,
+}
+
+impl ComplianceConfig {
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -570,11 +593,40 @@ impl StandaloneRegistryNotaryConfig {
         self.federation.validate(&self.evidence)?;
         self.validate_replay_cross_block()?;
         self.validate_signing_key_alg_usage()?;
+        self.validate_compliance()?;
         self.deployment.validate().map_err(|error| {
             EvidenceConfigError::InvalidDeploymentConfig {
                 reason: error.to_string(),
             }
         })?;
+        Ok(())
+    }
+
+    fn validate_compliance(&self) -> Result<(), EvidenceConfigError> {
+        let mut seen = HashSet::new();
+        for regime in &self.compliance.regimes {
+            let trimmed = regime.trim();
+            if trimmed.is_empty() {
+                return Err(EvidenceConfigError::InvalidComplianceConfig {
+                    reason: "compliance.regimes contains a blank regime id".to_string(),
+                });
+            }
+            if trimmed != regime {
+                return Err(EvidenceConfigError::InvalidComplianceConfig {
+                    reason: format!("compliance regime '{regime}' is not canonical"),
+                });
+            }
+            if trimmed != COMPLIANCE_REGIME_GDPR {
+                return Err(EvidenceConfigError::InvalidComplianceConfig {
+                    reason: format!("unsupported compliance regime '{trimmed}'"),
+                });
+            }
+            if !seen.insert(trimmed) {
+                return Err(EvidenceConfigError::InvalidComplianceConfig {
+                    reason: format!("duplicate compliance regime '{trimmed}'"),
+                });
+            }
+        }
         Ok(())
     }
 
@@ -1416,12 +1468,6 @@ impl FederationConfig {
                 "federation.replay.storage must be in_process_single_instance_only, in_memory, or redis",
             );
         }
-        if self.replay.max_entries == 0 {
-            return invalid_federation("federation.replay.max_entries must be greater than zero");
-        }
-        if self.replay.eviction != FEDERATION_REPLAY_EVICT_EXPIRE_OLDEST {
-            return invalid_federation("federation.replay.eviction must be expire_oldest");
-        }
         if self.peers.is_empty() {
             return invalid_federation("federation.peers must list at least one peer");
         }
@@ -1531,46 +1577,31 @@ pub struct FederationPairwiseSubjectHashConfig {
 
 pub const FEDERATION_REPLAY_IN_PROCESS_SINGLE_INSTANCE_ONLY: &str =
     "in_process_single_instance_only";
-pub const FEDERATION_REPLAY_EVICT_EXPIRE_OLDEST: &str = "expire_oldest";
 
 /// Replay protection settings for the federation MVP.
 ///
 /// `in_process_single_instance_only` is deliberately named as an operator
 /// warning. It is not safe for active-active serving Notary deployments
 /// because a replay accepted by one process is invisible to another process.
-/// Production multi-instance federation needs a shared replay store before
-/// privileged federation routes are enabled.
+/// Production multi-instance federation uses the top-level `replay` backend;
+/// this block does not carry capacity or eviction controls.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct FederationReplayConfig {
     #[serde(default = "default_federation_replay_storage")]
     pub storage: String,
-    #[serde(default = "default_federation_replay_max_entries")]
-    pub max_entries: usize,
-    #[serde(default = "default_federation_replay_eviction")]
-    pub eviction: String,
 }
 
 impl Default for FederationReplayConfig {
     fn default() -> Self {
         Self {
             storage: default_federation_replay_storage(),
-            max_entries: default_federation_replay_max_entries(),
-            eviction: default_federation_replay_eviction(),
         }
     }
 }
 
 fn default_federation_replay_storage() -> String {
     FEDERATION_REPLAY_IN_PROCESS_SINGLE_INSTANCE_ONLY.to_string()
-}
-
-const fn default_federation_replay_max_entries() -> usize {
-    10_000
-}
-
-fn default_federation_replay_eviction() -> String {
-    FEDERATION_REPLAY_EVICT_EXPIRE_OLDEST.to_string()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -2752,7 +2783,7 @@ pub struct SelfAttestationConfig {
     #[serde(default)]
     pub required_scopes: Vec<String>,
     #[serde(default)]
-    pub allowed_wallet_origins: Vec<String>,
+    pub wallet_cors: SelfAttestationWalletCorsConfig,
     #[serde(default)]
     pub credential_profiles: Vec<String>,
     #[serde(default)]
@@ -2780,12 +2811,19 @@ impl Default for SelfAttestationConfig {
             allowed_disclosures: Vec::new(),
             scope_policy: SelfAttestationScopePolicy::default(),
             required_scopes: Vec::new(),
-            allowed_wallet_origins: Vec::new(),
+            wallet_cors: SelfAttestationWalletCorsConfig::default(),
             credential_profiles: Vec::new(),
             delegation: SelfAttestationDelegationConfig::default(),
             rate_limits: SelfAttestationRateLimitsConfig::default(),
         }
     }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SelfAttestationWalletCorsConfig {
+    #[serde(default)]
+    pub allowed_origins: Vec<String>,
 }
 
 fn default_self_attestation_required_auth_mode() -> String {
@@ -2855,7 +2893,10 @@ impl SelfAttestationConfig {
         )?;
         self.delegation.validate(evidence)?;
         self.rate_limits.validate()?;
-        validate_exact_wallet_origins(&self.allowed_wallet_origins)?;
+        validate_exact_wallet_origins(
+            "self_attestation.wallet_cors.allowed_origins",
+            &self.wallet_cors.allowed_origins,
+        )?;
 
         let claim_ids: HashSet<&str> = evidence
             .claims
@@ -3427,15 +3468,18 @@ fn validate_entries(name: &str, values: &[String]) -> Result<(), EvidenceConfigE
     Ok(())
 }
 
-fn validate_exact_wallet_origins(origins: &[String]) -> Result<(), EvidenceConfigError> {
+fn validate_exact_wallet_origins(
+    field: &str,
+    origins: &[String],
+) -> Result<(), EvidenceConfigError> {
     for origin in origins {
         if origin == "*" || origin.contains('*') {
-            return invalid_self_attestation(
-                "allowed_wallet_origins must contain exact origins, not wildcards",
-            );
+            return invalid_self_attestation(format!(
+                "{field} must contain exact origins, not wildcards"
+            ));
         }
         if !origin.starts_with("https://") {
-            return invalid_self_attestation("allowed_wallet_origins must use https origins");
+            return invalid_self_attestation(format!("{field} must use https origins"));
         }
     }
     Ok(())
@@ -4501,6 +4545,8 @@ pub enum EvidenceConfigError {
     InvalidServerConfig { reason: String },
     #[error("invalid config_trust config: {reason}")]
     InvalidConfigTrustConfig { reason: String },
+    #[error("invalid compliance config: {reason}")]
+    InvalidComplianceConfig { reason: String },
     #[error("invalid deployment config: {reason}")]
     InvalidDeploymentConfig { reason: String },
     #[error("source_connection '{connection}': invalid source_auth config: {reason}")]
@@ -4825,43 +4871,18 @@ fn validate_source_matching_config(
     {
         return invalid_matching_config(claim, binding, "allowed_purposes must not contain blanks");
     }
+    matching.context_constraints.validate().map_err(|error| {
+        EvidenceConfigError::InvalidMatchingConfig {
+            claim: claim.to_string(),
+            binding: binding.to_string(),
+            reason: error.to_string(),
+        }
+    })?;
     if matching
-        .allowed_assurance
-        .iter()
-        .any(|value| value.trim().is_empty())
-    {
-        return invalid_matching_config(
-            claim,
-            binding,
-            "allowed_assurance must not contain blanks",
-        );
-    }
-    if matching
-        .minimum_assurance
-        .as_ref()
-        .is_some_and(|value| value.trim().is_empty())
-    {
-        return invalid_matching_config(claim, binding, "minimum_assurance must not be empty");
-    }
-    if matching
-        .permitted_jurisdictions
-        .iter()
-        .any(|value| value.trim().is_empty())
-    {
-        return invalid_matching_config(
-            claim,
-            binding,
-            "permitted_jurisdictions must not contain blanks",
-        );
-    }
-    if matching.max_source_age_seconds == Some(0) {
-        return invalid_matching_config(
-            claim,
-            binding,
-            "max_source_age_seconds must be greater than zero",
-        );
-    }
-    if matching.max_source_age_seconds.is_some()
+        .context_constraints
+        .source_freshness
+        .max_age_seconds
+        .is_some()
         && matching
             .source_observed_at_field
             .as_ref()
@@ -4870,7 +4891,7 @@ fn validate_source_matching_config(
         return invalid_matching_config(
             claim,
             binding,
-            "source_observed_at_field is required when max_source_age_seconds is set",
+            "source_observed_at_field is required when context_constraints.source_freshness.max_age_seconds is set",
         );
     }
     if matching
@@ -5320,19 +5341,9 @@ pub struct SourceMatchingConfig {
     #[serde(default)]
     pub allowed_purposes: Vec<String>,
     #[serde(default)]
-    pub allowed_assurance: Vec<String>,
-    #[serde(default)]
-    pub minimum_assurance: Option<String>,
-    #[serde(default)]
-    pub permitted_jurisdictions: Vec<String>,
-    #[serde(default)]
-    pub max_source_age_seconds: Option<u64>,
+    pub context_constraints: ContextConstraintsConfig,
     #[serde(default)]
     pub source_observed_at_field: Option<String>,
-    #[serde(default)]
-    pub require_legal_basis: bool,
-    #[serde(default)]
-    pub require_consent: bool,
     #[serde(default)]
     pub redaction_fields: Vec<String>,
     #[serde(default)]
@@ -5390,13 +5401,8 @@ impl Default for SourceMatchingConfig {
             target_type: None,
             requester_type: None,
             allowed_purposes: Vec::new(),
-            allowed_assurance: Vec::new(),
-            minimum_assurance: None,
-            permitted_jurisdictions: Vec::new(),
-            max_source_age_seconds: None,
+            context_constraints: ContextConstraintsConfig::default(),
             source_observed_at_field: None,
-            require_legal_basis: false,
-            require_consent: false,
             redaction_fields: Vec::new(),
             ecosystem_binding: None,
             allowed_relationships: Vec::new(),
@@ -6359,6 +6365,30 @@ auth:
     }
 
     #[test]
+    fn compliance_regimes_accept_only_gdpr_for_mvp() {
+        let mut config = minimal_config();
+        config.compliance.regimes = vec!["gdpr".to_string()];
+        config.validate().expect("gdpr compliance config validates");
+
+        for regimes in [
+            vec!["ccpa".to_string()],
+            vec!["gdpr".to_string(), "gdpr".to_string()],
+            vec!["".to_string()],
+            vec![" gdpr ".to_string()],
+        ] {
+            let mut config = minimal_config();
+            config.compliance.regimes = regimes;
+            let err = config
+                .validate()
+                .expect_err("unsupported, duplicate, or blank regime is rejected");
+            assert!(matches!(
+                err,
+                EvidenceConfigError::InvalidComplianceConfig { .. }
+            ));
+        }
+    }
+
+    #[test]
     fn gate_input_defaults_are_low_risk_for_minimal_config() {
         let config = minimal_config();
         let input = config.gate_input();
@@ -7040,36 +7070,43 @@ auth:
     #[test]
     fn matching_config_rejects_blank_pdp_policy_entries() {
         let mut assurance = SourceMatchingConfig {
-            allowed_assurance: vec!["substantial".to_string(), " ".to_string()],
+            context_constraints: ContextConstraintsConfig {
+                assurance: registry_platform_pdp::AssurancePolicy {
+                    allowed: vec!["substantial".to_string(), " ".to_string()],
+                    minimum: None,
+                },
+                ..ContextConstraintsConfig::default()
+            },
             ..SourceMatchingConfig::default()
         };
         let ecosystem_bindings = BTreeMap::new();
         let err = validate_source_matching_config("claim", "src", &assurance, &ecosystem_bindings)
             .expect_err("blank assurance entry is rejected");
         assert!(
-            matches!(err, EvidenceConfigError::InvalidMatchingConfig { ref reason, .. } if reason.contains("allowed_assurance")),
-            "expected allowed_assurance rejection, got {err:?}"
+            matches!(err, EvidenceConfigError::InvalidMatchingConfig { ref reason, .. } if reason.contains("context_constraints.assurance.allowed")),
+            "expected context_constraints.assurance.allowed rejection, got {err:?}"
         );
 
-        assurance.allowed_assurance.clear();
-        assurance.minimum_assurance = Some(" ".to_string());
+        assurance.context_constraints.assurance.allowed.clear();
+        assurance.context_constraints.assurance.minimum = Some(" ".to_string());
         let err = validate_source_matching_config("claim", "src", &assurance, &ecosystem_bindings)
             .expect_err("blank minimum assurance is rejected");
         assert!(
-            matches!(err, EvidenceConfigError::InvalidMatchingConfig { ref reason, .. } if reason.contains("minimum_assurance")),
-            "expected minimum_assurance rejection, got {err:?}"
+            matches!(err, EvidenceConfigError::InvalidMatchingConfig { ref reason, .. } if reason.contains("context_constraints.assurance.minimum")),
+            "expected context_constraints.assurance.minimum rejection, got {err:?}"
         );
 
-        assurance.minimum_assurance = None;
-        assurance.permitted_jurisdictions = vec!["RW".to_string(), " ".to_string()];
+        assurance.context_constraints.assurance.minimum = None;
+        assurance.context_constraints.jurisdiction.permitted =
+            vec!["RW".to_string(), " ".to_string()];
         let err = validate_source_matching_config("claim", "src", &assurance, &ecosystem_bindings)
             .expect_err("blank jurisdiction entry is rejected");
         assert!(
-            matches!(err, EvidenceConfigError::InvalidMatchingConfig { ref reason, .. } if reason.contains("permitted_jurisdictions")),
-            "expected permitted_jurisdictions rejection, got {err:?}"
+            matches!(err, EvidenceConfigError::InvalidMatchingConfig { ref reason, .. } if reason.contains("context_constraints.jurisdiction.permitted")),
+            "expected context_constraints.jurisdiction.permitted rejection, got {err:?}"
         );
 
-        assurance.permitted_jurisdictions.clear();
+        assurance.context_constraints.jurisdiction.permitted.clear();
         assurance.redaction_fields = vec!["value".to_string(), " ".to_string()];
         let err = validate_source_matching_config("claim", "src", &assurance, &ecosystem_bindings)
             .expect_err("blank redaction entry is rejected");
@@ -7083,18 +7120,26 @@ auth:
     fn matching_config_rejects_invalid_source_freshness_contract() {
         let ecosystem_bindings = BTreeMap::new();
         let mut matching = SourceMatchingConfig {
-            max_source_age_seconds: Some(0),
+            context_constraints: ContextConstraintsConfig {
+                source_freshness: registry_platform_pdp::SourceFreshnessPolicy {
+                    max_age_seconds: Some(0),
+                },
+                ..ContextConstraintsConfig::default()
+            },
             source_observed_at_field: Some("observed_at".to_string()),
             ..SourceMatchingConfig::default()
         };
         let err = validate_source_matching_config("claim", "src", &matching, &ecosystem_bindings)
             .expect_err("zero max source age is rejected");
         assert!(
-            matches!(err, EvidenceConfigError::InvalidMatchingConfig { ref reason, .. } if reason.contains("max_source_age_seconds")),
-            "expected max_source_age_seconds rejection, got {err:?}"
+            matches!(err, EvidenceConfigError::InvalidMatchingConfig { ref reason, .. } if reason.contains("context_constraints.source_freshness.max_age_seconds")),
+            "expected context_constraints.source_freshness.max_age_seconds rejection, got {err:?}"
         );
 
-        matching.max_source_age_seconds = Some(60);
+        matching
+            .context_constraints
+            .source_freshness
+            .max_age_seconds = Some(60);
         matching.source_observed_at_field = None;
         let err = validate_source_matching_config("claim", "src", &matching, &ecosystem_bindings)
             .expect_err("missing source observed path is rejected");
@@ -7109,6 +7154,21 @@ auth:
         assert!(
             matches!(err, EvidenceConfigError::InvalidMatchingConfig { ref reason, .. } if reason.contains("source_observed_at_field")),
             "expected source_observed_at_field rejection, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn matching_config_rejects_removed_flat_context_fields() {
+        let error = serde_norway::from_str::<SourceMatchingConfig>(
+            r#"
+require_legal_basis: true
+"#,
+        )
+        .expect_err("removed flat context field is rejected");
+
+        assert!(
+            error.to_string().contains("require_legal_basis"),
+            "unexpected error: {error}"
         );
     }
 
@@ -7319,8 +7379,9 @@ self_attestation:
     - value
   required_scopes:
     - self_attestation
-  allowed_wallet_origins:
-    - https://wallet.example.gov
+  wallet_cors:
+    allowed_origins:
+      - https://wallet.example.gov
   credential_profiles:
     - civil_status_sd_jwt
   rate_limits:
@@ -7850,6 +7911,22 @@ syslog_socket_path: /dev/log
         config
             .validate()
             .expect("matching top-level redis replay validates");
+    }
+
+    #[test]
+    fn federation_replay_rejects_removed_capacity_knobs() {
+        let error = serde_norway::from_str::<FederationReplayConfig>(
+            r#"
+storage: in_process_single_instance_only
+max_entries: 100
+"#,
+        )
+        .expect_err("removed federation replay capacity knob is rejected");
+
+        assert!(
+            error.to_string().contains("max_entries"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
@@ -10828,7 +10905,7 @@ self_attestation:
     #[test]
     fn self_attestation_rejects_wildcard_wallet_origins() {
         let mut config = valid_self_attestation_config();
-        config.self_attestation.allowed_wallet_origins = vec!["*".to_string()];
+        config.self_attestation.wallet_cors.allowed_origins = vec!["*".to_string()];
 
         let reason = expect_self_attestation_error(&config);
         assert!(reason.contains("wildcards"), "unexpected: {reason}");
@@ -10837,7 +10914,7 @@ self_attestation:
     #[test]
     fn self_attestation_allows_empty_wallet_origins_for_non_browser_flows() {
         let mut config = valid_self_attestation_config();
-        config.self_attestation.allowed_wallet_origins.clear();
+        config.self_attestation.wallet_cors.allowed_origins.clear();
 
         config
             .validate()

@@ -24,7 +24,7 @@ concurrency:
 
 env:
   REGISTRY_PLATFORM_REPOSITORY: jeremi/registry-platform
-  REGISTRY_PLATFORM_REF: 3c53be10d755a428851ad6469e64f50016523b2a
+  REGISTRY_PLATFORM_REF: decd8af0ddc6d754360c911099ee4fa3b1caec64
   CROSSWALK_REPOSITORY: PublicSchema/crosswalk
   CROSSWALK_REF: 1d44ec735fdc8a7c719264b339574371e8330337
   NOTARY_IMAGE: ghcr.io/jeremi/registry-notary

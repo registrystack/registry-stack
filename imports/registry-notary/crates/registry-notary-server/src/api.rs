@@ -10915,7 +10915,9 @@ mod tests {
             "allowed_formats": [FORMAT_CLAIM_RESULT_JSON],
             "allowed_disclosures": ["predicate"],
             "required_scopes": ["self_attestation"],
-            "allowed_wallet_origins": ["https://wallet.example.gov"],
+            "wallet_cors": {
+                "allowed_origins": ["https://wallet.example.gov"]
+            },
             "credential_profiles": ["civil_status_sd_jwt"],
             "rate_limits": {
                 "mode": "in_process",
@@ -14595,8 +14597,6 @@ pairwise_subject_hash:
   secret_env: {secret_env}
 replay:
   storage: in_process_single_instance_only
-  max_entries: 100
-  eviction: expire_oldest
 response_shaping:
   minimum_denial_latency_ms: 1
 peers:

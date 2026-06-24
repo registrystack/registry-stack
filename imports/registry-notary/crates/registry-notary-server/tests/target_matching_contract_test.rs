@@ -20,6 +20,7 @@ use registry_notary_core::{
 use registry_notary_server::{
     BatchEvaluateOptions, EvidenceStore, RegistryNotaryRuntime, SourceReader,
 };
+use registry_platform_pdp::{ContextConstraintsConfig, SourceFreshnessPolicy};
 use serde_json::{json, Value};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
@@ -707,7 +708,12 @@ fn freshness_gated_person_claim() -> ClaimDefinition {
             policy_id: Some("demo-person-freshness-v1".to_string()),
             target_type: Some("Person".to_string()),
             allowed_purposes: vec!["benefits".to_string()],
-            max_source_age_seconds: Some(60),
+            context_constraints: ContextConstraintsConfig {
+                source_freshness: SourceFreshnessPolicy {
+                    max_age_seconds: Some(60),
+                },
+                ..ContextConstraintsConfig::default()
+            },
             source_observed_at_field: Some("observed_at".to_string()),
             collapse_matching_errors: false,
             ..SourceMatchingConfig::default()
@@ -1673,7 +1679,9 @@ async fn assurance_policy_rejects_before_source_read() {
         .get_mut("src")
         .expect("source binding exists")
         .matching
-        .allowed_assurance = vec!["substantial".to_string()];
+        .context_constraints
+        .assurance
+        .allowed = vec!["substantial".to_string()];
     let mut target = person_target("Amina", "Diallo", Some("1984-02-10"));
     target.assurance = Some(EvidenceAssurance {
         method: None,
@@ -1710,7 +1718,9 @@ async fn assurance_policy_accepts_trusted_authorization_details() {
         .get_mut("src")
         .expect("source binding exists")
         .matching
-        .allowed_assurance = vec!["substantial".to_string()];
+        .context_constraints
+        .assurance
+        .allowed = vec!["substantial".to_string()];
     let principal = principal_with_policy_context(Some("substantial"), None, None, None);
 
     let results = runtime
@@ -1742,10 +1752,10 @@ async fn context_only_authorization_details_supply_policy_context_without_transa
         .get_mut("src")
         .expect("source binding exists")
         .matching;
-    matching.allowed_assurance = vec!["substantial".to_string()];
-    matching.permitted_jurisdictions = vec!["ZZ".to_string()];
-    matching.require_legal_basis = true;
-    matching.require_consent = true;
+    matching.context_constraints.assurance.allowed = vec!["substantial".to_string()];
+    matching.context_constraints.jurisdiction.permitted = vec!["ZZ".to_string()];
+    matching.context_constraints.legal_basis.required = true;
+    matching.context_constraints.consent.required = true;
     let principal = principal_with_context_only_policy_context(
         Some("substantial"),
         Some("ZZ"),
@@ -1782,10 +1792,10 @@ async fn context_only_authorization_details_missing_consent_reject_before_source
         .get_mut("src")
         .expect("source binding exists")
         .matching;
-    matching.allowed_assurance = vec!["substantial".to_string()];
-    matching.permitted_jurisdictions = vec!["ZZ".to_string()];
-    matching.require_legal_basis = true;
-    matching.require_consent = true;
+    matching.context_constraints.assurance.allowed = vec!["substantial".to_string()];
+    matching.context_constraints.jurisdiction.permitted = vec!["ZZ".to_string()];
+    matching.context_constraints.legal_basis.required = true;
+    matching.context_constraints.consent.required = true;
     let principal = principal_with_context_only_policy_context(
         Some("substantial"),
         Some("ZZ"),
@@ -1822,7 +1832,9 @@ async fn source_policy_rejects_broadened_authorization_details_before_source_rea
         .get_mut("src")
         .expect("source binding exists")
         .matching
-        .allowed_assurance = vec!["substantial".to_string()];
+        .context_constraints
+        .assurance
+        .allowed = vec!["substantial".to_string()];
     let mut principal = principal_with_policy_context(Some("substantial"), None, None, None);
     principal
         .authorization_details
@@ -1860,7 +1872,9 @@ async fn source_policy_rejects_duplicate_authorization_action_before_source_read
         .get_mut("src")
         .expect("source binding exists")
         .matching
-        .allowed_assurance = vec!["substantial".to_string()];
+        .context_constraints
+        .assurance
+        .allowed = vec!["substantial".to_string()];
     let mut principal = principal_with_policy_context(Some("substantial"), None, None, None);
     principal
         .authorization_details
@@ -1898,7 +1912,9 @@ async fn source_policy_rejects_claim_mismatched_authorization_details_before_sou
         .get_mut("src")
         .expect("source binding exists")
         .matching
-        .allowed_assurance = vec!["substantial".to_string()];
+        .context_constraints
+        .assurance
+        .allowed = vec!["substantial".to_string()];
     let mut principal = principal_with_policy_context(Some("substantial"), None, None, None);
     principal
         .authorization_details
@@ -1936,7 +1952,7 @@ async fn batch_prefetch_rejects_broadened_authorization_details_before_bulk_read
         .expect("source binding exists");
     binding.connector = SourceConnectorKind::SourceAdapterSidecar;
     binding.connection = Some("source_adapter_crvs".to_string());
-    binding.matching.allowed_assurance = vec!["substantial".to_string()];
+    binding.matching.context_constraints.assurance.allowed = vec!["substantial".to_string()];
 
     let mut principal = principal_with_policy_context(Some("substantial"), None, None, None);
     principal
@@ -1993,7 +2009,9 @@ async fn minimum_assurance_policy_rejects_before_source_read_and_accepts_higher_
         .get_mut("src")
         .expect("source binding exists")
         .matching
-        .minimum_assurance = Some("substantial".to_string());
+        .context_constraints
+        .assurance
+        .minimum = Some("substantial".to_string());
     let low_principal = principal_with_policy_context(Some("low"), None, None, None);
 
     let error = runtime
@@ -2234,7 +2252,9 @@ async fn jurisdiction_policy_rejects_before_source_read() {
         .get_mut("src")
         .expect("source binding exists")
         .matching
-        .permitted_jurisdictions = vec!["RW".to_string()];
+        .context_constraints
+        .jurisdiction
+        .permitted = vec!["RW".to_string()];
     let mut target = person_target("Amina", "Diallo", Some("1984-02-10"));
     target.identifiers.push(EvidenceIdentifier {
         scheme: "national_id".to_string(),
@@ -2269,9 +2289,12 @@ async fn jurisdiction_legal_basis_and_consent_accept_trusted_authorization_detai
         .get_mut("src")
         .expect("source binding exists")
         .matching;
-    matching.permitted_jurisdictions = vec!["RW".to_string()];
-    matching.require_legal_basis = true;
-    matching.require_consent = true;
+    matching.context_constraints.jurisdiction.permitted = vec!["RW".to_string()];
+    matching.context_constraints.legal_basis.required = true;
+    matching.context_constraints.legal_basis.allowed_refs =
+        vec!["legal-basis:benefits".to_string()];
+    matching.context_constraints.consent.required = true;
+    matching.context_constraints.consent.allowed_refs = vec!["consent:person-1".to_string()];
     let principal = principal_with_policy_context(
         None,
         Some("RW"),
@@ -2308,8 +2331,8 @@ async fn required_legal_basis_and_consent_reject_before_source_read() {
         .get_mut("src")
         .expect("source binding exists")
         .matching;
-    matching.require_legal_basis = true;
-    matching.require_consent = true;
+    matching.context_constraints.legal_basis.required = true;
+    matching.context_constraints.consent.required = true;
 
     let error = runtime
         .evaluate(
@@ -2331,6 +2354,47 @@ async fn required_legal_basis_and_consent_reject_before_source_read() {
 }
 
 #[tokio::test]
+async fn wrong_legal_basis_rejects_before_source_read() {
+    let runtime = RegistryNotaryRuntime::new();
+    let source = Arc::new(MatchingSource::new());
+    let mut claim = person_claim();
+    let matching = &mut claim
+        .source_bindings
+        .get_mut("src")
+        .expect("source binding exists")
+        .matching;
+    matching.context_constraints.legal_basis.required = true;
+    matching.context_constraints.legal_basis.allowed_refs =
+        vec!["legal-basis:benefits".to_string()];
+    matching.context_constraints.consent.required = true;
+    matching.context_constraints.consent.allowed_refs = vec!["consent:person-1".to_string()];
+    let principal = principal_with_policy_context(
+        None,
+        None,
+        Some("legal-basis:appeals"),
+        Some("consent:person-1"),
+    );
+
+    let error = runtime
+        .evaluate(
+            evidence_config(vec![claim]),
+            source.clone(),
+            &EvidenceStore::default(),
+            &principal,
+            evaluate_request(
+                person_target("Amina", "Diallo", Some("1984-02-10")),
+                "person-is-alive",
+            ),
+            None,
+        )
+        .await
+        .expect_err("wrong legal basis rejects request");
+
+    assert_eq!(error.code(), "pdp.legal_basis_required");
+    assert_eq!(source.reads(), 0);
+}
+
+#[tokio::test]
 async fn required_consent_rejects_before_source_read() {
     let runtime = RegistryNotaryRuntime::new();
     let source = Arc::new(MatchingSource::new());
@@ -2340,8 +2404,8 @@ async fn required_consent_rejects_before_source_read() {
         .get_mut("src")
         .expect("source binding exists")
         .matching;
-    matching.require_legal_basis = true;
-    matching.require_consent = true;
+    matching.context_constraints.legal_basis.required = true;
+    matching.context_constraints.consent.required = true;
     let principal = principal_with_policy_context(None, None, Some("legal-basis:benefits"), None);
 
     let error = runtime
@@ -2358,6 +2422,47 @@ async fn required_consent_rejects_before_source_read() {
         )
         .await
         .expect_err("missing consent rejects request");
+
+    assert_eq!(error.code(), "pdp.consent_required");
+    assert_eq!(source.reads(), 0);
+}
+
+#[tokio::test]
+async fn wrong_consent_rejects_before_source_read() {
+    let runtime = RegistryNotaryRuntime::new();
+    let source = Arc::new(MatchingSource::new());
+    let mut claim = person_claim();
+    let matching = &mut claim
+        .source_bindings
+        .get_mut("src")
+        .expect("source binding exists")
+        .matching;
+    matching.context_constraints.legal_basis.required = true;
+    matching.context_constraints.legal_basis.allowed_refs =
+        vec!["legal-basis:benefits".to_string()];
+    matching.context_constraints.consent.required = true;
+    matching.context_constraints.consent.allowed_refs = vec!["consent:person-1".to_string()];
+    let principal = principal_with_policy_context(
+        None,
+        None,
+        Some("legal-basis:benefits"),
+        Some("consent:person-2"),
+    );
+
+    let error = runtime
+        .evaluate(
+            evidence_config(vec![claim]),
+            source.clone(),
+            &EvidenceStore::default(),
+            &principal,
+            evaluate_request(
+                person_target("Amina", "Diallo", Some("1984-02-10")),
+                "person-is-alive",
+            ),
+            None,
+        )
+        .await
+        .expect_err("wrong consent rejects request");
 
     assert_eq!(error.code(), "pdp.consent_required");
     assert_eq!(source.reads(), 0);

@@ -475,7 +475,7 @@ impl SelfAttestationWalletCorsPolicy {
     fn from_config(config: &StandaloneRegistryNotaryConfig) -> Self {
         Self {
             enabled: config.self_attestation.enabled,
-            allowed_origins: config.self_attestation.allowed_wallet_origins.clone(),
+            allowed_origins: config.self_attestation.wallet_cors.allowed_origins.clone(),
             allow_credentials: false,
         }
     }

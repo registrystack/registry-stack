@@ -1417,8 +1417,6 @@ pairwise_subject_hash:
   secret_env: TEST_FEDERATION_PAIRWISE_SECRET
 replay:
   storage: in_process_single_instance_only
-  max_entries: 100
-  eviction: expire_oldest
 response_shaping:
   minimum_denial_latency_ms: 1
 peers:
@@ -1459,10 +1457,10 @@ fn add_governed_federation_policy_context(
         .source_bindings
         .get_mut("farmer")
         .expect("farmer binding exists");
-    binding.matching.allowed_assurance = vec!["substantial".to_string()];
-    binding.matching.permitted_jurisdictions = vec!["ZZ".to_string()];
-    binding.matching.require_legal_basis = true;
-    binding.matching.require_consent = true;
+    binding.matching.context_constraints.assurance.allowed = vec!["substantial".to_string()];
+    binding.matching.context_constraints.jurisdiction.permitted = vec!["ZZ".to_string()];
+    binding.matching.context_constraints.legal_basis.required = true;
+    binding.matching.context_constraints.consent.required = true;
 
     let profile = config
         .federation
@@ -1751,8 +1749,9 @@ self_attestation:
     - self_attestation
   credential_profiles:
     - civil_status_sd_jwt
-  allowed_wallet_origins:
-    - https://wallet.example.gov
+  wallet_cors:
+    allowed_origins:
+      - https://wallet.example.gov
   rate_limits:
     mode: in_process
     invalid_token_per_client_address_per_minute: 20
@@ -3226,6 +3225,7 @@ async fn federation_stale_source_observation_returns_signed_evaluation_error() {
         &format!("{}/jwks", peer_jwks.url()),
     );
     config.federation.evaluation_profiles[0].max_source_observed_age_seconds = Some(0);
+    config.federation.response_shaping.minimum_denial_latency_ms = 50;
     let app = standalone_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let token = federation_request_jwt(
@@ -3233,13 +3233,19 @@ async fn federation_stale_source_observation_returns_signed_evaluation_error() {
         "https://purpose.example.test/eligibility",
     );
 
+    let started = std::time::Instant::now();
     let response = server
         .post("/federation/v1/evaluations")
         .add_header("content-type", "application/jwt")
         .bytes(Bytes::from(token))
         .await;
+    let elapsed = started.elapsed();
 
     response.assert_status_ok();
+    assert!(
+        elapsed >= Duration::from_millis(50),
+        "signed evaluation denial skipped latency floor; elapsed={elapsed:?}"
+    );
     let claims = verified_federation_response_claims(&response.text());
     assert_eq!(
         claims["error"]["type"],
@@ -11244,7 +11250,11 @@ async fn standalone_server_uses_dci_response_timestamp_for_source_freshness() {
         .source_bindings
         .get_mut("farmer")
         .expect("farmer binding exists");
-    binding.matching.max_source_age_seconds = Some(60);
+    binding
+        .matching
+        .context_constraints
+        .source_freshness
+        .max_age_seconds = Some(60);
     binding.matching.source_observed_at_field = Some("observed_at".to_string());
 
     let app = standalone_router(config).expect("standalone router builds");
