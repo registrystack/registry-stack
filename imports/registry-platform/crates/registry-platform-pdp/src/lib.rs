@@ -1,6 +1,10 @@
 //! Native policy decision primitives for Registry services.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    error::Error,
+    fmt,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -119,6 +123,226 @@ pub struct PolicyInput {
     pub required_checked_scopes: BTreeSet<String>,
     #[serde(default)]
     pub unsupported_odrl_terms: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContextConstraintsConfig {
+    #[serde(default)]
+    pub legal_basis: LegalBasisPolicy,
+    #[serde(default)]
+    pub consent: ConsentPolicy,
+    #[serde(default)]
+    pub jurisdiction: JurisdictionPolicy,
+    #[serde(default)]
+    pub assurance: AssurancePolicy,
+    #[serde(default)]
+    pub source_freshness: SourceFreshnessPolicy,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LegalBasisPolicy {
+    #[serde(default)]
+    pub required: bool,
+    #[serde(default)]
+    pub allowed_refs: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConsentPolicy {
+    #[serde(default)]
+    pub required: bool,
+    #[serde(default)]
+    pub allowed_refs: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct JurisdictionPolicy {
+    #[serde(default)]
+    pub permitted: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AssurancePolicy {
+    #[serde(default)]
+    pub allowed: Vec<String>,
+    #[serde(default)]
+    pub minimum: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceFreshnessPolicy {
+    #[serde(default)]
+    pub max_age_seconds: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ContextConstraintsConfigError {
+    BlankEntry { field: &'static str },
+    DuplicateEntry { field: &'static str },
+    AllowedRefsRequireRequired { field: &'static str },
+    ZeroSourceFreshness { field: &'static str },
+}
+
+impl fmt::Display for ContextConstraintsConfigError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::BlankEntry { field } => {
+                write!(
+                    f,
+                    "context constraints field {field} contains a blank entry"
+                )
+            }
+            Self::DuplicateEntry { field } => {
+                write!(
+                    f,
+                    "context constraints field {field} contains a duplicate entry"
+                )
+            }
+            Self::AllowedRefsRequireRequired { field } => {
+                write!(
+                    f,
+                    "context constraints field {field} cannot set allowed_refs when required is false"
+                )
+            }
+            Self::ZeroSourceFreshness { field } => {
+                write!(
+                    f,
+                    "context constraints field {field} must be greater than zero"
+                )
+            }
+        }
+    }
+}
+
+impl Error for ContextConstraintsConfigError {}
+
+impl ContextConstraintsConfig {
+    pub fn validate(&self) -> Result<(), ContextConstraintsConfigError> {
+        validate_allowed_refs_policy(
+            "context_constraints.legal_basis",
+            "context_constraints.legal_basis.allowed_refs",
+            self.legal_basis.required,
+            &self.legal_basis.allowed_refs,
+        )?;
+        validate_allowed_refs_policy(
+            "context_constraints.consent",
+            "context_constraints.consent.allowed_refs",
+            self.consent.required,
+            &self.consent.allowed_refs,
+        )?;
+        validate_unique_nonblank(
+            "context_constraints.jurisdiction.permitted",
+            &self.jurisdiction.permitted,
+        )?;
+        validate_unique_nonblank(
+            "context_constraints.assurance.allowed",
+            &self.assurance.allowed,
+        )?;
+        if self
+            .assurance
+            .minimum
+            .as_deref()
+            .is_some_and(|minimum| minimum.trim().is_empty())
+        {
+            return Err(ContextConstraintsConfigError::BlankEntry {
+                field: "context_constraints.assurance.minimum",
+            });
+        }
+        if self.source_freshness.max_age_seconds == Some(0) {
+            return Err(ContextConstraintsConfigError::ZeroSourceFreshness {
+                field: "context_constraints.source_freshness.max_age_seconds",
+            });
+        }
+        Ok(())
+    }
+
+    pub fn apply_to_policy_input(
+        &self,
+        policy: &mut PolicyInput,
+    ) -> Result<(), ContextConstraintsConfigError> {
+        self.validate()?;
+        policy.require_legal_basis = self.legal_basis.required;
+        policy.allowed_legal_basis_refs = normalized_string_set(&self.legal_basis.allowed_refs);
+        policy.require_consent = self.consent.required;
+        policy.allowed_consent_refs = normalized_string_set(&self.consent.allowed_refs);
+        policy.permitted_jurisdictions = normalized_string_set(&self.jurisdiction.permitted);
+        policy.allowed_assurance = normalized_string_set(&self.assurance.allowed);
+        policy.minimum_assurance = self
+            .assurance
+            .minimum
+            .as_deref()
+            .map(str::trim)
+            .filter(|minimum| !minimum.is_empty())
+            .map(ToOwned::to_owned);
+        policy.max_source_age_seconds = self.source_freshness.max_age_seconds;
+        Ok(())
+    }
+
+    pub fn hash_material(&self) -> Result<String, ContextConstraintsConfigError> {
+        context_constraints_hash_material(self)
+    }
+}
+
+pub fn apply_context_constraints_to_policy_input(
+    constraints: &ContextConstraintsConfig,
+    policy: &mut PolicyInput,
+) -> Result<(), ContextConstraintsConfigError> {
+    constraints.apply_to_policy_input(policy)
+}
+
+pub fn context_constraints_hash_material(
+    constraints: &ContextConstraintsConfig,
+) -> Result<String, ContextConstraintsConfigError> {
+    constraints.validate()?;
+
+    let mut material = String::from("registry-platform-pdp.context_constraints.v1\n");
+    push_bool_hash_field(
+        &mut material,
+        "legal_basis.required",
+        constraints.legal_basis.required,
+    );
+    push_string_list_hash_field(
+        &mut material,
+        "legal_basis.allowed_refs",
+        &normalized_string_set(&constraints.legal_basis.allowed_refs),
+    );
+    push_bool_hash_field(
+        &mut material,
+        "consent.required",
+        constraints.consent.required,
+    );
+    push_string_list_hash_field(
+        &mut material,
+        "consent.allowed_refs",
+        &normalized_string_set(&constraints.consent.allowed_refs),
+    );
+    push_string_list_hash_field(
+        &mut material,
+        "jurisdiction.permitted",
+        &normalized_string_set(&constraints.jurisdiction.permitted),
+    );
+    push_string_list_hash_field(
+        &mut material,
+        "assurance.allowed",
+        &normalized_string_set(&constraints.assurance.allowed),
+    );
+    push_optional_string_hash_field(
+        &mut material,
+        "assurance.minimum",
+        constraints.assurance.minimum.as_deref().map(str::trim),
+    );
+    push_optional_u64_hash_field(
+        &mut material,
+        "source_freshness.max_age_seconds",
+        constraints.source_freshness.max_age_seconds,
+    );
+    Ok(material)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -692,9 +916,103 @@ fn normalized_assurance(level: &str) -> String {
         .collect()
 }
 
+fn validate_allowed_refs_policy(
+    policy_field: &'static str,
+    allowed_refs_field: &'static str,
+    required: bool,
+    allowed_refs: &[String],
+) -> Result<(), ContextConstraintsConfigError> {
+    validate_unique_nonblank(allowed_refs_field, allowed_refs)?;
+    if !required && !allowed_refs.is_empty() {
+        return Err(ContextConstraintsConfigError::AllowedRefsRequireRequired {
+            field: policy_field,
+        });
+    }
+    Ok(())
+}
+
+fn validate_unique_nonblank(
+    field: &'static str,
+    values: &[String],
+) -> Result<(), ContextConstraintsConfigError> {
+    let mut seen = BTreeSet::new();
+    for value in values {
+        let value = value.trim();
+        if value.is_empty() {
+            return Err(ContextConstraintsConfigError::BlankEntry { field });
+        }
+        if !seen.insert(value) {
+            return Err(ContextConstraintsConfigError::DuplicateEntry { field });
+        }
+    }
+    Ok(())
+}
+
+fn normalized_string_set(values: &[String]) -> Vec<String> {
+    values
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn push_bool_hash_field(material: &mut String, field: &str, value: bool) {
+    material.push_str(field);
+    material.push('=');
+    material.push_str(if value { "true" } else { "false" });
+    material.push('\n');
+}
+
+fn push_optional_u64_hash_field(material: &mut String, field: &str, value: Option<u64>) {
+    material.push_str(field);
+    material.push('=');
+    match value {
+        Some(value) => material.push_str(&value.to_string()),
+        None => material.push_str("none"),
+    }
+    material.push('\n');
+}
+
+fn push_optional_string_hash_field(material: &mut String, field: &str, value: Option<&str>) {
+    material.push_str(field);
+    material.push('=');
+    if let Some(value) = value.filter(|value| !value.is_empty()) {
+        push_len_prefixed_string(material, value);
+    } else {
+        material.push_str("none");
+    }
+    material.push('\n');
+}
+
+fn push_string_list_hash_field(material: &mut String, field: &str, values: &[String]) {
+    material.push_str(field);
+    material.push_str(".len=");
+    material.push_str(&values.len().to_string());
+    material.push('\n');
+    for (index, value) in values.iter().enumerate() {
+        material.push_str(field);
+        material.push('.');
+        material.push_str(&index.to_string());
+        material.push('=');
+        push_len_prefixed_string(material, value);
+        material.push('\n');
+    }
+}
+
+fn push_len_prefixed_string(material: &mut String, value: &str) {
+    material.push_str(&value.len().to_string());
+    material.push(':');
+    material.push_str(value);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde::de::value::{Error as DeError, MapDeserializer};
+    use serde::Deserialize;
 
     fn context() -> EvidenceRequestContext {
         EvidenceRequestContext {
@@ -763,6 +1081,18 @@ mod tests {
             } => Some(stable_problem_code),
             _ => None,
         }
+    }
+
+    fn assert_unknown_field_rejected<T>()
+    where
+        T: for<'de> Deserialize<'de> + std::fmt::Debug,
+    {
+        let deserializer = MapDeserializer::<_, DeError>::new(std::iter::once(("typo_field", ())));
+        let error = T::deserialize(deserializer).expect_err("unknown field should be rejected");
+        assert!(
+            error.to_string().contains("unknown field"),
+            "unexpected serde error: {error}"
+        );
     }
 
     #[test]
@@ -944,6 +1274,204 @@ mod tests {
         assert_eq!(
             deny_code(decide(&context(), &consent_policy)),
             Some(CONSENT_REQUIRED.to_string())
+        );
+    }
+
+    #[test]
+    fn context_constraints_validation_rejects_ambiguous_config() {
+        let blank = ContextConstraintsConfig {
+            jurisdiction: JurisdictionPolicy {
+                permitted: vec![" ".to_string()],
+            },
+            ..Default::default()
+        };
+        assert_eq!(
+            blank.validate(),
+            Err(ContextConstraintsConfigError::BlankEntry {
+                field: "context_constraints.jurisdiction.permitted"
+            })
+        );
+
+        let duplicate = ContextConstraintsConfig {
+            legal_basis: LegalBasisPolicy {
+                required: true,
+                allowed_refs: vec!["law:benefits".to_string(), " law:benefits ".to_string()],
+            },
+            ..Default::default()
+        };
+        assert_eq!(
+            duplicate.validate(),
+            Err(ContextConstraintsConfigError::DuplicateEntry {
+                field: "context_constraints.legal_basis.allowed_refs"
+            })
+        );
+
+        let allowed_without_required = ContextConstraintsConfig {
+            consent: ConsentPolicy {
+                required: false,
+                allowed_refs: vec!["consent:benefits".to_string()],
+            },
+            ..Default::default()
+        };
+        assert_eq!(
+            allowed_without_required.validate(),
+            Err(ContextConstraintsConfigError::AllowedRefsRequireRequired {
+                field: "context_constraints.consent"
+            })
+        );
+
+        let zero_freshness = ContextConstraintsConfig {
+            source_freshness: SourceFreshnessPolicy {
+                max_age_seconds: Some(0),
+            },
+            ..Default::default()
+        };
+        assert_eq!(
+            zero_freshness.validate(),
+            Err(ContextConstraintsConfigError::ZeroSourceFreshness {
+                field: "context_constraints.source_freshness.max_age_seconds"
+            })
+        );
+    }
+
+    #[test]
+    fn context_constraints_config_rejects_unknown_fields() {
+        assert_unknown_field_rejected::<ContextConstraintsConfig>();
+        assert_unknown_field_rejected::<LegalBasisPolicy>();
+        assert_unknown_field_rejected::<ConsentPolicy>();
+        assert_unknown_field_rejected::<JurisdictionPolicy>();
+        assert_unknown_field_rejected::<AssurancePolicy>();
+        assert_unknown_field_rejected::<SourceFreshnessPolicy>();
+    }
+
+    #[test]
+    fn context_constraints_apply_to_policy_input_fields() {
+        let constraints = ContextConstraintsConfig {
+            legal_basis: LegalBasisPolicy {
+                required: true,
+                allowed_refs: vec![
+                    " law:benefits-act ".to_string(),
+                    "law:social-protection-act".to_string(),
+                ],
+            },
+            consent: ConsentPolicy {
+                required: true,
+                allowed_refs: vec!["consent:123".to_string()],
+            },
+            jurisdiction: JurisdictionPolicy {
+                permitted: vec![" RW ".to_string()],
+            },
+            assurance: AssurancePolicy {
+                allowed: vec![" substantial ".to_string()],
+                minimum: Some(" substantial ".to_string()),
+            },
+            source_freshness: SourceFreshnessPolicy {
+                max_age_seconds: Some(120),
+            },
+        };
+
+        let mut policy = policy();
+        constraints
+            .apply_to_policy_input(&mut policy)
+            .expect("constraints are valid");
+
+        assert!(policy.require_legal_basis);
+        assert_eq!(
+            policy.allowed_legal_basis_refs,
+            vec![
+                "law:benefits-act".to_string(),
+                "law:social-protection-act".to_string()
+            ]
+        );
+        assert!(policy.require_consent);
+        assert_eq!(policy.allowed_consent_refs, vec!["consent:123".to_string()]);
+        assert_eq!(policy.permitted_jurisdictions, vec!["RW".to_string()]);
+        assert_eq!(policy.allowed_assurance, vec!["substantial".to_string()]);
+        assert_eq!(policy.minimum_assurance.as_deref(), Some("substantial"));
+        assert_eq!(policy.max_source_age_seconds, Some(120));
+
+        assert!(matches!(decide(&context(), &policy), Decision::Permit(_)));
+
+        let mut wrong_legal_basis = context();
+        wrong_legal_basis.legal_basis_ref = Some("law:birth-registration".to_string());
+        assert_eq!(
+            deny_code(decide(&wrong_legal_basis, &policy)),
+            Some(LEGAL_BASIS_REQUIRED.to_string())
+        );
+
+        let mut wrong_consent = context();
+        wrong_consent.consent_ref = Some("consent:other".to_string());
+        assert_eq!(
+            deny_code(decide(&wrong_consent, &policy)),
+            Some(CONSENT_REQUIRED.to_string())
+        );
+    }
+
+    #[test]
+    fn context_constraints_hash_material_is_canonical_and_stable() {
+        let constraints = ContextConstraintsConfig {
+            legal_basis: LegalBasisPolicy {
+                required: true,
+                allowed_refs: vec![" law:b ".to_string(), "law:a".to_string()],
+            },
+            consent: ConsentPolicy {
+                required: true,
+                allowed_refs: vec!["consent:alpha".to_string()],
+            },
+            jurisdiction: JurisdictionPolicy {
+                permitted: vec!["US".to_string(), " RW ".to_string()],
+            },
+            assurance: AssurancePolicy {
+                allowed: vec!["loa3".to_string(), "ial2".to_string()],
+                minimum: Some(" ial2 ".to_string()),
+            },
+            source_freshness: SourceFreshnessPolicy {
+                max_age_seconds: Some(86_400),
+            },
+        };
+
+        let material =
+            context_constraints_hash_material(&constraints).expect("constraints are valid");
+        assert_eq!(
+            material,
+            concat!(
+                "registry-platform-pdp.context_constraints.v1\n",
+                "legal_basis.required=true\n",
+                "legal_basis.allowed_refs.len=2\n",
+                "legal_basis.allowed_refs.0=5:law:a\n",
+                "legal_basis.allowed_refs.1=5:law:b\n",
+                "consent.required=true\n",
+                "consent.allowed_refs.len=1\n",
+                "consent.allowed_refs.0=13:consent:alpha\n",
+                "jurisdiction.permitted.len=2\n",
+                "jurisdiction.permitted.0=2:RW\n",
+                "jurisdiction.permitted.1=2:US\n",
+                "assurance.allowed.len=2\n",
+                "assurance.allowed.0=4:ial2\n",
+                "assurance.allowed.1=4:loa3\n",
+                "assurance.minimum=4:ial2\n",
+                "source_freshness.max_age_seconds=86400\n",
+            )
+        );
+
+        let reordered = ContextConstraintsConfig {
+            legal_basis: LegalBasisPolicy {
+                required: true,
+                allowed_refs: vec!["law:a".to_string(), "law:b".to_string()],
+            },
+            consent: constraints.consent.clone(),
+            jurisdiction: JurisdictionPolicy {
+                permitted: vec!["RW".to_string(), "US".to_string()],
+            },
+            assurance: AssurancePolicy {
+                allowed: vec!["ial2".to_string(), "loa3".to_string()],
+                minimum: Some("ial2".to_string()),
+            },
+            source_freshness: constraints.source_freshness.clone(),
+        };
+        assert_eq!(
+            material,
+            context_constraints_hash_material(&reordered).expect("constraints are valid")
         );
     }
 

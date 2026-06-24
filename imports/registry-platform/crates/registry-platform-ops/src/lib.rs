@@ -4,6 +4,7 @@
 //! collection. This crate owns the shared public contract and the emit-only
 //! sensitivity-tier filter used before posture leaves a runtime.
 
+use std::collections::BTreeMap;
 use std::fmt::{self, Display, Write as _};
 use std::fs;
 use std::io::Write;
@@ -86,6 +87,15 @@ impl GateSeverity {
             Self::FindingWarn => "finding_warn",
         }
     }
+
+    /// Whether an operator waiver can suppress this severity's runtime effect.
+    ///
+    /// Startup and readiness failures are hard profile gates: `startup_fail`
+    /// means running would falsify the declared profile, and `readiness_fail`
+    /// means the process may run but must not report ready.
+    pub const fn is_waivable(self) -> bool {
+        matches!(self, Self::FindingError | Self::FindingWarn)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -125,6 +135,322 @@ pub struct DeploymentWaiver {
     pub finding: String,
     pub reason: String,
     pub expires: String,
+}
+
+/// Finding id emitted when no deployment profile is declared.
+pub const PROFILE_UNDECLARED_FINDING_ID: &str = "deployment.profile_undeclared";
+
+/// Finding id emitted for each expired deployment waiver.
+pub const WAIVER_EXPIRED_FINDING_ID: &str = "deployment.waiver_expired";
+
+/// Per-profile severities for one product-owned gate.
+///
+/// `None` means the gate does not bind to that profile.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ProfileGateSeverities {
+    pub local: Option<GateSeverity>,
+    pub hosted_lab: Option<GateSeverity>,
+    pub production: Option<GateSeverity>,
+    pub evidence_grade: Option<GateSeverity>,
+}
+
+impl ProfileGateSeverities {
+    pub const fn severity_for(self, profile: DeploymentProfile) -> Option<GateSeverity> {
+        match profile {
+            DeploymentProfile::Local => self.local,
+            DeploymentProfile::HostedLab => self.hosted_lab,
+            DeploymentProfile::Production => self.production,
+            DeploymentProfile::EvidenceGrade => self.evidence_grade,
+        }
+    }
+}
+
+/// One row in a product-owned deployment gate catalog.
+///
+/// Products keep their own facts projection and catalog. Platform owns the
+/// shared evaluation rules, severity vocabulary, waiver expiry handling, and
+/// undeclared-profile diagnostic.
+#[derive(Clone, Copy, Debug)]
+pub struct Gate<I> {
+    pub id: &'static str,
+    pub condition: fn(&I) -> bool,
+    pub severities: ProfileGateSeverities,
+}
+
+impl<I> Gate<I> {
+    pub const fn severity_for(&self, profile: DeploymentProfile) -> Option<GateSeverity> {
+        self.severities.severity_for(profile)
+    }
+}
+
+/// Outcome of evaluating a product catalog against one profile.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct GateEvaluation {
+    /// Findings to render into posture, in catalog order followed by framework
+    /// findings such as expired waivers.
+    pub findings: Vec<DeploymentFinding>,
+    /// Active, non-expired waivers echoed for operator review.
+    pub active_waivers: Vec<DeploymentWaiver>,
+    /// Unsuppressed `startup_fail` finding ids.
+    pub startup_failures: Vec<String>,
+    /// Unsuppressed `readiness_fail` finding ids.
+    pub readiness_failures: Vec<String>,
+}
+
+impl GateEvaluation {
+    #[must_use]
+    pub fn has_startup_failure(&self) -> bool {
+        !self.startup_failures.is_empty()
+    }
+
+    #[must_use]
+    pub fn has_readiness_failure(&self) -> bool {
+        !self.readiness_failures.is_empty()
+    }
+}
+
+/// Evaluate a product-owned gate catalog.
+///
+/// `today` is a `YYYY-MM-DD` date used for deterministic waiver expiry. Invalid
+/// dates fail closed as expired so an unparsable waiver cannot suppress a gate.
+#[must_use]
+pub fn evaluate<I>(
+    profile: Option<DeploymentProfile>,
+    catalog: &[Gate<I>],
+    facts: &I,
+    waivers: &[DeploymentWaiver],
+    today: &str,
+) -> GateEvaluation {
+    let Some(profile) = profile else {
+        return GateEvaluation {
+            findings: vec![DeploymentFinding {
+                id: PROFILE_UNDECLARED_FINDING_ID.to_string(),
+                severity: GateSeverity::FindingWarn,
+                status: DeploymentFindingStatus::Active,
+                waiver: None,
+            }],
+            active_waivers: Vec::new(),
+            startup_failures: Vec::new(),
+            readiness_failures: Vec::new(),
+        };
+    };
+
+    let mut evaluation = GateEvaluation::default();
+
+    for gate in catalog {
+        let Some(severity) = gate.severity_for(profile) else {
+            continue;
+        };
+        if !(gate.condition)(facts) {
+            continue;
+        }
+
+        let active_waiver = if severity.is_waivable() {
+            waivers
+                .iter()
+                .find(|waiver| waiver.finding == gate.id && !waiver_is_expired(waiver, today))
+        } else {
+            None
+        };
+
+        if let Some(waiver) = active_waiver {
+            evaluation.findings.push(DeploymentFinding {
+                id: gate.id.to_string(),
+                severity,
+                status: DeploymentFindingStatus::Waived,
+                waiver: Some(DeploymentFindingWaiver {
+                    reason: waiver.reason.clone(),
+                    expires: waiver.expires.clone(),
+                }),
+            });
+            continue;
+        }
+
+        match severity {
+            GateSeverity::StartupFail => evaluation.startup_failures.push(gate.id.to_string()),
+            GateSeverity::ReadinessFail => evaluation.readiness_failures.push(gate.id.to_string()),
+            GateSeverity::FindingError | GateSeverity::FindingWarn => {}
+        }
+        evaluation.findings.push(DeploymentFinding {
+            id: gate.id.to_string(),
+            severity,
+            status: DeploymentFindingStatus::Active,
+            waiver: None,
+        });
+    }
+
+    let mut expired_findings = Vec::new();
+    for waiver in waivers {
+        if waiver_is_expired(waiver, today) {
+            expired_findings.push(DeploymentFinding {
+                id: WAIVER_EXPIRED_FINDING_ID.to_string(),
+                severity: GateSeverity::FindingError,
+                status: DeploymentFindingStatus::Active,
+                waiver: Some(DeploymentFindingWaiver {
+                    reason: waiver.reason.clone(),
+                    expires: waiver.expires.clone(),
+                }),
+            });
+        } else {
+            evaluation.active_waivers.push(waiver.clone());
+        }
+    }
+    evaluation.findings.extend(expired_findings);
+
+    evaluation
+}
+
+fn waiver_is_expired(waiver: &DeploymentWaiver, today: &str) -> bool {
+    match (parse_iso_date(&waiver.expires), parse_iso_date(today)) {
+        (Some(_), Some(_)) => waiver.expires.as_str() < today,
+        _ => true,
+    }
+}
+
+fn parse_iso_date(value: &str) -> Option<(u16, u8, u8)> {
+    let bytes = value.as_bytes();
+    if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
+        return None;
+    }
+    let year: u16 = value.get(0..4)?.parse().ok()?;
+    let month: u8 = value.get(5..7)?.parse().ok()?;
+    let day: u8 = value.get(8..10)?.parse().ok()?;
+    if !(1..=12).contains(&month) {
+        return None;
+    }
+    let max_day = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if is_leap_year(year) => 29,
+        2 => 28,
+        _ => return None,
+    };
+    if day == 0 || day > max_day {
+        return None;
+    }
+    Some((year, month, day))
+}
+
+#[allow(clippy::manual_is_multiple_of)]
+const fn is_leap_year(year: u16) -> bool {
+    // Keep modulo arithmetic for downstream toolchains where `is_multiple_of`
+    // is not available on integer primitives.
+    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
+}
+
+pub const COMPLIANCE_REGIME_GDPR: &str = "gdpr";
+
+pub const REGISTRYSTACK_IRI_NAMESPACE: &str = "registrystack:";
+
+pub const GDPR_CONSENT_CAPTURE_OBLIGATION: &str = "registrystack:gdpr.art7.consent_capture";
+pub const GDPR_RECTIFICATION_EXECUTION_OBLIGATION: &str =
+    "registrystack:gdpr.art16.rectification_execution";
+pub const GDPR_AUTOMATED_DECISION_SAFEGUARDS_OBLIGATION: &str =
+    "registrystack:gdpr.art22.automated_decision_safeguards";
+pub const GDPR_BREACH_NOTIFICATION_WORKFLOW_OBLIGATION: &str =
+    "registrystack:gdpr.art33_34.breach_notification_workflow";
+
+/// Top-level `compliance` posture block.
+///
+/// In the MVP, products should omit this block entirely when no regime is
+/// declared. When present, `findings` is expected to be empty until compliance
+/// gate content lands.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct CompliancePosture {
+    pub regimes: Vec<String>,
+    pub findings: Vec<ComplianceFinding>,
+    pub not_applicable: Vec<ComplianceNotApplicable>,
+}
+
+impl CompliancePosture {
+    #[must_use]
+    pub fn for_declared_regimes<I, S>(regimes: I) -> Option<Self>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let regimes = regimes.into_iter().map(Into::into).collect::<Vec<_>>();
+        if regimes.is_empty() {
+            return None;
+        }
+        let not_applicable = regimes
+            .iter()
+            .flat_map(|regime| static_not_applicable_for_regime(regime))
+            .collect();
+        Some(Self {
+            regimes,
+            findings: Vec::new(),
+            not_applicable,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct ComplianceFinding {
+    pub id: String,
+    pub regime_severities: BTreeMap<String, GateSeverity>,
+    pub status: DeploymentFindingStatus,
+    pub kind: ComplianceFindingKind,
+    pub discharges: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waiver: Option<DeploymentFindingWaiver>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ComplianceFindingKind {
+    Observed,
+    Asserted,
+}
+
+impl ComplianceFindingKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Observed => "observed",
+            Self::Asserted => "asserted",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct ComplianceNotApplicable {
+    pub obligation: String,
+    pub reason: String,
+}
+
+fn static_not_applicable_for_regime(regime: &str) -> Vec<ComplianceNotApplicable> {
+    match regime {
+        COMPLIANCE_REGIME_GDPR => gdpr_static_not_applicable(),
+        _ => Vec::new(),
+    }
+}
+
+fn gdpr_static_not_applicable() -> Vec<ComplianceNotApplicable> {
+    [
+        (
+            GDPR_CONSENT_CAPTURE_OBLIGATION,
+            "Consent capture is outside the platform posture MVP.",
+        ),
+        (
+            GDPR_RECTIFICATION_EXECUTION_OBLIGATION,
+            "Rectification execution is outside the platform posture MVP.",
+        ),
+        (
+            GDPR_AUTOMATED_DECISION_SAFEGUARDS_OBLIGATION,
+            "Automated-decision safeguards are outside the platform posture MVP.",
+        ),
+        (
+            GDPR_BREACH_NOTIFICATION_WORKFLOW_OBLIGATION,
+            "Breach-notification workflow is outside the platform posture MVP.",
+        ),
+    ]
+    .into_iter()
+    .map(|(obligation, reason)| ComplianceNotApplicable {
+        obligation: obligation.to_string(),
+        reason: reason.to_string(),
+    })
+    .collect()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]

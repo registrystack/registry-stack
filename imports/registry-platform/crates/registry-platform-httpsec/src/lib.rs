@@ -20,6 +20,8 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
 
 pub const DEFAULT_REQUEST_BODY_LIMIT_BYTES: usize = 1024 * 1024;
+pub const PROBLEM_CODE_EXTENSION: &str = "code";
+pub const PROBLEM_REQUEST_ID_EXTENSION: &str = "request_id";
 
 #[derive(Debug, Clone, Default)]
 pub struct CorsPolicy {
@@ -411,6 +413,87 @@ pub struct Problem {
     pub extra: BTreeMap<String, Value>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ProductProblemBuilder {
+    base_uri: String,
+    code: String,
+    title: String,
+    status: StatusCode,
+    detail: Option<String>,
+    request_id: Option<String>,
+    extra: BTreeMap<String, Value>,
+}
+
+impl ProductProblemBuilder {
+    /// Start a product-owned RFC 9457 Problem Details response.
+    ///
+    /// The response `type` is derived as `{base_uri}/{code}`, and the stable
+    /// product code is always emitted as the `code` extension member.
+    #[must_use]
+    pub fn new(
+        base_uri: impl Into<String>,
+        code: impl Into<String>,
+        title: impl Into<String>,
+        status: StatusCode,
+    ) -> Self {
+        Self {
+            base_uri: base_uri.into(),
+            code: code.into(),
+            title: title.into(),
+            status,
+            detail: None,
+            request_id: None,
+            extra: BTreeMap::new(),
+        }
+    }
+
+    /// Set public response detail.
+    ///
+    /// Pass only client-safe text. Server causes, upstream messages, secrets,
+    /// and raw validation internals belong in service logs, not this field.
+    #[must_use]
+    pub fn detail(mut self, detail: impl Into<String>) -> Self {
+        self.detail = Some(detail.into());
+        self
+    }
+
+    #[must_use]
+    pub fn request_id(mut self, request_id: impl Into<String>) -> Self {
+        self.request_id = Some(request_id.into());
+        self
+    }
+
+    #[must_use]
+    pub fn with_extension(mut self, key: impl Into<String>, value: Value) -> Self {
+        self.extra.insert(key.into(), value);
+        self
+    }
+
+    #[must_use]
+    pub fn build(self) -> Problem {
+        let type_uri = product_problem_type_uri(&self.base_uri, &self.code);
+        let mut problem = Problem::new(&type_uri, &self.title, self.status);
+        problem.detail = self.detail;
+        problem.extra = self.extra;
+        if let Some(request_id) = self.request_id {
+            problem.extra.insert(
+                PROBLEM_REQUEST_ID_EXTENSION.to_string(),
+                Value::String(request_id),
+            );
+        }
+        problem
+            .extra
+            .insert(PROBLEM_CODE_EXTENSION.to_string(), Value::String(self.code));
+        problem
+    }
+}
+
+impl From<ProductProblemBuilder> for Problem {
+    fn from(builder: ProductProblemBuilder) -> Self {
+        builder.build()
+    }
+}
+
 impl Problem {
     #[must_use]
     pub fn new(type_uri: &str, title: &str, status: StatusCode) -> Self {
@@ -451,6 +534,10 @@ impl Problem {
     }
 }
 
+fn product_problem_type_uri(base_uri: &str, code: &str) -> String {
+    format!("{}/{}", base_uri.trim_end_matches('/'), code)
+}
+
 fn serialize_status_code<S>(status: &StatusCode, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
@@ -459,7 +546,9 @@ where
 }
 
 pub mod problem {
-    pub use super::Problem;
+    pub use super::{
+        Problem, ProductProblemBuilder, PROBLEM_CODE_EXTENSION, PROBLEM_REQUEST_ID_EXTENSION,
+    };
 }
 
 pub async fn body_limit_problem_response(_request: Request<Body>) -> Response<Body> {
@@ -542,6 +631,35 @@ mod tests {
         assert_eq!(value["title"], "Test Error");
         assert_eq!(value["status"], 422);
         assert_eq!(value["detail"], "something was wrong");
+    }
+
+    #[test]
+    fn product_problem_builder_adds_stable_code_and_request_id_extensions() {
+        let value = serde_json::to_value(
+            ProductProblemBuilder::new(
+                "https://registry-relay.dev/problems/",
+                "auth.missing_credential",
+                "Authentication Required",
+                StatusCode::UNAUTHORIZED,
+            )
+            .detail("authentication credentials are required")
+            .request_id("req_123")
+            .with_extension("code", Value::String("auth.product_specific".to_string()))
+            .with_extension("retryable", Value::Bool(false))
+            .build(),
+        )
+        .expect("product problem serializes");
+
+        assert_eq!(
+            value["type"],
+            "https://registry-relay.dev/problems/auth.missing_credential"
+        );
+        assert_eq!(value["title"], "Authentication Required");
+        assert_eq!(value["status"], 401);
+        assert_eq!(value["detail"], "authentication credentials are required");
+        assert_eq!(value["code"], "auth.missing_credential");
+        assert_eq!(value["request_id"], "req_123");
+        assert_eq!(value["retryable"], false);
     }
 
     #[test]
