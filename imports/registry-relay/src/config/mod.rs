@@ -26,6 +26,7 @@ use std::time::Duration;
 use registry_platform_authcommon::CredentialFingerprintRef;
 use registry_platform_config::RegistryTrustRoot;
 use registry_platform_ops::{AuditWritePolicy, BreakGlassRateLimit, DeploymentProfile};
+use registry_platform_pdp::ContextConstraintsConfig;
 use serde::{Deserialize, Serialize};
 
 pub mod capabilities;
@@ -64,6 +65,10 @@ pub struct Config {
     pub auth: AuthConfig,
     pub audit: AuditConfig,
     pub datasets: Vec<DatasetConfig>,
+    /// Optional compliance metadata. Declaring regimes only changes posture; it
+    /// does not create request-path PDP enforcement by itself.
+    #[serde(default)]
+    pub compliance: ComplianceConfig,
     /// Optional data provenance configuration. Disabled by default:
     /// deployments without this block load unchanged.
     #[serde(default)]
@@ -128,6 +133,23 @@ pub struct DeploymentEvidenceConfig {
     /// Operator asserts an API-key rotation process is in place.
     #[serde(default)]
     pub api_key_rotation: bool,
+}
+
+/// Operator-declared compliance metadata.
+///
+/// `regimes` is the activation list. RoPA metadata alone does not activate
+/// compliance posture, and all fields are no-op when omitted.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ComplianceConfig {
+    #[serde(default)]
+    pub regimes: Vec<String>,
+    #[serde(default)]
+    pub controller: Option<String>,
+    #[serde(default)]
+    pub dpo_contact: Option<String>,
+    #[serde(default)]
+    pub supervisory_authority: Option<String>,
 }
 
 /// Stable deployment identity surfaced in redacted operations posture.
@@ -1322,36 +1344,9 @@ pub struct GovernedPolicyConfig {
     #[serde(default)]
     pub permitted_purposes: Vec<String>,
     #[serde(default)]
-    pub permitted_jurisdictions: Vec<String>,
-    #[serde(default)]
-    pub allowed_assurance: Vec<String>,
-    #[serde(default)]
-    pub minimum_assurance: Option<String>,
-    #[serde(default)]
-    pub max_source_age_seconds: Option<u64>,
-    #[serde(default)]
-    pub require_legal_basis: bool,
-    #[serde(default)]
-    pub require_consent: bool,
+    pub context_constraints: ContextConstraintsConfig,
     #[serde(default)]
     pub redaction_fields: Vec<String>,
-    #[serde(default)]
-    pub trusted_context: GovernedTrustedContextConfig,
-}
-
-#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct GovernedTrustedContextConfig {
-    #[serde(default)]
-    pub jurisdiction: Option<String>,
-    #[serde(default)]
-    pub asserted_assurance: Option<String>,
-    #[serde(default)]
-    pub legal_basis_ref: Option<String>,
-    #[serde(default)]
-    pub consent_ref: Option<String>,
-    #[serde(default)]
-    pub source_observed_age_seconds: Option<u64>,
 }
 
 /// Declared resource schema. `strict` is the spec's `strict_schema`

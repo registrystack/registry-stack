@@ -18,6 +18,7 @@ catalog: {}
 vocabularies: {}
 auth: {}
 audit: {}
+compliance: {} # optional declared regulatory scope metadata
 deployment: {}   # optional declared assurance profile, waivers, and evidence
 config_trust: {} # optional governed config apply state
 datasets: []
@@ -620,9 +621,31 @@ Waiver reasons are only visible in the restricted posture tier; the default tier
 | `relay.auth.api_key_no_rotation_evidence` | warn | error | error |
 | `relay.config.unsigned` | warn | error | startup_fail |
 | `relay.audit.best_effort` | (not bound) | warn | readiness_fail |
-| `relay.audit.sink_missing` | error | readiness_fail | startup_fail |
+
+A missing audit sink is not a deployment-profile finding: `audit.sink` is mandatory in the canonical Relay config shape, so invalid no-sink configs fail config parsing instead of producing a runtime posture gate such as `relay.audit.sink_missing`.
 
 The current deployment profile, its findings, and active waivers are reported under `deployment` in the operations posture (`GET /admin/v1/posture`).
+
+## Compliance Metadata
+
+The optional top-level `compliance` block declares regulatory scope metadata for
+posture and downstream evidence tooling. It does not create request-path PDP
+enforcement by itself. Leave the block absent, or set `regimes: []`, to keep the
+same behavior as a config with no compliance declaration.
+
+```yaml
+compliance:
+  regimes: [gdpr]
+  controller: Example Ministry
+  dpo_contact: dpo@example.gov
+  supervisory_authority: Example Data Protection Authority
+```
+
+For the MVP, `gdpr` is the only accepted regime id. Reserved future ids such as
+`ccpa`, `lgpd`, and `coe108` fail config validation until their posture mapping
+is explicitly added. `controller`, `dpo_contact`, and
+`supervisory_authority` are metadata only; setting them without `regimes` does
+not activate the posture `compliance` block.
 
 ## Datasets
 
@@ -855,6 +878,24 @@ entities:
       default_limit: 100
       max_limit: 1000
       require_purpose_header: true
+      governed_policy:
+        permitted_purposes:
+          - https://data.example.gov/purposes/service-intake-check
+        context_constraints:
+          legal_basis:
+            required: true
+            allowed_refs:
+              - law:social-protection-act
+          consent:
+            required: true
+          jurisdiction:
+            permitted:
+              - RW
+          assurance:
+            allowed:
+              - registry:assurance:verified
+          source_freshness:
+            max_age_seconds: 86400
       required_filters:
         - id
       allowed_filters:
@@ -869,6 +910,8 @@ entities:
 ```
 
 When `fields` is present, only listed fields are exposed. When it is omitted, every table column is exposed. For sensitive datasets, prefer an explicit field list. Use entity `read_scope`, required filters, purpose-header requirements, and explicit field projection for exposure control; `sensitive: true` controls audit redaction only.
+
+`governed_policy` is optional and opt-in. `permitted_purposes` remains Relay-owned purpose allow-listing. Legal basis, consent, jurisdiction, assurance, and source freshness gates live under the nested `context_constraints` object. Trusted context values are supplied by verified request/principal context, not by static `trusted_context` config.
 
 Row-level authorization scopes are not supported. The `row_scope` resource setting is rejected by config parsing; model row exposure with dataset/entity read scopes, required filters, purpose headers, and projected fields instead.
 

@@ -557,7 +557,6 @@ async fn resolve_required_claim_missing_denies() {
             permitted_purposes:
               - identity
             redaction_fields: [given_name]
-            trusted_context: {}
 "#,
         true,
         None,
@@ -585,7 +584,6 @@ async fn resolve_optional_claim_omitted_when_source_redacted() {
             permitted_purposes:
               - identity
             redaction_fields: [surname]
-            trusted_context: {}
 "#,
         true,
         None,
@@ -621,7 +619,6 @@ async fn resolve_computed_claim_cannot_read_redacted_field() {
             permitted_purposes:
               - identity
             redaction_fields: [surname]
-            trusted_context: {}
 "#,
         true,
         None,

@@ -147,11 +147,36 @@ fn valid_household_individual_entities_load_and_compile() {
 }
 
 #[test]
+fn compliance_regimes_accept_only_gdpr_for_mvp() {
+    let tmp = TempDir::new().expect("tempdir");
+    let valid = base_config(&valid_dataset()).replacen(
+        "server:\n  bind: 127.0.0.1:0",
+        "server:\n  bind: 127.0.0.1:0\n\ncompliance:\n  regimes: [gdpr]\n  controller: Test Ministry\n  dpo_contact: dpo@example.test\n  supervisory_authority: Example DPA",
+        1,
+    );
+    let config_path = write_config(&tmp, &valid);
+    let config = registry_relay::config::load(&config_path).expect("gdpr compliance config loads");
+    assert_eq!(config.compliance.regimes, vec!["gdpr"]);
+
+    for regimes in ["[ccpa]", "[gdpr, gdpr]", "[\"\"]", "[\" gdpr \"]"] {
+        let invalid = base_config(&valid_dataset()).replacen(
+            "server:\n  bind: 127.0.0.1:0",
+            &format!("server:\n  bind: 127.0.0.1:0\n\ncompliance:\n  regimes: {regimes}"),
+            1,
+        );
+        let config_path = write_config(&tmp, &invalid);
+        let err = registry_relay::config::load(&config_path)
+            .expect_err("unsupported, duplicate, or blank regime is rejected");
+        assert_eq!(err.code(), "config.validation_error");
+    }
+}
+
+#[test]
 fn governed_redaction_field_must_be_top_level_projectable_path() {
     let tmp = TempDir::new().expect("tempdir");
     let invalid = valid_dataset().replace(
         "          allowed_filters:\n            - field: household_id",
-        "          governed_policy:\n            permitted_purposes: [testing]\n            redaction_fields: [profile.birthdate]\n            trusted_context: {}\n          allowed_filters:\n            - field: household_id",
+        "          governed_policy:\n            permitted_purposes: [testing]\n            redaction_fields: [profile.birthdate]\n          allowed_filters:\n            - field: household_id",
     );
     let config_path = write_config(&tmp, &base_config(&invalid));
     let err = registry_relay::config::load(&config_path)
@@ -164,7 +189,7 @@ fn governed_redaction_field_must_exist_on_entity() {
     let tmp = TempDir::new().expect("tempdir");
     let invalid = valid_dataset().replace(
         "          allowed_filters:\n            - field: household_id",
-        "          governed_policy:\n            permitted_purposes: [testing]\n            redaction_fields: [missing_field]\n            trusted_context: {}\n          allowed_filters:\n            - field: household_id",
+        "          governed_policy:\n            permitted_purposes: [testing]\n            redaction_fields: [missing_field]\n          allowed_filters:\n            - field: household_id",
     );
     let config_path = write_config(&tmp, &base_config(&invalid));
     let err = registry_relay::config::load(&config_path)
@@ -173,15 +198,48 @@ fn governed_redaction_field_must_exist_on_entity() {
 }
 
 #[test]
-fn governed_policy_rejects_static_trusted_source_freshness() {
+fn governed_policy_rejects_removed_static_trusted_context() {
     let tmp = TempDir::new().expect("tempdir");
     let invalid = valid_dataset().replace(
         "          allowed_filters:\n            - field: household_id",
-        "          governed_policy:\n            permitted_purposes: [testing]\n            max_source_age_seconds: 30\n            trusted_context:\n              source_observed_age_seconds: 5\n          allowed_filters:\n            - field: household_id",
+        "          governed_policy:\n            permitted_purposes: [testing]\n            trusted_context:\n              source_observed_age_seconds: 5\n          allowed_filters:\n            - field: household_id",
     );
     let config_path = write_config(&tmp, &base_config(&invalid));
     let err = registry_relay::config::load(&config_path)
-        .expect_err("config rejects static governed freshness context");
+        .expect_err("config rejects removed static governed trusted_context");
+    assert_eq!(err.code(), "config.parse_error");
+}
+
+#[test]
+fn governed_policy_rejects_removed_flat_context_fields() {
+    let tmp = TempDir::new().expect("tempdir");
+    let invalid = valid_dataset().replace(
+        "          allowed_filters:\n            - field: household_id",
+        "          governed_policy:\n            permitted_purposes: [testing]\n            permitted_jurisdictions: [ZZ]\n            require_legal_basis: true\n          allowed_filters:\n            - field: household_id",
+    );
+    let config_path = write_config(&tmp, &base_config(&invalid));
+    let err = registry_relay::config::load(&config_path)
+        .expect_err("config rejects removed flat governed context fields");
+    assert_eq!(err.code(), "config.parse_error");
+}
+
+#[test]
+fn governed_policy_validates_context_constraints_allowed_refs_require_required() {
+    let tmp = TempDir::new().expect("tempdir");
+    let invalid = valid_dataset().replace(
+        "          allowed_filters:\n            - field: household_id",
+        r#"          governed_policy:
+            permitted_purposes: [testing]
+            context_constraints:
+              legal_basis:
+                required: false
+                allowed_refs: [law:test-benefits]
+          allowed_filters:
+            - field: household_id"#,
+    );
+    let config_path = write_config(&tmp, &base_config(&invalid));
+    let err = registry_relay::config::load(&config_path)
+        .expect_err("config rejects allowed legal-basis refs when required is false");
     assert_eq!(err.code(), "config.validation_error");
 }
 
@@ -190,7 +248,7 @@ fn governed_policy_rejects_inert_policy_block() {
     let tmp = TempDir::new().expect("tempdir");
     let invalid = valid_dataset().replace(
         "          allowed_filters:\n            - field: household_id",
-        "          governed_policy:\n            trusted_context: {}\n          allowed_filters:\n            - field: household_id",
+        "          governed_policy: {}\n          allowed_filters:\n            - field: household_id",
     );
     let config_path = write_config(&tmp, &base_config(&invalid));
     let err = registry_relay::config::load(&config_path)
@@ -382,10 +440,11 @@ fn governed_entity_policy_rejects_blank_policy_terms() {
         "          allowed_filters:\n",
         r#"          governed_policy:
             permitted_purposes: [" "]
-            permitted_jurisdictions: [ZZ]
-            allowed_assurance: [substantial]
-            trusted_context:
-              jurisdiction: ZZ
+            context_constraints:
+              jurisdiction:
+                permitted: [ZZ]
+              assurance:
+                allowed: [substantial]
           allowed_filters:
 "#,
     );

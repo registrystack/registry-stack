@@ -321,7 +321,9 @@ const ENTITY_ROUTE_SCOPES: &[&str] = &[
     "registry:trust:jurisdiction:ZZ",
     "registry:trust:assurance:substantial",
     "registry:trust:legal_basis:law:test-benefits",
+    "registry:trust:legal_basis:law:other",
     "registry:trust:consent:consent:test",
+    "registry:trust:consent:consent:other",
     "registry:trust:source_observed_age_seconds:5",
 ];
 
@@ -1056,12 +1058,16 @@ async fn governed_entity_policy_redacts_configured_fields_from_collection_and_re
     let policy = r#"          governed_policy:
             permitted_purposes:
               - https://data.example.test/purposes/testing
-            permitted_jurisdictions: [ZZ]
-            allowed_assurance: [substantial]
-            require_legal_basis: true
-            require_consent: true
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              jurisdiction:
+                permitted: [ZZ]
+              assurance:
+                allowed: [substantial]
             redaction_fields: [given_name]
-            trusted_context: {}
 "#;
     let server = server_with_query_and_governed_entity_policy(policy).await;
 
@@ -1105,7 +1111,6 @@ async fn governed_entity_policy_redacts_configured_fields_from_relationships() {
             permitted_purposes:
               - https://data.example.test/purposes/testing
             redaction_fields: [given_name]
-            trusted_context: {}
 "#;
     let server = server_with_query_and_governed_entity_policy(policy).await;
 
@@ -1130,7 +1135,6 @@ async fn governed_entity_policy_redacts_configured_fields_from_expansions() {
             permitted_purposes:
               - https://data.example.test/purposes/testing
             redaction_fields: [given_name]
-            trusted_context: {}
 "#;
     let server = server_with_query_and_governed_entity_policy(policy).await;
 
@@ -1186,7 +1190,6 @@ async fn governed_entity_etag_varies_by_redaction_policy() {
             permitted_purposes:
               - https://data.example.test/purposes/testing
             redaction_fields: [given_name]
-            trusted_context: {}
 "#;
     let redacted = server_with_query_and_governed_entity_policy(policy)
         .await
@@ -1214,8 +1217,9 @@ async fn governed_entity_policy_denies_when_required_trusted_context_is_missing(
     let policy = r#"          governed_policy:
             permitted_purposes:
               - https://data.example.test/purposes/testing
-            require_legal_basis: true
-            trusted_context: {}
+            context_constraints:
+              legal_basis:
+                required: true
 "#;
     let resp = server_with_query_and_governed_entity_policy(policy)
         .await
@@ -1228,16 +1232,101 @@ async fn governed_entity_policy_denies_when_required_trusted_context_is_missing(
 }
 
 #[tokio::test]
+async fn governed_entity_policy_enforces_legal_basis_allowed_refs() {
+    let policy = r#"          governed_policy:
+            permitted_purposes:
+              - https://data.example.test/purposes/testing
+            context_constraints:
+              legal_basis:
+                required: true
+                allowed_refs:
+                  - law:test-benefits
+"#;
+    let server = server_with_query_and_governed_entity_policy(policy).await;
+
+    let missing = server
+        .get("/v1/datasets/social_registry/entities/individual/records?id=p-1")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
+        .await;
+
+    missing.assert_status(StatusCode::FORBIDDEN);
+    assert_eq!(missing.json::<Value>()["code"], "pdp.legal_basis_required");
+
+    let wrong = server
+        .get("/v1/datasets/social_registry/entities/individual/records?id=p-1")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
+        .add_header("x-registry-trust-legal-basis", "law:other")
+        .await;
+
+    wrong.assert_status(StatusCode::FORBIDDEN);
+    assert_eq!(wrong.json::<Value>()["code"], "pdp.legal_basis_required");
+
+    let approved = server
+        .get("/v1/datasets/social_registry/entities/individual/records?id=p-1")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
+        .add_header("x-registry-trust-legal-basis", "law:test-benefits")
+        .await;
+
+    approved.assert_status(StatusCode::OK);
+    assert_eq!(approved.json::<Value>()["data"][0]["id"], "p-1");
+}
+
+#[tokio::test]
+async fn governed_entity_policy_enforces_consent_allowed_refs() {
+    let policy = r#"          governed_policy:
+            permitted_purposes:
+              - https://data.example.test/purposes/testing
+            context_constraints:
+              consent:
+                required: true
+                allowed_refs:
+                  - consent:test
+"#;
+    let server = server_with_query_and_governed_entity_policy(policy).await;
+
+    let missing = server
+        .get("/v1/datasets/social_registry/entities/individual/records?id=p-1")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
+        .await;
+
+    missing.assert_status(StatusCode::FORBIDDEN);
+    assert_eq!(missing.json::<Value>()["code"], "pdp.consent_required");
+
+    let wrong = server
+        .get("/v1/datasets/social_registry/entities/individual/records?id=p-1")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
+        .add_header("x-registry-trust-consent", "consent:other")
+        .await;
+
+    wrong.assert_status(StatusCode::FORBIDDEN);
+    assert_eq!(wrong.json::<Value>()["code"], "pdp.consent_required");
+
+    let approved = server
+        .get("/v1/datasets/social_registry/entities/individual/records?id=p-1")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
+        .add_header("x-registry-trust-consent", "consent:test")
+        .await;
+
+    approved.assert_status(StatusCode::OK);
+    assert_eq!(approved.json::<Value>()["data"][0]["id"], "p-1");
+}
+
+#[tokio::test]
 async fn governed_entity_policy_uses_request_trust_context_on_same_route() {
     let policy = r#"          governed_policy:
             permitted_purposes:
               - https://data.example.test/purposes/testing
-            permitted_jurisdictions: [ZZ]
-            allowed_assurance: [substantial]
-            max_source_age_seconds: 30
-            require_legal_basis: true
-            require_consent: true
-            trusted_context: {}
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              jurisdiction:
+                permitted: [ZZ]
+              assurance:
+                allowed: [substantial]
+              source_freshness:
+                max_age_seconds: 30
 "#;
     let server = server_with_query_and_governed_entity_policy(policy).await;
 
@@ -1299,11 +1388,15 @@ async fn governed_entity_policy_ignores_unverified_trust_headers() {
     let policy = r#"          governed_policy:
             permitted_purposes:
               - https://data.example.test/purposes/testing
-            permitted_jurisdictions: [ZZ]
-            allowed_assurance: [substantial]
-            require_legal_basis: true
-            require_consent: true
-            trusted_context: {}
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              jurisdiction:
+                permitted: [ZZ]
+              assurance:
+                allowed: [substantial]
 "#;
     let server =
         server_with_query_and_governed_entity_policy_without_trust_assertion_scopes(policy).await;
@@ -1380,7 +1473,6 @@ datasets:
           governed_policy:
             permitted_purposes:
               - benefits
-            trusted_context: {}
 audit:
   sink: stdout
   format: jsonl

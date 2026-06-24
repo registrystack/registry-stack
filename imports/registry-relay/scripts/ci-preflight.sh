@@ -32,6 +32,10 @@ require_tool git
 require_tool python3
 require_tool rsync
 
+is_git_worktree() {
+  git -C "$1" rev-parse --is-inside-work-tree >/dev/null 2>&1
+}
+
 read_workflow_ref_config() {
   python3 - "$repo_root" <<'PY'
 from pathlib import Path
@@ -99,7 +103,7 @@ checkout_ref() {
   local source="${!env_name:-$default_source}"
   local clone_source=""
 
-  if [[ "${CI_PREFLIGHT_USE_WORKTREE:-0}" == "1" && -d "${source}/.git" ]]; then
+  if [[ "${CI_PREFLIGHT_USE_WORKTREE:-0}" == "1" ]] && is_git_worktree "$source"; then
     echo "==> registry-relay: using ${label} working tree from ${source}"
     echo "==> registry-relay: clean CI still checks out ${label} ${ref} from ${repository}"
     run rsync -a \
@@ -111,7 +115,7 @@ checkout_ref() {
     return
   fi
 
-  if [[ -d "${source}/.git" ]] && git -C "$source" cat-file -e "${ref}^{commit}" 2>/dev/null; then
+  if is_git_worktree "$source" && git -C "$source" cat-file -e "${ref}^{commit}" 2>/dev/null; then
     clone_source="$source"
   else
     clone_source="https://github.com/${repository}.git"
