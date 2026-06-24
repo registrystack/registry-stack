@@ -2,7 +2,7 @@ stack:
   release: beta-6
   version: 0.8.0
   source_repo: registrystack/registry-stack
-  source_ref: d2d2cf2ee2c50000fe5ca3fe00a7e059347758cf
+  source_ref: f30a541df539c2e16de09733c5944c744a60493c
   source_tag: v0.8.0
   status: release-candidate
 
