@@ -62,8 +62,6 @@ use std::sync::Arc;
 #[cfg(feature = "registry-notary-cel")]
 use std::sync::Mutex;
 use std::time::Duration;
-#[cfg(feature = "registry-notary-cel")]
-use std::time::Instant;
 use tempfile::TempDir;
 #[cfg(feature = "registry-notary-cel")]
 use time::format_description::well_known::Rfc3339;
@@ -3235,7 +3233,7 @@ async fn federation_stale_source_observation_returns_signed_evaluation_error() {
         "https://purpose.example.test/eligibility",
     );
 
-    let started = Instant::now();
+    let started = std::time::Instant::now();
     let response = server
         .post("/federation/v1/evaluations")
         .add_header("content-type", "application/jwt")
