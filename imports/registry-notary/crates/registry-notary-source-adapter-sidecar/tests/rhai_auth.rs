@@ -310,3 +310,36 @@ async fn restricted_static_proxy_header_is_rejected() {
     let message = expect_startup_rejection(target_extra).await;
     assert!(message.contains("restricted header"), "got: {message}");
 }
+
+#[tokio::test]
+async fn malformed_static_header_name_is_rejected_at_startup() {
+    let _guard = ENV_LOCK.lock().await;
+    // `/` is not a legal HTTP header-name token. The check must fail at config
+    // validation, not later when reqwest builds the request (which would only
+    // surface at smoke or first use).
+    let target_extra = r#"
+          headers:
+            "Bad/Header": "x""#;
+    let message = expect_startup_rejection(target_extra).await;
+    assert!(
+        message.contains("is not a valid HTTP header name"),
+        "got: {message}"
+    );
+}
+
+#[tokio::test]
+async fn api_key_header_with_malformed_header_name_is_rejected() {
+    let _guard = ENV_LOCK.lock().await;
+    // `:` is the header name/value separator and is not a legal token character.
+    let target_extra = r#"
+          auth:
+            type: api_key_header
+            header: "Bad:Header"
+            token:
+              secret: apiToken"#;
+    let message = expect_startup_rejection(target_extra).await;
+    assert!(
+        message.contains("is not a valid HTTP header name"),
+        "got: {message}"
+    );
+}

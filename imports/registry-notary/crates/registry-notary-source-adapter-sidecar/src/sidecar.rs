@@ -2699,7 +2699,7 @@ fn validate_http_request_header_name(
     label: &str,
     name: &str,
 ) -> Result<(), SidecarError> {
-    if !is_valid_http_param_name(name) {
+    if !is_valid_http_header_name(name) {
         return Err(SidecarError::Config(format!(
             "source {source_id} {label} is not a valid HTTP header name"
         )));
@@ -2746,12 +2746,29 @@ fn is_valid_http_param_name(name: &str) -> bool {
             .any(|byte| byte.is_ascii_control() || matches!(byte, b' ' | b'\t' | b'\r' | b'\n'))
 }
 
+/// Whether `name` is a valid HTTP header name (an RFC 7230 token). This is
+/// stricter than `is_valid_http_param_name`: `reqwest` rejects a non-token
+/// header name when it builds the request, so checking it here turns what would
+/// otherwise be a smoke-time or first-request failure into a config error that
+/// blocks readiness. Query-parameter names keep the looser predicate because the
+/// client percent-encodes them.
+fn is_valid_http_header_name(name: &str) -> bool {
+    reqwest::header::HeaderName::from_bytes(name.as_bytes()).is_ok()
+}
+
 fn validate_http_header_or_query_name(
     source_id: &str,
     section: &str,
     name: &str,
 ) -> Result<(), SidecarError> {
-    if !is_valid_http_param_name(name) {
+    // Header names must be valid HTTP tokens; query-parameter names use the
+    // looser control/whitespace check (the client percent-encodes them).
+    let valid = if section == "headers" {
+        is_valid_http_header_name(name)
+    } else {
+        is_valid_http_param_name(name)
+    };
+    if !valid {
         return Err(SidecarError::Config(format!(
             "source {source_id} http_json.{section} contains an invalid name"
         )));
