@@ -3,9 +3,8 @@
 """Focused regression checks for Registry Lab built-in sidecar wiring.
 
 The DHIS2 and civil sidecars now use the built-in http_json engine instead of
-the OpenFn Node worker pool. Local demo Notary configs retain the
-openfn_sidecar connector, while hosted DHIS2 tracks the deployed Notary image's
-source_adapter_sidecar connector spelling.
+the OpenFn Node worker pool. Local and hosted demo Notary configs use the
+current source_adapter_sidecar connector spelling.
 """
 
 from __future__ import annotations
@@ -78,16 +77,17 @@ class BuiltinSidecarLabConfigTest(unittest.TestCase):
     def test_openfn_notary_bindings_use_sidecar_connector(self) -> None:
         civil = read(LOCAL_CIVIL_NOTARY)
         self.assertIn("connection: openfn_civil", civil)
-        self.assertIn("connector: openfn_sidecar", civil)
+        self.assertIn("connector: source_adapter_sidecar", civil)
 
         local_dhis2 = read(LOCAL_DHIS2_NOTARY)
         self.assertEqual(9, local_dhis2.count("connection: dhis2_openfn"))
-        self.assertEqual(9, local_dhis2.count("connector: openfn_sidecar"))
+        self.assertEqual(9, local_dhis2.count("connector: source_adapter_sidecar"))
         self.assertNotIn("connector: registry_data_api", local_dhis2)
 
         hosted_dhis2 = read(HOSTED_DHIS2_NOTARY)
         self.assertEqual(9, hosted_dhis2.count("connection: dhis2_openfn"))
         self.assertEqual(9, hosted_dhis2.count("connector: source_adapter_sidecar"))
+        self.assertNotIn("connector: openfn_sidecar", local_dhis2)
         self.assertNotIn("connector: openfn_sidecar", hosted_dhis2)
         self.assertNotIn("connector: registry_data_api", hosted_dhis2)
 
@@ -110,7 +110,8 @@ class BuiltinSidecarLabConfigTest(unittest.TestCase):
 
     def test_lab_readme_names_sidecar_connector(self) -> None:
         body = read(README)
-        self.assertIn("Registry Notary `openfn_sidecar` connector", body)
+        normalized = " ".join(body.split())
+        self.assertIn("Registry Notary `source_adapter_sidecar` connector", normalized)
         self.assertNotIn("Registry Notary `registry_data_api` connector", body)
 
 

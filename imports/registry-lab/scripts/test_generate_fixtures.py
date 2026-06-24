@@ -305,7 +305,7 @@ class GenerateFixturesTest(unittest.TestCase):
         for path in notary_paths:
             with self.subTest(path=path.relative_to(self.generator.ROOT)):
                 text = path.read_text(encoding="utf-8")
-                self.assertNotIn("max_source_age_seconds:", text)
+                self.assertNotIn("source_freshness:", text)
                 self.assertNotIn("source_observed_at_field: observed_at", text)
 
     def test_opencrvs_dci_freshness_uses_source_response_timestamp(self) -> None:
@@ -320,8 +320,28 @@ class GenerateFixturesTest(unittest.TestCase):
                     'observed_at: "$response:/message/search_response/0/timestamp"',
                     text,
                 )
-                self.assertEqual(text.count("max_source_age_seconds: 86400"), 8)
+                self.assertEqual(text.count("source_freshness:"), 8)
+                self.assertEqual(text.count("max_age_seconds: 86400"), 8)
                 self.assertEqual(text.count("source_observed_at_field: observed_at"), 8)
+
+    def test_notary_matching_context_constraints_are_nested(self) -> None:
+        legacy_fields = (
+            "allowed_assurance:",
+            "permitted_jurisdictions:",
+            "require_legal_basis:",
+            "require_consent:",
+            "max_source_age_seconds:",
+        )
+        notary_dirs = (
+            self.generator.ROOT / "config" / "notary",
+            self.generator.ROOT / "config" / "coolify" / "notary",
+        )
+        for notary_dir in notary_dirs:
+            for path in sorted(notary_dir.glob("*-notary.yaml")):
+                with self.subTest(path=path.relative_to(self.generator.ROOT)):
+                    text = path.read_text(encoding="utf-8")
+                    for field in legacy_fields:
+                        self.assertNotIn(field, text)
 
     def test_refresh_persona_invariants_cover_source_outcomes(self) -> None:
         personas = self.generator.FIXTURE_PERSONAS

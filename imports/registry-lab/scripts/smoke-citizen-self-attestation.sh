@@ -1136,8 +1136,9 @@ self_attestation:
 {required_scopes_block.rstrip()}
   credential_profiles:
     - citizen_civil_status_sd_jwt
-  allowed_wallet_origins:
-    - https://wallet.example.gov
+  wallet_cors:
+    allowed_origins:
+      - https://wallet.example.gov
   rate_limits:
     mode: in_process
     invalid_token_per_client_address_per_minute: 20

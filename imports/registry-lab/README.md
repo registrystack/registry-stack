@@ -486,9 +486,9 @@ Wallet API or Inji/Mimoto, see `docs/wallet-interop-testing.md`.
 
 ## Built-in sidecar civil demo
 
-The civil sidecar nodes prove the Registry Notary `openfn_sidecar` connector can
-source one-item civil lookups from a built-in `http_json` sidecar and issue a
-date-of-birth SD-JWT VC from that evidence. For the guided path, see
+The civil sidecar nodes prove the Registry Notary `source_adapter_sidecar`
+connector can source one-item civil lookups from a built-in `http_json` sidecar
+and issue a date-of-birth SD-JWT VC from that evidence. For the guided path, see
 [`docs/openfn-sidecar-notary-tutorial.md`](docs/openfn-sidecar-notary-tutorial.md).
 
 ```bash

@@ -46,7 +46,7 @@ evidence:
       allow_insecure_private_network: true
       token_env: FHIR_SIDECAR_TOKEN_RAW
       retry_on_5xx: false
-      bulk_mode: openfn_sidecar_batch
+      bulk_mode: source_adapter_sidecar_batch
   claims:
     - id: patient-record-exists
       title: Patient record exists
@@ -55,7 +55,7 @@ evidence:
       value: { type: boolean }
       source_bindings: &patient_binding
         patient:
-          connector: openfn_sidecar
+          connector: source_adapter_sidecar
           connection: fhir_sidecar
           required_scope: health_registry:evidence_verification
           dataset: health_registry
@@ -84,7 +84,7 @@ evidence:
       value: { type: boolean }
       source_bindings:
         patient:
-          connector: openfn_sidecar
+          connector: source_adapter_sidecar
           connection: fhir_sidecar
           required_scope: health_registry:evidence_verification
           dataset: health_registry
@@ -110,7 +110,7 @@ evidence:
       value: { type: boolean }
       source_bindings:
         patient:
-          connector: openfn_sidecar
+          connector: source_adapter_sidecar
           connection: fhir_sidecar
           required_scope: health_registry:evidence_verification
           dataset: health_registry
@@ -136,7 +136,7 @@ evidence:
       value: { type: boolean }
       source_bindings:
         coverage:
-          connector: openfn_sidecar
+          connector: source_adapter_sidecar
           connection: fhir_sidecar
           required_scope: health_registry:evidence_verification
           dataset: health_registry
@@ -161,7 +161,7 @@ evidence:
       value: { type: boolean }
       source_bindings:
         eligibility:
-          connector: openfn_sidecar
+          connector: source_adapter_sidecar
           connection: fhir_sidecar
           required_scope: health_registry:evidence_verification
           dataset: health_registry
@@ -187,7 +187,7 @@ evidence:
       value: { type: boolean }
       source_bindings:
         enrollment:
-          connector: openfn_sidecar
+          connector: source_adapter_sidecar
           connection: fhir_sidecar
           required_scope: health_registry:evidence_verification
           dataset: health_registry
@@ -212,7 +212,7 @@ evidence:
       value: { type: boolean }
       source_bindings:
         encounter:
-          connector: openfn_sidecar
+          connector: source_adapter_sidecar
           connection: fhir_sidecar
           required_scope: health_registry:evidence_verification
           dataset: health_registry
@@ -237,7 +237,7 @@ evidence:
       value: { type: boolean }
       source_bindings:
         referral:
-          connector: openfn_sidecar
+          connector: source_adapter_sidecar
           connection: fhir_sidecar
           required_scope: health_registry:evidence_verification
           dataset: health_registry
@@ -262,7 +262,7 @@ evidence:
       value: { type: boolean }
       source_bindings:
         appointment:
-          connector: openfn_sidecar
+          connector: source_adapter_sidecar
           connection: fhir_sidecar
           required_scope: health_registry:evidence_verification
           dataset: health_registry
@@ -287,7 +287,7 @@ evidence:
       value: { type: boolean }
       source_bindings:
         lab_report:
-          connector: openfn_sidecar
+          connector: source_adapter_sidecar
           connection: fhir_sidecar
           required_scope: health_registry:evidence_verification
           dataset: health_registry
@@ -312,7 +312,7 @@ evidence:
       value: { type: boolean }
       source_bindings:
         immunization:
-          connector: openfn_sidecar
+          connector: source_adapter_sidecar
           connection: fhir_sidecar
           required_scope: health_registry:evidence_verification
           dataset: health_registry
@@ -337,7 +337,7 @@ evidence:
       value: { type: boolean }
       source_bindings:
         authorization:
-          connector: openfn_sidecar
+          connector: source_adapter_sidecar
           connection: fhir_sidecar
           required_scope: health_registry:evidence_verification
           dataset: health_registry
@@ -363,7 +363,7 @@ evidence:
       value: { type: boolean }
       source_bindings:
         source_trace:
-          connector: openfn_sidecar
+          connector: source_adapter_sidecar
           connection: fhir_sidecar
           required_scope: health_registry:evidence_verification
           dataset: health_registry
@@ -388,7 +388,7 @@ evidence:
       value: { type: boolean }
       source_bindings:
         guardian:
-          connector: openfn_sidecar
+          connector: source_adapter_sidecar
           connection: fhir_sidecar
           required_scope: health_registry:evidence_verification
           dataset: health_registry
@@ -424,7 +424,7 @@ evidence:
       value: { type: boolean }
       source_bindings:
         affiliation:
-          connector: openfn_sidecar
+          connector: source_adapter_sidecar
           connection: fhir_sidecar
           required_scope: health_registry:evidence_verification
           dataset: health_registry
@@ -448,7 +448,7 @@ evidence:
       value: { type: boolean }
       source_bindings:
         facility_service:
-          connector: openfn_sidecar
+          connector: source_adapter_sidecar
           connection: fhir_sidecar
           required_scope: health_registry:evidence_verification
           dataset: health_registry
