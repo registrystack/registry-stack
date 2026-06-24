@@ -1,5 +1,10 @@
 # Release Notes
 
+## 0.5.1
+
+- Refreshed the Registry Manifest dependency and workflow pins to the beta-5
+  `v0.2.3` compatibility release.
+
 ## 0.5.0
 
 - Adopted shared compliance context constraints for legal basis, consent,

@@ -1,6 +1,6 @@
 [package]
 name = "registry-relay"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 rust-version = "1.95"
 license = "Apache-2.0"
@@ -85,7 +85,7 @@ jsonschema = { version = "0.18", optional = true }
 # Pure Rust YAML parser used instead of the previous unmaintained YAML stack.
 serde-saphyr = { version = "0.0.26" }
 humantime-serde = { version = "1" }
-registry-manifest-core = { version = "0.2.2", path = "../registry-manifest/crates/registry-manifest-core" }
+registry-manifest-core = { version = "0.2.3", path = "../registry-manifest/crates/registry-manifest-core" }
 
 # ─── auth / crypto ───────────────────────────────────────────────────────────
 registry-platform-authcommon = { version = "0.3.3", path = "../registry-platform/crates/registry-platform-authcommon" }
