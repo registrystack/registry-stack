@@ -1,5 +1,9 @@
 # Release Notes
 
+## 0.2.3
+
+- Refreshed the Registry Platform pin to the beta-5 platform release.
+
 ## 0.2.2
 
 - Rejected secret-bearing manifest fields more aggressively, including singular,
