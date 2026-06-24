@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+"""RegistryStack release manifest validator and import auditor."""
+
+from __future__ import annotations
+
+import argparse
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+import yaml
+
+
+ROOT = Path(__file__).resolve().parents[2]
+HEX40 = re.compile(r"^[0-9a-f]{40}$")
+
+
+def load_yaml(path: Path) -> object:
+    with path.open("r", encoding="utf-8") as handle:
+        return yaml.safe_load(handle)
+
+
+def validate(manifest_path: Path) -> int:
+    manifest = load_yaml(manifest_path)
+    errors: list[str] = []
+    stack = manifest.get("stack", {}) if isinstance(manifest, dict) else {}
+    artifacts = manifest.get("artifacts", {}) if isinstance(manifest, dict) else {}
+    external = manifest.get("external", {}) if isinstance(manifest, dict) else {}
+    version = str(stack.get("version", ""))
+    source_ref = str(stack.get("source_ref", ""))
+
+    if stack.get("source_repo") != "registrystack/registry-stack":
+        errors.append("stack.source_repo must be registrystack/registry-stack")
+    if not version:
+        errors.append("stack.version is required")
+    if source_ref != "HEAD" and not HEX40.fullmatch(source_ref):
+        errors.append("stack.source_ref must be HEAD for a draft or a 40-character commit")
+    for name, artifact_version in sorted(artifacts.items()):
+        if str(artifact_version) != version:
+            errors.append(f"artifact {name} version {artifact_version} does not match stack version {version}")
+    crosswalk = external.get("crosswalk", {}) if isinstance(external, dict) else {}
+    if crosswalk.get("repo") != "PublicSchema/crosswalk":
+        errors.append("external.crosswalk.repo must be PublicSchema/crosswalk")
+    if not HEX40.fullmatch(str(crosswalk.get("ref", ""))):
+        errors.append("external.crosswalk.ref must be a 40-character commit")
+
+    if errors:
+        for error in errors:
+            print(f"error: {error}", file=sys.stderr)
+        return 1
+    print(f"validated {manifest_path}: {stack.get('release')} {version}")
+    return 0
+
+
+def audit(import_map_path: Path) -> int:
+    data = load_yaml(import_map_path)
+    errors: list[str] = []
+    imports = data.get("imports", []) if isinstance(data, dict) else []
+    if not imports:
+        errors.append("import map has no imports")
+    for entry in imports:
+        old_repo = entry.get("old_repo", "<unknown>")
+        if entry.get("old_commit_count") != entry.get("imported_commit_count"):
+            errors.append(f"{old_repo}: imported commit count differs")
+        if entry.get("old_tag_count") != entry.get("imported_tag_count"):
+            errors.append(f"{old_repo}: imported tag count differs")
+        if not str(entry.get("imported_ref", "")).strip():
+            errors.append(f"{old_repo}: imported_ref is required")
+        tag_prefix = str(entry.get("legacy_tag_prefix", ""))
+        if tag_prefix:
+            result = subprocess.run(
+                ["git", "tag", "--list", f"{tag_prefix}*"],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            count = len([line for line in result.stdout.splitlines() if line.strip()])
+            if count != entry.get("imported_tag_count"):
+                errors.append(f"{old_repo}: expected {entry.get('imported_tag_count')} tags under {tag_prefix}, found {count}")
+    if (ROOT / "imports").exists():
+        errors.append("staging imports/ directory must not exist after layout migration")
+
+    if errors:
+        for error in errors:
+            print(f"error: {error}", file=sys.stderr)
+        return 1
+    print(f"audited {len(imports)} imports from {import_map_path}")
+    return 0
+
+
+def classify_warning(code: str) -> int:
+    known = {
+        "draft-source-ref": "expected-draft-only",
+        "held-lab-external": "documented-external-input",
+    }
+    print(known.get(code, "unknown-warning"))
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(prog="registry-release")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    validate_parser = subparsers.add_parser("validate")
+    validate_parser.add_argument("manifest", type=Path)
+    audit_parser = subparsers.add_parser("audit")
+    audit_parser.add_argument("import_map", type=Path)
+    subparsers.add_parser("generate-docset")
+    subparsers.add_parser("collect-artifacts")
+    warning_parser = subparsers.add_parser("classify-warning")
+    warning_parser.add_argument("code")
+    args = parser.parse_args()
+
+    if args.command == "validate":
+        return validate(args.manifest)
+    if args.command == "audit":
+        return audit(args.import_map)
+    if args.command == "classify-warning":
+        return classify_warning(args.code)
+    if args.command in {"generate-docset", "collect-artifacts"}:
+        print(f"{args.command} is reserved for the release packaging step")
+        return 0
+    raise AssertionError(args.command)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,160 @@
+[workspace]
+members = [
+    "crates/registry-config-report",
+    "crates/registry-platform-audit",
+    "crates/registry-platform-authcommon",
+    "crates/registry-platform-cache",
+    "crates/registry-platform-config",
+    "crates/registry-platform-crypto",
+    "crates/registry-platform-httpsec",
+    "crates/registry-platform-httputil",
+    "crates/registry-platform-oid4vci",
+    "crates/registry-platform-oidc",
+    "crates/registry-platform-ops",
+    "crates/registry-platform-pdp",
+    "crates/registry-platform-replay",
+    "crates/registry-platform-sdjwt",
+    "crates/registry-platform-sts",
+    "crates/registry-platform-testing",
+    "crates/registry-manifest-core",
+    "crates/registry-manifest-cli",
+    "crates/registry-notary-core",
+    "crates/registry-notary-client",
+    "crates/registry-notary-server",
+    "crates/registry-notary-bin",
+    "crates/registry-notary-worker-harness",
+    "crates/registry-notary-source-adapter-sidecar",
+    "crates/registry-notary-source-adapter-rhai",
+    "crates/registry-relay",
+    "crates/registryctl",
+    "products/notary/xtask",
+]
+exclude = [
+    "products/platform/fuzz",
+    "products/notary/fuzz",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.8.0"
+edition = "2021"
+rust-version = "1.95"
+license = "Apache-2.0"
+description = "RegistryStack source workspace."
+repository = "https://github.com/registrystack/registry-stack"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.dependencies]
+registry-config-report = { path = "crates/registry-config-report" }
+registry-manifest-core = { path = "crates/registry-manifest-core" }
+registry-notary-client = { path = "crates/registry-notary-client" }
+registry-notary-core = { path = "crates/registry-notary-core" }
+registry-notary-server = { path = "crates/registry-notary-server", default-features = false }
+registry-notary-source-adapter-rhai = { path = "crates/registry-notary-source-adapter-rhai" }
+registry-notary-source-adapter-sidecar = { path = "crates/registry-notary-source-adapter-sidecar" }
+registry-notary-worker-harness = { path = "crates/registry-notary-worker-harness" }
+registry-platform-audit = { path = "crates/registry-platform-audit" }
+registry-platform-authcommon = { path = "crates/registry-platform-authcommon" }
+registry-platform-cache = { path = "crates/registry-platform-cache", features = ["redis"] }
+registry-platform-config = { path = "crates/registry-platform-config" }
+registry-platform-crypto = { path = "crates/registry-platform-crypto" }
+registry-platform-httpsec = { path = "crates/registry-platform-httpsec" }
+registry-platform-httputil = { path = "crates/registry-platform-httputil" }
+registry-platform-oid4vci = { path = "crates/registry-platform-oid4vci" }
+registry-platform-oidc = { path = "crates/registry-platform-oidc" }
+registry-platform-ops = { path = "crates/registry-platform-ops" }
+registry-platform-pdp = { path = "crates/registry-platform-pdp" }
+registry-platform-replay = { path = "crates/registry-platform-replay", features = ["redis"] }
+registry-platform-sdjwt = { path = "crates/registry-platform-sdjwt" }
+registry-platform-testing = { path = "crates/registry-platform-testing" }
+
+crosswalk-core = { git = "https://github.com/PublicSchema/crosswalk", rev = "1d44ec735fdc8a7c719264b339574371e8330337", version = "0.2.0" }
+crosswalk-functions = { git = "https://github.com/PublicSchema/crosswalk", rev = "1d44ec735fdc8a7c719264b339574371e8330337", version = "0.2.0" }
+
+anyhow = { version = "1" }
+arc-swap = { version = "1" }
+assert-json-diff = { version = "2" }
+async-trait = { version = "0.1" }
+aws-lc-rs = { version = "1" }
+axum = { version = "0.8" }
+axum-test = { version = "20" }
+base64 = { version = "0.22" }
+bytes = { version = "1" }
+calamine = { version = "0.35" }
+chrono = { version = "0.4" }
+clap = { version = "4", features = ["derive", "env"] }
+crc32fast = { version = "1.4" }
+criterion = { version = "0.8", features = ["html_reports", "async_tokio"] }
+cryptoki = { version = "0.12" }
+csv = { version = "1" }
+datafusion = { version = "53.1" }
+ed25519-dalek = { version = "2", features = ["pkcs8", "rand_core"] }
+fs2 = { version = "0.4" }
+futures = { version = "0.3" }
+futures-core = { version = "0.3" }
+geo = { version = "0.31" }
+geo-types = { version = "0.7" }
+geojson = { version = "0.24", features = ["geo-types"] }
+getrandom = { version = "0.4" }
+hex = { version = "0.4" }
+hmac = { version = "0.13" }
+http = { version = "1" }
+humantime-serde = { version = "1" }
+hyper = { version = "1", features = ["http1", "http2", "server"] }
+hyper-util = { version = "0.1", features = ["server-auto", "tokio"] }
+insta = { version = "1", features = ["json"] }
+jsonschema = { version = "0.18" }
+jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
+native-tls = { version = "0.2" }
+ogcapi-types = { version = "0.3.0", features = ["features"] }
+p256 = { version = "0.13", features = ["ecdsa"] }
+postgres-native-tls = { version = "0.5" }
+proptest = { version = "1" }
+rand_core = { version = "0.6", features = ["std"] }
+redis = { version = "1.2.1", default-features = false, features = ["aio", "tokio-comp"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+rhai = { version = "1.25.1", features = ["sync", "serde"] }
+rsa = { version = "0.9", features = ["sha2"] }
+secrecy = { version = "0.10" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1" }
+serde_norway = { version = "0.9" }
+serde-saphyr = { version = "0.0.26" }
+serde_yaml = { version = "0.9" }
+serde_yaml_ng = { version = "0.10.0" }
+sha2 = { version = "0.11" }
+subtle = { version = "2" }
+tempfile = { version = "3" }
+thiserror = { version = "2" }
+time = { version = "0.3", features = ["serde", "formatting", "parsing", "macros"] }
+tokio = { version = "1", features = ["fs", "macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-postgres = { version = "0.7.18", features = ["with-time-0_3"] }
+tokio-util = { version = "0.7" }
+toml = { version = "1.1" }
+tough = { version = "0.22.0" }
+tower = { version = "0.5" }
+tower-http = { version = "0.6", features = ["cors", "limit", "request-id", "set-header", "timeout", "trace"] }
+tracing = { version = "0.1" }
+tracing-subscriber = { version = "0.3", features = ["fmt", "json", "env-filter"] }
+ulid = { version = "1" }
+ureq = { version = "2" }
+url = { version = "2" }
+utoipa = { version = "5" }
+uuid = { version = "1", features = ["v4"] }
+wiremock = { version = "0.6" }
+wkt = { version = "0.12", features = ["geo-types"] }
+zeroize = { version = "1", features = ["derive"] }
+zip = { version = "7", default-features = false, features = ["deflate"] }
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.test]
+debug = "line-tables-only"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+strip = "symbols"

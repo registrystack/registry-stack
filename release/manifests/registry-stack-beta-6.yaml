@@ -1,0 +1,34 @@
+stack:
+  release: beta-6
+  version: 0.8.0
+  source_repo: registrystack/registry-stack
+  source_ref: HEAD
+  status: draft
+
+artifacts:
+  registry-notary: 0.8.0
+  registry-notary-source-adapter-sidecar: 0.8.0
+  registry-relay: 0.8.0
+  registry-manifest-cli: 0.8.0
+  registryctl: 0.8.0
+  registry-lab: 0.8.0
+  registry-docs: 0.8.0
+
+external:
+  crosswalk:
+    repo: PublicSchema/crosswalk
+    ref: 1d44ec735fdc8a7c719264b339574371e8330337
+    status: tested external input
+  registry-atlas:
+    repo: jeremi/registry-atlas
+    ref: d46f943b9fdcbab787d1d4eed114058aa43980be
+    status: lab-only external input
+  esignet-relay-authenticator:
+    repo: jeremi/esignet-relay-authenticator
+    ref: 23cc0abb6469e0d18c8e6776f87de1691bdf40ee
+    status: lab-only external input
+
+warnings:
+  - code: draft-source-ref
+    classification: expected-draft-only
+    detail: source_ref is HEAD until the monorepo migration commit is finalized.

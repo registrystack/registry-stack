@@ -1,0 +1,9 @@
+[submodule "vendor/crosswalk"]
+	path = vendor/crosswalk
+	url = git@github.com:PublicSchema/crosswalk.git
+[submodule "vendor/registry-atlas"]
+	path = vendor/registry-atlas
+	url = git@github.com:jeremi/registry-atlas.git
+[submodule "vendor/esignet-relay-authenticator"]
+	path = vendor/esignet-relay-authenticator
+	url = git@github.com:jeremi/esignet-relay-authenticator.git

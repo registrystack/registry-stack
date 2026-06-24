@@ -1,0 +1,83 @@
+imports:
+  - old_repo: jeremi/registry-platform
+    old_ref: c7a8c458c0a939eecc309fed1d35d5e32126927b
+    imported_path_prefix: imports/registry-platform
+    final_paths:
+      - crates/registry-platform-*
+      - crates/registry-config-report
+      - products/platform
+    imported_ref: 910864835035a523a1ad5c6fbaf015d3d02d0817
+    legacy_tag_prefix: legacy/registry-platform/
+    old_commit_count: 151
+    imported_commit_count: 151
+    old_tag_count: 10
+    imported_tag_count: 10
+  - old_repo: jeremi/registry-manifest
+    old_ref: 431ebef0cb3f8bfe1c7bcf7f10ae790326a64403
+    imported_path_prefix: imports/registry-manifest
+    final_paths:
+      - crates/registry-manifest-core
+      - crates/registry-manifest-cli
+      - products/manifest
+    imported_ref: e1c0b037a08e93742e9f9bf9acc8a7293c9aba05
+    legacy_tag_prefix: legacy/registry-manifest/
+    old_commit_count: 82
+    imported_commit_count: 82
+    old_tag_count: 8
+    imported_tag_count: 8
+  - old_repo: jeremi/registry-notary
+    old_ref: 4fb5fcf137edb628f3dc4bfedd42891dbbdebb03
+    imported_path_prefix: imports/registry-notary
+    final_paths:
+      - crates/registry-notary-*
+      - products/notary
+    imported_ref: 8a3b02614c8eef0a4c3dbe07b92b6edbbc0870bd
+    legacy_tag_prefix: legacy/registry-notary/
+    old_commit_count: 498
+    imported_commit_count: 498
+    old_tag_count: 13
+    imported_tag_count: 13
+  - old_repo: jeremi/registry-relay
+    old_ref: 6370e92468349ae7e7a95d508a02871c0fca2ce1
+    imported_path_prefix: imports/registry-relay
+    final_paths:
+      - crates/registry-relay
+    imported_ref: 3dc2deb93139221e4f403ddd57997cb45aca1d5b
+    legacy_tag_prefix: legacy/registry-relay/
+    old_commit_count: 432
+    imported_commit_count: 432
+    old_tag_count: 10
+    imported_tag_count: 10
+  - old_repo: jeremi/registry-registryctl
+    old_ref: 519c809e71c5b46c2557f7b17d517c0054c7f688
+    imported_path_prefix: imports/registry-registryctl
+    final_paths:
+      - crates/registryctl
+    imported_ref: aa178c188126700afbc1348facde0653f83d0ea6
+    legacy_tag_prefix: legacy/registry-registryctl/
+    old_commit_count: 53
+    imported_commit_count: 53
+    old_tag_count: 4
+    imported_tag_count: 4
+  - old_repo: jeremi/registry-docs
+    old_ref: 20ff606fffd7e385d65c9ee052150c2b354c2e8a
+    imported_path_prefix: imports/registry-docs
+    final_paths:
+      - docs/site
+    imported_ref: fbed5d9a4437f21dc64b95bda498b7b903d1c92c
+    legacy_tag_prefix: legacy/registry-docs/
+    old_commit_count: 192
+    imported_commit_count: 192
+    old_tag_count: 0
+    imported_tag_count: 0
+  - old_repo: jeremi/registry-lab
+    old_ref: 167d8f1d5a9d7d422091377d545b001a8f241f63
+    imported_path_prefix: imports/registry-lab
+    final_paths:
+      - lab
+    imported_ref: 9955fa49c5a0feb5876fb9895d38b85eb5a61745
+    legacy_tag_prefix: legacy/registry-lab/
+    old_commit_count: 354
+    imported_commit_count: 354
+    old_tag_count: 7
+    imported_tag_count: 7

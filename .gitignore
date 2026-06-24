@@ -1,0 +1,9 @@
+/target/
+/.repo-docs-cache/
+/node_modules/
+/docs/site/node_modules/
+/docs/site/.repo-docs-cache/
+__pycache__/
+*.py[cod]
+
+.DS_Store

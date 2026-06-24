@@ -1,0 +1,99 @@
+[
+  {
+    "label": "Relay",
+    "collapsed": true,
+    "items": [
+      {
+        "label": "Overview",
+        "slug": "products/registry-relay"
+      },
+      {
+        "label": "Client integration",
+        "slug": "products/registry-relay/client-integration"
+      },
+      {
+        "label": "Configuration",
+        "slug": "products/registry-relay/configuration"
+      }
+    ]
+  },
+  {
+    "label": "Notary",
+    "collapsed": true,
+    "items": [
+      {
+        "label": "Overview",
+        "slug": "products/registry-notary"
+      },
+      {
+        "label": "How-to",
+        "items": [
+          {
+            "label": "Client SDK guide",
+            "slug": "products/registry-notary/client-sdk-guide"
+          },
+          {
+            "label": "Source and claim modeling",
+            "slug": "products/registry-notary/source-claim-modeling-guide"
+          },
+          {
+            "label": "Credential lifecycle and status",
+            "slug": "products/registry-notary/credential-lifecycle-status"
+          },
+          {
+            "label": "Signing key provider",
+            "slug": "products/registry-notary/signing-key-provider"
+          }
+        ]
+      },
+      {
+        "label": "Reference",
+        "items": [
+          {
+            "label": "Operator configuration reference",
+            "slug": "products/registry-notary/operator-config-reference"
+          },
+          {
+            "label": "SD-JWT VC conformance profile",
+            "slug": "products/registry-notary/sd-jwt-vc-conformance-profile"
+          }
+        ]
+      },
+      {
+        "label": "Explanation",
+        "items": [
+          {
+            "label": "Notary architecture",
+            "slug": "products/registry-notary/architecture-overview"
+          },
+          {
+            "label": "Identity and record matching",
+            "slug": "products/registry-notary/identity-and-record-matching"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "label": "Manifest",
+    "collapsed": true,
+    "items": [
+      {
+        "label": "Overview",
+        "slug": "products/registry-manifest"
+      },
+      {
+        "label": "Validate and render a manifest",
+        "slug": "products/registry-manifest/validate-and-render"
+      },
+      {
+        "label": "Validate against profile fixtures",
+        "slug": "products/registry-manifest/profile-fixtures"
+      },
+      {
+        "label": "Reference",
+        "slug": "products/registry-manifest/reference"
+      }
+    ]
+  }
+]

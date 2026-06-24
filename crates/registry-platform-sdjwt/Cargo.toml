@@ -1,0 +1,23 @@
+[package]
+name = "registry-platform-sdjwt"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+publish = false
+
+[dependencies]
+base64.workspace = true
+getrandom.workspace = true
+jsonwebtoken.workspace = true
+registry-platform-crypto = { workspace = true }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+ulid.workspace = true
+
+[dev-dependencies]
+async-trait.workspace = true
+tokio.workspace = true

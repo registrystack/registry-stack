@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registrystack.org/schemas/registry-stack-release-manifest.schema.json",
+  "title": "RegistryStack release manifest",
+  "type": "object",
+  "required": ["stack", "artifacts", "external"],
+  "properties": {
+    "stack": {
+      "type": "object",
+      "required": ["release", "version", "source_repo", "source_ref"],
+      "properties": {
+        "release": { "type": "string" },
+        "version": { "type": "string" },
+        "source_repo": { "const": "registrystack/registry-stack" },
+        "source_ref": { "type": "string" },
+        "status": { "type": "string" }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "external": {
+      "type": "object",
+      "required": ["crosswalk"],
+      "properties": {
+        "crosswalk": {
+          "type": "object",
+          "required": ["repo", "ref", "status"],
+          "properties": {
+            "repo": { "const": "PublicSchema/crosswalk" },
+            "ref": { "pattern": "^[0-9a-f]{40}$" },
+            "status": { "type": "string" }
+          }
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}

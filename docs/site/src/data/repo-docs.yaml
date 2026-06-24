@@ -1,0 +1,125 @@
+repos:
+  registry-relay:
+    remote: https://github.com/registrystack/registry-stack
+    ref: HEAD
+    version: v0.8.0
+    local: ../..
+    openapi: crates/registry-relay/openapi/registry-relay.openapi.json
+    archive_remote: https://github.com/jeremi/registry-relay
+    archive_openapi: openapi/registry-relay.openapi.json
+    docs:
+      - src: crates/registry-relay/docs/README.md
+        archive_src: docs/README.md
+        dest: products/registry-relay/index
+        label: Registry Relay
+        nav_order: 0
+        doc_type: explanation
+        description: Operator and adopter documentation for Registry Relay.
+      - src: crates/registry-relay/docs/client-integration.md
+        archive_src: docs/client-integration.md
+        dest: products/registry-relay/client-integration
+        label: Client integration
+        nav_order: 20
+        doc_type: how-to
+      - src: crates/registry-relay/docs/configuration.md
+        archive_src: docs/configuration.md
+        dest: products/registry-relay/configuration
+        label: Configuration
+        nav_order: 30
+        doc_type: reference
+  registry-notary:
+    remote: https://github.com/registrystack/registry-stack
+    ref: HEAD
+    version: v0.8.0
+    local: ../..
+    openapi: products/notary/openapi/registry-notary.openapi.json
+    archive_remote: https://github.com/jeremi/registry-notary
+    archive_openapi: openapi/registry-notary.openapi.json
+    docs:
+      - src: products/notary/docs/README.md
+        archive_src: docs/README.md
+        dest: products/registry-notary/index
+        label: Registry Notary
+        nav_order: 0
+        doc_type: explanation
+        description: Integrator and operator documentation for Registry Notary.
+      - src: products/notary/docs/architecture-overview.md
+        archive_src: docs/architecture-overview.md
+        dest: products/registry-notary/architecture-overview
+        label: Notary architecture
+        nav_order: 10
+        doc_type: explanation
+      - src: products/notary/docs/client-sdk-guide.md
+        archive_src: docs/client-sdk-guide.md
+        dest: products/registry-notary/client-sdk-guide
+        label: Client SDK guide
+        nav_order: 40
+        doc_type: how-to
+      - src: products/notary/docs/identity-and-record-matching.md
+        archive_src: docs/identity-and-record-matching.md
+        dest: products/registry-notary/identity-and-record-matching
+        label: Identity and record matching
+        nav_order: 50
+        doc_type: explanation
+      - src: products/notary/docs/source-claim-modeling-guide.md
+        archive_src: docs/source-claim-modeling-guide.md
+        dest: products/registry-notary/source-claim-modeling-guide
+        label: Source and claim modeling
+        nav_order: 60
+        doc_type: how-to
+      - src: products/notary/docs/operator-config-reference.md
+        archive_src: docs/operator-config-reference.md
+        dest: products/registry-notary/operator-config-reference
+        label: Operator configuration reference
+        nav_order: 70
+        doc_type: reference
+      - src: products/notary/docs/credential-lifecycle-status.md
+        archive_src: docs/credential-lifecycle-status.md
+        dest: products/registry-notary/credential-lifecycle-status
+        label: Credential lifecycle and status
+        nav_order: 80
+        doc_type: how-to
+      - src: products/notary/docs/signing-key-provider.md
+        archive_src: docs/signing-key-provider.md
+        dest: products/registry-notary/signing-key-provider
+        label: Signing key provider
+        nav_order: 90
+        doc_type: how-to
+      - src: products/notary/docs/sd-jwt-vc-conformance-profile.md
+        archive_src: docs/sd-jwt-vc-conformance-profile.md
+        dest: products/registry-notary/sd-jwt-vc-conformance-profile
+        label: SD-JWT VC conformance profile
+        nav_order: 130
+        doc_type: reference
+  registry-manifest:
+    remote: https://github.com/registrystack/registry-stack
+    ref: HEAD
+    version: v0.8.0
+    local: ../..
+    archive_remote: https://github.com/jeremi/registry-manifest
+    docs:
+      - src: products/manifest/docs/overview.md
+        archive_src: docs/overview.md
+        dest: products/registry-manifest/index
+        label: Registry Manifest
+        nav_order: 0
+        doc_type: explanation
+        description: Operator and integrator documentation for Registry Manifest.
+      - src: products/manifest/docs/validate-and-render.md
+        archive_src: docs/validate-and-render.md
+        dest: products/registry-manifest/validate-and-render
+        label: Validate and render a manifest
+        nav_order: 10
+        doc_type: how-to
+      - src: products/manifest/docs/profile-fixtures.md
+        archive_src: docs/profile-fixtures.md
+        dest: products/registry-manifest/profile-fixtures
+        label: Validate against profile fixtures
+        nav_order: 20
+        doc_type: how-to
+      - src: products/manifest/docs/reference.md
+        archive_src: docs/reference.md
+        dest: products/registry-manifest/reference
+        label: Reference
+        nav_order: 30
+        doc_type: reference

@@ -1,0 +1,196 @@
+{
+  "current": "latest",
+  "docsets": [
+    {
+      "id": "latest",
+      "label": "Latest",
+      "path": "/",
+      "status": "current",
+      "source": "registry-stack-main",
+      "published_at": "2026-06-24",
+      "description": "Current RegistryStack monorepo documentation build.",
+      "products": {
+        "registry-stack": {
+          "version": "v0.8.0",
+          "ref": "HEAD"
+        },
+        "registry-relay": {
+          "version": "v0.8.0",
+          "ref": "HEAD"
+        },
+        "registry-notary": {
+          "version": "v0.8.0",
+          "ref": "HEAD"
+        },
+        "registry-manifest": {
+          "version": "v0.8.0",
+          "ref": "HEAD"
+        }
+      }
+    },
+    {
+      "id": "beta-5",
+      "label": "Beta 5",
+      "path": "/v/beta-5/",
+      "status": "archived",
+      "source": "registry-stack-beta-5",
+      "published_at": "2026-06-24",
+      "description": "Beta-5 source-release documentation set prepared for release proof.",
+      "products": {
+        "registry-platform": {
+          "version": "v0.3.3",
+          "ref": "c7a8c458c0a939eecc309fed1d35d5e32126927b"
+        },
+        "registry-manifest": {
+          "version": "v0.2.2",
+          "ref": "52da5e913d8652e98ce8e443102c5d23b1a0974f"
+        },
+        "registry-notary": {
+          "version": "v0.7.0",
+          "ref": "4fb5fcf137edb628f3dc4bfedd42891dbbdebb03"
+        },
+        "registry-relay": {
+          "version": "v0.5.0",
+          "ref": "917e8064b62b8f86f35425a61fe66d3a4b5db921"
+        },
+        "registry-lab": {
+          "version": "registry-stack-beta-5-2026-06-24",
+          "ref": "9b109b0363aee3c12be301c62cbd1a5b0ade6923"
+        },
+        "registry-registryctl": {
+          "version": "v0.2.1",
+          "ref": "519c809e71c5b46c2557f7b17d517c0054c7f688"
+        },
+        "crosswalk": {
+          "version": "crosswalk-core-v0.2.0",
+          "ref": "1d44ec735fdc8a7c719264b339574371e8330337"
+        },
+        "registry-atlas": {
+          "version": "beta-5 vendor input",
+          "ref": "d46f943b9fdcbab787d1d4eed114058aa43980be"
+        }
+      }
+    },
+    {
+      "id": "beta-4",
+      "label": "Beta 4",
+      "path": "/v/beta-4/",
+      "status": "archived",
+      "source": "registry-stack-beta-4",
+      "published_at": "2026-06-22",
+      "description": "Beta-4 source-release documentation set prepared for release proof.",
+      "products": {
+        "registry-platform": {
+          "version": "v0.3.2",
+          "ref": "88d1a798043673dac30d809d87badb083c6e1a26"
+        },
+        "registry-manifest": {
+          "version": "v0.2.2",
+          "ref": "52da5e913d8652e98ce8e443102c5d23b1a0974f"
+        },
+        "registry-notary": {
+          "version": "v0.6.2",
+          "ref": "629c901c6ae49c86c6df907b876be267ecf05c72"
+        },
+        "registry-relay": {
+          "version": "v0.4.1",
+          "ref": "cfb1b735c6a2b3a50f5204e49660a859ceabb87d"
+        },
+        "registry-lab": {
+          "version": "registry-stack-beta-4-2026-06-22",
+          "ref": "9814a8e3286b324616b887f7258a902efefcfb00"
+        },
+        "registry-registryctl": {
+          "version": "v0.2.1",
+          "ref": "519c809e71c5b46c2557f7b17d517c0054c7f688"
+        },
+        "crosswalk": {
+          "version": "crosswalk-core-v0.2.0",
+          "ref": "1d44ec735fdc8a7c719264b339574371e8330337"
+        },
+        "registry-atlas": {
+          "version": "beta-4 vendor input",
+          "ref": "d46f943b9fdcbab787d1d4eed114058aa43980be"
+        }
+      }
+    },
+    {
+      "id": "beta-3",
+      "label": "Beta 3",
+      "path": "/v/beta-3/",
+      "status": "archived",
+      "source": "registry-stack-beta-3",
+      "published_at": "2026-06-21",
+      "description": "Beta-3 candidate documentation set prepared for release proof.",
+      "products": {
+        "registry-platform": {
+          "version": "v0.3.1",
+          "ref": "0abc4fde81764f6c81143b622624415232197129"
+        },
+        "registry-manifest": {
+          "version": "v0.2.1",
+          "ref": "141efade265f453e15c967770286bafc5c3a3956"
+        },
+        "registry-notary": {
+          "version": "v0.5.0",
+          "ref": "4a5a7fb89acf7788bd1d540759dedb2f25419c2c"
+        },
+        "registry-relay": {
+          "version": "v0.4.0",
+          "ref": "380261c386309a4194b131913525f6cf70611adb"
+        },
+        "registry-lab": {
+          "version": "registry-stack-beta-3-2026-06-21",
+          "ref": "b4cc8eb37456d65003481929c48955e9a8eb7fb9"
+        },
+        "registry-registryctl": {
+          "version": "v0.2.0",
+          "ref": "30ffbe8672b1a8c975ca0722ea93d44a8191380b"
+        },
+        "crosswalk": {
+          "version": "crosswalk-core-v0.2.0",
+          "ref": "1d44ec735fdc8a7c719264b339574371e8330337"
+        },
+        "registry-atlas": {
+          "version": "beta-3 vendor input",
+          "ref": "d46f943b9fdcbab787d1d4eed114058aa43980be"
+        }
+      }
+    },
+    {
+      "id": "beta-2026-06-12",
+      "label": "Beta 2026-06-12",
+      "path": "/v/beta-2026-06-12/",
+      "status": "archived",
+      "source": "registry-stack-beta-2026-06-12",
+      "published_at": "2026-06-12",
+      "description": "Frozen public beta documentation set.",
+      "products": {
+        "registry-platform": {
+          "version": "v0.2.1",
+          "ref": "80777207269099bc2e257827d71259abd383335b"
+        },
+        "registry-manifest": {
+          "version": "v0.2.0",
+          "ref": "81eb005f1808415199d79e02e24e84a6649be318"
+        },
+        "registry-notary": {
+          "version": "v0.3.0",
+          "ref": "f182385a5065873aac030c41d9fe020704afc4e2"
+        },
+        "registry-relay": {
+          "version": "v0.2.0",
+          "ref": "3938fdf3930e134d6dca97360baf64ac3a16bed2"
+        },
+        "registry-registryctl": {
+          "version": "v0.1.0",
+          "ref": "1a50752fe71417ff250f2ec99d6d0fdf67e4cf33"
+        },
+        "crosswalk": {
+          "version": "crosswalk-core-v0.2.0",
+          "ref": "1d44ec735fdc8a7c719264b339574371e8330337"
+        }
+      }
+    }
+  ]
+}
