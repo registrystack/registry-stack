@@ -6,6 +6,7 @@ ARG REGISTRY_RELAY_FEATURES=spdci-api-standards,standards-cel-mapping,ogcapi-edr
 
 COPY --from=registry_platform_src /Cargo.toml /Cargo.lock /LICENSE ./
 COPY --from=registry_platform_src /crates ./crates
+COPY --from=registry_platform_src /products/notary/xtask ./products/notary/xtask
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/workspace/registry-stack/target \
