@@ -125,7 +125,7 @@ evidence:
         type: string
       source_bindings:
         dhis2:
-          connector: openfn_sidecar
+          connector: source_adapter_sidecar
           connection: dhis2_openfn
           required_scope: dhis2_health:evidence_verification
           dataset: dhis2_tracker
@@ -164,7 +164,7 @@ evidence:
         type: string
       source_bindings:
         dhis2:
-          connector: openfn_sidecar
+          connector: source_adapter_sidecar
           connection: dhis2_openfn
           required_scope: dhis2_health:evidence_verification
           dataset: dhis2_tracker
@@ -203,7 +203,7 @@ evidence:
         type: boolean
       source_bindings:
         dhis2:
-          connector: openfn_sidecar
+          connector: source_adapter_sidecar
           connection: dhis2_openfn
           required_scope: dhis2_health:evidence_verification
           dataset: dhis2_tracker
@@ -243,7 +243,7 @@ evidence:
         type: string
       source_bindings:
         dhis2:
-          connector: openfn_sidecar
+          connector: source_adapter_sidecar
           connection: dhis2_openfn
           required_scope: dhis2_health:evidence_verification
           dataset: dhis2_tracker
@@ -281,7 +281,7 @@ evidence:
         type: string
       source_bindings:
         dhis2:
-          connector: openfn_sidecar
+          connector: source_adapter_sidecar
           connection: dhis2_openfn
           required_scope: dhis2_health:evidence_verification
           dataset: dhis2_tracker
@@ -319,7 +319,7 @@ evidence:
         type: string
       source_bindings:
         dhis2:
-          connector: openfn_sidecar
+          connector: source_adapter_sidecar
           connection: dhis2_openfn
           required_scope: dhis2_health:evidence_verification
           dataset: dhis2_tracker
@@ -357,7 +357,7 @@ evidence:
         type: boolean
       source_bindings:
         dhis2:
-          connector: openfn_sidecar
+          connector: source_adapter_sidecar
           connection: dhis2_openfn
           required_scope: dhis2_health:evidence_verification
           dataset: dhis2_tracker
@@ -393,7 +393,7 @@ evidence:
         type: boolean
       source_bindings:
         dhis2:
-          connector: openfn_sidecar
+          connector: source_adapter_sidecar
           connection: dhis2_openfn
           required_scope: dhis2_health:evidence_verification
           dataset: dhis2_tracker
@@ -429,7 +429,7 @@ evidence:
         type: boolean
       source_bindings:
         dhis2:
-          connector: openfn_sidecar
+          connector: source_adapter_sidecar
           connection: dhis2_openfn
           required_scope: dhis2_health:evidence_verification
           dataset: dhis2_tracker

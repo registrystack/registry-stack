@@ -170,10 +170,14 @@ evidence:
           matching:
             allowed_purposes:
               - https://demo.example.gov/purpose/decentralized-evidence-demo
-            allowed_assurance:
-              - substantial
-            require_legal_basis: true
-            require_consent: true
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              assurance:
+                allowed:
+                  - substantial
             ecosystem_binding:
               id: combined-support-eligibility/v1
           lookup:
@@ -217,10 +221,14 @@ evidence:
           matching:
             allowed_purposes:
               - https://demo.example.gov/purpose/decentralized-evidence-demo
-            allowed_assurance:
-              - substantial
-            require_legal_basis: true
-            require_consent: true
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              assurance:
+                allowed:
+                  - substantial
             ecosystem_binding:
               id: combined-support-eligibility/v1
           lookup:
@@ -298,10 +306,14 @@ evidence:
           matching:
             allowed_purposes:
               - https://demo.example.gov/purpose/decentralized-evidence-demo
-            allowed_assurance:
-              - substantial
-            require_legal_basis: true
-            require_consent: true
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              assurance:
+                allowed:
+                  - substantial
             ecosystem_binding:
               id: combined-support-eligibility/v1
           lookup:
@@ -354,10 +366,14 @@ evidence:
             policy_id: demo.household-summary-redaction.v1
             allowed_purposes:
               - https://demo.example.gov/purpose/decentralized-evidence-demo
-            allowed_assurance:
-              - substantial
-            require_legal_basis: true
-            require_consent: true
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              assurance:
+                allowed:
+                  - substantial
             ecosystem_binding:
               id: combined-support-eligibility/v1
             redaction_fields:
@@ -418,10 +434,14 @@ evidence:
           matching:
             allowed_purposes:
               - https://demo.example.gov/purpose/decentralized-evidence-demo
-            allowed_assurance:
-              - substantial
-            require_legal_basis: true
-            require_consent: true
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              assurance:
+                allowed:
+                  - substantial
             ecosystem_binding:
               id: combined-support-eligibility/v1
           lookup:
@@ -443,10 +463,14 @@ evidence:
           matching:
             allowed_purposes:
               - https://demo.example.gov/purpose/decentralized-evidence-demo
-            allowed_assurance:
-              - substantial
-            require_legal_basis: true
-            require_consent: true
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              assurance:
+                allowed:
+                  - substantial
             ecosystem_binding:
               id: combined-support-eligibility/v1
           lookup:
@@ -500,10 +524,14 @@ evidence:
           matching:
             allowed_purposes:
               - https://demo.example.gov/purpose/decentralized-evidence-demo
-            allowed_assurance:
-              - substantial
-            require_legal_basis: true
-            require_consent: true
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              assurance:
+                allowed:
+                  - substantial
             ecosystem_binding:
               id: combined-support-eligibility/v1
           lookup:
@@ -550,10 +578,14 @@ evidence:
           matching:
             allowed_purposes:
               - https://demo.example.gov/purpose/decentralized-evidence-demo
-            allowed_assurance:
-              - substantial
-            require_legal_basis: true
-            require_consent: true
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              assurance:
+                allowed:
+                  - substantial
             ecosystem_binding:
               id: combined-support-eligibility/v1
           lookup:

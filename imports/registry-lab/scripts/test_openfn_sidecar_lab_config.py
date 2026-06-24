@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#   "PyYAML>=6.0",
+# ]
+# ///
 # SPDX-License-Identifier: Apache-2.0
 """Focused regression checks for Registry Lab built-in sidecar wiring.
 
 The DHIS2 and civil sidecars now use the built-in http_json engine instead of
-the OpenFn Node worker pool. Local demo Notary configs retain the
-openfn_sidecar connector, while hosted DHIS2 tracks the deployed Notary image's
-source_adapter_sidecar connector spelling.
+the OpenFn Node worker pool. Local and hosted demo Notary configs use the
+current source_adapter_sidecar connector spelling.
 """
 
 from __future__ import annotations
@@ -13,6 +18,8 @@ from __future__ import annotations
 import json
 import unittest
 from pathlib import Path
+
+import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -32,6 +39,16 @@ HOSTED_OPENFN_REPORT = ROOT / "config/coolify/openfn/governed/openfn-dhis2-sidec
 
 def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def claim_source_bindings(path: Path) -> list[dict[str, object]]:
+    config = yaml.safe_load(read(path))
+    claims = config["evidence"]["claims"]
+    return [
+        binding
+        for claim in claims
+        for binding in claim["source_bindings"].values()
+    ]
 
 
 class BuiltinSidecarLabConfigTest(unittest.TestCase):
@@ -76,20 +93,32 @@ class BuiltinSidecarLabConfigTest(unittest.TestCase):
             self.assertIn('default_source_dir "../registry-platform" "vendor/registry-platform"', body)
 
     def test_openfn_notary_bindings_use_sidecar_connector(self) -> None:
-        civil = read(LOCAL_CIVIL_NOTARY)
-        self.assertIn("connection: openfn_civil", civil)
-        self.assertIn("connector: openfn_sidecar", civil)
+        civil_bindings = claim_source_bindings(LOCAL_CIVIL_NOTARY)
+        self.assertEqual(1, len(civil_bindings))
+        self.assertEqual("openfn_civil", civil_bindings[0]["connection"])
+        self.assertEqual("source_adapter_sidecar", civil_bindings[0]["connector"])
 
-        local_dhis2 = read(LOCAL_DHIS2_NOTARY)
-        self.assertEqual(9, local_dhis2.count("connection: dhis2_openfn"))
-        self.assertEqual(9, local_dhis2.count("connector: openfn_sidecar"))
-        self.assertNotIn("connector: registry_data_api", local_dhis2)
+        local_dhis2_bindings = claim_source_bindings(LOCAL_DHIS2_NOTARY)
+        self.assertEqual(9, len(local_dhis2_bindings))
+        self.assertEqual(
+            {"dhis2_openfn"},
+            {binding["connection"] for binding in local_dhis2_bindings},
+        )
+        self.assertEqual(
+            {"source_adapter_sidecar"},
+            {binding["connector"] for binding in local_dhis2_bindings},
+        )
 
-        hosted_dhis2 = read(HOSTED_DHIS2_NOTARY)
-        self.assertEqual(9, hosted_dhis2.count("connection: dhis2_openfn"))
-        self.assertEqual(9, hosted_dhis2.count("connector: source_adapter_sidecar"))
-        self.assertNotIn("connector: openfn_sidecar", hosted_dhis2)
-        self.assertNotIn("connector: registry_data_api", hosted_dhis2)
+        hosted_dhis2_bindings = claim_source_bindings(HOSTED_DHIS2_NOTARY)
+        self.assertEqual(9, len(hosted_dhis2_bindings))
+        self.assertEqual(
+            {"dhis2_openfn"},
+            {binding["connection"] for binding in hosted_dhis2_bindings},
+        )
+        self.assertEqual(
+            {"source_adapter_sidecar"},
+            {binding["connector"] for binding in hosted_dhis2_bindings},
+        )
 
     def test_hosted_notary_pins_generated_sidecar_hash(self) -> None:
         report = json.loads(read(HOSTED_OPENFN_REPORT))
@@ -110,7 +139,8 @@ class BuiltinSidecarLabConfigTest(unittest.TestCase):
 
     def test_lab_readme_names_sidecar_connector(self) -> None:
         body = read(README)
-        self.assertIn("Registry Notary `openfn_sidecar` connector", body)
+        normalized = " ".join(body.split())
+        self.assertIn("Registry Notary `source_adapter_sidecar` connector", normalized)
         self.assertNotIn("Registry Notary `registry_data_api` connector", body)
 
 

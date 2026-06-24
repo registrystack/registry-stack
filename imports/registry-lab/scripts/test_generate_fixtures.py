@@ -4,6 +4,7 @@
 # dependencies = [
 #   "openpyxl>=3.1",
 #   "pyarrow>=16",
+#   "PyYAML>=6.0",
 # ]
 # ///
 """Focused tests for decentralized demo fixture alignment."""
@@ -20,6 +21,7 @@ import tempfile
 from pathlib import Path
 
 import pyarrow.parquet as pq
+import yaml
 from openpyxl import load_workbook
 
 
@@ -30,6 +32,16 @@ SCRIPT_MATRIX_PATHS = [
     SCRIPT_DIR / "demo-flow.py",
     SCRIPT_DIR / "smoke-notary-client.py",
 ]
+EXPECTED_NOTARY_CONTEXT_CONSTRAINT_COUNTS = {
+    "config/coolify/notary/civil-notary.yaml": 19,
+    "config/coolify/notary/opencrvs-dci-notary.yaml": 8,
+    "config/coolify/notary/shared-eligibility-notary.yaml": 3,
+    "config/coolify/notary/social-protection-notary.yaml": 7,
+    "config/notary/civil-notary.yaml": 19,
+    "config/notary/opencrvs-dci-notary.yaml": 8,
+    "config/notary/shared-eligibility-notary.yaml": 3,
+    "config/notary/social-protection-notary.yaml": 8,
+}
 
 
 def load_generator():
@@ -305,7 +317,7 @@ class GenerateFixturesTest(unittest.TestCase):
         for path in notary_paths:
             with self.subTest(path=path.relative_to(self.generator.ROOT)):
                 text = path.read_text(encoding="utf-8")
-                self.assertNotIn("max_source_age_seconds:", text)
+                self.assertNotIn("source_freshness:", text)
                 self.assertNotIn("source_observed_at_field: observed_at", text)
 
     def test_opencrvs_dci_freshness_uses_source_response_timestamp(self) -> None:
@@ -320,8 +332,60 @@ class GenerateFixturesTest(unittest.TestCase):
                     'observed_at: "$response:/message/search_response/0/timestamp"',
                     text,
                 )
-                self.assertEqual(text.count("max_source_age_seconds: 86400"), 8)
+                self.assertEqual(text.count("source_freshness:"), 8)
+                self.assertEqual(text.count("max_age_seconds: 86400"), 8)
                 self.assertEqual(text.count("source_observed_at_field: observed_at"), 8)
+
+    def test_notary_matching_context_constraints_are_nested(self) -> None:
+        legacy_fields = (
+            "allowed_assurance",
+            "permitted_jurisdictions",
+            "require_legal_basis",
+            "require_consent",
+            "max_source_age_seconds",
+        )
+        notary_dirs = (
+            self.generator.ROOT / "config" / "notary",
+            self.generator.ROOT / "config" / "coolify" / "notary",
+        )
+        for notary_dir in notary_dirs:
+            for path in sorted(notary_dir.glob("*-notary.yaml")):
+                with self.subTest(path=path.relative_to(self.generator.ROOT)):
+                    config = yaml.safe_load(path.read_text(encoding="utf-8"))
+                    context_constraint_count = 0
+                    for matching in self._source_binding_matchings(config):
+                        for field in legacy_fields:
+                            self.assertNotIn(field, matching)
+                        context_constraints = matching.get("context_constraints")
+                        if context_constraints is not None:
+                            context_constraint_count += 1
+                            self.assertIsInstance(context_constraints, dict)
+                            self.assertTrue(
+                                set(context_constraints).intersection(
+                                    {
+                                        "legal_basis",
+                                        "consent",
+                                        "jurisdiction",
+                                        "assurance",
+                                        "source_freshness",
+                                    }
+                                )
+                            )
+                    relative_path = path.relative_to(self.generator.ROOT).as_posix()
+                    self.assertEqual(
+                        EXPECTED_NOTARY_CONTEXT_CONSTRAINT_COUNTS.get(relative_path, 0),
+                        context_constraint_count,
+                    )
+
+    @staticmethod
+    def _source_binding_matchings(config: dict[str, object]) -> list[dict[str, object]]:
+        claims = config.get("evidence", {}).get("claims", [])
+        return [
+            matching
+            for claim in claims
+            for binding in claim.get("source_bindings", {}).values()
+            if isinstance((matching := binding.get("matching")), dict)
+        ]
 
     def test_refresh_persona_invariants_cover_source_outcomes(self) -> None:
         personas = self.generator.FIXTURE_PERSONAS

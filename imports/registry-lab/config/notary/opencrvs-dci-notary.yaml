@@ -180,13 +180,19 @@ evidence:
           matching:
             allowed_purposes:
               - https://demo.example.gov/purpose/opencrvs-dci-lab
-            allowed_assurance:
-              - substantial
-            permitted_jurisdictions:
-              - ZZ
-            require_legal_basis: true
-            require_consent: true
-            max_source_age_seconds: 86400
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              jurisdiction:
+                permitted:
+                  - ZZ
+              assurance:
+                allowed:
+                  - substantial
+              source_freshness:
+                max_age_seconds: 86400
             source_observed_at_field: observed_at
             ecosystem_binding:
               id: birth-registration-evidence/v1
@@ -224,13 +230,19 @@ evidence:
           matching:
             allowed_purposes:
               - https://demo.example.gov/purpose/opencrvs-dci-lab
-            allowed_assurance:
-              - substantial
-            permitted_jurisdictions:
-              - ZZ
-            require_legal_basis: true
-            require_consent: true
-            max_source_age_seconds: 86400
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              jurisdiction:
+                permitted:
+                  - ZZ
+              assurance:
+                allowed:
+                  - substantial
+              source_freshness:
+                max_age_seconds: 86400
             source_observed_at_field: observed_at
             ecosystem_binding:
               id: birth-registration-evidence/v1
@@ -274,13 +286,19 @@ evidence:
           matching:
             allowed_purposes:
               - https://demo.example.gov/purpose/opencrvs-dci-lab
-            allowed_assurance:
-              - substantial
-            permitted_jurisdictions:
-              - ZZ
-            require_legal_basis: true
-            require_consent: true
-            max_source_age_seconds: 86400
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              jurisdiction:
+                permitted:
+                  - ZZ
+              assurance:
+                allowed:
+                  - substantial
+              source_freshness:
+                max_age_seconds: 86400
             source_observed_at_field: observed_at
             ecosystem_binding:
               id: birth-registration-evidence/v1
@@ -324,13 +342,19 @@ evidence:
           matching:
             allowed_purposes:
               - https://demo.example.gov/purpose/opencrvs-dci-lab
-            allowed_assurance:
-              - substantial
-            permitted_jurisdictions:
-              - ZZ
-            require_legal_basis: true
-            require_consent: true
-            max_source_age_seconds: 86400
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              jurisdiction:
+                permitted:
+                  - ZZ
+              assurance:
+                allowed:
+                  - substantial
+              source_freshness:
+                max_age_seconds: 86400
             source_observed_at_field: observed_at
             ecosystem_binding:
               id: birth-registration-evidence/v1
@@ -378,13 +402,19 @@ evidence:
           matching:
             allowed_purposes:
               - https://demo.example.gov/purpose/opencrvs-dci-lab
-            allowed_assurance:
-              - substantial
-            permitted_jurisdictions:
-              - ZZ
-            require_legal_basis: true
-            require_consent: true
-            max_source_age_seconds: 86400
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              jurisdiction:
+                permitted:
+                  - ZZ
+              assurance:
+                allowed:
+                  - substantial
+              source_freshness:
+                max_age_seconds: 86400
             source_observed_at_field: observed_at
             ecosystem_binding:
               id: birth-registration-evidence/v1
@@ -428,13 +458,19 @@ evidence:
           matching:
             allowed_purposes:
               - https://demo.example.gov/purpose/opencrvs-dci-lab
-            allowed_assurance:
-              - substantial
-            permitted_jurisdictions:
-              - ZZ
-            require_legal_basis: true
-            require_consent: true
-            max_source_age_seconds: 86400
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              jurisdiction:
+                permitted:
+                  - ZZ
+              assurance:
+                allowed:
+                  - substantial
+              source_freshness:
+                max_age_seconds: 86400
             source_observed_at_field: observed_at
             ecosystem_binding:
               id: birth-registration-evidence/v1
@@ -478,13 +514,19 @@ evidence:
           matching:
             allowed_purposes:
               - https://demo.example.gov/purpose/opencrvs-dci-lab
-            allowed_assurance:
-              - substantial
-            permitted_jurisdictions:
-              - ZZ
-            require_legal_basis: true
-            require_consent: true
-            max_source_age_seconds: 86400
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              jurisdiction:
+                permitted:
+                  - ZZ
+              assurance:
+                allowed:
+                  - substantial
+              source_freshness:
+                max_age_seconds: 86400
             source_observed_at_field: observed_at
             ecosystem_binding:
               id: birth-registration-evidence/v1
@@ -528,13 +570,19 @@ evidence:
           matching:
             allowed_purposes:
               - https://demo.example.gov/purpose/opencrvs-dci-lab
-            allowed_assurance:
-              - substantial
-            permitted_jurisdictions:
-              - ZZ
-            require_legal_basis: true
-            require_consent: true
-            max_source_age_seconds: 86400
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              jurisdiction:
+                permitted:
+                  - ZZ
+              assurance:
+                allowed:
+                  - substantial
+              source_freshness:
+                max_age_seconds: 86400
             source_observed_at_field: observed_at
             ecosystem_binding:
               id: birth-registration-evidence/v1

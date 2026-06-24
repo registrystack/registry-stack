@@ -57,8 +57,6 @@ federation:
     secret_env: AGRI_FEDERATION_PAIRWISE_SUBJECT_HASH_SECRET
   replay:
     storage: in_process_single_instance_only
-    max_entries: 10000
-    eviction: expire_oldest
   response_shaping:
     minimum_denial_latency_ms: 250
   emergency_denylist:

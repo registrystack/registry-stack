@@ -128,12 +128,17 @@ evidence:
           matching:
             allowed_purposes:
               - https://demo.example.gov/purpose/civil-certificate-evidence
-            allowed_assurance:
-              - substantial
-            permitted_jurisdictions:
-              - ZZ
-            require_legal_basis: true
-            require_consent: true
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              jurisdiction:
+                permitted:
+                  - ZZ
+              assurance:
+                allowed:
+                  - substantial
             ecosystem_binding:
               id: birth-certificate-evidence/v1
               pack_id: birth-certificate-evidence/v1
@@ -183,12 +188,17 @@ evidence:
           matching:
             allowed_purposes:
               - https://demo.example.gov/purpose/civil-certificate-evidence
-            allowed_assurance:
-              - substantial
-            permitted_jurisdictions:
-              - ZZ
-            require_legal_basis: true
-            require_consent: true
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              jurisdiction:
+                permitted:
+                  - ZZ
+              assurance:
+                allowed:
+                  - substantial
             ecosystem_binding:
               id: birth-certificate-evidence/v1
               pack_id: birth-certificate-evidence/v1
@@ -226,12 +236,17 @@ evidence:
           matching:
             allowed_purposes:
               - https://demo.example.gov/purpose/civil-certificate-evidence
-            allowed_assurance:
-              - substantial
-            permitted_jurisdictions:
-              - ZZ
-            require_legal_basis: true
-            require_consent: true
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              jurisdiction:
+                permitted:
+                  - ZZ
+              assurance:
+                allowed:
+                  - substantial
             ecosystem_binding:
               id: birth-certificate-evidence/v1
               pack_id: birth-certificate-evidence/v1
@@ -279,12 +294,17 @@ evidence:
           matching:
             allowed_purposes:
               - https://demo.example.gov/purpose/civil-certificate-evidence
-            allowed_assurance:
-              - substantial
-            permitted_jurisdictions:
-              - ZZ
-            require_legal_basis: true
-            require_consent: true
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              jurisdiction:
+                permitted:
+                  - ZZ
+              assurance:
+                allowed:
+                  - substantial
             ecosystem_binding:
               id: birth-certificate-evidence/v1
               pack_id: birth-certificate-evidence/v1
@@ -328,12 +348,17 @@ evidence:
           matching:
             allowed_purposes:
               - https://demo.example.gov/purpose/civil-certificate-evidence
-            allowed_assurance:
-              - substantial
-            permitted_jurisdictions:
-              - ZZ
-            require_legal_basis: true
-            require_consent: true
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              jurisdiction:
+                permitted:
+                  - ZZ
+              assurance:
+                allowed:
+                  - substantial
             ecosystem_binding:
               id: birth-certificate-evidence/v1
               pack_id: birth-certificate-evidence/v1
@@ -373,12 +398,17 @@ evidence:
           matching:
             allowed_purposes:
               - https://demo.example.gov/purpose/civil-certificate-evidence
-            allowed_assurance:
-              - substantial
-            permitted_jurisdictions:
-              - ZZ
-            require_legal_basis: true
-            require_consent: true
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              jurisdiction:
+                permitted:
+                  - ZZ
+              assurance:
+                allowed:
+                  - substantial
             ecosystem_binding:
               id: birth-certificate-evidence/v1
               pack_id: birth-certificate-evidence/v1
@@ -449,12 +479,17 @@ evidence:
           matching:
             allowed_purposes:
               - https://demo.example.gov/purpose/civil-certificate-evidence
-            allowed_assurance:
-              - substantial
-            permitted_jurisdictions:
-              - ZZ
-            require_legal_basis: true
-            require_consent: true
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              jurisdiction:
+                permitted:
+                  - ZZ
+              assurance:
+                allowed:
+                  - substantial
             ecosystem_binding:
               id: birth-certificate-evidence/v1
               pack_id: birth-certificate-evidence/v1
@@ -503,12 +538,17 @@ evidence:
           matching:
             allowed_purposes:
               - https://demo.example.gov/purpose/civil-certificate-evidence
-            allowed_assurance:
-              - substantial
-            permitted_jurisdictions:
-              - ZZ
-            require_legal_basis: true
-            require_consent: true
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              jurisdiction:
+                permitted:
+                  - ZZ
+              assurance:
+                allowed:
+                  - substantial
             ecosystem_binding:
               id: birth-certificate-evidence/v1
               pack_id: birth-certificate-evidence/v1
@@ -552,12 +592,17 @@ evidence:
           matching:
             allowed_purposes:
               - https://demo.example.gov/purpose/civil-certificate-evidence
-            allowed_assurance:
-              - substantial
-            permitted_jurisdictions:
-              - ZZ
-            require_legal_basis: true
-            require_consent: true
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              jurisdiction:
+                permitted:
+                  - ZZ
+              assurance:
+                allowed:
+                  - substantial
             ecosystem_binding:
               id: birth-certificate-evidence/v1
               pack_id: birth-certificate-evidence/v1
@@ -589,12 +634,17 @@ evidence:
           matching:
             allowed_purposes:
               - https://demo.example.gov/purpose/civil-certificate-evidence
-            allowed_assurance:
-              - substantial
-            permitted_jurisdictions:
-              - ZZ
-            require_legal_basis: true
-            require_consent: true
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              jurisdiction:
+                permitted:
+                  - ZZ
+              assurance:
+                allowed:
+                  - substantial
             ecosystem_binding:
               id: birth-certificate-evidence/v1
               pack_id: birth-certificate-evidence/v1
@@ -634,12 +684,17 @@ evidence:
           matching:
             allowed_purposes:
               - https://demo.example.gov/purpose/civil-certificate-evidence
-            allowed_assurance:
-              - substantial
-            permitted_jurisdictions:
-              - ZZ
-            require_legal_basis: true
-            require_consent: true
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              jurisdiction:
+                permitted:
+                  - ZZ
+              assurance:
+                allowed:
+                  - substantial
             ecosystem_binding:
               id: birth-certificate-evidence/v1
               pack_id: birth-certificate-evidence/v1
@@ -679,12 +734,17 @@ evidence:
           matching:
             allowed_purposes:
               - https://demo.example.gov/purpose/civil-certificate-evidence
-            allowed_assurance:
-              - substantial
-            permitted_jurisdictions:
-              - ZZ
-            require_legal_basis: true
-            require_consent: true
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              jurisdiction:
+                permitted:
+                  - ZZ
+              assurance:
+                allowed:
+                  - substantial
             ecosystem_binding:
               id: birth-certificate-evidence/v1
               pack_id: birth-certificate-evidence/v1
@@ -740,12 +800,17 @@ evidence:
           matching:
             allowed_purposes:
               - https://demo.example.gov/purpose/civil-certificate-evidence
-            allowed_assurance:
-              - substantial
-            permitted_jurisdictions:
-              - ZZ
-            require_legal_basis: true
-            require_consent: true
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              jurisdiction:
+                permitted:
+                  - ZZ
+              assurance:
+                allowed:
+                  - substantial
             ecosystem_binding:
               id: birth-certificate-evidence/v1
               pack_id: birth-certificate-evidence/v1
@@ -791,12 +856,17 @@ evidence:
           matching:
             allowed_purposes:
               - https://demo.example.gov/purpose/civil-certificate-evidence
-            allowed_assurance:
-              - substantial
-            permitted_jurisdictions:
-              - ZZ
-            require_legal_basis: true
-            require_consent: true
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              jurisdiction:
+                permitted:
+                  - ZZ
+              assurance:
+                allowed:
+                  - substantial
             ecosystem_binding:
               id: marriage-certificate-evidence/v1
               pack_id: marriage-certificate-evidence/v1
@@ -842,12 +912,17 @@ evidence:
           matching:
             allowed_purposes:
               - https://demo.example.gov/purpose/civil-certificate-evidence
-            allowed_assurance:
-              - substantial
-            permitted_jurisdictions:
-              - ZZ
-            require_legal_basis: true
-            require_consent: true
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              jurisdiction:
+                permitted:
+                  - ZZ
+              assurance:
+                allowed:
+                  - substantial
             ecosystem_binding:
               id: marriage-certificate-evidence/v1
               pack_id: marriage-certificate-evidence/v1
@@ -885,12 +960,17 @@ evidence:
           matching:
             allowed_purposes:
               - https://demo.example.gov/purpose/civil-certificate-evidence
-            allowed_assurance:
-              - substantial
-            permitted_jurisdictions:
-              - ZZ
-            require_legal_basis: true
-            require_consent: true
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              jurisdiction:
+                permitted:
+                  - ZZ
+              assurance:
+                allowed:
+                  - substantial
             ecosystem_binding:
               id: marriage-certificate-evidence/v1
               pack_id: marriage-certificate-evidence/v1
@@ -930,12 +1010,17 @@ evidence:
           matching:
             allowed_purposes:
               - https://demo.example.gov/purpose/civil-certificate-evidence
-            allowed_assurance:
-              - substantial
-            permitted_jurisdictions:
-              - ZZ
-            require_legal_basis: true
-            require_consent: true
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              jurisdiction:
+                permitted:
+                  - ZZ
+              assurance:
+                allowed:
+                  - substantial
             ecosystem_binding:
               id: marriage-certificate-evidence/v1
               pack_id: marriage-certificate-evidence/v1
@@ -975,12 +1060,17 @@ evidence:
           matching:
             allowed_purposes:
               - https://demo.example.gov/purpose/civil-certificate-evidence
-            allowed_assurance:
-              - substantial
-            permitted_jurisdictions:
-              - ZZ
-            require_legal_basis: true
-            require_consent: true
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              jurisdiction:
+                permitted:
+                  - ZZ
+              assurance:
+                allowed:
+                  - substantial
             ecosystem_binding:
               id: marriage-certificate-evidence/v1
               pack_id: marriage-certificate-evidence/v1
@@ -1036,12 +1126,17 @@ evidence:
           matching:
             allowed_purposes:
               - https://demo.example.gov/purpose/civil-certificate-evidence
-            allowed_assurance:
-              - substantial
-            permitted_jurisdictions:
-              - ZZ
-            require_legal_basis: true
-            require_consent: true
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              jurisdiction:
+                permitted:
+                  - ZZ
+              assurance:
+                allowed:
+                  - substantial
             ecosystem_binding:
               id: marriage-certificate-evidence/v1
               pack_id: marriage-certificate-evidence/v1
