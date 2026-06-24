@@ -24,9 +24,10 @@ Reach for `script_rhai` only when the declarative engines do not fit:
 - `http_json` — one governed request and a JSON/CEL projection.
 - `http_flow` — a fixed declarative sequence of dependent reads.
 - `fhir` — a bounded FHIR R4 GET graph.
-- `script_rhai` — 1–3 governed reads where the script must **branch** on a
-  response (e.g. try one path, fall back on a 404), or normalize source-specific
-  JSON that the declarative mappers cannot express.
+- `script_rhai` — 1–3 governed source calls where the script must **branch** on
+  a response (e.g. POST a search body, then GET a returned id; try one path,
+  fall back on a 404), or normalize source-specific JSON that the declarative
+  mappers cannot express.
 
 If a single request with a CEL projection works, prefer `http_json`.
 
@@ -37,18 +38,21 @@ so a buggy script or a hostile *upstream response* cannot escalate:
 
 - **No ambient capability.** A script has no generic HTTP, filesystem,
   environment, process, or module access. Its only I/O is the host-registered
-  `source.get(target, path, query)`. Module loading and `eval` are disabled.
+  `source.get(target, path, query)` and
+  `source.post_json(target, path, query, body)`. Module loading and `eval` are
+  disabled.
 - **Secrets never reach the script.** The script sees only the whitelisted
   **public** credential projection (`credential_public`). Target credentials are
   resolved by the host and applied to the outbound request; they are never
   exposed to script code, response shaping, error text, logs, or cache keys.
-- **The host owns every effect.** `source.get` reuses the same outbound path as
-  `http_json`: `allowed_base_urls` allow-listing, percent-decode-then-validate
-  path canonicalization, same-origin enforcement, a DNS-pinned client with
-  redirects disabled, SSRF/private-IP/cloud-metadata blocking, the per-source
-  rate-limit and `Retry-After` backoff gate, and a byte-bounded JSON reader.
+- **The host owns every effect.** `source.get` and `source.post_json` reuse the
+  same outbound path as `http_json`: `allowed_base_urls` allow-listing,
+  percent-decode-then-validate path canonicalization, same-origin enforcement,
+  a DNS-pinned client with redirects disabled, SSRF/private-IP/cloud-metadata
+  blocking, target-owned auth, the per-source rate-limit and `Retry-After`
+  backoff gate, and byte-bounded JSON request/response handling.
 - **Sandbox limits.** Operation count, call depth, string/array/map sizes, the
-  per-run `source.get` call budget, output bytes, wall-clock timeout, and engine
+  per-run source-call budget, output bytes, wall-clock timeout, and engine
   concurrency are all bounded. The script is **compiled and smoke-tested at
   startup**; a compile, policy, or smoke failure blocks readiness.
 - **Governed provenance.** The script is embedded inline in the signed runtime
@@ -94,6 +98,24 @@ fn lookup(ctx) {
 - `query` is a map of name → string/number/bool; names are validated.
 - `status` is the upstream HTTP status; `body` is the parsed JSON, or `()`
   (null) for an observable non-2xx with an empty, non-JSON, or oversized body.
+
+`source.post_json(target, path, query, body)` has the same response shape and
+visibility rules, but sends `body` as a JSON request body. The body is bounded
+by the Rhai JSON conversion caps and by the sidecar `limits.max_request_bytes`.
+It is intended for APIs that require a small search or envelope POST before a
+read:
+
+```rhai
+fn lookup(ctx) {
+  let search = source.post_json(
+    "primary",
+    "/search",
+    #{},
+    #{ value: ctx.lookup.value, fields: ctx.fields }
+  );
+  source.get("primary", "/people/" + search.body[0].national_id, #{}).body
+}
+```
 
 ### Pure `xw` helpers
 
@@ -171,10 +193,28 @@ the script.
 | `basic` | `username.secret`, `password.secret` | HTTP Basic |
 | `api_key_header` | `header`, `token.secret` | sets `<header>: <secret>` |
 | `api_key_query` | `query_param`, `token.secret` | appends `?<query_param>=<secret>` |
+| `oauth2_client_credentials` | `token_url`, `client_id.secret`, `client_secret.secret` | fetches and caches a host-owned bearer token |
 
 `api_key_query` is for messy upstreams that expect the key in the URL; the value
 is a secret, so the host keeps it out of logs and cache keys (the cache key is
 built from request fields, not the resolved URL).
+
+OAuth2 client-credentials token URLs must also appear in `allowed_base_urls`.
+The token request defaults to `request_format: form`; set `request_format: json`
+for upstreams that require a JSON token request. Optional fields are `scope`,
+`audience`, and `refresh_skew_seconds` (default `60`).
+
+```yaml
+          auth:
+            type: oauth2_client_credentials
+            token_url: https://identity.example.gov/oauth/token
+            request_format: form
+            scope: people.read
+            client_id:
+              secret: clientId
+            client_secret:
+              secret: clientSecret
+```
 
 ### Static request headers
 
@@ -242,13 +282,13 @@ cargo test -p registry-notary-server --lib governed_script_rhai
 Gate checks: `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check`,
 and `cargo deny check`.
 
-## Current limits
+## Current Limits
 
-- One `source.get` capability (read-only GET); no `source.post_json` and no
-  built-in pagination yet.
+- Supported source calls are `source.get` and `source.post_json`; there is no
+  built-in pagination helper yet.
 - JSON request/response bodies only; XML/CSV upstreams stay out of scope.
-- Auth kinds are `bearer`, `basic`, `api_key_header`, and `api_key_query`.
-  OAuth2 client-credentials, session/cookie login, HMAC request signing, and
+- Auth kinds are `bearer`, `basic`, `api_key_header`, `api_key_query`, and
+  `oauth2_client_credentials`. Session/cookie login, HMAC request signing, and
   mTLS are not yet available.
-- The per-run `source.get` budget is small (a few calls); design scripts for a
-  handful of reads, not arbitrary fan-out.
+- The per-run source-call budget is small (default `3`, hard cap `5`); design
+  scripts for a handful of calls, not arbitrary fan-out.

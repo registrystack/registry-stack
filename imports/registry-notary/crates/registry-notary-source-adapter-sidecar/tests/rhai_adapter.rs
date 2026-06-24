@@ -7,7 +7,13 @@
 //! the script reaches the configured upstream, its records surface as
 //! `{ "data": [...] }`, and the per-target `visible_statuses` gate behaves.
 
-use axum::{extract::Query, http::StatusCode, response::IntoResponse, routing::get, Json, Router};
+use axum::{
+    extract::Query,
+    http::StatusCode,
+    response::IntoResponse,
+    routing::{get, post},
+    Json, Router,
+};
 use axum_test::TestServer;
 use registry_notary_source_adapter_sidecar::{sidecar_router, SidecarConfig};
 use serde_json::{json, Value};
@@ -28,6 +34,7 @@ static ENV_LOCK: Mutex<()> = Mutex::const_new(());
 #[derive(Clone, Default)]
 struct UpstreamState {
     seen: std::sync::Arc<Mutex<Vec<String>>>,
+    last_post_body: std::sync::Arc<Mutex<Option<Value>>>,
 }
 
 /// `/lookup?id=...` — echoes the id back as one record. Used by the happy-path
@@ -85,6 +92,17 @@ async fn path_b(
         StatusCode::OK,
         Json(json!([{ "national_id": "from-b", "birth_date": "1980-12-31" }])),
     )
+}
+
+async fn post_search_endpoint(
+    axum::extract::State(state): axum::extract::State<UpstreamState>,
+    Query(query): Query<HashMap<String, String>>,
+    Json(body): Json<Value>,
+) -> Json<Value> {
+    let id = query.get("id").cloned().unwrap_or_default();
+    state.seen.lock().await.push(format!("/search:{id}"));
+    *state.last_post_body.lock().await = Some(body);
+    Json(json!([{ "national_id": id }]))
 }
 
 fn set_env() {
@@ -230,6 +248,68 @@ sources:
     )
 }
 
+/// A `script_rhai` manifest that POSTs a search body, then GETs the concrete
+/// record using the id returned by the search endpoint.
+fn rhai_post_then_get_manifest(allowlist_url: &str) -> String {
+    format!(
+        r#"
+server:
+  bind: "127.0.0.1:0"
+auth:
+  bearer_tokens:
+    - id: notary-contract
+      hash_env: {token_hash_env}
+limits:
+  max_workers: 2
+  worker_timeout_ms: 500
+  max_output_bytes: 4096
+  max_request_bytes: 2048
+  max_query_parameter_bytes: 128
+  liveness_window_ms: 30000
+  max_batch_items: 100
+  max_worker_memory_mb: 256
+sources:
+  rhai_people:
+    engine: script_rhai
+    dataset: {dataset}
+    entity: {entity}
+    credential_env: {credential_env}
+    credential_public_fields:
+      - clientId
+    allowed_base_urls:
+      - {allowlist_url}
+    allow_insecure_localhost: true
+    rhai:
+      limits:
+        max_http_calls: 3
+      script: |
+        fn lookup(ctx) {{
+          let search = source.post_json(
+            "primary",
+            "/search",
+            #{{ id: ctx.lookup.value }},
+            #{{ value: ctx.lookup.value, fields: ctx.fields }}
+          );
+          source.get("primary", "/lookup", #{{ id: search.body[0].national_id }}).body
+        }}
+      targets:
+        primary:
+          base_url: {allowlist_url}
+    smoke_lookup:
+      field: national_id
+      value: smoke-person
+      fields:
+        - national_id
+      purpose: startup-smoke
+"#,
+        token_hash_env = serde_json::to_string(TOKEN_HASH_ENV).expect("env serializes"),
+        credential_env = serde_json::to_string(CREDENTIAL_ENV).expect("env serializes"),
+        allowlist_url = serde_json::to_string(allowlist_url).expect("URL serializes"),
+        dataset = DATASET,
+        entity = ENTITY,
+    )
+}
+
 async fn spawn_sidecar(manifest: String, upstream_state: UpstreamState) -> TestServer {
     let config: SidecarConfig =
         serde_norway::from_str(&manifest).expect("script_rhai manifest parses");
@@ -277,6 +357,63 @@ async fn rhai_lookup_returns_data_from_upstream() {
     assert!(
         seen.iter().any(|hit| hit == "/lookup:person-123"),
         "the script's lookup must reach the upstream; saw {seen:?}"
+    );
+}
+
+#[tokio::test]
+async fn rhai_post_json_then_get_uses_json_body_and_shared_call_budget() {
+    let _guard = ENV_LOCK.lock().await;
+    let upstream_state = UpstreamState::default();
+    let upstream = TestServer::builder().http_transport().build(
+        Router::new()
+            .route("/search", post(post_search_endpoint))
+            .route("/lookup", get(lookup_endpoint))
+            .with_state(upstream_state.clone()),
+    );
+    let upstream_url = server_base_url(&upstream);
+    set_env();
+    let sidecar = spawn_sidecar(
+        rhai_post_then_get_manifest(&upstream_url),
+        upstream_state.clone(),
+    )
+    .await;
+    upstream_state.seen.lock().await.clear();
+    *upstream_state.last_post_body.lock().await = None;
+
+    let response = sidecar
+        .get(&format!("/v1/datasets/{DATASET}/entities/{ENTITY}/records"))
+        .add_header("authorization", format!("Bearer {TOKEN}"))
+        .add_header("data-purpose", "eligibility")
+        .add_query_param("national_id", "person-123")
+        .add_query_param("fields", "national_id,birth_date")
+        .await;
+
+    response.assert_status_ok();
+    assert_eq!(
+        response.json::<Value>(),
+        json!({
+            "data": [{
+                "national_id": "person-123",
+                "birth_date": "1990-01-01"
+            }]
+        })
+    );
+
+    let post_body = upstream_state
+        .last_post_body
+        .lock()
+        .await
+        .clone()
+        .expect("POST body captured");
+    assert_eq!(
+        post_body,
+        json!({ "value": "person-123", "fields": ["national_id", "birth_date"] })
+    );
+    let seen = upstream_state.seen.lock().await;
+    assert_eq!(
+        seen.as_slice(),
+        ["/search:person-123", "/lookup:person-123"],
+        "the script should POST once, then GET once under the shared call budget"
     );
 }
 

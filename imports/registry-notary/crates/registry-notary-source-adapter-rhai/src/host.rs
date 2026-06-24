@@ -2,14 +2,14 @@
 //! The language-agnostic async host seam.
 //!
 //! [`ScriptSourceHost`] is the single boundary between a sandboxed script and
-//! the outside world. A script can only ever request `source.get(...)`; the
-//! engine routes that request through this trait. The trait is intentionally
-//! minimal and effect-oriented so an embedder can back it with a real HTTP
-//! client, while tests back it with a deterministic mock.
+//! the outside world. A script can only request explicit `source.*`
+//! capabilities; the engine routes those requests through this trait. The trait
+//! is intentionally minimal and effect-oriented so an embedder can back it with
+//! a real HTTP client, while tests back it with a deterministic mock.
 
 use crate::error::SourceScriptError;
 
-/// The result of a single host `source.get` call.
+/// The result of a single host source call.
 ///
 /// The engine surfaces a returned `Ok(SourceResponse)` to the script as a
 /// `#{ status, body }` map when the status is *observable* — 2xx, or in the
@@ -24,7 +24,8 @@ pub struct SourceResponse {
     pub body: serde_json::Value,
 }
 
-/// The host capability a script may invoke as `source.get(target, path, query)`.
+/// The host capabilities a script may invoke as `source.get(...)` and
+/// `source.post_json(...)`.
 ///
 /// Implementations own *all* effects: authentication, base-URL joining,
 /// allow-listing, and the actual network call. The script never sees any of
@@ -53,5 +54,22 @@ pub trait ScriptSourceHost: Send + Sync {
         target: &str,
         path: &str,
         query: serde_json::Value,
+    ) -> Result<SourceResponse, SourceScriptError>;
+
+    /// Perform a single JSON source write/read operation.
+    ///
+    /// This has the same status-observability contract as [`source_get`]. The
+    /// host owns the actual POST mechanics, including content type, auth,
+    /// request-size policy, rate limiting, and allow-listing.
+    ///
+    /// * `body` — a bounded JSON value supplied by the script. It has already
+    ///   passed the same JSON conversion caps as `query`; the implementation may
+    ///   still enforce its own serialized request byte budget.
+    async fn source_post_json(
+        &self,
+        target: &str,
+        path: &str,
+        query: serde_json::Value,
+        body: serde_json::Value,
     ) -> Result<SourceResponse, SourceScriptError>;
 }

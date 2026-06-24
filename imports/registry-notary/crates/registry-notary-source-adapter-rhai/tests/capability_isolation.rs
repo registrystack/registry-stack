@@ -3,8 +3,8 @@
 //!
 //! * `eval(...)` is a compile-time rejection (`disable_symbol`).
 //! * There is no `print`/`debug` output, no file/env/network access beyond the
-//!   single `source.get` capability.
-//! * Unregistered helpers (`xw.regex_replace`, `source.post_json`, ...) are
+//!   explicit `source.get` / `source.post_json` capabilities.
+//! * Unregistered helpers (`xw.regex_replace`, `source.delete`, ...) are
 //!   rejected. NOTE: stock Rhai resolves method/namespaced calls at *runtime*,
 //!   so an unregistered helper that is actually reached surfaces as a runtime
 //!   function-not-found error (classified `Runtime`), not at `compile()`. Only
@@ -61,8 +61,8 @@ async fn unregistered_xw_helper_is_rejected() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unregistered_source_method_is_rejected() {
-    // `source.post_json` is intentionally not registered.
-    let e = run(r#"fn lookup(ctx) { source.post_json("/x", #{}) }"#)
+    // Arbitrary HTTP-style methods are intentionally not registered.
+    let e = run(r#"fn lookup(ctx) { source.delete("t", "/x", #{}) }"#)
         .await
         .unwrap_err();
     assert!(matches!(e, SourceScriptError::Runtime { .. }), "got {e:?}");

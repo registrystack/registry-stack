@@ -319,7 +319,7 @@ pub struct FhirProjectionConfig {
 
 /// Configuration for the `script_rhai` engine: an inline sandboxed Rhai script
 /// plus the set of named upstream targets it may reach. The script resolves a
-/// lookup by calling `source.get(target, path, query)` against these targets;
+/// lookup by calling explicit `source.*` capabilities against these targets;
 /// all outbound machinery (allow-listing, SSRF policy, auth, rate limiting) is
 /// reused from the `http_json` path and never exposed to the script.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -575,6 +575,25 @@ pub struct HttpJsonAuthConfig {
     pub username: Option<HttpJsonSecretRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub password: Option<HttpJsonSecretRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<HttpJsonSecretRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_secret: Option<HttpJsonSecretRef>,
+    /// OAuth2 client-credentials token endpoint. The URL must be explicitly
+    /// present in `allowed_base_urls`, just like ordinary source targets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_url: Option<String>,
+    /// OAuth2 token request body format. Defaults to form when omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_format: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audience: Option<String>,
+    /// Seconds to subtract from `expires_in` when caching OAuth2 access tokens.
+    /// Defaults to 60 when omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_skew_seconds: Option<u64>,
     /// Header name carrying the API key for `api_key_header` (e.g. `X-API-Key`).
     /// The value is the resolved `token` secret. Restricted headers (auth,
     /// cookie, host, hop-by-hop, forwarding) are rejected at validation.
@@ -596,6 +615,9 @@ pub enum HttpJsonAuthKind {
     ApiKeyHeader,
     /// Send the `token` secret in a configured query parameter (`query_param`).
     ApiKeyQuery,
+    /// Fetch a host-owned bearer token via OAuth2 client credentials.
+    #[serde(rename = "oauth2_client_credentials")]
+    OAuth2ClientCredentials,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -794,12 +816,19 @@ struct AppState {
     source_limiters: Arc<BTreeMap<String, Arc<Semaphore>>>,
     source_runtime: Arc<BTreeMap<String, Arc<SourceRuntimeState>>>,
     http_json_clients: Arc<Mutex<BTreeMap<String, reqwest::Client>>>,
+    oauth2_tokens: Arc<Mutex<BTreeMap<String, CachedOAuth2Token>>>,
     /// Compiled `script_rhai` engines, keyed by `source_id`. Each script is
     /// compiled once at startup and reused for every request; a compile failure
     /// is a configuration error that fails startup.
     rhai_engines: Arc<BTreeMap<String, Arc<ScriptEngine>>>,
     metrics: Arc<Mutex<BTreeMap<MetricKey, MetricValue>>>,
     audit: Option<Arc<SidecarAuditPipeline>>,
+}
+
+#[derive(Clone)]
+struct CachedOAuth2Token {
+    access_token: String,
+    refresh_after: Instant,
 }
 
 struct SidecarAuditPipeline {
@@ -1559,6 +1588,7 @@ pub async fn sidecar_router(config: SidecarConfig) -> Result<Router, SidecarErro
         source_limiters: Arc::new(source_limiters),
         source_runtime: Arc::new(source_runtime),
         http_json_clients: Arc::new(Mutex::new(BTreeMap::new())),
+        oauth2_tokens: Arc::new(Mutex::new(BTreeMap::new())),
         rhai_engines: Arc::new(rhai_engines),
         metrics: Arc::new(Mutex::new(BTreeMap::new())),
         audit: audit.map(Arc::new),
@@ -2005,7 +2035,7 @@ fn validate_http_json_source(source_id: &str, source: &SourceConfig) -> Result<(
         )?;
     }
     if let Some(auth) = &http_json.auth {
-        validate_http_json_auth_config(source_id, "http_json.auth", auth)?;
+        validate_http_json_auth_config(source_id, source, "http_json.auth", auth)?;
     }
     Ok(())
 }
@@ -2160,6 +2190,7 @@ fn validate_http_flow_source(source_id: &str, source: &SourceConfig) -> Result<(
         if let Some(auth) = &step.request.auth {
             validate_http_json_auth_config(
                 source_id,
+                source,
                 &format!("http_flow.steps.{}.request.auth", step.id),
                 auth,
             )?;
@@ -2364,6 +2395,7 @@ fn validate_rhai_source(source_id: &str, source: &SourceConfig) -> Result<(), Si
             requires_credential = true;
             validate_http_json_auth_config(
                 source_id,
+                source,
                 &format!("rhai.targets.{target_id}.auth"),
                 auth,
             )?;
@@ -2603,6 +2635,7 @@ fn validate_http_json_secret_ref(
 /// from the credential env at request time and never appears in config.
 fn validate_http_json_auth_config(
     source_id: &str,
+    source: &SourceConfig,
     label_prefix: &str,
     auth: &HttpJsonAuthConfig,
 ) -> Result<(), SidecarError> {
@@ -2660,8 +2693,81 @@ fn validate_http_json_auth_config(
                 )));
             }
         }
+        HttpJsonAuthKind::OAuth2ClientCredentials => {
+            let token_url = auth.token_url.as_deref().ok_or_else(|| {
+                SidecarError::Config(format!(
+                    "source {source_id} {label_prefix}.token_url is required when type is oauth2_client_credentials"
+                ))
+            })?;
+            validate_http_json_auth_token_url(
+                source_id,
+                source,
+                &format!("{label_prefix}.token_url"),
+                token_url,
+            )?;
+            validate_http_json_secret_ref(
+                source_id,
+                &format!("{label_prefix}.client_id.secret"),
+                auth.client_id.as_ref(),
+            )?;
+            validate_http_json_secret_ref(
+                source_id,
+                &format!("{label_prefix}.client_secret.secret"),
+                auth.client_secret.as_ref(),
+            )?;
+            if let Some(request_format) = &auth.request_format {
+                if !matches!(request_format.as_str(), "form" | "json") {
+                    return Err(SidecarError::Config(format!(
+                        "source {source_id} {label_prefix}.request_format must be form or json"
+                    )));
+                }
+            }
+            if auth
+                .scope
+                .as_ref()
+                .is_some_and(|scope| scope.trim().is_empty())
+            {
+                return Err(SidecarError::Config(format!(
+                    "source {source_id} {label_prefix}.scope must not be empty when set"
+                )));
+            }
+            if auth
+                .audience
+                .as_ref()
+                .is_some_and(|audience| audience.trim().is_empty())
+            {
+                return Err(SidecarError::Config(format!(
+                    "source {source_id} {label_prefix}.audience must not be empty when set"
+                )));
+            }
+        }
     }
     Ok(())
+}
+
+fn validate_http_json_auth_token_url(
+    source_id: &str,
+    source: &SourceConfig,
+    label: &str,
+    token_url: &str,
+) -> Result<(), SidecarError> {
+    let url = reqwest::Url::parse(token_url)
+        .map_err(|_| SidecarError::Config(format!("source {source_id} {label} must be a URL")))?;
+    if url.fragment().is_some() {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} {label} must not include a fragment"
+        )));
+    }
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} {label} must use http or https"
+        )));
+    }
+    ensure_allowed_base_url(source_id, source, &url).map_err(|_| {
+        SidecarError::Config(format!(
+            "source {source_id} {label} is not in allowed_base_urls"
+        ))
+    })
 }
 
 /// HTTP request headers a target/source must not set directly: authentication
@@ -2842,12 +2948,12 @@ async fn execute_source_json(
     }
 }
 
-/// The async host backing a `script_rhai` run's `source.get(target, path, query)`
-/// capability. It owns everything the call needs by value (clones / `Arc`s), so
-/// it is `Send + Sync` and outlives the bridged blocking execution. Every effect
-/// — target resolution, allow-listing, SSRF policy, auth, rate limiting, bounded
-/// body read — is reused from the `http_json` machinery; the script never sees
-/// any of it.
+/// The async host backing a `script_rhai` run's `source.*` capabilities. It owns
+/// everything the call needs by value (clones / `Arc`s), so it is `Send + Sync`
+/// and outlives the bridged blocking execution. Every effect — target
+/// resolution, allow-listing, SSRF policy, auth, rate limiting, bounded JSON
+/// body handling — is reused from the `http_json` machinery; the script never
+/// sees any of it.
 struct RhaiHttpHost {
     state: AppState,
     source: SourceConfig,
@@ -2857,6 +2963,11 @@ struct RhaiHttpHost {
     credential: Value,
 }
 
+enum RhaiSourceRequest {
+    Get,
+    PostJson(Value),
+}
+
 #[async_trait::async_trait]
 impl ScriptSourceHost for RhaiHttpHost {
     async fn source_get(
@@ -2864,6 +2975,30 @@ impl ScriptSourceHost for RhaiHttpHost {
         target: &str,
         path: &str,
         query: Value,
+    ) -> Result<SourceResponse, SourceScriptError> {
+        self.source_request(target, path, query, RhaiSourceRequest::Get)
+            .await
+    }
+
+    async fn source_post_json(
+        &self,
+        target: &str,
+        path: &str,
+        query: Value,
+        body: Value,
+    ) -> Result<SourceResponse, SourceScriptError> {
+        self.source_request(target, path, query, RhaiSourceRequest::PostJson(body))
+            .await
+    }
+}
+
+impl RhaiHttpHost {
+    async fn source_request(
+        &self,
+        target: &str,
+        path: &str,
+        query: Value,
+        request: RhaiSourceRequest,
     ) -> Result<SourceResponse, SourceScriptError> {
         let rhai = self
             .source
@@ -2892,7 +3027,13 @@ impl ScriptSourceHost for RhaiHttpHost {
         .await
         .map_err(map_source_execution_error)?;
 
-        let mut builder = prepared.client.get(prepared.url);
+        let mut builder = match request {
+            RhaiSourceRequest::Get => prepared.client.get(prepared.url),
+            RhaiSourceRequest::PostJson(body) => {
+                ensure_rhai_post_json_body_size(&body, self.state.config.limits.max_request_bytes)?;
+                prepared.client.post(prepared.url).json(&body)
+            }
+        };
         if let Value::Object(params) = &query {
             for (name, value) in params {
                 // Match the http_json contract: reject a query-parameter name
@@ -2914,8 +3055,16 @@ impl ScriptSourceHost for RhaiHttpHost {
         for (name, value) in &target_config.headers {
             builder = builder.header(name, value);
         }
-        builder = apply_http_json_auth(builder, target_config.auth.as_ref(), &self.credential)
-            .map_err(map_source_execution_error)?;
+        builder = apply_http_json_auth(
+            &self.state,
+            &self.source_id,
+            &self.source,
+            builder,
+            target_config.auth.as_ref(),
+            &self.credential,
+        )
+        .await
+        .map_err(map_source_execution_error)?;
 
         // Honour the same rate-limit/backoff gate as http_json. A limiter
         // rejection is reported to the script as a 429 so `problem_code()`
@@ -2943,9 +3092,12 @@ impl ScriptSourceHost for RhaiHttpHost {
         // is only the ceiling — the host decides per target).
         if status.is_success() || target_config.visible_statuses.contains(&status_code) {
             let body = if status.is_success() {
-                read_limited_json_response(response, self.state.config.limits.max_output_bytes)
-                    .await
-                    .map_err(map_source_execution_error)?
+                read_limited_json_or_empty_response(
+                    response,
+                    self.state.config.limits.max_output_bytes,
+                )
+                .await
+                .map_err(map_source_execution_error)?
             } else {
                 read_limited_optional_json_response(
                     response,
@@ -2964,6 +3116,21 @@ impl ScriptSourceHost for RhaiHttpHost {
             })
         }
     }
+}
+
+fn ensure_rhai_post_json_body_size(
+    body: &Value,
+    max_bytes: usize,
+) -> Result<(), SourceScriptError> {
+    let bytes = serde_json::to_vec(body).map_err(|_| SourceScriptError::HostDenied {
+        reason: "request body is not serializable".into(),
+    })?;
+    if bytes.len() > max_bytes {
+        return Err(SourceScriptError::HostDenied {
+            reason: "request body exceeds configured byte limit".into(),
+        });
+    }
+    Ok(())
 }
 
 /// Map the http_json outbound machinery's coarse error into the script host's
@@ -4286,7 +4453,15 @@ async fn execute_http_json_native_batch(
         let value = eval_http_json_string(expr, bindings.clone())?;
         builder = builder.header(name.as_str(), value);
     }
-    builder = apply_http_json_auth(builder, http_json.auth.as_ref(), &credential)?;
+    builder = apply_http_json_auth(
+        state,
+        source_id,
+        source,
+        builder,
+        http_json.auth.as_ref(),
+        &credential,
+    )
+    .await?;
     if let Some(error) = acquire_http_json_rate_or_error(state, source_id).await {
         return Ok(error);
     }
@@ -4493,7 +4668,15 @@ async fn execute_http_flow_lookup(
             let value = eval_http_json_string(expr, request_bindings.clone())?;
             builder = builder.header(name.as_str(), value);
         }
-        builder = apply_http_json_auth(builder, step.request.auth.as_ref(), &credential)?;
+        builder = apply_http_json_auth(
+            state,
+            source_id,
+            source,
+            builder,
+            step.request.auth.as_ref(),
+            &credential,
+        )
+        .await?;
         if let Some(error) = acquire_http_json_rate_or_error(state, source_id).await {
             return Ok(error);
         }
@@ -4703,7 +4886,15 @@ async fn execute_http_json_lookup(
         let value = eval_http_json_string(expr, bindings.clone())?;
         builder = builder.header(name.as_str(), value);
     }
-    builder = apply_http_json_auth(builder, http_json.auth.as_ref(), &credential)?;
+    builder = apply_http_json_auth(
+        state,
+        source_id,
+        source,
+        builder,
+        http_json.auth.as_ref(),
+        &credential,
+    )
+    .await?;
     if let Some(error) = acquire_http_json_rate_or_error(state, source_id).await {
         return Ok(error);
     }
@@ -4786,7 +4977,10 @@ fn http_json_batch_request_body(request: &Value) -> Value {
     })
 }
 
-fn apply_http_json_auth(
+async fn apply_http_json_auth(
+    state: &AppState,
+    source_id: &str,
+    source: &SourceConfig,
     mut builder: reqwest::RequestBuilder,
     auth: Option<&HttpJsonAuthConfig>,
     credential: &Value,
@@ -4834,9 +5028,151 @@ fn apply_http_json_auth(
                 let token = credential_secret(credential, token_ref)?;
                 builder = builder.query(&[(param, token)]);
             }
+            HttpJsonAuthKind::OAuth2ClientCredentials => {
+                let token =
+                    oauth2_client_credentials_token(state, source_id, source, auth, credential)
+                        .await?;
+                builder = builder.bearer_auth(token);
+            }
         }
     }
     Ok(builder)
+}
+
+async fn oauth2_client_credentials_token(
+    state: &AppState,
+    source_id: &str,
+    source: &SourceConfig,
+    auth: &HttpJsonAuthConfig,
+    credential: &Value,
+) -> Result<String, SourceExecutionError> {
+    let cache_key = oauth2_token_cache_key(source_id, auth)?;
+    let now = Instant::now();
+    if let Some(token) = state.oauth2_tokens.lock().await.get(&cache_key).cloned() {
+        if token.refresh_after > now {
+            return Ok(token.access_token);
+        }
+    }
+
+    let token_url = auth
+        .token_url
+        .as_deref()
+        .ok_or(SourceExecutionError::HttpJson)?;
+    let token_url = reqwest::Url::parse(token_url).map_err(|_| SourceExecutionError::HttpJson)?;
+    ensure_allowed_base_url(source_id, source, &token_url)
+        .map_err(|_| SourceExecutionError::HttpJson)?;
+    if token_url.fragment().is_some() {
+        return Err(SourceExecutionError::HttpJson);
+    }
+    let client = http_json_client_for(state, source_id, source, &token_url).await?;
+    let client_id_ref = auth
+        .client_id
+        .as_ref()
+        .ok_or(SourceExecutionError::HttpJson)?;
+    let client_secret_ref = auth
+        .client_secret
+        .as_ref()
+        .ok_or(SourceExecutionError::HttpJson)?;
+    let client_id = credential_secret(credential, client_id_ref)?;
+    let client_secret = credential_secret(credential, client_secret_ref)?;
+    let mut params = BTreeMap::new();
+    params.insert("grant_type".to_string(), "client_credentials".to_string());
+    params.insert("client_id".to_string(), client_id.to_string());
+    params.insert("client_secret".to_string(), client_secret.to_string());
+    if let Some(scope) = auth
+        .scope
+        .as_deref()
+        .filter(|scope| !scope.trim().is_empty())
+    {
+        params.insert("scope".to_string(), scope.to_string());
+    }
+    if let Some(audience) = auth
+        .audience
+        .as_deref()
+        .filter(|audience| !audience.trim().is_empty())
+    {
+        params.insert("audience".to_string(), audience.to_string());
+    }
+
+    let request = client
+        .post(token_url.clone())
+        .header(reqwest::header::ACCEPT, "application/json");
+    let request = match oauth2_request_format(auth) {
+        "json" => request.json(&params),
+        "form" => request.form(&params),
+        _ => return Err(SourceExecutionError::HttpJson),
+    };
+    let response = request.send().await.map_err(|error| {
+        if error.is_timeout() {
+            SourceExecutionError::HttpJsonTimeout
+        } else {
+            SourceExecutionError::HttpJson
+        }
+    })?;
+    if !response.status().is_success() {
+        return Err(SourceExecutionError::HttpJson);
+    }
+    let body = read_limited_json_response(response, state.config.limits.max_output_bytes).await?;
+    let access_token = body
+        .get("access_token")
+        .and_then(Value::as_str)
+        .filter(|token| !token.is_empty())
+        .ok_or(SourceExecutionError::HttpJson)?
+        .to_string();
+    let expires_in = body
+        .get("expires_in")
+        .and_then(Value::as_u64)
+        .unwrap_or(300);
+    let refresh_skew = Duration::from_secs(auth.refresh_skew_seconds.unwrap_or(60));
+    let ttl = Duration::from_secs(expires_in);
+    let refresh_after = Instant::now()
+        + ttl
+            .checked_sub(refresh_skew)
+            .unwrap_or_else(|| Duration::from_secs(0));
+    state.oauth2_tokens.lock().await.insert(
+        cache_key,
+        CachedOAuth2Token {
+            access_token: access_token.clone(),
+            refresh_after,
+        },
+    );
+    Ok(access_token)
+}
+
+fn oauth2_request_format(auth: &HttpJsonAuthConfig) -> &str {
+    auth.request_format
+        .as_deref()
+        .filter(|format| !format.trim().is_empty())
+        .unwrap_or("form")
+}
+
+fn oauth2_token_cache_key(
+    source_id: &str,
+    auth: &HttpJsonAuthConfig,
+) -> Result<String, SourceExecutionError> {
+    let token_url = auth
+        .token_url
+        .as_deref()
+        .ok_or(SourceExecutionError::HttpJson)?;
+    let client_id_ref = auth
+        .client_id
+        .as_ref()
+        .ok_or(SourceExecutionError::HttpJson)?;
+    let client_secret_ref = auth
+        .client_secret
+        .as_ref()
+        .ok_or(SourceExecutionError::HttpJson)?;
+    let key = json!({
+        "source_id": source_id,
+        "token_url": token_url,
+        "client_id_field": client_id_ref.secret.as_str(),
+        "client_secret_field": client_secret_ref.secret.as_str(),
+        "request_format": oauth2_request_format(auth),
+        "scope": auth.scope.as_deref(),
+        "audience": auth.audience.as_deref(),
+    });
+    let bytes = serde_json::to_vec(&key).map_err(|_| SourceExecutionError::HttpJson)?;
+    Ok(registry_platform_config::sha256_uri(&bytes))
 }
 
 fn http_json_cache_key(
@@ -4955,6 +5291,29 @@ async fn read_limited_json_response(
             return Err(SourceExecutionError::HttpJson);
         }
         bytes.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&bytes).map_err(|_| SourceExecutionError::HttpJson)
+}
+
+async fn read_limited_json_or_empty_response(
+    mut response: reqwest::Response,
+    max_bytes: usize,
+) -> Result<Value, SourceExecutionError> {
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|error| {
+        if error.is_timeout() {
+            SourceExecutionError::HttpJsonTimeout
+        } else {
+            SourceExecutionError::HttpJson
+        }
+    })? {
+        if bytes.len().saturating_add(chunk.len()) > max_bytes {
+            return Err(SourceExecutionError::HttpJson);
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    if bytes.is_empty() {
+        return Ok(Value::Null);
     }
     serde_json::from_slice(&bytes).map_err(|_| SourceExecutionError::HttpJson)
 }
@@ -7147,6 +7506,7 @@ mod tests {
             source_limiters: Arc::new(BTreeMap::new()),
             source_runtime: Arc::new(BTreeMap::new()),
             http_json_clients: Arc::new(Mutex::new(BTreeMap::new())),
+            oauth2_tokens: Arc::new(Mutex::new(BTreeMap::new())),
             rhai_engines: Arc::new(BTreeMap::new()),
             metrics: Arc::new(Mutex::new(BTreeMap::new())),
             audit: None,

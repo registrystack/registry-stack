@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Sidecar integration tests for the `script_rhai` messy-API auth package:
 //! `api_key_header` / `api_key_query` auth kinds and per-target static request
-//! headers. The positive tests assert the secret/headers reach the upstream on
-//! the wire (and the script-visible public credential never does); the negative
-//! tests assert misconfigurations are rejected at startup.
+//! headers, plus host-owned OAuth2 client credentials. The positive tests assert
+//! secrets/headers reach the upstream on the wire (and the script-visible public
+//! credential never does); the negative tests assert misconfigurations are
+//! rejected at startup.
 
 use axum::{
-    extract::{Query, State},
+    extract::{Form, Query, State},
     http::HeaderMap,
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use axum_test::TestServer;
@@ -36,6 +37,8 @@ static ENV_LOCK: Mutex<()> = Mutex::const_new(());
 struct CapturingUpstream {
     last_headers: Arc<Mutex<HashMap<String, String>>>,
     last_query: Arc<Mutex<HashMap<String, String>>>,
+    last_oauth_form: Arc<Mutex<HashMap<String, String>>>,
+    oauth_requests: Arc<Mutex<u64>>,
 }
 
 async fn capturing_lookup(
@@ -58,11 +61,25 @@ async fn capturing_lookup(
     Json(json!([{ "national_id": id, "birth_date": "1990-01-01" }]))
 }
 
+async fn oauth_token_form(
+    State(state): State<CapturingUpstream>,
+    Form(form): Form<HashMap<String, String>>,
+) -> Json<Value> {
+    *state.oauth_requests.lock().await += 1;
+    *state.last_oauth_form.lock().await = form;
+    Json(json!({ "access_token": "oauth-access", "expires_in": 600 }))
+}
+
 fn set_env() {
     std::env::set_var(TOKEN_HASH_ENV, TOKEN_HASH);
     std::env::set_var(
         CREDENTIAL_ENV,
-        json!({ "clientId": "public-client", "apiToken": "target-secret" }).to_string(),
+        json!({
+            "clientId": "public-client",
+            "apiToken": "target-secret",
+            "oauthSecret": "oauth-secret"
+        })
+        .to_string(),
     );
 }
 
@@ -79,6 +96,7 @@ fn server_base_url(server: &TestServer) -> String {
 /// caller-supplied `target_extra` block (auth and/or headers) appended under its
 /// `base_url`. The script fetches `/lookup?id=<value>` and returns the body.
 fn rhai_auth_manifest(allowlist_url: &str, target_extra: &str) -> String {
+    let token_url = format!("{}/oauth/token", allowlist_url.trim_end_matches('/'));
     format!(
         r#"
 server:
@@ -106,6 +124,7 @@ sources:
       - clientId
     allowed_base_urls:
       - {allowlist_url}
+      - {token_url}
     allow_insecure_localhost: true
     rhai:
       script: |
@@ -125,6 +144,7 @@ sources:
         token_hash_env = serde_json::to_string(TOKEN_HASH_ENV).expect("env serializes"),
         credential_env = serde_json::to_string(CREDENTIAL_ENV).expect("env serializes"),
         allowlist_url = serde_json::to_string(allowlist_url).expect("URL serializes"),
+        token_url = serde_json::to_string(&token_url).expect("URL serializes"),
         dataset = DATASET,
         entity = ENTITY,
     )
@@ -248,6 +268,68 @@ async fn static_target_headers_are_sent_to_upstream() {
     );
 }
 
+#[tokio::test]
+async fn oauth2_client_credentials_fetches_token_and_caches_across_lookups() {
+    let _guard = ENV_LOCK.lock().await;
+    let upstream_state = CapturingUpstream::default();
+    let upstream = TestServer::builder().http_transport().build(
+        Router::new()
+            .route("/lookup", get(capturing_lookup))
+            .route("/oauth/token", post(oauth_token_form))
+            .with_state(upstream_state.clone()),
+    );
+    let upstream_url = server_base_url(&upstream);
+    set_env();
+    let token_url = format!("{upstream_url}/oauth/token");
+    let target_extra = format!(
+        r#"
+          auth:
+            type: oauth2_client_credentials
+            token_url: {token_url}
+            request_format: form
+            scope: people.read
+            client_id:
+              secret: clientId
+            client_secret:
+              secret: oauthSecret"#,
+        token_url = serde_json::to_string(&token_url).expect("URL serializes"),
+    );
+    let sidecar = spawn_sidecar(rhai_auth_manifest(&upstream_url, &target_extra)).await;
+
+    for _ in 0..2 {
+        let response = run_single_lookup(&sidecar).await;
+        response.assert_status_ok();
+    }
+
+    let oauth_requests = *upstream_state.oauth_requests.lock().await;
+    assert_eq!(
+        oauth_requests, 1,
+        "OAuth access token should be cached across smoke and real lookups"
+    );
+    let form = upstream_state.last_oauth_form.lock().await;
+    assert_eq!(
+        form.get("grant_type").map(String::as_str),
+        Some("client_credentials")
+    );
+    assert_eq!(
+        form.get("client_id").map(String::as_str),
+        Some("public-client")
+    );
+    assert_eq!(
+        form.get("client_secret").map(String::as_str),
+        Some("oauth-secret")
+    );
+    assert_eq!(form.get("scope").map(String::as_str), Some("people.read"));
+    drop(form);
+
+    let headers = upstream_state.last_headers.lock().await;
+    assert_eq!(
+        headers.get("authorization").map(String::as_str),
+        Some("Bearer oauth-access"),
+        "the target request must use the host-owned OAuth access token; saw {headers:?}"
+    );
+}
+
 /// Validation negatives share a dummy in-allowlist URL; they fail before the
 /// startup smoke lookup ever connects, so no live upstream is needed.
 async fn expect_startup_rejection(target_extra: &str) -> String {
@@ -287,6 +369,24 @@ async fn api_key_query_without_param_is_rejected() {
     let message = expect_startup_rejection(target_extra).await;
     assert!(
         message.contains("query_param is required when type is api_key_query"),
+        "got: {message}"
+    );
+}
+
+#[tokio::test]
+async fn oauth2_token_url_must_be_allowlisted() {
+    let _guard = ENV_LOCK.lock().await;
+    let target_extra = r#"
+          auth:
+            type: oauth2_client_credentials
+            token_url: "https://identity.example.test/oauth/token"
+            client_id:
+              secret: clientId
+            client_secret:
+              secret: oauthSecret"#;
+    let message = expect_startup_rejection(target_extra).await;
+    assert!(
+        message.contains("token_url is not in allowed_base_urls"),
         "got: {message}"
     );
 }
