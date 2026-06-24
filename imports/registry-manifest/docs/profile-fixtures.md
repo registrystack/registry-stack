@@ -1,0 +1,183 @@
+# Validate against profile fixtures
+
+Check that a manifest conforms to a named profile's requirements, or run the fixture suite against a new domain profile descriptor. Also useful for reproducing a `validate-profiles` CI failure locally.
+
+For basic manifest validation (schema version, field format, reference integrity), use the `validate` subcommand instead. See [Validate and render a manifest](./validate-and-render.md).
+
+## What profile fixtures are
+
+A profile fixture is a pair of files in a `profiles/<profile-id>/` directory:
+
+- `profile.yaml`: the profile descriptor (schema version `registry-manifest-profile/v1`). It
+  declares required concept IRIs, required identifiers, codelist expectations, cardinality
+  expectations per entity field, runtime-only keys that must not appear in a portable manifest,
+  and a list of fixture paths to validate.
+- `fixtures/metadata.yaml`: a portable manifest (schema version `registry-manifest/v1`) that
+  the validator checks against the profile descriptor.
+
+The two schema versions govern different files: `registry-manifest/v1` governs the manifest;
+`registry-manifest-profile/v1` governs the descriptor. The CLI enforces both.
+
+The four example profiles in the repository are non-normative examples.
+They are not authoritative profiles for OpenCRVS, OpenSPP, OpenIMIS, or SP DCI until reviewed
+against official artifacts.
+
+## Prerequisites
+
+- Rust toolchain installed.
+- The `registry-manifest` repository cloned locally.
+
+Build the CLI before running commands:
+
+```sh
+cargo build -p registry-manifest-cli
+```
+
+The commands in this page use `cargo run -p registry-manifest-cli --` as a prefix.
+If you have installed the binary directly, replace that prefix with `registry-manifest-cli`.
+
+## Steps
+
+### 1. Identify the profiles directory
+
+By default the `validate-profiles` subcommand expects a `profiles/` directory path as its
+argument.
+In the repository root, the directory is `profiles/`.
+
+List the available profiles:
+
+```sh
+ls profiles/
+```
+
+Expected output (subdirectories that contain a `profile.yaml` are active profiles; others are
+placeholders):
+
+```text
+example-benefits-sync/
+example-civil-registration/
+example-person-schema/
+example-social-benefits/
+opencrvs/
+openimis/
+openspp/
+spdci/
+```
+
+Each subdirectory that contains a `profile.yaml` is a profile entry.
+
+### 2. Run validate-profiles on the full directory
+
+```sh
+cargo run -p registry-manifest-cli -- validate-profiles profiles
+```
+
+The validator scans every subdirectory for `profile.yaml`, validates the descriptor schema,
+then validates every fixture manifest listed in that descriptor.
+
+On success, the command exits with code 0 and prints a summary line for each profile.
+
+On failure, it prints structured errors describing which check failed and where.
+
+### 3. Run validate-profiles on a subset of profiles
+
+`validate-profiles` takes a directory and scans its immediate subdirectories for
+`profile.yaml` files. Targeting a single profile is not directly supported; the argument
+must be a directory whose children are profile directories. To iterate on a single profile,
+place it under a scratch directory and pass that directory:
+
+```sh
+mkdir -p /tmp/profile-check
+cp -r profiles/example-civil-registration /tmp/profile-check/
+cargo run -p registry-manifest-cli -- validate-profiles /tmp/profile-check
+```
+
+This validates only the profiles in `/tmp/profile-check` rather than the full suite.
+
+### 4. Understand the failure output
+
+Each failure line includes:
+
+- The profile descriptor path or fixture path where the error was found.
+- The check ID that failed (for example, `example-civil-registration.required_concepts`).
+- A description of what was expected and what was found.
+
+Common failure types:
+
+- **Missing required concept IRI**: the fixture manifest does not reference an IRI that the
+  profile marks as required. Add the concept to the appropriate entity in the manifest.
+- **Missing required identifier**: the fixture manifest does not include the required identifier
+  name and kind for the expected entity.
+- **Codelist code not found**: the fixture manifest's codelist for a given ID does not include
+  a required code value.
+- **Cardinality mismatch**: the field appears too few or too many times for the entity.
+- **Runtime-only key present**: the fixture manifest contains a key that must not appear in a
+  portable manifest (a manifest that carries only static metadata and no deployment-specific
+  bindings). Examples: `source`, `table`, `scope`, `url_env`.
+  Remove the key; it belongs in Relay configuration, not in a portable fixture.
+
+The authoritative list of disallowed runtime keys is in [Registry Manifest reference](./reference.md#runtime-only-keys).
+
+### 5. Add a new profile
+
+If you are authoring a new domain profile (for example, adapting Registry Manifest to a new
+program area or official standard), follow these steps to create and validate it:
+
+1. Create a directory under `profiles/<your-profile-id>/`.
+2. Write `profile.yaml` with `schema_version: registry-manifest-profile/v1`.
+3. Declare `required_concepts`, `required_identifiers`, `codelist_expectations`, and
+   `cardinality_expectations` for the entities the profile governs.
+4. Add a `fixtures/metadata.yaml` that satisfies all the declared requirements.
+5. List the fixture path under `fixtures:` in `profile.yaml`.
+6. Run `validate-profiles profiles` to confirm the fixture passes alongside all existing profiles.
+
+See
+[`profiles/example-civil-registration/profile.yaml`](https://github.com/jeremi/registry-manifest/blob/bb7bc6d015f519a9d1a6b6a0b661a2d28566af9d/profiles/example-civil-registration/profile.yaml)
+for a complete example.
+
+## Verification
+
+After running `validate-profiles`, confirm the exit code:
+
+```sh
+cargo run -p registry-manifest-cli -- validate-profiles profiles
+echo "exit code: $?"
+```
+
+Exit code 0 means every profile descriptor and every referenced fixture passed.
+
+To confirm the test suite also covers all four example profiles, run:
+
+```sh
+cargo test -p registry-manifest-core validates_profile_fixtures
+```
+
+This test asserts that all four example profile fixtures pass manifest validation.
+
+## Troubleshooting
+
+### "schema_version mismatch" on profile.yaml
+
+The profile descriptor must declare `schema_version: registry-manifest-profile/v1`.
+Do not use `registry-manifest/v1` (which is the manifest schema version) in the descriptor.
+
+### "missing required concept" on a concept you believe is present
+
+Check the IRI spelling exactly.
+The validator matches concept IRIs as strings, so a namespace prefix mismatch
+(`person:Person.identifier` versus `person:person.identifier`) causes a miss.
+Confirm the IRI in the profile descriptor matches the IRI as it appears in the fixture manifest
+after vocabulary prefix expansion.
+
+### "runtime-only key present" in fixture
+
+Remove keys such as `source`, `source_id`, `table`, `scope`, `url`, `url_env`, `file_path`,
+`query`, `required_filters`, `rows_scope`, `bindings`, `capabilities`, `column`, or
+`visibility` from the fixture manifest.
+These keys belong in Registry Relay runtime configuration, not in a portable metadata manifest.
+
+### validate-profiles passes locally but fails in CI
+
+Confirm you are running against the same `profiles/` directory path as CI.
+The validator uses the path you pass as its argument.
+Check whether CI is running `validate-profiles profiles` from the repository root.

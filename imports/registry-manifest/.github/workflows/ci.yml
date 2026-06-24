@@ -1,0 +1,210 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+env:
+  REGISTRY_MANIFEST_COVERAGE_THRESHOLD: "80"
+  REGISTRY_PLATFORM_REPOSITORY: jeremi/registry-platform
+  REGISTRY_PLATFORM_REF: 1ff93500d4a42a09d67cc31e547d97ef1b5e5404
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Checkout registry-platform
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.REGISTRY_PLATFORM_REPOSITORY }}
+          ref: ${{ env.REGISTRY_PLATFORM_REF }}
+          token: ${{ secrets.REGISTRY_PLATFORM_TOKEN || github.token }}
+          path: registry-platform
+
+      - name: Link registry-platform path dependency
+        run: ln -s "$GITHUB_WORKSPACE/registry-platform" "$GITHUB_WORKSPACE/../registry-platform"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Lint
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test core
+        run: cargo test -p registry-manifest-core
+
+      - name: Test CLI
+        run: cargo test -p registry-manifest-cli
+
+      - name: Validate profile fixtures
+        run: cargo run -p registry-manifest-cli -- validate-profiles profiles
+
+      - name: Build
+        run: cargo build --workspace --all-targets
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Checkout registry-platform
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.REGISTRY_PLATFORM_REPOSITORY }}
+          ref: ${{ env.REGISTRY_PLATFORM_REF }}
+          token: ${{ secrets.REGISTRY_PLATFORM_TOKEN || github.token }}
+          path: registry-platform
+
+      - name: Link registry-platform path dependency
+        run: ln -s "$GITHUB_WORKSPACE/registry-platform" "$GITHUB_WORKSPACE/../registry-platform"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Run coverage
+        run: |
+          mkdir -p target/coverage
+          cargo llvm-cov --workspace | tee target/coverage/summary.txt
+          cat target/coverage/summary.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Export coverage artifacts
+        run: |
+          cargo llvm-cov report --lcov --output-path target/coverage/lcov.info
+          cargo llvm-cov report --json --summary-only --output-path target/coverage/summary.json
+          test -s target/coverage/summary.txt
+          test -s target/coverage/lcov.info
+          test -s target/coverage/summary.json
+
+      - name: Export coverage dashboard data
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          summary = json.loads(Path("target/coverage/summary.json").read_text())
+          line_coverage = summary["data"][0]["totals"]["lines"]["percent"]
+          threshold = float(os.environ["REGISTRY_MANIFEST_COVERAGE_THRESHOLD"])
+          run_url = f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+          dashboard = {
+              "repo": "registry-manifest",
+              "branch": os.environ.get("GITHUB_REF_NAME", ""),
+              "commit": os.environ.get("GITHUB_SHA", ""),
+              "workflow_run_url": run_url,
+              "generated_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+              "line_coverage_percent": round(line_coverage, 2),
+              "threshold_percent": threshold,
+              "status": "pass" if line_coverage >= threshold else "fail",
+              "artifact_urls": [run_url],
+          }
+          Path("target/coverage/dashboard.json").write_text(json.dumps(dashboard, indent=2) + "\n")
+          PY
+          test -s target/coverage/dashboard.json
+
+      - name: Upload coverage artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: registry-manifest-coverage
+          path: |
+            target/coverage/summary.txt
+            target/coverage/lcov.info
+            target/coverage/summary.json
+            target/coverage/dashboard.json
+
+      - name: Enforce coverage threshold
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          dashboard = json.loads(Path("target/coverage/dashboard.json").read_text())
+          if dashboard["status"] != "pass":
+              raise SystemExit(
+                  f"line coverage {dashboard['line_coverage_percent']:.2f}% is below "
+                  f"threshold {dashboard['threshold_percent']:.2f}%"
+              )
+          PY
+
+  dependency-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Checkout registry-platform
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.REGISTRY_PLATFORM_REPOSITORY }}
+          ref: ${{ env.REGISTRY_PLATFORM_REF }}
+          token: ${{ secrets.REGISTRY_PLATFORM_TOKEN || github.token }}
+          path: registry-platform
+
+      - name: Link registry-platform path dependency
+        run: ln -s "$GITHUB_WORKSPACE/registry-platform" "$GITHUB_WORKSPACE/../registry-platform"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --version 0.19.7 --locked
+
+      - name: Deny check
+        run: cargo deny check
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --version 0.22.1 --locked
+
+      - name: Audit
+        run: |
+          cargo audit \
+            --db "$RUNNER_TEMP/cargo-audit-advisory-db" \
+            --deny warnings \
+            --ignore RUSTSEC-2024-0388 \
+            --ignore RUSTSEC-2024-0370
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Gitleaks
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          GOBIN="$RUNNER_TEMP/bin" go install github.com/zricethezav/gitleaks/v8@v8.30.1
+
+      - name: Scan tracked files for secrets
+        env:
+          GITLEAKS_CONFIG_TOML: |
+            [extend]
+            useDefault = true
+
+            [[allowlists]]
+            description = "Ignore generated Rust build output."
+            paths = ["(^|/)target/"]
+        run: |
+          "$RUNNER_TEMP/bin/gitleaks" dir --no-banner --redact --verbose --timeout 120 .

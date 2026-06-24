@@ -1,0 +1,318 @@
+schema_version: registry-manifest/v1
+catalog:
+  id: health-linked-child-support
+  base_url: https://child-support.example.gov
+  title:
+    en: Health-linked Child Support Service Catalogue
+  description:
+    en: Service-first metadata for a child support eligibility review.
+  publisher:
+    name: Child Support Authority
+    iri: https://child-support.example.gov/authorities/child-support-authority
+    authority_type: eli:PublicAuthority
+  participant_id: https://child-support.example.gov/authorities/child-support-authority
+  application_profiles:
+    - id: cpsv-ap
+      version: "3.2.0"
+vocabularies:
+  eli: http://data.europa.eu/eli/ontology#
+  person: https://person-schema.example.gov/vocab/
+profiles:
+  - id: service-first-discovery
+    version: "1"
+authorities:
+  - id: child-support-authority
+    iri: https://child-support.example.gov/authorities/child-support-authority
+    name: Child Support Authority
+    authority_type: eli:PublicAuthority
+    spatial: http://publications.europa.eu/resource/authority/country/THA
+requirements:
+  - id: child-health-coverage-requirement
+    iri: https://child-support.example.gov/requirements/child-health-coverage
+    title:
+      en: Child has active health coverage
+    description:
+      en: Eligibility requires proof that the child is enrolled in active health coverage.
+    rdf_type: cccev:Requirement
+    evidence_type_lists:
+      - id: coverage-and-residence
+        title:
+          en: Health coverage and residence evidence
+        description:
+          en: A grouped option requiring both active health coverage and residence evidence.
+        evidence_types:
+          - child-health-coverage-evidence
+          - child-residence-evidence
+      - id: combined-support-record
+        title:
+          en: Combined support record evidence
+        description:
+          en: An alternative single evidence record that satisfies the same requirement.
+        evidence_types:
+          - combined-support-record-evidence
+evidence_types:
+  - id: child-health-coverage-evidence
+    iri: https://child-support.example.gov/evidence-types/child-health-coverage
+    title:
+      en: Child health coverage evidence
+    description:
+      en: Evidence confirming a child's active health coverage status.
+    proves:
+      - child-health-coverage-requirement
+    information_concepts:
+      - person:Person.identifier
+      - person:Person.birthDate
+  - id: child-residence-evidence
+    iri: https://child-support.example.gov/evidence-types/child-residence
+    title:
+      en: Child residence evidence
+    description:
+      en: Evidence confirming the child's household residence.
+    proves:
+      - child-health-coverage-requirement
+    information_concepts:
+      - person:Person.identifier
+      - person:Person.address
+  - id: combined-support-record-evidence
+    iri: https://child-support.example.gov/evidence-types/combined-support-record
+    title:
+      en: Combined support record evidence
+    description:
+      en: Combined evidence record covering health coverage and residence.
+    proves:
+      - child-health-coverage-requirement
+    information_concepts:
+      - person:Person.identifier
+      - person:Person.birthDate
+      - person:Person.address
+public_services:
+  - id: health-linked-child-support
+    iri: https://child-support.example.gov/services/health-linked-child-support
+    title:
+      en: Health-linked child support eligibility review
+    description:
+      en: Review child support eligibility using health coverage evidence.
+    competent_authority: child-support-authority
+    jurisdiction: http://publications.europa.eu/resource/authority/country/THA
+    holds_requirements:
+      - child-health-coverage-requirement
+    produces:
+      - child-support-cases
+    data_services:
+      - health-coverage-verification-api
+    forms:
+      - child-support-review-form
+    channels:
+      - id: online-application
+        iri: https://child-support.example.gov/services/health-linked-child-support/channels/online-application
+        title:
+          en: Online application
+        kind: cv:OnlineChannel
+        access_url: https://child-support.example.gov/apply
+data_services:
+  - id: health-coverage-verification-api
+    iri: https://health.example.gov/data-services/coverage-verification
+    title:
+      en: Health coverage verification API
+    description:
+      en: Verifies whether a child has active health coverage.
+    endpoint_url: https://health.example.gov/api/coverage/verify
+    endpoint_description: https://health.example.gov/openapi/coverage.yaml
+    serves_datasets:
+      - health-coverage
+    conforms_to: https://spec.openapis.org/oas/v3.1.0
+forms:
+  - id: child-support-review-form
+    iri: https://child-support.example.gov/forms/child-support-review
+    title:
+      en: Child support eligibility review form
+    description:
+      en: Form used to start the eligibility review.
+    service: health-linked-child-support
+    channel: online-application
+    validates_with:
+      json_schema: https://child-support.example.gov/metadata/forms/child-support-review-form/schema.json
+      shacl: https://child-support.example.gov/metadata/forms/child-support-review-form/shacl
+    sections:
+      - id: applicant
+        title:
+          en: Applicant
+        min_occurs: 1
+        max_occurs: 1
+        fields:
+          - id: child_identifier
+            name: childIdentifier
+            label:
+              en: Child identifier
+            widget_type: text
+            data_type: xsd:string
+            concept: person:Person.identifier
+            supports_requirement: child-health-coverage-requirement
+            required: true
+            min_occurs: 1
+            max_occurs: 1
+            fulfillment:
+              modes:
+                - manual_input
+                - registry_lookup
+                - oots_evidence_exchange
+              preferred_mode: registry_lookup
+      - id: children
+        title:
+          en: Children
+        repeatable: true
+        min_occurs: 1
+        fields:
+          - id: child_birth_date
+            name: childBirthDate
+            label:
+              en: Child birth date
+            widget_type: date
+            data_type: xsd:date
+            concept: person:Person.birthDate
+            supports_requirement: child-health-coverage-requirement
+            required: true
+            min_occurs: 1
+            max_occurs: 1
+      - id: health_linked
+        title:
+          en: Health service context
+        visible_when:
+          field: supportType
+          equals: health_linked
+    fields:
+      - id: support_type
+        name: supportType
+        label:
+          en: Support type
+        widget_type: select
+        data_type: xsd:string
+        concept: https://child-support.example.gov/concepts/support-type
+        required: true
+        fulfillment:
+          modes:
+            - manual_input
+          preferred_mode: manual_input
+      - id: case_note
+        name: caseNote
+        label:
+          en: Case note
+        widget_type: textarea
+        data_type: xsd:string
+        concept: https://child-support.example.gov/concepts/case-note
+        required: false
+datasets:
+  - id: child-support-cases
+    title:
+      en: Child Support Cases
+    description:
+      en: Case records produced by the eligibility review.
+    access_rights: restricted
+    entities:
+      - name: case
+        fields:
+          - name: case_id
+            type: string
+            required: true
+          - name: child_identifier
+            type: string
+  - id: health-coverage
+    title:
+      en: Health Coverage
+    description:
+      en: Registry data used to verify child health coverage.
+    access_rights: restricted
+    public_services:
+      - id: https://health.example.gov/services/health-coverage-registry
+        title:
+          en: Health coverage registry service
+        description:
+          en: Public registry service that maintains health coverage data.
+    entities:
+      - name: coverage
+        fields:
+          - name: child_identifier
+            type: string
+            required: true
+            concepts:
+              - person:Person.identifier
+          - name: child_birth_date
+            type: date
+            concepts:
+              - person:Person.birthDate
+          - name: active
+            type: boolean
+            required: true
+    evidence_offerings:
+      - id: health-coverage-evidence-offering
+        iri: https://health.example.gov/evidence-offerings/child-health-coverage
+        title:
+          en: Health coverage evidence offering
+        description:
+          en: Health authority route for child health coverage evidence.
+        evidence_type: child-health-coverage-evidence
+        issuing_authority:
+          id: health-authority
+          iri: https://health.example.gov/authorities/health-authority
+          name: Health Authority
+          country: TH
+        entity: coverage
+        lookup_keys:
+          - child_identifier
+          - child_birth_date
+        procedure_contexts:
+          - health-linked-child-support
+        access:
+          kind: evidence-verification-api
+          conforms_to: https://spec.openapis.org/oas/v3.1.0
+          endpoint_url: https://health.example.gov/api/coverage/verify
+          discovery_url: https://health.example.gov/openapi/coverage.yaml
+          ruleset: child-health-coverage-active
+      - id: child-residence-evidence-offering
+        iri: https://health.example.gov/evidence-offerings/child-residence
+        title:
+          en: Child residence evidence offering
+        description:
+          en: Residence authority route for child residence evidence.
+        evidence_type: child-residence-evidence
+        issuing_authority:
+          id: residence-authority
+          iri: https://health.example.gov/authorities/residence-authority
+          name: Residence Authority
+          country: TH
+        entity: coverage
+        lookup_keys:
+          - child_identifier
+        procedure_contexts:
+          - health-linked-child-support
+        access:
+          kind: evidence-verification-api
+          conforms_to: https://spec.openapis.org/oas/v3.1.0
+          endpoint_url: https://health.example.gov/api/residence/verify
+          discovery_url: https://health.example.gov/openapi/residence.yaml
+          ruleset: child-residence-active
+      - id: combined-support-record-evidence-offering
+        iri: https://health.example.gov/evidence-offerings/combined-support-record
+        title:
+          en: Combined support record evidence offering
+        description:
+          en: Combined evidence route for health coverage and residence.
+        evidence_type: combined-support-record-evidence
+        issuing_authority:
+          id: support-data-authority
+          iri: https://health.example.gov/authorities/support-data-authority
+          name: Support Data Authority
+          country: TH
+        entity: coverage
+        lookup_keys:
+          - child_identifier
+          - child_birth_date
+        procedure_contexts:
+          - health-linked-child-support
+        access:
+          kind: evidence-verification-api
+          conforms_to: https://spec.openapis.org/oas/v3.1.0
+          endpoint_url: https://health.example.gov/api/support-record/verify
+          discovery_url: https://health.example.gov/openapi/support-record.yaml
+          ruleset: combined-support-record-active
+codelists: []

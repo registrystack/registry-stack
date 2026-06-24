@@ -1,0 +1,25 @@
+[package]
+name = "registry-manifest-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["registry", "metadata", "manifest", "dcat", "shacl"]
+categories = ["data-structures", "encoding", "parser-implementations"]
+publish = false
+
+[dependencies]
+oxiri = { version = "0.2.11" }
+registry-platform-pdp = { version = "0.3.1", path = "../../../registry-platform/crates/registry-platform-pdp" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { version = "2" }
+
+[dev-dependencies]
+serde_yaml_ng = { workspace = true }
+sophia_api = { version = "0.10.0" }
+sophia_jsonld = { version = "0.10.0" }
+sophia_term = { version = "0.10.0" }

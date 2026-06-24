@@ -1,0 +1,27 @@
+[workspace]
+members = [
+    "crates/registry-manifest-core",
+    "crates/registry-manifest-cli",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.2.1"
+edition = "2021"
+license = "Apache-2.0"
+description = "Portable manifest contracts, validators, and renderers for registry catalogs."
+repository = "https://github.com/jeremi/registry-manifest"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1" }
+serde_yaml_ng = { version = "0.10.0" }
+sha2 = { version = "0.10" }
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+strip = "symbols"

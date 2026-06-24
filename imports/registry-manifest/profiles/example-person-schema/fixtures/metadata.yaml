@@ -1,0 +1,63 @@
+schema_version: registry-manifest/v1
+catalog:
+  id: example-person-schema
+  base_url: https://person-schema.example.gov
+  title:
+    en: Example Person Schema Metadata
+  description:
+    en: Portable metadata for a hypothetical person schema resource.
+  publisher:
+    name: Example Person Schema Publisher
+    iri: https://person-schema.example.gov/publisher
+    authority_type: eli:PublicAuthority
+  participant_id: https://person-schema.example.gov/publisher
+  conforms_to:
+    - https://json-schema.org/draft/2020-12/schema
+  standards:
+    dcat: "3.0"
+    shacl: "1.1"
+    json_schema: "2020-12"
+  application_profiles: []
+vocabularies:
+  person: https://person-schema.example.gov/vocab/
+  eli: http://data.europa.eu/eli/ontology#
+profiles:
+  - id: example-person-schema
+    version: "1"
+datasets:
+  - id: person-index
+    title:
+      en: Person Index
+    conforms_to:
+      - https://json-schema.org/draft/2020-12/schema
+    status: active
+    access_rights: restricted
+    entities:
+      - name: person
+        title:
+          en: Person
+        identifiers:
+          - name: person_id
+            kind: local
+        fields:
+          - name: person_id
+            type: string
+            required: true
+            constraints:
+              min_length: 1
+              max_length: 64
+            concepts:
+              - person:Person.identifier
+          - name: given_name
+            type: string
+            concepts:
+              - person:Person.givenName
+          - name: family_name
+            type: string
+            concepts:
+              - person:Person.familyName
+          - name: birth_date
+            type: date
+            concepts:
+              - person:Person.birthDate
+codelists: []
