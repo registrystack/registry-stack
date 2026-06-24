@@ -8,7 +8,7 @@
 
 use axum::{
     extract::{Form, Query, State},
-    http::HeaderMap,
+    http::{HeaderMap, StatusCode},
     routing::{get, post},
     Json, Router,
 };
@@ -38,6 +38,7 @@ struct CapturingUpstream {
     last_headers: Arc<Mutex<HashMap<String, String>>>,
     last_query: Arc<Mutex<HashMap<String, String>>>,
     last_oauth_form: Arc<Mutex<HashMap<String, String>>>,
+    last_oauth_json: Arc<Mutex<Option<Value>>>,
     oauth_requests: Arc<Mutex<u64>>,
 }
 
@@ -68,6 +69,48 @@ async fn oauth_token_form(
     *state.oauth_requests.lock().await += 1;
     *state.last_oauth_form.lock().await = form;
     Json(json!({ "access_token": "oauth-access", "expires_in": 600 }))
+}
+
+async fn oauth_token_json(
+    State(state): State<CapturingUpstream>,
+    Json(body): Json<Value>,
+) -> Json<Value> {
+    *state.oauth_requests.lock().await += 1;
+    *state.last_oauth_json.lock().await = Some(body);
+    Json(json!({ "access_token": "oauth-json-access", "expires_in": 600 }))
+}
+
+async fn oauth_token_short_lived_form(
+    State(state): State<CapturingUpstream>,
+    Form(form): Form<HashMap<String, String>>,
+) -> Json<Value> {
+    let mut requests = state.oauth_requests.lock().await;
+    *requests += 1;
+    let token = format!("oauth-access-{}", *requests);
+    drop(requests);
+    *state.last_oauth_form.lock().await = form;
+    Json(json!({ "access_token": token, "expires_in": 1 }))
+}
+
+async fn oauth_token_missing_access_token(
+    State(state): State<CapturingUpstream>,
+    Form(form): Form<HashMap<String, String>>,
+) -> Json<Value> {
+    *state.oauth_requests.lock().await += 1;
+    *state.last_oauth_form.lock().await = form;
+    Json(json!({ "expires_in": 600 }))
+}
+
+async fn oauth_token_status_failure(
+    State(state): State<CapturingUpstream>,
+    Form(form): Form<HashMap<String, String>>,
+) -> (StatusCode, Json<Value>) {
+    *state.oauth_requests.lock().await += 1;
+    *state.last_oauth_form.lock().await = form;
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({ "error": "invalid_client" })),
+    )
 }
 
 fn set_env() {
@@ -157,6 +200,15 @@ async fn spawn_sidecar(manifest: String) -> TestServer {
         .await
         .expect("script_rhai sidecar starts and passes smoke lookup");
     TestServer::builder().http_transport().build(app)
+}
+
+async fn expect_sidecar_startup_failure(manifest: String) -> String {
+    let config: SidecarConfig =
+        serde_norway::from_str(&manifest).expect("script_rhai manifest parses");
+    sidecar_router(config)
+        .await
+        .expect_err("script_rhai sidecar startup must fail")
+        .to_string()
 }
 
 async fn run_single_lookup(sidecar: &TestServer) -> axum_test::TestResponse {
@@ -327,6 +379,198 @@ async fn oauth2_client_credentials_fetches_token_and_caches_across_lookups() {
         headers.get("authorization").map(String::as_str),
         Some("Bearer oauth-access"),
         "the target request must use the host-owned OAuth access token; saw {headers:?}"
+    );
+}
+
+#[tokio::test]
+async fn oauth2_json_request_format_sends_audience_and_uses_bearer() {
+    let _guard = ENV_LOCK.lock().await;
+    let upstream_state = CapturingUpstream::default();
+    let upstream = TestServer::builder().http_transport().build(
+        Router::new()
+            .route("/lookup", get(capturing_lookup))
+            .route("/oauth/token", post(oauth_token_json))
+            .with_state(upstream_state.clone()),
+    );
+    let upstream_url = server_base_url(&upstream);
+    set_env();
+    let token_url = format!("{upstream_url}/oauth/token");
+    let target_extra = format!(
+        r#"
+          auth:
+            type: oauth2_client_credentials
+            token_url: {token_url}
+            request_format: json
+            scope: people.read
+            audience: registry-api
+            client_id:
+              secret: clientId
+            client_secret:
+              secret: oauthSecret"#,
+        token_url = serde_json::to_string(&token_url).expect("URL serializes"),
+    );
+    let sidecar = spawn_sidecar(rhai_auth_manifest(&upstream_url, &target_extra)).await;
+
+    let response = run_single_lookup(&sidecar).await;
+    response.assert_status_ok();
+
+    let oauth_requests = *upstream_state.oauth_requests.lock().await;
+    assert_eq!(
+        oauth_requests, 1,
+        "JSON OAuth access token should be cached after startup smoke"
+    );
+    let body = upstream_state
+        .last_oauth_json
+        .lock()
+        .await
+        .clone()
+        .expect("JSON OAuth request captured");
+    assert_eq!(
+        body,
+        json!({
+            "grant_type": "client_credentials",
+            "client_id": "public-client",
+            "client_secret": "oauth-secret",
+            "scope": "people.read",
+            "audience": "registry-api"
+        })
+    );
+
+    let headers = upstream_state.last_headers.lock().await;
+    assert_eq!(
+        headers.get("authorization").map(String::as_str),
+        Some("Bearer oauth-json-access"),
+        "the target request must use the JSON OAuth access token; saw {headers:?}"
+    );
+}
+
+#[tokio::test]
+async fn oauth2_short_lived_token_refreshes_after_skew() {
+    let _guard = ENV_LOCK.lock().await;
+    let upstream_state = CapturingUpstream::default();
+    let upstream = TestServer::builder().http_transport().build(
+        Router::new()
+            .route("/lookup", get(capturing_lookup))
+            .route("/oauth/token", post(oauth_token_short_lived_form))
+            .with_state(upstream_state.clone()),
+    );
+    let upstream_url = server_base_url(&upstream);
+    set_env();
+    let token_url = format!("{upstream_url}/oauth/token");
+    let target_extra = format!(
+        r#"
+          auth:
+            type: oauth2_client_credentials
+            token_url: {token_url}
+            request_format: form
+            refresh_skew_seconds: 60
+            client_id:
+              secret: clientId
+            client_secret:
+              secret: oauthSecret"#,
+        token_url = serde_json::to_string(&token_url).expect("URL serializes"),
+    );
+    let sidecar = spawn_sidecar(rhai_auth_manifest(&upstream_url, &target_extra)).await;
+
+    run_single_lookup(&sidecar).await.assert_status_ok();
+    run_single_lookup(&sidecar).await.assert_status_ok();
+
+    let oauth_requests = *upstream_state.oauth_requests.lock().await;
+    assert_eq!(
+        oauth_requests, 3,
+        "startup smoke and each real lookup should refresh a token that is already inside skew"
+    );
+    let headers = upstream_state.last_headers.lock().await;
+    assert_eq!(
+        headers.get("authorization").map(String::as_str),
+        Some("Bearer oauth-access-3"),
+        "the last target request must use the freshly refreshed token; saw {headers:?}"
+    );
+}
+
+#[tokio::test]
+async fn oauth2_missing_access_token_fails_startup_smoke() {
+    let _guard = ENV_LOCK.lock().await;
+    let upstream_state = CapturingUpstream::default();
+    let upstream = TestServer::builder().http_transport().build(
+        Router::new()
+            .route("/lookup", get(capturing_lookup))
+            .route("/oauth/token", post(oauth_token_missing_access_token))
+            .with_state(upstream_state.clone()),
+    );
+    let upstream_url = server_base_url(&upstream);
+    set_env();
+    let token_url = format!("{upstream_url}/oauth/token");
+    let target_extra = format!(
+        r#"
+          auth:
+            type: oauth2_client_credentials
+            token_url: {token_url}
+            client_id:
+              secret: clientId
+            client_secret:
+              secret: oauthSecret"#,
+        token_url = serde_json::to_string(&token_url).expect("URL serializes"),
+    );
+
+    let manifest = rhai_auth_manifest(&upstream_url, &target_extra)
+        .replace("liveness_window_ms: 30000", "liveness_window_ms: 100");
+    let error = expect_sidecar_startup_failure(manifest).await;
+
+    assert!(
+        error.contains("smoke lookup"),
+        "OAuth token parse failure must fail startup readiness, got: {error}"
+    );
+    assert!(
+        *upstream_state.oauth_requests.lock().await >= 1,
+        "startup should attempt token acquisition before readiness fails"
+    );
+    assert!(
+        upstream_state.last_headers.lock().await.is_empty(),
+        "target request must not be sent when token acquisition fails"
+    );
+}
+
+#[tokio::test]
+async fn oauth2_non_success_token_response_fails_startup_smoke() {
+    let _guard = ENV_LOCK.lock().await;
+    let upstream_state = CapturingUpstream::default();
+    let upstream = TestServer::builder().http_transport().build(
+        Router::new()
+            .route("/lookup", get(capturing_lookup))
+            .route("/oauth/token", post(oauth_token_status_failure))
+            .with_state(upstream_state.clone()),
+    );
+    let upstream_url = server_base_url(&upstream);
+    set_env();
+    let token_url = format!("{upstream_url}/oauth/token");
+    let target_extra = format!(
+        r#"
+          auth:
+            type: oauth2_client_credentials
+            token_url: {token_url}
+            client_id:
+              secret: clientId
+            client_secret:
+              secret: oauthSecret"#,
+        token_url = serde_json::to_string(&token_url).expect("URL serializes"),
+    );
+
+    let manifest = rhai_auth_manifest(&upstream_url, &target_extra)
+        .replace("liveness_window_ms: 30000", "liveness_window_ms: 100");
+    let error = expect_sidecar_startup_failure(manifest).await;
+
+    assert!(
+        error.contains("smoke lookup"),
+        "OAuth non-2xx token response must fail startup readiness, got: {error}"
+    );
+    assert!(
+        *upstream_state.oauth_requests.lock().await >= 1,
+        "startup should attempt token acquisition before readiness fails"
+    );
+    assert!(
+        upstream_state.last_headers.lock().await.is_empty(),
+        "target request must not be sent when token acquisition fails"
     );
 }
 

@@ -2,7 +2,7 @@
 
 use axum::{
     body::{to_bytes, Body},
-    extract::Query,
+    extract::{Form, Query},
     http::header,
     http::Request,
     http::{HeaderMap, StatusCode},
@@ -104,6 +104,17 @@ async fn person_post_lookup(
             }]
         })),
     )
+}
+
+async fn oauth_token_form(
+    axum::extract::State(state): axum::extract::State<UpstreamState>,
+    Form(form): Form<HashMap<String, String>>,
+) -> Json<Value> {
+    state.seen.lock().await.push(json!({
+        "kind": "oauth",
+        "form": form,
+    }));
+    Json(json!({ "access_token": "oauth-http-json", "expires_in": 600 }))
 }
 
 async fn oversized_lookup(Query(query): Query<HashMap<String, String>>) -> Json<Value> {
@@ -214,12 +225,17 @@ async fn native_batch_lookup(request: Request<Body>) -> (StatusCode, Json<Value>
 
 async fn flow_person_lookup(
     axum::extract::State(state): axum::extract::State<UpstreamState>,
+    headers: HeaderMap,
     Query(query): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
     let id = query.get("id").cloned().unwrap_or_default();
     state.seen.lock().await.push(json!({
         "step": "person",
-        "id": id
+        "id": id,
+        "authorization": headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default(),
     }));
     match id.as_str() {
         "smoke-person" | "person-123" | "person-456" => Json(json!({
@@ -399,6 +415,7 @@ fn set_sidecar_env(base_url: &str) {
             "baseUrl": base_url,
             "clientId": "public-client",
             "apiToken": "target-secret",
+            "oauthSecret": "oauth-secret",
             "username": "admin",
             "password": "district"
         })
@@ -492,6 +509,34 @@ fn http_json_basic_auth_manifest(allowlist_url: &str) -> String {
         password:
           secret: password"#,
     )
+}
+
+fn http_json_oauth_manifest(allowlist_url: &str) -> String {
+    let token_url = format!("{}/oauth/token", allowlist_url.trim_end_matches('/'));
+    let quoted_allowlist_url = serde_json::to_string(allowlist_url).expect("URL serializes");
+    let quoted_token_url = serde_json::to_string(&token_url).expect("URL serializes");
+    http_json_manifest(allowlist_url, allowlist_url)
+        .replace(
+            &format!("    allowed_base_urls:\n      - {quoted_allowlist_url}"),
+            &format!("    allowed_base_urls:\n      - {quoted_allowlist_url}\n      - {quoted_token_url}"),
+        )
+        .replace(
+            r#"      auth:
+        type: bearer
+        token:
+          secret: apiToken"#,
+            &format!(
+                r#"      auth:
+        type: oauth2_client_credentials
+        token_url: {quoted_token_url}
+        request_format: form
+        scope: people.read
+        client_id:
+          secret: clientId
+        client_secret:
+          secret: oauthSecret"#
+            ),
+        )
 }
 
 fn http_json_manifest_with_source_limits(allowlist_url: &str) -> String {
@@ -664,6 +709,36 @@ fn http_flow_manifest_with_continue(allowlist_url: &str) -> String {
         )
 }
 
+fn http_flow_oauth_manifest(allowlist_url: &str) -> String {
+    let token_url = format!("{}/oauth/token", allowlist_url.trim_end_matches('/'));
+    let quoted_allowlist_url = serde_json::to_string(allowlist_url).expect("URL serializes");
+    let quoted_token_url = serde_json::to_string(&token_url).expect("URL serializes");
+    http_flow_manifest(allowlist_url)
+        .replace(
+            &format!("    allowed_base_urls:\n      - {quoted_allowlist_url}"),
+            &format!("    allowed_base_urls:\n      - {quoted_allowlist_url}\n      - {quoted_token_url}"),
+        )
+        .replace(
+            r#"            headers:
+              x-client-id:
+                cel: credential_public.clientId"#,
+            &format!(
+                r#"            headers:
+              x-client-id:
+                cel: credential_public.clientId
+            auth:
+              type: oauth2_client_credentials
+              token_url: {quoted_token_url}
+              request_format: form
+              scope: people.read
+              client_id:
+                secret: clientId
+              client_secret:
+                secret: oauthSecret"#
+            ),
+        )
+}
+
 fn server_base_url(server: &TestServer) -> String {
     server
         .server_address()
@@ -816,6 +891,60 @@ async fn http_json_basic_auth_uses_username_and_password_secret_refs() {
         .expect("basic-auth lookup reached upstream");
     assert_eq!(lookup["authorization"], json!("Basic YWRtaW46ZGlzdHJpY3Q="));
     assert_eq!(lookup["client_id"], json!("public-client"));
+}
+
+#[tokio::test]
+async fn http_json_oauth2_client_credentials_uses_cached_bearer_token() {
+    let _env_guard = ENV_LOCK.lock().await;
+    let upstream_state = UpstreamState::default();
+    let upstream = TestServer::builder().http_transport().build(
+        Router::new()
+            .route("/people", get(person_lookup))
+            .route("/oauth/token", post(oauth_token_form))
+            .with_state(upstream_state.clone()),
+    );
+    let upstream_url = server_base_url(&upstream);
+    set_sidecar_env(&upstream_url);
+    let config: SidecarConfig = serde_norway::from_str(&http_json_oauth_manifest(&upstream_url))
+        .expect("oauth http_json manifest parses");
+    let app = sidecar_router(config)
+        .await
+        .expect("oauth http_json sidecar starts");
+    let sidecar = TestServer::builder().http_transport().build(app);
+
+    let response = sidecar
+        .get(&format!("/v1/datasets/{DATASET}/entities/{ENTITY}/records"))
+        .add_header("authorization", format!("Bearer {TOKEN}"))
+        .add_header("data-purpose", "eligibility")
+        .add_query_param("national_id", "person-123")
+        .add_query_param("fields", "national_id,birth_date")
+        .await;
+
+    response.assert_status_ok();
+    let seen = upstream_state.seen.lock().await;
+    let oauth_requests = seen
+        .iter()
+        .filter(|request| request["kind"] == json!("oauth"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        oauth_requests.len(),
+        1,
+        "http_json should cache the startup OAuth token for the real lookup; saw {seen:?}"
+    );
+    assert_eq!(
+        oauth_requests[0]["form"],
+        json!({
+            "grant_type": "client_credentials",
+            "client_id": "public-client",
+            "client_secret": "oauth-secret",
+            "scope": "people.read"
+        })
+    );
+    let lookup = seen
+        .iter()
+        .find(|request| request["id"] == json!("person-123"))
+        .expect("real lookup reached upstream");
+    assert_eq!(lookup["authorization"], json!("Bearer oauth-http-json"));
 }
 
 #[tokio::test]
@@ -1151,6 +1280,55 @@ async fn http_flow_runs_dependent_steps_and_returns_projected_rda_data() {
         request["step"] == json!("enrollments")
             && request["trackedEntityInstance"] == json!("tei-person-123")
     }));
+}
+
+#[tokio::test]
+async fn http_flow_oauth2_client_credentials_uses_cached_bearer_token() {
+    let _env_guard = ENV_LOCK.lock().await;
+    let upstream_state = UpstreamState::default();
+    let upstream = TestServer::builder().http_transport().build(
+        Router::new()
+            .route("/trackedEntityInstances", get(flow_person_lookup))
+            .route("/enrollments", get(flow_enrollment_lookup))
+            .route("/oauth/token", post(oauth_token_form))
+            .with_state(upstream_state.clone()),
+    );
+    let upstream_url = server_base_url(&upstream);
+    set_sidecar_env(&upstream_url);
+    let config: SidecarConfig = serde_norway::from_str(&http_flow_oauth_manifest(&upstream_url))
+        .expect("oauth http_flow manifest parses");
+    let app = sidecar_router(config)
+        .await
+        .expect("oauth http_flow sidecar starts");
+    let sidecar = TestServer::builder().http_transport().build(app);
+
+    let response = sidecar
+        .get(&format!("/v1/datasets/{DATASET}/entities/{ENTITY}/records"))
+        .add_header("authorization", format!("Bearer {TOKEN}"))
+        .add_header("data-purpose", "eligibility")
+        .add_query_param("national_id", "person-123")
+        .add_query_param("fields", "tracked_entity_instance,program_status")
+        .await;
+
+    response.assert_status_ok();
+    let seen = upstream_state.seen.lock().await;
+    let oauth_requests = seen
+        .iter()
+        .filter(|request| request["kind"] == json!("oauth"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        oauth_requests.len(),
+        1,
+        "http_flow should cache the startup OAuth token for the real lookup; saw {seen:?}"
+    );
+    let person_request = seen
+        .iter()
+        .find(|request| request["step"] == json!("person") && request["id"] == json!("person-123"))
+        .expect("real flow person lookup reached upstream");
+    assert_eq!(
+        person_request["authorization"],
+        json!("Bearer oauth-http-json")
+    );
 }
 
 #[tokio::test]
