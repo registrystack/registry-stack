@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import re
 import subprocess
 import sys
@@ -14,11 +16,22 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
+IMAGE_DIGEST_REF = re.compile(r"^([^@]+)@(sha256:[0-9a-f]{64})$")
+STATUS_VALUES = {"verified", "not-present", "not-applicable", "unknown"}
 
 
 def load_yaml(path: Path) -> object:
     with path.open("r", encoding="utf-8") as handle:
         return yaml.safe_load(handle)
+
+
+def load_json(path: Path) -> object:
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def validate(manifest_path: Path) -> int:
@@ -29,11 +42,14 @@ def validate(manifest_path: Path) -> int:
     external = manifest.get("external", {}) if isinstance(manifest, dict) else {}
     version = str(stack.get("version", ""))
     source_ref = str(stack.get("source_ref", ""))
+    source_tag = str(stack.get("source_tag", ""))
 
     if stack.get("source_repo") != "registrystack/registry-stack":
         errors.append("stack.source_repo must be registrystack/registry-stack")
     if not version:
         errors.append("stack.version is required")
+    if source_tag != f"v{version}":
+        errors.append(f"stack.source_tag must be v{version}")
     if source_ref != "HEAD" and not HEX40.fullmatch(source_ref):
         errors.append("stack.source_ref must be HEAD for a draft or a 40-character commit")
     for name, artifact_version in sorted(artifacts.items()):
@@ -51,6 +67,412 @@ def validate(manifest_path: Path) -> int:
         return 1
     print(f"validated {manifest_path}: {stack.get('release')} {version}")
     return 0
+
+
+def git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        check=check,
+    )
+
+
+def is_draft_source(manifest: dict) -> bool:
+    stack = manifest.get("stack", {}) if isinstance(manifest, dict) else {}
+    if stack.get("status") == "draft" or stack.get("source_ref") == "HEAD":
+        return True
+    warnings = manifest.get("warnings", []) if isinstance(manifest, dict) else []
+    return any(isinstance(warning, dict) and warning.get("code") == "draft-source-ref" for warning in warnings)
+
+
+def source_lineage(manifest: dict, tag: str, repo: Path, default_branch: str) -> tuple[list[str], dict]:
+    errors: list[str] = []
+    stack = manifest.get("stack", {})
+    source_tag = str(stack.get("source_tag", ""))
+    source_ref = str(stack.get("source_ref", ""))
+    draft = is_draft_source(manifest)
+    proof = {
+        "source_tag": source_tag,
+        "source_ref": source_ref,
+        "source_commit": "",
+        "manifest_ref": source_ref,
+        "lineage": {
+            "tag_matches_source_tag": False,
+            "head_matches_tag_target": False,
+            "source_ref_ancestor_or_equal": False,
+            "default_branch_reachable": False,
+        },
+    }
+
+    if not source_tag:
+        errors.append("stack.source_tag is required")
+    elif source_tag != tag:
+        errors.append(f"stack.source_tag {source_tag} does not match checked-out release tag {tag}")
+    else:
+        proof["lineage"]["tag_matches_source_tag"] = True
+
+    tag_result = git(repo, "rev-parse", "--verify", f"refs/tags/{tag}^{{}}", check=False)
+    if tag_result.returncode != 0:
+        errors.append(f"release tag {tag} does not exist")
+        tag_target = ""
+    else:
+        tag_target = tag_result.stdout.strip()
+        head = git(repo, "rev-parse", "HEAD").stdout.strip()
+        proof["source_commit"] = head
+        if head != tag_target:
+            errors.append(f"checked-out HEAD {head} does not match release tag target {tag_target}")
+        else:
+            proof["lineage"]["head_matches_tag_target"] = True
+
+    if not draft and tag_target:
+        if not HEX40.fullmatch(source_ref):
+            errors.append("stack.source_ref must be a 40-character commit for a non-draft release")
+        else:
+            ancestor = git(repo, "merge-base", "--is-ancestor", source_ref, tag_target, check=False)
+            if ancestor.returncode != 0:
+                errors.append(f"stack.source_ref {source_ref} is not an ancestor of release tag target {tag_target}")
+            else:
+                proof["lineage"]["source_ref_ancestor_or_equal"] = True
+
+        reachable = git(repo, "merge-base", "--is-ancestor", tag_target, default_branch, check=False)
+        if reachable.returncode != 0:
+            errors.append(f"release tag target {tag_target} is not reachable from {default_branch}")
+        else:
+            proof["lineage"]["default_branch_reachable"] = True
+    elif draft and source_ref not in {"HEAD", ""} and tag_target:
+        if not HEX40.fullmatch(source_ref):
+            errors.append("stack.source_ref must be HEAD for a draft or a 40-character commit")
+        else:
+            ancestor = git(repo, "merge-base", "--is-ancestor", source_ref, tag_target, check=False)
+            proof["lineage"]["source_ref_ancestor_or_equal"] = ancestor.returncode == 0
+
+    return errors, proof
+
+
+def validate_source(manifest_path: Path, tag: str, repo: Path, default_branch: str) -> int:
+    manifest = load_yaml(manifest_path)
+    if not isinstance(manifest, dict):
+        print("error: release manifest must be an object", file=sys.stderr)
+        return 1
+    errors, proof = source_lineage(manifest, tag, repo, default_branch)
+    if errors:
+        for error in errors:
+            print(f"error: {error}", file=sys.stderr)
+        return 1
+    print(f"validated source lineage for {tag}: {proof['source_ref']} -> {proof['source_commit'] or 'draft'}")
+    return 0
+
+
+def find_one(root: Path, pattern: str) -> Path | None:
+    matches = sorted(path for path in root.rglob(pattern) if path.is_file())
+    return matches[0] if matches else None
+
+
+def severity_summary(grype_report: object) -> dict[str, int]:
+    summary = {"critical": 0, "high": 0, "medium": 0, "low": 0, "negligible": 0, "unknown": 0}
+    matches = grype_report.get("matches", []) if isinstance(grype_report, dict) else []
+    for match in matches:
+        vulnerability = match.get("vulnerability", {}) if isinstance(match, dict) else {}
+        severity = str(vulnerability.get("severity", "unknown")).lower()
+        summary[severity if severity in summary else "unknown"] += 1
+    return summary
+
+
+def release_decision_status(summary: dict[str, int]) -> str:
+    if summary.get("critical", 0) or summary.get("high", 0):
+        return "review-required"
+    return "no-high-or-critical-findings"
+
+
+def nested(data: object, *keys: str) -> object:
+    current = data
+    for key in keys:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
+def grype_subject(report: object) -> str | None:
+    for keys in (
+        ("source", "target", "userInput"),
+        ("source", "target", "imageID"),
+        ("source", "target", "manifestDigest"),
+    ):
+        value = nested(report, *keys)
+        if isinstance(value, str) and value:
+            return value
+    repo_digests = nested(report, "source", "target", "repoDigests")
+    if isinstance(repo_digests, list) and repo_digests:
+        return str(repo_digests[0])
+    return None
+
+
+def field_contains_digest(value: object, digest_ref: str, digest: str) -> bool:
+    return isinstance(value, str) and (digest_ref in value or digest in value)
+
+
+def spdx_subject_contains_digest(data: object, digest_ref: str, digest: str) -> bool:
+    if not isinstance(data, dict):
+        return False
+    described = data.get("documentDescribes")
+    packages = data.get("packages")
+    if not isinstance(described, list) or not isinstance(packages, list):
+        return False
+    described_ids = {item for item in described if isinstance(item, str)}
+    if not described_ids:
+        return False
+    for package in packages:
+        if not isinstance(package, dict) or package.get("SPDXID") not in described_ids:
+            continue
+        fields = (
+            package.get("name"),
+            package.get("packageFileName"),
+            package.get("downloadLocation"),
+            package.get("sourceInfo"),
+        )
+        if any(field_contains_digest(field, digest_ref, digest) for field in fields):
+            return True
+        refs = package.get("externalRefs")
+        if isinstance(refs, list):
+            for ref in refs:
+                if isinstance(ref, dict) and field_contains_digest(ref.get("referenceLocator"), digest_ref, digest):
+                    return True
+    return False
+
+
+def grype_db_timestamp(report: object) -> str:
+    for keys in (
+        ("descriptor", "db", "built"),
+        ("descriptor", "db", "checksum"),
+        ("descriptor", "db", "schemaVersion"),
+    ):
+        value = nested(report, *keys)
+        if value:
+            return str(value)
+    return "not-recorded"
+
+
+def grype_version(report: object) -> str:
+    value = nested(report, "descriptor", "version")
+    return str(value) if value else "not-recorded"
+
+
+def artifact_status(image_evidence_dir: Path, name: str) -> tuple[str, str]:
+    status_path = find_one(image_evidence_dir, f"{name}.status.json")
+    if status_path is None:
+        return ("not-present", "not-present")
+    status = load_json(status_path)
+    if not isinstance(status, dict):
+        raise ValueError(f"{status_path} must be an object")
+    return (
+        str(status.get("signing_status", "not-present")),
+        str(status.get("attestation_status", "not-present")),
+    )
+
+
+def assert_public_status(value: str, field: str, artifact: str) -> None:
+    if value not in STATUS_VALUES:
+        raise ValueError(f"{artifact} {field} has invalid value {value}")
+    if value == "unknown":
+        raise ValueError(f"{artifact} {field} must not be unknown in a public capsule")
+
+
+def parse_sha256s(path: Path) -> dict[str, str]:
+    checksums: dict[str, str] = {}
+    if not path.exists():
+        return checksums
+    for line in path.read_text(encoding="utf-8").splitlines():
+        parts = line.split()
+        if len(parts) >= 2:
+            checksums[parts[-1].lstrip("*")] = parts[0]
+    return checksums
+
+
+def verified_binary_sha256(path: Path, checksums: dict[str, str]) -> str:
+    expected = checksums.get(path.name)
+    if expected is None:
+        raise ValueError(f"{path.name} is missing from SHA256SUMS")
+    actual = sha256(path)
+    if expected != actual:
+        raise ValueError(f"{path.name} SHA256SUMS entry does not match file contents")
+    return actual
+
+
+def render_capsule(
+    manifest_path: Path,
+    tag: str,
+    version: str,
+    binary_dir: Path,
+    image_evidence_dir: Path,
+    output_json: Path,
+    output_markdown: Path,
+    workflow_name: str,
+    workflow_run_url: str,
+    workflow_run_id: str,
+    default_branch_protection: str,
+    repo: Path,
+    default_branch: str,
+) -> int:
+    manifest = load_yaml(manifest_path)
+    if not isinstance(manifest, dict):
+        print("error: release manifest must be an object", file=sys.stderr)
+        return 1
+    if default_branch_protection not in {"verified", "unverified", "not-public"}:
+        print("error: default branch protection must be verified, unverified, or not-public", file=sys.stderr)
+        return 1
+
+    try:
+        checksums = parse_sha256s(binary_dir / "SHA256SUMS")
+        binaries = []
+        for path in sorted(binary_dir.iterdir()) if binary_dir.exists() else []:
+            if not path.is_file() or path.name == "SHA256SUMS":
+                continue
+            binary = {
+                "name": path.name,
+                "path": str(path),
+                "sha256": verified_binary_sha256(path, checksums),
+                "signing_status": "not-present",
+                "attestation_status": "not-present",
+            }
+            assert_public_status(binary["signing_status"], "signing_status", path.name)
+            assert_public_status(binary["attestation_status"], "attestation_status", path.name)
+            binaries.append(binary)
+
+        images = []
+        for digest_path in sorted(image_evidence_dir.rglob("*.digest")):
+            name = digest_path.stem
+            digest_ref = digest_path.read_text(encoding="utf-8").strip()
+            digest_match = IMAGE_DIGEST_REF.fullmatch(digest_ref)
+            if digest_match is None:
+                raise ValueError(f"{name} digest ref must match image@sha256:<64 hex>")
+            digest = digest_match.group(2)
+            sbom = find_one(image_evidence_dir, f"{name}.spdx.json")
+            grype = find_one(image_evidence_dir, f"{name}.grype.json")
+            if sbom is None:
+                raise ValueError(f"{name} is missing an SBOM file")
+            if grype is None:
+                raise ValueError(f"{name} is missing a Grype report")
+            sbom_report = load_json(sbom)
+            if not spdx_subject_contains_digest(sbom_report, digest_ref, digest):
+                raise ValueError(f"{name} SBOM subject does not contain digest {digest_ref}")
+            grype_report = load_json(grype)
+            subject = grype_subject(grype_report)
+            if not subject:
+                raise ValueError(f"{name} Grype report has no digest-bound subject")
+            if subject not in {digest_ref, digest}:
+                raise ValueError(f"{name} Grype subject {subject} does not match digest ref {digest_ref}")
+            signing_status, attestation_status = artifact_status(image_evidence_dir, name)
+            summary = severity_summary(grype_report)
+            image = {
+                "name": name,
+                "digest_ref": digest_ref,
+                "digest": digest,
+                "tag": tag,
+                "tag_ref": f"{digest_ref.rsplit('@', 1)[0]}:{tag}",
+                "signing_status": signing_status,
+                "attestation_status": attestation_status,
+                "sbom": {
+                    "asset_name": sbom.name,
+                    "subject": digest_ref,
+                    "format": "spdx-json",
+                    "sha256": sha256(sbom),
+                },
+                "vulnerability_scan": {
+                    "asset_name": grype.name,
+                    "subject": digest_ref,
+                    "scanner": "grype",
+                    "scanner_version": grype_version(grype_report),
+                    "vulnerability_db_timestamp": grype_db_timestamp(grype_report),
+                    "severity_summary": summary,
+                    "release_decision_status": release_decision_status(summary),
+                    "sha256": sha256(grype),
+                },
+            }
+            assert_public_status(image["signing_status"], "signing_status", name)
+            assert_public_status(image["attestation_status"], "attestation_status", name)
+            images.append(image)
+
+        errors, source = source_lineage(manifest, tag, repo, default_branch)
+        if errors:
+            raise ValueError("; ".join(errors))
+        evidence = {
+            "release_tag": tag,
+            "version": version,
+            "repository": manifest["stack"]["source_repo"],
+            "source": source,
+            "workflow": {
+                "name": workflow_name,
+                "run_url": workflow_run_url,
+                "run_id": workflow_run_id,
+            },
+            "manifest": {
+                "path": str(manifest_path),
+                "sha256": sha256(manifest_path),
+            },
+            "default_branch_protection": {"status": default_branch_protection},
+            "external_pinned_inputs": manifest.get("external", {}),
+            "binaries": binaries,
+            "images": images,
+            "warnings": manifest.get("warnings", []),
+            "hosted_publication_status": hosted_publication_status(manifest),
+        }
+        if not binaries:
+            raise ValueError("capsule requires at least one binary artifact")
+        if not images:
+            raise ValueError("capsule requires at least one image artifact")
+    except (KeyError, OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    output_json.parent.mkdir(parents=True, exist_ok=True)
+    output_markdown.parent.mkdir(parents=True, exist_ok=True)
+    output_json.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    output_markdown.write_text(capsule_markdown(evidence), encoding="utf-8")
+    print(f"rendered release capsule {output_json} and {output_markdown}")
+    return 0
+
+
+def capsule_markdown(evidence: dict) -> str:
+    lines = [
+        f"# RegistryStack {evidence['release_tag']} Release Trust Capsule",
+        "",
+        f"- Version: `{evidence['version']}`",
+        f"- Source repository: `{evidence['repository']}`",
+        f"- Source tag: `{evidence['source']['source_tag']}`",
+        f"- Source ref: `{evidence['source']['source_ref']}`",
+        f"- Workflow: {evidence['workflow']['name']} run `{evidence['workflow']['run_id']}` ({evidence['workflow']['run_url']})",
+        f"- Manifest: `{evidence['manifest']['path']}` (`{evidence['manifest']['sha256']}`)",
+        f"- Default branch protection: `{evidence['default_branch_protection']['status']}`",
+        f"- Hosted/public announcement status: `{evidence['hosted_publication_status']}`",
+        "",
+        "## Binaries",
+        "",
+    ]
+    for binary in evidence["binaries"]:
+        lines.append(f"- `{binary['name']}` sha256 `{binary['sha256']}`; signing `{binary['signing_status']}`; attestation `{binary['attestation_status']}`")
+    lines.extend(["", "## Images", ""])
+    for image in evidence["images"]:
+        scan = image["vulnerability_scan"]
+        lines.append(f"- `{image['name']}` tag `{image['tag_ref']}` digest `{image['digest_ref']}`; SBOM `{image['sbom']['asset_name']}`; Grype `{scan['asset_name']}`; signing `{image['signing_status']}`; attestation `{image['attestation_status']}`")
+    lines.extend(["", "## Caveats", ""])
+    warnings = evidence.get("warnings") or []
+    if warnings:
+        for warning in warnings:
+            lines.append(f"- `{warning.get('code', 'warning')}`: {warning.get('detail', '')}")
+    else:
+        lines.append("- No release warnings recorded.")
+    return "\n".join(lines) + "\n"
+
+
+def hosted_publication_status(manifest: dict) -> str:
+    warnings = manifest.get("warnings", []) if isinstance(manifest, dict) else []
+    for warning in warnings:
+        if isinstance(warning, dict) and warning.get("code") == "hosted-publication-held":
+            return "held"
+    return "not-recorded"
 
 
 def audit(import_map_path: Path) -> int:
@@ -107,20 +529,57 @@ def main() -> int:
     subparsers = parser.add_subparsers(dest="command", required=True)
     validate_parser = subparsers.add_parser("validate")
     validate_parser.add_argument("manifest", type=Path)
+    source_parser = subparsers.add_parser("validate-source")
+    source_parser.add_argument("manifest", type=Path)
+    source_parser.add_argument("--tag", required=True)
+    source_parser.add_argument("--repo", type=Path, default=ROOT)
+    source_parser.add_argument("--default-branch", default="origin/main")
     audit_parser = subparsers.add_parser("audit")
     audit_parser.add_argument("import_map", type=Path)
     subparsers.add_parser("generate-docset")
     subparsers.add_parser("collect-artifacts")
     warning_parser = subparsers.add_parser("classify-warning")
     warning_parser.add_argument("code")
+    capsule_parser = subparsers.add_parser("render-capsule")
+    capsule_parser.add_argument("manifest", type=Path)
+    capsule_parser.add_argument("--tag", required=True)
+    capsule_parser.add_argument("--version", required=True)
+    capsule_parser.add_argument("--binary-dir", type=Path, required=True)
+    capsule_parser.add_argument("--image-evidence-dir", type=Path, required=True)
+    capsule_parser.add_argument("--output-json", type=Path, required=True)
+    capsule_parser.add_argument("--output-markdown", type=Path, required=True)
+    capsule_parser.add_argument("--workflow-name", default="RegistryStack Release")
+    capsule_parser.add_argument("--workflow-run-url", required=True)
+    capsule_parser.add_argument("--workflow-run-id", default="not-recorded")
+    capsule_parser.add_argument("--default-branch-protection", default="unverified")
+    capsule_parser.add_argument("--repo", type=Path, default=ROOT)
+    capsule_parser.add_argument("--default-branch", default="origin/main")
     args = parser.parse_args()
 
     if args.command == "validate":
         return validate(args.manifest)
+    if args.command == "validate-source":
+        return validate_source(args.manifest, args.tag, args.repo, args.default_branch)
     if args.command == "audit":
         return audit(args.import_map)
     if args.command == "classify-warning":
         return classify_warning(args.code)
+    if args.command == "render-capsule":
+        return render_capsule(
+            args.manifest,
+            args.tag,
+            args.version,
+            args.binary_dir,
+            args.image_evidence_dir,
+            args.output_json,
+            args.output_markdown,
+            args.workflow_name,
+            args.workflow_run_url,
+            args.workflow_run_id,
+            args.default_branch_protection,
+            args.repo,
+            args.default_branch,
+        )
     if args.command in {"generate-docset", "collect-artifacts"}:
         print(f"{args.command} is reserved for the release packaging step")
         return 0
