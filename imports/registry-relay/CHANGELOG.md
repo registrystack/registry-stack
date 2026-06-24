@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.5.0 - 2026-06-24
+
+### Added
+
+- Adopted shared compliance context constraints for legal basis, consent,
+  jurisdiction, assurance, and retention checks across relay deployment
+  posture and policy evaluation surfaces.
+
+### Changed
+
+- Advanced Registry Platform to `0.3.3` for the beta-5 train and aligned
+  workflow pins with the selected Platform release-prep merge commit.
+- Aligned the dependency-deny template with the shared Platform policy posture.
+
+### Fixed
+
+- Tightened deployment waiver validation so malformed or unsupported waiver
+  entries fail predictably instead of weakening deployment posture checks.
+
+## 0.4.1 - 2026-06-22
+
+### Changed
+
+- Refreshed companion Platform, Manifest, and Crosswalk release pins for the
+  beta-4 train.
+- Published reload-all generations atomically and fenced reload publication so
+  callers do not observe partially applied runtime state.
+
+### Security
+
+- Failed closed on rollback restore, relay rollback, and spatial ODRL
+  constraint errors instead of continuing with ambiguous policy state.
+- Defaulted relay audit behavior to fail closed.
+
 ## 0.4.0 - 2026-06-21
 
 ### Added

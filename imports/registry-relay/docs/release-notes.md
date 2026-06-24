@@ -1,5 +1,16 @@
 # Release Notes
 
+## 0.5.0
+
+- Adopted shared compliance context constraints for legal basis, consent,
+  jurisdiction, assurance, and retention checks across relay deployment posture
+  and policy evaluation surfaces.
+- Tightened deployment waiver validation so malformed or unsupported waiver
+  entries fail predictably instead of weakening deployment posture checks.
+- Advanced Registry Platform to `0.3.3` for the beta-5 train and aligned
+  workflow pins with the selected Platform release-prep merge commit.
+- Aligned the dependency-deny template with the shared Platform policy posture.
+
 ## 0.4.1
 
 - Failed closed on rollback restore, relay rollback, and spatial ODRL
