@@ -1,0 +1,37 @@
+{
+  "schema_version": "registry.config.diagnostic_report.v1",
+  "product": "registry-notary",
+  "config_schema_version": "registry.notary.config.v1",
+  "source": {
+    "kind": "local_file",
+    "path": "notary/config.yaml"
+  },
+  "status": "error",
+  "summary": {
+    "error_count": 2,
+    "warning_count": 0
+  },
+  "diagnostics": [
+    {
+      "code": "notary.config.claim_source_missing",
+      "severity": "error",
+      "path": "/claim_sources/0",
+      "message": "Claim source local-relay must declare a source kind.",
+      "documentation_key": "notary.config.claim_sources"
+    },
+    {
+      "code": "notary.config.signer_required",
+      "severity": "error",
+      "path": "/issuer/signer",
+      "message": "Issuer signer configuration is required."
+    }
+  ],
+  "required_env": [
+    {
+      "name": "REGISTRY_NOTARY_SIGNING_KEY",
+      "classification": "secret",
+      "status": "not_checked"
+    }
+  ],
+  "generated_at": "2026-06-20T00:00:00Z"
+}

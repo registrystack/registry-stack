@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registry-platform.example/schemas/registry.admin.error.v1.schema.json",
+  "title": "Registry Admin Error v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "code", "message"],
+  "properties": {
+    "schema": {
+      "const": "registry.admin.error.v1"
+    },
+    "code": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^registry\\.admin\\.[a-z0-9_]+(\\.[a-z0-9_]+)+$"
+    },
+    "message": {
+      "type": "string",
+      "minLength": 1
+    },
+    "details": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  }
+}

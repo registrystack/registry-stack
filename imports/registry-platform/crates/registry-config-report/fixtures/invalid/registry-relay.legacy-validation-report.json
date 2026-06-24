@@ -1,0 +1,16 @@
+{
+  "schema_version": "registry.validation.report.v1",
+  "product": "registry-relay",
+  "config_schema_version": "registry.relay.config.v1",
+  "source": {
+    "kind": "local_file",
+    "path": "relay/config.yaml"
+  },
+  "status": "ok",
+  "summary": {
+    "error_count": 0,
+    "warning_count": 0
+  },
+  "diagnostics": [],
+  "generated_at": "2026-06-20T00:00:00Z"
+}

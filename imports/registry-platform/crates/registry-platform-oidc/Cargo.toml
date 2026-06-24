@@ -1,0 +1,22 @@
+[package]
+name = "registry-platform-oidc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+publish = false
+
+[dependencies]
+base64.workspace = true
+jsonwebtoken.workspace = true
+registry-platform-crypto = { version = "0.3.1", path = "../registry-platform-crypto" }
+registry-platform-httputil = { version = "0.3.1", path = "../registry-platform-httputil" }
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+axum.workspace = true

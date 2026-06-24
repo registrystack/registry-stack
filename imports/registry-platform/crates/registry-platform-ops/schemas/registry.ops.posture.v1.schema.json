@@ -1,0 +1,1134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registry-platform.example/schemas/registry.ops.posture.v1.schema.json",
+  "title": "Registry Ops Posture v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "observed_at",
+    "component",
+    "instance",
+    "build",
+    "runtime",
+    "configuration",
+    "standards_artifacts",
+    "posture"
+  ],
+  "properties": {
+    "schema": {
+      "const": "registry.ops.posture.v1"
+    },
+    "observed_at": {
+      "$ref": "#/$defs/rfc3339"
+    },
+    "component": {
+      "enum": [
+        "registry-relay",
+        "registry-notary"
+      ]
+    },
+    "tier": {
+      "enum": [
+        "default",
+        "restricted"
+      ]
+    },
+    "instance": {
+      "$ref": "#/$defs/instance"
+    },
+    "build": {
+      "$ref": "#/$defs/build"
+    },
+    "runtime": {
+      "$ref": "#/$defs/runtime"
+    },
+    "configuration": {
+      "$ref": "#/$defs/configuration"
+    },
+    "deployment": {
+      "$ref": "#/$defs/deployment"
+    },
+    "audit": {
+      "$ref": "#/$defs/audit_assurance"
+    },
+    "standards_artifacts": {
+      "$ref": "#/$defs/standards_artifacts"
+    },
+    "posture": {
+      "$ref": "#/$defs/posture_summary"
+    },
+    "relay": {
+      "$ref": "#/$defs/relay"
+    },
+    "notary": {
+      "$ref": "#/$defs/notary"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "component": {
+            "const": "registry-relay"
+          }
+        },
+        "required": [
+          "component"
+        ]
+      },
+      "then": {
+        "required": [
+          "relay"
+        ],
+        "not": {
+          "required": [
+            "notary"
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "component": {
+            "const": "registry-notary"
+          }
+        },
+        "required": [
+          "component"
+        ]
+      },
+      "then": {
+        "required": [
+          "notary"
+        ],
+        "not": {
+          "required": [
+            "relay"
+          ]
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "rfc3339": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "hash": {
+      "type": "string",
+      "pattern": "^sha256:[a-fA-F0-9]{64}$"
+    },
+    "string_array": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "readiness_status": {
+      "enum": [
+        "ready",
+        "degraded",
+        "not_ready",
+        "unknown"
+      ]
+    },
+    "instance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "environment"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "environment": {
+          "type": "string",
+          "minLength": 1
+        },
+        "owner": {
+          "type": "string",
+          "minLength": 1
+        },
+        "jurisdiction": {
+          "type": "string",
+          "minLength": 1
+        },
+        "public_base_url": {
+          "type": "string",
+          "format": "uri"
+        }
+      }
+    },
+    "build": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "package",
+        "version"
+      ],
+      "properties": {
+        "package": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "git_sha": {
+          "type": "string",
+          "minLength": 7
+        },
+        "features": {
+          "$ref": "#/$defs/string_array"
+        }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "auth_mode",
+        "admin_enabled",
+        "readiness"
+      ],
+      "properties": {
+        "auth_mode": {
+          "type": "string",
+          "minLength": 1
+        },
+        "admin_enabled": {
+          "type": "boolean"
+        },
+        "readiness": {
+          "$ref": "#/$defs/readiness_status"
+        }
+      }
+    },
+    "configuration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "dynamic_reload_supported",
+        "last_config_hash"
+      ],
+      "properties": {
+        "source": {
+          "enum": [
+            "local_file",
+            "signed_bundle_file",
+            "signed_bundle_endpoint",
+            "unknown"
+          ]
+        },
+        "dynamic_reload_supported": {
+          "type": "boolean"
+        },
+        "last_config_hash": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/hash"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "last_bundle_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_bundle_sequence": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "last_apply_result": {
+          "enum": [
+            "accepted",
+            "rejected",
+            "failed",
+            "not_applied",
+            null
+          ]
+        },
+        "last_apply_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/rfc3339"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "restart_required": {
+          "type": "boolean"
+        },
+        "emergency": {
+          "$ref": "#/$defs/configuration_emergency"
+        },
+        "trusted_roots": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/trusted_root"
+          }
+        }
+      }
+    },
+    "configuration_emergency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "last_apply_emergency",
+        "exception_window_open"
+      ],
+      "properties": {
+        "last_apply_emergency": {
+          "type": "boolean"
+        },
+        "last_emergency_change_class": {
+          "$ref": "#/$defs/finding_id"
+        },
+        "last_emergency_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/rfc3339"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "exception_window_open": {
+          "type": "boolean"
+        },
+        "exception_window_expires_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/rfc3339"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "open_exception_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "trusted_root": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "root_id",
+        "active_signer_kids"
+      ],
+      "properties": {
+        "root_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "active_signer_kids": {
+          "$ref": "#/$defs/string_array"
+        }
+      }
+    },
+    "deployment": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "profile": {
+          "$ref": "#/$defs/deployment_profile"
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/deployment_finding"
+          }
+        },
+        "waivers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/deployment_waiver"
+          }
+        }
+      }
+    },
+    "deployment_profile": {
+      "enum": [
+        "local",
+        "hosted_lab",
+        "production",
+        "evidence_grade"
+      ]
+    },
+    "finding_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(?:\\.[a-z][a-z0-9_-]*)*$"
+    },
+    "gate_severity": {
+      "enum": [
+        "startup_fail",
+        "readiness_fail",
+        "finding_error",
+        "finding_warn"
+      ]
+    },
+    "deployment_finding_status": {
+      "enum": [
+        "active",
+        "waived"
+      ]
+    },
+    "deployment_finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "severity",
+        "status"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/finding_id"
+        },
+        "severity": {
+          "$ref": "#/$defs/gate_severity"
+        },
+        "status": {
+          "$ref": "#/$defs/deployment_finding_status"
+        },
+        "waiver": {
+          "$ref": "#/$defs/deployment_finding_waiver"
+        }
+      }
+    },
+    "deployment_finding_waiver": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reason",
+        "expires"
+      ],
+      "properties": {
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "expires": {
+          "type": "string",
+          "format": "date",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        }
+      }
+    },
+    "deployment_waiver": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "finding",
+        "reason",
+        "expires"
+      ],
+      "properties": {
+        "finding": {
+          "$ref": "#/$defs/finding_id"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "expires": {
+          "type": "string",
+          "format": "date",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        }
+      }
+    },
+    "audit_assurance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "write_policy",
+        "redaction_mode",
+        "hash_chain",
+        "keyed_integrity",
+        "sink_class",
+        "retention_owner",
+        "checkpoints",
+        "anchoring"
+      ],
+      "properties": {
+        "write_policy": {
+          "enum": [
+            "availability_first",
+            "fail_closed",
+            "fail_closed_route_families"
+          ]
+        },
+        "redaction_mode": {
+          "enum": [
+            "redacted"
+          ]
+        },
+        "hash_chain": {
+          "enum": [
+            "none",
+            "process_local",
+            "retained"
+          ]
+        },
+        "keyed_integrity": {
+          "enum": [
+            "none",
+            "hmac"
+          ]
+        },
+        "sink_class": {
+          "enum": [
+            "none",
+            "stdout",
+            "file",
+            "http",
+            "external"
+          ]
+        },
+        "retention_owner": {
+          "enum": [
+            "unspecified",
+            "operator",
+            "host"
+          ]
+        },
+        "checkpoints": {
+          "enum": [
+            "unsupported",
+            "supported",
+            "enabled"
+          ]
+        },
+        "anchoring": {
+          "enum": [
+            "none",
+            "external"
+          ]
+        }
+      }
+    },
+    "artifact_reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "observed_status"
+      ],
+      "properties": {
+        "url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "media_type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "$ref": "#/$defs/hash"
+        },
+        "observed_status": {
+          "enum": [
+            "available",
+            "configured_not_checked",
+            "unavailable",
+            "not_configured"
+          ]
+        },
+        "standard_family": {
+          "type": "string",
+          "minLength": 1
+        },
+        "profile_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "profile_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "claim_kind": {
+          "enum": [
+            "vocabulary_use",
+            "profile_claim",
+            "validation_result",
+            "reviewed_conformance"
+          ]
+        },
+        "validation_status": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "validator": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reviewed_claim_ref": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "standards_artifacts": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/artifact_reference"
+      }
+    },
+    "posture_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "warnings",
+        "findings",
+        "audit"
+      ],
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/finding"
+          }
+        },
+        "audit": {
+          "$ref": "#/$defs/posture_audit"
+        }
+      }
+    },
+    "posture_audit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "configured",
+        "sink_type",
+        "checkpoint_status",
+        "verification_status"
+      ],
+      "properties": {
+        "configured": {
+          "type": "boolean"
+        },
+        "sink_type": {
+          "enum": [
+            "file",
+            "stdout",
+            "syslog",
+            "otlp",
+            "webhook",
+            "none",
+            "unknown"
+          ]
+        },
+        "checkpoint_status": {
+          "enum": [
+            "available",
+            "unavailable",
+            "not_configured",
+            "not_supported"
+          ]
+        },
+        "latest_tail_hash": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/hash"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "latest_sequence": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "verified_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/rfc3339"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "verification_status": {
+          "enum": [
+            "verified",
+            "not_verified",
+            "not_supported",
+            "failed",
+            "unavailable"
+          ]
+        },
+        "checkpoint_ref": {
+          "$ref": "#/$defs/artifact_reference"
+        }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "severity",
+        "title",
+        "detail",
+        "evidence",
+        "standards_refs",
+        "recommended_action"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "severity": {
+          "enum": [
+            "info",
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ]
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "detail": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/finding_evidence"
+          }
+        },
+        "standards_refs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "recommended_action": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "finding_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "field",
+        "value"
+      ],
+      "properties": {
+        "field": {
+          "type": "string",
+          "minLength": 1
+        },
+        "value": {
+          "type": [
+            "string",
+            "number",
+            "integer",
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    },
+    "relay": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dataset_count",
+        "entity_count",
+        "aggregate_count",
+        "evidence_offering_count",
+        "metadata_manifest",
+        "provenance",
+        "standards_adapters"
+      ],
+      "properties": {
+        "dataset_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "entity_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "aggregate_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "evidence_offering_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "metadata_manifest": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "configured"
+          ],
+          "properties": {
+            "configured": {
+              "type": "boolean"
+            },
+            "schema_version": {
+              "type": "string",
+              "minLength": 1
+            },
+            "source_digest": {
+              "$ref": "#/$defs/hash"
+            },
+            "package_digest": {
+              "$ref": "#/$defs/hash"
+            },
+            "sha256": {
+              "$ref": "#/$defs/hash"
+            }
+          }
+        },
+        "provenance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "issuer": {
+              "type": "string",
+              "minLength": 1
+            },
+            "active_kid": {
+              "type": "string",
+              "minLength": 1
+            },
+            "active_provider": {
+              "enum": [
+                "local_jwk_env",
+                "file_watch",
+                "pkcs11",
+                "local_pkcs12_file",
+                "kms"
+              ]
+            },
+            "retired_kids": {
+              "$ref": "#/$defs/string_array"
+            },
+            "key_readiness": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/$defs/readiness_status"
+              }
+            }
+          }
+        },
+        "standards_adapters": {
+          "$ref": "#/$defs/adapter_state_map"
+        }
+      }
+    },
+    "adapter_state_map": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ogcapi_records": {
+          "$ref": "#/$defs/adapter_state"
+        },
+        "ogcapi_features": {
+          "$ref": "#/$defs/adapter_state"
+        },
+        "ogcapi_edr": {
+          "$ref": "#/$defs/adapter_state"
+        },
+        "spdci": {
+          "$ref": "#/$defs/adapter_state"
+        },
+        "publicschema_cel": {
+          "$ref": "#/$defs/adapter_state"
+        }
+      }
+    },
+    "adapter_state": {
+      "enum": [
+        "enabled",
+        "disabled",
+        "not_configured",
+        "unknown"
+      ]
+    },
+    "notary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "claim_count",
+        "credential_profile_count",
+        "replay",
+        "credential_status",
+        "federation",
+        "oid4vci"
+      ],
+      "properties": {
+        "claim_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "credential_profile_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "source_connection_counts": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "signing_keys": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "active",
+            "publish_only",
+            "disabled"
+          ],
+          "properties": {
+            "active": {
+              "$ref": "#/$defs/string_array"
+            },
+            "publish_only": {
+              "description": "Publish-only signing key ids that are currently published at posture observation time.",
+              "$ref": "#/$defs/string_array"
+            },
+            "disabled": {
+              "$ref": "#/$defs/string_array"
+            },
+            "readiness": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/$defs/readiness_status"
+              }
+            }
+          }
+        },
+        "replay": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "storage",
+            "ready"
+          ],
+          "properties": {
+            "storage": {
+              "enum": [
+                "redis",
+                "in_memory",
+                "disabled",
+                "unknown"
+              ]
+            },
+            "ready": {
+              "type": "boolean"
+            }
+          }
+        },
+        "credential_status": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "storage"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "storage": {
+              "enum": [
+                "redis",
+                "in_memory",
+                "disabled",
+                "unknown"
+              ]
+            }
+          }
+        },
+        "federation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "peer_count",
+            "supported_protocol_versions",
+            "allowed_profile_count",
+            "allowed_purpose_count"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "node_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "issuer": {
+              "type": "string",
+              "minLength": 1
+            },
+            "peer_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "supported_protocol_versions": {
+              "$ref": "#/$defs/string_array"
+            },
+            "allowed_profile_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "allowed_purpose_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "peers": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/federation_peer"
+              }
+            }
+          }
+        },
+        "oid4vci": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "credential_configuration_count"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "credential_configuration_count": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "self_attestation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "allowed_claim_count",
+            "allowed_purpose_count",
+            "credential_profile_count",
+            "wallet_origin_count",
+            "rate_limit_mode"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "allowed_claim_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "allowed_purpose_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "credential_profile_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "wallet_origin_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "rate_limit_mode": {
+              "enum": [
+                "in_process",
+                "disabled",
+                "unknown"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "federation_peer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "peer_ref",
+        "allowed_profile_count",
+        "allowed_purpose_count",
+        "supported_protocol_versions"
+      ],
+      "properties": {
+        "peer_ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "allowed_profile_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "allowed_purpose_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "supported_protocol_versions": {
+          "$ref": "#/$defs/string_array"
+        }
+      }
+    }
+  }
+}

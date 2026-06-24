@@ -1,0 +1,180 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registry-platform.example/schemas/registry.config.explanation.v1.schema.json",
+  "title": "Registry Product Config Explanation v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "product",
+    "config_schema_version",
+    "source",
+    "resolved_config",
+    "generated_at"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "registry.config.explanation.v1"
+    },
+    "product": {
+      "$ref": "#/$defs/non_empty_string"
+    },
+    "config_schema_version": {
+      "$ref": "#/$defs/non_empty_string"
+    },
+    "source": {
+      "$ref": "#/$defs/source"
+    },
+    "required_env": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/required_env"
+      },
+      "default": []
+    },
+    "defaults_applied": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/config_default"
+      },
+      "default": []
+    },
+    "optional_sections_absent": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/optional_section"
+      },
+      "default": []
+    },
+    "live_apply": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/live_apply_component"
+      },
+      "default": []
+    },
+    "resolved_config": {
+      "type": ["object", "array", "string", "number", "boolean", "null"]
+    },
+    "hashes": {
+      "$ref": "#/$defs/hashes"
+    },
+    "generated_at": {
+      "$ref": "#/$defs/rfc3339_timestamp"
+    }
+  },
+  "$defs": {
+    "non_empty_string": {
+      "type": "string",
+      "minLength": 1
+    },
+    "rfc3339_timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "sha256_hash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "classification": {
+      "enum": ["public", "secret", "topology_sensitive", "internal_only"]
+    },
+    "env_status": {
+      "enum": ["present", "missing", "not_checked"]
+    },
+    "source": {
+      "type": "object",
+      "required": ["kind"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "local_file",
+            "generated_file",
+            "signed_bundle_file",
+            "signed_bundle_endpoint",
+            "unknown"
+          ]
+        },
+        "path": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "uri": {
+          "$ref": "#/$defs/non_empty_string"
+        }
+      }
+    },
+    "required_env": {
+      "type": "object",
+      "required": ["name", "classification", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "classification": {
+          "$ref": "#/$defs/classification"
+        },
+        "status": {
+          "$ref": "#/$defs/env_status"
+        }
+      }
+    },
+    "config_default": {
+      "type": "object",
+      "required": ["path", "value"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "value": {
+          "type": ["object", "array", "string", "number", "boolean", "null"]
+        }
+      }
+    },
+    "optional_section": {
+      "type": "object",
+      "required": ["path"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "reason": {
+          "$ref": "#/$defs/non_empty_string"
+        }
+      }
+    },
+    "live_apply_component": {
+      "type": "object",
+      "required": ["path", "class"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "class": {
+          "enum": [
+            "hot_swappable",
+            "restart_required",
+            "unsupported_live_apply"
+          ]
+        }
+      }
+    },
+    "hashes": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "properties": {
+        "internal_config_hash": {
+          "$ref": "#/$defs/sha256_hash"
+        },
+        "posture_safe_config_hash": {
+          "$ref": "#/$defs/sha256_hash"
+        }
+      }
+    }
+  }
+}

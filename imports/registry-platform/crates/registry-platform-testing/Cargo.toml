@@ -1,0 +1,36 @@
+[package]
+name = "registry-platform-testing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+publish = false
+
+[features]
+default = ["test-utils"]
+test-utils = []
+
+[dependencies]
+async-trait.workspace = true
+axum.workspace = true
+base64.workspace = true
+bytes.workspace = true
+jsonwebtoken.workspace = true
+registry-platform-audit = { version = "0.3.1", path = "../registry-platform-audit" }
+registry-platform-crypto = { version = "0.3.1", path = "../registry-platform-crypto" }
+registry-platform-httpsec = { version = "0.3.1", path = "../registry-platform-httpsec" }
+registry-platform-httputil = { version = "0.3.1", path = "../registry-platform-httputil" }
+registry-platform-oid4vci = { version = "0.3.1", path = "../registry-platform-oid4vci" }
+registry-platform-oidc = { version = "0.3.1", path = "../registry-platform-oidc" }
+registry-platform-replay = { version = "0.3.1", path = "../registry-platform-replay" }
+reqwest.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tokio.workspace = true
+tower.workspace = true
+wiremock.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

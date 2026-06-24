@@ -1,0 +1,49 @@
+[package]
+name = "registry-platform-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+base64 = "0.22"
+libfuzzer-sys = "0.4"
+registry-platform-authcommon = { path = "../crates/registry-platform-authcommon" }
+registry-platform-crypto = { path = "../crates/registry-platform-crypto" }
+registry-platform-oid4vci = { path = "../crates/registry-platform-oid4vci" }
+registry-platform-sdjwt = { path = "../crates/registry-platform-sdjwt" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_urlencoded = "0.7"
+sha2 = "0.11"
+tokio = { version = "1", features = ["rt"] }
+
+[[bin]]
+name = "authcommon_parsers"
+path = "fuzz_targets/authcommon_parsers.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "oid4vci_request_and_proof"
+path = "fuzz_targets/oid4vci_request_and_proof.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sdjwt_holder_proof"
+path = "fuzz_targets/sdjwt_holder_proof.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sdjwt_issuance"
+path = "fuzz_targets/sdjwt_issuance.rs"
+test = false
+doc = false
+bench = false

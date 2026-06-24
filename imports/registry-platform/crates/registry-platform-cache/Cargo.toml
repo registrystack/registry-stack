@@ -1,0 +1,23 @@
+[package]
+name = "registry-platform-cache"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+publish = false
+
+[features]
+default = []
+redis = ["dep:redis"]
+
+[dependencies]
+async-trait.workspace = true
+redis = { workspace = true, optional = true }
+sha2.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

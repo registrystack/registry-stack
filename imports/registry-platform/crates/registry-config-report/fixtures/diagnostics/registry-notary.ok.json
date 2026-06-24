@@ -1,0 +1,32 @@
+{
+  "schema_version": "registry.config.diagnostic_report.v1",
+  "product": "registry-notary",
+  "config_schema_version": "registry.notary.config.v1",
+  "source": {
+    "kind": "generated_file",
+    "path": "notary/config.yaml"
+  },
+  "status": "ok",
+  "summary": {
+    "error_count": 0,
+    "warning_count": 0
+  },
+  "diagnostics": [],
+  "required_env": [
+    {
+      "name": "REGISTRY_NOTARY_SIGNING_KEY",
+      "classification": "secret",
+      "status": "present"
+    },
+    {
+      "name": "REGISTRY_NOTARY_ISSUER_DID",
+      "classification": "public",
+      "status": "present"
+    }
+  ],
+  "hashes": {
+    "internal_config_hash": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "posture_safe_config_hash": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  },
+  "generated_at": "2026-06-20T00:00:00Z"
+}

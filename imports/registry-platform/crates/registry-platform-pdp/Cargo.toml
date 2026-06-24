@@ -1,0 +1,11 @@
+[package]
+name = "registry-platform-pdp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+publish = false
+
+[dependencies]
+serde.workspace = true
