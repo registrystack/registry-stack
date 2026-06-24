@@ -61,6 +61,22 @@ async fn path_a(
     (StatusCode::NOT_FOUND, Json(json!({ "error": "missing" }))).into_response()
 }
 
+async fn path_a_empty_404(
+    axum::extract::State(state): axum::extract::State<UpstreamState>,
+    Query(query): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let id = query.get("id").cloned().unwrap_or_default();
+    state.seen.lock().await.push(format!("/a:{id}"));
+    if id == "smoke-person" {
+        return (
+            StatusCode::OK,
+            Json(json!([{ "national_id": "smoke-person", "birth_date": "1990-01-01" }])),
+        )
+            .into_response();
+    }
+    (StatusCode::NOT_FOUND, "").into_response()
+}
+
 async fn path_b(
     axum::extract::State(state): axum::extract::State<UpstreamState>,
 ) -> impl IntoResponse {
@@ -95,6 +111,10 @@ fn server_base_url(server: &TestServer) -> String {
 /// A `script_rhai` manifest whose `lookup` script fetches `/lookup?id=<value>`
 /// from the single `primary` target and returns the body verbatim.
 fn rhai_lookup_manifest(allowlist_url: &str) -> String {
+    rhai_lookup_manifest_with_batch(allowlist_url, "")
+}
+
+fn rhai_lookup_manifest_with_batch(allowlist_url: &str, batch_block: &str) -> String {
     format!(
         r#"
 server:
@@ -122,7 +142,7 @@ sources:
       - clientId
     allowed_base_urls:
       - {allowlist_url}
-    allow_insecure_localhost: true
+    allow_insecure_localhost: true{batch_block}
     rhai:
       script: |
         fn lookup(ctx) {{
@@ -141,10 +161,11 @@ sources:
       fields:
         - national_id
       purpose: startup-smoke
-"#,
+    "#,
         token_hash_env = serde_json::to_string(TOKEN_HASH_ENV).expect("env serializes"),
         credential_env = serde_json::to_string(CREDENTIAL_ENV).expect("env serializes"),
         allowlist_url = serde_json::to_string(allowlist_url).expect("URL serializes"),
+        batch_block = batch_block,
         dataset = DATASET,
         entity = ENTITY,
     )
@@ -260,6 +281,117 @@ async fn rhai_lookup_returns_data_from_upstream() {
 }
 
 #[tokio::test]
+async fn rhai_batch_match_runs_sequential_lookups_and_preserves_item_order() {
+    let _guard = ENV_LOCK.lock().await;
+    let upstream_state = UpstreamState::default();
+    let upstream = TestServer::builder().http_transport().build(
+        Router::new()
+            .route("/lookup", get(lookup_endpoint))
+            .with_state(upstream_state.clone()),
+    );
+    let upstream_url = server_base_url(&upstream);
+    set_env();
+    let sidecar = spawn_sidecar(rhai_lookup_manifest(&upstream_url), upstream_state.clone()).await;
+    upstream_state.seen.lock().await.clear();
+
+    let response = sidecar
+        .post(&format!(
+            "/v1/datasets/{DATASET}/entities/{ENTITY}/records:batchMatch"
+        ))
+        .add_header("authorization", format!("Bearer {TOKEN}"))
+        .add_header("data-purpose", "eligibility")
+        .json(&json!({
+            "fields": ["national_id", "birth_date"],
+            "query_signature": [{ "field": "national_id", "op": "eq" }],
+            "items": [
+                { "id": "first", "values": ["person-123"] },
+                { "id": "second", "values": ["person-456"] }
+            ]
+        }))
+        .await;
+
+    response.assert_status_ok();
+    assert_eq!(
+        response.json::<Value>(),
+        json!({
+            "items": [
+                {
+                    "id": "first",
+                    "data": [{ "national_id": "person-123", "birth_date": "1990-01-01" }]
+                },
+                {
+                    "id": "second",
+                    "data": [{ "national_id": "person-456", "birth_date": "1990-01-01" }]
+                }
+            ]
+        })
+    );
+
+    let seen = upstream_state.seen.lock().await;
+    assert_eq!(
+        seen.as_slice(),
+        ["/lookup:person-123", "/lookup:person-456"],
+        "sequential Rhai batch should run one lookup per item in order"
+    );
+}
+
+#[tokio::test]
+async fn rhai_batch_match_supports_parallel_lookup_mode() {
+    let _guard = ENV_LOCK.lock().await;
+    let upstream_state = UpstreamState::default();
+    let upstream = TestServer::builder().http_transport().build(
+        Router::new()
+            .route("/lookup", get(lookup_endpoint))
+            .with_state(upstream_state.clone()),
+    );
+    let upstream_url = server_base_url(&upstream);
+    set_env();
+    let batch = r#"
+    batch:
+      mode: parallel_lookup
+      max_parallel: 2"#;
+    let sidecar = spawn_sidecar(
+        rhai_lookup_manifest_with_batch(&upstream_url, batch),
+        upstream_state.clone(),
+    )
+    .await;
+    upstream_state.seen.lock().await.clear();
+
+    let response = sidecar
+        .post(&format!(
+            "/v1/datasets/{DATASET}/entities/{ENTITY}/records:batchMatch"
+        ))
+        .add_header("authorization", format!("Bearer {TOKEN}"))
+        .add_header("data-purpose", "eligibility")
+        .json(&json!({
+            "fields": ["national_id", "birth_date"],
+            "query_signature": [{ "field": "national_id", "op": "eq" }],
+            "items": [
+                { "id": "first", "values": ["person-123"] },
+                { "id": "second", "values": ["person-456"] }
+            ]
+        }))
+        .await;
+
+    response.assert_status_ok();
+    assert_eq!(
+        response.json::<Value>(),
+        json!({
+            "items": [
+                {
+                    "id": "first",
+                    "data": [{ "national_id": "person-123", "birth_date": "1990-01-01" }]
+                },
+                {
+                    "id": "second",
+                    "data": [{ "national_id": "person-456", "birth_date": "1990-01-01" }]
+                }
+            ]
+        })
+    );
+}
+
+#[tokio::test]
 async fn rhai_visible_status_lets_script_observe_404_and_fall_back() {
     let _guard = ENV_LOCK.lock().await;
     let upstream_state = UpstreamState::default();
@@ -274,6 +406,54 @@ async fn rhai_visible_status_lets_script_observe_404_and_fall_back() {
     let upstream_url = server_base_url(&upstream);
     set_env();
     // 404 is observable for this target, so the script branches to `/b`.
+    let visible = r#"
+          visible_statuses:
+            - 404"#;
+    let sidecar = spawn_sidecar(
+        rhai_fallback_manifest(&upstream_url, visible),
+        upstream_state.clone(),
+    )
+    .await;
+
+    let response = sidecar
+        .get(&format!("/v1/datasets/{DATASET}/entities/{ENTITY}/records"))
+        .add_header("authorization", format!("Bearer {TOKEN}"))
+        .add_header("data-purpose", "eligibility")
+        .add_query_param("national_id", "person-123")
+        .add_query_param("fields", "national_id,birth_date")
+        .await;
+
+    response.assert_status_ok();
+    assert_eq!(
+        response.json::<Value>(),
+        json!({
+            "data": [{
+                "national_id": "from-b",
+                "birth_date": "1980-12-31"
+            }]
+        })
+    );
+
+    let seen = upstream_state.seen.lock().await;
+    assert!(
+        seen.iter().any(|hit| hit == "/a:person-123"),
+        "saw {seen:?}"
+    );
+    assert!(seen.iter().any(|hit| hit == "/b"), "saw {seen:?}");
+}
+
+#[tokio::test]
+async fn rhai_visible_empty_404_body_is_observable_as_null() {
+    let _guard = ENV_LOCK.lock().await;
+    let upstream_state = UpstreamState::default();
+    let upstream = TestServer::builder().http_transport().build(
+        Router::new()
+            .route("/a", get(path_a_empty_404))
+            .route("/b", get(path_b))
+            .with_state(upstream_state.clone()),
+    );
+    let upstream_url = server_base_url(&upstream);
+    set_env();
     let visible = r#"
           visible_statuses:
             - 404"#;

@@ -2794,15 +2794,24 @@ impl ScriptSourceHost for RhaiHttpHost {
         })?;
         let status = response.status();
         let status_code = status.as_u16();
-        let body = read_limited_json_response(response, self.state.config.limits.max_output_bytes)
-            .await
-            .map_err(map_source_execution_error)?;
 
         // Per-target visibility gate: a 2xx, or a status this target explicitly
         // allows, is returned to the script; any other non-2xx terminates the
         // run as an upstream-status error (the engine's union `visible_statuses`
         // is only the ceiling — the host decides per target).
         if status.is_success() || target_config.visible_statuses.contains(&status_code) {
+            let body = if status.is_success() {
+                read_limited_json_response(response, self.state.config.limits.max_output_bytes)
+                    .await
+                    .map_err(map_source_execution_error)?
+            } else {
+                read_limited_optional_json_response(
+                    response,
+                    self.state.config.limits.max_output_bytes,
+                )
+                .await
+                .map_err(map_source_execution_error)?
+            };
             Ok(SourceResponse {
                 status: status_code,
                 body,
@@ -2840,6 +2849,32 @@ fn rhai_query_param_value(value: &Value) -> Option<String> {
 }
 
 async fn execute_rhai(
+    state: &AppState,
+    source_id: &str,
+    source: &SourceConfig,
+    request: Value,
+) -> Result<SourceExecution, SourceExecutionError> {
+    if request.get("mode").and_then(Value::as_str) == Some("batch_match") {
+        let item_count = request
+            .get("items")
+            .and_then(Value::as_array)
+            .map_or(1, |items| items.len().max(1));
+        let value = tokio::time::timeout(
+            http_json_batch_timeout(&state.config.limits, item_count),
+            execute_rhai_batch(state, source_id, source, &request),
+        )
+        .await
+        .map_err(|_| SourceExecutionError::HttpJsonTimeout)??;
+        return Ok(SourceExecution {
+            value,
+            worker_id: "script_rhai".to_string(),
+        });
+    }
+
+    execute_rhai_lookup(state, source_id, source, request).await
+}
+
+async fn execute_rhai_lookup(
     state: &AppState,
     source_id: &str,
     source: &SourceConfig,
@@ -2927,6 +2962,159 @@ async fn execute_rhai(
             worker_id: "script_rhai".to_string(),
         }),
     }
+}
+
+async fn execute_rhai_batch(
+    state: &AppState,
+    source_id: &str,
+    source: &SourceConfig,
+    request: &Value,
+) -> Result<Value, SourceExecutionError> {
+    match source.batch.mode {
+        SourceBatchMode::SequentialLookup => {
+            execute_rhai_sequential_batch(state, source_id, source, request).await
+        }
+        SourceBatchMode::ParallelLookup => {
+            execute_rhai_parallel_batch(state, source_id, source, request).await
+        }
+        SourceBatchMode::WorkflowBatch | SourceBatchMode::NativeBatch => {
+            Err(SourceExecutionError::HttpJsonBadRequest)
+        }
+    }
+}
+
+async fn execute_rhai_sequential_batch(
+    state: &AppState,
+    source_id: &str,
+    source: &SourceConfig,
+    request: &Value,
+) -> Result<Value, SourceExecutionError> {
+    let query_signature = request
+        .get("query_signature")
+        .and_then(Value::as_array)
+        .ok_or(SourceExecutionError::HttpJson)?;
+    if query_signature.len() != 1 {
+        return Err(SourceExecutionError::HttpJsonBadRequest);
+    }
+    let lookup_field = query_signature
+        .first()
+        .and_then(|term| term.get("field"))
+        .and_then(Value::as_str)
+        .ok_or(SourceExecutionError::HttpJson)?;
+    let items = request
+        .get("items")
+        .and_then(Value::as_array)
+        .ok_or(SourceExecutionError::HttpJson)?;
+    let mut responses = Vec::with_capacity(items.len());
+    for item in items {
+        let id = item
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or(SourceExecutionError::HttpJson)?;
+        let lookup_request = http_json_item_lookup_request(source_id, request, lookup_field, item)?;
+        let execution = execute_rhai_lookup(state, source_id, source, lookup_request).await?;
+        if let Some(error) = execution.value.get("error") {
+            if shared_credential_error(error) {
+                return Ok(json!({ "error": error }));
+            }
+            responses.push(json!({ "id": id, "error": error }));
+        } else if let Some(data) = execution.value.get("data") {
+            responses.push(json!({ "id": id, "data": data }));
+        } else {
+            return Err(SourceExecutionError::HttpJson);
+        }
+    }
+    Ok(json!({ "items": responses }))
+}
+
+async fn execute_rhai_parallel_batch(
+    state: &AppState,
+    source_id: &str,
+    source: &SourceConfig,
+    request: &Value,
+) -> Result<Value, SourceExecutionError> {
+    let query_signature = request
+        .get("query_signature")
+        .and_then(Value::as_array)
+        .ok_or(SourceExecutionError::HttpJson)?;
+    if query_signature.len() != 1 {
+        return Err(SourceExecutionError::HttpJsonBadRequest);
+    }
+    let lookup_field = query_signature
+        .first()
+        .and_then(|term| term.get("field"))
+        .and_then(Value::as_str)
+        .ok_or(SourceExecutionError::HttpJson)?;
+    let items = request
+        .get("items")
+        .and_then(Value::as_array)
+        .ok_or(SourceExecutionError::HttpJson)?;
+    let max_parallel = source
+        .batch
+        .max_parallel
+        .unwrap_or(1)
+        .min(items.len().max(1));
+    let semaphore = Arc::new(Semaphore::new(max_parallel));
+    let state = Arc::new(state.clone());
+    let source = Arc::new(source.clone());
+    let source_id = source_id.to_string();
+    let mut tasks = JoinSet::new();
+    let mut requested_ids = Vec::with_capacity(items.len());
+    for (idx, item) in items.iter().enumerate() {
+        let id = item
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or(SourceExecutionError::HttpJson)?
+            .to_string();
+        requested_ids.push(id.clone());
+        let lookup_request =
+            http_json_item_lookup_request(&source_id, request, lookup_field, item)?;
+        let permit = semaphore.clone();
+        let task_state = Arc::clone(&state);
+        let task_source = Arc::clone(&source);
+        let task_source_id = source_id.clone();
+        tasks.spawn(async move {
+            let _permit = permit
+                .acquire_owned()
+                .await
+                .map_err(|_| SourceExecutionError::HttpJson)?;
+            let execution = execute_rhai_lookup(
+                &task_state,
+                &task_source_id,
+                task_source.as_ref(),
+                lookup_request,
+            )
+            .await?;
+            Ok::<_, SourceExecutionError>((idx, id, execution.value))
+        });
+    }
+
+    let mut responses = vec![Value::Null; items.len()];
+    while let Some(joined) = tasks.join_next().await {
+        let (idx, id, value) = joined.map_err(|_| SourceExecutionError::HttpJson)??;
+        if let Some(error) = value.get("error") {
+            if shared_credential_error(error) {
+                tasks.abort_all();
+                return Ok(json!({ "error": error }));
+            }
+            responses[idx] = json!({ "id": id, "error": error });
+        } else if let Some(data) = value.get("data") {
+            responses[idx] = json!({ "id": id, "data": data });
+        } else {
+            tasks.abort_all();
+            return Err(SourceExecutionError::HttpJson);
+        }
+    }
+
+    for (idx, response) in responses.iter_mut().enumerate() {
+        if response.is_null() {
+            *response = json!({
+                "id": requested_ids[idx],
+                "error": { "code": "source.unavailable" }
+            });
+        }
+    }
+    Ok(json!({ "items": responses }))
 }
 
 async fn execute_fhir(
@@ -4604,6 +4792,29 @@ async fn read_limited_json_response(
         bytes.extend_from_slice(&chunk);
     }
     serde_json::from_slice(&bytes).map_err(|_| SourceExecutionError::HttpJson)
+}
+
+async fn read_limited_optional_json_response(
+    mut response: reqwest::Response,
+    max_bytes: usize,
+) -> Result<Value, SourceExecutionError> {
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|error| {
+        if error.is_timeout() {
+            SourceExecutionError::HttpJsonTimeout
+        } else {
+            SourceExecutionError::HttpJson
+        }
+    })? {
+        if bytes.len().saturating_add(chunk.len()) > max_bytes {
+            return Ok(Value::Null);
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    if bytes.is_empty() {
+        return Ok(Value::Null);
+    }
+    Ok(serde_json::from_slice(&bytes).unwrap_or(Value::Null))
 }
 
 fn public_credential(source: &SourceConfig, credential: &Value) -> Value {
