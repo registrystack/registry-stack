@@ -1,0 +1,125 @@
+---
+title: Consultation flow
+description: How Registry Relay binds a source, applies auth and scopes, serves
+  entity-shaped routes, and audits every request at runtime.
+status: current
+owner: registry-relay
+source_repos:
+  - registry-relay
+  - registry-platform
+last_reviewed: "2026-06-12"
+doc_type: explanation
+locale: en
+standards_referenced:
+  - openapi
+---
+
+Registry Relay is a read-only HTTP consultation gateway that fronts sensitive tabular
+sources with entity-shaped routes and caller-specific access controls.
+Storage table identifiers stay private; callers see only declared entities, fields,
+filters, and aggregates.
+For the broader scope of what each project owns, see the
+[boundaries and map page](../../map/boundaries-and-map/).
+
+## Request lifecycle
+
+The lifecycle has one startup phase (Bind) and four per-request phases (Match scope, Query,
+Audit, Respond).
+
+{/* SVG diagram. Essential labels are restated in the sections that follow. */}
+<figure>
+  <img src="../../images/registry-relay-request-lifecycle.svg"
+       alt="Registry Relay request lifecycle. Bind runs once at startup: validate the manifest
+            and bind datasets, entities, sources, columns, scopes, and filters from config;
+            the process exits non-zero on any mismatch. Every authorized request then flows
+            through four phases in order: Match scope (verify credential and require route
+            scope), Query (project only declared fields, no raw SQL), Audit (write one JSONL
+            record with names and operators only), and Respond (return projected fields,
+            never storage identifiers)." />
+</figure>
+
+### Startup: Bind
+
+At startup, Registry Relay loads `config.yaml` and validates it against `metadata.yaml`.
+Binding maps each logical dataset and entity from the manifest to physical sources,
+physical table columns, declared filters, and scopes.
+If a dataset in the manifest has no matching `config.yaml` entry, startup fails with
+`runtime.binding.dataset_missing` and the process exits non-zero.
+API-key auth has its own startup prerequisite: each `api_keys` entry needs a pre-generated
+fingerprint and commitment (emitted together by `registry-relay generate-api-key`), and
+Relay fails closed at startup if they are missing or malformed; see the
+[deployment guide](../../tutorials/deploy-standalone-with-own-data/#provision-the-api-key-fingerprint-and-commitment).
+Bind runs once per process; the per-request path assumes the bound state is valid.
+
+### Per request: four phases in sequence
+
+**1. Match scope.** Relay extracts the bearer token or API key from `Authorization: Bearer`
+or `x-api-key`, verifies the credential, and resolves the caller's principal.
+The caller's scopes are compared against the scope required by the route.
+A caller without the correct `<dataset_id>:<suffix>` scope receives `403 Forbidden` before
+any data access occurs.
+
+**2. Query.** Relay translates the request path and query parameters into an internal
+query plan over the bound source tables.
+Only fields declared in `entities[].fields` are projected.
+Only filter operations declared in `entities[].api.allowed_filters` are accepted.
+Relay builds the query from its own plan; it never forwards raw SQL or arbitrary filter
+expressions to the source.
+
+**3. Audit.** Before returning the response, Relay writes one JSONL record to the
+configured audit sink (stdout, file, or syslog).
+The record carries the `principal_id`, `request_id` (a ULID also returned in the
+`x-request-id` response header), `dataset_id`, `entity_name`, `scopes_used`, `query_params`
+(names and operators, never values), `status_code`, and `duration_ms`.
+Registry Platform wraps the record with `prev_hash` and `record_hash` for tamper evidence.
+For the full field list, see the [Relay operations runbook](https://github.com/jeremi/registry-relay/blob/05a4b249c74bd8f3788eda249a53277d02b22f12/docs/ops.md).
+
+**4. Respond.** Relay returns the entity-shaped response.
+The response body contains only projected fields for the authenticated caller's visible
+datasets and entities.
+Storage table identifiers never appear in responses.
+
+## Entity-shaped routes vs storage tables
+
+Storage tables are an implementation detail.
+Public routes reference datasets and entity names, never table ids.
+The four primary route shapes for row access are:
+
+- `GET /v1/datasets/{dataset_id}/entities/{entity}/records` : paginated list of entity records.
+- `GET /v1/datasets/{dataset_id}/entities/{entity}/records/{id}` : single record by identifier.
+- `GET /v1/datasets/{dataset_id}/entities/{entity}/records/{id}/relationships/{relationship}` :
+  related records for a declared relationship.
+- `GET /v1/datasets/{dataset_id}/aggregates/{aggregate_id}` : a pre-configured aggregate over
+  entity records.
+
+Metadata routes under `/metadata/*` follow the same auth path but require a `metadata`
+scope, not a `rows` or `aggregate` scope.
+The full route inventory is in the [Registry Relay API reference](../../reference/apis/registry-relay/).
+
+## Scope model
+
+Data-plane scopes follow the pattern `<dataset_id>:<suffix>`, where the five suffix values
+are `metadata`, `rows`, `aggregate`, `verify`, and `evidence_verification`.
+A data-plane scope is always bound to a specific dataset; a principal holding
+`social_registry:metadata` cannot access `vital_events:metadata` unless that scope is
+also assigned.
+One scope sits outside the pattern: `registry_relay:admin` is service-level, grants the
+administrative surface rather than any dataset, and is never implied by a dataset scope.
+Full scope configuration, API-key provisioning, and example principal assignments are in
+[Client integration](../../products/registry-relay/client-integration/).
+
+## Closed surfaces
+
+Five constraints a reviewer can verify against the code:
+
+- **Read-only in v1.** Entity paths expose only `GET`. No `POST`, `PUT`, `PATCH`, or
+  `DELETE` route is registered; provisioning is out of scope.
+- **Closed filter set.** Callers cannot submit arbitrary query expressions. Relay accepts
+  only the operators declared in `entities[].api.allowed_filters` and builds queries from
+  its own plan.
+- **Storage details stay private.** Table names, column names, and connection strings
+  never appear in responses or error messages.
+- **Filter values stay out of audit.** Records capture filter parameter names and
+  operators but never the submitted values, so personal identifiers are not logged.
+- **No token minting.** In OIDC mode, Relay is a resource server: it verifies tokens
+  issued by an external identity provider and never mints or refreshes them.

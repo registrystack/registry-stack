@@ -1,0 +1,151 @@
+---
+title: Integration patterns
+description: How Registry Stack wires in behind exchange layers, workflow engines, wallets, and domain registry platforms, and the standards each surface speaks.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-manifest
+  - registry-relay
+  - registry-notary
+last_reviewed: "2026-06-20"
+doc_type: explanation
+locale: en
+standards_referenced:
+  - dcat
+  - bregdcat-ap
+  - cpsv-ap
+  - cccev
+  - shacl
+  - json-schema
+  - odrl
+  - openapi
+  - sd-jwt-vc
+  - oid4vci
+  - w3c-did
+  - sp-dci
+  - ogc-api-records
+  - ogc-api-features
+  - govstack-digital-registries
+---
+
+Registry Stack is the registry-facing surface that sits behind systems already in a delivery
+stack. This page describes the technical wiring for each neighbor: what the neighbor owns, what
+Registry Stack adds, and the conditions under which a Registry Stack surface belongs in the path.
+For where the registry family sits relative to the wider ecosystem as a product positioning, see
+the marketing [ecosystem page](https://registrystack.org/ecosystem/).
+
+## Country evidence mesh
+
+At country scale, the same pattern can sit next to several domain platforms.
+Clinical health systems can expose bounded facts through a FHIR API, public-health program systems
+such as DHIS2 are reached through the built-in source-adapter engines (`http_json` or `http_flow`),
+and social protection, agriculture, education, and civil
+registration systems can keep their own authoritative stores.
+Registry Notary instances return configured claims to a social protection management information
+system and citizen-facing service channels without turning those consumers into raw-record readers.
+
+{/* SVG diagram. Essential labels are restated in the paragraph before the figure. */}
+<figure>
+  <img src="../../images/registry-country-evidence-mesh.svg"
+       alt="Country evidence mesh: civil registration, clinical health over FHIR API,
+            public health through DHIS2 via built-in http_json or http_flow source adapter, social protection, agriculture, and
+            education registries each keep their source systems. Registry Notary add-ons
+            return signed minimized attestations to a social protection MIS and citizen
+            service channels. The consuming systems receive claims, not full source rows." />
+</figure>
+
+## Domain registry platforms
+
+Examples: [OpenCRVS](https://www.opencrvs.org/) (civil registration), [OpenSPP](https://openspp.org/)
+(social-protection household and programme management), [DHIS2](https://dhis2.org/) (health
+management information), [OpenIMIS](https://openimis.org/) (health insurance information).
+
+These platforms own storage, business rules, correction workflows, user interfaces, and a runtime
+API for their domain.
+Registry Stack adds standardized metadata description, scoped read-only routes over source data,
+configured evidence responses, and tamper-evident audit records.
+
+Wire Registry Stack in alongside a domain platform when:
+
+- The platform does not yet publish standards-shaped catalog, service, schema, policy, or evidence-offering metadata.
+- Callers need evidence-shaped responses (predicate, redacted, selected value) rather than full
+  records.
+- A read path is needed for callers that must not be granted direct database access.
+
+## Workflow engines
+
+Examples: [OpenFn](https://www.openfn.org/) (cross-system orchestration popular in humanitarian and
+government data flows), [Camunda](https://camunda.com/), [Flowable](https://www.flowable.com/).
+
+Workflow engines own process state, task assignment, timers, branching, retries, escalation, and
+history.
+Registry Stack adds a stable registry contract that workflow steps can call, without learning
+source tables, raw SQL, or full records.
+
+Wire Registry Stack in alongside a workflow engine when:
+
+- A workflow step needs an authoritative registry fact (status, predicate, selected value).
+- A workflow step needs an evidence artifact or credential rather than an internal service result.
+- Generated workflow connectors must not depend on source schema details.
+
+## Exchange layers
+
+Examples: [X-Road](https://x-road.global/), [OpenFn](https://www.openfn.org/) (when used as the
+cross-institution data flow), GovStack-style reference exchanges.
+
+Exchange layers own participant onboarding, message transport, mutual trust, routing, addressing,
+and cross-institution policy.
+Registry Stack adds the registry-facing surface that sits behind the exchange layer: what entities
+exist, which fields are exposed, what evidence can be requested.
+
+Wire Registry Stack in behind an exchange layer when:
+
+- The exchange layer handles network trust but the registry endpoint still needs route-level
+  scopes, field projection, and source-specific access controls.
+- An exchange-forwarded request needs a configured evidence response rather than a copied record.
+
+## Wallets
+
+Examples: SD-JWT VC wallets, OID4VCI-compatible wallets.
+
+Wallets own key management, credential storage, holder consent, and presentation to relying
+parties.
+Registry Stack adds the server-side issuance path: claim evaluation against registry data, plus
+the metadata describing what a registry-backed issuer offers.
+
+Wire Registry Stack in alongside a wallet when:
+
+- A registry-backed issuer needs to produce SD-JWT VC credentials or an OID4VCI issuance flow.
+- An evidence offering needs to be discoverable before integration begins.
+
+## Public-service platforms
+
+Examples: citizen portals, casework systems, service catalogue platforms.
+
+These platforms own the user journey: forms, case queues, notifications, payments, channels.
+Registry Stack adds the narrow registry-facing surface those journeys can call: entity routes,
+evidence responses, scoped metadata, and audit records.
+
+Wire Registry Stack in alongside a service platform when:
+
+- A service platform needs a registry answer during delivery but must not pull the full record.
+- A service catalogue needs to discover an evidence offering before integration.
+
+## Standards each surface speaks
+
+Each integration surface involves a different set of standards.
+The claim level differs per standard (some surfaces emit a standard, others map to or
+compare against it); the [standards register](../../reference/standards/) is the
+authoritative list of claim levels and per-project evidence.
+
+| Integration surface | Relevant standards |
+| --- | --- |
+| Static catalog and service discovery (Registry Manifest) | DCAT, BRegDCAT-AP, CPSV-AP, OGC API Records, SHACL, JSON Schema, ODRL, SKOS-shaped codelists |
+| Scoped runtime metadata and protected data routes (Registry Relay) | OpenAPI, DCAT, BRegDCAT-AP, SHACL, JSON Schema, ODRL, OGC API Records, OGC API Features, OGC API EDR, SP-DCI, GovStack Digital Registries |
+| Evidence and credentials (Registry Notary) | OpenAPI, CCCEV, SD-JWT VC, OID4VCI, W3C DID |
+
+## Next
+
+- [Architecture overview](../architecture/)
+- [Standards register](../../reference/standards/)
+- [Boundaries and map](../../map/boundaries-and-map/)

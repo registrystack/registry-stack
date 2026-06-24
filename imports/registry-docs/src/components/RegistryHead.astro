@@ -1,0 +1,96 @@
+---
+import docsetsManifest from '../data/generated/docsets.json';
+import { mdHrefForPath } from '../lib/md-href';
+
+const activeDocsetId = process.env.DOCS_DOCSET || docsetsManifest.current;
+const activeDocset =
+  docsetsManifest.docsets.find((docset) => docset.id === activeDocsetId) ??
+  docsetsManifest.docsets.find((docset) => docset.id === docsetsManifest.current);
+const isArchived = activeDocset?.status === 'archived';
+const head = isArchived
+  ? Astro.locals.starlightRoute.head.filter(
+      ({ tag, attrs }) => !(tag === 'link' && attrs?.rel === 'sitemap'),
+    )
+  : Astro.locals.starlightRoute.head;
+
+// Machine-discoverability: the .md alternate link tells LLMs and other
+// consumers where to find the raw Markdown source for this page. Starlight's
+// built-in 404 has no docs entry (and thus no .md), so skip it there.
+const path = Astro.url.pathname.replace(import.meta.env.BASE_URL, '/');
+const is404 = path === '/404/' || path === '/404';
+// starlight-openapi reference routes are virtual pages with no per-page .md
+// twin, so they must not advertise a (broken) Markdown alternate link.
+const isGeneratedApi =
+  path.startsWith('/reference/apis/relay/') || path.startsWith('/reference/apis/notary/');
+const mdHref = mdHrefForPath(Astro.url.pathname, import.meta.env.BASE_URL);
+const umamiWebsiteId = isArchived ? '' : import.meta.env.PUBLIC_UMAMI_WEBSITE_ID?.trim();
+const umamiScriptSrc =
+  import.meta.env.PUBLIC_UMAMI_SCRIPT_SRC?.trim() || 'https://stats.registrystack.org/script.js';
+const umamiDomains = import.meta.env.PUBLIC_UMAMI_DOMAINS?.trim() || 'docs.registrystack.org';
+---
+
+{head.map(({ tag: Tag, attrs, content }) => <Tag {...attrs} set:html={content} />)}
+{isArchived && <meta name="robots" content="noindex,follow" />}
+{!is404 && !isGeneratedApi && <link rel="alternate" type="text/markdown" href={mdHref} />}
+{
+  umamiWebsiteId && (
+    <script is:inline defer src={umamiScriptSrc} data-website-id={umamiWebsiteId} data-domains={umamiDomains}></script>
+  )
+}
+{
+  umamiWebsiteId && (
+    <script is:inline>
+      {`
+        const docsJourneyTargets = new Map([
+          ['registrystack.org', 'marketing'],
+          ['lab.registrystack.org', 'lab'],
+          ['github.com', 'github'],
+        ]);
+
+        const docsLinkText = (node) => (node.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 80);
+
+        const docsJourneyUrl = (anchor, targetSite) => {
+          const url = new URL(anchor.href);
+          if (targetSite === 'marketing' || targetSite === 'lab') {
+            url.searchParams.set('utm_source', 'registry_docs');
+            url.searchParams.set('utm_medium', 'docs');
+            url.searchParams.set('utm_campaign', 'cross_site');
+            url.searchParams.set('utm_content', window.location.pathname);
+          }
+          return url;
+        };
+
+        const prepareDocsJourneyLinks = () => document.querySelectorAll('a[href]').forEach((anchor) => {
+          try {
+            const url = new URL(anchor.href);
+            const targetSite = docsJourneyTargets.get(url.hostname);
+            if (!targetSite) return;
+            anchor.href = docsJourneyUrl(anchor, targetSite).toString();
+          } catch (_error) {}
+        });
+
+        if (document.readyState === 'loading') {
+          document.addEventListener('DOMContentLoaded', prepareDocsJourneyLinks, { once: true });
+        } else {
+          prepareDocsJourneyLinks();
+        }
+
+        document.addEventListener('click', (event) => {
+          const anchor = event.target instanceof Element ? event.target.closest('a[href]') : null;
+          if (!anchor) return;
+          try {
+            const url = new URL(anchor.href);
+            const targetSite = docsJourneyTargets.get(url.hostname);
+            if (!targetSite || !window.umami?.track) return;
+            window.umami.track('docs_link_click', {
+              target_site: targetSite,
+              target_path: url.pathname,
+              source_path: window.location.pathname,
+              link_text: docsLinkText(anchor),
+            });
+          } catch (_error) {}
+        });
+      `}
+    </script>
+  )
+}

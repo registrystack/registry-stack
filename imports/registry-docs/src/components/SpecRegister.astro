@@ -1,0 +1,39 @@
+---
+// The specification register. Its rows are read from the actual frontmatter of
+// every doc_type: specification page via getCollection, so the table can never
+// drift from the documents it lists. Add a spec file under src/content/docs/spec
+// and it appears here automatically. The axes (status, category, evidence) are
+// defined in spec/RS-DOC.
+import { getCollection } from 'astro:content';
+
+const specs = (await getCollection('docs', (entry) => entry.data.doc_type === 'specification')).sort(
+  (a, b) => (a.data.doc_id ?? '').localeCompare(b.data.doc_id ?? ''),
+);
+---
+
+<table class="spec-register">
+  <thead>
+    <tr>
+      <th>ID</th>
+      <th>Document</th>
+      <th>Category</th>
+      <th>Evidence</th>
+      <th>Status</th>
+    </tr>
+  </thead>
+  <tbody>
+    {specs.map((spec) => (
+      <tr>
+        <td><code class="card-id">{spec.data.doc_id}</code></td>
+        <td>
+          <a href={`${spec.id.replace(/^spec\//, '')}/`}>{spec.data.title}</a>
+          <span class="spec-desc">{spec.data.description}</span>
+        </td>
+        <td><span class="claim-chip">{spec.data.category}</span></td>
+        <td><span class="inline-chip">{spec.data.evidence}</span></td>
+        <td><span class="status-chip">{spec.data.status}</span></td>
+      </tr>
+    ))}
+  </tbody>
+</table>
+<p class="source-note">Generated from the frontmatter of every specification document.</p>

@@ -1,0 +1,75 @@
+---
+title: Registry Relay API
+description: "Narrative context for the Registry Relay OpenAPI reference: what the API surface is, how authentication works, and what the specification does not cover."
+status: current
+owner: registry-relay
+source_repos:
+  - registry-relay
+  - registry-platform
+last_reviewed: "2026-06-20"
+doc_type: reference
+locale: en
+standards_referenced:
+  - openapi
+  - dcat
+  - ogc-api-records
+  - ogc-api-features
+  - ogc-api-edr
+  - odrl
+  - shacl
+  - json-ld
+  - sp-dci
+  - w3c-did
+---
+
+[Open the Registry Relay API operations](../relay/)
+
+The generated API reference linked above is the **authoritative route reference**. It is built from
+Registry Relay's OpenAPI document, synced from the
+[`registry-relay`](https://github.com/jeremi/registry-relay) repository at the commit pinned in
+`src/data/repo-docs.yaml`, so it tracks the real service rather than a hand-maintained copy. This
+page carries only the context the specification does not: what the surface is, how authentication
+works, and what is out of scope.
+
+For exact routes, parameters, and schemas, read the generated API reference. For setup, scopes, and
+integration detail, see the [Registry Relay product documentation](../../../products/registry-relay/).
+
+## What the API is
+
+Registry Relay implements the Protected Registry APIs pattern. It turns existing registry source
+data, such as files, extracts, and database tables, into protected, read-only, domain-oriented
+consultation APIs. Callers read configured entities, schemas, declared aggregates, catalog and
+policy metadata, and evidence-offering descriptors. Relay never widens a caller's reach at request
+time: the routes, datasets, and scopes a gateway exposes are fixed by its configuration.
+
+## Authentication
+
+A Relay instance runs exactly one auth mode (API key or OIDC/OAuth2), configured under `auth`.
+Access is scope-based per dataset; liveness and readiness probes are unauthenticated.
+For setup steps, scope strings, and credential configuration, see
+[Client integration](../../../products/registry-relay/client-integration/).
+
+## What the specification does not cover
+
+- **Per-deployment shape.** Concrete dataset ids, entity names, aggregate ids, evidence-offering
+  ids, and SP-DCI registry ids are runtime configuration, not contract data. To see what a specific
+  gateway exposes, fetch `GET /openapi.json` or read `GET /metadata/catalog`. Runtime deployments
+  gate OpenAPI by default unless `openapi_requires_auth` is disabled for demos or controlled tooling.
+- **Purpose-header enforcement.** The shared `Data-Purpose` header parameter is optional in the
+  baseline OpenAPI component because not every entity requires purpose capture. At runtime,
+  `api.require_purpose_header: true` on an entity or aggregate source makes the header mandatory for
+  that operation. Calls that omit it are rejected with `400 auth.purpose_required`.
+- **Feature-gated surfaces.** OGC API Features, Records, and EDR adapters, SP-DCI sync routes, and
+  the signed response credential routes (DID document, JSON Schemas, JSON-LD contexts, VC-JWT
+  serialization; config key: `provenance`) only mount when the gateway is built and configured with
+  the matching Cargo feature.
+- **Admin routes.** Reload and metrics routes are mounted on a separate, optional admin listener,
+  require `registry_relay:admin` for reload/config mutation, `registry_relay:metrics_read` for
+  metrics, and `registry_relay:ops_read` for operational posture reads. They do not appear in the
+  public OpenAPI document.
+- **Evidence-offering discovery.** Relay publishes evidence-offering metadata at
+  `GET /metadata/evidence-offerings` and `GET /metadata/evidence-offerings/{offering_id}`.
+  These routes describe where to reach a Notary for verification; Relay does not execute the
+  verification itself.
+- **Read-only, no streaming.** Relay does not mutate source registry data. Sources are read as batch
+  snapshots or table scans; there is no event-stream backend.

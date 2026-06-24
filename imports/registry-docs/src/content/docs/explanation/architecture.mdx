@@ -1,0 +1,109 @@
+---
+title: Architecture overview
+description: How the registry stack uses a two-layer design of portable metadata and runtime services to publish, consult, and prove registry facts.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-manifest
+  - registry-platform
+  - registry-relay
+  - registry-notary
+  - registry-lab
+last_reviewed: "2026-06-20"
+doc_type: explanation
+locale: en
+standards_referenced:
+  - dcat
+  - bregdcat-ap
+  - ogc-api-records
+  - openapi
+  - shacl
+  - json-schema
+  - json-ld
+  - sd-jwt-vc
+  - verifiable-credentials
+  - cccev
+  - w3c-did
+---
+
+The registry stack is organized around two layers: a portable metadata layer and a runtime services layer.
+The metadata layer (Registry Manifest) compiles and renders discovery artifacts that describe what a registry
+exposes, without touching production sources.
+The runtime services layer (Registry Relay, Registry Notary) binds those artifacts to real data, enforces
+access control, evaluates claims, serves delegated evaluation between trusted Notaries, and issues
+credentials.
+Registry Platform provides shared Rust primitives consumed by both runtime services.
+Registry Lab runs the current stack together in a local demo.
+
+These docs cover the five current formal stack projects: Registry Platform, Registry Manifest,
+Registry Relay, Registry Notary, and Registry Lab.
+
+At runtime, Registry Stack exposes source data through two patterns:
+
+- **Protected Registry APIs** are controlled read-only interfaces over existing registry sources.
+  Registry Relay implements this runtime surface.
+- **Evidence Gateway** is the governed evidence path. A runtime service evaluates request context,
+  source context, supported policy terms, freshness, redaction, and audit provenance before it
+  returns a result or denial. Registry Notary implements claim evaluation and credential issuance.
+  Registry Relay implements governed read routes when evidence is returned from a protected API.
+
+This split matters because it separates the obligation to describe (what a registry declares it can expose
+and under what policy) from the obligation to enforce (what a running service will actually return to an
+authorized caller). A reviewer can audit the portable metadata bundle before any runtime service is
+deployed. An integrator can validate schemas and claim shapes offline. A governance team can publish
+updated policy documents without touching deployment config.
+
+{/* SVG diagram. Essential labels are restated in the HTML list that follows. */}
+<figure>
+  <img src="../../images/registry-architecture-flow.svg"
+       alt="Architecture flow: Registry Platform provides shared primitives. Registry Manifest compiles
+            metadata artifacts. Registry Relay binds those artifacts to protected runtime sources.
+            Registry Notary evaluates claims against HTTP sources and issues credentials.
+            Registry Lab wires runtime services into a local compose topology." />
+</figure>
+
+## Data and contract flow
+
+1. Registry Platform provides reusable security and operational primitives consumed by runtime services.
+2. A metadata manifest (`registry-manifest/v1` schema) describes datasets, entities, fields, policies,
+   and evidence offerings.
+3. Registry Manifest compiles and validates the manifest, then renders a static discovery bundle
+   (catalog, DCAT, BRegDCAT-AP, CPSV-AP, SHACL, JSON Schemas, OGC Records item collection,
+   policies, evidence-offering metadata, embedded codelist metadata, and an `index.json`).
+4. Registry Relay starts with runtime config that binds the manifest's logical datasets and entities
+   to actual data sources. Clients reach entity routes, metadata routes, and evidence-offering
+   endpoints through configured auth.
+5. Registry Notary evaluates claims against configured HTTP sources (`registry_data_api`, `dci`,
+   or source adapter sidecar connectors, with the sidecar using built-in `http_json`, `http_flow`,
+   or `fhir` engines to reach external sources such as DHIS2 or FHIR servers). It renders evaluation
+   results as `application/vnd.registry-notary.claim-result+json`
+   or CCCEV-shaped JSON-LD (`application/ld+json; profile="cccev"`), and it materializes eligible
+   stored evaluations into SD-JWT VC credentials (`application/dc+sd-jwt`).
+6. A trusted Registry Notary can call another trusted Registry Notary through
+   `POST /federation/v1/evaluations` for signed delegated evaluation. Registry Manifest can publish
+   discovery metadata for that relationship, but local Notary peer policy grants access.
+For what each project does and does not own, refer to the product overview pages linked in the table below.
+
+## Capabilities at a glance
+
+The two-layer design supports one capability sequence: describe what the registry can provide,
+expose protected registry APIs, then return evidence that matches the purpose and policy of the
+request.
+A caller cannot safely use a registry until its fields, schemas, services, policies, and evidence
+offerings are inspectable, so metadata comes first.
+
+| Capability | Use it when | Primary project |
+| --- | --- | --- |
+| Describe registries | Other teams need to inspect fields, schemas, policies, services, and evidence offerings before integration. | [Registry Manifest](../../map/boundaries-and-map/) |
+| Protected Registry APIs | A file, extract, database, or legacy registry needs a governed read-only API without replacing the source. | [Registry Relay](../../products/registry-relay/) |
+| Evidence Gateway | A caller needs a status, predicate, selected value, redacted result, protected read, denial, or supported credential instead of unrestricted source-record access. | [Registry Notary](../../products/registry-notary/) and governed [Registry Relay](../../products/registry-relay/) routes |
+
+Shared audit and operational behavior makes Registry Relay and Registry Notary reviewable:
+Registry Platform supplies the shared primitives for authentication, HTTP security, audit envelopes,
+cryptography, and credential support that both runtime services compose. Registry Lab gives reviewers
+a runnable local topology for the current stack.
+
+## Next
+
+- [Evidence issuance](../evidence-issuance/) explains claim evaluation, disclosure policy,
+  delegated evaluation, and credential issuance in Registry Notary.

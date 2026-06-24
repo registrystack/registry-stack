@@ -1,0 +1,17 @@
+extends: existence
+message: "Avoid '%s' unless it adds real meaning."
+level: suggestion
+ignorecase: true
+tokens:
+  - simply
+  - just
+  - obviously
+  - clearly
+  - easy
+  - easily
+  - please
+  - powerful
+  - seamless
+  - robust
+  - leverage
+  - utilize

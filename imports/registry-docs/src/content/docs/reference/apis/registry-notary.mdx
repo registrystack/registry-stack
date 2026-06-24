@@ -1,0 +1,126 @@
+---
+title: Registry Notary API
+description: "Narrative context for the Registry Notary OpenAPI reference: authentication, disclosure profiles, credential issuance, and documented limitations."
+status: current
+owner: registry-notary
+source_repos:
+  - registry-notary
+  - registry-platform
+last_reviewed: "2026-06-21"
+doc_type: reference
+locale: en
+standards_referenced:
+  - openapi
+  - sd-jwt-vc
+  - cccev
+  - json-ld
+  - w3c-did
+---
+
+[Open the Registry Notary API operations](../notary/)
+
+The generated API reference linked above is the **authoritative route reference**. It is built from
+Registry Notary's generated OpenAPI document, synced from the
+[`registry-notary`](https://github.com/jeremi/registry-notary) repository at the commit pinned in
+`src/data/repo-docs.yaml`. This page carries the context the specification does not: how
+authentication works, how disclosure is controlled, what credentials look like, and what is out of
+scope.
+
+For exact routes and schemas, read the generated API reference. For setup and operations, see the
+[Registry Notary product documentation](../../../products/registry-notary/).
+
+## What the API is
+
+Registry Notary implements the claim-evaluation and credential-issuance parts of the Evidence
+Gateway pattern. It is a standalone service for claim evaluation, disclosure policy, credential
+issuance, and audit. It runs independently and does not require Registry Relay.
+Callers discover its capabilities and claim catalog at `GET /.well-known/evidence-service`.
+This route requires authentication (the same `x-api-key` or `Authorization: Bearer` token as other
+evaluation routes); it is not a public discovery endpoint.
+The issuer JWKS at `GET /.well-known/evidence/jwks.json` is public and requires no credentials.
+The evaluation, rendering, credential, and OID4VCI routes are documented in the generated API reference.
+
+## Authentication
+
+Registry Notary runs in static-credential mode or OIDC mode:
+
+- **Static credentials.** The client presents either an `x-api-key` token or an
+  `Authorization: Bearer` token. Notary fingerprints the presented token and compares it
+  (constant-time) against `sha256:<...>` values loaded from environment variables at startup. Each
+  credential carries a `scopes` list, and per-claim scope requirements are enforced before
+  evaluation.
+- **OIDC.** Notary delegates token verification to Registry Platform OIDC primitives (issuer, JWKS
+  URI, audiences, algorithms, scope mapping) and still owns the scopes its claim routes require.
+
+For the exact configuration, see the
+[operator configuration reference](../../../products/registry-notary/operator-config-reference/).
+
+## Disclosure profiles
+
+Notary controls what a caller receives through three disclosure levels (`value`, `predicate`, `redacted`), each governed by `default` and `allowed` settings in the claim definition.
+For a full explanation of how the levels interact and the downgrade strategies, see [Evidence issuance, end to end](../../../explanation/evidence-issuance/).
+
+## Credential issuance
+
+Notary issues SD-JWT VC credentials:
+
+- Token type `dc+sd-jwt`, signing algorithm EdDSA (Ed25519).
+- The issuer key is sourced from an environment variable (an OKP Ed25519 JWK); the public key is
+  published at `GET /.well-known/evidence/jwks.json`.
+- Individual claim fields are wrapped in SD-JWT disclosures with SHA-256 digests for selective
+  disclosure.
+
+Issuance and holder-proof helpers come from Registry Platform; Notary owns the credential profile,
+claim selection, and route workflow. Notary does **not** emit W3C Verifiable Credentials Data Model
+envelopes: the format is SD-JWT, not a W3C VC JSON object.
+
+## CCCEV rendering
+
+The render route can return CCCEV-shaped JSON-LD when the caller requests
+`application/ld+json; profile="cccev"`. The output includes an `@context` with the `cccev`,
+`dcterms`, `foaf`, `time`, and `xsd` namespaces, evidence nodes typed as `cccev:Evidence`, and CCCEV
+properties (`cccev:isProvidedBy`, `cccev:supportsRequirement`, `cccev:supportsValue`,
+`cccev:validityPeriod`, `cccev:isConformantTo`). Conformance against CCCEV 2.00 is not claimed;
+consume the output by parsing the `@graph` for `cccev:Evidence` nodes.
+
+## Source connectors
+
+Notary reads registry facts from external sources over HTTP. Three connector kinds are configured
+under `source_connections`:
+
+- **Registry Data API** connector queries a Registry Relay instance, authenticating with a
+  per-connection bearer token.
+- **SP-DCI** connector sends DCI-shaped search requests and parses the response using configured
+  field paths.
+- **Source adapter sidecar** connector calls a private sidecar over HTTP, using a static
+  bearer token, for sources reached through the built-in `http_json`, `http_flow`, or `fhir`
+  engines. (Note: OpenFn as an external caller, where OpenFn workflows call Registry Notary, remains
+  supported; what is retired is the OpenFn Node worker pool as a source-reading engine inside the
+  sidecar.)
+
+There is no generic file-based or database connector; source connectors must reach their targets
+over HTTP.
+
+The sidecar token authenticates the Notary-to-sidecar hop. It is not an end-user authorization
+boundary on its own, so the sidecar belongs on a private network, direct client access stays blocked,
+and source credentials, cache state, retries, and backoff should be scoped so one source or caller
+path cannot affect another.
+
+## What the specification does not cover
+
+- **Plugin rule type.** The `Plugin` rule variant is declared in config but has no implementation at
+  the pinned commit.
+- **Holder binding.** `did:jwk` is the only supported proof-of-possession binding method.
+- **Audit events.** Every evaluated request emits an `EvidenceAuditEvent` in a Registry Platform
+  audit envelope to a configured sink (stdout, file, or JSONL).
+- **Demo helpers.** Demo OpenFn snippets and generated workflow helpers are examples, not production
+  replay-protection profiles. Add freshness, expiry, or nonce checks before copying a helper into a
+  production workflow.
+
+:::caution
+Audit write failures surface as request errors, not as silent log entries. If the audit sink is
+unavailable, callers receive errors. Monitor the audit sink as part of your operational runbook.
+:::
+
+- **Admin reload.** The admin reload route returns a no-op in the standalone router; key and
+  configuration changes still require a service restart.

@@ -1,0 +1,9 @@
+extends: substitution
+message: "Spell out '%s' as '%s'."
+level: warning
+ignorecase: true
+nonword: true
+swap:
+  'e\.g\.': for example
+  'i\.e\.': that is
+  'etc\.': among others, or name the items

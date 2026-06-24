@@ -1,0 +1,88 @@
+---
+title: Standards register
+description: Standards referenced by the registry stack, with explicit claim levels and supporting evidence.
+wide: true
+status: current
+owner: registry-docs
+source_repos:
+  - registry-relay
+  - registry-platform
+  - registry-manifest
+  - registry-notary
+last_reviewed: "2026-06-20"
+doc_type: reference
+locale: en
+standards_referenced:
+  - dcat
+  - bregdcat-ap
+  - ogc-api-records
+  - ogc-api-features
+  - openapi
+  - shacl
+  - json-schema
+  - json-ld
+  - sd-jwt-vc
+  - verifiable-credentials
+  - cccev
+  - odrl
+  - prov-o
+  - govstack-digital-registries
+  - sp-dci
+  - w3c-did
+  - oid4vci
+---
+
+import StandardsTable from '../../../components/StandardsTable.astro';
+
+This register lists every standard the registry stack touches, the projects that touch it, and the claim level that names how strong the relationship is. The registry stack does not introduce a new standard; each project emits, maps to, or aligns with existing ones, and says so explicitly.
+
+The table is generated from `src/data/standards.yaml`.
+For selected external validator results, see [ITB and SEMIC evidence](../itb-semic-evidence/).
+
+## Register
+
+<StandardsTable />
+
+## Claim levels
+
+Six levels in descending strength:
+
+- `implements`: the project implements a normative requirement or API shape from the standard.
+- `emits`: the project produces artifacts shaped like the standard (JSON-LD, SHACL, OpenAPI, catalog records).
+- `maps_to`: local concepts or fields are mapped to the standard.
+- `aligns_with`: the project follows the model or intent without claiming formal conformance.
+- `inspired_by`: the standard influenced design without any compatibility claim.
+- `compares_against`: the standard is discussed to explain boundaries or alternatives.
+
+What these levels mean for integrators:
+
+- `emits`: you can parse that project's output as the standard expects. Fixtures or generated artifacts back the claim.
+- `aligns_with`: the project uses the vocabulary and intent of the standard but does not guarantee strict conformance. Do not write a validator against the spec without reading the surface notes.
+- `implements`: a normative requirement is met; you can rely on the API shape.
+- `inspired_by` or `compares_against`: design context only, no interoperability claim.
+
+{/* A claim is only as strong as its evidence. When evidence is a README sentence, the claim is at most aligns_with. When evidence is a test, fixture, or generated artifact, the claim can reach emits or implements. A standard appears in the register only when it has all five required fields: standard, status, used_by, claim_level, and evidence. */}
+
+## Column guide
+
+- **Standard** links to the official standards body page.
+- **Status** is one of `used`, `referenced`, `evaluated`, `planned`, or `historical`.
+- **Used by** lists the registry stack projects that reference this standard.
+- **Claim level** uses the six levels defined above.
+- **Surface** names the specific output or endpoint that the claim applies to.
+- **Profile and notes** identifies the version or profile in use and any boundary conditions.
+- **Evidence** links to the source code, fixture, or document that supports the claim.
+
+## Gaps
+
+- OGC API Features and OGC API EDR are listed as profiled `emits` claims for Registry Relay.
+  The claims are scoped to the tested feature-gated adapter routes, not full OGC conformance.
+- The Verifiable Credentials Data Model (W3C VC) is listed as `aligns_with` (`referenced`).
+  [Registry Relay](../../products/registry-relay/) has VC-oriented provenance fixtures and [Registry Notary](../../products/registry-notary/) issues SD-JWT VC credentials,
+  but neither project emits a full W3C VC Data Model envelope.
+  Promote when a reviewed VC profile and validation fixtures are pinned.
+  {/* Notary evidence packet explicitly states "W3C Verifiable Credentials Data Model: NOT PRESENT" (.research/registry-notary.md). This is a confirmed absence, not an evidence gap; keep at aligns_with until a reviewed VC profile and validation fixtures are pinned. */}
+- PROV-O is listed as `inspired_by` (`referenced`).
+  The code uses provenance-shaped concepts (audit fields, claim provenance struct) but no PROV-O
+  vocabulary terms are emitted as JSON-LD.
+  {/* Confirmed absence: no `prov:` namespace or PROV-O `@context` found in relay or notary source at reviewed commits. PROV-O influences the design (audit fields, claim provenance struct) but no PROV-O vocabulary is emitted. Keep at inspired_by. */}

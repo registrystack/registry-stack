@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 460" role="img" aria-labelledby="r-title r-desc" fill="none">
+  <title id="r-title">Registry Relay: from private storage to scoped public entities</title>
+  <desc id="r-desc">Registry Relay reads from private CSV, XLSX, Parquet, and PostgreSQL sources and serves them as public, entity-shaped APIs such as household and individual. For each request it performs a scope check, projects only declared fields, and writes one audit JSONL record. Inside the Relay, adapters expose the same entities over the native Registry Data API, the SP DCI sync protocol used by the GovStack Registry Building Block, and OGC API Records.</desc>
+
+  <style>
+    .h { font: 600 13px 'Public Sans', system-ui, sans-serif; fill: #161616; }
+    .m { font: 600 10.5px 'Public Sans', system-ui, sans-serif; fill: #6a6a6a; letter-spacing: 0.08em; }
+    .c { font: 400 11px 'IBM Plex Mono', ui-monospace, monospace; fill: #6a6a6a; }
+    .b { font: 400 12px 'Public Sans', system-ui, sans-serif; fill: #3a3a3a; }
+    .a { font: 600 13px 'Public Sans', system-ui, sans-serif; fill: #000091; }
+  </style>
+
+  <!-- Column captions -->
+  <text x="24" y="40" class="m">PRIVATE STORAGE</text>
+  <text x="260" y="40" class="m">REGISTRY RELAY</text>
+  <text x="496" y="40" class="m">PUBLIC API</text>
+
+  <!-- Column 1: Private storage boxes -->
+  <g stroke="#161616" stroke-width="1">
+    <rect x="24" y="72" width="200" height="44" fill="#ffffff"/>
+    <rect x="24" y="130" width="200" height="44" fill="#ffffff"/>
+    <rect x="24" y="188" width="200" height="44" fill="#ffffff"/>
+    <rect x="24" y="246" width="200" height="44" fill="#ffffff"/>
+  </g>
+  <text x="36" y="92" class="h">csv</text>
+  <text x="36" y="108" class="c">households.csv</text>
+  <text x="36" y="150" class="h">xlsx</text>
+  <text x="36" y="166" class="c">individuals.xlsx</text>
+  <text x="36" y="208" class="h">parquet</text>
+  <text x="36" y="224" class="c">2026q1.parquet</text>
+  <text x="36" y="266" class="h">postgres</text>
+  <text x="36" y="282" class="c">T_x9</text>
+
+  <!-- Column 2: Registry Relay -->
+  <rect x="260" y="72" width="200" height="284" fill="#ffffff" stroke="#161616" stroke-width="1"/>
+  <rect x="260" y="72" width="4" height="284" fill="#000091"/>
+  <text x="276" y="94" class="a">Registry Relay</text>
+  <line x1="276" y1="108" x2="444" y2="108" stroke="#e5e5e5"/>
+
+  <text x="276" y="130" class="h">scope check</text>
+  <text x="276" y="148" class="c">caller must hold</text>
+  <text x="276" y="164" class="c">dataset:rows</text>
+
+  <line x1="276" y1="182" x2="444" y2="182" stroke="#e5e5e5"/>
+
+  <text x="276" y="204" class="h">entity shape</text>
+  <text x="276" y="222" class="c">only declared fields,</text>
+  <text x="276" y="238" class="c">no arbitrary SQL</text>
+
+  <line x1="276" y1="256" x2="444" y2="256" stroke="#e5e5e5"/>
+
+  <text x="276" y="278" class="h">adapters</text>
+  <text x="276" y="298" class="c">Registry Data API</text>
+  <text x="276" y="314" class="c">DCI sync · GovStack BB</text>
+  <text x="276" y="330" class="c">OGC API Records (opt)</text>
+
+  <!-- Column 3: Public API entity cards -->
+  <g stroke="#161616" stroke-width="1">
+    <rect x="496" y="72" width="200" height="102" fill="#ffffff"/>
+    <rect x="496" y="188" width="200" height="102" fill="#ffffff"/>
+  </g>
+
+  <text x="508" y="92" class="h">household</text>
+  <line x1="508" y1="102" x2="684" y2="102" stroke="#e5e5e5"/>
+  <text x="508" y="124" class="c">id · head · size</text>
+  <text x="508" y="140" class="c">dwelling</text>
+  <text x="508" y="156" class="c">link to individual[]</text>
+
+  <text x="508" y="208" class="h">individual</text>
+  <line x1="508" y1="218" x2="684" y2="218" stroke="#e5e5e5"/>
+  <text x="508" y="240" class="c">given · family</text>
+  <text x="508" y="256" class="c">date of birth</text>
+  <text x="508" y="272" class="c">link to household</text>
+
+  <!-- Arrow: col1 -> col2 -->
+  <line x1="224" y1="181" x2="252" y2="181" stroke="#161616"/>
+  <polygon points="260,181 252,177 252,185" fill="#161616"/>
+
+  <!-- Arrow: col2 -> col3 -->
+  <line x1="460" y1="181" x2="488" y2="181" stroke="#161616"/>
+  <polygon points="496,181 488,177 488,185" fill="#161616"/>
+
+  <!-- Audit drop-out -->
+  <line x1="360" y1="356" x2="360" y2="388" stroke="#161616"/>
+  <polygon points="360,396 356,388 364,388" fill="#161616"/>
+
+  <rect x="260" y="400" width="200" height="56" fill="#ffffff" stroke="#161616" stroke-width="1"/>
+  <text x="276" y="420" class="h">audit (JSONL)</text>
+  <text x="276" y="438" class="c">ts · principal · scopes</text>
+  <text x="276" y="452" class="c">status · duration_ms</text>
+</svg>

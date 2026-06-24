@@ -1,0 +1,61 @@
+---
+import standards from '../data/generated/standards.json';
+---
+
+<div class="standards-list">
+  {standards.map((standard) => (
+    <section class="standards-card" id={standard.id}>
+      <header class="card-header">
+        <h3>
+          {standard.official_url
+            ? <a href={standard.official_url}>{standard.name}</a>
+            : standard.name}
+        </h3>
+        <code class="card-id">{standard.id}</code>
+      </header>
+
+      <dl class="card-meta">
+        <dt>Status</dt>
+        <dd>
+          <span class="status-chip">{standard.status}</span>
+          {standard.last_checked && <span class="meta-date">· {standard.last_checked}</span>}
+        </dd>
+        <dt>Claim level</dt>
+        <dd><span class="claim-chip">{standard.claim_level}</span></dd>
+        <dt>Adoption mode</dt>
+        <dd><span class="adoption-chip">{standard.adoption_mode}</span></dd>
+        <dt>Used by</dt>
+        <dd class="meta-chips">
+          {standard.used_by.map((u: string, i: number) => (
+            <><span class="inline-chip">{u}</span>{i < standard.used_by.length - 1 ? ' ' : ''}</>
+          ))}
+        </dd>
+        <dt>Surface</dt>
+        <dd class="meta-chips">
+          {standard.surfaces.map((s: string, i: number) => (
+            <><span class="inline-chip">{s}</span>{i < standard.surfaces.length - 1 ? ' ' : ''}</>
+          ))}
+        </dd>
+      </dl>
+
+      {(standard.version_or_profile || standard.notes) && (
+        <div class="card-body">
+          {standard.version_or_profile && <p><strong>{standard.version_or_profile}</strong></p>}
+          {standard.notes && <p>{standard.notes}</p>}
+        </div>
+      )}
+
+      {standard.evidence_docs && standard.evidence_docs.length > 0 && (
+        <footer class="card-footer">
+          <span class="footer-label">Evidence</span>
+          <ul class="link-list">
+            {standard.evidence_docs.map((doc: { url: string; label: string }) => (
+              <li><a href={doc.url}>{doc.label}</a></li>
+            ))}
+          </ul>
+        </footer>
+      )}
+    </section>
+  ))}
+</div>
+<p class="source-note">Generated from <code>src/data/standards.yaml</code>.</p>

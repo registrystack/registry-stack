@@ -1,0 +1,57 @@
+{
+  "name": "registry-docs",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "npm run generate && astro dev",
+    "build": "npm run generate && astro check && astro build",
+    "build:archive": "node scripts/build-archive.mjs",
+    "build:archives": "node scripts/build-archives.mjs",
+    "preview": "astro preview",
+    "generate": "node scripts/generate-data.mjs && node scripts/fetch-openapi.mjs && node scripts/sync-repo-docs.mjs && node scripts/generate-sidebar.mjs",
+    "test": "node --test \"scripts/**/*.test.mjs\"",
+    "check:llms:built": "node scripts/check-llms.mjs",
+    "check:docset": "node scripts/check-docset.mjs",
+    "check:content": "node scripts/check-doc-frontmatter.mjs",
+    "check:svg": "node scripts/check-svg-a11y.mjs",
+    "check:markdown": "markdownlint-cli2",
+    "check:style": "node scripts/run-vale.mjs --no-exit --glob=!**/products/** src/content/docs README.md",
+    "check:style:fixtures": "node scripts/check-vale-fixtures.mjs",
+    "check:openapi": "redocly lint registry-relay registry-notary",
+    "check:config-vocabulary": "scripts/check-stale-config-vocabulary.sh",
+    "check:tutorial": "scripts/check-tutorial.sh",
+    "check:tutorial:dry-run": "scripts/check-tutorial.sh --dry-run",
+    "check:links": "npm run build && npm run check:links:built",
+    "check": "npm run generate && npm run check:docset && npm run check:content && npm run check:markdown && npm run check:style && npm run check:style:fixtures && npm run check:openapi && npm run check:config-vocabulary && npm run check:tutorial:dry-run && npm run check:svg && npm run build && npm run check:llms:built && npm run build:archives && npm run check:seo:built && npm run check:links:built",
+    "check:seo:built": "node scripts/check-seo.mjs",
+    "check:links:built": "node scripts/check-built-links.mjs"
+  },
+  "dependencies": {
+    "@astrojs/sitemap": "^3.7.2",
+    "@astrojs/starlight": "^0.39.2",
+    "@fontsource/ibm-plex-mono": "^5.2.7",
+    "@fontsource/public-sans": "^5.2.7",
+    "astro": "^6.3.7",
+    "astro-mermaid": "^2.0.2",
+    "mermaid": "^11.15.0",
+    "starlight-openapi": "^0.25.3"
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.9",
+    "@redocly/cli": "^2.31.4",
+    "@vvago/vale": "^3.12.0",
+    "linkinator": "^7.6.1",
+    "markdownlint-cli2": "^0.22.1",
+    "remark-gfm": "^4.0.1",
+    "starlight-llms-txt": "^0.10.0",
+    "typescript": "^5.9.3",
+    "yaml": "^2.8.1"
+  },
+  "overrides": {
+    "url-template": "^3.1.1"
+  }
+}

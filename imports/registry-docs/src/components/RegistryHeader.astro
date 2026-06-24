@@ -1,0 +1,41 @@
+---
+import config from 'virtual:starlight/user-config';
+import Search from '@astrojs/starlight/components/Search.astro';
+import ThemeSelect from '@astrojs/starlight/components/ThemeSelect.astro';
+import docsetsManifest from '../data/generated/docsets.json';
+import RegistryDocsetSwitch from './RegistryDocsetSwitch.astro';
+
+const base = import.meta.env.BASE_URL;
+const shouldRenderSearch =
+  config.pagefind || config.components.Search !== '@astrojs/starlight/components/Search.astro';
+
+const activeDocsetId = process.env.DOCS_DOCSET || docsetsManifest.current;
+const activeDocset =
+  docsetsManifest.docsets.find((docset) => docset.id === activeDocsetId) ??
+  docsetsManifest.docsets.find((docset) => docset.id === docsetsManifest.current);
+
+---
+
+<div class="registry-header">
+  <div class="registry-masthead">
+    <a class="registry-wordmark" href={base}>
+      <span class="registry-brand-mark" aria-hidden="true">RS</span>
+      <span>Registry Stack</span>
+      <span class="registry-docs-tag">Docs</span>
+      <span class="registry-version">{activeDocset?.label}</span>
+    </a>
+
+    {shouldRenderSearch && (
+      <div class="registry-search">
+        <span class="registry-search-label" id="registry-search-label">Search</span>
+        <Search />
+      </div>
+    )}
+
+    <nav class="registry-utility" aria-label="Site">
+      <RegistryDocsetSwitch />
+      <ThemeSelect />
+      <a href="https://github.com/jeremi/registry-docs">GitHub ↗</a>
+    </nav>
+  </div>
+</div>

@@ -1,0 +1,33 @@
+---
+import docsetsManifest from '../data/generated/docsets.json';
+
+const activeDocsetId = process.env.DOCS_DOCSET || docsetsManifest.current;
+const activeDocset =
+  docsetsManifest.docsets.find((docset) => docset.id === activeDocsetId) ??
+  docsetsManifest.docsets.find((docset) => docset.id === docsetsManifest.current);
+
+function pathForDocset(targetPath: string) {
+  const currentPath = Astro.url.pathname;
+  const activePath = activeDocset?.path ?? '/';
+  const relativePath =
+    activePath !== '/' && currentPath.startsWith(activePath)
+      ? currentPath.slice(activePath.length)
+      : currentPath.replace(/^\//, '');
+  return `${targetPath}${relativePath}`.replace(/\/{2,}/g, '/');
+}
+---
+
+<label class="registry-version-switch">
+  <span>Version</span>
+  <select
+    aria-label="Docs version"
+    onchange="if (this.value) window.location.assign(this.value)"
+    oninput="if (this.value) window.location.assign(this.value)"
+  >
+    {docsetsManifest.docsets.map((docset) => (
+      <option value={pathForDocset(docset.path)} selected={docset.id === activeDocset?.id}>
+        {docset.label}
+      </option>
+    ))}
+  </select>
+</label>

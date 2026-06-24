@@ -1,0 +1,243 @@
+---
+title: Getting started with FHIR evidence
+description: Run the Registry Lab FHIR demo, evaluate health-navigation claims from FHIR R4 fixture data, and understand where the source adapter fits.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-lab
+  - registry-notary
+last_reviewed: "2026-06-17"
+doc_type: tutorial
+locale: en
+standards_referenced:
+  - openapi
+---
+
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+
+Use this tutorial when you want to inspect the full Registry Lab FHIR profile:
+the local FHIR fixture API, the private source adapter, and Registry Notary
+working together. You will call the Notary evaluation API and inspect the claim
+results produced from a local FHIR R4 fixture server.
+
+<QuickstartMeta
+  outcome="Registry Notary evaluating health-navigation claims from local FHIR R4 fixture data, with the claim results inspected."
+  time="About 10 minutes after the container images build"
+  level="Local lab topology"
+  prerequisites={['Docker Compose 2.20+', 'just', 'A Registry Lab checkout with submodules']}
+/>
+
+This is a lab topology walkthrough, not the shortest adopter quickstart. For a
+normal local project generated without cloning product repositories, use the
+[`registryctl` Registry API tutorial](../publish-spreadsheet-secured-registry-api/)
+or the [`registryctl` Notary tutorial](../verify-claim-registry-api/).
+`registryctl` can scaffold a standalone Notary project for an existing FHIR
+source-adapter sidecar, but this tutorial uses `registry-lab` directly because
+it also starts deterministic FHIR fixture data and the source adapter.
+
+The FHIR path is useful when a health system already exposes FHIR resources and
+a delivery system needs a narrow answer, such as "coverage is active" or "this
+facility offers this service", instead of a full clinical record.
+The demo is deterministic local fixture data. It is not a production FHIR
+server conformance test.
+
+Estimated time: about 10 minutes after the container images build.
+
+## Before you start
+
+You need:
+
+- Docker with Compose v2.20 or later.
+- The `just` command runner.
+- A Registry Lab checkout with submodules.
+- Local demo credentials generated with the lab's fixture command.
+
+Clone Registry Lab if you do not already have it. This is only needed for this
+full FHIR lab profile:
+
+```sh
+git clone --recurse-submodules https://github.com/jeremi/registry-lab.git
+cd registry-lab
+```
+
+If you already have a FHIR source-adapter sidecar running and only need a
+generated Notary project, use:
+
+```sh
+registryctl init notary my-fhir-notary --source-kind fhir-sidecar
+```
+
+For an existing checkout, update submodules before running the profile:
+
+```sh
+just setup
+```
+
+## Generate local credentials
+
+Generate fixtures, local demo credentials, and static metadata:
+
+```sh
+just generate
+```
+
+This writes `FHIR_*` values into `.env`, including:
+
+- `FHIR_EVIDENCE_CLIENT_BEARER`, used by you when calling Registry Notary.
+- `FHIR_SIDECAR_TOKEN_RAW`, used by Registry Notary when calling the private
+  FHIR source adapter.
+
+Do not use generated demo credentials outside the local lab.
+
+## Build and start the FHIR profile
+
+Build the three FHIR profile images:
+
+```sh
+just fhir-build
+```
+
+Start the services:
+
+```sh
+just fhir-up
+```
+
+The profile starts:
+
+| Service | Local URL | Role |
+| --- | --- | --- |
+| `fhir-fixture-server` | `http://127.0.0.1:4361` | Deterministic FHIR R4 fixture API |
+| `fhir-source-adapter-sidecar` | `http://127.0.0.1:4360` | Private FHIR source adapter |
+| `fhir-health-notary` | `http://127.0.0.1:4362` | Registry Notary claim evaluator |
+
+Registry Notary does not mount the FHIR data directly. It calls the source
+adapter over the private Compose network, and the source adapter queries the
+FHIR fixture server.
+
+## Run the smoke
+
+Run the scripted smoke:
+
+```sh
+just fhir-smoke
+```
+
+Expected ending:
+
+```text
+FHIR smoke passed; artifacts written to output/fhir-smoke
+```
+
+The smoke evaluates three claim groups:
+
+- Person health-navigation claims for target `person-123`, requested by
+  guardian `guardian-1`.
+- Provider affiliation for target `provider-123`.
+- Facility service availability for target `facility-1`.
+
+Every claim must return `satisfied: true`.
+
+## Inspect the claim results
+
+The smoke writes artifacts under:
+
+```text
+output/fhir-smoke/
+```
+
+Inspect the person workflow result:
+
+```sh
+jq '.results // .claim_results' output/fhir-smoke/person-workflow-evaluation.json
+```
+
+The person workflow covers patient existence, age, deceased status, coverage,
+eligibility, programme enrollment, encounter completion, referral, appointment,
+lab result, immunization, prior authorization, source trace, and guardian
+relationship.
+
+Inspect the provider and facility results:
+
+```sh
+jq '.results // .claim_results' output/fhir-smoke/provider-affiliation-evaluation.json
+jq '.results // .claim_results' output/fhir-smoke/facility-service-evaluation.json
+```
+
+## Call Notary manually
+
+Load the generated local credentials:
+
+```sh
+set -a
+. .env
+set +a
+```
+
+Call Registry Notary discovery:
+
+```sh
+curl -fsS http://127.0.0.1:4362/.well-known/evidence-service \
+  -H "Authorization: Bearer ${FHIR_EVIDENCE_CLIENT_BEARER}" | jq
+```
+
+Evaluate the provider affiliation claim:
+
+```sh
+curl -fsS -X POST http://127.0.0.1:4362/v1/evaluations \
+  -H "Authorization: Bearer ${FHIR_EVIDENCE_CLIENT_BEARER}" \
+  -H "Content-Type: application/json" \
+  -H "Data-Purpose: https://demo.example.gov/purpose/fhir-health-navigation" \
+  -d '{
+    "target": { "type": "Person", "id": "provider-123" },
+    "claims": ["provider-affiliated-with-facility"],
+    "purpose": "https://demo.example.gov/purpose/fhir-health-navigation"
+  }' | jq '.results // .claim_results'
+```
+
+The result is a Notary claim result, not a FHIR `Evidence` resource.
+FHIR is the source data model; Registry Notary is the claim evaluation surface.
+
+## How the adapter fits
+
+The Registry Lab FHIR profile is configured in two files:
+
+- `config/fhir/fhir-source-adapter-sidecar.yaml.template`: defines FHIR source
+  searches, resource relations, and JSON Pointer projections.
+- `config/notary/fhir-health-notary.yaml`: defines the claim rules that read
+  the projected fields.
+
+The adapter starts from an anchor resource, usually `Patient`, then follows
+configured relations to resources such as `Coverage`,
+`CoverageEligibilityResponse`, `EpisodeOfCare`, `Encounter`, `ServiceRequest`,
+`Appointment`, `DiagnosticReport`, `Immunization`, `ClaimResponse`,
+`RelatedPerson`, `PractitionerRole`, and `HealthcareService`.
+Registry Notary receives projected source fields and evaluates configured claim
+rules against those fields.
+
+This shape lets an integrator keep FHIR-specific lookup logic in the adapter
+while keeping Notary claim definitions stable and small.
+
+## Stop the profile
+
+Stop the FHIR services:
+
+```sh
+just fhir-down
+```
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| `missing FHIR_EVIDENCE_CLIENT_BEARER` | `.env` was generated before the FHIR profile existed. | Run `just generate`, then rerun `just fhir-smoke`. |
+| The source adapter is not ready | The sidecar config did not load, or the image was built from incompatible sibling checkouts. | Run `docker compose -f compose.yaml --profile fhir logs fhir-source-adapter-sidecar`, then rebuild with compatible source directories. |
+| Notary discovery returns `401` | The request is missing the local bearer token. | Add `Authorization: Bearer ${FHIR_EVIDENCE_CLIENT_BEARER}`. |
+| A claim is unsatisfied | The source projection or claim rule did not produce the expected predicate. | Inspect the JSON artifact in `output/fhir-smoke/`, then compare the claim id with `config/notary/fhir-health-notary.yaml`. |
+
+## Next
+
+- [Publish a secured registry API with `registryctl`](../publish-spreadsheet-secured-registry-api/)
+- [Verify a claim with Registry Notary and `registryctl`](../verify-claim-registry-api/)
+- [First run with Registry Lab](../first-run-with-registry-lab/)
+- [Integration patterns](../../explanation/integration-patterns/)

@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 440" role="img"
+     font-family="'Public Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
+     text-rendering="geometricPrecision">
+  <title>Registry Notary claim dependency graph</title>
+  <desc>Registry Notary can evaluate simple extracted claims and derived claims in dependency order. Source connectors fetch facts. Extracted claims can feed a CEL rule. Disclosure policy then shapes claim results, CCCEV evidence, or SD-JWT VC credentials.</desc>
+
+  <g fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">
+    <text x="24" y="32">FACTS</text>
+    <text x="250" y="32">CLAIM GRAPH</text>
+    <text x="540" y="32">ARTIFACTS</text>
+  </g>
+  <g fill="#000091">
+    <rect x="24" y="40" width="32" height="2"/>
+    <rect x="250" y="40" width="32" height="2"/>
+    <rect x="540" y="40" width="32" height="2"/>
+  </g>
+
+  <rect x="32" y="132" width="164" height="150" fill="#ffffff" stroke="#e5e5e5" stroke-width="1"/>
+  <text x="56" y="166" fill="#161616" font-size="14" font-weight="700">Source connector</text>
+  <text x="56" y="188" fill="#6a6a6a" font-size="11.5"
+        font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">registry_data_api</text>
+  <text x="56" y="210" fill="#3a3a3a" font-size="12.5">Reads facts over HTTP</text>
+  <text x="56" y="228" fill="#3a3a3a" font-size="12.5">from Relay or DCI</text>
+  <text x="56" y="246" fill="#3a3a3a" font-size="12.5">sources.</text>
+
+  <g fill="#ffffff" stroke="#e5e5e5" stroke-width="1">
+    <rect x="252" y="72" width="164" height="72"/>
+    <rect x="252" y="214" width="164" height="72"/>
+    <rect x="318" y="332" width="180" height="72"/>
+  </g>
+  <g fill="#161616" font-size="13" font-weight="700">
+    <text x="274" y="104">date-of-birth</text>
+    <text x="274" y="122">extract</text>
+    <text x="274" y="246">farmed-land-size</text>
+    <text x="274" y="264">extract</text>
+    <text x="340" y="364">farmer-under-4ha</text>
+    <text x="340" y="382">CEL predicate</text>
+  </g>
+  <g fill="#6a6a6a" font-size="11.5">
+    <text x="274" y="138">value claim</text>
+    <text x="274" y="280">value claim</text>
+    <text x="340" y="398">derived claim</text>
+  </g>
+
+  <rect x="520" y="126" width="160" height="182" fill="#ffffff" stroke="#e5e5e5" stroke-width="1"/>
+  <text x="544" y="160" fill="#161616" font-size="14" font-weight="700">Disclosure policy</text>
+  <text x="544" y="184" fill="#3a3a3a" font-size="12.5">Chooses value,</text>
+  <text x="544" y="202" fill="#3a3a3a" font-size="12.5">predicate, or</text>
+  <text x="544" y="220" fill="#3a3a3a" font-size="12.5">redacted result.</text>
+  <line x1="544" y1="242" x2="656" y2="242" stroke="#e5e5e5" stroke-width="1"/>
+  <text x="544" y="266" fill="#161616" font-size="12.5" font-weight="700">Claim result</text>
+  <text x="544" y="284" fill="#161616" font-size="12.5" font-weight="700">CCCEV JSON-LD</text>
+  <text x="544" y="302" fill="#161616" font-size="12.5" font-weight="700">SD-JWT VC</text>
+
+  <g stroke="#000091" stroke-width="1.2" fill="none">
+    <path d="M196 178 C224 146 226 118 252 108"/>
+    <polyline points="244,108 252,108 247,102"/>
+    <path d="M196 234 C226 240 226 250 252 250"/>
+    <polyline points="246,246 252,250 246,254"/>
+    <path d="M416 250 C452 268 470 320 426 332"/>
+    <polyline points="432,326 426,332 434,334"/>
+    <path d="M416 108 C470 112 504 138 520 166"/>
+    <polyline points="512,164 520,166 516,159"/>
+    <path d="M498 368 C560 368 584 328 600 308"/>
+    <polyline points="592,311 600,308 597,316"/>
+  </g>
+
+  <line x1="24" y1="412" x2="696" y2="412" stroke="#e5e5e5" stroke-width="1"/>
+</svg>

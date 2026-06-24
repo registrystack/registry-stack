@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 530" role="img"
+     font-family="'Public Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
+     text-rendering="geometricPrecision">
+  <title>Registry architecture flow</title>
+  <desc>Registry Platform provides shared primitives to Relay and Notary. Registry Manifest produces portable metadata contracts. Registry Relay binds those contracts to protected runtime data sources and serves entity and metadata APIs. Registry Notary evaluates claims against configured sources and issues credentials. Registry Lab runs runtime services together as a compose-based local demo.</desc>
+
+  <text x="16" y="22" fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">SHARED PRIMITIVES</text>
+  <rect x="16" y="30" width="32" height="2" fill="#000091"/>
+
+  <text x="16" y="64" fill="#161616" font-size="14" font-weight="700">Registry Platform</text>
+  <text x="16" y="82" fill="#6a6a6a" font-size="11.5"
+        font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">registry-platform</text>
+  <g fill="#3a3a3a" font-size="12.5">
+    <text x="16" y="112">Shared auth, OIDC, audit, HTTP, crypto, SD-JWT, outbound HTTP, and test crates.</text>
+    <text x="16" y="130">Consumed by every runtime service below.</text>
+  </g>
+
+  <line x1="0" y1="156" x2="720" y2="156" stroke="#e5e5e5" stroke-width="1"/>
+
+  <g fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">
+    <text x="16" y="178">CONTRACTS</text>
+    <text x="240" y="178">RUNTIME</text>
+    <text x="464" y="178">DEMO</text>
+  </g>
+  <g fill="#000091">
+    <rect x="16" y="186" width="32" height="2"/>
+    <rect x="240" y="186" width="32" height="2"/>
+    <rect x="464" y="186" width="32" height="2"/>
+  </g>
+
+  <text x="16" y="220" fill="#161616" font-size="14" font-weight="700">Registry Manifest</text>
+  <text x="16" y="238" fill="#6a6a6a" font-size="11.5"
+        font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">registry-manifest</text>
+  <g fill="#3a3a3a" font-size="12.5">
+    <text x="16" y="268">Portable metadata</text>
+    <text x="16" y="286">contracts and</text>
+    <text x="16" y="304">renderers for DCAT,</text>
+    <text x="16" y="322">SHACL, JSON Schema,</text>
+    <text x="16" y="340">OGC Records, and SKOS.</text>
+  </g>
+
+  <g stroke="#000091" stroke-width="1" fill="none">
+    <line x1="208" y1="268" x2="236" y2="268"/>
+    <polyline points="230,264 236,268 230,272"/>
+  </g>
+
+  <text x="240" y="220" fill="#161616" font-size="14" font-weight="700">Registry Relay</text>
+  <text x="240" y="238" fill="#6a6a6a" font-size="11.5"
+        font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">registry-relay</text>
+  <g fill="#3a3a3a" font-size="12.5">
+    <text x="240" y="268">Binds manifests to CSV,</text>
+    <text x="240" y="286">XLSX, Parquet, or PostgreSQL</text>
+    <text x="240" y="304">sources. Serves protected</text>
+    <text x="240" y="322">entity and metadata APIs.</text>
+  </g>
+
+  <text x="240" y="360" fill="#161616" font-size="14" font-weight="700">Registry Notary</text>
+  <text x="240" y="378" fill="#6a6a6a" font-size="11.5"
+        font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">registry-notary</text>
+  <g fill="#3a3a3a" font-size="12.5">
+    <text x="240" y="408">Evaluates configured</text>
+    <text x="240" y="426">claims against HTTP</text>
+    <text x="240" y="444">sources. Issues SD-JWT</text>
+    <text x="240" y="462">VCs and CCCEV evidence.</text>
+  </g>
+
+  <g stroke="#000091" stroke-width="1" fill="none">
+    <line x1="432" y1="268" x2="460" y2="268"/>
+    <polyline points="454,264 460,268 454,272"/>
+  </g>
+
+  <text x="464" y="220" fill="#161616" font-size="14" font-weight="700">Registry Lab</text>
+  <text x="464" y="238" fill="#6a6a6a" font-size="11.5"
+        font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">registry-lab</text>
+  <g fill="#3a3a3a" font-size="12.5">
+    <text x="464" y="268">Compose demo that</text>
+    <text x="464" y="286">wires Relay, Notary,</text>
+    <text x="464" y="304">Platform primitives,</text>
+    <text x="464" y="322">and static metadata.</text>
+  </g>
+
+  <line x1="0" y1="486" x2="720" y2="486" stroke="#e5e5e5" stroke-width="1"/>
+  <text x="16" y="508" fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">DEMO · REGISTRY LAB</text>
+  <rect x="16" y="516" width="32" height="2" fill="#000091"/>
+  <g fill="#3a3a3a" font-size="12.5">
+    <text x="160" y="508">Compose demo of the runtime family for local development and reviewer walkthroughs.</text>
+  </g>
+</svg>

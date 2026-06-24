@@ -1,0 +1,131 @@
+---
+import docsetsManifest from '../data/generated/docsets.json';
+
+const base = import.meta.env.BASE_URL;
+const activeDocsetId = process.env.DOCS_DOCSET || docsetsManifest.current;
+const activeDocset =
+  docsetsManifest.docsets.find((docset) => docset.id === activeDocsetId) ??
+  docsetsManifest.docsets.find((docset) => docset.id === docsetsManifest.current);
+const isArchived = activeDocset?.status === 'archived';
+
+// Per-page affordances driven by the route. On the built-in 404 page `entry`
+// (and therefore its frontmatter) may be undefined, so every field is read
+// defensively and each piece is rendered only when its data exists.
+const route = Astro.locals.starlightRoute;
+const entryData = route.entry?.data as
+  | { title?: string; last_reviewed?: string }
+  | undefined;
+
+const lastReviewed = entryData?.last_reviewed;
+const editUrl = route.editUrl;
+const pagination = route.pagination;
+const prev = pagination?.prev;
+const next = pagination?.next;
+const hasPagination = Boolean(prev || next);
+
+const pageTitle = entryData?.title ?? 'this page';
+const pagePath = Astro.url.pathname;
+const issueUrl =
+  'https://github.com/jeremi/registry-docs/issues/new?title=' +
+  encodeURIComponent(`Docs issue: ${pageTitle}`) +
+  '&body=' +
+  encodeURIComponent(`Page: ${pagePath}\n\n`);
+
+// The meta row is only shown for live docsets and only when at least one of its
+// items has data, so archived pages and bare 404s render no empty row.
+const hasMeta = !isArchived && Boolean(lastReviewed || editUrl);
+const showFeedback = !isArchived;
+const showPageFooter = hasPagination || hasMeta || showFeedback;
+---
+
+{
+  showPageFooter && (
+    <div class="registry-page-footer">
+      {hasPagination && (
+        <nav class="doc-pagination" aria-label="Page navigation">
+          {prev ? (
+            <a class="doc-pagination-link doc-pagination-prev" href={prev.href}>
+              <span class="doc-pagination-eyebrow">Previous</span>
+              <span class="doc-pagination-label">{prev.label}</span>
+            </a>
+          ) : (
+            <span />
+          )}
+          {next ? (
+            <a class="doc-pagination-link doc-pagination-next" href={next.href}>
+              <span class="doc-pagination-eyebrow">Next</span>
+              <span class="doc-pagination-label">{next.label}</span>
+            </a>
+          ) : (
+            <span />
+          )}
+        </nav>
+      )}
+
+      {hasMeta && (
+        <div class="doc-meta">
+          {lastReviewed && <span class="doc-meta-item">Last reviewed {lastReviewed}</span>}
+          {editUrl && (
+            <a class="doc-meta-item" href={editUrl.href}>
+              Edit this page
+            </a>
+          )}
+          <a class="doc-meta-item" href={issueUrl}>
+            Report an issue
+          </a>
+        </div>
+      )}
+
+      {showFeedback && (
+        <div class="doc-feedback" data-doc-feedback>
+          <div class="doc-feedback-prompt" data-doc-feedback-prompt>
+            <span class="doc-feedback-label">Was this helpful?</span>
+            <span class="doc-feedback-buttons" role="group" aria-label="Was this page helpful?">
+              <button type="button" data-doc-feedback-value="yes">
+                Yes
+              </button>
+              <button type="button" data-doc-feedback-value="no">
+                No
+              </button>
+            </span>
+          </div>
+          <p class="doc-feedback-status" data-doc-feedback-status aria-live="polite" />
+        </div>
+      )}
+    </div>
+  )
+}
+
+<footer class="registry-footer">
+  <p>Registry stack docs · CC BY 4.0</p>
+  <nav aria-label="Footer">
+    <a href={`${base}accessibility/`}>Accessibility</a>
+    {!isArchived && <a href={`${base}sitemap-index.xml`}>Sitemap</a>}
+    {!isArchived && <a href={`${base}llms.txt`}>llms.txt</a>}
+  </nav>
+</footer>
+
+<script>
+  // Wire the per-page "Was this helpful?" controls on each full page load.
+  // Starlight does not use client-side view transitions by default, so a
+  // per-load script is correct here. The umami call no-ops safely when the
+  // analytics script is absent (optional chaining never throws).
+  document.querySelectorAll<HTMLElement>('[data-doc-feedback]').forEach((widget) => {
+    const buttons = widget.querySelectorAll<HTMLButtonElement>('[data-doc-feedback-value]');
+    const prompt = widget.querySelector<HTMLElement>('[data-doc-feedback-prompt]');
+    const status = widget.querySelector<HTMLElement>('[data-doc-feedback-status]');
+
+    buttons.forEach((button) => {
+      button.addEventListener('click', () => {
+        const value = button.getAttribute('data-doc-feedback-value');
+        (window as any).umami?.track('doc_helpful', {
+          value,
+          page: window.location.pathname,
+        });
+
+        if (prompt) prompt.hidden = true;
+        if (status) status.textContent = 'Thanks for the feedback.';
+      });
+    });
+  });
+</script>

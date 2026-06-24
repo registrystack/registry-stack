@@ -1,0 +1,14 @@
+- id: registry-relay
+  name: Registry Relay API
+  owner: registry-relay
+  source: Pulled from `registry-relay/openapi/registry-relay.openapi.json` at the pinned ref in `src/data/repo-docs.yaml` by `scripts/fetch-openapi.mjs`. The repo authors an abstract contract that uses templated paths and capability tags, not a per-deployment dump.
+  artifact: openapi/registry-relay.openapi.json
+  status: pulled at the pinned ref (build artifact, regenerated each build). Use `GET /openapi.json` on a running gateway for the instance-specific shape of `{dataset_id}` and `{entity}`. Runtime deployments gate that route by default unless `openapi_requires_auth` is disabled for demos or controlled tooling.
+  reference_path: /reference/apis/relay/
+- id: registry-notary
+  name: Registry Notary API
+  owner: registry-notary
+  source: Pulled from `registry-notary/openapi/registry-notary.openapi.json` at the pinned ref in `src/data/repo-docs.yaml` by `scripts/fetch-openapi.mjs`. The repo generates the spec with `cargo run -p registry-notary-bin -- openapi`.
+  artifact: openapi/registry-notary.openapi.json
+  status: pulled at the pinned ref (build artifact, regenerated each build) with federation, OID4VCI, and response examples
+  reference_path: /reference/apis/notary/

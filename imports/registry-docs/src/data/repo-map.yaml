@@ -1,0 +1,16 @@
+stack_name: registry stack
+site_name: Registry stack docs
+last_reviewed: 2026-05-23
+projects:
+  - registry-platform
+  - registry-relay
+  - registry-manifest
+  - registry-notary
+  - registry-lab
+current_source_repos:
+  registry-platform: ../registry-platform
+  registry-relay: ../registry-relay
+  registry-manifest: ../registry-manifest
+  registry-notary: ../registry-notary
+  registry-lab: ../registry-lab
+rename_plan: ../rename-plan-2026-05-23.md

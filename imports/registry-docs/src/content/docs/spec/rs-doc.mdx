@@ -1,0 +1,163 @@
+---
+title: "RS-DOC: Documentation framework"
+description: How the formal specification layer of the registry stack is structured, identified, versioned, and governed. The conventions every other specification builds on.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-relay
+  - registry-notary
+  - registry-platform
+  - registry-manifest
+last_reviewed: "2026-06-13"
+doc_type: specification
+doc_id: RS-DOC
+category: normative
+evidence: verified
+locale: en
+standards_referenced: []
+audience:
+  - maintainer
+  - specification editor
+---
+
+This document defines how the formal layer of the registry stack documentation is written. It sets the document identifier scheme, the metadata every specification carries, the structure a specification follows, and the conventions for normative language. It is itself a specification, and it follows its own rules so that the layer explains its method by being an example of it.
+
+It is the anchor the other specifications cite. Where another document says "the key words are interpreted per RS-DOC," it means Section 2 below.
+
+## Version history
+
+| Version | Date | Status | Change |
+| --- | --- | --- | --- |
+| 0.1.0 | 2026-06-13 | draft | Initial framework: layers, identifiers, metadata axes, document structure, register, cross-link rule, lifecycle. |
+
+## 1. Scope and layers
+
+The registry stack documentation has three layers. Each document belongs to exactly one of them.
+
+1. **Practical docs.** Task-oriented, developer-facing pages: Get started, Tutorials, Explanation, Reference. They teach and orient.
+2. **Formal docs.** The specifications in this `/spec/` section. They define required behavior, data shapes, and boundaries precisely enough to implement, audit, or govern against. This document governs them.
+3. **Internal evidence.** Release records, security review notes, deployment specifics, working plans, and retrospectives. These stay in the internal repository.
+
+REQ-DOC-001: A formal specification MUST be a distilled public contract. It MUST NOT be a copy of an internal-evidence document. Authors derive a specification from internal material and from shipped code; they do not publish internal material as a specification.
+
+REQ-DOC-002: Where a practical doc and a current normative specification disagree on required behavior, the specification governs. The practical doc MUST be corrected.
+
+This document does not govern the practical docs. Their conventions live in the internal documentation principles and in the site's lint configuration.
+
+## 2. Conventions
+
+The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED", "MAY", and "OPTIONAL" in the normative documents of this layer are to be interpreted as described in BCP 14 ([RFC 2119](https://www.rfc-editor.org/info/rfc2119), [RFC 8174](https://www.rfc-editor.org/info/rfc8174)) when, and only when, they appear in all capitals.
+
+A requirement only binds when it appears in a document whose `category` is `normative` (Section 4). The same words in an `informative` document carry their ordinary English meaning and impose no obligation.
+
+REQ-DOC-003: A normative document MUST state conformance honestly. It MUST NOT advertise conformance to an external standard while implementing only a subset of it. It MUST name the adoption mode (conforms to, implements a subset of, profiles, maps to, or does not adopt) and state what is out of scope. This mirrors the standards register's claim-level discipline.
+
+## 3. Document identifiers
+
+Every specification has a stable identifier in its `doc_id` frontmatter field. The identifier is a citable, permanent contract: external parties reference it, so it does not change once the document is published.
+
+An identifier is `RS-` followed by a prefix that names the subject area, optionally followed by a specific suffix.
+
+| Prefix | Subject area |
+| --- | --- |
+| `RS-DOC` | Documentation framework (this document) |
+| `RS-TERMS` | Terms and abbreviations |
+| `RS-ARC-*` | Architecture |
+| `RS-SEC-*` | Security model |
+| `RS-PR-*` | Protocols and API behavior |
+| `RS-DM-*` | Data models |
+| `RS-OP-*` | Operations and trust |
+| `RS-TEST-*` | Conformance and testing |
+| `RS-DEC-*` | Decisions |
+
+REQ-DOC-004: A `doc_id` MUST match the pattern `RS-` followed by uppercase letters or digits in one or more `-` separated segments. It MUST be unique across the register. The frontmatter check enforces both.
+
+REQ-DOC-005: A published `doc_id` MUST NOT be renumbered or reused. When a document is replaced, the superseding document takes a new identifier, and the superseded document keeps its identifier and points forward (Section 8).
+
+New prefixes are added by amending this document. The register (Section 6) is the authority for which identifiers exist and what state they are in.
+
+## 4. Metadata and the three axes
+
+A specification's canonical metadata is its frontmatter. The register surfaces it; this document does not repeat it in a per-page header table, because a second copy would drift. Three axes describe every specification, and they are independent.
+
+**Status** is the lifecycle state, shared with the rest of the site: `draft`, `current`, `historical`, or `deprecated`. Section 8 defines the transitions.
+
+**Category** is the document's role:
+
+- `normative` defines required behavior. Its MUST and SHOULD statements bind.
+- `informative` explains, motivates, or illustrates. It binds nothing.
+
+**Evidence** is how true the document is against shipped code:
+
+- `verified` is backed by code, tests, fixtures, or generated artifacts that a reader can inspect. A `verified` document carries evidence references to those artifacts (REQ-DOC-014); a claim a reader cannot trace to one is not `verified`.
+- `partial` mixes shipped behavior with target behavior. The document marks which sections are which.
+- `aspirational` describes a target state that is not built yet.
+
+Category and evidence are orthogonal on purpose. The combination that matters most is `normative` plus `aspirational`: a document that defines required behavior for something that does not exist yet. That combination is legitimate (it is how a specification leads implementation) but dangerous if mistaken for current fact.
+
+REQ-DOC-006: A specification MUST declare `doc_id`, `category`, and `evidence` in frontmatter, in addition to the fields every doc carries. The frontmatter check enforces their presence and values for `doc_type: specification`.
+
+REQ-DOC-007: A document whose `evidence` is `aspirational` or `partial` MUST say so in its opening, and a `partial` document MUST mark which requirements are not yet met by shipped code. A reader MUST NOT have to read the code to learn that a requirement is unbuilt.
+
+REQ-DOC-014: A specification whose `evidence` is `verified` MUST carry evidence references: an Evidence section, or per-requirement references, that link the inspectable artifacts substantiating its claims. Acceptable artifacts include published site pages, generated API references, the standards register, and repository sources a reader can open. This holds the formal layer to at least the evidence bar the standards register already meets with its per-entry evidence links.
+
+## 5. Document structure
+
+A normative specification follows this structure. An informative document in the layer MAY use a lighter structure.
+
+1. A short opening that states what the document defines and who it is for.
+2. A **version history** table (Section 8).
+3. Numbered sections. The first SHOULD introduce scope, references to other specifications, and any local conventions beyond Section 2.
+4. Normative statements carried by tagged requirements (below).
+5. A **conformance** section that summarizes what an implementation MUST do to conform, where the document defines an external surface.
+
+Diagrams use Mermaid so they render in light and dark themes and remain in version control. Per the site's accessibility rule, anything a reader needs from a diagram MUST also appear in text.
+
+REQ-DOC-008: Each binding requirement in a normative document SHOULD carry a stable identifier of the form `REQ-<suffix>-<number>`, where `<suffix>` is drawn from the document's `doc_id`. Identifiers let a conformance test or a review reference a single requirement. They are stable once published, on the same basis as `doc_id` (Section 3).
+
+## 6. The register
+
+The [register](../) lists every specification with its identifier, role, evidence state, and lifecycle status. It is generated from each document's frontmatter at build time, so it cannot disagree with the documents it lists.
+
+REQ-DOC-009: A new specification is added by creating its file under `src/content/docs/spec/` with complete frontmatter. It MUST NOT be added to a hand-maintained list, because the register reads the documents directly. The register is the authority for the lifecycle state of every identifier.
+
+## 7. Cross-link discipline
+
+The formal layer is precise; the practical layer is approachable. They stay that way by pointing at each other rather than by each trying to be both.
+
+REQ-DOC-010: A normative specification SHOULD link out to the explanation or tutorial that gives the motivation and a worked example, so a reader who wants the "why" is one click away from it.
+
+REQ-DOC-011: A practical page that states a rule SHOULD link in to the specification and requirement that defines it, so a reader who wants the precise version is one click away from it. This is what lets the practical docs stay readable without hedging: the exact wording lives in the specification.
+
+## 8. Lifecycle and change
+
+A specification moves through `draft` (under development or review), `current` (in force), and then either `deprecated` (still described but no longer recommended) or `historical` (retained for the record and replaced by a newer document).
+
+Each substantive change is recorded in the version-history table using semantic versioning:
+
+- **MAJOR** for a change that alters or removes a normative requirement.
+- **MINOR** for a normative addition that does not break existing conformance.
+- **PATCH** for clarifications and editorial changes that do not change requirements.
+
+REQ-DOC-012: Every change to a normative requirement MUST add a row to the version-history table. The top row is the current version.
+
+REQ-DOC-013: When a specification is superseded, its `status` becomes `historical`, it keeps its `doc_id`, and its opening links to the document that replaces it. The replacement takes a new `doc_id` (Section 3).
+
+## Conformance
+
+A document conforms to RS-DOC when it: is a distilled public contract, not copied internal evidence (REQ-DOC-001); carries a unique, well-formed `doc_id` and the `category` and `evidence` axes (REQ-DOC-004, REQ-DOC-006); states its evidence honestly, including the unbuilt case (REQ-DOC-007); backs a `verified` evidence level with evidence references (REQ-DOC-014); carries a version-history table that records normative changes (REQ-DOC-012); and interprets normative keywords per Section 2. The frontmatter check enforces the mechanical requirements; the rest is a review responsibility.
+
+## Evidence
+
+This specification is `verified`: the mechanisms it defines exist and run, and a reader can inspect them.
+
+- The [register](../) renders from each specification's frontmatter at build time, demonstrating the generated-register rule (Section 6) and the three axes (Section 4).
+- `scripts/check-doc-frontmatter.mjs` enforces the `doc_id`, `category`, and `evidence` fields for `doc_type: specification` (Sections 3 and 4).
+- `styles/RegistryDocsSpec/` and the `[src/content/docs/spec/**]` Vale section enforce the honest-conformance discipline (Section 2).
+- `src/content.config.ts` defines the specification frontmatter; `astro.config.mjs` defines the sidebar group.
+
+## Next
+
+- [RS-TERMS](../rs-terms/) defines the shared vocabulary the other specifications use.
+- [RS-ARC-G](../rs-arc-g/) describes the architecture those specifications refine.
+- The [standards register](../../reference/standards/) records how the stack relates to each external standard, with the claim-level discipline RS-DOC Section 2 refers to.

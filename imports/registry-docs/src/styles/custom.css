@@ -1,0 +1,1370 @@
+@import '@fontsource/public-sans/400.css';
+@import '@fontsource/public-sans/600.css';
+@import '@fontsource/public-sans/700.css';
+@import '@fontsource/ibm-plex-mono/400.css';
+
+:root,
+:root[data-theme='light'],
+:root[data-theme='dark'] {
+  /* Shared identity with registrystack.org: civic blue, ink, and the
+     civic-print palette (ledger paper, stamp red, brass). Keep these in sync
+     with the marketing site's global.css. */
+  --registry-blue: #173b7a;
+  --registry-blue-dark: #102a56;
+  --registry-ink: #161616;
+  --registry-body: #3a3a3a;
+  --registry-muted: #6a6a6a;
+  --registry-rule: #e5e5e5;
+  --registry-sidebar: #fafafa;
+  --registry-active: #eef3ff;
+  --registry-code-bg: #f3f4f6;
+  --registry-paper: #eef2ec;
+  --registry-stamp: #9d2c1d;
+  --registry-brass: #d4af4e;
+  /* Surface tokens. Light values match the constants they replace, so the
+     light theme is unchanged; the dark override below repoints them. --bg is
+     the page canvas, --surface is raised chrome (search, dialogs, right TOC),
+     --ink-rule is the strong masthead/footer/section rule (heavier than the
+     --rule hairline so it survives on a dark canvas). */
+  --registry-bg: #ffffff;
+  --registry-surface: #ffffff;
+  --registry-ink-rule: var(--registry-ink);
+  --registry-preview-border: #c2cce0;
+  --__sl-font: 'Public Sans', system-ui, sans-serif;
+  --__sl-font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+  --sl-font: var(--__sl-font);
+  --sl-font-mono: var(--__sl-font-mono);
+  --sl-color-accent-low: var(--registry-active);
+  --sl-color-accent: var(--registry-blue);
+  --sl-color-accent-high: var(--registry-blue);
+  --sl-color-white: var(--registry-ink);
+  --sl-color-gray-1: var(--registry-ink);
+  --sl-color-gray-2: var(--registry-body);
+  --sl-color-gray-3: var(--registry-muted);
+  --sl-color-gray-4: var(--registry-muted);
+  --sl-color-gray-5: var(--registry-rule);
+  --sl-color-gray-6: var(--registry-sidebar);
+  --sl-color-black: var(--registry-bg);
+  --sl-color-text: var(--registry-body);
+  --sl-color-text-accent: var(--registry-blue);
+  --sl-color-text-invert: var(--registry-blue);
+  --sl-color-bg: var(--registry-bg);
+  --sl-color-bg-nav: var(--registry-bg);
+  --sl-color-bg-sidebar: var(--registry-sidebar);
+  --sl-color-bg-inline-code: var(--registry-code-bg);
+  --sl-color-hairline: var(--registry-rule);
+  --sl-color-hairline-light: var(--registry-rule);
+  --sl-color-hairline-shade: var(--registry-rule);
+  --sl-nav-height: 60px;
+  --sl-nav-pad-x: 28px;
+  --sl-nav-pad-y: 0px;
+  --sl-nav-gap: 24px;
+  --sl-sidebar-width: 300px;
+  --sl-sidebar-pad-x: 28px;
+  --sl-content-width: 720px;
+  --sl-content-pad-x: 56px;
+  --registry-content-max: 832px;
+  --sl-text-base: 16px;
+  --sl-text-sm: 14px;
+  --sl-text-xs: 13px;
+  --sl-text-h1: 38px;
+  --sl-text-h2: 22px;
+  --sl-text-h3: 17px;
+  --sl-line-height: 1.6;
+  --sl-line-height-headings: 1.15;
+}
+
+html,
+body {
+  background: var(--registry-bg);
+}
+
+body {
+  color: var(--registry-body);
+  font-family: var(--__sl-font);
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+* {
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  letter-spacing: 0;
+}
+
+:focus-visible {
+  outline: 2px solid var(--registry-blue);
+  outline-offset: 2px;
+}
+
+/* Masthead rule: a strong ink line under the site name, in the manner of a
+   broadsheet nameplate (same device as the marketing site's header). */
+.page > .header {
+  align-items: stretch;
+  border-bottom: 2px solid var(--registry-ink-rule);
+  padding: 0 var(--sl-nav-pad-x);
+}
+
+.main-frame {
+  background: var(--registry-bg);
+}
+
+.content-panel {
+  padding-block: 32px;
+}
+
+.content-panel + .content-panel {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.content-panel img,
+.sl-markdown-content img,
+.sl-markdown-content picture,
+.sl-markdown-content video,
+.sl-markdown-content iframe {
+  border: 1px solid var(--registry-rule);
+  background: var(--registry-surface);
+}
+
+.registry-header {
+  display: grid;
+  grid-template-rows: 60px;
+  block-size: 60px;
+}
+
+.registry-masthead {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(280px, 526px) minmax(220px, 1fr);
+  align-items: center;
+  gap: 24px;
+}
+
+.registry-wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--registry-ink);
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+/* The same RS block the marketing site's brand carries, so both sites read
+   as one identity. */
+.registry-brand-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  background: var(--registry-blue);
+  color: #ffffff;
+  font-family: var(--__sl-font-mono);
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.registry-wordmark:hover {
+  color: var(--registry-ink);
+}
+
+/* The role tag next to the nameplate, set like the marketing site's
+   nav-entry roles: small blue mono capitals. */
+.registry-docs-tag {
+  color: var(--registry-blue);
+  font-family: var(--__sl-font-mono);
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.registry-version {
+  color: var(--registry-muted);
+  font-family: var(--__sl-font-mono);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.registry-search {
+  min-width: 0;
+}
+
+.registry-search-label {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.registry-utility {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 22px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.registry-version-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--registry-muted);
+  font-family: var(--__sl-font-mono);
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.registry-version-switch select {
+  min-block-size: 32px;
+  border: 1px solid var(--registry-rule);
+  background: var(--registry-surface);
+  color: var(--registry-ink);
+  font: 600 13px/1 var(--__sl-font);
+  padding: 0 28px 0 8px;
+}
+
+/* The theme toggle is set as a quiet utility control: the same bordered,
+   square chrome as the version select, so the masthead (and the mobile menu
+   footer) reads as a row of register controls rather than a button. */
+.registry-utility starlight-theme-select,
+.registry-mobile-menu-footer starlight-theme-select {
+  display: inline-flex;
+  align-items: center;
+}
+
+.registry-utility starlight-theme-select label,
+.registry-mobile-menu-footer starlight-theme-select label {
+  color: var(--registry-muted);
+}
+
+.registry-utility starlight-theme-select label:hover,
+.registry-mobile-menu-footer starlight-theme-select label:hover {
+  color: var(--registry-ink);
+}
+
+/* Only the chrome is overridden (border, surface, ink, type). Padding is left
+   to Starlight's Select, which sizes the inline padding around its leading
+   theme icon and trailing caret, so the icon never overlaps the label. */
+.registry-utility starlight-theme-select select,
+.registry-mobile-menu-footer starlight-theme-select select {
+  min-block-size: 32px;
+  border: 1px solid var(--registry-rule);
+  background: var(--registry-surface);
+  color: var(--registry-ink);
+  font-family: var(--__sl-font);
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.registry-utility a {
+  color: var(--registry-muted);
+  text-decoration: none;
+}
+
+.registry-utility a:hover {
+  color: var(--registry-ink);
+}
+
+.registry-mobile-menu-footer {
+  display: grid;
+  gap: 14px;
+  border-top: 1px solid var(--registry-rule);
+  padding: 18px 24px 22px;
+}
+
+.registry-mobile-menu-footer .registry-version-switch {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.registry-mobile-menu-footer .registry-version-switch select {
+  inline-size: 100%;
+}
+
+.registry-mobile-menu-footer a {
+  color: var(--registry-muted);
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+button[data-open-modal] {
+  border: 1px solid var(--registry-rule) !important;
+  background: var(--registry-surface) !important;
+  color: var(--registry-muted) !important;
+  font-size: 14px !important;
+  min-height: 38px;
+}
+
+button[data-open-modal] kbd {
+  border: 1px solid var(--registry-rule);
+  background: var(--registry-surface);
+  color: var(--registry-muted);
+  font-family: var(--__sl-font-mono);
+}
+
+dialog,
+mobile-starlight-toc .dropdown {
+  background: var(--registry-surface) !important;
+}
+
+dialog::backdrop {
+  backdrop-filter: none !important;
+}
+
+/* The breadcrumb is set as a register kicker: small mono capitals above the
+   page title, the same eyebrow device the marketing site sets over its
+   headings. */
+.registry-breadcrumb {
+  color: var(--registry-muted);
+  font-family: var(--__sl-font-mono);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.registry-breadcrumb a {
+  color: var(--registry-muted);
+  font-weight: 400;
+  text-decoration: none;
+}
+
+.registry-breadcrumb a:hover {
+  color: var(--registry-blue);
+}
+
+.registry-breadcrumb span[aria-current='page'] {
+  color: var(--registry-ink);
+}
+
+h1,
+.sl-markdown-content h1 {
+  margin: 16px 0 0;
+  color: var(--registry-ink) !important;
+  font-size: 38px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.1;
+}
+
+.sl-markdown-content > p:first-child {
+  max-width: 640px;
+  color: var(--registry-body);
+  font-size: 18px;
+  line-height: 1.55;
+}
+
+.sl-markdown-content h2 {
+  color: var(--registry-ink) !important;
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+/* Oxford rule: the short double rule (thick over thin) under section
+   headings, the classic print divider the marketing site uses under its
+   centered headings. */
+.sl-markdown-content h2::after {
+  content: '';
+  display: block;
+  inline-size: 44px;
+  block-size: 3px;
+  margin-block-start: 10px;
+  border-top: 3px solid var(--registry-ink);
+  border-bottom: 1px solid var(--registry-ink);
+}
+
+.sl-markdown-content :where(a) {
+  color: var(--registry-blue);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.sl-markdown-content p :where(a),
+.sl-markdown-content li :where(a) {
+  color: var(--registry-ink);
+  text-decoration: none;
+}
+
+.sl-markdown-content p :where(a:hover),
+.sl-markdown-content li :where(a:hover) {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.sl-markdown-content .sl-heading-wrapper:has(h2[id='next']) + ul {
+  list-style: none;
+  padding-inline-start: 0;
+}
+
+.sl-markdown-content .sl-heading-wrapper:has(h2[id='next']) + ul li {
+  margin-block: 4px;
+}
+
+.sl-markdown-content .sl-heading-wrapper:has(h2[id='next']) + ul a {
+  color: var(--registry-blue);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+code,
+kbd,
+pre {
+  font-family: var(--__sl-font-mono);
+}
+
+.sl-markdown-content code:not(:where(.not-content *)),
+.sl-markdown-content kbd {
+  border: 0;
+  background: var(--registry-code-bg) !important;
+  color: var(--registry-ink);
+  font-size: 0.85em;
+  padding: 0.15em 0.4em;
+}
+
+pre,
+.expressive-code .frame {
+  border: 1px solid var(--registry-rule) !important;
+  background: var(--registry-code-bg) !important;
+}
+
+.expressive-code pre {
+  border: 0 !important;
+  background: var(--registry-code-bg) !important;
+}
+
+.sidebar-pane {
+  background: var(--registry-sidebar) !important;
+}
+
+.sidebar-content {
+  padding-block-start: 16px !important;
+  /* No right gutter: the 16px scrollbar gutter already insets the text, and
+     dropping the padding lets the longest spec labels run a line wider. */
+  padding-inline-end: 0 !important;
+}
+
+.sidebar-content .top-level > li + li {
+  margin-top: 28px;
+}
+
+.sidebar-content details > summary {
+  padding: 0;
+}
+
+/* Top-level groups read as ledger column headings: a strong ink rule above
+   each label (the marketing site tops its proof columns the same way). */
+.sidebar-content .top-level > li > details > summary {
+  border-top: 2px solid var(--registry-ink-rule);
+  padding: 10px 0 0;
+}
+
+.sidebar-content details > summary .caret {
+  display: none;
+}
+
+.sidebar-content .large {
+  color: var(--registry-muted);
+  font-family: var(--__sl-font-mono);
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.sidebar-content a {
+  position: relative;
+  /* Bleed left to the pane edge for the full-width active highlight; on the
+     right the content padding is 0, so only a small text inset is needed. */
+  margin-inline: calc(-1 * var(--sl-sidebar-pad-x)) 0;
+  padding: 6px 8px 6px var(--sl-sidebar-pad-x);
+  border-inline-start: 2px solid transparent;
+  color: var(--registry-ink);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.35;
+  text-decoration: none;
+}
+
+.sidebar-content a:hover {
+  color: var(--registry-blue);
+}
+
+/* The open page is ticked in the register: ink text, stamp-red mark (the
+   marketing site uses the same device for its current nav entry). */
+.sidebar-content [aria-current='page'],
+.sidebar-content [aria-current='page']:hover,
+.sidebar-content [aria-current='page']:focus {
+  background: var(--registry-active) !important;
+  color: var(--registry-ink) !important;
+  font-weight: 600;
+  border-inline-start-color: var(--registry-stamp);
+}
+
+.right-sidebar-container .right-sidebar {
+  position: static !important;
+  inline-size: 100% !important;
+  inset-inline-end: auto !important;
+  block-size: 100% !important;
+  overflow: visible !important;
+}
+
+.registry-page-sidebar {
+  position: sticky;
+  top: var(--sl-nav-height);
+  inline-size: 220px;
+  max-block-size: calc(100vh - var(--sl-nav-height));
+  margin-block-start: 50px;
+  margin-inline-start: 32px;
+  margin-inline-end: auto;
+  overflow-y: auto;
+  border-inline-start: 0;
+  padding: 32px 0;
+  background: var(--registry-bg);
+}
+
+.registry-page-sidebar h2 {
+  margin: 0 0 12px;
+  color: var(--registry-muted);
+  font-family: var(--__sl-font-mono);
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.registry-page-sidebar a {
+  display: block;
+  border-inline-start: 2px solid var(--registry-rule);
+  padding-block: 4px;
+  padding-inline-start: 14px;
+  color: var(--registry-muted);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.registry-page-sidebar a:hover {
+  color: var(--registry-blue);
+}
+
+/* Same ticked-in-the-register device as the left sidebar: the section being
+   read carries the stamp-red mark. */
+.registry-page-sidebar a[aria-current='true'],
+.registry-page-sidebar a[aria-current='location'] {
+  border-inline-start-color: var(--registry-stamp);
+  color: var(--registry-ink);
+  font-weight: 600;
+}
+
+.registry-page-sidebar-section nav > ul {
+  border-inline-start: 0;
+  list-style: none;
+  padding-inline-start: 0;
+}
+
+.registry-page-sidebar-section nav > ul ul {
+  list-style: none;
+  padding-inline-start: 14px;
+}
+
+.registry-page-meta {
+  margin-top: 32px;
+}
+
+.registry-page-meta a {
+  color: var(--registry-ink);
+  font-size: 12.5px;
+  font-weight: 400;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.registry-page-meta p {
+  margin: 12px 0 0;
+  color: var(--registry-muted);
+  font-size: 12.5px;
+}
+
+/* The footer rule bookends the masthead: the page opens and closes on the
+   same strong ink line. */
+.registry-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  margin-top: 48px;
+  border-top: 2px solid var(--registry-ink-rule);
+  padding: 16px 0 0;
+  color: var(--registry-muted);
+  font-size: 13px;
+}
+
+.registry-footer p {
+  margin: 0;
+  font-family: var(--__sl-font-mono);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.registry-footer nav {
+  display: flex;
+  gap: 24px;
+}
+
+.registry-footer a {
+  color: var(--registry-muted);
+  text-decoration: none;
+}
+
+.legend-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-block: 1px solid var(--registry-rule);
+}
+
+.legend-list li + li {
+  border-top: 1px solid var(--registry-rule);
+}
+
+.legend-list a {
+  display: grid;
+  grid-template-columns: 28px 190px minmax(0, 1fr);
+  gap: 12px 38px;
+  align-items: start;
+  padding: 12px 0;
+  color: var(--registry-body);
+  text-decoration: none !important;
+}
+
+.legend-index {
+  color: var(--registry-blue);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.legend-project {
+  display: grid;
+  gap: 2px;
+}
+
+.legend-project span {
+  color: var(--registry-ink);
+  font-weight: 600;
+}
+
+.legend-project code {
+  color: var(--registry-muted);
+  font-size: 11.5px;
+}
+
+.legend-description {
+  color: var(--registry-body);
+}
+
+.registry-table {
+  display: block;
+  inline-size: 100%;
+  overflow-x: auto;
+}
+
+.registry-table table {
+  inline-size: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.registry-table th {
+  color: var(--registry-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-align: start;
+  text-transform: uppercase;
+}
+
+.registry-table th,
+.registry-table td {
+  border-bottom: 1px solid var(--registry-rule);
+  padding: 10px 12px;
+  vertical-align: top;
+}
+
+.registry-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.status-chip,
+.claim-chip,
+.adoption-chip {
+  display: inline;
+  border: 0;
+  padding: 0;
+  color: var(--registry-muted);
+  font-family: var(--__sl-font-mono);
+  font-size: 0.78rem;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.claim-chip {
+  background: transparent;
+}
+
+.source-note {
+  color: var(--registry-muted);
+  font-size: 0.85rem;
+}
+
+/* Asides sit on quiet ledger paper, like the marketing site's record slips. */
+.starlight-aside {
+  border: 1px solid var(--registry-rule) !important;
+  border-inline-start: 4px solid var(--registry-blue) !important;
+  background: var(--registry-paper) !important;
+  color: var(--registry-body) !important;
+}
+
+mobile-starlight-toc nav {
+  min-height: 44px;
+  border-top: 0 !important;
+  border-bottom: 1px solid var(--registry-rule);
+}
+
+mobile-starlight-toc summary {
+  height: 44px !important;
+  padding-block: 0 !important;
+}
+
+@media (min-width: 72rem) {
+  main {
+    max-width: calc(720px + 112px);
+    margin-inline: auto;
+  }
+}
+
+@media (min-width: 72rem) and (max-width: 85.999rem) {
+  .right-sidebar-container {
+    display: none;
+  }
+
+  :root[data-has-sidebar][data-has-toc] .main-pane {
+    --sl-content-margin-inline: 0 auto;
+    width: 100% !important;
+  }
+}
+
+@media (min-width: 86rem) {
+  /* Center the content + TOC group on wide viewports so the page doesn't
+     leave a 500px+ gap between text and the table of contents. Override
+     Starlight's default "fill all the space" formula for both panes. */
+  .main-frame > .lg\:sl-flex {
+    justify-content: center;
+  }
+
+  :root[data-has-sidebar][data-has-toc] .main-pane {
+    width: calc(720px + 112px) !important;
+    flex: 0 0 auto;
+  }
+
+  .right-sidebar-container {
+    width: calc(220px + 64px) !important;
+    flex: 0 0 auto;
+  }
+
+  .right-sidebar {
+    width: 100% !important;
+  }
+}
+
+@media (min-width: 50rem) {
+  :root,
+  :root[data-theme='light'],
+  :root[data-theme='dark'] {
+    --sl-mobile-toc-height: 0rem;
+  }
+
+  .registry-mobile-toc {
+    display: none !important;
+  }
+}
+
+@media (max-width: 72rem) {
+  .registry-page-sidebar {
+    position: static;
+    inline-size: auto;
+  }
+}
+
+@media (max-width: 50rem) {
+  :root,
+  :root[data-theme='light'],
+  :root[data-theme='dark'] {
+    --sl-nav-height: 64px;
+    --sl-nav-pad-x: 16px;
+    --sl-content-pad-x: 20px;
+  }
+
+  .page > .header {
+    padding-inline: 16px;
+  }
+
+  .registry-header {
+    grid-template-rows: 64px;
+    block-size: 64px;
+  }
+
+  .registry-masthead {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 16px;
+  }
+
+  .registry-search {
+    display: none;
+  }
+
+  .registry-wordmark {
+    flex-wrap: wrap;
+    gap: 8px;
+    font-size: 19px;
+  }
+
+  /* Hidden on mobile: the link overlaps the fixed hamburger menu button,
+     and the same GitHub URL is reachable from the preview banner and the
+     per-page "Edit on GitHub" link. */
+  .registry-utility {
+    display: none;
+  }
+
+  .legend-list a {
+    grid-template-columns: 28px minmax(0, 1fr);
+  }
+
+  .legend-description {
+    grid-column: 2;
+  }
+
+  .registry-footer {
+    display: grid;
+  }
+}
+
+/* The preview notice reads as a record slip pinned above the page: ledger
+   paper with a perforated edge, the same artifact device the marketing site
+   uses for its product cards. */
+.registry-preview-banner {
+  margin: 24px var(--sl-content-pad-x) 0;
+  border: 1px dashed var(--registry-preview-border);
+  background: var(--registry-paper);
+  color: var(--registry-body);
+  padding: 10px 14px;
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+.registry-preview-banner p {
+  margin: 0;
+  max-inline-size: 1100px;
+}
+
+.registry-preview-banner strong {
+  color: var(--registry-stamp);
+  font-weight: 700;
+  font-family: var(--__sl-font-mono);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin-inline-end: 6px;
+}
+
+.registry-preview-banner a {
+  color: var(--registry-blue);
+  text-decoration: underline;
+}
+
+/* Figures with SVG diagrams are authored at a 720px viewBox; cap them so the
+   embedded text renders at its designed size on wide layouts. */
+.sl-markdown-content figure {
+  margin: 1.5rem 0;
+  max-width: 720px;
+}
+
+.sl-markdown-content figure img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+/* ── Card layouts (StandardsTable, ContractsTable, OpenApiSourcesTable, ProjectMap) ── */
+
+.standards-list,
+.contracts-list,
+.openapi-sources-list,
+.project-map,
+.home-landing {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.standards-card,
+.contracts-card,
+.openapi-source,
+.project-card,
+.home-card {
+  border: 1px solid var(--registry-rule);
+  padding: 20px 24px;
+  width: 100%;
+}
+
+/* Homepage primary action: a single bordered "See it live" control (the
+   redoc-link device) with quiet secondary links alongside, set on the
+   standfirst, before the section index. No band, no fill, no hype. */
+.home-actions {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  margin-block: 20px 32px;
+}
+
+.home-cta {
+  padding: 7px 16px;
+}
+
+.home-actions-secondary {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  font-size: var(--sl-text-sm);
+  font-weight: 600;
+}
+
+/* The "Then read" follow-ups read as a quiet list under the start link. */
+.home-then a + span {
+  color: var(--registry-muted);
+}
+
+/* Card header */
+
+.card-header {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin-bottom: 12px;
+}
+
+.card-header h3 {
+  margin: 0;
+  color: var(--registry-ink);
+  font-size: var(--sl-text-h3);
+  font-weight: 700;
+  line-height: var(--sl-line-height-headings);
+}
+
+.card-header h3 a {
+  color: var(--registry-ink);
+  text-decoration: none;
+}
+
+.card-header h3 a:hover {
+  color: var(--registry-blue);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.card-id {
+  color: var(--registry-muted);
+  font-size: 11.5px;
+}
+
+.card-header-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Metadata key/value rows */
+
+.card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 0;
+  margin: 0 0 14px;
+  padding: 10px 0;
+  border-top: 1px solid var(--registry-rule);
+  border-bottom: 1px solid var(--registry-rule);
+  font-size: var(--sl-text-sm);
+}
+
+/* The same ledger key/value strip, used standalone on tutorial pages to carry
+   Outcome / Time / Prerequisites under the lead paragraph. */
+.quickstart-meta {
+  margin-block: 16px 28px;
+}
+
+.card-meta dt {
+  color: var(--registry-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin-inline-end: 6px;
+}
+
+.card-meta dt::after {
+  content: ':';
+}
+
+.card-meta dd {
+  margin: 0;
+  margin-inline-end: 18px;
+  color: var(--registry-body);
+}
+
+.card-meta dd:last-child {
+  margin-inline-end: 0;
+}
+
+/* Inline chip tags (Used by, Surface, Owner) */
+
+.meta-chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.inline-chip {
+  display: inline-block;
+  padding: 1px 6px;
+  background: var(--registry-code-bg);
+  color: var(--registry-muted);
+  font-family: var(--__sl-font-mono);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* Card body prose */
+
+.card-body {
+  margin-bottom: 12px;
+  font-size: var(--sl-text-sm);
+  color: var(--registry-body);
+}
+
+.card-body p {
+  margin: 0 0 6px;
+}
+
+.card-body p:last-child {
+  margin-bottom: 0;
+}
+
+.field-label {
+  font-weight: 700;
+  margin-inline-end: 4px;
+}
+
+/* Card footer (evidence / source docs) */
+
+.card-footer {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--registry-rule);
+  font-size: var(--sl-text-sm);
+}
+
+.footer-label {
+  color: var(--registry-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.link-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.link-list li {
+  margin: 0;
+}
+
+/* Redoc button link */
+
+.redoc-link {
+  display: inline-block;
+  padding: 4px 12px;
+  border: 1px solid var(--registry-blue);
+  color: var(--registry-blue) !important;
+  font-size: var(--sl-text-sm);
+  font-weight: 600;
+  text-decoration: none !important;
+}
+
+.redoc-link:hover {
+  background: var(--registry-active);
+}
+
+/* Starlight language tabs */
+
+starlight-tabs [role='tablist'] {
+  gap: 2px;
+}
+
+starlight-tabs [role='tab'] {
+  border: 1px solid transparent;
+  border-block-end: 0;
+  margin-block-end: -1px;
+}
+
+starlight-tabs [role='tab'][aria-selected='true'] {
+  border-color: var(--registry-blue);
+  background: var(--registry-active);
+  color: var(--registry-blue);
+}
+
+starlight-tabs [role='tab']:not([aria-selected='true']):hover {
+  background: var(--registry-code-bg);
+  color: var(--registry-ink);
+}
+
+/* ProjectMap: two-column owns / does-not-own grid */
+
+.project-ownership {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 12px;
+  padding: 12px 0;
+  border-top: 1px solid var(--registry-rule);
+  border-bottom: 1px solid var(--registry-rule);
+}
+
+.ownership-label {
+  margin: 0 0 8px;
+  color: var(--registry-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.ownership-col ul {
+  margin: 0;
+  padding-inline-start: 18px;
+  font-size: var(--sl-text-sm);
+  color: var(--registry-body);
+}
+
+.ownership-col li {
+  margin-block: 3px;
+}
+
+@media (max-width: 640px) {
+  .project-ownership {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Dark theme ──────────────────────────────────────────────────────────────
+   Civic-print, inverted. A charcoal canvas (not OLED black), the civic blue
+   lifted so links clear WCAG AA on dark, and the ink-rule device kept as a
+   light rule on dark. Every other rule in this file already cascades from the
+   --registry-* vars, so it flips automatically. Contrast on --registry-bg
+   (#16181d): body ~10.5:1, links ~7.2:1, headings ~15:1, muted ~5.4:1. Keep in
+   sync with registrystack.org's dark palette. This block must stay after the
+   shared :root block so it wins under [data-theme='dark']. */
+:root[data-theme='dark'] {
+  --registry-blue: #7da3e0;
+  --registry-blue-dark: #a8c4ef;
+  --registry-ink: #f2f3f5;
+  --registry-body: #c7cad0;
+  --registry-muted: #9aa0a8;
+  --registry-rule: #2f333b;
+  --registry-sidebar: #1b1e24;
+  --registry-active: #202a3d;
+  --registry-code-bg: #212530;
+  --registry-paper: #1d2128;
+  --registry-stamp: #e0735f;
+  --registry-brass: #e6c66a;
+
+  --registry-bg: #16181d;
+  --registry-surface: #1b1e24;
+  --registry-ink-rule: #3c424c;
+  --registry-preview-border: #3a4763;
+
+  /* A few Starlight tokens were pinned to light constants in the shared block;
+     re-point the ones that affect dark legibility so the cascade is complete. */
+  --sl-color-bg: var(--registry-bg);
+  --sl-color-bg-nav: var(--registry-bg);
+  --sl-color-black: var(--registry-bg);
+  --sl-color-bg-sidebar: var(--registry-sidebar);
+  --sl-color-bg-inline-code: var(--registry-code-bg);
+  --sl-color-white: var(--registry-ink);
+  --sl-color-text: var(--registry-body);
+  --sl-color-text-accent: var(--registry-blue);
+  --sl-color-text-invert: var(--registry-bg);
+  --sl-color-hairline: var(--registry-rule);
+  --sl-color-hairline-light: var(--registry-rule);
+  --sl-color-hairline-shade: var(--registry-rule);
+}
+
+/* ── Per-page footer (RegistryFooter override) ───────────────────────────────
+   Pagination, review/edit meta, and the "Was this helpful?" feedback row that
+   sit above the site-footer line. Themed entirely from the --registry-* tokens
+   (and the squared-by-default global rule), so it tracks light and dark with no
+   per-theme values here. The feedback buttons mirror the .redoc-link / version
+   -switch control chrome: 1px bordered, transparent fill, hover fills with the
+   active wash. */
+.registry-page-footer {
+  margin-top: 48px;
+  border-top: 1px solid var(--registry-rule);
+  padding-top: 20px;
+  display: grid;
+  gap: 24px;
+}
+
+/* Pagination: prev on the left, next on the right; stacks on narrow screens. */
+.doc-pagination {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.doc-pagination-link {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid var(--registry-rule);
+  padding: 10px 14px;
+  color: var(--registry-ink);
+  text-decoration: none;
+}
+
+.doc-pagination-link:hover {
+  background: var(--registry-active);
+}
+
+.doc-pagination-next {
+  text-align: end;
+}
+
+.doc-pagination-eyebrow {
+  color: var(--registry-muted);
+  font-family: var(--__sl-font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.doc-pagination-label {
+  color: var(--registry-ink);
+  font-size: var(--sl-text-sm);
+  font-weight: 600;
+}
+
+/* Meta row: small muted items separated by a middot, like the site footer. */
+.doc-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 0;
+  color: var(--registry-muted);
+  font-size: var(--sl-text-sm);
+}
+
+.doc-meta-item + .doc-meta-item::before {
+  content: ' · ';
+  color: var(--registry-muted);
+  white-space: pre;
+}
+
+a.doc-meta-item {
+  color: var(--registry-blue);
+  text-decoration: none;
+}
+
+a.doc-meta-item:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* Feedback: a label and two small square bordered controls. The status row is
+   always present (reserved height) so swapping in the acknowledgement does not
+   shift layout. */
+.doc-feedback {
+  display: grid;
+  gap: 8px;
+}
+
+.doc-feedback-prompt {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.doc-feedback-label {
+  color: var(--registry-muted);
+  font-size: var(--sl-text-sm);
+}
+
+.doc-feedback-buttons {
+  display: inline-flex;
+  gap: 8px;
+}
+
+.doc-feedback-buttons button {
+  border: 1px solid var(--registry-ink-rule);
+  background: transparent;
+  color: var(--registry-ink);
+  font: 600 13px/1 var(--__sl-font);
+  padding: 6px 14px;
+  cursor: pointer;
+}
+
+.doc-feedback-buttons button:hover {
+  background: var(--registry-active);
+}
+
+.doc-feedback-status {
+  margin: 0;
+  min-block-size: 1.2em;
+  color: var(--registry-muted);
+  font-size: var(--sl-text-sm);
+}
+
+@media (max-width: 50rem) {
+  .doc-pagination {
+    grid-template-columns: 1fr;
+  }
+
+  .doc-pagination-next {
+    text-align: start;
+  }
+}

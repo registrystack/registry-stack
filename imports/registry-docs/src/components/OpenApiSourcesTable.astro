@@ -1,0 +1,38 @@
+---
+import sources from '../data/generated/openapi-sources.json';
+
+const base = import.meta.env.BASE_URL === '/' ? '' : import.meta.env.BASE_URL.replace(/\/$/, '');
+
+function withBase(path: string) {
+  return path.startsWith('/') ? `${base}${path}` : path;
+}
+---
+
+<div class="openapi-sources-list">
+  {sources.map((source) => (
+    <section class="openapi-source" id={source.id}>
+      <header class="card-header">
+        <h3>{source.name}</h3>
+        <code class="card-id">{source.id}</code>
+      </header>
+
+      <dl class="card-meta">
+        <dt>Owner</dt>
+        <dd><span class="inline-chip">{source.owner}</span></dd>
+        <dt>Status</dt>
+        <dd>{source.status}</dd>
+        <dt>Source</dt>
+        <dd><code>{source.source}</code></dd>
+        <dt>Pinned artifact</dt>
+        <dd><code>{source.artifact}</code></dd>
+      </dl>
+
+      {source.reference_path && (
+        <footer class="card-footer">
+          <a href={withBase(source.reference_path)} class="redoc-link">Open API reference</a>
+        </footer>
+      )}
+    </section>
+  ))}
+</div>
+<p class="source-note">Generated from <code>src/data/openapi-sources.yaml</code>.</p>

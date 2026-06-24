@@ -1,0 +1,159 @@
+[
+  {
+    "id": "registry-platform",
+    "name": "Registry Platform",
+    "repo_path": "../registry-platform",
+    "target_repo_path": "../registry-platform",
+    "role": "Shared Rust workspace for security and operational primitives consumed by Registry Relay, Registry Notary, and related registry services, including auth helpers, OIDC verification, JWKS fetching, audit envelopes, HTTP security, outbound HTTP policy, crypto, SD-JWT VC support, and test fixtures.",
+    "owns": [
+      "Shared auth, OIDC, JWKS fetching, audit, HTTP security, outbound HTTP, crypto, SD-JWT, and testing primitives.",
+      "OID4VCI credential offer, nonce, credential request, and issuer metadata primitives via the `registry-platform-oid4vci` crate.",
+      "Cross-service crate APIs that must behave consistently in Relay, Notary, and future registry services.",
+      "Shared Rust hygiene templates and supported integration-test fixtures."
+    ],
+    "does_not_own": [
+      "Registry Relay runtime data access, entity routing, metadata publication, or scope policy semantics.",
+      "Registry Notary claim configuration, evaluation rules, disclosure policy decisions, or service routes.",
+      "Product-level authorization policy, tenant isolation, audit retention, secret provisioning, or deployment configuration."
+    ],
+    "source_docs": [
+      {
+        "label": "README",
+        "url": "https://github.com/jeremi/registry-platform"
+      },
+      {
+        "label": "Registry Platform crates",
+        "url": "https://github.com/jeremi/registry-platform/tree/88d1a798043673dac30d809d87badb083c6e1a26/crates"
+      }
+    ],
+    "rename_status": "New shared workspace; not part of the 2026-05-23 rename wave."
+  },
+  {
+    "id": "registry-manifest",
+    "name": "Registry Manifest",
+    "repo_path": "../registry-manifest",
+    "target_repo_path": "../registry-manifest",
+    "role": "Renders standards-shaped catalog, service, schema, form, policy, evidence-offering, public Notary federation, OGC Records, and embedded SKOS-shaped codelist metadata from a single YAML metadata manifest, so a registry's published surface stays consistent across formats.",
+    "owns": [
+      "Metadata manifest model and compiled metadata model.",
+      "Pure renderers for catalog, DCAT, CPSV-AP service catalogues, CCCEV requirements and evidence type lists, BRegDCAT-AP, SHACL, JSON Schema, form JSON Schema, OGC Records, policies, evidence offerings, and embedded SKOS-shaped codelist nodes.",
+      "Public Registry Notary federation metadata and evaluation profile validation.",
+      "CLI validation, rendering, static publication, and profile fixture validation."
+    ],
+    "does_not_own": [
+      "Registry Relay runtime data access.",
+      "Auth, audit, observability, DataFusion, Postgres, Axum, or secret handling.",
+      "Production source configuration."
+    ],
+    "source_docs": [
+      {
+        "label": "README",
+        "url": "https://github.com/jeremi/registry-manifest"
+      },
+      {
+        "label": "Local examples",
+        "url": "https://github.com/jeremi/registry-manifest/blob/52da5e913d8652e98ce8e443102c5d23b1a0974f/examples/README.md"
+      }
+    ],
+    "rename_status": "Already using the target repo name locally."
+  },
+  {
+    "id": "registry-relay",
+    "name": "Registry Relay",
+    "repo_path": "../registry-relay",
+    "target_repo_path": "../registry-relay",
+    "role": "Read-only HTTP gateway that fronts a sensitive registry database. Exposes entity-shaped query routes, caller-scoped metadata, evidence-offering discovery, optional OGC API adapters, and optional signed response provenance while composing shared auth, OIDC, audit, HTTP security, crypto, and SD-JWT primitives from Registry Platform.",
+    "owns": [
+      "Runtime configuration and source binding.",
+      "Entity-shaped Registry Data API routes.",
+      "Relay-specific API key and OIDC resource-server configuration, scope checks, and route enforcement.",
+      "Caller-scoped metadata publication.",
+      "Relay-native evidence offering discovery and publication."
+    ],
+    "does_not_own": [
+      "Source-registry provisioning, write-back, or domain-data mutation paths in v1.",
+      "Portable metadata schema ownership.",
+      "Standalone claim service internals owned by Registry Notary.",
+      "Shared security and operational primitives owned by Registry Platform.",
+      "Storage table ids or arbitrary SQL in public APIs."
+    ],
+    "source_docs": [
+      {
+        "label": "README",
+        "url": "https://github.com/jeremi/registry-relay"
+      },
+      {
+        "label": "Local API docs",
+        "url": "https://github.com/jeremi/registry-relay/blob/917e8064b62b8f86f35425a61fe66d3a4b5db921/docs/api.md"
+      },
+      {
+        "label": "Local metadata docs",
+        "url": "https://github.com/jeremi/registry-relay/blob/917e8064b62b8f86f35425a61fe66d3a4b5db921/docs/metadata.md"
+      }
+    ],
+    "rename_status": "Local checkout renamed to `registry-relay`; old worktrees under `registry_relay-*` remain for historical evidence."
+  },
+  {
+    "id": "registry-notary",
+    "name": "Registry Notary",
+    "repo_path": "../registry-notary",
+    "target_repo_path": "../registry-notary",
+    "role": "Standalone service that evaluates eligibility claims against registry data, serves static-peer federated delegated evaluation, and issues SD-JWT verifiable credentials with selective disclosure, composing shared auth, audit, OIDC, HTTP security, crypto, SD-JWT, and testing primitives from Registry Platform.",
+    "owns": [
+      "Claim configuration and evaluation.",
+      "Disclosure policy and redacted audit event semantics.",
+      "Registry Notary API routes.",
+      "Static-peer delegated evaluation at `/federation/v1/evaluations`.",
+      "Credential issuance workflow and claim-to-credential mapping.",
+      "OID4VCI Draft 13 credential offer flow (credential-offer, nonce, credential endpoints) and the `/.well-known/openid-credential-issuer` metadata endpoint.",
+      "HTTP source connectors for Registry Data API and SP DCI-style sources."
+    ],
+    "does_not_own": [
+      "Registry Relay source code or runtime internals.",
+      "Portable metadata renderers owned by Registry Manifest.",
+      "Shared security and operational primitives owned by Registry Platform.",
+      "Open federation, dynamic trust-chain discovery, shared replay storage, or federated credential issuance.",
+      "Browser inspection workflows outside the current formal v1 stack scope."
+    ],
+    "source_docs": [
+      {
+        "label": "README",
+        "url": "https://github.com/jeremi/registry-notary"
+      },
+      {
+        "label": "OpenAPI source",
+        "url": "https://github.com/jeremi/registry-notary/blob/4fb5fcf137edb628f3dc4bfedd42891dbbdebb03/crates/registry-notary-server/src/openapi.rs"
+      }
+    ],
+    "rename_status": "Already using the target repo name locally."
+  },
+  {
+    "id": "registry-lab",
+    "name": "Registry Lab",
+    "repo_path": "../registry-lab",
+    "target_repo_path": "../registry-lab",
+    "role": "Docker Compose demo of the registry runtime on a laptop. Wires three Relay instances, four Notary instances, live Postgres and Zitadel services, a source adapter sidecar scenario (using built-in http_json/http_flow/fhir engines), a static metadata publisher, and narrated demo clients together with Registry Platform, Relay, and Notary source pins, fixtures, and smoke tests.",
+    "owns": [
+      "End-to-end local topology for Relay, Notary, live Postgres, live Zitadel, the source adapter sidecar path (built-in http_json/http_flow/fhir engines), the static metadata publisher, and demo-client fixtures.",
+      "Demo scripts, smoke checks, generated local credentials, live-service checks, static metadata checks, and narrated client flows.",
+      "Citizen self-attestation walkthrough that exercises the Notary OID4VCI flow end-to-end through the `just citizen-oid4vci-*` recipes.",
+      "Acceptance rehearsal after rename waves land."
+    ],
+    "does_not_own": [
+      "Production deployment guidance.",
+      "Normative API or metadata contracts.",
+      "Real product integrations for OpenCRVS, OpenSPP, DHIS2, OpenIMIS, MOSIP, or other systems."
+    ],
+    "source_docs": [
+      {
+        "label": "README",
+        "url": "https://github.com/jeremi/registry-lab/blob/9814a8e3286b324616b887f7258a902efefcfb00/README.md"
+      },
+      {
+        "label": "Rename plan",
+        "url": "https://github.com/jeremi/registry-docs/blob/e926f05441f39eb2d633979c3bc5a3552f5cf6e2/rename-plan-2026-05-23.md"
+      }
+    ],
+    "rename_status": "Local checkout renamed to `registry-lab`; stable demo identifiers may still contain `decentralized-demo` as protocol and artifact values."
+  }
+]

@@ -1,0 +1,84 @@
+---
+title: When to use Registry Stack
+description: What Registry Stack is, when it fits a registry integration problem, and the non-goals it deliberately leaves to other systems.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-relay
+  - registry-notary
+last_reviewed: "2026-06-20"
+doc_type: explanation
+locale: en
+standards_referenced:
+  - oid4vci
+  - sd-jwt-vc
+---
+
+Registry Stack is a registry-facing layer for institutions that already hold authoritative data.
+It does not store records or run a domain registry. It adds controlled service surfaces over data
+you already operate: a published metadata contract, protected registry APIs, governed evidence
+responses, and tamper-evident audit records.
+
+This is the one "why" page these docs keep. For broader problem framing, who benefits, and where
+the stack fits in a wider ecosystem, see [registrystack.org](https://registrystack.org/).
+
+## What it is
+
+Registry Stack supports two runtime patterns:
+
+- Protected Registry APIs expose files, extracts, databases, and legacy registry systems through
+  scoped, read-only routes.
+- Evidence Gateway evaluates the request, source context, policy, freshness, redaction, and audit
+  requirements before returning a protected read, minimized fact, selected value, signed claim
+  result, credential, redacted result, or denial.
+
+These docs cover the two products you build against directly:
+
+- Registry Relay exposes existing source data (a file, extract, database, or legacy system) through
+  protected, scoped, read-only HTTP routes, without giving callers database access.
+- Registry Notary evaluates configured claims and returns a status, predicate, selected value, or
+  signed credential, instead of the full source record.
+
+The wider current stack (Registry Manifest for portable metadata, Registry Platform for shared
+primitives, and Registry Lab for a local compose demo) is described at
+[registrystack.org](https://registrystack.org/). For how the pieces connect at runtime, see the
+[architecture overview](../../explanation/architecture/).
+
+## When to use it
+
+Reach for Registry Stack when a registry that already exists needs a governed read path, and one or
+more of the following is true:
+
+- Data exists in files, extracts, databases, or legacy systems, but other services cannot depend on
+  a clear, approved interface over it.
+- Callers need a status or evidence response, but the available record APIs move more data than the
+  purpose requires.
+- A data-sharing agreement describes intended access on paper, but the API itself has no scopes, no
+  purpose field, no disclosure limits, and no audit record.
+- Other teams need to inspect a registry's fields, schemas, policies, services, and evidence
+  offerings before they integrate.
+- A registry-backed issuer needs to produce SD-JWT VC credentials or run an OID4VCI issuance flow.
+
+For how the stack wires in behind exchange layers, workflow engines, wallets, and domain platforms,
+see the [architecture overview](../../explanation/architecture/).
+
+## Non-goals
+
+Registry Stack deliberately leaves these to other systems:
+
+- It does not replace a domain registry platform (such as OpenCRVS, OpenSPP, DHIS2, or OpenIMIS), a
+  workflow engine, an exchange layer, a wallet, or a public-service portal. It provides the
+  registry-facing controls those systems call.
+- It does not solve foundational identity, deduplication, legal authority, semantic governance, or
+  institutional approval by itself. It makes those boundaries explicit so they can be reviewed
+  before data moves.
+- Registry Relay does not mutate source registry data: provisioning, inserts, updates, and write-back
+  are out of scope for its consultation API.
+- Registry Relay is not an open-data portal: it publishes restricted consultation APIs for
+  authorized systems only.
+
+## Next
+
+- [See it live](../see-it-live/)
+- [Choose by question (homepage router)](../../)
+- [Architecture overview](../../explanation/architecture/)

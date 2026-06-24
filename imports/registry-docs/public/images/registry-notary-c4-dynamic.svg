@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 500" role="img"
+     font-family="'Public Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
+     text-rendering="geometricPrecision">
+  <title>Registry Notary C4 dynamic view</title>
+  <desc>C4-style dynamic diagram for Registry Notary evidence issuance. Numbered interactions show a caller requesting a claim, Notary fetching facts from a registry source, applying disclosure policy, issuing an evidence artifact, returning it to the caller, and writing audit.</desc>
+
+  <g fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">
+    <text x="24" y="34">C4 SUPPORTING VIEW</text>
+    <text x="188" y="34">DYNAMIC</text>
+  </g>
+  <rect x="24" y="42" width="32" height="2" fill="#000091"/>
+
+  <g fill="#ffffff" stroke="#e5e5e5" stroke-width="1">
+    <rect x="52" y="150" width="128" height="88"/>
+    <rect x="282" y="88" width="198" height="96"/>
+    <rect x="584" y="112" width="128" height="88"/>
+    <rect x="230" y="300" width="150" height="78"/>
+    <rect x="446" y="300" width="150" height="78"/>
+    <rect x="606" y="388" width="118" height="64"/>
+  </g>
+
+  <g fill="#161616" font-size="13" font-weight="700">
+    <text x="78" y="184">Client</text>
+    <text x="78" y="202">or wallet</text>
+    <text x="306" y="124">Registry Notary</text>
+    <text x="306" y="142">claim service</text>
+    <text x="610" y="146">Registry</text>
+    <text x="610" y="164">source</text>
+    <text x="254" y="332">Disclosure</text>
+    <text x="254" y="350">policy</text>
+    <text x="470" y="332">Credential</text>
+    <text x="470" y="350">issuer</text>
+    <text x="630" y="416">Audit</text>
+    <text x="630" y="434">sink</text>
+  </g>
+  <g fill="#6a6a6a" font-size="11.5"
+     font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">
+    <text x="78" y="218">[External]</text>
+    <text x="306" y="158">[Container]</text>
+    <text x="610" y="180">[External]</text>
+    <text x="254" y="366">[Component]</text>
+    <text x="470" y="366">[Component]</text>
+    <text x="630" y="448">[External]</text>
+  </g>
+
+  <g stroke="#000091" stroke-width="1.2" fill="none">
+    <path d="M180 190 C220 166 238 140 282 136"/>
+    <polyline points="274,132 282,136 275,140"/>
+
+    <path d="M480 126 C526 114 548 130 584 150"/>
+    <polyline points="576,150 584,150 578,144"/>
+
+    <path d="M584 174 C536 204 514 198 480 166"/>
+    <polyline points="488,168 480,166 484,173"/>
+
+    <path d="M356 184 C334 228 312 260 304 300"/>
+    <polyline points="301,292 304,300 309,294"/>
+
+    <path d="M380 340 C406 340 420 340 446 340"/>
+    <polyline points="440,336 446,340 440,344"/>
+
+    <path d="M446 360 C360 458 190 420 116 238"/>
+    <polyline points="114,246 116,238 122,244"/>
+
+    <path d="M596 354 C636 360 650 374 652 388"/>
+    <polyline points="647,382 652,388 656,381"/>
+  </g>
+
+  <g fill="#000091" font-size="13" font-weight="700">
+    <text x="216" y="138">1</text>
+    <text x="524" y="116">2</text>
+    <text x="526" y="216">3</text>
+    <text x="326" y="244">4</text>
+    <text x="410" y="326">5</text>
+    <text x="286" y="440">6</text>
+    <text x="622" y="374">7</text>
+  </g>
+  <g fill="#3a3a3a" font-size="11.5">
+    <text x="188" y="120">request claim</text>
+    <text x="506" y="98">fetch facts</text>
+    <text x="506" y="236">return facts</text>
+    <text x="286" y="258">apply rule</text>
+    <text x="392" y="314">shape result</text>
+    <text x="244" y="460">return artifact</text>
+    <text x="618" y="358">write audit</text>
+  </g>
+
+  <line x1="24" y1="466" x2="736" y2="466" stroke="#e5e5e5" stroke-width="1"/>
+</svg>

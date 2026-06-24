@@ -1,0 +1,81 @@
+- id: registry-platform.crate-apis
+  name: Registry Platform Crate APIs
+  owner: registry-platform
+  status: current-source
+  surface: Shared Rust crate APIs for auth helpers, OIDC verification, audit envelopes and sinks, HTTP security middleware, outbound HTTP policy, Ed25519 JWK and DID helpers, SD-JWT VC issuance, and testing fixtures.
+  source_of_truth:
+    label: Registry Platform crates
+    url: https://github.com/jeremi/registry-platform/tree/88d1a798043673dac30d809d87badb083c6e1a26/crates
+  consumer_note: Relay, Notary, and future registry services should consume these primitives instead of reimplementing security or operational behavior locally.
+- id: registry-relay.openapi
+  name: Registry Relay OpenAPI
+  owner: registry-relay
+  status: hand-authored-abstract-contract
+  surface: "Protected Registry Data API, metadata API, evidence offering discovery, aggregates, health and readiness, plus optional standards adapters (OGC API Features, OGC API Records, OGC API EDR, SP DCI) and signed response credential routes (config key: provenance)."
+  source_of_truth:
+    label: Registry Relay abstract OpenAPI contract
+    url: https://github.com/jeremi/registry-relay/blob/917e8064b62b8f86f35425a61fe66d3a4b5db921/openapi/registry-relay.openapi.json
+  consumer_note: Hand-authored from `docs/api.md` and the runtime route table. Uses templated paths and capability tags. For instance-specific shape of `{dataset_id}` and `{entity}`, fetch `GET /openapi.json` from a configured gateway. Runtime deployments gate that route by default unless `openapi_requires_auth` is disabled for demos or controlled tooling.
+- id: registry-notary.openapi
+  name: Registry Notary OpenAPI
+  owner: registry-notary
+  status: pinned-generated-snapshot
+  surface: Claim discovery, claim evaluation, batch evaluation, federated delegated evaluation, rendering, JWKS, service metadata, and credential issuance.
+  source_of_truth:
+    label: Registry Notary OpenAPI generator
+    url: https://github.com/jeremi/registry-notary/blob/4fb5fcf137edb628f3dc4bfedd42891dbbdebb03/crates/registry-notary-server/src/openapi.rs
+  consumer_note: Generate with `cargo run -p registry-notary-bin -- openapi`.
+- id: registry-notary.oid4vci
+  name: Registry Notary OID4VCI surface
+  owner: registry-notary
+  status: current-source
+  surface: OID4VCI offer start and callback (`/oid4vci/offer/start`, `/oid4vci/offer/callback`), credential offer (`GET /oid4vci/credential-offer`), nonce (`POST /oid4vci/nonce`), token (`POST /oid4vci/token`), credential request (`POST /oid4vci/credential`), VCT credential and metadata routes (`/credentials/{vct_path}`, `/.well-known/vct/{vct_path}`), and issuer metadata (`GET /.well-known/openid-credential-issuer`). Primitives sourced from the `registry-platform-oid4vci` crate.
+  source_of_truth:
+    label: Registry Notary OID4VCI routes
+    url: https://github.com/jeremi/registry-notary/blob/4fb5fcf137edb628f3dc4bfedd42891dbbdebb03/crates/registry-notary-server/src/api.rs
+  consumer_note: OID4VCI flow advertising `dc+sd-jwt` credential format. Registry Lab exercises the full path through the `just citizen-oid4vci-*` recipes. Full OID4VCI Draft 13 `vc+sd-jwt` wallet conformance is not asserted at this version.
+- id: registry-notary.federated-evaluation
+  name: Registry Notary Federated Evaluation MVP
+  owner: registry-notary
+  status: current-source
+  surface: Static-peer delegated evaluation over `POST /federation/v1/evaluations`, compact JWS request and response JWTs, peer policy checks, pairwise subject handles, replay protection, and federation audit fields.
+  source_of_truth:
+    label: Registry Notary federation module
+    url: https://github.com/jeremi/registry-notary/tree/4fb5fcf137edb628f3dc4bfedd42891dbbdebb03/crates/registry-notary-server/src/federation
+  consumer_note: This is delegated evaluation only. Open federation, trust-chain discovery, shared replay storage, audit checkpoint exchange, and federated credential issuance are outside the MVP.
+- id: registry-manifest.metadata-yaml
+  name: Metadata Manifest
+  owner: registry-manifest
+  status: current-source
+  surface: Portable `metadata.yaml` documents, compiled metadata model, public services, forms, policies, requirements, evidence type lists, evidence offering metadata, public federation metadata, and evaluation profile metadata.
+  source_of_truth:
+    label: Registry Manifest core
+    url: https://github.com/jeremi/registry-manifest/tree/52da5e913d8652e98ce8e443102c5d23b1a0974f/crates/registry-manifest-core
+  consumer_note: Runtime source paths, scopes, table names, backend URLs, peer allowlists, replay storage, and federation secrets belong in runtime service config, not manifests.
+- id: registry-manifest.cpsv-ap-service-catalogue
+  name: CPSV-AP Service Catalogue Render Contract
+  owner: registry-manifest
+  status: current-source
+  surface: CPSV-AP JSON-LD service catalogue, CCCEV requirements, grouped evidence type lists, local form-definition links, DCAT data services, and form JSON Schemas.
+  source_of_truth:
+    label: Registry Manifest CPSV-AP fixture
+    url: https://github.com/jeremi/registry-manifest/tree/52da5e913d8652e98ce8e443102c5d23b1a0974f/fixtures/cpsv-ap
+  consumer_note: Each CCCEV evidence type list is one grouped option; multiple lists on a requirement are alternatives.
+- id: registry-manifest.static-publication
+  name: Static Metadata Publication Bundle
+  owner: registry-manifest
+  status: current-source
+  surface: Static index, catalog JSON, evidence offerings, policies, DCAT, CPSV-AP, BRegDCAT-AP, SHACL, OGC Records item collection, entity JSON Schemas, form JSON Schemas, and embedded SKOS-shaped codelist nodes.
+  source_of_truth:
+    label: Registry Manifest CLI
+    url: https://github.com/jeremi/registry-manifest/tree/52da5e913d8652e98ce8e443102c5d23b1a0974f/crates/registry-manifest-cli
+  consumer_note: The bundle can be hosted as static files without running Registry Relay.
+- id: registry-lab.release-check
+  name: Registry Lab Release Check
+  owner: registry-lab
+  status: current-source
+  surface: Compose build, fixture generation, secret generation, static metadata publication, core smoke checks, live Postgres checks, live Zitadel and OIDC checks, source adapter sidecar smoke checks, raw-secret log checks, and narrated demo flows.
+  source_of_truth:
+    label: Registry Lab README
+    url: https://github.com/jeremi/registry-lab/blob/9814a8e3286b324616b887f7258a902efefcfb00/README.md
+  consumer_note: Use as a demo acceptance path only; production contracts remain in the owning repos.

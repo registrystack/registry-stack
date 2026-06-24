@@ -1,0 +1,235 @@
+# Manifest for the build-time docs aggregation pipeline (Wave 3).
+#
+# `scripts/sync-repo-docs.mjs` reads this file, pulls the allowlisted markdown
+# from each product repo (sibling checkout in dev, shallow clone at `ref` in
+# CI), and renders Starlight pages under src/content/docs/products/<repo>/.
+#
+# Allowlist, not pull-all. Each repo carries repo-owned docs (release notes,
+# contributor guides, deep operator references) that are better read in the
+# repository. Only the genuinely public how-to / reference / explanation /
+# tutorial set is listed here.
+#
+# Fields per repo:
+#   remote  GitHub repository the page links and clones from.
+#   ref     Pinned commit (bumped explicitly) for reproducible CI builds and
+#           for editUrl / GitHub fallback links.
+#   version Human-facing version label for the pinned ref. Release docsets in
+#           src/data/docsets.yaml bind public doc versions to exact refs.
+#   local   Sibling checkout used as the source when it exists (dev). The clone
+#           path is used only when no sibling checkout resolves.
+# Fields per docs entry:
+#   src         path within the repo (relative to the repo root).
+#   dest        site route under src/content/docs (no extension).
+#   label       Starlight page title and sidebar label.
+#   nav_order   ordering hint for the sidebar (lower first).
+#   doc_type    Diataxis type for site frontmatter (tutorial | how-to |
+#               explanation | reference | decision).
+#   description optional; site frontmatter description. Falls back to a derived
+#               summary when omitted.
+repos:
+  registry-relay:
+    remote: https://github.com/jeremi/registry-relay
+    ref: 917e8064b62b8f86f35425a61fe66d3a4b5db921
+    version: v0.5.0
+    local: ../registry-relay
+    docs:
+      - src: docs/README.md
+        dest: products/registry-relay/index
+        label: Registry Relay
+        nav_order: 0
+        doc_type: explanation
+        description: Operator and adopter documentation for Registry Relay, pulled from the product repository.
+      - src: docs/client-integration.md
+        dest: products/registry-relay/client-integration
+        label: Client integration
+        nav_order: 20
+        doc_type: how-to
+      - src: docs/configuration.md
+        dest: products/registry-relay/configuration
+        label: Configuration
+        nav_order: 30
+        doc_type: reference
+    # Excluded (intentionally not public via the docs site):
+    #   docs/release-notes.md               release notes (repo-owned)
+    #   docs/provenance.md                  deep reference, repo-owned
+    #   docs/security-assurance.md          release/supply-chain detail, repo-owned
+    #   docs/relay-scenario-catalog.md      product/demo guide (marketing-adjacent)
+    #   docs/xlsx-readiness-contract.md     deep source contract, repo-owned
+    #   docs/api.md                         repo-owned; the site serves the Redoc route reference at /api/registry-relay.html
+    #   docs/ops.md                         operator runbook, repo-owned
+    #   docs/metadata.md                    deep metadata reference, repo-owned
+    #   docs/standards-adapter-operator-guide.md  operator rollout guide, repo-owned
+    #   docs/development.md                 contributor guide, repo-owned
+  registry-notary:
+    remote: https://github.com/jeremi/registry-notary
+    ref: 4fb5fcf137edb628f3dc4bfedd42891dbbdebb03
+    version: v0.7.0
+    local: ../registry-notary
+    docs:
+      - src: docs/README.md
+        dest: products/registry-notary/index
+        label: Registry Notary
+        nav_order: 0
+        doc_type: explanation
+        description: Integrator and operator documentation for Registry Notary, pulled from the product repository.
+      - src: docs/architecture-overview.md
+        dest: products/registry-notary/architecture-overview
+        # "Notary architecture" (not the repo's "Architecture overview") so the
+        # sidebar entry does not collide with Explanation > Architecture.
+        label: Notary architecture
+        nav_order: 10
+        doc_type: explanation
+      - src: docs/client-sdk-guide.md
+        dest: products/registry-notary/client-sdk-guide
+        label: Client SDK guide
+        nav_order: 40
+        doc_type: how-to
+      - src: docs/identity-and-record-matching.md
+        dest: products/registry-notary/identity-and-record-matching
+        label: Identity and record matching
+        nav_order: 50
+        doc_type: explanation
+      - src: docs/source-claim-modeling-guide.md
+        dest: products/registry-notary/source-claim-modeling-guide
+        label: Source and claim modeling
+        nav_order: 60
+        doc_type: how-to
+      - src: docs/opencrvs-onboarding.md
+        dest: products/registry-notary/opencrvs-onboarding
+        label: OpenCRVS onboarding model
+        nav_order: 65
+        doc_type: explanation
+        exclude_docsets:
+          - beta-2026-06-12
+      - src: docs/operator-config-reference.md
+        dest: products/registry-notary/operator-config-reference
+        label: Operator configuration reference
+        nav_order: 70
+        doc_type: reference
+      - src: docs/credential-lifecycle-status.md
+        dest: products/registry-notary/credential-lifecycle-status
+        label: Credential lifecycle and status
+        nav_order: 80
+        doc_type: how-to
+      - src: docs/signing-key-provider.md
+        dest: products/registry-notary/signing-key-provider
+        label: Signing key provider
+        nav_order: 90
+        doc_type: how-to
+      - src: docs/sd-jwt-vc-conformance-profile.md
+        dest: products/registry-notary/sd-jwt-vc-conformance-profile
+        label: SD-JWT VC conformance profile
+        nav_order: 130
+        doc_type: reference
+    # Excluded (intentionally not public via the docs site):
+    #   docs/release-notes.md               release notes (repo-owned)
+    #   docs/security-assurance.md          release/supply-chain detail, repo-owned
+    #   docs/api-reference.md               repo-owned; the site serves the Redoc reference at /api/registry-notary.html
+    #   docs/notary-capability-matrix.md    capability inventory, repo-owned
+    #   docs/self-attestation-operator-guide.md  operator guide, repo-owned
+    #   docs/federated-evaluation-operator-guide.md  operator guide, repo-owned
+    #   docs/oid4vci-wallet-interop.md      operator/integrator guide, repo-owned
+    #   docs/notary-scenario-patterns.md    scenario catalog, repo-owned
+    #   docs/opencrvs-dci-standalone-tutorial.md  tutorial against an external system, repo-owned
+    #   docs/deployment-hardening-runbook.md  operator runbook, repo-owned
+  registry-manifest:
+    remote: https://github.com/jeremi/registry-manifest
+    ref: 52da5e913d8652e98ce8e443102c5d23b1a0974f
+    version: v0.2.2
+    local: ../registry-manifest
+    docs:
+      - src: docs/overview.md
+        dest: products/registry-manifest/index
+        label: Registry Manifest
+        nav_order: 0
+        doc_type: explanation
+        description: Operator and integrator documentation for Registry Manifest, pulled from the product repository.
+      - src: docs/validate-and-render.md
+        dest: products/registry-manifest/validate-and-render
+        label: Validate and render a manifest
+        nav_order: 10
+        doc_type: how-to
+      - src: docs/profile-fixtures.md
+        dest: products/registry-manifest/profile-fixtures
+        label: Validate against profile fixtures
+        nav_order: 20
+        doc_type: how-to
+      - src: docs/reference.md
+        dest: products/registry-manifest/reference
+        label: Reference
+        nav_order: 30
+        doc_type: reference
+    # Excluded (intentionally not public via the docs site):
+    #   docs/release-notes.md               release notes (repo-owned)
+    #   docs/repository-split.md            historical metadata/evidence split note
+#   registry-platform:
+#     remote: https://github.com/jeremi/registry-platform
+#     ref: ee298e00e76ad6b1e56373fe85d6c1e3a95ea238
+#     local: ../registry-platform
+#     docs:
+#       - src: docs/SECURITY_PRINCIPLES.md
+#         dest: products/registry-platform/index
+#         label: Registry Platform security principles
+#         nav_order: 0
+#         doc_type: explanation
+#         description: The platform security house rules consumer apps cite when adopting platform primitives.
+#       - src: docs/versioning.md
+#         dest: products/registry-platform/versioning
+#         label: Versioning
+#         nav_order: 10
+#         doc_type: reference
+#       - src: docs/audit-reference-hashing.md
+#         dest: products/registry-platform/audit-reference-hashing
+#         label: Audit reference hashing
+#         nav_order: 20
+#         doc_type: reference
+#     # Excluded (intentionally not public via the docs site):
+#     #   docs/release-review-0.1.2.md        internal release review
+#     #   docs/config-drift-inventory.md      internal config-drift inventory
+#   registry-lab:
+#     remote: https://github.com/jeremi/registry-lab
+#     ref: 884b7a0aeb43fb6b75ba785bd03bd700a4705d18
+#     local: ../registry-lab
+#     docs:
+#       - src: docs/README.md
+#         dest: products/registry-lab/index
+#         label: Registry Lab
+#         nav_order: 0
+#         doc_type: explanation
+#         description: Demo-operator and integrator documentation for Registry Lab, pulled from the product repository.
+#       - src: docs/opencrvs-dci-notary-tutorial.md
+#         dest: products/registry-lab/opencrvs-dci-notary-tutorial
+#         label: OpenCRVS tutorial
+#         nav_order: 10
+#         doc_type: tutorial
+#       - src: docs/dhis2-openfn-notary-tutorial.md
+#         dest: products/registry-lab/dhis2-openfn-notary-tutorial
+#         label: DHIS2 OpenFn tutorial
+#         nav_order: 20
+#         doc_type: tutorial
+#       - src: docs/openfn-sidecar-notary-tutorial.md
+#         dest: products/registry-lab/openfn-sidecar-notary-tutorial
+#         label: OpenFn sidecar tutorial
+#         nav_order: 30
+#         doc_type: tutorial
+#       - src: docs/citizen-self-attestation-esignet-use-case.md
+#         dest: products/registry-lab/citizen-self-attestation-esignet
+#         label: Citizen self-attestation with eSignet
+#         nav_order: 40
+#         doc_type: how-to
+#       - src: docs/wallet-interop-testing.md
+#         dest: products/registry-lab/wallet-interop-testing
+#         label: Wallet interop testing
+#         nav_order: 50
+#         doc_type: how-to
+#       - src: docs/service-first-discovery.md
+#         dest: products/registry-lab/service-first-discovery
+#         label: Service-first discovery
+#         nav_order: 60
+#         doc_type: explanation
+#     # Excluded (intentionally not public via the docs site):
+#     #   docs/nagdi-agricultural-registries-demo-spec.md  internal demo design spec
+#     #   docs/nagdi-consumer-integration-demo-spec.md     internal demo design spec
+#     #   docs/commons-release-cleanup-plan.md             maintainer cleanup plan
+#     #   docs/ops-posture-lab-contract.md                 deep source contract, repo-owned
+#     #   docs/public-api-workspace.md                     implementation spec, repo-owned
