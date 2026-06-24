@@ -1,0 +1,267 @@
+name: RegistryStack Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  CARGO_TERM_COLOR: always
+  REGISTRY: ghcr.io
+  IMAGE_NAMESPACE: registrystack
+  SYFT_VERSION: v1.45.1
+  GRYPE_VERSION: v0.114.0
+
+jobs:
+  verify:
+    name: Verify release source
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Resolve release tag
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            tag="${{ inputs.tag }}"
+            git fetch --force --tags origin "refs/tags/${tag}:refs/tags/${tag}"
+            git checkout --detach "${tag}"
+          fi
+          if [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tag must look like v0.8.0, got ${tag}" >&2
+            exit 1
+          fi
+          version="${tag#v}"
+          manifest_version="$(python3 -c 'import yaml; print(yaml.safe_load(open("release/manifests/registry-stack-beta-6.yaml", encoding="utf-8"))["stack"]["version"])')"
+          if [[ "${manifest_version}" != "${version}" ]]; then
+            echo "Manifest version ${manifest_version} does not match tag ${tag}" >&2
+            exit 1
+          fi
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Validate release manifest
+        run: release/scripts/registry-release validate release/manifests/registry-stack-beta-6.yaml
+
+      - name: Audit import map
+        run: release/scripts/registry-release audit release/manifests/import-map-2026-06-24.yaml
+
+      - name: Cargo metadata
+        run: cargo metadata --locked --format-version 1 >/tmp/registry-stack-cargo-metadata.json
+
+      - name: Lab source model
+        run: REGISTRY_LAB_RELEASE_SOURCE_MODE=monorepo lab/scripts/check-release-source-model.sh
+
+  binaries:
+    name: Build release binaries
+    needs: verify
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Build binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --release --locked -p registryctl
+          cargo build --release --locked -p registry-manifest-cli
+          cargo build --release --locked -p registry-relay --features spdci-api-standards,standards-cel-mapping,ogcapi-edr
+          cargo build --release --locked -p registry-notary-bin --features registry-notary-cel
+          mkdir -p dist/bin
+          cp target/release/registryctl "dist/bin/registryctl-${{ needs.verify.outputs.tag }}-linux-amd64"
+          cp target/release/registry-manifest "dist/bin/registry-manifest-${{ needs.verify.outputs.tag }}-linux-amd64"
+          cp target/release/registry-relay "dist/bin/registry-relay-${{ needs.verify.outputs.tag }}-linux-amd64"
+          cp target/release/registry-notary "dist/bin/registry-notary-${{ needs.verify.outputs.tag }}-linux-amd64"
+          (cd dist/bin && sha256sum -- * > SHA256SUMS)
+
+      - name: Upload binary artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: registry-stack-binaries
+          path: dist/bin/*
+          if-no-files-found: error
+
+  images:
+    name: Build and publish images
+    needs: verify
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435
+
+      - name: Log in to GHCR
+        uses: docker/login-action@184bdaa0721073962dff0199f1fb9940f07167d1
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Syft and Grype
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${HOME}/.local/bin"
+          curl -sSfL "https://raw.githubusercontent.com/anchore/syft/${SYFT_VERSION}/install.sh" | sh -s -- -b "${HOME}/.local/bin" "${SYFT_VERSION}"
+          curl -sSfL "https://raw.githubusercontent.com/anchore/grype/${GRYPE_VERSION}/install.sh" | sh -s -- -b "${HOME}/.local/bin" "${GRYPE_VERSION}"
+          echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
+
+      - name: Build, push, and scan images
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/images dist/sbom dist/grype
+          build_image() {
+            local name="$1"
+            local dockerfile="$2"
+            local image="${REGISTRY}/${IMAGE_NAMESPACE}/${name}:${{ needs.verify.outputs.tag }}"
+            local metadata="dist/images/${name}.metadata.json"
+            docker buildx build \
+              --build-context registry_platform_src=. \
+              --file "${dockerfile}" \
+              --tag "${image}" \
+              --metadata-file "${metadata}" \
+              --push \
+              .
+            local digest
+            digest="$(jq -r '."containerimage.digest"' "${metadata}")"
+            printf '%s@%s\n' "${REGISTRY}/${IMAGE_NAMESPACE}/${name}" "${digest}" | tee "dist/images/${name}.digest"
+            syft "${image}" -o "spdx-json=dist/sbom/${name}.spdx.json"
+            grype "${image}" -o json > "dist/grype/${name}.grype.json"
+          }
+          build_image registry-notary lab/Dockerfile.registry-notary
+          build_image registry-notary-source-adapter-sidecar lab/Dockerfile.registry-notary-openfn-sidecar
+          build_image registry-relay lab/Dockerfile.registry-relay
+
+      - name: Create release evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/release-evidence
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import pathlib
+          import subprocess
+          import yaml
+
+          root = pathlib.Path(".").resolve()
+          manifest_path = pathlib.Path("release/manifests/registry-stack-beta-6.yaml")
+          manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+          files = []
+          for pattern in ("dist/images/*", "dist/sbom/*", "dist/grype/*"):
+              for path in sorted(pathlib.Path(".").glob(pattern)):
+                  if path.is_file():
+                      files.append(
+                          {
+                              "path": str(path),
+                              "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                          }
+                      )
+          evidence = {
+              "release": "${{ needs.verify.outputs.tag }}",
+              "version": "${{ needs.verify.outputs.version }}",
+              "repository": "${{ github.repository }}",
+              "tag_target": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+              "manifest": {
+                  "path": str(manifest_path),
+                  "source_repo": manifest["stack"]["source_repo"],
+                  "source_ref": manifest["stack"]["source_ref"],
+                  "external": manifest.get("external", {}),
+                  "warnings": manifest.get("warnings", []),
+              },
+              "artifacts": files,
+          }
+          output = pathlib.Path("dist/release-evidence/registry-stack-${{ needs.verify.outputs.tag }}-release-evidence.json")
+          output.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          PY
+
+      - name: Upload image evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: registry-stack-image-evidence
+          path: |
+            dist/images/*
+            dist/sbom/*
+            dist/grype/*
+            dist/release-evidence/*
+          if-no-files-found: error
+
+  github-release:
+    name: Create GitHub Release
+    needs:
+      - verify
+      - binaries
+      - images
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Download binaries
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: registry-stack-binaries
+          path: dist/bin
+
+      - name: Download image evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: registry-stack-image-evidence
+          path: dist/image-evidence
+
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s globstar nullglob
+          tag="${{ needs.verify.outputs.tag }}"
+          notes="release/notes/${tag}.md"
+          assets=(dist/bin/* dist/image-evidence/**/*)
+          if [[ "${#assets[@]}" -eq 0 ]]; then
+            echo "No release assets found" >&2
+            exit 1
+          fi
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            gh release upload "${tag}" "${assets[@]}" --clobber
+          else
+            gh release create "${tag}" \
+              --title "RegistryStack ${tag}" \
+              --notes-file "${notes}" \
+              --prerelease \
+              "${assets[@]}"
+          fi

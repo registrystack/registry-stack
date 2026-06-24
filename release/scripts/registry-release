@@ -94,6 +94,9 @@ def classify_warning(code: str) -> int:
     known = {
         "draft-source-ref": "expected-draft-only",
         "held-lab-external": "documented-external-input",
+        "root-release-workflows-missing": "artifact-gate-held",
+        "artifact-publication-held": "artifact-gate-held",
+        "hosted-publication-held": "hosted-gate-held",
     }
     print(known.get(code, "unknown-warning"))
     return 0

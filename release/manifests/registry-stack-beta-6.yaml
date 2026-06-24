@@ -2,8 +2,9 @@ stack:
   release: beta-6
   version: 0.8.0
   source_repo: registrystack/registry-stack
-  source_ref: HEAD
-  status: draft
+  source_ref: d2d2cf2ee2c50000fe5ca3fe00a7e059347758cf
+  source_tag: v0.8.0
+  status: release-candidate
 
 artifacts:
   registry-notary: 0.8.0
@@ -22,13 +23,13 @@ external:
   registry-atlas:
     repo: jeremi/registry-atlas
     ref: d46f943b9fdcbab787d1d4eed114058aa43980be
-    status: lab-only external input
+    status: held lab-only external input
   esignet-relay-authenticator:
     repo: jeremi/esignet-relay-authenticator
     ref: 23cc0abb6469e0d18c8e6776f87de1691bdf40ee
-    status: lab-only external input
+    status: held lab-only external input
 
 warnings:
-  - code: draft-source-ref
-    classification: expected-draft-only
-    detail: source_ref is HEAD until the monorepo migration commit is finalized.
+  - code: hosted-publication-held
+    classification: hosted-gate-held
+    detail: Hosted/public announcement requires separate hosted-state proof after source release.

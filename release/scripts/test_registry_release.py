@@ -23,9 +23,9 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertIn("audited 7 imports", result.stdout)
 
     def test_classify_known_warning(self) -> None:
-        result = run_tool("classify-warning", "draft-source-ref")
+        result = run_tool("classify-warning", "artifact-publication-held")
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertEqual("expected-draft-only", result.stdout.strip())
+        self.assertEqual("artifact-gate-held", result.stdout.strip())
 
 
 def run_tool(*args: str) -> subprocess.CompletedProcess[str]:
