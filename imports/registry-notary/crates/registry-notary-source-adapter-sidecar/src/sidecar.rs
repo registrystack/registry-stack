@@ -2343,6 +2343,13 @@ fn validate_rhai_source(source_id: &str, source: &SourceConfig) -> Result<(), Si
                 "source {source_id} rhai.targets.{target_id}.base_url is not in allowed_base_urls"
             ))
         })?;
+        for status in &target.visible_statuses {
+            if !(100..=599).contains(status) {
+                return Err(SidecarError::Config(format!(
+                    "source {source_id} rhai.targets.{target_id}.visible_statuses contains an invalid HTTP status {status}"
+                )));
+            }
+        }
         if let Some(auth) = &target.auth {
             requires_credential = true;
             match auth.kind {
@@ -2607,16 +2614,24 @@ fn validate_http_json_cel(
     Ok(())
 }
 
+/// Whether `name` is a valid HTTP header / query-parameter name: non-empty and
+/// free of ASCII control characters and whitespace. Shared by the config-time
+/// validator and the runtime `script_rhai` query-name guard so both engines
+/// enforce the same invariant rather than relying solely on the client's URL
+/// encoder.
+fn is_valid_http_param_name(name: &str) -> bool {
+    !name.trim().is_empty()
+        && !name
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || matches!(byte, b' ' | b'\t' | b'\r' | b'\n'))
+}
+
 fn validate_http_header_or_query_name(
     source_id: &str,
     section: &str,
     name: &str,
 ) -> Result<(), SidecarError> {
-    if name.trim().is_empty()
-        || name
-            .bytes()
-            .any(|byte| byte.is_ascii_control() || matches!(byte, b' ' | b'\t' | b'\r' | b'\n'))
-    {
+    if !is_valid_http_param_name(name) {
         return Err(SidecarError::Config(format!(
             "source {source_id} http_json.{section} contains an invalid name"
         )));
@@ -2743,6 +2758,15 @@ impl ScriptSourceHost for RhaiHttpHost {
         let mut builder = prepared.client.get(prepared.url);
         if let Value::Object(params) = &query {
             for (name, value) in params {
+                // Match the http_json contract: reject a query-parameter name
+                // carrying control characters or whitespace rather than relying
+                // solely on the client's URL encoder. A name can derive from
+                // untrusted upstream data, so the call fails closed.
+                if !is_valid_http_param_name(name) {
+                    return Err(SourceScriptError::HostDenied {
+                        reason: "invalid query parameter name".into(),
+                    });
+                }
                 if let Some(rendered) = rhai_query_param_value(value) {
                     builder = builder.query(&[(name.as_str(), rendered)]);
                 }
