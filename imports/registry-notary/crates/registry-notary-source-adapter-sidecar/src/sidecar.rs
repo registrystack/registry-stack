@@ -1393,6 +1393,17 @@ fn materialize_governed_config(
         timestamp_version: tuf.timestamp_version,
         change_classes: metadata.change_classes.clone(),
         signer_kids: tuf.signer_kids.clone(),
+        // These three booleans attest the *whole-target* `config_hash` that TUF
+        // has just verified -- reaching this function requires a
+        // `TufVerifiedTarget`. That hash covers the inline governed content
+        // directly: the http_json CEL expressions, the script_rhai script, and
+        // the runtime policy. It is therefore the real content anchor; there is
+        // no separate per-expression hash ledger to verify independently. They
+        // are reported `true` here because the matching runtime compile and
+        // startup smoke are enforced downstream in `sidecar_router` (config
+        // validation compiles every expression/script, and `run_smoke_lookups`
+        // exercises the live path) -- a failure there blocks readiness, so any
+        // sidecar actually serving these values has satisfied all three.
         expression_hashes_verified: true,
         runtime_verified: true,
         smoke_verified: true,
