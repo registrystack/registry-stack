@@ -1,0 +1,34 @@
+version: "0.2"
+id: nagdi-agri-person-v1
+source: nagdi-agri-relay
+target: publicschema
+runtime:
+  bindings: publicschema-v1
+property_mappings:
+  - rule_id: person-id
+    source: /id
+    target: /id
+    required: true
+  - rule_id: source-farmer-id
+    source: /source_farmer_id
+    target: /source_farmer_id
+    required: true
+  - rule_id: given-name
+    source: /given_name
+    target: /given_name
+  - rule_id: family-name
+    source: /family_name
+    target: /family_name
+  - rule_id: sex
+    source: /sex
+    target: /sex
+  - rule_id: district-code
+    source: /district_code
+    target: /district_code
+  - rule_id: preferred-language
+    source: /preferred_language
+    target: /preferred_language
+  - rule_id: concept-uri
+    source: /concept_uri
+    target: /concept_uri
+    required: true

@@ -1,0 +1,76 @@
+meta {
+  name: 05 - Render programme participation CCCEV JSON-LD
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{dhis2_notary_url}}/v1/evaluations/{{dhis2_programme_cccev_evaluation_id}}/render
+  body: json
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{DHIS2_EVIDENCE_CLIENT_BEARER}}
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "claims": [
+      "dhis2-tracked-entity-first-name",
+      "dhis2-tracked-entity-last-name",
+      "dhis2-child-age-band",
+      "dhis2-programme-code",
+      "dhis2-child-program-active",
+      "dhis2-reconciliation-ref"
+    ],
+    "disclosure": "value",
+    "format": "application/ld+json; profile=\"cccev\""
+  }
+}
+
+script:pre-request {
+  if (!bru.getVar("dhis2_programme_cccev_evaluation_id")) {
+    throw new Error("Run '04 - Evaluate programme participation for CCCEV JSON-LD' first so Bruno can store the CCCEV-bound evaluation id.");
+  }
+}
+
+script:post-response {
+  const body = res.getBody();
+  const graph = body["@graph"] || [];
+  const expectedClaims = [
+    "dhis2-tracked-entity-first-name",
+    "dhis2-tracked-entity-last-name",
+    "dhis2-child-age-band",
+    "dhis2-programme-code",
+    "dhis2-child-program-active",
+    "dhis2-reconciliation-ref",
+  ];
+
+  function valueFor(node) {
+    return node["cccev:supportsValue"] && node["cccev:supportsValue"]["cccev:value"];
+  }
+
+  test("status is 200", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("programme participation renders as CCCEV JSON-LD", function () {
+    expect(body["@context"].cccev).to.equal("http://data.europa.eu/m8g/");
+    expect(graph).to.have.length(expectedClaims.length);
+    expect(graph.every((node) => node["@type"] === "cccev:Evidence")).to.equal(true);
+    expect(graph.map((node) => node["cccev:supportsValue"]["cccev:providesValueFor"]["dcterms:identifier"]).sort()).to.deep.equal(expectedClaims.slice().sort());
+  });
+
+  test("CCCEV graph carries programme claim values", function () {
+    const byClaim = Object.fromEntries(graph.map((node) => [
+      node["cccev:supportsValue"]["cccev:providesValueFor"]["dcterms:identifier"],
+      node,
+    ]));
+    expect(valueFor(byClaim["dhis2-child-age-band"])).to.equal("5_to_17");
+    expect(valueFor(byClaim["dhis2-programme-code"])).to.equal("DHIS2_CHILD_PROGRAM");
+    expect(valueFor(byClaim["dhis2-child-program-active"])).to.equal(true);
+    expect(valueFor(byClaim["dhis2-reconciliation-ref"])).to.match(/^dhis2:tracked-entity:/);
+  });
+}

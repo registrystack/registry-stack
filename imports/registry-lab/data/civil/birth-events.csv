@@ -1,0 +1,7 @@
+event_id,child_person_id,mother_person_id,father_person_id,place_of_birth,date_of_birth,sex_at_birth,attendant_or_place_type
+BE-1001,CP-1001,CP-2001,CP-2002,North City,2016-01-15,M,clinic
+BE-1002,CP-1002,,CP-2002,South Town,2018-01-15,F,clinic
+BE-1004,CP-1004,CP-2004,CP-2005,East City,2019-01-15,M,clinic
+BE-1005,CP-1005,,CP-2005,West City,2013-01-15,F,clinic
+BE-1006,CP-1006,,CP-2006,North City,2014-01-15,M,clinic
+BE-1011,CP-1011,,,South Town,2016-01-15,M,clinic

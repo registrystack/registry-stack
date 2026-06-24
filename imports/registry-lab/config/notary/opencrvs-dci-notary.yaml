@@ -1,0 +1,610 @@
+# SPDX-License-Identifier: Apache-2.0
+
+server:
+  bind: 0.0.0.0:8080
+  openapi_requires_auth: false
+  admin_listener:
+    mode: dedicated
+    bind: 0.0.0.0:8081
+
+auth:
+  mode: api_key
+  api_keys:
+    - id: opencrvs_dci_lab_client
+      fingerprint:
+        provider: env
+        name: OPENCRVS_EVIDENCE_CLIENT_TOKEN_HASH
+        commitment: sha256:66696f4ca124d37179cab186ade3a61151a95fdf94c7b4143ba400fddd0ce235
+      scopes:
+        - civil_registry:evidence_verification
+      authorization_details:
+        type: registry-notary/evidence-authorization/v1
+        schema_version: v1
+        legal_basis_ref: demo:birth-registration-verification
+        consent_ref: demo:birth-registration-consent
+        jurisdiction: ZZ
+        assurance_level: substantial
+    - id: opencrvs_evidence_deny_assurance
+      fingerprint:
+        provider: env
+        name: OPENCRVS_EVIDENCE_DENY_ASSURANCE_TOKEN_HASH
+        commitment: sha256:2d7ed7ef7a3095414df08a857fdd3f18f6f0d984e6b0ad9c8998ca3918aa0f34
+      scopes:
+        - civil_registry:evidence_verification
+      authorization_details:
+        type: registry-notary/evidence-authorization/v1
+        schema_version: v1
+        legal_basis_ref: demo:birth-registration-verification
+        consent_ref: demo:birth-registration-consent
+        jurisdiction: ZZ
+        assurance_level: low
+    - id: opencrvs_evidence_deny_jurisdiction
+      fingerprint:
+        provider: env
+        name: OPENCRVS_EVIDENCE_DENY_JURISDICTION_TOKEN_HASH
+        commitment: sha256:24d5f8875d7db37e8735c60fc10a405324d291cf62c0e5a3d0065b6392dd2ad4
+      scopes:
+        - civil_registry:evidence_verification
+      authorization_details:
+        type: registry-notary/evidence-authorization/v1
+        schema_version: v1
+        legal_basis_ref: demo:birth-registration-verification
+        consent_ref: demo:birth-registration-consent
+        jurisdiction: XY
+        assurance_level: substantial
+    - id: opencrvs_evidence_deny_legal_basis
+      fingerprint:
+        provider: env
+        name: OPENCRVS_EVIDENCE_DENY_LEGAL_BASIS_TOKEN_HASH
+        commitment: sha256:2e201b51677467f83d8d80cc73bc93cdbb8ab52cc000f70debc78bf2e671d30a
+      scopes:
+        - civil_registry:evidence_verification
+      authorization_details:
+        type: registry-notary/evidence-authorization/v1
+        schema_version: v1
+        consent_ref: demo:birth-registration-consent
+        jurisdiction: ZZ
+        assurance_level: substantial
+    - id: opencrvs_evidence_deny_consent
+      fingerprint:
+        provider: env
+        name: OPENCRVS_EVIDENCE_DENY_CONSENT_TOKEN_HASH
+        commitment: sha256:ede1434e48c3284bc2978cb9722f861fb6e2bbd8c2ad60ee0e1f41e7dedd5e75
+      scopes:
+        - civil_registry:evidence_verification
+      authorization_details:
+        type: registry-notary/evidence-authorization/v1
+        schema_version: v1
+        legal_basis_ref: demo:birth-registration-verification
+        jurisdiction: ZZ
+        assurance_level: substantial
+
+audit:
+  sink: stdout
+  hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
+
+config_trust:
+  antirollback_state_path: /var/lib/registry-notary/config-state/opencrvs-dci-notary-config-antirollback.json
+  local_approval_state_path: /var/lib/registry-notary/config-state/opencrvs-dci-notary-config-local-approvals.json
+  break_glass_rate_limit:
+    max_accepted: 1
+    window_seconds: 3600
+
+evidence:
+  enabled: true
+  service_id: opencrvs-dci-notary
+  api_base_url: http://opencrvs-dci-notary:8080
+  inline_batch_limit: 20
+  source_connections:
+    opencrvs_crvs:
+      base_url: https://dci-crvs-api.farajaland-integration.opencrvs.dev
+      source_auth:
+        type: oauth2_client_credentials
+        token_url: https://dci-crvs-api.farajaland-integration.opencrvs.dev/oauth2/client/token
+        client_id_env: OPENCRVS_DCI_CLIENT_ID
+        client_secret_env: OPENCRVS_DCI_CLIENT_SECRET
+        request_format: json
+      bulk_mode: none
+      dci:
+        search_path: /registry/sync/search
+        sender_id: registry-notary
+        query_type: idtype-value
+        registry_type: ns:org:RegistryType:Civil
+        registry_event_type: birth
+        records_path: /message/search_response/0/data/reg_records
+        field_paths:
+          child_given_name: /name/given_name
+          child_family_name: /name/surname
+          child_birth_date: /birth_date
+          child_place_of_birth: /birth_place
+          observed_at: "$response:/message/search_response/0/timestamp"
+  ecosystem_bindings:
+    birth-registration-evidence/v1:
+      profile: registry-notary/source-policy/v1
+      policy_id: lab.birth-registration-evidence.governed-evidence.v1
+      policy_hash: sha256:1b239a9f1d158705364d444d8ea00ed26088ffbe69bb7e3477bf72c2522979c2
+  signing_keys:
+    opencrvs-dci-demo:
+      provider: local_jwk_env
+      private_jwk_env: REGISTRY_NOTARY_ISSUER_JWK
+      alg: EdDSA
+      kid: did:web:opencrvs-dci.demo.example.gov#registry-notary-demo-key-1
+      status: active
+  credential_profiles:
+    opencrvs_birth_summary_sd_jwt:
+      format: application/dc+sd-jwt
+      issuer: did:web:opencrvs-dci.demo.example.gov
+      signing_key: opencrvs-dci-demo
+      vct: https://demo.example.gov/credentials/opencrvs-birth-summary/v1
+      validity_seconds: 600
+      allowed_claims:
+        - opencrvs-birth-record-exists
+        - opencrvs-date-of-birth
+        - opencrvs-sex
+        - opencrvs-age-band
+      holder_binding:
+        mode: none
+      disclosure:
+        allowed:
+          - value
+    opencrvs_birth_attributes_sd_jwt:
+      format: application/dc+sd-jwt
+      issuer: did:web:opencrvs-dci.demo.example.gov
+      signing_key: opencrvs-dci-demo
+      vct: https://demo.example.gov/credentials/opencrvs-birth-attributes/v1
+      validity_seconds: 600
+      allowed_claims:
+        - opencrvs-child-given-name
+        - opencrvs-child-family-name
+        - opencrvs-child-date-of-birth
+        - opencrvs-child-place-of-birth
+      holder_binding:
+        mode: none
+      disclosure:
+        allowed:
+          - value
+  claims:
+    - id: opencrvs-birth-record-exists
+      title: Birth Registration Attestation
+      version: 2026-05
+      subject_type: person
+      value:
+        type: boolean
+      source_bindings:
+        birth_record:
+          connector: dci
+          connection: opencrvs_crvs
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: birth_registration
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/opencrvs-dci-lab
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              jurisdiction:
+                permitted:
+                  - ZZ
+              assurance:
+                allowed:
+                  - substantial
+              source_freshness:
+                max_age_seconds: 86400
+            source_observed_at_field: observed_at
+            ecosystem_binding:
+              id: birth-registration-evidence/v1
+          lookup:
+            input: target.identifiers.UIN
+            field: UIN
+            op: eq
+            cardinality: one
+      rule:
+        type: exists
+        source: birth_record
+      disclosure:
+        default: value
+        allowed:
+          - value
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+        - application/dc+sd-jwt
+      credential_profiles:
+        - opencrvs_birth_summary_sd_jwt
+    - id: opencrvs-date-of-birth
+      title: OpenCRVS date of birth
+      version: 2026-05
+      subject_type: person
+      value:
+        type: date
+      source_bindings:
+        birth_record:
+          connector: dci
+          connection: opencrvs_crvs
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: birth_registration
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/opencrvs-dci-lab
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              jurisdiction:
+                permitted:
+                  - ZZ
+              assurance:
+                allowed:
+                  - substantial
+              source_freshness:
+                max_age_seconds: 86400
+            source_observed_at_field: observed_at
+            ecosystem_binding:
+              id: birth-registration-evidence/v1
+          lookup:
+            input: target.identifiers.UIN
+            field: UIN
+            op: eq
+            cardinality: one
+          fields:
+            birth_date:
+              field: birth_date
+              type: date
+              required: true
+      rule:
+        type: extract
+        source: birth_record
+        field: birth_date
+      disclosure:
+        default: value
+        allowed:
+          - value
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+        - application/dc+sd-jwt
+      credential_profiles:
+        - opencrvs_birth_summary_sd_jwt
+    - id: opencrvs-sex
+      title: OpenCRVS sex
+      version: 2026-05
+      subject_type: person
+      value:
+        type: string
+      source_bindings:
+        birth_record:
+          connector: dci
+          connection: opencrvs_crvs
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: birth_registration
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/opencrvs-dci-lab
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              jurisdiction:
+                permitted:
+                  - ZZ
+              assurance:
+                allowed:
+                  - substantial
+              source_freshness:
+                max_age_seconds: 86400
+            source_observed_at_field: observed_at
+            ecosystem_binding:
+              id: birth-registration-evidence/v1
+          lookup:
+            input: target.identifiers.UIN
+            field: UIN
+            op: eq
+            cardinality: one
+          fields:
+            sex:
+              field: sex
+              type: string
+              required: true
+      rule:
+        type: extract
+        source: birth_record
+        field: sex
+      disclosure:
+        default: value
+        allowed:
+          - value
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+        - application/dc+sd-jwt
+      credential_profiles:
+        - opencrvs_birth_summary_sd_jwt
+    - id: opencrvs-age-band
+      title: Age Eligibility Attestation
+      version: 2026-05
+      subject_type: person
+      value:
+        type: string
+      source_bindings:
+        birth_record:
+          connector: dci
+          connection: opencrvs_crvs
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: birth_registration
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/opencrvs-dci-lab
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              jurisdiction:
+                permitted:
+                  - ZZ
+              assurance:
+                allowed:
+                  - substantial
+              source_freshness:
+                max_age_seconds: 86400
+            source_observed_at_field: observed_at
+            ecosystem_binding:
+              id: birth-registration-evidence/v1
+          lookup:
+            input: target.identifiers.UIN
+            field: UIN
+            op: eq
+            cardinality: one
+          fields:
+            birth_date:
+              field: birth_date
+              type: date
+              required: true
+      rule:
+        type: cel
+        expression: "date.age_on(source.birth_record.birth_date, vars.as_of_date) < 18 ? 'child' : (date.age_on(source.birth_record.birth_date, vars.as_of_date) >= 65 ? 'elderly' : 'adult')"
+        bindings:
+          vars:
+            as_of_date: "2026-05-29"
+      disclosure:
+        default: value
+        allowed:
+          - value
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+        - application/dc+sd-jwt
+      credential_profiles:
+        - opencrvs_birth_summary_sd_jwt
+    - id: opencrvs-child-given-name
+      title: OpenCRVS child given name
+      version: 2026-05
+      subject_type: person
+      value:
+        type: string
+      credential_profiles:
+        - opencrvs_birth_attributes_sd_jwt
+      source_bindings:
+        birth_record:
+          connector: dci
+          connection: opencrvs_crvs
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: birth_registration
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/opencrvs-dci-lab
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              jurisdiction:
+                permitted:
+                  - ZZ
+              assurance:
+                allowed:
+                  - substantial
+              source_freshness:
+                max_age_seconds: 86400
+            source_observed_at_field: observed_at
+            ecosystem_binding:
+              id: birth-registration-evidence/v1
+          lookup:
+            input: target.identifiers.UIN
+            field: UIN
+            op: eq
+            cardinality: one
+          fields:
+            child_given_name:
+              field: child_given_name
+              type: string
+              required: true
+      rule:
+        type: extract
+        source: birth_record
+        field: child_given_name
+      disclosure:
+        default: value
+        allowed:
+          - value
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+        - application/dc+sd-jwt
+    - id: opencrvs-child-family-name
+      title: OpenCRVS child family name
+      version: 2026-05
+      subject_type: person
+      value:
+        type: string
+      credential_profiles:
+        - opencrvs_birth_attributes_sd_jwt
+      source_bindings:
+        birth_record:
+          connector: dci
+          connection: opencrvs_crvs
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: birth_registration
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/opencrvs-dci-lab
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              jurisdiction:
+                permitted:
+                  - ZZ
+              assurance:
+                allowed:
+                  - substantial
+              source_freshness:
+                max_age_seconds: 86400
+            source_observed_at_field: observed_at
+            ecosystem_binding:
+              id: birth-registration-evidence/v1
+          lookup:
+            input: target.identifiers.UIN
+            field: UIN
+            op: eq
+            cardinality: one
+          fields:
+            child_family_name:
+              field: child_family_name
+              type: string
+              required: true
+      rule:
+        type: extract
+        source: birth_record
+        field: child_family_name
+      disclosure:
+        default: value
+        allowed:
+          - value
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+        - application/dc+sd-jwt
+    - id: opencrvs-child-date-of-birth
+      title: OpenCRVS child date of birth
+      version: 2026-05
+      subject_type: person
+      value:
+        type: date
+      credential_profiles:
+        - opencrvs_birth_attributes_sd_jwt
+      source_bindings:
+        birth_record:
+          connector: dci
+          connection: opencrvs_crvs
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: birth_registration
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/opencrvs-dci-lab
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              jurisdiction:
+                permitted:
+                  - ZZ
+              assurance:
+                allowed:
+                  - substantial
+              source_freshness:
+                max_age_seconds: 86400
+            source_observed_at_field: observed_at
+            ecosystem_binding:
+              id: birth-registration-evidence/v1
+          lookup:
+            input: target.identifiers.UIN
+            field: UIN
+            op: eq
+            cardinality: one
+          fields:
+            child_birth_date:
+              field: child_birth_date
+              type: date
+              required: true
+      rule:
+        type: extract
+        source: birth_record
+        field: child_birth_date
+      disclosure:
+        default: value
+        allowed:
+          - value
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+        - application/dc+sd-jwt
+    - id: opencrvs-child-place-of-birth
+      title: OpenCRVS child place of birth
+      version: 2026-05
+      subject_type: person
+      value:
+        type: string
+      credential_profiles:
+        - opencrvs_birth_attributes_sd_jwt
+      source_bindings:
+        birth_record:
+          connector: dci
+          connection: opencrvs_crvs
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: birth_registration
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/opencrvs-dci-lab
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              jurisdiction:
+                permitted:
+                  - ZZ
+              assurance:
+                allowed:
+                  - substantial
+              source_freshness:
+                max_age_seconds: 86400
+            source_observed_at_field: observed_at
+            ecosystem_binding:
+              id: birth-registration-evidence/v1
+          lookup:
+            input: target.identifiers.UIN
+            field: UIN
+            op: eq
+            cardinality: one
+          fields:
+            child_place_of_birth:
+              field: child_place_of_birth
+              type: string
+              required: true
+      rule:
+        type: extract
+        source: birth_record
+        field: child_place_of_birth
+      disclosure:
+        default: value
+        allowed:
+          - value
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+        - application/dc+sd-jwt

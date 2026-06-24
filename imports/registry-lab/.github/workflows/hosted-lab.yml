@@ -1,0 +1,568 @@
+name: hosted-lab
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/hosted-lab.yml"
+      - "Dockerfile.citizen-portal"
+      - "Dockerfile.static-metadata"
+      - "compose.coolify.yaml"
+      - "compose.agri-hosted.yaml"
+      - "compose.esignet-hosted.yaml"
+      - "compose.social-hosted.yaml"
+      - "compose.walt-hosted.yaml"
+      - "config/coolify/**"
+      - "config/static-metadata/**"
+      - "config/evidence-gateway/**"
+      - "config/lab-homepage/**"
+      - "config/esignet/nginx-hosted.conf"
+      - "config/walt/**"
+      - "portal/**"
+      - "docs/README.md"
+      - "docs/public-api-workspace.md"
+      - "requests/registry-lab/**"
+      - "scripts/check-service-first-deps.sh"
+      - "scripts/generate-demo-secrets.py"
+      - "scripts/generate-holder-proof.js"
+      - "scripts/publish-static-metadata.sh"
+      - "scripts/static-metadata-server.py"
+      - "scripts/lab-homepage-server.py"
+      - "scripts/lab_homepage_scenarios/**"
+      - "scripts/test_lab_homepage_server.py"
+      - "scripts/credential-commitment.py"
+      - "scripts/test_credential_commitment.py"
+      - "scripts/check-evidence-gateway-fixtures.py"
+      - "scripts/test_evidence_gateway_fixtures.py"
+      - "scripts/run-evidence-gateway-live-fixtures.py"
+      - "scripts/test_evidence_gateway_live_fixtures.py"
+      - "scripts/summarize-dhis2-programme-vc.py"
+      - "scripts/test_dhis2_programme_vc_config.py"
+      - "scripts/hosted-smoke.py"
+      - "scripts/test_hosted_smoke.py"
+      - "scripts/check-coolify-required-env.py"
+      - "scripts/test_coolify_required_env.py"
+      - "scripts/sync-coolify-compose-domains.py"
+      - "scripts/test_sync_coolify_compose_domains.py"
+      - "scripts/validate-hosted-deploy.py"
+      - "scripts/test_validate_hosted_deploy.py"
+      - "scripts/validate-public-api-workspace.py"
+      - "scripts/test_validate_public_api_workspace.py"
+      - "justfile"
+  push:
+    branches:
+      - main
+      - staging
+    paths:
+      - ".github/workflows/hosted-lab.yml"
+      - "Dockerfile.citizen-portal"
+      - "Dockerfile.static-metadata"
+      - "compose.coolify.yaml"
+      - "compose.agri-hosted.yaml"
+      - "compose.esignet-hosted.yaml"
+      - "compose.social-hosted.yaml"
+      - "compose.walt-hosted.yaml"
+      - "config/coolify/**"
+      - "config/static-metadata/**"
+      - "config/evidence-gateway/**"
+      - "config/lab-homepage/**"
+      - "config/esignet/nginx-hosted.conf"
+      - "config/walt/**"
+      - "portal/**"
+      - "docs/README.md"
+      - "docs/public-api-workspace.md"
+      - "requests/registry-lab/**"
+      - "scripts/check-service-first-deps.sh"
+      - "scripts/generate-demo-secrets.py"
+      - "scripts/generate-holder-proof.js"
+      - "scripts/publish-static-metadata.sh"
+      - "scripts/static-metadata-server.py"
+      - "scripts/lab-homepage-server.py"
+      - "scripts/lab_homepage_scenarios/**"
+      - "scripts/test_lab_homepage_server.py"
+      - "scripts/credential-commitment.py"
+      - "scripts/test_credential_commitment.py"
+      - "scripts/check-evidence-gateway-fixtures.py"
+      - "scripts/test_evidence_gateway_fixtures.py"
+      - "scripts/run-evidence-gateway-live-fixtures.py"
+      - "scripts/test_evidence_gateway_live_fixtures.py"
+      - "scripts/summarize-dhis2-programme-vc.py"
+      - "scripts/test_dhis2_programme_vc_config.py"
+      - "scripts/hosted-smoke.py"
+      - "scripts/test_hosted_smoke.py"
+      - "scripts/check-coolify-required-env.py"
+      - "scripts/test_coolify_required_env.py"
+      - "scripts/sync-coolify-compose-domains.py"
+      - "scripts/test_sync_coolify_compose_domains.py"
+      - "scripts/validate-hosted-deploy.py"
+      - "scripts/test_validate_hosted_deploy.py"
+      - "scripts/validate-public-api-workspace.py"
+      - "scripts/test_validate_public_api_workspace.py"
+      - "justfile"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-hosted-artifacts:
+    runs-on: ubuntu-latest
+    env:
+      REGISTRY_LAB_ESIGNET_POSTGRES_PASSWORD: hosted-validation-placeholder
+      CONFIG_REPO_REF: ${{ github.sha }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.SUBMODULES_PAT || github.token }}
+
+      - name: Set up Node for citizen portal
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Show Docker Compose version
+        run: docker compose version
+
+      - name: Run citizen portal gates
+        working-directory: portal
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.3.0 --activate
+          pnpm install --frozen-lockfile
+          pnpm check
+          pnpm test
+          pnpm build
+          pnpm exec playwright install --with-deps chromium
+          pnpm e2e
+
+      - name: Check whitespace
+        run: |
+          # shellcheck disable=SC2016
+          git ls-files -z \
+            .github/workflows/hosted-lab.yml \
+            Dockerfile.citizen-portal \
+            Dockerfile.static-metadata \
+            compose.coolify.yaml \
+            compose.agri-hosted.yaml \
+            compose.esignet-hosted.yaml \
+            compose.social-hosted.yaml \
+            compose.walt-hosted.yaml \
+            config/coolify \
+            config/static-metadata \
+            config/evidence-gateway \
+            config/lab-homepage \
+            config/esignet/nginx-hosted.conf \
+            config/walt \
+            portal \
+            docs/README.md \
+            docs/public-api-workspace.md \
+            requests/registry-lab \
+            scripts/check-service-first-deps.sh \
+            scripts/generate-demo-secrets.py \
+            scripts/generate-holder-proof.js \
+            scripts/sync-coolify-compose-domains.py \
+            scripts/test_sync_coolify_compose_domains.py \
+            scripts/publish-static-metadata.sh \
+            scripts/static-metadata-server.py \
+            scripts/lab-homepage-server.py \
+            scripts/lab_homepage_scenarios \
+            scripts/test_lab_homepage_server.py \
+            scripts/credential-commitment.py \
+            scripts/test_credential_commitment.py \
+            scripts/check-evidence-gateway-fixtures.py \
+            scripts/test_evidence_gateway_fixtures.py \
+            scripts/run-evidence-gateway-live-fixtures.py \
+            scripts/test_evidence_gateway_live_fixtures.py \
+            scripts/summarize-dhis2-programme-vc.py \
+            scripts/test_dhis2_programme_vc_config.py \
+            scripts/hosted-smoke.py \
+            scripts/test_hosted_smoke.py \
+            scripts/check-coolify-required-env.py \
+            scripts/test_coolify_required_env.py \
+            scripts/validate-hosted-deploy.py \
+            scripts/test_validate_hosted_deploy.py \
+            scripts/validate-public-api-workspace.py \
+            scripts/test_validate_public_api_workspace.py \
+            justfile \
+            | xargs -0 perl -ne 'if (/[ \t]$/) { print "$ARGV:$.: trailing whitespace\n"; $bad = 1 } END { exit($bad || 0) }'
+
+      - name: Require hosted compose artifacts
+        run: |
+          test -f compose.coolify.yaml
+          test -f compose.agri-hosted.yaml
+          test -f compose.esignet-hosted.yaml
+          test -f compose.social-hosted.yaml
+          test -f compose.walt-hosted.yaml
+
+      - name: Render Registry Lab hosted compose
+        run: docker compose -f compose.coolify.yaml config >/tmp/compose.coolify.config.yaml
+
+      - name: Render hosted eSignet compose
+        env:
+          REGISTRY_LAB_ESIGNET_RELAY_IMAGE: ghcr.io/jeremi/registry-lab-esignet-relay@sha256:1111111111111111111111111111111111111111111111111111111111111111
+          REGISTRY_LAB_ESIGNET_SEED_IMAGE: ghcr.io/jeremi/registry-lab-esignet-seed@sha256:2222222222222222222222222222222222222222222222222222222222222222
+        run: docker compose -f compose.esignet-hosted.yaml config >/tmp/compose.esignet-hosted.config.yaml
+
+      - name: Render hosted social compose
+        run: docker compose -f compose.social-hosted.yaml config >/tmp/compose.social-hosted.config.yaml
+
+      - name: Render hosted agriculture compose
+        run: docker compose -f compose.agri-hosted.yaml config >/tmp/compose.agri-hosted.config.yaml
+
+      - name: Render hosted walt compose
+        env:
+          WALT_AUTH_ENCRYPTION_KEY: hosted-validation-placeholder
+          WALT_AUTH_SIGN_KEY: hosted-validation-placeholder
+          WALT_AUTH_TOKEN_KEY: hosted-validation-placeholder
+          WALT_DB_PASSWORD: hosted-validation-placeholder
+          WALT_KTOR_SIGNING_KEY: hosted-validation-placeholder
+          WALT_KTOR_VERIFICATION_KEY: hosted-validation-placeholder
+        run: docker compose -f compose.walt-hosted.yaml config >/tmp/compose.walt-hosted.config.yaml
+
+      - name: Run hosted deploy validator tests
+        run: python3 scripts/test_validate_hosted_deploy.py
+
+      - name: Run lab homepage server tests
+        run: python3 scripts/test_lab_homepage_server.py
+
+      - name: Run DHIS2 programme VC config tests
+        run: python3 scripts/test_dhis2_programme_vc_config.py
+
+      - name: Run credential commitment tests
+        run: python3 scripts/test_credential_commitment.py
+
+      - name: Run evidence gateway fixture tests
+        run: python3 scripts/test_evidence_gateway_fixtures.py
+
+      - name: Validate evidence gateway fixtures
+        run: python3 scripts/check-evidence-gateway-fixtures.py
+
+      - name: Run evidence gateway live fixture runner tests
+        run: python3 scripts/test_evidence_gateway_live_fixtures.py
+
+      - name: Run hosted smoke tests
+        run: python3 scripts/test_hosted_smoke.py
+
+      - name: Run Coolify required env gate tests
+        run: python3 scripts/test_coolify_required_env.py
+
+      - name: Run Coolify compose domain sync tests
+        run: python3 scripts/test_sync_coolify_compose_domains.py
+
+      - name: Validate hosted deploy artifacts
+        run: python3 scripts/validate-hosted-deploy.py --reject-interim-product-images
+
+      - name: Run public API workspace validator tests
+        run: python3 scripts/test_validate_public_api_workspace.py
+
+      - name: Validate public API workspace
+        run: python3 scripts/validate-public-api-workspace.py
+
+  deploy-coolify:
+    needs: validate-hosted-artifacts
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    permissions:
+      contents: read
+    concurrency:
+      group: hosted-lab-coolify-deploy
+      cancel-in-progress: false
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Deploy Coolify apps and wait
+        env:
+          COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
+          COOLIFY_API_BASE_URL: ${{ vars.COOLIFY_API_BASE_URL }}
+          COOLIFY_REGISTRY_LAB_APP_UUID: ${{ vars.COOLIFY_REGISTRY_LAB_APP_UUID }}
+          COOLIFY_HOSTED_ESIGNET_APP_UUID: ${{ vars.COOLIFY_HOSTED_ESIGNET_APP_UUID }}
+          COOLIFY_HOSTED_WALT_APP_UUID: ${{ vars.COOLIFY_HOSTED_WALT_APP_UUID }}
+          COOLIFY_HOSTED_SOCIAL_APP_UUID: ${{ vars.COOLIFY_HOSTED_SOCIAL_APP_UUID }}
+          COOLIFY_HOSTED_AGRI_APP_UUID: ${{ vars.COOLIFY_HOSTED_AGRI_APP_UUID }}
+        run: |
+          set -euo pipefail
+          if [ -z "$COOLIFY_API_TOKEN" ]; then
+            echo "::error::COOLIFY_API_TOKEN is not configured."
+            exit 1
+          fi
+
+          missing=0
+          for name in COOLIFY_API_BASE_URL COOLIFY_REGISTRY_LAB_APP_UUID COOLIFY_HOSTED_ESIGNET_APP_UUID COOLIFY_HOSTED_WALT_APP_UUID COOLIFY_HOSTED_SOCIAL_APP_UUID COOLIFY_HOSTED_AGRI_APP_UUID; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::${name} is not configured."
+              missing=1
+            fi
+          done
+          if [ "$missing" -eq 1 ]; then
+            exit 1
+          fi
+
+          api_base="${COOLIFY_API_BASE_URL%/}"
+          python3 scripts/check-coolify-required-env.py \
+            --compose compose.coolify.yaml \
+            --api-base-url "${api_base}" \
+            --app-uuid "${COOLIFY_REGISTRY_LAB_APP_UUID}"
+
+          python3 scripts/check-coolify-required-env.py \
+            --compose compose.esignet-hosted.yaml \
+            --api-base-url "${api_base}" \
+            --app-uuid "${COOLIFY_HOSTED_ESIGNET_APP_UUID}"
+
+          python3 scripts/check-coolify-required-env.py \
+            --compose compose.social-hosted.yaml \
+            --api-base-url "${api_base}" \
+            --app-uuid "${COOLIFY_HOSTED_SOCIAL_APP_UUID}"
+
+          python3 scripts/check-coolify-required-env.py \
+            --compose compose.agri-hosted.yaml \
+            --api-base-url "${api_base}" \
+            --app-uuid "${COOLIFY_HOSTED_AGRI_APP_UUID}"
+
+          # App deploy targets: "uuid|label|health_url|probe_attempts".
+          # Health URLs mirror the x-hosted-domains headers in each compose file;
+          # keep them in sync if a public domain changes. JVM-heavy apps get a
+          # longer post-deploy probe budget (Coolify can report "finished" a bit
+          # before the service binds its port). The social probe hits the relay
+          # only, as a representative endpoint for that app's three domains.
+          apps=(
+            "${COOLIFY_REGISTRY_LAB_APP_UUID}|monolith|https://lab.registrystack.org|18"
+            "${COOLIFY_HOSTED_ESIGNET_APP_UUID}|esignet|https://esignet.lab.registrystack.org|18"
+            "${COOLIFY_HOSTED_WALT_APP_UUID}|walt|https://wallet.lab.registrystack.org|12"
+            "${COOLIFY_HOSTED_SOCIAL_APP_UUID}|social|https://social-relay.lab.registrystack.org|18"
+            "${COOLIFY_HOSTED_AGRI_APP_UUID}|agri|https://agri-relay.lab.registrystack.org|18"
+          )
+
+          # Pre-flight, per app, before mutating anything:
+          #  (a) Warn if Coolify's rendered compose is approaching the kernel
+          #      single-arg limit (MAX_ARG_STRLEN, 131072 bytes after base64).
+          #      Coolify execs the rendered compose as one base64 argument, so
+          #      crossing that cliff fails the deploy with E2BIG. This reads the
+          #      *stored* render (Coolify's last parse), so it flags gradual
+          #      growth early; an acute jump is still caught non-destructively at
+          #      deploy time (see the E2BIG branch below). Warn-only: a shrink PR
+          #      must never be blocked by a stale-high reading.
+          #  (b) Snapshot the current rollback target (config ref + image pins)
+          #      so a bad deploy can be reverted from the uploaded artifact.
+          #      Allow-list only non-secret keys; never persist hashes/keys/raws.
+          #      Best-effort: a failed snapshot warns but never blocks the deploy.
+          : > rollback-targets.jsonl
+          arg_limit=131072
+          for entry in "${apps[@]}"; do
+            IFS='|' read -r app label health_url _ <<<"$entry"
+
+            render_bytes="$(
+              curl -fsS -H "Authorization: Bearer ${COOLIFY_API_TOKEN}" \
+                "${api_base}/applications/${app}" \
+                | python3 -c 'import json,sys; print(len((json.load(sys.stdin).get("docker_compose") or "")))'
+            )" || render_bytes=0
+            # base64 size is 4*ceil(n/3): divide-then-multiply is intentional
+            # (the SC2017 "a*c/b" rewrite over-counts unless n+2 divides by 3).
+            # shellcheck disable=SC2017
+            b64_bytes=$(( (render_bytes + 2) / 3 * 4 ))
+            pct=$(( b64_bytes * 100 / arg_limit ))
+            echo "render app=${label} raw=${render_bytes} base64=${b64_bytes} limit=${arg_limit} util=${pct}%"
+            if [ "$pct" -ge 80 ]; then
+              echo "::warning::${label}: rendered compose is at ${pct}% of the Coolify arg-size limit (${b64_bytes}/${arg_limit} bytes after base64). Approaching the E2BIG cliff; plan to split a track or trim per-service env soon."
+            fi
+
+            if curl -fsS -H "Authorization: Bearer ${COOLIFY_API_TOKEN}" \
+                  "${api_base}/applications/${app}/envs" \
+                  | python3 -c 'import json, sys; rows=[e for e in json.load(sys.stdin) if not e.get("is_preview")]; keep={e.get("key"): e.get("value") for e in rows if e.get("key") == "CONFIG_REPO_REF" or str(e.get("key", "")).endswith("_IMAGE")}; print(json.dumps({"app": sys.argv[1], "uuid": sys.argv[2], "targets": keep}))' \
+                      "$label" "$app" >> rollback-targets.jsonl; then
+              echo "captured rollback target label=${label}"
+            else
+              echo "::warning::could not capture rollback target for ${label}"
+            fi
+          done
+
+          deployments_file="$(mktemp)"
+          for entry in "${apps[@]}"; do
+            IFS='|' read -r app label health_url probe_attempts <<<"$entry"
+            python3 -c 'import json, os; print(json.dumps({"key": "CONFIG_REPO_REF", "value": os.environ["GITHUB_SHA"], "is_preview": False}))' \
+              | curl -fsS -X PATCH \
+                  -H "Authorization: Bearer ${COOLIFY_API_TOKEN}" \
+                  -H "Content-Type: application/json" \
+                  --data-binary @- \
+                  "${api_base}/applications/${app}/envs" >/dev/null
+            deployment_uuid="$(
+              curl -fsS \
+                -H "Authorization: Bearer ${COOLIFY_API_TOKEN}" \
+                "${api_base}/deploy?uuid=${app}&force=false" \
+                | python3 -c 'import json, sys; print(json.load(sys.stdin)["deployments"][0]["deployment_uuid"])'
+            )"
+            printf '%s\t%s\t%s\t%s\t%s\n' "$app" "$label" "$health_url" "$probe_attempts" "$deployment_uuid" >> "$deployments_file"
+            echo "triggered app=${label} (${app}) deployment_uuid=${deployment_uuid}"
+          done
+
+          while IFS="$(printf '\t')" read -r app label health_url probe_attempts deployment_uuid; do
+            deadline=$((SECONDS + 1200))
+            while true; do
+              status="$(
+                curl -fsS \
+                  -H "Authorization: Bearer ${COOLIFY_API_TOKEN}" \
+                  "${api_base}/deployments/${deployment_uuid}" \
+                  | python3 -c 'import json, sys; data=json.load(sys.stdin); print((data.get("status") or data.get("deployment", {}).get("status") or "").lower())'
+              )"
+              echo "status app=${label} (${app}) deployment_uuid=${deployment_uuid} status=${status}"
+              case "$status" in
+                finished)
+                  break
+                  ;;
+                failed|cancelled|canceled|error)
+                  echo "::error::Coolify deployment failed for ${label} (${app}): ${status}"
+                  detail="$(curl -fsS -H "Authorization: Bearer ${COOLIFY_API_TOKEN}" "${api_base}/deployments/${deployment_uuid}" 2>/dev/null || true)"
+                  if printf '%s' "$detail" | grep -qE 'E2BIG|posix_spawn|Argument list too long'; then
+                    echo "::error::${label}: the rendered compose hit the kernel single-arg limit (E2BIG, ~128 KiB after base64). Coolify execs the whole compose as one base64 argument; shrink it by splitting services into a separate compose app or trimming per-service env."
+                  fi
+                  exit 1
+                  ;;
+              esac
+              if [ "$SECONDS" -ge "$deadline" ]; then
+                echo "::error::Timed out waiting for Coolify deployment ${deployment_uuid}"
+                exit 1
+              fi
+              sleep 15
+            done
+
+            # Coolify reported "finished"; confirm the app actually serves HTTP
+            # before moving on, so a crash-on-boot fails fast with clear
+            # attribution rather than surfacing only in the aggregate smoke.
+            # Liveness only: any HTTP status (2xx/3xx/4xx) means the listener is
+            # up; 5xx/000 (edge proxy with no backend, or refused) keeps retrying.
+            ok=0
+            for attempt in $(seq 1 "${probe_attempts}"); do
+              code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${health_url}" || true)"
+              case "$code" in
+                2*|3*|4*)
+                  echo "health ok app=${label} url=${health_url} http=${code} (attempt ${attempt}/${probe_attempts})"
+                  ok=1
+                  break
+                  ;;
+              esac
+              echo "health pending app=${label} url=${health_url} http=${code:-000} (attempt ${attempt}/${probe_attempts})"
+              sleep 10
+            done
+            if [ "$ok" -ne 1 ]; then
+              echo "::error::${label}: deployment finished but ${health_url} did not return a healthy HTTP status (2xx/3xx/4xx) after ${probe_attempts} attempts."
+              exit 1
+            fi
+          done < "$deployments_file"
+
+          # Coolify only persists docker_compose_domains for services already
+          # present in its parsed docker_compose_raw. The deploy above loads
+          # this commit's compose, then this sync rehydrates every monolith
+          # route from x-hosted-domains and overrides citizen-portal's target
+          # port before a targeted redeploy applies the proxy labels.
+          python3 scripts/sync-coolify-compose-domains.py \
+            --compose compose.coolify.yaml \
+            --api-base-url "${api_base}" \
+            --app-uuid "${COOLIFY_REGISTRY_LAB_APP_UUID}" \
+            --domain citizen-portal=https://portal.lab.registrystack.org:3000 \
+            --attempts 6 \
+            --retry-delay 10
+
+          deployment_uuid="$(
+            curl -fsS \
+              -H "Authorization: Bearer ${COOLIFY_API_TOKEN}" \
+              "${api_base}/deploy?uuid=${COOLIFY_REGISTRY_LAB_APP_UUID}&force=false" \
+              | python3 -c 'import json, sys; print(json.load(sys.stdin)["deployments"][0]["deployment_uuid"])'
+          )"
+          echo "triggered app=monolith-domain-sync (${COOLIFY_REGISTRY_LAB_APP_UUID}) deployment_uuid=${deployment_uuid}"
+          deadline=$((SECONDS + 1200))
+          while true; do
+            status="$(
+              curl -fsS \
+                -H "Authorization: Bearer ${COOLIFY_API_TOKEN}" \
+                "${api_base}/deployments/${deployment_uuid}" \
+                | python3 -c 'import json, sys; data=json.load(sys.stdin); print((data.get("status") or data.get("deployment", {}).get("status") or "").lower())'
+            )"
+            echo "status app=monolith-domain-sync (${COOLIFY_REGISTRY_LAB_APP_UUID}) deployment_uuid=${deployment_uuid} status=${status}"
+            case "$status" in
+              finished)
+                break
+                ;;
+              failed|cancelled|canceled|error)
+                echo "::error::Coolify deployment failed for monolith-domain-sync (${COOLIFY_REGISTRY_LAB_APP_UUID}): ${status}"
+                detail="$(curl -fsS -H "Authorization: Bearer ${COOLIFY_API_TOKEN}" "${api_base}/deployments/${deployment_uuid}" 2>/dev/null || true)"
+                if printf '%s' "$detail" | grep -qE 'E2BIG|posix_spawn|Argument list too long'; then
+                  echo "::error::monolith-domain-sync: the rendered compose hit the kernel single-arg limit (E2BIG, ~128 KiB after base64). Coolify execs the whole compose as one base64 argument; shrink it by splitting a track or trimming per-service env."
+                fi
+                exit 1
+                ;;
+            esac
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::Timed out waiting for Coolify deployment ${deployment_uuid}"
+              exit 1
+            fi
+            sleep 15
+          done
+
+          ok=0
+          for attempt in $(seq 1 18); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "https://lab.registrystack.org" || true)"
+            case "$code" in
+              2*|3*|4*)
+                echo "health ok app=monolith-domain-sync url=https://lab.registrystack.org http=${code} (attempt ${attempt}/18)"
+                ok=1
+                break
+                ;;
+            esac
+            echo "health pending app=monolith-domain-sync url=https://lab.registrystack.org http=${code:-000} (attempt ${attempt}/18)"
+            sleep 10
+          done
+          if [ "$ok" -ne 1 ]; then
+            echo "::error::monolith-domain-sync: deployment finished but https://lab.registrystack.org did not return a healthy HTTP status (2xx/3xx/4xx) after 18 attempts."
+            exit 1
+          fi
+
+          # The monolith has multiple public routes. Probe the new portal route
+          # explicitly so a missing service-domain binding is caught here, before
+          # the aggregate smoke test starts exercising portal behavior.
+          routes=(
+            "citizen-portal|https://portal.lab.registrystack.org|24"
+          )
+          for entry in "${routes[@]}"; do
+            IFS='|' read -r label health_url probe_attempts <<<"$entry"
+            ok=0
+            for attempt in $(seq 1 "${probe_attempts}"); do
+              code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${health_url}" || true)"
+              case "$code" in
+                2*|3*|4*)
+                  echo "route ok app=${label} url=${health_url} http=${code} (attempt ${attempt}/${probe_attempts})"
+                  ok=1
+                  break
+                  ;;
+              esac
+              echo "route pending app=${label} url=${health_url} http=${code:-000} (attempt ${attempt}/${probe_attempts})"
+              sleep 10
+            done
+            if [ "$ok" -ne 1 ]; then
+              echo "::error::${label}: deployment finished but ${health_url} did not return a healthy HTTP status (2xx/3xx/4xx) after ${probe_attempts} attempts."
+              exit 1
+            fi
+          done
+
+      - name: Upload rollback targets
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rollback-targets
+          path: rollback-targets.jsonl
+          if-no-files-found: warn
+
+      - name: Run hosted smoke
+        env:
+          HOSTED_LAB_BASE_URL: ${{ vars.HOSTED_LAB_BASE_URL }}
+          HOSTED_CREDENTIAL_SMOKE: ${{ vars.HOSTED_CREDENTIAL_SMOKE }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [ -n "${HOSTED_LAB_BASE_URL:-}" ]; then
+            args+=(--base-url "$HOSTED_LAB_BASE_URL")
+          fi
+          if [ "${HOSTED_CREDENTIAL_SMOKE:-}" = "true" ]; then
+            args+=(--credential-smoke)
+          fi
+          python3 scripts/hosted-smoke.py "${args[@]}"

@@ -1,0 +1,45 @@
+{
+  "signed": {
+    "_type": "targets",
+    "spec_version": "1.0.0",
+    "version": 4,
+    "expires": "2026-07-21T02:57:13.007506Z",
+    "targets": {
+      "openfn-dhis2-sidecar-runtime.json": {
+        "length": 4563,
+        "hashes": {
+          "sha256": "4c58e9ae9726d68f6a6d41a23b69ff2b6ff9ef661cdf386bb650804496c00dd5"
+        },
+        "custom": {
+          "product": "registry-notary-openfn-sidecar",
+          "instance_id": "hosted-dhis2-openfn-sidecar",
+          "previous_config_hash": "sha256:5dedb55ab547c38aeca1a7fab32c2f3d037e3a3f59527d324e39acc7a66a9262",
+          "apply_policy": "restart_required",
+          "sequence": 4,
+          "signer_kids": [
+            "8ec3a843a0f9328c863cac4046ab1cacbbc67888476ac7acf73d9bcd9a223ada"
+          ],
+          "bundle_id": "registry-lab-hosted-dhis2-openfn-sidecar-2026-06-09",
+          "stream_id": "dhis2-openfn-sidecar-runtime",
+          "config_hash": "sha256:4c58e9ae9726d68f6a6d41a23b69ff2b6ff9ef661cdf386bb650804496c00dd5",
+          "environment": "hosted-lab",
+          "change_classes": [
+            "openfn_sidecar_runtime",
+            "openfn_sidecar_workflow_bundle",
+            "openfn_sidecar_source_binding"
+          ]
+        }
+      }
+    },
+    "delegations": {
+      "keys": {},
+      "roles": []
+    }
+  },
+  "signatures": [
+    {
+      "keyid": "8ec3a843a0f9328c863cac4046ab1cacbbc67888476ac7acf73d9bcd9a223ada",
+      "sig": "6bafcc8278f3b2f196a213cb509f32cd8ff323465ae6d483b12e4c9294e14e16f1beece7c9c02dbe83e7ed24792ad15cfb2b1572b24b689a877d343c7b048ff93c68c5b65630857024e81c84a4c1e5b11bac85dab3c47135a4dcb309113fc8b6624917d78c68b909b8f9f18a1a744811522a92a34a646da3cae01ffb4d6f1ce35de377b60d1548821aff878e4c9d8b95125ab7ca310db8f4417baff569d8916ab5c427cca498f8e0bcf4f7eb28b4925d40b0e308473cc8acd2404a70a85eb3b90a95e4aff3c484e4f2944776f502ed40edb2bbc01cb9dd420bad079eac9c02c11acf0c082024acf3422a8b65256314f7274ede1e389780a4b9e6f4156c7cd024e193772771972608aa16a406858f443d59361d39c0cceb1e3aa42324d4acf5916ba8a6b5e002804ad42b5e8cb084906ed6aeada1f9e54c8616c2835677b08cb18adc91f60daea5ec4caa52f31a189fa919ee00a0080388d1abe119642eab028d6f6518ffed91841706f114512ff2c5ec181a4a6c80053fb252dda673bb492fa5"
+    }
+  ]
+}

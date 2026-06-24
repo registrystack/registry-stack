@@ -1,0 +1,50 @@
+meta {
+  name: 11 - Relay break-glass accepted
+  type: http
+  seq: 11
+}
+
+post {
+  url: {{lab2_civil_relay_admin_url}}/admin/v1/config/apply
+  body: json
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{CIVIL_RELAY_OPS_RAW}}
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "tuf": {
+      "root_path": "/lab2/tuf-repo/relay-break-glass/metadata/1.root.json",
+      "metadata_dir": "/lab2/tuf-repo/relay-break-glass/metadata",
+      "targets_dir": "/lab2/tuf-repo/relay-break-glass/targets",
+      "datastore_dir": "/var/lib/registry-relay/cache/tuf-relay-break-glass",
+      "target_name": "civil-registry-relay.yaml"
+    },
+    "break_glass": true,
+    "break_glass_approval": {
+      "approval_reference": "INC-LAB2-BRUNO-BG",
+      "approved_by": "lab2-operator@example.test",
+      "reason": "BRUNO-EXERCISE-ONLY-BREAK-GLASS",
+      "emergency_change_class": "emergency_break_glass",
+      "expires_at_unix_seconds": 1893456000,
+      "rate_limit_identity": "lab2-governed-config-bruno"
+    }
+  }
+}
+
+script:post-response {
+  const body = res.getBody();
+
+  test("status is 200", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("signed emergency target applies with operator approval", function () {
+    expect(body).to.have.property("result", "applied");
+    expect(body).to.have.property("applied", true);
+  });
+}

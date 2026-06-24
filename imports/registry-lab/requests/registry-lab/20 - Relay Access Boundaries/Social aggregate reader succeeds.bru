@@ -1,0 +1,31 @@
+meta {
+  name: Social aggregate reader succeeds
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{social_relay_url}}/v1/datasets/social_protection_registry/aggregates/households_by_eligibility_band
+  body: none
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{SOCIAL_AGGREGATE_READER_RAW}}
+  Data-Purpose: {{decentralized_evidence_purpose}}
+}
+
+script:post-response {
+  const body = res.getBody();
+
+  test("status is 200", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("aggregate reader receives aggregate data", function () {
+    expect(body).to.have.property("aggregate_id");
+    expect(body.aggregate_id).to.equal("households_by_eligibility_band");
+    expect(body).to.have.property("observations");
+    expect(body.observations).to.be.an("array").and.have.lengthOf(3);
+  });
+}

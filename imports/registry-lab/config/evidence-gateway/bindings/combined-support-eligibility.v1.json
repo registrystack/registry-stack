@@ -1,0 +1,92 @@
+{
+  "schema_version": "registry-lab/evidence-gateway-binding/v1",
+  "binding": {
+    "id": "combined-support-eligibility/v1",
+    "version": "v1",
+    "profile": "combined-support-eligibility",
+    "type": "governed-evidence",
+    "description": "Default governed evidence binding for PublicSchema-style REST evidence requests.",
+    "source_configs": [
+      "config/relay/civil-registry-relay.metadata.yaml",
+      "config/relay/social-protection-registry-relay.metadata.yaml",
+      "config/relay/health-registry-relay.metadata.yaml"
+    ],
+    "synthetic_data": "config/evidence-gateway/synthetic/combined-support-eligibility.v1.json",
+    "golden_fixtures": "config/evidence-gateway/golden/combined-support-eligibility.v1.json"
+  },
+  "evidence_pack": {
+    "pack_id": "combined-support-eligibility/v1",
+    "pack_version": "v1",
+    "pack_title": "Combined support eligibility evidence",
+    "source_basis": {
+      "family": "registry-lab-baseline",
+      "evidence_type": "Combined support eligibility",
+      "adaptation": "jurisdiction-neutral-publicschema"
+    },
+    "matching_modes": [
+      {
+        "mode": "identifier",
+        "status": "implemented",
+        "input": "target.identifiers.national_id",
+        "identifier_scheme": "national_id"
+      }
+    ],
+    "policy_id": "lab.combined-support-eligibility.governed-evidence.v1",
+    "policy_hash": "sha256:77a93c25e2d8b3c734176a8646628af65dd2a50396f2710e2fc26c5847259e5c",
+    "odrl_enforcement": {
+      "profile": "registry-evidence-gateway-pdp/v1",
+      "constraint_terms": [
+        "odrl:purpose"
+      ],
+      "unsupported_terms_fail_closed": true,
+      "compile_target": "native-pdp"
+    },
+    "pdp_gates": [
+      {
+        "term": "registry:pdp:assurance",
+        "operator": "odrl:gteq",
+        "rightOperand": "substantial"
+      },
+      {
+        "term": "registry:pdp:source_age",
+        "operator": "odrl:lteq",
+        "rightOperand": 86400
+      },
+      {
+        "term": "registry:pdp:legal_basis",
+        "operator": "odrl:isA",
+        "rightOperand": "demo:child-support-eligibility"
+      },
+      {
+        "term": "registry:pdp:consent",
+        "operator": "odrl:isA",
+        "rightOperand": "demo:child-support-consent"
+      }
+    ]
+  },
+  "odrl_policy": {
+    "@context": [
+      "https://www.w3.org/ns/odrl.jsonld",
+      {
+        "registry": "https://registrystack.org/ns/evidence-gateway#"
+      }
+    ],
+    "@type": "Set",
+    "uid": "urn:registry-lab:policy:combined-support-eligibility:governed-evidence:v1",
+    "profile": "registry-evidence-gateway-pdp/v1",
+    "permission": [
+      {
+        "uid": "urn:registry-lab:rule:combined-support-eligibility:purpose:decentralized-evidence-demo",
+        "action": "odrl:use",
+        "target": "urn:registry-lab:evidence:combined-support-eligibility:v1",
+        "constraint": [
+          {
+            "leftOperand": "odrl:purpose",
+            "operator": "odrl:isA",
+            "rightOperand": "https://demo.example.gov/purpose/decentralized-evidence-demo"
+          }
+        ]
+      }
+    ]
+  }
+}

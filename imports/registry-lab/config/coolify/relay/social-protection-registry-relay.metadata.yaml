@@ -1,0 +1,496 @@
+# SPDX-License-Identifier: Apache-2.0
+
+schema_version: registry-manifest/v1
+catalog:
+  id: decentralized-social-protection-registry
+  base_url: http://social-protection-registry-relay:8080
+  title: Social Protection Registry Relay (Decentralized Demo)
+  publisher:
+    name: Social Protection Authority (Demo)
+  standards:
+    dcat: '3.0'
+    shacl: '1.1'
+    json_schema: 2020-12
+  application_profiles:
+    - id: bregdcat-ap
+      version: '3.0'
+federation:
+  node_id: did:web:social-relay.lab.registrystack.org
+  issuer: https://social-relay.lab.registrystack.org
+  jwks_uri: https://social-relay.lab.registrystack.org/.well-known/jwks.json
+  federation_api: https://social-relay.lab.registrystack.org/federation
+  supported_protocol_versions:
+    - registry-notary-federation/v0.1
+evaluation_profiles:
+  - id: program-enrollment-status-v1
+    ruleset: program-enrollment-status-v1
+    claim_id: program_enrollment_status
+    subject_id_type: id
+    max_source_observed_age_seconds: 86400
+ecosystem_bindings:
+  - id: combined-support-eligibility/v1
+    version: v1
+    profile: combined-support-eligibility
+    type: governed-evidence
+    evidence_pack:
+      pack_id: combined-support-eligibility/v1
+      pack_version: v1
+      source_basis:
+        family: dpi
+        evidence_type: household_support_evidence
+      semantic_profile:
+        vocabulary: registry-lab
+        fit: strong
+      evidence_envelope:
+        format: minimized_json
+        fields:
+          - claim_id
+          - result
+      required_gates:
+        - purpose
+        - jurisdiction
+        - legal_basis
+        - consent
+        - authority_basis
+        - requester_identity
+        - subject_identity
+        - subject_relationship
+        - assurance
+        - source_binding
+        - source_freshness
+        - requested_disclosure
+        - credential_format
+        - route_scope
+      allowed_outputs:
+        - minimized_json
+      policy_id: lab.combined-support-eligibility.governed-evidence.v1
+      policy_hash: sha256:77a93c25e2d8b3c734176a8646628af65dd2a50396f2710e2fc26c5847259e5c
+      odrl_enforcement:
+        profile: registry-evidence-gateway-pdp/v1
+        constraint_terms:
+          - odrl:purpose
+requirements:
+  - id: household_support_requirement
+    iri: https://metadata.lab.registrystack.org/requirements/household-support-eligibility
+    title: Household support eligibility requirement
+    description: Requirement to confirm enrollment and eligibility band for support review.
+evidence_types:
+  - id: household_support_evidence
+    iri: https://metadata.lab.registrystack.org/evidence-types/household-support
+    title: Household support evidence
+    description: Evidence that a household or beneficiary has active program support facts.
+    proves:
+      - household_support_requirement
+datasets:
+  - id: social_protection_registry
+    title: Social Protection Registry
+    description: Synthetic households, persons, and enrollments for decentralized evidence demo flows.
+    owner: Social Protection Authority
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: weekly
+    evidence_offerings:
+      - id: household_support_evidence_service
+        iri: https://metadata.lab.registrystack.org/evidence-offerings/household-support
+        title: Household support evidence service
+        description: Evidence Server endpoint that computes enrollment and eligibility status from social protection data.
+        evidence_type: household_support_evidence
+        issuing_authority:
+          id: social_protection_authority
+          iri: did:web:social-relay.lab.registrystack.org
+          name: Social Protection Authority
+          country: ZZ
+        jurisdiction:
+          country: ZZ
+        level_of_assurance: substantial
+        entity: program_enrollment
+        lookup_keys:
+          - national_id
+        access:
+          kind: registry-notary
+          conforms_to: registry-notary-federation/v0.1
+          endpoint_url: https://social-notary.lab.registrystack.org
+          discovery_url: https://social-notary.lab.registrystack.org/.well-known/evidence-service
+          ruleset: program-enrollment-status-v1
+        policy:
+          purpose:
+            - https://metadata.lab.registrystack.org/purpose/social-protection-review
+    entities:
+      - name: household
+        title: Household
+        description: Household enrolled or assessed for support.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: national_id
+            type: string
+            required: true
+          - name: district
+            type: string
+            required: true
+          - name: poverty_score
+            type: number
+            required: true
+          - name: eligibility_band
+            type: string
+            required: true
+          - name: household_size
+            type: integer
+            required: true
+          - name: active_members
+            type: integer
+            required: true
+          - name: deceased_member_count
+            type: integer
+            required: true
+          - name: observed_at
+            type: string
+            required: true
+        relationships:
+          - name: members
+            target_entity: person
+            cardinality: many
+          - name: enrollments
+            target_entity: program_enrollment
+            cardinality: many
+      - name: district_geometry
+        title: District Geometry
+        description: Administrative district geometries for spatial aggregate demonstrations.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: geometry
+            type: string
+            required: true
+      - name: person
+        title: Person
+        description: Household member projection.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: household_id
+            type: string
+            required: true
+          - name: national_id
+            type: string
+            required: true
+          - name: relationship
+            type: string
+            required: true
+          - name: age
+            type: integer
+            required: true
+          - name: alive
+            type: boolean
+            required: true
+          - name: disability_status
+            type: string
+            required: true
+          - name: observed_at
+            type: string
+            required: true
+        relationships:
+          - name: household
+            target_entity: household
+            cardinality: zero_or_one
+      - name: program_enrollment
+        title: Program Enrollment
+        description: Program participation record for a household member.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: household_id
+            type: string
+            required: true
+          - name: person_id
+            type: string
+            required: true
+          - name: national_id
+            type: string
+            required: true
+          - name: program_code
+            type: string
+            required: true
+          - name: enrollment_status
+            type: string
+            required: true
+          - name: benefit_amount
+            type: number
+            required: true
+            unit: USD
+          - name: enrolled_on
+            type: date
+            required: true
+          - name: observed_at
+            type: string
+            required: true
+        relationships:
+          - name: household
+            target_entity: household
+            cardinality: zero_or_one
+          - name: person
+            target_entity: person
+            cardinality: zero_or_one
+      - name: household_membership
+        title: Household Membership
+        description: Household membership record used for composition and caregiver attestations.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: household_id
+            type: string
+            required: true
+          - name: person_id
+            type: string
+            required: true
+          - name: relationship_type
+            type: string
+            required: true
+          - name: membership_status
+            type: string
+            required: true
+          - name: start_date
+            type: date
+            required: true
+          - name: end_date
+            type: date
+            required: false
+      - name: socio_economic_profile
+        title: Socio-Economic Profile
+        description: Household welfare assessment source record.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: household_id
+            type: string
+            required: true
+          - name: observation_date
+            type: date
+            required: true
+          - name: instrument
+            type: string
+            required: true
+          - name: profile_status
+            type: string
+            required: true
+          - name: collected_by
+            type: string
+            required: true
+          - name: source_version
+            type: string
+            required: true
+      - name: scoring_event
+        title: Scoring Event
+        description: Eligibility scoring event with validity and status.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: profile_id
+            type: string
+            required: true
+          - name: score_band
+            type: string
+            required: true
+          - name: scoring_rule
+            type: string
+            required: true
+          - name: scoring_version
+            type: string
+            required: true
+          - name: valid_from
+            type: date
+            required: true
+          - name: valid_until
+            type: date
+            required: true
+          - name: scoring_status
+            type: string
+            required: true
+      - name: program
+        title: Program
+        description: Social protection programme reference record.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: display_name
+            type: string
+            required: true
+          - name: benefit_type
+            type: string
+            required: true
+          - name: authority
+            type: string
+            required: true
+      - name: entitlement
+        title: Entitlement
+        description: Benefit entitlement source record with coverage period and status.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: enrollment_id
+            type: string
+            required: true
+          - name: benefit_modality
+            type: string
+            required: true
+          - name: amount
+            type: number
+            required: true
+          - name: amount_band
+            type: string
+            required: true
+          - name: currency
+            type: string
+            required: true
+          - name: coverage_start
+            type: date
+            required: true
+          - name: coverage_end
+            type: date
+            required: true
+          - name: entitlement_status
+            type: string
+            required: true
+      - name: payment_event
+        title: Payment Event
+        description: Payment execution or hold event linked to an entitlement.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: entitlement_id
+            type: string
+            required: true
+          - name: cycle
+            type: string
+            required: true
+          - name: delivery_channel
+            type: string
+            required: true
+          - name: payment_date
+            type: date
+            required: true
+          - name: status
+            type: string
+            required: true
+          - name: reconciled
+            type: boolean
+            required: true
+      - name: functioning_profile
+        title: Functioning Profile
+        description: Lightweight functioning assessment source record.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: person_id
+            type: string
+            required: true
+          - name: national_id
+            type: string
+            required: true
+          - name: instrument_code
+            type: string
+            required: true
+          - name: administration_date
+            type: date
+            required: true
+          - name: respondent_relationship
+            type: string
+            required: true
+          - name: domain_severities
+            type: string
+            required: true
+          - name: disability_identifier_met
+            type: boolean
+            required: true
+          - name: domains_triggering_identifier
+            type: string
+            required: true
+          - name: source_version
+            type: string
+            required: true
+          - name: observed_at
+            type: string
+            required: true
+      - name: disability_determination
+        title: Disability Determination
+        description: Disability support determination source record.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: person_id
+            type: string
+            required: true
+          - name: national_id
+            type: string
+            required: true
+          - name: determination_status
+            type: string
+            required: true
+          - name: support_category
+            type: string
+            required: true
+          - name: authority
+            type: string
+            required: true
+          - name: valid_from
+            type: date
+            required: true
+          - name: valid_until
+            type: date
+            required: true
+          - name: review_due
+            type: date
+            required: true
+          - name: observed_at
+            type: string
+            required: true
+vocabularies:
+  registry_relay: https://registry-relay.dev/

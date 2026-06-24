@@ -1,0 +1,77 @@
+{
+  "schema": "registry.notary.openfn_sidecar.runtime.v1",
+  "limits": {
+    "max_workers": 4,
+    "worker_timeout_ms": 15000,
+    "max_output_bytes": 1048576,
+    "max_request_bytes": 16384,
+    "max_query_parameter_bytes": 1024,
+    "liveness_window_ms": 30000,
+    "retry_after_seconds": 1,
+    "max_batch_items": 100,
+    "max_worker_memory_mb": 12288
+  },
+  "sources": {
+    "dhis2_health": {
+      "dataset": "dhis2_tracker",
+      "entity": "person",
+      "engine": "http_json",
+      "credential_env": "OPENFN_DHIS2_DEMO_CREDENTIAL_JSON",
+      "credential_public_fields": [
+        "baseUrl"
+      ],
+      "allowed_base_urls": [
+        "https://play.im.dhis2.org/stable-2-43-0-1"
+      ],
+      "allow_insecure_localhost": false,
+      "allow_insecure_private_network": false,
+      "http_json": {
+        "method": "GET",
+        "base_url": {
+          "cel": "credential_public.baseUrl"
+        },
+        "path": "/api/tracker/trackedEntities",
+        "query": {
+          "fields": {
+            "cel": "\"trackedEntity,orgUnit,attributes[attribute,value],enrollments[enrollment,program,status,enrolledAt,events[event,programStage,status,occurredAt,scheduledAt]]\""
+          },
+          "orgUnitMode": {
+            "cel": "\"ALL\""
+          },
+          "trackedEntities": {
+            "cel": "lookup.value.startsWith('dhis2:tracked-entity:')\n  ? lookup.value.substring(size('dhis2:tracked-entity:'))\n  : lookup.value"
+          }
+        },
+        "headers": {},
+        "auth": {
+          "type": "basic",
+          "username": {
+            "secret": "username"
+          },
+          "password": {
+            "secret": "password"
+          }
+        },
+        "response": {
+          "records": {
+            "cel": "size(body.trackedEntities) == 0 ? [] : [\n  {\n    \"tracked_entity\": lookup.value,\n    \"org_unit\": body.trackedEntities[0].orgUnit,\n    \"first_name\": size(body.trackedEntities[0].attributes.filter(a, a.attribute == 'w75KJ2mc4zz')) == 0\n      ? null\n      : body.trackedEntities[0].attributes.filter(a, a.attribute == 'w75KJ2mc4zz')[0].value,\n    \"last_name\": size(body.trackedEntities[0].attributes.filter(a, a.attribute == 'zDhUuAYrxNC')) == 0\n      ? null\n      : body.trackedEntities[0].attributes.filter(a, a.attribute == 'zDhUuAYrxNC')[0].value,\n    \"child_program_code\": \"DHIS2_CHILD_PROGRAM\",\n    \"child_program_status\": size(body.trackedEntities[0].enrollments.filter(e, e.program == 'IpHINAT79UW')) == 0\n      ? null\n      : body.trackedEntities[0].enrollments.filter(e, e.program == 'IpHINAT79UW')[0].status,\n    \"child_program_active\": body.trackedEntities[0].enrollments.exists(e, e.program == 'IpHINAT79UW' && e.status == 'ACTIVE'),\n    \"child_age_band\": body.trackedEntities[0].enrollments.exists(e, e.program == 'IpHINAT79UW') ? '5_to_17' : 'unknown',\n    \"reconciliation_ref\": 'dhis2:tracked-entity:' + body.trackedEntities[0].trackedEntity,\n    \"maternal_pnc_status\": size(body.trackedEntities[0].enrollments.filter(e, e.program == 'uy2gU8kT1jF')) == 0\n      ? null\n      : body.trackedEntities[0].enrollments.filter(e, e.program == 'uy2gU8kT1jF')[0].status,\n    \"maternal_pnc_active\": body.trackedEntities[0].enrollments.exists(e, e.program == 'uy2gU8kT1jF' && e.status == 'ACTIVE'),\n    \"child_health_visit_recorded\": body.trackedEntities[0].enrollments.exists(e,\n      e.program == 'IpHINAT79UW' && e.events.exists(ev,\n        ev.status == 'COMPLETED' && (ev.programStage == 'A03MvHHogjR' || ev.programStage == 'ZzYYXq4fJie'))),\n    \"child_health_visit_count\": size(body.trackedEntities[0].enrollments.filter(e, e.program == 'IpHINAT79UW')) == 0\n      ? 0\n      : size(body.trackedEntities[0].enrollments.filter(e, e.program == 'IpHINAT79UW')[0].events),\n    \"tb_program_status\": size(body.trackedEntities[0].enrollments.filter(e, e.program == 'ur1Edk5Oe2n')) == 0\n      ? null\n      : body.trackedEntities[0].enrollments.filter(e, e.program == 'ur1Edk5Oe2n')[0].status,\n    \"tb_program_active\": body.trackedEntities[0].enrollments.exists(e, e.program == 'ur1Edk5Oe2n' && e.status == 'ACTIVE')\n  }\n]"
+          }
+        }
+      },
+      "smoke_lookup": {
+        "field": "tracked_entity",
+        "value": "PQfMcpmXeFE",
+        "query_values": {},
+        "fields": [
+          "tracked_entity",
+          "child_program_active",
+          "child_age_band",
+          "child_program_code",
+          "reconciliation_ref",
+          "tb_program_active"
+        ],
+        "purpose": "startup-readiness-smoke"
+      }
+    }
+  }
+}

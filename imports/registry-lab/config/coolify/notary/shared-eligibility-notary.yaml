@@ -1,0 +1,310 @@
+# SPDX-License-Identifier: Apache-2.0
+
+server:
+  bind: 0.0.0.0:8080
+  openapi_requires_auth: false
+  admin_listener:
+    mode: dedicated
+    bind: 0.0.0.0:8081
+
+auth:
+  mode: api_key
+  api_keys:
+    - id: shared_evidence_client
+      fingerprint:
+        provider: env
+        name: SHARED_EVIDENCE_CLIENT_TOKEN_HASH
+        commitment: sha256:1a2927edc408f2a0908750d5f988e73a09afb243d2f4fa5aea249af9fc89ea37
+      scopes:
+        - civil_registry:evidence_verification
+        - social_protection_registry:evidence_verification
+        - health_registry:evidence_verification
+      authorization_details:
+        type: registry-notary/evidence-authorization/v1
+        schema_version: v1
+        legal_basis_ref: demo:child-support-eligibility
+        consent_ref: demo:child-support-consent
+        jurisdiction: ZZ
+        assurance_level: substantial
+  bearer_tokens:
+    - id: shared_evidence_client
+      fingerprint:
+        provider: env
+        name: SHARED_EVIDENCE_CLIENT_BEARER_HASH
+        commitment: sha256:3d0d1305cc6f1a4266dedf6c6a50dd8bc6c9631226ffca3cfd36ee416e565fbe
+      scopes:
+        - civil_registry:evidence_verification
+        - social_protection_registry:evidence_verification
+        - health_registry:evidence_verification
+      authorization_details:
+        type: registry-notary/evidence-authorization/v1
+        schema_version: v1
+        legal_basis_ref: demo:child-support-eligibility
+        consent_ref: demo:child-support-consent
+        jurisdiction: ZZ
+        assurance_level: substantial
+
+audit:
+  sink: stdout
+  hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
+
+config_trust:
+  antirollback_state_path: /var/lib/registry-notary/config-state/shared-eligibility-notary-config-antirollback.json
+  local_approval_state_path: /var/lib/registry-notary/config-state/shared-eligibility-notary-config-local-approvals.json
+  break_glass_rate_limit:
+    max_accepted: 1
+    window_seconds: 3600
+
+cel:
+  worker_count: 16
+
+evidence:
+  enabled: true
+  service_id: shared-eligibility-notary
+  api_base_url: https://shared-notary.lab.registrystack.org
+  inline_batch_limit: 20
+  source_connections:
+    civil:
+      base_url: https://civil-relay.lab.registrystack.org
+      token_env: SHARED_CIVIL_EVIDENCE_SOURCE_RAW
+    social_protection:
+      base_url: http://social-protection-registry-relay:8080
+      allow_insecure_private_network: true
+      token_env: SHARED_SOCIAL_EVIDENCE_SOURCE_RAW
+    health:
+      base_url: https://health-relay.lab.registrystack.org
+      token_env: SHARED_HEALTH_EVIDENCE_SOURCE_RAW
+  ecosystem_bindings:
+    combined-support-eligibility/v1:
+      profile: registry-notary/source-policy/v1
+      policy_id: lab.combined-support-eligibility.governed-evidence.v1
+      policy_hash: sha256:77a93c25e2d8b3c734176a8646628af65dd2a50396f2710e2fc26c5847259e5c
+  signing_keys:
+    shared-eligibility-evidence-demo:
+      provider: local_jwk_env
+      private_jwk_env: REGISTRY_NOTARY_ISSUER_JWK
+      alg: EdDSA
+      kid: did:web:shared-notary.lab.registrystack.org#shared-eligibility-evidence-demo-key-1
+      status: active
+  credential_profiles:
+    combined_support_sd_jwt:
+      format: application/dc+sd-jwt
+      issuer: did:web:shared-notary.lab.registrystack.org
+      signing_key: shared-eligibility-evidence-demo
+      vct: https://demo.example/credentials/combined-support-eligibility/v1
+      validity_seconds: 600
+      allowed_claims:
+        - civil-record-present
+        - social-program-active
+        - health-service-available
+        - eligible-for-combined-support
+      holder_binding:
+        mode: did
+        proof_of_possession: required
+        allowed_did_methods:
+          - did:jwk
+      disclosure:
+        allowed:
+          - predicate
+  claims:
+    - id: civil-record-present
+      title: Civil record present
+      version: 2026-05
+      subject_type: person
+      value:
+        type: boolean
+      source_bindings:
+        civil:
+          connector: registry_data_api
+          connection: civil
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: civil_person
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/decentralized-evidence-demo
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              assurance:
+                allowed:
+                  - substantial
+            ecosystem_binding:
+              id: combined-support-eligibility/v1
+          lookup:
+            input: target.identifiers.national_id
+            field: national_id
+            op: eq
+            cardinality: one
+          fields:
+            national_id:
+              field: national_id
+              type: string
+              required: true
+            deceased:
+              field: deceased
+              type: boolean
+              required: true
+      rule:
+        type: cel
+        expression: "source.civil.deceased == false"
+      disclosure:
+        default: predicate
+        allowed:
+          - predicate
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+      credential_profiles:
+        - combined_support_sd_jwt
+    - id: social-program-active
+      title: Social program active
+      version: 2026-05
+      subject_type: person
+      value:
+        type: boolean
+      source_bindings:
+        enrollment:
+          connector: registry_data_api
+          connection: social_protection
+          required_scope: social_protection_registry:evidence_verification
+          dataset: social_protection_registry
+          entity: program_enrollment
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/decentralized-evidence-demo
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              assurance:
+                allowed:
+                  - substantial
+            ecosystem_binding:
+              id: combined-support-eligibility/v1
+          lookup:
+            input: target.identifiers.national_id
+            field: national_id
+            op: eq
+            cardinality: one
+          fields:
+            enrollment_status:
+              field: enrollment_status
+              type: string
+              required: true
+      rule:
+        type: cel
+        expression: "source.enrollment.enrollment_status == 'active'"
+      disclosure:
+        default: predicate
+        allowed:
+          - predicate
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+      credential_profiles:
+        - combined_support_sd_jwt
+    - id: health-service-available
+      title: Health service available
+      version: 2026-05
+      subject_type: person
+      value:
+        type: boolean
+      source_bindings:
+        facility:
+          connector: registry_data_api
+          connection: health
+          required_scope: health_registry:evidence_verification
+          dataset: health_registry
+          entity: health_facility
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/decentralized-evidence-demo
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              assurance:
+                allowed:
+                  - substantial
+            ecosystem_binding:
+              id: combined-support-eligibility/v1
+          lookup:
+            input: target.identifiers.national_id
+            field: national_id
+            op: eq
+            cardinality: one
+          fields:
+            license_status:
+              field: license_status
+              type: string
+              required: true
+            pediatric_service_available:
+              field: pediatric_service_available
+              type: boolean
+              required: true
+            practitioner_credential_active:
+              field: practitioner_credential_active
+              type: boolean
+              required: true
+      rule:
+        type: cel
+        expression: "source.facility.license_status == 'active' && source.facility.pediatric_service_available == true && source.facility.practitioner_credential_active == true"
+      disclosure:
+        default: predicate
+        allowed:
+          - predicate
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+      cccev:
+        requirement_type: InformationRequirement
+        evidence_type: health_service_availability_evidence
+        evidence_type_iri: https://demo.example.gov/evidence-types/health-service-availability
+      credential_profiles:
+        - combined_support_sd_jwt
+    - id: eligible-for-combined-support
+      title: Eligible for combined support
+      version: 2026-05
+      subject_type: person
+      value:
+        type: boolean
+      depends_on:
+        - civil-record-present
+        - social-program-active
+        - health-service-available
+      rule:
+        type: cel
+        expression: "claims.civil_record_present.satisfied && claims.social_program_active.satisfied && claims.health_service_available.satisfied"
+        bindings:
+          claims:
+            civil_record_present:
+              claim: civil-record-present
+            social_program_active:
+              claim: social-program-active
+            health_service_available:
+              claim: health-service-available
+      operations:
+        evaluate:
+          enabled: true
+        batch_evaluate:
+          enabled: true
+          max_subjects: 10
+      disclosure:
+        default: predicate
+        allowed:
+          - predicate
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+        - application/dc+sd-jwt
+      cccev:
+        requirement_type: InformationRequirement
+        evidence_type: combined_support_evidence
+        evidence_type_iri: https://demo.example.gov/evidence-types/combined-support
+      credential_profiles:
+        - combined_support_sd_jwt

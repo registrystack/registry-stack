@@ -1,0 +1,160 @@
+name: registry-lab-esignet-live
+
+services:
+  database:
+    image: postgres:bookworm
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "${REGISTRY_LAB_ESIGNET_POSTGRES_PORT:-5455}:5432"
+    volumes:
+      - esignet-postgres-data:/var/lib/postgresql
+      - ./config/esignet/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    image: redis:6.0
+    command: ["redis-server"]
+    restart: unless-stopped
+    networks:
+      default:
+        aliases:
+          - redis-server
+
+  esignet:
+    image: registry-lab-esignet-relay:demo
+    build:
+      context: .
+      dockerfile: Dockerfile.esignet-relay
+      additional_contexts:
+        esignet_relay_authenticator_src: ${ESIGNET_RELAY_AUTHENTICATOR_SOURCE_DIR:-./vendor/esignet-relay-authenticator}
+    user: root
+    depends_on:
+      database:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      active_profile_env: default,local
+      spring_config_label_env: ""
+      spring_config_url_env: ""
+      hsm_client_zip_url_env: ""
+      hsm_local_dir_env: hsm-client
+      loader_path_env: /home/mosip/additional_jars/
+      work_dir: /home/mosip
+      container_user: mosip
+      # The MOSIP mock plugin package is kept only for local key-binding SPI
+      # compatibility. Account lookup and UserInfo release are handled by
+      # RelayAuthenticationService below, not by mock IDA.
+      plugin_name_env: esignet-mock-plugin.jar,esignet-relay-authenticator.jar
+      plugin_url_env: ""
+      plugins_path_env: /home/mosip/plugins
+      amr_acr_mapping_file_path_env: /home/mosip/amr_acr_mapping.json
+      KAFKA_ENABLED: "false"
+      SPRING_AUTOCONFIGURE_EXCLUDE: org.springframework.boot.autoconfigure.kafka.KafkaAutoConfiguration
+      SPRING_CACHE_TYPE: redis
+      SPRING_DATA_REDIS_HOST: redis-server
+      SPRING_REDIS_PASSWORD: ""
+      MOSIP_ESIGNET_DATABASE_URL: jdbc:postgresql://database:5432/mosip_esignet?currentSchema=esignet
+      MOSIP_ESIGNET_DATABASE_USERNAME: postgres
+      MOSIP_ESIGNET_DATABASE_PASSWORD: postgres
+      MOSIP_ESIGNET_INTEGRATION_SCAN_BASE_PACKAGE: io.mosip.esignet.mock.integration,io.registry.esignet.relay
+      MOSIP_ESIGNET_INTEGRATION_AUTHENTICATOR: RelayAuthenticationService
+      MOSIP_ESIGNET_INTEGRATION_KEY_BINDER: MockKeyBindingWrapperService
+      MOSIP_ESIGNET_OPENID_SCOPE_CLAIMS: "{'profile' : {'name','given_name','family_name','gender','birthdate','individual_id'}}"
+      REGISTRY_RELAY_BASE_URL: ${REGISTRY_LAB_ESIGNET_RELAY_BASE_URL:-http://host.docker.internal:4315}
+      REGISTRY_RELAY_ATTRIBUTE_RELEASE_PROFILE_ID: esignet-civil-userinfo
+      REGISTRY_RELAY_ATTRIBUTE_RELEASE_PROFILE_VERSION: v1
+      REGISTRY_RELAY_ATTRIBUTE_RELEASE_PURPOSE: https://demo.example.gov/purpose/esignet-identity-verification
+      REGISTRY_RELAY_AUTH_CREDENTIAL_KIND: api_key
+      REGISTRY_RELAY_AUTH_BEARER_TOKEN: ${POPULATION_ESIGNET_IDENTITY_RELEASE_RAW:?missing POPULATION_ESIGNET_IDENTITY_RELEASE_RAW; run scripts/generate-demo-secrets.py}
+      REGISTRY_RELAY_SUBJECT_ID_TYPE: national_id
+      REGISTRY_RELAY_DEFAULT_CLAIMS: individual_id,name,given_name,family_name,birthdate,gender
+      REGISTRY_ESIGNET_AUTH_SUPPORTED_FACTORS: OTP
+      REGISTRY_ESIGNET_AUTH_OTP_CHANNELS: email,phone
+      REGISTRY_ESIGNET_AUTH_OTP_STATIC_ENABLED: "true"
+      REGISTRY_ESIGNET_AUTH_OTP_STATIC_VALUE: "111111"
+      REGISTRY_ESIGNET_KYC_TOKEN_HMAC_SECRET: ${REGISTRY_ESIGNET_KYC_TOKEN_SECRET:?missing REGISTRY_ESIGNET_KYC_TOKEN_SECRET; run scripts/generate-demo-secrets.py}
+      REGISTRY_ESIGNET_PSUT_HMAC_SECRET: ${REGISTRY_ESIGNET_PSUT_SECRET:?missing REGISTRY_ESIGNET_PSUT_SECRET; run scripts/generate-demo-secrets.py}
+      REGISTRY_ESIGNET_USER_INFO_ISSUER: ${REGISTRY_ESIGNET_USER_INFO_ISSUER:-http://localhost:8088}
+      REGISTRY_ESIGNET_KYC_SIGNING_KEYSTORE_PATH: /home/mosip/kyc-signing/kyc-signing.p12
+      REGISTRY_ESIGNET_KYC_SIGNING_KEYSTORE_TYPE: PKCS12
+      REGISTRY_ESIGNET_KYC_SIGNING_KEYSTORE_PASSWORD: ${REGISTRY_ESIGNET_KYC_KEYSTORE_PASSWORD:?missing REGISTRY_ESIGNET_KYC_KEYSTORE_PASSWORD; run scripts/generate-demo-secrets.py}
+      REGISTRY_ESIGNET_KYC_SIGNING_KEY_ALIAS: esignet-relay-kyc
+      REGISTRY_ESIGNET_KYC_SIGNING_KEY_PASSWORD: ${REGISTRY_ESIGNET_KYC_KEYSTORE_PASSWORD:?missing REGISTRY_ESIGNET_KYC_KEYSTORE_PASSWORD; run scripts/generate-demo-secrets.py}
+      MOSIP_KERNEL_KEYMANAGER_HSM_CONFIG_PATH: /home/mosip/keystore/esignet_local.p12
+    ports:
+      - "${REGISTRY_LAB_ESIGNET_PORT:-8088}:8088"
+    volumes:
+      - esignet-keystore:/home/mosip/keystore
+      - esignet-kyc-signing:/home/mosip/kyc-signing
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8088/v1/esignet/oidc/.well-known/openid-configuration"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 90s
+
+  esignet-ui:
+    image: mosipid/oidc-ui:1.8.0
+    user: root
+    depends_on:
+      esignet:
+        condition: service_healthy
+    environment:
+      container_user: mosip
+      DEFAULT_WELLKNOWN: "%5B%7B%22name%22%3A%22OpenID%20Configuration%22%2C%22value%22%3A%22%2F.well-known%2Fopenid-configuration%22%7D%2C%7B%22name%22%3A%22Jwks%20Json%22%2C%22value%22%3A%22%2F.well-known%2Fjwks.json%22%7D%2C%7B%22name%22%3A%22Authorization%20Server%22%2C%22value%22%3A%22%2F.well-known%2Foauth-authorization-server%22%7D%5D"
+      # Pinned 2026-06-21; sha256 031e16a94fc2379b20ac30e035e0f9ab10d7de8e73a4289d22d4e0fcb5da23c0.
+      SIGN_IN_WITH_ESIGNET_PLUGIN_URL: https://raw.githubusercontent.com/mosip/artifactory-ref-impl/977607990661e864c2adddb9d7de50ea6c651b8f/artifacts/src/mosip-plugins/sign-in-with-esignet/sign-in-with-esignet.zip
+      i18n_url_env: ""
+      theme_url_env: ""
+      images_url_env: ""
+    ports:
+      - "${REGISTRY_LAB_ESIGNET_UI_PORT:-3000}:3000"
+    volumes:
+      - ./config/esignet/nginx.conf:/etc/nginx/nginx.conf:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/.well-known/openid-configuration"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  esignet-seed:
+    image: registry-lab-esignet-seed:demo
+    build:
+      context: .
+      dockerfile: Dockerfile.esignet-seed
+    depends_on:
+      database:
+        condition: service_healthy
+      esignet:
+        condition: service_healthy
+    environment:
+      PGHOST: database
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      ESIGNET_CLIENT_PRIVATE_KEY_FILE: /output/client-private.pem
+      ESIGNET_ACCOUNT_SOURCE_LABEL: population Relay profile esignet-civil-userinfo
+      ESIGNET_REDIS_HOST: redis-server
+      ESIGNET_REDIS_PORT: "6379"
+    volumes:
+      - ./scripts/seed-esignet-live.py:/seed/seed-esignet-live.py:ro
+      - ./output/esignet-live:/output
+    entrypoint: ["/bin/sh", "-euc"]
+    command:
+      - python /seed/seed-esignet-live.py
+    restart: "no"
+
+volumes:
+  esignet-postgres-data:
+  esignet-keystore:
+  esignet-kyc-signing:

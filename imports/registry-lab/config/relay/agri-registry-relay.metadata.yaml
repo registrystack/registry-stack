@@ -1,0 +1,914 @@
+# SPDX-License-Identifier: Apache-2.0
+
+schema_version: registry-manifest/v1
+catalog:
+  id: nagdi-agricultural-registries
+  base_url: http://agri-registry-relay:8080
+  title: NAgDI Agricultural Registry Relay (Decentralized Demo)
+  publisher:
+    name: National Agricultural Data Infrastructure Governance Body (Demo)
+  standards:
+    dcat: '3.0'
+    shacl: '1.1'
+    json_schema: 2020-12
+  application_profiles:
+    - id: bregdcat-ap
+      version: '3.0'
+federation:
+  node_id: did:web:nagdi-agricultural-registries.demo.example.gov
+  issuer: https://nagdi-agricultural-registries.demo.example.gov
+  jwks_uri: https://nagdi-agricultural-registries.demo.example.gov/.well-known/jwks.json
+  federation_api: https://nagdi-agricultural-registries.demo.example.gov/federation
+  supported_protocol_versions:
+    - registry-notary-federation/v0.1
+evaluation_profiles:
+  - id: eligible-for-input-voucher-v1
+    ruleset: eligible-for-input-voucher-v1
+    claim_id: eligible_for_input_voucher
+    subject_id_type: id
+    max_source_observed_age_seconds: 86400
+  - id: eligible-for-livestock-movement-v1
+    ruleset: eligible-for-livestock-movement-v1
+    claim_id: eligible_for_livestock_movement
+    subject_id_type: id
+    max_source_observed_age_seconds: 86400
+requirements:
+  - id: farmer_registration_requirement
+    iri: https://demo.example.gov/requirements/nagdi/farmer-registration
+    title: Farmer registration requirement
+    description: Requirement to confirm the applicant is an active registered farmer.
+  - id: climate_smart_input_voucher_requirement
+    iri: https://demo.example.gov/requirements/nagdi/climate-smart-input-voucher
+    title: Climate-smart input voucher eligibility requirement
+    description: Requirement to confirm crop, parcel, climate-risk, entitlement, authorization, and redemption exclusion facts for input support review.
+  - id: livestock_movement_permit_requirement
+    iri: https://demo.example.gov/requirements/nagdi/livestock-movement-permit
+    title: Livestock movement permit review requirement
+    description: Requirement to confirm livestock holder, herd, vaccination, quarantine, and open-permit controls for movement permit review.
+  - id: agricultural_market_sizing_requirement
+    iri: https://demo.example.gov/requirements/nagdi/agricultural-market-sizing
+    title: Agricultural market sizing aggregate requirement
+    description: Requirement to provide suppressed district-level planning aggregates without raw farmer row export.
+  - id: livestock_herd_planning_requirement
+    iri: https://demo.example.gov/requirements/nagdi/livestock-herd-planning
+    title: Livestock herd planning aggregate requirement
+    description: Requirement to provide suppressed herd-count planning aggregates without raw livestock holder, herd, or animal row export.
+evidence_types:
+  - id: farmer_registration_evidence
+    iri: https://demo.example.gov/evidence-types/nagdi/farmer-registration
+    title: Farmer registration evidence
+    description: Evidence that a farmer registry row is active and current enough for program review.
+    proves:
+      - farmer_registration_requirement
+  - id: climate_smart_input_voucher_evidence
+    iri: https://demo.example.gov/evidence-types/nagdi/climate-smart-input-voucher
+    title: Climate-smart input voucher eligibility evidence
+    description: Composed evidence for seasonal climate-smart input voucher review.
+    proves:
+      - climate_smart_input_voucher_requirement
+  - id: livestock_movement_permit_evidence
+    iri: https://demo.example.gov/evidence-types/nagdi/livestock-movement-permit
+    title: Livestock movement permit review evidence
+    description: Composed evidence for herd-level livestock movement permit review.
+    proves:
+      - livestock_movement_permit_requirement
+  - id: agricultural_market_sizing_evidence
+    iri: https://demo.example.gov/evidence-types/nagdi/agricultural-market-sizing
+    title: Agricultural market sizing evidence
+    description: Suppressed aggregate evidence for planning and market sizing without individual row disclosure.
+    proves:
+      - agricultural_market_sizing_requirement
+  - id: livestock_herd_planning_evidence
+    iri: https://demo.example.gov/evidence-types/nagdi/livestock-herd-planning
+    title: Livestock herd planning evidence
+    description: Suppressed aggregate evidence for animal-health planning without livestock holder, herd, or animal row disclosure.
+    proves:
+      - livestock_herd_planning_requirement
+datasets:
+  - id: agri_registry
+    title: NAgDI Agricultural Registries
+    description: XLSX-backed farmer, holding, program, market, livestock, and reference-data registers for purpose-bound agricultural evidence.
+    owner: National Agricultural Data Infrastructure Governance Body
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: weekly
+    evidence_offerings:
+      - id: climate_smart_input_voucher_evidence_service
+        iri: https://demo.example.gov/evidence-offerings/nagdi/climate-smart-input-voucher
+        title: Climate-smart input voucher evidence service
+        description: Registry Notary endpoint that evaluates farmer registration, data-use authorization, parcel, crop, climate-risk, entitlement, redemption exclusion, and review controls.
+        evidence_type: climate_smart_input_voucher_evidence
+        issuing_authority:
+          id: nagdi_agriculture_governance_body
+          iri: did:web:nagdi-agriculture.demo.example.gov
+          name: National Agricultural Data Infrastructure Governance Body
+          country: ZZ
+        jurisdiction:
+          country: ZZ
+        level_of_assurance: substantial
+        entity: voucher_eligibility_snapshot
+        lookup_keys:
+          - id
+        access:
+          kind: registry-notary
+          conforms_to: registry-notary-federation/v0.1
+          endpoint_url: https://nagdi-agriculture-notary:8080
+          discovery_url: https://nagdi-agriculture-notary:8080/.well-known/evidence-service
+          ruleset: eligible-for-input-voucher-v1
+        policy:
+          purpose:
+            - https://demo.example.gov/purpose/nagdi/climate-smart-input-support
+      - id: livestock_movement_permit_evidence_service
+        iri: https://demo.example.gov/evidence-offerings/nagdi/livestock-movement-permit
+        title: Livestock movement permit evidence service
+        description: Registry Notary endpoint that evaluates herd registration, vaccination, quarantine, and conflicting permit controls.
+        evidence_type: livestock_movement_permit_evidence
+        issuing_authority:
+          id: animal_health_authority
+          iri: did:web:animal-health.demo.example.gov
+          name: Animal Health Authority
+          country: ZZ
+        jurisdiction:
+          country: ZZ
+        level_of_assurance: substantial
+        entity: livestock_movement_snapshot
+        lookup_keys:
+          - farmer_id
+          - herd_id
+        access:
+          kind: registry-notary
+          conforms_to: registry-notary-federation/v0.1
+          endpoint_url: https://nagdi-agriculture-notary:8080
+          discovery_url: https://nagdi-agriculture-notary:8080/.well-known/evidence-service
+          ruleset: eligible-for-livestock-movement-v1
+        policy:
+          purpose:
+            - https://demo.example.gov/purpose/nagdi/livestock-movement-permit-review
+    entities:
+      - name: farmer
+        title: Farmer
+        description: Registered farmer projection with personal fields minimized for row and evidence workflows.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: national_id
+            type: string
+            required: false
+          - name: given_name
+            type: string
+            required: true
+          - name: family_name
+            type: string
+            required: true
+          - name: district
+            type: string
+            required: true
+          - name: district_code
+            type: string
+            required: true
+          - name: registration_status
+            type: string
+            required: true
+          - name: smallholder_status
+            type: string
+            required: true
+          - name: producer_type
+            type: string
+            required: true
+          - name: data_quality_status
+            type: string
+            required: true
+          - name: last_verified_on
+            type: date
+            required: true
+      - name: data_use_authorization
+        title: Data Use Authorization
+        description: Purpose and lawful-basis authorization facts for agricultural data consultation.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: subject_id
+            type: string
+            required: true
+          - name: subject_scope
+            type: string
+            required: true
+          - name: subject_type
+            type: string
+            required: true
+          - name: purpose_code
+            type: string
+            required: true
+          - name: lawful_basis_code
+            type: string
+            required: true
+          - name: disclosure_mode
+            type: string
+            required: true
+          - name: authorization_status
+            type: string
+            required: true
+          - name: valid_from
+            type: date
+            required: true
+          - name: valid_until
+            type: date
+            required: false
+      - name: farmer_identifier
+        title: Farmer Identifier
+        description: Identifier rows linked to farmer Persons for PublicSchema-shaped projection.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: farmer_id
+            type: string
+            required: true
+          - name: identifier_type
+            type: string
+            required: true
+          - name: identifier_value
+            type: string
+            required: true
+          - name: issuing_authority
+            type: string
+            required: true
+          - name: active
+            type: boolean
+            required: true
+          - name: recorded_on
+            type: date
+            required: true
+      - name: farmer_group_membership
+        title: Farmer Group Membership
+        description: Membership rows linking farmers to cooperatives or producer groups.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: farmer_id
+            type: string
+            required: true
+          - name: group_id
+            type: string
+            required: true
+          - name: group_name
+            type: string
+            required: true
+          - name: group_type
+            type: string
+            required: true
+          - name: role
+            type: string
+            required: true
+          - name: active
+            type: boolean
+            required: true
+          - name: joined_on
+            type: date
+            required: true
+      - name: holding
+        title: Farm Holding
+        description: Farm holding projection from land or farm services records.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: farmer_id
+            type: string
+            required: true
+          - name: district
+            type: string
+            required: true
+          - name: district_code
+            type: string
+            required: true
+          - name: holding_status
+            type: string
+            required: true
+          - name: total_area_ha
+            type: number
+            required: true
+          - name: primary_livelihood
+            type: string
+            required: true
+          - name: data_quality_status
+            type: string
+            required: true
+          - name: last_verified_on
+            type: date
+            required: true
+        relationships:
+          - name: parcels
+            target_entity: parcel
+            cardinality: many
+      - name: parcel
+        title: Farm Parcel
+        description: Active or retired parcel projection for crop and input support review.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: holding_id
+            type: string
+            required: true
+          - name: district
+            type: string
+            required: true
+          - name: district_code
+            type: string
+            required: true
+          - name: area_ha
+            type: number
+            required: true
+          - name: irrigation_type
+            type: string
+            required: true
+          - name: soil_zone
+            type: string
+            required: true
+          - name: active
+            type: boolean
+            required: true
+          - name: last_surveyed_on
+            type: date
+            required: true
+        relationships:
+          - name: holding
+            target_entity: holding
+            cardinality: zero_or_one
+          - name: crop_declarations
+            target_entity: crop_declaration
+            cardinality: many
+      - name: crop_declaration
+        title: Crop Declaration
+        description: Farmer-declared crop and planted area for a parcel and season.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: parcel_id
+            type: string
+            required: true
+          - name: season
+            type: string
+            required: true
+          - name: crop
+            type: string
+            required: true
+          - name: planted_area_ha
+            type: number
+            required: true
+          - name: declared_on
+            type: date
+            required: true
+          - name: declaration_status
+            type: string
+            required: true
+        relationships:
+          - name: parcel
+            target_entity: parcel
+            cardinality: zero_or_one
+      - name: voucher_entitlement
+        title: Voucher Entitlement
+        description: Program entitlement facts for seasonal input support.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: farmer_id
+            type: string
+            required: true
+          - name: program_code
+            type: string
+            required: true
+          - name: season
+            type: string
+            required: true
+          - name: entitlement_status
+            type: string
+            required: true
+          - name: approval_status
+            type: string
+            required: true
+          - name: eligible_input_type
+            type: string
+            required: true
+          - name: package_code
+            type: string
+            required: true
+          - name: max_value
+            type: number
+            required: true
+          - name: currency
+            type: string
+            required: true
+          - name: valid_from
+            type: date
+            required: true
+          - name: issued_on
+            type: date
+            required: true
+          - name: expires_on
+            type: date
+            required: true
+      - name: voucher_redemption
+        title: Voucher Redemption
+        description: Voucher redemption event, including successful and exception states.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: entitlement_id
+            type: string
+            required: true
+          - name: farmer_id
+            type: string
+            required: true
+          - name: supplier_id
+            type: string
+            required: true
+          - name: redeemed_on
+            type: date
+            required: true
+          - name: redeemed_value
+            type: number
+            required: true
+          - name: currency
+            type: string
+            required: true
+          - name: redemption_status
+            type: string
+            required: true
+      - name: supplier
+        title: Agricultural Input Supplier
+        description: Synthetic supplier license projection for redemption authorization.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: supplier_name
+            type: string
+            required: true
+          - name: district
+            type: string
+            required: true
+          - name: district_code
+            type: string
+            required: true
+          - name: license_status
+            type: string
+            required: true
+          - name: last_verified_on
+            type: date
+            required: true
+      - name: district_climate_risk
+        title: District Climate Risk
+        description: Seasonal climate-risk classification and recommended input type by district.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: district
+            type: string
+            required: true
+          - name: district_code
+            type: string
+            required: true
+          - name: season
+            type: string
+            required: true
+          - name: drought_risk_level
+            type: string
+            required: true
+          - name: flood_risk_level
+            type: string
+            required: true
+          - name: rainfall_percentile
+            type: number
+            required: true
+          - name: recommended_input_type
+            type: string
+            required: true
+          - name: updated_on
+            type: date
+            required: true
+      - name: market_price
+        title: Market Price
+        description: Public or restricted-low market price observation by district market and commodity.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: district
+            type: string
+            required: true
+          - name: district_code
+            type: string
+            required: true
+          - name: market_name
+            type: string
+            required: true
+          - name: commodity
+            type: string
+            required: true
+          - name: price_date
+            type: date
+            required: true
+          - name: unit
+            type: string
+            required: true
+          - name: price
+            type: number
+            required: true
+          - name: currency
+            type: string
+            required: true
+      - name: livestock_holding
+        title: Livestock Holding
+        description: Animal-health authority holding projection for livestock keeper review.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: farmer_id
+            type: string
+            required: true
+          - name: district
+            type: string
+            required: true
+          - name: district_code
+            type: string
+            required: true
+          - name: village
+            type: string
+            required: true
+          - name: village_code
+            type: string
+            required: true
+          - name: holding_status
+            type: string
+            required: true
+          - name: premises_code
+            type: string
+            required: true
+          - name: last_verified_on
+            type: date
+            required: true
+        relationships:
+          - name: herds
+            target_entity: herd
+            cardinality: many
+      - name: herd
+        title: Herd
+        description: Herd-level species and registration facts.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: farmer_id
+            type: string
+            required: true
+          - name: livestock_holding_id
+            type: string
+            required: true
+          - name: district
+            type: string
+            required: true
+          - name: district_code
+            type: string
+            required: true
+          - name: village_code
+            type: string
+            required: true
+          - name: species
+            type: string
+            required: true
+          - name: count
+            type: integer
+            required: true
+          - name: production_system
+            type: string
+            required: true
+          - name: registration_status
+            type: string
+            required: true
+          - name: updated_on
+            type: date
+            required: true
+        relationships:
+          - name: livestock_holding
+            target_entity: livestock_holding
+            cardinality: zero_or_one
+          - name: vaccinations
+            target_entity: vaccination
+            cardinality: many
+      - name: vaccination
+        title: Vaccination
+        description: Herd-level and animal-level vaccination facts.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: herd_id
+            type: string
+            required: true
+          - name: animal_id
+            type: string
+            required: false
+          - name: vaccine_code
+            type: string
+            required: true
+          - name: vaccinated_on
+            type: date
+            required: true
+          - name: valid_until
+            type: date
+            required: true
+          - name: vaccination_status
+            type: string
+            required: true
+        relationships:
+          - name: herd
+            target_entity: herd
+            cardinality: zero_or_one
+      - name: movement_permit
+        title: Movement Permit
+        description: Existing or historical livestock movement permit facts.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: application_id
+            type: string
+            required: true
+          - name: herd_id
+            type: string
+            required: true
+          - name: origin_premises_code
+            type: string
+            required: true
+          - name: destination_premises_code
+            type: string
+            required: true
+          - name: origin_district
+            type: string
+            required: true
+          - name: origin_district_code
+            type: string
+            required: true
+          - name: destination_district
+            type: string
+            required: true
+          - name: destination_district_code
+            type: string
+            required: true
+          - name: permit_status
+            type: string
+            required: true
+          - name: issued_on
+            type: date
+            required: true
+          - name: valid_until
+            type: date
+            required: true
+          - name: revoked_on
+            type: date
+            required: false
+      - name: voucher_eligibility_snapshot
+        title: Voucher Eligibility Snapshot
+        description: One-row per farmer materialized evidence projection for 2026A climate-smart input voucher review.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: season
+            type: string
+            required: true
+          - name: purpose_code
+            type: string
+            required: true
+          - name: farmer_registered
+            type: boolean
+            required: true
+          - name: data_use_authorized
+            type: boolean
+            required: true
+          - name: active_smallholder_farmer
+            type: boolean
+            required: true
+          - name: active_farm_parcel
+            type: boolean
+            required: true
+          - name: crop_declared_for_season
+            type: boolean
+            required: true
+          - name: district_climate_risk_active
+            type: boolean
+            required: true
+          - name: voucher_entitlement_current
+            type: boolean
+            required: true
+          - name: voucher_not_redeemed
+            type: boolean
+            required: true
+          - name: supplier_license_active
+            type: boolean
+            required: true
+          - name: manual_review_required
+            type: boolean
+            required: true
+          - name: reason_code
+            type: string
+            required: true
+          - name: evaluation_as_of
+            type: date
+            required: true
+      - name: livestock_movement_snapshot
+        title: Livestock Movement Snapshot
+        description: One-row per farmer and herd materialized evidence projection for movement permit review.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: farmer_id
+            type: string
+            required: true
+          - name: herd_id
+            type: string
+            required: true
+          - name: registered_livestock_holder
+            type: boolean
+            required: true
+          - name: registered_herd
+            type: boolean
+            required: true
+          - name: herd_vaccination_current
+            type: boolean
+            required: true
+          - name: origin_district_not_quarantined
+            type: boolean
+            required: true
+          - name: destination_district_open
+            type: boolean
+            required: true
+          - name: no_conflicting_open_movement_permit
+            type: boolean
+            required: true
+          - name: manual_review_required
+            type: boolean
+            required: true
+          - name: reason_code
+            type: string
+            required: true
+          - name: evaluation_as_of
+            type: date
+            required: true
+      - name: market_sizing_cell
+        title: Market Sizing Cell
+        description: Pre-materialized district-level opportunity sizing cells for aggregate-only market planning.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: district
+            type: string
+            required: true
+          - name: district_code
+            type: string
+            required: true
+          - name: season
+            type: string
+            required: true
+          - name: crop
+            type: string
+            required: true
+          - name: risk_band
+            type: string
+            required: true
+          - name: input_type
+            type: string
+            required: true
+          - name: eligible_opportunity_count
+            type: integer
+            required: true
+          - name: estimated_area_ha
+            type: number
+            required: true
+          - name: cell_farmer_count
+            type: integer
+            required: true
+          - name: recipient_authorization_required
+            type: boolean
+            required: true
+          - name: geography_floor
+            type: string
+            required: true
+      - name: purpose_policy
+        title: Purpose Policy
+        description: Governance policy row for purpose-bound agricultural consultation and aggregate disclosure.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: public_service_code
+            type: string
+            required: true
+          - name: lawful_basis_code
+            type: string
+            required: true
+          - name: allowed_recipient_types
+            type: string
+            required: true
+          - name: allowed_disclosure_modes
+            type: string
+            required: true
+          - name: retention_days
+            type: integer
+            required: true
+          - name: minimum_cell_count
+            type: integer
+            required: true
+          - name: geography_floor
+            type: string
+            required: true
+          - name: suppression_policy
+            type: string
+            required: true
+          - name: rare_category_suppression
+            type: boolean
+            required: true
+          - name: onward_sharing_allowed
+            type: boolean
+            required: true
+          - name: automated_decision_allowed
+            type: boolean
+            required: true
+          - name: audit_required
+            type: boolean
+            required: true
+vocabularies:
+  registry_relay: https://registry-relay.dev/
+  nagdi: https://demo.example.gov/vocab/nagdi/

@@ -1,0 +1,111 @@
+# SPDX-License-Identifier: Apache-2.0
+
+server:
+  bind: 0.0.0.0:8080
+  openapi_requires_auth: false
+  admin_listener:
+    mode: dedicated
+    bind: 0.0.0.0:8081
+
+auth:
+  mode: api_key
+  api_keys:
+    - id: openfn_civil_evidence_client
+      fingerprint:
+        provider: env
+        name: CIVIL_EVIDENCE_CLIENT_TOKEN_HASH
+        commitment: sha256:a2648c346361bb2ace3af3ac2a496ce3f961cdb72da19fba2038f5bf66df93be
+      scopes:
+        - civil_registry:evidence_verification
+  bearer_tokens:
+    - id: openfn_civil_evidence_client
+      fingerprint:
+        provider: env
+        name: CIVIL_EVIDENCE_CLIENT_BEARER_HASH
+        commitment: sha256:ba86ed33aaa4d1101b2187778d2907facf24e3d05d8dc2eb98f15b575518c90b
+      scopes:
+        - civil_registry:evidence_verification
+
+audit:
+  sink: stdout
+  hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
+
+config_trust:
+  antirollback_state_path: /var/lib/registry-notary/config-state/openfn-civil-notary-config-antirollback.json
+  local_approval_state_path: /var/lib/registry-notary/config-state/openfn-civil-notary-config-local-approvals.json
+  break_glass_rate_limit:
+    max_accepted: 1
+    window_seconds: 3600
+
+evidence:
+  enabled: true
+  service_id: openfn-civil-notary
+  api_base_url: http://openfn-civil-notary:8080
+  inline_batch_limit: 20
+  source_connections:
+    openfn_civil:
+      base_url: http://openfn-civil-sidecar:8080
+      allow_insecure_private_network: true
+      retry_on_5xx: false
+      token_env: OPENFN_SIDECAR_TOKEN_RAW
+  signing_keys:
+    openfn-civil-demo:
+      provider: local_jwk_env
+      private_jwk_env: REGISTRY_NOTARY_ISSUER_JWK
+      alg: EdDSA
+      kid: did:web:openfn-civil-notary.demo.example#openfn-civil-demo-key-1
+      status: active
+  credential_profiles:
+    openfn_civil_sd_jwt:
+      format: application/dc+sd-jwt
+      issuer: did:web:openfn-civil-notary.demo.example
+      signing_key: openfn-civil-demo
+      vct: https://demo.example/credentials/openfn-civil/date-of-birth/v1
+      validity_seconds: 600
+      allowed_claims:
+        - date-of-birth
+      disclosure:
+        allowed:
+          - value
+          - redacted
+  claims:
+    - id: date-of-birth
+      title: Date of birth through OpenFn sidecar
+      version: 2026-05
+      subject_type: person
+      value:
+        type: date
+      source_bindings:
+        civil:
+          connector: source_adapter_sidecar
+          connection: openfn_civil
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: civil_person
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/openfn-sidecar-demo
+          lookup:
+            input: target.identifiers.national_id
+            field: national_id
+            op: eq
+            cardinality: one
+          fields:
+            birth_date:
+              field: birth_date
+              type: date
+              required: true
+      rule:
+        type: extract
+        source: civil
+        field: birth_date
+      disclosure:
+        default: value
+        allowed:
+          - value
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+        - application/dc+sd-jwt
+      credential_profiles:
+        - openfn_civil_sd_jwt

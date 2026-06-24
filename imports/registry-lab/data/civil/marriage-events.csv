@@ -1,0 +1,3 @@
+event_id,spouse_1_person_id,spouse_2_person_id,marriage_date,marriage_place,registration_date,authority
+ME-2001,CP-2001,CP-2002,2020-08-15,North City,2020-08-16,Civil Registry Authority
+ME-2002,CP-2004,CP-2005,2021-09-03,East City,2021-09-04,Civil Registry Authority

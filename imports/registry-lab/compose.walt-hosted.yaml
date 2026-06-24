@@ -1,0 +1,148 @@
+name: registry-lab-walt
+
+# Self-hosted walt.id holder wallet, deployed as a third Coolify Docker Compose
+# app in the registry-lab project (alongside registry-lab and hosted eSignet).
+# Only the holder side is deployed (wallet-api + web wallet); the Registry
+# Notary is the issuer, so walt's issuer-api / verifier-api / portal are omitted.
+#
+# Ingress: a trimmed walt Caddy is the single public entrypoint. Coolify/Traefik
+# terminates TLS for wallet.lab.registrystack.org and forwards to caddy:7101,
+# which serves the web wallet and proxies /wallet-api/* to wallet-api:7001 on the
+# same origin (walt's web wallet calls the API at a relative /wallet-api path).
+
+x-hosted-domains:
+  caddy: wallet.lab.registrystack.org
+
+services:
+  # Coolify does not seed compose bind mounts from the git repo: relative bind
+  # mounts are rewritten to empty persistent dirs. This one-shot init clones the
+  # public repo and populates named config volumes that wallet-api and caddy
+  # mount at their expected paths. Re-runs on each deploy (overwrites).
+  config-loader:
+    image: ${CONFIG_LOADER_IMAGE:-alpine:3.20}
+    restart: "no"
+    environment:
+      CONFIG_REPO_URL: ${CONFIG_REPO_URL:-https://github.com/jeremi/registry-lab}
+      CONFIG_REPO_REF: ${CONFIG_REPO_REF:?set CONFIG_REPO_REF to the deployed registry-lab git ref}
+    entrypoint: ["/bin/sh", "-euc"]
+    command:
+      - |
+        apk add --no-cache git >/dev/null
+        rm -rf /tmp/repo
+        git init /tmp/repo
+        git -C /tmp/repo remote add origin "$$CONFIG_REPO_URL"
+        git -C /tmp/repo fetch --depth 1 origin "$$CONFIG_REPO_REF"
+        git -C /tmp/repo -c advice.detachedHead=false checkout FETCH_HEAD
+        for d in walletconf caddy; do
+          mkdir -p "/out/$$d"
+          find "/out/$$d" -mindepth 1 -delete 2>/dev/null || true
+        done
+        cp -a /tmp/repo/config/walt/. /out/walletconf/
+        # The wallet-api config dir holds only walt's HOCON configs; the Caddyfile
+        # and the provenance README are not part of it.
+        rm -f /out/walletconf/Caddyfile /out/walletconf/README.md
+        cp -a /tmp/repo/config/walt/Caddyfile /out/caddy/Caddyfile
+        echo "config-loader: populated walt config volumes from $$CONFIG_REPO_REF"
+    volumes:
+      - cfg-walt:/out/walletconf
+      - cfg-walt-caddy:/out/caddy
+
+  walt-postgres:
+    image: ${WALT_POSTGRES_IMAGE:-postgres:16-alpine}
+    environment:
+      POSTGRES_DB: ${WALT_DB_NAME:-waltid}
+      POSTGRES_USER: ${WALT_DB_USERNAME:-waltid}
+      POSTGRES_PASSWORD: ${WALT_DB_PASSWORD:-replace-in-coolify}
+    depends_on:
+      config-loader:
+        condition: service_completed_successfully
+    volumes:
+      - walt-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    restart: unless-stopped
+
+  wallet-api:
+    image: ${WALT_IMAGE_PREFIX:-docker.io/}waltid/wallet-api:${WALT_IMAGE_TAG:-0.20.2}
+    depends_on:
+      walt-postgres:
+        condition: service_healthy
+      config-loader:
+        condition: service_completed_successfully
+    environment:
+      # walt's HOCON configs (db.conf, web.conf, auth.conf, oidc.conf) resolve
+      # these from the environment at runtime.
+      WALLET_BACKEND_PORT: "7001"
+      SERVICE_HOST: wallet.lab.registrystack.org
+      DATABASE_ENGINE: postgres
+      POSTGRES_DB_HOST: walt-postgres
+      POSTGRES_DB_PORT: "5432"
+      DB_NAME: ${WALT_DB_NAME:-waltid}
+      DB_USERNAME: ${WALT_DB_USERNAME:-waltid}
+      DB_PASSWORD: ${WALT_DB_PASSWORD:-replace-in-coolify}
+      # Login-session signing material. Fail-closed if unset (see config/walt/auth.conf).
+      WALT_AUTH_ENCRYPTION_KEY: ${WALT_AUTH_ENCRYPTION_KEY:?set WALT_AUTH_ENCRYPTION_KEY in Coolify}
+      WALT_AUTH_SIGN_KEY: ${WALT_AUTH_SIGN_KEY:?set WALT_AUTH_SIGN_KEY in Coolify}
+      WALT_AUTH_TOKEN_KEY: ${WALT_AUTH_TOKEN_KEY:?set WALT_AUTH_TOKEN_KEY in Coolify}
+      WALT_KTOR_SIGNING_KEY: ${WALT_KTOR_SIGNING_KEY:?set WALT_KTOR_SIGNING_KEY in Coolify}
+      WALT_KTOR_VERIFICATION_KEY: ${WALT_KTOR_VERIFICATION_KEY:?set WALT_KTOR_VERIFICATION_KEY in Coolify}
+    expose:
+      - "7001"
+    volumes:
+      - cfg-walt:/waltid-wallet-api/config:ro
+      - walt-data:/waltid-wallet-api/data
+    healthcheck:
+      # Liveness only: curl without -f exits 0 on any HTTP response (the Ktor
+      # API may answer 404 at /), non-zero on connection-refused while the JVM
+      # is still booting. The image ships curl. Long start_period for JVM boot.
+      test: ["CMD", "curl", "-s", "-o", "/dev/null", "http://127.0.0.1:7001/"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  waltid-demo-wallet:
+    image: ${WALT_IMAGE_PREFIX:-docker.io/}waltid/waltid-demo-wallet:${WALT_IMAGE_TAG:-0.20.2}
+    depends_on:
+      wallet-api:
+        condition: service_started
+    environment:
+      # The web wallet's own public origin (used for OID4VCI callbacks). The
+      # frontend reaches the API via the same-origin /wallet-api path (Caddy).
+      NUXT_PUBLIC_ISSUER_CALLBACK_URL: https://wallet.lab.registrystack.org
+      PORT: "7101"
+    expose:
+      - "7101"
+    restart: unless-stopped
+
+  caddy:
+    image: ${WALT_CADDY_IMAGE:-docker.io/caddy:2}
+    depends_on:
+      config-loader:
+        condition: service_completed_successfully
+      waltid-demo-wallet:
+        condition: service_started
+      wallet-api:
+        condition: service_started
+    expose:
+      - "7101"
+    volumes:
+      - cfg-walt-caddy:/etc/caddy:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:7101/"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
+volumes:
+  cfg-walt:
+  cfg-walt-caddy:
+  walt-pgdata:
+  walt-data:

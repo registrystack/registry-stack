@@ -1,0 +1,47 @@
+# SPDX-License-Identifier: Apache-2.0
+
+server:
+  bind: "0.0.0.0:8080"
+
+auth:
+  bearer_tokens:
+    - id: dhis2_health_notary
+      hash_env: OPENFN_SIDECAR_TOKEN_HASH
+
+audit:
+  sink: file
+  path: /var/lib/registry-notary-openfn-sidecar/audit/dhis2-openfn-sidecar-audit.jsonl
+  hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
+
+config_trust:
+  product: registry-notary-openfn-sidecar
+  instance_id: hosted-dhis2-openfn-sidecar
+  environment: hosted-lab
+  stream_id: dhis2-openfn-sidecar-runtime
+  root_path: /etc/registry-notary-openfn/governed/tuf/metadata/1.root.json
+  metadata_dir: /etc/registry-notary-openfn/governed/tuf/metadata
+  targets_dir: /etc/registry-notary-openfn/governed/tuf/targets
+  datastore_dir: /var/lib/registry-notary-openfn-sidecar/tuf
+  target_name: openfn-dhis2-sidecar-runtime.json
+  antirollback_state_path: /var/lib/registry-notary-openfn-sidecar/config-trust/dhis2-openfn-sidecar-antirollback.json
+  accepted_roots:
+    - root_id: registry-lab-hosted-openfn-demo-root-2026-06-09
+      production: false
+      tuf_root_sha256: sha256:4fb870c642c7b794638d712c95f2159bf749d2599fcce3ff7dad9014346da07d
+      high_risk_change_classes:
+        - openfn_sidecar_runtime
+        - openfn_sidecar_workflow_bundle
+        - openfn_sidecar_source_binding
+      signers:
+        8ec3a843a0f9328c863cac4046ab1cacbbc67888476ac7acf73d9bcd9a223ada:
+          kid: 8ec3a843a0f9328c863cac4046ab1cacbbc67888476ac7acf73d9bcd9a223ada
+          enabled: true
+      roles:
+        - name: registry-lab-openfn-demo-config-admin
+          threshold: 1
+          signer_kids:
+            - 8ec3a843a0f9328c863cac4046ab1cacbbc67888476ac7acf73d9bcd9a223ada
+          allowed_change_classes:
+            - openfn_sidecar_runtime
+            - openfn_sidecar_workflow_bundle
+            - openfn_sidecar_source_binding

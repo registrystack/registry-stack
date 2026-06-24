@@ -1,0 +1,101 @@
+meta {
+  name: 02 - Issue holder-bound programme participation VC
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{dhis2_notary_url}}/v1/credentials
+  body: json
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{DHIS2_EVIDENCE_CLIENT_BEARER}}
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "evaluation_id": "{{dhis2_programme_evaluation_id}}",
+    "credential_profile": "dhis2_programme_participation_sd_jwt",
+    "format": "application/dc+sd-jwt",
+    "claims": [
+      "dhis2-tracked-entity-first-name",
+      "dhis2-tracked-entity-last-name",
+      "dhis2-child-age-band",
+      "dhis2-programme-code",
+      "dhis2-child-program-active",
+      "dhis2-reconciliation-ref"
+    ],
+    "disclosure": "value",
+    "holder": {
+      "binding": "did",
+      "id": "{{dhis2_programme_holder_id}}",
+      "proof": "{{dhis2_programme_holder_proof}}"
+    }
+  }
+}
+
+script:pre-request {
+  if (!bru.getVar("dhis2_programme_evaluation_id") || !bru.getVar("dhis2_programme_holder_proof")) {
+    throw new Error("Run '01 - Evaluate programme participation claims' first so Bruno can create the holder proof.");
+  }
+}
+
+script:post-response {
+  const body = res.getBody();
+  const expectedClaims = [
+    "dhis2-tracked-entity-first-name",
+    "dhis2-tracked-entity-last-name",
+    "dhis2-child-age-band",
+    "dhis2-programme-code",
+    "dhis2-child-program-active",
+    "dhis2-reconciliation-ref",
+  ];
+
+  function decodeJson(part) {
+    return JSON.parse(Buffer.from(part, "base64url").toString("utf8"));
+  }
+
+  function decodeDisclosure(raw) {
+    const decoded = decodeJson(raw);
+    expect(decoded).to.be.an("array");
+    expect(decoded).to.have.length(3);
+    return {
+      claim_id: decoded[1],
+      value: decoded[2],
+    };
+  }
+
+  const issuerPayload = body.issuer_signed_jwt ? decodeJson(body.issuer_signed_jwt.split(".")[1]) : {};
+  const disclosures = body.disclosures || [];
+  const disclosureClaims = Object.fromEntries(disclosures.map((raw) => {
+    const disclosure = decodeDisclosure(raw);
+    return [disclosure.claim_id, disclosure.value];
+  }));
+
+  test("status is 200", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("programme participation VC is one-year, holder-bound, and selectively disclosable", function () {
+    expect(body.credential_profile).to.equal("dhis2_programme_participation_sd_jwt");
+    expect(body.format).to.equal("application/dc+sd-jwt");
+    expect(body.issuer).to.equal(bru.getEnvVar("dhis2_programme_vc_issuer"));
+    expect(body.credential_id).to.be.a("string").and.not.empty;
+    expect(body.credential).to.be.a("string").and.not.empty;
+    expect(body.issuer_signed_jwt).to.be.a("string").and.not.empty;
+    expect(body.expires_at).to.be.a("string").and.not.empty;
+    expect(issuerPayload.vct).to.equal(bru.getEnvVar("dhis2_programme_vc_vct"));
+    expect(issuerPayload.cnf.kid).to.equal(bru.getVar("dhis2_programme_holder_id"));
+    expect(issuerPayload.exp - issuerPayload.iat).to.be.within(31535940, 31536060);
+    expect(Object.keys(disclosureClaims).sort()).to.deep.equal(expectedClaims.slice().sort());
+    expect(disclosureClaims["dhis2-child-age-band"].value).to.equal("5_to_17");
+    expect(disclosureClaims["dhis2-programme-code"].value).to.equal("DHIS2_CHILD_PROGRAM");
+    expect(disclosureClaims["dhis2-child-program-active"].value).to.equal(true);
+    expect(disclosureClaims["dhis2-reconciliation-ref"].value).to.equal(bru.getVar("dhis2_programme_reconciliation_ref"));
+  });
+
+  bru.setVar("dhis2_programme_credential_id", body.credential_id);
+}

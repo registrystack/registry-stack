@@ -1,0 +1,178 @@
+* { box-sizing: border-box; letter-spacing: 0; }
+html { background: #ffffff; color: var(--registry-body); font-family: var(--registry-font); scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: #ffffff;
+  color: var(--registry-body);
+  font: 14px/1.5 var(--registry-font);
+}
+::selection { background: var(--registry-blue); color: #ffffff; }
+a { color: var(--registry-blue); text-decoration: none; text-underline-offset: 3px; }
+a:hover { text-decoration: underline; }
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+:focus-visible { outline: 2px solid var(--registry-blue); outline-offset: 3px; }
+/* Masthead rule: a strong ink line under the site name, in the manner of a
+   broadsheet nameplate (mirrors registrystack.org). */
+.site-header {
+  align-items: center;
+  backdrop-filter: blur(8px) saturate(1.4);
+  background: rgba(255, 255, 255, 0.92);
+  border-bottom: 2px solid var(--registry-ink);
+  display: flex;
+  gap: 24px;
+  justify-content: space-between;
+  padding: 14px clamp(16px, 4vw, 42px);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.brand {
+  align-items: center;
+  color: var(--registry-ink);
+  display: inline-flex;
+  font-size: 17px;
+  font-weight: 700;
+  gap: 12px;
+  white-space: nowrap;
+}
+.brand:hover { text-decoration: none; }
+.brand-mark {
+  align-items: center;
+  background: var(--registry-blue);
+  color: #ffffff;
+  display: inline-flex;
+  font-family: var(--registry-mono);
+  font-size: 13px;
+  height: 34px;
+  justify-content: center;
+  width: 34px;
+}
+.top-nav {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: clamp(12px, 2vw, 24px);
+  justify-content: flex-end;
+}
+.top-nav a {
+  align-items: center;
+  color: var(--registry-muted);
+  display: inline-flex;
+  font-size: 14px;
+  font-weight: 600;
+  min-height: 36px;
+  transition: color var(--registry-ease);
+}
+.top-nav a:hover { color: var(--registry-ink); }
+/* The open page is ticked in the register: ink text, stamp-red underline. */
+.top-nav a[aria-current="page"] {
+  box-shadow: inset 0 -2px 0 var(--registry-stamp);
+  color: var(--registry-ink);
+}
+/* Every hero sits on quiet paper. */
+.hero {
+  background: var(--registry-paper);
+  border-bottom: 1px solid var(--registry-rule);
+}
+.eyebrow {
+  color: var(--registry-blue);
+  font-family: var(--registry-mono);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  margin: 0 0 14px;
+  text-transform: uppercase;
+}
+p { line-height: 1.58; margin: 0; }
+code, pre {
+  font-family: var(--registry-mono);
+  font-size: 12px;
+  letter-spacing: 0;
+}
+button, .button {
+  transition: background var(--registry-ease), box-shadow var(--registry-ease),
+    transform var(--registry-ease);
+}
+button:hover, .button:hover { background: var(--registry-active); text-decoration: none; }
+/* Hover lifts the button off the page with a hard offset shadow, like a
+   letterpress block, not a soft app glow. */
+button:hover:not(:disabled):not([aria-disabled="true"]), .button:hover {
+  box-shadow: 3px 3px 0 rgba(12, 27, 58, 0.25);
+  transform: translate(-1px, -1px);
+}
+button:active, .button:active {
+  box-shadow: none;
+  transform: translate(0, 0);
+}
+.primary { background: var(--registry-blue); border-color: var(--registry-blue); color: #fff; }
+.primary:hover { background: var(--registry-blue-dark); }
+.actions { display: flex; gap: 10px; flex-wrap: wrap; }
+/* Scenario chooser cards, rendered on the homepage (server-side) and on
+   /scenarios (by scenarios.js). */
+.chooser-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); }
+.scenario-card {
+  background: #ffffff;
+  border: 1px solid var(--registry-rule);
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+  transition: border-color var(--registry-ease), box-shadow var(--registry-ease);
+}
+/* Hovering a story card lifts it like a pulled record slip. */
+.scenario-card:hover { border-color: var(--registry-blue); box-shadow: 4px 4px 0 rgba(23, 59, 122, 0.12); }
+.scenario-card h2, .scenario-card h3 { color: var(--registry-ink); font-size: 20px; line-height: 1.2; margin: 0 0 2px; }
+.scenario-card--default { border-color: var(--registry-blue); }
+.start-here-badge { background: var(--registry-blue); color: #ffffff; display: inline-flex; font-family: var(--registry-mono); font-size: 11px; padding: 3px 7px; width: fit-content; }
+.availability { border: 1px solid var(--registry-rule); color: var(--registry-muted); display: inline-flex; font-family: var(--registry-mono); font-size: 12px; min-height: 30px; padding: 5px 8px; width: fit-content; }
+.availability.hosted { background: var(--registry-ok-bg); border-color: #b7ddc9; color: var(--registry-ok); }
+.availability.local-only { background: var(--registry-warn-bg); border-color: #e2b66c; color: var(--registry-amber); }
+.domain-tag { background: var(--registry-active); border: 1px solid #b7c7dd; color: var(--registry-blue); display: inline-flex; font-family: var(--registry-mono); font-size: 11px; padding: 3px 7px; width: fit-content; }
+.card-meta { color: var(--registry-muted); font-size: 13px; }
+.card-meta strong { color: var(--registry-ink); }
+.badge-explanation { color: var(--registry-muted); font-size: 13px; margin: 0 0 18px; }
+/* The footer is a deep ink band: the page closes on the ledger. */
+.site-footer {
+  background: var(--registry-ink-band-deep);
+  color: #ffffff;
+}
+.site-footer-inner {
+  align-items: start;
+  display: flex;
+  gap: 24px;
+  justify-content: space-between;
+  margin: 0 auto;
+  max-width: var(--registry-max);
+  padding: 40px clamp(16px, 4vw, 42px);
+}
+/* Brass is text-only on the dark band: a small mono wordmark, no blocks. */
+.site-footer strong {
+  color: var(--registry-brass);
+  font-family: var(--registry-mono);
+  font-size: 14px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.site-footer .meta { color: rgba(255, 255, 255, 0.72); margin: 8px 0 0; max-width: 420px; }
+.site-footer nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  justify-content: flex-end;
+}
+.site-footer nav a { align-items: center; color: #ffffff; display: inline-flex; min-height: 36px; }
+.site-footer :focus-visible { outline-color: #ffffff; }
+@media (max-width: 760px) {
+  /* On small screens the header gives the space back: it stacks, tightens,
+     and scrolls away with the page instead of pinning two rows of chrome. */
+  .site-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px 16px;
+    position: static;
+  }
+  .top-nav { gap: 2px 18px; justify-content: flex-start; }
+  .site-footer-inner { flex-direction: column; }
+}

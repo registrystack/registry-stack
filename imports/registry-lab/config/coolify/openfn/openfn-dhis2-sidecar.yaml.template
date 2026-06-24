@@ -1,0 +1,102 @@
+# SPDX-License-Identifier: Apache-2.0
+
+# Render input for config/coolify/openfn/governed/openfn-dhis2-sidecar-runtime.json.
+# Hosted runtime starts from openfn-dhis2-sidecar.bootstrap.yaml and verifies the
+# signed TUF target before serving.
+#
+# Built-in http_json source: the OpenFn worker engine is retired, so this hosted
+# manifest mirrors config/source-adapter/dhis2-health-sidecar.yaml -- a single
+# governed GET against the DHIS2 tracker COLLECTION endpoint plus a CEL mapping
+# that reproduces the retired dhis2-health-lookup.js RDA record shape.
+
+server:
+  bind: "0.0.0.0:8080"
+
+auth:
+  bearer_tokens:
+    - id: dhis2_health_notary
+      hash_env: OPENFN_SIDECAR_TOKEN_HASH
+
+limits:
+  max_workers: 4
+  worker_timeout_ms: 15000
+  max_worker_memory_mb: 12288
+  max_output_bytes: 1048576
+  max_request_bytes: 16384
+  max_query_parameter_bytes: 1024
+  liveness_window_ms: 30000
+  retry_after_seconds: 1
+
+sources:
+  dhis2_health:
+    engine: http_json
+    dataset: dhis2_tracker
+    entity: person
+    credential_env: OPENFN_DHIS2_DEMO_CREDENTIAL_JSON
+    credential_public_fields:
+      - baseUrl
+    allowed_base_urls:
+      - https://play.im.dhis2.org/stable-2-43-0-1
+    http_json:
+      method: GET
+      base_url:
+        cel: credential_public.baseUrl
+      path: "/api/tracker/trackedEntities"
+      query:
+        trackedEntities:
+          cel: >-
+            lookup.value.startsWith('dhis2:tracked-entity:')
+              ? lookup.value.substring(size('dhis2:tracked-entity:'))
+              : lookup.value
+        orgUnitMode:
+          cel: '"ALL"'
+        fields:
+          cel: >-
+            "trackedEntity,orgUnit,attributes[attribute,value],enrollments[enrollment,program,status,enrolledAt,events[event,programStage,status,occurredAt,scheduledAt]]"
+      auth:
+        type: basic
+        username:
+          secret: username
+        password:
+          secret: password
+      response:
+        records:
+          cel: >-
+            size(body.trackedEntities) == 0 ? [] : [
+              {
+                "tracked_entity": lookup.value,
+                "org_unit": body.trackedEntities[0].orgUnit,
+                "first_name": size(body.trackedEntities[0].attributes.filter(a, a.attribute == 'w75KJ2mc4zz')) == 0
+                  ? null
+                  : body.trackedEntities[0].attributes.filter(a, a.attribute == 'w75KJ2mc4zz')[0].value,
+                "last_name": size(body.trackedEntities[0].attributes.filter(a, a.attribute == 'zDhUuAYrxNC')) == 0
+                  ? null
+                  : body.trackedEntities[0].attributes.filter(a, a.attribute == 'zDhUuAYrxNC')[0].value,
+                "child_program_code": "DHIS2_CHILD_PROGRAM",
+                "child_program_status": size(body.trackedEntities[0].enrollments.filter(e, e.program == 'IpHINAT79UW')) == 0
+                  ? null
+                  : body.trackedEntities[0].enrollments.filter(e, e.program == 'IpHINAT79UW')[0].status,
+                "child_program_active": body.trackedEntities[0].enrollments.exists(e, e.program == 'IpHINAT79UW' && e.status == 'ACTIVE'),
+                "child_age_band": body.trackedEntities[0].enrollments.exists(e, e.program == 'IpHINAT79UW') ? '5_to_17' : 'unknown',
+                "reconciliation_ref": 'dhis2:tracked-entity:' + body.trackedEntities[0].trackedEntity,
+                "maternal_pnc_status": size(body.trackedEntities[0].enrollments.filter(e, e.program == 'uy2gU8kT1jF')) == 0
+                  ? null
+                  : body.trackedEntities[0].enrollments.filter(e, e.program == 'uy2gU8kT1jF')[0].status,
+                "maternal_pnc_active": body.trackedEntities[0].enrollments.exists(e, e.program == 'uy2gU8kT1jF' && e.status == 'ACTIVE'),
+                "child_health_visit_recorded": body.trackedEntities[0].enrollments.exists(e,
+                  e.program == 'IpHINAT79UW' && e.events.exists(ev,
+                    ev.status == 'COMPLETED' && (ev.programStage == 'A03MvHHogjR' || ev.programStage == 'ZzYYXq4fJie'))),
+                "child_health_visit_count": size(body.trackedEntities[0].enrollments.filter(e, e.program == 'IpHINAT79UW')) == 0
+                  ? 0
+                  : size(body.trackedEntities[0].enrollments.filter(e, e.program == 'IpHINAT79UW')[0].events),
+                "tb_program_status": size(body.trackedEntities[0].enrollments.filter(e, e.program == 'ur1Edk5Oe2n')) == 0
+                  ? null
+                  : body.trackedEntities[0].enrollments.filter(e, e.program == 'ur1Edk5Oe2n')[0].status,
+                "tb_program_active": body.trackedEntities[0].enrollments.exists(e, e.program == 'ur1Edk5Oe2n' && e.status == 'ACTIVE')
+              }
+            ]
+    smoke_lookup:
+      field: tracked_entity
+      value: PQfMcpmXeFE
+      fields: ["tracked_entity", "child_program_active", "child_age_band", "child_program_code", "reconciliation_ref", "tb_program_active"]
+      purpose: startup-readiness-smoke

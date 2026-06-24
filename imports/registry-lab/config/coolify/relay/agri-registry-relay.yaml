@@ -1,0 +1,1760 @@
+# SPDX-License-Identifier: Apache-2.0
+
+server:
+  bind: 0.0.0.0:8080
+  openapi_requires_auth: false
+  cache_dir: /var/lib/registry-relay/cache
+
+config_trust:
+  antirollback_state_path: /var/lib/registry-relay/cache/agri-registry-relay-config-antirollback.json
+  local_approval_state_path: /var/lib/registry-relay/cache/agri-registry-relay-config-local-approvals.json
+  break_glass_rate_limit:
+    max_accepted: 1
+    window_seconds: 3600
+
+metadata:
+  source:
+    path: agri-registry-relay.metadata.yaml
+    digest: sha256:05012875b1241ad60b546d5e0ec59c388173399a83174325e38587737a69b082
+
+catalog:
+  title: NAgDI Agricultural Registry Relay (Decentralized Demo)
+  base_url: http://agri-registry-relay:8080
+  publisher: National Agricultural Data Infrastructure Governance Body (Demo)
+  participant_id: did:web:agri-relay.lab.registrystack.org
+
+vocabularies:
+  demo: https://metadata.lab.registrystack.org/vocab/
+  nagdi: https://metadata.lab.registrystack.org/vocab/nagdi/
+
+auth:
+  mode: api_key
+  api_keys:
+    - id: metadata_client
+      fingerprint:
+        provider: env
+        name: AGRI_METADATA_CLIENT_HASH
+        commitment: sha256:e13220645d2d8668b5458169e1d99fb33248f74df3ee35467131e217fc95a847
+      scopes:
+        - agri_registry:metadata
+    - id: agri_evidence_source
+      fingerprint:
+        provider: env
+        name: AGRI_EVIDENCE_SOURCE_HASH
+        commitment: sha256:1fadee6f9ff45b9b738bc6fca7864697651ee05824682343aba54203c09a459b
+      scopes:
+        - agri_registry:metadata
+        - agri_registry:rows
+        - agri_registry:evidence_verification
+    - id: evidence_only
+      fingerprint:
+        provider: env
+        name: AGRI_EVIDENCE_ONLY_HASH
+        commitment: sha256:e090219b33fc108ab2ced40a13b8612e16ea11a741c98b29361c02259d6ce7a0
+      scopes:
+        - agri_registry:metadata
+        - agri_registry:evidence_verification
+    - id: row_reader
+      fingerprint:
+        provider: env
+        name: AGRI_ROW_READER_HASH
+        commitment: sha256:4fabdd761a56a3d5de141c53e6c82b614a4f2a24618befbaeab48391f1944d0e
+      scopes:
+        - agri_registry:metadata
+        - agri_registry:rows
+    - id: aggregate_reader
+      fingerprint:
+        provider: env
+        name: AGRI_AGGREGATE_READER_HASH
+        commitment: sha256:c41016812ab0690ce03132b7e64bbb0a318fb94221c6f1b4a8f857577e6fd6a9
+      scopes:
+        - agri_registry:metadata
+        - agri_registry:aggregate
+
+audit:
+  sink: stdout
+  format: jsonl
+  hash_secret_env: REGISTRY_RELAY_AUDIT_HASH_SECRET
+
+datasets:
+  - id: agri_registry
+    title: NAgDI Agricultural Registries
+    description: XLSX-backed farmer, holding, program, market, livestock, and reference-data registers for purpose-bound agricultural evidence.
+    owner: National Agricultural Data Infrastructure Governance Body
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: weekly
+    conforms_to:
+      - nagdi:AgriculturalRegistryFederation
+    defaults:
+      refresh:
+        mode: manual
+      materialization: snapshot
+    tables:
+      - id: farmers_table
+        source:
+          type: file
+          path: /demo/data/agriculture/farmer-registry.xlsx
+          format:
+            xlsx:
+              sheet: Farmers
+              header_row: 1
+        primary_key: farmer_id
+        schema:
+          strict: false
+          fields:
+            - name: farmer_id
+              type: string
+              nullable: false
+            - name: national_id
+              type: string
+              nullable: true
+              sensitive: true
+            - name: given_name
+              type: string
+              nullable: false
+            - name: family_name
+              type: string
+              nullable: false
+            - name: district
+              type: string
+              nullable: false
+            - name: district_code
+              type: string
+              nullable: false
+            - name: registration_status
+              type: string
+              nullable: false
+            - name: smallholder_status
+              type: string
+              nullable: false
+            - name: producer_type
+              type: string
+              nullable: false
+            - name: data_quality_status
+              type: string
+              nullable: false
+            - name: last_verified_on
+              type: date
+              nullable: false
+      - id: data_use_authorizations_table
+        source:
+          type: file
+          path: /demo/data/agriculture/farmer-registry.xlsx
+          format:
+            xlsx:
+              sheet: DataUseAuthorizations
+              header_row: 1
+        primary_key: authorization_id
+        schema:
+          strict: false
+          fields:
+            - name: authorization_id
+              type: string
+              nullable: false
+            - name: subject_id
+              type: string
+              nullable: false
+            - name: subject_scope
+              type: string
+              nullable: false
+            - name: subject_type
+              type: string
+              nullable: false
+            - name: purpose_code
+              type: string
+              nullable: false
+            - name: lawful_basis_code
+              type: string
+              nullable: false
+            - name: disclosure_mode
+              type: string
+              nullable: false
+            - name: status
+              type: string
+              nullable: false
+            - name: valid_from
+              type: date
+              nullable: false
+            - name: valid_until
+              type: date
+              nullable: true
+      - id: farmer_identifiers_table
+        source:
+          type: file
+          path: /demo/data/agriculture/farmer-registry.xlsx
+          format:
+            xlsx:
+              sheet: FarmerIdentifiers
+              header_row: 1
+        primary_key: identifier_id
+        schema:
+          strict: false
+          fields:
+            - name: identifier_id
+              type: string
+              nullable: false
+            - name: farmer_id
+              type: string
+              nullable: false
+            - name: identifier_type
+              type: string
+              nullable: false
+            - name: identifier_value
+              type: string
+              nullable: false
+              sensitive: true
+            - name: issuing_authority
+              type: string
+              nullable: false
+            - name: active
+              type: boolean
+              nullable: false
+            - name: recorded_on
+              type: date
+              nullable: false
+      - id: farmer_groups_table
+        source:
+          type: file
+          path: /demo/data/agriculture/farmer-registry.xlsx
+          format:
+            xlsx:
+              sheet: FarmerGroups
+              header_row: 1
+        primary_key: membership_id
+        schema:
+          strict: false
+          fields:
+            - name: membership_id
+              type: string
+              nullable: false
+            - name: farmer_id
+              type: string
+              nullable: false
+            - name: group_id
+              type: string
+              nullable: false
+            - name: group_name
+              type: string
+              nullable: false
+            - name: group_type
+              type: string
+              nullable: false
+            - name: role
+              type: string
+              nullable: false
+            - name: active
+              type: boolean
+              nullable: false
+            - name: joined_on
+              type: date
+              nullable: false
+      - id: holdings_table
+        source:
+          type: file
+          path: /demo/data/agriculture/farm-holdings-registry.xlsx
+          format:
+            xlsx:
+              sheet: Holdings
+              header_row: 1
+        primary_key: holding_id
+        schema:
+          strict: false
+          fields:
+            - name: holding_id
+              type: string
+              nullable: false
+            - name: farmer_id
+              type: string
+              nullable: false
+            - name: district
+              type: string
+              nullable: false
+            - name: district_code
+              type: string
+              nullable: false
+            - name: holding_status
+              type: string
+              nullable: false
+            - name: total_area_ha
+              type: number
+              nullable: false
+            - name: primary_livelihood
+              type: string
+              nullable: false
+            - name: data_quality_status
+              type: string
+              nullable: false
+            - name: last_verified_on
+              type: date
+              nullable: false
+      - id: parcels_table
+        source:
+          type: file
+          path: /demo/data/agriculture/farm-holdings-registry.xlsx
+          format:
+            xlsx:
+              sheet: Parcels
+              header_row: 1
+        primary_key: parcel_id
+        schema:
+          strict: false
+          fields:
+            - name: parcel_id
+              type: string
+              nullable: false
+            - name: holding_id
+              type: string
+              nullable: false
+            - name: district
+              type: string
+              nullable: false
+            - name: district_code
+              type: string
+              nullable: false
+            - name: area_ha
+              type: number
+              nullable: false
+            - name: irrigation_type
+              type: string
+              nullable: false
+            - name: soil_zone
+              type: string
+              nullable: false
+            - name: active
+              type: boolean
+              nullable: false
+            - name: last_surveyed_on
+              type: date
+              nullable: false
+      - id: crop_declarations_table
+        source:
+          type: file
+          path: /demo/data/agriculture/farm-holdings-registry.xlsx
+          format:
+            xlsx:
+              sheet: CropDeclarations
+              header_row: 1
+        primary_key: crop_declaration_id
+        schema:
+          strict: false
+          fields:
+            - name: crop_declaration_id
+              type: string
+              nullable: false
+            - name: parcel_id
+              type: string
+              nullable: false
+            - name: season
+              type: string
+              nullable: false
+            - name: crop
+              type: string
+              nullable: false
+            - name: planted_area_ha
+              type: number
+              nullable: false
+            - name: declared_on
+              type: date
+              nullable: false
+            - name: declaration_status
+              type: string
+              nullable: false
+      - id: voucher_entitlements_table
+        source:
+          type: file
+          path: /demo/data/agriculture/agri-program-registry.xlsx
+          format:
+            xlsx:
+              sheet: VoucherEntitlements
+              header_row: 1
+        primary_key: entitlement_id
+        schema:
+          strict: false
+          fields:
+            - name: entitlement_id
+              type: string
+              nullable: false
+            - name: farmer_id
+              type: string
+              nullable: false
+            - name: program_code
+              type: string
+              nullable: false
+            - name: season
+              type: string
+              nullable: false
+            - name: entitlement_status
+              type: string
+              nullable: false
+            - name: approval_status
+              type: string
+              nullable: false
+            - name: eligible_input_type
+              type: string
+              nullable: false
+            - name: package_code
+              type: string
+              nullable: false
+            - name: max_value
+              type: number
+              nullable: false
+            - name: currency
+              type: string
+              nullable: false
+            - name: valid_from
+              type: date
+              nullable: false
+            - name: issued_on
+              type: date
+              nullable: false
+            - name: expires_on
+              type: date
+              nullable: false
+      - id: voucher_redemptions_table
+        source:
+          type: file
+          path: /demo/data/agriculture/agri-program-registry.xlsx
+          format:
+            xlsx:
+              sheet: VoucherRedemptions
+              header_row: 1
+        primary_key: redemption_id
+        schema:
+          strict: false
+          fields:
+            - name: redemption_id
+              type: string
+              nullable: false
+            - name: entitlement_id
+              type: string
+              nullable: false
+            - name: farmer_id
+              type: string
+              nullable: false
+            - name: supplier_id
+              type: string
+              nullable: false
+            - name: redeemed_on
+              type: date
+              nullable: false
+            - name: redeemed_value
+              type: number
+              nullable: false
+            - name: currency
+              type: string
+              nullable: false
+            - name: redemption_status
+              type: string
+              nullable: false
+      - id: suppliers_table
+        source:
+          type: file
+          path: /demo/data/agriculture/agri-program-registry.xlsx
+          format:
+            xlsx:
+              sheet: Suppliers
+              header_row: 1
+        primary_key: supplier_id
+        schema:
+          strict: false
+          fields:
+            - name: supplier_id
+              type: string
+              nullable: false
+            - name: supplier_name
+              type: string
+              nullable: false
+            - name: district
+              type: string
+              nullable: false
+            - name: district_code
+              type: string
+              nullable: false
+            - name: license_status
+              type: string
+              nullable: false
+            - name: last_verified_on
+              type: date
+              nullable: false
+      - id: district_climate_risk_table
+        source:
+          type: file
+          path: /demo/data/agriculture/agroclimate-market-registry.xlsx
+          format:
+            xlsx:
+              sheet: DistrictClimateRisk
+              header_row: 1
+        primary_key: risk_id
+        schema:
+          strict: false
+          fields:
+            - name: risk_id
+              type: string
+              nullable: false
+            - name: district
+              type: string
+              nullable: false
+            - name: district_code
+              type: string
+              nullable: false
+            - name: season
+              type: string
+              nullable: false
+            - name: drought_risk_level
+              type: string
+              nullable: false
+            - name: flood_risk_level
+              type: string
+              nullable: false
+            - name: rainfall_percentile
+              type: number
+              nullable: false
+            - name: recommended_input_type
+              type: string
+              nullable: false
+            - name: updated_on
+              type: date
+              nullable: false
+      - id: market_prices_table
+        source:
+          type: file
+          path: /demo/data/agriculture/agroclimate-market-registry.xlsx
+          format:
+            xlsx:
+              sheet: MarketPrices
+              header_row: 1
+        primary_key: price_id
+        schema:
+          strict: false
+          fields:
+            - name: price_id
+              type: string
+              nullable: false
+            - name: district
+              type: string
+              nullable: false
+            - name: district_code
+              type: string
+              nullable: false
+            - name: market_name
+              type: string
+              nullable: false
+            - name: commodity
+              type: string
+              nullable: false
+            - name: price_date
+              type: date
+              nullable: false
+            - name: unit
+              type: string
+              nullable: false
+            - name: price
+              type: number
+              nullable: false
+            - name: currency
+              type: string
+              nullable: false
+      - id: livestock_holdings_table
+        source:
+          type: file
+          path: /demo/data/agriculture/livestock-registry.xlsx
+          format:
+            xlsx:
+              sheet: LivestockHoldings
+              header_row: 1
+        primary_key: livestock_holding_id
+        schema:
+          strict: false
+          fields:
+            - name: livestock_holding_id
+              type: string
+              nullable: false
+            - name: farmer_id
+              type: string
+              nullable: false
+            - name: district
+              type: string
+              nullable: false
+            - name: district_code
+              type: string
+              nullable: false
+            - name: village
+              type: string
+              nullable: false
+            - name: village_code
+              type: string
+              nullable: false
+            - name: holding_status
+              type: string
+              nullable: false
+            - name: premises_code
+              type: string
+              nullable: false
+            - name: last_verified_on
+              type: date
+              nullable: false
+      - id: herds_table
+        source:
+          type: file
+          path: /demo/data/agriculture/livestock-registry.xlsx
+          format:
+            xlsx:
+              sheet: Herds
+              header_row: 1
+        primary_key: herd_id
+        schema:
+          strict: false
+          fields:
+            - name: herd_id
+              type: string
+              nullable: false
+            - name: farmer_id
+              type: string
+              nullable: false
+            - name: livestock_holding_id
+              type: string
+              nullable: false
+            - name: district
+              type: string
+              nullable: false
+            - name: district_code
+              type: string
+              nullable: false
+            - name: village_code
+              type: string
+              nullable: false
+            - name: species
+              type: string
+              nullable: false
+            - name: count
+              type: integer
+              nullable: false
+            - name: production_system
+              type: string
+              nullable: false
+            - name: registration_status
+              type: string
+              nullable: false
+            - name: updated_on
+              type: date
+              nullable: false
+      - id: vaccinations_table
+        source:
+          type: file
+          path: /demo/data/agriculture/livestock-registry.xlsx
+          format:
+            xlsx:
+              sheet: Vaccinations
+              header_row: 1
+        primary_key: vaccination_id
+        schema:
+          strict: false
+          fields:
+            - name: vaccination_id
+              type: string
+              nullable: false
+            - name: herd_id
+              type: string
+              nullable: false
+            - name: animal_id
+              type: string
+              nullable: true
+            - name: vaccine_code
+              type: string
+              nullable: false
+            - name: vaccinated_on
+              type: date
+              nullable: false
+            - name: valid_until
+              type: date
+              nullable: false
+            - name: status
+              type: string
+              nullable: false
+      - id: movement_permits_table
+        source:
+          type: file
+          path: /demo/data/agriculture/livestock-registry.xlsx
+          format:
+            xlsx:
+              sheet: MovementPermits
+              header_row: 1
+        primary_key: permit_id
+        schema:
+          strict: false
+          fields:
+            - name: permit_id
+              type: string
+              nullable: false
+            - name: application_id
+              type: string
+              nullable: false
+            - name: herd_id
+              type: string
+              nullable: false
+            - name: origin_premises_code
+              type: string
+              nullable: false
+            - name: destination_premises_code
+              type: string
+              nullable: false
+            - name: origin_district
+              type: string
+              nullable: false
+            - name: origin_district_code
+              type: string
+              nullable: false
+            - name: destination_district
+              type: string
+              nullable: false
+            - name: destination_district_code
+              type: string
+              nullable: false
+            - name: permit_status
+              type: string
+              nullable: false
+            - name: issued_on
+              type: date
+              nullable: false
+            - name: valid_until
+              type: date
+              nullable: false
+            - name: revoked_on
+              type: date
+              nullable: true
+      - id: voucher_eligibility_snapshots_table
+        source:
+          type: file
+          path: /demo/data/agriculture/nagdi-evidence-snapshots.xlsx
+          format:
+            xlsx:
+              sheet: VoucherEligibilitySnapshots
+              header_row: 1
+        primary_key: farmer_id
+        schema:
+          strict: false
+          fields:
+            - name: farmer_id
+              type: string
+              nullable: false
+            - name: season
+              type: string
+              nullable: false
+            - name: purpose_code
+              type: string
+              nullable: false
+            - name: farmer_registered
+              type: boolean
+              nullable: false
+            - name: data_use_authorized
+              type: boolean
+              nullable: false
+            - name: active_smallholder_farmer
+              type: boolean
+              nullable: false
+            - name: active_farm_parcel
+              type: boolean
+              nullable: false
+            - name: crop_declared_for_season
+              type: boolean
+              nullable: false
+            - name: district_climate_risk_active
+              type: boolean
+              nullable: false
+            - name: voucher_entitlement_current
+              type: boolean
+              nullable: false
+            - name: voucher_not_redeemed
+              type: boolean
+              nullable: false
+            - name: supplier_license_active
+              type: boolean
+              nullable: false
+            - name: manual_review_required
+              type: boolean
+              nullable: false
+            - name: reason_code
+              type: string
+              nullable: false
+            - name: evaluation_as_of
+              type: date
+              nullable: false
+      - id: livestock_movement_snapshots_table
+        source:
+          type: file
+          path: /demo/data/agriculture/nagdi-evidence-snapshots.xlsx
+          format:
+            xlsx:
+              sheet: LivestockMovementSnapshots
+              header_row: 1
+        primary_key: movement_snapshot_id
+        schema:
+          strict: false
+          fields:
+            - name: movement_snapshot_id
+              type: string
+              nullable: false
+            - name: farmer_id
+              type: string
+              nullable: false
+            - name: herd_id
+              type: string
+              nullable: false
+            - name: registered_livestock_holder
+              type: boolean
+              nullable: false
+            - name: registered_herd
+              type: boolean
+              nullable: false
+            - name: herd_vaccination_current
+              type: boolean
+              nullable: false
+            - name: origin_district_not_quarantined
+              type: boolean
+              nullable: false
+            - name: destination_district_open
+              type: boolean
+              nullable: false
+            - name: no_conflicting_open_movement_permit
+              type: boolean
+              nullable: false
+            - name: manual_review_required
+              type: boolean
+              nullable: false
+            - name: reason_code
+              type: string
+              nullable: false
+            - name: evaluation_as_of
+              type: date
+              nullable: false
+      - id: market_sizing_cells_table
+        source:
+          type: file
+          path: /demo/data/agriculture/nagdi-evidence-snapshots.xlsx
+          format:
+            xlsx:
+              sheet: MarketSizingCells
+              header_row: 1
+        primary_key: cell_id
+        schema:
+          strict: false
+          fields:
+            - name: cell_id
+              type: string
+              nullable: false
+            - name: district
+              type: string
+              nullable: false
+            - name: district_code
+              type: string
+              nullable: false
+            - name: season
+              type: string
+              nullable: false
+            - name: crop
+              type: string
+              nullable: false
+            - name: risk_band
+              type: string
+              nullable: false
+            - name: input_type
+              type: string
+              nullable: false
+            - name: eligible_opportunity_count
+              type: integer
+              nullable: false
+            - name: estimated_area_ha
+              type: number
+              nullable: false
+            - name: cell_farmer_count
+              type: integer
+              nullable: false
+            - name: recipient_authorization_required
+              type: boolean
+              nullable: false
+            - name: geography_floor
+              type: string
+              nullable: false
+      - id: purpose_policies_table
+        source:
+          type: file
+          path: /demo/data/agriculture/nagdi-reference-data.xlsx
+          format:
+            xlsx:
+              sheet: PurposePolicies
+              header_row: 1
+        primary_key: purpose_code
+        schema:
+          strict: false
+          fields:
+            - name: purpose_code
+              type: string
+              nullable: false
+            - name: public_service_code
+              type: string
+              nullable: false
+            - name: lawful_basis_code
+              type: string
+              nullable: false
+            - name: allowed_recipient_types
+              type: string
+              nullable: false
+            - name: allowed_disclosure_modes
+              type: string
+              nullable: false
+            - name: retention_days
+              type: integer
+              nullable: false
+            - name: minimum_cell_count
+              type: integer
+              nullable: false
+            - name: geography_floor
+              type: string
+              nullable: true
+            - name: suppression_policy
+              type: string
+              nullable: true
+            - name: rare_category_suppression
+              type: boolean
+              nullable: false
+            - name: onward_sharing_allowed
+              type: boolean
+              nullable: false
+            - name: automated_decision_allowed
+              type: boolean
+              nullable: false
+            - name: audit_required
+              type: boolean
+              nullable: false
+    aggregates:
+      - id: voucher_opportunities_by_district_crop_risk_input
+        title: Voucher Opportunities by District, Crop, Risk, and Input
+        description: Aggregate planning count and area for voucher market sizing with rare-cell suppression.
+        source_entity: market_sizing_cell
+        default_group_by:
+          - district_code
+          - crop
+          - risk_band
+          - input_type
+        dimensions:
+          - id: district_code
+            label: District code
+            field: district_code
+          - id: district
+            label: District
+            field: district
+          - id: crop
+            label: Crop
+            field: crop
+          - id: risk_band
+            label: Climate risk band
+            field: risk_band
+          - id: input_type
+            label: Input type
+            field: input_type
+          - id: season
+            label: Season
+            field: season
+        indicators:
+          - id: eligible_opportunity_count
+            label: Eligible voucher opportunities
+            function: sum
+            column: eligible_opportunity_count
+            unit_measure: opportunities
+          - id: estimated_area_ha
+            label: Estimated area
+            function: sum
+            column: estimated_area_ha
+            unit_measure: hectare
+            decimals: 2
+          - id: market_sizing_cell_count
+            label: Market sizing cells
+            function: count
+            column: id
+            unit_measure: cells
+        allowed_filters:
+          - field: district_code
+            ops: [eq, in]
+          - field: crop
+            ops: [eq, in]
+          - field: risk_band
+            ops: [eq, in]
+          - field: input_type
+            ops: [eq, in]
+          - field: season
+            ops: [eq, in]
+        access:
+          metadata_scope: agri_registry:metadata
+          aggregate_scope: agri_registry:aggregate
+          aggregate_only_execution: true
+        disclosure_control:
+          min_cell_size: 5
+          suppression: omit
+          report_suppressed_rows: true
+      - id: livestock_herds_by_species_district
+        title: Livestock Herds by Species and District
+        description: Aggregate herd and animal counts for animal-health planning without row-level herd or animal export.
+        source_entity: herd
+        default_group_by:
+          - species
+          - district_code
+        dimensions:
+          - id: species
+            label: Species
+            field: species
+          - id: district_code
+            label: District code
+            field: district_code
+          - id: district
+            label: District
+            field: district
+          - id: production_system
+            label: Production system
+            field: production_system
+        indicators:
+          - id: herd_count
+            label: Herd count
+            function: count
+            column: id
+            unit_measure: herds
+          - id: animal_count
+            label: Animal count
+            function: sum
+            column: count
+            unit_measure: animals
+        allowed_filters:
+          - field: species
+            ops: [eq, in]
+          - field: district_code
+            ops: [eq, in]
+          - field: production_system
+            ops: [eq, in]
+        access:
+          metadata_scope: agri_registry:metadata
+          aggregate_scope: agri_registry:aggregate
+          aggregate_only_execution: true
+        disclosure_control:
+          min_cell_size: 5
+          suppression: omit
+          report_suppressed_rows: true
+    entities:
+      - name: farmer
+        title: Farmer
+        description: Registered farmer projection with personal fields minimized for row and evidence workflows.
+        table: farmers_table
+        concept_uri: https://publicschema.org/Person
+        fields:
+          - name: id
+            from: farmer_id
+          - name: national_id
+            sensitive: true
+          - name: given_name
+          - name: family_name
+          - name: district
+          - name: district_code
+          - name: registration_status
+          - name: smallholder_status
+          - name: producer_type
+          - name: data_quality_status
+          - name: last_verified_on
+        access: &agri_entity_access
+          metadata_scope: agri_registry:metadata
+          aggregate_scope: agri_registry:aggregate
+          read_scope: agri_registry:rows
+          evidence_verification_scope: agri_registry:evidence_verification
+        api:
+          default_limit: 25
+          max_limit: 100
+          require_purpose_header: true
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: district_code
+              ops: [eq, in]
+            - field: registration_status
+              ops: [eq, in]
+            - field: smallholder_status
+              ops: [eq, in]
+        aggregates:
+          - id: farmers_by_district_and_status
+            description: Farmer count by district and registration status with small-cell suppression.
+            group_by:
+              - district_code
+              - registration_status
+            measures:
+              - name: farmer_count
+                function: count
+                column: id
+            disclosure_control:
+              min_group_size: 5
+              suppression: omit
+      - name: data_use_authorization
+        title: Data Use Authorization
+        description: Purpose and lawful-basis authorization facts for agricultural data consultation.
+        table: data_use_authorizations_table
+        concept_uri: nagdi:DataUseAuthorization
+        fields:
+          - name: id
+            from: authorization_id
+          - name: subject_id
+          - name: subject_scope
+          - name: subject_type
+          - name: purpose_code
+          - name: lawful_basis_code
+          - name: disclosure_mode
+          - name: authorization_status
+            from: status
+          - name: valid_from
+          - name: valid_until
+        access: *agri_entity_access
+        api:
+          default_limit: 25
+          max_limit: 100
+          require_purpose_header: true
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: subject_id
+              ops: [eq, in]
+            - field: purpose_code
+              ops: [eq, in]
+            - field: authorization_status
+              ops: [eq, in]
+      - name: farmer_identifier
+        title: Farmer Identifier
+        description: Identifier rows linked to farmer Persons without treating local farmer IDs as the person model.
+        table: farmer_identifiers_table
+        concept_uri: https://publicschema.org/Identifier
+        fields:
+          - name: id
+            from: identifier_id
+          - name: farmer_id
+          - name: identifier_type
+          - name: identifier_value
+            sensitive: true
+          - name: issuing_authority
+          - name: active
+          - name: recorded_on
+        access: *agri_entity_access
+        api:
+          default_limit: 25
+          max_limit: 100
+          require_purpose_header: true
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: farmer_id
+              ops: [eq, in]
+            - field: identifier_type
+              ops: [eq, in]
+            - field: active
+              ops: [eq]
+      - name: farmer_group_membership
+        title: Farmer Group Membership
+        description: Membership between farmer Persons and producer groups or cooperatives.
+        table: farmer_groups_table
+        concept_uri: https://publicschema.org/GroupMembership
+        fields:
+          - name: id
+            from: membership_id
+          - name: farmer_id
+          - name: group_id
+          - name: group_name
+          - name: group_type
+          - name: role
+          - name: active
+          - name: joined_on
+        access: *agri_entity_access
+        api:
+          default_limit: 25
+          max_limit: 100
+          require_purpose_header: true
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: farmer_id
+              ops: [eq, in]
+            - field: group_id
+              ops: [eq, in]
+            - field: active
+              ops: [eq]
+      - name: holding
+        title: Farm Holding
+        description: Farm holding projection from land or farm services records.
+        table: holdings_table
+        concept_uri: https://publicschema.org/Farm
+        fields:
+          - name: id
+            from: holding_id
+          - name: farmer_id
+          - name: district
+          - name: district_code
+          - name: holding_status
+          - name: total_area_ha
+          - name: primary_livelihood
+          - name: data_quality_status
+          - name: last_verified_on
+        relationships:
+          - name: parcels
+            kind: has_many
+            target: parcel
+            foreign_key: holding_id
+        access: *agri_entity_access
+        api:
+          default_limit: 25
+          max_limit: 100
+          require_purpose_header: true
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: farmer_id
+              ops: [eq, in]
+            - field: district_code
+              ops: [eq, in]
+            - field: holding_status
+              ops: [eq, in]
+      - name: parcel
+        title: Farm Parcel
+        description: Active or retired parcel projection for crop and input support review.
+        table: parcels_table
+        concept_uri: nagdi:FarmParcel
+        fields:
+          - name: id
+            from: parcel_id
+          - name: holding_id
+          - name: district
+          - name: district_code
+          - name: area_ha
+          - name: irrigation_type
+          - name: soil_zone
+          - name: active
+          - name: last_surveyed_on
+        relationships:
+          - name: holding
+            kind: belongs_to
+            target: holding
+            foreign_key: holding_id
+          - name: crop_declarations
+            kind: has_many
+            target: crop_declaration
+            foreign_key: parcel_id
+        access: *agri_entity_access
+        api:
+          default_limit: 25
+          max_limit: 100
+          require_purpose_header: true
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: holding_id
+              ops: [eq, in]
+            - field: district_code
+              ops: [eq, in]
+            - field: active
+              ops: [eq]
+      - name: crop_declaration
+        title: Crop Declaration
+        description: Farmer-declared crop and planted area for a parcel and season.
+        table: crop_declarations_table
+        concept_uri: nagdi:CropDeclaration
+        fields:
+          - name: id
+            from: crop_declaration_id
+          - name: parcel_id
+          - name: season
+          - name: crop
+          - name: planted_area_ha
+          - name: declared_on
+          - name: declaration_status
+        relationships:
+          - name: parcel
+            kind: belongs_to
+            target: parcel
+            foreign_key: parcel_id
+        access: *agri_entity_access
+        api:
+          default_limit: 25
+          max_limit: 100
+          require_purpose_header: true
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: parcel_id
+              ops: [eq, in]
+            - field: season
+              ops: [eq, in]
+            - field: crop
+              ops: [eq, in]
+            - field: declaration_status
+              ops: [eq, in]
+      - name: voucher_entitlement
+        title: Voucher Entitlement
+        description: Program entitlement facts for seasonal input support.
+        table: voucher_entitlements_table
+        concept_uri: nagdi:VoucherEntitlement
+        fields:
+          - name: id
+            from: entitlement_id
+          - name: farmer_id
+          - name: program_code
+          - name: season
+          - name: entitlement_status
+          - name: approval_status
+          - name: eligible_input_type
+          - name: package_code
+          - name: max_value
+          - name: currency
+          - name: valid_from
+          - name: issued_on
+          - name: expires_on
+        access: *agri_entity_access
+        api:
+          default_limit: 25
+          max_limit: 100
+          require_purpose_header: true
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: farmer_id
+              ops: [eq, in]
+            - field: season
+              ops: [eq, in]
+            - field: entitlement_status
+              ops: [eq, in]
+            - field: approval_status
+              ops: [eq, in]
+      - name: voucher_redemption
+        title: Voucher Redemption
+        description: Voucher redemption event, including successful and exception states.
+        table: voucher_redemptions_table
+        concept_uri: nagdi:VoucherRedemption
+        fields:
+          - name: id
+            from: redemption_id
+          - name: entitlement_id
+          - name: farmer_id
+          - name: supplier_id
+          - name: redeemed_on
+          - name: redeemed_value
+          - name: currency
+          - name: redemption_status
+        access: *agri_entity_access
+        api:
+          default_limit: 25
+          max_limit: 100
+          require_purpose_header: true
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: entitlement_id
+              ops: [eq, in]
+            - field: farmer_id
+              ops: [eq, in]
+            - field: supplier_id
+              ops: [eq, in]
+            - field: redemption_status
+              ops: [eq, in]
+      - name: supplier
+        title: Agricultural Input Supplier
+        description: Synthetic supplier license projection for redemption authorization.
+        table: suppliers_table
+        concept_uri: nagdi:InputSupplier
+        fields:
+          - name: id
+            from: supplier_id
+          - name: supplier_name
+          - name: district
+          - name: district_code
+          - name: license_status
+          - name: last_verified_on
+        access: *agri_entity_access
+        api:
+          default_limit: 25
+          max_limit: 100
+          require_purpose_header: true
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: district_code
+              ops: [eq, in]
+            - field: license_status
+              ops: [eq, in]
+      - name: district_climate_risk
+        title: District Climate Risk
+        description: Seasonal climate-risk classification and recommended input type by district.
+        table: district_climate_risk_table
+        concept_uri: nagdi:DistrictClimateRisk
+        fields:
+          - name: id
+            from: risk_id
+          - name: district
+          - name: district_code
+          - name: season
+          - name: drought_risk_level
+          - name: flood_risk_level
+          - name: rainfall_percentile
+          - name: recommended_input_type
+          - name: updated_on
+        access: *agri_entity_access
+        api:
+          default_limit: 25
+          max_limit: 100
+          require_purpose_header: false
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: district_code
+              ops: [eq, in]
+            - field: season
+              ops: [eq, in]
+            - field: drought_risk_level
+              ops: [eq, in]
+            - field: recommended_input_type
+              ops: [eq, in]
+      - name: market_price
+        title: Market Price
+        description: Public or restricted-low market price observation by district market and commodity.
+        table: market_prices_table
+        concept_uri: nagdi:MarketPrice
+        fields:
+          - name: id
+            from: price_id
+          - name: district
+          - name: district_code
+          - name: market_name
+          - name: commodity
+          - name: price_date
+          - name: unit
+          - name: price
+          - name: currency
+        access: *agri_entity_access
+        api:
+          default_limit: 25
+          max_limit: 100
+          require_purpose_header: false
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: district
+              ops: [eq, in]
+            - field: district_code
+              ops: [eq, in]
+            - field: commodity
+              ops: [eq, in]
+            - field: price_date
+              ops: [gte, lte, between]
+      - name: livestock_holding
+        title: Livestock Holding
+        description: Animal-health authority holding projection for livestock keeper review.
+        table: livestock_holdings_table
+        concept_uri: nagdi:LivestockHolding
+        fields:
+          - name: id
+            from: livestock_holding_id
+          - name: farmer_id
+          - name: district
+          - name: district_code
+          - name: village
+          - name: village_code
+          - name: holding_status
+          - name: premises_code
+          - name: last_verified_on
+        relationships:
+          - name: herds
+            kind: has_many
+            target: herd
+            foreign_key: livestock_holding_id
+        access: *agri_entity_access
+        api:
+          default_limit: 25
+          max_limit: 100
+          require_purpose_header: true
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: farmer_id
+              ops: [eq, in]
+            - field: district_code
+              ops: [eq, in]
+            - field: holding_status
+              ops: [eq, in]
+      - name: herd
+        title: Herd
+        description: Herd-level species and registration facts.
+        table: herds_table
+        concept_uri: nagdi:Herd
+        fields:
+          - name: id
+            from: herd_id
+          - name: farmer_id
+          - name: livestock_holding_id
+          - name: district
+          - name: district_code
+          - name: village_code
+          - name: species
+          - name: count
+          - name: production_system
+          - name: registration_status
+          - name: updated_on
+        relationships:
+          - name: livestock_holding
+            kind: belongs_to
+            target: livestock_holding
+            foreign_key: livestock_holding_id
+          - name: vaccinations
+            kind: has_many
+            target: vaccination
+            foreign_key: herd_id
+        access: *agri_entity_access
+        api:
+          default_limit: 25
+          max_limit: 100
+          require_purpose_header: true
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: farmer_id
+              ops: [eq, in]
+            - field: district_code
+              ops: [eq, in]
+            - field: species
+              ops: [eq, in]
+            - field: registration_status
+              ops: [eq, in]
+        aggregates:
+          - id: herd_counts_by_species_and_district
+            description: Herd count and animal count by species and holding district with small-cell suppression.
+            joins:
+              - relationship: livestock_holding
+            group_by:
+              - species
+              - livestock_holding.district_code
+            measures:
+              - name: herd_count
+                function: count
+                column: id
+              - name: animal_count
+                function: sum
+                column: count
+            disclosure_control:
+              min_group_size: 5
+              suppression: omit
+      - name: vaccination
+        title: Vaccination
+        description: Herd-level and animal-level vaccination facts.
+        table: vaccinations_table
+        concept_uri: nagdi:Vaccination
+        fields:
+          - name: id
+            from: vaccination_id
+          - name: herd_id
+          - name: animal_id
+          - name: vaccine_code
+          - name: vaccinated_on
+          - name: valid_until
+          - name: vaccination_status
+            from: status
+        relationships:
+          - name: herd
+            kind: belongs_to
+            target: herd
+            foreign_key: herd_id
+        access: *agri_entity_access
+        api:
+          default_limit: 25
+          max_limit: 100
+          require_purpose_header: true
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: herd_id
+              ops: [eq, in]
+            - field: vaccine_code
+              ops: [eq, in]
+            - field: vaccination_status
+              ops: [eq, in]
+      - name: movement_permit
+        title: Movement Permit
+        description: Existing or historical livestock movement permit facts.
+        table: movement_permits_table
+        concept_uri: nagdi:MovementPermit
+        fields:
+          - name: id
+            from: permit_id
+          - name: application_id
+          - name: herd_id
+          - name: origin_premises_code
+          - name: destination_premises_code
+          - name: origin_district
+          - name: origin_district_code
+          - name: destination_district
+          - name: destination_district_code
+          - name: permit_status
+          - name: issued_on
+          - name: valid_until
+          - name: revoked_on
+        access: *agri_entity_access
+        api:
+          default_limit: 25
+          max_limit: 100
+          require_purpose_header: true
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: herd_id
+              ops: [eq, in]
+            - field: permit_status
+              ops: [eq, in]
+      - name: voucher_eligibility_snapshot
+        title: Voucher Eligibility Snapshot
+        description: One-row per farmer materialized evidence projection for 2026A climate-smart input voucher review.
+        table: voucher_eligibility_snapshots_table
+        concept_uri: nagdi:VoucherEligibilitySnapshot
+        fields:
+          - name: id
+            from: farmer_id
+          - name: season
+          - name: purpose_code
+          - name: farmer_registered
+          - name: data_use_authorized
+          - name: active_smallholder_farmer
+          - name: active_farm_parcel
+          - name: crop_declared_for_season
+          - name: district_climate_risk_active
+          - name: voucher_entitlement_current
+          - name: voucher_not_redeemed
+          - name: supplier_license_active
+          - name: manual_review_required
+          - name: reason_code
+          - name: evaluation_as_of
+        access: *agri_entity_access
+        api:
+          default_limit: 25
+          max_limit: 100
+          require_purpose_header: true
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: season
+              ops: [eq, in]
+            - field: purpose_code
+              ops: [eq, in]
+            - field: manual_review_required
+              ops: [eq]
+      - name: livestock_movement_snapshot
+        title: Livestock Movement Snapshot
+        description: One-row per farmer and herd materialized evidence projection for movement permit review.
+        table: livestock_movement_snapshots_table
+        concept_uri: nagdi:LivestockMovementSnapshot
+        fields:
+          - name: id
+            from: movement_snapshot_id
+          - name: farmer_id
+          - name: herd_id
+          - name: registered_livestock_holder
+          - name: registered_herd
+          - name: herd_vaccination_current
+          - name: origin_district_not_quarantined
+          - name: destination_district_open
+          - name: no_conflicting_open_movement_permit
+          - name: manual_review_required
+          - name: reason_code
+          - name: evaluation_as_of
+        access: *agri_entity_access
+        api:
+          default_limit: 25
+          max_limit: 100
+          require_purpose_header: true
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: farmer_id
+              ops: [eq, in]
+            - field: herd_id
+              ops: [eq, in]
+            - field: manual_review_required
+              ops: [eq]
+      - name: market_sizing_cell
+        title: Market Sizing Cell
+        description: Pre-materialized district-level opportunity sizing cells for aggregate-only market planning.
+        table: market_sizing_cells_table
+        concept_uri: nagdi:MarketSizingCell
+        fields:
+          - name: id
+            from: cell_id
+          - name: district
+          - name: district_code
+          - name: season
+          - name: crop
+          - name: risk_band
+          - name: input_type
+          - name: eligible_opportunity_count
+          - name: estimated_area_ha
+          - name: cell_farmer_count
+          - name: recipient_authorization_required
+          - name: geography_floor
+        access: *agri_entity_access
+        api:
+          default_limit: 25
+          max_limit: 100
+          require_purpose_header: true
+          allowed_filters:
+            - field: district_code
+              ops: [eq, in]
+            - field: season
+              ops: [eq, in]
+            - field: crop
+              ops: [eq, in]
+            - field: risk_band
+              ops: [eq, in]
+            - field: input_type
+              ops: [eq, in]
+        aggregates:
+          - id: voucher_opportunities_by_district_crop_risk_input
+            description: Aggregate market-sizing opportunities by district, crop, risk band, and input type.
+            group_by:
+              - district_code
+              - crop
+              - risk_band
+              - input_type
+            measures:
+              - name: opportunity_count
+                function: sum
+                column: eligible_opportunity_count
+              - name: estimated_area_ha
+                function: sum
+                column: estimated_area_ha
+            disclosure_control:
+              min_group_size: 5
+              suppression: omit
+      - name: purpose_policy
+        title: Purpose Policy
+        description: Governance policy row for purpose-bound agricultural consultation and aggregate disclosure.
+        table: purpose_policies_table
+        concept_uri: nagdi:PurposePolicy
+        fields:
+          - name: id
+            from: purpose_code
+          - name: public_service_code
+          - name: lawful_basis_code
+          - name: allowed_recipient_types
+          - name: allowed_disclosure_modes
+          - name: retention_days
+          - name: minimum_cell_count
+          - name: geography_floor
+          - name: suppression_policy
+          - name: rare_category_suppression
+          - name: onward_sharing_allowed
+          - name: automated_decision_allowed
+          - name: audit_required
+        access: *agri_entity_access
+        api:
+          default_limit: 25
+          max_limit: 100
+          require_purpose_header: false
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: public_service_code
+              ops: [eq, in]

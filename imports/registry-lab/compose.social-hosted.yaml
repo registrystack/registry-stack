@@ -1,0 +1,194 @@
+name: registry-lab-social
+
+# Per-track Coolify app for the social-protection demo, split out of the
+# registry-lab monolith compose because the monolith's rendered compose (18
+# services + Coolify magic-env) exceeds the Linux MAX_ARG_STRLEN limit Coolify
+# v4.1.1 hits when it writes the decoded compose via `echo <base64> | base64 -d`.
+# Splitting per track shrinks the magic-env (which grows O(services x domains))
+# back under the limit.
+#
+# This app runs the three social-protection services plus the config-loader and
+# redis they need. Cross-track dependencies are reached over their public domains
+# instead of the docker network (which is per-app):
+#   * shared-eligibility-notary -> civil-relay / health-relay (public HTTPS)
+#   * social-protection-notary federation peer -> metadata publisher (public HTTPS)
+# The social relay/notary it owns are co-located here, so those stay internal.
+
+x-hosted-domains:
+  social-protection-registry-relay: social-relay.lab.registrystack.org
+  social-protection-notary: social-notary.lab.registrystack.org
+  shared-eligibility-notary: shared-notary.lab.registrystack.org
+
+x-coolify-required-env:
+  - REGISTRY_NOTARY_AUDIT_HASH_SECRET
+  - REGISTRY_NOTARY_ISSUER_JWK
+  - REGISTRY_RELAY_AUDIT_HASH_SECRET
+  - SHARED_CIVIL_EVIDENCE_SOURCE_RAW
+  - SHARED_EVIDENCE_CLIENT_BEARER_HASH
+  - SHARED_EVIDENCE_CLIENT_TOKEN_HASH
+  - SHARED_HEALTH_EVIDENCE_SOURCE_RAW
+  - SHARED_SOCIAL_EVIDENCE_SOURCE_HASH
+  - SHARED_SOCIAL_EVIDENCE_SOURCE_RAW
+  - SOCIAL_AGGREGATE_READER_HASH
+  - SOCIAL_EVIDENCE_CLIENT_BEARER_HASH
+  - SOCIAL_EVIDENCE_CLIENT_TOKEN_HASH
+  - SOCIAL_EVIDENCE_ONLY_HASH
+  - SOCIAL_EVIDENCE_SOURCE_HASH
+  - SOCIAL_EVIDENCE_SOURCE_RAW
+  - SOCIAL_FEDERATION_PAIRWISE_SUBJECT_HASH_SECRET
+  - SOCIAL_FEDERATION_RESPONSE_JWK
+  - SOCIAL_METADATA_CLIENT_HASH
+  - SOCIAL_ROW_READER_HASH
+
+x-relay-common: &relay-common
+  image: ${REGISTRY_RELAY_IMAGE:-ghcr.io/jeremi/registry-relay@sha256:67746141b44b3f9efa25482ccbf91373efc79efc9e3e8cd5c1df5655a0a1f3cd}
+  environment: &relay-env
+    RUST_LOG: ${RUST_LOG:-info}
+    # Relay config and workbook fixtures are copied by config-loader into named
+    # volumes. Carrying the deployed ref in the service environment makes
+    # docker compose recreate relays when that mounted config/data changes.
+    CONFIG_REPO_REF: ${CONFIG_REPO_REF:?set CONFIG_REPO_REF to the deployed registry-lab git ref}
+  restart: unless-stopped
+  expose:
+    - "8080"
+  healthcheck:
+    test: ["CMD", "/usr/local/bin/registry-relay", "healthcheck"]
+    interval: 30s
+    timeout: 10s
+    retries: 3
+    start_period: 10s
+
+x-notary-common: &notary-common
+  image: ${REGISTRY_NOTARY_IMAGE:-ghcr.io/jeremi/registry-notary@sha256:81c97e192daa066476f220f0f5d3a8f0c9b0c383a289d2db76e12539099c59bb}
+  environment: &notary-env
+    RUST_LOG: ${RUST_LOG:-info}
+    REGISTRY_NOTARY_REPLAY_REDIS_URL: ${REGISTRY_NOTARY_REPLAY_REDIS_URL:-redis://redis:6379/0}
+  restart: unless-stopped
+  expose:
+    - "8080"
+  healthcheck:
+    # The notary image ships only the binary + sh (no curl/wget for an HTTP
+    # /healthz probe), and this build has no `healthcheck` subcommand, so use
+    # `--version` as a process-liveness check.
+    test: ["CMD", "registry-notary", "--version"]
+    interval: 30s
+    timeout: 10s
+    retries: 3
+    start_period: 10s
+
+services:
+  # Coolify does not seed compose bind mounts from the git repo: relative
+  # bind mounts are rewritten to empty persistent dirs. This one-shot init
+  # clones the public repo and populates named config volumes that every
+  # service mounts at its expected path. Re-runs on each deploy (overwrites).
+  # Trimmed to only the config/data the three social services mount.
+  config-loader:
+    image: ${CONFIG_LOADER_IMAGE:-alpine:3.20}
+    restart: "no"
+    environment:
+      CONFIG_REPO_URL: ${CONFIG_REPO_URL:-https://github.com/jeremi/registry-lab}
+      CONFIG_REPO_REF: ${CONFIG_REPO_REF:?set CONFIG_REPO_REF to the deployed registry-lab git ref}
+    entrypoint: ["/bin/sh", "-euc"]
+    command:
+      - |
+        apk add --no-cache git >/dev/null
+        rm -rf /tmp/repo
+        git init /tmp/repo
+        git -C /tmp/repo remote add origin "$$CONFIG_REPO_URL"
+        git -C /tmp/repo fetch --depth 1 origin "$$CONFIG_REPO_REF"
+        git -C /tmp/repo -c advice.detachedHead=false checkout FETCH_HEAD
+        for d in relay notary data; do
+          mkdir -p "/out/$$d"
+          find "/out/$$d" -mindepth 1 -delete 2>/dev/null || true
+        done
+        cp -a /tmp/repo/config/coolify/relay/social-protection-registry-relay.yaml /out/relay/
+        cp -a /tmp/repo/config/coolify/relay/social-protection-registry-relay.metadata.yaml /out/relay/
+        cp -a /tmp/repo/config/coolify/notary/social-protection-notary.yaml /out/notary/
+        cp -a /tmp/repo/config/coolify/notary/shared-eligibility-notary.yaml /out/notary/
+        cp -a /tmp/repo/data/. /out/data/
+        mkdir -p /out/social-cache
+        chown -R 65532:65532 /out/social-cache
+        echo "config-loader: populated config volumes from $$CONFIG_REPO_REF"
+    volumes:
+      - cfg-relay:/out/relay
+      - cfg-notary:/out/notary
+      - cfg-data:/out/data
+      - social-protection-registry-cache:/out/social-cache
+
+  redis:
+    image: ${REGISTRY_LAB_REDIS_IMAGE:-redis:7.4-alpine}
+    command: ["redis-server", "--appendonly", "yes"]
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  social-protection-registry-relay:
+    <<: *relay-common
+    command: ["--config", "/etc/registry-relay/social-protection-registry-relay.yaml"]
+    depends_on:
+      config-loader:
+        condition: service_completed_successfully
+    volumes:
+      - cfg-relay:/etc/registry-relay:ro
+      - cfg-data:/demo/data:ro
+      - social-protection-registry-cache:/var/lib/registry-relay/cache
+
+  social-protection-notary:
+    <<: *notary-common
+    command: ["--config", "/etc/registry-notary/social-protection-notary.yaml"]
+    environment:
+      <<: *notary-env
+      SOCIAL_EVIDENCE_CLIENT_TOKEN_HASH: ${SOCIAL_EVIDENCE_CLIENT_TOKEN_HASH:-}
+      SOCIAL_EVIDENCE_CLIENT_BEARER_HASH: ${SOCIAL_EVIDENCE_CLIENT_BEARER_HASH:-}
+      SOCIAL_EVIDENCE_SOURCE_RAW: ${SOCIAL_EVIDENCE_SOURCE_RAW:-}
+      SOCIAL_FEDERATION_PAIRWISE_SUBJECT_HASH_SECRET: ${SOCIAL_FEDERATION_PAIRWISE_SUBJECT_HASH_SECRET:-}
+      SOCIAL_FEDERATION_RESPONSE_JWK: ${SOCIAL_FEDERATION_RESPONSE_JWK:-}
+    volumes:
+      - cfg-notary:/etc/registry-notary:ro
+      - notary-config-state:/var/lib/registry-notary/config-state
+    depends_on:
+      config-loader:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      social-protection-registry-relay:
+        condition: service_healthy
+
+  shared-eligibility-notary:
+    <<: *notary-common
+    command: ["--config", "/etc/registry-notary/shared-eligibility-notary.yaml"]
+    environment:
+      <<: *notary-env
+      SHARED_EVIDENCE_CLIENT_TOKEN_HASH: ${SHARED_EVIDENCE_CLIENT_TOKEN_HASH:-}
+      SHARED_EVIDENCE_CLIENT_BEARER_HASH: ${SHARED_EVIDENCE_CLIENT_BEARER_HASH:-}
+      SHARED_CIVIL_EVIDENCE_SOURCE_RAW: ${SHARED_CIVIL_EVIDENCE_SOURCE_RAW:-}
+      SHARED_SOCIAL_EVIDENCE_SOURCE_RAW: ${SHARED_SOCIAL_EVIDENCE_SOURCE_RAW:-}
+      SHARED_HEALTH_EVIDENCE_SOURCE_RAW: ${SHARED_HEALTH_EVIDENCE_SOURCE_RAW:-}
+    volumes:
+      - cfg-notary:/etc/registry-notary:ro
+      - notary-config-state:/var/lib/registry-notary/config-state
+    # civil-relay and health-relay live in the monolith app and are reached over
+    # their public domains, so only the co-located social relay is a local
+    # depends_on. The notary connects to sources lazily per request, so it stays
+    # healthy even if a remote relay is briefly unavailable.
+    depends_on:
+      config-loader:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      social-protection-registry-relay:
+        condition: service_healthy
+
+volumes:
+  redis-data:
+  social-protection-registry-cache:
+  cfg-relay:
+  cfg-notary:
+  cfg-data:
+  notary-config-state:

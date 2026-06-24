@@ -1,0 +1,41 @@
+meta {
+  name: 09 - Apply Notary signing key rotation
+  type: http
+  seq: 9
+}
+
+post {
+  url: {{lab2_civil_notary_admin_url}}/admin/v1/config/apply
+  body: json
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{CIVIL_NOTARY_OPS_BEARER}}
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "tuf": {
+      "root_path": "/lab2/tuf-repo/notary-signing-key-rotation/metadata/1.root.json",
+      "metadata_dir": "/lab2/tuf-repo/notary-signing-key-rotation/metadata",
+      "targets_dir": "/lab2/tuf-repo/notary-signing-key-rotation/targets",
+      "datastore_dir": "/var/lib/registry-notary/config-state/tuf-notary-signing-key-rotation",
+      "target_name": "civil-notary.yaml"
+    }
+  }
+}
+
+script:post-response {
+  const body = res.getBody();
+
+  test("status is 200", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("signed Notary key rotation applies", function () {
+    expect(body).to.have.property("result", "applied");
+    expect(body).to.have.property("applied", true);
+  });
+}

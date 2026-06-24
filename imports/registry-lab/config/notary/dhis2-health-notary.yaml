@@ -1,0 +1,459 @@
+# SPDX-License-Identifier: Apache-2.0
+
+server:
+  bind: 0.0.0.0:8080
+  openapi_requires_auth: false
+  admin_listener:
+    mode: dedicated
+    bind: 0.0.0.0:8081
+
+auth:
+  mode: api_key
+  api_keys:
+    - id: dhis2_evidence_client
+      fingerprint:
+        provider: env
+        name: DHIS2_EVIDENCE_CLIENT_TOKEN_HASH
+        commitment: sha256:fd7f4e271239b810b315f2dd19f0c6b57843ac92f56e7915e136b68ce96e2faf
+      scopes:
+        - dhis2_health:evidence_verification
+  bearer_tokens:
+    - id: dhis2_evidence_client
+      fingerprint:
+        provider: env
+        name: DHIS2_EVIDENCE_CLIENT_BEARER_HASH
+        commitment: sha256:73f69da9f649967b6ce674124162d49da342b003822c090a86c0c310f748a80d
+      scopes:
+        - dhis2_health:evidence_verification
+
+audit:
+  sink: stdout
+  hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
+
+config_trust:
+  antirollback_state_path: /var/lib/registry-notary/config-state/dhis2-health-notary-config-antirollback.json
+  local_approval_state_path: /var/lib/registry-notary/config-state/dhis2-health-notary-config-local-approvals.json
+  break_glass_rate_limit:
+    max_accepted: 1
+    window_seconds: 3600
+
+evidence:
+  enabled: true
+  service_id: dhis2-health-notary
+  api_base_url: http://dhis2-health-notary:8080
+  inline_batch_limit: 20
+  max_credential_validity_seconds: 31536000
+  allowed_purposes:
+    - https://demo.example.gov/purpose/dhis2-openfn-health-evidence
+  concurrency:
+    bindings: 4
+  source_connections:
+    dhis2_openfn:
+      base_url: http://openfn-dhis2-sidecar:8080
+      allow_insecure_private_network: true
+      retry_on_5xx: false
+      token_env: OPENFN_SIDECAR_TOKEN_RAW
+  signing_keys:
+    dhis2-health-demo:
+      provider: local_jwk_env
+      private_jwk_env: REGISTRY_NOTARY_ISSUER_JWK
+      alg: EdDSA
+      kid: did:web:dhis2-health-notary.demo.example.gov#dhis2-health-demo-key-1
+      status: active
+  credential_profiles:
+    dhis2_health_status_sd_jwt:
+      format: application/dc+sd-jwt
+      issuer: did:web:dhis2-health-notary.demo.example.gov
+      signing_key: dhis2-health-demo
+      vct: https://demo.example.gov/credentials/dhis2/health-status/v1
+      validity_seconds: 600
+      allowed_claims:
+        - dhis2-child-program-active
+        - dhis2-maternal-pnc-active
+        - dhis2-child-health-visit-recorded
+        - dhis2-tb-program-active
+      holder_binding:
+        mode: none
+      disclosure:
+        allowed:
+          - predicate
+          - redacted
+    dhis2_child_program_sd_jwt:
+      format: application/dc+sd-jwt
+      issuer: did:web:dhis2-health-notary.demo.example.gov
+      signing_key: dhis2-health-demo
+      vct: https://demo.example.gov/credentials/dhis2/child-program/v1
+      validity_seconds: 600
+      allowed_claims:
+        - dhis2-tracked-entity-first-name
+        - dhis2-tracked-entity-last-name
+        - dhis2-child-program-active
+      holder_binding:
+        mode: none
+      disclosure:
+        allowed:
+          - value
+          - redacted
+    dhis2_programme_participation_sd_jwt:
+      format: application/dc+sd-jwt
+      issuer: did:web:dhis2-health-notary.demo.example.gov
+      signing_key: dhis2-health-demo
+      vct: https://demo.example.gov/credentials/dhis2/programme-participation/v1
+      validity_seconds: 31536000
+      allowed_claims:
+        - dhis2-tracked-entity-first-name
+        - dhis2-tracked-entity-last-name
+        - dhis2-child-age-band
+        - dhis2-programme-code
+        - dhis2-child-program-active
+        - dhis2-reconciliation-ref
+      holder_binding:
+        mode: did
+        proof_of_possession: required
+        allowed_did_methods:
+          - did:jwk
+      disclosure:
+        allowed:
+          - value
+          - redacted
+  claims:
+    - id: dhis2-tracked-entity-first-name
+      title: DHIS2 tracked entity first name
+      version: 2026-05
+      subject_type: person
+      value:
+        type: string
+      source_bindings:
+        dhis2:
+          connector: source_adapter_sidecar
+          connection: dhis2_openfn
+          required_scope: dhis2_health:evidence_verification
+          dataset: dhis2_tracker
+          entity: person
+          lookup:
+            input: target.identifiers.dhis2_tracked_entity
+            field: tracked_entity
+            op: eq
+            cardinality: one
+          fields:
+            first_name:
+              field: first_name
+              type: string
+              required: true
+      rule:
+        type: extract
+        source: dhis2
+        field: first_name
+      disclosure:
+        default: value
+        allowed:
+          - value
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+        - 'application/ld+json; profile="cccev"'
+        - application/dc+sd-jwt
+      credential_profiles:
+        - dhis2_child_program_sd_jwt
+        - dhis2_programme_participation_sd_jwt
+    - id: dhis2-tracked-entity-last-name
+      title: DHIS2 tracked entity last name
+      version: 2026-05
+      subject_type: person
+      value:
+        type: string
+      source_bindings:
+        dhis2:
+          connector: source_adapter_sidecar
+          connection: dhis2_openfn
+          required_scope: dhis2_health:evidence_verification
+          dataset: dhis2_tracker
+          entity: person
+          lookup:
+            input: target.identifiers.dhis2_tracked_entity
+            field: tracked_entity
+            op: eq
+            cardinality: one
+          fields:
+            last_name:
+              field: last_name
+              type: string
+              required: true
+      rule:
+        type: extract
+        source: dhis2
+        field: last_name
+      disclosure:
+        default: value
+        allowed:
+          - value
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+        - 'application/ld+json; profile="cccev"'
+        - application/dc+sd-jwt
+      credential_profiles:
+        - dhis2_child_program_sd_jwt
+        - dhis2_programme_participation_sd_jwt
+    - id: dhis2-child-program-active
+      title: Health Programme Participation Attestation
+      version: 2026-05
+      subject_type: person
+      value:
+        type: boolean
+      source_bindings:
+        dhis2:
+          connector: source_adapter_sidecar
+          connection: dhis2_openfn
+          required_scope: dhis2_health:evidence_verification
+          dataset: dhis2_tracker
+          entity: person
+          lookup:
+            input: target.identifiers.dhis2_tracked_entity
+            field: tracked_entity
+            op: eq
+            cardinality: one
+          fields:
+            child_program_active:
+              field: child_program_active
+              type: boolean
+              required: true
+      rule:
+        type: cel
+        expression: "source.dhis2.child_program_active == true"
+      disclosure:
+        default: predicate
+        allowed:
+          - value
+          - predicate
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+        - 'application/ld+json; profile="cccev"'
+        - application/dc+sd-jwt
+      credential_profiles:
+        - dhis2_health_status_sd_jwt
+        - dhis2_child_program_sd_jwt
+        - dhis2_programme_participation_sd_jwt
+    - id: dhis2-child-age-band
+      title: DHIS2 child age band
+      version: 2026-06
+      subject_type: person
+      value:
+        type: string
+      source_bindings:
+        dhis2:
+          connector: source_adapter_sidecar
+          connection: dhis2_openfn
+          required_scope: dhis2_health:evidence_verification
+          dataset: dhis2_tracker
+          entity: person
+          lookup:
+            input: target.identifiers.dhis2_tracked_entity
+            field: tracked_entity
+            op: eq
+            cardinality: one
+          fields:
+            child_age_band:
+              field: child_age_band
+              type: string
+              required: true
+      rule:
+        type: extract
+        source: dhis2
+        field: child_age_band
+      disclosure:
+        default: value
+        allowed:
+          - value
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+        - 'application/ld+json; profile="cccev"'
+        - application/dc+sd-jwt
+      credential_profiles:
+        - dhis2_programme_participation_sd_jwt
+    - id: dhis2-programme-code
+      title: DHIS2 programme code
+      version: 2026-06
+      subject_type: person
+      value:
+        type: string
+      source_bindings:
+        dhis2:
+          connector: source_adapter_sidecar
+          connection: dhis2_openfn
+          required_scope: dhis2_health:evidence_verification
+          dataset: dhis2_tracker
+          entity: person
+          lookup:
+            input: target.identifiers.dhis2_tracked_entity
+            field: tracked_entity
+            op: eq
+            cardinality: one
+          fields:
+            child_program_code:
+              field: child_program_code
+              type: string
+              required: true
+      rule:
+        type: extract
+        source: dhis2
+        field: child_program_code
+      disclosure:
+        default: value
+        allowed:
+          - value
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+        - 'application/ld+json; profile="cccev"'
+        - application/dc+sd-jwt
+      credential_profiles:
+        - dhis2_programme_participation_sd_jwt
+    - id: dhis2-reconciliation-ref
+      title: DHIS2 reconciliation reference
+      version: 2026-06
+      subject_type: person
+      value:
+        type: string
+      source_bindings:
+        dhis2:
+          connector: source_adapter_sidecar
+          connection: dhis2_openfn
+          required_scope: dhis2_health:evidence_verification
+          dataset: dhis2_tracker
+          entity: person
+          lookup:
+            input: target.identifiers.dhis2_tracked_entity
+            field: tracked_entity
+            op: eq
+            cardinality: one
+          fields:
+            reconciliation_ref:
+              field: reconciliation_ref
+              type: string
+              required: true
+      rule:
+        type: extract
+        source: dhis2
+        field: reconciliation_ref
+      disclosure:
+        default: value
+        allowed:
+          - value
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+        - 'application/ld+json; profile="cccev"'
+        - application/dc+sd-jwt
+      credential_profiles:
+        - dhis2_programme_participation_sd_jwt
+    - id: dhis2-maternal-pnc-active
+      title: DHIS2 maternal and postnatal care active
+      version: 2026-05
+      subject_type: person
+      value:
+        type: boolean
+      source_bindings:
+        dhis2:
+          connector: source_adapter_sidecar
+          connection: dhis2_openfn
+          required_scope: dhis2_health:evidence_verification
+          dataset: dhis2_tracker
+          entity: person
+          lookup:
+            input: target.identifiers.dhis2_tracked_entity
+            field: tracked_entity
+            op: eq
+            cardinality: one
+          fields:
+            maternal_pnc_active:
+              field: maternal_pnc_active
+              type: boolean
+              required: true
+      rule:
+        type: cel
+        expression: "source.dhis2.maternal_pnc_active == true"
+      disclosure:
+        default: predicate
+        allowed:
+          - predicate
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+        - application/dc+sd-jwt
+      credential_profiles:
+        - dhis2_health_status_sd_jwt
+    - id: dhis2-child-health-visit-recorded
+      title: DHIS2 child health visit recorded
+      version: 2026-05
+      subject_type: person
+      value:
+        type: boolean
+      source_bindings:
+        dhis2:
+          connector: source_adapter_sidecar
+          connection: dhis2_openfn
+          required_scope: dhis2_health:evidence_verification
+          dataset: dhis2_tracker
+          entity: person
+          lookup:
+            input: target.identifiers.dhis2_tracked_entity
+            field: tracked_entity
+            op: eq
+            cardinality: one
+          fields:
+            child_health_visit_recorded:
+              field: child_health_visit_recorded
+              type: boolean
+              required: true
+      rule:
+        type: cel
+        expression: "source.dhis2.child_health_visit_recorded == true"
+      disclosure:
+        default: predicate
+        allowed:
+          - predicate
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+        - application/dc+sd-jwt
+      credential_profiles:
+        - dhis2_health_status_sd_jwt
+    - id: dhis2-tb-program-active
+      title: DHIS2 TB programme active
+      version: 2026-05
+      subject_type: person
+      value:
+        type: boolean
+      source_bindings:
+        dhis2:
+          connector: source_adapter_sidecar
+          connection: dhis2_openfn
+          required_scope: dhis2_health:evidence_verification
+          dataset: dhis2_tracker
+          entity: person
+          lookup:
+            input: target.identifiers.dhis2_tracked_entity
+            field: tracked_entity
+            op: eq
+            cardinality: one
+          fields:
+            tb_program_active:
+              field: tb_program_active
+              type: boolean
+              required: true
+      rule:
+        type: cel
+        expression: "source.dhis2.tb_program_active == true"
+      disclosure:
+        default: predicate
+        allowed:
+          - predicate
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+        - application/dc+sd-jwt
+      credential_profiles:
+        - dhis2_health_status_sd_jwt

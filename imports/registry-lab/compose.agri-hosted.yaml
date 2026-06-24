@@ -1,0 +1,141 @@
+name: registry-lab-agri
+
+# Per-track Coolify app for the NAgDI agriculture demo. It follows the
+# social-hosted split: config-loader copies the exact deployed config/data ref
+# into named volumes, while the Relay and Notary run on this app's private
+# docker network and expose only their public lab domains.
+
+x-hosted-domains:
+  agri-registry-relay: agri-relay.lab.registrystack.org
+  nagdi-agriculture-notary: agriculture-notary.lab.registrystack.org
+
+x-coolify-required-env:
+  - AGRI_AGGREGATE_READER_HASH
+  - AGRI_EVIDENCE_CLIENT_BEARER_HASH
+  - AGRI_EVIDENCE_CLIENT_TOKEN_HASH
+  - AGRI_EVIDENCE_ONLY_HASH
+  - AGRI_EVIDENCE_SOURCE_HASH
+  - AGRI_EVIDENCE_SOURCE_RAW
+  - AGRI_FEDERATION_PAIRWISE_SUBJECT_HASH_SECRET
+  - AGRI_FEDERATION_RESPONSE_JWK
+  - AGRI_METADATA_CLIENT_HASH
+  - AGRI_ROW_READER_HASH
+  - REGISTRY_NOTARY_AUDIT_HASH_SECRET
+  - REGISTRY_NOTARY_ISSUER_JWK
+  - REGISTRY_RELAY_AUDIT_HASH_SECRET
+
+x-relay-common: &relay-common
+  image: ${REGISTRY_RELAY_IMAGE:-ghcr.io/jeremi/registry-relay@sha256:67746141b44b3f9efa25482ccbf91373efc79efc9e3e8cd5c1df5655a0a1f3cd}
+  environment: &relay-env
+    RUST_LOG: ${RUST_LOG:-info}
+    CONFIG_REPO_REF: ${CONFIG_REPO_REF:?set CONFIG_REPO_REF to the deployed registry-lab git ref}
+  restart: unless-stopped
+  expose:
+    - "8080"
+  healthcheck:
+    test: ["CMD", "/usr/local/bin/registry-relay", "healthcheck"]
+    interval: 30s
+    timeout: 10s
+    retries: 3
+    start_period: 10s
+
+x-notary-common: &notary-common
+  image: ${REGISTRY_NOTARY_IMAGE:-ghcr.io/jeremi/registry-notary@sha256:81c97e192daa066476f220f0f5d3a8f0c9b0c383a289d2db76e12539099c59bb}
+  environment: &notary-env
+    RUST_LOG: ${RUST_LOG:-info}
+    REGISTRY_NOTARY_REPLAY_REDIS_URL: ${REGISTRY_NOTARY_REPLAY_REDIS_URL:-redis://redis:6379/0}
+  restart: unless-stopped
+  expose:
+    - "8080"
+  healthcheck:
+    test: ["CMD", "registry-notary", "--version"]
+    interval: 30s
+    timeout: 10s
+    retries: 3
+    start_period: 10s
+
+services:
+  config-loader:
+    image: ${CONFIG_LOADER_IMAGE:-alpine:3.20}
+    restart: "no"
+    environment:
+      CONFIG_REPO_URL: ${CONFIG_REPO_URL:-https://github.com/jeremi/registry-lab}
+      CONFIG_REPO_REF: ${CONFIG_REPO_REF:?set CONFIG_REPO_REF to the deployed registry-lab git ref}
+    entrypoint: ["/bin/sh", "-euc"]
+    command:
+      - |
+        apk add --no-cache git >/dev/null
+        rm -rf /tmp/repo
+        git init /tmp/repo
+        git -C /tmp/repo remote add origin "$$CONFIG_REPO_URL"
+        git -C /tmp/repo fetch --depth 1 origin "$$CONFIG_REPO_REF"
+        git -C /tmp/repo -c advice.detachedHead=false checkout FETCH_HEAD
+        for d in relay notary data; do
+          mkdir -p "/out/$$d"
+          find "/out/$$d" -mindepth 1 -delete 2>/dev/null || true
+        done
+        cp -a /tmp/repo/config/coolify/relay/agri-registry-relay.yaml /out/relay/
+        cp -a /tmp/repo/config/coolify/relay/agri-registry-relay.metadata.yaml /out/relay/
+        cp -a /tmp/repo/config/coolify/notary/nagdi-agriculture-notary.yaml /out/notary/
+        cp -a /tmp/repo/data/agriculture /out/data/
+        mkdir -p /out/agri-cache
+        chown -R 65532:65532 /out/agri-cache
+        echo "config-loader: populated config volumes from $$CONFIG_REPO_REF"
+    volumes:
+      - cfg-relay:/out/relay
+      - cfg-notary:/out/notary
+      - cfg-data:/out/data
+      - agri-registry-cache:/out/agri-cache
+
+  redis:
+    image: ${REGISTRY_LAB_REDIS_IMAGE:-redis:7.4-alpine}
+    command: ["redis-server", "--appendonly", "yes"]
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  agri-registry-relay:
+    <<: *relay-common
+    command: ["--config", "/etc/registry-relay/agri-registry-relay.yaml"]
+    depends_on:
+      config-loader:
+        condition: service_completed_successfully
+    volumes:
+      - cfg-relay:/etc/registry-relay:ro
+      - cfg-data:/demo/data:ro
+      - agri-registry-cache:/var/lib/registry-relay/cache
+
+  nagdi-agriculture-notary:
+    <<: *notary-common
+    command: ["--config", "/etc/registry-notary/nagdi-agriculture-notary.yaml"]
+    environment:
+      <<: *notary-env
+      AGRI_EVIDENCE_CLIENT_TOKEN_HASH: ${AGRI_EVIDENCE_CLIENT_TOKEN_HASH:-}
+      AGRI_EVIDENCE_CLIENT_BEARER_HASH: ${AGRI_EVIDENCE_CLIENT_BEARER_HASH:-}
+      AGRI_EVIDENCE_SOURCE_RAW: ${AGRI_EVIDENCE_SOURCE_RAW:-}
+      AGRI_FEDERATION_PAIRWISE_SUBJECT_HASH_SECRET: ${AGRI_FEDERATION_PAIRWISE_SUBJECT_HASH_SECRET:-}
+      AGRI_FEDERATION_RESPONSE_JWK: ${AGRI_FEDERATION_RESPONSE_JWK:-}
+    volumes:
+      - cfg-notary:/etc/registry-notary:ro
+      - notary-config-state:/var/lib/registry-notary/config-state
+    depends_on:
+      config-loader:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      agri-registry-relay:
+        condition: service_healthy
+
+volumes:
+  redis-data:
+  agri-registry-cache:
+  cfg-relay:
+  cfg-notary:
+  cfg-data:
+  notary-config-state:

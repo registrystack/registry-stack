@@ -1,0 +1,117 @@
+{
+  "schema_version": "registry-lab/evidence-gateway-synthetic-data/v1",
+  "binding_id": "marriage-certificate-evidence/v1",
+  "records": [
+    {
+      "id": "marriage-certificate-success",
+      "observed_at": "2026-06-19T00:00:00Z",
+      "evidence": {
+        "identifier": "CERT-M-2001",
+        "issue_date": "2026-06-02",
+        "issuing_authority": "Civil Registry Authority",
+        "issuing_place": {
+          "name": "North Civil Office"
+        }
+      },
+      "marriage": {
+        "identifier": "MR-2026-2001",
+        "event_date": "2020-08-15",
+        "event_location": "North City",
+        "party_1": {
+          "identifiers": [
+            {
+              "scheme": "national_id",
+              "value": "NID-2001"
+            }
+          ],
+          "given_name": "Maria",
+          "family_name": "Santos"
+        },
+        "party_2": {
+          "identifiers": [
+            {
+              "scheme": "national_id",
+              "value": "NID-2002"
+            }
+          ],
+          "given_name": "Juan",
+          "family_name": "Dela Cruz"
+        }
+      }
+    },
+    {
+      "id": "marriage-certificate-denial-target",
+      "observed_at": "2026-06-19T00:00:00Z",
+      "evidence": {
+        "identifier": "CERT-M-2002",
+        "issue_date": "2026-06-02",
+        "issuing_authority": "Civil Registry Authority",
+        "issuing_place": {
+          "name": "East Civil Office"
+        }
+      },
+      "marriage": {
+        "identifier": "MR-2026-2002",
+        "event_date": "2021-09-03",
+        "event_location": "East City",
+        "party_1": {
+          "identifiers": [
+            {
+              "scheme": "national_id",
+              "value": "NID-2004"
+            }
+          ],
+          "given_name": "Rosario",
+          "family_name": "Aquino"
+        },
+        "party_2": {
+          "identifiers": [
+            {
+              "scheme": "national_id",
+              "value": "NID-2005"
+            }
+          ],
+          "given_name": "Eduardo",
+          "family_name": "Bautista"
+        }
+      }
+    },
+    {
+      "id": "marriage-certificate-stale",
+      "observed_at": "2026-06-15T00:00:00Z",
+      "evidence": {
+        "identifier": "CERT-M-2001",
+        "issue_date": "2026-06-02",
+        "issuing_authority": "Civil Registry Authority",
+        "issuing_place": {
+          "name": "North Civil Office"
+        }
+      },
+      "marriage": {
+        "identifier": "MR-2026-2001",
+        "event_date": "2020-08-15",
+        "event_location": "North City",
+        "party_1": {
+          "identifiers": [
+            {
+              "scheme": "national_id",
+              "value": "NID-2001"
+            }
+          ],
+          "given_name": "Maria",
+          "family_name": "Santos"
+        },
+        "party_2": {
+          "identifiers": [
+            {
+              "scheme": "national_id",
+              "value": "NID-2002"
+            }
+          ],
+          "given_name": "Juan",
+          "family_name": "Dela Cruz"
+        }
+      }
+    }
+  ]
+}

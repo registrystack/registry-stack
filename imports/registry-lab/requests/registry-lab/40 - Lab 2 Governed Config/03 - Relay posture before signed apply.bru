@@ -1,0 +1,29 @@
+meta {
+  name: 03 - Relay posture before signed apply
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{lab2_civil_relay_admin_url}}/admin/v1/posture?tier=restricted
+  body: none
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{CIVIL_RELAY_OPS_RAW}}
+}
+
+script:post-response {
+  const body = res.getBody();
+
+  test("status is 200", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("governed config is loaded but no apply has happened yet", function () {
+    expect(body).to.have.nested.property("configuration.source");
+    expect(body).to.have.nested.property("configuration.last_apply_result", null);
+    expect(body.configuration).to.have.property("last_config_hash");
+  });
+}
