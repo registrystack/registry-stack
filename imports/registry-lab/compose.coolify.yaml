@@ -294,9 +294,9 @@ services:
       context: .
       dockerfile: Dockerfile.static-metadata
       args:
-        REGISTRY_MANIFEST_REF: 52da5e913d8652e98ce8e443102c5d23b1a0974f
-        REGISTRY_PLATFORM_REF: 88d1a798043673dac30d809d87badb083c6e1a26
-        REGISTRY_RELAY_REF: cfb1b735c6a2b3a50f5204e49660a859ceabb87d
+        REGISTRY_MANIFEST_REF: 431ebef0cb3f8bfe1c7bcf7f10ae790326a64403
+        REGISTRY_PLATFORM_REF: c7a8c458c0a939eecc309fed1d35d5e32126927b
+        REGISTRY_RELAY_REF: 917e8064b62b8f86f35425a61fe66d3a4b5db921
     restart: unless-stopped
     expose:
       - "8080"
