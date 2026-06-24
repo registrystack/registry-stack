@@ -9,6 +9,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+async-trait.workspace = true
 axum.workspace = true
 chrono = { version = "0.4" }
 clap.workspace = true
@@ -19,6 +20,7 @@ reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_norway.workspace = true
+registry-notary-source-adapter-rhai = { version = "0.6.2", path = "../registry-notary-source-adapter-rhai" }
 registry-platform-authcommon.workspace = true
 registry-platform-audit.workspace = true
 registry-platform-config.workspace = true

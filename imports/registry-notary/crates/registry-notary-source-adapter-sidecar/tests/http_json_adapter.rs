@@ -700,6 +700,27 @@ async fn http_json_harness() -> HttpJsonHarness {
 }
 
 #[tokio::test]
+async fn http_json_malformed_header_name_is_rejected_at_startup() {
+    let _env_guard = ENV_LOCK.lock().await;
+    // `/` is not a legal HTTP header-name token. The shared header validator must
+    // reject it at config validation rather than letting reqwest fail when the
+    // request is built (which would surface only at smoke or first use).
+    let url = "http://127.0.0.1:9";
+    set_sidecar_env(url);
+    let manifest = http_json_manifest_with_method(url, "GET", "/people", 4096)
+        .replace("x-client-id:", "bad/header:");
+    let config: SidecarConfig =
+        serde_norway::from_str(&manifest).expect("manifest parses; the rejection is at validation");
+    let error = sidecar_router(config)
+        .await
+        .expect_err("a non-token http_json header name must be rejected at startup");
+    assert!(
+        error.to_string().contains("contains an invalid name"),
+        "got: {error}"
+    );
+}
+
+#[tokio::test]
 async fn http_json_lookup_returns_projected_rda_data_without_worker() {
     let harness = http_json_harness().await;
 

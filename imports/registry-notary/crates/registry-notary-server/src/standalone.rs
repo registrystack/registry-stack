@@ -9708,6 +9708,159 @@ config_trust:
         );
     }
 
+    /// Mock upstream for the `script_rhai` sidecar. Returns a bare JSON array
+    /// record (the script forwards `source.get(...).body` verbatim and the
+    /// sidecar wraps it as `{ "data": [...] }`). Answers both the notary's lookup
+    /// value (`person-123`) and the startup-smoke value (`smoke-person`); any
+    /// other id yields an empty array. No auth is enforced (the target omits
+    /// auth), so the script needs no credential.
+    async fn rhai_lookup_handler(Query(query): Query<HashMap<String, String>>) -> Response {
+        let id = query.get("id").cloned().unwrap_or_default();
+        let records = match id.as_str() {
+            "person-123" | "smoke-person" => json!([
+                {
+                    "national_id": id,
+                    "birth_date": "1990-01-01",
+                    "ignored_extra": "notary must not depend on this"
+                }
+            ]),
+            _ => json!([]),
+        };
+        Json(records).into_response()
+    }
+
+    fn script_rhai_sidecar_test_manifest(upstream_url: &str) -> String {
+        std::env::set_var(
+            SOURCE_ADAPTER_SIDECAR_TOKEN_HASH_ENV,
+            SOURCE_ADAPTER_SIDECAR_TOKEN_HASH,
+        );
+        format!(
+            r#"
+server:
+  bind: "127.0.0.1:0"
+auth:
+  bearer_tokens:
+    - id: notary
+      hash_env: "{SOURCE_ADAPTER_SIDECAR_TOKEN_HASH_ENV}"
+limits:
+  max_workers: 2
+  worker_timeout_ms: 500
+  max_output_bytes: 4096
+  max_request_bytes: 2048
+  max_query_parameter_bytes: 128
+  liveness_window_ms: 30000
+  max_batch_items: 100
+  max_worker_memory_mb: 256
+sources:
+  source_adapter_crvs:
+    engine: script_rhai
+    dataset: civil_registry
+    entity: civil_person
+    allowed_base_urls:
+      - "{upstream_url}"
+    allow_insecure_localhost: true
+    rhai:
+      script: |
+        fn lookup(ctx) {{
+          source.get("primary", "/lookup", #{{ id: ctx.lookup.value }}).body
+        }}
+      targets:
+        primary:
+          base_url: "{upstream_url}"
+    smoke_lookup:
+      field: national_id
+      value: smoke-person
+      fields:
+        - national_id
+      purpose: startup-smoke
+"#
+        )
+    }
+
+    fn script_rhai_sidecar_test_config(upstream_url: &str) -> SidecarConfig {
+        serde_norway::from_str(&script_rhai_sidecar_test_manifest(upstream_url))
+            .expect("script_rhai sidecar test config parses")
+    }
+
+    /// End-to-end twin of `http_json_sidecar_rda_facade_can_source_single_item_attestation`,
+    /// swapping only the sidecar engine to `script_rhai`. The notary connector
+    /// (`source_adapter_sidecar`) and its spike config are identical: the
+    /// protocol between notary and sidecar is engine-agnostic.
+    #[tokio::test]
+    async fn script_rhai_sidecar_rda_facade_can_source_single_item_attestation() {
+        let _env_guard = HTTP_JSON_SIDECAR_ENV_LOCK.lock().await;
+        std::env::set_var(
+            SOURCE_ADAPTER_SIDECAR_TOKEN_ENV,
+            SOURCE_ADAPTER_SIDECAR_TOKEN,
+        );
+        let upstream = TestServer::builder()
+            .http_transport()
+            .build(Router::new().route("/lookup", get(rhai_lookup_handler)));
+        let upstream_url = upstream
+            .server_address()
+            .expect("HTTP transport exposes upstream address")
+            .to_string()
+            .trim_end_matches('/')
+            .to_string();
+        let sidecar = sidecar_router(script_rhai_sidecar_test_config(&upstream_url))
+            .await
+            .expect("script_rhai sidecar router builds and passes startup smoke");
+        let server = TestServer::builder().http_transport().build(sidecar);
+        let evidence = Arc::new(source_adapter_sidecar_spike_config(
+            server
+                .server_address()
+                .expect("HTTP transport exposes sidecar address")
+                .as_str(),
+        ));
+        let source = Arc::new(
+            HttpEvidenceSources::from_config(&evidence, Arc::new(AppMetrics::default()))
+                .expect("source config"),
+        );
+        let principal = EvidencePrincipal {
+            principal_id: "caseworker".to_string(),
+            scopes: vec!["civil_registry:evidence_verification".to_string()],
+            access_mode: AccessMode::MachineClient,
+            verified_claims: None,
+            authorization_details: None,
+        };
+
+        let results = crate::RegistryNotaryRuntime::new()
+            .evaluate(
+                Arc::clone(&evidence),
+                source,
+                &EvidenceStore::default(),
+                &principal,
+                EvaluateRequest {
+                    requester: None,
+                    target: Some(registry_notary_core::EvidenceEntity::from_subject_request(
+                        "Person",
+                        SubjectRequest {
+                            id: "person-123".to_string(),
+                            id_type: None,
+                        },
+                    )),
+                    relationship: None,
+                    on_behalf_of: None,
+                    claims: vec![registry_notary_core::ClaimRef::from("date-of-birth")],
+                    disclosure: Some("value".to_string()),
+                    format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
+                    purpose: Some(SOURCE_ADAPTER_SPIKE_PURPOSE.to_string()),
+                },
+                None,
+            )
+            .await
+            .expect("script_rhai sidecar facade sources the claim");
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].claim_id, "date-of-birth");
+        assert_eq!(results[0].value, Some(json!("1990-01-01")));
+        assert_eq!(results[0].provenance.used.source_count, 1);
+        assert!(
+            results[0].provenance.used.source_runtimes.is_empty(),
+            "unsigned local sidecar has no pinned runtime summary"
+        );
+    }
+
     #[tokio::test]
     async fn governed_http_json_sidecar_e2e_notary_pins_assurance_and_evaluates() {
         let _env_guard = HTTP_JSON_SIDECAR_ENV_LOCK.lock().await;
@@ -9808,6 +9961,144 @@ config_trust:
             )
             .await
             .expect("governed http_json sidecar sources the claim");
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].claim_id, "date-of-birth");
+        assert_eq!(results[0].value, Some(json!("1990-01-01")));
+        assert_eq!(
+            source
+                .observed_sidecar_config_hashes(&evidence, &["date-of-birth".to_string()])
+                .await,
+            vec![repo.config_hash.clone()]
+        );
+        let runtimes = &results[0].provenance.used.source_runtimes;
+        assert_eq!(runtimes.len(), 1, "one sidecar runtime summary expected");
+        assert_eq!(runtimes[0].kind, SOURCE_RUNTIME_KIND_SOURCE_ADAPTER_SIDECAR);
+        assert_eq!(runtimes[0].config_hash, repo.config_hash);
+        assert!(runtimes[0].assurance.pinned);
+        assert!(runtimes[0].assurance.expression_hashes_verified);
+        assert!(runtimes[0].assurance.runtime_verified);
+        assert!(runtimes[0].assurance.smoke_verified);
+    }
+
+    /// Governed-assurance twin of
+    /// `governed_http_json_sidecar_e2e_notary_pins_assurance_and_evaluates`, but
+    /// for the `script_rhai` engine. The notary<->sidecar assurance protocol is
+    /// engine-agnostic (the notary never sees the engine), so only the sidecar
+    /// manifest/upstream differ: this reuses the existing `script_rhai`
+    /// manifest/config (`script_rhai_sidecar_test_manifest` /
+    /// `script_rhai_sidecar_test_config`) and its mock upstream
+    /// (`rhai_lookup_handler`), then drives the SAME governed evaluation path and
+    /// asserts the SAME pinned-assurance contract: config_hash pinning plus the
+    /// `expression_hashes_verified` / `runtime_verified` / `smoke_verified`
+    /// booleans, with the claim resolving to the expected value. All sidecar env
+    /// mutations are serialized behind the shared `HTTP_JSON_SIDECAR_ENV_LOCK`,
+    /// exactly as the template does, so no two sidecar tests race on process env.
+    #[tokio::test]
+    async fn governed_script_rhai_sidecar_e2e_notary_pins_assurance_and_evaluates() {
+        let _env_guard = HTTP_JSON_SIDECAR_ENV_LOCK.lock().await;
+        std::env::set_var(
+            SOURCE_ADAPTER_SIDECAR_TOKEN_ENV,
+            SOURCE_ADAPTER_SIDECAR_TOKEN,
+        );
+        std::env::set_var(
+            TEST_AUDIT_HASH_SECRET_ENV,
+            "registry-notary-sidecar-test-audit-secret-32-bytes-minimum",
+        );
+        let upstream = TestServer::builder()
+            .http_transport()
+            .build(Router::new().route("/lookup", get(rhai_lookup_handler)));
+        let upstream_url = upstream
+            .server_address()
+            .expect("HTTP transport exposes upstream address")
+            .to_string()
+            .trim_end_matches('/')
+            .to_string();
+        let manifest = script_rhai_sidecar_test_manifest(&upstream_url);
+        let target_bytes = render_governed_runtime_target_json(&manifest)
+            .expect("governed script_rhai target renders");
+        let target_json: Value =
+            serde_json::from_slice(&target_bytes).expect("target is valid JSON");
+        // Ungoverned runtime fields are not part of the governed target shape:
+        // `worker`/`jobs_root` are not even fields of `GovernedRuntimeTarget`.
+        assert!(target_json["worker"].is_null());
+        assert!(target_json["jobs_root"].is_null());
+        // Unlike the http_json manifest, the script_rhai manifest pins
+        // `limits.max_worker_memory_mb` (a governed `LimitConfig` field), so the
+        // rendered target carries it through verbatim.
+        assert_eq!(target_json["limits"]["max_worker_memory_mb"], json!(256));
+
+        let previous_config_hash =
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+        let repo =
+            signed_source_adapter_runtime_repo(&target_bytes, 13, previous_config_hash).await;
+        initialize_source_adapter_antirollback(&repo, previous_config_hash, 12);
+        let bootstrap = source_adapter_governed_bootstrap_yaml(&repo);
+        let sidecar_config = load_source_adapter_sidecar_startup_config(&bootstrap)
+            .await
+            .expect("governed script_rhai sidecar startup config loads");
+        let sidecar = sidecar_router(sidecar_config)
+            .await
+            .expect("governed script_rhai sidecar starts and passes startup smoke");
+        let server = TestServer::builder().http_transport().build(sidecar);
+
+        let ready = server.get("/ready").await;
+        ready.assert_status_ok();
+        let ready_body: Value = ready.json();
+        assert_eq!(ready_body["status"], "ready");
+        assert_eq!(ready_body["config_hash"], repo.config_hash);
+
+        let mut evidence = source_adapter_sidecar_spike_config(
+            server
+                .server_address()
+                .expect("HTTP transport exposes sidecar address")
+                .as_str(),
+        );
+        evidence
+            .source_connections
+            .get_mut("source_adapter_crvs")
+            .expect("connection exists")
+            .expected_sidecar = Some(expected_source_adapter_sidecar(&repo.config_hash));
+        let evidence = Arc::new(evidence);
+        let source = Arc::new(
+            HttpEvidenceSources::from_config(&evidence, Arc::new(AppMetrics::default()))
+                .expect("source config"),
+        );
+        assert!(source.check_ready().await);
+        let principal = EvidencePrincipal {
+            principal_id: "caseworker".to_string(),
+            scopes: vec!["civil_registry:evidence_verification".to_string()],
+            access_mode: AccessMode::MachineClient,
+            verified_claims: None,
+            authorization_details: None,
+        };
+
+        let results = crate::RegistryNotaryRuntime::new()
+            .evaluate(
+                Arc::clone(&evidence),
+                source.clone(),
+                &EvidenceStore::default(),
+                &principal,
+                EvaluateRequest {
+                    requester: None,
+                    target: Some(registry_notary_core::EvidenceEntity::from_subject_request(
+                        "Person",
+                        SubjectRequest {
+                            id: "person-123".to_string(),
+                            id_type: None,
+                        },
+                    )),
+                    relationship: None,
+                    on_behalf_of: None,
+                    claims: vec![registry_notary_core::ClaimRef::from("date-of-birth")],
+                    disclosure: Some("value".to_string()),
+                    format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
+                    purpose: Some(SOURCE_ADAPTER_SPIKE_PURPOSE.to_string()),
+                },
+                None,
+            )
+            .await
+            .expect("governed script_rhai sidecar sources the claim");
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].claim_id, "date-of-birth");

@@ -14,6 +14,10 @@ use hyper_util::{
     rt::{TokioExecutor, TokioIo, TokioTimer},
     server::conn::auto::Builder as HyperBuilder,
 };
+use registry_notary_source_adapter_rhai::{
+    Lookup, RhaiLimits, RhaiPolicy, ScriptCtx, ScriptEngine, ScriptSourceHost, SourceResponse,
+    SourceScriptError,
+};
 use registry_platform_audit::{AuditProfile, ChainState, JsonlFileSink};
 use registry_platform_authcommon::{parse_bearer_token, parse_fingerprint, verify_api_key};
 use registry_platform_config::{
@@ -209,6 +213,8 @@ pub struct SourceConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fhir: Option<FhirSourceConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rhai: Option<RhaiScriptConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache: Option<SourceCacheConfig>,
     #[serde(default)]
     pub smoke_lookup: Option<SmokeLookupConfig>,
@@ -221,6 +227,7 @@ pub enum SourceEngine {
     HttpJson,
     HttpFlow,
     Fhir,
+    ScriptRhai,
 }
 
 impl SourceEngine {
@@ -229,6 +236,7 @@ impl SourceEngine {
             SourceEngine::HttpJson => "http_json",
             SourceEngine::HttpFlow => "http_flow",
             SourceEngine::Fhir => "fhir",
+            SourceEngine::ScriptRhai => "script_rhai",
         }
     }
 }
@@ -307,6 +315,172 @@ pub struct FhirProjectionConfig {
     pub pointer: String,
     #[serde(default, rename = "default", skip_serializing_if = "Option::is_none")]
     pub default_value: Option<Value>,
+}
+
+/// Configuration for the `script_rhai` engine: an inline sandboxed Rhai script
+/// plus the set of named upstream targets it may reach. The script resolves a
+/// lookup by calling `source.get(target, path, query)` against these targets;
+/// all outbound machinery (allow-listing, SSRF policy, auth, rate limiting) is
+/// reused from the `http_json` path and never exposed to the script.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RhaiScriptConfig {
+    /// Inline Rhai source (v1: inline only).
+    pub script: String,
+    /// The entrypoint function name. Defaults to `lookup`.
+    #[serde(default = "default_rhai_entrypoint")]
+    pub entrypoint: String,
+    /// Sandbox resource/budget limits mapped to the engine policy.
+    #[serde(default, skip_serializing_if = "RhaiLimitsConfig::is_default")]
+    pub limits: RhaiLimitsConfig,
+    /// The named upstream targets the script may select. Must be non-empty.
+    pub targets: BTreeMap<String, RhaiTargetConfig>,
+}
+
+/// A single named upstream target a `script_rhai` script may call. The
+/// `base_url` must appear in the source's `allowed_base_urls`; auth reuses the
+/// `http_json` credential machinery.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RhaiTargetConfig {
+    pub base_url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<HttpJsonAuthConfig>,
+    /// Static request headers added to every call to this target (e.g. `Accept`
+    /// or a vendor API-version header). Values are non-secret config and flow
+    /// through the governed `config_hash`. Restricted headers (auth, cookie,
+    /// host, hop-by-hop, forwarding) are rejected at validation; credentials
+    /// belong in `auth`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub headers: BTreeMap<String, String>,
+    /// Non-2xx statuses this target's responses the script is allowed to
+    /// observe (rather than terminating the run). Per-target; the engine is
+    /// compiled with the union across all targets and the per-target gate is
+    /// applied in the host.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub visible_statuses: Vec<u16>,
+}
+
+/// Sandbox limits for a `script_rhai` source. Every field defaults to the
+/// matching value from the rhai engine's `RhaiPolicy::default()` /
+/// `RhaiLimits::default()`, so an omitted `limits` block yields the engine's
+/// own defaults. `max_modules` is always `0` (module loading is forbidden) and
+/// is therefore not configurable here.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RhaiLimitsConfig {
+    #[serde(default = "default_rhai_timeout_ms")]
+    pub timeout_ms: u64,
+    #[serde(default = "default_rhai_max_http_calls")]
+    pub max_http_calls: u32,
+    #[serde(default = "default_rhai_max_output_bytes")]
+    pub max_output_bytes: usize,
+    #[serde(default = "default_rhai_max_concurrent")]
+    pub max_concurrent: usize,
+    #[serde(default = "default_rhai_max_operations")]
+    pub max_operations: u64,
+    #[serde(default = "default_rhai_max_call_levels")]
+    pub max_call_levels: usize,
+    #[serde(default = "default_rhai_max_string_bytes")]
+    pub max_string_bytes: usize,
+    #[serde(default = "default_rhai_max_array_items")]
+    pub max_array_items: usize,
+    #[serde(default = "default_rhai_max_map_entries")]
+    pub max_map_entries: usize,
+}
+
+impl Default for RhaiLimitsConfig {
+    fn default() -> Self {
+        let policy = RhaiPolicy::default();
+        let limits = RhaiLimits::default();
+        Self {
+            timeout_ms: policy.timeout.as_millis() as u64,
+            max_http_calls: policy.max_http_calls,
+            max_output_bytes: policy.max_output_bytes,
+            max_concurrent: policy.max_concurrent,
+            max_operations: limits.max_operations,
+            max_call_levels: limits.max_call_levels,
+            max_string_bytes: limits.max_string_bytes,
+            max_array_items: limits.max_array_items,
+            max_map_entries: limits.max_map_entries,
+        }
+    }
+}
+
+impl RhaiLimitsConfig {
+    fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+
+    /// Build the engine policy from these limits. `visible_statuses` is the
+    /// union of every target's observable statuses; `max_modules` is always 0.
+    fn to_policy(&self, visible_statuses: BTreeSet<u16>) -> RhaiPolicy {
+        RhaiPolicy {
+            limits: RhaiLimits {
+                max_operations: self.max_operations,
+                max_call_levels: self.max_call_levels,
+                max_string_bytes: self.max_string_bytes,
+                max_array_items: self.max_array_items,
+                max_map_entries: self.max_map_entries,
+                max_modules: 0,
+            },
+            timeout: Duration::from_millis(self.timeout_ms),
+            max_http_calls: self.max_http_calls,
+            max_output_bytes: self.max_output_bytes,
+            max_concurrent: self.max_concurrent,
+            visible_statuses,
+        }
+    }
+}
+
+fn default_rhai_entrypoint() -> String {
+    "lookup".into()
+}
+
+fn default_rhai_timeout_ms() -> u64 {
+    RhaiPolicy::default().timeout.as_millis() as u64
+}
+
+fn default_rhai_max_http_calls() -> u32 {
+    RhaiPolicy::default().max_http_calls
+}
+
+fn default_rhai_max_output_bytes() -> usize {
+    RhaiPolicy::default().max_output_bytes
+}
+
+fn default_rhai_max_concurrent() -> usize {
+    RhaiPolicy::default().max_concurrent
+}
+
+fn default_rhai_max_operations() -> u64 {
+    RhaiLimits::default().max_operations
+}
+
+fn default_rhai_max_call_levels() -> usize {
+    RhaiLimits::default().max_call_levels
+}
+
+fn default_rhai_max_string_bytes() -> usize {
+    RhaiLimits::default().max_string_bytes
+}
+
+fn default_rhai_max_array_items() -> usize {
+    RhaiLimits::default().max_array_items
+}
+
+fn default_rhai_max_map_entries() -> usize {
+    RhaiLimits::default().max_map_entries
+}
+
+/// The union of every target's `visible_statuses`, used to compile the engine
+/// so it surfaces any status some target allows. Per-target gating is then
+/// applied in the host (see `execute_rhai`).
+fn rhai_union_visible_statuses(rhai: &RhaiScriptConfig) -> BTreeSet<u16> {
+    rhai.targets
+        .values()
+        .flat_map(|target| target.visible_statuses.iter().copied())
+        .collect()
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -393,12 +567,24 @@ pub struct HttpJsonCelExpression {
 pub struct HttpJsonAuthConfig {
     #[serde(rename = "type")]
     pub kind: HttpJsonAuthKind,
+    /// The secret credential field used as the bearer token (`bearer`) or the
+    /// API-key value (`api_key_header` / `api_key_query`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token: Option<HttpJsonSecretRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub username: Option<HttpJsonSecretRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub password: Option<HttpJsonSecretRef>,
+    /// Header name carrying the API key for `api_key_header` (e.g. `X-API-Key`).
+    /// The value is the resolved `token` secret. Restricted headers (auth,
+    /// cookie, host, hop-by-hop, forwarding) are rejected at validation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header: Option<String>,
+    /// Query-parameter name carrying the API key for `api_key_query` (e.g.
+    /// `api_key`). The value is the resolved `token` secret; it is appended to
+    /// the request URL by the host and is never logged or used in cache keys.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query_param: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -406,6 +592,10 @@ pub struct HttpJsonAuthConfig {
 pub enum HttpJsonAuthKind {
     Bearer,
     Basic,
+    /// Send the `token` secret in a configured request header (`header`).
+    ApiKeyHeader,
+    /// Send the `token` secret in a configured query parameter (`query_param`).
+    ApiKeyQuery,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -604,6 +794,10 @@ struct AppState {
     source_limiters: Arc<BTreeMap<String, Arc<Semaphore>>>,
     source_runtime: Arc<BTreeMap<String, Arc<SourceRuntimeState>>>,
     http_json_clients: Arc<Mutex<BTreeMap<String, reqwest::Client>>>,
+    /// Compiled `script_rhai` engines, keyed by `source_id`. Each script is
+    /// compiled once at startup and reused for every request; a compile failure
+    /// is a configuration error that fails startup.
+    rhai_engines: Arc<BTreeMap<String, Arc<ScriptEngine>>>,
     metrics: Arc<Mutex<BTreeMap<MetricKey, MetricValue>>>,
     audit: Option<Arc<SidecarAuditPipeline>>,
 }
@@ -1222,6 +1416,17 @@ fn materialize_governed_config(
         timestamp_version: tuf.timestamp_version,
         change_classes: metadata.change_classes.clone(),
         signer_kids: tuf.signer_kids.clone(),
+        // These three booleans attest the *whole-target* `config_hash` that TUF
+        // has just verified -- reaching this function requires a
+        // `TufVerifiedTarget`. That hash covers the inline governed content
+        // directly: the http_json CEL expressions, the script_rhai script, and
+        // the runtime policy. It is therefore the real content anchor; there is
+        // no separate per-expression hash ledger to verify independently. They
+        // are reported `true` here because the matching runtime compile and
+        // startup smoke are enforced downstream in `sidecar_router` (config
+        // validation compiles every expression/script, and `run_smoke_lookups`
+        // exercises the live path) -- a failure there blocks readiness, so any
+        // sidecar actually serving these values has satisfied all three.
         expression_hashes_verified: true,
         runtime_verified: true,
         smoke_verified: true,
@@ -1345,6 +1550,7 @@ pub async fn sidecar_router(config: SidecarConfig) -> Result<Router, SidecarErro
             SourceRuntimeState::new(source).map(|runtime| (source_id.clone(), Arc::new(runtime)))
         })
         .collect::<Result<BTreeMap<_, _>, _>>()?;
+    let rhai_engines = compile_rhai_engines(&config)?;
     let state = Arc::new(AppState {
         config: Arc::new(config),
         auth_tokens: Arc::new(auth_tokens),
@@ -1353,6 +1559,7 @@ pub async fn sidecar_router(config: SidecarConfig) -> Result<Router, SidecarErro
         source_limiters: Arc::new(source_limiters),
         source_runtime: Arc::new(source_runtime),
         http_json_clients: Arc::new(Mutex::new(BTreeMap::new())),
+        rhai_engines: Arc::new(rhai_engines),
         metrics: Arc::new(Mutex::new(BTreeMap::new())),
         audit: audit.map(Arc::new),
     });
@@ -1701,6 +1908,7 @@ fn validate_source_execution(source_id: &str, source: &SourceConfig) -> Result<(
         SourceEngine::HttpJson => validate_http_json_source(source_id, source),
         SourceEngine::HttpFlow => validate_http_flow_source(source_id, source),
         SourceEngine::Fhir => validate_fhir_source(source_id, source),
+        SourceEngine::ScriptRhai => validate_rhai_source(source_id, source),
     }
 }
 
@@ -1797,27 +2005,7 @@ fn validate_http_json_source(source_id: &str, source: &SourceConfig) -> Result<(
         )?;
     }
     if let Some(auth) = &http_json.auth {
-        match auth.kind {
-            HttpJsonAuthKind::Bearer => {
-                validate_http_json_secret_ref(
-                    source_id,
-                    "http_json.auth.token.secret",
-                    auth.token.as_ref(),
-                )?;
-            }
-            HttpJsonAuthKind::Basic => {
-                validate_http_json_secret_ref(
-                    source_id,
-                    "http_json.auth.username.secret",
-                    auth.username.as_ref(),
-                )?;
-                validate_http_json_secret_ref(
-                    source_id,
-                    "http_json.auth.password.secret",
-                    auth.password.as_ref(),
-                )?;
-            }
-        }
+        validate_http_json_auth_config(source_id, "http_json.auth", auth)?;
     }
     Ok(())
 }
@@ -1970,27 +2158,11 @@ fn validate_http_flow_source(source_id: &str, source: &SourceConfig) -> Result<(
             }
         }
         if let Some(auth) = &step.request.auth {
-            match auth.kind {
-                HttpJsonAuthKind::Bearer => {
-                    validate_http_json_secret_ref(
-                        source_id,
-                        &format!("http_flow.steps.{}.request.auth.token.secret", step.id),
-                        auth.token.as_ref(),
-                    )?;
-                }
-                HttpJsonAuthKind::Basic => {
-                    validate_http_json_secret_ref(
-                        source_id,
-                        &format!("http_flow.steps.{}.request.auth.username.secret", step.id),
-                        auth.username.as_ref(),
-                    )?;
-                    validate_http_json_secret_ref(
-                        source_id,
-                        &format!("http_flow.steps.{}.request.auth.password.secret", step.id),
-                        auth.password.as_ref(),
-                    )?;
-                }
-            }
+            validate_http_json_auth_config(
+                source_id,
+                &format!("http_flow.steps.{}.request.auth", step.id),
+                auth,
+            )?;
         }
     }
     Ok(())
@@ -2110,6 +2282,109 @@ fn validate_fhir_source(source_id: &str, source: &SourceConfig) -> Result<(), Si
             }
         }
     }
+    Ok(())
+}
+
+fn validate_rhai_source(source_id: &str, source: &SourceConfig) -> Result<(), SidecarError> {
+    if source.http_json.is_some() {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} http_json config is not valid when engine is script_rhai"
+        )));
+    }
+    if source.http_flow.is_some() {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} http_flow config is not valid when engine is script_rhai"
+        )));
+    }
+    if source.fhir.is_some() {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} fhir config is not valid when engine is script_rhai"
+        )));
+    }
+    if matches!(
+        source.batch.mode,
+        SourceBatchMode::WorkflowBatch | SourceBatchMode::NativeBatch
+    ) {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} batch.mode is not supported for script_rhai sources"
+        )));
+    }
+    if source.batch.mode != SourceBatchMode::ParallelLookup && source.batch.max_parallel.is_some() {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} batch.max_parallel requires batch.mode parallel_lookup"
+        )));
+    }
+    if source.allowed_base_urls.is_empty() {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} allowed_base_urls is required for script_rhai"
+        )));
+    }
+    let rhai = source.rhai.as_ref().ok_or_else(|| {
+        SidecarError::Config(format!(
+            "source {source_id} engine script_rhai requires a rhai config"
+        ))
+    })?;
+    if rhai.targets.is_empty() {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} rhai.targets must not be empty"
+        )));
+    }
+    let mut requires_credential = false;
+    for (target_id, target) in &rhai.targets {
+        let base = reqwest::Url::parse(&target.base_url).map_err(|_| {
+            SidecarError::Config(format!(
+                "source {source_id} rhai.targets.{target_id}.base_url must be a URL"
+            ))
+        })?;
+        ensure_allowed_base_url(source_id, source, &base).map_err(|_| {
+            SidecarError::Config(format!(
+                "source {source_id} rhai.targets.{target_id}.base_url is not in allowed_base_urls"
+            ))
+        })?;
+        for status in &target.visible_statuses {
+            if !(100..=599).contains(status) {
+                return Err(SidecarError::Config(format!(
+                    "source {source_id} rhai.targets.{target_id}.visible_statuses contains an invalid HTTP status {status}"
+                )));
+            }
+        }
+        for (name, value) in &target.headers {
+            validate_http_request_header_name(
+                source_id,
+                &format!("rhai.targets.{target_id}.headers.{name}"),
+                name,
+            )?;
+            if !is_valid_http_header_value(value) {
+                return Err(SidecarError::Config(format!(
+                    "source {source_id} rhai.targets.{target_id}.headers.{name} has an invalid value"
+                )));
+            }
+        }
+        if let Some(auth) = &target.auth {
+            requires_credential = true;
+            validate_http_json_auth_config(
+                source_id,
+                &format!("rhai.targets.{target_id}.auth"),
+                auth,
+            )?;
+        }
+    }
+    // A credential env is only required when at least one target authenticates;
+    // an unauthenticated script_rhai source may omit it entirely.
+    if requires_credential && source.credential_env.trim().is_empty() {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} credential_env is required when a rhai target configures auth"
+        )));
+    }
+    // The script must compile under the same union policy used at runtime. This
+    // validates the entrypoint's existence and the policy bounds up front. The
+    // rhai error's Display is non-sensitive (no script source) and is surfaced.
+    let policy = rhai.limits.to_policy(rhai_union_visible_statuses(rhai));
+    ScriptEngine::compile(&rhai.script, &rhai.entrypoint, &policy).map_err(|error| {
+        SidecarError::Config(format!(
+            "source {source_id} rhai script failed to compile: {error}"
+        ))
+    })?;
     Ok(())
 }
 
@@ -2320,6 +2595,132 @@ fn validate_http_json_secret_ref(
     Ok(())
 }
 
+/// Validate a shared `HttpJsonAuthConfig` for any engine (`http_json`,
+/// `http_flow`, or a `script_rhai` target). `label_prefix` is the config path up
+/// to and including `.auth`. Every kind names its secret via a top-level
+/// credential field; `api_key_*` additionally require a valid, non-restricted
+/// header name or query-parameter name. The secret value itself is resolved
+/// from the credential env at request time and never appears in config.
+fn validate_http_json_auth_config(
+    source_id: &str,
+    label_prefix: &str,
+    auth: &HttpJsonAuthConfig,
+) -> Result<(), SidecarError> {
+    match auth.kind {
+        HttpJsonAuthKind::Bearer => {
+            validate_http_json_secret_ref(
+                source_id,
+                &format!("{label_prefix}.token.secret"),
+                auth.token.as_ref(),
+            )?;
+        }
+        HttpJsonAuthKind::Basic => {
+            validate_http_json_secret_ref(
+                source_id,
+                &format!("{label_prefix}.username.secret"),
+                auth.username.as_ref(),
+            )?;
+            validate_http_json_secret_ref(
+                source_id,
+                &format!("{label_prefix}.password.secret"),
+                auth.password.as_ref(),
+            )?;
+        }
+        HttpJsonAuthKind::ApiKeyHeader => {
+            validate_http_json_secret_ref(
+                source_id,
+                &format!("{label_prefix}.token.secret"),
+                auth.token.as_ref(),
+            )?;
+            let Some(header) = auth.header.as_deref() else {
+                return Err(SidecarError::Config(format!(
+                    "source {source_id} {label_prefix}.header is required when type is api_key_header"
+                )));
+            };
+            validate_http_request_header_name(
+                source_id,
+                &format!("{label_prefix}.header"),
+                header,
+            )?;
+        }
+        HttpJsonAuthKind::ApiKeyQuery => {
+            validate_http_json_secret_ref(
+                source_id,
+                &format!("{label_prefix}.token.secret"),
+                auth.token.as_ref(),
+            )?;
+            let Some(param) = auth.query_param.as_deref() else {
+                return Err(SidecarError::Config(format!(
+                    "source {source_id} {label_prefix}.query_param is required when type is api_key_query"
+                )));
+            };
+            if !is_valid_http_param_name(param) {
+                return Err(SidecarError::Config(format!(
+                    "source {source_id} {label_prefix}.query_param is not a valid query parameter name"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// HTTP request headers a target/source must not set directly: authentication
+/// (use `auth`), cookies, host/length framing, hop-by-hop headers, and
+/// forwarding headers. Comparison is case-insensitive; the `proxy-` prefix is
+/// blanket-denied.
+fn is_restricted_request_header(name: &str) -> bool {
+    let lower = name.trim().to_ascii_lowercase();
+    if lower.starts_with("proxy-") {
+        return true;
+    }
+    matches!(
+        lower.as_str(),
+        "authorization"
+            | "cookie"
+            | "host"
+            | "content-length"
+            | "connection"
+            | "transfer-encoding"
+            | "te"
+            | "trailer"
+            | "upgrade"
+            | "keep-alive"
+            | "forwarded"
+            | "x-forwarded-for"
+            | "x-forwarded-host"
+            | "x-forwarded-proto"
+    )
+}
+
+/// Validate an operator-configured static request-header name: it must be a
+/// legal header name and must not be one of the restricted headers.
+fn validate_http_request_header_name(
+    source_id: &str,
+    label: &str,
+    name: &str,
+) -> Result<(), SidecarError> {
+    if !is_valid_http_header_name(name) {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} {label} is not a valid HTTP header name"
+        )));
+    }
+    if is_restricted_request_header(name) {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} {label} sets a restricted header (auth, cookie, host, hop-by-hop, and forwarding headers are not allowed)"
+        )));
+    }
+    Ok(())
+}
+
+/// A static request-header value is valid if it carries no CR/LF/NUL or other
+/// ASCII control bytes (tab is permitted), preventing header injection. The
+/// value is operator config, not a secret.
+fn is_valid_http_header_value(value: &str) -> bool {
+    !value
+        .bytes()
+        .any(|byte| byte.is_ascii_control() && byte != b'\t')
+}
+
 fn validate_http_json_cel(
     source_id: &str,
     label: &str,
@@ -2333,16 +2734,41 @@ fn validate_http_json_cel(
     Ok(())
 }
 
+/// Whether `name` is a valid HTTP header / query-parameter name: non-empty and
+/// free of ASCII control characters and whitespace. Shared by the config-time
+/// validator and the runtime `script_rhai` query-name guard so both engines
+/// enforce the same invariant rather than relying solely on the client's URL
+/// encoder.
+fn is_valid_http_param_name(name: &str) -> bool {
+    !name.trim().is_empty()
+        && !name
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || matches!(byte, b' ' | b'\t' | b'\r' | b'\n'))
+}
+
+/// Whether `name` is a valid HTTP header name (an RFC 7230 token). This is
+/// stricter than `is_valid_http_param_name`: `reqwest` rejects a non-token
+/// header name when it builds the request, so checking it here turns what would
+/// otherwise be a smoke-time or first-request failure into a config error that
+/// blocks readiness. Query-parameter names keep the looser predicate because the
+/// client percent-encodes them.
+fn is_valid_http_header_name(name: &str) -> bool {
+    reqwest::header::HeaderName::from_bytes(name.as_bytes()).is_ok()
+}
+
 fn validate_http_header_or_query_name(
     source_id: &str,
     section: &str,
     name: &str,
 ) -> Result<(), SidecarError> {
-    if name.trim().is_empty()
-        || name
-            .bytes()
-            .any(|byte| byte.is_ascii_control() || matches!(byte, b' ' | b'\t' | b'\r' | b'\n'))
-    {
+    // Header names must be valid HTTP tokens; query-parameter names use the
+    // looser control/whitespace check (the client percent-encodes them).
+    let valid = if section == "headers" {
+        is_valid_http_header_name(name)
+    } else {
+        is_valid_http_param_name(name)
+    };
+    if !valid {
         return Err(SidecarError::Config(format!(
             "source {source_id} http_json.{section} contains an invalid name"
         )));
@@ -2412,7 +2838,425 @@ async fn execute_source_json(
         SourceEngine::HttpJson => execute_http_json(state, source_id, source, request).await,
         SourceEngine::HttpFlow => execute_http_flow(state, source_id, source, request).await,
         SourceEngine::Fhir => execute_fhir(state, source_id, source, request).await,
+        SourceEngine::ScriptRhai => execute_rhai(state, source_id, source, request).await,
     }
+}
+
+/// The async host backing a `script_rhai` run's `source.get(target, path, query)`
+/// capability. It owns everything the call needs by value (clones / `Arc`s), so
+/// it is `Send + Sync` and outlives the bridged blocking execution. Every effect
+/// — target resolution, allow-listing, SSRF policy, auth, rate limiting, bounded
+/// body read — is reused from the `http_json` machinery; the script never sees
+/// any of it.
+struct RhaiHttpHost {
+    state: AppState,
+    source: SourceConfig,
+    source_id: String,
+    /// The resolved per-source credential object (secret fields are read by
+    /// `apply_http_json_auth`). `Value::Null` when the source has no credential.
+    credential: Value,
+}
+
+#[async_trait::async_trait]
+impl ScriptSourceHost for RhaiHttpHost {
+    async fn source_get(
+        &self,
+        target: &str,
+        path: &str,
+        query: Value,
+    ) -> Result<SourceResponse, SourceScriptError> {
+        let rhai = self
+            .source
+            .rhai
+            .as_ref()
+            .ok_or(SourceScriptError::HostDenied {
+                reason: "missing rhai config".into(),
+            })?;
+        let target_config = rhai
+            .targets
+            .get(target)
+            .ok_or(SourceScriptError::HostDenied {
+                reason: "unknown target".into(),
+            })?;
+
+        // Reuse the http_json request preparation: it parses the base URL,
+        // enforces `allowed_base_urls`, joins the (already canonicalized) path,
+        // checks same-origin, and applies the SSRF/localhost client policy.
+        let prepared = prepare_http_json_request(
+            &self.state,
+            &self.source_id,
+            &self.source,
+            &target_config.base_url,
+            path,
+        )
+        .await
+        .map_err(map_source_execution_error)?;
+
+        let mut builder = prepared.client.get(prepared.url);
+        if let Value::Object(params) = &query {
+            for (name, value) in params {
+                // Match the http_json contract: reject a query-parameter name
+                // carrying control characters or whitespace rather than relying
+                // solely on the client's URL encoder. A name can derive from
+                // untrusted upstream data, so the call fails closed.
+                if !is_valid_http_param_name(name) {
+                    return Err(SourceScriptError::HostDenied {
+                        reason: "invalid query parameter name".into(),
+                    });
+                }
+                if let Some(rendered) = rhai_query_param_value(value) {
+                    builder = builder.query(&[(name.as_str(), rendered)]);
+                }
+            }
+        }
+        // Static, operator-configured request headers (validated at startup as
+        // non-restricted). Applied before auth so they can never shadow it.
+        for (name, value) in &target_config.headers {
+            builder = builder.header(name, value);
+        }
+        builder = apply_http_json_auth(builder, target_config.auth.as_ref(), &self.credential)
+            .map_err(map_source_execution_error)?;
+
+        // Honour the same rate-limit/backoff gate as http_json. A limiter
+        // rejection is reported to the script as a 429 so `problem_code()`
+        // surfaces `source.target_rate_limit`.
+        if acquire_http_json_rate_or_error(&self.state, &self.source_id)
+            .await
+            .is_some()
+        {
+            return Err(SourceScriptError::HttpStatus { status: 429 });
+        }
+
+        let response = builder.send().await.map_err(|error| {
+            if error.is_timeout() {
+                SourceScriptError::Deadline
+            } else {
+                SourceScriptError::HttpTransport
+            }
+        })?;
+        let status = response.status();
+        let status_code = status.as_u16();
+
+        // Per-target visibility gate: a 2xx, or a status this target explicitly
+        // allows, is returned to the script; any other non-2xx terminates the
+        // run as an upstream-status error (the engine's union `visible_statuses`
+        // is only the ceiling — the host decides per target).
+        if status.is_success() || target_config.visible_statuses.contains(&status_code) {
+            let body = if status.is_success() {
+                read_limited_json_response(response, self.state.config.limits.max_output_bytes)
+                    .await
+                    .map_err(map_source_execution_error)?
+            } else {
+                read_limited_optional_json_response(
+                    response,
+                    self.state.config.limits.max_output_bytes,
+                )
+                .await
+                .map_err(map_source_execution_error)?
+            };
+            Ok(SourceResponse {
+                status: status_code,
+                body,
+            })
+        } else {
+            Err(SourceScriptError::HttpStatus {
+                status: status_code,
+            })
+        }
+    }
+}
+
+/// Map the http_json outbound machinery's coarse error into the script host's
+/// taxonomy. A transport timeout becomes a deadline; everything else collapses
+/// to a transport failure (both ultimately surface as `source.unavailable`
+/// except the timeout, which surfaces as `source.timeout`).
+fn map_source_execution_error(error: SourceExecutionError) -> SourceScriptError {
+    match error {
+        SourceExecutionError::HttpJsonTimeout => SourceScriptError::Deadline,
+        SourceExecutionError::HttpJson | SourceExecutionError::HttpJsonBadRequest => {
+            SourceScriptError::HttpTransport
+        }
+    }
+}
+
+/// Stringify a scalar query-parameter value the way http_json does; non-scalar
+/// values (objects, arrays, null) are dropped, matching query-string semantics.
+fn rhai_query_param_value(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => Some(text.clone()),
+        Value::Number(number) => Some(number.to_string()),
+        Value::Bool(flag) => Some(flag.to_string()),
+        Value::Null | Value::Array(_) | Value::Object(_) => None,
+    }
+}
+
+async fn execute_rhai(
+    state: &AppState,
+    source_id: &str,
+    source: &SourceConfig,
+    request: Value,
+) -> Result<SourceExecution, SourceExecutionError> {
+    if request.get("mode").and_then(Value::as_str) == Some("batch_match") {
+        let item_count = request
+            .get("items")
+            .and_then(Value::as_array)
+            .map_or(1, |items| items.len().max(1));
+        let value = tokio::time::timeout(
+            http_json_batch_timeout(&state.config.limits, item_count),
+            execute_rhai_batch(state, source_id, source, &request),
+        )
+        .await
+        .map_err(|_| SourceExecutionError::HttpJsonTimeout)??;
+        return Ok(SourceExecution {
+            value,
+            worker_id: "script_rhai".to_string(),
+        });
+    }
+
+    execute_rhai_lookup(state, source_id, source, request).await
+}
+
+async fn execute_rhai_lookup(
+    state: &AppState,
+    source_id: &str,
+    source: &SourceConfig,
+    request: Value,
+) -> Result<SourceExecution, SourceExecutionError> {
+    // Presence is also enforced at validation/compile time; guard here so a
+    // misconfigured source fails closed rather than reaching the host.
+    let _rhai = source.rhai.as_ref().ok_or(SourceExecutionError::HttpJson)?;
+    let lookup = request
+        .get("lookup")
+        .ok_or(SourceExecutionError::HttpJsonBadRequest)?;
+    let lookup_field = lookup
+        .get("field")
+        .and_then(Value::as_str)
+        .ok_or(SourceExecutionError::HttpJsonBadRequest)?;
+    let lookup_value = lookup
+        .get("value")
+        .and_then(Value::as_str)
+        .ok_or(SourceExecutionError::HttpJsonBadRequest)?;
+    let fields = request_fields(&request)?;
+    let limit = request.get("limit").and_then(Value::as_u64).unwrap_or(2);
+    let purpose = request
+        .get("purpose")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let dataset = request
+        .get("dataset")
+        .and_then(Value::as_str)
+        .unwrap_or(&source.dataset)
+        .to_string();
+    let entity = request
+        .get("entity")
+        .and_then(Value::as_str)
+        .unwrap_or(&source.entity)
+        .to_string();
+
+    let credential = state
+        .credentials
+        .get(source_id)
+        .cloned()
+        .unwrap_or(Value::Null);
+    // The script only ever sees the whitelisted public credential fields, never
+    // a raw secret (mirrors the http_json `public_credential` projection).
+    let credential_public = public_credential(source, &credential);
+
+    let ctx = ScriptCtx::new(
+        source_id,
+        dataset,
+        entity,
+        Lookup {
+            field: lookup_field.to_string(),
+            value: lookup_value.to_string(),
+        },
+        purpose,
+    )
+    .fields(fields)
+    .limit(limit)
+    .credential_public(credential_public);
+
+    let engine = state
+        .rhai_engines
+        .get(source_id)
+        .cloned()
+        .ok_or(SourceExecutionError::HttpJson)?;
+
+    let host = RhaiHttpHost {
+        state: state.clone(),
+        source: source.clone(),
+        source_id: source_id.to_string(),
+        credential,
+    };
+
+    match engine.execute(Arc::new(host), ctx).await {
+        Ok(records) => Ok(SourceExecution {
+            value: json!({ "data": records }),
+            worker_id: "script_rhai".to_string(),
+        }),
+        // Mirror http_json: a classified script error is returned as the
+        // sidecar's `{ "error": { "code": ... } }` envelope (never the script
+        // source, a response body, or a secret), and the public problem code is
+        // the engine's stable mapping.
+        Err(error) => Ok(SourceExecution {
+            value: json!({ "error": { "code": error.problem_code() } }),
+            worker_id: "script_rhai".to_string(),
+        }),
+    }
+}
+
+async fn execute_rhai_batch(
+    state: &AppState,
+    source_id: &str,
+    source: &SourceConfig,
+    request: &Value,
+) -> Result<Value, SourceExecutionError> {
+    match source.batch.mode {
+        SourceBatchMode::SequentialLookup => {
+            execute_rhai_sequential_batch(state, source_id, source, request).await
+        }
+        SourceBatchMode::ParallelLookup => {
+            execute_rhai_parallel_batch(state, source_id, source, request).await
+        }
+        SourceBatchMode::WorkflowBatch | SourceBatchMode::NativeBatch => {
+            Err(SourceExecutionError::HttpJsonBadRequest)
+        }
+    }
+}
+
+async fn execute_rhai_sequential_batch(
+    state: &AppState,
+    source_id: &str,
+    source: &SourceConfig,
+    request: &Value,
+) -> Result<Value, SourceExecutionError> {
+    let query_signature = request
+        .get("query_signature")
+        .and_then(Value::as_array)
+        .ok_or(SourceExecutionError::HttpJson)?;
+    if query_signature.len() != 1 {
+        return Err(SourceExecutionError::HttpJsonBadRequest);
+    }
+    let lookup_field = query_signature
+        .first()
+        .and_then(|term| term.get("field"))
+        .and_then(Value::as_str)
+        .ok_or(SourceExecutionError::HttpJson)?;
+    let items = request
+        .get("items")
+        .and_then(Value::as_array)
+        .ok_or(SourceExecutionError::HttpJson)?;
+    let mut responses = Vec::with_capacity(items.len());
+    for item in items {
+        let id = item
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or(SourceExecutionError::HttpJson)?;
+        let lookup_request = http_json_item_lookup_request(source_id, request, lookup_field, item)?;
+        let execution = execute_rhai_lookup(state, source_id, source, lookup_request).await?;
+        if let Some(error) = execution.value.get("error") {
+            if shared_credential_error(error) {
+                return Ok(json!({ "error": error }));
+            }
+            responses.push(json!({ "id": id, "error": error }));
+        } else if let Some(data) = execution.value.get("data") {
+            responses.push(json!({ "id": id, "data": data }));
+        } else {
+            return Err(SourceExecutionError::HttpJson);
+        }
+    }
+    Ok(json!({ "items": responses }))
+}
+
+async fn execute_rhai_parallel_batch(
+    state: &AppState,
+    source_id: &str,
+    source: &SourceConfig,
+    request: &Value,
+) -> Result<Value, SourceExecutionError> {
+    let query_signature = request
+        .get("query_signature")
+        .and_then(Value::as_array)
+        .ok_or(SourceExecutionError::HttpJson)?;
+    if query_signature.len() != 1 {
+        return Err(SourceExecutionError::HttpJsonBadRequest);
+    }
+    let lookup_field = query_signature
+        .first()
+        .and_then(|term| term.get("field"))
+        .and_then(Value::as_str)
+        .ok_or(SourceExecutionError::HttpJson)?;
+    let items = request
+        .get("items")
+        .and_then(Value::as_array)
+        .ok_or(SourceExecutionError::HttpJson)?;
+    let max_parallel = source
+        .batch
+        .max_parallel
+        .unwrap_or(1)
+        .min(items.len().max(1));
+    let semaphore = Arc::new(Semaphore::new(max_parallel));
+    let state = Arc::new(state.clone());
+    let source = Arc::new(source.clone());
+    let source_id = source_id.to_string();
+    let mut tasks = JoinSet::new();
+    let mut requested_ids = Vec::with_capacity(items.len());
+    for (idx, item) in items.iter().enumerate() {
+        let id = item
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or(SourceExecutionError::HttpJson)?
+            .to_string();
+        requested_ids.push(id.clone());
+        let lookup_request =
+            http_json_item_lookup_request(&source_id, request, lookup_field, item)?;
+        let permit = semaphore.clone();
+        let task_state = Arc::clone(&state);
+        let task_source = Arc::clone(&source);
+        let task_source_id = source_id.clone();
+        tasks.spawn(async move {
+            let _permit = permit
+                .acquire_owned()
+                .await
+                .map_err(|_| SourceExecutionError::HttpJson)?;
+            let execution = execute_rhai_lookup(
+                &task_state,
+                &task_source_id,
+                task_source.as_ref(),
+                lookup_request,
+            )
+            .await?;
+            Ok::<_, SourceExecutionError>((idx, id, execution.value))
+        });
+    }
+
+    let mut responses = vec![Value::Null; items.len()];
+    while let Some(joined) = tasks.join_next().await {
+        let (idx, id, value) = joined.map_err(|_| SourceExecutionError::HttpJson)??;
+        if let Some(error) = value.get("error") {
+            if shared_credential_error(error) {
+                tasks.abort_all();
+                return Ok(json!({ "error": error }));
+            }
+            responses[idx] = json!({ "id": id, "error": error });
+        } else if let Some(data) = value.get("data") {
+            responses[idx] = json!({ "id": id, "data": data });
+        } else {
+            tasks.abort_all();
+            return Err(SourceExecutionError::HttpJson);
+        }
+    }
+
+    for (idx, response) in responses.iter_mut().enumerate() {
+        if response.is_null() {
+            *response = json!({
+                "id": requested_ids[idx],
+                "error": { "code": "source.unavailable" }
+            });
+        }
+    }
+    Ok(json!({ "items": responses }))
 }
 
 async fn execute_fhir(
@@ -3967,6 +4811,29 @@ fn apply_http_json_auth(
                 let password = credential_secret(credential, password_ref)?;
                 builder = builder.basic_auth(username, Some(password));
             }
+            HttpJsonAuthKind::ApiKeyHeader => {
+                // Header name and secret-field name are config-validated at
+                // startup; the resolved value is the secret, never logged.
+                let header = auth
+                    .header
+                    .as_deref()
+                    .ok_or(SourceExecutionError::HttpJson)?;
+                let token_ref = auth.token.as_ref().ok_or(SourceExecutionError::HttpJson)?;
+                let token = credential_secret(credential, token_ref)?;
+                builder = builder.header(header, token);
+            }
+            HttpJsonAuthKind::ApiKeyQuery => {
+                // reqwest percent-encodes and appends the parameter. The cache
+                // key is built from request fields (not the URL), and the URL is
+                // never logged, so the secret does not leak via either path.
+                let param = auth
+                    .query_param
+                    .as_deref()
+                    .ok_or(SourceExecutionError::HttpJson)?;
+                let token_ref = auth.token.as_ref().ok_or(SourceExecutionError::HttpJson)?;
+                let token = credential_secret(credential, token_ref)?;
+                builder = builder.query(&[(param, token)]);
+            }
         }
     }
     Ok(builder)
@@ -4090,6 +4957,29 @@ async fn read_limited_json_response(
         bytes.extend_from_slice(&chunk);
     }
     serde_json::from_slice(&bytes).map_err(|_| SourceExecutionError::HttpJson)
+}
+
+async fn read_limited_optional_json_response(
+    mut response: reqwest::Response,
+    max_bytes: usize,
+) -> Result<Value, SourceExecutionError> {
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|error| {
+        if error.is_timeout() {
+            SourceExecutionError::HttpJsonTimeout
+        } else {
+            SourceExecutionError::HttpJson
+        }
+    })? {
+        if bytes.len().saturating_add(chunk.len()) > max_bytes {
+            return Ok(Value::Null);
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    if bytes.is_empty() {
+        return Ok(Value::Null);
+    }
+    Ok(serde_json::from_slice(&bytes).unwrap_or(Value::Null))
 }
 
 fn public_credential(source: &SourceConfig, credential: &Value) -> Value {
@@ -4465,6 +5355,38 @@ fn is_private_or_link_local_ip(ip: IpAddr) -> bool {
     }
 }
 
+/// Compile every `script_rhai` source's engine once, keyed by `source_id`.
+///
+/// The compile uses the union of all targets' `visible_statuses` so the engine
+/// surfaces any status some target allows; per-target gating then happens in the
+/// host. A compile failure is a configuration error that fails startup. The
+/// engine carries no script source in its error `Display`, so the message is
+/// safe to surface.
+fn compile_rhai_engines(
+    config: &SidecarConfig,
+) -> Result<BTreeMap<String, Arc<ScriptEngine>>, SidecarError> {
+    let mut engines = BTreeMap::new();
+    for (source_id, source) in &config.sources {
+        if source.engine != SourceEngine::ScriptRhai {
+            continue;
+        }
+        let rhai = source.rhai.as_ref().ok_or_else(|| {
+            SidecarError::Config(format!(
+                "source {source_id} engine script_rhai requires a rhai config"
+            ))
+        })?;
+        let policy = rhai.limits.to_policy(rhai_union_visible_statuses(rhai));
+        let engine =
+            ScriptEngine::compile(&rhai.script, &rhai.entrypoint, &policy).map_err(|error| {
+                SidecarError::Config(format!(
+                    "source {source_id} rhai script failed to compile: {error}"
+                ))
+            })?;
+        engines.insert(source_id.clone(), Arc::new(engine));
+    }
+    Ok(engines)
+}
+
 fn load_credentials(config: &SidecarConfig) -> Result<BTreeMap<String, Value>, SidecarError> {
     let mut credentials = BTreeMap::new();
     for (source_id, source) in &config.sources {
@@ -4482,7 +5404,13 @@ fn load_credentials(config: &SidecarConfig) -> Result<BTreeMap<String, Value>, S
                 env: source.credential_env.clone(),
                 source: error,
             })?;
-        validate_credential_base_url(source_id, source, &credential)?;
+        // The single-`baseUrl` credential gate is an http_json/http_flow/fhir
+        // shape. A `script_rhai` source binds its upstreams per-target via
+        // `rhai.targets[*].base_url` (each validated against `allowed_base_urls`
+        // up front), so it has no one credential `baseUrl` to pin here.
+        if source.engine != SourceEngine::ScriptRhai {
+            validate_credential_base_url(source_id, source, &credential)?;
+        }
         credentials.insert(source_id.clone(), credential);
     }
     Ok(credentials)
@@ -5943,6 +6871,7 @@ mod tests {
                     }),
                     http_flow: None,
                     fhir: None,
+                    rhai: None,
                     cache: None,
                     smoke_lookup: Some(SmokeLookupConfig {
                         field: "national_id".to_string(),
@@ -6218,6 +7147,7 @@ mod tests {
             source_limiters: Arc::new(BTreeMap::new()),
             source_runtime: Arc::new(BTreeMap::new()),
             http_json_clients: Arc::new(Mutex::new(BTreeMap::new())),
+            rhai_engines: Arc::new(BTreeMap::new()),
             metrics: Arc::new(Mutex::new(BTreeMap::new())),
             audit: None,
         }
