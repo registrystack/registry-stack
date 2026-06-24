@@ -47,16 +47,28 @@ struct LiveRelayServer {
     admin_url: String,
 }
 
+struct ReservedLoopbackAddr {
+    addr: SocketAddr,
+    listener: TcpListener,
+}
+
+impl ReservedLoopbackAddr {
+    fn bind() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("loopback listener binds");
+        let addr = listener.local_addr().expect("loopback listener has addr");
+        Self { addr, listener }
+    }
+
+    fn addr(&self) -> SocketAddr {
+        self.addr
+    }
+}
+
 impl Drop for LiveRelayServer {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
-}
-
-fn allocate_loopback_addr() -> SocketAddr {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("loopback listener binds");
-    listener.local_addr().expect("loopback listener has addr")
 }
 
 fn tough_fixture(name: &str) -> PathBuf {
@@ -342,8 +354,14 @@ async fn write_signed_root_transition_fixture(
     }
 }
 
-async fn start_live_relay(config_path: &Path, admin_addr: SocketAddr) -> LiveRelayServer {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_registry-relay"))
+async fn start_live_relay(
+    config_path: &Path,
+    public_bind: ReservedLoopbackAddr,
+    admin_bind: ReservedLoopbackAddr,
+) -> LiveRelayServer {
+    let admin_addr = admin_bind.addr();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_registry-relay"));
+    command
         .arg("--config")
         .arg(config_path)
         .env(ADMIN_TOKEN_HASH_ENV, fingerprint_api_key(ADMIN_TOKEN))
@@ -351,9 +369,12 @@ async fn start_live_relay(config_path: &Path, admin_addr: SocketAddr) -> LiveRel
         .env(AUDIT_HASH_SECRET_ENV, AUDIT_HASH_SECRET)
         .env("REGISTRY_RELAY_LOG_FORMAT", "json")
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("registry-relay process starts");
+        .stderr(Stdio::piped());
+
+    drop(public_bind.listener);
+    drop(admin_bind.listener);
+
+    let mut child = command.spawn().expect("registry-relay process starts");
     let admin_url = format!("http://{admin_addr}");
     let client = reqwest::Client::builder()
         .no_proxy()
@@ -484,11 +505,15 @@ async fn config_apply_bundle_cli_drives_live_admin_root_transition_with_local_ap
         std::env::set_var(AUDIT_HASH_SECRET_ENV, AUDIT_HASH_SECRET);
     }
     let tmp = TempDir::new().expect("tempdir");
-    let public_bind = allocate_loopback_addr();
-    let admin_bind = allocate_loopback_addr();
+    let public_bind = ReservedLoopbackAddr::bind();
+    let admin_bind = ReservedLoopbackAddr::bind();
     let remote = MockServer::start().await;
-    let current_yaml =
-        current_config_yaml_with_remote_tuf_repository(&tmp, public_bind, admin_bind, &remote);
+    let current_yaml = current_config_yaml_with_remote_tuf_repository(
+        &tmp,
+        public_bind.addr(),
+        admin_bind.addr(),
+        &remote,
+    );
     let current_config_path = tmp.path().join("current.yaml");
     std::fs::write(&current_config_path, &current_yaml).expect("current config writes");
     registry_relay::config::load(&current_config_path).expect("current config validates");
@@ -496,12 +521,12 @@ async fn config_apply_bundle_cli_drives_live_admin_root_transition_with_local_ap
     let antirollback_path = tmp.path().join("antirollback.json");
     initialize_antirollback_state(&antirollback_path, &current_config_hash);
 
-    let candidate_yaml = candidate_config_yaml(&tmp, public_bind, admin_bind);
+    let candidate_yaml = candidate_config_yaml(&tmp, public_bind.addr(), admin_bind.addr());
     let candidate_hash = internal_config_hash(candidate_yaml.as_bytes());
     write_local_approval(&tmp, &candidate_hash, &current_config_hash);
     let signed =
         write_signed_root_transition_fixture(&tmp, &current_config_hash, &candidate_yaml).await;
-    let server = start_live_relay(&current_config_path, admin_bind).await;
+    let server = start_live_relay(&current_config_path, public_bind, admin_bind).await;
 
     let output = local_apply_bundle_command(&server, &signed)
         .output()
@@ -577,11 +602,15 @@ async fn config_apply_bundle_cli_drives_live_admin_remote_root_transition_with_l
         std::env::set_var(AUDIT_HASH_SECRET_ENV, AUDIT_HASH_SECRET);
     }
     let tmp = TempDir::new().expect("tempdir");
-    let public_bind = allocate_loopback_addr();
-    let admin_bind = allocate_loopback_addr();
+    let public_bind = ReservedLoopbackAddr::bind();
+    let admin_bind = ReservedLoopbackAddr::bind();
     let remote = MockServer::start().await;
-    let current_yaml =
-        current_config_yaml_with_remote_tuf_repository(&tmp, public_bind, admin_bind, &remote);
+    let current_yaml = current_config_yaml_with_remote_tuf_repository(
+        &tmp,
+        public_bind.addr(),
+        admin_bind.addr(),
+        &remote,
+    );
     let current_config_path = tmp.path().join("current.yaml");
     std::fs::write(&current_config_path, &current_yaml).expect("current config writes");
     registry_relay::config::load(&current_config_path).expect("current config validates");
@@ -589,13 +618,13 @@ async fn config_apply_bundle_cli_drives_live_admin_remote_root_transition_with_l
     let antirollback_path = tmp.path().join("antirollback.json");
     initialize_antirollback_state(&antirollback_path, &current_config_hash);
 
-    let candidate_yaml = candidate_config_yaml(&tmp, public_bind, admin_bind);
+    let candidate_yaml = candidate_config_yaml(&tmp, public_bind.addr(), admin_bind.addr());
     let candidate_hash = internal_config_hash(candidate_yaml.as_bytes());
     write_local_approval(&tmp, &candidate_hash, &current_config_hash);
     let signed =
         write_signed_root_transition_fixture(&tmp, &current_config_hash, &candidate_yaml).await;
     mount_signed_tuf_fixture(&remote, &signed).await;
-    let server = start_live_relay(&current_config_path, admin_bind).await;
+    let server = start_live_relay(&current_config_path, public_bind, admin_bind).await;
 
     let output = remote_apply_bundle_command(&server, &signed, &remote)
         .output()
