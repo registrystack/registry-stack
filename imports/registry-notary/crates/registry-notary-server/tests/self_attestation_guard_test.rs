@@ -226,8 +226,9 @@ self_attestation:
 {allowed_disclosures_yaml}
   required_scopes:
     - self_attestation
-  allowed_wallet_origins:
-    - https://wallet.example.gov
+  wallet_cors:
+    allowed_origins:
+      - https://wallet.example.gov
   rate_limits:
     mode: in_process
     invalid_token_per_client_address_per_minute: 20
@@ -344,8 +345,9 @@ self_attestation:
     - redacted
   required_scopes:
     - self_attestation
-  allowed_wallet_origins:
-    - https://wallet.example.gov
+  wallet_cors:
+    allowed_origins:
+      - https://wallet.example.gov
   credential_profiles:
     - civil_status_sd_jwt
   rate_limits:

@@ -28,6 +28,7 @@ hyper-util.workspace = true
 registry-notary-core.workspace = true
 registry-notary-server = { workspace = true, default-features = false }
 registry-config-report.workspace = true
+registry-platform-authcommon.workspace = true
 registry-platform-config.workspace = true
 registry-platform-crypto.workspace = true
 registry-platform-httputil.workspace = true

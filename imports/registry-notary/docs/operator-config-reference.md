@@ -39,6 +39,7 @@ the basic path passes `doctor`.
 | --- | --- | --- |
 | `server` | Bind address and process HTTP settings | No, defaults are present |
 | `auth` | Caller authentication and scope mapping | Yes |
+| `compliance` | Optional declared regulatory scope metadata | No |
 | `deployment` | Operator-declared deployment profile and gate waivers | No, an undeclared profile binds no gates |
 | `audit` | Redacted audit envelope sink and HMAC secret | Recommended for every deployable environment |
 | `config_trust` | Durable local state for governed config apply | No, only for signed governed config |
@@ -52,6 +53,27 @@ the basic path passes `doctor`.
 
 Unknown fields are rejected. That is intentional: a misspelled field should fail
 at config validation instead of becoming an accidental open policy.
+
+## Compliance Metadata
+
+The optional top-level `compliance` block declares regulatory scope metadata for
+posture and downstream evidence tooling. It does not create source-read or PDP
+enforcement by itself. Leave the block absent, or set `regimes: []`, to keep the
+same behavior as a config with no compliance declaration.
+
+```yaml
+compliance:
+  regimes: [gdpr]
+  controller: Example Ministry
+  dpo_contact: dpo@example.gov
+  supervisory_authority: Example Data Protection Authority
+```
+
+For the MVP, `gdpr` is the only accepted regime id. Reserved future ids such as
+`ccpa`, `lgpd`, and `coe108` fail config validation until their posture mapping
+is explicitly added. `controller`, `dpo_contact`, and
+`supervisory_authority` are metadata only; setting them without `regimes` does
+not activate the posture `compliance` block.
 
 ## Deployment Profile and Gates
 
@@ -834,6 +856,23 @@ source_bindings:
       target_type: Person
       allowed_purposes:
         - benefit_eligibility_check
+      context_constraints:
+        legal_basis:
+          required: true
+          allowed_refs:
+            - legal-basis:benefits
+        consent:
+          required: true
+          allowed_refs:
+            - consent:benefits
+        jurisdiction:
+          permitted:
+            - RW
+        assurance:
+          minimum: substantial
+        source_freshness:
+          max_age_seconds: 300
+      source_observed_at_field: observed_at
       allowed_relationships:
         - self
         - guardian
@@ -858,6 +897,8 @@ Fields:
 | `target_type` | If set, the request `target.type` must equal this value | unenforced |
 | `requester_type` | If set, the request `requester.type` must equal this value | unenforced |
 | `allowed_purposes` | Purposes this binding may be used for; empty means no purpose restriction here | empty |
+| `context_constraints` | Shared PDP controls for required or allowed legal basis refs, consent refs, permitted jurisdictions, assurance allowed/minimum values, and source freshness max age | empty |
+| `source_observed_at_field` | Source row field containing the authoritative observation timestamp; required when `context_constraints.source_freshness.max_age_seconds` is set | none |
 | `allowed_relationships` | Relationship types this binding accepts | empty |
 | `relationship_purpose_scopes` | Per-relationship purpose allow-list; a scoped relationship used for any other purpose is rejected with granular code `relationship.purpose_not_allowed` | empty |
 | `sufficient_target_inputs` | OR-of-AND groups of target paths; the request must satisfy at least one full group | empty |
@@ -982,7 +1023,7 @@ The config keys unique to this page are: `subject_binding.token_claim`,
 `token_policy` ceilings, `allowed_operations`, `allowed_purposes`,
 `allowed_claims`, `allowed_formats`, `allowed_disclosures`,
 `credential_profiles`, `scope_policy`, `required_scopes`,
-`allowed_wallet_origins`, `delegation`, and `rate_limits`.
+`wallet_cors.allowed_origins`, `delegation`, and `rate_limits`.
 
 Delegated self-attestation is configured under `self_attestation.delegation`.
 It lets a token-bound requester evaluate configured dependent claims only when a

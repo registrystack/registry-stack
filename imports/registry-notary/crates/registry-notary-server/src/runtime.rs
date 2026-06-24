@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use registry_platform_pdp::{
+    apply_context_constraints_to_policy_input, context_constraints_hash_material,
     decide as pdp_decide, Decision as PdpDecision, DecisionAudit as PdpDecisionAudit,
     EvidenceRequestContext as PdpRequestContext, PolicyGate, PolicyInput as PdpPolicyInput,
     RelationshipPurposeConstraint as PdpRelationshipPurposeConstraint,
@@ -3105,11 +3106,14 @@ fn binding_policy_uses_authorization_details(
     binding: &registry_notary_core::SourceBindingConfig,
 ) -> bool {
     let matching = &binding.matching;
-    !matching.allowed_assurance.is_empty()
-        || matching.minimum_assurance.is_some()
-        || !matching.permitted_jurisdictions.is_empty()
-        || matching.require_legal_basis
-        || matching.require_consent
+    let constraints = &matching.context_constraints;
+    !constraints.assurance.allowed.is_empty()
+        || constraints.assurance.minimum.is_some()
+        || !constraints.jurisdiction.permitted.is_empty()
+        || constraints.legal_basis.required
+        || constraints.consent.required
+        || !constraints.legal_basis.allowed_refs.is_empty()
+        || !constraints.consent.allowed_refs.is_empty()
 }
 
 fn source_authorization_subject_expectation(
@@ -3897,7 +3901,13 @@ async fn fetch_binding_direct(
         Err(_) => return Err(EvidenceError::RuleEvaluationFailed),
     };
     let source_context = minimized_context_for_binding(binding, context);
-    let source_observed_at = if binding.matching.max_source_age_seconds.is_some() {
+    let source_observed_at = if binding
+        .matching
+        .context_constraints
+        .source_freshness
+        .max_age_seconds
+        .is_some()
+    {
         let source_observed_at = source
             .source_observed_at_for_context_with_capability(
                 source_capability,
@@ -3996,7 +4006,13 @@ fn validate_matching_freshness_policy(
     format: &str,
     source_observed_at: Option<OffsetDateTime>,
 ) -> Result<(), EvidenceError> {
-    if binding.matching.max_source_age_seconds.is_none() {
+    if binding
+        .matching
+        .context_constraints
+        .source_freshness
+        .max_age_seconds
+        .is_none()
+    {
         return Ok(());
     }
     let source_observed_age_seconds = source_observed_at.map(source_observed_age_seconds);
@@ -4380,7 +4396,7 @@ fn matching_pdp_decision(
     if !matching.allowed_purposes.is_empty() {
         purpose_constraints.push(matching.allowed_purposes.clone());
     }
-    let policy = PdpPolicyInput {
+    let mut policy = PdpPolicyInput {
         policy_id: policy_identity.policy_id.clone(),
         policy_hash: policy_identity.policy_hash.clone(),
         ecosystem_binding_id: policy_identity.ecosystem_binding_id.clone(),
@@ -4391,16 +4407,12 @@ fn matching_pdp_decision(
         required_context: Default::default(),
         odrl_constraint_terms: odrl_terms_for_matching_policy(matching, &purpose_constraints),
         purpose_constraints,
-        permitted_jurisdictions: matching.permitted_jurisdictions.clone(),
-        allowed_assurance: matching.allowed_assurance.clone(),
-        minimum_assurance: matching.minimum_assurance.clone(),
-        max_source_age_seconds: if enforce_freshness {
-            matching.max_source_age_seconds
-        } else {
-            None
-        },
-        require_legal_basis: matching.require_legal_basis,
-        require_consent: matching.require_consent,
+        permitted_jurisdictions: Vec::new(),
+        allowed_assurance: Vec::new(),
+        minimum_assurance: None,
+        max_source_age_seconds: None,
+        require_legal_basis: false,
+        require_consent: false,
         allowed_legal_basis_refs: Vec::new(),
         allowed_consent_refs: Vec::new(),
         redaction_fields: matching.redaction_fields.iter().cloned().collect(),
@@ -4426,6 +4438,11 @@ fn matching_pdp_decision(
             .map(|policy| policy.unsupported_odrl_terms.clone())
             .unwrap_or_default(),
     };
+    apply_context_constraints_to_policy_input(&matching.context_constraints, &mut policy)
+        .map_err(|_| EvidenceError::TargetMatchingPolicyRejected)?;
+    if !enforce_freshness {
+        policy.max_source_age_seconds = None;
+    }
     match pdp_decide(&pdp_context, &policy) {
         PdpDecision::Permit(audit) => Ok(BindingPolicyEffect {
             audit: Some(audit),
@@ -4569,7 +4586,12 @@ fn odrl_terms_for_matching_policy(
     if !purpose_constraints.is_empty() {
         terms.push("odrl:purpose".to_string());
     }
-    if !matching.permitted_jurisdictions.is_empty() {
+    if !matching
+        .context_constraints
+        .jurisdiction
+        .permitted
+        .is_empty()
+    {
         terms.push("odrl:spatial".to_string());
     }
     terms.sort();
@@ -4734,17 +4756,19 @@ fn matching_purpose_policy_id(binding: &registry_notary_core::SourceBindingConfi
 }
 
 fn matching_purpose_policy_hash(binding: &registry_notary_core::SourceBindingConfig) -> String {
+    let Ok(context_constraints) =
+        context_constraints_hash_material(&binding.matching.context_constraints)
+    else {
+        return "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+            .to_string();
+    };
     let material = serde_json::json!({
         "connection": binding.connection,
         "dataset": binding.dataset,
         "entity": binding.entity,
         "policy_id": binding.matching.policy_id,
         "allowed_purposes": binding.matching.allowed_purposes,
-        "allowed_assurance": binding.matching.allowed_assurance,
-        "minimum_assurance": binding.matching.minimum_assurance,
-        "permitted_jurisdictions": binding.matching.permitted_jurisdictions,
-        "require_legal_basis": binding.matching.require_legal_basis,
-        "require_consent": binding.matching.require_consent,
+        "context_constraints": context_constraints,
         "redaction_fields": binding.matching.redaction_fields,
     });
     hash_json(&material)
@@ -6252,6 +6276,47 @@ mod tests {
         }
     }
 
+    #[test]
+    fn derived_matching_policy_hash_changes_with_context_constraints() {
+        let binding = test_source_binding();
+        let baseline_hash = matching_purpose_policy_hash(&binding);
+
+        let mut constrained = binding.clone();
+        constrained.matching.context_constraints.assurance.allowed =
+            vec!["substantial".to_string()];
+        constrained
+            .matching
+            .context_constraints
+            .jurisdiction
+            .permitted = vec!["RW".to_string()];
+        constrained
+            .matching
+            .context_constraints
+            .legal_basis
+            .required = true;
+        constrained
+            .matching
+            .context_constraints
+            .legal_basis
+            .allowed_refs = vec!["law:rw:dpa".to_string()];
+        constrained.matching.context_constraints.consent.required = true;
+        constrained
+            .matching
+            .context_constraints
+            .consent
+            .allowed_refs = vec!["consent:person".to_string()];
+        constrained
+            .matching
+            .context_constraints
+            .source_freshness
+            .max_age_seconds = Some(300);
+
+        let constrained_hash = matching_purpose_policy_hash(&constrained);
+
+        assert_ne!(baseline_hash, constrained_hash);
+        assert!(constrained_hash.starts_with("sha256:"));
+    }
+
     fn dependent_source_binding(
         entity: &str,
         lookup_input: &str,
@@ -7088,7 +7153,7 @@ mod tests {
             json!("in_process")
         );
         assert!(document["self_attestation"]["rate_limits"].is_null());
-        assert!(document["self_attestation"]["allowed_wallet_origins"].is_null());
+        assert!(document["self_attestation"]["wallet_cors"].is_null());
         assert!(document["self_attestation"]["citizen_clients"].is_null());
         assert!(document["self_attestation"]["token_policy"].is_null());
     }
@@ -7256,7 +7321,11 @@ mod tests {
             .expect("test claim has source binding");
         binding.connection = Some("bulk-source".to_string());
         binding.matching.allowed_purposes = vec!["test".to_string()];
-        binding.matching.max_source_age_seconds = Some(60);
+        binding
+            .matching
+            .context_constraints
+            .source_freshness
+            .max_age_seconds = Some(60);
         binding.matching.source_observed_at_field = Some("observed_at".to_string());
         let mut evidence_config = (*test_evidence(vec![claim])).clone();
         evidence_config.inline_batch_limit = 1;
@@ -7921,7 +7990,7 @@ mod tests {
     fn matching_pdp_decision_uses_shared_contract() {
         let mut binding = test_source_binding();
         binding.matching.allowed_purposes = vec!["benefits".to_string(), "appeals".to_string()];
-        binding.matching.allowed_assurance = vec!["substantial".to_string()];
+        binding.matching.context_constraints.assurance.allowed = vec!["substantial".to_string()];
         let mut context = EvidenceRequestContext {
             requester: None,
             target: EvidenceEntity {
@@ -8039,9 +8108,9 @@ mod tests {
             }
         );
 
-        binding.matching.permitted_jurisdictions = vec!["RW".to_string()];
-        binding.matching.require_legal_basis = true;
-        binding.matching.require_consent = true;
+        binding.matching.context_constraints.jurisdiction.permitted = vec!["RW".to_string()];
+        binding.matching.context_constraints.legal_basis.required = true;
+        binding.matching.context_constraints.consent.required = true;
         binding.matching.redaction_fields = vec!["value".to_string()];
         let trusted_policy = TrustedPolicyContext {
             legal_basis_ref: Some("legal-basis:benefits".to_string()),
@@ -8269,7 +8338,11 @@ mod tests {
     #[test]
     fn matching_pdp_decision_enforces_source_freshness_only_when_requested() {
         let mut binding = test_source_binding();
-        binding.matching.max_source_age_seconds = Some(60);
+        binding
+            .matching
+            .context_constraints
+            .source_freshness
+            .max_age_seconds = Some(60);
         let purpose_constraints = test_purpose_constraints("benefits");
         let context = EvidenceRequestContext {
             requester: None,
@@ -8445,7 +8518,7 @@ mod tests {
             }
         ));
 
-        binding.matching.allowed_assurance = vec!["substantial".to_string()];
+        binding.matching.context_constraints.assurance.allowed = vec!["substantial".to_string()];
         let error = validate_matching_policy(
             &EvidenceConfig::default(),
             &machine_capability(&[]),
@@ -8468,7 +8541,11 @@ mod tests {
             }
         ));
 
-        binding.matching.max_source_age_seconds = Some(60);
+        binding
+            .matching
+            .context_constraints
+            .source_freshness
+            .max_age_seconds = Some(60);
         let error = validate_matching_freshness_policy(
             &EvidenceConfig::default(),
             &binding,

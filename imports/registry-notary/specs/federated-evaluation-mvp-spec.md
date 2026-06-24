@@ -679,7 +679,7 @@ Parallel work:
   JWKS/verifier primitives where possible, with MVP `typ`, compact-JWS,
   `alg = EdDSA`, and `iss`/`sub` binding checks layered on top.
 - Worker C: implement single-instance replay store abstraction and `jti`
-  retention rules with max-entry eviction.
+  retention rules through the selected replay backend.
 
 Wave DoD:
 

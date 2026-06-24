@@ -191,8 +191,9 @@ self_attestation:
   scope_policy: required
   required_scopes:
     - self_attestation
-  allowed_wallet_origins:
-    - https://wallet.example.gov
+  wallet_cors:
+    allowed_origins:
+      - https://wallet.example.gov
   credential_profiles:
     - civil_status_sd_jwt
   rate_limits:
@@ -546,9 +547,10 @@ public disclosure. Public discovery must not expose `subject_id_type` in v1.
 The first lab story may use CLI or script-driven calls and avoid browser CORS
 entirely. If Notary is called directly from a browser wallet or portal, CORS
 must be disabled by default and enabled only with an exact
-`allowed_wallet_origins` allow-list. Wildcard origins must not be used with
-credentials. Preflight failures should be generic and must not disclose
-self-attestation policy details.
+`wallet_cors.allowed_origins` allow-list. This is CORS-only and does not
+authorize missing-Origin or non-browser issuance. Wildcard origins must not be
+used with credentials. Preflight failures should be generic and must not
+disclose self-attestation policy details.
 
 ### Credential Freshness
 

@@ -8,80 +8,11 @@
 //! severity. Undeclared deployments bind no gates and keep their existing
 //! behavior unchanged.
 
+use registry_platform_ops::{self as platform_ops, DeploymentFinding, DeploymentWaiver, Gate};
+pub use registry_platform_ops::{
+    DeploymentFindingStatus, DeploymentProfile, GateEvaluation, GateSeverity, ProfileGateSeverities,
+};
 use serde::{Deserialize, Serialize};
-
-/// The set of deployment profiles an operator can declare.
-///
-/// Frozen at introduction; new profiles may be added but existing ones never
-/// change meaning. Deserialization is strict: an unknown profile string fails,
-/// which surfaces as a startup error.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DeploymentProfile {
-    Local,
-    HostedLab,
-    Production,
-    EvidenceGrade,
-}
-
-impl DeploymentProfile {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Local => "local",
-            Self::HostedLab => "hosted_lab",
-            Self::Production => "production",
-            Self::EvidenceGrade => "evidence_grade",
-        }
-    }
-}
-
-/// Severity vocabulary shared across products.
-///
-/// `startup_fail` and `readiness_fail` are hard gates and bind only on declared
-/// profiles. `finding_error` and `finding_warn` surface as posture findings.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum GateSeverity {
-    StartupFail,
-    ReadinessFail,
-    FindingError,
-    FindingWarn,
-}
-
-impl GateSeverity {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::StartupFail => "startup_fail",
-            Self::ReadinessFail => "readiness_fail",
-            Self::FindingError => "finding_error",
-            Self::FindingWarn => "finding_warn",
-        }
-    }
-
-    /// Hard deployment gates cannot be waived. `startup_fail` means running at
-    /// all would falsify the profile claim; `readiness_fail` means the process
-    /// may run but must not report ready until the condition is cleared.
-    pub const fn is_waivable(self) -> bool {
-        matches!(self, Self::FindingError | Self::FindingWarn)
-    }
-}
-
-/// Status of a finding in posture output.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DeploymentFindingStatus {
-    Active,
-    Waived,
-}
-
-impl DeploymentFindingStatus {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Active => "active",
-            Self::Waived => "waived",
-        }
-    }
-}
 
 /// The operator-declared `deployment` config block.
 ///
@@ -212,25 +143,16 @@ impl GateInput {
     }
 }
 
-/// A finding row in the catalog: an id and its severity under each profile that
-/// binds it. A profile with no entry leaves the gate unbound.
-struct Gate {
-    id: &'static str,
+const fn severities(
     hosted_lab: Option<GateSeverity>,
     production: Option<GateSeverity>,
     evidence_grade: Option<GateSeverity>,
-    /// Predicate over the gate input; true means the gate condition is met.
-    condition: fn(&GateInput) -> bool,
-}
-
-impl Gate {
-    fn severity_for(&self, profile: DeploymentProfile) -> Option<GateSeverity> {
-        match profile {
-            DeploymentProfile::Local => None,
-            DeploymentProfile::HostedLab => self.hosted_lab,
-            DeploymentProfile::Production => self.production,
-            DeploymentProfile::EvidenceGrade => self.evidence_grade,
-        }
+) -> ProfileGateSeverities {
+    ProfileGateSeverities {
+        local: None,
+        hosted_lab,
+        production,
+        evidence_grade,
     }
 }
 
@@ -252,122 +174,75 @@ pub const FINDING_ASSISTED_ACCESS_SENDER_CONSTRAINT_MISSING: &str =
 pub const FINDING_PROFILE_UNDECLARED: &str = "deployment.profile_undeclared";
 pub const FINDING_WAIVER_EXPIRED: &str = "deployment.waiver_expired";
 
-fn gate_catalog() -> &'static [Gate] {
-    use GateSeverity::{FindingError, FindingWarn, ReadinessFail, StartupFail};
-    &[
-        // notary.replay.in_memory_high_risk: in-memory replay while a high-risk
-        // mode is declared. (#206)
-        Gate {
-            id: FINDING_REPLAY_IN_MEMORY_HIGH_RISK,
-            hosted_lab: Some(FindingError),
-            production: Some(ReadinessFail),
-            evidence_grade: Some(StartupFail),
-            condition: |input| input.replay_in_memory && input.high_risk_replay_mode(),
+use GateSeverity::{FindingError, FindingWarn, ReadinessFail, StartupFail};
+
+const GATE_CATALOG: &[Gate<GateInput>] = &[
+    // notary.replay.in_memory_high_risk: in-memory replay while a high-risk
+    // mode is declared. (#206)
+    Gate {
+        id: FINDING_REPLAY_IN_MEMORY_HIGH_RISK,
+        condition: |input| input.replay_in_memory && input.high_risk_replay_mode(),
+        severities: severities(Some(FindingError), Some(ReadinessFail), Some(StartupFail)),
+    },
+    // notary.audit.sink_missing: no durable, retained audit sink. (#207)
+    Gate {
+        id: FINDING_AUDIT_SINK_MISSING,
+        condition: |input| !input.audit_sink_class_durable,
+        severities: severities(Some(FindingError), Some(StartupFail), Some(StartupFail)),
+    },
+    // Risky-but-legal defaults, surfaced as profile-bound findings. (#208)
+    Gate {
+        id: FINDING_SOURCE_INSECURE_URL,
+        condition: |input| input.source_insecure_url,
+        severities: severities(Some(FindingError), Some(ReadinessFail), Some(StartupFail)),
+    },
+    Gate {
+        id: FINDING_SOURCE_PRIVATE_NETWORK_ESCAPE,
+        condition: |input| input.source_private_network_escape,
+        severities: severities(Some(FindingWarn), Some(FindingError), Some(FindingError)),
+    },
+    Gate {
+        id: FINDING_SIDECAR_EXPECTED_MISSING,
+        condition: |input| input.source_adapter_sidecar_without_expected_sidecar,
+        severities: severities(Some(FindingWarn), Some(FindingError), Some(ReadinessFail)),
+    },
+    Gate {
+        id: FINDING_ADMIN_SHARED_EXPOSURE,
+        condition: |input| input.admin_shared_exposure,
+        severities: severities(Some(FindingError), Some(ReadinessFail), Some(StartupFail)),
+    },
+    Gate {
+        id: FINDING_OPENAPI_PUBLIC,
+        condition: |input| input.openapi_public,
+        severities: severities(Some(FindingWarn), Some(FindingError), Some(FindingError)),
+    },
+    Gate {
+        id: FINDING_CONFIG_UNSIGNED,
+        condition: |input| input.config_unsigned,
+        severities: severities(Some(FindingWarn), Some(FindingError), Some(StartupFail)),
+    },
+    Gate {
+        id: FINDING_ASSISTED_ACCESS_TRANSACTION_TOKEN_ANCHOR_MISSING,
+        condition: |input| {
+            input.self_attestation_enabled && !input.transaction_token_anchor_configured
         },
-        // notary.audit.sink_missing: no durable, retained audit sink. (#207)
-        Gate {
-            id: FINDING_AUDIT_SINK_MISSING,
-            hosted_lab: Some(FindingError),
-            production: Some(StartupFail),
-            evidence_grade: Some(StartupFail),
-            condition: |input| !input.audit_sink_class_durable,
+        severities: severities(Some(FindingError), Some(ReadinessFail), Some(StartupFail)),
+    },
+    Gate {
+        id: FINDING_ASSISTED_ACCESS_SENDER_CONSTRAINT_MISSING,
+        condition: |input| {
+            input.transaction_token_anchor_configured && !input.transaction_token_sender_constrained
         },
-        // Risky-but-legal defaults, surfaced as profile-bound findings. (#208)
-        Gate {
-            id: FINDING_SOURCE_INSECURE_URL,
-            hosted_lab: Some(FindingError),
-            production: Some(ReadinessFail),
-            evidence_grade: Some(StartupFail),
-            condition: |input| input.source_insecure_url,
-        },
-        Gate {
-            id: FINDING_SOURCE_PRIVATE_NETWORK_ESCAPE,
-            hosted_lab: Some(FindingWarn),
-            production: Some(FindingError),
-            evidence_grade: Some(FindingError),
-            condition: |input| input.source_private_network_escape,
-        },
-        Gate {
-            id: FINDING_SIDECAR_EXPECTED_MISSING,
-            hosted_lab: Some(FindingWarn),
-            production: Some(FindingError),
-            evidence_grade: Some(ReadinessFail),
-            condition: |input| input.source_adapter_sidecar_without_expected_sidecar,
-        },
-        Gate {
-            id: FINDING_ADMIN_SHARED_EXPOSURE,
-            hosted_lab: Some(FindingError),
-            production: Some(ReadinessFail),
-            evidence_grade: Some(StartupFail),
-            condition: |input| input.admin_shared_exposure,
-        },
-        Gate {
-            id: FINDING_OPENAPI_PUBLIC,
-            hosted_lab: Some(FindingWarn),
-            production: Some(FindingError),
-            evidence_grade: Some(FindingError),
-            condition: |input| input.openapi_public,
-        },
-        Gate {
-            id: FINDING_CONFIG_UNSIGNED,
-            hosted_lab: Some(FindingWarn),
-            production: Some(FindingError),
-            evidence_grade: Some(StartupFail),
-            condition: |input| input.config_unsigned,
-        },
-        Gate {
-            id: FINDING_ASSISTED_ACCESS_TRANSACTION_TOKEN_ANCHOR_MISSING,
-            hosted_lab: Some(FindingError),
-            production: Some(ReadinessFail),
-            evidence_grade: Some(StartupFail),
-            condition: |input| {
-                input.self_attestation_enabled && !input.transaction_token_anchor_configured
-            },
-        },
-        Gate {
-            id: FINDING_ASSISTED_ACCESS_SENDER_CONSTRAINT_MISSING,
-            hosted_lab: Some(FindingWarn),
-            production: Some(FindingError),
-            evidence_grade: Some(ReadinessFail),
-            condition: |input| {
-                input.transaction_token_anchor_configured
-                    && !input.transaction_token_sender_constrained
-            },
-        },
-    ]
+        severities: severities(Some(FindingWarn), Some(FindingError), Some(ReadinessFail)),
+    },
+];
+
+fn gate_catalog() -> &'static [Gate<GateInput>] {
+    GATE_CATALOG
 }
 
-/// A finding produced by gate evaluation, ready to render into posture.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EvaluatedFinding {
-    pub id: String,
-    pub severity: GateSeverity,
-    pub status: DeploymentFindingStatus,
-    pub waiver: Option<EvaluatedWaiver>,
-}
-
-/// An active waiver echoed into posture so Trust Operations can review it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EvaluatedWaiver {
-    pub finding: String,
-    pub reason: String,
-    pub expires: String,
-}
-
-/// The full result of evaluating gates for a declared profile.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct GateEvaluation {
-    /// Finding ids whose effect is `startup_fail` (never waived). A non-empty
-    /// list means the process must refuse to start.
-    pub startup_failures: Vec<String>,
-    /// Finding ids whose effect is `readiness_fail`. The process runs but
-    /// readiness reports not-ready.
-    pub readiness_failures: Vec<String>,
-    /// Findings to render into posture, both active and waived.
-    pub findings: Vec<EvaluatedFinding>,
-    /// Active waivers, including ones whose gate is not currently triggered.
-    pub active_waivers: Vec<EvaluatedWaiver>,
-}
+pub type EvaluatedFinding = DeploymentFinding;
+pub type EvaluatedWaiver = DeploymentWaiver;
 
 /// Evaluate the gate catalog for a configuration snapshot.
 ///
@@ -380,104 +255,15 @@ pub fn evaluate_gates(
     waivers: &[DeploymentWaiverConfig],
     today: &str,
 ) -> GateEvaluation {
-    let Some(profile) = profile else {
-        return GateEvaluation {
-            startup_failures: Vec::new(),
-            readiness_failures: Vec::new(),
-            findings: vec![EvaluatedFinding {
-                id: FINDING_PROFILE_UNDECLARED.to_string(),
-                severity: GateSeverity::FindingWarn,
-                status: DeploymentFindingStatus::Active,
-                waiver: None,
-            }],
-            active_waivers: Vec::new(),
-        };
-    };
-
-    let mut evaluation = GateEvaluation::default();
-    let mut waived_findings: Vec<&DeploymentWaiverConfig> = Vec::new();
-
-    // An expired waiver stops suppressing its finding and additionally emits a
-    // diagnostic error finding so Trust Operations sees the lapse.
-    for waiver in waivers {
-        if waiver_is_expired(&waiver.expires, today) {
-            evaluation.findings.push(EvaluatedFinding {
-                id: FINDING_WAIVER_EXPIRED.to_string(),
-                severity: GateSeverity::FindingError,
-                status: DeploymentFindingStatus::Active,
-                waiver: Some(EvaluatedWaiver {
-                    finding: waiver.finding.clone(),
-                    reason: waiver.reason.clone(),
-                    expires: waiver.expires.clone(),
-                }),
-            });
-        } else {
-            let Some(severity) = gate_catalog()
-                .iter()
-                .find(|gate| gate.id == waiver.finding)
-                .and_then(|gate| gate.severity_for(profile))
-            else {
-                continue;
-            };
-            if !severity.is_waivable() {
-                continue;
-            }
-            waived_findings.push(waiver);
-            evaluation.active_waivers.push(EvaluatedWaiver {
-                finding: waiver.finding.clone(),
-                reason: waiver.reason.clone(),
-                expires: waiver.expires.clone(),
-            });
-        }
-    }
-
-    for gate in gate_catalog() {
-        let Some(severity) = gate.severity_for(profile) else {
-            continue;
-        };
-        if !(gate.condition)(input) {
-            continue;
-        }
-
-        // A waiver only suppresses waivable severities. startup_fail is never
-        // waivable, so even an active waiver leaves it as a hard failure.
-        let active_waiver = if severity.is_waivable() {
-            waived_findings
-                .iter()
-                .find(|waiver| waiver.finding == gate.id)
-                .copied()
-        } else {
-            None
-        };
-
-        if let Some(waiver) = active_waiver {
-            evaluation.findings.push(EvaluatedFinding {
-                id: gate.id.to_string(),
-                severity,
-                status: DeploymentFindingStatus::Waived,
-                waiver: Some(EvaluatedWaiver {
-                    finding: waiver.finding.clone(),
-                    reason: waiver.reason.clone(),
-                    expires: waiver.expires.clone(),
-                }),
-            });
-            continue;
-        }
-
-        match severity {
-            GateSeverity::StartupFail => evaluation.startup_failures.push(gate.id.to_string()),
-            GateSeverity::ReadinessFail => evaluation.readiness_failures.push(gate.id.to_string()),
-            GateSeverity::FindingError | GateSeverity::FindingWarn => {}
-        }
-        evaluation.findings.push(EvaluatedFinding {
-            id: gate.id.to_string(),
-            severity,
-            status: DeploymentFindingStatus::Active,
-            waiver: None,
-        });
-    }
-
-    evaluation
+    let waivers = waivers
+        .iter()
+        .map(|waiver| DeploymentWaiver {
+            finding: waiver.finding.clone(),
+            reason: waiver.reason.clone(),
+            expires: waiver.expires.clone(),
+        })
+        .collect::<Vec<_>>();
+    platform_ops::evaluate(profile, gate_catalog(), input, &waivers, today)
 }
 
 /// Parse a strict `YYYY-MM-DD` date into a comparable tuple.
@@ -493,20 +279,24 @@ fn parse_iso_date(value: &str) -> Option<(u16, u8, u8)> {
     let year: u16 = value.get(0..4)?.parse().ok()?;
     let month: u8 = value.get(5..7)?.parse().ok()?;
     let day: u8 = value.get(8..10)?.parse().ok()?;
-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+    if !(1..=12).contains(&month) {
+        return None;
+    }
+    let max_day = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if is_leap_year(year) => 29,
+        2 => 28,
+        _ => return None,
+    };
+    if day == 0 || day > max_day {
         return None;
     }
     Some((year, month, day))
 }
 
-/// A waiver is expired once its expiry date is strictly before today.
-fn waiver_is_expired(expires: &str, today: &str) -> bool {
-    match (parse_iso_date(expires), parse_iso_date(today)) {
-        (Some(_), Some(_)) => expires < today,
-        // An unparseable expiry was rejected at config load; treat it as
-        // expired here so a bad value never silently suppresses a finding.
-        _ => true,
-    }
+const fn is_leap_year(year: u16) -> bool {
+    year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400))
 }
 
 #[cfg(test)]
@@ -670,7 +460,11 @@ mod tests {
             .find(|finding| finding.id == FINDING_REPLAY_IN_MEMORY_HIGH_RISK)
             .expect("high-risk replay finding exists");
         assert_eq!(finding.status, DeploymentFindingStatus::Active);
-        assert!(evaluation.active_waivers.is_empty());
+        assert_eq!(evaluation.active_waivers.len(), 1);
+        assert_eq!(
+            evaluation.active_waivers[0].finding,
+            FINDING_REPLAY_IN_MEMORY_HIGH_RISK
+        );
     }
 
     #[test]
@@ -955,6 +749,7 @@ mod tests {
                         );
                     }
                     GateSeverity::FindingError | GateSeverity::FindingWarn => {}
+                    _ => {}
                 }
             }
         }
@@ -1003,8 +798,11 @@ mod tests {
     #[test]
     fn iso_date_parser_accepts_valid_and_rejects_invalid() {
         assert!(parse_iso_date("2026-06-13").is_some());
+        assert!(parse_iso_date("2024-02-29").is_some());
         assert!(parse_iso_date("2026-13-01").is_none());
         assert!(parse_iso_date("2026-06-32").is_none());
+        assert!(parse_iso_date("2026-02-31").is_none());
+        assert!(parse_iso_date("2025-02-29").is_none());
         assert!(parse_iso_date("2026/06/13").is_none());
         assert!(parse_iso_date("26-06-13").is_none());
     }
