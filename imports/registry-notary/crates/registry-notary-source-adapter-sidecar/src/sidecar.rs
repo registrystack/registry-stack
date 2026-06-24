@@ -346,6 +346,13 @@ pub struct RhaiTargetConfig {
     pub base_url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth: Option<HttpJsonAuthConfig>,
+    /// Static request headers added to every call to this target (e.g. `Accept`
+    /// or a vendor API-version header). Values are non-secret config and flow
+    /// through the governed `config_hash`. Restricted headers (auth, cookie,
+    /// host, hop-by-hop, forwarding) are rejected at validation; credentials
+    /// belong in `auth`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub headers: BTreeMap<String, String>,
     /// Non-2xx statuses this target's responses the script is allowed to
     /// observe (rather than terminating the run). Per-target; the engine is
     /// compiled with the union across all targets and the per-target gate is
@@ -560,12 +567,24 @@ pub struct HttpJsonCelExpression {
 pub struct HttpJsonAuthConfig {
     #[serde(rename = "type")]
     pub kind: HttpJsonAuthKind,
+    /// The secret credential field used as the bearer token (`bearer`) or the
+    /// API-key value (`api_key_header` / `api_key_query`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token: Option<HttpJsonSecretRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub username: Option<HttpJsonSecretRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub password: Option<HttpJsonSecretRef>,
+    /// Header name carrying the API key for `api_key_header` (e.g. `X-API-Key`).
+    /// The value is the resolved `token` secret. Restricted headers (auth,
+    /// cookie, host, hop-by-hop, forwarding) are rejected at validation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header: Option<String>,
+    /// Query-parameter name carrying the API key for `api_key_query` (e.g.
+    /// `api_key`). The value is the resolved `token` secret; it is appended to
+    /// the request URL by the host and is never logged or used in cache keys.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query_param: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -573,6 +592,10 @@ pub struct HttpJsonAuthConfig {
 pub enum HttpJsonAuthKind {
     Bearer,
     Basic,
+    /// Send the `token` secret in a configured request header (`header`).
+    ApiKeyHeader,
+    /// Send the `token` secret in a configured query parameter (`query_param`).
+    ApiKeyQuery,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -1982,27 +2005,7 @@ fn validate_http_json_source(source_id: &str, source: &SourceConfig) -> Result<(
         )?;
     }
     if let Some(auth) = &http_json.auth {
-        match auth.kind {
-            HttpJsonAuthKind::Bearer => {
-                validate_http_json_secret_ref(
-                    source_id,
-                    "http_json.auth.token.secret",
-                    auth.token.as_ref(),
-                )?;
-            }
-            HttpJsonAuthKind::Basic => {
-                validate_http_json_secret_ref(
-                    source_id,
-                    "http_json.auth.username.secret",
-                    auth.username.as_ref(),
-                )?;
-                validate_http_json_secret_ref(
-                    source_id,
-                    "http_json.auth.password.secret",
-                    auth.password.as_ref(),
-                )?;
-            }
-        }
+        validate_http_json_auth_config(source_id, "http_json.auth", auth)?;
     }
     Ok(())
 }
@@ -2155,27 +2158,11 @@ fn validate_http_flow_source(source_id: &str, source: &SourceConfig) -> Result<(
             }
         }
         if let Some(auth) = &step.request.auth {
-            match auth.kind {
-                HttpJsonAuthKind::Bearer => {
-                    validate_http_json_secret_ref(
-                        source_id,
-                        &format!("http_flow.steps.{}.request.auth.token.secret", step.id),
-                        auth.token.as_ref(),
-                    )?;
-                }
-                HttpJsonAuthKind::Basic => {
-                    validate_http_json_secret_ref(
-                        source_id,
-                        &format!("http_flow.steps.{}.request.auth.username.secret", step.id),
-                        auth.username.as_ref(),
-                    )?;
-                    validate_http_json_secret_ref(
-                        source_id,
-                        &format!("http_flow.steps.{}.request.auth.password.secret", step.id),
-                        auth.password.as_ref(),
-                    )?;
-                }
-            }
+            validate_http_json_auth_config(
+                source_id,
+                &format!("http_flow.steps.{}.request.auth", step.id),
+                auth,
+            )?;
         }
     }
     Ok(())
@@ -2361,29 +2348,25 @@ fn validate_rhai_source(source_id: &str, source: &SourceConfig) -> Result<(), Si
                 )));
             }
         }
+        for (name, value) in &target.headers {
+            validate_http_request_header_name(
+                source_id,
+                &format!("rhai.targets.{target_id}.headers.{name}"),
+                name,
+            )?;
+            if !is_valid_http_header_value(value) {
+                return Err(SidecarError::Config(format!(
+                    "source {source_id} rhai.targets.{target_id}.headers.{name} has an invalid value"
+                )));
+            }
+        }
         if let Some(auth) = &target.auth {
             requires_credential = true;
-            match auth.kind {
-                HttpJsonAuthKind::Bearer => {
-                    validate_http_json_secret_ref(
-                        source_id,
-                        &format!("rhai.targets.{target_id}.auth.token.secret"),
-                        auth.token.as_ref(),
-                    )?;
-                }
-                HttpJsonAuthKind::Basic => {
-                    validate_http_json_secret_ref(
-                        source_id,
-                        &format!("rhai.targets.{target_id}.auth.username.secret"),
-                        auth.username.as_ref(),
-                    )?;
-                    validate_http_json_secret_ref(
-                        source_id,
-                        &format!("rhai.targets.{target_id}.auth.password.secret"),
-                        auth.password.as_ref(),
-                    )?;
-                }
-            }
+            validate_http_json_auth_config(
+                source_id,
+                &format!("rhai.targets.{target_id}.auth"),
+                auth,
+            )?;
         }
     }
     // A credential env is only required when at least one target authenticates;
@@ -2612,6 +2595,132 @@ fn validate_http_json_secret_ref(
     Ok(())
 }
 
+/// Validate a shared `HttpJsonAuthConfig` for any engine (`http_json`,
+/// `http_flow`, or a `script_rhai` target). `label_prefix` is the config path up
+/// to and including `.auth`. Every kind names its secret via a top-level
+/// credential field; `api_key_*` additionally require a valid, non-restricted
+/// header name or query-parameter name. The secret value itself is resolved
+/// from the credential env at request time and never appears in config.
+fn validate_http_json_auth_config(
+    source_id: &str,
+    label_prefix: &str,
+    auth: &HttpJsonAuthConfig,
+) -> Result<(), SidecarError> {
+    match auth.kind {
+        HttpJsonAuthKind::Bearer => {
+            validate_http_json_secret_ref(
+                source_id,
+                &format!("{label_prefix}.token.secret"),
+                auth.token.as_ref(),
+            )?;
+        }
+        HttpJsonAuthKind::Basic => {
+            validate_http_json_secret_ref(
+                source_id,
+                &format!("{label_prefix}.username.secret"),
+                auth.username.as_ref(),
+            )?;
+            validate_http_json_secret_ref(
+                source_id,
+                &format!("{label_prefix}.password.secret"),
+                auth.password.as_ref(),
+            )?;
+        }
+        HttpJsonAuthKind::ApiKeyHeader => {
+            validate_http_json_secret_ref(
+                source_id,
+                &format!("{label_prefix}.token.secret"),
+                auth.token.as_ref(),
+            )?;
+            let Some(header) = auth.header.as_deref() else {
+                return Err(SidecarError::Config(format!(
+                    "source {source_id} {label_prefix}.header is required when type is api_key_header"
+                )));
+            };
+            validate_http_request_header_name(
+                source_id,
+                &format!("{label_prefix}.header"),
+                header,
+            )?;
+        }
+        HttpJsonAuthKind::ApiKeyQuery => {
+            validate_http_json_secret_ref(
+                source_id,
+                &format!("{label_prefix}.token.secret"),
+                auth.token.as_ref(),
+            )?;
+            let Some(param) = auth.query_param.as_deref() else {
+                return Err(SidecarError::Config(format!(
+                    "source {source_id} {label_prefix}.query_param is required when type is api_key_query"
+                )));
+            };
+            if !is_valid_http_param_name(param) {
+                return Err(SidecarError::Config(format!(
+                    "source {source_id} {label_prefix}.query_param is not a valid query parameter name"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// HTTP request headers a target/source must not set directly: authentication
+/// (use `auth`), cookies, host/length framing, hop-by-hop headers, and
+/// forwarding headers. Comparison is case-insensitive; the `proxy-` prefix is
+/// blanket-denied.
+fn is_restricted_request_header(name: &str) -> bool {
+    let lower = name.trim().to_ascii_lowercase();
+    if lower.starts_with("proxy-") {
+        return true;
+    }
+    matches!(
+        lower.as_str(),
+        "authorization"
+            | "cookie"
+            | "host"
+            | "content-length"
+            | "connection"
+            | "transfer-encoding"
+            | "te"
+            | "trailer"
+            | "upgrade"
+            | "keep-alive"
+            | "forwarded"
+            | "x-forwarded-for"
+            | "x-forwarded-host"
+            | "x-forwarded-proto"
+    )
+}
+
+/// Validate an operator-configured static request-header name: it must be a
+/// legal header name and must not be one of the restricted headers.
+fn validate_http_request_header_name(
+    source_id: &str,
+    label: &str,
+    name: &str,
+) -> Result<(), SidecarError> {
+    if !is_valid_http_param_name(name) {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} {label} is not a valid HTTP header name"
+        )));
+    }
+    if is_restricted_request_header(name) {
+        return Err(SidecarError::Config(format!(
+            "source {source_id} {label} sets a restricted header (auth, cookie, host, hop-by-hop, and forwarding headers are not allowed)"
+        )));
+    }
+    Ok(())
+}
+
+/// A static request-header value is valid if it carries no CR/LF/NUL or other
+/// ASCII control bytes (tab is permitted), preventing header injection. The
+/// value is operator config, not a secret.
+fn is_valid_http_header_value(value: &str) -> bool {
+    !value
+        .bytes()
+        .any(|byte| byte.is_ascii_control() && byte != b'\t')
+}
+
 fn validate_http_json_cel(
     source_id: &str,
     label: &str,
@@ -2782,6 +2891,11 @@ impl ScriptSourceHost for RhaiHttpHost {
                     builder = builder.query(&[(name.as_str(), rendered)]);
                 }
             }
+        }
+        // Static, operator-configured request headers (validated at startup as
+        // non-restricted). Applied before auth so they can never shadow it.
+        for (name, value) in &target_config.headers {
+            builder = builder.header(name, value);
         }
         builder = apply_http_json_auth(builder, target_config.auth.as_ref(), &self.credential)
             .map_err(map_source_execution_error)?;
@@ -4679,6 +4793,29 @@ fn apply_http_json_auth(
                 let username = credential_secret(credential, username_ref)?;
                 let password = credential_secret(credential, password_ref)?;
                 builder = builder.basic_auth(username, Some(password));
+            }
+            HttpJsonAuthKind::ApiKeyHeader => {
+                // Header name and secret-field name are config-validated at
+                // startup; the resolved value is the secret, never logged.
+                let header = auth
+                    .header
+                    .as_deref()
+                    .ok_or(SourceExecutionError::HttpJson)?;
+                let token_ref = auth.token.as_ref().ok_or(SourceExecutionError::HttpJson)?;
+                let token = credential_secret(credential, token_ref)?;
+                builder = builder.header(header, token);
+            }
+            HttpJsonAuthKind::ApiKeyQuery => {
+                // reqwest percent-encodes and appends the parameter. The cache
+                // key is built from request fields (not the URL), and the URL is
+                // never logged, so the secret does not leak via either path.
+                let param = auth
+                    .query_param
+                    .as_deref()
+                    .ok_or(SourceExecutionError::HttpJson)?;
+                let token_ref = auth.token.as_ref().ok_or(SourceExecutionError::HttpJson)?;
+                let token = credential_secret(credential, token_ref)?;
+                builder = builder.query(&[(param, token)]);
             }
         }
     }
