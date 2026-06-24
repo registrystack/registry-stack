@@ -248,10 +248,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          shopt -s globstar nullglob
           tag="${{ needs.verify.outputs.tag }}"
           notes="release/notes/${tag}.md"
-          assets=(dist/bin/* dist/image-evidence/**/*)
+          mapfile -d '' -t assets < <(find dist/bin dist/image-evidence -type f -print0 | sort -z)
           if [[ "${#assets[@]}" -eq 0 ]]; then
             echo "No release assets found" >&2
             exit 1
