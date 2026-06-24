@@ -21,6 +21,10 @@ helpers for registry services.
   handles whose service-owned canonical input stays outside the platform domain.
 - `AuditKeyHasher::sensitive_value_hash` for generic field-bound audit lookup
   values used by redaction helpers.
+- `ComplianceContext` for additive, flattened compliance audit fields shared by
+  Registry services.
+- Frozen `subject-correlation-v1` and `dsar-subject-ref-v1` pseudonym helpers
+  over reviewed subject handles.
 
 ## Typical Use
 
@@ -96,6 +100,10 @@ fn verify_against_stored_tail(
 - Use `AuditKeyHasher::audit_reference_hash` for durable audit references
   instead of concatenating ad hoc hash inputs in each service. Keep service
   semantics and canonicalization in the consuming service.
+- Embed `ComplianceContext` with `#[serde(default, flatten)]` so absent
+  compliance fields remain a no-op for existing records.
+- Use the subject pseudonym helpers only with reviewed matched/source handles,
+  never raw identifier attributes.
 - Redaction helpers intentionally avoid preserving email local parts, phone
   digits, or sensitive query values.
 

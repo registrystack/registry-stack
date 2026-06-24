@@ -49,6 +49,9 @@
     "deployment": {
       "$ref": "#/$defs/deployment"
     },
+    "compliance": {
+      "$ref": "#/$defs/compliance_posture"
+    },
     "audit": {
       "$ref": "#/$defs/audit_assurance"
     },
@@ -378,7 +381,7 @@
     },
     "finding_id": {
       "type": "string",
-      "pattern": "^[a-z][a-z0-9]*(?:\\.[a-z][a-z0-9_-]*)*$"
+      "pattern": "^[a-z][a-z0-9_-]*(?:\\.[a-z][a-z0-9_-]*)*$"
     },
     "gate_severity": {
       "enum": [
@@ -458,6 +461,99 @@
           "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
         }
       }
+    },
+    "compliance_posture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "regimes",
+        "findings",
+        "not_applicable"
+      ],
+      "properties": {
+        "regimes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/compliance_finding"
+          }
+        },
+        "not_applicable": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/compliance_not_applicable"
+          }
+        }
+      }
+    },
+    "compliance_finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "regime_severities",
+        "status",
+        "kind",
+        "discharges"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/finding_id"
+        },
+        "regime_severities": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "$ref": "#/$defs/gate_severity"
+          }
+        },
+        "status": {
+          "$ref": "#/$defs/deployment_finding_status"
+        },
+        "kind": {
+          "enum": [
+            "observed",
+            "asserted"
+          ]
+        },
+        "discharges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/compliance_obligation_ref"
+          }
+        },
+        "waiver": {
+          "$ref": "#/$defs/deployment_finding_waiver"
+        }
+      }
+    },
+    "compliance_not_applicable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "obligation",
+        "reason"
+      ],
+      "properties": {
+        "obligation": {
+          "$ref": "#/$defs/compliance_obligation_ref"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "compliance_obligation_ref": {
+      "type": "string",
+      "pattern": "^(https?://|registrystack:)[^\\s]+$"
     },
     "audit_assurance": {
       "type": "object",

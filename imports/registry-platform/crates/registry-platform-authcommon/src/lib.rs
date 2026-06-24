@@ -24,6 +24,73 @@ const MAX_FINGERPRINT_FILE_BYTES: u64 = (FINGERPRINT_PREFIX.len() + SHA256_HEX_L
 /// of material before they are hashed and distributed.
 pub const MIN_API_KEY_ENTROPY_BYTES: usize = 32;
 
+/// Shared stable `auth.*` codes for common authentication and authorization
+/// failures.
+///
+/// Product-specific auth failures should define product-owned codes instead of
+/// extending this shared vocabulary.
+pub mod auth_codes {
+    /// No supported credential was presented.
+    pub const MISSING: &str = "auth.missing_credential";
+    /// A credential was present but did not match the required syntax.
+    pub const MALFORMED: &str = "auth.malformed_credential";
+    /// A credential was syntactically valid but failed verification.
+    pub const INVALID: &str = "auth.invalid_credential";
+    /// More than one supported credential was presented.
+    pub const MULTIPLE_CREDENTIALS: &str = "auth.multiple_credentials";
+    /// The caller is authenticated but lacks a required scope.
+    pub const SCOPE_DENIED: &str = "auth.scope_denied";
+    /// The route requires a purpose value and none was supplied.
+    pub const PURPOSE_REQUIRED: &str = "auth.purpose_required";
+    /// The supplied purpose is not permitted for this operation.
+    pub const PURPOSE_DENIED: &str = "auth.purpose_denied";
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum AuthFailureCode {
+    /// No supported credential was presented.
+    Missing,
+    /// A credential was present but did not match the required syntax.
+    Malformed,
+    /// A credential was syntactically valid but failed verification.
+    Invalid,
+    /// More than one supported credential was presented.
+    MultipleCredentials,
+    /// The caller is authenticated but lacks a required scope.
+    ScopeDenied,
+    /// The route requires a purpose value and none was supplied.
+    PurposeRequired,
+    /// The supplied purpose is not permitted for this operation.
+    PurposeDenied,
+}
+
+impl AuthFailureCode {
+    /// All shared overlapping auth failure codes.
+    pub const ALL: [Self; 7] = [
+        Self::Missing,
+        Self::Malformed,
+        Self::Invalid,
+        Self::MultipleCredentials,
+        Self::ScopeDenied,
+        Self::PurposeRequired,
+        Self::PurposeDenied,
+    ];
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Missing => auth_codes::MISSING,
+            Self::Malformed => auth_codes::MALFORMED,
+            Self::Invalid => auth_codes::INVALID,
+            Self::MultipleCredentials => auth_codes::MULTIPLE_CREDENTIALS,
+            Self::ScopeDenied => auth_codes::SCOPE_DENIED,
+            Self::PurposeRequired => auth_codes::PURPOSE_REQUIRED,
+            Self::PurposeDenied => auth_codes::PURPOSE_DENIED,
+        }
+    }
+}
+
 /// Error returned when an `Authorization: Bearer` value does not match the
 /// platform's RFC 6750 profile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -421,9 +488,58 @@ fn hex_lower(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use proptest::prelude::*;
+    use std::collections::BTreeSet;
     use std::io::Write;
 
     const SAMPLE_KEY: &str = "0123456789abcdef0123456789abcdef";
+
+    #[test]
+    fn auth_failure_codes_are_stable_and_unique() {
+        let expected = [
+            (
+                AuthFailureCode::Missing,
+                auth_codes::MISSING,
+                "auth.missing_credential",
+            ),
+            (
+                AuthFailureCode::Malformed,
+                auth_codes::MALFORMED,
+                "auth.malformed_credential",
+            ),
+            (
+                AuthFailureCode::Invalid,
+                auth_codes::INVALID,
+                "auth.invalid_credential",
+            ),
+            (
+                AuthFailureCode::MultipleCredentials,
+                auth_codes::MULTIPLE_CREDENTIALS,
+                "auth.multiple_credentials",
+            ),
+            (
+                AuthFailureCode::ScopeDenied,
+                auth_codes::SCOPE_DENIED,
+                "auth.scope_denied",
+            ),
+            (
+                AuthFailureCode::PurposeRequired,
+                auth_codes::PURPOSE_REQUIRED,
+                "auth.purpose_required",
+            ),
+            (
+                AuthFailureCode::PurposeDenied,
+                auth_codes::PURPOSE_DENIED,
+                "auth.purpose_denied",
+            ),
+        ];
+        let mut seen = BTreeSet::new();
+        for (code, public_const, expected_str) in expected {
+            assert_eq!(code.as_str(), public_const);
+            assert_eq!(public_const, expected_str);
+            assert!(seen.insert(public_const));
+        }
+        assert_eq!(AuthFailureCode::ALL.len(), expected.len());
+    }
 
     #[test]
     fn parse_bearer_token_accepts_case_insensitive_scheme() {

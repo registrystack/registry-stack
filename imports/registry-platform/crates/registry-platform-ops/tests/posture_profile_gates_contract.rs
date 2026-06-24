@@ -1,12 +1,15 @@
 use registry_platform_ops::{
     AuditAnchoring, AuditAssurance, AuditCheckpoints, AuditHashChain, AuditKeyedIntegrity,
-    AuditRedactionMode, AuditRetentionOwner, AuditSinkClass, AuditWritePolicy, DeploymentFinding,
-    DeploymentFindingStatus, DeploymentFindingWaiver, DeploymentProfile, DeploymentWaiver,
-    GateSeverity, POSTURE_SCHEMA_V1,
+    AuditRedactionMode, AuditRetentionOwner, AuditSinkClass, AuditWritePolicy, ComplianceFinding,
+    ComplianceFindingKind, CompliancePosture, DeploymentFinding, DeploymentFindingStatus,
+    DeploymentFindingWaiver, DeploymentProfile, DeploymentWaiver, Gate, GateSeverity,
+    ProfileGateSeverities, POSTURE_SCHEMA_V1, PROFILE_UNDECLARED_FINDING_ID,
+    WAIVER_EXPIRED_FINDING_ID,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 
 fn parse(input: &str) -> Value {
     serde_json::from_str(input).expect("fixture parses as JSON")
@@ -170,6 +173,257 @@ fn posture_profile_gate_structs_round_trip_and_accept_unknown_finding_ids() {
             "expires": "2026-07-01"
         }),
     );
+}
+
+#[test]
+fn generic_gate_engine_uses_strict_waivers_and_framework_findings() {
+    #[derive(Clone, Copy)]
+    struct Facts {
+        risky: bool,
+        noisy: bool,
+    }
+
+    const CATALOG: &[Gate<Facts>] = &[
+        Gate {
+            id: "product.risky",
+            condition: |facts| facts.risky,
+            severities: ProfileGateSeverities {
+                local: None,
+                hosted_lab: Some(GateSeverity::FindingWarn),
+                production: Some(GateSeverity::ReadinessFail),
+                evidence_grade: Some(GateSeverity::StartupFail),
+            },
+        },
+        Gate {
+            id: "product.noisy",
+            condition: |facts| facts.noisy,
+            severities: ProfileGateSeverities {
+                local: None,
+                hosted_lab: Some(GateSeverity::FindingWarn),
+                production: Some(GateSeverity::FindingWarn),
+                evidence_grade: Some(GateSeverity::FindingError),
+            },
+        },
+    ];
+
+    let facts = Facts {
+        risky: true,
+        noisy: true,
+    };
+    let waivers = vec![
+        DeploymentWaiver {
+            finding: "product.risky".to_string(),
+            reason: "not allowed to suppress readiness".to_string(),
+            expires: "2026-07-01".to_string(),
+        },
+        DeploymentWaiver {
+            finding: "product.noisy".to_string(),
+            reason: "accepted temporary posture finding".to_string(),
+            expires: "2026-07-01".to_string(),
+        },
+        DeploymentWaiver {
+            finding: "product.expired".to_string(),
+            reason: "stale exception".to_string(),
+            expires: "2026-06-01".to_string(),
+        },
+    ];
+
+    let evaluation = registry_platform_ops::evaluate(
+        Some(DeploymentProfile::Production),
+        CATALOG,
+        &facts,
+        &waivers,
+        "2026-06-24",
+    );
+
+    assert_eq!(evaluation.readiness_failures, vec!["product.risky"]);
+    assert!(evaluation.startup_failures.is_empty());
+    assert_eq!(evaluation.active_waivers.len(), 2);
+    assert_eq!(evaluation.findings[0].id, "product.risky");
+    assert_eq!(
+        evaluation.findings[0].status,
+        DeploymentFindingStatus::Active
+    );
+    assert_eq!(evaluation.findings[1].id, "product.noisy");
+    assert_eq!(
+        evaluation.findings[1].status,
+        DeploymentFindingStatus::Waived
+    );
+    assert_eq!(evaluation.findings[2].id, WAIVER_EXPIRED_FINDING_ID);
+
+    let undeclared = registry_platform_ops::evaluate(None, CATALOG, &facts, &[], "2026-06-24");
+    assert_eq!(undeclared.findings.len(), 1);
+    assert_eq!(undeclared.findings[0].id, PROFILE_UNDECLARED_FINDING_ID);
+    assert!(undeclared.startup_failures.is_empty());
+    assert!(undeclared.readiness_failures.is_empty());
+}
+
+#[test]
+fn generic_gate_engine_treats_impossible_waiver_dates_as_expired() {
+    #[derive(Clone, Copy)]
+    struct Facts {
+        risky: bool,
+    }
+
+    const CATALOG: &[Gate<Facts>] = &[Gate {
+        id: "product.risky",
+        condition: |facts| facts.risky,
+        severities: ProfileGateSeverities {
+            local: None,
+            hosted_lab: Some(GateSeverity::FindingWarn),
+            production: Some(GateSeverity::FindingWarn),
+            evidence_grade: Some(GateSeverity::FindingWarn),
+        },
+    }];
+
+    for expires in ["2026-02-31", "2025-02-29"] {
+        let evaluation = registry_platform_ops::evaluate(
+            Some(DeploymentProfile::Production),
+            CATALOG,
+            &Facts { risky: true },
+            &[DeploymentWaiver {
+                finding: "product.risky".to_string(),
+                reason: "invalid date must not suppress".to_string(),
+                expires: expires.to_string(),
+            }],
+            "2026-02-01",
+        );
+        assert!(evaluation.active_waivers.is_empty());
+        assert_eq!(evaluation.findings[0].id, "product.risky");
+        assert_eq!(
+            evaluation.findings[0].status,
+            DeploymentFindingStatus::Active
+        );
+        assert_eq!(evaluation.findings[1].id, WAIVER_EXPIRED_FINDING_ID);
+    }
+
+    let leap_day = registry_platform_ops::evaluate(
+        Some(DeploymentProfile::Production),
+        CATALOG,
+        &Facts { risky: true },
+        &[DeploymentWaiver {
+            finding: "product.risky".to_string(),
+            reason: "valid leap day".to_string(),
+            expires: "2024-02-29".to_string(),
+        }],
+        "2024-02-29",
+    );
+    assert_eq!(leap_day.active_waivers.len(), 1);
+    assert_eq!(leap_day.findings[0].status, DeploymentFindingStatus::Waived);
+}
+
+#[test]
+fn compliance_posture_types_round_trip_and_reuse_gate_vocabularies() {
+    let empty = CompliancePosture::for_declared_regimes(Vec::<String>::new());
+    assert_eq!(empty, None);
+
+    let posture = CompliancePosture::for_declared_regimes(["gdpr"]).expect("gdpr posture");
+    assert_eq!(posture.regimes, vec!["gdpr"]);
+    assert!(posture.findings.is_empty());
+    assert_eq!(posture.not_applicable.len(), 4);
+
+    let mut regime_severities = BTreeMap::new();
+    regime_severities.insert("gdpr".to_string(), GateSeverity::FindingWarn);
+    round_trip(
+        ComplianceFinding {
+            id: "compliance.example".to_string(),
+            regime_severities,
+            status: DeploymentFindingStatus::Active,
+            kind: ComplianceFindingKind::Asserted,
+            discharges: vec!["https://w3id.org/dpv#Purpose".to_string()],
+            waiver: None,
+        },
+        json!({
+            "id": "compliance.example",
+            "regime_severities": { "gdpr": "finding_warn" },
+            "status": "active",
+            "kind": "asserted",
+            "discharges": ["https://w3id.org/dpv#Purpose"]
+        }),
+    );
+}
+
+#[test]
+fn posture_schema_accepts_compliance_block_and_rejects_bad_vocabulary() {
+    let validator = posture_validator();
+    let mut posture = parse(registry_platform_ops::RELAY_POSTURE_EXAMPLE_V1);
+    posture["compliance"] = serde_json::to_value(
+        CompliancePosture::for_declared_regimes(["gdpr"]).expect("compliance posture"),
+    )
+    .expect("compliance posture serializes");
+    assert_valid(&validator, &posture);
+
+    let mut with_finding = posture.clone();
+    with_finding["compliance"]["findings"] = json!([
+        {
+            "id": "compliance.audit.evidence",
+            "regime_severities": { "gdpr": "finding_warn" },
+            "status": "active",
+            "kind": "observed",
+            "discharges": ["https://w3id.org/dpv#Process"]
+        }
+    ]);
+    assert_valid(&validator, &with_finding);
+
+    let mut empty_regimes = posture.clone();
+    empty_regimes["compliance"]["regimes"] = json!([]);
+    assert_invalid(&validator, &empty_regimes);
+
+    let mut unknown_kind = with_finding.clone();
+    unknown_kind["compliance"]["findings"][0]["kind"] = json!("claimed");
+    assert_invalid(&validator, &unknown_kind);
+
+    let mut unknown_severity = with_finding.clone();
+    unknown_severity["compliance"]["findings"][0]["regime_severities"]["gdpr"] = json!("critical");
+    assert_invalid(&validator, &unknown_severity);
+}
+
+#[test]
+fn default_filter_preserves_compliance_public_block_without_waiver_reasons() {
+    let validator = posture_validator();
+    let mut posture = parse(registry_platform_ops::RELAY_POSTURE_EXAMPLE_V1);
+    posture["compliance"] = json!({
+        "regimes": ["gdpr"],
+        "findings": [
+            {
+                "id": "compliance.audit.evidence",
+                "regime_severities": { "gdpr": "finding_warn" },
+                "status": "waived",
+                "kind": "asserted",
+                "discharges": ["https://w3id.org/dpv#Process"],
+                "waiver": {
+                    "reason": "operator-only compliance note",
+                    "expires": "2026-07-01"
+                }
+            }
+        ],
+        "not_applicable": [
+            {
+                "obligation": "registrystack:gdpr.art7.consent_capture",
+                "reason": "Consent capture is outside the platform posture MVP."
+            }
+        ]
+    });
+
+    let filtered = registry_platform_ops::filter_posture_for_tier(
+        posture,
+        registry_platform_ops::PostureTier::Default,
+    )
+    .expect("default posture filters");
+    assert_valid(&validator, &filtered);
+    assert_eq!(filtered["compliance"]["regimes"], json!(["gdpr"]));
+    assert_eq!(
+        filtered["compliance"]["findings"][0]["regime_severities"]["gdpr"],
+        json!("finding_warn")
+    );
+    assert!(filtered["compliance"]["findings"][0]
+        .as_object()
+        .expect("finding object")
+        .get("waiver")
+        .is_none());
+    assert!(!serde_json::to_string(&filtered)
+        .expect("filtered posture renders")
+        .contains("operator-only compliance note"));
 }
 
 #[test]

@@ -7,6 +7,10 @@ and the shared emit-only sensitivity-tier filter for admin-scoped posture
 documents. It does not implement Relay or Notary endpoints and does not depend
 on private control-plane or internal planning repositories.
 
+It also owns the shared deployment gate vocabulary and generic gate evaluator
+used by product-owned gate catalogs, plus the optional compliance posture block
+vocabulary for declared regulatory scope.
+
 Runtime services currently emit the default posture projection. The restricted
 tier is a schema and fixture contract for future/admin-gated posture surfaces;
 it documents fields that are valid in the contract but excluded from default
@@ -15,8 +19,8 @@ runtime output.
 ## Assets
 
 - `schemas/registry.ops.posture.v1.schema.json` defines the shared posture
-  envelope, artifact reference shape, finding shape, and `posture.audit`
-  summary shape.
+  envelope, deployment gate fields, optional compliance block, artifact
+  reference shape, finding shape, and `posture.audit` summary shape.
 - `examples/registry-relay.posture.valid.json` is a valid default Relay posture.
 - `examples/registry-notary.posture.valid.json` is a valid default Notary
   posture.

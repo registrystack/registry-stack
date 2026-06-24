@@ -31,6 +31,8 @@ const KEYED_HASH_PREFIX: &str = "hmac-sha256:";
 const UNKEYED_HASH_PREFIX: &str = "sha256:";
 const CHAIN_HMAC_CONTEXT: &[u8] = b"registry-platform-audit-chain-v1";
 const AUDIT_REFERENCE_HASH_CONTEXT: &str = "registry-platform:audit-reference:v1";
+pub const SUBJECT_CORRELATION_PSEUDONYM_DOMAIN_V1: &str = "subject-correlation-v1";
+pub const DSAR_SUBJECT_REF_PSEUDONYM_DOMAIN_V1: &str = "dsar-subject-ref-v1";
 
 /// HKDF-Expand `info` label deriving the chain-integrity sub-key (AUDIT-03).
 const CHAIN_KEY_DERIVATION_INFO: &[u8] = b"registry-platform-audit/chain-key/v1";
@@ -53,6 +55,27 @@ pub struct AuditEnvelope {
     /// serialized as lowercase hex in JSONL.
     #[serde(with = "hash_hex")]
     pub record_hash: [u8; 32],
+}
+
+/// Shared compliance audit vocabulary for flattened event records.
+///
+/// Consumers embed this with `#[serde(default, flatten)]`. Empty values serialize
+/// to no fields, preserving existing audit record shapes when compliance context
+/// is absent.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+pub struct ComplianceContext {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub purpose_scope: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legal_basis_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub compliance_regimes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject_pseudonym: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pseudonym_domain: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pseudonym_key_id: Option<String>,
 }
 
 impl fmt::Debug for AuditEnvelope {
@@ -806,6 +829,49 @@ impl AuditKeyHasher {
         Ok(self.hash(&input))
     }
 
+    /// Compute a routine, purpose-scoped subject pseudonym.
+    ///
+    /// Returns `Ok(None)` unless `subject_type`, `subject_handle`, and
+    /// `purpose_scope` are present and already normalized. Callers remain
+    /// responsible for ensuring `subject_handle` is a reviewed matched/source
+    /// handle, not raw identifier attributes.
+    pub fn subject_correlation_pseudonym(
+        &self,
+        subject_type: &str,
+        subject_handle: Option<&str>,
+        purpose_scope: Option<&str>,
+    ) -> Result<Option<String>, AuditReferenceHashError> {
+        let Some(canonical_input) =
+            subject_correlation_canonical_input(subject_type, subject_handle, purpose_scope)
+        else {
+            return Ok(None);
+        };
+        self.audit_reference_hash(
+            SUBJECT_CORRELATION_PSEUDONYM_DOMAIN_V1,
+            "",
+            &canonical_input,
+        )
+        .map(Some)
+    }
+
+    /// Compute a purpose-independent DSAR/erasure subject reference.
+    ///
+    /// This helper is for authorized DSAR/erasure flows only. It returns
+    /// `Ok(None)` when the reviewed `subject_handle` is absent or not
+    /// normalized.
+    pub fn dsar_subject_ref(
+        &self,
+        subject_type: &str,
+        subject_handle: Option<&str>,
+    ) -> Result<Option<String>, AuditReferenceHashError> {
+        let Some(canonical_input) = dsar_subject_ref_canonical_input(subject_type, subject_handle)
+        else {
+            return Ok(None);
+        };
+        self.audit_reference_hash(DSAR_SUBJECT_REF_PSEUDONYM_DOMAIN_V1, "", &canonical_input)
+            .map(Some)
+    }
+
     /// Hash a sensitive audit lookup value under a field-bound platform class.
     ///
     /// This is appropriate for generic redaction surfaces such as URL query
@@ -826,6 +892,62 @@ fn audit_reference_hash_input(class: &str, scope: &str, canonical_input: &str) -
         scope.len(),
         canonical_input.len()
     )
+}
+
+#[must_use]
+pub fn subject_correlation_canonical_input(
+    subject_type: &str,
+    subject_handle: Option<&str>,
+    purpose_scope: Option<&str>,
+) -> Option<String> {
+    let subject_type = normalized_non_empty(subject_type)?;
+    let subject_handle = normalized_non_empty(subject_handle?)?;
+    let purpose_scope = normalized_non_empty(purpose_scope?)?;
+    let input = SubjectCorrelationCanonicalInput {
+        class: SUBJECT_CORRELATION_PSEUDONYM_DOMAIN_V1,
+        version: 1,
+        subject_type,
+        subject_handle,
+        purpose_scope,
+    };
+    Some(serde_json::to_string(&input).expect("canonical pseudonym input serializes"))
+}
+
+#[must_use]
+pub fn dsar_subject_ref_canonical_input(
+    subject_type: &str,
+    subject_handle: Option<&str>,
+) -> Option<String> {
+    let subject_type = normalized_non_empty(subject_type)?;
+    let subject_handle = normalized_non_empty(subject_handle?)?;
+    let input = DsarSubjectRefCanonicalInput {
+        class: DSAR_SUBJECT_REF_PSEUDONYM_DOMAIN_V1,
+        version: 1,
+        subject_type,
+        subject_handle,
+    };
+    Some(serde_json::to_string(&input).expect("canonical pseudonym input serializes"))
+}
+
+fn normalized_non_empty(value: &str) -> Option<&str> {
+    (!value.is_empty() && value.trim() == value).then_some(value)
+}
+
+#[derive(Serialize)]
+struct SubjectCorrelationCanonicalInput<'a> {
+    class: &'static str,
+    version: u8,
+    subject_type: &'a str,
+    subject_handle: &'a str,
+    purpose_scope: &'a str,
+}
+
+#[derive(Serialize)]
+struct DsarSubjectRefCanonicalInput<'a> {
+    class: &'static str,
+    version: u8,
+    subject_type: &'a str,
+    subject_handle: &'a str,
 }
 
 pub mod redact {
@@ -2207,6 +2329,157 @@ mod tests {
         assert!(hasher
             .sensitive_value_hash("empty", "")
             .starts_with(UNKEYED_HASH_PREFIX));
+    }
+
+    #[test]
+    fn compliance_context_flattens_and_omits_empty_fields() {
+        #[derive(Debug, Deserialize, PartialEq, Serialize)]
+        struct Event {
+            event: String,
+            #[serde(default, flatten)]
+            compliance: ComplianceContext,
+        }
+
+        let old: Event =
+            serde_json::from_value(json!({ "event": "credential.issued" })).expect("old event");
+        assert_eq!(old.compliance, ComplianceContext::default());
+
+        let empty = serde_json::to_value(&old).expect("event serializes");
+        assert_eq!(empty, json!({ "event": "credential.issued" }));
+
+        let enriched = Event {
+            event: "credential.issued".to_string(),
+            compliance: ComplianceContext {
+                purpose_scope: Some("benefits:eligibility".to_string()),
+                legal_basis_ref: Some("dpv:PublicInterest".to_string()),
+                compliance_regimes: vec!["gdpr".to_string()],
+                subject_pseudonym: Some("hmac-sha256:abc".to_string()),
+                pseudonym_domain: Some(SUBJECT_CORRELATION_PSEUDONYM_DOMAIN_V1.to_string()),
+                pseudonym_key_id: Some("compliance-key-2026q2".to_string()),
+            },
+        };
+        let encoded = serde_json::to_value(enriched).expect("event serializes");
+        assert_eq!(encoded["event"], json!("credential.issued"));
+        assert_eq!(encoded["purpose_scope"], json!("benefits:eligibility"));
+        assert_eq!(encoded["legal_basis_ref"], json!("dpv:PublicInterest"));
+        assert_eq!(encoded["compliance_regimes"], json!(["gdpr"]));
+        assert_eq!(
+            encoded["pseudonym_domain"],
+            json!(SUBJECT_CORRELATION_PSEUDONYM_DOMAIN_V1)
+        );
+        assert!(encoded.get("compliance").is_none());
+    }
+
+    #[test]
+    fn subject_correlation_pseudonym_is_purpose_scoped_and_skips_missing_inputs() {
+        let hasher = AuditKeyHasher::unkeyed_dev_only();
+        let canonical = subject_correlation_canonical_input(
+            "person",
+            Some("matched:abc"),
+            Some("benefits:eligibility"),
+        )
+        .expect("canonical input");
+        assert_eq!(
+            canonical,
+            r#"{"class":"subject-correlation-v1","version":1,"subject_type":"person","subject_handle":"matched:abc","purpose_scope":"benefits:eligibility"}"#
+        );
+
+        let first = hasher
+            .subject_correlation_pseudonym(
+                "person",
+                Some("matched:abc"),
+                Some("benefits:eligibility"),
+            )
+            .expect("pseudonym")
+            .expect("present");
+        let second = hasher
+            .subject_correlation_pseudonym(
+                "person",
+                Some("matched:abc"),
+                Some("benefits:eligibility"),
+            )
+            .expect("pseudonym")
+            .expect("present");
+        let other_purpose = hasher
+            .subject_correlation_pseudonym("person", Some("matched:abc"), Some("casework:audit"))
+            .expect("pseudonym")
+            .expect("present");
+
+        assert!(first.starts_with(UNKEYED_HASH_PREFIX));
+        assert_eq!(first, second);
+        assert_ne!(first, other_purpose);
+        assert_eq!(
+            hasher
+                .subject_correlation_pseudonym("person", None, Some("benefits:eligibility"))
+                .expect("missing handle skips"),
+            None
+        );
+        assert_eq!(
+            hasher
+                .subject_correlation_pseudonym("person", Some("matched:abc"), None)
+                .expect("missing purpose skips"),
+            None
+        );
+        assert_eq!(
+            hasher
+                .subject_correlation_pseudonym(
+                    "person",
+                    Some("matched:abc"),
+                    Some(" benefits:eligibility")
+                )
+                .expect("unnormalized purpose skips"),
+            None
+        );
+    }
+
+    #[test]
+    fn dsar_subject_ref_is_purpose_independent_and_key_bound() {
+        let first_secret =
+            AuditHashSecret::new(b"first-32-byte-compliance-secret-ok".to_vec()).expect("secret");
+        let second_secret =
+            AuditHashSecret::new(b"second-32-byte-compliance-secret-ok".to_vec()).expect("secret");
+        let first_hasher = AuditKeyHasher::Keyed(first_secret);
+        let second_hasher = AuditKeyHasher::Keyed(second_secret);
+
+        let canonical =
+            dsar_subject_ref_canonical_input("person", Some("matched:abc")).expect("canonical");
+        assert_eq!(
+            canonical,
+            r#"{"class":"dsar-subject-ref-v1","version":1,"subject_type":"person","subject_handle":"matched:abc"}"#
+        );
+
+        let dsar_a = first_hasher
+            .dsar_subject_ref("person", Some("matched:abc"))
+            .expect("dsar")
+            .expect("present");
+        let dsar_b = first_hasher
+            .dsar_subject_ref("person", Some("matched:abc"))
+            .expect("dsar")
+            .expect("present");
+        let routine_a = first_hasher
+            .subject_correlation_pseudonym("person", Some("matched:abc"), Some("purpose:a"))
+            .expect("routine")
+            .expect("present");
+        let routine_b = first_hasher
+            .subject_correlation_pseudonym("person", Some("matched:abc"), Some("purpose:b"))
+            .expect("routine")
+            .expect("present");
+        let other_key = second_hasher
+            .dsar_subject_ref("person", Some("matched:abc"))
+            .expect("dsar")
+            .expect("present");
+
+        assert!(dsar_a.starts_with(KEYED_HASH_PREFIX));
+        assert_eq!(dsar_a, dsar_b);
+        assert_ne!(routine_a, routine_b);
+        assert_ne!(dsar_a, routine_a);
+        assert_ne!(dsar_a, other_key);
+        assert_eq!(
+            first_hasher
+                .dsar_subject_ref("person", None)
+                .expect("missing handle skips"),
+            None
+        );
     }
 
     #[test]

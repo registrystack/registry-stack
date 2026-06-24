@@ -11,6 +11,8 @@ Axum and Tower helpers for browser-facing HTTP security.
 - Conditional Cross-Origin-Resource-Policy handling.
 - Request body limit layer construction.
 - RFC 9457 Problem Details responses with `application/problem+json`.
+- `ProductProblemBuilder` for product Problem Details with a stable `code`
+  extension.
 - A standard body-limit problem response.
 
 ## Typical Use
@@ -36,6 +38,23 @@ let app = Router::new()
 let _ = app;
 ```
 
+```rust
+use axum::http::StatusCode;
+use registry_platform_httpsec::ProductProblemBuilder;
+
+let problem = ProductProblemBuilder::new(
+    "https://registry-relay.dev/problems",
+    "auth.missing_credential",
+    "Authentication Required",
+    StatusCode::UNAUTHORIZED,
+)
+.detail("authentication credentials are required")
+.request_id("req_123")
+.build();
+
+let _ = problem;
+```
+
 ## Behavior
 
 - Wildcard CORS origins are rejected.
@@ -43,6 +62,8 @@ let _ = app;
 - HTTPS origins are accepted. HTTP origins are accepted only for loopback
   development origins.
 - Existing security headers are preserved when `security_headers` is applied.
+- Product Problem Details derive `type` as `{base_uri}/{code}` and include the
+  stable `code` extension member.
 
 ## Security Notes
 
