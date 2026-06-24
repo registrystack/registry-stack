@@ -1,0 +1,46 @@
+[package]
+name = "registry-notary-source-adapter-sidecar"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Registry Notary governed source adapter sidecar runtime."
+readme = "README.md"
+repository.workspace = true
+publish = false
+
+[dependencies]
+async-trait.workspace = true
+axum.workspace = true
+chrono = { version = "0.4" }
+clap.workspace = true
+crosswalk-core.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_norway.workspace = true
+registry-notary-source-adapter-rhai = { version = "0.6.2", path = "../registry-notary-source-adapter-rhai" }
+registry-platform-authcommon.workspace = true
+registry-platform-audit.workspace = true
+registry-platform-config.workspace = true
+registry-platform-ops.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-util", "process"] }
+tough = { version = "0.22.0" }
+tower.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = { version = "0.2" }
+
+[dev-dependencies]
+axum-test = { version = "20" }
+tempfile = { version = "3" }
+
+[[bin]]
+name = "registry-notary-source-adapter-sidecar"
+path = "src/main.rs"
+test = false

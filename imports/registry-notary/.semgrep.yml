@@ -1,0 +1,32 @@
+rules:
+  - id: registry-notary.no-full-env-dump
+    message: Do not collect or log the full process environment.
+    severity: ERROR
+    languages: [rust]
+    pattern: std::env::vars()
+
+  - id: registry-notary.no-danger-invalid-certs
+    message: Do not disable TLS certificate validation outside a reviewed local test helper.
+    severity: ERROR
+    languages: [rust]
+    pattern: danger_accept_invalid_certs(true)
+    paths:
+      exclude:
+        - /crates/**/tests/**
+
+  - id: registry-notary.no-write-all-actions
+    message: GitHub Actions must not use write-all permissions.
+    severity: ERROR
+    languages: [yaml]
+    pattern: |
+      permissions: write-all
+
+  - id: registry-notary.no-secret-copy-in-dockerfile
+    message: Dockerfiles must not copy secrets, env files, private keys, or JWK material.
+    severity: ERROR
+    languages: [generic]
+    paths:
+      include:
+        - Dockerfile
+        - Dockerfile.openfn-sidecar
+    pattern-regex: '(?i)\\bCOPY\\b.*(\\.env|\\.pem|\\.key|\\.p12|jwk|secret|credential)|"d"\\s*:'

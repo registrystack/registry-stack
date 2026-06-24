@@ -1,0 +1,19 @@
+[project]
+name = "registry-notary-perf"
+version = "0.1.0"
+description = "Load harness and test tooling for registry-notary performance testing"
+requires-python = ">=3.11"
+dependencies = [
+    "aiohttp>=3.9",
+    "psutil>=6",
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "cryptography>=42",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.uv]
+package = false

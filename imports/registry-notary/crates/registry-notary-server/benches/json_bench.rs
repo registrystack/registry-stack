@@ -1,0 +1,293 @@
+// SPDX-License-Identifier: Apache-2.0
+//! Microbenchmarks for the JSON serialization/deserialization hot paths.
+//!
+//! Covers:
+//! - `EvidenceAuditEvent` serialization (written as a JSONL line on every request).
+//! - `ClaimResultView` serialization (returned in `/v1/evaluations` and
+//!   `/v1/batch-evaluations` responses).
+//! - DCI response envelope deserialization (parsed from an upstream source on
+//!   every evaluate call that reaches the source).
+//! - Stage-3 bulk response deserialization for RDA (one `{"data": [...N rows]}`
+//!   envelope) and DCI (one envelope with N `search_response[]` entries) at
+//!   N=10 and N=100. These shapes only appear in the bulk prefetch path, so
+//!   they are not covered by the single-record DCI envelope bench above.
+
+use std::collections::BTreeMap;
+use std::hint::black_box;
+
+use criterion::{criterion_group, criterion_main, Criterion};
+use registry_notary_core::model::{
+    ClaimProvenance, ClaimResultView, EvidenceAuditEvent, EvidenceEntityRef,
+    EvidenceEntityReference, Hashed, MatchingMetadata, PrincipalIdentifier, TargetRefView,
+};
+use serde_json::{json, Value};
+
+// ---------------------------------------------------------------------------
+// Builder helpers
+// ---------------------------------------------------------------------------
+
+fn build_audit_event() -> EvidenceAuditEvent {
+    EvidenceAuditEvent {
+        event_id: "01HWQZPJ3VXKM8N2BF5CSRTE4D".to_string(),
+        occurred_at: "2026-05-24T12:00:00Z".to_string(),
+        principal_id_hash: Some(Hashed::<PrincipalIdentifier>::from_hash(
+            "hmac-sha256:client-bench-001",
+        )),
+        decision: "allow".to_string(),
+        method: "POST".to_string(),
+        path: "/v1/evaluations".to_string(),
+        status: 200,
+        verification_id: Some("01HWQZPJ3VXKM8N2BF5CSRTE4E".to_string()),
+        claim_hash: Some(
+            "sha256:abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890".to_string(),
+        ),
+        purposes: None,
+        row_count: None,
+        source_read_count: None,
+        forwarded: None,
+        error_code: None,
+        access_mode: None,
+        federation_peer_id_hash: None,
+        federation_issuer: None,
+        federation_profile: None,
+        federation_purpose: None,
+        federation_request_jti_hash: None,
+        federation_subject_ref_hash: None,
+        denial_code: None,
+        token_claim_name: None,
+        correlation_id_hash: None,
+        credential_profile: None,
+        protocol: None,
+        credential_configuration_id: None,
+        holder_binding_mode: None,
+        rate_limit_bucket: None,
+        policy_version: None,
+        policy_hash: None,
+        target_type: Some("Person".to_string()),
+        target_ref_hash: Some(Hashed::<EvidenceEntityReference>::from_hash(
+            "hmac-sha256:target-bench-0000007",
+        )),
+        requester_type: Some("Agency".to_string()),
+        requester_ref_hash: Some(Hashed::<EvidenceEntityReference>::from_hash(
+            "hmac-sha256:requester-bench-001",
+        )),
+        matching_policy_id: Some("national-id-exact-v1".to_string()),
+        matching_policy_hash: None,
+        matching_evaluated_rule_ids: None,
+        ecosystem_binding_id: None,
+        ecosystem_binding_version: None,
+        pack_id: None,
+        pack_version: None,
+        matching_method: Some("identifier_exact".to_string()),
+        matching_outcome: Some("matched".to_string()),
+        matching_error_code: None,
+        redacted_fields: None,
+        batch_items: None,
+        source_sidecar_config_hashes: None,
+        config: None,
+    }
+}
+
+fn build_claim_result_view() -> ClaimResultView {
+    let mut source_versions = BTreeMap::new();
+    source_versions.insert("civil-registry-stub".to_string(), "v1.2.0".to_string());
+
+    ClaimResultView {
+        evaluation_id: "01HWQZPJ3VXKM8N2BF5CSRTE4F".to_string(),
+        claim_id: "date-of-birth".to_string(),
+        claim_version: "1.0.0".to_string(),
+        subject_type: "national_id".to_string(),
+        requester_ref: Some(EvidenceEntityRef {
+            entity_type: "Agency".to_string(),
+            handle: "rnref:v1:requester-bench-001".to_string(),
+            identifier_schemes: vec!["agency_id".to_string()],
+            profile: Some("civil-registry".to_string()),
+        }),
+        target_ref: TargetRefView {
+            entity_type: "Person".to_string(),
+            handle: "rnref:v1:target-bench-0000007".to_string(),
+            identifier_schemes: vec!["national_id".to_string()],
+            profile: Some("resident".to_string()),
+        },
+        matching: Some(MatchingMetadata {
+            policy_id: "national-id-exact-v1".to_string(),
+            method: "identifier_exact".to_string(),
+            confidence: "high".to_string(),
+            score: Some(1.0),
+            policy_hash: None,
+            evaluated_rule_ids: Vec::new(),
+            ecosystem_binding_id: None,
+            ecosystem_binding_version: None,
+            pack_id: None,
+            pack_version: None,
+        }),
+        value: Some(json!("1990-01-01")),
+        satisfied: Some(true),
+        disclosure: "full_disclosure".to_string(),
+        redacted_fields: Vec::new(),
+        format: "json".to_string(),
+        issued_at: "2026-05-24T12:00:00Z".to_string(),
+        expires_at: None,
+        provenance: ClaimProvenance::new(
+            "registry-notary-server".to_string(),
+            "eval-bench".to_string(),
+            "date-of-birth".to_string(),
+            "1".to_string(),
+            registry_notary_core::ProvenanceUsed {
+                source_count: 1,
+                source_versions,
+                source_runtimes: Vec::new(),
+            },
+        ),
+    }
+}
+
+fn build_dci_response_bytes() -> Vec<u8> {
+    let envelope = json!({
+        "header": {
+            "version": "1.0.0",
+            "message_id": "msg-bench-0001",
+            "message_ts": "2026-05-24T12:00:00Z",
+            "action": "search",
+            "status": "success",
+            "sender_id": "stub-source",
+            "receiver_id": "registry-notary"
+        },
+        "message": {
+            "transaction_id": "txn-bench-0001",
+            "search_response": [
+                {
+                    "reference_id": "subj-0000007",
+                    "timestamp": "2026-05-24T12:00:00Z",
+                    "status": "succ",
+                    "data": {
+                        "reg_records": [
+                            {
+                                "NATIONAL_ID": "subj-0000007",
+                                "birth_date": "1954-09-16",
+                                "farmed_land_size_hectares": 3.42
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+    });
+    serde_json::to_vec(&envelope).expect("DCI response envelope must serialize")
+}
+
+fn build_rda_bulk_response_bytes(n: usize) -> Vec<u8> {
+    let rows: Vec<Value> = (0..n)
+        .map(|i| {
+            json!({
+                "NATIONAL_ID": format!("subj-{i:07}"),
+                "birth_date": "1954-09-16",
+                "farmed_land_size_hectares": 3.42,
+            })
+        })
+        .collect();
+    let envelope = json!({ "data": rows });
+    serde_json::to_vec(&envelope).expect("RDA bulk envelope must serialize")
+}
+
+fn build_dci_bulk_response_bytes(n: usize) -> Vec<u8> {
+    let entries: Vec<Value> = (0..n)
+        .map(|i| {
+            json!({
+                "reference_id": format!("ref-{i:07}"),
+                "timestamp": "2026-05-24T12:00:00Z",
+                "status": "succ",
+                "data": {
+                    "reg_records": [{
+                        "NATIONAL_ID": format!("subj-{i:07}"),
+                        "birth_date": "1954-09-16",
+                        "farmed_land_size_hectares": 3.42,
+                    }]
+                }
+            })
+        })
+        .collect();
+    let envelope = json!({
+        "header": {
+            "version": "1.0.0",
+            "message_id": "msg-bench-bulk",
+            "message_ts": "2026-05-24T12:00:00Z",
+            "action": "search",
+            "status": "success",
+            "sender_id": "stub-source",
+            "receiver_id": "registry-notary",
+        },
+        "message": {
+            "transaction_id": "txn-bench-bulk",
+            "search_response": entries,
+        },
+    });
+    serde_json::to_vec(&envelope).expect("DCI bulk envelope must serialize")
+}
+
+// ---------------------------------------------------------------------------
+// Benchmark functions
+// ---------------------------------------------------------------------------
+
+fn benchmark_serialize_audit_event(c: &mut Criterion) {
+    let event = build_audit_event();
+    c.bench_function("json/serialize_audit_event", |b| {
+        b.iter(|| serde_json::to_vec(black_box(&event)).expect("audit event must serialize"));
+    });
+}
+
+fn benchmark_serialize_claim_result_view(c: &mut Criterion) {
+    let view = build_claim_result_view();
+    c.bench_function("json/serialize_claim_result_view", |b| {
+        b.iter(|| serde_json::to_vec(black_box(&view)).expect("claim result view must serialize"));
+    });
+}
+
+fn benchmark_deserialize_dci_response_envelope(c: &mut Criterion) {
+    let payload_bytes = build_dci_response_bytes();
+    c.bench_function("json/deserialize_dci_response_envelope", |b| {
+        b.iter(|| {
+            serde_json::from_slice::<Value>(black_box(&payload_bytes))
+                .expect("DCI response envelope must deserialize")
+        });
+    });
+}
+
+fn benchmark_deserialize_rda_bulk_response(c: &mut Criterion) {
+    for n in [10usize, 100] {
+        let payload_bytes = build_rda_bulk_response_bytes(n);
+        c.bench_function(&format!("json/deserialize_rda_bulk_n{n}"), |b| {
+            b.iter(|| {
+                serde_json::from_slice::<Value>(black_box(&payload_bytes))
+                    .expect("RDA bulk envelope must deserialize")
+            });
+        });
+    }
+}
+
+fn benchmark_deserialize_dci_bulk_response(c: &mut Criterion) {
+    for n in [10usize, 100] {
+        let payload_bytes = build_dci_bulk_response_bytes(n);
+        c.bench_function(&format!("json/deserialize_dci_bulk_n{n}"), |b| {
+            b.iter(|| {
+                serde_json::from_slice::<Value>(black_box(&payload_bytes))
+                    .expect("DCI bulk envelope must deserialize")
+            });
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Registration
+// ---------------------------------------------------------------------------
+
+criterion_group! {
+    name = benches;
+    config = Criterion::default().sample_size(50);
+    targets = benchmark_serialize_audit_event,
+              benchmark_serialize_claim_result_view,
+              benchmark_deserialize_dci_response_envelope,
+              benchmark_deserialize_rda_bulk_response,
+              benchmark_deserialize_dci_bulk_response
+}
+criterion_main!(benches);

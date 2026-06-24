@@ -1,0 +1,53 @@
+[package]
+name = "registry-notary-bin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Standalone Registry Notary process entrypoint."
+readme = "README.md"
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "registry-notary"
+path = "src/main.rs"
+
+[features]
+default = []
+pkcs11 = ["registry-notary-server/pkcs11"]
+registry-notary-cel = ["registry-notary-server/registry-notary-cel"]
+
+[dependencies]
+axum.workspace = true
+base64.workspace = true
+clap.workspace = true
+ed25519-dalek = { version = "2" }
+getrandom.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+registry-notary-core.workspace = true
+registry-notary-server = { workspace = true, default-features = false }
+registry-config-report.workspace = true
+registry-platform-config.workspace = true
+registry-platform-crypto.workspace = true
+registry-platform-httputil.workspace = true
+reqwest.workspace = true
+serde_json.workspace = true
+serde_norway.workspace = true
+sha2.workspace = true
+time.workspace = true
+tokio = { workspace = true, features = ["io-util"] }
+tower.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+ulid.workspace = true
+
+[dev-dependencies]
+axum-test = { version = "20" }
+chrono = { version = "0.4" }
+jsonschema.workspace = true
+registry-platform-ops.workspace = true
+tempfile = { version = "3" }
+tough = { version = "0.22.0" }
+wiremock = { version = "0.6" }

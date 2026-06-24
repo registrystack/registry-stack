@@ -1,0 +1,14 @@
+/target/
+/.git/
+/.github/
+/.idea/
+/.vscode/
+**/.DS_Store
+demo/var/
+.env
+.env.*
+*.env
+*.env.*
+*.pem
+*.key
+*.p12

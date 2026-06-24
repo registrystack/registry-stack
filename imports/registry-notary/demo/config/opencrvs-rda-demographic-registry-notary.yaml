@@ -1,0 +1,109 @@
+# SPDX-License-Identifier: Apache-2.0
+# Registry Notary config for testing an OpenCRVS-like Registry Data API
+# lookup by child first name, last name, and date of birth.
+# Point base_url at a registry-relay instance that exposes civil_registry
+# civil_person records and allows filters on given_name, surname, and birth_date.
+
+server:
+  bind: 127.0.0.1:4255
+
+auth:
+  mode: api_key
+  api_keys:
+    - id: local_tester
+      fingerprint:
+        provider: env
+        name: REGISTRY_NOTARY_API_KEY_HASH
+        commitment: sha256:ce551aedcccd9709da728accc6f777e53ebfd18b30a32445d49d5d89ec3df733
+      scopes:
+        - civil_registry:evidence_verification
+
+audit:
+  sink: file
+  path: demo/var/opencrvs-rda-demographic-registry-notary-audit.jsonl
+  hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
+
+evidence:
+  enabled: true
+  service_id: opencrvs-rda-demographic.registry-notary
+  api_base_url: http://127.0.0.1:4255
+  signing_keys:
+    registry-notary-demo:
+      provider: local_jwk_env
+      private_jwk_env: REGISTRY_NOTARY_ISSUER_JWK
+      alg: EdDSA
+      kid: did:web:localhost#registry-notary-demo
+      status: active
+  credential_profiles:
+    opencrvs_rda_demographic_sd_jwt:
+      format: application/dc+sd-jwt
+      issuer: did:web:localhost
+      signing_key: registry-notary-demo
+      vct: https://demo.example.gov/credentials/opencrvs-rda-birth-record/v1
+      validity_seconds: 600
+      allowed_claims:
+        - opencrvs-rda-birth-record-exists-by-demographics
+      holder_binding:
+        mode: none
+      disclosure:
+        allowed:
+          - value
+  source_connections:
+    registry_relay_crvs:
+      base_url: http://127.0.0.1:8080
+      token_env: EVIDENCE_SOURCE_REGISTRY_RELAY_TOKEN
+      allow_insecure_localhost: true
+      bulk_mode: none
+  claims:
+    - id: opencrvs-rda-birth-record-exists-by-demographics
+      title: OpenCRVS birth record exists by demographics through Registry Data API
+      version: 2026-05
+      subject_type: person
+      value:
+        type: boolean
+      credential_profiles:
+        - opencrvs_rda_demographic_sd_jwt
+      source_bindings:
+        birth_record:
+          connector: registry_data_api
+          connection: registry_relay_crvs
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: civil_person
+          lookup:
+            input: target.attributes.given_name
+            field: given_name
+            op: eq
+            cardinality: one
+          query_fields:
+            - input: target.attributes.given_name
+              field: given_name
+              op: eq
+            - input: target.attributes.family_name
+              field: surname
+              op: eq
+            - input: target.attributes.birthdate
+              field: birth_date
+              op: eq
+          matching:
+            target_type: Person
+            method: configured_demographic_lookup
+            sufficient_target_inputs:
+              - - target.attributes.given_name
+                - target.attributes.family_name
+                - target.attributes.birthdate
+            allowed_target_inputs:
+              - target.attributes.given_name
+              - target.attributes.family_name
+              - target.attributes.birthdate
+      rule:
+        type: exists
+        source: birth_record
+      disclosure:
+        default: value
+        allowed:
+          - value
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+        - application/dc+sd-jwt

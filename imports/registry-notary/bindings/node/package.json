@@ -1,0 +1,27 @@
+{
+  "name": "@registry-notary/client",
+  "version": "0.1.0",
+  "description": "Promise-based Node.js client for Registry Notary",
+  "type": "module",
+  "main": "./src/index.js",
+  "types": "./src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "default": "./src/index.js"
+    }
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "check:types": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=18.17"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}

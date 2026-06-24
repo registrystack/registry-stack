@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Baseline file for reviewed false positives. Keep entries path-scoped and add
+# rationale in the surrounding commit message or security waiver.

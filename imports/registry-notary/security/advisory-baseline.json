@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "service": "registry-notary",
+  "policies": [
+    {
+      "tool": "zizmor",
+      "minimum_severity": "high",
+      "action": "block_unreviewed"
+    },
+    {
+      "tool": "grype",
+      "minimum_severity": "critical",
+      "action": "block_unreviewed"
+    }
+  ],
+  "reviewed_findings": [
+    {
+      "tool": "grype",
+      "fingerprint": "grype|registry-notary-source-adapter-sidecar-image|CVE-2023-45853|zlib1g|1:1.2.13.dfsg-1|deb",
+      "rule_id": "CVE-2023-45853",
+      "severity": "critical",
+      "status": "false_positive",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "Not affected. Debian marks CVE-2023-45853 <ignored> for bookworm: the vulnerable contrib/minizip code is not built into the shipped zlib1g binary (no fixed package is coming, so the prior 'until the sidecar base image moves to a fixed distro package' exit condition was unreachable). The OpenFN sidecar Rust crate has no zlib/zip dependency and zlib1g is only a transitive node:24-bookworm-slim package, so MiniZip is never reached. Suppression retained to keep grype quiet; re-review when the sidecar base image leaves Debian bookworm.",
+      "reviewed_at": "2026-06-04",
+      "expires_at": "2027-06-01"
+    }
+  ]
+}

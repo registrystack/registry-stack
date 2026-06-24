@@ -1,0 +1,70 @@
+# SPDX-License-Identifier: Apache-2.0
+allowed:
+  - listener: public
+    method: GET
+    path: /healthz
+    reason: Health probe.
+  - listener: public
+    method: GET
+    path: /ready
+    reason: Readiness probe.
+  - listener: public
+    method: GET
+    path: /docs
+    reason: Public static API docs shell; it does not inline the OpenAPI document.
+  - listener: public
+    method: GET
+    path: /docs/scalar.js
+    reason: Public static Scalar bundle with no generated OpenAPI document or catalog data.
+  - listener: public
+    method: GET
+    path: /.well-known/evidence/jwks.json
+    reason: Public issuer JWKS for wallet and verifier discovery; only public verification keys are emitted.
+  - listener: public
+    method: GET
+    path: /.well-known/openid-credential-issuer
+    reason: Public OID4VCI issuer metadata.
+  - listener: public
+    method: GET
+    path: /oid4vci/credential-offer
+    reason: Public OID4VCI credential offer endpoint.
+  - listener: public
+    method: GET
+    path: /oid4vci/offer/start
+    reason: Public OID4VCI pre-authorized-code browser start endpoint.
+  - listener: public
+    method: GET
+    path: /oid4vci/offer/callback
+    reason: Public OID4VCI pre-authorized-code IdP callback endpoint with route-local state validation.
+  - listener: public
+    method: POST
+    path: /oid4vci/token
+    reason: Public OID4VCI pre-authorized-code token endpoint with code, PIN, and route-local replay controls.
+  - listener: public
+    method: POST
+    path: /oid4vci/nonce
+    reason: Public OID4VCI nonce endpoint.
+  - listener: public
+    method: GET
+    path: /credentials/{*vct_path}
+    reason: "Public SD-JWT VC type metadata. Bare path is protocol-required: the VCT URL path component must be preserved exactly for dereference; adding /v1/ would break any credential whose vct does not include that prefix. Distinct from POST /v1/credentials (credential issuance)."
+  - listener: public
+    method: GET
+    path: /.well-known/vct/{*vct_path}
+    reason: "Public SD-JWT VC Type Metadata well-known route. Bare path is protocol-required per RFC 8615: well-known URI paths are determined by the protocol and cannot be prefixed."
+  - listener: public
+    method: GET
+    path: /v1/credentials/{credential_id}/status
+    reason: Public credential status lookup with opaque credential id.
+  - listener: sidecar
+    method: GET
+    path: /healthz
+    reason: source-adapter sidecar health probe.
+  - listener: sidecar
+    method: GET
+    path: /ready
+    reason: source-adapter sidecar readiness probe.
+  - listener: sidecar
+    method: GET
+    path: /metrics
+    reason: source-adapter sidecar metrics expose bounded operational counters.

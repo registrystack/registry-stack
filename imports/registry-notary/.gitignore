@@ -1,0 +1,16 @@
+/target/
+node_modules/
+demo/var/
+/.security-review/
+/.release-review/
+/internal/security-reviews/
+
+# Python bytecode (perf scripts and stub)
+__pycache__/
+*.py[cod]
+
+# Perf testing: secrets, stub runtime output, and Python virtual env
+perf/.env
+perf/.env.*
+perf/.venv/
+perf/.pytest_cache/

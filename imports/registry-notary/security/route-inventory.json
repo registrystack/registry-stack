@@ -1,0 +1,321 @@
+{
+  "version": 1,
+  "service": "registry-notary",
+  "routes": [
+    {
+      "listener": "public",
+      "path": "/healthz",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/ready",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "admin",
+      "path": "/admin/v1/reload",
+      "methods": [
+        "POST"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "admin",
+      "path": "/admin/v1/capabilities",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "admin",
+      "path": "/admin/v1/config/verify",
+      "methods": [
+        "POST"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "admin",
+      "path": "/admin/v1/config/dry-run",
+      "methods": [
+        "POST"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "admin",
+      "path": "/admin/v1/config/apply",
+      "methods": [
+        "POST"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "admin",
+      "path": "/admin/v1/posture",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs",
+      "notes": "Read-only redacted operations posture route. In dedicated admin mode it is not mounted on the public listener; simple local shared mode still requires registry_notary:ops_read and local network controls."
+    },
+    {
+      "listener": "public",
+      "path": "/openapi.json",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/docs",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-server/src/docs.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/docs/scalar.js",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-server/src/docs.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/.well-known/evidence-service",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/.well-known/evidence/jwks.json",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/.well-known/openid-credential-issuer",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/credentials/{*vct_path}",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/.well-known/vct/{*vct_path}",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/oid4vci/credential-offer",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/oid4vci/offer/start",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/oid4vci/offer/callback",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/oid4vci/token",
+      "methods": [
+        "POST"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/oid4vci/nonce",
+      "methods": [
+        "POST"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/oid4vci/credential",
+      "methods": [
+        "POST"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/v1/claims",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/v1/claims/{claim_id}",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/v1/formats",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/v1/evaluations",
+      "methods": [
+        "POST"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/v1/batch-evaluations",
+      "methods": [
+        "POST"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/v1/evaluations/{evaluation_id}/render",
+      "methods": [
+        "POST"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/v1/credentials",
+      "methods": [
+        "POST"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/v1/credentials/{credential_id}/status",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "admin",
+      "path": "/admin/v1/credentials/{credential_id}/status",
+      "methods": [
+        "POST"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
+      "path": "/federation/v1/evaluations",
+      "methods": [
+        "POST"
+      ],
+      "source": "crates/registry-notary-server/src/federation/mod.rs",
+      "feature": "federation.enabled"
+    },
+    {
+      "listener": "admin",
+      "path": "/metrics",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-server/src/standalone.rs",
+      "notes": "Admin metrics route mounted on the admin listener in dedicated mode and handler-enforced by admin scope. Simple local shared mode keeps the same admin-scope gate."
+    },
+    {
+      "listener": "sidecar",
+      "path": "/healthz",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-source-adapter-sidecar/src/sidecar.rs"
+    },
+    {
+      "listener": "sidecar",
+      "path": "/ready",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-source-adapter-sidecar/src/sidecar.rs"
+    },
+    {
+      "listener": "sidecar",
+      "path": "/metrics",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-source-adapter-sidecar/src/sidecar.rs"
+    },
+    {
+      "listener": "sidecar",
+      "path": "/v1/assurance",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-source-adapter-sidecar/src/sidecar.rs"
+    },
+    {
+      "listener": "sidecar",
+      "path": "/v1/datasets/{dataset}/entities/{entity}/records",
+      "methods": [
+        "GET"
+      ],
+      "source": "crates/registry-notary-source-adapter-sidecar/src/sidecar.rs"
+    },
+    {
+      "listener": "sidecar",
+      "path": "/v1/datasets/{dataset}/entities/{entity}/records:batchMatch",
+      "methods": [
+        "POST"
+      ],
+      "source": "crates/registry-notary-source-adapter-sidecar/src/sidecar.rs"
+    }
+  ]
+}

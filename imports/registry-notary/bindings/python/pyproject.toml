@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "registry-notary"
+version = "0.1.0"
+description = "Python client bindings for Registry Notary"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Registry Notary contributors" }]
+
+[tool.setuptools]
+packages = ["registry_notary"]
+
+[tool.setuptools.package-data]
+registry_notary = ["py.typed"]
