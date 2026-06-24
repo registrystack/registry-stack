@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **OID4VCI SD-JWT field projection**: claim policies can project selected
   SD-JWT fields while preserving the configured disclosure boundary.
 - **Compliance context constraints**: Notary policy gates now consume the shared
-  Platform legal-basis, consent, jurisdiction, assurance, and retention
+  Platform legal basis, consent, jurisdiction, assurance, and retention
   vocabulary for source matching and posture reporting.
 
 ### Changed
