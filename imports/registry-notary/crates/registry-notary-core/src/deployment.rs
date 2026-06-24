@@ -295,7 +295,10 @@ fn parse_iso_date(value: &str) -> Option<(u16, u8, u8)> {
     Some((year, month, day))
 }
 
+#[allow(clippy::manual_is_multiple_of)]
 const fn is_leap_year(year: u16) -> bool {
+    // Keep modulo arithmetic for downstream toolchains where `is_multiple_of`
+    // is not available on integer primitives.
     year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
 }
 
