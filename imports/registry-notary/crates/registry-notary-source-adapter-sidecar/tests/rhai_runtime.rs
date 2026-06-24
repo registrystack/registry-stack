@@ -86,7 +86,10 @@ async fn lookup_endpoint_smoke_500(
     state.seen.lock().await.push(format!("/lookup:{id}"));
     if id == "smoke-person" {
         // No `visible_statuses` on the target, so this terminates the run.
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "boom" })))
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "boom" })),
+        )
             .into_response();
     }
     (
@@ -434,7 +437,9 @@ async fn rhai_per_source_rate_limit_trips_before_dispatch() {
 
     let seen = upstream_state.seen.lock().await;
     assert_eq!(
-        seen.iter().filter(|hit| hit.as_str() != "/lookup:smoke-person").count(),
+        seen.iter()
+            .filter(|hit| hit.as_str() != "/lookup:smoke-person")
+            .count(),
         1,
         "only the first real lookup may reach the upstream; the rate-limited \
          second must be rejected before dispatch; saw {seen:?}"
