@@ -130,3 +130,26 @@ async fn success_2xx_is_wrapped() {
     );
     assert_eq!(out[0]["v"], "1");
 }
+
+// `source.post_json` has the same response shape as `source.get`, but carries a
+// host-owned JSON body to the upstream.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn post_json_success_2xx_is_wrapped() {
+    let host = Arc::new(MockScriptHost::echo(Duration::from_millis(1)));
+    let script = r#"
+        fn lookup(ctx) {
+            source.post_json(
+                "t",
+                "/search",
+                #{ value: ctx.lookup.value },
+                #{ q: ctx.lookup.value, limit: 1 }
+            ).body
+        }
+    "#;
+    let engine = ScriptEngine::compile(script, "lookup", &RhaiPolicy::default()).unwrap();
+    let out = engine.execute(host, ctx()).await.unwrap();
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0]["id"], "t/search");
+    assert_eq!(out[0]["v"], "1");
+    assert_eq!(out[0]["body"], json!({ "q": "1", "limit": 1 }));
+}

@@ -91,7 +91,7 @@ pub enum SourceScriptError {
 pub enum BudgetKind {
     /// The Rhai operation budget was exhausted (e.g. an infinite loop).
     Operations,
-    /// The maximum number of `source.get` calls was exceeded.
+    /// The maximum number of source calls was exceeded.
     HttpCalls,
     /// The serialized output exceeded the configured byte cap.
     OutputBytes,

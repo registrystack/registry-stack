@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! A deterministic mock [`ScriptSourceHost`] for offline tests.
 //!
-//! The mock answers every `source.get` with a configured outcome after a
+//! The mock answers every `source.*` call with a configured outcome after a
 //! configurable delay. The delay makes cancellation deterministic: a slow mock
 //! lets a test prove that the caller deadline is respected and that an
 //! in-flight call is abandoned. A monotonically increasing call counter lets
@@ -39,9 +39,9 @@ enum Outcome {
 pub struct MockScriptHost {
     delay: Duration,
     outcome: Outcome,
-    /// Number of `source_get` calls that ran to completion (not cancelled).
+    /// Number of source calls that ran to completion (not cancelled).
     pub calls_completed: Arc<AtomicU64>,
-    /// Number of `source_get` calls that were started.
+    /// Number of source calls that were started.
     pub calls_started: Arc<AtomicU64>,
 }
 
@@ -115,6 +115,28 @@ impl ScriptSourceHost for MockScriptHost {
         path: &str,
         query: Value,
     ) -> Result<SourceResponse, SourceScriptError> {
+        self.respond(target, path, query, Value::Null).await
+    }
+
+    async fn source_post_json(
+        &self,
+        target: &str,
+        path: &str,
+        query: Value,
+        body: Value,
+    ) -> Result<SourceResponse, SourceScriptError> {
+        self.respond(target, path, query, body).await
+    }
+}
+
+impl MockScriptHost {
+    async fn respond(
+        &self,
+        target: &str,
+        path: &str,
+        query: Value,
+        body: Value,
+    ) -> Result<SourceResponse, SourceScriptError> {
         self.calls_started.fetch_add(1, Ordering::SeqCst);
         // If this future is dropped during the sleep (cancellation), the
         // completion counter is NOT incremented — that is how a test proves the
@@ -130,6 +152,7 @@ impl ScriptSourceHost for MockScriptHost {
                     {
                         "id": format!("{target}{path}"),
                         "v": query.get("value").cloned().unwrap_or(Value::Null),
+                        "body": body,
                     }
                 ]),
             }),

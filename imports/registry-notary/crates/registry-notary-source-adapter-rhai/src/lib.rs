@@ -2,9 +2,9 @@
 //! A sandboxed Rhai scripting engine for governed source adapters.
 //!
 //! This crate runs small, untrusted Rhai scripts that resolve a lookup against
-//! an upstream source. Every resource axis is bounded, the only effect a script
-//! can perform is a single host capability, and the script's output is shape-
-//! validated before it leaves the engine.
+//! an upstream source. Every resource axis is bounded, the only effects a script
+//! can perform are explicit host capabilities, and the script's output is
+//! shape-validated before it leaves the engine.
 //!
 //! # Architecture
 //!
@@ -29,12 +29,13 @@
 //! A script defines an entrypoint `fn lookup(ctx) { ... }` and may call:
 //!
 //! ```text
-//! // The host capability. Returns `#{ status, body }` for every observable
+//! // Host capabilities. They return `#{ status, body }` for every observable
 //! // response (2xx, or a status in the engine's `visible_statuses`); any other
 //! // non-2xx status terminates the run. Read records via `r.body`, branch on
 //! // `r.status`:
 //! let r = source.get(target, path, query);
 //! let data = if r.status == 404 { source.get(target, alt, query).body } else { r.body };
+//! let posted = source.post_json(target, search_path, #{}, #{ value: ctx.lookup.value });
 //!
 //! xw.text.slug(s)                   // pure helpers (see the `xw` module)
 //! xw.date.add_days(d, 3)

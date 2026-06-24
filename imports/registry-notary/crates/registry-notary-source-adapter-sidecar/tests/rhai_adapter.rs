@@ -7,7 +7,13 @@
 //! the script reaches the configured upstream, its records surface as
 //! `{ "data": [...] }`, and the per-target `visible_statuses` gate behaves.
 
-use axum::{extract::Query, http::StatusCode, response::IntoResponse, routing::get, Json, Router};
+use axum::{
+    extract::Query,
+    http::StatusCode,
+    response::IntoResponse,
+    routing::{get, post},
+    Json, Router,
+};
 use axum_test::TestServer;
 use registry_notary_source_adapter_sidecar::{sidecar_router, SidecarConfig};
 use serde_json::{json, Value};
@@ -28,6 +34,7 @@ static ENV_LOCK: Mutex<()> = Mutex::const_new(());
 #[derive(Clone, Default)]
 struct UpstreamState {
     seen: std::sync::Arc<Mutex<Vec<String>>>,
+    last_post_body: std::sync::Arc<Mutex<Option<Value>>>,
 }
 
 /// `/lookup?id=...` — echoes the id back as one record. Used by the happy-path
@@ -85,6 +92,50 @@ async fn path_b(
         StatusCode::OK,
         Json(json!([{ "national_id": "from-b", "birth_date": "1980-12-31" }])),
     )
+}
+
+async fn post_search_endpoint(
+    axum::extract::State(state): axum::extract::State<UpstreamState>,
+    Query(query): Query<HashMap<String, String>>,
+    Json(body): Json<Value>,
+) -> Json<Value> {
+    let id = query.get("id").cloned().unwrap_or_default();
+    state.seen.lock().await.push(format!("/search:{id}"));
+    *state.last_post_body.lock().await = Some(body);
+    Json(json!([{ "national_id": id }]))
+}
+
+async fn post_empty_endpoint(
+    axum::extract::State(state): axum::extract::State<UpstreamState>,
+    Query(query): Query<HashMap<String, String>>,
+    Json(body): Json<Value>,
+) -> impl IntoResponse {
+    let id = query.get("id").cloned().unwrap_or_default();
+    state.seen.lock().await.push(format!("/empty:{id}"));
+    *state.last_post_body.lock().await = Some(body);
+    (StatusCode::NO_CONTENT, "")
+}
+
+async fn post_conflict_endpoint(
+    axum::extract::State(state): axum::extract::State<UpstreamState>,
+    Query(query): Query<HashMap<String, String>>,
+    Json(body): Json<Value>,
+) -> impl IntoResponse {
+    let id = query.get("id").cloned().unwrap_or_default();
+    state.seen.lock().await.push(format!("/conflict:{id}"));
+    *state.last_post_body.lock().await = Some(body);
+    if id == "smoke-person" {
+        return (
+            StatusCode::OK,
+            Json(json!([{ "national_id": "smoke-person", "birth_date": "1990-01-01" }])),
+        )
+            .into_response();
+    }
+    (
+        StatusCode::CONFLICT,
+        Json(json!({ "error": "duplicate", "id": id })),
+    )
+        .into_response()
 }
 
 fn set_env() {
@@ -230,6 +281,257 @@ sources:
     )
 }
 
+/// A `script_rhai` manifest that POSTs a search body, then GETs the concrete
+/// record using the id returned by the search endpoint.
+fn rhai_post_then_get_manifest(allowlist_url: &str) -> String {
+    format!(
+        r#"
+server:
+  bind: "127.0.0.1:0"
+auth:
+  bearer_tokens:
+    - id: notary-contract
+      hash_env: {token_hash_env}
+limits:
+  max_workers: 2
+  worker_timeout_ms: 500
+  max_output_bytes: 4096
+  max_request_bytes: 2048
+  max_query_parameter_bytes: 128
+  liveness_window_ms: 30000
+  max_batch_items: 100
+  max_worker_memory_mb: 256
+sources:
+  rhai_people:
+    engine: script_rhai
+    dataset: {dataset}
+    entity: {entity}
+    credential_env: {credential_env}
+    credential_public_fields:
+      - clientId
+    allowed_base_urls:
+      - {allowlist_url}
+    allow_insecure_localhost: true
+    rhai:
+      limits:
+        max_http_calls: 3
+      script: |
+        fn lookup(ctx) {{
+          let search = source.post_json(
+            "primary",
+            "/search",
+            #{{ id: ctx.lookup.value }},
+            #{{ value: ctx.lookup.value, fields: ctx.fields }}
+          );
+          source.get("primary", "/lookup", #{{ id: search.body[0].national_id }}).body
+        }}
+      targets:
+        primary:
+          base_url: {allowlist_url}
+    smoke_lookup:
+      field: national_id
+      value: smoke-person
+      fields:
+        - national_id
+      purpose: startup-smoke
+"#,
+        token_hash_env = serde_json::to_string(TOKEN_HASH_ENV).expect("env serializes"),
+        credential_env = serde_json::to_string(CREDENTIAL_ENV).expect("env serializes"),
+        allowlist_url = serde_json::to_string(allowlist_url).expect("URL serializes"),
+        dataset = DATASET,
+        entity = ENTITY,
+    )
+}
+
+fn rhai_post_empty_manifest(allowlist_url: &str) -> String {
+    format!(
+        r#"
+server:
+  bind: "127.0.0.1:0"
+auth:
+  bearer_tokens:
+    - id: notary-contract
+      hash_env: {token_hash_env}
+limits:
+  max_workers: 2
+  worker_timeout_ms: 500
+  max_output_bytes: 4096
+  max_request_bytes: 2048
+  max_query_parameter_bytes: 128
+  liveness_window_ms: 30000
+  max_batch_items: 100
+  max_worker_memory_mb: 256
+sources:
+  rhai_people:
+    engine: script_rhai
+    dataset: {dataset}
+    entity: {entity}
+    credential_env: {credential_env}
+    credential_public_fields:
+      - clientId
+    allowed_base_urls:
+      - {allowlist_url}
+    allow_insecure_localhost: true
+    rhai:
+      limits:
+        max_http_calls: 1
+      script: |
+        fn lookup(ctx) {{
+          let posted = source.post_json(
+            "primary",
+            "/empty",
+            #{{ id: ctx.lookup.value }},
+            #{{ value: ctx.lookup.value }}
+          );
+          [#{{ national_id: ctx.lookup.value, post_status: posted.status, post_body: posted.body }}]
+        }}
+      targets:
+        primary:
+          base_url: {allowlist_url}
+    smoke_lookup:
+      field: national_id
+      value: smoke-person
+      fields:
+        - national_id
+      purpose: startup-smoke
+"#,
+        token_hash_env = serde_json::to_string(TOKEN_HASH_ENV).expect("env serializes"),
+        credential_env = serde_json::to_string(CREDENTIAL_ENV).expect("env serializes"),
+        allowlist_url = serde_json::to_string(allowlist_url).expect("URL serializes"),
+        dataset = DATASET,
+        entity = ENTITY,
+    )
+}
+
+fn rhai_post_conflict_manifest(allowlist_url: &str, visible_statuses_block: &str) -> String {
+    format!(
+        r#"
+server:
+  bind: "127.0.0.1:0"
+auth:
+  bearer_tokens:
+    - id: notary-contract
+      hash_env: {token_hash_env}
+limits:
+  max_workers: 2
+  worker_timeout_ms: 500
+  max_output_bytes: 4096
+  max_request_bytes: 2048
+  max_query_parameter_bytes: 128
+  liveness_window_ms: 30000
+  max_batch_items: 100
+  max_worker_memory_mb: 256
+sources:
+  rhai_people:
+    engine: script_rhai
+    dataset: {dataset}
+    entity: {entity}
+    credential_env: {credential_env}
+    credential_public_fields:
+      - clientId
+    allowed_base_urls:
+      - {allowlist_url}
+    allow_insecure_localhost: true
+    rhai:
+      limits:
+        max_http_calls: 1
+      script: |
+        fn lookup(ctx) {{
+          let posted = source.post_json(
+            "primary",
+            "/conflict",
+            #{{ id: ctx.lookup.value }},
+            #{{ value: ctx.lookup.value }}
+          );
+          if posted.status == 409 {{
+            [#{{ national_id: ctx.lookup.value, birth_date: "conflict" }}]
+          }} else {{
+            posted.body
+          }}
+        }}
+      targets:
+        primary:
+          base_url: {allowlist_url}{visible_statuses_block}
+    smoke_lookup:
+      field: national_id
+      value: smoke-person
+      fields:
+        - national_id
+      purpose: startup-smoke
+"#,
+        token_hash_env = serde_json::to_string(TOKEN_HASH_ENV).expect("env serializes"),
+        credential_env = serde_json::to_string(CREDENTIAL_ENV).expect("env serializes"),
+        allowlist_url = serde_json::to_string(allowlist_url).expect("URL serializes"),
+        visible_statuses_block = visible_statuses_block,
+        dataset = DATASET,
+        entity = ENTITY,
+    )
+}
+
+fn rhai_post_oversized_manifest(allowlist_url: &str) -> String {
+    format!(
+        r#"
+server:
+  bind: "127.0.0.1:0"
+auth:
+  bearer_tokens:
+    - id: notary-contract
+      hash_env: {token_hash_env}
+limits:
+  max_workers: 2
+  worker_timeout_ms: 500
+  max_output_bytes: 4096
+  max_request_bytes: 256
+  max_query_parameter_bytes: 128
+  liveness_window_ms: 30000
+  max_batch_items: 100
+  max_worker_memory_mb: 256
+sources:
+  rhai_people:
+    engine: script_rhai
+    dataset: {dataset}
+    entity: {entity}
+    credential_env: {credential_env}
+    credential_public_fields:
+      - clientId
+    allowed_base_urls:
+      - {allowlist_url}
+    allow_insecure_localhost: true
+    rhai:
+      limits:
+        max_http_calls: 1
+      script: |
+        fn lookup(ctx) {{
+          let payload = if ctx.lookup.value == "smoke-person" {{
+            "ok"
+          }} else {{
+            "this-value-is-intentionally-too-large-for-the-request-limit-this-value-is-intentionally-too-large-for-the-request-limit-this-value-is-intentionally-too-large-for-the-request-limit-this-value-is-intentionally-too-large-for-the-request-limit-this-value-is-intentionally-too-large-for-the-request-limit-this-value-is-intentionally-too-large-for-the-request-limit"
+          }};
+          source.post_json(
+            "primary",
+            "/search",
+            #{{ id: ctx.lookup.value }},
+            #{{ value: payload }}
+          ).body
+        }}
+      targets:
+        primary:
+          base_url: {allowlist_url}
+    smoke_lookup:
+      field: national_id
+      value: smoke-person
+      fields:
+        - national_id
+      purpose: startup-smoke
+"#,
+        token_hash_env = serde_json::to_string(TOKEN_HASH_ENV).expect("env serializes"),
+        credential_env = serde_json::to_string(CREDENTIAL_ENV).expect("env serializes"),
+        allowlist_url = serde_json::to_string(allowlist_url).expect("URL serializes"),
+        dataset = DATASET,
+        entity = ENTITY,
+    )
+}
+
 async fn spawn_sidecar(manifest: String, upstream_state: UpstreamState) -> TestServer {
     let config: SidecarConfig =
         serde_norway::from_str(&manifest).expect("script_rhai manifest parses");
@@ -278,6 +580,236 @@ async fn rhai_lookup_returns_data_from_upstream() {
         seen.iter().any(|hit| hit == "/lookup:person-123"),
         "the script's lookup must reach the upstream; saw {seen:?}"
     );
+}
+
+#[tokio::test]
+async fn rhai_post_json_then_get_uses_json_body_and_shared_call_budget() {
+    let _guard = ENV_LOCK.lock().await;
+    let upstream_state = UpstreamState::default();
+    let upstream = TestServer::builder().http_transport().build(
+        Router::new()
+            .route("/search", post(post_search_endpoint))
+            .route("/lookup", get(lookup_endpoint))
+            .with_state(upstream_state.clone()),
+    );
+    let upstream_url = server_base_url(&upstream);
+    set_env();
+    let sidecar = spawn_sidecar(
+        rhai_post_then_get_manifest(&upstream_url),
+        upstream_state.clone(),
+    )
+    .await;
+    upstream_state.seen.lock().await.clear();
+    *upstream_state.last_post_body.lock().await = None;
+
+    let response = sidecar
+        .get(&format!("/v1/datasets/{DATASET}/entities/{ENTITY}/records"))
+        .add_header("authorization", format!("Bearer {TOKEN}"))
+        .add_header("data-purpose", "eligibility")
+        .add_query_param("national_id", "person-123")
+        .add_query_param("fields", "national_id,birth_date")
+        .await;
+
+    response.assert_status_ok();
+    assert_eq!(
+        response.json::<Value>(),
+        json!({
+            "data": [{
+                "national_id": "person-123",
+                "birth_date": "1990-01-01"
+            }]
+        })
+    );
+
+    let post_body = upstream_state
+        .last_post_body
+        .lock()
+        .await
+        .clone()
+        .expect("POST body captured");
+    assert_eq!(
+        post_body,
+        json!({ "value": "person-123", "fields": ["national_id", "birth_date"] })
+    );
+    let seen = upstream_state.seen.lock().await;
+    assert_eq!(
+        seen.as_slice(),
+        ["/search:person-123", "/lookup:person-123"],
+        "the script should POST once, then GET once under the shared call budget"
+    );
+}
+
+#[tokio::test]
+async fn rhai_post_json_empty_2xx_body_is_returned_as_null() {
+    let _guard = ENV_LOCK.lock().await;
+    let upstream_state = UpstreamState::default();
+    let upstream = TestServer::builder().http_transport().build(
+        Router::new()
+            .route("/empty", post(post_empty_endpoint))
+            .with_state(upstream_state.clone()),
+    );
+    let upstream_url = server_base_url(&upstream);
+    set_env();
+    let sidecar = spawn_sidecar(
+        rhai_post_empty_manifest(&upstream_url),
+        upstream_state.clone(),
+    )
+    .await;
+    upstream_state.seen.lock().await.clear();
+    *upstream_state.last_post_body.lock().await = None;
+
+    let response = sidecar
+        .get(&format!("/v1/datasets/{DATASET}/entities/{ENTITY}/records"))
+        .add_header("authorization", format!("Bearer {TOKEN}"))
+        .add_header("data-purpose", "eligibility")
+        .add_query_param("national_id", "person-123")
+        .add_query_param("fields", "national_id,post_status,post_body")
+        .await;
+
+    response.assert_status_ok();
+    assert_eq!(
+        response.json::<Value>(),
+        json!({
+            "data": [{
+                "national_id": "person-123",
+                "post_status": 204,
+                "post_body": null
+            }]
+        })
+    );
+    assert_eq!(
+        *upstream_state.last_post_body.lock().await,
+        Some(json!({ "value": "person-123" }))
+    );
+}
+
+#[tokio::test]
+async fn rhai_post_json_visible_status_lets_script_observe_409() {
+    let _guard = ENV_LOCK.lock().await;
+    let upstream_state = UpstreamState::default();
+    let upstream = TestServer::builder().http_transport().build(
+        Router::new()
+            .route("/conflict", post(post_conflict_endpoint))
+            .with_state(upstream_state.clone()),
+    );
+    let upstream_url = server_base_url(&upstream);
+    set_env();
+    let visible = r#"
+          visible_statuses:
+            - 409"#;
+    let sidecar = spawn_sidecar(
+        rhai_post_conflict_manifest(&upstream_url, visible),
+        upstream_state.clone(),
+    )
+    .await;
+    upstream_state.seen.lock().await.clear();
+
+    let response = sidecar
+        .get(&format!("/v1/datasets/{DATASET}/entities/{ENTITY}/records"))
+        .add_header("authorization", format!("Bearer {TOKEN}"))
+        .add_header("data-purpose", "eligibility")
+        .add_query_param("national_id", "person-123")
+        .add_query_param("fields", "national_id,birth_date")
+        .await;
+
+    response.assert_status_ok();
+    assert_eq!(
+        response.json::<Value>(),
+        json!({
+            "data": [{
+                "national_id": "person-123",
+                "birth_date": "conflict"
+            }]
+        })
+    );
+    let seen = upstream_state.seen.lock().await;
+    assert_eq!(
+        seen.as_slice(),
+        ["/conflict:person-123"],
+        "the visible POST 409 should be returned to the script once; saw {seen:?}"
+    );
+}
+
+#[tokio::test]
+async fn rhai_post_json_without_visible_status_terminates_on_409() {
+    let _guard = ENV_LOCK.lock().await;
+    let upstream_state = UpstreamState::default();
+    let upstream = TestServer::builder().http_transport().build(
+        Router::new()
+            .route("/conflict", post(post_conflict_endpoint))
+            .with_state(upstream_state.clone()),
+    );
+    let upstream_url = server_base_url(&upstream);
+    set_env();
+    let sidecar = spawn_sidecar(
+        rhai_post_conflict_manifest(&upstream_url, ""),
+        upstream_state.clone(),
+    )
+    .await;
+    upstream_state.seen.lock().await.clear();
+
+    let response = sidecar
+        .get(&format!("/v1/datasets/{DATASET}/entities/{ENTITY}/records"))
+        .add_header("authorization", format!("Bearer {TOKEN}"))
+        .add_header("data-purpose", "eligibility")
+        .add_query_param("national_id", "person-123")
+        .add_query_param("fields", "national_id,birth_date")
+        .await;
+
+    assert_eq!(response.status_code(), StatusCode::BAD_GATEWAY);
+    let body = response.json::<Value>();
+    assert_eq!(
+        body.pointer("/code").and_then(Value::as_str),
+        Some("source.unavailable"),
+        "expected POST 409 to terminate as source.unavailable, got {body}"
+    );
+    let seen = upstream_state.seen.lock().await;
+    assert_eq!(
+        seen.as_slice(),
+        ["/conflict:person-123"],
+        "the run should stop after the non-visible POST 409; saw {seen:?}"
+    );
+}
+
+#[tokio::test]
+async fn rhai_post_json_oversized_body_fails_before_sending_request() {
+    let _guard = ENV_LOCK.lock().await;
+    let upstream_state = UpstreamState::default();
+    let upstream = TestServer::builder().http_transport().build(
+        Router::new()
+            .route("/search", post(post_search_endpoint))
+            .with_state(upstream_state.clone()),
+    );
+    let upstream_url = server_base_url(&upstream);
+    set_env();
+    let sidecar = spawn_sidecar(
+        rhai_post_oversized_manifest(&upstream_url),
+        upstream_state.clone(),
+    )
+    .await;
+    upstream_state.seen.lock().await.clear();
+    *upstream_state.last_post_body.lock().await = None;
+
+    let response = sidecar
+        .get(&format!("/v1/datasets/{DATASET}/entities/{ENTITY}/records"))
+        .add_header("authorization", format!("Bearer {TOKEN}"))
+        .add_header("data-purpose", "eligibility")
+        .add_query_param("national_id", "person-123")
+        .add_query_param("fields", "national_id")
+        .await;
+
+    assert_eq!(response.status_code(), StatusCode::BAD_GATEWAY);
+    let body = response.json::<Value>();
+    assert_eq!(
+        body.pointer("/code").and_then(Value::as_str),
+        Some("source.unavailable"),
+        "expected oversized POST body to fail as source.unavailable, got {body}"
+    );
+    assert!(
+        upstream_state.seen.lock().await.is_empty(),
+        "oversized POST body must be rejected before reaching the upstream"
+    );
+    assert_eq!(*upstream_state.last_post_body.lock().await, None);
 }
 
 #[tokio::test]

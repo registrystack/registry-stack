@@ -11,8 +11,9 @@
 //! * `print`/`debug` routed to no-ops so scripts cannot emit;
 //! * the `xw` pure-helper module tree registered.
 //!
-//! The per-execution capability (`source.get`) and the termination callback are
-//! applied later, in the bridge, because they depend on per-run state.
+//! The per-execution capabilities (`source.get` / `source.post_json`) and the
+//! termination callback are applied later, in the bridge, because they depend on
+//! per-run state.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -70,7 +71,7 @@ pub struct RhaiPolicy {
     pub limits: RhaiLimits,
     /// Wall-clock execution budget for a single run.
     pub timeout: Duration,
-    /// Maximum number of `source.get` calls a single run may dispatch. Must be
+    /// Maximum number of source calls a single run may dispatch. Must be
     /// in `1..=`[`MAX_HTTP_CALLS_HARD`]; validated at compile time.
     pub max_http_calls: u32,
     /// Maximum size, in bytes, of the serialized script output.
@@ -80,7 +81,7 @@ pub struct RhaiPolicy {
     /// pool.
     pub max_concurrent: usize,
     /// Non-2xx upstream statuses the script is allowed to *observe* rather than
-    /// having the run terminated. A `source.get` whose status is 2xx **or** in
+    /// having the run terminated. A source call whose status is 2xx **or** in
     /// this set returns a `#{ status, body }` map to the script; any other
     /// non-2xx status terminates the run as an upstream-status error. Empty by
     /// default, so by default every non-2xx status terminates.
@@ -192,9 +193,10 @@ impl ScriptEngine {
 ///
 /// The engine is built with [`Engine::new`], which loads only Rhai's standard
 /// (pure, non-IO) package set — no filesystem, process, or networking packages.
-/// This is intentional: the sandbox's sole effect is the host `source.get`
-/// capability, so the engine must never gain ambient IO. Do not switch to a
-/// package set that adds IO; the `xw.*` helpers are the only additional surface.
+/// This is intentional: the sandbox's only effects are host source
+/// capabilities, so the engine must never gain ambient IO. Do not switch to a
+/// package set that adds IO; the host source calls and `xw.*` helpers are the
+/// only additional surface.
 pub(crate) fn apply_hardening(engine: &mut Engine, limits: &RhaiLimits) {
     // --- resource limits (sandbox axes) ---
     engine.set_max_operations(limits.max_operations);

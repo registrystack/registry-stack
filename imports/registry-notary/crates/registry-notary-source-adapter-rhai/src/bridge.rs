@@ -4,8 +4,8 @@
 //! Rhai is synchronous; the host seam is async. We run the compiled script on
 //! [`tokio::task::spawn_blocking`], guarded by a dedicated [`Semaphore`] permit
 //! (admission control independent of tokio's shared blocking pool). The
-//! script's `source.get` does **not** touch async code: it sends a
-//! [`SourceGetCommand`] over an mpsc channel to an async *dispatch loop* run by
+//! script's `source.*` capability calls do **not** touch async code: they send a
+//! [`SourceCommand`] over an mpsc channel to an async *dispatch loop* run by
 //! [`ScriptEngine::execute`], which calls the host, deadline-bounds the call,
 //! and **always** replies on a oneshot so the blocking `blocking_recv` can never
 //! wedge.
@@ -118,18 +118,26 @@ impl OutcomeCell {
 }
 
 /// Namespace marker for the `source` value in scope. `source.get(...)`
-/// desugars to `get(SourceNs, ...)`.
+/// desugars to `get(SourceNs, ...)`; `source.post_json(...)` desugars to
+/// `post_json(SourceNs, ...)`.
 #[derive(Debug, Clone, Copy)]
 struct SourceNs;
 
+/// The source operation requested by a script.
+enum SourceMethod {
+    Get,
+    PostJson { body: Value },
+}
+
 /// A request from the (blocking) script thread to the async dispatch loop.
-struct SourceGetCommand {
+struct SourceCommand {
     target: String,
     /// The canonicalized, target-relative path. The capability runs
     /// [`canonicalize_target_relative_path`] before constructing this command,
     /// so a command never carries a raw (un-canonicalized) script path.
     path: String,
     query: Value,
+    method: SourceMethod,
     reply: oneshot::Sender<Result<SourceResponse, SourceScriptError>>,
 }
 
@@ -210,7 +218,7 @@ impl ScriptEngine {
         let visible = Arc::new(policy.visible_statuses.clone());
 
         // --- the bridge channel ---
-        let (tx, mut rx) = mpsc::channel::<SourceGetCommand>(16);
+        let (tx, mut rx) = mpsc::channel::<SourceCommand>(16);
 
         // --- build a fresh hardened engine and layer on the per-run pieces ---
         let mut engine = Engine::new();
@@ -250,10 +258,23 @@ impl ScriptEngine {
                     let _ = cmd.reply.send(Err(SourceScriptError::Deadline));
                     continue;
                 }
-                let result = match tokio::time::timeout(
-                    remaining,
-                    host.source_get(&cmd.target, &cmd.path, cmd.query.clone()),
-                )
+                let result = match tokio::time::timeout(remaining, async {
+                    match &cmd.method {
+                        SourceMethod::Get => {
+                            host.source_get(&cmd.target, &cmd.path, cmd.query.clone())
+                                .await
+                        }
+                        SourceMethod::PostJson { body } => {
+                            host.source_post_json(
+                                &cmd.target,
+                                &cmd.path,
+                                cmd.query.clone(),
+                                body.clone(),
+                            )
+                            .await
+                        }
+                    }
+                })
                 .await
                 {
                     Ok(r) => r,
@@ -385,13 +406,14 @@ fn install_progress_guard(
     });
 }
 
-/// Register the script-visible `source.get(target, path, query)` capability.
+/// Register the script-visible `source.get(...)` and `source.post_json(...)`
+/// capabilities.
 ///
-/// `source` is a [`SourceNs`] marker pushed into scope; `source.get(...)`
-/// desugars to `get(SourceNs, ...)`. The function is synchronous: it counts
-/// against the HTTP budget, **canonicalizes the path** (the traversal gate),
-/// sends a [`SourceGetCommand`], and blocks on the reply. The dispatcher always
-/// answers, so the block cannot wedge.
+/// `source` is a [`SourceNs`] marker pushed into scope; method calls desugar to
+/// free functions with `SourceNs` as their first argument. Each function is
+/// synchronous: it counts against the HTTP budget, **canonicalizes the path**
+/// (the traversal gate), sends a [`SourceCommand`], and blocks on the reply.
+/// The dispatcher always answers, so the block cannot wedge.
 ///
 /// Every failure path records the authoritative cause in the out-of-band
 /// [`OutcomeCell`] and then unwinds with an opaque token (see [`host_abort`]);
@@ -399,7 +421,7 @@ fn install_progress_guard(
 /// outcomes by throwing a lookalike string.
 fn install_source_capability(
     engine: &mut Engine,
-    tx: mpsc::Sender<SourceGetCommand>,
+    tx: mpsc::Sender<SourceCommand>,
     http_calls: Arc<AtomicU32>,
     max_http_calls: u32,
     caps: ConvertCaps,
@@ -407,6 +429,11 @@ fn install_source_capability(
     visible: Arc<std::collections::BTreeSet<u16>>,
 ) {
     engine.register_type_with_name::<SourceNs>("SourceNs");
+
+    let get_tx = tx.clone();
+    let get_calls = http_calls.clone();
+    let get_outcome = outcome.clone();
+    let get_visible = visible.clone();
     engine.register_fn(
         "get",
         move |_ns: SourceNs,
@@ -414,63 +441,133 @@ fn install_source_capability(
               path: rhai::ImmutableString,
               query: rhai::Map|
               -> Result<Dynamic, Box<EvalAltResult>> {
-            // Host-side budget: count BEFORE dispatch; exceed -> Budget error.
-            let n = http_calls.fetch_add(1, Ordering::SeqCst) + 1;
-            if n > max_http_calls {
-                return Err(host_abort(
-                    &outcome,
-                    HostOutcome::Budget(BudgetKind::HttpCalls),
-                ));
-            }
+            dispatch_source_capability(
+                &get_tx,
+                &get_calls,
+                max_http_calls,
+                caps,
+                &get_outcome,
+                &get_visible,
+                target,
+                path,
+                query,
+                None,
+            )
+        },
+    );
 
-            // Traversal gate (B2): canonicalize the script-supplied path BEFORE
-            // building the command. On rejection, do NOT dispatch — record a
-            // HostDenied outcome and unwind. The host therefore only ever sees a
-            // path that has passed canonicalization.
-            let canonical_path = match canonicalize_target_relative_path(&path) {
-                Ok(p) => p,
-                Err(_) => {
-                    return Err(host_abort(
-                        &outcome,
-                        HostOutcome::HostDenied {
-                            reason: "path failed canonicalization".into(),
-                        },
-                    ));
-                }
-            };
+    let post_tx = tx;
+    let post_calls = http_calls;
+    let post_outcome = outcome;
+    let post_visible = visible;
+    engine.register_fn(
+        "post_json",
+        move |_ns: SourceNs,
+              target: rhai::ImmutableString,
+              path: rhai::ImmutableString,
+              query: rhai::Map,
+              body: Dynamic|
+              -> Result<Dynamic, Box<EvalAltResult>> {
+            dispatch_source_capability(
+                &post_tx,
+                &post_calls,
+                max_http_calls,
+                caps,
+                &post_outcome,
+                &post_visible,
+                target,
+                path,
+                query,
+                Some(body),
+            )
+        },
+    );
+}
 
-            // The query map is converted to JSON, bounded by the caps.
-            let query_dynamic = Dynamic::from_map(query);
-            let query_json = match dynamic_to_json(&query_dynamic, caps) {
+#[allow(clippy::too_many_arguments)]
+fn dispatch_source_capability(
+    tx: &mpsc::Sender<SourceCommand>,
+    http_calls: &AtomicU32,
+    max_http_calls: u32,
+    caps: ConvertCaps,
+    outcome: &OutcomeCell,
+    visible: &std::collections::BTreeSet<u16>,
+    target: rhai::ImmutableString,
+    path: rhai::ImmutableString,
+    query: rhai::Map,
+    body: Option<Dynamic>,
+) -> Result<Dynamic, Box<EvalAltResult>> {
+    // Host-side budget: count BEFORE dispatch or conversion; exceed -> Budget.
+    let n = http_calls.fetch_add(1, Ordering::SeqCst) + 1;
+    if n > max_http_calls {
+        return Err(host_abort(
+            outcome,
+            HostOutcome::Budget(BudgetKind::HttpCalls),
+        ));
+    }
+
+    // Traversal gate (B2): canonicalize the script-supplied path BEFORE
+    // building the command. On rejection, do NOT dispatch. The host therefore
+    // only ever sees a path that has passed canonicalization.
+    let canonical_path = match canonicalize_target_relative_path(&path) {
+        Ok(p) => p,
+        Err(_) => {
+            return Err(host_abort(
+                outcome,
+                HostOutcome::HostDenied {
+                    reason: "path failed canonicalization".into(),
+                },
+            ));
+        }
+    };
+
+    let query_dynamic = Dynamic::from_map(query);
+    let query_json = match dynamic_to_json(&query_dynamic, caps) {
+        Ok(j) => j,
+        Err(e) => {
+            return Err(host_abort(
+                outcome,
+                HostOutcome::Type {
+                    detail: type_detail(&e),
+                },
+            ));
+        }
+    };
+    let method = match body {
+        Some(body) => {
+            let body_json = match dynamic_to_json(&body, caps) {
                 Ok(j) => j,
                 Err(e) => {
                     return Err(host_abort(
-                        &outcome,
+                        outcome,
                         HostOutcome::Type {
                             detail: type_detail(&e),
                         },
                     ));
                 }
             };
+            SourceMethod::PostJson { body: body_json }
+        }
+        None => SourceMethod::Get,
+    };
 
-            let (reply_tx, reply_rx) = oneshot::channel();
-            let cmd = SourceGetCommand {
-                target: target.to_string(),
-                path: canonical_path,
-                query: query_json,
-                reply: reply_tx,
-            };
-            // If the dispatcher is gone, fail cleanly rather than wedging.
-            if tx.blocking_send(cmd).is_err() {
-                return Err(host_abort(&outcome, HostOutcome::HttpTransport));
-            }
-            match reply_rx.blocking_recv() {
-                Ok(Ok(resp)) => map_response_to_dynamic(resp, caps, &outcome, &visible),
-                Ok(Err(host_err)) => Err(host_abort(&outcome, host_outcome_for(host_err))),
-                Err(_recv) => Err(host_abort(&outcome, HostOutcome::HttpTransport)),
-            }
-        },
-    );
+    let (reply_tx, reply_rx) = oneshot::channel();
+    let cmd = SourceCommand {
+        target: target.to_string(),
+        path: canonical_path,
+        query: query_json,
+        method,
+        reply: reply_tx,
+    };
+    // If the dispatcher is gone, fail cleanly rather than wedging.
+    if tx.blocking_send(cmd).is_err() {
+        return Err(host_abort(outcome, HostOutcome::HttpTransport));
+    }
+    match reply_rx.blocking_recv() {
+        Ok(Ok(resp)) => map_response_to_dynamic(resp, caps, outcome, visible),
+        Ok(Err(host_err)) => Err(host_abort(outcome, host_outcome_for(host_err))),
+        Err(_recv) => Err(host_abort(outcome, HostOutcome::HttpTransport)),
+    }
 }
 
 /// Map a host response to the value the script receives.
@@ -573,7 +670,7 @@ fn run_script_blocking(
     max_output_bytes: usize,
 ) -> Result<Vec<Value>, SourceScriptError> {
     let mut scope = Scope::new();
-    // Push the namespace markers so `xw.*` and `source.get(...)` resolve.
+    // Push the namespace markers so `xw.*` and `source.*` calls resolve.
     crate::xw::push_into_scope(&mut scope);
     scope.push_constant("source", SourceNs);
     let out: Dynamic = engine
