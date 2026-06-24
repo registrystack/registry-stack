@@ -332,7 +332,7 @@ fn parse_iso_date(value: &str) -> Option<(u16, u8, u8)> {
 }
 
 const fn is_leap_year(year: u16) -> bool {
-    year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400))
+    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
 }
 
 pub const COMPLIANCE_REGIME_GDPR: &str = "gdpr";
