@@ -1,0 +1,27 @@
+meta {
+  name: Read student with school expanded
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/v1/datasets/education_registry/entities/student/records/{{studentAlias}}?expand=school
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{rowsKey}}
+}
+
+headers {
+  Data-Purpose: {{purpose}}
+}
+
+docs {
+  Reads student stu-2001 with school relationship expanded inline.
+  Uses casework_system persona (rowsKey). Purpose header required.
+  Expected: 200 with student fields plus embedded school record showing
+  school_id, school_name, district, school_type, education_level,
+  has_meal_program, has_accessibility_support.
+}

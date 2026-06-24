@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registry-relay.local/demo/schemas/spdci/fr-farmer.schema.json",
+  "title": "Demo SP DCI Farmer Registry FRPerson",
+  "$comment": "Shaped from third_party/spdci-api-standards/src/registry/fr/RegistryRecord.yaml and src/extensions/fr/FRPerson.yaml. The upstream example spells the top-level personal-details key as famer_personal_details, and this demo follows that shape.",
+  "type": "object",
+  "required": ["famer_personal_details", "farm_details"],
+  "properties": {
+    "famer_personal_details": {
+      "type": "object",
+      "required": ["member_identifier", "demographic_info"],
+      "properties": {
+        "member_identifier": {
+          "type": "object",
+          "required": ["identifier_type", "identifier_value"],
+          "properties": {
+            "identifier_type": { "type": "string" },
+            "identifier_value": { "type": "string" }
+          }
+        },
+        "demographic_info": { "type": "object" }
+      }
+    },
+    "family_details": { "type": "object" },
+    "farm_details": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "object" }
+    },
+    "registration_date": { "type": "string" },
+    "last_updated": { "type": "string" }
+  }
+}

@@ -1,0 +1,182 @@
+@prefix dcat: <http://www.w3.org/ns/dcat#> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix foaf: <http://xmlns.com/foaf/0.1/> .
+@prefix odrl: <http://www.w3.org/ns/odrl/2/> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+
+<https://registry-relay.dev/shapes/DcatCatalogSmokeShape>
+    a sh:NodeShape ;
+    sh:targetClass dcat:Catalog ;
+    sh:property [
+        sh:path dcterms:title ;
+        sh:minCount 1 ;
+        sh:nodeKind sh:Literal ;
+    ] ;
+    sh:property [
+        sh:path dcterms:description ;
+        sh:minCount 1 ;
+        sh:nodeKind sh:Literal ;
+    ] ;
+    sh:property [
+        sh:path dcterms:publisher ;
+        sh:minCount 1 ;
+        sh:class foaf:Agent ;
+    ] ;
+    sh:property [
+        sh:path dcat:dataset ;
+        sh:minCount 1 ;
+        sh:class dcat:Dataset ;
+    ] ;
+    sh:property [
+        sh:path dcat:landingPage ;
+        sh:minCount 1 ;
+        sh:nodeKind sh:IRI ;
+    ] .
+
+<https://registry-relay.dev/shapes/DcatDatasetSmokeShape>
+    a sh:NodeShape ;
+    sh:targetClass dcat:Dataset ;
+    sh:property [
+        sh:path dcterms:title ;
+        sh:minCount 1 ;
+        sh:nodeKind sh:Literal ;
+    ] ;
+    sh:property [
+        sh:path dcterms:description ;
+        sh:minCount 1 ;
+        sh:nodeKind sh:Literal ;
+    ] ;
+    sh:property [
+        sh:path dcterms:publisher ;
+        sh:minCount 1 ;
+        sh:class foaf:Agent ;
+    ] ;
+    sh:property [
+        sh:path dcterms:accessRights ;
+        sh:minCount 1 ;
+        sh:nodeKind sh:IRI ;
+    ] ;
+    sh:property [
+        sh:path dcterms:accrualPeriodicity ;
+        sh:minCount 1 ;
+        sh:nodeKind sh:IRI ;
+    ] ;
+    sh:property [
+        sh:path dcat:distribution ;
+        sh:class dcat:Distribution ;
+    ] ;
+    sh:property [
+        sh:path dcat:landingPage ;
+        sh:minCount 1 ;
+        sh:nodeKind sh:IRI ;
+    ] ;
+    sh:property [
+        sh:path odrl:hasPolicy ;
+        sh:minCount 1 ;
+        sh:class odrl:Offer ;
+    ] .
+
+<https://registry-relay.dev/shapes/DcatDistributionSmokeShape>
+    a sh:NodeShape ;
+    sh:targetClass dcat:Distribution ;
+    sh:property [
+        sh:path dcterms:title ;
+        sh:minCount 1 ;
+        sh:nodeKind sh:Literal ;
+    ] ;
+    sh:property [
+        sh:path dcterms:format ;
+        sh:minCount 1 ;
+        sh:nodeKind sh:IRI ;
+    ] ;
+    sh:property [
+        sh:path dcat:accessURL ;
+        sh:minCount 1 ;
+        sh:nodeKind sh:IRI ;
+    ] ;
+    sh:property [
+        sh:path dcat:accessService ;
+        sh:minCount 1 ;
+        sh:class dcat:DataService ;
+    ] ;
+    sh:property [
+        sh:path dcterms:conformsTo ;
+        sh:minCount 1 ;
+        sh:nodeKind sh:IRI ;
+    ] .
+
+<https://registry-relay.dev/shapes/DcatDataServiceSmokeShape>
+    a sh:NodeShape ;
+    sh:targetClass dcat:DataService ;
+    sh:property [
+        sh:path dcat:endpointURL ;
+        sh:minCount 1 ;
+        sh:nodeKind sh:IRI ;
+    ] ;
+    sh:property [
+        sh:path dcat:endpointDescription ;
+        sh:minCount 1 ;
+        sh:nodeKind sh:IRI ;
+    ] .
+
+<https://registry-relay.dev/shapes/OdrlOfferSmokeShape>
+    a sh:NodeShape ;
+    sh:targetClass odrl:Offer ;
+    sh:property [
+        sh:path odrl:permission ;
+        sh:minCount 1 ;
+    ] .
+
+<https://registry-relay.dev/shapes/EmbeddedNodeShapeSmokeShape>
+    a sh:NodeShape ;
+    sh:targetClass sh:NodeShape ;
+    sh:property [
+        sh:path sh:targetClass ;
+        sh:minCount 1 ;
+        sh:nodeKind sh:IRI ;
+    ] ;
+    sh:property [
+        sh:path sh:property ;
+        sh:minCount 1 ;
+        sh:class sh:PropertyShape ;
+    ] ;
+    sh:property [
+        sh:path sh:nodeKind ;
+        sh:minCount 1 ;
+        sh:nodeKind sh:IRI ;
+    ] .
+
+<https://registry-relay.dev/shapes/EmbeddedPropertyShapeSmokeShape>
+    a sh:NodeShape ;
+    sh:targetClass sh:PropertyShape ;
+    sh:property [
+        sh:path sh:path ;
+        sh:minCount 1 ;
+        sh:nodeKind sh:IRI ;
+    ] ;
+    sh:property [
+        sh:path sh:name ;
+        sh:minCount 1 ;
+        sh:nodeKind sh:Literal ;
+    ] ;
+    sh:property [
+        sh:path sh:nodeKind ;
+        sh:minCount 1 ;
+        sh:nodeKind sh:IRI ;
+    ] ;
+    sh:or (
+        [
+            sh:property [
+                sh:path sh:datatype ;
+                sh:minCount 1 ;
+                sh:nodeKind sh:IRI ;
+            ]
+        ]
+        [
+            sh:property [
+                sh:path sh:class ;
+                sh:minCount 1 ;
+                sh:nodeKind sh:IRI ;
+            ]
+        ]
+    ) .

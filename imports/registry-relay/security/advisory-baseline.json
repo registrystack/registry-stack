@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "service": "registry-relay",
+  "policies": [
+    {
+      "tool": "zizmor",
+      "minimum_severity": "high",
+      "action": "block_unreviewed"
+    },
+    {
+      "tool": "grype",
+      "minimum_severity": "critical",
+      "action": "block_unreviewed"
+    }
+  ],
+  "reviewed_findings": [
+    {
+      "tool": "zizmor",
+      "fingerprint": "zizmor|cache-poisoning|.github/workflows/dcat-ap-external-validation.yml|k:jobs/k:semic-dcat-ap/k:steps/i:8/k:uses|enables caching by default",
+      "rule_id": "cache-poisoning",
+      "severity": "high",
+      "status": "accepted_risk",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "dcat-ap-external-validation runs only on workflow_dispatch and release:published (no fork/PR trigger), and no privileged job restores this cache key (container.yml builds via docker build and never uses rust-cache). The rust-cache step is now restore-only (save-if: false), so this workflow cannot write a poisonable cache. zizmor still flags the presence of a caching action in a release-triggered workflow regardless of save-if; accepted as a mitigated, non-exploitable residual. Re-review if a privileged consumer of this cache key is introduced, or drop the rust-cache step to clear it entirely.",
+      "reviewed_at": "2026-06-04",
+      "expires_at": "2026-12-01"
+    },
+    {
+      "tool": "grype",
+      "fingerprint": "grype|registry-relay-image|CVE-2023-45853|zlib1g|1:1.2.13.dfsg-1|deb",
+      "rule_id": "CVE-2023-45853",
+      "severity": "critical",
+      "status": "false_positive",
+      "owner": "@PublicSchema/maintainers",
+      "reason": "Not affected. Debian marks CVE-2023-45853 <ignored> for bookworm: the vulnerable contrib/minizip code is not built into the shipped zlib1g binary (no fixed package is coming, so the prior 'until the base image moves to a fixed distro package' exit condition was unreachable). The Relay binary's deflate path is pure-Rust (flate2/miniz_oxide/zlib-rs, no libz-sys C linkage) and the only `zip` crate is a dev-only XLSX test fixture, so MiniZip is never reached. zlib1g is a transitive base-image package only. Suppression retained to keep grype quiet; re-review when the base image leaves Debian bookworm.",
+      "reviewed_at": "2026-06-04",
+      "expires_at": "2027-06-01"
+    }
+  ]
+}

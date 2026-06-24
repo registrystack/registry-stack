@@ -1,0 +1,21 @@
+# Tests config.missing_secret: fingerprint.name names an unset env var.
+server:
+  bind: 127.0.0.1:8080
+catalog:
+  title: t
+  base_url: https://example.test
+  publisher: p
+vocabularies: {}
+auth:
+  mode: api_key
+  api_keys:
+    - id: k1
+      fingerprint:
+        provider: env
+        name: TEST_KEY_HASH_MISSING_NOPE
+        commitment: sha256:1a5586e27a0ca57a7ae7a6d1f5eb378fdaaa1a816abc8a4bffad55ee6a6b62f8
+      scopes:
+        - registry_relay:admin
+audit:
+  sink: stdout
+datasets: []

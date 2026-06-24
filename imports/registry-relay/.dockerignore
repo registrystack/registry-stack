@@ -1,0 +1,25 @@
+.git
+.gitignore
+target
+cache
+data
+agent-skills
+registry-platform
+fixtures
+tests
+docs
+decisions
+*.log
+*.tmp
+.DS_Store
+Dockerfile
+.dockerignore
+# Keep developer secrets and key material out of the build context so they
+# cannot leak into image layers.
+.env
+.env.*
+*.env
+*.env.*
+*.pem
+*.key
+*.p12

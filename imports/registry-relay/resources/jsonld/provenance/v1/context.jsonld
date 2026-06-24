@@ -1,0 +1,87 @@
+{
+  "@context": {
+    "@version": 1.1,
+    "@protected": true,
+    "dg": "https://schemas.registry-relay.org/provenance/v1#",
+
+    "VerifyResult": {
+      "@id": "dg:VerifyResult"
+    },
+    "AggregateResult": {
+      "@id": "dg:AggregateResult"
+    },
+    "EntityRecord": {
+      "@id": "dg:EntityRecord"
+    },
+
+    "dataset": {
+      "@id": "dg:dataset",
+      "@type": "http://www.w3.org/2001/XMLSchema#string"
+    },
+    "entity": {
+      "@id": "dg:entity",
+      "@type": "http://www.w3.org/2001/XMLSchema#string"
+    },
+    "subjectId": {
+      "@id": "dg:subjectId",
+      "@type": "http://www.w3.org/2001/XMLSchema#string"
+    },
+    "predicate": {
+      "@id": "dg:predicate",
+      "@type": "http://www.w3.org/2001/XMLSchema#string"
+    },
+    "value": {
+      "@id": "dg:value"
+    },
+    "asOf": {
+      "@id": "dg:asOf",
+      "@type": "http://www.w3.org/2001/XMLSchema#dateTime"
+    },
+
+    "aggregateId": {
+      "@id": "dg:aggregateId",
+      "@type": "http://www.w3.org/2001/XMLSchema#string"
+    },
+    "aggregateUrl": {
+      "@id": "dg:aggregateUrl",
+      "@type": "@id"
+    },
+    "groupBy": {
+      "@id": "dg:groupBy",
+      "@container": "@list"
+    },
+    "indicators": {
+      "@id": "dg:indicators",
+      "@container": "@list"
+    },
+    "rows": {
+      "@id": "dg:rows",
+      "@container": "@list"
+    },
+    "group": {
+      "@id": "dg:group"
+    },
+    "values": {
+      "@id": "dg:values"
+    },
+    "suppressedRows": {
+      "@id": "dg:suppressedRows",
+      "@type": "http://www.w3.org/2001/XMLSchema#integer"
+    },
+    "minCellSize": {
+      "@id": "dg:minCellSize",
+      "@type": "http://www.w3.org/2001/XMLSchema#integer"
+    },
+    "computedAt": {
+      "@id": "dg:computedAt",
+      "@type": "http://www.w3.org/2001/XMLSchema#dateTime"
+    },
+
+    "fields": {
+      "@id": "dg:fields"
+    },
+    "expanded": {
+      "@id": "dg:expanded"
+    }
+  }
+}

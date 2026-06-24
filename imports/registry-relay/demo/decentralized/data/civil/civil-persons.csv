@@ -1,0 +1,13 @@
+national_id,given_name,surname,birth_date,civil_status,deceased,district
+NID-1001,Amina,Diallo,2020-04-12,child,false,north
+NID-1002,Ben,Mensah,2017-11-02,child,false,south
+NID-1003,Cara,Okafor,1957-02-14,adult,true,central
+NID-2001,Dara,Diallo,1994-08-19,adult,false,north
+NID-2002,Esi,Mensah,1990-12-01,adult,false,south
+NID-1004,Femi,Okeke,2021-07-30,child,false,east
+NID-2004,Gita,Okeke,1988-03-21,adult,false,east
+NID-1005,Hana,Njoroge,2019-09-09,child,false,west
+NID-2005,Idris,Njoroge,1985-05-17,adult,false,west
+NID-1006,Jona,Abebe,2015-01-25,child,false,north
+NID-2006,Kaya,Abebe,1982-10-02,adult,true,north
+NID-2008,Lina,Santos,1984-06-06,adult,false,west

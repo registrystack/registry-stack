@@ -1,0 +1,26 @@
+meta {
+  name: Read subject by canonical id
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/v1/datasets/subject_registry/entities/subject/records?canonical_id={{canonicalId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{linkageKey}}
+}
+
+headers {
+  Data-Purpose: {{purpose}}
+}
+
+docs {
+  Reads the subject row for canonical id sub-9001. Uses linkage_service persona (linkageKey).
+  Expected: 200 with the same row returned in request 03 (same subject, different filter key).
+  Confirms that canonical_id and education_student_alias resolve to the same row,
+  demonstrating bidirectional lookup within the registry.
+}

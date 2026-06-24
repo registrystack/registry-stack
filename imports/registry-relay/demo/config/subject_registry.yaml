@@ -1,0 +1,210 @@
+# SPDX-License-Identifier: Apache-2.0
+# Single-dataset config for local startup: cargo run -- --config demo/config/subject_registry.yaml
+
+server:
+  bind: 0.0.0.0:4242
+
+metadata:
+  source:
+    path: subject_registry.metadata.yaml
+
+catalog:
+  title: Subject Registry Gateway (Demo)
+  base_url: http://127.0.0.1:4242
+  publisher: Government Identity Coordination Function (Demo)
+
+auth:
+  mode: api_key
+  api_keys:
+    - id: catalog_viewer
+      fingerprint:
+        provider: env
+        name: CATALOG_VIEWER_HASH
+        commitment: sha256:8e1a97e93d31a6c8e57a2e47fede65dc52655e4c40c4ddb3836395a6c12ef17f
+      scopes:
+        - subject_registry:metadata
+
+    - id: planning_analyst
+      fingerprint:
+        provider: env
+        name: PLANNING_ANALYST_HASH
+        commitment: sha256:2ff911bb5cf147eafc2024bb123df859f731d087e02e7da96a2b4c49687b5320
+      scopes:
+        - subject_registry:metadata
+        - subject_registry:aggregate
+
+    # casework_system is explicitly excluded from subject_registry:rows: it
+    # must not enumerate cross-dataset aliases; linkage_service is the sole
+    # persona authorized to resolve them.
+    - id: casework_system
+      fingerprint:
+        provider: env
+        name: CASEWORK_SYSTEM_HASH
+        commitment: sha256:31eaa0644ee0593bf88482417b113d4e4f01b07848d5b2a628d97a01be899779
+      scopes:
+        - subject_registry:metadata
+
+    - id: verification_service
+      fingerprint:
+        provider: env
+        name: VERIFICATION_SERVICE_HASH
+        commitment: sha256:a0bd21e279907c6fada5bb839a461a3e3014617dbb49c2e9a03e87e7f1f3344b
+      scopes:
+        - subject_registry:evidence_verification
+
+    # linkage_service is the ONLY persona with subject_registry:rows.
+    - id: linkage_service
+      fingerprint:
+        provider: env
+        name: LINKAGE_SERVICE_HASH
+        commitment: sha256:4e8a0c5713797fb8c03b4e710e3367185fdc383f9e33d9d1ab27dd19df29e4e2
+      scopes:
+        - subject_registry:metadata
+        - subject_registry:rows
+        - subject_registry:aggregate
+
+    - id: operations_admin
+      fingerprint:
+        provider: env
+        name: OPERATIONS_ADMIN_HASH
+        commitment: sha256:379ad2d16e275e6fc7de478764353606569f30507c6e73647dc28045d79b2f17
+      scopes:
+        - registry_relay:admin
+        - registry_relay:ops_read
+        - subject_registry:metadata
+
+audit:
+  sink: stdout
+  format: jsonl
+  hash_secret_env: REGISTRY_RELAY_AUDIT_HASH_SECRET
+
+datasets:
+  - id: subject_registry
+    title: Subject Registry
+    description: >-
+      Canonical mapping between subject identifiers used by different
+      administrative datasets. Contains no personal data: only opaque
+      canonical ids and per-dataset aliases. The linkage itself is the
+      sensitive surface; access is gated to the linkage_service persona only.
+    owner: Government Identity Coordination Function
+    sensitivity: confidential
+    access_rights: restricted
+    update_frequency: as_needed
+    defaults:
+      refresh:
+        mode: manual
+
+    tables:
+      - id: subjects_table
+        source:
+          type: file
+          path: demo/data/subject_registry.xlsx
+          format:
+            xlsx:
+              sheet: Subjects
+        primary_key: canonical_id
+        schema:
+          strict: true
+          fields:
+            - name: canonical_id
+              type: string
+              nullable: false
+            - name: benefits_person_alias
+              type: string
+              nullable: true
+            - name: benefits_household_alias
+              type: string
+              nullable: true
+            - name: education_student_alias
+              type: string
+              nullable: true
+            - name: education_guardian_alias
+              type: string
+              nullable: true
+            - name: linkage_method
+              type: string
+              nullable: false
+            - name: linkage_confidence
+              type: string
+              nullable: false
+            - name: linked_on
+              type: date
+              nullable: false
+            # raw match score and reviewer notes are operationally sensitive
+            - name: internal_match_score
+              type: number
+              nullable: true
+              sensitive: true
+            - name: match_notes
+              type: string
+              nullable: true
+              sensitive: true
+
+    entities:
+      - name: subject
+        title: Subject
+        description: >-
+          A canonical subject identity with per-dataset aliases. The registry
+          deliberately has no relationships to personal datasets; cross-dataset
+          composition stays client-side and is audited per call.
+        table: subjects_table
+        fields:
+          - name: canonical_id
+            from: canonical_id
+          - name: benefits_person_alias
+            from: benefits_person_alias
+          - name: benefits_household_alias
+            from: benefits_household_alias
+          - name: education_student_alias
+            from: education_student_alias
+          - name: education_guardian_alias
+            from: education_guardian_alias
+          - name: linkage_method
+            from: linkage_method
+          - name: linkage_confidence
+            from: linkage_confidence
+          - name: linked_on
+            from: linked_on
+        access:
+          metadata_scope:    subject_registry:metadata
+          aggregate_scope:   subject_registry:aggregate
+          read_scope:        subject_registry:rows
+        api:
+          default_limit: 100
+          max_limit: 1000
+          require_purpose_header: true
+          required_filters:
+            - canonical_id
+            - benefits_person_alias
+            - benefits_household_alias
+            - education_student_alias
+            - education_guardian_alias
+          allowed_filters:
+            - field: canonical_id
+              ops: [eq, in]
+            - field: benefits_person_alias
+              ops: [eq, in]
+            - field: benefits_household_alias
+              ops: [eq, in]
+            - field: education_student_alias
+              ops: [eq, in]
+            - field: education_guardian_alias
+              ops: [eq, in]
+            - field: linkage_method
+              ops: [eq, in]
+            - field: linkage_confidence
+              ops: [eq, in]
+        aggregates:
+          - id: by_linkage_method_confidence
+            description: Count of subjects by linkage method and confidence band
+            group_by:
+              - linkage_method
+              - linkage_confidence
+            measures:
+              - name: subject_count
+                function: count
+                column: canonical_id
+            # linkage table is the most sensitive surface in the demo pack; small groups risk pinpointing cross-dataset linkages
+            disclosure_control:
+              min_group_size: 5
+              suppression: omit

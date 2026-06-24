@@ -1,0 +1,21 @@
+meta {
+  name: Disability evidence offering
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/metadata/evidence-offerings/{{disabilityEvidenceOfferingId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{metadataKey}}
+}
+
+docs {
+  Reads the disability-status evidence offering from the standards demo metadata.
+  Requires the server to run demo/config/all_standards.yaml or demo/config/disability_registry.yaml.
+  Expected: 200 with the disability evidence type, issuing authority, jurisdiction, and verification request schema.
+}

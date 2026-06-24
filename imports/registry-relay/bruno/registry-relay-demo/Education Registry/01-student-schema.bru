@@ -1,0 +1,24 @@
+meta {
+  name: Student schema
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/v1/datasets/education_registry/entities/student/schema
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{metadataKey}}
+}
+
+docs {
+  Reads the student entity schema. Uses catalog_viewer persona (metadataKey).
+  Expected: 200 with public field list (student_id, school_id, age_band, sex,
+  grade_level, enrollment_status, home_district, language_group, disability_status,
+  scholarship_eligible). Sensitive fields student_name, national_id, home_address,
+  guardian_phone, student_notes are absent. Relationships: school, guardians,
+  enrollments, support_needs, attendance_summaries.
+}

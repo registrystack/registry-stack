@@ -1,0 +1,619 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: ["**"]
+
+# Cancel superseded runs on the same ref so a fast-follow push does not
+# keep an outdated build alive next to the new one. Main is kept (we want
+# every merged commit's CI result), branches are racy and can be cancelled.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_NET_GIT_FETCH_WITH_CLI: true
+  RUST_BACKTRACE: 1
+  CARGO_LLVM_COV_VERSION: "0.8.7"
+  REGISTRY_RELAY_COVERAGE_THRESHOLD: "85"
+  REGISTRY_PLATFORM_REPOSITORY: jeremi/registry-platform
+  REGISTRY_PLATFORM_REF: 1ff93500d4a42a09d67cc31e547d97ef1b5e5404
+  REGISTRY_MANIFEST_REPOSITORY: jeremi/registry-manifest
+  REGISTRY_MANIFEST_REF: 19cf67ada5eb7325a8fb8b051a2acc266b41bbde
+  CROSSWALK_REPOSITORY: PublicSchema/crosswalk
+  CROSSWALK_REF: 1d44ec735fdc8a7c719264b339574371e8330337
+
+# Default the GITHUB_TOKEN granted to each job to read-only on contents.
+# Individual jobs can widen this when they truly need write access.
+permissions:
+  contents: read
+
+# Actions are pinned to commit SHAs (with a trailing `# vX.Y.Z` comment for
+# readability), matching security.yml and container.yml. Bump the SHA and the
+# comment together when upgrading. dtolnay/rust-toolchain is pinned to a SHA
+# with an explicit `toolchain: stable` input, since a SHA ref no longer selects
+# the channel the way `@stable` did.
+
+jobs:
+  # ── Lint + test (x86_64-unknown-linux-gnu) ───────────────────────────────
+  # musl was previously part of a matrix here. Removed because nothing
+  # ships a musl artifact (Dockerfile builds glibc top-to-bottom) and the
+  # canary was costing ~7 min/run without catching anything not already
+  # caught by gnu. Re-add a musl job alongside this one when a musl
+  # artifact is actually published.
+  build-and-test:
+    name: build-and-test
+    runs-on: ubuntu-latest
+
+    steps:
+      # The hosted runner's 14 GB free disk is not enough for three sibling
+      # checkouts plus debug, all-features, and test artifacts; drop the
+      # preinstalled toolchains we never use (~25 GB) before building.
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Checkout registry-platform
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ env.REGISTRY_PLATFORM_REPOSITORY }}
+          ref: ${{ env.REGISTRY_PLATFORM_REF }}
+          token: ${{ secrets.REGISTRY_PLATFORM_TOKEN || github.token }}
+          path: registry-platform
+
+      - name: Link registry-platform path dependency
+        run: ln -s "$GITHUB_WORKSPACE/registry-platform" "$GITHUB_WORKSPACE/../registry-platform"
+
+      - name: Checkout crosswalk
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ env.CROSSWALK_REPOSITORY }}
+          ref: ${{ env.CROSSWALK_REF }}
+          path: crosswalk
+
+      - name: Link crosswalk path dependency
+        run: ln -s "$GITHUB_WORKSPACE/crosswalk" "$GITHUB_WORKSPACE/../crosswalk"
+
+      - name: Checkout registry-manifest
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ env.REGISTRY_MANIFEST_REPOSITORY }}
+          ref: ${{ env.REGISTRY_MANIFEST_REF }}
+          token: ${{ secrets.REGISTRY_MANIFEST_TOKEN || github.token }}
+          path: registry-manifest
+
+      - name: Link registry-manifest path dependency
+        run: ln -s "$GITHUB_WORKSPACE/registry-manifest" "$GITHUB_WORKSPACE/../registry-manifest"
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: stable
+
+      - name: Cache Cargo registry and build artifacts
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+
+      - name: Check Docker build contract
+        run: python3 scripts/check_docker_build_contract.py
+
+      - name: Check workflow hardening contract
+        run: python3 scripts/check_workflow_hardening.py
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@25435dc8dd3baed7417e0c96d3fe89013a5b2e09 # v2.81.3
+        with:
+          tool: nextest@0.9.136
+          fallback: none
+
+      - name: Install oasdiff
+        run: |
+          go install github.com/oasdiff/oasdiff@v1.11.7
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Check platform hygiene alignment
+        run: bash registry-platform/scripts/check-hygiene-alignment.sh . registry-platform
+
+      - name: Clippy (treat warnings as errors)
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Clippy all features (treat warnings as errors)
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Run tests
+        run: cargo nextest run --build-jobs 2
+
+      - name: Run all-features tests
+        run: cargo nextest run --all-features --build-jobs 2
+
+      - name: Run doctests
+        # nextest does not execute doctests; this step keeps doctest
+        # coverage alive in case any are added later.
+        run: cargo test --all-features --doc
+
+      - name: Check OpenAPI contract
+        run: |
+          base_ref=""
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch --no-tags --depth=1 origin "${{ github.event.pull_request.base.sha }}"
+            base_ref="FETCH_HEAD"
+          elif [ -n "${{ github.event.before }}" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            git fetch --no-tags --depth=1 origin "${{ github.event.before }}"
+            base_ref="${{ github.event.before }}"
+          fi
+
+          if [ -n "$base_ref" ]; then
+            OPENAPI_CONTRACT_BASE_REF="$base_ref" scripts/check-openapi-contract.sh
+          else
+            scripts/check-openapi-contract.sh
+          fi
+
+      - name: Lint OpenAPI artifact (spec validity)
+        # The committed artifact is the frozen contract; freezing a
+        # document standard tooling rejects undermines the freeze
+        # (relay#110). Errors fail; warnings do not.
+        run: npx --yes @redocly/cli@2.32.2 lint openapi/registry-relay.openapi.json
+
+      - name: Export sample DCAT-AP catalog
+        env:
+          REGISTRY_RELAY_EXPORT_DCAT_AP_PATH: target/dcat-ap/catalog.dcat-ap.jsonld
+        run: cargo nextest run --test catalog_entity export_generated_dcat_ap_catalog_when_path_is_set
+
+      - name: Validate sample DCAT-AP catalog with local SHACL smoke profile
+        run: |
+          uv run --with 'pyshacl>=0.27,<0.31' --with 'rdflib-jsonld>=0.6' \
+            python scripts/validate_dcat_shacl.py \
+            --catalog target/dcat-ap/catalog.dcat-ap.jsonld
+
+  # ── Feature-disabled build (--no-default-features) ──────────────────────
+  # attribute-release ships in the default feature set, so neither the default
+  # `cargo nextest run` nor the `--all-features` run ever compiles the
+  # `cfg(not(feature = "attribute-release"))` paths (src/server.rs route stub,
+  # src/config/validate.rs feature-disabled rejection). This job builds with the
+  # feature off so those paths are compiled and the rejection guardrail
+  # (attribute_release_feature_flag.rs) is actually exercised.
+  feature-disabled:
+    name: feature-disabled
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Checkout registry-platform
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ env.REGISTRY_PLATFORM_REPOSITORY }}
+          ref: ${{ env.REGISTRY_PLATFORM_REF }}
+          token: ${{ secrets.REGISTRY_PLATFORM_TOKEN || github.token }}
+          path: registry-platform
+
+      - name: Link registry-platform path dependency
+        run: ln -s "$GITHUB_WORKSPACE/registry-platform" "$GITHUB_WORKSPACE/../registry-platform"
+
+      # crosswalk-core is an *optional* path dependency (only pulled in by the
+      # attribute-release feature), but Cargo still resolves its manifest, so the
+      # checkout must be present even though this job disables the feature.
+      - name: Checkout crosswalk
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ env.CROSSWALK_REPOSITORY }}
+          ref: ${{ env.CROSSWALK_REF }}
+          path: crosswalk
+
+      - name: Link crosswalk path dependency
+        run: ln -s "$GITHUB_WORKSPACE/crosswalk" "$GITHUB_WORKSPACE/../crosswalk"
+
+      - name: Checkout registry-manifest
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ env.REGISTRY_MANIFEST_REPOSITORY }}
+          ref: ${{ env.REGISTRY_MANIFEST_REF }}
+          token: ${{ secrets.REGISTRY_MANIFEST_TOKEN || github.token }}
+          path: registry-manifest
+
+      - name: Link registry-manifest path dependency
+        run: ln -s "$GITHUB_WORKSPACE/registry-manifest" "$GITHUB_WORKSPACE/../registry-manifest"
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: stable
+
+      - name: Cache Cargo registry and build artifacts
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: feature-disabled
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@25435dc8dd3baed7417e0c96d3fe89013a5b2e09 # v2.81.3
+        with:
+          tool: nextest@0.9.136
+          fallback: none
+
+      # Compiles the lib + tests with attribute-release off and runs the
+      # feature-disabled guardrails. Warnings are not gated here: this cfg path
+      # is otherwise unlinted, and the goal is to keep it compiling and the
+      # rejection covered, not to introduce a new lint surface.
+      - name: Run feature-disabled tests
+        run: cargo nextest run --no-default-features --build-jobs 2
+
+  # ── Coverage report (x86_64-unknown-linux-gnu) ──────────────────────────
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Checkout registry-platform
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ env.REGISTRY_PLATFORM_REPOSITORY }}
+          ref: ${{ env.REGISTRY_PLATFORM_REF }}
+          token: ${{ secrets.REGISTRY_PLATFORM_TOKEN || github.token }}
+          path: registry-platform
+
+      - name: Link registry-platform path dependency
+        run: ln -s "$GITHUB_WORKSPACE/registry-platform" "$GITHUB_WORKSPACE/../registry-platform"
+
+      - name: Checkout crosswalk
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ env.CROSSWALK_REPOSITORY }}
+          ref: ${{ env.CROSSWALK_REF }}
+          path: crosswalk
+
+      - name: Link crosswalk path dependency
+        run: ln -s "$GITHUB_WORKSPACE/crosswalk" "$GITHUB_WORKSPACE/../crosswalk"
+
+      - name: Checkout registry-manifest
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ env.REGISTRY_MANIFEST_REPOSITORY }}
+          ref: ${{ env.REGISTRY_MANIFEST_REF }}
+          token: ${{ secrets.REGISTRY_MANIFEST_TOKEN || github.token }}
+          path: registry-manifest
+
+      - name: Link registry-manifest path dependency
+        run: ln -s "$GITHUB_WORKSPACE/registry-manifest" "$GITHUB_WORKSPACE/../registry-manifest"
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: stable
+          components: llvm-tools-preview
+
+      - name: Cache Cargo registry and build artifacts
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: coverage
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@25435dc8dd3baed7417e0c96d3fe89013a5b2e09 # v2.81.3
+        with:
+          tool: nextest@0.9.136
+          fallback: none
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@25435dc8dd3baed7417e0c96d3fe89013a5b2e09 # v2.81.3
+        with:
+          tool: cargo-llvm-cov@${{ env.CARGO_LLVM_COV_VERSION }}
+          fallback: none
+
+      - name: Run coverage
+        run: |
+          mkdir -p target/coverage
+          cargo llvm-cov clean --workspace
+          cargo llvm-cov nextest --no-report --build-jobs 2
+          cargo llvm-cov nextest --all-features --no-report --build-jobs 2
+          cargo llvm-cov report | tee target/coverage/summary.txt
+          cat target/coverage/summary.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Export coverage artifacts
+        run: |
+          cargo llvm-cov report --lcov --output-path target/coverage/lcov.info
+          cargo llvm-cov report --json --summary-only --output-path target/coverage/summary.json
+          test -s target/coverage/summary.txt
+          test -s target/coverage/lcov.info
+          test -s target/coverage/summary.json
+
+      - name: Export coverage dashboard data
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          summary = json.loads(Path("target/coverage/summary.json").read_text())
+          line_coverage = summary["data"][0]["totals"]["lines"]["percent"]
+          threshold = float(os.environ["REGISTRY_RELAY_COVERAGE_THRESHOLD"])
+          run_url = f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+          dashboard = {
+              "repo": "registry-relay",
+              "branch": os.environ.get("GITHUB_REF_NAME", ""),
+              "commit": os.environ.get("GITHUB_SHA", ""),
+              "workflow_run_url": run_url,
+              "generated_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+              "line_coverage_percent": round(line_coverage, 2),
+              "threshold_percent": threshold,
+              "status": "pass" if line_coverage >= threshold else "fail",
+              "artifact_urls": [run_url],
+          }
+          Path("target/coverage/dashboard.json").write_text(json.dumps(dashboard, indent=2) + "\n")
+          PY
+          test -s target/coverage/dashboard.json
+
+      - name: Upload coverage artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: registry-relay-coverage
+          path: |
+            target/coverage/summary.txt
+            target/coverage/lcov.info
+            target/coverage/summary.json
+            target/coverage/dashboard.json
+
+      - name: Enforce coverage threshold
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          dashboard = json.loads(Path("target/coverage/dashboard.json").read_text())
+          if dashboard["status"] != "pass":
+              raise SystemExit(
+                  f"line coverage {dashboard['line_coverage_percent']:.2f}% is below "
+                  f"threshold {dashboard['threshold_percent']:.2f}%"
+              )
+          PY
+
+  # ── cargo-deny (license + advisory + bans) ───────────────────────────────
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Checkout registry-platform
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ env.REGISTRY_PLATFORM_REPOSITORY }}
+          ref: ${{ env.REGISTRY_PLATFORM_REF }}
+          token: ${{ secrets.REGISTRY_PLATFORM_TOKEN || github.token }}
+          path: registry-platform
+
+      - name: Link registry-platform path dependency
+        run: ln -s "$GITHUB_WORKSPACE/registry-platform" "$GITHUB_WORKSPACE/../registry-platform"
+
+      - name: Checkout crosswalk
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ env.CROSSWALK_REPOSITORY }}
+          ref: ${{ env.CROSSWALK_REF }}
+          path: crosswalk
+
+      - name: Link crosswalk path dependency
+        run: ln -s "$GITHUB_WORKSPACE/crosswalk" "$GITHUB_WORKSPACE/../crosswalk"
+
+      - name: Checkout registry-manifest
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ env.REGISTRY_MANIFEST_REPOSITORY }}
+          ref: ${{ env.REGISTRY_MANIFEST_REF }}
+          token: ${{ secrets.REGISTRY_MANIFEST_TOKEN || github.token }}
+          path: registry-manifest
+
+      - name: Link registry-manifest path dependency
+        run: ln -s "$GITHUB_WORKSPACE/registry-manifest" "$GITHUB_WORKSPACE/../registry-manifest"
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@25435dc8dd3baed7417e0c96d3fe89013a5b2e09 # v2.81.3
+        with:
+          tool: cargo-deny@0.19.8
+
+      - name: Run cargo-deny
+        run: cargo deny check licenses advisories bans sources
+
+  # ── Postgres-backed datasource integration ───────────────────────────────
+  postgres-integration:
+    name: postgres-integration
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Checkout registry-platform
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ env.REGISTRY_PLATFORM_REPOSITORY }}
+          ref: ${{ env.REGISTRY_PLATFORM_REF }}
+          token: ${{ secrets.REGISTRY_PLATFORM_TOKEN || github.token }}
+          path: registry-platform
+
+      - name: Link registry-platform path dependency
+        run: ln -s "$GITHUB_WORKSPACE/registry-platform" "$GITHUB_WORKSPACE/../registry-platform"
+
+      - name: Checkout crosswalk
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ env.CROSSWALK_REPOSITORY }}
+          ref: ${{ env.CROSSWALK_REF }}
+          path: crosswalk
+
+      - name: Link crosswalk path dependency
+        run: ln -s "$GITHUB_WORKSPACE/crosswalk" "$GITHUB_WORKSPACE/../crosswalk"
+
+      - name: Checkout registry-manifest
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ env.REGISTRY_MANIFEST_REPOSITORY }}
+          ref: ${{ env.REGISTRY_MANIFEST_REF }}
+          token: ${{ secrets.REGISTRY_MANIFEST_TOKEN || github.token }}
+          path: registry-manifest
+
+      - name: Link registry-manifest path dependency
+        run: ln -s "$GITHUB_WORKSPACE/registry-manifest" "$GITHUB_WORKSPACE/../registry-manifest"
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: stable
+
+      - name: Cache Cargo registry and build artifacts
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: postgres-integration
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@25435dc8dd3baed7417e0c96d3fe89013a5b2e09 # v2.81.3
+        with:
+          tool: nextest@0.9.136
+          fallback: none
+
+      - name: Enable TLS for Postgres integration tests
+        run: |
+          set -euo pipefail
+
+          mkdir -p /tmp/postgres-tls
+          cd /tmp/postgres-tls
+          openssl req -new -x509 -days 1 -nodes \
+            -subj "/CN=registry-relay-ci-postgres-ca" \
+            -keyout ca.key \
+            -out ca.crt
+          cat > server.ext <<'EOF'
+          subjectAltName = DNS:localhost,IP:127.0.0.1
+          extendedKeyUsage = serverAuth
+          EOF
+          openssl req -new -nodes -newkey rsa:2048 \
+            -subj "/CN=localhost" \
+            -keyout server.key \
+            -out server.csr
+          openssl x509 -req -days 1 \
+            -in server.csr \
+            -CA ca.crt \
+            -CAkey ca.key \
+            -CAcreateserial \
+            -out server.crt \
+            -extfile server.ext
+          chmod 600 server.key
+
+          container="${{ job.services.postgres.id }}"
+          docker cp server.crt "$container:/var/lib/postgresql/server.crt"
+          docker cp server.key "$container:/var/lib/postgresql/server.key"
+          docker exec -u root "$container" chown postgres:postgres /var/lib/postgresql/server.crt /var/lib/postgresql/server.key
+          docker exec -u root "$container" chmod 600 /var/lib/postgresql/server.key
+          docker exec -u root "$container" sh -c "cat >> /var/lib/postgresql/data/postgresql.conf <<'EOF'
+          ssl = on
+          ssl_cert_file = '/var/lib/postgresql/server.crt'
+          ssl_key_file = '/var/lib/postgresql/server.key'
+          EOF"
+          docker restart "$container"
+          for _ in {1..30}; do
+            if docker exec "$container" pg_isready -U postgres; then
+              break
+            fi
+            sleep 1
+          done
+          docker exec "$container" pg_isready -U postgres
+
+          sudo cp ca.crt /usr/local/share/ca-certificates/registry-relay-ci-postgres-ca.crt
+          sudo update-ca-certificates
+
+      - name: Run Postgres datasource integration tests
+        env:
+          DATA_GATE_POSTGRES_TEST_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=require
+        run: cargo nextest run --test postgres_snapshot --run-ignored=ignored-only --no-capture
+
+  # ── Container image build ────────────────────────────────────────────────
+  docker-build:
+    name: docker-build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Checkout registry-platform
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ env.REGISTRY_PLATFORM_REPOSITORY }}
+          ref: ${{ env.REGISTRY_PLATFORM_REF }}
+          token: ${{ secrets.REGISTRY_PLATFORM_TOKEN || github.token }}
+          path: registry-platform
+
+      - name: Checkout crosswalk
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ env.CROSSWALK_REPOSITORY }}
+          ref: ${{ env.CROSSWALK_REF }}
+          path: crosswalk
+
+      - name: Checkout registry-manifest
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ env.REGISTRY_MANIFEST_REPOSITORY }}
+          ref: ${{ env.REGISTRY_MANIFEST_REF }}
+          token: ${{ secrets.REGISTRY_MANIFEST_TOKEN || github.token }}
+          path: registry-manifest
+
+      # Buildx + GHA cache backend persists the Dockerfile's
+      # `RUN --mount=type=cache` cargo registry and target directories
+      # across runs. First run is a cold compile; subsequent runs reuse
+      # the cargo caches and only rebuild changed crates.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      - name: Build container image
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          file: Dockerfile
+          build-contexts: |
+            registry-platform=./registry-platform
+            registry-manifest=./registry-manifest
+            crosswalk=./crosswalk
+          build-args: |
+            REGISTRY_RELAY_FEATURES=spdci-api-standards,standards-cel-mapping,attribute-release,ogcapi-features,ogcapi-edr,ogcapi-records
+          tags: registry-relay:ci
+          load: false
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

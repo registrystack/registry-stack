@@ -1,0 +1,187 @@
+# SPDX-License-Identifier: Apache-2.0
+
+schema_version: registry-manifest/v1
+catalog:
+  id: decentralized-social-protection-registry
+  base_url: http://social-protection-registry-relay:8080
+  title: Social Protection Registry Relay (Decentralized Demo)
+  publisher:
+    name: Social Protection Authority (Demo)
+  standards:
+    dcat: '3.0'
+    shacl: '1.1'
+    json_schema: 2020-12
+  application_profiles:
+    - id: bregdcat-ap
+      version: '3.0'
+federation:
+  node_id: did:web:social-protection.demo.example.gov
+  issuer: https://social-protection.demo.example.gov
+  jwks_uri: https://social-protection.demo.example.gov/.well-known/jwks.json
+  federation_api: https://social-protection.demo.example.gov/federation
+  supported_protocol_versions:
+    - registry-notary-federation/v0.1
+evaluation_profiles:
+  - id: program-enrollment-status-v1
+    ruleset: program-enrollment-status-v1
+    claim_id: program_enrollment_status
+    subject_id_type: id
+    max_source_observed_age_seconds: 86400
+requirements:
+  - id: household_support_requirement
+    iri: https://demo.example.gov/requirements/household-support-eligibility
+    title: Household support eligibility requirement
+    description: Requirement to confirm enrollment and eligibility band for support review.
+evidence_types:
+  - id: household_support_evidence
+    iri: https://demo.example.gov/evidence-types/household-support
+    title: Household support evidence
+    description: Evidence that a household or beneficiary has active program support facts.
+    proves:
+      - household_support_requirement
+datasets:
+  - id: social_protection_registry
+    title: Social Protection Registry
+    description: Synthetic households, persons, and enrollments for decentralized evidence demo flows.
+    owner: Social Protection Authority
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: weekly
+    evidence_offerings:
+      - id: household_support_evidence_service
+        iri: https://demo.example.gov/evidence-offerings/household-support
+        title: Household support evidence service
+        description: Registry Notary endpoint that computes enrollment and eligibility status from social protection data.
+        evidence_type: household_support_evidence
+        issuing_authority:
+          id: social_protection_authority
+          iri: did:web:social-protection.demo.example.gov
+          name: Social Protection Authority
+          country: ZZ
+        jurisdiction:
+          country: ZZ
+        level_of_assurance: substantial
+        entity: program_enrollment
+        lookup_keys:
+          - national_id
+        access:
+          kind: registry-notary
+          conforms_to: registry-notary-federation/v0.1
+          endpoint_url: https://social-protection-registry-notary:8080
+          discovery_url: https://social-protection-registry-notary:8080/.well-known/evidence-service
+          ruleset: program-enrollment-status-v1
+        policy:
+          purpose:
+            - https://demo.example.gov/purpose/decentralized-evidence-demo
+    entities:
+      - name: household
+        title: Household
+        description: Household enrolled or assessed for support.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: national_id
+            type: string
+            required: true
+          - name: district
+            type: string
+            required: true
+          - name: poverty_score
+            type: number
+            required: true
+          - name: eligibility_band
+            type: string
+            required: true
+          - name: household_size
+            type: integer
+            required: true
+          - name: active_members
+            type: integer
+            required: true
+          - name: deceased_member_count
+            type: integer
+            required: true
+        relationships:
+          - name: members
+            target_entity: person
+            cardinality: many
+          - name: enrollments
+            target_entity: program_enrollment
+            cardinality: many
+      - name: person
+        title: Person
+        description: Household member projection.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: household_id
+            type: string
+            required: true
+          - name: national_id
+            type: string
+            required: true
+          - name: relationship
+            type: string
+            required: true
+          - name: age
+            type: integer
+            required: true
+          - name: alive
+            type: boolean
+            required: true
+          - name: disability_status
+            type: string
+            required: true
+        relationships:
+          - name: household
+            target_entity: household
+            cardinality: zero_or_one
+      - name: program_enrollment
+        title: Program Enrollment
+        description: Program participation record for a household member.
+        identifiers:
+          - name: id
+            kind: primary
+        fields:
+          - name: id
+            type: string
+            required: true
+          - name: household_id
+            type: string
+            required: true
+          - name: person_id
+            type: string
+            required: true
+          - name: national_id
+            type: string
+            required: true
+          - name: program_code
+            type: string
+            required: true
+          - name: enrollment_status
+            type: string
+            required: true
+          - name: benefit_amount
+            type: number
+            required: true
+            unit: USD
+          - name: enrolled_on
+            type: date
+            required: true
+        relationships:
+          - name: household
+            target_entity: household
+            cardinality: zero_or_one
+          - name: person
+            target_entity: person
+            cardinality: zero_or_one
+vocabularies:
+  registry_relay: https://registry-relay.dev/

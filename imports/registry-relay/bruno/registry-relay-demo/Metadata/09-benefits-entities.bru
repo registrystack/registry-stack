@@ -1,0 +1,21 @@
+meta {
+  name: Benefits metadata entities
+  type: http
+  seq: 9
+}
+
+get {
+  url: {{baseUrl}}/metadata/datasets/benefits_casework/entities
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{metadataKey}}
+}
+
+docs {
+  Lists portable entity metadata for the benefits_casework dataset.
+  Uses catalog_viewer persona (metadataKey).
+  Expected: 200 with household, person, case, and payment entity metadata.
+}

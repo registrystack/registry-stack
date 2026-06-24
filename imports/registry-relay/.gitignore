@@ -1,0 +1,47 @@
+# Rust build artifacts
+/target
+**/*.rs.bk
+__pycache__/
+*.py[cod]
+
+# Do NOT ignore Cargo.lock: this is a binary crate.
+
+# Environment / secrets
+.env
+.envrc
+demo/.env.local
+bruno/**/.env
+bruno/data_gate_demo/environments/local.bru
+bruno/registry-relay-demo/environments/local.bru
+
+# Demo audit log sink (populated by demo/config/all_demos.yaml)
+demo/var/
+demo/output/
+
+# macOS
+.DS_Store
+
+# Editor swap files
+*.swp
+
+# IDE directories
+.idea/
+.vscode/
+
+# Claude Code local state (worktrees, scratch)
+.claude/
+
+# Local security-review scratch directory
+/.security-review/
+
+# Local documentation review notes
+docs/internal/
+
+# Runtime dataset caches
+cache/
+
+# Perf testing: generated fixtures, compiled artifacts, and secrets
+perf/fixtures/generated/
+target/perf/
+perf/.env
+perf/.env.*

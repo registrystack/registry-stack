@@ -1,0 +1,11 @@
+---
+source: tests/error_taxonomy.rs
+expression: json
+---
+{
+  "code": "schema.unknown_dataset",
+  "detail": "dataset id is not registered",
+  "status": 404,
+  "title": "Unknown dataset",
+  "type": "https://registry-relay.dev/problems/schema/unknown_dataset"
+}

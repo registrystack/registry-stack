@@ -1,0 +1,23 @@
+meta {
+  name: Household aggregate by poverty band
+  type: http
+  seq: 6
+}
+
+get {
+  url: {{baseUrl}}/v1/datasets/benefits_casework/aggregates/by_poverty_band
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{aggregateKey}}
+}
+
+docs {
+  Runs the household aggregate grouped by district and poverty band.
+  Uses planning_analyst persona (aggregateKey).
+  Expected: 200 with counts of households per district+poverty_band group.
+  Groups below min_group_size=5 are omitted (omit disclosure control).
+  Useful for planning allocations across districts without row-level access.
+}

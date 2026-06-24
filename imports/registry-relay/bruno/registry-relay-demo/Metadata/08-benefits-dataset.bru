@@ -1,0 +1,21 @@
+meta {
+  name: Benefits metadata dataset
+  type: http
+  seq: 8
+}
+
+get {
+  url: {{baseUrl}}/metadata/datasets/benefits_casework
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{metadataKey}}
+}
+
+docs {
+  Reads one dataset from the standards-facing metadata surface.
+  Uses catalog_viewer persona (metadataKey).
+  Expected: 200 with benefits_casework dataset metadata and entity definitions.
+}

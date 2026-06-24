@@ -1,0 +1,187 @@
+# SPDX-License-Identifier: Apache-2.0
+
+server:
+  bind: 0.0.0.0:8080
+  openapi_requires_auth: false
+
+auth:
+  mode: api_key
+  api_keys:
+    - id: social_protection_evidence_client
+      fingerprint:
+        provider: env
+        name: SOCIAL_EVIDENCE_CLIENT_TOKEN_HASH
+        commitment: "${SOCIAL_EVIDENCE_CLIENT_TOKEN_COMMITMENT:?missing social notary API key commitment}"
+      scopes:
+        - social_protection_registry:evidence_verification
+  bearer_tokens:
+    - id: social_protection_evidence_client
+      fingerprint:
+        provider: env
+        name: SOCIAL_EVIDENCE_CLIENT_BEARER_HASH
+        commitment: "${SOCIAL_EVIDENCE_CLIENT_BEARER_COMMITMENT:?missing social notary bearer commitment}"
+      scopes:
+        - social_protection_registry:evidence_verification
+
+audit:
+  sink: stdout
+
+evidence:
+  enabled: true
+  service_id: social-protection-registry-notary
+  api_base_url: http://social-protection-registry-notary:8080
+  inline_batch_limit: 20
+  allowed_purposes:
+    - https://demo.example.gov/purpose/decentralized-evidence-demo
+  source_connections:
+    social_protection:
+      base_url: http://social-protection-registry-relay:8080
+      token_env: SOCIAL_EVIDENCE_SOURCE_RAW
+  signing_keys:
+    social-protection-evidence-demo:
+      provider: local_jwk_env
+      private_jwk_env: SOCIAL_PROTECTION_EVIDENCE_ISSUER_JWK
+      alg: EdDSA
+      kid: did:web:social-protection-evidence.demo.example#social-protection-evidence-demo-key-1
+      status: active
+  credential_profiles:
+    enrollment_sd_jwt:
+      format: application/dc+sd-jwt
+      issuer: did:web:social-protection-evidence.demo.example
+      signing_key: social-protection-evidence-demo
+      vct: https://demo.example/credentials/program-enrollment/v1
+      validity_seconds: 600
+      allowed_claims:
+        - program-enrollment-status
+        - household-eligibility-band
+        - beneficiary-active
+      holder_binding:
+        mode: did
+        proof_of_possession: required
+        allowed_did_methods:
+          - did:jwk
+      disclosure:
+        allowed:
+          - value
+          - predicate
+  claims:
+    - id: program-enrollment-status
+      title: Program enrollment status
+      version: 2026-05
+      subject_type: person
+      value:
+        type: string
+      inputs:
+        - name: subject_id
+          type: string
+      source_bindings:
+        enrollment:
+          connector: registry_data_api
+          connection: social_protection
+          required_scope: social_protection_registry:evidence_verification
+          dataset: social_protection_registry
+          entity: program_enrollment
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/decentralized-evidence-demo
+          lookup:
+            input: subject_id
+            field: national_id
+            op: eq
+            cardinality: one
+          fields:
+            enrollment_status:
+              field: enrollment_status
+              type: string
+              required: true
+      rule:
+        type: extract
+        source: enrollment
+        field: enrollment_status
+      disclosure:
+        default: value
+        allowed:
+          - value
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+        - application/dc+sd-jwt
+      credential_profiles:
+        - enrollment_sd_jwt
+    - id: household-eligibility-band
+      title: Household eligibility band
+      version: 2026-05
+      subject_type: person
+      value:
+        type: string
+      inputs:
+        - name: subject_id
+          type: string
+      source_bindings:
+        household:
+          connector: registry_data_api
+          connection: social_protection
+          required_scope: social_protection_registry:evidence_verification
+          dataset: social_protection_registry
+          entity: household
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/decentralized-evidence-demo
+          lookup:
+            input: subject_id
+            field: national_id
+            op: eq
+            cardinality: one
+          fields:
+            eligibility_band:
+              field: eligibility_band
+              type: string
+              required: true
+      rule:
+        type: extract
+        source: household
+        field: eligibility_band
+      disclosure:
+        default: value
+        allowed:
+          - value
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+        - application/dc+sd-jwt
+      credential_profiles:
+        - enrollment_sd_jwt
+    - id: beneficiary-active
+      title: Beneficiary active
+      version: 2026-05
+      subject_type: person
+      value:
+        type: boolean
+      inputs:
+        - name: subject_id
+          type: string
+      depends_on:
+        - program-enrollment-status
+      rule:
+        type: cel
+        expression: "claims.program_enrollment_status.value == 'active'"
+        bindings:
+          claims:
+            program_enrollment_status:
+              claim: program-enrollment-status
+      operations:
+        evaluate:
+          enabled: true
+        batch_evaluate:
+          enabled: true
+          max_subjects: 10
+      disclosure:
+        default: predicate
+        allowed:
+          - predicate
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+        - application/dc+sd-jwt
+      credential_profiles:
+        - enrollment_sd_jwt

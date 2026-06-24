@@ -1,0 +1,26 @@
+meta {
+  name: Filter students by school and grade
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/v1/datasets/education_registry/entities/student/records?school_id={{schoolId}}&grade_level=grade_5
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{rowsKey}}
+}
+
+headers {
+  Data-Purpose: {{purpose}}
+}
+
+docs {
+  Filters students by school_id=sch-3001 and grade_level=grade_5.
+  Uses casework_system persona (rowsKey). Purpose header required (personal data).
+  Expected: 200 with paginated list of grade 5 students at school sch-3001.
+  Sensitive fields (student_name, national_id, etc.) are absent from the response.
+}

@@ -1,0 +1,23 @@
+meta {
+  name: Metadata-only key cannot read project rows (expects 403)
+  type: http
+  seq: 8
+}
+
+get {
+  url: {{baseUrl}}/v1/datasets/public_works_projects/entities/project/records?sector=schools
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{metadataKey}}
+}
+
+docs {
+  Attempts to read project rows using the catalog_viewer key (metadataKey).
+  metadataKey holds only public_works_projects:metadata; row reads require :rows.
+  expected: 403 auth.scope_denied
+  Demonstrates that schema discovery (already covered by 07-project-schema-metadata-only)
+  does not imply row access on the same entity.
+}

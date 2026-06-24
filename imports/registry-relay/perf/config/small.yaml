@@ -1,0 +1,187 @@
+# SPDX-License-Identifier: Apache-2.0
+# Perf config: small profile (1k rows). CI smoke check and quick iteration.
+# Source: perf/fixtures/generated/clinic_capacity_1k.parquet
+
+server:
+  bind: 127.0.0.1:18080
+
+catalog:
+  title: Clinic Capacity Perf Gateway (small)
+  base_url: http://127.0.0.1:18080
+  publisher: Perf Test Harness
+
+metadata:
+  source:
+    path: clinic_capacity.metadata.yaml
+
+auth:
+  mode: api_key
+  api_keys:
+    - id: perf_rows
+      fingerprint:
+        provider: env
+        name: PERF_ROWS_KEY_HASH
+        commitment: sha256:df466c5c32dfeab9b96dbb5888d3cb362120db1dd64aa9890ac52aaa83c5686d
+      scopes:
+        - clinic_capacity:rows
+
+    - id: perf_metadata
+      fingerprint:
+        provider: env
+        name: PERF_METADATA_KEY_HASH
+        commitment: sha256:efac4b6b9c528b19a3cfc6bb8781671dcd19ca0d7bac1295112655550bf92873
+      scopes:
+        - clinic_capacity:metadata
+
+    - id: perf_aggregate
+      fingerprint:
+        provider: env
+        name: PERF_AGGREGATE_KEY_HASH
+        commitment: sha256:49506182846acdd8a4f9eab9e1352829165e489cc158b5389721317468240152
+      scopes:
+        - clinic_capacity:aggregate
+
+    - id: perf_no_scope
+      fingerprint:
+        provider: env
+        name: PERF_NO_SCOPE_KEY_HASH
+        commitment: sha256:1ec2768cbf1bd1e06c8650bc68f54fa3c78d33e461039862f97e85e711264a2e
+      scopes: []
+
+    - id: perf_evidence_verification
+      fingerprint:
+        provider: env
+        name: PERF_EVIDENCE_VERIFICATION_KEY_HASH
+        commitment: sha256:b3260cacfbac8cdabe060288053b35f707ec03d98d50bc16b0b8c2edb4b93d6a
+      scopes:
+        - clinic_capacity:evidence_verification
+
+    - id: perf_admin
+      fingerprint:
+        provider: env
+        name: PERF_ADMIN_KEY_HASH
+        commitment: sha256:0000000000000000000000000000000000000000000000000000000000000000
+      scopes:
+        - registry_relay:admin
+
+
+# Provenance signer for VC-JWT response checks.
+# See perf/config/medium.yaml for the full comment.
+provenance:
+  enabled: true
+  accepted_media_types:
+    - application/vc+jwt
+  schema_base_url: http://127.0.0.1:18080/schemas
+  context_base_url: http://127.0.0.1:18080/contexts
+  claim_validity:
+    aggregate_result: 1h
+    entity_record: 24h
+  issuer:
+    mode: gateway
+    did: did:web:perf.example.test
+    verification_method_id: did:web:perf.example.test#perf-evidence-verification-v1
+    signer:
+      kind: software
+      jwk_env: REGISTRY_RELAY_PROVENANCE_JWK
+      signing_algorithm: EdDSA
+
+datasets:
+  - id: clinic_capacity
+    title: Clinic Capacity
+    description: Synthetic facility records for perf testing
+    owner: Perf Test Harness
+    sensitivity: public
+    access_rights: public
+    update_frequency: as_needed
+
+    defaults:
+      refresh:
+        mode: manual
+
+    tables:
+      - id: facility_table
+        source:
+          type: file
+          path: perf/fixtures/generated/clinic_capacity_1k.parquet
+          format:
+            parquet: {}
+        primary_key: id
+        schema:
+          strict: true
+          fields:
+            - name: id
+              type: string
+              nullable: false
+            - name: region_code
+              type: string
+              nullable: true
+            - name: capacity
+              type: integer
+              nullable: true
+            - name: occupancy
+              type: integer
+              nullable: true
+            - name: last_updated
+              type: string
+              nullable: true
+            - name: operating_since
+              type: string
+              nullable: true
+            - name: category
+              type: string
+              nullable: true
+
+    entities:
+      - name: facility
+        title: Facility
+        description: A healthcare facility (clinic, hospital, or pharmacy)
+        table: facility_table
+        fields:
+          - name: id
+            from: id
+          - name: region_code
+            from: region_code
+          - name: capacity
+            from: capacity
+          - name: occupancy
+            from: occupancy
+          - name: last_updated
+            from: last_updated
+          - name: operating_since
+            from: operating_since
+          - name: category
+            from: category
+        access:
+          metadata_scope:           clinic_capacity:metadata
+          aggregate_scope:          clinic_capacity:aggregate
+          read_scope:               clinic_capacity:rows
+          evidence_verification_scope: clinic_capacity:evidence_verification
+        api:
+          default_limit: 100
+          max_limit: 1000
+          allowed_filters:
+            - field: region_code
+              ops: [eq, in]
+            - field: category
+              ops: [eq, in]
+          allowed_expansions: []
+        aggregates:
+          - id: by_region
+            description: Facility count and total capacity by region
+            group_by:
+              - region_code
+            measures:
+              - name: facility_count
+                function: count
+                column: id
+              - name: total_capacity
+                function: sum
+                column: capacity
+            disclosure_control:
+              min_group_size: 1
+
+audit:
+  sink: file
+  format: jsonl
+  hash_secret_env: REGISTRY_RELAY_AUDIT_HASH_SECRET
+  path: target/perf/audit.jsonl

@@ -1,0 +1,21 @@
+meta {
+  name: Benefits dataset record
+  type: http
+  seq: 6
+}
+
+get {
+  url: {{baseUrl}}/ogc/v1/records/collections/datasets/items/benefits_casework
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{metadataKey}}
+}
+
+docs {
+  Reads one runtime OGC API Records item with injected absolute links.
+  Uses catalog_viewer persona (metadataKey).
+  Expected: 200 application/geo+json with the benefits_casework dataset record.
+}

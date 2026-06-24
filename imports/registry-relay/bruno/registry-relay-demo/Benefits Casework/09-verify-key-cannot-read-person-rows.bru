@@ -1,0 +1,26 @@
+meta {
+  name: Verify-only key cannot read person rows (expects 403)
+  type: http
+  seq: 9
+}
+
+get {
+  url: {{baseUrl}}/v1/datasets/benefits_casework/entities/person/records?id={{benefitsPersonAlias}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{evidenceVerificationKey}}
+}
+
+headers {
+  Data-Purpose: {{purpose}}
+}
+
+docs {
+  Attempts to read person rows using evidenceVerificationKey.
+  evidenceVerificationKey holds only benefits_casework:evidence_verification; row reads require benefits_casework:rows.
+  expected: 403 auth.scope_denied
+  Confirms evidence-verification scope cannot be widened into a row read even with purpose header set.
+}

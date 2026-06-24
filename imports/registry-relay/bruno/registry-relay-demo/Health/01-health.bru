@@ -1,0 +1,16 @@
+meta {
+  name: Health check
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/healthz
+  body: none
+  auth: none
+}
+
+docs {
+  Liveness probe. Expected: 200 OK with JSON body indicating service is up.
+  No auth required; this endpoint is unauthenticated.
+}

@@ -1,0 +1,21 @@
+meta {
+  name: Datasets records collection
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/ogc/v1/records/collections/datasets
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{metadataKey}}
+}
+
+docs {
+  Reads the datasets collection description for OGC API Records.
+  Uses catalog_viewer persona (metadataKey).
+  Expected: 200 with collection metadata, links, and itemType=record.
+}

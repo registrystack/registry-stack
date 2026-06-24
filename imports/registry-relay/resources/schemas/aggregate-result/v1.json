@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.registry-relay.org/aggregate-result/v1.json",
+  "title": "AggregateResult v1",
+  "description": "Structural schema for the `credentialSubject` of an AggregateResult VC (Wave 3, decisions/wave-3-data-provenance.md §8).",
+  "type": "object",
+  "required": [
+    "dataset",
+    "aggregateId",
+    "aggregateUrl",
+    "groupBy",
+    "indicators",
+    "rows",
+    "suppressedRows",
+    "minCellSize",
+    "computedAt"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Canonical aggregate URL (D9). Optional duplicate of `aggregateUrl` carried as the JWT `sub`."
+    },
+    "dataset": {
+      "type": "string",
+      "minLength": 1
+    },
+    "aggregateId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "aggregateUrl": {
+      "type": "string",
+      "format": "uri"
+    },
+    "groupBy": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "indicators": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "rows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["group", "values"],
+        "additionalProperties": false,
+        "properties": {
+          "group": {
+            "type": "object",
+            "description": "Map of declared group-by field to scalar value; empty for a global aggregate."
+          },
+          "values": {
+            "type": "object",
+            "description": "Map of indicator id to scalar value; `null` indicates disclosure-control suppression of that indicator."
+          }
+        }
+      }
+    },
+    "suppressedRows": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "minCellSize": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "computedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "asOf": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

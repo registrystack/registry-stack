@@ -1,0 +1,714 @@
+# SPDX-License-Identifier: Apache-2.0
+# Single-dataset config for local startup: cargo run -- --config demo/config/education_registry.yaml
+
+server:
+  bind: 0.0.0.0:4242
+
+metadata:
+  source:
+    path: education_registry.metadata.yaml
+
+catalog:
+  title: Education Student Registry Gateway (Demo)
+  base_url: http://127.0.0.1:4242
+  publisher: Ministry of Education (Demo)
+
+auth:
+  mode: api_key
+  api_keys:
+    - id: catalog_viewer
+      fingerprint:
+        provider: env
+        name: CATALOG_VIEWER_HASH
+        commitment: sha256:8e1a97e93d31a6c8e57a2e47fede65dc52655e4c40c4ddb3836395a6c12ef17f
+      scopes:
+        - education_registry:metadata
+
+    - id: planning_analyst
+      fingerprint:
+        provider: env
+        name: PLANNING_ANALYST_HASH
+        commitment: sha256:2ff911bb5cf147eafc2024bb123df859f731d087e02e7da96a2b4c49687b5320
+      scopes:
+        - education_registry:metadata
+        - education_registry:aggregate
+
+    - id: casework_system
+      fingerprint:
+        provider: env
+        name: CASEWORK_SYSTEM_HASH
+        commitment: sha256:31eaa0644ee0593bf88482417b113d4e4f01b07848d5b2a628d97a01be899779
+      scopes:
+        - education_registry:metadata
+        - education_registry:rows
+        - education_registry:aggregate
+
+    - id: verification_service
+      fingerprint:
+        provider: env
+        name: VERIFICATION_SERVICE_HASH
+        commitment: sha256:a0bd21e279907c6fada5bb839a461a3e3014617dbb49c2e9a03e87e7f1f3344b
+      scopes:
+        - education_registry:evidence_verification
+
+    # linkage_service has no education_registry scopes: it must not read
+    # education rows directly; it resolves aliases via subject_registry only.
+
+    - id: operations_admin
+      fingerprint:
+        provider: env
+        name: OPERATIONS_ADMIN_HASH
+        commitment: sha256:379ad2d16e275e6fc7de478764353606569f30507c6e73647dc28045d79b2f17
+      scopes:
+        - registry_relay:admin
+        - registry_relay:ops_read
+        - education_registry:metadata
+
+
+audit:
+  sink: stdout
+  format: jsonl
+  hash_secret_env: REGISTRY_RELAY_AUDIT_HASH_SECRET
+
+datasets:
+  - id: education_registry
+    title: Education Student Registry
+    description: >-
+      Student registry for the national education system. Covers students,
+      guardians, schools, enrolments, support needs, and attendance summaries.
+      Governed personal data; scholarship, transport, meals, and planning systems
+      access via controlled scopes.
+    owner: Ministry of Education
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: termly
+    defaults:
+      refresh:
+        mode: manual
+
+    tables:
+      - id: students_table
+        source:
+          type: file
+          path: demo/data/education_registry.xlsx
+          format:
+            xlsx:
+              sheet: Students
+        primary_key: student_id
+        schema:
+          strict: true
+          fields:
+            - name: student_id
+              type: string
+              nullable: false
+            - name: school_id
+              type: string
+              nullable: false
+            - name: current_enrollment_id
+              type: string
+              nullable: true
+            - name: age_band
+              type: string
+              nullable: false
+            - name: sex
+              type: string
+              nullable: false
+            - name: grade_level
+              type: string
+              nullable: false
+            - name: enrollment_status
+              type: string
+              nullable: false
+            - name: home_district
+              type: string
+              nullable: false
+            - name: language_group
+              type: string
+              nullable: false
+            - name: disability_status
+              type: string
+              nullable: false
+            - name: scholarship_eligible
+              type: boolean
+              nullable: false
+            # date_of_birth suppressed; age_band is the public substitute
+            - name: date_of_birth
+              type: date
+              nullable: true
+              sensitive: true
+            - name: student_name
+              type: string
+              nullable: true
+              sensitive: true
+            - name: national_id
+              type: string
+              nullable: true
+              sensitive: true
+            - name: home_address
+              type: string
+              nullable: true
+              sensitive: true
+            - name: guardian_phone
+              type: string
+              nullable: true
+              sensitive: true
+            - name: student_notes
+              type: string
+              nullable: true
+              sensitive: true
+
+      - id: guardians_table
+        source:
+          type: file
+          path: demo/data/education_registry.xlsx
+          format:
+            xlsx:
+              sheet: Guardians
+        primary_key: guardian_id
+        schema:
+          strict: true
+          fields:
+            - name: guardian_id
+              type: string
+              nullable: false
+            - name: student_id
+              type: string
+              nullable: false
+            - name: relationship
+              type: string
+              nullable: false
+            - name: contact_verified
+              type: boolean
+              nullable: false
+            - name: guardian_name
+              type: string
+              nullable: true
+              sensitive: true
+            - name: phone
+              type: string
+              nullable: true
+              sensitive: true
+            - name: email
+              type: string
+              nullable: true
+              sensitive: true
+            - name: address
+              type: string
+              nullable: true
+              sensitive: true
+
+      - id: schools_table
+        source:
+          type: file
+          path: demo/data/education_registry.xlsx
+          format:
+            xlsx:
+              sheet: Schools
+        primary_key: school_id
+        schema:
+          strict: true
+          fields:
+            - name: school_id
+              type: string
+              nullable: false
+            - name: school_name
+              type: string
+              nullable: false
+            - name: district
+              type: string
+              nullable: false
+            - name: school_type
+              type: string
+              nullable: false
+            - name: education_level
+              type: string
+              nullable: false
+            - name: has_meal_program
+              type: boolean
+              nullable: false
+            - name: has_accessibility_support
+              type: boolean
+              nullable: false
+
+      - id: enrollments_table
+        source:
+          type: file
+          path: demo/data/education_registry.xlsx
+          format:
+            xlsx:
+              sheet: Enrollments
+        primary_key: enrollment_id
+        schema:
+          strict: true
+          fields:
+            - name: enrollment_id
+              type: string
+              nullable: false
+            - name: student_id
+              type: string
+              nullable: false
+            - name: school_id
+              type: string
+              nullable: false
+            - name: school_year
+              type: string
+              nullable: false
+            - name: grade_level
+              type: string
+              nullable: false
+            - name: status
+              type: string
+              nullable: false
+            - name: enrolled_on
+              type: date
+              nullable: false
+            - name: exited_on
+              type: date
+              nullable: true
+
+      - id: support_needs_table
+        source:
+          type: file
+          path: demo/data/education_registry.xlsx
+          format:
+            xlsx:
+              sheet: SupportNeeds
+        primary_key: support_need_id
+        schema:
+          strict: true
+          fields:
+            - name: support_need_id
+              type: string
+              nullable: false
+            - name: student_id
+              type: string
+              nullable: false
+            - name: support_type
+              type: string
+              nullable: false
+            - name: eligibility_status
+              type: string
+              nullable: false
+            - name: assessment_date
+              type: date
+              nullable: true
+            - name: active
+              type: boolean
+              nullable: false
+            - name: assessment_notes
+              type: string
+              nullable: true
+              sensitive: true
+
+      - id: attendance_summary_table
+        source:
+          type: file
+          path: demo/data/education_registry.xlsx
+          format:
+            xlsx:
+              sheet: AttendanceSummary
+        primary_key: attendance_id
+        schema:
+          strict: true
+          fields:
+            - name: attendance_id
+              type: string
+              nullable: false
+            - name: student_id
+              type: string
+              nullable: false
+            - name: school_year
+              type: string
+              nullable: false
+            - name: term
+              type: string
+              nullable: false
+            - name: attendance_rate
+              type: number
+              nullable: false
+            - name: chronic_absence_flag
+              type: boolean
+              nullable: false
+
+    entities:
+      - name: student
+        title: Student
+        description: A student enrolled in the national education system
+        table: students_table
+        fields:
+          - name: id
+            from: student_id
+          - name: school_id
+            from: school_id
+          - name: current_enrollment_id
+            from: current_enrollment_id
+          - name: age_band
+            from: age_band
+          - name: sex
+            from: sex
+          - name: grade_level
+            from: grade_level
+          - name: enrollment_status
+            from: enrollment_status
+          - name: home_district
+            from: home_district
+          - name: language_group
+            from: language_group
+          - name: disability_status
+            from: disability_status
+          - name: scholarship_eligible
+            from: scholarship_eligible
+        relationships:
+          - name: school
+            kind: belongs_to
+            target: school
+            foreign_key: school_id
+          - name: guardians
+            kind: has_many
+            target: guardian
+            foreign_key: student_id
+          - name: enrollments
+            kind: has_many
+            target: enrollment
+            foreign_key: student_id
+          - name: support_needs
+            kind: has_many
+            target: support_need
+            foreign_key: student_id
+          - name: attendance_summaries
+            kind: has_many
+            target: attendance_summary
+            foreign_key: student_id
+        access:
+          metadata_scope:    education_registry:metadata
+          aggregate_scope:   education_registry:aggregate
+          read_scope:        education_registry:rows
+          evidence_verification_scope: education_registry:evidence_verification
+        api:
+          default_limit: 100
+          max_limit: 1000
+          require_purpose_header: true
+          required_filters:
+            - id
+            - school_id
+            - home_district
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: school_id
+              ops: [eq, in]
+            - field: grade_level
+              ops: [eq, in]
+            - field: enrollment_status
+              ops: [eq, in]
+            - field: home_district
+              ops: [eq, in]
+            - field: scholarship_eligible
+              ops: [eq]
+          allowed_expansions: [school, guardians, enrollments, support_needs, attendance_summaries]
+        aggregates:
+          - id: by_school_grade_status
+            description: Count of students by school, grade level, and enrollment status
+            group_by:
+              - school_id
+              - grade_level
+              - enrollment_status
+            measures:
+              - name: student_count
+                function: count
+                column: id
+            # personal data; student and support-need counts use omit, attendance measures use mask
+            disclosure_control:
+              min_group_size: 5
+              suppression: omit
+          - id: by_district_language
+            description: Count of students by home district and language group
+            group_by:
+              - home_district
+              - language_group
+            measures:
+              - name: student_count
+                function: count
+                column: id
+            # personal data; student and support-need counts use omit, attendance measures use mask
+            disclosure_control:
+              min_group_size: 5
+              suppression: omit
+
+      - name: guardian
+        title: Guardian
+        description: A guardian or caregiver linked to a student
+        table: guardians_table
+        fields:
+          - name: id
+            from: guardian_id
+          - name: student_id
+            from: student_id
+          - name: relationship
+            from: relationship
+          - name: contact_verified
+            from: contact_verified
+        relationships:
+          - name: student
+            kind: belongs_to
+            target: student
+            foreign_key: student_id
+        access:
+          metadata_scope:    education_registry:metadata
+          aggregate_scope:   education_registry:aggregate
+          read_scope:        education_registry:rows
+        api:
+          default_limit: 100
+          max_limit: 1000
+          require_purpose_header: true
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: student_id
+              ops: [eq, in]
+            - field: relationship
+              ops: [eq, in]
+            - field: contact_verified
+              ops: [eq]
+          allowed_expansions: [student]
+
+      - name: school
+        title: School
+        description: A school in the national education system
+        table: schools_table
+        fields:
+          - name: id
+            from: school_id
+          - name: school_name
+            from: school_name
+          - name: district
+            from: district
+          - name: school_type
+            from: school_type
+          - name: education_level
+            from: education_level
+          - name: has_meal_program
+            from: has_meal_program
+          - name: has_accessibility_support
+            from: has_accessibility_support
+        relationships:
+          - name: students
+            kind: has_many
+            target: student
+            foreign_key: school_id
+          - name: enrollments
+            kind: has_many
+            target: enrollment
+            foreign_key: school_id
+        access:
+          metadata_scope:    education_registry:metadata
+          aggregate_scope:   education_registry:aggregate
+          read_scope:        education_registry:rows
+        api:
+          default_limit: 100
+          max_limit: 1000
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: district
+              ops: [eq, in]
+            - field: school_type
+              ops: [eq, in]
+            - field: education_level
+              ops: [eq, in]
+            - field: has_meal_program
+              ops: [eq]
+          allowed_expansions: [students, enrollments]
+        aggregates:
+          - id: by_district_meal_program
+            description: Count of schools by district and meal program status
+            group_by:
+              - district
+              - has_meal_program
+            measures:
+              - name: school_count
+                function: count
+                column: id
+            # personal data; student and support-need counts use omit, attendance measures use mask
+            disclosure_control:
+              min_group_size: 5
+              suppression: omit
+
+      - name: enrollment
+        title: Enrollment
+        description: A student enrollment record for a school year
+        table: enrollments_table
+        fields:
+          - name: id
+            from: enrollment_id
+          - name: student_id
+            from: student_id
+          - name: school_id
+            from: school_id
+          - name: school_year
+            from: school_year
+          - name: grade_level
+            from: grade_level
+          - name: status
+            from: status
+          - name: enrolled_on
+            from: enrolled_on
+          - name: exited_on
+            from: exited_on
+        relationships:
+          - name: student
+            kind: belongs_to
+            target: student
+            foreign_key: student_id
+          - name: school
+            kind: belongs_to
+            target: school
+            foreign_key: school_id
+        access:
+          metadata_scope:    education_registry:metadata
+          aggregate_scope:   education_registry:aggregate
+          read_scope:        education_registry:rows
+        api:
+          default_limit: 100
+          max_limit: 1000
+          require_purpose_header: true
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: student_id
+              ops: [eq, in]
+            - field: school_id
+              ops: [eq, in]
+            - field: school_year
+              ops: [eq, in]
+            - field: grade_level
+              ops: [eq, in]
+            - field: status
+              ops: [eq, in]
+            - field: enrolled_on
+              ops: [gte, lte, between]
+          allowed_expansions: [student, school]
+
+      - name: support_need
+        title: Support Need
+        description: A support need assessment for a student
+        table: support_needs_table
+        fields:
+          - name: id
+            from: support_need_id
+          - name: student_id
+            from: student_id
+          - name: support_type
+            from: support_type
+          - name: eligibility_status
+            from: eligibility_status
+          - name: assessment_date
+            from: assessment_date
+          - name: active
+            from: active
+        relationships:
+          - name: student
+            kind: belongs_to
+            target: student
+            foreign_key: student_id
+        access:
+          metadata_scope:    education_registry:metadata
+          aggregate_scope:   education_registry:aggregate
+          read_scope:        education_registry:rows
+        api:
+          default_limit: 100
+          max_limit: 1000
+          require_purpose_header: true
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: student_id
+              ops: [eq, in]
+            - field: support_type
+              ops: [eq, in]
+            - field: eligibility_status
+              ops: [eq, in]
+            - field: assessment_date
+              ops: [gte, lte, between]
+            - field: active
+              ops: [eq]
+          allowed_expansions: [student]
+        aggregates:
+          - id: by_type_district
+            description: Count of support needs by support type and student home district
+            joins:
+              - relationship: student
+            group_by:
+              - support_type
+              - student.home_district
+            measures:
+              - name: support_need_count
+                function: count
+                column: id
+            # personal data; student and support-need counts use omit, attendance measures use mask
+            disclosure_control:
+              min_group_size: 5
+              suppression: omit
+
+      - name: attendance_summary
+        title: Attendance Summary
+        description: Term-level attendance summary for a student
+        table: attendance_summary_table
+        fields:
+          - name: id
+            from: attendance_id
+          - name: student_id
+            from: student_id
+          - name: school_year
+            from: school_year
+          - name: term
+            from: term
+          - name: attendance_rate
+            from: attendance_rate
+          - name: chronic_absence_flag
+            from: chronic_absence_flag
+        relationships:
+          - name: student
+            kind: belongs_to
+            target: student
+            foreign_key: student_id
+        access:
+          metadata_scope:    education_registry:metadata
+          aggregate_scope:   education_registry:aggregate
+          read_scope:        education_registry:rows
+        api:
+          default_limit: 100
+          max_limit: 1000
+          require_purpose_header: true
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: student_id
+              ops: [eq, in]
+            - field: school_year
+              ops: [eq, in]
+            - field: term
+              ops: [eq, in]
+            - field: chronic_absence_flag
+              ops: [eq]
+          allowed_expansions: [student]
+        aggregates:
+          - id: by_school_term
+            description: Average attendance rate and count of chronic absence flags by school and term
+            joins:
+              - relationship: student
+            group_by:
+              - student.school_id
+              - school_year
+              - term
+            measures:
+              - name: average_attendance_rate
+                function: avg
+                column: attendance_rate
+              - name: chronic_absence_count
+                function: count
+                column: chronic_absence_flag
+            # personal data; student and support-need counts use omit, attendance measures use mask
+            disclosure_control:
+              min_group_size: 5
+              suppression: mask

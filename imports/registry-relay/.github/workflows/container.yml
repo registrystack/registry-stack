@@ -1,0 +1,354 @@
+name: Container Image
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*", "registry-stack-technical-preview-*"]
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      publish_snapshot:
+        description: "Publish a development snapshot from main if it differs from :snapshot"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: containers-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  REGISTRY_PLATFORM_REPOSITORY: jeremi/registry-platform
+  REGISTRY_PLATFORM_REF: 1ff93500d4a42a09d67cc31e547d97ef1b5e5404
+  REGISTRY_MANIFEST_REPOSITORY: jeremi/registry-manifest
+  REGISTRY_MANIFEST_REF: 19cf67ada5eb7325a8fb8b051a2acc266b41bbde
+  CROSSWALK_REPOSITORY: PublicSchema/crosswalk
+  CROSSWALK_REF: 1d44ec735fdc8a7c719264b339574371e8330337
+  REGISTRY_RELAY_IMAGE: ghcr.io/jeremi/registry-relay
+  REGISTRY_RELAY_RELEASE_FEATURES: spdci-api-standards,standards-cel-mapping,attribute-release,ogcapi-features,ogcapi-edr,ogcapi-records
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    steps:
+      - name: Decide image channel
+        id: channel
+        env:
+          PUBLISH_SNAPSHOT_INPUT: ${{ inputs.publish_snapshot || false }}
+        run: |
+          set -euo pipefail
+
+          build=true
+          publish=false
+          channel=validation
+          tags=("$REGISTRY_RELAY_IMAGE:ci-${GITHUB_SHA}")
+
+          if [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF_TYPE" == "tag" ]]; then
+            channel=release
+            publish=true
+            if [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              version="${GITHUB_REF_NAME#v}"
+              IFS=. read -r major minor patch <<< "$version"
+              tags=(
+                "$REGISTRY_RELAY_IMAGE:sha-${GITHUB_SHA}"
+                "$REGISTRY_RELAY_IMAGE:v${major}.${minor}.${patch}"
+                "$REGISTRY_RELAY_IMAGE:v${major}.${minor}"
+                "$REGISTRY_RELAY_IMAGE:v${major}"
+                "$REGISTRY_RELAY_IMAGE:latest"
+              )
+            elif [[ "$GITHUB_REF_NAME" =~ ^registry-stack-technical-preview-[0-9A-Za-z][0-9A-Za-z._-]*$ ]]; then
+              tags=(
+                "$REGISTRY_RELAY_IMAGE:sha-${GITHUB_SHA}"
+                "$REGISTRY_RELAY_IMAGE:${GITHUB_REF_NAME}"
+              )
+            else
+              echo "Release image tags must be stable semver tags like v0.1.2 or registry-stack-technical-preview-<date-or-version>." >&2
+              exit 1
+            fi
+          elif [[ "$GITHUB_EVENT_NAME" == "schedule" || "$PUBLISH_SNAPSHOT_INPUT" == "true" ]]; then
+            if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+              echo "Snapshot publishing is only allowed from refs/heads/main; got $GITHUB_REF."
+              build=false
+            else
+              existing_revision="$(
+                docker buildx imagetools inspect "$REGISTRY_RELAY_IMAGE:snapshot" \
+                  --format '{{if .Image.Config.Labels}}{{index .Image.Config.Labels "org.opencontainers.image.revision"}}{{end}}' \
+                  2>/dev/null || true
+              )"
+              if [[ "$existing_revision" == "$GITHUB_SHA" ]]; then
+                echo "Snapshot already points at $GITHUB_SHA; skipping rebuild."
+                build=false
+              else
+                short_sha="${GITHUB_SHA::12}"
+                snapshot_date="$(date -u +%Y%m%d)"
+                channel=snapshot
+                publish=true
+                tags=(
+                  "$REGISTRY_RELAY_IMAGE:snapshot"
+                  "$REGISTRY_RELAY_IMAGE:snapshot-${snapshot_date}"
+                  "$REGISTRY_RELAY_IMAGE:snapshot-${short_sha}"
+                )
+              fi
+            fi
+          fi
+
+          {
+            echo "build=$build"
+            echo "publish=$publish"
+            echo "channel=$channel"
+            echo "tags<<EOF"
+            printf '%s\n' "${tags[@]}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Checkout registry-relay
+        if: steps.channel.outputs.build == 'true'
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          path: registry-relay
+          persist-credentials: false
+
+      - name: Verify release tag is protected-main reachable
+        if: steps.channel.outputs.publish == 'true' && steps.channel.outputs.channel == 'release'
+        working-directory: registry-relay
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          main_branch="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main")"
+          protected="$(jq -r '.protected' <<<"$main_branch")"
+          if [[ "$protected" != "true" ]]; then
+            echo "Official release image aliases require the repository's main branch to be protected." >&2
+            exit 1
+          fi
+          main_sha="$(jq -r '.commit.sha' <<<"$main_branch")"
+          if [[ ! "$main_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Could not resolve protected main branch to an immutable commit SHA." >&2
+            exit 1
+          fi
+
+          if [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            crate_version="$(python3 -c 'import pathlib, tomllib; print(tomllib.load(pathlib.Path("Cargo.toml").open("rb"))["package"]["version"])')"
+            if [[ "$GITHUB_REF_NAME" != "v${crate_version}" ]]; then
+              echo "Release tag ${GITHUB_REF_NAME} does not match Cargo.toml package version ${crate_version}." >&2
+              exit 1
+            fi
+          fi
+
+          # Ancestry via the compare API: the checkout has no persisted
+          # credentials (persist-credentials: false), so a git fetch here
+          # cannot authenticate, while the job token works against the
+          # REST API. Compare against the protected branch commit SHA to
+          # avoid ambiguous ref resolution if a tag named "main" exists.
+          # "ahead" or "identical" means the tag commit is reachable from
+          # protected main.
+          status="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${GITHUB_SHA}...${main_sha}" --jq '.status')"
+          if [[ "$status" != "ahead" && "$status" != "identical" ]]; then
+            echo "Official release image aliases require tag commit $GITHUB_SHA to be reachable from protected main (compare status: ${status})." >&2
+            exit 1
+          fi
+
+      - name: Checkout registry-platform
+        if: steps.channel.outputs.build == 'true'
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ env.REGISTRY_PLATFORM_REPOSITORY }}
+          ref: ${{ env.REGISTRY_PLATFORM_REF }}
+          token: ${{ secrets.REGISTRY_PLATFORM_TOKEN || github.token }}
+          path: registry-platform
+          persist-credentials: false
+
+      - name: Checkout registry-manifest
+        if: steps.channel.outputs.build == 'true'
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ env.REGISTRY_MANIFEST_REPOSITORY }}
+          ref: ${{ env.REGISTRY_MANIFEST_REF }}
+          token: ${{ secrets.REGISTRY_MANIFEST_TOKEN || github.token }}
+          path: registry-manifest
+          persist-credentials: false
+
+      - name: Checkout crosswalk
+        if: steps.channel.outputs.build == 'true'
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ env.CROSSWALK_REPOSITORY }}
+          ref: ${{ env.CROSSWALK_REF }}
+          path: crosswalk
+          persist-credentials: false
+
+      - name: Build registry-relay image
+        if: steps.channel.outputs.build == 'true'
+        run: |
+          tag_args=()
+          while IFS= read -r tag; do
+            [ -n "$tag" ] && tag_args+=(--tag "$tag")
+          done <<'EOF'
+          ${{ steps.channel.outputs.tags }}
+          EOF
+
+          docker build \
+            --build-context registry-platform=registry-platform \
+            --build-context registry-manifest=registry-manifest \
+            --build-context crosswalk=crosswalk \
+            --build-arg "REGISTRY_RELAY_FEATURES=$REGISTRY_RELAY_RELEASE_FEATURES" \
+            --file registry-relay/Dockerfile \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --label "org.opencontainers.image.version=${GITHUB_REF_NAME}" \
+            "${tag_args[@]}" \
+            registry-relay
+      - name: Verify registry-relay image can run hosted feature surfaces
+        if: steps.channel.outputs.build == 'true'
+        run: |
+          set -euo pipefail
+          image_ref="$(cat <<'EOF' | head -n 1
+          ${{ steps.channel.outputs.tags }}
+          EOF
+          )"
+          docker run --rm "$image_ref" healthcheck \
+            --url https://example.com \
+            --timeout-ms 10000
+          run_config() {
+            config="$1"
+            shift
+            cid="$(docker run -d \
+              -e REGISTRY_RELAY_AUDIT_HASH_SECRET=release-image-contract-secret-32-bytes \
+              "$@" \
+              -v "$PWD/registry-relay/demo/decentralized:/demo:ro" \
+              -w /demo/config/relay \
+              "$image_ref" \
+              --config "$config")"
+            for _ in $(seq 1 30); do
+              logs="$(docker logs "$cid" 2>&1 || true)"
+              if echo "$logs" | grep -E "feature disabled|config\\.feature_disabled"; then
+                docker rm -f "$cid" >/dev/null 2>&1 || true
+                echo "$logs"
+                exit 1
+              fi
+              if echo "$logs" | grep -E "registry-relay listening" >/dev/null; then
+                docker exec "$cid" /usr/local/bin/registry-relay healthcheck
+                docker rm -f "$cid" >/dev/null 2>&1 || true
+                echo "verified $config"
+                return 0
+              fi
+              if [ "$(docker inspect --format '{{.State.Running}}' "$cid")" != "true" ]; then
+                docker rm -f "$cid" >/dev/null 2>&1 || true
+                echo "$logs"
+                exit 1
+              fi
+              sleep 1
+            done
+            docker logs "$cid" 2>&1 || true
+            docker rm -f "$cid" >/dev/null 2>&1 || true
+            echo "$config did not reach registry-relay listening" >&2
+            exit 1
+          }
+          run_config civil-registry-relay.yaml \
+            -e CIVIL_METADATA_CLIENT_HASH=sha256:4472f34fd899d34a46a5c3a07cf254625017dad7d3f5d7bb0940dd7b94e0883f \
+            -e CIVIL_EVIDENCE_SOURCE_HASH=sha256:e33368b5f2cfeb0f885291ccdaf7c6b9502ea1ae91399882ae789b270f55cca6 \
+            -e CIVIL_EVIDENCE_ONLY_HASH=sha256:a345704eea4092b8bc96f9f41e15b872d35665df6f6531ba4258b71759100cf6 \
+            -e CIVIL_ROW_READER_HASH=sha256:7357ffdb168d900245a8f2dbbef94b922648fccf478d344122152d4f8631d1c9 \
+            -e SHARED_CIVIL_EVIDENCE_SOURCE_HASH=sha256:47243e5e8543e53b1915edaa8d6425d2fc50e0ecc7dca7e2f833c0221db14103
+          run_config social-protection-registry-relay.yaml \
+            -e SOCIAL_METADATA_CLIENT_HASH=sha256:9e31f50e89536fb5451ee1d5733fcc085401597d4139b806a7f2393b26428ce0 \
+            -e SOCIAL_EVIDENCE_SOURCE_HASH=sha256:6bec86ae6efb4262b1449378494b7710ab102537f8055937948f414a5b5b782b \
+            -e SOCIAL_EVIDENCE_ONLY_HASH=sha256:65cd49d942b3556b4818fb4e6cb5c9c6a2774dce2790c552610ca45a48da7447 \
+            -e SOCIAL_ROW_READER_HASH=sha256:da20b60c627353db2017ee391e3d4e7ee8d351bab319a1b18e7d2a72d27158ad \
+            -e SOCIAL_AGGREGATE_READER_HASH=sha256:8ee6cd3654fb9ba3542daed10a72fb46c3eb00ff358356536b8cc0a7a4c851a6 \
+            -e SHARED_SOCIAL_EVIDENCE_SOURCE_HASH=sha256:8d4ce59cb907c9db7b666a2be7ddc4c5bd45275e6b0476b2b67aab97f94612f8
+      - name: Generate image SBOM and advisory vulnerability report
+        if: steps.channel.outputs.build == 'true'
+        run: |
+          set -o pipefail
+          image_ref="$(cat <<'EOF' | head -n 1
+          ${{ steps.channel.outputs.tags }}
+          EOF
+          )"
+          mkdir -p registry-relay/target/security
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$PWD/registry-relay/target/security:/out" \
+            anchore/syft:v1.18.1@sha256:b8c170b8e51bfc4779ec3ef4399942c57290f5ce76a9c3af564c9d00d4946a6b "$image_ref" \
+            -o spdx-json=/out/registry-relay-image.spdx.json
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$PWD/registry-relay/target/security:/out" \
+            anchore/grype:v0.85.0@sha256:8d7a54c4281e334a60c2d1616269411a940efad44c2cc1533ddc76689b9268af "$image_ref" \
+            -o json > registry-relay/target/security/registry-relay-image-vulnerabilities.json
+          python3 registry-relay/scripts/check_advisory_baselines.py grype \
+            registry-relay/target/security/registry-relay-image-vulnerabilities.json \
+            --subject registry-relay-image
+      - name: Upload image security evidence
+        if: always() && steps.channel.outputs.build == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: registry-relay-image-security-evidence
+          path: registry-relay/target/security/
+
+      - name: Login to GHCR
+        if: steps.channel.outputs.publish == 'true'
+        env:
+          GHCR_ACTOR: ${{ github.actor }}
+          GHCR_TOKEN: ${{ github.token }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_ACTOR" --password-stdin
+
+      - name: Install cosign
+        if: steps.channel.outputs.publish == 'true'
+        uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5 # v3.10.1
+
+      - name: Push image
+        if: steps.channel.outputs.publish == 'true'
+        run: |
+          set -euo pipefail
+          while IFS= read -r tag; do
+            [ -n "$tag" ] && docker push "$tag"
+          done <<'EOF'
+          ${{ steps.channel.outputs.tags }}
+          EOF
+
+      - name: Sign image tags
+        if: steps.channel.outputs.publish == 'true'
+        run: |
+          set -euo pipefail
+          while IFS= read -r tag; do
+            [ -n "$tag" ] && cosign sign --yes "$tag"
+          done <<'EOF'
+          ${{ steps.channel.outputs.tags }}
+          EOF
+
+      - name: Verify published image aliases and signatures
+        if: steps.channel.outputs.publish == 'true'
+        run: |
+          set -euo pipefail
+          expected_digest=""
+          while IFS= read -r tag; do
+            [ -n "$tag" ] || continue
+            digest="$(
+              docker buildx imagetools inspect "$tag" \
+                | awk '/^Digest:/ {print $2; exit}'
+            )"
+            if [ -z "$digest" ]; then
+              echo "Could not resolve digest for $tag" >&2
+              exit 1
+            fi
+            if [ -z "$expected_digest" ]; then
+              expected_digest="$digest"
+            elif [ "$digest" != "$expected_digest" ]; then
+              echo "$tag resolves to $digest, expected $expected_digest" >&2
+              exit 1
+            fi
+            cosign verify \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/container.yml@${GITHUB_REF}" \
+              "$tag" >/dev/null
+          done <<'EOF'
+          ${{ steps.channel.outputs.tags }}
+          EOF

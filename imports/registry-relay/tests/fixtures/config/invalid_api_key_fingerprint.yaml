@@ -1,0 +1,22 @@
+# Tests config.validation_error: env var is set but value is not a
+# valid sha256 API key fingerprint.
+server:
+  bind: 127.0.0.1:8080
+catalog:
+  title: t
+  base_url: https://example.test
+  publisher: p
+vocabularies: {}
+auth:
+  mode: api_key
+  api_keys:
+    - id: k1
+      fingerprint:
+        provider: env
+        name: TEST_KEY_HASH_BAD_FINGERPRINT
+        commitment: sha256:7f887644dfa6f08d5efed9aa8c6aa3f1dd9f204b61e506b921053653964531c6
+      scopes:
+        - registry_relay:admin
+audit:
+  sink: stdout
+datasets: []

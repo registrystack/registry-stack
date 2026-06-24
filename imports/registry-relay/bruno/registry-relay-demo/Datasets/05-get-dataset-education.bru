@@ -1,0 +1,20 @@
+meta {
+  name: Get education_registry dataset
+  type: http
+  seq: 5
+}
+
+get {
+  url: {{baseUrl}}/v1/datasets/education_registry
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{metadataKey}}
+}
+
+docs {
+  Reads the education_registry dataset summary. Uses catalog_viewer persona (metadataKey).
+  Expected: 200 with sensitivity=personal, access_rights=restricted, update_frequency=termly.
+}

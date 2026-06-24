@@ -1,0 +1,23 @@
+meta {
+  name: Support need aggregate by type and district
+  type: http
+  seq: 7
+}
+
+get {
+  url: {{baseUrl}}/v1/datasets/education_registry/aggregates/by_type_district
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{aggregateKey}}
+}
+
+docs {
+  Runs the support need aggregate grouped by support type and student home district.
+  Uses planning_analyst persona (aggregateKey).
+  Expected: 200 with counts per support_type+district group.
+  Groups below min_group_size=5 are omitted. Joined through student to get district.
+  Demonstrates a cross-entity aggregate join within a single dataset.
+}

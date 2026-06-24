@@ -1,0 +1,207 @@
+# SPDX-License-Identifier: Apache-2.0
+
+server:
+  bind: 0.0.0.0:8080
+  openapi_requires_auth: false
+
+auth:
+  mode: api_key
+  api_keys:
+    - id: civil_evidence_client
+      fingerprint:
+        provider: env
+        name: CIVIL_EVIDENCE_CLIENT_TOKEN_HASH
+        commitment: "${CIVIL_EVIDENCE_CLIENT_TOKEN_COMMITMENT:?missing civil notary API key commitment}"
+      scopes:
+        - civil_registry:evidence_verification
+  bearer_tokens:
+    - id: civil_evidence_client
+      fingerprint:
+        provider: env
+        name: CIVIL_EVIDENCE_CLIENT_BEARER_HASH
+        commitment: "${CIVIL_EVIDENCE_CLIENT_BEARER_COMMITMENT:?missing civil notary bearer commitment}"
+      scopes:
+        - civil_registry:evidence_verification
+
+audit:
+  sink: stdout
+
+evidence:
+  enabled: true
+  service_id: civil-registry-notary
+  api_base_url: http://civil-registry-notary:8080
+  inline_batch_limit: 20
+  allowed_purposes:
+    - https://demo.example.gov/purpose/decentralized-evidence-demo
+  source_connections:
+    civil:
+      base_url: http://civil-registry-relay:8080
+      token_env: CIVIL_EVIDENCE_SOURCE_RAW
+      dci:
+        search_path: /dci/crvs/registry/sync/search
+        query_type: idtype-value
+        records_path: /message/search_response/0/data/reg_records
+        field_paths:
+          national_id: /person/national_id
+          birth_date: /person/birth_date
+          civil_status: /person/civil_status
+          deceased: /person/deceased
+  signing_keys:
+    civil-evidence-demo:
+      provider: local_jwk_env
+      private_jwk_env: CIVIL_EVIDENCE_ISSUER_JWK
+      alg: EdDSA
+      kid: did:web:civil-evidence.demo.example#civil-evidence-demo-key-1
+      status: active
+  credential_profiles:
+    civil_status_sd_jwt:
+      format: application/dc+sd-jwt
+      issuer: did:web:civil-evidence.demo.example
+      signing_key: civil-evidence-demo
+      vct: https://demo.example/credentials/civil-status/v1
+      validity_seconds: 600
+      allowed_claims:
+        - date-of-birth
+        - civil-status
+        - person-is-alive
+      holder_binding:
+        mode: did
+        proof_of_possession: required
+        allowed_did_methods:
+          - did:jwk
+      disclosure:
+        allowed:
+          - value
+          - predicate
+  claims:
+    - id: date-of-birth
+      title: Date of birth
+      version: 2026-05
+      subject_type: person
+      value:
+        type: date
+      inputs:
+        - name: subject_id
+          type: string
+      source_bindings:
+        civil:
+          connector: dci
+          connection: civil
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: civil_person
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/decentralized-evidence-demo
+          lookup:
+            input: subject_id
+            field: NATIONAL_ID
+            op: eq
+            cardinality: one
+          fields:
+            birth_date:
+              field: birth_date
+              type: date
+              required: true
+      rule:
+        type: extract
+        source: civil
+        field: birth_date
+      disclosure:
+        default: value
+        allowed:
+          - value
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+        - 'application/ld+json; profile="cccev"'
+        - application/dc+sd-jwt
+      credential_profiles:
+        - civil_status_sd_jwt
+    - id: civil-status
+      title: Civil status
+      version: 2026-05
+      subject_type: person
+      value:
+        type: string
+      inputs:
+        - name: subject_id
+          type: string
+      source_bindings:
+        civil:
+          connector: dci
+          connection: civil
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: civil_person
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/decentralized-evidence-demo
+          lookup:
+            input: subject_id
+            field: NATIONAL_ID
+            op: eq
+            cardinality: one
+          fields:
+            civil_status:
+              field: civil_status
+              type: string
+              required: true
+      rule:
+        type: extract
+        source: civil
+        field: civil_status
+      disclosure:
+        default: value
+        allowed:
+          - value
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+        - 'application/ld+json; profile="cccev"'
+        - application/dc+sd-jwt
+      credential_profiles:
+        - civil_status_sd_jwt
+    - id: person-is-alive
+      title: Person is alive
+      version: 2026-05
+      subject_type: person
+      value:
+        type: boolean
+      inputs:
+        - name: subject_id
+          type: string
+      source_bindings:
+        civil:
+          connector: dci
+          connection: civil
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: civil_person
+          matching:
+            allowed_purposes:
+              - https://demo.example.gov/purpose/decentralized-evidence-demo
+          lookup:
+            input: subject_id
+            field: NATIONAL_ID
+            op: eq
+            cardinality: one
+          fields:
+            deceased:
+              field: deceased
+              type: boolean
+              required: true
+      rule:
+        type: cel
+        expression: "source.civil.deceased == false"
+      disclosure:
+        default: predicate
+        allowed:
+          - predicate
+          - redacted
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+        - 'application/ld+json; profile="cccev"'
+        - application/dc+sd-jwt
+      credential_profiles:
+        - civil_status_sd_jwt

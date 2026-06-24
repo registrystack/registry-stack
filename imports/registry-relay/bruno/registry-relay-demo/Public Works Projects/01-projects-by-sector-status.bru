@@ -1,0 +1,23 @@
+meta {
+  name: Filter projects by sector and status
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/v1/datasets/public_works_projects/entities/project/records?sector=schools&project_status=active
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{rowsKey}}
+}
+
+docs {
+  Filters public works projects by sector=schools and project_status=active.
+  Uses casework_system persona (rowsKey). No purpose header required; dataset has no PII.
+  Expected: 200 with list of active school projects, showing project_id, project_name,
+  district, asset_type, asset_ref, implementing_agency, risk_rating.
+  Sensitive internal_risk_notes is absent.
+}

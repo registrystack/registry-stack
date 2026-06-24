@@ -1,0 +1,24 @@
+meta {
+  name: Clinic rehabilitation - public works project
+  type: http
+  seq: 8
+}
+
+get {
+  url: {{baseUrl}}/v1/datasets/public_works_projects/entities/project/records?asset_ref={{facilityId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{rowsKey}}
+}
+
+docs {
+  Step 1 of 3: Clinic rehabilitation follow-up workflow.
+  Reads the public works project(s) with asset_ref=fac-4001.
+  Uses casework_system persona (rowsKey).
+  NOTE: asset_ref is a client-side soft pointer, not a system-enforced foreign key
+  to clinic_capacity.facility. The same pattern applies as for school construction.
+  Expected: 200 with project(s) for fac-4001 including rehabilitation status and timeline.
+}

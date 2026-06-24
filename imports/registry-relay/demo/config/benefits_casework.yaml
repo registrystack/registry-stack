@@ -1,0 +1,512 @@
+# SPDX-License-Identifier: Apache-2.0
+# Single-dataset config for local startup: cargo run -- --config demo/config/benefits_casework.yaml
+
+server:
+  bind: 0.0.0.0:4242
+
+metadata:
+  source:
+    path: benefits_casework.metadata.yaml
+
+catalog:
+  title: Benefits Casework Gateway (Demo)
+  base_url: http://127.0.0.1:4242
+  publisher: Ministry of Social Affairs (Demo)
+
+auth:
+  mode: api_key
+  api_keys:
+    - id: catalog_viewer
+      fingerprint:
+        provider: env
+        name: CATALOG_VIEWER_HASH
+        commitment: sha256:8e1a97e93d31a6c8e57a2e47fede65dc52655e4c40c4ddb3836395a6c12ef17f
+      scopes:
+        - benefits_casework:metadata
+
+    - id: planning_analyst
+      fingerprint:
+        provider: env
+        name: PLANNING_ANALYST_HASH
+        commitment: sha256:2ff911bb5cf147eafc2024bb123df859f731d087e02e7da96a2b4c49687b5320
+      scopes:
+        - benefits_casework:metadata
+        - benefits_casework:aggregate
+
+    - id: casework_system
+      fingerprint:
+        provider: env
+        name: CASEWORK_SYSTEM_HASH
+        commitment: sha256:31eaa0644ee0593bf88482417b113d4e4f01b07848d5b2a628d97a01be899779
+      scopes:
+        - benefits_casework:metadata
+        - benefits_casework:rows
+        - benefits_casework:aggregate
+
+    - id: verification_service
+      fingerprint:
+        provider: env
+        name: VERIFICATION_SERVICE_HASH
+        commitment: sha256:a0bd21e279907c6fada5bb839a461a3e3014617dbb49c2e9a03e87e7f1f3344b
+      scopes:
+        - benefits_casework:evidence_verification
+
+    # linkage_service has no benefits_casework scopes: it must not read
+    # benefits rows directly; it resolves aliases via subject_registry only.
+
+    - id: operations_admin
+      fingerprint:
+        provider: env
+        name: OPERATIONS_ADMIN_HASH
+        commitment: sha256:379ad2d16e275e6fc7de478764353606569f30507c6e73647dc28045d79b2f17
+      scopes:
+        - registry_relay:admin
+        - registry_relay:ops_read
+        - benefits_casework:metadata
+
+
+audit:
+  sink: stdout
+  format: jsonl
+  hash_secret_env: REGISTRY_RELAY_AUDIT_HASH_SECRET
+
+datasets:
+  - id: benefits_casework
+    title: Benefits Casework
+    description: >-
+      Household, person, benefit case, and payment data for social protection
+      programme administration. Used for eligibility checks, grievance
+      follow-up, reconciliation, and planning aggregates.
+    owner: Ministry of Social Affairs
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: monthly
+    defaults:
+      refresh:
+        mode: manual
+
+    tables:
+      - id: households_table
+        source:
+          type: file
+          path: demo/data/benefits_casework.xlsx
+          format:
+            xlsx:
+              sheet: Households
+        primary_key: household_id
+        schema:
+          strict: true
+          fields:
+            - name: household_id
+              type: string
+              nullable: false
+            - name: district
+              type: string
+              nullable: false
+            - name: municipality
+              type: string
+              nullable: false
+            - name: household_size
+              type: number
+              nullable: false
+            - name: poverty_band
+              type: string
+              nullable: false
+            - name: enrollment_status
+              type: string
+              nullable: false
+            - name: enrolled_on
+              type: date
+              nullable: false
+            # address_line and case_notes are present in the workbook but
+            # not projected into any public entity field.
+            - name: address_line
+              type: string
+              nullable: true
+              sensitive: true
+            - name: case_notes
+              type: string
+              nullable: true
+              sensitive: true
+
+      - id: persons_table
+        source:
+          type: file
+          path: demo/data/benefits_casework.xlsx
+          format:
+            xlsx:
+              sheet: Persons
+        primary_key: person_id
+        schema:
+          strict: true
+          fields:
+            - name: person_id
+              type: string
+              nullable: false
+            - name: household_id
+              type: string
+              nullable: false
+            - name: age_band
+              type: string
+              nullable: false
+            - name: sex
+              type: string
+              nullable: false
+            - name: disability_status
+              type: string
+              nullable: false
+            - name: benefit_role
+              type: string
+              nullable: false
+            - name: eligibility_status
+              type: string
+              nullable: false
+            - name: full_name
+              type: string
+              nullable: true
+              sensitive: true
+            - name: national_id
+              type: string
+              nullable: true
+              sensitive: true
+            - name: phone
+              type: string
+              nullable: true
+              sensitive: true
+
+      - id: cases_table
+        source:
+          type: file
+          path: demo/data/benefits_casework.xlsx
+          format:
+            xlsx:
+              sheet: Cases
+        primary_key: case_id
+        schema:
+          strict: true
+          fields:
+            - name: case_id
+              type: string
+              nullable: false
+            - name: household_id
+              type: string
+              nullable: false
+            - name: case_type
+              type: string
+              nullable: false
+            - name: case_status
+              type: string
+              nullable: false
+            - name: opened_on
+              type: date
+              nullable: false
+            - name: closed_on
+              type: date
+              nullable: true
+            - name: priority
+              type: string
+              nullable: false
+            - name: caseworker_notes
+              type: string
+              nullable: true
+              sensitive: true
+
+      - id: payments_table
+        source:
+          type: file
+          path: demo/data/benefits_casework.xlsx
+          format:
+            xlsx:
+              sheet: Payments
+        primary_key: payment_id
+        schema:
+          strict: true
+          fields:
+            - name: payment_id
+              type: string
+              nullable: false
+            - name: household_id
+              type: string
+              nullable: false
+            - name: cycle
+              type: string
+              nullable: false
+            - name: payment_status
+              type: string
+              nullable: false
+            - name: amount
+              type: number
+              nullable: false
+              unit: USD
+            - name: paid_on
+              type: date
+              nullable: true
+            - name: payment_channel
+              type: string
+              nullable: false
+            - name: bank_account_hint
+              type: string
+              nullable: true
+              sensitive: true
+
+    entities:
+      - name: household
+        title: Household
+        description: A household enrolled in the benefits programme
+        table: households_table
+        fields:
+          - name: id
+            from: household_id
+          - name: district
+            from: district
+          - name: municipality
+            from: municipality
+          - name: household_size
+            from: household_size
+          - name: poverty_band
+            from: poverty_band
+          - name: enrollment_status
+            from: enrollment_status
+          - name: enrolled_on
+            from: enrolled_on
+        relationships:
+          - name: members
+            kind: has_many
+            target: person
+            foreign_key: household_id
+          - name: cases
+            kind: has_many
+            target: case
+            foreign_key: household_id
+          - name: payments
+            kind: has_many
+            target: payment
+            foreign_key: household_id
+        access:
+          metadata_scope:    benefits_casework:metadata
+          aggregate_scope:   benefits_casework:aggregate
+          read_scope:        benefits_casework:rows
+        api:
+          default_limit: 100
+          max_limit: 1000
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: district
+              ops: [eq, in]
+            - field: municipality
+              ops: [eq, in]
+            - field: poverty_band
+              ops: [eq, in]
+            - field: enrollment_status
+              ops: [eq, in]
+            - field: enrolled_on
+              ops: [gte, lte, between]
+          allowed_expansions: [members, cases, payments]
+        aggregates:
+          - id: by_poverty_band
+            description: Count of households by district and poverty band
+            group_by:
+              - district
+              - poverty_band
+            measures:
+              - name: household_count
+                function: count
+                column: id
+            # personal data; person and case counts use omit, payment measures use mask
+            disclosure_control:
+              min_group_size: 5
+              suppression: omit
+
+      - name: person
+        title: Person
+        description: An individual member of a benefit household
+        table: persons_table
+        fields:
+          - name: id
+            from: person_id
+          - name: household_id
+            from: household_id
+          - name: age_band
+            from: age_band
+          - name: sex
+            from: sex
+          - name: disability_status
+            from: disability_status
+          - name: benefit_role
+            from: benefit_role
+          - name: eligibility_status
+            from: eligibility_status
+        relationships:
+          - name: household
+            kind: belongs_to
+            target: household
+            foreign_key: household_id
+        access:
+          metadata_scope:    benefits_casework:metadata
+          aggregate_scope:   benefits_casework:aggregate
+          read_scope:        benefits_casework:rows
+          evidence_verification_scope: benefits_casework:evidence_verification
+        api:
+          default_limit: 100
+          max_limit: 1000
+          require_purpose_header: true
+          required_filters:
+            - id
+            - household_id
+            - eligibility_status
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: household_id
+              ops: [eq, in]
+            - field: age_band
+              ops: [eq, in]
+            - field: sex
+              ops: [eq, in]
+            - field: disability_status
+              ops: [eq, in]
+            - field: eligibility_status
+              ops: [eq, in]
+          allowed_expansions: [household]
+        aggregates:
+          - id: by_district_age_band
+            description: Count of persons by household district and age band
+            joins:
+              - relationship: household
+            group_by:
+              - household.district
+              - age_band
+            measures:
+              - name: person_count
+                function: count
+                column: id
+            # personal data; person and case counts use omit, payment measures use mask
+            disclosure_control:
+              min_group_size: 5
+              suppression: omit
+
+      - name: case
+        title: Benefit Case
+        description: An appeal, recertification, or grievance case for a household
+        table: cases_table
+        fields:
+          - name: id
+            from: case_id
+          - name: household_id
+            from: household_id
+          - name: case_type
+            from: case_type
+          - name: case_status
+            from: case_status
+          - name: opened_on
+            from: opened_on
+          - name: closed_on
+            from: closed_on
+          - name: priority
+            from: priority
+        relationships:
+          - name: household
+            kind: belongs_to
+            target: household
+            foreign_key: household_id
+        access:
+          metadata_scope:    benefits_casework:metadata
+          aggregate_scope:   benefits_casework:aggregate
+          read_scope:        benefits_casework:rows
+        api:
+          default_limit: 100
+          max_limit: 1000
+          require_purpose_header: true
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: household_id
+              ops: [eq, in]
+            - field: case_type
+              ops: [eq, in]
+            - field: case_status
+              ops: [eq, in]
+            - field: opened_on
+              ops: [gte, lte, between]
+            - field: priority
+              ops: [eq, in]
+          allowed_expansions: [household]
+        aggregates:
+          - id: by_status_priority
+            description: Count of cases by status and priority
+            group_by:
+              - case_status
+              - priority
+            measures:
+              - name: case_count
+                function: count
+                column: id
+            # personal data; person and case counts use omit, payment measures use mask
+            disclosure_control:
+              min_group_size: 5
+              suppression: omit
+
+      - name: payment
+        title: Benefit Payment
+        description: A payment disbursed to a household in a given cycle
+        table: payments_table
+        fields:
+          - name: id
+            from: payment_id
+          - name: household_id
+            from: household_id
+          - name: cycle
+            from: cycle
+          - name: payment_status
+            from: payment_status
+          - name: amount
+            from: amount
+          - name: paid_on
+            from: paid_on
+          - name: payment_channel
+            from: payment_channel
+        relationships:
+          - name: household
+            kind: belongs_to
+            target: household
+            foreign_key: household_id
+        access:
+          metadata_scope:    benefits_casework:metadata
+          aggregate_scope:   benefits_casework:aggregate
+          read_scope:        benefits_casework:rows
+        api:
+          default_limit: 100
+          max_limit: 1000
+          require_purpose_header: true
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: household_id
+              ops: [eq, in]
+            - field: cycle
+              ops: [eq, in]
+            - field: payment_status
+              ops: [eq, in]
+            - field: paid_on
+              ops: [gte, lte, between]
+          allowed_expansions: [household]
+        aggregates:
+          - id: by_district_cycle
+            description: Sum and average payment amount by household district and cycle
+            joins:
+              - relationship: household
+            group_by:
+              - household.district
+              - cycle
+            measures:
+              - name: total_amount
+                function: sum
+                column: amount
+              - name: average_amount
+                function: avg
+                column: amount
+            # personal data; person and case counts use omit, payment measures use mask
+            disclosure_control:
+              min_group_size: 5
+              suppression: mask

@@ -1,0 +1,58 @@
+# SPDX-License-Identifier: Apache-2.0
+# Portable metadata manifest generated from subject_registry.yaml.
+
+schema_version: registry-manifest/v1
+catalog:
+  id: subject-registry
+  base_url: http://127.0.0.1:4242
+  title: Subject Registry Gateway (Demo)
+  publisher:
+    name: Government Identity Coordination Function (Demo)
+  standards:
+    dcat: '3.0'
+    shacl: '1.1'
+    json_schema: 2020-12
+  application_profiles:
+  - id: bregdcat-ap
+    version: '3.0'
+datasets:
+- id: subject_registry
+  title: Subject Registry
+  description: 'Canonical mapping between subject identifiers used by different administrative
+    datasets. Contains no personal data: only opaque canonical ids and per-dataset
+    aliases. The linkage itself is the sensitive surface; access is gated to the linkage_service
+    persona only.'
+  owner: Government Identity Coordination Function
+  sensitivity: confidential
+  access_rights: restricted
+  update_frequency: as_needed
+  entities:
+  - name: subject
+    title: Subject
+    description: A canonical subject identity with per-dataset aliases. The registry
+      deliberately has no relationships to personal datasets; cross-dataset composition
+      stays client-side and is audited per call.
+    identifiers:
+    - name: canonical_id
+      kind: primary
+    fields:
+    - name: canonical_id
+      type: string
+      required: true
+    - name: benefits_person_alias
+      type: string
+    - name: benefits_household_alias
+      type: string
+    - name: education_student_alias
+      type: string
+    - name: education_guardian_alias
+      type: string
+    - name: linkage_method
+      type: string
+      required: true
+    - name: linkage_confidence
+      type: string
+      required: true
+    - name: linked_on
+      type: date
+      required: true

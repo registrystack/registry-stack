@@ -1,0 +1,23 @@
+meta {
+  name: Service capacity aggregate by district and service type
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/v1/datasets/clinic_capacity/aggregates/by_district_service
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{aggregateKey}}
+}
+
+docs {
+  Runs the service capacity aggregate grouped by district and service type.
+  Uses planning_analyst persona (aggregateKey).
+  Expected: 200 with summed beds and staff counts per district+service_type group.
+  Groups below min_group_size=3 are disclosure-controlled.
+  Demonstrates aggregate joined to facility district without exposing facility rows.
+}

@@ -1,0 +1,21 @@
+meta {
+  name: BRegDCAT-AP profile
+  type: http
+  seq: 7
+}
+
+get {
+  url: {{baseUrl}}/metadata/profiles/bregdcat-ap
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{metadataKey}}
+}
+
+docs {
+  Reads one declared application-profile descriptor from the portable metadata catalog.
+  Uses catalog_viewer persona (metadataKey).
+  Expected: 200 with id=bregdcat-ap and the configured profile version.
+}

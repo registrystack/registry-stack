@@ -1,0 +1,20 @@
+meta {
+  name: Benefits person evidence offering
+  type: http
+  seq: 15
+}
+
+get {
+  url: {{baseUrl}}/metadata/evidence-offerings/{{benefitsPersonEvidenceOfferingId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{metadataKey}}
+}
+
+docs {
+  Reads one declared benefits evidence offering from the portable metadata surface.
+  Expected: 200 with the offering IRI, evidence type, issuing authority, and verification request schema metadata.
+}

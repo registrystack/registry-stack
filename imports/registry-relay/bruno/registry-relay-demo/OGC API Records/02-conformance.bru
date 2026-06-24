@@ -1,0 +1,21 @@
+meta {
+  name: Records conformance
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/ogc/v1/records/conformance
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{metadataKey}}
+}
+
+docs {
+  Reads OGC API Records conformance declarations for the runtime records surface.
+  Uses catalog_viewer persona (metadataKey).
+  Expected: 200 with conformsTo containing OGC API Records and JSON conformance classes.
+}

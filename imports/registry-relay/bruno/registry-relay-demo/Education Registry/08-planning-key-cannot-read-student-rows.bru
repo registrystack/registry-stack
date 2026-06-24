@@ -1,0 +1,26 @@
+meta {
+  name: Planning aggregate key cannot read student rows (expects 403)
+  type: http
+  seq: 8
+}
+
+get {
+  url: {{baseUrl}}/v1/datasets/education_registry/entities/student/records?id={{studentAlias}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{aggregateKey}}
+}
+
+headers {
+  Data-Purpose: {{purpose}}
+}
+
+docs {
+  Attempts to read student rows using the planning_analyst key (aggregateKey).
+  aggregateKey holds education_registry:metadata + education_registry:aggregate but not :rows.
+  expected: 403 auth.scope_denied
+  Demonstrates that planning analysts can run aggregates but cannot enumerate students.
+}

@@ -1,0 +1,45 @@
+# Tests config.duplicate_id: two datasets share the same id.
+server:
+  bind: 127.0.0.1:8080
+catalog:
+  title: t
+  base_url: https://example.test
+  publisher: p
+vocabularies: {}
+auth:
+  mode: api_key
+  api_keys:
+    - id: k1
+      fingerprint:
+        provider: env
+        name: TEST_KEY_HASH_DUP
+        commitment: sha256:cbcaf577b8d08743c360b2b140d29d03d530ffa551409d7a033012d219b0955d
+      scopes:
+        - registry_relay:admin
+audit:
+  sink: stdout
+datasets:
+  - id: ds_one
+    title: T
+    description: D
+    owner: O
+    sensitivity: public
+    access_rights: public
+    update_frequency: monthly
+    conforms_to: []
+    defaults:
+      refresh:
+        mode: manual
+    tables:
+  - id: ds_one
+    title: T2
+    description: D2
+    owner: O2
+    sensitivity: public
+    access_rights: public
+    update_frequency: monthly
+    conforms_to: []
+    defaults:
+      refresh:
+        mode: manual
+    tables:

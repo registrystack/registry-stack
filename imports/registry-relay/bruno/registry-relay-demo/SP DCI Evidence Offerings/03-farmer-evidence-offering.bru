@@ -1,0 +1,21 @@
+meta {
+  name: Farmer evidence offering
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/metadata/evidence-offerings/{{farmerEvidenceOfferingId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{metadataKey}}
+}
+
+docs {
+  Reads the farmer-registration evidence offering from the standards demo metadata.
+  Requires the server to run demo/config/all_standards.yaml or demo/config/disability_registry.yaml.
+  Expected: 200 with the farmer evidence type, issuing authority, jurisdiction, and verification request schema.
+}

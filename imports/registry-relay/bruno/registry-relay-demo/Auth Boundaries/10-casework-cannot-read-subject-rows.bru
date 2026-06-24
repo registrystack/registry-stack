@@ -1,0 +1,28 @@
+meta {
+  name: casework_system cannot read subject_registry rows (expects 403)
+  type: http
+  seq: 10
+}
+
+get {
+  url: {{baseUrl}}/v1/datasets/subject_registry/entities/subject/records?canonical_id={{canonicalId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{rowsKey}}
+}
+
+headers {
+  Data-Purpose: {{purpose}}
+}
+
+docs {
+  Attempts to read subject_registry rows using casework_system key (rowsKey).
+  casework_system holds benefits_casework:rows and education_registry:rows but
+  explicitly does NOT hold subject_registry:rows.
+  expected: 403 auth.scope_denied
+  Demonstrates that cross-dataset linkage access is a separate, privileged scope.
+  A casework system cannot initiate linkage lookups unilaterally.
+}

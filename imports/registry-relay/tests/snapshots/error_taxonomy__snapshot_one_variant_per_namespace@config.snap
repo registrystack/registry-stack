@@ -1,0 +1,11 @@
+---
+source: tests/error_taxonomy.rs
+expression: json
+---
+{
+  "code": "config.missing_secret",
+  "detail": "a required hash environment variable is unset",
+  "status": 500,
+  "title": "Missing credential hash",
+  "type": "https://registry-relay.dev/problems/config/missing_secret"
+}

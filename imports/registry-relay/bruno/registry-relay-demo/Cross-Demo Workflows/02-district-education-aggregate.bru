@@ -1,0 +1,23 @@
+meta {
+  name: District planning - education aggregate
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/v1/datasets/education_registry/aggregates/by_school_grade_status
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{aggregateKey}}
+}
+
+docs {
+  Step 2 of 4: District planning workflow.
+  Runs education enrollment aggregate. Uses planning_analyst persona (aggregateKey).
+  Combined with step 1, shows poverty-education correlation at district level.
+  Expected: 200 with student counts per school+grade+enrollment_status.
+  The same district value (riverbend) provides the shared geographic frame.
+}

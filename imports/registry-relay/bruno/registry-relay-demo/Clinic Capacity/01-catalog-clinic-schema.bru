@@ -1,0 +1,22 @@
+meta {
+  name: Facility SHACL metadata
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/metadata/datasets/clinic_capacity/entities/facility/shacl
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{metadataKey}}
+}
+
+docs {
+  Reads the portable SHACL JSON-LD shape for the clinic_capacity facility entity.
+  Uses catalog_viewer persona (metadataKey).
+  Expected: 200 with application/ld+json body describing the facility entity's fields,
+  constraints, concepts, and relationships from the split metadata manifest.
+}

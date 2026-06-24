@@ -1,0 +1,27 @@
+meta {
+  name: Read household with members expanded
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/v1/datasets/benefits_casework/entities/household/records/hh-1001?expand=members
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{rowsKey}}
+}
+
+headers {
+  Data-Purpose: {{purpose}}
+}
+
+docs {
+  Reads a single household record with the members relationship expanded inline.
+  Uses casework_system persona (rowsKey). Purpose header is required because expanding
+  members pulls person rows which have require_purpose_header=true.
+  Expected: 200 with household fields plus an embedded members array of person records
+  (omitting sensitive fields full_name, national_id, phone).
+}

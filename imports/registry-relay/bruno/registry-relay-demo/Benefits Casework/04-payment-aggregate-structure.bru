@@ -1,0 +1,21 @@
+meta {
+  name: Payment aggregate structure
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/v1/datasets/benefits_casework/aggregates/by_district_cycle/structure
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{aggregateKey}}
+}
+
+docs {
+  Reads the aggregate structure document for the payment aggregate.
+  Expected: 200 with dimensions, measures, disclosure control, and links.
+  This is the canonical replacement for the deprecated aggregate /metadata alias.
+}

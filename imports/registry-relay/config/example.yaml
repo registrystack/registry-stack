@@ -1,0 +1,363 @@
+# SPDX-License-Identifier: Apache-2.0
+# Canonical V1 example. Keep this file aligned with docs/configuration.md,
+# docs/api.md, and docs/ops.md.
+
+instance:
+  id: registry-relay-local
+  environment: development
+  owner: Ministry of Digital Government
+  jurisdiction: example-country
+
+server:
+  bind: 0.0.0.0:8080
+
+catalog:
+  title: Internal Government Registry Relay
+  base_url: https://data.example.gov
+  publisher: Ministry of Digital Government
+  participant_id: did:web:data.example.gov
+
+vocabularies:
+  # optional prefix registry, used to shorten URIs in the rest of the config
+  psc:    https://publicschema.org/
+  m8g:    http://data.europa.eu/m8g/        # SEMIC Core Vocabularies
+  schema: https://schema.org/
+  dct:    http://purl.org/dc/terms/
+  sdmx:   http://purl.org/linked-data/sdmx/2009/concept#
+
+auth:
+  mode: api_key
+  api_keys:
+    - id: statistics_office
+      fingerprint:
+        provider: env
+        name: STATS_OFFICE_API_KEY_HASH
+        commitment: sha256:b21620332a196ee79d97b77cb490cb8033906f07c5e4ff0c0e3d7776999bd1d6
+      scopes:
+        - social_registry:metadata
+        - social_registry:aggregate
+
+    - id: program_system
+      fingerprint:
+        provider: env
+        name: PROGRAM_SYSTEM_API_KEY_HASH
+        commitment: sha256:069a5a49b48c64e1644c2c7ac9a746aa9785b2c18cee1eaee395f04d51736ff3
+      scopes:
+        - social_registry:metadata
+        - social_registry:aggregate
+        - social_registry:rows
+
+    - id: identity_verification_service
+      fingerprint:
+        provider: env
+        name: VERIFICATION_SERVICE_API_KEY_HASH
+        commitment: sha256:ba18c6e651be2168f263df1b70cf7821ebc1b4d876de71fa5b679a56cad9dc16
+      scopes:
+        - social_registry:metadata
+        - social_registry:evidence_verification
+
+    - id: operations_operator
+      fingerprint:
+        provider: env
+        name: OPERATIONS_OPERATOR_API_KEY_HASH
+        commitment: sha256:aab859ae1ef792b76913f8bb1aea0ab3d9c7f59f0c49eb4dc559e13358a9cef5
+      scopes:
+        - registry_relay:ops_read
+
+
+datasets:
+  - id: social_registry
+    title: Social Registry
+    description: Registry of households participating in Program X
+    owner: Ministry of Social Affairs
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: monthly
+    conforms_to:
+      - psc:concepts/Person
+      - psc:concepts/Enrollment
+      - m8g:CorePerson
+
+    tables:
+      - id: households_table
+        materialization: snapshot
+        source:
+          type: file
+          path: ./data/social_registry.xlsx
+          format:
+            xlsx:
+              sheet: Households
+        refresh:
+          mode: mtime         # mtime | interval | manual
+          interval: 1h
+        primary_key: household_id
+        schema:
+          strict: true
+          fields:
+            - name: household_id
+              type: string
+              nullable: false
+            - name: region_code
+              type: string
+              nullable: true
+            - name: enrollment_date
+              type: date
+              nullable: true
+
+      - id: individuals_table
+        materialization: snapshot
+        source:
+          type: file
+          path: ./data/social_registry.xlsx
+          format:
+            xlsx:
+              sheet: Individuals
+        refresh:
+          mode: mtime
+          interval: 1h
+        primary_key: individual_id
+        schema:
+          strict: true
+          fields:
+            - name: individual_id
+              type: string
+              nullable: false
+            - name: household_id
+              type: string
+              nullable: false
+            - name: municipality_code
+              type: string
+              nullable: true
+              codelist: https://www.insee.fr/codes/cog
+            - name: payment_amount
+              type: number
+              nullable: true
+              unit: EUR
+
+    aggregates:
+      - id: by_municipality
+        title: Individuals by municipality
+        description: Number of individuals by municipality
+        source_entity: individual
+        default_group_by:
+          - municipality_code
+        dimensions:
+          - id: municipality_code
+            label: Municipality
+            field: municipality_code
+            codelist: https://www.insee.fr/codes/cog
+        indicators:
+          - id: individual_count
+            label: Individuals
+            function: count
+            column: id
+            unit_measure: people
+        allowed_filters:
+          - field: municipality_code
+            ops: [eq, in]
+        disclosure_control:
+          min_group_size: 5
+          suppression: omit
+
+      - id: payments_by_municipality
+        title: Payments by municipality
+        description: Total and average payments by municipality
+        source_entity: individual
+        default_group_by:
+          - municipality_code
+        dimensions:
+          - id: municipality_code
+            label: Municipality
+            field: municipality_code
+            codelist: https://www.insee.fr/codes/cog
+        indicators:
+          - id: total_payment
+            label: Total payment
+            function: sum
+            column: payment_amount
+            unit_measure: EUR
+          - id: average_payment
+            label: Average payment
+            function: avg
+            column: payment_amount
+            unit_measure: EUR
+        allowed_filters:
+          - field: municipality_code
+            ops: [eq, in]
+        disclosure_control:
+          min_group_size: 5
+          suppression: mask
+
+      - id: by_household_region
+        title: Individuals by household region
+        description: Number of individuals by household region
+        source_entity: individual
+        default_group_by:
+          - household_region
+        dimensions:
+          - id: household_region
+            label: Household region
+            field: household.region
+        indicators:
+          - id: individual_count
+            label: Individuals
+            function: count
+            column: id
+            unit_measure: people
+        disclosure_control:
+          min_group_size: 5
+          suppression: omit
+
+    entities:
+      - name: household
+        title: Household
+        description: A household participating in Program X
+        table: households_table
+        concept_uri: psc:concepts/Household
+        fields:
+          - name: id
+            from: household_id
+            concept_uri: psc:properties/householdIdentifier
+          - name: region
+            from: region_code
+            concept_uri: m8g:Location
+          - name: enrolled_on
+            from: enrollment_date
+            concept_uri: psc:properties/enrollmentDate
+        relationships:
+          - name: members
+            kind: has_many
+            target: individual
+            foreign_key: household_id
+        access:
+          metadata_scope:    social_registry:metadata
+          aggregate_scope:   social_registry:aggregate
+          read_scope:        social_registry:rows
+          evidence_verification_scope: social_registry:evidence_verification
+        api:
+          default_limit: 100
+          max_limit: 1000
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: region
+              ops: [eq, in]
+          allowed_expansions: [members]
+
+      - name: individual
+        title: Individual
+        description: A person enrolled in Program X
+        table: individuals_table
+        concept_uri: psc:concepts/Person
+        fields:
+          - name: id
+            from: individual_id
+            concept_uri: psc:properties/personIdentifier
+          - name: household_id
+            from: household_id
+            concept_uri: psc:properties/householdIdentifier
+          - name: municipality_code
+            from: municipality_code
+            concept_uri: m8g:Location
+          - name: payment_amount
+            from: payment_amount
+            concept_uri: psc:properties/paymentAmount
+        relationships:
+          - name: household
+            kind: belongs_to
+            target: household
+            foreign_key: household_id
+        access:
+          metadata_scope:    social_registry:metadata
+          aggregate_scope:   social_registry:aggregate
+          read_scope:        social_registry:rows
+          evidence_verification_scope: social_registry:evidence_verification
+        api:
+          default_limit: 100
+          max_limit: 1000
+          require_purpose_header: true
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: household_id
+              ops: [eq, in]
+            - field: municipality_code
+              ops: [eq, in]
+          allowed_expansions: [household]
+        # Governed identity attribute release. Resolves exactly one subject and
+        # returns only the configured claims under a dedicated release scope
+        # (distinct from `read_scope`), never a raw registry row.
+        attribute_release_profiles:
+          - id: basic_identity
+            version: "1"
+            title: Basic identity attributes
+            description: Minimal identity claims for an authenticator plugin.
+            purpose: identity_verification
+            release_scope: social_registry:identity_release
+            subject:
+              input: individual_id
+              source_field: id
+              id_type: national_id
+              cardinality: one
+            claims:
+              - name: subject_identifier
+                source_field: id
+                required: true
+                sensitivity: direct_identifier
+                shareable: false
+              - name: municipality
+                source_field: municipality_code
+                required: false
+                sensitivity: public
+            response:
+              include_source_metadata: false
+              max_age_seconds: 300
+
+
+audit:
+  sink: stdout            # stdout | file | syslog
+  format: jsonl
+  hash_secret_env: REGISTRY_RELAY_AUDIT_HASH_SECRET
+  # path: /var/log/registry-relay/audit.jsonl   # when sink == file
+
+# Data provenance (signed Verifiable Credentials).
+#
+# When `enabled: false` (or the whole `provenance:` block is omitted),
+# provenance stays invisible: no Accept negotiation, no signing, no
+# extra audit events. Plain JSON responses stay unchanged.
+#
+# Opting in requires a local signer (`software` env var or `file_watch`
+# JWK file) and an issuer DID. Two issuer modes:
+#
+# * `gateway`: registry-relay self-issues under its own DID and hosts
+#   `/.well-known/did.json`.
+# * `delegated`: registry-relay signs under a ministry's DID. The ministry
+#   hosts its own DID Document including the gateway's `kid`. registry-relay
+#   does NOT publish `/.well-known/did.json` in this mode.
+#
+# See `docs/provenance.md` for the full operational contract.
+#
+# provenance:
+#   enabled: false
+#   accepted_media_types:
+#     - application/vc+jwt
+#     - application/jwt
+#   schema_base_url: https://data.example.gov/schemas
+#   context_base_url: https://data.example.gov/contexts
+#   claim_validity:
+#     aggregate_result: 1h    # tune to dataset refresh cadence
+#     entity_record:    24h   # tune to consumer caching window
+#   issuer:
+#     mode: gateway
+#     did: did:web:data.example.gov
+#     verification_method_id: did:web:data.example.gov#issuance
+#     signer:
+#       kind: software
+#       jwk_env: REGISTRY_RELAY_PROVENANCE_JWK   # private JWK (JSON), never logged
+#       signing_algorithm: EdDSA
+#     # Or, for simple local file-mounted secret refresh:
+#     # signer:
+#     #   kind: file_watch
+#     #   path: /run/secrets/registry-relay/provenance-active.jwk
+#     #   signing_algorithm: EdDSA
+#     retired_keys: []                     # public JWKs of rotated-out keys

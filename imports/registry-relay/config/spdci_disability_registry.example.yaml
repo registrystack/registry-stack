@@ -1,0 +1,168 @@
+# SPDX-License-Identifier: Apache-2.0
+# Optional Social Protection Digital Convergence Initiative (SP DCI)
+# Disability Registry sync adapter example.
+# Build with: cargo run --features spdci-api-standards -- --config this-file.yaml
+
+server:
+  bind: 0.0.0.0:8080
+
+catalog:
+  title: Disability Registry Relay
+  base_url: https://data.example.gov
+  publisher: Ministry of Social Affairs
+
+vocabularies:
+  spdci: https://schema.spdci.org/
+
+auth:
+  mode: api_key
+  api_keys:
+    - id: disability_verification_service
+      fingerprint:
+        provider: env
+        name: DISABILITY_VERIFICATION_API_KEY_HASH
+        commitment: sha256:120e8c63c3b5f4f8ef1ddc0c84b8887bbc127fbcaaa9e07768d1dc545f3dd716
+      scopes:
+        - disability_registry:evidence_verification
+    - id: disability_casework_system
+      fingerprint:
+        provider: env
+        name: DISABILITY_CASEWORK_API_KEY_HASH
+        commitment: sha256:fc4f5b803289fd47526c4e5416ff3c4dabbfa7324e47b0d3580eab8e9a1abd57
+      scopes:
+        - disability_registry:metadata
+        - disability_registry:rows
+
+standards:
+  spdci:
+    disability_registry:
+      dataset: disability_registry
+      entity: disabled_person
+      query_key: member.member_identifier
+      query_field: id
+      disabled_status_field: disability_status
+      disabled_positive_values: [approved, yes]
+    registries:
+      dr:
+        dataset: disability_registry
+        entity: disabled_person
+        registry_type: ns:org:RegistryType:DR
+        record_type: spdci-extensions-dci:DisabledPerson
+        identifiers:
+          DISABILITY_ID: id
+          MEMBER_ID: id
+          UIN: id
+          NIN: id
+        expression_fields:
+          disability_status: disability_status
+          disability_details.impairment_type: impairment_type
+        response_fields:
+          personal_details.identifier: id
+          disability_status: disability_status
+          disability_level: disability_level
+          disability_details.0.impairment_type: impairment_type
+          disability_details.0.impairment_level: impairment_level
+          disability_support.0.human_assistance.type: human_assistance_type
+          disability_support.0.human_assistance.frequency: support_frequency
+          disability_support.0.human_assistance.support_status: support_status
+          registration_date: registration_date
+          last_updated: last_updated
+
+datasets:
+  - id: disability_registry
+    title: Disability Registry
+    description: Disability registry backed by an XLSX worksheet.
+    owner: Ministry of Social Affairs
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: monthly
+    conforms_to:
+      - spdci:extensions/dr/v1/DisabledPerson
+
+    tables:
+      - id: disabled_people_table
+        materialization: snapshot
+        source:
+          type: file
+          path: ./data/disability_registry.xlsx
+          format:
+            xlsx:
+              sheet: DisabledPeople
+              header_row: 1
+        refresh:
+          mode: mtime
+          interval: 1h
+        primary_key: person_id
+        schema:
+          strict: true
+          fields:
+            - name: person_id
+              type: string
+              nullable: false
+            - name: disability_status
+              type: string
+              nullable: false
+            - name: disability_level
+              type: string
+              nullable: true
+            - name: impairment_type
+              type: string
+              nullable: true
+            - name: impairment_level
+              type: string
+              nullable: true
+            - name: human_assistance_type
+              type: string
+              nullable: true
+            - name: support_frequency
+              type: string
+              nullable: true
+            - name: support_status
+              type: string
+              nullable: true
+            - name: registration_date
+              type: timestamp
+              nullable: true
+            - name: last_updated
+              type: timestamp
+              nullable: true
+
+    entities:
+      - name: disabled_person
+        title: Disabled Person
+        description: Person record exposed through the SP DCI Disability Registry sync adapter.
+        table: disabled_people_table
+        concept_uri: spdci:extensions/dr/v1/DisabledPerson
+        fields:
+          - name: id
+            from: person_id
+          - name: disability_status
+          - name: disability_level
+          - name: impairment_type
+          - name: impairment_level
+          - name: human_assistance_type
+          - name: support_frequency
+          - name: support_status
+          - name: registration_date
+          - name: last_updated
+        access:
+          metadata_scope:    disability_registry:metadata
+          aggregate_scope:   disability_registry:aggregate
+          read_scope:        disability_registry:rows
+          evidence_verification_scope: disability_registry:evidence_verification
+        api:
+          require_purpose_header: true
+          default_limit: 100
+          max_limit: 1000
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: disability_status
+              ops: [eq, in]
+            - field: impairment_type
+              ops: [eq, in]
+
+audit:
+  sink: stdout
+  format: jsonl
+  hash_secret_env: REGISTRY_RELAY_AUDIT_HASH_SECRET

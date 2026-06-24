@@ -1,0 +1,22 @@
+meta {
+  name: Wrong scope for rows endpoint (expects 403)
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/v1/datasets/benefits_casework/entities/household/records?district=riverbend
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{metadataKey}}
+}
+
+docs {
+  Attempts to read household rows using the catalog_viewer key (metadataKey).
+  metadataKey holds only metadata scopes; reading rows requires benefits_casework:rows.
+  expected: 403 auth.scope_denied
+  Demonstrates that metadata scope and rows scope are independent grants.
+}

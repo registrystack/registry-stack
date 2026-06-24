@@ -1,0 +1,25 @@
+meta {
+  name: Verify-only key cannot read student rows (expects 403)
+  type: http
+  seq: 10
+}
+
+get {
+  url: {{baseUrl}}/v1/datasets/education_registry/entities/student/records?id={{studentAlias}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{evidenceVerificationKey}}
+}
+
+headers {
+  Data-Purpose: {{purpose}}
+}
+
+docs {
+  Attempts to read student rows using evidenceVerificationKey.
+  evidenceVerificationKey holds only education_registry:evidence_verification; row reads require :rows.
+  expected: 403 auth.scope_denied
+}

@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: Apache-2.0
+allowed:
+  - listener: public
+    method: GET
+    path: /healthz
+    reason: Health probe.
+  - listener: public
+    method: GET
+    path: /ready
+    reason: Readiness probe.
+  - listener: public
+    method: GET
+    path: /docs
+    reason: Static Scalar shell; OpenAPI remains auth-gated.
+  - listener: public
+    method: GET
+    path: /docs/scalar.js
+    reason: Static Scalar asset.
+  - listener: public
+    method: GET
+    path: /.well-known/api-catalog
+    reason: Public RFC 9727 discovery linkset; static handler with no principal input.
+  - listener: public
+    method: HEAD
+    path: /.well-known/api-catalog
+    reason: Public RFC 9727 discovery linkset; static handler with no principal input.
+  - listener: public
+    method: GET
+    path: /.well-known/did.json
+    reason: Public DID document when provenance gateway mode is enabled.
+  - listener: public
+    method: GET
+    path: /schemas/{claim_type}/{version}
+    reason: Public provenance schema when provenance is enabled.
+  - listener: public
+    method: GET
+    path: /contexts/{vocab}/{version}
+    reason: Public JSON-LD context when provenance is enabled.
+  - listener: admin
+    method: GET
+    path: /healthz
+    reason: Admin listener health probe.
+  - listener: admin
+    method: GET
+    path: /ready
+    reason: Admin listener readiness probe.
+  - listener: admin
+    method: GET
+    path: /metrics
+    reason: Metrics are admin-listener-only.

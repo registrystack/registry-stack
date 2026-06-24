@@ -1,0 +1,1956 @@
+{
+  "version": 1,
+  "generated_at": "manual-baseline",
+  "service": "registry-relay",
+  "endpoints": [
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/healthz",
+      "feature": null,
+      "audience": "health",
+      "auth": "none",
+      "scopes": [],
+      "rate_limit": null,
+      "audit": "optional",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "operational",
+      "notes": "Intentionally unauthenticated public route.",
+      "source": "manual",
+      "enforcement_tests": [],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/ready",
+      "feature": null,
+      "audience": "health",
+      "auth": "none",
+      "scopes": [],
+      "rate_limit": null,
+      "audit": "optional",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "operational",
+      "notes": "Intentionally unauthenticated public route.",
+      "source": "manual",
+      "enforcement_tests": [],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/docs",
+      "feature": null,
+      "audience": "external",
+      "auth": "none",
+      "scopes": [],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "operational",
+      "notes": "Intentionally unauthenticated public route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/api_docs.rs::docs_routes_are_public_but_openapi_json_stays_auth_gated",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/docs/scalar.js",
+      "feature": null,
+      "audience": "external",
+      "auth": "none",
+      "scopes": [],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "operational",
+      "notes": "Intentionally unauthenticated public route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/api_docs.rs::docs_routes_are_public_but_openapi_json_stays_auth_gated",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/.well-known/did.json",
+      "feature": null,
+      "audience": "external",
+      "auth": "none",
+      "scopes": [],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Intentionally unauthenticated public route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/api_docs.rs::docs_routes_are_public_but_openapi_json_stays_auth_gated",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/schemas/{claim_type}/{version}",
+      "feature": null,
+      "audience": "external",
+      "auth": "none",
+      "scopes": [],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Intentionally unauthenticated public route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/api_docs.rs::docs_routes_are_public_but_openapi_json_stays_auth_gated",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/contexts/{vocab}/{version}",
+      "feature": null,
+      "audience": "external",
+      "auth": "none",
+      "scopes": [],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Intentionally unauthenticated public route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/api_docs.rs::docs_routes_are_public_but_openapi_json_stays_auth_gated",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/openapi.json",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "metadata"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/auth_flow.rs::missing_header_returns_missing_credential",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit",
+        "tests/catalog_entity.rs::metadata_routes_enforce_metadata_scope"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/v1/datasets",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "configured"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/auth_flow.rs::missing_header_returns_missing_credential",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit",
+        "tests/catalog_entity.rs::metadata_routes_enforce_metadata_scope"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/v1/datasets/{dataset_id}",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "configured"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/auth_flow.rs::missing_header_returns_missing_credential",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit",
+        "tests/catalog_entity.rs::metadata_routes_enforce_metadata_scope"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/v1/datasets/{dataset_id}/aggregates",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "configured"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/auth_flow.rs::missing_header_returns_missing_credential",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit",
+        "tests/catalog_entity.rs::metadata_routes_enforce_metadata_scope"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/v1/datasets/{dataset_id}/aggregates/{aggregate_id}",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "configured"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/auth_flow.rs::missing_header_returns_missing_credential",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit",
+        "tests/catalog_entity.rs::metadata_routes_enforce_metadata_scope"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "POST",
+      "path": "/v1/datasets/{dataset_id}/aggregates/{aggregate_id}/query",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "configured"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/auth_flow.rs::missing_header_returns_missing_credential",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit",
+        "tests/catalog_entity.rs::metadata_routes_enforce_metadata_scope"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/v1/datasets/{dataset_id}/aggregates/{aggregate_id}/structure",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "configured"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/auth_flow.rs::missing_header_returns_missing_credential",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit",
+        "tests/catalog_entity.rs::metadata_routes_enforce_metadata_scope"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/v1/datasets/{dataset_id}/aggregates/{aggregate_id}/metadata",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "configured"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "deprecated",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/auth_flow.rs::missing_header_returns_missing_credential",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit",
+        "tests/catalog_entity.rs::metadata_routes_enforce_metadata_scope"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/v1/datasets/{dataset_id}/measures",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "configured"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/auth_flow.rs::missing_header_returns_missing_credential",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit",
+        "tests/catalog_entity.rs::metadata_routes_enforce_metadata_scope"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/v1/datasets/{dataset_id}/measures/{item_id}",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "configured"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/auth_flow.rs::missing_header_returns_missing_credential",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit",
+        "tests/catalog_entity.rs::metadata_routes_enforce_metadata_scope"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/v1/datasets/{dataset_id}/dimensions",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "configured"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/auth_flow.rs::missing_header_returns_missing_credential",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit",
+        "tests/catalog_entity.rs::metadata_routes_enforce_metadata_scope"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/v1/datasets/{dataset_id}/dimensions/{item_id}",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "configured"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/auth_flow.rs::missing_header_returns_missing_credential",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit",
+        "tests/catalog_entity.rs::metadata_routes_enforce_metadata_scope"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/v1/datasets/{dataset_id}/entities/{entity}/schema",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "configured"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/auth_flow.rs::missing_header_returns_missing_credential",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit",
+        "tests/catalog_entity.rs::metadata_routes_enforce_metadata_scope"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/v1/datasets/{dataset_id}/entities/{entity}/records",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "configured"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "personal",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/auth_flow.rs::missing_header_returns_missing_credential",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit",
+        "tests/catalog_entity.rs::metadata_routes_enforce_metadata_scope"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/v1/datasets/{dataset_id}/entities/{entity}/records/{id}",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "configured"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "personal",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/auth_flow.rs::missing_header_returns_missing_credential",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit",
+        "tests/catalog_entity.rs::metadata_routes_enforce_metadata_scope"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/v1/datasets/{dataset_id}/entities/{entity}/records/{id}/relationships/{relationship}",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "configured"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "personal",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/auth_flow.rs::missing_header_returns_missing_credential",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit",
+        "tests/catalog_entity.rs::metadata_routes_enforce_metadata_scope"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/.well-known/api-catalog",
+      "feature": null,
+      "audience": "external",
+      "auth": "none",
+      "scopes": [],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Intentionally unauthenticated public RFC 9727 discovery linkset; static handler with no principal input.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/e2e_health.rs::api_catalog_is_public_and_carries_security_headers",
+        "tests/api_docs.rs::docs_routes_are_public_but_openapi_json_stays_auth_gated"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "HEAD",
+      "path": "/.well-known/api-catalog",
+      "feature": null,
+      "audience": "external",
+      "auth": "none",
+      "scopes": [],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": false,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Intentionally unauthenticated public RFC 9727 discovery linkset; static handler with no principal input.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/e2e_health.rs::api_catalog_head_is_public_and_carries_security_headers"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/metadata",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "metadata"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/auth_flow.rs::missing_header_returns_missing_credential",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit",
+        "tests/catalog_entity.rs::metadata_routes_enforce_metadata_scope"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/metadata/catalog",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "metadata"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/auth_flow.rs::missing_header_returns_missing_credential",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit",
+        "tests/catalog_entity.rs::metadata_routes_enforce_metadata_scope"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/metadata/evidence-offerings",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "metadata"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/auth_flow.rs::missing_header_returns_missing_credential",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit",
+        "tests/catalog_entity.rs::metadata_routes_enforce_metadata_scope"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/metadata/evidence-offerings/{offering_id}",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "metadata"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/auth_flow.rs::missing_header_returns_missing_credential",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit",
+        "tests/catalog_entity.rs::metadata_routes_enforce_metadata_scope"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/metadata/dcat",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "metadata"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/auth_flow.rs::missing_header_returns_missing_credential",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit",
+        "tests/catalog_entity.rs::metadata_routes_enforce_metadata_scope"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/metadata/dcat/{profile}",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "metadata"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/auth_flow.rs::missing_header_returns_missing_credential",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit",
+        "tests/catalog_entity.rs::metadata_routes_enforce_metadata_scope"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/metadata/shacl",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "metadata"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/auth_flow.rs::missing_header_returns_missing_credential",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit",
+        "tests/catalog_entity.rs::metadata_routes_enforce_metadata_scope"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/metadata/policies",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "metadata"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/auth_flow.rs::missing_header_returns_missing_credential",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit",
+        "tests/catalog_entity.rs::metadata_routes_enforce_metadata_scope"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/metadata/profiles",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "metadata"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/auth_flow.rs::missing_header_returns_missing_credential",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit",
+        "tests/catalog_entity.rs::metadata_routes_enforce_metadata_scope"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/metadata/profiles/{profile}",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "metadata"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/auth_flow.rs::missing_header_returns_missing_credential",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit",
+        "tests/catalog_entity.rs::metadata_routes_enforce_metadata_scope"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/metadata/datasets",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "metadata"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/auth_flow.rs::missing_header_returns_missing_credential",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit",
+        "tests/catalog_entity.rs::metadata_routes_enforce_metadata_scope"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/metadata/datasets/{dataset_id}",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "metadata"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/auth_flow.rs::missing_header_returns_missing_credential",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit",
+        "tests/catalog_entity.rs::metadata_routes_enforce_metadata_scope"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/metadata/datasets/{dataset_id}/policy",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "metadata"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/auth_flow.rs::missing_header_returns_missing_credential",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit",
+        "tests/catalog_entity.rs::metadata_routes_enforce_metadata_scope"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/metadata/datasets/{dataset_id}/entities",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "metadata"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/auth_flow.rs::missing_header_returns_missing_credential",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit",
+        "tests/catalog_entity.rs::metadata_routes_enforce_metadata_scope"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/metadata/datasets/{dataset_id}/entities/{entity}",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "metadata"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/auth_flow.rs::missing_header_returns_missing_credential",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit",
+        "tests/catalog_entity.rs::metadata_routes_enforce_metadata_scope"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/metadata/schema/{dataset_id}/{entity}/schema.json",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "metadata"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/auth_flow.rs::missing_header_returns_missing_credential",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit",
+        "tests/catalog_entity.rs::metadata_routes_enforce_metadata_scope"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/metadata/datasets/{dataset_id}/entities/{entity}/schema",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "metadata"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/auth_flow.rs::missing_header_returns_missing_credential",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit",
+        "tests/catalog_entity.rs::metadata_routes_enforce_metadata_scope"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/metadata/datasets/{dataset_id}/entities/{entity}/shacl",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "metadata"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/auth_flow.rs::missing_header_returns_missing_credential",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit",
+        "tests/catalog_entity.rs::metadata_routes_enforce_metadata_scope"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/metadata/ogc/records",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "metadata"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/auth_flow.rs::missing_header_returns_missing_credential",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit",
+        "tests/catalog_entity.rs::metadata_routes_enforce_metadata_scope"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/metadata/ogc/records/{record_id}",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "metadata"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/auth_flow.rs::missing_header_returns_missing_credential",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit",
+        "tests/catalog_entity.rs::metadata_routes_enforce_metadata_scope"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "POST",
+      "path": "/dci/{registry}/registry/sync/search",
+      "feature": "spdci-api-standards",
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "configured"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "personal",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/spdci_api_standards.rs::search_without_authorization_returns_401",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "POST",
+      "path": "/dci/{registry}/registry/sync/disabled",
+      "feature": "spdci-api-standards",
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "configured"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "personal",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/spdci_api_standards.rs::search_without_authorization_returns_401",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "POST",
+      "path": "/dci/{registry}/registry/sync/get-disability-details",
+      "feature": "spdci-api-standards",
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "configured"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "personal",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/spdci_api_standards.rs::search_without_authorization_returns_401",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "POST",
+      "path": "/dci/{registry}/registry/sync/get-disability-support",
+      "feature": "spdci-api-standards",
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "configured"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "personal",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/spdci_api_standards.rs::search_without_authorization_returns_401",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "POST",
+      "path": "/v1/attribute-releases/{profile_id}/versions/{version}/resolve",
+      "feature": "attribute-release",
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "configured"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": false,
+      "stability": "beta",
+      "data_classification": "personal",
+      "notes": "Governed identity attribute release: purpose-bound, projection-limited, exactly-one-subject resolve returning only configured claims.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/attribute_release_api.rs::resolve_without_release_scope_is_denied_before_read",
+        "tests/attribute_release_api.rs::resolve_missing_purpose_denies_before_read"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/v1/attribute-releases",
+      "feature": "attribute-release",
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "configured"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": false,
+      "stability": "beta",
+      "data_classification": "metadata",
+      "notes": "Attribute release profile discovery (authenticated); lists visible profiles without exposing source internals.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/attribute_release_api.rs::discovery_hides_profiles_without_release_scope",
+        "tests/attribute_release_api.rs::discovery_does_not_leak_source_internals"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/ogc/v1",
+      "feature": "ogcapi-features",
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "configured"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/ogcapi_feature_flag.rs::all_ogc_feature_configs_load_when_features_are_enabled",
+        "tests/ogc_edr_api.rs::area_requires_aggregate_scope",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/ogc/v1/conformance",
+      "feature": "ogcapi-features",
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "configured"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/ogcapi_feature_flag.rs::all_ogc_feature_configs_load_when_features_are_enabled",
+        "tests/ogc_edr_api.rs::area_requires_aggregate_scope",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/ogc/v1/collections",
+      "feature": "ogcapi-features",
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "configured"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/ogcapi_feature_flag.rs::all_ogc_feature_configs_load_when_features_are_enabled",
+        "tests/ogc_edr_api.rs::area_requires_aggregate_scope",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/ogc/v1/datasets/{dataset_id}/collections",
+      "feature": "ogcapi-features",
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "configured"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/ogcapi_feature_flag.rs::all_ogc_feature_configs_load_when_features_are_enabled",
+        "tests/ogc_edr_api.rs::area_requires_aggregate_scope",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/ogc/v1/datasets/{dataset_id}/collections/{collection_id}",
+      "feature": "ogcapi-features",
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "configured"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/ogcapi_feature_flag.rs::all_ogc_feature_configs_load_when_features_are_enabled",
+        "tests/ogc_edr_api.rs::area_requires_aggregate_scope",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/ogc/v1/datasets/{dataset_id}/collections/{collection_id}/items",
+      "feature": "ogcapi-features",
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "configured"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/ogcapi_feature_flag.rs::all_ogc_feature_configs_load_when_features_are_enabled",
+        "tests/ogc_edr_api.rs::area_requires_aggregate_scope",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/ogc/v1/datasets/{dataset_id}/collections/{collection_id}/items/{feature_id}",
+      "feature": "ogcapi-features",
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "configured"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/ogcapi_feature_flag.rs::all_ogc_feature_configs_load_when_features_are_enabled",
+        "tests/ogc_edr_api.rs::area_requires_aggregate_scope",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/ogc/v1/records",
+      "feature": "ogcapi-records",
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "configured"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "personal",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/ogcapi_feature_flag.rs::all_ogc_feature_configs_load_when_features_are_enabled",
+        "tests/ogc_edr_api.rs::area_requires_aggregate_scope",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/ogc/v1/records/conformance",
+      "feature": "ogcapi-records",
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "configured"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "personal",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/ogcapi_feature_flag.rs::all_ogc_feature_configs_load_when_features_are_enabled",
+        "tests/ogc_edr_api.rs::area_requires_aggregate_scope",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/ogc/v1/records/collections",
+      "feature": "ogcapi-records",
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "configured"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "personal",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/ogcapi_feature_flag.rs::all_ogc_feature_configs_load_when_features_are_enabled",
+        "tests/ogc_edr_api.rs::area_requires_aggregate_scope",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/ogc/v1/records/collections/{collection_id}",
+      "feature": "ogcapi-records",
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "configured"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "personal",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/ogcapi_feature_flag.rs::all_ogc_feature_configs_load_when_features_are_enabled",
+        "tests/ogc_edr_api.rs::area_requires_aggregate_scope",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/ogc/v1/records/collections/{collection_id}/items",
+      "feature": "ogcapi-records",
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "configured"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "personal",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/ogcapi_feature_flag.rs::all_ogc_feature_configs_load_when_features_are_enabled",
+        "tests/ogc_edr_api.rs::area_requires_aggregate_scope",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/ogc/v1/records/collections/{collection_id}/items/{record_id}",
+      "feature": "ogcapi-records",
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "configured"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "personal",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/ogcapi_feature_flag.rs::all_ogc_feature_configs_load_when_features_are_enabled",
+        "tests/ogc_edr_api.rs::area_requires_aggregate_scope",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/ogc/edr/v1",
+      "feature": "ogcapi-edr",
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "configured"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/ogcapi_feature_flag.rs::all_ogc_feature_configs_load_when_features_are_enabled",
+        "tests/ogc_edr_api.rs::area_requires_aggregate_scope",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/ogc/edr/v1/conformance",
+      "feature": "ogcapi-edr",
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "configured"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/ogcapi_feature_flag.rs::all_ogc_feature_configs_load_when_features_are_enabled",
+        "tests/ogc_edr_api.rs::area_requires_aggregate_scope",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/ogc/edr/v1/collections",
+      "feature": "ogcapi-edr",
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "configured"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/ogcapi_feature_flag.rs::all_ogc_feature_configs_load_when_features_are_enabled",
+        "tests/ogc_edr_api.rs::area_requires_aggregate_scope",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/ogc/edr/v1/collections/{collection_id}",
+      "feature": "ogcapi-edr",
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "configured"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/ogcapi_feature_flag.rs::all_ogc_feature_configs_load_when_features_are_enabled",
+        "tests/ogc_edr_api.rs::area_requires_aggregate_scope",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "GET",
+      "path": "/ogc/edr/v1/collections/{collection_id}/area",
+      "feature": "ogcapi-edr",
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "configured"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/ogcapi_feature_flag.rs::all_ogc_feature_configs_load_when_features_are_enabled",
+        "tests/ogc_edr_api.rs::area_requires_aggregate_scope",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "POST",
+      "path": "/ogc/edr/v1/collections/{collection_id}/area",
+      "feature": "ogcapi-edr",
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "configured"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": true,
+      "stability": "stable",
+      "data_classification": "metadata",
+      "notes": "Protected Registry Relay route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/ogcapi_feature_flag.rs::all_ogc_feature_configs_load_when_features_are_enabled",
+        "tests/ogc_edr_api.rs::area_requires_aggregate_scope",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "admin",
+      "method": "GET",
+      "path": "/healthz",
+      "feature": null,
+      "audience": "operator",
+      "auth": "none",
+      "scopes": [],
+      "rate_limit": null,
+      "audit": "optional",
+      "openapi": false,
+      "stability": "admin",
+      "data_classification": "operational",
+      "notes": "Unauthenticated admin-listener probe or metrics route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/observability_metrics.rs::metrics_requires_metrics_scope_on_admin_listener",
+        "tests/admin_reload.rs::reload_all_without_credential_is_rejected"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "admin",
+      "method": "GET",
+      "path": "/ready",
+      "feature": null,
+      "audience": "operator",
+      "auth": "none",
+      "scopes": [],
+      "rate_limit": null,
+      "audit": "optional",
+      "openapi": false,
+      "stability": "admin",
+      "data_classification": "operational",
+      "notes": "Unauthenticated admin-listener probe or metrics route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/observability_metrics.rs::metrics_requires_metrics_scope_on_admin_listener",
+        "tests/admin_reload.rs::reload_all_without_credential_is_rejected"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "admin",
+      "method": "GET",
+      "path": "/metrics",
+      "feature": null,
+      "audience": "operator",
+      "auth": "none",
+      "scopes": [],
+      "rate_limit": null,
+      "audit": "not_applicable",
+      "openapi": false,
+      "stability": "admin",
+      "data_classification": "operational",
+      "notes": "Unauthenticated admin-listener probe or metrics route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/observability_metrics.rs::metrics_requires_metrics_scope_on_admin_listener",
+        "tests/admin_reload.rs::reload_all_without_credential_is_rejected"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "admin",
+      "method": "GET",
+      "path": "/admin/v1/posture",
+      "feature": null,
+      "audience": "operator",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "registry_relay:ops_read"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": false,
+      "stability": "admin",
+      "data_classification": "operational",
+      "notes": "Admin listener posture route for dedicated read-only operations credentials.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/admin_reload.rs::posture_requires_ops_read_scope",
+        "tests/admin_reload.rs::ops_read_key_cannot_reload",
+        "tests/admin_reload.rs::admin_routes_are_not_mounted_on_public_app"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "admin",
+      "method": "GET",
+      "path": "/admin/v1/capabilities",
+      "feature": null,
+      "audience": "operator",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "registry_relay:ops_read"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": false,
+      "stability": "admin",
+      "data_classification": "operational",
+      "notes": "Admin listener capabilities route for discovering supported reload and governed config operations.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/admin_reload.rs::capabilities_requires_ops_read_and_reports_relay_admin_surface",
+        "tests/admin_reload.rs::config_apply_routes_are_admin_only_and_not_public"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "admin",
+      "method": "POST",
+      "path": "/admin/v1/config/verify",
+      "feature": null,
+      "audience": "operator",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "registry_relay:admin"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": false,
+      "stability": "admin",
+      "data_classification": "operational",
+      "notes": "Admin listener governed config verification route. It validates a candidate config and reports whether a restart would be required; it does not apply break-glass requests.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/admin_reload.rs::config_apply_routes_are_admin_only_and_not_public",
+        "tests/admin_reload.rs::config_dry_run_reports_restart_required_without_swapping"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "admin",
+      "method": "POST",
+      "path": "/admin/v1/config/dry-run",
+      "feature": null,
+      "audience": "operator",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "registry_relay:admin"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": false,
+      "stability": "admin",
+      "data_classification": "operational",
+      "notes": "Admin listener governed config dry-run route. It validates a candidate config and reports apply compatibility without swapping runtime state; it does not apply break-glass requests.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/admin_reload.rs::config_apply_routes_are_admin_only_and_not_public",
+        "tests/admin_reload.rs::config_dry_run_reports_restart_required_without_swapping"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "admin",
+      "method": "POST",
+      "path": "/admin/v1/config/apply",
+      "feature": null,
+      "audience": "operator",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "registry_relay:admin"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": false,
+      "stability": "admin",
+      "data_classification": "operational",
+      "notes": "Admin listener governed signed config apply route. Inline candidates are rejected for apply; signed TUF targets can live-apply compatible changes and require explicit break-glass approval fields for emergency rollback bypass.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/admin_reload.rs::config_apply_routes_are_admin_only_and_not_public",
+        "tests/admin_reload.rs::config_apply_signed_tuf_break_glass_with_approval_swaps_runtime_snapshot"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "admin",
+      "method": "POST",
+      "path": "/admin/v1/reload",
+      "feature": null,
+      "audience": "operator",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "registry_relay:admin"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": false,
+      "stability": "admin",
+      "data_classification": "operational",
+      "notes": "Admin listener route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/admin_reload.rs::reload_all_without_credential_is_rejected",
+        "tests/observability_metrics.rs::metrics_requires_metrics_scope_on_admin_listener",
+        "tests/auth_flow.rs::missing_header_returns_missing_credential",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "admin",
+      "method": "POST",
+      "path": "/admin/v1/datasets/{dataset_id}/tables/{table_id}/reload",
+      "feature": null,
+      "audience": "operator",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "registry_relay:admin"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": false,
+      "stability": "admin",
+      "data_classification": "operational",
+      "notes": "Admin listener route.",
+      "source": "manual",
+      "enforcement_tests": [
+        "tests/admin_reload.rs::reload_all_without_credential_is_rejected",
+        "tests/observability_metrics.rs::metrics_requires_metrics_scope_on_admin_listener",
+        "tests/auth_flow.rs::missing_header_returns_missing_credential",
+        "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit"
+      ],
+      "waiver": null
+    }
+  ]
+}

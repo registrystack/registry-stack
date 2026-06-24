@@ -1,0 +1,21 @@
+meta {
+  name: Base DCAT JSON-LD
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/metadata/dcat
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{metadataKey}}
+}
+
+docs {
+  Reads the base DCAT 3 JSON-LD document from the portable metadata manifest.
+  Uses catalog_viewer persona (metadataKey).
+  Expected: 200 with application/ld+json body containing dcat:Catalog and visible dcat:Dataset entries.
+}

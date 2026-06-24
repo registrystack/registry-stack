@@ -1,0 +1,20 @@
+meta {
+  name: Get clinic_capacity dataset
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/v1/datasets/clinic_capacity
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{metadataKey}}
+}
+
+docs {
+  Reads the clinic_capacity dataset summary. Uses catalog_viewer persona (metadataKey).
+  Expected: 200 with sensitivity=confidential, access_rights=restricted, update_frequency=weekly.
+}

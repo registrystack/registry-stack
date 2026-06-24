@@ -1,0 +1,212 @@
+# SPDX-License-Identifier: Apache-2.0
+# Portable metadata manifest generated from benefits_casework.yaml.
+
+schema_version: registry-manifest/v1
+catalog:
+  id: benefits-casework
+  base_url: http://127.0.0.1:4242
+  title: Benefits Casework Gateway (Demo)
+  publisher:
+    name: Ministry of Social Affairs (Demo)
+  standards:
+    dcat: '3.0'
+    shacl: '1.1'
+    json_schema: 2020-12
+  application_profiles:
+  - id: bregdcat-ap
+    version: '3.0'
+federation:
+  node_id: did:web:social-affairs.demo.example.gov
+  issuer: https://social-affairs.demo.example.gov
+  jwks_uri: https://social-affairs.demo.example.gov/.well-known/jwks.json
+  federation_api: https://social-affairs.demo.example.gov/federation
+  supported_protocol_versions:
+  - registry-notary-federation/v0.1
+evaluation_profiles:
+- id: benefits-person-v1
+  ruleset: benefits-person-v1
+  claim_id: benefits_person
+  subject_id_type: id
+  max_source_observed_age_seconds: 86400
+requirements:
+- id: benefits_person_requirement
+  iri: https://demo.example.gov/requirements/benefits-person
+  title: Benefits person eligibility requirement
+  description: Requirement for verifying that a person has the submitted benefits eligibility status and role in the benefits casework registry.
+evidence_types:
+- id: benefits_person_record_evidence
+  iri: https://demo.example.gov/evidence-types/benefits-person-record
+  title: Benefits person status evidence
+  description: Evidence that submitted person status facts match the benefits casework registry.
+  proves:
+  - benefits_person_requirement
+datasets:
+- id: benefits_casework
+  title: Benefits Casework
+  description: Household, person, benefit case, and payment data for social protection
+    programme administration. Used for eligibility checks, grievance follow-up, reconciliation,
+    and planning aggregates.
+  owner: Ministry of Social Affairs
+  sensitivity: personal
+  access_rights: restricted
+  update_frequency: monthly
+  evidence_offerings:
+  - id: benefits_person_evidence
+    iri: https://demo.example.gov/evidence-offerings/benefits-person
+    title: Benefits person status evidence
+    description: Registry Relay verification for submitted benefits person eligibility status and role facts.
+    evidence_type: benefits_person_record_evidence
+    issuing_authority:
+      id: ministry_of_social_affairs
+      iri: did:web:social-affairs.demo.example.gov
+      name: Ministry of Social Affairs
+      country: ZZ
+    jurisdiction:
+      country: ZZ
+    level_of_assurance: substantial
+    entity: person
+    lookup_keys:
+    - id
+    access:
+      kind: registry-notary
+      conforms_to: registry-notary-federation/v0.1
+      endpoint_url: https://benefits-notary.demo.example.gov
+      discovery_url: https://benefits-notary.demo.example.gov/.well-known/evidence-service
+      ruleset: benefits-person-v1
+    policy:
+      purpose:
+      - https://demo.example.gov/purpose/social-protection-eligibility
+  entities:
+  - name: household
+    title: Household
+    description: A household enrolled in the benefits programme
+    identifiers:
+    - name: id
+      kind: primary
+    fields:
+    - name: id
+      type: string
+      required: true
+    - name: district
+      type: string
+      required: true
+    - name: municipality
+      type: string
+      required: true
+    - name: household_size
+      type: number
+      required: true
+    - name: poverty_band
+      type: string
+      required: true
+    - name: enrollment_status
+      type: string
+      required: true
+    - name: enrolled_on
+      type: date
+      required: true
+    relationships:
+    - name: members
+      target_entity: person
+      cardinality: many
+    - name: cases
+      target_entity: case
+      cardinality: many
+    - name: payments
+      target_entity: payment
+      cardinality: many
+  - name: person
+    title: Person
+    description: An individual member of a benefit household
+    identifiers:
+    - name: id
+      kind: primary
+    fields:
+    - name: id
+      type: string
+      required: true
+    - name: household_id
+      type: string
+      required: true
+    - name: age_band
+      type: string
+      required: true
+    - name: sex
+      type: string
+      required: true
+    - name: disability_status
+      type: string
+      required: true
+    - name: benefit_role
+      type: string
+      required: true
+    - name: eligibility_status
+      type: string
+      required: true
+    relationships:
+    - name: household
+      target_entity: household
+      cardinality: zero_or_one
+  - name: case
+    title: Benefit Case
+    description: An appeal, recertification, or grievance case for a household
+    identifiers:
+    - name: id
+      kind: primary
+    fields:
+    - name: id
+      type: string
+      required: true
+    - name: household_id
+      type: string
+      required: true
+    - name: case_type
+      type: string
+      required: true
+    - name: case_status
+      type: string
+      required: true
+    - name: opened_on
+      type: date
+      required: true
+    - name: closed_on
+      type: date
+    - name: priority
+      type: string
+      required: true
+    relationships:
+    - name: household
+      target_entity: household
+      cardinality: zero_or_one
+  - name: payment
+    title: Benefit Payment
+    description: A payment disbursed to a household in a given cycle
+    identifiers:
+    - name: id
+      kind: primary
+    fields:
+    - name: id
+      type: string
+      required: true
+    - name: household_id
+      type: string
+      required: true
+    - name: cycle
+      type: string
+      required: true
+    - name: payment_status
+      type: string
+      required: true
+    - name: amount
+      type: number
+      required: true
+      unit: USD
+    - name: paid_on
+      type: date
+    - name: payment_channel
+      type: string
+      required: true
+    relationships:
+    - name: household
+      target_entity: household
+      cardinality: zero_or_one

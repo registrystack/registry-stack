@@ -1,0 +1,24 @@
+meta {
+  name: School construction - education school record
+  type: http
+  seq: 6
+}
+
+get {
+  url: {{baseUrl}}/v1/datasets/education_registry/entities/school/records/{{schoolId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{rowsKey}}
+}
+
+docs {
+  Step 2 of 3: School construction follow-up workflow.
+  Reads the education_registry school record for sch-3001 to confirm current
+  operational status alongside the construction project from step 5.
+  Uses casework_system persona (rowsKey). School has no require_purpose_header.
+  Expected: 200 with school fields: school_name, district, school_type,
+  education_level, has_meal_program, has_accessibility_support.
+}

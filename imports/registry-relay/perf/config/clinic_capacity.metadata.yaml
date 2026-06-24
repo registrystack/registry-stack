@@ -1,0 +1,113 @@
+# SPDX-License-Identifier: Apache-2.0
+schema_version: registry-manifest/v1
+
+catalog:
+  id: clinic-capacity-perf
+  base_url: http://127.0.0.1:18080
+  title: Clinic Capacity Perf Metadata
+  publisher:
+    name: Perf Test Harness
+
+federation:
+  node_id: did:web:perf.example.test
+  issuer: https://perf.example.test
+  jwks_uri: https://perf.example.test/.well-known/jwks.json
+  federation_api: https://perf.example.test/federation
+  supported_protocol_versions:
+    - registry-notary-federation/v0.1
+
+evaluation_profiles:
+  - id: facility-identity-v1
+    ruleset: facility-identity-v1
+    claim_id: facility_identity
+    subject_id_type: id
+  - id: facility-region-v1
+    ruleset: facility-region-v1
+    claim_id: facility_region_category
+    subject_id_type: region_code
+
+requirements:
+  - id: facility_identity_requirement
+    iri: https://perf.example.test/requirements/facility-identity
+    title: Facility identity requirement
+  - id: facility_region_requirement
+    iri: https://perf.example.test/requirements/facility-region-category
+    title: Facility region/category requirement
+
+evidence_types:
+  - id: facility_identity_evidence
+    iri: https://perf.example.test/evidence-types/facility-identity
+    title: Facility identity evidence
+    proves: [facility_identity_requirement]
+  - id: facility_region_evidence
+    iri: https://perf.example.test/evidence-types/facility-region-category
+    title: Facility region/category evidence
+    proves: [facility_region_requirement]
+
+datasets:
+  - id: clinic_capacity
+    title: Clinic Capacity
+    description: Synthetic facility records for evidence-verification perf testing
+    owner: Perf Test Harness
+    sensitivity: public
+    access_rights: public
+    update_frequency: as_needed
+    evidence_offerings:
+      - id: facility_identity_evidence_offering
+        iri: https://perf.example.test/evidence-offerings/facility-identity
+        title: Facility identity evidence offering
+        evidence_type: facility_identity_evidence
+        issuing_authority:
+          id: perf_harness
+          iri: did:web:perf.example.test
+          name: Perf Test Harness
+          country: ZZ
+        entity: facility
+        lookup_keys: [id]
+        access:
+          kind: registry-notary
+          conforms_to: registry-notary-federation/v0.1
+          endpoint_url: https://perf.example.test/notary
+          discovery_url: https://perf.example.test/.well-known/evidence-service
+          ruleset: facility-identity-v1
+        policy:
+          purpose:
+            - https://perf.example.test/purpose/load-test
+      - id: facility_region_evidence_offering
+        iri: https://perf.example.test/evidence-offerings/facility-region-category
+        title: Facility region/category evidence offering
+        evidence_type: facility_region_evidence
+        issuing_authority:
+          id: perf_harness
+          iri: did:web:perf.example.test
+          name: Perf Test Harness
+          country: ZZ
+        entity: facility
+        lookup_keys: [region_code]
+        access:
+          kind: registry-notary
+          conforms_to: registry-notary-federation/v0.1
+          endpoint_url: https://perf.example.test/notary
+          discovery_url: https://perf.example.test/.well-known/evidence-service
+          ruleset: facility-region-v1
+        policy:
+          purpose:
+            - https://perf.example.test/purpose/load-test
+    entities:
+      - name: facility
+        title: Facility
+        fields:
+          - name: id
+            type: string
+          - name: region_code
+            type: string
+          - name: capacity
+            type: integer
+          - name: occupancy
+            type: integer
+          - name: last_updated
+            type: string
+          - name: operating_since
+            type: string
+          - name: category
+            type: string

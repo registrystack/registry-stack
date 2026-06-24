@@ -1,0 +1,133 @@
+# SPDX-License-Identifier: Apache-2.0
+# Portable metadata manifest generated from clinic_capacity.yaml.
+
+schema_version: registry-manifest/v1
+catalog:
+  id: clinic-capacity
+  base_url: http://127.0.0.1:4242
+  title: Clinic Capacity Gateway (Demo)
+  publisher:
+    name: Ministry of Health (Demo)
+  standards:
+    dcat: '3.0'
+    shacl: '1.1'
+    json_schema: 2020-12
+  application_profiles:
+  - id: bregdcat-ap
+    version: '3.0'
+datasets:
+- id: clinic_capacity
+  title: Clinic Capacity
+  description: Operational data about health facilities, monthly service capacity,
+    and medicine stock events. Used by emergency planners and supply teams. No patient-level
+    data.
+  owner: Ministry of Health
+  sensitivity: confidential
+  access_rights: restricted
+  update_frequency: weekly
+  entities:
+  - name: facility
+    title: Health Facility
+    description: A health facility in the network
+    identifiers:
+    - name: id
+      kind: primary
+    fields:
+    - name: id
+      type: string
+      required: true
+    - name: facility_name
+      type: string
+      required: true
+    - name: district
+      type: string
+      required: true
+    - name: facility_type
+      type: string
+      required: true
+    - name: ownership
+      type: string
+      required: true
+    - name: service_level
+      type: string
+      required: true
+    - name: latitude_band
+      type: string
+      required: true
+    - name: longitude_band
+      type: string
+      required: true
+    - name: map_latitude
+      type: number
+      required: true
+    - name: map_longitude
+      type: number
+      required: true
+    relationships:
+    - name: service_capacity
+      target_entity: service_capacity
+      cardinality: many
+    - name: stock_events
+      target_entity: stock_event
+      cardinality: many
+  - name: service_capacity
+    title: Service Capacity Record
+    description: Monthly capacity figures for a service at a facility
+    identifiers:
+    - name: id
+      kind: primary
+    fields:
+    - name: id
+      type: string
+      required: true
+    - name: facility_id
+      type: string
+      required: true
+    - name: service_type
+      type: string
+      required: true
+    - name: month
+      type: string
+      required: true
+    - name: beds_available
+      type: number
+      required: true
+    - name: staff_on_roster
+      type: number
+      required: true
+    - name: open_days
+      type: number
+      required: true
+    relationships:
+    - name: facility
+      target_entity: facility
+      cardinality: zero_or_one
+  - name: stock_event
+    title: Stock Event
+    description: A medicine stock status observation at a facility in a given month
+    identifiers:
+    - name: id
+      kind: primary
+    fields:
+    - name: id
+      type: string
+      required: true
+    - name: facility_id
+      type: string
+      required: true
+    - name: medicine_code
+      type: string
+      required: true
+    - name: event_month
+      type: string
+      required: true
+    - name: stock_status
+      type: string
+      required: true
+    - name: days_stocked_out
+      type: number
+      required: true
+    relationships:
+    - name: facility
+      target_entity: facility
+      cardinality: zero_or_one

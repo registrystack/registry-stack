@@ -1,0 +1,26 @@
+meta {
+  name: Emergency planning - public works district status
+  type: http
+  seq: 17
+}
+
+get {
+  url: {{baseUrl}}/v1/datasets/public_works_projects/entities/project/records?district={{district}}&project_status=delayed
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{rowsKey}}
+}
+
+docs {
+  Step 3 of 3: Emergency planning workflow.
+  Reads public works projects filtered to the target district where status is delayed
+  (road or facility projects most likely to compound the emergency). Uses casework_system
+  (rowsKey), which carries public_works_projects:rows for operational follow-ups.
+  Expected: 200, project rows in the selected district with project_status=delayed.
+  Closes the loop with steps 1 (stockout) and 2 (affected population). The three
+  controlled calls compose into the kind of situational picture an operations cell
+  needs, without giving any single key blanket access across the demo pack.
+}

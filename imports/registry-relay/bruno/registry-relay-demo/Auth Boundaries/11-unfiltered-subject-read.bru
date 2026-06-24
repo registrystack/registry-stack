@@ -1,0 +1,27 @@
+meta {
+  name: Unfiltered subject_registry read (expects 400)
+  type: http
+  seq: 11
+}
+
+get {
+  url: {{baseUrl}}/v1/datasets/subject_registry/entities/subject/records
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{linkageKey}}
+}
+
+headers {
+  Data-Purpose: {{purpose}}
+}
+
+docs {
+  Attempts to list all subject_registry rows with no filter. The entity declares
+  required_any_of: canonical_id, benefits_person_alias, benefits_household_alias,
+  education_student_alias, education_guardian_alias.
+  expected: 400 entity.filter_required
+  Prevents bulk enumeration of the full cross-dataset identity join table.
+}

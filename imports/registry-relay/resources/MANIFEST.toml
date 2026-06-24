@@ -1,0 +1,46 @@
+# Vendored resources manifest.
+#
+# Pinned SHA-256 of every shipped resource the gateway serves verbatim:
+# the Wave 3 JSON-LD contexts and JSON Schemas under the unauthenticated
+# `/contexts/...` and `/schemas/...` routes (the vendored W3C VC v2
+# context lives here too), and the Scalar UI bundle the `/docs` viewer
+# loads. The test suite re-hashes each file and asserts equality, so any
+# unreviewed edit fails CI before reaching production. The Wave 3 hash
+# space is `decisions/wave-3-data-provenance.md` section §10.
+
+[[resource]]
+path = "jsonld/provenance/v1/context.jsonld"
+sha256 = "7db4c10c16eb8e8b8c64c28151b90a9d458134bbb0415596e1b4e2dd1886d7a1"
+served_as = "context"
+
+[[resource]]
+path = "jsonld/vc/v2/credentials.jsonld"
+sha256 = "0f3f6806198ec8436cc9d6604ddf17e21890f158a91f55fe6d7e38bb7c2df549"
+served_as = "vendored"
+
+[[resource]]
+path = "schemas/aggregate-result/v1.json"
+sha256 = "e7e785a396846409abc2f8d51d51f0bf9b4c11ea69d4d3dec5e759702949f681"
+served_as = "schema"
+
+[[resource]]
+path = "schemas/entity-record/v1.json"
+sha256 = "4ec670064f4d9f4717b9870ec7ca87167359d239e113c875168f09288cb0b80c"
+served_as = "schema"
+
+# SDMX-JSON 2.1.0 data message schema for offline validation of aggregate
+# `application/vnd.sdmx.data+json` responses.
+# Source: https://json.sdmx.org/2.1/sdmx-json-data-schema.json
+# Retrieved: 2026-06-11
+[[resource]]
+path = "schemas/sdmx-json/2.1/sdmx-json-data-schema.json"
+sha256 = "ca1c85c7693a2d9d0602a1ca8e5a8b1cc56437fcb05e25cce15165ee75dcd80d"
+served_as = "vendored"
+
+# Scalar API Reference standalone bundle, @scalar/api-reference@1.57.1
+# from cdn.jsdelivr.net. Served by the `/docs/scalar.js` route under the
+# authenticated data-plane surface; the `/docs` HTML page loads it.
+[[resource]]
+path = "scalar/api-reference.js"
+sha256 = "9a65d9d53200f082b46b150bbbeafdfa9a6efc403f4c55aae1c219dbc2d9d8c3"
+served_as = "vendored"

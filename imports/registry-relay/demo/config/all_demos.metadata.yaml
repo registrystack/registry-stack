@@ -1,0 +1,801 @@
+# SPDX-License-Identifier: Apache-2.0
+# Portable metadata manifest generated from all_demos.yaml.
+
+schema_version: registry-manifest/v1
+catalog:
+  id: all-demos
+  base_url: http://127.0.0.1:4242
+  title: Government Demo Registry Relay (All Demos)
+  publisher:
+    name: Government Data Reuse Cell (Demo)
+    iri: http://publications.europa.eu/resource/authority/corporate-body/DIGIT
+    authority_type: http://purl.org/adms/publishertype/NationalAuthority
+  standards:
+    dcat: '3.0'
+    shacl: '1.1'
+    json_schema: 2020-12
+  application_profiles:
+  - id: bregdcat-ap
+    version: '3.0'
+federation:
+  node_id: did:web:all-demos.demo.example.gov
+  issuer: https://all-demos.demo.example.gov
+  jwks_uri: https://all-demos.demo.example.gov/.well-known/jwks.json
+  federation_api: https://all-demos.demo.example.gov/federation
+  supported_protocol_versions:
+  - registry-notary-federation/v0.1
+evaluation_profiles:
+- id: benefits-person-v1
+  ruleset: benefits-person-v1
+  claim_id: benefits_person
+  subject_id_type: id
+  max_source_observed_age_seconds: 86400
+- id: education-student-v1
+  ruleset: education-student-v1
+  claim_id: education_student
+  subject_id_type: id
+  max_source_observed_age_seconds: 86400
+requirements:
+- id: benefits_person_requirement
+  iri: https://demo.example.gov/requirements/benefits-person
+  title: Benefits person eligibility requirement
+  description: Requirement for verifying that a person has the submitted benefits eligibility status and role in the benefits casework registry.
+- id: education_student_requirement
+  iri: https://demo.example.gov/requirements/education-student
+  title: Current student enrollment requirement
+  description: Requirement for verifying that submitted student enrollment facts match the education registry.
+evidence_types:
+- id: benefits_person_record_evidence
+  iri: https://demo.example.gov/evidence-types/benefits-person-record
+  title: Benefits person status evidence
+  description: Evidence that submitted person status facts match the benefits casework registry.
+  proves:
+  - benefits_person_requirement
+- id: education_student_record_evidence
+  iri: https://demo.example.gov/evidence-types/education-student-record
+  title: Student enrollment status evidence
+  description: Evidence that submitted student enrollment status, grade, and district facts match the education registry.
+  proves:
+  - education_student_requirement
+datasets:
+- id: benefits_casework
+  title: Benefits Casework
+  description: Household, person, benefit case, and payment data for social protection
+    programme administration. Used for eligibility checks, grievance follow-up, reconciliation,
+    and planning aggregates.
+  owner: Ministry of Social Affairs
+  sensitivity: personal
+  access_rights: restricted
+  update_frequency: monthly
+  evidence_offerings:
+  - id: benefits_person_evidence
+    iri: https://demo.example.gov/evidence-offerings/benefits-person
+    title: Benefits person status evidence
+    description: Registry Relay verification for submitted benefits person eligibility status and role facts.
+    evidence_type: benefits_person_record_evidence
+    issuing_authority:
+      id: ministry_of_social_affairs
+      iri: did:web:social-affairs.demo.example.gov
+      name: Ministry of Social Affairs
+      country: ZZ
+    jurisdiction:
+      country: ZZ
+    level_of_assurance: substantial
+    entity: person
+    lookup_keys:
+    - id
+    access:
+      kind: registry-notary
+      conforms_to: registry-notary-federation/v0.1
+      endpoint_url: https://benefits-notary.demo.example.gov
+      discovery_url: https://benefits-notary.demo.example.gov/.well-known/evidence-service
+      ruleset: benefits-person-v1
+    policy:
+      purpose:
+      - https://demo.example.gov/purpose/social-protection-eligibility
+  entities:
+  - name: household
+    title: Household
+    description: A household enrolled in the benefits programme
+    identifiers:
+    - name: id
+      kind: primary
+    fields:
+    - name: id
+      type: string
+      required: true
+    - name: district
+      type: string
+      required: true
+    - name: municipality
+      type: string
+      required: true
+    - name: household_size
+      type: number
+      required: true
+    - name: poverty_band
+      type: string
+      required: true
+    - name: enrollment_status
+      type: string
+      required: true
+    - name: enrolled_on
+      type: date
+      required: true
+    relationships:
+    - name: members
+      target_entity: person
+      cardinality: many
+    - name: cases
+      target_entity: case
+      cardinality: many
+    - name: payments
+      target_entity: payment
+      cardinality: many
+  - name: person
+    title: Person
+    description: An individual member of a benefit household
+    identifiers:
+    - name: id
+      kind: primary
+    fields:
+    - name: id
+      type: string
+      required: true
+    - name: household_id
+      type: string
+      required: true
+    - name: age_band
+      type: string
+      required: true
+    - name: sex
+      type: string
+      required: true
+    - name: disability_status
+      type: string
+      required: true
+    - name: benefit_role
+      type: string
+      required: true
+    - name: eligibility_status
+      type: string
+      required: true
+    relationships:
+    - name: household
+      target_entity: household
+      cardinality: zero_or_one
+  - name: case
+    title: Benefit Case
+    description: An appeal, recertification, or grievance case for a household
+    identifiers:
+    - name: id
+      kind: primary
+    fields:
+    - name: id
+      type: string
+      required: true
+    - name: household_id
+      type: string
+      required: true
+    - name: case_type
+      type: string
+      required: true
+    - name: case_status
+      type: string
+      required: true
+    - name: opened_on
+      type: date
+      required: true
+    - name: closed_on
+      type: date
+    - name: priority
+      type: string
+      required: true
+    relationships:
+    - name: household
+      target_entity: household
+      cardinality: zero_or_one
+  - name: payment
+    title: Benefit Payment
+    description: A payment disbursed to a household in a given cycle
+    identifiers:
+    - name: id
+      kind: primary
+    fields:
+    - name: id
+      type: string
+      required: true
+    - name: household_id
+      type: string
+      required: true
+    - name: cycle
+      type: string
+      required: true
+    - name: payment_status
+      type: string
+      required: true
+    - name: amount
+      type: number
+      required: true
+      unit: USD
+    - name: paid_on
+      type: date
+    - name: payment_channel
+      type: string
+      required: true
+    relationships:
+    - name: household
+      target_entity: household
+      cardinality: zero_or_one
+- id: clinic_capacity
+  title: Clinic Capacity
+  description: Operational data about health facilities, monthly service capacity,
+    and medicine stock events. Used by emergency planners and supply teams. No patient-level
+    data.
+  owner: Ministry of Health
+  sensitivity: confidential
+  access_rights: restricted
+  update_frequency: weekly
+  entities:
+  - name: facility
+    title: Health Facility
+    description: A health facility in the network
+    identifiers:
+    - name: id
+      kind: primary
+    fields:
+    - name: id
+      type: string
+      required: true
+    - name: facility_name
+      type: string
+      required: true
+    - name: district
+      type: string
+      required: true
+    - name: facility_type
+      type: string
+      required: true
+    - name: ownership
+      type: string
+      required: true
+    - name: service_level
+      type: string
+      required: true
+    - name: latitude_band
+      type: string
+      required: true
+    - name: longitude_band
+      type: string
+      required: true
+    - name: map_latitude
+      type: number
+      required: true
+    - name: map_longitude
+      type: number
+      required: true
+    relationships:
+    - name: service_capacity
+      target_entity: service_capacity
+      cardinality: many
+    - name: stock_events
+      target_entity: stock_event
+      cardinality: many
+  - name: service_capacity
+    title: Service Capacity Record
+    description: Monthly capacity figures for a service at a facility
+    identifiers:
+    - name: id
+      kind: primary
+    fields:
+    - name: id
+      type: string
+      required: true
+    - name: facility_id
+      type: string
+      required: true
+    - name: service_type
+      type: string
+      required: true
+    - name: month
+      type: string
+      required: true
+    - name: beds_available
+      type: number
+      required: true
+    - name: staff_on_roster
+      type: number
+      required: true
+    - name: open_days
+      type: number
+      required: true
+    relationships:
+    - name: facility
+      target_entity: facility
+      cardinality: zero_or_one
+  - name: stock_event
+    title: Stock Event
+    description: A medicine stock status observation at a facility in a given month
+    identifiers:
+    - name: id
+      kind: primary
+    fields:
+    - name: id
+      type: string
+      required: true
+    - name: facility_id
+      type: string
+      required: true
+    - name: medicine_code
+      type: string
+      required: true
+    - name: event_month
+      type: string
+      required: true
+    - name: stock_status
+      type: string
+      required: true
+    - name: days_stocked_out
+      type: number
+      required: true
+    relationships:
+    - name: facility
+      target_entity: facility
+      cardinality: zero_or_one
+- id: public_works_projects
+  title: Public Works Projects
+  description: Infrastructure projects, contracts, milestones, and disbursements tracked
+    by the delivery unit. Non-personal but commercially and politically sensitive.
+  owner: Delivery Unit
+  sensitivity: confidential
+  access_rights: non_public
+  update_frequency: monthly
+  entities:
+  - name: project
+    title: Infrastructure Project
+    description: An infrastructure project tracked by the delivery unit
+    identifiers:
+    - name: id
+      kind: primary
+    fields:
+    - name: id
+      type: string
+      required: true
+    - name: project_name
+      type: string
+      required: true
+    - name: sector
+      type: string
+      required: true
+    - name: district
+      type: string
+      required: true
+    - name: asset_type
+      type: string
+      required: true
+    - name: asset_ref
+      type: string
+    - name: implementing_agency
+      type: string
+      required: true
+    - name: project_status
+      type: string
+      required: true
+    - name: start_date
+      type: date
+      required: true
+    - name: planned_end_date
+      type: date
+    - name: risk_rating
+      type: string
+      required: true
+    relationships:
+    - name: contracts
+      target_entity: contract
+      cardinality: many
+    - name: milestones
+      target_entity: milestone
+      cardinality: many
+    - name: disbursements
+      target_entity: disbursement
+      cardinality: many
+  - name: contract
+    title: Project Contract
+    description: A contract awarded under a project
+    identifiers:
+    - name: id
+      kind: primary
+    fields:
+    - name: id
+      type: string
+      required: true
+    - name: project_id
+      type: string
+      required: true
+    - name: contractor_ref
+      type: string
+      required: true
+    - name: procurement_method
+      type: string
+      required: true
+    - name: contract_status
+      type: string
+      required: true
+    - name: contract_value
+      type: number
+      required: true
+      unit: USD
+    - name: signed_on
+      type: date
+    relationships:
+    - name: project
+      target_entity: project
+      cardinality: zero_or_one
+  - name: milestone
+    title: Project Milestone
+    description: A milestone on the delivery schedule of a project
+    identifiers:
+    - name: id
+      kind: primary
+    fields:
+    - name: id
+      type: string
+      required: true
+    - name: project_id
+      type: string
+      required: true
+    - name: milestone_name
+      type: string
+      required: true
+    - name: milestone_status
+      type: string
+      required: true
+    - name: due_date
+      type: date
+      required: true
+    - name: completed_on
+      type: date
+    - name: delay_reason
+      type: string
+    relationships:
+    - name: project
+      target_entity: project
+      cardinality: zero_or_one
+  - name: disbursement
+    title: Project Disbursement
+    description: A payment disbursed against a project contract in a fiscal period
+    identifiers:
+    - name: id
+      kind: primary
+    fields:
+    - name: id
+      type: string
+      required: true
+    - name: project_id
+      type: string
+      required: true
+    - name: contract_id
+      type: string
+      required: true
+    - name: fiscal_year
+      type: string
+      required: true
+    - name: quarter
+      type: string
+      required: true
+    - name: amount
+      type: number
+      required: true
+      unit: USD
+    - name: payment_status
+      type: string
+      required: true
+    relationships:
+    - name: project
+      target_entity: project
+      cardinality: zero_or_one
+    - name: contract
+      target_entity: contract
+      cardinality: zero_or_one
+- id: education_registry
+  title: Education Student Registry
+  description: Student registry for the national education system. Covers students,
+    guardians, schools, enrolments, support needs, and attendance summaries. Governed
+    personal data; scholarship, transport, meals, and planning systems access via
+    controlled scopes.
+  owner: Ministry of Education
+  sensitivity: personal
+  access_rights: restricted
+  update_frequency: termly
+  evidence_offerings:
+  - id: education_student_evidence
+    iri: https://demo.example.gov/evidence-offerings/education-student
+    title: Student enrollment status evidence
+    description: Registry Relay verification for submitted current student enrollment facts.
+    evidence_type: education_student_record_evidence
+    issuing_authority:
+      id: ministry_of_education
+      iri: did:web:education.demo.example.gov
+      name: Ministry of Education
+      country: ZZ
+    jurisdiction:
+      country: ZZ
+    level_of_assurance: substantial
+    entity: student
+    lookup_keys:
+    - id
+    access:
+      kind: registry-notary
+      conforms_to: registry-notary-federation/v0.1
+      endpoint_url: https://education-notary.demo.example.gov
+      discovery_url: https://education-notary.demo.example.gov/.well-known/evidence-service
+      ruleset: education-student-v1
+    policy:
+      purpose:
+      - https://demo.example.gov/purpose/student-support-planning
+  policy:
+    uid: https://demo.example.gov/datasets/education_registry#illustrative-offer
+    assigner: did:web:education.demo.example.gov
+    profile:
+    - https://demo.example.gov/odrl/profile/illustrative-government-data-sharing
+    permissions:
+    - action: odrl:use
+      constraints:
+      - left_operand: odrl:purpose
+        operator: odrl:isA
+        right_operand:
+          iri: https://demo.example.gov/purpose/student-support-planning
+      duties:
+      - action: odrl:reviewPolicy
+      - action: odrl:attribute
+    prohibitions:
+    - action: odrl:sell
+    - action: https://demo.example.gov/odrl/action/reidentify
+  entities:
+  - name: student
+    title: Student
+    description: A student enrolled in the national education system
+    identifiers:
+    - name: id
+      kind: primary
+    fields:
+    - name: id
+      type: string
+      required: true
+    - name: school_id
+      type: string
+      required: true
+    - name: current_enrollment_id
+      type: string
+    - name: age_band
+      type: string
+      required: true
+    - name: sex
+      type: string
+      required: true
+    - name: grade_level
+      type: string
+      required: true
+    - name: enrollment_status
+      type: string
+      required: true
+    - name: home_district
+      type: string
+      required: true
+    - name: language_group
+      type: string
+      required: true
+    - name: disability_status
+      type: string
+      required: true
+    - name: scholarship_eligible
+      type: boolean
+      required: true
+    relationships:
+    - name: school
+      target_entity: school
+      cardinality: zero_or_one
+    - name: guardians
+      target_entity: guardian
+      cardinality: many
+    - name: enrollments
+      target_entity: enrollment
+      cardinality: many
+    - name: support_needs
+      target_entity: support_need
+      cardinality: many
+    - name: attendance_summaries
+      target_entity: attendance_summary
+      cardinality: many
+  - name: guardian
+    title: Guardian
+    description: A guardian or caregiver linked to a student
+    identifiers:
+    - name: id
+      kind: primary
+    fields:
+    - name: id
+      type: string
+      required: true
+    - name: student_id
+      type: string
+      required: true
+    - name: relationship
+      type: string
+      required: true
+    - name: contact_verified
+      type: boolean
+      required: true
+    relationships:
+    - name: student
+      target_entity: student
+      cardinality: zero_or_one
+  - name: school
+    title: School
+    description: A school in the national education system
+    identifiers:
+    - name: id
+      kind: primary
+    fields:
+    - name: id
+      type: string
+      required: true
+    - name: school_name
+      type: string
+      required: true
+    - name: district
+      type: string
+      required: true
+    - name: school_type
+      type: string
+      required: true
+    - name: education_level
+      type: string
+      required: true
+    - name: has_meal_program
+      type: boolean
+      required: true
+    - name: has_accessibility_support
+      type: boolean
+      required: true
+    relationships:
+    - name: students
+      target_entity: student
+      cardinality: many
+    - name: enrollments
+      target_entity: enrollment
+      cardinality: many
+  - name: enrollment
+    title: Enrollment
+    description: A student enrollment record for a school year
+    identifiers:
+    - name: id
+      kind: primary
+    fields:
+    - name: id
+      type: string
+      required: true
+    - name: student_id
+      type: string
+      required: true
+    - name: school_id
+      type: string
+      required: true
+    - name: school_year
+      type: string
+      required: true
+    - name: grade_level
+      type: string
+      required: true
+    - name: status
+      type: string
+      required: true
+    - name: enrolled_on
+      type: date
+      required: true
+    - name: exited_on
+      type: date
+    relationships:
+    - name: student
+      target_entity: student
+      cardinality: zero_or_one
+    - name: school
+      target_entity: school
+      cardinality: zero_or_one
+  - name: support_need
+    title: Support Need
+    description: A support need assessment for a student
+    identifiers:
+    - name: id
+      kind: primary
+    fields:
+    - name: id
+      type: string
+      required: true
+    - name: student_id
+      type: string
+      required: true
+    - name: support_type
+      type: string
+      required: true
+    - name: eligibility_status
+      type: string
+      required: true
+    - name: assessment_date
+      type: date
+    - name: active
+      type: boolean
+      required: true
+    relationships:
+    - name: student
+      target_entity: student
+      cardinality: zero_or_one
+  - name: attendance_summary
+    title: Attendance Summary
+    description: Term-level attendance summary for a student
+    identifiers:
+    - name: id
+      kind: primary
+    fields:
+    - name: id
+      type: string
+      required: true
+    - name: student_id
+      type: string
+      required: true
+    - name: school_year
+      type: string
+      required: true
+    - name: term
+      type: string
+      required: true
+    - name: attendance_rate
+      type: number
+      required: true
+    - name: chronic_absence_flag
+      type: boolean
+      required: true
+    relationships:
+    - name: student
+      target_entity: student
+      cardinality: zero_or_one
+- id: subject_registry
+  title: Subject Registry
+  description: 'Canonical mapping between subject identifiers used by different administrative
+    datasets. Contains no personal data: only opaque canonical ids and per-dataset
+    aliases. The linkage itself is the sensitive surface; access is gated to the linkage_service
+    persona only.'
+  owner: Government Identity Coordination Function
+  sensitivity: confidential
+  access_rights: restricted
+  update_frequency: as_needed
+  entities:
+  - name: subject
+    title: Subject
+    description: A canonical subject identity with per-dataset aliases. The registry
+      deliberately has no relationships to personal datasets; cross-dataset composition
+      stays client-side and is audited per call.
+    identifiers:
+    - name: canonical_id
+      kind: primary
+    fields:
+    - name: canonical_id
+      type: string
+      required: true
+    - name: benefits_person_alias
+      type: string
+    - name: benefits_household_alias
+      type: string
+    - name: education_student_alias
+      type: string
+    - name: education_guardian_alias
+      type: string
+    - name: linkage_method
+      type: string
+      required: true
+    - name: linkage_confidence
+      type: string
+      required: true
+    - name: linked_on
+      type: date
+      required: true

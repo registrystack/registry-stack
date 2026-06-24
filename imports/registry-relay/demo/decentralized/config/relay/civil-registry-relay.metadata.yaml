@@ -1,0 +1,110 @@
+# SPDX-License-Identifier: Apache-2.0
+
+schema_version: registry-manifest/v1
+catalog:
+  id: decentralized-civil-registry
+  base_url: http://civil-registry-relay:8080
+  title: Civil Registry Relay (Decentralized Demo)
+  publisher:
+    name: Civil Registration Authority (Demo)
+  standards:
+    dcat: '3.0'
+    shacl: '1.1'
+    json_schema: 2020-12
+  application_profiles:
+    - id: bregdcat-ap
+      version: '3.0'
+federation:
+  node_id: did:web:civil-registry.demo.example.gov
+  issuer: https://civil-registry.demo.example.gov
+  jwks_uri: https://civil-registry.demo.example.gov/.well-known/jwks.json
+  federation_api: https://civil-registry.demo.example.gov/federation
+  supported_protocol_versions:
+    - registry-notary-federation/v0.1
+evaluation_profiles:
+  - id: civil-child-status-v1
+    ruleset: civil-child-status-v1
+    claim_id: civil_child_status
+    subject_id_type: id
+    max_source_observed_age_seconds: 86400
+requirements:
+  - id: child_identity_requirement
+    iri: https://demo.example.gov/requirements/child-identity-and-alive
+    title: Child identity and alive-status requirement
+    description: Requirement to confirm birth date and alive status for a child support decision.
+evidence_types:
+  - id: civil_child_status_evidence
+    iri: https://demo.example.gov/evidence-types/civil-child-status
+    title: Civil child status evidence
+    description: Evidence that a submitted child identifier resolves to a civil registry record with birth date and alive status.
+    proves:
+      - child_identity_requirement
+datasets:
+  - id: civil_registry
+    title: Civil Registry
+    description: Synthetic civil status records for decentralized evidence demo flows.
+    owner: Civil Registration Authority
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: daily
+    conforms_to:
+      - spdci:extensions/crvs/v1/Person
+    evidence_offerings:
+      - id: civil_child_status_evidence_service
+        iri: https://demo.example.gov/evidence-offerings/civil-child-status
+        title: Civil child status evidence service
+        description: Registry Notary endpoint that computes birth date and alive status from the civil registry.
+        evidence_type: civil_child_status_evidence
+        issuing_authority:
+          id: civil_registration_authority
+          iri: did:web:civil-registry.demo.example.gov
+          name: Civil Registration Authority
+          country: ZZ
+        jurisdiction:
+          country: ZZ
+        level_of_assurance: substantial
+        entity: civil_person
+        lookup_keys:
+          - national_id
+        access:
+          kind: registry-notary
+          conforms_to: registry-notary-federation/v0.1
+          endpoint_url: https://civil-registry-notary:8080
+          discovery_url: https://civil-registry-notary:8080/.well-known/evidence-service
+          ruleset: civil-child-status-v1
+        policy:
+          purpose:
+            - https://demo.example.gov/purpose/decentralized-evidence-demo
+    entities:
+      - name: civil_person
+        title: Civil Person
+        description: Person-level civil status projection for evidence computation.
+        concept_uri: spdci:extensions/crvs/v1/Person
+        identifiers:
+          - name: national_id
+            kind: primary
+        fields:
+          - name: national_id
+            type: string
+            required: true
+          - name: given_name
+            type: string
+            required: true
+          - name: surname
+            type: string
+            required: true
+          - name: birth_date
+            type: date
+            required: true
+          - name: civil_status
+            type: string
+            required: true
+          - name: deceased
+            type: boolean
+            required: true
+          - name: district
+            type: string
+            required: true
+vocabularies:
+  spdci: https://schema.spdci.org/
+  registry_relay: https://registry-relay.dev/

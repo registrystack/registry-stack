@@ -1,0 +1,14 @@
+# Tests config.parse_error: extra top-level key with deny_unknown_fields.
+server:
+  bind: 127.0.0.1:8080
+catalog:
+  title: t
+  base_url: https://example.test
+  publisher: p
+auth:
+  mode: api_key
+  api_keys: []
+audit:
+  sink: stdout
+datasets: []
+unexpected_top_level: oops

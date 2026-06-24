@@ -1,0 +1,11 @@
+---
+source: tests/error_taxonomy.rs
+expression: json
+---
+{
+  "code": "runtime.binding.field_missing",
+  "detail": "runtime field binding is absent from the metadata manifest",
+  "status": 500,
+  "title": "Runtime field missing from metadata",
+  "type": "https://registry-relay.dev/problems/runtime/binding/field_missing"
+}

@@ -1,0 +1,23 @@
+meta {
+  name: Filter projects by asset_type=school
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/v1/datasets/public_works_projects/entities/project/records?asset_type=school
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{rowsKey}}
+}
+
+docs {
+  Filters projects where asset_type=school. The asset_ref field may match school IDs
+  in education_registry (e.g. sch-3001), but this link is a client-side soft pointer
+  not enforced by the platform. See cross-demo workflows for the school construction
+  follow-up sequence that uses asset_ref={{schoolId}}.
+  Expected: 200 with projects whose asset_type is school.
+}

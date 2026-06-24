@@ -1,0 +1,11 @@
+---
+source: tests/error_taxonomy.rs
+expression: json
+---
+{
+  "code": "aggregate.execution_failed",
+  "detail": "query engine returned an execution error",
+  "status": 500,
+  "title": "Aggregate execution failed",
+  "type": "https://registry-relay.dev/problems/aggregate/execution_failed"
+}

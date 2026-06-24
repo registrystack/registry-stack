@@ -1,0 +1,23 @@
+meta {
+  name: Verify-only key cannot read schema (expects 403)
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/v1/datasets/benefits_casework/entities/person/schema
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{evidenceVerificationKey}}
+}
+
+docs {
+  Attempts to read the person entity schema using the verification_service key (evidenceVerificationKey).
+  evidenceVerificationKey holds only evidence-verification scopes; schema access requires a metadata scope.
+  expected: 403 auth.scope_denied
+  Evidence-verification scope is intentionally narrow: it grants no
+  schema, row, or aggregate access.
+}

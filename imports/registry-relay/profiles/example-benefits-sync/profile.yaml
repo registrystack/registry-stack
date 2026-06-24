@@ -1,0 +1,74 @@
+schema_version: registry-manifest-profile/v1
+profile:
+  id: example-benefits-sync
+  version: "1"
+  name: Hypothetical Benefits Sync Profile
+  upstream_system: Hypothetical benefits sync app
+  upstream_url: https://example-benefits-sync.org/
+  description: Portable metadata expectations for benefits sync registry sync descriptors and related metadata publication.
+supported_input_artifacts:
+  - kind: metadata_manifest
+    media_type: application/yaml
+    description: Registry Relay portable metadata manifest with benefits sync concept references.
+  - kind: sync_response_schema
+    media_type: application/schema+json
+    description: Optional benefits sync response schema used by runtime sync adapters.
+required_concepts:
+  - name: registry subject identifier
+    iri: sync:RegistrySubject.identifier
+  - name: disability status
+    iri: sync:DisabilityRegistry.disabilityStatus
+  - name: consent status
+    iri: sync:RegistrySubject.consentStatus
+optional_concepts:
+  - name: program identifier
+    iri: sync:Program.identifier
+  - name: transaction status
+    iri: sync:Transaction.status
+required_identifiers:
+  - entity: disabled_person
+    name: subject_id
+    kind: local
+cardinality_expectations:
+  - entity: disabled_person
+    field: subject_id
+    min: 1
+    max: 1
+  - entity: disabled_person
+    field: disability_status
+    min: 1
+    max: 1
+  - entity: disabled_person
+    field: consent_status
+    min: 1
+    max: 1
+codelist_expectations:
+  - id: disability_status
+    required_codes:
+      - certified
+      - not_certified
+  - id: consent_status
+    required_codes:
+      - granted
+      - revoked
+unsupported_mappings:
+  - source: async subscribe and callback flow
+    reason: benefits sync async operations are Relay runtime behavior, not static metadata.
+  - source: transaction status polling
+    reason: Transaction status is runtime state and is not represented in this metadata fixture.
+conformance_checks:
+  - id: example-benefits-sync.required_concepts
+    severity: error
+    description: Manifest must include required benefits sync concepts.
+  - id: example-benefits-sync.identifiers
+    severity: error
+    description: Disabled person metadata must expose a stable local subject identifier.
+  - id: example-benefits-sync.codelists
+    severity: error
+    description: Disability and consent codelists must include required codes.
+fixtures:
+  - path: fixtures/metadata.yaml
+    manifest: true
+    expect: valid
+    description: Minimal benefits sync disability registry metadata fixture.
+generator_command: null

@@ -1,0 +1,21 @@
+meta {
+  name: Metadata profiles
+  type: http
+  seq: 6
+}
+
+get {
+  url: {{baseUrl}}/metadata/profiles
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{metadataKey}}
+}
+
+docs {
+  Lists portable metadata application profiles and manifest profile declarations.
+  Uses catalog_viewer persona (metadataKey).
+  Expected: 200 with application_profiles including bregdcat-ap.
+}

@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registry-relay.local/demo/schemas/spdci/crvs-person.schema.json",
+  "title": "Demo SP DCI CRVS Person",
+  "$comment": "Shaped from third_party/spdci-api-standards/src/registry/crvs/RegistryRecord.yaml and src/extensions/crvs/Person.yaml.",
+  "type": "object",
+  "required": ["@id", "@type", "identifier", "name", "sex", "birth_date"],
+  "properties": {
+    "@id": { "type": "string" },
+    "@type": { "type": "string" },
+    "identifier": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["identifier_type", "identifier_value"],
+        "properties": {
+          "identifier_type": { "type": "string" },
+          "identifier_value": { "type": "string" }
+        }
+      }
+    },
+    "name": {
+      "type": "object",
+      "required": ["given_name", "surname"],
+      "properties": {
+        "given_name": { "type": "string" },
+        "surname": { "type": "string" }
+      }
+    },
+    "sex": { "type": "string" },
+    "birth_date": { "type": "string" },
+    "birth_place": { "type": "object" },
+    "address": { "type": "object" },
+    "phone_number": { "type": "array", "items": { "type": "string" } },
+    "email": { "type": "array", "items": { "type": "string" } }
+  }
+}

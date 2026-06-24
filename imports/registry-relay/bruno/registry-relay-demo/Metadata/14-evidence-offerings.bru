@@ -1,0 +1,20 @@
+meta {
+  name: Evidence offerings
+  type: http
+  seq: 14
+}
+
+get {
+  url: {{baseUrl}}/metadata/evidence-offerings
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{metadataKey}}
+}
+
+docs {
+  Lists visible evidence offerings from the portable metadata surface.
+  Expected: 200 with evidence_offerings filtered by the caller's metadata scopes.
+}

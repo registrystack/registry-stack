@@ -1,0 +1,20 @@
+meta {
+  name: Clinic facilities collection
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/ogc/v1/datasets/clinic_capacity/collections/facilities
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{metadataKey}}
+}
+
+docs {
+  Reads the dataset-scoped OGC collection document for clinic facilities.
+  Expected: 200 with CRS84, storageCrs, propertyNames, and supportedQueryParameters.
+}

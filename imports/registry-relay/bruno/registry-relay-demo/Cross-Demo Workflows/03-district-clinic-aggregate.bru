@@ -1,0 +1,22 @@
+meta {
+  name: District planning - clinic capacity aggregate
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/v1/datasets/clinic_capacity/aggregates/by_district_service
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{aggregateKey}}
+}
+
+docs {
+  Step 3 of 4: District planning workflow.
+  Runs clinic service capacity aggregate. Uses planning_analyst persona (aggregateKey).
+  Combined with steps 1-2, adds health infrastructure availability to the district picture.
+  Expected: 200 with summed beds and staff counts per district+service_type.
+}

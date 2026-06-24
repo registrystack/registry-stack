@@ -1,0 +1,23 @@
+meta {
+  name: Linkage method aggregate
+  type: http
+  seq: 5
+}
+
+get {
+  url: {{baseUrl}}/v1/datasets/subject_registry/aggregates/by_linkage_method_confidence
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{aggregateKey}}
+}
+
+docs {
+  Runs the subject aggregate grouped by linkage method and confidence band.
+  Uses planning_analyst persona (aggregateKey).
+  Expected: 200 with counts per linkage_method+linkage_confidence group.
+  Groups below min_group_size=5 are omitted. Output exposes only governance metadata
+  about the linkage process, not population characteristics.
+}

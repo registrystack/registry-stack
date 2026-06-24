@@ -1,0 +1,25 @@
+meta {
+  name: School construction - public works project
+  type: http
+  seq: 5
+}
+
+get {
+  url: {{baseUrl}}/v1/datasets/public_works_projects/entities/project/records?asset_ref={{schoolId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{rowsKey}}
+}
+
+docs {
+  Step 1 of 3: School construction follow-up workflow.
+  Reads the public works project(s) with asset_ref=sch-3001.
+  Uses casework_system persona (rowsKey).
+  NOTE: asset_ref is a client-side soft pointer. The platform stores it as a plain
+  string; no system-enforced foreign key to education_registry.school exists.
+  The caller is responsible for the semantic join.
+  Expected: 200 with project(s) for sch-3001 including milestones status and timeline.
+}

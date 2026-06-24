@@ -1,0 +1,28 @@
+meta {
+  name: Unfiltered benefits person read (expects 400)
+  type: http
+  seq: 12
+}
+
+get {
+  url: {{baseUrl}}/v1/datasets/benefits_casework/entities/person/records
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{rowsKey}}
+}
+
+headers {
+  Data-Purpose: {{purpose}}
+}
+
+docs {
+  Attempts to list all benefits_casework person rows with no filter.
+  The entity declares required_any_of: id, household_id, eligibility_status.
+  expected: 400 entity.filter_required
+  Prevents a bulk dump of all person records without a discriminating filter.
+  The caller must know at least a household id, person id, or eligibility status
+  before they can retrieve rows.
+}

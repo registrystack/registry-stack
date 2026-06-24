@@ -1,0 +1,22 @@
+meta {
+  name: Aggregate-only key cannot read facility rows (expects 403)
+  type: http
+  seq: 7
+}
+
+get {
+  url: {{baseUrl}}/v1/datasets/clinic_capacity/entities/facility/records?district={{district}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{aggregateKey}}
+}
+
+docs {
+  Attempts to read facility rows using the planning_analyst key (aggregateKey).
+  aggregateKey holds clinic_capacity:metadata + clinic_capacity:aggregate but not :rows.
+  expected: 403 auth.scope_denied
+  Demonstrates that aggregate scope is narrower than row scope on the same dataset.
+}

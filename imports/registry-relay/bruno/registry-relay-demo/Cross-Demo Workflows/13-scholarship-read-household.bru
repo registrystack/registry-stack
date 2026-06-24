@@ -1,0 +1,28 @@
+meta {
+  name: Scholarship eligibility - read benefits household
+  type: http
+  seq: 13
+}
+
+get {
+  url: {{baseUrl}}/v1/datasets/benefits_casework/entities/household/records/hh-1001
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{rowsKey}}
+}
+
+headers {
+  Data-Purpose: {{purpose}}
+}
+
+docs {
+  Step 3 of 4: Scholarship eligibility with subject linkage workflow.
+  Reads the benefits household whose id was returned as benefits_household_alias in step 2.
+  Uses casework_system persona (rowsKey). Purpose header required.
+  The household alias hh-1001 came from the subject registry, not from a system join.
+  Expected: 200 with household fields including poverty_band and enrollment_status,
+  which the scholarship system uses to confirm benefit eligibility.
+}

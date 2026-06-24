@@ -1,0 +1,22 @@
+meta {
+  name: Facility schema
+  type: http
+  seq: 6
+}
+
+get {
+  url: {{baseUrl}}/v1/datasets/clinic_capacity/entities/facility/schema
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{metadataKey}}
+}
+
+docs {
+  Reads the facility entity schema. Uses catalog_viewer persona (metadataKey).
+  Expected: 200 with public field list (facility_id, facility_name, district, facility_type,
+  ownership, service_level, latitude_band, longitude_band) and relationships
+  (service_capacity, stock_events). Sensitive exact_latitude and exact_longitude are absent.
+}

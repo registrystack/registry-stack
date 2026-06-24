@@ -1,0 +1,151 @@
+name: dcat-ap-external-validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      validation_type:
+        description: SEMIC validation type
+        required: true
+        default: dcatap.3_0_1_base
+      bregdcatap_validation_type:
+        # SEMIC ITB advertises bregdcatap.2_0_0 and bregdcatap.2_1_0 today; pin
+        # to the later one so the step produces a report. BRegDCAT-AP 3.0.0 is
+        # an annex to DCAT-AP 3.0 and may never get its own SEMIC ITB slug; if
+        # SEMIC publishes a bregdcatap.3_0_0 slug, update this default, but
+        # otherwise leaving the 2_1_0 gap report in place is the intended
+        # steady state.
+        description: SEMIC BRegDCAT-AP validation type (gap report only, continue-on-error)
+        required: true
+        default: bregdcatap.2_1_0
+      catalog_path:
+        description: Export path for the generated catalog artifact
+        required: true
+        default: target/dcat-ap/catalog.dcat-ap.jsonld
+  release:
+    types: [published]
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_NET_GIT_FETCH_WITH_CLI: true
+  RUST_BACKTRACE: 1
+  SEMIC_VALIDATION_TYPE: ${{ github.event.inputs.validation_type || 'dcatap.3_0_1_base' }}
+  SEMIC_BREGDCATAP_VALIDATION_TYPE: ${{ github.event.inputs.bregdcatap_validation_type || 'bregdcatap.2_1_0' }}
+  CATALOG_PATH: ${{ github.event.inputs.catalog_path || 'target/dcat-ap/catalog.dcat-ap.jsonld' }}
+  SEMIC_REPORT_PATH: target/dcat-ap/semic-report.json
+  SEMIC_BREGDCATAP_REPORT_PATH: target/dcat-ap/semic-bregdcatap-report.json
+  REGISTRY_PLATFORM_REPOSITORY: jeremi/registry-platform
+  REGISTRY_PLATFORM_REF: 1ff93500d4a42a09d67cc31e547d97ef1b5e5404
+  REGISTRY_MANIFEST_REPOSITORY: jeremi/registry-manifest
+  REGISTRY_MANIFEST_REF: 19cf67ada5eb7325a8fb8b051a2acc266b41bbde
+  CROSSWALK_REPOSITORY: PublicSchema/crosswalk
+  CROSSWALK_REF: 1d44ec735fdc8a7c719264b339574371e8330337
+
+jobs:
+  semic-dcat-ap:
+    name: SEMIC DCAT-AP validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Checkout registry-platform
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ env.REGISTRY_PLATFORM_REPOSITORY }}
+          ref: ${{ env.REGISTRY_PLATFORM_REF }}
+          token: ${{ secrets.REGISTRY_PLATFORM_TOKEN || github.token }}
+          path: registry-platform
+
+      - name: Link registry-platform path dependency
+        run: ln -s "$GITHUB_WORKSPACE/registry-platform" "$GITHUB_WORKSPACE/../registry-platform"
+
+      - name: Checkout crosswalk
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ env.CROSSWALK_REPOSITORY }}
+          ref: ${{ env.CROSSWALK_REF }}
+          path: crosswalk
+
+      - name: Link crosswalk path dependency
+        run: ln -s "$GITHUB_WORKSPACE/crosswalk" "$GITHUB_WORKSPACE/../crosswalk"
+
+      - name: Checkout registry-manifest
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ env.REGISTRY_MANIFEST_REPOSITORY }}
+          ref: ${{ env.REGISTRY_MANIFEST_REF }}
+          token: ${{ secrets.REGISTRY_MANIFEST_TOKEN || github.token }}
+          path: registry-manifest
+
+      - name: Link registry-manifest path dependency
+        run: ln -s "$GITHUB_WORKSPACE/registry-manifest" "$GITHUB_WORKSPACE/../registry-manifest"
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: stable
+
+      - name: Cache Cargo registry and build artifacts
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: dcat-ap-external-validation
+          # Restore-only (never write the cache) to close the cache-poisoning vector.
+          save-if: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          # No cache write: closes the cache-poisoning vector in this workflow.
+          enable-cache: false
+
+      - name: Export sample DCAT-AP catalog
+        env:
+          REGISTRY_RELAY_EXPORT_DCAT_AP_PATH: ${{ env.CATALOG_PATH }}
+        run: cargo test --test catalog_entity export_generated_dcat_ap_catalog_when_path_is_set
+
+      - name: Validate sample DCAT-AP catalog with local SHACL smoke profiles (DCAT-AP + BRegDCAT-AP)
+        run: |
+          uv run --with 'pyshacl>=0.27,<0.31' --with 'rdflib-jsonld>=0.6' \
+            python scripts/validate_dcat_shacl.py \
+            --catalog "${CATALOG_PATH}"
+
+      - name: Validate sample DCAT-AP catalog with SEMIC
+        run: |
+          python scripts/validate_semic_dcat_ap.py \
+            --catalog "${CATALOG_PATH}" \
+            --validation-type "${SEMIC_VALIDATION_TYPE}" \
+            --save-report "${SEMIC_REPORT_PATH}"
+
+      - name: BRegDCAT-AP gap report via SEMIC (continue-on-error, informational only)
+        continue-on-error: true
+        run: |
+          python scripts/validate_semic_dcat_ap.py \
+            --catalog "${CATALOG_PATH}" \
+            --validation-type "${SEMIC_BREGDCATAP_VALIDATION_TYPE}" \
+            --save-report "${SEMIC_BREGDCATAP_REPORT_PATH}"
+
+      - name: Assert BRegDCAT-AP gap report was produced
+        # The previous step is continue-on-error so a failing validation does
+        # not block CI, but if the SEMIC slug is invalid the script raises
+        # before writing a report and the gap signal vanishes silently. This
+        # step fails loudly when the file is missing or empty so a wrong slug
+        # cannot hide.
+        run: |
+          if [[ ! -s "${SEMIC_BREGDCATAP_REPORT_PATH}" ]]; then
+            echo "::error::BRegDCAT-AP gap report missing or empty at ${SEMIC_BREGDCATAP_REPORT_PATH}." \
+                 "Check that ${SEMIC_BREGDCATAP_VALIDATION_TYPE} is a valid SEMIC ITB slug" \
+                 "(see https://www.itb.ec.europa.eu/shacl/semic-shacl/api/info)."
+            exit 1
+          fi
+
+      - name: Upload validation artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dcat-ap-validation
+          path: |
+            ${{ env.CATALOG_PATH }}
+            ${{ env.SEMIC_REPORT_PATH }}
+            ${{ env.SEMIC_BREGDCATAP_REPORT_PATH }}
+          if-no-files-found: ignore

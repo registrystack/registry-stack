@@ -1,0 +1,21 @@
+meta {
+  name: OGC landing page
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/ogc/v1
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{metadataKey}}
+}
+
+docs {
+  Reads the OGC API Features landing page. Start the server with
+  `just demo-run`.
+  Expected: 200 with links to conformance, collections, and OpenAPI.
+}

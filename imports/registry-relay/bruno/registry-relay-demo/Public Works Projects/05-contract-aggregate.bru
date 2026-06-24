@@ -1,0 +1,23 @@
+meta {
+  name: Contract aggregate by district and procurement method
+  type: http
+  seq: 5
+}
+
+get {
+  url: {{baseUrl}}/v1/datasets/public_works_projects/aggregates/by_district_procurement
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{aggregateKey}}
+}
+
+docs {
+  Runs the contract aggregate joined to project district, grouped by district
+  and procurement method. Uses planning_analyst persona (aggregateKey).
+  Expected: 200 with counts and summed contract values per district+procurement group.
+  Money measures are masked for small groups (min_group_size=2, mask disclosure control).
+  Demonstrates financial oversight aggregate without row access to individual contracts.
+}

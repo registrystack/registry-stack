@@ -1,0 +1,19 @@
+# Local-dev linker tuning. Linux CI is unaffected; the Binary Release
+# workflow's macOS jobs neutralize this via a set-but-empty RUSTFLAGS,
+# since hosted runners do not ship Homebrew's lld.
+#
+# On Apple Silicon, dev/test builds spend most of their wall time in the
+# linker because each of the 50 integration test binaries statically pulls
+# in datafusion / axum / etc. The system `ld` (`ld64`) is single-threaded;
+# LLVM's `ld64.lld` (Mach-O port) is parallel and is a drop-in replacement
+# for the workloads this crate produces.
+#
+# Requires: `brew install lld`, which puts `ld64.lld` on PATH at
+# `/opt/homebrew/bin/ld64.lld`. Contributors without lld installed will
+# see a linker-not-found error pointing at this file.
+#
+# Override locally by exporting `CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER`
+# or by deleting this file in your worktree.
+[target.aarch64-apple-darwin]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=/opt/homebrew/bin/ld64.lld"]

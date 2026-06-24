@@ -1,0 +1,28 @@
+meta {
+  name: Read subject by education student alias
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/v1/datasets/subject_registry/entities/subject/records?education_student_alias={{studentAlias}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{linkageKey}}
+}
+
+headers {
+  Data-Purpose: {{purpose}}
+}
+
+docs {
+  Reads the subject row for student alias stu-2001. Uses linkage_service persona (linkageKey).
+  Purpose header required. Satisfies required_any_of via education_student_alias filter.
+  Expected: 200 with the subject row including canonical_id, benefits_person_alias,
+  benefits_household_alias, education_student_alias, linkage_method, linkage_confidence.
+  The caller can then use benefits_household_alias to read the matching household
+  in benefits_casework (see Cross-Demo Workflows/scholarship-eligibility).
+}

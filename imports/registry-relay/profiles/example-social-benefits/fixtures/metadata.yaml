@@ -1,0 +1,127 @@
+schema_version: registry-manifest/v1
+catalog:
+  id: example-social-benefits
+  base_url: https://social-protection.example.gov
+  title:
+    en: Social Protection Metadata
+  description:
+    en: Portable metadata for a hypothetical social benefits application.
+  publisher:
+    name: Social Protection Agency
+    iri: https://social-protection.example.gov/agency
+    authority_type: eli:PublicAuthority
+  participant_id: https://social-protection.example.gov/agency
+  conforms_to:
+    - https://semiceu.github.io/BRegDCAT-AP/releases/3.0.0/
+  standards:
+    dcat: "3.0"
+    shacl: "1.1"
+    json_schema: "2020-12"
+  application_profiles:
+    - id: bregdcat-ap
+      version: "3.0.0"
+vocabularies:
+  person: https://person-schema.example.gov/vocab/
+  benefits: https://social-protection.example.gov/vocab/benefits/
+  eli: http://data.europa.eu/eli/ontology#
+profiles:
+  - id: example-social-benefits
+    version: "1"
+datasets:
+  - id: social-registry
+    title:
+      en: Social Registry
+    conforms_to:
+      - https://semiceu.github.io/BRegDCAT-AP/releases/3.0.0/
+    status: active
+    access_rights: restricted
+    entities:
+      - name: household
+        title:
+          en: Household
+        identifiers:
+          - name: household_id
+            kind: local
+        fields:
+          - name: household_id
+            type: string
+            required: true
+            concepts:
+              - benefits:Group.identifier
+          - name: vulnerability_category
+            type: code
+            codelist: vulnerability_category
+            concepts:
+              - benefits:SocialRegistry.vulnerabilityCategory
+      - name: individual
+        title:
+          en: Individual
+        identifiers:
+          - name: individual_id
+            kind: local
+        fields:
+          - name: individual_id
+            type: string
+            required: true
+            concepts:
+              - person:Person.identifier
+          - name: birth_date
+            type: date
+            concepts:
+              - person:Person.birthDate
+      - name: enrollment
+        title:
+          en: Program Enrollment
+        identifiers:
+          - name: enrollment_id
+            kind: local
+        fields:
+          - name: enrollment_id
+            type: string
+            required: true
+            concepts:
+              - benefits:ProgramEnrollment.identifier
+          - name: enrollment_status
+            type: code
+            required: true
+            codelist: enrollment_status
+            constraints:
+              in:
+                - active
+                - suspended
+                - closed
+            concepts:
+              - benefits:ProgramEnrollment.status
+codelists:
+  - id: enrollment_status
+    scheme_iri: https://social-protection.example.gov/codelists/enrollment-status
+    external_ref: https://social-protection.example.gov/codelists/enrollment-status.ttl
+    concepts:
+      - code: active
+        iri: https://social-protection.example.gov/codelists/enrollment-status/active
+        label:
+          en: Active
+      - code: suspended
+        iri: https://social-protection.example.gov/codelists/enrollment-status/suspended
+        label:
+          en: Suspended
+      - code: closed
+        iri: https://social-protection.example.gov/codelists/enrollment-status/closed
+        label:
+          en: Closed
+  - id: vulnerability_category
+    scheme_iri: https://social-protection.example.gov/codelists/vulnerability-category
+    external_ref: https://social-protection.example.gov/codelists/vulnerability-category.ttl
+    concepts:
+      - code: disability
+        iri: https://social-protection.example.gov/codelists/vulnerability-category/disability
+        label:
+          en: Disability
+      - code: elderly
+        iri: https://social-protection.example.gov/codelists/vulnerability-category/elderly
+        label:
+          en: Elderly
+      - code: low_income
+        iri: https://social-protection.example.gov/codelists/vulnerability-category/low-income
+        label:
+          en: Low income

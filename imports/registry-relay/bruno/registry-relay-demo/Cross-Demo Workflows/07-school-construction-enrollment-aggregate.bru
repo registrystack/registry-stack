@@ -1,0 +1,24 @@
+meta {
+  name: School construction - enrollment aggregate
+  type: http
+  seq: 7
+}
+
+get {
+  url: {{baseUrl}}/v1/datasets/education_registry/aggregates/by_school_grade_status
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{aggregateKey}}
+}
+
+docs {
+  Step 3 of 3: School construction follow-up workflow.
+  Runs enrollment aggregate to see current student counts at school sch-3001.
+  Uses planning_analyst persona (aggregateKey).
+  Together with steps 5-6 this gives: construction timeline (public works), current
+  operational state (education school record), and enrollment load (this aggregate).
+  Expected: 200 with student counts per grade+status for the school.
+}

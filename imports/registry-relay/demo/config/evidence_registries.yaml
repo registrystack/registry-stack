@@ -1,0 +1,251 @@
+# SPDX-License-Identifier: Apache-2.0
+# Source registries for the split Evidence Server demo.
+# This process exposes CRVS and farmer registry rows through the normal
+# registry-relay API. Evidence computation runs in a separate process.
+
+server:
+  bind: 127.0.0.1:4256
+
+metadata:
+  source:
+    path: evidence_registries.metadata.yaml
+
+catalog:
+  title: Evidence Source Registries Demo
+  base_url: http://127.0.0.1:4256
+  publisher: Government Data Reuse Cell (Demo)
+
+vocabularies:
+  spdci: https://schema.spdci.org/
+
+auth:
+  mode: api_key
+  api_keys:
+    - id: verification_service
+      fingerprint:
+        provider: env
+        name: VERIFICATION_SERVICE_HASH
+        commitment: sha256:a0bd21e279907c6fada5bb839a461a3e3014617dbb49c2e9a03e87e7f1f3344b
+      scopes:
+        - civil_registry:metadata
+        - civil_registry:evidence_verification
+        - farmer_registry:metadata
+        - farmer_registry:evidence_verification
+    - id: casework_system
+      fingerprint:
+        provider: env
+        name: CASEWORK_SYSTEM_HASH
+        commitment: sha256:31eaa0644ee0593bf88482417b113d4e4f01b07848d5b2a628d97a01be899779
+      scopes:
+        - civil_registry:metadata
+        - civil_registry:rows
+        - farmer_registry:metadata
+        - farmer_registry:rows
+
+standards:
+  spdci:
+    registries:
+      crvs:
+        dataset: civil_registry
+        entity: civil_person
+        registry_type: ns:org:RegistryType:CRVS
+        record_type: spdci-extensions-crvs:Person
+        identifiers:
+          NATIONAL_ID: national_id
+          UIN: national_id
+          NIN: national_id
+        expression_fields:
+          birth_date: birth_date
+          address.locality: district
+      fr:
+        dataset: farmer_registry
+        entity: farmer
+        registry_type: ns:org:RegistryType:FR
+        record_type: spdci-extensions-fr:FRPerson
+        identifiers:
+          NATIONAL_ID: national_id
+          UIN: national_id
+          NIN: national_id
+          FARMER_ID: id
+        expression_fields:
+          national_id: national_id
+          farmed_land_size_hectares: farmed_land_size_hectares
+
+audit:
+  sink: file
+  path: demo/var/registry-notary-audit.jsonl
+  format: jsonl
+  hash_secret_env: REGISTRY_RELAY_AUDIT_HASH_SECRET
+  rotate:
+    max_size_mb: 10
+    max_files: 3
+
+datasets:
+  - id: civil_registry
+    title: Civil Registry
+    description: Synthetic CRVS records for the Evidence Server demo.
+    owner: Civil Registration Authority
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: monthly
+    conforms_to:
+      - spdci:extensions/crvs/v1/Person
+    defaults:
+      refresh:
+        mode: manual
+    tables:
+      - id: people_table
+        source:
+          type: file
+          path: demo/data/evidence_server/crvs.csv
+          format:
+            csv:
+              header_row: 1
+        primary_key: national_id
+        schema:
+          strict: true
+          fields:
+            - name: national_id
+              type: string
+              nullable: false
+              sensitive: true
+            - name: given_name
+              type: string
+              nullable: false
+              sensitive: true
+            - name: surname
+              type: string
+              nullable: false
+              sensitive: true
+            - name: birth_date
+              type: date
+              nullable: false
+            - name: birth_place
+              type: string
+              nullable: false
+            - name: district
+              type: string
+              nullable: false
+    entities:
+      - name: civil_person
+        title: Civil Person
+        description: Minimal CRVS person projection for evidence computation.
+        table: people_table
+        concept_uri: spdci:extensions/crvs/v1/Person
+        fields:
+          - name: national_id
+          - name: given_name
+          - name: surname
+          - name: birth_date
+          - name: birth_place
+          - name: district
+        access:
+          metadata_scope: civil_registry:metadata
+          aggregate_scope: civil_registry:aggregate
+          read_scope: civil_registry:rows
+          evidence_verification_scope: civil_registry:evidence_verification
+        api:
+          default_limit: 25
+          max_limit: 100
+          require_purpose_header: true
+          allowed_filters:
+            - field: national_id
+              ops: [eq, in]
+            - field: given_name
+              ops: [eq]
+            - field: surname
+              ops: [eq]
+            - field: birth_date
+              ops: [eq, gte, lte]
+            - field: district
+              ops: [eq, in]
+  - id: farmer_registry
+    title: Farmer Registry
+    description: Synthetic farmer records for land-size evidence computation.
+    owner: Ministry of Agriculture
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: monthly
+    conforms_to:
+      - spdci:extensions/fr/v1/FRPerson
+    defaults:
+      refresh:
+        mode: manual
+    tables:
+      - id: farmers_table
+        source:
+          type: file
+          path: demo/data/evidence_server/farmers.csv
+          format:
+            csv:
+              header_row: 1
+        primary_key: farmer_id
+        schema:
+          strict: true
+          fields:
+            - name: farmer_id
+              type: string
+              nullable: false
+            - name: national_id
+              type: string
+              nullable: false
+              sensitive: true
+            - name: given_name
+              type: string
+              nullable: false
+              sensitive: true
+            - name: surname
+              type: string
+              nullable: false
+              sensitive: true
+            - name: farm_type
+              type: string
+              nullable: false
+            - name: farm_place_name
+              type: string
+              nullable: false
+            - name: farmed_land_size_hectares
+              type: number
+              nullable: false
+              unit: hectare
+            - name: registration_date
+              type: date
+              nullable: false
+            - name: district
+              type: string
+              nullable: false
+    entities:
+      - name: farmer
+        title: Farmer
+        description: Minimal farmer projection for evidence computation.
+        table: farmers_table
+        concept_uri: spdci:extensions/fr/v1/FRPerson
+        fields:
+          - name: id
+            from: farmer_id
+          - name: national_id
+          - name: given_name
+          - name: surname
+          - name: farm_type
+          - name: farm_place_name
+          - name: farmed_land_size_hectares
+          - name: registration_date
+          - name: district
+        access:
+          metadata_scope: farmer_registry:metadata
+          aggregate_scope: farmer_registry:aggregate
+          read_scope: farmer_registry:rows
+          evidence_verification_scope: farmer_registry:evidence_verification
+        api:
+          default_limit: 25
+          max_limit: 100
+          require_purpose_header: true
+          allowed_filters:
+            - field: id
+              ops: [eq, in]
+            - field: national_id
+              ops: [eq, in]
+            - field: farmed_land_size_hectares
+              ops: [eq, gte, lte]
+            - field: district
+              ops: [eq, in]
