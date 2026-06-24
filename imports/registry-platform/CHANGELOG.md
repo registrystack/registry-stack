@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+## v0.3.3 - 2026-06-24
+
+### Added
+
+- Compliance context primitives across audit, authcommon, httpsec, ops, and PDP
+  helpers. These provide shared legal-basis, consent, jurisdiction, assurance,
+  and retention constraint vocabulary for Notary and Relay policy checks.
+
+### Fixed
+
+- Use portable leap-year arithmetic in compatibility calculations used by the
+  shared posture helpers.
+
+## v0.3.2 - 2026-06-22
+
+### Changed
+
+- Centralized workspace dependency declarations so release consumers and
+  sibling repos resolve the Platform crates through one shared dependency table.
+
+### Fixed
+
+- Strengthened STS delegation binding, authorization-details canonicalization,
+  rate-limit cleanup bounds, and audit-sink wiring.
+- Bound SD-JWT holder-proof algorithms to the resolved verification key.
+- Added an atomic compare-and-set operation to the shared cache crate.
+
 ## v0.3.1 - 2026-06-21
 
 ### Security

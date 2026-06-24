@@ -6,7 +6,7 @@
 
 | Version | Supported |
 | --- | --- |
-| `0.3.x` | Yes, newest supported tag is `v0.3.2` |
+| `0.3.x` | Yes, newest supported tag is `v0.3.3` |
 | Untagged branches | No |
 
 ## Reporting a Vulnerability
