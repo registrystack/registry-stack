@@ -20,7 +20,7 @@ use registry_platform_authcommon::{
 };
 use registry_platform_crypto::{validate_did, DidMethod};
 use registry_platform_httpsec::CorsPolicy;
-use registry_platform_ops::ConfigSource;
+use registry_platform_ops::{ConfigSource, COMPLIANCE_REGIME_GDPR};
 
 use super::capabilities::source_capabilities;
 use super::{
@@ -74,6 +74,7 @@ pub fn run_with_source(config: &Config, source: ConfigSource) -> Result<(), Erro
     validate_ids_and_uniqueness(config).map_err(Error::from)?;
     validate_scopes(config).map_err(Error::from)?;
     validate_env_vars_and_hashes(config).map_err(Error::from)?;
+    validate_compliance(config).map_err(Error::from)?;
     validate_catalog_uris(config).map_err(Error::from)?;
     validate_ogc_feature_flags(config).map_err(Error::from)?;
     validate_resources(config).map_err(Error::from)?;
@@ -86,11 +87,52 @@ pub fn run_with_source(config: &Config, source: ConfigSource) -> Result<(), Erro
     Ok(())
 }
 
+fn validate_compliance(config: &Config) -> Result<(), ConfigError> {
+    let mut seen = HashSet::new();
+    for regime in &config.compliance.regimes {
+        let trimmed = regime.trim();
+        if trimmed.is_empty() {
+            tracing::error!(
+                code = "config.validation_error",
+                "compliance.regimes contains a blank regime id"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+        if trimmed != regime {
+            tracing::error!(
+                code = "config.validation_error",
+                regime,
+                "compliance.regimes must use canonical regime ids"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+        if trimmed != COMPLIANCE_REGIME_GDPR {
+            tracing::error!(
+                code = "config.validation_error",
+                regime = trimmed,
+                "compliance.regimes contains an unsupported regime id"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+        if !seen.insert(trimmed) {
+            tracing::error!(
+                code = "config.validation_error",
+                regime = trimmed,
+                "compliance.regimes contains a duplicate regime id"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+    }
+    Ok(())
+}
+
 /// Validate the deployment block and evaluate startup gates.
 ///
-/// Waiver finding ids must match the finding id pattern, waiver dates must be
-/// well-formed `YYYY-MM-DD`, reasons must be non-empty, and the deployment must
-/// not declare a profile under which any unwaived `startup_fail` gate triggers.
+/// Waiver finding ids must match the finding id pattern and name a catalog
+/// finding, waiver dates must be well-formed `YYYY-MM-DD`, reasons must be
+/// non-empty, waivers must not name hard gates under the declared profile, and
+/// the deployment must not declare a profile under which any unwaived
+/// `startup_fail` gate triggers.
 /// An invalid profile value is rejected earlier by `serde` (the parse error
 /// path); this check covers the conditions that only hold once the whole config
 /// is deserialised.
@@ -131,6 +173,26 @@ fn validate_deployment(config: &Config, source: ConfigSource) -> Result<(), Conf
                 "deployment waiver expiry must be an ISO 8601 YYYY-MM-DD date"
             );
             return Err(ConfigError::ValidationError);
+        }
+        match crate::deployment::catalog_severity_for(config.deployment.profile, &waiver.finding) {
+            None => {
+                tracing::error!(
+                    code = "config.validation_error",
+                    finding = %waiver.finding,
+                    "deployment waiver targets an unknown finding id"
+                );
+                return Err(ConfigError::ValidationError);
+            }
+            Some(Some(severity)) if !severity.is_waivable() => {
+                tracing::error!(
+                    code = "config.validation_error",
+                    finding = %waiver.finding,
+                    severity = severity.as_str(),
+                    "deployment waiver targets a non-waivable gate"
+                );
+                return Err(ConfigError::ValidationError);
+            }
+            Some(_) => {}
         }
     }
 
@@ -3418,6 +3480,10 @@ fn validate_entity_governed_policy(
     entity: &EntityConfig,
     policy: &GovernedPolicyConfig,
 ) -> Result<(), ConfigError> {
+    if let Err(err) = policy.context_constraints.validate() {
+        let message = err.to_string();
+        return entity_governed_policy_error(dataset, entity, &message);
+    }
     if !governed_policy_has_enforced_gate(policy) {
         return entity_governed_policy_error(
             dataset,
@@ -3429,34 +3495,6 @@ fn validate_entity_governed_policy(
         if purpose.trim().is_empty() {
             return entity_governed_policy_error(dataset, entity, "empty permitted_purposes entry");
         }
-    }
-    for jurisdiction in &policy.permitted_jurisdictions {
-        if jurisdiction.trim().is_empty() {
-            return entity_governed_policy_error(
-                dataset,
-                entity,
-                "empty permitted_jurisdictions entry",
-            );
-        }
-    }
-    for assurance in &policy.allowed_assurance {
-        if assurance.trim().is_empty() {
-            return entity_governed_policy_error(dataset, entity, "empty allowed_assurance entry");
-        }
-    }
-    if policy
-        .minimum_assurance
-        .as_ref()
-        .is_some_and(|value| value.trim().is_empty())
-    {
-        return entity_governed_policy_error(dataset, entity, "empty minimum_assurance");
-    }
-    if policy.max_source_age_seconds == Some(0) {
-        return entity_governed_policy_error(
-            dataset,
-            entity,
-            "max_source_age_seconds must be greater than zero",
-        );
     }
     for field in &policy.redaction_fields {
         if field.trim().is_empty() {
@@ -3476,55 +3514,6 @@ fn validate_entity_governed_policy(
                 "redaction_fields entries must exist as entity fields or aggregate output fields",
             );
         }
-    }
-    let trusted = &policy.trusted_context;
-    if trusted
-        .jurisdiction
-        .as_ref()
-        .is_some_and(|value| value.trim().is_empty())
-    {
-        return entity_governed_policy_error(dataset, entity, "empty trusted_context.jurisdiction");
-    }
-    if trusted
-        .asserted_assurance
-        .as_ref()
-        .is_some_and(|value| value.trim().is_empty())
-    {
-        return entity_governed_policy_error(
-            dataset,
-            entity,
-            "empty trusted_context.asserted_assurance",
-        );
-    }
-    if trusted
-        .legal_basis_ref
-        .as_ref()
-        .is_some_and(|value| value.trim().is_empty())
-    {
-        return entity_governed_policy_error(
-            dataset,
-            entity,
-            "empty trusted_context.legal_basis_ref",
-        );
-    }
-    if trusted
-        .consent_ref
-        .as_ref()
-        .is_some_and(|value| value.trim().is_empty())
-    {
-        return entity_governed_policy_error(dataset, entity, "empty trusted_context.consent_ref");
-    }
-    if trusted.jurisdiction.is_some()
-        || trusted.asserted_assurance.is_some()
-        || trusted.legal_basis_ref.is_some()
-        || trusted.consent_ref.is_some()
-        || trusted.source_observed_age_seconds.is_some()
-    {
-        return entity_governed_policy_error(
-            dataset,
-            entity,
-            "trusted_context values must be supplied by per-request trust headers",
-        );
     }
     Ok(())
 }
@@ -3732,13 +3721,16 @@ fn compile_release_expression(
 }
 
 fn governed_policy_has_enforced_gate(policy: &GovernedPolicyConfig) -> bool {
+    let constraints = &policy.context_constraints;
     !policy.permitted_purposes.is_empty()
-        || !policy.permitted_jurisdictions.is_empty()
-        || !policy.allowed_assurance.is_empty()
-        || policy.minimum_assurance.is_some()
-        || policy.max_source_age_seconds.is_some()
-        || policy.require_legal_basis
-        || policy.require_consent
+        || constraints.legal_basis.required
+        || !constraints.legal_basis.allowed_refs.is_empty()
+        || constraints.consent.required
+        || !constraints.consent.allowed_refs.is_empty()
+        || !constraints.jurisdiction.permitted.is_empty()
+        || !constraints.assurance.allowed.is_empty()
+        || constraints.assurance.minimum.is_some()
+        || constraints.source_freshness.max_age_seconds.is_some()
         || !policy.redaction_fields.is_empty()
 }
 

@@ -8,8 +8,10 @@ use registry_manifest_core::{
     CompiledDatasetPolicy, CompiledMetadata, CompiledPolicyOperandValue, EvidencePackMetadata,
 };
 use registry_platform_pdp::{
-    decide as pdp_decide, Decision as PdpDecision, DecisionAudit as PdpDecisionAudit,
-    EvidenceRequestContext as PdpRequestContext, PolicyGate, PolicyInput as PdpPolicyInput,
+    apply_context_constraints_to_policy_input, context_constraints_hash_material,
+    decide as pdp_decide, ContextConstraintsConfigError, Decision as PdpDecision,
+    DecisionAudit as PdpDecisionAudit, EvidenceRequestContext as PdpRequestContext, PolicyGate,
+    PolicyInput as PdpPolicyInput,
 };
 use sha2::{Digest, Sha256};
 
@@ -136,6 +138,15 @@ impl From<Error> for GovernedAccessError {
     }
 }
 
+fn governed_context_constraints_error(err: ContextConstraintsConfigError) -> GovernedAccessError {
+    tracing::error!(
+        code = "config.validation_error",
+        error = %err,
+        "governed policy context_constraints failed validation after config load"
+    );
+    GovernedAccessError::from_error(InternalError::Unhandled)
+}
+
 #[allow(clippy::result_large_err)]
 pub(crate) fn require_governed_read_access<E: GovernedEntity + ?Sized>(
     runtime: &RuntimeSnapshot,
@@ -177,15 +188,18 @@ pub(crate) fn require_governed_read_access<E: GovernedEntity + ?Sized>(
         return Err(GovernedAccessError::from_error(AuthError::PurposeDenied));
     }
     let policy_rule_id = format!("entity-purpose-required:{}", entity.name());
-    let policy = PdpPolicyInput {
+    let policy_hash = if let Some(selected_policy) = selected_policy.as_ref() {
+        selected_policy.policy_hash.clone()
+    } else {
+        entity_purpose_policy_hash(entity, &purpose_constraints)
+            .map_err(governed_context_constraints_error)?
+    };
+    let mut policy = PdpPolicyInput {
         policy_id: selected_policy
             .as_ref()
             .map(|policy| policy.policy_id.clone())
             .unwrap_or_else(|| format!("relay.entity.{}.purpose-required", entity.name())),
-        policy_hash: selected_policy
-            .as_ref()
-            .map(|policy| policy.policy_hash.clone())
-            .unwrap_or_else(|| entity_purpose_policy_hash(entity, &purpose_constraints)),
+        policy_hash,
         ecosystem_binding_id: selected_policy
             .as_ref()
             .and_then(|policy| policy.ecosystem_binding_id.clone()),
@@ -201,16 +215,12 @@ pub(crate) fn require_governed_read_access<E: GovernedEntity + ?Sized>(
             .map(|policy| policy.odrl_constraint_terms.clone())
             .unwrap_or_default(),
         purpose_constraints,
-        permitted_jurisdictions: governed_policy
-            .map(|policy| policy.permitted_jurisdictions.clone())
-            .unwrap_or_default(),
-        allowed_assurance: governed_policy
-            .map(|policy| policy.allowed_assurance.clone())
-            .unwrap_or_default(),
-        minimum_assurance: governed_policy.and_then(|policy| policy.minimum_assurance.clone()),
-        max_source_age_seconds: governed_policy.and_then(|policy| policy.max_source_age_seconds),
-        require_legal_basis: governed_policy.is_some_and(|policy| policy.require_legal_basis),
-        require_consent: governed_policy.is_some_and(|policy| policy.require_consent),
+        permitted_jurisdictions: Vec::new(),
+        allowed_assurance: Vec::new(),
+        minimum_assurance: None,
+        max_source_age_seconds: None,
+        require_legal_basis: false,
+        require_consent: false,
         allowed_legal_basis_refs: Vec::new(),
         allowed_consent_refs: Vec::new(),
         redaction_fields: governed_policy
@@ -228,6 +238,13 @@ pub(crate) fn require_governed_read_access<E: GovernedEntity + ?Sized>(
             .map(|policy| policy.unsupported_odrl_terms)
             .unwrap_or_default(),
     };
+    if let Some(governed_policy) = governed_policy {
+        apply_context_constraints_to_policy_input(
+            &governed_policy.context_constraints,
+            &mut policy,
+        )
+        .map_err(governed_context_constraints_error)?;
+    }
     match pdp_decide(&context, &policy) {
         PdpDecision::Permit(audit) => Ok(GovernedReadDecision {
             audit: Some(audit),
@@ -262,6 +279,8 @@ fn governed_rule_ids_by_gate(rule_id: &str) -> std::collections::BTreeMap<Policy
         (PolicyGate::SourceFreshness, "source_freshness"),
         (PolicyGate::LegalBasisRequired, "legal_basis_required"),
         (PolicyGate::ConsentRequired, "consent_required"),
+        (PolicyGate::LegalBasisAllowedSet, "legal_basis_allowed_set"),
+        (PolicyGate::ConsentAllowedSet, "consent_allowed_set"),
         (PolicyGate::Redaction, "redaction"),
         (PolicyGate::RequestedFact, "requested_fact"),
         (PolicyGate::RequestedDisclosure, "requested_disclosure"),
@@ -675,7 +694,7 @@ fn governed_purpose_constraints_for_policy(
 fn entity_purpose_policy_hash<E: GovernedEntity + ?Sized>(
     entity: &E,
     purpose_constraints: &[Vec<String>],
-) -> String {
+) -> Result<String, ContextConstraintsConfigError> {
     let policy = entity.api().governed_policy.as_ref();
     let mut material = format!(
         "entity={};table_id={};read_scope={};require_purpose_header={};purpose_constraints={:?}",
@@ -691,65 +710,15 @@ fn entity_purpose_policy_hash<E: GovernedEntity + ?Sized>(
             "permitted_purposes",
             &policy.permitted_purposes,
         );
-        push_hash_list(
-            &mut material,
-            "permitted_jurisdictions",
-            &policy.permitted_jurisdictions,
-        );
-        push_hash_list(
-            &mut material,
-            "allowed_assurance",
-            &policy.allowed_assurance,
-        );
-        push_hash_optional(
-            &mut material,
-            "minimum_assurance",
-            policy.minimum_assurance.as_deref(),
-        );
-        let max_source_age_seconds = policy.max_source_age_seconds.map(|value| value.to_string());
-        push_hash_optional(
-            &mut material,
-            "max_source_age_seconds",
-            max_source_age_seconds.as_deref(),
-        );
-        material.push_str(&format!(
-            ";require_legal_basis={};require_consent={}",
-            policy.require_legal_basis, policy.require_consent
-        ));
+        material.push_str(";context_constraints=");
+        material.push_str(&context_constraints_hash_material(
+            &policy.context_constraints,
+        )?);
         push_hash_list(&mut material, "redaction_fields", &policy.redaction_fields);
-        push_hash_optional(
-            &mut material,
-            "trusted_jurisdiction",
-            policy.trusted_context.jurisdiction.as_deref(),
-        );
-        push_hash_optional(
-            &mut material,
-            "trusted_asserted_assurance",
-            policy.trusted_context.asserted_assurance.as_deref(),
-        );
-        push_hash_optional(
-            &mut material,
-            "trusted_legal_basis_ref",
-            policy.trusted_context.legal_basis_ref.as_deref(),
-        );
-        push_hash_optional(
-            &mut material,
-            "trusted_consent_ref",
-            policy.trusted_context.consent_ref.as_deref(),
-        );
-        let trusted_source_observed_age_seconds = policy
-            .trusted_context
-            .source_observed_age_seconds
-            .map(|value| value.to_string());
-        push_hash_optional(
-            &mut material,
-            "trusted_source_observed_age_seconds",
-            trusted_source_observed_age_seconds.as_deref(),
-        );
     }
     let mut hasher = Sha256::new();
     hasher.update(material.as_bytes());
-    format!("sha256:{}", hex_lower(&hasher.finalize()))
+    Ok(format!("sha256:{}", hex_lower(&hasher.finalize())))
 }
 
 fn push_hash_list(material: &mut String, name: &str, values: &[String]) {
@@ -759,13 +728,6 @@ fn push_hash_list(material: &mut String, name: &str, values: &[String]) {
     material.push_str(name);
     material.push('=');
     material.push_str(&values.join(","));
-}
-
-fn push_hash_optional(material: &mut String, name: &str, value: Option<&str>) {
-    material.push(';');
-    material.push_str(name);
-    material.push('=');
-    material.push_str(value.unwrap_or(""));
 }
 
 fn hex_lower(bytes: &[u8]) -> String {
@@ -809,6 +771,30 @@ audit:
 "#,
         )
         .expect("config parses")
+    }
+
+    fn entity_with_governed_policy() -> EntityConfig {
+        serde_saphyr::from_str(
+            r#"
+name: person
+table: people
+fields:
+  - name: id
+  - name: secret
+access:
+  metadata_scope: metadata
+  aggregate_scope: aggregate
+  read_scope: people:read
+api:
+  default_limit: 50
+  max_limit: 100
+  require_purpose_header: true
+  governed_policy:
+    permitted_purposes: [benefits]
+    redaction_fields: [secret]
+"#,
+        )
+        .expect("entity config parses")
     }
 
     fn compiled_metadata_with_binding(constraint_terms: &[&str]) -> CompiledMetadata {
@@ -942,6 +928,35 @@ datasets: []
             .expect("metadata without selector is accepted");
 
         assert_eq!(selected, None);
+    }
+
+    #[test]
+    fn derived_entity_policy_hash_changes_with_context_constraints() {
+        let purpose_constraints = vec![vec!["benefits".to_string()]];
+        let entity = entity_with_governed_policy();
+        let baseline_hash = entity_purpose_policy_hash(&entity, &purpose_constraints)
+            .expect("baseline policy hash derives");
+
+        let mut constrained = entity.clone();
+        let constraints = &mut constrained
+            .api
+            .governed_policy
+            .as_mut()
+            .expect("governed policy")
+            .context_constraints;
+        constraints.assurance.allowed = vec!["substantial".to_string()];
+        constraints.jurisdiction.permitted = vec!["RW".to_string()];
+        constraints.legal_basis.required = true;
+        constraints.legal_basis.allowed_refs = vec!["law:rw:dpa".to_string()];
+        constraints.consent.required = true;
+        constraints.consent.allowed_refs = vec!["consent:household".to_string()];
+        constraints.source_freshness.max_age_seconds = Some(300);
+
+        let constrained_hash = entity_purpose_policy_hash(&constrained, &purpose_constraints)
+            .expect("constrained policy hash derives");
+
+        assert_ne!(baseline_hash, constrained_hash);
+        assert!(constrained_hash.starts_with("sha256:"));
     }
 
     #[test]

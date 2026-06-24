@@ -353,7 +353,6 @@ async fn ogc_items_and_features_enforce_required_purpose_header() {
     let policy = r#"          governed_policy:
             permitted_purposes:
               - capacity planning
-            trusted_context: {}
 "#;
     let server = server_with_purpose_and_entity_api_extra(
         &["civic_registry:metadata", "civic_registry:rows"],
@@ -400,7 +399,6 @@ async fn ogc_items_enforce_governed_purpose_and_redaction() {
             permitted_purposes:
               - capacity planning
             redaction_fields: [name]
-            trusted_context: {}
 "#;
     let server = server_with_purpose_and_entity_api_extra(
         &["civic_registry:metadata", "civic_registry:rows"],

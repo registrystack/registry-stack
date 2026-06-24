@@ -21,7 +21,7 @@ use registry_platform_ops::{
     filter_posture_for_tier, internal_config_hash, is_sha256_config_hash,
     posture_safe_runtime_config_hash, AntiRollbackKey, AntiRollbackProposal, AntiRollbackRecord,
     AntiRollbackStoreError, ApplyReportResult, AuditWritePolicy, BreakGlassApproval,
-    BreakGlassRateLimit, ConfigProvenance, ConfigSource, FileAntiRollbackStore,
+    BreakGlassRateLimit, CompliancePosture, ConfigProvenance, ConfigSource, FileAntiRollbackStore,
     FileLocalApprovalStore, LocalOperatorApproval, PostureFilterError, PostureTier,
 };
 use serde::de::DeserializeOwned;
@@ -1369,7 +1369,7 @@ fn build_posture(
     metadata: PostureMetadata<'_>,
     tier: PostureTier,
 ) -> Result<Value, PostureFilterError> {
-    let warnings = posture_warnings(config, readiness);
+    let warnings = posture_warnings(readiness);
     let provenance = provenance.unwrap_or_else(|| fallback_config_provenance(config));
     let mut instance = Map::new();
     instance.insert("id".to_string(), json!(config.instance.id));
@@ -1430,7 +1430,7 @@ fn build_posture(
     if let Some(emergency) = emergency_posture(config, &provenance) {
         configuration.insert("emergency".to_string(), emergency);
     }
-    let posture = json!({
+    let mut posture = json!({
         "schema": "registry.ops.posture.v1",
         "observed_at": OffsetDateTime::now_utc()
             .format(&Rfc3339)
@@ -1472,6 +1472,14 @@ fn build_posture(
             "audit": audit_summary(config),
         },
     });
+    if let Some(compliance) =
+        CompliancePosture::for_declared_regimes(config.compliance.regimes.clone())
+    {
+        posture
+            .as_object_mut()
+            .expect("posture document is a JSON object")
+            .insert("compliance".to_string(), json!(compliance));
+    }
     filter_posture_for_tier(posture, tier)
 }
 
@@ -2395,11 +2403,8 @@ fn unix_seconds_rfc3339(seconds: u64) -> Option<String> {
         .ok()
 }
 
-fn posture_warnings(config: &Config, readiness: Option<&ReadinessSnapshot>) -> Vec<String> {
+fn posture_warnings(readiness: Option<&ReadinessSnapshot>) -> Vec<String> {
     let mut warnings = Vec::new();
-    if !config.audit.chain {
-        warnings.push("relay.audit_checkpoint_unavailable".to_string());
-    }
     if readiness.is_none_or(|snapshot| !snapshot.fully_ready()) {
         warnings.push("relay.readiness_degraded".to_string());
     }
@@ -2530,7 +2535,7 @@ fn audit_summary(config: &Config) -> Value {
     json!({
         "configured": true,
         "sink_type": audit_sink_label(config),
-        "checkpoint_status": if config.audit.chain { "available" } else { "unavailable" },
+        "checkpoint_status": "not_supported",
         "latest_tail_hash": null,
         "latest_sequence": null,
         "verified_at": null,
@@ -2618,11 +2623,10 @@ fn audit_assurance(config: &Config) -> Value {
         crate::config::AuditSinkConfig::File { .. } => AuditSinkClass::File,
         crate::config::AuditSinkConfig::Syslog { .. } => AuditSinkClass::External,
     };
-    let checkpoints = if config.audit.chain {
-        AuditCheckpoints::Enabled
-    } else {
-        AuditCheckpoints::Supported
-    };
+    // Relay does not emit independent audit checkpoints today. `audit.chain`
+    // is retained only for config compatibility and cannot enable this posture
+    // capability; platform audit envelopes are chained regardless.
+    let checkpoints = AuditCheckpoints::Unsupported;
 
     // The ops assurance enums serialize to their snake_case wire strings, the
     // canonical posture vocabulary. `to_value` cannot fail for these unit
@@ -3099,6 +3103,26 @@ datasets: []
         assert_eq!(audit["write_policy"], "availability_first");
     }
 
+    /// The compatibility `audit.chain` flag does not control runtime chaining
+    /// or checkpoint posture. Platform audit envelopes are always chained, and
+    /// Relay has no independent checkpoint emission today.
+    #[test]
+    fn audit_checkpoint_posture_ignores_compat_chain_flag() {
+        let mut config = parse_minimal_config(&minimal_config_yaml());
+        config.audit.chain = true;
+
+        let assurance = audit_assurance(&config);
+        assert_eq!(assurance["hash_chain"], "process_local");
+        assert_eq!(assurance["checkpoints"], "unsupported");
+
+        let summary = audit_summary(&config);
+        assert_eq!(summary["checkpoint_status"], "not_supported");
+
+        assert!(!posture_warnings(None)
+            .iter()
+            .any(|warning| warning == "relay.audit_checkpoint_unavailable"));
+    }
+
     /// An undeclared profile (the minimal config default) omits `profile`,
     /// reports the single `deployment.profile_undeclared` warn finding, and
     /// carries no waivers.
@@ -3173,6 +3197,29 @@ datasets: []
         )
         .expect("evidence-grade posture builds");
         assert_posture_schema_valid(&posture);
+    }
+
+    #[test]
+    fn posture_omits_compliance_until_regime_is_declared() {
+        let mut config = parse_minimal_config(&minimal_config_yaml());
+        let posture = build_default_tier_posture(&config);
+        assert!(
+            posture.get("compliance").is_none(),
+            "compliance block must be omitted when no regime is declared"
+        );
+
+        config.compliance.regimes = vec!["gdpr".to_string()];
+        let posture = build_default_tier_posture(&config);
+        assert_posture_schema_valid(&posture);
+        assert_eq!(posture["compliance"]["regimes"], json!(["gdpr"]));
+        assert_eq!(posture["compliance"]["findings"], json!([]));
+        assert!(
+            posture["compliance"]["not_applicable"]
+                .as_array()
+                .expect("not_applicable is an array")
+                .len()
+                >= 4
+        );
     }
 
     /// The default-tier allowlist exposes only finding id/severity/status; the
@@ -3301,7 +3348,7 @@ datasets: []
                 "keyed_integrity": "none",
                 "sink_class": "stdout",
                 "retention_owner": "operator",
-                "checkpoints": "supported",
+                "checkpoints": "unsupported",
                 "anchoring": "none",
             }),
             "default-config audit assurance block changed"

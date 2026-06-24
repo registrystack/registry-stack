@@ -649,7 +649,6 @@ async fn aggregate_execution_enforces_source_entity_governed_purpose() {
           governed_policy:
             permitted_purposes:
               - capacity planning
-            trusted_context: {}
 audit:"#,
     );
     let server = server_with_aggregate_config(
@@ -686,7 +685,6 @@ async fn aggregate_governed_denial_audit_records_pdp_provenance() {
           governed_policy:
             permitted_purposes:
               - capacity planning
-            trusted_context: {}
 audit:"#,
     );
     let (server, audit_sink) = server_with_aggregate_config_and_audit(
@@ -753,7 +751,6 @@ async fn aggregate_scope_denial_happens_before_governed_pdp() {
           governed_policy:
             permitted_purposes:
               - capacity planning
-            trusted_context: {}
 audit:"#,
     );
     let (server, audit_sink) = server_with_aggregate_config_and_audit(
@@ -799,7 +796,6 @@ async fn aggregate_source_read_scope_denial_happens_before_governed_pdp() {
           governed_policy:
             permitted_purposes:
               - capacity planning
-            trusted_context: {}
 audit:"#,
     );
     let (server, audit_sink) = server_with_aggregate_config_and_audit(
@@ -850,7 +846,6 @@ async fn aggregate_only_governed_execution_uses_aggregate_scope_for_pdp() {
           governed_policy:
             permitted_purposes:
               - capacity planning
-            trusted_context: {}
 audit:"#,
         );
     let server = server_with_aggregate_config(
@@ -878,7 +873,6 @@ async fn aggregate_execution_applies_governed_redaction_to_observations_and_stru
             permitted_purposes:
               - capacity planning
             redaction_fields: [municipality_code]
-            trusted_context: {}
 audit:"#,
     );
     let server = server_with_aggregate_config(

@@ -9,6 +9,7 @@
 //!
 //! * an invalid profile value fails config parse,
 //! * deployment waivers must carry a non-empty reason and a well-formed expiry,
+//!   and must not target hard gates,
 //! * `evidence_grade` from an unsigned local file refuses startup,
 //! * the audit write-policy hook behaves under the default `fail_closed`
 //!   policy and explicit `availability_first` opt-out, proven with an
@@ -146,6 +147,32 @@ fn waiver_with_valid_expiry_passes_validation() {
     assert!(
         config::validate::run(&config).is_ok(),
         "a well-formed hosted_lab waiver must pass validation"
+    );
+}
+
+#[test]
+fn waiver_for_readiness_fail_gate_is_rejected() {
+    let yaml = format!(
+        "{}\ndeployment:\n  profile: production\n  waivers:\n    - finding: relay.admin.public_exposure\n      reason: \"synthetic-waiver-not-a-secret\"\n      expires: \"2999-01-01\"\n",
+        minimal_config_yaml()
+    );
+    let config = parse_config(&yaml).expect("config parses");
+    assert!(
+        config::validate::run(&config).is_err(),
+        "a waiver targeting a readiness_fail gate must fail validation even when the gate is inactive"
+    );
+}
+
+#[test]
+fn waiver_for_unknown_finding_is_rejected() {
+    let yaml = format!(
+        "{}\ndeployment:\n  profile: hosted_lab\n  waivers:\n    - finding: relay.made_up\n      reason: \"synthetic-waiver-not-a-secret\"\n      expires: \"2999-01-01\"\n",
+        minimal_config_yaml()
+    );
+    let config = parse_config(&yaml).expect("config parses");
+    assert!(
+        config::validate::run(&config).is_err(),
+        "a waiver targeting an unknown finding must fail validation"
     );
 }
 

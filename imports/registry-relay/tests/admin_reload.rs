@@ -4916,7 +4916,7 @@ async fn posture_reads_provenance_readiness_from_swapped_runtime_snapshot() {
 }
 
 #[tokio::test]
-async fn posture_warns_when_audit_checkpoint_unavailable() {
+async fn posture_reports_checkpoints_as_unsupported() {
     let fixture = build_fixture();
 
     let resp = fixture
@@ -4928,8 +4928,12 @@ async fn posture_warns_when_audit_checkpoint_unavailable() {
     resp.assert_status(StatusCode::OK);
     let body: Value = resp.json();
     assert_matches_posture_schema(&body);
-    assert_eq!(body["posture"]["audit"]["checkpoint_status"], "unavailable");
-    assert!(body["posture"]["warnings"]
+    assert_eq!(body["audit"]["checkpoints"], "unsupported");
+    assert_eq!(
+        body["posture"]["audit"]["checkpoint_status"],
+        "not_supported"
+    );
+    assert!(!body["posture"]["warnings"]
         .as_array()
         .expect("warnings array")
         .iter()

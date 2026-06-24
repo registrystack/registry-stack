@@ -214,7 +214,7 @@ Common forms:
 
 Operators are configured per field with `ops: [eq, in, gte, lte, between]`. Arbitrary SQL is never exposed.
 
-Some entities declare `required_filters`. Collection reads for those entities must include at least one of those fields or the gateway returns `400 entity.filter_required`. This protects sensitive resources from accidental unfiltered enumeration.
+Some entities declare `required_filters`. Collection reads for those entities must include at least one of those fields or the gateway returns `400 entity.filter_required`. When multiple fields are listed, they are alternatives: any one listed field satisfies the requirement, and callers do not need to provide all of them. This protects sensitive resources from accidental unfiltered enumeration.
 
 Collection reads accept at most 20 filter parameters. The cap applies before query planning so overly broad or machine-generated requests fail predictably.
 
@@ -237,7 +237,7 @@ Data-Purpose: https://data.example.gov/purposes/service-intake-check
 - Header **presence** can be required per entity via `require_purpose_header: true`. A missing header when required returns `400 auth.purpose_required`.
 - When the header is present, the value is **always recorded verbatim** in the audit trail.
 - Without an entity `governed_policy`, purpose **values are not enforced** at the consultation layer. Relay records the value but does not validate, compare, or allowlist it.
-- With an entity `governed_policy`, governed evidence-gateway routes evaluate the configured PDP purpose allowlist and return a stable `pdp.*` denial when the purpose is not permitted.
+- With an entity `governed_policy`, governed evidence-gateway routes evaluate the configured PDP purpose allowlist and any nested `context_constraints` gates for verified legal basis, consent, jurisdiction, assurance, and source freshness. Denials return stable `pdp.*` codes.
 - **Registry Notary** is the purpose-certification layer.
 - Value-level allowlists remain additive opt-in configuration and do not change the default `require_purpose_header` behavior.
 

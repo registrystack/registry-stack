@@ -689,7 +689,6 @@ async fn spdci_routes_enforce_governed_purpose_and_redact_reg_records() {
             permitted_purposes:
               - benefits
             redaction_fields: [impairment_type]
-            trusted_context: {}
 "#,
     )
     .await
@@ -742,7 +741,6 @@ async fn disabled_status_denies_when_status_source_field_is_redacted() {
             permitted_purposes:
               - benefits
             redaction_fields: [disability_status]
-            trusted_context: {}
 "#,
     )
     .await
@@ -1394,7 +1392,6 @@ async fn sync_search_redacts_mapped_response_field_without_failing_projection() 
             permitted_purposes:
               - benefits
             redaction_fields: [impairment_type]
-            trusted_context: {}
 "#,
         true,
     )
@@ -2045,7 +2042,6 @@ mod full_stack {
             r#"          governed_policy:
             permitted_purposes:
               - benefits
-            trusted_context: {}
 "#,
         )
         .await;

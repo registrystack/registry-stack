@@ -14,20 +14,23 @@
 //!   keeps running.
 //! * `finding_error` / `finding_warn`: a posture finding only.
 //!
-//! A triggered gate can be suppressed by a config waiver that names the
-//! finding, carries a free-text reason, and a mandatory expiry date. A waived
-//! finding reports status `waived` instead of its severity effect. An expired
-//! waiver stops suppressing the finding and additionally raises
-//! `deployment.waiver_expired`. `startup_fail` gates are never waivable.
+//! Finding-error and finding-warning gates can be suppressed by a config waiver
+//! that names the finding, carries a free-text reason, and a mandatory expiry
+//! date. A waived finding reports status `waived` instead of its severity
+//! effect. An expired waiver stops suppressing the finding and additionally
+//! raises `deployment.waiver_expired`. `startup_fail` and `readiness_fail` gates
+//! are hard gates and are never waivable.
 //!
 //! When no profile is declared, no gates bind and the deployment keeps its
 //! existing behavior exactly; a single `deployment.profile_undeclared` warn
 //! finding is emitted so operators are nagged, not broken.
 
 use registry_platform_ops::{
-    AuditWritePolicy, ConfigSource, DeploymentFinding, DeploymentFindingStatus,
-    DeploymentFindingWaiver, DeploymentProfile, DeploymentWaiver, GateSeverity,
+    self as platform_ops, AuditWritePolicy, ConfigSource, DeploymentProfile, DeploymentWaiver,
+    Gate, GateEvaluation, GateSeverity, ProfileGateSeverities,
 };
+#[cfg(test)]
+use registry_platform_ops::{DeploymentFinding, DeploymentFindingStatus};
 
 use crate::config::{AuthMode, Config};
 
@@ -38,14 +41,7 @@ pub const PROFILE_UNDECLARED: &str = "deployment.profile_undeclared";
 /// has passed its expiry date.
 pub const WAIVER_EXPIRED: &str = "deployment.waiver_expired";
 
-/// A waiver as declared in config: one finding id, a reason, and a mandatory
-/// expiry date in `YYYY-MM-DD` form.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct WaiverInput {
-    pub finding: String,
-    pub reason: String,
-    pub expires: String,
-}
+pub type WaiverInput = DeploymentWaiver;
 
 /// Derived, profile-independent inputs that gate conditions read. The caller
 /// projects these from the runtime config so gate evaluation stays a pure
@@ -68,92 +64,74 @@ pub struct DeploymentFacts {
     pub api_key_rotation_evidence_missing: bool,
     /// Config is a local YAML file rather than a signed governed bundle.
     pub config_unsigned: bool,
-    /// No audit sink is configured.
-    pub audit_sink_missing: bool,
     /// The audit write policy is availability-first (best effort).
     pub audit_best_effort: bool,
-}
-
-/// One gate in the relay catalog.
-struct Gate {
-    id: &'static str,
-    /// Whether the gate's condition holds for the given facts.
-    condition: fn(&DeploymentFacts) -> bool,
-    /// Severity per profile. `None` means the gate does not bind to that
-    /// profile.
-    hosted_lab: Option<GateSeverity>,
-    production: Option<GateSeverity>,
-    evidence_grade: Option<GateSeverity>,
-}
-
-impl Gate {
-    fn severity_for(&self, profile: DeploymentProfile) -> Option<GateSeverity> {
-        match profile {
-            // `local` binds no hard gates in the initial catalog.
-            DeploymentProfile::Local => None,
-            DeploymentProfile::HostedLab => self.hosted_lab,
-            DeploymentProfile::Production => self.production,
-            DeploymentProfile::EvidenceGrade => self.evidence_grade,
-            // The shared enum is `#[non_exhaustive]`; unknown future profiles
-            // bind nothing until this catalog is extended for them.
-            _ => None,
-        }
-    }
 }
 
 use GateSeverity::{FindingError, FindingWarn, ReadinessFail, StartupFail};
 
 /// The relay findings catalog. Order is stable so posture output is
 /// deterministic.
-const GATES: &[Gate] = &[
+const GATES: &[Gate<DeploymentFacts>] = &[
     Gate {
         id: "relay.admin.public_exposure",
         condition: |facts| facts.admin_public_exposure,
-        hosted_lab: Some(FindingError),
-        production: Some(ReadinessFail),
-        evidence_grade: Some(StartupFail),
+        severities: ProfileGateSeverities {
+            local: None,
+            hosted_lab: Some(FindingError),
+            production: Some(ReadinessFail),
+            evidence_grade: Some(StartupFail),
+        },
     },
     Gate {
         id: "relay.openapi.public",
         condition: |facts| facts.openapi_public,
-        hosted_lab: Some(FindingWarn),
-        production: Some(FindingError),
-        evidence_grade: Some(FindingError),
+        severities: ProfileGateSeverities {
+            local: None,
+            hosted_lab: Some(FindingWarn),
+            production: Some(FindingError),
+            evidence_grade: Some(FindingError),
+        },
     },
     Gate {
         id: "relay.ingress.rate_limit_missing",
         condition: |facts| facts.rate_limit_evidence_missing,
-        hosted_lab: Some(FindingWarn),
-        production: Some(FindingError),
-        evidence_grade: Some(FindingError),
+        severities: ProfileGateSeverities {
+            local: None,
+            hosted_lab: Some(FindingWarn),
+            production: Some(FindingError),
+            evidence_grade: Some(FindingError),
+        },
     },
     Gate {
         id: "relay.oidc.client_allowlist_empty",
         condition: |facts| facts.oidc_enabled && facts.oidc_allowlist_empty,
-        hosted_lab: Some(FindingWarn),
-        production: Some(FindingError),
-        evidence_grade: Some(ReadinessFail),
+        severities: ProfileGateSeverities {
+            local: None,
+            hosted_lab: Some(FindingWarn),
+            production: Some(FindingError),
+            evidence_grade: Some(ReadinessFail),
+        },
     },
     Gate {
         id: "relay.auth.api_key_no_rotation_evidence",
         condition: |facts| facts.api_key_mode && facts.api_key_rotation_evidence_missing,
-        hosted_lab: Some(FindingWarn),
-        production: Some(FindingError),
-        evidence_grade: Some(FindingError),
+        severities: ProfileGateSeverities {
+            local: None,
+            hosted_lab: Some(FindingWarn),
+            production: Some(FindingError),
+            evidence_grade: Some(FindingError),
+        },
     },
     Gate {
         id: "relay.config.unsigned",
         condition: |facts| facts.config_unsigned,
-        hosted_lab: Some(FindingWarn),
-        production: Some(FindingError),
-        evidence_grade: Some(StartupFail),
-    },
-    Gate {
-        id: "relay.audit.sink_missing",
-        condition: |facts| facts.audit_sink_missing,
-        hosted_lab: Some(FindingError),
-        production: Some(ReadinessFail),
-        evidence_grade: Some(StartupFail),
+        severities: ProfileGateSeverities {
+            local: None,
+            hosted_lab: Some(FindingWarn),
+            production: Some(FindingError),
+            evidence_grade: Some(StartupFail),
+        },
     },
     Gate {
         id: "relay.audit.best_effort",
@@ -164,150 +142,37 @@ const GATES: &[Gate] = &[
         // concern for a lab, so the hosted_lab binding is intentionally omitted
         // until the shared severity vocabulary gains an info level (a cross-repo
         // vocabulary decision tracked outside this catalog).
-        hosted_lab: None,
-        production: Some(FindingWarn),
-        evidence_grade: Some(ReadinessFail),
+        severities: ProfileGateSeverities {
+            local: None,
+            hosted_lab: None,
+            production: Some(FindingWarn),
+            evidence_grade: Some(ReadinessFail),
+        },
     },
 ];
 
-/// Outcome of evaluating the catalog against one profile.
-#[derive(Clone, Debug, Eq, PartialEq, Default)]
-pub struct GateEvaluation {
-    /// All findings, in catalog order, with profile findings first followed by
-    /// the framework findings (`deployment.profile_undeclared`,
-    /// `deployment.waiver_expired`).
-    pub findings: Vec<DeploymentFinding>,
-    /// Active (non-expired) waivers, including ones whose gate is not
-    /// currently triggered.
-    pub active_waivers: Vec<DeploymentWaiver>,
-    /// Finding ids whose triggered severity is `startup_fail` and are not
-    /// suppressed. A non-empty list means the process must refuse to start.
-    pub startup_failures: Vec<String>,
-    /// Finding ids whose triggered severity is `readiness_fail` and are not
-    /// suppressed. A non-empty list means readiness must report not-ready.
-    pub readiness_failures: Vec<String>,
-}
-
-impl GateEvaluation {
-    pub fn has_startup_failure(&self) -> bool {
-        !self.startup_failures.is_empty()
-    }
-
-    pub fn has_readiness_failure(&self) -> bool {
-        !self.readiness_failures.is_empty()
-    }
-}
-
 /// Evaluate the relay gate catalog.
 ///
-/// `today` is the current date in `YYYY-MM-DD` form, compared lexically
-/// against each waiver's `expires` date (ISO 8601 dates sort lexically).
+/// `today` is the current date in `YYYY-MM-DD` form.
 pub fn evaluate(
     profile: Option<DeploymentProfile>,
     facts: &DeploymentFacts,
     waivers: &[WaiverInput],
     today: &str,
 ) -> GateEvaluation {
-    let Some(profile) = profile else {
-        // Undeclared profile binds no gates. Existing behavior is preserved
-        // exactly; the operator is nagged with a single warn finding.
-        return GateEvaluation {
-            findings: vec![DeploymentFinding {
-                id: PROFILE_UNDECLARED.to_string(),
-                severity: FindingWarn,
-                status: DeploymentFindingStatus::Active,
-                waiver: None,
-            }],
-            active_waivers: Vec::new(),
-            startup_failures: Vec::new(),
-            readiness_failures: Vec::new(),
-        };
-    };
-
-    let mut evaluation = GateEvaluation::default();
-
-    for gate in GATES {
-        let Some(severity) = gate.severity_for(profile) else {
-            continue;
-        };
-        if !(gate.condition)(facts) {
-            continue;
-        }
-
-        // A waivable, triggered gate may be suppressed by a matching waiver.
-        // `startup_fail` is never waivable.
-        let waivable = severity != StartupFail;
-        let waiver = if waivable {
-            waivers.iter().find(|waiver| waiver.finding == gate.id)
-        } else {
-            None
-        };
-
-        match waiver {
-            Some(waiver) if !is_expired(waiver, today) => {
-                evaluation.findings.push(DeploymentFinding {
-                    id: gate.id.to_string(),
-                    severity,
-                    status: DeploymentFindingStatus::Waived,
-                    waiver: Some(DeploymentFindingWaiver {
-                        reason: waiver.reason.clone(),
-                        expires: waiver.expires.clone(),
-                    }),
-                });
-            }
-            _ => {
-                // No waiver, or an expired waiver: the gate's severity effect
-                // applies. Record the effect for startup / readiness.
-                evaluation.findings.push(DeploymentFinding {
-                    id: gate.id.to_string(),
-                    severity,
-                    status: DeploymentFindingStatus::Active,
-                    waiver: None,
-                });
-                match severity {
-                    StartupFail => evaluation.startup_failures.push(gate.id.to_string()),
-                    ReadinessFail => evaluation.readiness_failures.push(gate.id.to_string()),
-                    FindingError | FindingWarn => {}
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    // Active waivers are reported regardless of whether their gate currently
-    // triggers, so Trust Operations can aggregate and review them. Expired
-    // waivers raise `deployment.waiver_expired` and are dropped from the
-    // active list.
-    let mut expired_findings = Vec::new();
-    for waiver in waivers {
-        if is_expired(waiver, today) {
-            expired_findings.push(DeploymentFinding {
-                id: WAIVER_EXPIRED.to_string(),
-                severity: FindingError,
-                status: DeploymentFindingStatus::Active,
-                waiver: Some(DeploymentFindingWaiver {
-                    reason: waiver.reason.clone(),
-                    expires: waiver.expires.clone(),
-                }),
-            });
-        } else {
-            evaluation.active_waivers.push(DeploymentWaiver {
-                finding: waiver.finding.clone(),
-                reason: waiver.reason.clone(),
-                expires: waiver.expires.clone(),
-            });
-        }
-    }
-    evaluation.findings.extend(expired_findings);
-
-    evaluation
+    platform_ops::evaluate(profile, GATES, facts, waivers, today)
 }
 
-/// A waiver is expired once `today` is strictly past its `expires` date. The
-/// expiry day itself is still covered. ISO 8601 dates compare correctly with
-/// lexical string ordering.
-fn is_expired(waiver: &WaiverInput, today: &str) -> bool {
-    today > waiver.expires.as_str()
+/// Look up the declared-profile severity for a finding id in the relay catalog.
+///
+/// `None` means the finding id is unknown. `Some(None)` means the gate exists
+/// but does not bind to the declared profile, or no profile was declared.
+pub fn catalog_severity_for(
+    profile: Option<DeploymentProfile>,
+    finding: &str,
+) -> Option<Option<GateSeverity>> {
+    let gate = GATES.iter().find(|gate| gate.id == finding)?;
+    Some(profile.and_then(|profile| gate.severity_for(profile)))
 }
 
 /// Project the runtime config into the profile-independent facts the gates
@@ -315,9 +180,7 @@ fn is_expired(waiver: &WaiverInput, today: &str) -> bool {
 ///
 /// `config_source` is the provenance source of the loaded config: a signed
 /// governed bundle clears `relay.config.unsigned`; a local YAML file does not,
-/// and neither does unknown provenance (which fails closed as unsigned). Relay
-/// always configures an audit sink, so `audit_sink_missing` is always false
-/// here; the gate remains in the catalog for completeness.
+/// and neither does unknown provenance (which fails closed as unsigned).
 pub fn facts_from_config(config: &Config, config_source: ConfigSource) -> DeploymentFacts {
     DeploymentFacts {
         admin_public_exposure: admin_public_exposure(config),
@@ -339,7 +202,6 @@ pub fn facts_from_config(config: &Config, config_source: ConfigSource) -> Deploy
             config_source,
             ConfigSource::SignedBundleFile | ConfigSource::SignedBundleEndpoint
         ),
-        audit_sink_missing: false,
         audit_best_effort: config.audit.write_policy == AuditWritePolicy::AvailabilityFirst,
     }
 }
@@ -400,7 +262,6 @@ mod tests {
             api_key_mode: false,
             api_key_rotation_evidence_missing: false,
             config_unsigned: false,
-            audit_sink_missing: false,
             audit_best_effort: false,
         }
     }
@@ -430,7 +291,6 @@ mod tests {
             api_key_mode: true,
             api_key_rotation_evidence_missing: true,
             config_unsigned: true,
-            audit_sink_missing: true,
             audit_best_effort: true,
         };
         let evaluation = evaluate(None, &facts, &[], TODAY);
@@ -459,7 +319,6 @@ mod tests {
         let facts = DeploymentFacts {
             admin_public_exposure: true,
             config_unsigned: true,
-            audit_sink_missing: true,
             ..clean_facts()
         };
         let evaluation = evaluate(Some(DeploymentProfile::Local), &facts, &[], TODAY);
@@ -683,25 +542,30 @@ mod tests {
     }
 
     #[test]
-    fn audit_sink_missing_escalates() {
+    fn audit_sink_missing_is_not_an_evaluated_gate() {
         let facts = DeploymentFacts {
-            audit_sink_missing: true,
-            ..clean_facts()
+            admin_public_exposure: true,
+            openapi_public: true,
+            rate_limit_evidence_missing: true,
+            oidc_enabled: true,
+            oidc_allowlist_empty: true,
+            api_key_mode: true,
+            api_key_rotation_evidence_missing: true,
+            config_unsigned: true,
+            audit_best_effort: true,
         };
-        let id = "relay.audit.sink_missing";
-        assert_eq!(
-            finding(
-                &evaluate(Some(DeploymentProfile::HostedLab), &facts, &[], TODAY),
-                id
-            )
-            .severity,
-            FindingError
-        );
-        let production = evaluate(Some(DeploymentProfile::Production), &facts, &[], TODAY);
-        assert_eq!(finding(&production, id).severity, ReadinessFail);
-        let evidence = evaluate(Some(DeploymentProfile::EvidenceGrade), &facts, &[], TODAY);
-        assert_eq!(finding(&evidence, id).severity, StartupFail);
-        assert!(evidence.has_startup_failure());
+
+        for profile in [
+            DeploymentProfile::HostedLab,
+            DeploymentProfile::Production,
+            DeploymentProfile::EvidenceGrade,
+        ] {
+            let evaluation = evaluate(Some(profile), &facts, &[], TODAY);
+            assert!(
+                !finding_ids(&evaluation).contains(&"relay.audit.sink_missing".to_string()),
+                "unrepresentable audit sink absence must not be reported under {profile:?}"
+            );
+        }
     }
 
     #[test]
@@ -752,7 +616,7 @@ mod tests {
     }
 
     #[test]
-    fn waiver_suppresses_readiness_fail() {
+    fn waiver_does_not_suppress_readiness_fail() {
         let facts = DeploymentFacts {
             admin_public_exposure: true,
             ..clean_facts()
@@ -765,9 +629,14 @@ mod tests {
         let evaluation = evaluate(Some(DeploymentProfile::Production), &facts, &waivers, TODAY);
         assert_eq!(
             finding(&evaluation, "relay.admin.public_exposure").status,
-            DeploymentFindingStatus::Waived
+            DeploymentFindingStatus::Active
         );
-        assert!(!evaluation.has_readiness_failure());
+        assert!(evaluation.has_readiness_failure());
+        assert_eq!(evaluation.active_waivers.len(), 1);
+        assert_eq!(
+            evaluation.active_waivers[0].finding,
+            "relay.admin.public_exposure"
+        );
     }
 
     #[test]

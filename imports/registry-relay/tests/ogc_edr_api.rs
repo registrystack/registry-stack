@@ -558,7 +558,6 @@ async fn area_enforces_source_entity_purpose_header() {
     let policy = r#"          governed_policy:
             permitted_purposes:
               - capacity planning
-            trusted_context: {}
 "#;
     let server = server_with_source_entity_api_extra(
         &[
@@ -606,7 +605,6 @@ async fn area_governed_denial_audit_records_pdp_provenance() {
     let policy = r#"          governed_policy:
             permitted_purposes:
               - capacity planning
-            trusted_context: {}
 "#;
     let (server, audit_sink) = server_with_source_entity_api_extra_and_audit(
         &[
@@ -675,7 +673,6 @@ async fn area_applies_source_entity_governed_redaction_to_feature_properties() {
             permitted_purposes:
               - capacity planning
             redaction_fields: [individual_count]
-            trusted_context: {}
 "#;
     let server = server_with_source_entity_api_extra(
         &[
@@ -868,7 +865,6 @@ async fn area_aggregate_only_governed_policy_uses_aggregate_checked_scope() {
     let policy = r#"          governed_policy:
             permitted_purposes:
               - capacity planning
-            trusted_context: {}
 "#;
     let server = server_with_aggregate_only_source_entity_api_extra(
         &["social_registry:metadata", "social_registry:aggregate"],
