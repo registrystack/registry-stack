@@ -493,7 +493,10 @@ Docker Compose style setups.
 Use `connector: source_adapter_sidecar` when a target system needs governed HTTP JSON
 mapping, a short dependent HTTP JSON flow, FHIR mapping, target credential
 handling, or output normalization outside Notary. The sidecar source chooses
-`engine: http_json`, `engine: http_flow`, or `engine: fhir`
+`engine: http_json`, `engine: http_flow`, `engine: fhir`, or
+`engine: script_rhai` (a sandboxed, orchestration-only Rhai script for sources
+that need a little branching across a few governed reads — see the
+[Script (Rhai) Source Adapter Guide](script-rhai-source-adapter-guide.md))
 in its own signed manifest. The source connection must use static sidecar bearer auth through
 `token_env`. Do not configure target-service credentials in Notary; keep them
 in the sidecar environment or secret store. Configure performance and
