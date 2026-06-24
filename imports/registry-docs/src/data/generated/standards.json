@@ -507,7 +507,7 @@
       },
       {
         "label": "Registry Relay governed evidence PDP path",
-        "url": "https://github.com/jeremi/registry-relay/blob/cfb1b735c6a2b3a50f5204e49660a859ceabb87d/src/api/governed.rs"
+        "url": "https://github.com/jeremi/registry-relay/blob/917e8064b62b8f86f35425a61fe66d3a4b5db921/src/api/governed.rs"
       }
     ],
     "last_checked": "2026-06-20",

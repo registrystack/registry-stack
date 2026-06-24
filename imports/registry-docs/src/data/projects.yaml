@@ -59,9 +59,9 @@
     - label: README
       url: https://github.com/jeremi/registry-relay
     - label: Local API docs
-      url: https://github.com/jeremi/registry-relay/blob/cfb1b735c6a2b3a50f5204e49660a859ceabb87d/docs/api.md
+      url: https://github.com/jeremi/registry-relay/blob/917e8064b62b8f86f35425a61fe66d3a4b5db921/docs/api.md
     - label: Local metadata docs
-      url: https://github.com/jeremi/registry-relay/blob/cfb1b735c6a2b3a50f5204e49660a859ceabb87d/docs/metadata.md
+      url: https://github.com/jeremi/registry-relay/blob/917e8064b62b8f86f35425a61fe66d3a4b5db921/docs/metadata.md
   rename_status: Local checkout renamed to `registry-relay`; old worktrees under `registry_relay-*` remain for historical evidence.
 - id: registry-notary
   name: Registry Notary
@@ -86,7 +86,7 @@
     - label: README
       url: https://github.com/jeremi/registry-notary
     - label: OpenAPI source
-      url: https://github.com/jeremi/registry-notary/blob/629c901c6ae49c86c6df907b876be267ecf05c72/crates/registry-notary-server/src/openapi.rs
+      url: https://github.com/jeremi/registry-notary/blob/4fb5fcf137edb628f3dc4bfedd42891dbbdebb03/crates/registry-notary-server/src/openapi.rs
   rename_status: Already using the target repo name locally.
 - id: registry-lab
   name: Registry Lab
