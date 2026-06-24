@@ -1,5 +1,24 @@
 # Release Notes
 
+## 0.7.0
+
+- Added the `script_rhai` source-adapter engine with governed/runtime
+  validation, bounded helper functions, batch-match coverage, and operator
+  documentation.
+- Added OID4VCI SD-JWT field projection so claim policies can disclose selected
+  fields without widening the configured credential boundary.
+- Adopted shared compliance context constraints for legal basis, consent,
+  jurisdiction, assurance, and retention policy checks.
+- Renamed the current source-adapter sidecar surfaces from the retired OpenFn
+  sidecar naming to `source_adapter_sidecar`, including config connector values,
+  batch mode values, Dockerfile naming, metrics, security inventories, and
+  operator docs. Operators must update configs and monitoring that reference the
+  old names.
+- Removed the ignored source-adapter sidecar `--jobs-root` compatibility flag.
+- Hardened source-adapter request-header validation, Rhai POST/OAuth target
+  authentication, and OAuth token-refresh coalescing.
+- Refreshed the Registry Platform pin to the beta-5 `0.3.3` release prep.
+
 ## 0.6.2
 
 - Fixed federated evaluation policy-context handling so federation profiles can

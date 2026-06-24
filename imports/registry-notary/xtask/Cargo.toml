@@ -8,7 +8,7 @@ publish = false
 
 [dependencies]
 base64 = { version = "0.22" }
-registry-platform-crypto = { version = "0.3.2", path = "../../registry-platform/crates/registry-platform-crypto" }
-registry-platform-sdjwt = { version = "0.3.2", path = "../../registry-platform/crates/registry-platform-sdjwt" }
+registry-platform-crypto = { version = "0.3.3", path = "../../registry-platform/crates/registry-platform-crypto" }
+registry-platform-sdjwt = { version = "0.3.3", path = "../../registry-platform/crates/registry-platform-sdjwt" }
 serde_json = { version = "1" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

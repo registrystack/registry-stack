@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-06-24
+
+### Added
+
+- **Script Rhai source-adapter engine**: added an offline Rhai runtime and
+  sidecar integration with governed/runtime validation, bounded helpers,
+  batch-match coverage, and operator documentation.
+- **OID4VCI SD-JWT field projection**: claim policies can project selected
+  SD-JWT fields while preserving the configured disclosure boundary.
+- **Compliance context constraints**: Notary policy gates now consume the shared
+  Platform legal basis, consent, jurisdiction, assurance, and retention
+  vocabulary for source matching and posture reporting.
+
 ### Changed
 
 - **BREAKING: removed OpenFn sidecar naming from the current source-adapter
@@ -25,6 +38,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING: removed the ignored source-adapter sidecar `--jobs-root` CLI
   flag.** Built-in adapter manifests are self-contained; wrappers that still
   pass `--jobs-root` must drop it.
+- Advanced Registry Platform to `0.3.3` for the beta-5 train.
+
+### Fixed
+
+- Hardened source-adapter request-header validation and Rhai POST/OAuth target
+  authentication, including OAuth token-refresh coalescing and edge-case tests.
 
 ## [0.6.2] - 2026-06-22
 

@@ -20,7 +20,7 @@ reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_norway.workspace = true
-registry-notary-source-adapter-rhai = { version = "0.6.2", path = "../registry-notary-source-adapter-rhai" }
+registry-notary-source-adapter-rhai = { version = "0.7.0", path = "../registry-notary-source-adapter-rhai" }
 registry-platform-authcommon.workspace = true
 registry-platform-audit.workspace = true
 registry-platform-config.workspace = true
