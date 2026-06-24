@@ -817,6 +817,7 @@ struct AppState {
     source_runtime: Arc<BTreeMap<String, Arc<SourceRuntimeState>>>,
     http_json_clients: Arc<Mutex<BTreeMap<String, reqwest::Client>>>,
     oauth2_tokens: Arc<Mutex<BTreeMap<String, CachedOAuth2Token>>>,
+    oauth2_token_locks: Arc<Mutex<BTreeMap<String, Arc<Mutex<()>>>>>,
     /// Compiled `script_rhai` engines, keyed by `source_id`. Each script is
     /// compiled once at startup and reused for every request; a compile failure
     /// is a configuration error that fails startup.
@@ -1589,6 +1590,7 @@ pub async fn sidecar_router(config: SidecarConfig) -> Result<Router, SidecarErro
         source_runtime: Arc::new(source_runtime),
         http_json_clients: Arc::new(Mutex::new(BTreeMap::new())),
         oauth2_tokens: Arc::new(Mutex::new(BTreeMap::new())),
+        oauth2_token_locks: Arc::new(Mutex::new(BTreeMap::new())),
         rhai_engines: Arc::new(rhai_engines),
         metrics: Arc::new(Mutex::new(BTreeMap::new())),
         audit: audit.map(Arc::new),
@@ -5047,11 +5049,14 @@ async fn oauth2_client_credentials_token(
     credential: &Value,
 ) -> Result<String, SourceExecutionError> {
     let cache_key = oauth2_token_cache_key(source_id, auth)?;
-    let now = Instant::now();
-    if let Some(token) = state.oauth2_tokens.lock().await.get(&cache_key).cloned() {
-        if token.refresh_after > now {
-            return Ok(token.access_token);
-        }
+    if let Some(token) = cached_oauth2_access_token(state, &cache_key).await {
+        return Ok(token);
+    }
+
+    let fetch_lock = oauth2_token_fetch_lock(state, &cache_key).await;
+    let _fetch_guard = fetch_lock.lock().await;
+    if let Some(token) = cached_oauth2_access_token(state, &cache_key).await {
+        return Ok(token);
     }
 
     let token_url = auth
@@ -5121,7 +5126,7 @@ async fn oauth2_client_credentials_token(
         .to_string();
     let expires_in = body
         .get("expires_in")
-        .and_then(Value::as_u64)
+        .and_then(oauth2_expires_in_seconds)
         .unwrap_or(300);
     let refresh_skew = Duration::from_secs(auth.refresh_skew_seconds.unwrap_or(60));
     let ttl = Duration::from_secs(expires_in);
@@ -5137,6 +5142,33 @@ async fn oauth2_client_credentials_token(
         },
     );
     Ok(access_token)
+}
+
+async fn cached_oauth2_access_token(state: &AppState, cache_key: &str) -> Option<String> {
+    let now = Instant::now();
+    state
+        .oauth2_tokens
+        .lock()
+        .await
+        .get(cache_key)
+        .filter(|token| token.refresh_after > now)
+        .map(|token| token.access_token.clone())
+}
+
+async fn oauth2_token_fetch_lock(state: &AppState, cache_key: &str) -> Arc<Mutex<()>> {
+    let mut locks = state.oauth2_token_locks.lock().await;
+    locks
+        .entry(cache_key.to_string())
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone()
+}
+
+fn oauth2_expires_in_seconds(value: &Value) -> Option<u64> {
+    match value {
+        Value::Number(number) => number.as_u64(),
+        Value::String(text) => text.trim().parse::<u64>().ok(),
+        _ => None,
+    }
 }
 
 fn oauth2_request_format(auth: &HttpJsonAuthConfig) -> &str {
@@ -7507,6 +7539,7 @@ mod tests {
             source_runtime: Arc::new(BTreeMap::new()),
             http_json_clients: Arc::new(Mutex::new(BTreeMap::new())),
             oauth2_tokens: Arc::new(Mutex::new(BTreeMap::new())),
+            oauth2_token_locks: Arc::new(Mutex::new(BTreeMap::new())),
             rhai_engines: Arc::new(BTreeMap::new()),
             metrics: Arc::new(Mutex::new(BTreeMap::new())),
             audit: None,

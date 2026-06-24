@@ -77,7 +77,7 @@ async fn oauth_token_json(
 ) -> Json<Value> {
     *state.oauth_requests.lock().await += 1;
     *state.last_oauth_json.lock().await = Some(body);
-    Json(json!({ "access_token": "oauth-json-access", "expires_in": 600 }))
+    Json(json!({ "access_token": "oauth-json-access", "expires_in": "600" }))
 }
 
 async fn oauth_token_short_lived_form(
@@ -90,6 +90,25 @@ async fn oauth_token_short_lived_form(
     drop(requests);
     *state.last_oauth_form.lock().await = form;
     Json(json!({ "access_token": token, "expires_in": 1 }))
+}
+
+async fn oauth_token_expired_then_cached_form(
+    State(state): State<CapturingUpstream>,
+    Form(form): Form<HashMap<String, String>>,
+) -> Json<Value> {
+    let request_number = {
+        let mut requests = state.oauth_requests.lock().await;
+        *requests += 1;
+        *requests
+    };
+    if request_number > 1 {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    *state.last_oauth_form.lock().await = form;
+    Json(json!({
+        "access_token": format!("oauth-refresh-{request_number}"),
+        "expires_in": if request_number == 1 { 0 } else { 600 }
+    }))
 }
 
 async fn oauth_token_missing_access_token(
@@ -485,6 +504,51 @@ async fn oauth2_short_lived_token_refreshes_after_skew() {
         headers.get("authorization").map(String::as_str),
         Some("Bearer oauth-access-3"),
         "the last target request must use the freshly refreshed token; saw {headers:?}"
+    );
+}
+
+#[tokio::test]
+async fn oauth2_concurrent_refreshes_are_coalesced_per_cache_key() {
+    let _guard = ENV_LOCK.lock().await;
+    let upstream_state = CapturingUpstream::default();
+    let upstream = TestServer::builder().http_transport().build(
+        Router::new()
+            .route("/lookup", get(capturing_lookup))
+            .route("/oauth/token", post(oauth_token_expired_then_cached_form))
+            .with_state(upstream_state.clone()),
+    );
+    let upstream_url = server_base_url(&upstream);
+    set_env();
+    let token_url = format!("{upstream_url}/oauth/token");
+    let target_extra = format!(
+        r#"
+          auth:
+            type: oauth2_client_credentials
+            token_url: {token_url}
+            request_format: form
+            refresh_skew_seconds: 0
+            client_id:
+              secret: clientId
+            client_secret:
+              secret: oauthSecret"#,
+        token_url = serde_json::to_string(&token_url).expect("URL serializes"),
+    );
+    let sidecar = spawn_sidecar(rhai_auth_manifest(&upstream_url, &target_extra)).await;
+
+    let (first, second) = tokio::join!(run_single_lookup(&sidecar), run_single_lookup(&sidecar));
+    first.assert_status_ok();
+    second.assert_status_ok();
+
+    let oauth_requests = *upstream_state.oauth_requests.lock().await;
+    assert_eq!(
+        oauth_requests, 2,
+        "startup uses an immediately expired token, then concurrent real lookups should share one refresh"
+    );
+    let headers = upstream_state.last_headers.lock().await;
+    assert_eq!(
+        headers.get("authorization").map(String::as_str),
+        Some("Bearer oauth-refresh-2"),
+        "real lookups must use the coalesced refreshed token; saw {headers:?}"
     );
 }
 
