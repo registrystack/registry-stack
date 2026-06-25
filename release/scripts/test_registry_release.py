@@ -372,6 +372,45 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("missing release asset registry-relay.digest", result.stderr)
 
+    def test_bind_spdx_subject_adds_digest_bound_described_package(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            spdx = root / "sidecar.spdx.json"
+            spdx.write_text(
+                json.dumps(
+                    {
+                        "spdxVersion": "SPDX-2.3",
+                        "name": "syft-sidecar-output",
+                        "documentDescribes": ["SPDXRef-DocumentRoot"],
+                        "packages": [
+                            {
+                                "SPDXID": "SPDXRef-DocumentRoot",
+                                "name": "registry-notary-source-adapter-sidecar",
+                                "downloadLocation": "NOASSERTION",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = run_tool(
+                "bind-spdx-subject",
+                str(spdx),
+                "--image-name",
+                "registry-notary-source-adapter-sidecar",
+                "--digest-ref",
+                IMAGE_DIGEST_REF,
+            )
+
+            data = json.loads(spdx.read_text(encoding="utf-8"))
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        described = set(data["documentDescribes"])
+        subject_packages = [package for package in data["packages"] if package["SPDXID"] in described]
+        self.assertTrue(any(package["name"] == IMAGE_DIGEST_REF for package in subject_packages))
+        self.assertTrue(any(IMAGE_DIGEST in json.dumps(package) for package in subject_packages))
+
 
 def run_tool(*args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
