@@ -10,7 +10,7 @@ use axum::response::{IntoResponse, Json, Response};
 use axum::routing::get;
 use axum::{Extension, Router};
 use geo::Intersects;
-use geojson::{GeoJson, Geometry};
+use geojson::{GeoJson, Geometry, GeometryValue};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use tokio::sync::watch;
@@ -803,17 +803,19 @@ fn geo_geometry(geometry: &Geometry) -> Result<geo_types::Geometry<f64>, Error> 
 
 fn count_vertices(geometry: &Geometry) -> usize {
     match &geometry.value {
-        geojson::Value::Point(_) => 1,
-        geojson::Value::MultiPoint(points) | geojson::Value::LineString(points) => points.len(),
-        geojson::Value::MultiLineString(lines) | geojson::Value::Polygon(lines) => {
-            lines.iter().map(Vec::len).sum()
+        GeometryValue::Point { .. } => 1,
+        GeometryValue::MultiPoint { coordinates } | GeometryValue::LineString { coordinates } => {
+            coordinates.len()
         }
-        geojson::Value::MultiPolygon(polygons) => polygons
+        GeometryValue::MultiLineString { coordinates } | GeometryValue::Polygon { coordinates } => {
+            coordinates.iter().map(Vec::len).sum()
+        }
+        GeometryValue::MultiPolygon { coordinates } => coordinates
             .iter()
             .flat_map(|polygon| polygon.iter())
             .map(Vec::len)
             .sum(),
-        geojson::Value::GeometryCollection(geometries) => {
+        GeometryValue::GeometryCollection { geometries } => {
             geometries.iter().map(count_vertices).sum()
         }
     }
@@ -994,4 +996,36 @@ fn require_any_metadata_scope(
 
 fn link(href: &str, rel: &str, media_type: &str) -> Value {
     json!({ "href": href, "rel": rel, "type": media_type })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn count_vertices_counts_nested_geojson_geometries() {
+        let geometry: Geometry = serde_json::from_value(json!({
+            "type": "GeometryCollection",
+            "geometries": [
+                {"type": "Point", "coordinates": [100.0, 13.0]},
+                {
+                    "type": "LineString",
+                    "coordinates": [[100.0, 13.0], [100.1, 13.1]]
+                },
+                {
+                    "type": "Polygon",
+                    "coordinates": [[
+                        [100.0, 13.0],
+                        [100.1, 13.0],
+                        [100.1, 13.1],
+                        [100.0, 13.0]
+                    ]]
+                }
+            ]
+        }))
+        .expect("test geometry parses");
+
+        assert_eq!(count_vertices(&geometry), 7);
+    }
 }
