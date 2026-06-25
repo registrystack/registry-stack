@@ -5,7 +5,7 @@
 Install a pinned release without cloning this repo:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/jeremi/registry-registryctl/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/v0.8.0/crates/registryctl/install.sh | sh
 ```
 
 Then create and start your first secured spreadsheet API:
@@ -44,14 +44,16 @@ source-adapter contract and defaults the sidecar URL to
 `http://host.docker.internal:4360`. It does not start a FHIR server or the
 FHIR sidecar for you.
 
-The installer defaults to `v0.1.0`. To install a different pinned release, set
+The installer defaults to `v0.8.0`. To install a different pinned release, set
 `REGISTRYCTL_VERSION`:
 
 ```sh
-REGISTRYCTL_VERSION=vX.Y.Z curl -fsSL https://raw.githubusercontent.com/jeremi/registry-registryctl/main/install.sh | sh
+REGISTRYCTL_VERSION=vX.Y.Z curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/v0.8.0/crates/registryctl/install.sh | sh
 ```
 
-Binaries are published for Linux x86_64, Linux aarch64, and macOS aarch64.
+A Linux x86_64 binary is published for the `v0.8.0` stack release. On other
+platforms (including macOS and Linux arm64), install from source with
+`cargo install --git https://github.com/registrystack/registry-stack --tag v0.8.0 registryctl --locked`.
 
 ## Update checks
 
@@ -123,7 +125,7 @@ shared crates have fresh release tags.
 ## End-to-end smoke
 
 The generated project uses the public Relay image published from current main:
-`ghcr.io/jeremi/registry-relay:snapshot`. With Docker Compose available, run:
+`ghcr.io/registrystack/registry-relay:snapshot`. With Docker Compose available, run:
 
 ```sh
 tmpdir="$(mktemp -d)"

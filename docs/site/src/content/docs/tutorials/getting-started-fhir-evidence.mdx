@@ -49,15 +49,16 @@ You need:
 
 - Docker with Compose v2.20 or later.
 - The `just` command runner.
-- A Registry Lab checkout with submodules.
+- A Registry Lab checkout (the `lab` directory of the `registry-stack` monorepo) with its external submodules.
 - Local demo credentials generated with the lab's fixture command.
 
-Clone Registry Lab if you do not already have it. This is only needed for this
-full FHIR lab profile:
+Clone the RegistryStack monorepo if you do not already have it; the lab lives in
+the `lab` directory. This is only needed for this full FHIR lab profile:
 
 ```sh
-git clone --recurse-submodules https://github.com/jeremi/registry-lab.git
-cd registry-lab
+git clone https://github.com/registrystack/registry-stack.git
+cd registry-stack/lab
+just setup
 ```
 
 If you already have a FHIR source-adapter sidecar running and only need a

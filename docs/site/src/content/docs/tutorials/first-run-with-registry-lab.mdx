@@ -56,16 +56,19 @@ you want the full multi-service demo topology rather than a generated project.
 
 ## Get the repository
 
-Clone with submodules, or run `just setup` after a plain clone to initialise them.
+The lab lives in the `lab` directory of the RegistryStack monorepo. Clone the
+monorepo, then run `just setup` to initialise the external demo submodules
+(crosswalk, Atlas, eSignet authenticator).
 
 ```sh
-git clone --recurse-submodules git@github.com:jeremi/registry-lab.git
-cd registry-lab
+git clone git@github.com:registrystack/registry-stack.git
+cd registry-stack/lab
+just setup
 ```
 
 ## Steps
 
-Run these from the `registry-lab` checkout, in order.
+Run these from the `lab` directory of your `registry-stack` checkout, in order.
 
 <Steps>
 
@@ -114,7 +117,7 @@ The default topology runs three Relay instances (civil `4311`, social protection
 `4323`), live Postgres and Zitadel services, the source adapter sidecar, the static metadata publisher
 (`4331`), and a profile-gated narrated demo client. For the full service inventory with host ports
 and network layout, see the
-[Registry Lab repository](https://github.com/jeremi/registry-lab).
+[Registry Lab directory](https://github.com/registrystack/registry-stack/tree/v0.8.0/lab).
 
 ## Expected output
 
@@ -222,7 +225,7 @@ This scenario exercises the static metadata publisher (port `4331`), the shared 
 
 What this proves: the Notary fans out to all three Relay services using per-source bearer tokens
 configured in
-[`config/notary/shared-eligibility-notary.yaml`](https://github.com/jeremi/registry-lab/blob/9814a8e3286b324616b887f7258a902efefcfb00/config/notary/shared-eligibility-notary.yaml).
+[`config/notary/shared-eligibility-notary.yaml`](https://github.com/registrystack/registry-stack/blob/v0.8.0/lab/config/notary/shared-eligibility-notary.yaml).
 The result carries `provenance.used.source_count >= 2` once at least two sources contribute. A single Notary
 aggregates evidence across independently operated registries and reports how many authorities
 contributed, without merging or exposing the underlying rows.
@@ -253,7 +256,7 @@ issuer and key configuration, and the wallet-driven OID4VCI alternative, see
 [Registry Notary](../../products/registry-notary/). The lab also drives an end-to-end citizen wallet
 flow through the `just citizen-oid4vci-login`, `just citizen-oid4vci-code`,
 `just citizen-oid4vci-token`, and `just citizen-oid4vci-report` recipes; see the
-[Registry Lab repository](https://github.com/jeremi/registry-lab) for that path and its extra
+[Registry Lab directory](https://github.com/registrystack/registry-stack/tree/v0.8.0/lab) for that path and its extra
 services.
 
 ## Cross-authority evaluation
@@ -369,7 +372,7 @@ just down
 
 ## Next
 
-- [Registry Lab](https://github.com/jeremi/registry-lab): the full demo topology, fixture data
+- [Registry Lab](https://github.com/registrystack/registry-stack/tree/v0.8.0/lab): the full demo topology, fixture data
   contract, and per-scenario tutorials.
 - [Registry Relay](../../products/registry-relay/): route reference, auth scopes, and configuration
   guide.

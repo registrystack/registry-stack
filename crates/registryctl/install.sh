@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo="jeremi/registry-registryctl"
-default_version="v0.1.0"
+repo="registrystack/registry-stack"
+default_version="v0.8.0"
 version="${REGISTRYCTL_VERSION:-$default_version}"
 install_dir="${REGISTRYCTL_INSTALL_DIR:-$HOME/.local/bin}"
 
@@ -11,7 +11,7 @@ usage() {
 Install registryctl.
 
 Environment:
-  REGISTRYCTL_VERSION      Pinned release tag to install. Defaults to v0.1.0.
+  REGISTRYCTL_VERSION      Pinned release tag to install. Defaults to v0.8.0.
   REGISTRYCTL_INSTALL_DIR  Install directory. Defaults to ~/.local/bin.
 EOF
 }
@@ -29,7 +29,6 @@ need() {
 }
 
 need curl
-need tar
 need uname
 
 case "$version" in
@@ -53,22 +52,21 @@ Darwin) os_label="macos" ;;
 esac
 
 case "$arch" in
-x86_64 | amd64) arch_label="x86_64" ;;
-arm64 | aarch64) arch_label="aarch64" ;;
+x86_64 | amd64) arch_label="amd64" ;;
+arm64 | aarch64) arch_label="arm64" ;;
 *)
 	echo "Unsupported architecture: $arch" >&2
 	exit 1
 	;;
 esac
 
-if [ "$os_label" = "macos" ] && [ "$arch_label" = "x86_64" ]; then
-	echo "registryctl does not publish a macOS x86_64 binary yet." >&2
-	echo "On Intel macOS, install from source for now: cargo install --git https://github.com/${repo} --tag ${version}" >&2
-	exit 1
-fi
+source_hint() {
+	echo "Install registryctl from source instead:" >&2
+	echo "  cargo install --git https://github.com/${repo} --tag ${version} registryctl --locked" >&2
+}
 
-asset="registryctl-${os_label}-${arch_label}.tar.gz"
-url="https://github.com/${repo}/releases/download/${version}/${asset}"
+asset="registryctl-${version}-${os_label}-${arch_label}"
+base_url="https://github.com/${repo}/releases/download/${version}"
 tmpdir="$(mktemp -d 2>/dev/null || mktemp -d -t registryctl)"
 
 cleanup() {
@@ -79,18 +77,27 @@ trap cleanup EXIT INT TERM
 download() {
 	local src="$1"
 	local dest="$2"
-	if ! curl -fsSL "$src" -o "$dest" 2>/dev/null; then
-		printf 'registryctl release %s not found (HTTP 404 or download error).\n' "$version" >&2
-		printf 'Check available releases at https://github.com/%s/releases\n' "$repo" >&2
-		exit 1
-	fi
+	curl -fsSL "$src" -o "$dest" 2>/dev/null
 }
 
 echo "Downloading registryctl ${version} for ${os_label}/${arch_label}..."
-download "$url" "$tmpdir/$asset"
-download "$url.sha256" "$tmpdir/$asset.sha256"
+if ! download "$base_url/$asset" "$tmpdir/$asset"; then
+	printf 'No registryctl %s binary published for %s/%s (HTTP 404 or download error).\n' "$version" "$os_label" "$arch_label" >&2
+	printf 'Check the published assets at https://github.com/%s/releases/tag/%s\n' "$repo" "$version" >&2
+	source_hint
+	exit 1
+fi
 
-read -r expected_hash _ <"$tmpdir/$asset.sha256"
+if ! download "$base_url/SHA256SUMS" "$tmpdir/SHA256SUMS"; then
+	echo "Could not download SHA256SUMS for checksum verification." >&2
+	exit 1
+fi
+
+expected_hash="$(awk -v asset="$asset" '$2 == asset {print $1}' "$tmpdir/SHA256SUMS")"
+if [ -z "$expected_hash" ]; then
+	echo "SHA256SUMS has no entry for $asset" >&2
+	exit 1
+fi
 
 if command -v shasum >/dev/null 2>&1; then
 	actual_hash="$(shasum -a 256 "$tmpdir/$asset")"
@@ -110,8 +117,7 @@ if [ "$actual_hash" != "$expected_hash" ]; then
 fi
 
 mkdir -p "$install_dir"
-tar -xzf "$tmpdir/$asset" -C "$tmpdir"
-cp "$tmpdir/registryctl" "$install_dir/registryctl"
+cp "$tmpdir/$asset" "$install_dir/registryctl"
 chmod 0755 "$install_dir/registryctl"
 
 cat <<EOF

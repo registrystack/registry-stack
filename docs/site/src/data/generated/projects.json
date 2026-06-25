@@ -19,11 +19,11 @@
     "source_docs": [
       {
         "label": "README",
-        "url": "https://github.com/jeremi/registry-platform"
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.8.0/products/platform/README.md"
       },
       {
         "label": "Registry Platform crates",
-        "url": "https://github.com/jeremi/registry-platform/tree/88d1a798043673dac30d809d87badb083c6e1a26/crates"
+        "url": "https://github.com/registrystack/registry-stack/tree/v0.8.0/crates"
       }
     ],
     "rename_status": "New shared workspace; not part of the 2026-05-23 rename wave."
@@ -48,11 +48,11 @@
     "source_docs": [
       {
         "label": "README",
-        "url": "https://github.com/jeremi/registry-manifest"
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.8.0/products/manifest/README.md"
       },
       {
         "label": "Local examples",
-        "url": "https://github.com/jeremi/registry-manifest/blob/52da5e913d8652e98ce8e443102c5d23b1a0974f/examples/README.md"
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.8.0/products/manifest/examples/README.md"
       }
     ],
     "rename_status": "Already using the target repo name locally."
@@ -80,15 +80,15 @@
     "source_docs": [
       {
         "label": "README",
-        "url": "https://github.com/jeremi/registry-relay"
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.8.0/crates/registry-relay/README.md"
       },
       {
         "label": "Local API docs",
-        "url": "https://github.com/jeremi/registry-relay/blob/917e8064b62b8f86f35425a61fe66d3a4b5db921/docs/api.md"
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.8.0/crates/registry-relay/docs/api.md"
       },
       {
         "label": "Local metadata docs",
-        "url": "https://github.com/jeremi/registry-relay/blob/917e8064b62b8f86f35425a61fe66d3a4b5db921/docs/metadata.md"
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.8.0/crates/registry-relay/docs/metadata.md"
       }
     ],
     "rename_status": "Local checkout renamed to `registry-relay`; old worktrees under `registry_relay-*` remain for historical evidence."
@@ -118,11 +118,11 @@
     "source_docs": [
       {
         "label": "README",
-        "url": "https://github.com/jeremi/registry-notary"
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.8.0/products/notary/README.md"
       },
       {
         "label": "OpenAPI source",
-        "url": "https://github.com/jeremi/registry-notary/blob/4fb5fcf137edb628f3dc4bfedd42891dbbdebb03/crates/registry-notary-server/src/openapi.rs"
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.8.0/crates/registry-notary-server/src/openapi.rs"
       }
     ],
     "rename_status": "Already using the target repo name locally."
@@ -147,7 +147,7 @@
     "source_docs": [
       {
         "label": "README",
-        "url": "https://github.com/jeremi/registry-lab/blob/9814a8e3286b324616b887f7258a902efefcfb00/README.md"
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.8.0/lab/README.md"
       },
       {
         "label": "Rename plan",
