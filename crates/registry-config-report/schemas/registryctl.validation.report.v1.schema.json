@@ -164,6 +164,169 @@
         }
       }
     },
+    "trusted_value_source": {
+      "enum": [
+        "static_credential_authorization_details",
+        "oidc_authorization_details",
+        "federation_authorization_details",
+        "principal_scope",
+        "route_default",
+        "source_observation_timestamp",
+        "adapter_injected_observation_timestamp",
+        "not_configured",
+        "unknown"
+      ]
+    },
+    "context_constraint": {
+      "type": "object",
+      "required": [
+        "container_path",
+        "product",
+        "platform_contract",
+        "hash_material_contract",
+        "legal_basis",
+        "consent",
+        "jurisdiction",
+        "assurance",
+        "source_freshness",
+        "product_owned_adjacent_controls"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "container_path": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "product": {
+          "enum": ["registry-relay", "registry-notary"]
+        },
+        "platform_contract": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "hash_material_contract": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "legal_basis": {
+          "type": "object",
+          "required": [
+            "required",
+            "approved_value_check",
+            "allowed_ref_count",
+            "trusted_value_source"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "required": {
+              "type": "boolean"
+            },
+            "approved_value_check": {
+              "type": "boolean"
+            },
+            "allowed_ref_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "trusted_value_source": {
+              "$ref": "#/$defs/trusted_value_source"
+            }
+          }
+        },
+        "consent": {
+          "type": "object",
+          "required": [
+            "required",
+            "approved_value_check",
+            "allowed_ref_count",
+            "trusted_value_source"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "required": {
+              "type": "boolean"
+            },
+            "approved_value_check": {
+              "type": "boolean"
+            },
+            "allowed_ref_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "trusted_value_source": {
+              "$ref": "#/$defs/trusted_value_source"
+            }
+          }
+        },
+        "jurisdiction": {
+          "type": "object",
+          "required": ["permitted_count", "trusted_value_source"],
+          "additionalProperties": false,
+          "properties": {
+            "permitted_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "trusted_value_source": {
+              "$ref": "#/$defs/trusted_value_source"
+            }
+          }
+        },
+        "assurance": {
+          "type": "object",
+          "required": [
+            "allowed_count",
+            "minimum",
+            "trusted_value_source",
+            "authn_derived"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "allowed_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "minimum": {
+              "type": ["string", "null"]
+            },
+            "trusted_value_source": {
+              "$ref": "#/$defs/trusted_value_source"
+            },
+            "authn_derived": {
+              "type": "boolean"
+            }
+          }
+        },
+        "source_freshness": {
+          "type": "object",
+          "required": [
+            "max_age_seconds",
+            "observation_field",
+            "observation_timestamp_source",
+            "observation_contract_proven"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "max_age_seconds": {
+              "type": ["integer", "null"],
+              "minimum": 1
+            },
+            "observation_field": {
+              "type": ["string", "null"]
+            },
+            "observation_timestamp_source": {
+              "$ref": "#/$defs/trusted_value_source"
+            },
+            "observation_contract_proven": {
+              "type": "boolean"
+            }
+          }
+        },
+        "product_owned_adjacent_controls": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/non_empty_string"
+          }
+        }
+      }
+    },
     "hashes": {
       "type": "object",
       "minProperties": 1,
@@ -187,6 +350,7 @@
         "status",
         "summary",
         "diagnostics",
+        "context_constraints",
         "generated_at"
       ],
       "additionalProperties": false,
@@ -219,6 +383,13 @@
           "type": "array",
           "items": {
             "$ref": "#/$defs/required_env"
+          },
+          "default": []
+        },
+        "context_constraints": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/context_constraint"
           },
           "default": []
         },

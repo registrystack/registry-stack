@@ -87,6 +87,7 @@ def validate(manifest_path: Path) -> int:
     version = str(stack.get("version", ""))
     source_ref = str(stack.get("source_ref", ""))
     source_tag = str(stack.get("source_tag", ""))
+    status = str(stack.get("status", ""))
 
     if stack.get("source_repo") != "registrystack/registry-stack":
         errors.append("stack.source_repo must be registrystack/registry-stack")
@@ -96,6 +97,8 @@ def validate(manifest_path: Path) -> int:
         errors.append(f"stack.source_tag must be v{version}")
     if source_ref != "HEAD" and not HEX40.fullmatch(source_ref):
         errors.append("stack.source_ref must be HEAD for a draft or a 40-character commit")
+    if source_ref == "HEAD" and status != "draft":
+        errors.append("stack.source_ref may be HEAD only when stack.status is draft")
     for name, artifact_version in sorted(artifacts.items()):
         if str(artifact_version) != version:
             errors.append(f"artifact {name} version {artifact_version} does not match stack version {version}")

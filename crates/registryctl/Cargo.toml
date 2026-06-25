@@ -20,4 +20,5 @@ ureq = "2"
 url = "2"
 
 [dev-dependencies]
+registry-notary-core.workspace = true
 tempfile = "3"

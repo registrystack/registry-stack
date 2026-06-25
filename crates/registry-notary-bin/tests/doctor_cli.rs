@@ -151,6 +151,137 @@ TEST_DOCTOR_JSON_SOURCE_TOKEN={TEST_SOURCE_TOKEN}
     path
 }
 
+fn write_opencrvs_dci_config(tmp: &TempDir) -> PathBuf {
+    let path = tmp.path().join("opencrvs-dci.yaml");
+    std::fs::write(
+        &path,
+        format!(
+            r#"
+server:
+  bind: 127.0.0.1:0
+auth:
+  mode: api_key
+  api_keys:
+    - id: local
+      fingerprint:
+        provider: env
+        name: TEST_DOCTOR_JSON_API_HASH
+        commitment: {TEST_API_COMMITMENT}
+      scopes: [civil_registry:evidence_verification]
+      authorization_details:
+        type: registry-notary/evidence-authorization/v1
+        schema_version: v1
+        legal_basis_ref: registryctl:opencrvs-dci:demo-legal-basis
+        consent_ref: registryctl:opencrvs-dci:demo-consent
+        jurisdiction: ZZ
+        assurance_level: substantial
+audit:
+  sink: stdout
+  hash_secret_env: TEST_DOCTOR_JSON_AUDIT_SECRET
+evidence:
+  enabled: true
+  service_id: doctor-json-test
+  source_connections:
+    opencrvs_crvs:
+      base_url: https://opencrvs.example.test
+      source_auth:
+        type: oauth2_client_credentials
+        token_url: https://opencrvs.example.test/oauth2/client/token
+        client_id_env: DCI_CLIENT_ID
+        client_secret_env: DCI_CLIENT_SECRET
+        request_format: json
+      dci:
+        search_path: /registry/sync/search
+        sender_id: registry-notary
+        query_type: idtype-value
+        registry_type: ns:org:RegistryType:Civil
+        registry_event_type: birth
+        records_path: /message/search_response/0/data/reg_records
+        field_paths:
+          observed_at: "$response:/message/search_response/0/timestamp"
+  signing_keys:
+    issuer:
+      provider: local_jwk_env
+      private_jwk_env: TEST_DOCTOR_JSON_ISSUER_JWK
+      alg: EdDSA
+      kid: did:web:issuer.example#key-1
+      status: active
+  claims:
+    - id: opencrvs-birth-record-exists
+      title: OpenCRVS birth record exists
+      version: 2026-06
+      subject_type: person
+      value:
+        type: boolean
+      inputs:
+        - name: target.identifiers.UIN
+          type: string
+      source_bindings:
+        birth_record:
+          connector: dci
+          connection: opencrvs_crvs
+          required_scope: civil_registry:evidence_verification
+          dataset: civil_registry
+          entity: birth_registration
+          lookup:
+            input: target.identifiers.UIN
+            field: UIN
+            op: eq
+            cardinality: one
+          fields: {{}}
+          matching:
+            policy_id: registryctl.opencrvs-dci.birth-record.lookup.v1
+            method: configured_lookup
+            context_constraints:
+              legal_basis:
+                required: true
+              consent:
+                required: true
+              jurisdiction:
+                permitted: [ZZ]
+              assurance:
+                allowed: [substantial]
+              source_freshness:
+                max_age_seconds: 86400
+            source_observed_at_field: observed_at
+            sufficient_target_inputs:
+              - [target.identifiers.UIN]
+            allowed_target_inputs: [target.identifiers.UIN]
+            collapse_matching_errors: true
+            confidence: high
+      rule:
+        type: exists
+        source: birth_record
+      disclosure:
+        default: predicate
+        allowed: [predicate, redacted]
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+"#
+        ),
+    )
+    .expect("config writes");
+    path
+}
+
+fn write_opencrvs_dci_env_file(tmp: &TempDir) -> PathBuf {
+    let path = tmp.path().join("opencrvs-dci.env");
+    std::fs::write(
+        &path,
+        format!(
+            "\
+TEST_DOCTOR_JSON_API_HASH={TEST_API_HASH}
+TEST_DOCTOR_JSON_AUDIT_SECRET={TEST_AUDIT_SECRET}
+TEST_DOCTOR_JSON_ISSUER_JWK='{TEST_ISSUER_JWK}'
+DCI_CLIENT_ID=test-dci-client
+DCI_CLIENT_SECRET=test-dci-secret
+"
+        ),
+    )
+    .expect("env file writes");
+    path
+}
+
 fn write_invalid_config(tmp: &TempDir) -> PathBuf {
     let path = tmp.path().join("invalid.yaml");
     std::fs::write(&path, "auth:\n  mode: definitely-not-valid\n").expect("config writes");
@@ -227,6 +358,88 @@ fn assert_config_explanation(report: &Value) {
     assert_eq!(report["schema_version"], "registry.config.explanation.v1");
     assert_eq!(report["product"], "registry-notary");
     assert_eq!(report["config_schema_version"], "registry.notary.config.v1");
+}
+
+fn assert_opencrvs_context_constraint(report: &Value) {
+    let entries = report["context_constraints"]
+        .as_array()
+        .expect("context_constraints array");
+    assert_eq!(entries.len(), 1);
+    let entry = &entries[0];
+    assert_eq!(
+        entry["container_path"],
+        "/evidence/claims/0/source_bindings/birth_record/matching"
+    );
+    assert_eq!(entry["product"], "registry-notary");
+    assert_eq!(
+        entry["platform_contract"],
+        "registry-platform-pdp.context_constraints.v1"
+    );
+    assert_eq!(entry["legal_basis"]["required"], true);
+    assert_eq!(entry["legal_basis"]["approved_value_check"], false);
+    assert_eq!(entry["legal_basis"]["allowed_ref_count"], 0);
+    assert_eq!(
+        entry["legal_basis"]["trusted_value_source"],
+        "static_credential_authorization_details"
+    );
+    assert_eq!(entry["consent"]["required"], true);
+    assert_eq!(entry["consent"]["approved_value_check"], false);
+    assert_eq!(
+        entry["consent"]["trusted_value_source"],
+        "static_credential_authorization_details"
+    );
+    assert_eq!(entry["jurisdiction"]["permitted_count"], 1);
+    assert_eq!(
+        entry["jurisdiction"]["trusted_value_source"],
+        "static_credential_authorization_details"
+    );
+    assert_eq!(entry["assurance"]["allowed_count"], 1);
+    assert_eq!(entry["assurance"]["minimum"], Value::Null);
+    assert_eq!(
+        entry["assurance"]["trusted_value_source"],
+        "static_credential_authorization_details"
+    );
+    assert_eq!(entry["assurance"]["authn_derived"], false);
+    assert_eq!(entry["source_freshness"]["max_age_seconds"], 86400);
+    assert_eq!(
+        entry["source_freshness"]["observation_field"],
+        "observed_at"
+    );
+    assert_eq!(
+        entry["source_freshness"]["observation_timestamp_source"],
+        "source_observation_timestamp"
+    );
+    assert_eq!(
+        entry["source_freshness"]["observation_contract_proven"],
+        true
+    );
+    assert!(entry["product_owned_adjacent_controls"]
+        .as_array()
+        .expect("adjacent controls array")
+        .iter()
+        .any(|control| control == "target_input_minimization"));
+}
+
+fn assert_opencrvs_context_constraint_has_approved_refs(report: &Value) {
+    let entries = report["context_constraints"]
+        .as_array()
+        .expect("context_constraints array");
+    assert_eq!(entries.len(), 1);
+    let entry = &entries[0];
+    assert_eq!(entry["legal_basis"]["required"], true);
+    assert_eq!(entry["legal_basis"]["approved_value_check"], true);
+    assert_eq!(entry["legal_basis"]["allowed_ref_count"], 1);
+    assert_eq!(
+        entry["legal_basis"]["trusted_value_source"],
+        "static_credential_authorization_details"
+    );
+    assert_eq!(entry["consent"]["required"], true);
+    assert_eq!(entry["consent"]["approved_value_check"], true);
+    assert_eq!(entry["consent"]["allowed_ref_count"], 1);
+    assert_eq!(
+        entry["consent"]["trusted_value_source"],
+        "static_credential_authorization_details"
+    );
 }
 
 #[test]
@@ -802,6 +1015,84 @@ fn explain_config_json_reports_redacted_resolved_config() {
     assert!(!stdout.contains(TEST_AUDIT_SECRET));
     assert!(!stdout.contains(TEST_API_HASH));
     assert!(!stdout.contains(TEST_API_COMMITMENT));
+}
+
+#[test]
+fn doctor_json_report_opencrvs_dci_context_constraints_approved_refs() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config = write_opencrvs_dci_config(&tmp);
+    let env_file = write_opencrvs_dci_env_file(&tmp);
+    let raw_config = std::fs::read_to_string(&config).expect("config reads");
+    let raw_config = raw_config.replace(
+        r#"              legal_basis:
+                required: true
+              consent:
+                required: true"#,
+        r#"              legal_basis:
+                required: true
+                allowed_refs:
+                  - registryctl:opencrvs-dci:demo-legal-basis
+              consent:
+                required: true
+                allowed_refs:
+                  - registryctl:opencrvs-dci:demo-consent"#,
+    );
+    std::fs::write(&config, raw_config).expect("config writes");
+
+    let doctor_output = doctor_command(&config, Some(&env_file))
+        .args(["--format", "json"])
+        .output()
+        .expect("doctor runs");
+    assert!(
+        doctor_output.status.success(),
+        "doctor failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&doctor_output.stdout),
+        String::from_utf8_lossy(&doctor_output.stderr)
+    );
+    let doctor_stdout = String::from_utf8(doctor_output.stdout).expect("stdout is utf8");
+    let doctor_report: Value =
+        serde_json::from_str(&doctor_stdout).expect("doctor emits one JSON document");
+    assert_product_diagnostic_report(&doctor_report);
+    assert_opencrvs_context_constraint_has_approved_refs(&doctor_report);
+}
+
+#[test]
+fn doctor_and_explain_json_report_opencrvs_dci_context_constraints() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config = write_opencrvs_dci_config(&tmp);
+    let env_file = write_opencrvs_dci_env_file(&tmp);
+
+    let doctor_output = doctor_command(&config, Some(&env_file))
+        .args(["--format", "json"])
+        .output()
+        .expect("doctor runs");
+    assert!(
+        doctor_output.status.success(),
+        "doctor failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&doctor_output.stdout),
+        String::from_utf8_lossy(&doctor_output.stderr)
+    );
+    let doctor_stdout = String::from_utf8(doctor_output.stdout).expect("stdout is utf8");
+    let doctor_report: Value =
+        serde_json::from_str(&doctor_stdout).expect("doctor emits one JSON document");
+    assert_product_diagnostic_report(&doctor_report);
+    assert_opencrvs_context_constraint(&doctor_report);
+
+    let explain_output = explain_command(&config, Some(&env_file))
+        .args(["--format", "json"])
+        .output()
+        .expect("explain-config runs");
+    assert!(
+        explain_output.status.success(),
+        "explain-config failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&explain_output.stdout),
+        String::from_utf8_lossy(&explain_output.stderr)
+    );
+    let explain_stdout = String::from_utf8(explain_output.stdout).expect("stdout is utf8");
+    let explain_report: Value =
+        serde_json::from_str(&explain_stdout).expect("explain-config emits JSON");
+    assert_config_explanation(&explain_report);
+    assert_opencrvs_context_constraint(&explain_report);
 }
 
 #[test]

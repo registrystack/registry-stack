@@ -64,6 +64,13 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("stack.source_tag must be v0.8.0", result.stderr)
 
+    def test_validate_rejects_head_for_non_draft_release(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = write_manifest(Path(tmp), source_ref="HEAD", status="release-candidate")
+            result = run_tool("validate", str(manifest))
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("stack.source_ref may be HEAD only", result.stderr)
+
     def test_validate_source_accepts_ancestor_source_ref(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = init_repo(Path(tmp))

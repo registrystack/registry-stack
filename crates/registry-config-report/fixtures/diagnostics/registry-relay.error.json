@@ -34,6 +34,7 @@
       "status": "missing"
     }
   ],
+  "context_constraints": [],
   "hashes": {
     "internal_config_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "posture_safe_config_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"

@@ -58,13 +58,24 @@ pub enum NotarySource {
 pub enum NotaryInitSourceKind {
     RegistryDataApi,
     FhirSidecar,
+    OpencrvsDci,
 }
 
 impl NotaryInitSourceKind {
+    fn from_source_label(source: &str) -> Option<Self> {
+        match source {
+            "registry_data_api" | "relay" => Some(Self::RegistryDataApi),
+            "fhir_source_adapter_sidecar" => Some(Self::FhirSidecar),
+            "opencrvs_dci" => Some(Self::OpencrvsDci),
+            _ => None,
+        }
+    }
+
     fn source_label(self) -> &'static str {
         match self {
             Self::RegistryDataApi => "registry_data_api",
             Self::FhirSidecar => "fhir_source_adapter_sidecar",
+            Self::OpencrvsDci => "opencrvs_dci",
         }
     }
 
@@ -72,6 +83,7 @@ impl NotaryInitSourceKind {
         match self {
             Self::RegistryDataApi => "source_api",
             Self::FhirSidecar => "fhir_sidecar",
+            Self::OpencrvsDci => "opencrvs_crvs",
         }
     }
 
@@ -79,6 +91,7 @@ impl NotaryInitSourceKind {
         match self {
             Self::RegistryDataApi => "registry_data_api",
             Self::FhirSidecar => "openfn_sidecar",
+            Self::OpencrvsDci => "dci",
         }
     }
 
@@ -86,6 +99,7 @@ impl NotaryInitSourceKind {
         match self {
             Self::RegistryDataApi => "person",
             Self::FhirSidecar => "patient",
+            Self::OpencrvsDci => "birth_record",
         }
     }
 
@@ -93,6 +107,7 @@ impl NotaryInitSourceKind {
         match self {
             Self::RegistryDataApi => "https://api.example.test",
             Self::FhirSidecar => "http://host.docker.internal:4360",
+            Self::OpencrvsDci => "https://opencrvs.example.test",
         }
     }
 
@@ -100,6 +115,7 @@ impl NotaryInitSourceKind {
         match self {
             Self::RegistryDataApi => "EVIDENCE_SOURCE_API_TOKEN",
             Self::FhirSidecar => "FHIR_SIDECAR_TOKEN",
+            Self::OpencrvsDci => "OPENCRVS_DCI_UNUSED_STATIC_TOKEN",
         }
     }
 
@@ -107,6 +123,7 @@ impl NotaryInitSourceKind {
         match self {
             Self::RegistryDataApi => "benefits_casework",
             Self::FhirSidecar => "health_registry",
+            Self::OpencrvsDci => "civil_registry",
         }
     }
 
@@ -114,6 +131,7 @@ impl NotaryInitSourceKind {
         match self {
             Self::RegistryDataApi => "person",
             Self::FhirSidecar => "patient",
+            Self::OpencrvsDci => "birth_registration",
         }
     }
 
@@ -121,6 +139,7 @@ impl NotaryInitSourceKind {
         match self {
             Self::RegistryDataApi => "id",
             Self::FhirSidecar => "national_id",
+            Self::OpencrvsDci => "UIN",
         }
     }
 
@@ -128,6 +147,7 @@ impl NotaryInitSourceKind {
         match self {
             Self::RegistryDataApi => "benefits-person-exists",
             Self::FhirSidecar => "patient-record-exists",
+            Self::OpencrvsDci => "opencrvs-birth-record-exists",
         }
     }
 
@@ -135,6 +155,7 @@ impl NotaryInitSourceKind {
         match self {
             Self::RegistryDataApi => "Benefits person exists",
             Self::FhirSidecar => "Patient record exists",
+            Self::OpencrvsDci => "OpenCRVS birth record exists",
         }
     }
 
@@ -142,6 +163,7 @@ impl NotaryInitSourceKind {
         match self {
             Self::RegistryDataApi => "per-2001",
             Self::FhirSidecar => "person-123",
+            Self::OpencrvsDci => "UIN-2001",
         }
     }
 
@@ -149,6 +171,7 @@ impl NotaryInitSourceKind {
         match self {
             Self::RegistryDataApi => "true",
             Self::FhirSidecar => "false",
+            Self::OpencrvsDci => "true",
         }
     }
 
@@ -156,6 +179,29 @@ impl NotaryInitSourceKind {
         match self {
             Self::RegistryDataApi => "none",
             Self::FhirSidecar => "openfn_sidecar_batch",
+            Self::OpencrvsDci => "none",
+        }
+    }
+
+    fn uses_static_source_token(self) -> bool {
+        !matches!(self, Self::OpencrvsDci)
+    }
+
+    fn smoke_target_json(self, smoke_target_id: &str, source_entity: &str) -> Value {
+        match self {
+            Self::OpencrvsDci => serde_json::json!({
+                "type": "person",
+                "identifiers": [
+                    {
+                        "scheme": "UIN",
+                        "value": smoke_target_id
+                    }
+                ]
+            }),
+            Self::RegistryDataApi | Self::FhirSidecar => serde_json::json!({
+                "type": source_entity,
+                "id": smoke_target_id
+            }),
         }
     }
 }
@@ -760,24 +806,15 @@ pub fn notary_smoke_project(project_dir: &Path) -> Result<()> {
     validate_notary_fingerprint(project_dir, &project)?;
     let notary_base_url = project.notary_base_url()?.to_string();
     let claim_id = project.notary_claim_id();
-    let smoke_target_id = project
+    let smoke_target = project
         .notary
         .as_ref()
-        .map(notary_smoke_target_id)
-        .unwrap_or("per-2001");
-    let smoke_target_type = project
-        .notary
-        .as_ref()
-        .and_then(|notary| notary.source_entity.as_deref())
-        .unwrap_or("person");
+        .map(|notary| notary_smoke_target_json(notary, notary_smoke_target_id(notary)))
+        .unwrap_or_else(|| {
+            NotaryInitSourceKind::RegistryDataApi.smoke_target_json("per-2001", "person")
+        });
     let secrets = LocalEnv::load(&project_dir.join(&project.local.secrets_env))?;
-    let report = run_notary_smoke_checks(
-        &notary_base_url,
-        &secrets,
-        &claim_id,
-        smoke_target_type,
-        smoke_target_id,
-    );
+    let report = run_notary_smoke_checks(&notary_base_url, &secrets, &claim_id, smoke_target);
     let output_path = project_dir
         .join(&project.local.output_dir)
         .join("notary-smoke-results.json");
@@ -1342,10 +1379,20 @@ fn init_standalone_notary_project(dir: &Path, options: NotaryInitOptions) -> Res
     fs::create_dir_all(dir.join("secrets"))?;
     fs::create_dir_all(dir.join("output"))?;
 
-    let source_token = match &options.source_token_from_env {
-        Some(env_name) => std::env::var(env_name)
-            .with_context(|| format!("failed to read source token from ${env_name}"))?,
-        None => STANDALONE_SOURCE_TOKEN_PLACEHOLDER.to_string(),
+    if !options.source_kind.uses_static_source_token() && options.source_token_from_env.is_some() {
+        bail!(
+            "--source-token-from-env is not used with --source-kind {}; configure DCI_CLIENT_ID and DCI_CLIENT_SECRET in secrets/local.env",
+            options.source_kind.source_label()
+        );
+    }
+    let source_token = if options.source_kind.uses_static_source_token() {
+        match &options.source_token_from_env {
+            Some(env_name) => std::env::var(env_name)
+                .with_context(|| format!("failed to read source token from ${env_name}"))?,
+            None => STANDALONE_SOURCE_TOKEN_PLACEHOLDER.to_string(),
+        }
+    } else {
+        STANDALONE_SOURCE_TOKEN_PLACEHOLDER.to_string()
     };
     let notary_credentials = NotaryLocalCredentials::generate(source_token)?;
 
@@ -1368,7 +1415,7 @@ fn init_standalone_notary_project(dir: &Path, options: NotaryInitOptions) -> Res
     )?;
     write_text(
         dir.join("secrets/local.env"),
-        &standalone_notary_env_file(&notary_credentials, &options.source_token_env),
+        &standalone_notary_env_file(&notary_credentials, &options),
     )?;
     write_text(dir.join("output/.gitkeep"), "")?;
     bruno_generate_project(dir, false)?;
@@ -2568,7 +2615,9 @@ fn bruno_notary_files(project: &Project, _secrets: &LocalEnv) -> Result<Vec<Gene
         .unwrap_or(NOTARY_TUTORIAL_CLAIM);
     let smoke_target_id = notary_smoke_target_id(notary);
     let missing_smoke_target_id = format!("{smoke_target_id}-missing");
-    let source_entity = notary.source_entity.as_deref().unwrap_or("person");
+    let evaluate_body = bruno_notary_evaluate_body(notary, claim_id, smoke_target_id)?;
+    let evaluate_missing_body =
+        bruno_notary_evaluate_body(notary, claim_id, &missing_smoke_target_id)?;
     let source_url = notary
         .source_url
         .as_deref()
@@ -2616,17 +2665,7 @@ fn bruno_notary_files(project: &Project, _secrets: &LocalEnv) -> Result<Vec<Gene
                 ("Content-Type", "application/json"),
                 ("Accept", NOTARY_CLAIM_RESULT_JSON),
             ],
-            &format!(
-                r#"{{
-  "target": {{
-    "type": "{source_entity}",
-    "id": "{smoke_target_id}"
-  }},
-  "claims": ["{claim_id}"],
-  "disclosure": "predicate",
-  "purpose": "{{{{purpose}}}}"
-}}"#
-            ),
+            &evaluate_body,
         ),
         bruno_post_json(
             "Notary/Evaluate missing person.bru",
@@ -2638,17 +2677,7 @@ fn bruno_notary_files(project: &Project, _secrets: &LocalEnv) -> Result<Vec<Gene
                 ("Content-Type", "application/json"),
                 ("Accept", NOTARY_CLAIM_RESULT_JSON),
             ],
-            &format!(
-                r#"{{
-  "target": {{
-    "type": "{source_entity}",
-    "id": "{missing_smoke_target_id}"
-  }},
-  "claims": ["{claim_id}"],
-  "disclosure": "predicate",
-  "purpose": "{{{{purpose}}}}"
-}}"#
-            ),
+            &evaluate_missing_body,
         ),
         generated_file(
             "Notary/folder.bru",
@@ -2670,14 +2699,53 @@ fn bruno_notary_files(project: &Project, _secrets: &LocalEnv) -> Result<Vec<Gene
     ])
 }
 
+fn bruno_notary_evaluate_body(
+    notary: &ProjectNotary,
+    claim_id: &str,
+    smoke_target_id: &str,
+) -> Result<String> {
+    if NotaryInitSourceKind::from_source_label(&notary.source)
+        == Some(NotaryInitSourceKind::OpencrvsDci)
+    {
+        return serde_json::to_string_pretty(&serde_json::json!({
+            "target": notary_smoke_target_json(notary, smoke_target_id),
+            "claims": [claim_id],
+            "disclosure": "predicate",
+            "purpose": "{{purpose}}"
+        }))
+        .context("failed to render OpenCRVS DCI Notary Bruno body");
+    }
+    let source_entity = notary.source_entity.as_deref().unwrap_or("person");
+    Ok(format!(
+        r#"{{
+  "target": {{
+    "type": "{source_entity}",
+    "id": "{smoke_target_id}"
+  }},
+  "claims": ["{claim_id}"],
+  "disclosure": "predicate",
+  "purpose": "{{{{purpose}}}}"
+}}"#
+    ))
+}
+
 fn notary_smoke_target_id(notary: &ProjectNotary) -> &str {
     notary.smoke_target_id.as_deref().unwrap_or_else(|| {
         if notary.source == "fhir_source_adapter_sidecar" {
             "person-123"
+        } else if notary.source == "opencrvs_dci" {
+            "UIN-2001"
         } else {
             "per-2001"
         }
     })
+}
+
+fn notary_smoke_target_json(notary: &ProjectNotary, smoke_target_id: &str) -> Value {
+    let source_entity = notary.source_entity.as_deref().unwrap_or("person");
+    NotaryInitSourceKind::from_source_label(&notary.source)
+        .unwrap_or(NotaryInitSourceKind::RegistryDataApi)
+        .smoke_target_json(smoke_target_id, source_entity)
 }
 
 fn bruno_get(
@@ -3175,10 +3243,35 @@ impl NotaryLocalCredentials {
     }
 
     fn env_values(&self) -> Vec<(String, String)> {
-        self.env_values_for_source("EVIDENCE_SOURCE_REGISTRY_RELAY_TOKEN")
+        let mut values = self.common_env_values();
+        values.push((
+            "EVIDENCE_SOURCE_REGISTRY_RELAY_TOKEN".to_string(),
+            self.relay_source_token.clone(),
+        ));
+        values
     }
 
-    fn env_values_for_source(&self, source_token_env: &str) -> Vec<(String, String)> {
+    fn env_values_for_source(&self, options: &NotaryInitOptions) -> Vec<(String, String)> {
+        let mut values = self.common_env_values();
+        if options.source_kind.uses_static_source_token() {
+            values.push((
+                options.source_token_env.clone(),
+                self.relay_source_token.clone(),
+            ));
+        } else {
+            values.push((
+                "DCI_CLIENT_ID".to_string(),
+                "replace-with-dci-client-id".to_string(),
+            ));
+            values.push((
+                "DCI_CLIENT_SECRET".to_string(),
+                "replace-with-dci-client-secret".to_string(),
+            ));
+        }
+        values
+    }
+
+    fn common_env_values(&self) -> Vec<(String, String)> {
         vec![
             (
                 "REGISTRY_NOTARY_TUTORIAL_EVALUATOR_RAW".to_string(),
@@ -3191,10 +3284,6 @@ impl NotaryLocalCredentials {
             (
                 "REGISTRY_NOTARY_AUDIT_HASH_SECRET".to_string(),
                 self.audit_hash_secret.clone(),
-            ),
-            (
-                source_token_env.to_string(),
-                self.relay_source_token.clone(),
             ),
             (
                 "REGISTRY_NOTARY_ISSUER_JWK".to_string(),
@@ -3377,7 +3466,10 @@ fn registryctl_manifest(dir: &Path, kind: ProjectManifestKind<'_>) -> Result<Str
             source: options.source_kind.source_label(),
             source_relay_service_url: None,
             source_url: Some(&options.source_url),
-            source_token_env: Some(&options.source_token_env),
+            source_token_env: options
+                .source_kind
+                .uses_static_source_token()
+                .then_some(options.source_token_env.as_str()),
             source_dataset: Some(&options.source_dataset),
             source_entity: Some(&options.source_entity),
             source_lookup_field: Some(&options.source_lookup_field),
@@ -3472,7 +3564,12 @@ fn notary_config(evaluator: &Credential) -> String {
 }
 
 fn notary_config_for_source(evaluator: &Credential, options: &NotaryInitOptions) -> String {
-    include_str!("templates/notary_standalone_config.yaml.tmpl")
+    let template = if options.source_kind == NotaryInitSourceKind::OpencrvsDci {
+        include_str!("templates/notary_opencrvs_dci_config.yaml.tmpl")
+    } else {
+        include_str!("templates/notary_standalone_config.yaml.tmpl")
+    };
+    template
         .replace("{{evaluator_id}}", evaluator.id)
         .replace("{{evaluator_commitment}}", &evaluator.commitment)
         .replace("{{issuer_key_id}}", NOTARY_DEMO_ISSUER_KEY_ID)
@@ -3496,10 +3593,10 @@ fn notary_config_for_source(evaluator: &Credential, options: &NotaryInitOptions)
 
 fn standalone_notary_env_file(
     credentials: &NotaryLocalCredentials,
-    source_token_env: &str,
+    options: &NotaryInitOptions,
 ) -> String {
     let mut env = String::new();
-    for (name, value) in credentials.env_values_for_source(source_token_env) {
+    for (name, value) in credentials.env_values_for_source(options) {
         env.push_str(&name);
         env.push('=');
         env.push_str(&value);
@@ -3614,16 +3711,12 @@ fn run_notary_smoke_checks(
     base_url: &str,
     secrets: &LocalEnv,
     claim_id: &str,
-    smoke_target_type: &str,
-    smoke_target_id: &str,
+    smoke_target: Value,
 ) -> SmokeReport {
     let mut checks = Vec::new();
     let api_key = secrets.value("REGISTRY_NOTARY_TUTORIAL_EVALUATOR_RAW");
     let evaluation_body = serde_json::json!({
-        "target": {
-            "type": smoke_target_type,
-            "id": smoke_target_id
-        },
+        "target": smoke_target,
         "claims": [claim_id],
         "disclosure": "predicate",
         "purpose": TUTORIAL_PURPOSE
@@ -4689,6 +4782,132 @@ workflows:
         assert!(bruno.contains(r#""type": "patient""#));
         assert!(bruno.contains(r#""id": "person-123""#));
         assert!(bruno.contains(r#""claims": ["patient-record-exists"]"#));
+    }
+
+    #[test]
+    fn standalone_notary_init_can_target_opencrvs_dci() {
+        let temp = TempDir::new().unwrap();
+        let project = temp.path().join("my-opencrvs-notary");
+        init_notary_project(
+            &project,
+            NotaryInitOptions {
+                source_kind: NotaryInitSourceKind::OpencrvsDci,
+                source_url: "https://opencrvs.example.test".to_string(),
+                source_token_from_env: None,
+                source_token_env: "OPENCRVS_DCI_UNUSED_STATIC_TOKEN".to_string(),
+                source_dataset: "civil_registry".to_string(),
+                source_entity: "birth_registration".to_string(),
+                source_lookup_field: "UIN".to_string(),
+                source_network: None,
+                source_claim: "opencrvs-birth-record-exists".to_string(),
+                source_claim_title: "OpenCRVS birth record exists".to_string(),
+                smoke_target_id: "UIN-2001".to_string(),
+            },
+        )
+        .unwrap();
+
+        let manifest: Value =
+            serde_yaml::from_str(&fs::read_to_string(project.join("registryctl.yaml")).unwrap())
+                .unwrap();
+        assert_eq!(manifest["notary"]["source"], "opencrvs_dci");
+        assert_eq!(
+            manifest["notary"]["source_url"],
+            "https://opencrvs.example.test"
+        );
+        assert_eq!(manifest["notary"]["source_dataset"], "civil_registry");
+        assert_eq!(manifest["notary"]["source_entity"], "birth_registration");
+        assert_eq!(manifest["notary"]["source_lookup_field"], "UIN");
+        assert!(manifest["notary"].get("source_token_env").is_none());
+
+        let config = fs::read_to_string(project.join("notary/config.yaml")).unwrap();
+        let parsed_config: registry_notary_core::StandaloneRegistryNotaryConfig =
+            serde_yaml::from_str(&config).unwrap();
+        parsed_config.validate().unwrap();
+        let runtime_matching =
+            &parsed_config.evidence.claims[0].source_bindings["birth_record"].matching;
+        assert!(runtime_matching.require_legal_basis);
+        assert!(runtime_matching.require_consent);
+        assert_eq!(runtime_matching.permitted_jurisdictions, ["ZZ"]);
+        assert_eq!(runtime_matching.allowed_assurance, ["substantial"]);
+        assert_eq!(runtime_matching.max_source_age_seconds, Some(86400));
+        assert_eq!(
+            runtime_matching.source_observed_at_field.as_deref(),
+            Some("observed_at")
+        );
+        assert!(runtime_matching.allowed_legal_basis_refs.is_empty());
+        assert!(runtime_matching.allowed_consent_refs.is_empty());
+
+        let config_yaml: Value = serde_yaml::from_str(&config).unwrap();
+        let credential = &config_yaml["auth"]["api_keys"][0];
+        assert_eq!(
+            credential["authorization_details"]["legal_basis_ref"],
+            "registryctl:opencrvs-dci:demo-legal-basis"
+        );
+        assert_eq!(
+            credential["authorization_details"]["consent_ref"],
+            "registryctl:opencrvs-dci:demo-consent"
+        );
+        assert_eq!(credential["authorization_details"]["jurisdiction"], "ZZ");
+        assert_eq!(
+            credential["authorization_details"]["assurance_level"],
+            "substantial"
+        );
+
+        let source = &config_yaml["evidence"]["source_connections"]["opencrvs_crvs"];
+        assert!(source.get("token_env").is_none());
+        assert_eq!(source["source_auth"]["type"], "oauth2_client_credentials");
+        assert_eq!(source["source_auth"]["client_id_env"], "DCI_CLIENT_ID");
+        assert_eq!(
+            source["source_auth"]["client_secret_env"],
+            "DCI_CLIENT_SECRET"
+        );
+        assert_eq!(
+            source["dci"]["field_paths"]["observed_at"],
+            "$response:/message/search_response/0/timestamp"
+        );
+
+        let binding = &config_yaml["evidence"]["claims"][0]["source_bindings"]["birth_record"];
+        assert_eq!(binding["connector"], "dci");
+        assert_eq!(binding["lookup"]["input"], "target.identifiers.UIN");
+        assert_eq!(binding["lookup"]["field"], "UIN");
+        let matching = &binding["matching"];
+        assert!(matching.get("require_legal_basis").is_none());
+        assert!(matching.get("require_consent").is_none());
+        assert!(matching.get("permitted_jurisdictions").is_none());
+        assert!(matching.get("allowed_assurance").is_none());
+        assert!(matching.get("max_source_age_seconds").is_none());
+        let context_constraints = &matching["context_constraints"];
+        assert_eq!(context_constraints["legal_basis"]["required"], true);
+        assert!(context_constraints["legal_basis"]["allowed_refs"].is_null());
+        assert_eq!(context_constraints["consent"]["required"], true);
+        assert!(context_constraints["consent"]["allowed_refs"].is_null());
+        assert_eq!(context_constraints["jurisdiction"]["permitted"][0], "ZZ");
+        assert_eq!(
+            context_constraints["assurance"]["allowed"][0],
+            "substantial"
+        );
+        assert_eq!(
+            context_constraints["source_freshness"]["max_age_seconds"],
+            86400
+        );
+        assert_eq!(matching["source_observed_at_field"], "observed_at");
+        assert_eq!(
+            matching["sufficient_target_inputs"][0][0],
+            "target.identifiers.UIN"
+        );
+
+        let env = fs::read_to_string(project.join("secrets/local.env")).unwrap();
+        assert!(env.contains("DCI_CLIENT_ID=replace-with-dci-client-id"));
+        assert!(env.contains("DCI_CLIENT_SECRET=replace-with-dci-client-secret"));
+        assert!(!env.contains("OPENCRVS_DCI_UNUSED_STATIC_TOKEN="));
+
+        let bruno = fs::read_to_string(
+            project.join("bruno/registry-api/Notary/Evaluate person exists.bru"),
+        )
+        .unwrap();
+        assert!(bruno.contains(r#""scheme": "UIN""#));
+        assert!(bruno.contains(r#""value": "UIN-2001""#));
+        assert!(bruno.contains(r#""opencrvs-birth-record-exists""#));
     }
 
     #[test]

@@ -240,6 +240,7 @@ export default defineConfig({
             { label: 'Boundaries and map', slug: 'map/boundaries-and-map' },
             { label: 'Consultation flow', slug: 'explanation/consultation-flow' },
             { label: 'Evidence issuance', slug: 'explanation/evidence-issuance' },
+            { label: 'Trusted context', slug: 'explanation/trusted-context-constraints' },
             { label: 'Integration patterns', slug: 'explanation/integration-patterns' },
             { label: 'DPI safeguards', slug: 'explanation/dpi-safeguards-alignment' },
           ],

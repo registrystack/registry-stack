@@ -11,6 +11,15 @@ use registry_notary_server::standalone_router;
 const DEMO_ISSUER_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}"#;
 const TEST_AUDIT_SECRET: &str = "0123456789abcdef0123456789abcdef";
 
+fn demo_config_path(file_name: &str) -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("workspace root")
+        .join("products/notary/demo/config")
+        .join(file_name)
+}
+
 #[test]
 fn split_demo_config_loads_validates_and_builds_router() {
     // Hold the shared lock for the duration of this test to prevent a race
@@ -34,12 +43,7 @@ fn split_demo_config_loads_validates_and_builds_router() {
         std::env::set_var("REGISTRY_NOTARY_AUDIT_HASH_SECRET", TEST_AUDIT_SECRET);
     }
 
-    let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let config_path = manifest_dir
-        .parent()
-        .and_then(std::path::Path::parent)
-        .expect("workspace root")
-        .join("demo/config/registry-notary.yaml");
+    let config_path = demo_config_path("registry-notary.yaml");
     let raw = std::fs::read_to_string(config_path).expect("demo config is readable");
     let mut config: StandaloneRegistryNotaryConfig =
         serde_norway::from_str(&raw).expect("demo config deserializes");
@@ -69,12 +73,7 @@ fn openspp_disability_demo_config_loads_validates_and_builds_router() {
         std::env::set_var("REGISTRY_NOTARY_AUDIT_HASH_SECRET", TEST_AUDIT_SECRET);
     }
 
-    let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let config_path = manifest_dir
-        .parent()
-        .and_then(std::path::Path::parent)
-        .expect("workspace root")
-        .join("demo/config/openspp-disability-registry-notary.yaml");
+    let config_path = demo_config_path("openspp-disability-registry-notary.yaml");
     let raw = std::fs::read_to_string(config_path).expect("OpenSPP config is readable");
     let mut config: StandaloneRegistryNotaryConfig =
         serde_norway::from_str(&raw).expect("OpenSPP config deserializes");
@@ -133,12 +132,7 @@ fn opencrvs_dci_demo_config_loads_validates_and_builds_router() {
         std::env::set_var("REGISTRY_NOTARY_AUDIT_HASH_SECRET", TEST_AUDIT_SECRET);
     }
 
-    let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let config_path = manifest_dir
-        .parent()
-        .and_then(std::path::Path::parent)
-        .expect("workspace root")
-        .join("demo/config/opencrvs-dci-registry-notary.yaml");
+    let config_path = demo_config_path("opencrvs-dci-registry-notary.yaml");
     let raw = std::fs::read_to_string(config_path).expect("OpenCRVS config is readable");
     let mut config: StandaloneRegistryNotaryConfig =
         serde_norway::from_str(&raw).expect("OpenCRVS config deserializes");
@@ -197,12 +191,7 @@ fn opencrvs_birth_attributes_demo_config_loads_validates_and_builds_router() {
         std::env::set_var("REGISTRY_NOTARY_AUDIT_HASH_SECRET", TEST_AUDIT_SECRET);
     }
 
-    let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let config_path = manifest_dir
-        .parent()
-        .and_then(std::path::Path::parent)
-        .expect("workspace root")
-        .join("demo/config/opencrvs-dci-birth-attributes-registry-notary.yaml");
+    let config_path = demo_config_path("opencrvs-dci-birth-attributes-registry-notary.yaml");
     let raw =
         std::fs::read_to_string(config_path).expect("OpenCRVS birth attributes config is readable");
     let mut config: StandaloneRegistryNotaryConfig =
@@ -325,12 +314,7 @@ fn opencrvs_demographic_dci_demo_config_loads_validates_and_builds_router() {
         std::env::set_var("REGISTRY_NOTARY_AUDIT_HASH_SECRET", TEST_AUDIT_SECRET);
     }
 
-    let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let config_path = manifest_dir
-        .parent()
-        .and_then(std::path::Path::parent)
-        .expect("workspace root")
-        .join("demo/config/opencrvs-dci-demographic-registry-notary.yaml");
+    let config_path = demo_config_path("opencrvs-dci-demographic-registry-notary.yaml");
     let raw =
         std::fs::read_to_string(config_path).expect("OpenCRVS demographic config is readable");
     let mut config: StandaloneRegistryNotaryConfig =
@@ -434,12 +418,7 @@ fn opencrvs_rda_demographic_demo_config_loads_validates_and_builds_router() {
         std::env::set_var("REGISTRY_NOTARY_AUDIT_HASH_SECRET", TEST_AUDIT_SECRET);
     }
 
-    let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let config_path = manifest_dir
-        .parent()
-        .and_then(std::path::Path::parent)
-        .expect("workspace root")
-        .join("demo/config/opencrvs-rda-demographic-registry-notary.yaml");
+    let config_path = demo_config_path("opencrvs-rda-demographic-registry-notary.yaml");
     let raw =
         std::fs::read_to_string(config_path).expect("OpenCRVS RDA demographic config is readable");
     let mut config: StandaloneRegistryNotaryConfig =
@@ -502,12 +481,7 @@ fn fhir_coverage_demo_config_loads_validates_and_builds_router() {
         std::env::set_var("REGISTRY_NOTARY_AUDIT_HASH_SECRET", TEST_AUDIT_SECRET);
     }
 
-    let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let config_path = manifest_dir
-        .parent()
-        .and_then(std::path::Path::parent)
-        .expect("workspace root")
-        .join("demo/config/fhir-coverage-registry-notary.yaml");
+    let config_path = demo_config_path("fhir-coverage-registry-notary.yaml");
     let raw = std::fs::read_to_string(config_path).expect("FHIR demo config is readable");
     let mut config: StandaloneRegistryNotaryConfig =
         serde_norway::from_str(&raw).expect("FHIR demo config deserializes");

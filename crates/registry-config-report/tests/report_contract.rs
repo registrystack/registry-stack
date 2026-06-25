@@ -67,6 +67,7 @@ fn producer_explanation_from_document(document: ConfigExplanationDocument) -> Co
         defaults_applied: document.defaults_applied,
         optional_sections_absent: document.optional_sections_absent,
         live_apply: document.live_apply,
+        context_constraints: document.context_constraints,
         resolved_config: RedactedConfig::redacted(&document.resolved_config, |_, _| {
             ConfigValueClassification::Public
         }),

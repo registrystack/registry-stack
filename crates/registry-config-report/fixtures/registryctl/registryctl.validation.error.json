@@ -30,6 +30,7 @@
             "status": "present"
           }
         ],
+        "context_constraints": [],
         "generated_at": "2026-06-20T00:00:00Z"
       }
     },
@@ -57,7 +58,8 @@
             "message": "Claim source local-relay must declare a source kind."
           }
         ],
-        "generated_at": "2026-06-20T00:00:00Z"
+        "generated_at": "2026-06-20T00:00:00Z",
+        "context_constraints": []
       }
     }
   ],
