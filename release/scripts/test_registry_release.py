@@ -42,6 +42,19 @@ class RegistryReleaseTest(unittest.TestCase):
             self.assertNotIn("dist/image-bin", text)
             self.assertIn("cargo build --release --locked", text)
 
+    def test_release_workflow_publishes_cross_platform_registryctl_binaries(self) -> None:
+        # The hermetic linux/amd64 builder cannot produce macOS or arm64 binaries,
+        # so registryctl-<tag>-macos-arm64 and -linux-arm64 are built natively on a
+        # runner matrix. install.sh expects exactly these asset names.
+        workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        self.assertIn("macos-14", workflow)
+        self.assertIn("ubuntu-24.04-arm", workflow)
+        self.assertIn("aarch64-apple-darwin", workflow)
+        self.assertIn("aarch64-unknown-linux-gnu", workflow)
+        for asset in ("macos-arm64", "linux-arm64"):
+            self.assertIn(asset, workflow)
+            self.assertIn(f"registry-stack-registryctl-{asset}", workflow)
+
     def test_validate_beta_6_manifest(self) -> None:
         result = run_tool("validate", "release/manifests/registry-stack-beta-6.yaml")
         self.assertEqual(0, result.returncode, result.stderr)
@@ -144,6 +157,31 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertEqual(1, len(evidence["binaries"]))
         self.assertEqual(1, len(evidence["images"]))
         self.assertIn("Release Trust Capsule", capsule_markdown)
+
+    def test_render_capsule_includes_cross_platform_binaries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_ref = init_release_repo(root)
+            manifest = write_manifest(root, source_ref=source_ref)
+            binary_dir = write_multiplatform_binary_fixture(root)
+            image_dir = write_image_fixture(root)
+            output_json = root / "capsule.json"
+            output_md = root / "capsule.md"
+
+            result = render_capsule(manifest, binary_dir, image_dir, output_json, output_md, root)
+
+            evidence = json.loads(output_json.read_text(encoding="utf-8"))
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        names = {binary["name"] for binary in evidence["binaries"]}
+        self.assertEqual(
+            {
+                "registryctl-v0.8.0-linux-amd64",
+                "registryctl-v0.8.0-linux-arm64",
+                "registryctl-v0.8.0-macos-arm64",
+            },
+            names,
+        )
 
     def test_render_capsule_rejects_grype_subject_digest_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -382,6 +420,33 @@ class RegistryReleaseTest(unittest.TestCase):
             self.assertFalse((image_dir / "registry-notary-source-adapter-sidecar.spdx.json").exists())
             self.assertFalse((image_dir / "registry-relay.grype.json").exists())
             self.assertFalse((image_dir / "registry-stack-v0.8.0-release-evidence.json").exists())
+            # Cross-platform binaries are optional and absent in this fixture.
+            self.assertFalse((binary_dir / "registryctl-v0.8.0-macos-arm64").exists())
+            self.assertFalse((binary_dir / "registryctl-v0.8.0-linux-arm64").exists())
+
+    def test_stage_capsule_backfill_assets_stages_optional_cross_platform_binaries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            asset_dir = write_release_asset_fixture(root, include_cross_platform=True)
+            binary_dir = root / "staged-bin"
+            image_dir = root / "staged-images"
+
+            result = run_tool(
+                "stage-capsule-backfill-assets",
+                str(asset_dir),
+                "--tag",
+                "v0.8.0",
+                "--binary-dir",
+                str(binary_dir),
+                "--image-evidence-dir",
+                str(image_dir),
+            )
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertTrue((binary_dir / "registryctl-v0.8.0-macos-arm64").is_file())
+            self.assertTrue((binary_dir / "registryctl-v0.8.0-linux-arm64").is_file())
+            # Required amd64 binaries are still staged alongside the optional ones.
+            self.assertTrue((binary_dir / "registryctl-v0.8.0-linux-amd64").is_file())
 
     def test_stage_capsule_backfill_assets_rejects_missing_release_asset(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -523,7 +588,23 @@ def write_binary_fixture(root: Path) -> Path:
     return binary_dir
 
 
-def write_release_asset_fixture(root: Path) -> Path:
+def write_multiplatform_binary_fixture(root: Path) -> Path:
+    binary_dir = root / "bin"
+    binary_dir.mkdir()
+    names = [
+        "registryctl-v0.8.0-linux-amd64",
+        "registryctl-v0.8.0-linux-arm64",
+        "registryctl-v0.8.0-macos-arm64",
+    ]
+    checksums = []
+    for name in names:
+        (binary_dir / name).write_text(f"{name} fixture\n", encoding="utf-8")
+        checksums.append(subprocess.check_output(["sha256sum", name], cwd=binary_dir, text=True))
+    (binary_dir / "SHA256SUMS").write_text("".join(checksums), encoding="utf-8")
+    return binary_dir
+
+
+def write_release_asset_fixture(root: Path, *, include_cross_platform: bool = False) -> Path:
     asset_dir = root / "release-assets"
     asset_dir.mkdir()
     binary_names = [
@@ -532,6 +613,11 @@ def write_release_asset_fixture(root: Path) -> Path:
         "registry-relay-v0.8.0-linux-amd64",
         "registry-notary-v0.8.0-linux-amd64",
     ]
+    if include_cross_platform:
+        binary_names += [
+            "registryctl-v0.8.0-macos-arm64",
+            "registryctl-v0.8.0-linux-arm64",
+        ]
     checksums = []
     for name in binary_names:
         path = asset_dir / name

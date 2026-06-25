@@ -12,6 +12,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   project pointing at an existing FHIR source-adapter sidecar, with a starter
   `patient-record-exists` claim and generated smoke request target.
 
+### Changed
+
+- Install script (`install.sh`) downloads the raw per-platform `registryctl` binary from
+  the stack release, verifies it against the release `SHA256SUMS`, and falls back to a
+  source-install hint on platforms without a published binary. The stack release publishes
+  binaries for Linux x86_64, Linux arm64, and macOS arm64.
+
 ## [0.1.0] - 2026-06-12
 
 First tagged release of the `registryctl` CLI for Registry Commons.

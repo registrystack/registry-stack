@@ -44,6 +44,15 @@ def copy_required_asset(asset_dir: Path, name: str, output_dir: Path) -> None:
     shutil.copy2(source, output_dir / name)
 
 
+def copy_optional_asset(asset_dir: Path, name: str, output_dir: Path) -> bool:
+    source = asset_dir / name
+    if not source.is_file():
+        return False
+    output_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, output_dir / name)
+    return True
+
+
 def stage_capsule_backfill_assets(asset_dir: Path, tag: str, binary_dir: Path, image_evidence_dir: Path) -> int:
     if SEMVER_TAG.fullmatch(tag) is None:
         print(f"error: release tag must look like v0.8.0, got {tag}", file=sys.stderr)
@@ -59,22 +68,39 @@ def stage_capsule_backfill_assets(asset_dir: Path, tag: str, binary_dir: Path, i
         f"registry-notary-{tag}-linux-amd64",
         "SHA256SUMS",
     ]
+    # registryctl ships extra native binaries the hermetic linux/amd64 builder
+    # cannot produce. They are optional so backfilling a release that predates
+    # them (or any future amd64-only tag) does not fail.
+    optional_binary_names = [
+        f"registryctl-{tag}-macos-arm64",
+        f"registryctl-{tag}-linux-arm64",
+    ]
     image_names = [
         "registry-notary",
         "registry-notary-source-adapter-sidecar",
         "registry-relay",
     ]
 
+    staged_optional: list[str] = []
     try:
         for name in binary_names:
             copy_required_asset(asset_dir, name, binary_dir)
+        for name in optional_binary_names:
+            if copy_optional_asset(asset_dir, name, binary_dir):
+                staged_optional.append(name)
         for image in image_names:
             copy_required_asset(asset_dir, f"{image}.digest", image_evidence_dir)
     except OSError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    print(f"staged {len(binary_names)} binary assets and {len(image_names)} image digest assets for {tag}")
+    print(
+        f"staged {len(binary_names)} binary assets "
+        f"({len(staged_optional)}/{len(optional_binary_names)} optional cross-platform) "
+        f"and {len(image_names)} image digest assets for {tag}"
+    )
+    for name in optional_binary_names:
+        print(f"  optional binary {name}: {'staged' if name in staged_optional else 'absent (skipped)'}")
     return 0
 
 
