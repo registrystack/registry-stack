@@ -2,8 +2,8 @@
 
 Registry Notary's container workflow publishes release images from stable
 `vX.Y.Z` tags and `registry-stack-technical-preview-<date-or-version>` tags to
-`ghcr.io/jeremi/registry-notary` and
-`ghcr.io/jeremi/registry-notary-source-adapter-sidecar`. Every release publishes
+`ghcr.io/registrystack/registry-notary` and
+`ghcr.io/registrystack/registry-notary-source-adapter-sidecar`. Every release publishes
 `sha-<commit-sha>` as the immutable image tag for both images. Stable releases
 also update `vX.Y.Z`, `vX.Y`, `vX`, and `latest`; `latest` means latest stable
 release. Technical-preview releases publish the matching

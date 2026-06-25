@@ -25,9 +25,9 @@ mod sample;
 mod stored_zip;
 
 const RELAY_IMAGE: &str =
-    "ghcr.io/jeremi/registry-relay@sha256:1e49c592d0f65378600f1a1745b331e499e226873a30340c0a66f260bb00494b";
+    "ghcr.io/registrystack/registry-relay@sha256:da9332ef30ba252d54ba275eb2a9be443a65e95ef78c493b9b0ce30cbc391e71";
 const NOTARY_IMAGE: &str =
-    "ghcr.io/jeremi/registry-notary@sha256:965a4e2d7d487e7cb8d95b5ad6ed35ed3977be21962a2cffa0f57116c9c34da8";
+    "ghcr.io/registrystack/registry-notary@sha256:303a059085be02caed17b4166115c6d69ef6d8c703b3c08f9254b380e73d923e";
 const NOTARY_REDIS_IMAGE: &str = "redis:7.4-alpine";
 const RELAY_BASE_URL: &str = "http://127.0.0.1:4242";
 const NOTARY_BASE_URL: &str = "http://127.0.0.1:4255";
@@ -4923,7 +4923,7 @@ workflows:
 
         assert_digest_pinned_image(
             manifest["runtime"]["relay_image"].as_str().unwrap(),
-            "ghcr.io/jeremi/registry-relay",
+            "ghcr.io/registrystack/registry-relay",
         );
         assert_eq!(manifest["runtime"]["relay_base_url"], RELAY_BASE_URL);
         assert!(compose.contains(&format!("image: {RELAY_IMAGE}")));
@@ -4966,7 +4966,7 @@ workflows:
 
         assert_digest_pinned_image(
             manifest["runtime"]["notary_image"].as_str().unwrap(),
-            "ghcr.io/jeremi/registry-notary",
+            "ghcr.io/registrystack/registry-notary",
         );
         assert_eq!(
             manifest["runtime"]["notary_base_url"],
