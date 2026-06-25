@@ -1,0 +1,254 @@
+name: RegistryStack Release Capsule Backfill
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing semver release tag to backfill
+        required: true
+        type: string
+      replace_existing:
+        description: Replace existing capsule assets for this tag
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-capsule-backfill-${{ inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  SYFT_VERSION: v1.45.1
+  SYFT_LINUX_AMD64_SHA256: 20c84195e24927f50a3b2269946be51f4c4abc9d2f145fee7388b4199149f716
+  GRYPE_VERSION: v0.114.0
+  GRYPE_LINUX_AMD64_SHA256: edda0968d8827daab01d32b3cd7de192ae0915005e7bbfcfef9e68e79bc43343
+
+jobs:
+  backfill:
+    name: Backfill release capsule
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ inputs.tag }}
+      REPLACE_EXISTING: ${{ inputs.replace_existing }}
+    steps:
+      - name: Checkout current capsule tooling
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          path: generator
+          fetch-depth: 0
+          submodules: false
+
+      - name: Validate backfill request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REPOSITORY}" != "registrystack/registry-stack" ]]; then
+            echo "Release capsule backfill can only run in registrystack/registry-stack" >&2
+            exit 1
+          fi
+          if [[ ! "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tag must look like v0.8.0, got ${TAG}" >&2
+            exit 1
+          fi
+          if ! release_draft="$(gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" --json isDraft --jq '.isDraft')"; then
+            echo "Release ${TAG} does not exist" >&2
+            exit 1
+          fi
+          if [[ "${release_draft}" == "true" ]]; then
+            echo "Release ${TAG} is still a draft" >&2
+            exit 1
+          fi
+          mkdir -p dist
+          gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name' \
+            | sort > dist/preexisting-assets
+          capsule_json="registry-stack-${TAG}-release-capsule.json"
+          capsule_md="registry-stack-${TAG}-release-capsule.md"
+          {
+            printf '%s\n' "${capsule_json}" "${capsule_md}"
+            for image in registry-notary registry-notary-source-adapter-sidecar registry-relay; do
+              printf '%s\n' "${image}.digest-bound.spdx.json" "${image}.digest-bound.grype.json"
+            done
+          } | sort > dist/backfill-assets
+          if [[ "${REPLACE_EXISTING}" != "true" ]]; then
+            if conflicts="$(comm -12 dist/preexisting-assets dist/backfill-assets)" && [[ -n "${conflicts}" ]]; then
+              echo "Backfill assets already exist for ${TAG}; rerun with replace_existing=true to replace them" >&2
+              printf '%s\n' "${conflicts}" >&2
+              exit 1
+            fi
+          fi
+          {
+            echo "CAPSULE_JSON=${capsule_json}"
+            echo "CAPSULE_MD=${capsule_md}"
+          } >> "${GITHUB_ENV}"
+
+      - name: Checkout release source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ inputs.tag }}
+          path: release-source
+          fetch-depth: 0
+          submodules: false
+
+      - name: Verify release source lineage
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C release-source fetch --force origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/tags/${TAG}:refs/tags/${TAG}"
+          tag_target="$(git -C release-source rev-parse --verify "refs/tags/${TAG}^{}")"
+          if [[ "$(git -C release-source rev-parse HEAD)" != "${tag_target}" ]]; then
+            echo "Release source checkout does not match ${TAG}" >&2
+            exit 1
+          fi
+          generator/release/scripts/registry-release validate-source \
+            release-source/release/manifests/registry-stack-beta-6.yaml \
+            --tag "${TAG}" \
+            --repo release-source \
+            --default-branch origin/main
+
+      - name: Download existing release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/downloaded
+          gh release download "${TAG}" --repo "${GITHUB_REPOSITORY}" --dir dist/downloaded
+          (cd dist/downloaded && find . -type f -print0 | sort -z | xargs -0 sha256sum) \
+            > dist/preexisting-asset-sha256s.txt
+
+      - name: Stage release assets for capsule rendering
+        shell: bash
+        run: |
+          set -euo pipefail
+          generator/release/scripts/registry-release stage-capsule-backfill-assets \
+            dist/downloaded \
+            --tag "${TAG}" \
+            --binary-dir dist/staged/bin \
+            --image-evidence-dir dist/staged/image-evidence
+
+      - name: Install Syft and Grype
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${SYFT_VERSION:?}"
+          : "${SYFT_LINUX_AMD64_SHA256:?}"
+          : "${GRYPE_VERSION:?}"
+          : "${GRYPE_LINUX_AMD64_SHA256:?}"
+          mkdir -p "${HOME}/.local/bin" /tmp/registry-stack-tools
+          syft_version="${SYFT_VERSION#v}"
+          grype_version="${GRYPE_VERSION#v}"
+          curl -sSfL \
+            "https://github.com/anchore/syft/releases/download/${SYFT_VERSION}/syft_${syft_version}_linux_amd64.tar.gz" \
+            -o /tmp/registry-stack-tools/syft.tar.gz
+          echo "${SYFT_LINUX_AMD64_SHA256}  /tmp/registry-stack-tools/syft.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/registry-stack-tools/syft.tar.gz -C "${HOME}/.local/bin" syft
+          curl -sSfL \
+            "https://github.com/anchore/grype/releases/download/${GRYPE_VERSION}/grype_${grype_version}_linux_amd64.tar.gz" \
+            -o /tmp/registry-stack-tools/grype.tar.gz
+          echo "${GRYPE_LINUX_AMD64_SHA256}  /tmp/registry-stack-tools/grype.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/registry-stack-tools/grype.tar.gz -C "${HOME}/.local/bin" grype
+          echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
+
+      - name: Generate digest-bound image evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r digest_path; do
+            image="$(basename "${digest_path}" .digest)"
+            digest_ref="$(tr -d '\n' < "${digest_path}")"
+            syft "${digest_ref}" -o "spdx-json=dist/staged/image-evidence/${image}.digest-bound.spdx.json"
+            grype "${digest_ref}" -o json > "dist/staged/image-evidence/${image}.digest-bound.grype.json"
+          done < <(find dist/staged/image-evidence -type f -name "*.digest" | sort)
+
+      - name: Render backfill release capsule
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          mkdir -p dist/release-capsule
+          generator/release/scripts/registry-release render-capsule \
+            release-source/release/manifests/registry-stack-beta-6.yaml \
+            --tag "${TAG}" \
+            --version "${version}" \
+            --binary-dir dist/staged/bin \
+            --image-evidence-dir dist/staged/image-evidence \
+            --output-json "dist/release-capsule/${CAPSULE_JSON}" \
+            --output-markdown "dist/release-capsule/${CAPSULE_MD}" \
+            --workflow-name "RegistryStack Release Capsule Backfill" \
+            --workflow-run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --workflow-run-id "${GITHUB_RUN_ID}" \
+            --default-branch-protection unverified \
+            --repo release-source \
+            --default-branch origin/main
+
+      - name: Upload backfill assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          upload_args=()
+          if [[ "${REPLACE_EXISTING}" == "true" ]]; then
+            upload_args+=(--clobber)
+          fi
+          upload_assets=()
+          while IFS= read -r asset; do
+            local_path="$(find dist/release-capsule dist/staged/image-evidence -maxdepth 1 -type f -name "${asset}" -print -quit)"
+            if [[ -z "${local_path}" ]]; then
+              echo "Generated backfill asset ${asset} was not found" >&2
+              exit 1
+            fi
+            upload_assets+=("${local_path}")
+          done < dist/backfill-assets
+          gh release upload "${TAG}" "${upload_assets[@]}" --repo "${GITHUB_REPOSITORY}" "${upload_args[@]}"
+
+      - name: Reconcile release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          {
+            cat dist/preexisting-assets
+            cat dist/backfill-assets
+          } | sort -u > "${tmp}/expected-assets"
+          gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name' \
+            | sort > "${tmp}/actual-assets"
+          if ! diff -u "${tmp}/expected-assets" "${tmp}/actual-assets"; then
+            echo "GitHub Release assets differ from expected backfill asset set" >&2
+            exit 1
+          fi
+
+          mkdir -p dist/reconciled
+          gh release download "${TAG}" --repo "${GITHUB_REPOSITORY}" --dir dist/reconciled
+          (cd dist/reconciled && find . -type f -print0 | sort -z | xargs -0 sha256sum) \
+            > dist/reconciled-asset-sha256s.txt
+          sed 's#^#./#' dist/backfill-assets > "${tmp}/backfill-hash-names"
+          grep -v -F -f "${tmp}/backfill-hash-names" \
+            dist/preexisting-asset-sha256s.txt > "${tmp}/preexisting-non-backfill-sha256s" || true
+          grep -v -F -f "${tmp}/backfill-hash-names" \
+            dist/reconciled-asset-sha256s.txt > "${tmp}/reconciled-non-backfill-sha256s" || true
+          if ! diff -u "${tmp}/preexisting-non-backfill-sha256s" "${tmp}/reconciled-non-backfill-sha256s"; then
+            echo "Existing release asset hashes changed during capsule backfill" >&2
+            exit 1
+          fi
+
+          while IFS= read -r asset; do
+            local_path="$(find dist/release-capsule dist/staged/image-evidence -maxdepth 1 -type f -name "${asset}" -print -quit)"
+            expected="$(sha256sum "${local_path}" | awk '{print $1}')"
+            actual="$(sha256sum "dist/reconciled/${asset}" | awk '{print $1}')"
+            if [[ "${expected}" != "${actual}" ]]; then
+              echo "Backfill asset ${asset} sha256 mismatch after upload" >&2
+              exit 1
+            fi
+          done < dist/backfill-assets
