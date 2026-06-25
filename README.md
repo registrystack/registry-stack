@@ -132,9 +132,11 @@ Release evidence lives in:
 ## Support And Contribution
 
 Use [GitHub issues](https://github.com/registrystack/registry-stack/issues) for
-non-security bugs, questions, and feature discussion. Before opening a pull
-request, run the relevant checks from [Development](#development) and keep
-changes scoped to the owning crate, product, docs, lab, or release area.
+non-security bugs, questions, and feature discussion. See [SUPPORT.md](SUPPORT.md)
+for support expectations and [CONTRIBUTING.md](CONTRIBUTING.md) for contribution
+workflow. Before opening a pull request, run the relevant checks from
+[Development](#development) and keep changes scoped to the owning crate,
+product, docs, lab, or release area.
 
 ## Security
 
