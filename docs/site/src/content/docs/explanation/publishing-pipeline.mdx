@@ -62,7 +62,7 @@ authenticated caller's `metadata` scope, so a caller with
 That filtering is the runtime-only capability; it cannot be replicated statically.
 
 Both paths share the same manifest format and the same renderer code from
-[`registry-manifest-core`](https://github.com/registrystack/registry-stack/tree/v0.8.0/crates/registry-manifest-core).
+[`registry-manifest-core`](https://github.com/registrystack/registry-stack/tree/v0.8.1/crates/registry-manifest-core).
 The static path invokes those renderers through the CLI.
 The runtime path invokes them at request time, inside Relay.
 

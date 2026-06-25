@@ -31,7 +31,7 @@ jobs:
               echo "::error title=Missing DCO sign-off::${commit} ${subject}"
               missing=1
             fi
-          done < <(git rev-list --reverse "${base}..${head}")
+          done < <(git rev-list --reverse --no-merges "${base}..${head}")
 
           if [[ "${missing}" -ne 0 ]]; then
             echo "Add a Signed-off-by trailer with: git commit -s" >&2

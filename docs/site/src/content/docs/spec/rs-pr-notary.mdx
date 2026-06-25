@@ -250,9 +250,9 @@ This specification is `verified`: every requirement describes shipped behavior a
 - [Evidence issuance, end to end](../../explanation/evidence-issuance/) walks the claim pipeline, the four consume paths, and the selective-disclosure mechanics that Sections 4 through 9 make precise.
 - The [standards register](../../reference/standards/) records the adoption mode for SD-JWT VC, OID4VCI, CCCEV, and the other standards listed in `standards_referenced`, including the profiled-subset claims this document refers to.
 - [RS-ARC-G](../rs-arc-g/) Section 3 and Section 5 hold the architectural invariants (REQ-ARC-G-004/007/008/009) that this document refines.
-- Delegated self-attestation access modes, source capabilities, stored metadata, and denial reasons are implemented in [`model.rs`](https://github.com/registrystack/registry-stack/blob/v0.8.0/crates/registry-notary-core/src/model.rs).
-- Delegated relationship configuration validation is implemented in [`config.rs`](https://github.com/registrystack/registry-stack/blob/v0.8.0/crates/registry-notary-core/src/config.rs).
-- Request context derivation, stored-evaluation revalidation, OID4VCI delegated-token rejection, explicit target binding, and proof-gated source reads are implemented in [`api.rs`](https://github.com/registrystack/registry-stack/blob/v0.8.0/crates/registry-notary-server/src/api.rs) and [`runtime.rs`](https://github.com/registrystack/registry-stack/blob/v0.8.0/crates/registry-notary-server/src/runtime.rs).
+- Delegated self-attestation access modes, source capabilities, stored metadata, and denial reasons are implemented in [`model.rs`](https://github.com/registrystack/registry-stack/blob/v0.8.1/crates/registry-notary-core/src/model.rs).
+- Delegated relationship configuration validation is implemented in [`config.rs`](https://github.com/registrystack/registry-stack/blob/v0.8.1/crates/registry-notary-core/src/config.rs).
+- Request context derivation, stored-evaluation revalidation, OID4VCI delegated-token rejection, explicit target binding, and proof-gated source reads are implemented in [`api.rs`](https://github.com/registrystack/registry-stack/blob/v0.8.1/crates/registry-notary-server/src/api.rs) and [`runtime.rs`](https://github.com/registrystack/registry-stack/blob/v0.8.1/crates/registry-notary-server/src/runtime.rs).
 
 ## Next
 
