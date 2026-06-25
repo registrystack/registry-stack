@@ -1,0 +1,15 @@
+# Code owners for Registry Stack.
+#
+# Owners are requested for review automatically. Owners need write access to
+# the repository. Add co-maintainers here as they join, most specific paths win.
+
+# Default owner for everything not matched below.
+*                 @jeremi
+
+# Area owners.
+/crates/          @jeremi
+/products/        @jeremi
+/docs/site/       @jeremi
+/lab/             @jeremi
+/release/         @jeremi
+/.github/         @jeremi
