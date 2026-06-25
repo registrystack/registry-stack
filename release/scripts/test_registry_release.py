@@ -266,6 +266,112 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("does not match checked-out release tag", result.stderr)
 
+    def test_render_capsule_prefers_digest_bound_backfill_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_ref = init_release_repo(root)
+            manifest = write_manifest(root, source_ref=source_ref)
+            binary_dir = write_binary_fixture(root)
+            image_dir = write_image_fixture(root, grype_subject="ghcr.io/registrystack/registry-notary:v0.8.0")
+            (image_dir / "registry-notary.digest-bound.spdx.json").write_text(
+                json.dumps(
+                    {
+                        "spdxVersion": "SPDX-2.3",
+                        "name": "registry-notary-digest-bound",
+                        "documentDescribes": ["SPDXRef-registry-notary-image"],
+                        "packages": [
+                            {
+                                "SPDXID": "SPDXRef-registry-notary-image",
+                                "name": "ghcr.io/registrystack/registry-notary",
+                                "externalRefs": [
+                                    {
+                                        "referenceType": "purl",
+                                        "referenceLocator": f"pkg:oci/registry-notary@{IMAGE_DIGEST}",
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (image_dir / "registry-notary.digest-bound.grype.json").write_text(
+                json.dumps(
+                    {
+                        "descriptor": {
+                            "version": "0.114.0",
+                            "db": {"built": "2026-06-24T00:00:00Z"},
+                        },
+                        "source": {"target": {"userInput": IMAGE_DIGEST_REF}},
+                        "matches": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            output_json = root / "capsule.json"
+
+            result = render_capsule(manifest, binary_dir, image_dir, output_json, root / "capsule.md", root)
+
+            evidence = json.loads(output_json.read_text(encoding="utf-8"))
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual("registry-notary.digest-bound.spdx.json", evidence["images"][0]["sbom"]["asset_name"])
+        self.assertEqual(
+            "registry-notary.digest-bound.grype.json",
+            evidence["images"][0]["vulnerability_scan"]["asset_name"],
+        )
+
+    def test_stage_capsule_backfill_assets_copies_expected_release_assets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            asset_dir = write_release_asset_fixture(root)
+            binary_dir = root / "staged-bin"
+            image_dir = root / "staged-images"
+
+            result = run_tool(
+                "stage-capsule-backfill-assets",
+                str(asset_dir),
+                "--tag",
+                "v0.8.0",
+                "--binary-dir",
+                str(binary_dir),
+                "--image-evidence-dir",
+                str(image_dir),
+            )
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertTrue((binary_dir / "registryctl-v0.8.0-linux-amd64").is_file())
+            self.assertTrue((binary_dir / "registry-manifest-v0.8.0-linux-amd64").is_file())
+            self.assertTrue((binary_dir / "registry-relay-v0.8.0-linux-amd64").is_file())
+            self.assertTrue((binary_dir / "registry-notary-v0.8.0-linux-amd64").is_file())
+            self.assertTrue((binary_dir / "SHA256SUMS").is_file())
+            self.assertTrue((image_dir / "registry-notary.digest").is_file())
+            self.assertTrue((image_dir / "registry-notary-source-adapter-sidecar.digest").is_file())
+            self.assertTrue((image_dir / "registry-relay.digest").is_file())
+            self.assertFalse((image_dir / "registry-notary-source-adapter-sidecar.spdx.json").exists())
+            self.assertFalse((image_dir / "registry-relay.grype.json").exists())
+            self.assertFalse((image_dir / "registry-stack-v0.8.0-release-evidence.json").exists())
+
+    def test_stage_capsule_backfill_assets_rejects_missing_release_asset(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            asset_dir = write_release_asset_fixture(root)
+            (asset_dir / "registry-relay.digest").unlink()
+
+            result = run_tool(
+                "stage-capsule-backfill-assets",
+                str(asset_dir),
+                "--tag",
+                "v0.8.0",
+                "--binary-dir",
+                str(root / "staged-bin"),
+                "--image-evidence-dir",
+                str(root / "staged-images"),
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("missing release asset registry-relay.digest", result.stderr)
+
 
 def run_tool(*args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
@@ -345,6 +451,30 @@ def write_binary_fixture(root: Path) -> Path:
     checksum = subprocess.check_output(["sha256sum", binary.name], cwd=binary_dir, text=True)
     (binary_dir / "SHA256SUMS").write_text(checksum, encoding="utf-8")
     return binary_dir
+
+
+def write_release_asset_fixture(root: Path) -> Path:
+    asset_dir = root / "release-assets"
+    asset_dir.mkdir()
+    binary_names = [
+        "registryctl-v0.8.0-linux-amd64",
+        "registry-manifest-v0.8.0-linux-amd64",
+        "registry-relay-v0.8.0-linux-amd64",
+        "registry-notary-v0.8.0-linux-amd64",
+    ]
+    checksums = []
+    for name in binary_names:
+        path = asset_dir / name
+        path.write_text(f"{name}\n", encoding="utf-8")
+        checksums.append(subprocess.check_output(["sha256sum", name], cwd=asset_dir, text=True))
+    (asset_dir / "SHA256SUMS").write_text("".join(checksums), encoding="utf-8")
+    for image in ("registry-notary", "registry-notary-source-adapter-sidecar", "registry-relay"):
+        (asset_dir / f"{image}.digest").write_text(f"{IMAGE_DIGEST_REF}\n", encoding="utf-8")
+        (asset_dir / f"{image}.spdx.json").write_text("{}", encoding="utf-8")
+        (asset_dir / f"{image}.grype.json").write_text("{}", encoding="utf-8")
+        (asset_dir / f"{image}.metadata.json").write_text("{}", encoding="utf-8")
+    (asset_dir / "registry-stack-v0.8.0-release-evidence.json").write_text("{}", encoding="utf-8")
+    return asset_dir
 
 
 def write_image_fixture(

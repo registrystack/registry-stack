@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -16,6 +17,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
+SEMVER_TAG = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$")
 IMAGE_DIGEST_REF = re.compile(r"^([^@]+)@(sha256:[0-9a-f]{64})$")
 STATUS_VALUES = {"verified", "not-present", "not-applicable", "unknown"}
 
@@ -32,6 +34,48 @@ def load_json(path: Path) -> object:
 
 def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def copy_required_asset(asset_dir: Path, name: str, output_dir: Path) -> None:
+    source = asset_dir / name
+    if not source.is_file():
+        raise FileNotFoundError(f"missing release asset {name}")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, output_dir / name)
+
+
+def stage_capsule_backfill_assets(asset_dir: Path, tag: str, binary_dir: Path, image_evidence_dir: Path) -> int:
+    if SEMVER_TAG.fullmatch(tag) is None:
+        print(f"error: release tag must look like v0.8.0, got {tag}", file=sys.stderr)
+        return 1
+    if not asset_dir.is_dir():
+        print(f"error: release asset directory does not exist: {asset_dir}", file=sys.stderr)
+        return 1
+
+    binary_names = [
+        f"registryctl-{tag}-linux-amd64",
+        f"registry-manifest-{tag}-linux-amd64",
+        f"registry-relay-{tag}-linux-amd64",
+        f"registry-notary-{tag}-linux-amd64",
+        "SHA256SUMS",
+    ]
+    image_names = [
+        "registry-notary",
+        "registry-notary-source-adapter-sidecar",
+        "registry-relay",
+    ]
+
+    try:
+        for name in binary_names:
+            copy_required_asset(asset_dir, name, binary_dir)
+        for image in image_names:
+            copy_required_asset(asset_dir, f"{image}.digest", image_evidence_dir)
+    except OSError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"staged {len(binary_names)} binary assets and {len(image_names)} image digest assets for {tag}")
+    return 0
 
 
 def validate(manifest_path: Path) -> int:
@@ -168,6 +212,10 @@ def validate_source(manifest_path: Path, tag: str, repo: Path, default_branch: s
 def find_one(root: Path, pattern: str) -> Path | None:
     matches = sorted(path for path in root.rglob(pattern) if path.is_file())
     return matches[0] if matches else None
+
+
+def find_image_evidence(root: Path, name: str, suffix: str) -> Path | None:
+    return find_one(root, f"{name}.digest-bound{suffix}") or find_one(root, f"{name}{suffix}")
 
 
 def severity_summary(grype_report: object) -> dict[str, int]:
@@ -349,8 +397,8 @@ def render_capsule(
             if digest_match is None:
                 raise ValueError(f"{name} digest ref must match image@sha256:<64 hex>")
             digest = digest_match.group(2)
-            sbom = find_one(image_evidence_dir, f"{name}.spdx.json")
-            grype = find_one(image_evidence_dir, f"{name}.grype.json")
+            sbom = find_image_evidence(image_evidence_dir, name, ".spdx.json")
+            grype = find_image_evidence(image_evidence_dir, name, ".grype.json")
             if sbom is None:
                 raise ValueError(f"{name} is missing an SBOM file")
             if grype is None:
@@ -540,6 +588,11 @@ def main() -> int:
     subparsers.add_parser("collect-artifacts")
     warning_parser = subparsers.add_parser("classify-warning")
     warning_parser.add_argument("code")
+    stage_parser = subparsers.add_parser("stage-capsule-backfill-assets")
+    stage_parser.add_argument("asset_dir", type=Path)
+    stage_parser.add_argument("--tag", required=True)
+    stage_parser.add_argument("--binary-dir", type=Path, required=True)
+    stage_parser.add_argument("--image-evidence-dir", type=Path, required=True)
     capsule_parser = subparsers.add_parser("render-capsule")
     capsule_parser.add_argument("manifest", type=Path)
     capsule_parser.add_argument("--tag", required=True)
@@ -564,6 +617,8 @@ def main() -> int:
         return audit(args.import_map)
     if args.command == "classify-warning":
         return classify_warning(args.code)
+    if args.command == "stage-capsule-backfill-assets":
+        return stage_capsule_backfill_assets(args.asset_dir, args.tag, args.binary_dir, args.image_evidence_dir)
     if args.command == "render-capsule":
         return render_capsule(
             args.manifest,
