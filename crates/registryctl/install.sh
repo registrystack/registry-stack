@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo="registrystack/registry-stack"
-default_version="v0.8.1"
+default_version="v0.8.2"
 version="${REGISTRYCTL_VERSION:-$default_version}"
 install_dir="${REGISTRYCTL_INSTALL_DIR:-$HOME/.local/bin}"
 
@@ -11,7 +11,7 @@ usage() {
 Install registryctl.
 
 Environment:
-  REGISTRYCTL_VERSION      Pinned release tag to install. Defaults to v0.8.1.
+  REGISTRYCTL_VERSION      Pinned release tag to install. Defaults to v0.8.2.
   REGISTRYCTL_INSTALL_DIR  Install directory. Defaults to ~/.local/bin.
 EOF
 }
