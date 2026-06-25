@@ -2,7 +2,7 @@
 
 Registry Relay's container workflow publishes release images from stable
 `vX.Y.Z` tags and `registry-stack-technical-preview-<date-or-version>` tags to
-`ghcr.io/jeremi/registry-relay`. Every release publishes
+`ghcr.io/registrystack/registry-relay`. Every release publishes
 `sha-<commit-sha>` as the immutable image tag. Stable releases also update
 `vX.Y.Z`, `vX.Y`, `vX`, and `latest`; `latest` means latest stable release.
 Technical-preview releases publish the matching
