@@ -5981,7 +5981,7 @@ dependencies = [
  "clap",
  "crc32fast",
  "ed25519-dalek",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "registry-notary-core",
  "registry-platform-authcommon",
  "serde",
