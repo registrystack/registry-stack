@@ -18,12 +18,22 @@ index, not a certification or external audit.
 
 Registry Stack configures OpenSSF Scorecard in
 `.github/workflows/scorecard.yml`. The workflow is scheduled and runs on
-default-branch changes. Public Scorecard viewer links are not present until a
-non-pull-request default-branch run publishes results.
+default-branch changes.
+
+Current public evidence:
+
+- [Latest public Scorecard viewer](https://scorecard.dev/viewer/?uri=github.com/registrystack/registry-stack)
+- [First successful default-branch publication run](https://github.com/registrystack/registry-stack/actions/runs/28138919172)
 
 Use the check-level results as hygiene telemetry. The aggregate score can hide
 important details, so release-integrity findings such as missing root image
 signing or provenance are tracked as explicit caveats until they are fixed.
+
+Known first-pass Scorecard caveats include unsigned releases, missing
+provenance, branch-protection visibility, SAST coverage, unpinned lab images,
+and existing dependency vulnerability findings. These are not certifications
+or blockers for using the published Scorecard as hygiene telemetry; they are
+the remediation backlog the telemetry exposes.
 
 ## Best practices badge
 

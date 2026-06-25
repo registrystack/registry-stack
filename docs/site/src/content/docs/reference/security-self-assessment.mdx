@@ -86,8 +86,8 @@ Development evidence:
 
 - CI runs Rust format, workspace checks, focused tests, release-tool tests, lab
   source-model checks, and docs checks.
-- OpenSSF Scorecard is configured in the root workflow; public default-branch
-  results are pending the first non-pull-request run after merge.
+- OpenSSF Scorecard runs on the root workflow and publishes default-branch
+  results as hygiene telemetry.
 - Release manifests pin source refs and external inputs.
 - Release validation checks source tag matching, source-ref ancestry, default
   branch reachability, and manifest consistency.
