@@ -294,6 +294,7 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+      id-token: write # keyless cosign signing via OIDC
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -342,6 +343,29 @@ jobs:
             --default-branch-protection unverified \
             --repo . \
             --default-branch origin/main
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+
+      - name: Sign release artifacts (keyless)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Capture the asset list BEFORE signing so signatures are never re-signed.
+          # Writing .sig/.pem into the same dist/ dirs keeps the downstream
+          # "Reconcile release assets" guard satisfied (expected == actual).
+          mapfile -d '' -t files < <(find dist/bin dist/image-evidence dist/release-capsule -type f -print0 | sort -z)
+          if [[ "${#files[@]}" -eq 0 ]]; then
+            echo "No artifacts to sign" >&2
+            exit 1
+          fi
+          for f in "${files[@]}"; do
+            cosign sign-blob --yes \
+              --output-signature "${f}.sig" \
+              --output-certificate "${f}.pem" \
+              "${f}"
+          done
+          echo "Signed ${#files[@]} release artifacts with keyless cosign (.sig + .pem)."
 
       - name: Create or update release
         env:
