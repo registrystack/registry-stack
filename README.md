@@ -27,6 +27,7 @@ release manifests, docs, and lab evidence.
 | Try it without installing anything | [Hosted lab](https://lab.registrystack.org/) |
 | Run the local demo topology | `cd lab && just quick` |
 | Work on the monorepo | See [Development](#development) |
+| Review the public roadmap | [ROADMAP.md](ROADMAP.md) |
 | Review release evidence | See [Release And External Inputs](#release-and-external-inputs) |
 
 ## What It Includes
@@ -138,6 +139,10 @@ Release evidence lives in:
 - `release/notes/`
 - `release/scripts/`
 
+Release assets are published with SHA256 checksums and keyless cosign
+signatures. See [release/VERIFY.md](release/VERIFY.md) for verification
+commands.
+
 ## Support And Contribution
 
 Use [GitHub issues](https://github.com/registrystack/registry-stack/issues) for
@@ -145,7 +150,8 @@ non-security bugs, questions, and feature discussion. See [SUPPORT.md](SUPPORT.m
 for support expectations and [CONTRIBUTING.md](CONTRIBUTING.md) for contribution
 workflow. Before opening a pull request, run the relevant checks from
 [Development](#development) and keep changes scoped to the owning crate,
-product, docs, lab, or release area.
+product, docs, lab, or release area. Open issues are triaged with public labels
+described in [CONTRIBUTING.md](CONTRIBUTING.md#issue-labels).
 
 ## Security
 

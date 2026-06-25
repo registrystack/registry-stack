@@ -5,6 +5,33 @@ reports, questions, and review notes are welcome. Maintainers review incoming
 work according to project priorities, release risk, and available review
 capacity.
 
+## Contribution License
+
+Registry Stack uses the [Developer Certificate of Origin
+1.1](https://developercertificate.org/) for inbound contributions. By
+contributing, you certify that you have the right to submit the work under this
+repository's license and that the contribution can be included in the project.
+
+Add a `Signed-off-by` trailer to every commit:
+
+```bash
+git commit -s
+```
+
+The trailer must use your real name or established project identity and an
+email address you are willing to associate with the contribution:
+
+```text
+Signed-off-by: Name <name@example.com>
+```
+
+Pull requests are checked automatically for this trailer.
+
+You may use coding agents or other automation while preparing a change. The
+person who commits, signs off, and submits the contribution is responsible for
+reviewing the result, running the relevant checks, and making sure the DCO
+certification is true.
+
 ## Maintainer Workflow
 
 - Maintainers may merge their own pull requests when the change is scoped and
@@ -14,6 +41,24 @@ capacity.
 - CI remains the reference gate for normal pull requests.
 - Required human review should be enabled only when maintainer capacity can
   satisfy it reliably.
+
+## Review Standards
+
+Every pull request should make the review path clear:
+
+- Explain the user-visible or operator-visible impact in the pull request
+  summary.
+- Keep changes scoped to one owning area whenever practical.
+- Call out release, security, migration, compatibility, privacy, or governance
+  concerns in the pull request notes.
+- Run the checks that match the changed files, or state exactly which relevant
+  check was skipped and why.
+- Include tests for major functionality and bug fixes. If a test cannot be
+  added, explain why in the pull request.
+- Treat changes to authentication, authorization, credential issuance, signing,
+  audit integrity, release provenance, deployment defaults, or data minimization
+  as security-sensitive. These changes need explicit maintainer review notes,
+  even when the maintainer is also the author.
 
 ## Scope
 
@@ -29,6 +74,19 @@ Private planning, release evidence that is not already public, credentials,
 hosted deployment details, and internal review notes do not belong in this
 repository.
 
+## Issue Labels
+
+Public GitHub issue labels can help identify scope and priority. Start with:
+
+- [`enhancement`](https://github.com/registrystack/registry-stack/issues?q=is%3Aissue%20is%3Aopen%20label%3Aenhancement):
+  product, docs, lab, or release improvements.
+- [`criticality:p3`](https://github.com/registrystack/registry-stack/issues?q=is%3Aissue%20is%3Aopen%20label%3Acriticality%3Ap3):
+  lower-risk work that is usually safer for first contributions than release or
+  security-critical changes.
+
+If an issue looks too broad, ask for a smaller slice before opening a pull
+request.
+
 ## Before Opening A Pull Request
 
 Run the checks that match the files you changed. The full current gate is in
@@ -41,6 +99,11 @@ integration tests, Python unittest coverage for scripts, Node test coverage for
 docs or UI scripts, or an existing product-specific automated suite. If a
 maintainer determines that a change is not major new functionality, the pull
 request should say so in the testing notes.
+
+Major bug fixes should include the smallest relevant automated test, fixture,
+or docs check that proves the behavior. If a change is documentation-only, say
+so in the pull request checks section. If a code change genuinely cannot be
+tested, explain the reason and the manual or review evidence used instead.
 
 Rust workspace:
 
