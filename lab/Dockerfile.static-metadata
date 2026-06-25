@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM rust:1-bookworm AS publisher
+FROM rust:1-bookworm@sha256:5e2214abe154fe26e39f64488952e5c991eeed1d6d6da7cc8381ae83927f0cfc AS publisher
 
 WORKDIR /app
 
@@ -48,7 +48,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     test -f /app/static-metadata/.well-known/registry-manifest.json && \
     test -f /app/static-metadata/metadata/index.json
 
-FROM python:3.12.3-slim-bookworm AS runtime
+FROM python:3.12.3-slim-bookworm@sha256:afc139a0a640942491ec481ad8dda10f2c5b753f5c969393b12480155fe15a63 AS runtime
 
 COPY scripts/static-metadata-server.py /usr/local/bin/static-metadata-server.py
 COPY --from=publisher /app/static-metadata /srv/static
