@@ -51,8 +51,8 @@ The installer defaults to `v0.8.0`. To install a different pinned release, set
 REGISTRYCTL_VERSION=vX.Y.Z curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/v0.8.0/crates/registryctl/install.sh | sh
 ```
 
-A Linux x86_64 binary is published for the `v0.8.0` stack release. On other
-platforms (including macOS and Linux arm64), install from source with
+Prebuilt binaries are published for the `v0.8.0` stack release on Linux x86_64,
+Linux arm64, and macOS arm64. On other platforms, install from source with
 `cargo install --git https://github.com/registrystack/registry-stack --tag v0.8.0 registryctl --locked`.
 
 ## Update checks

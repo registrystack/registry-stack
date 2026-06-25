@@ -44,9 +44,9 @@ const BRUNO_COLLECTION_DIR: &str = "bruno/registry-api";
 const BRUNO_GENERATED_MANIFEST: &str = "bruno/registry-api/.registryctl-generated";
 const STANDALONE_SOURCE_TOKEN_PLACEHOLDER: &str = "replace-with-source-api-token";
 const REGISTRYCTL_RELEASES_API: &str =
-    "https://api.github.com/repos/jeremi/registry-registryctl/releases/latest";
+    "https://api.github.com/repos/registrystack/registry-stack/releases/latest";
 const REGISTRYCTL_INSTALL_SCRIPT: &str =
-    "https://raw.githubusercontent.com/jeremi/registry-registryctl/main/install.sh";
+    "https://raw.githubusercontent.com/registrystack/registry-stack/main/crates/registryctl/install.sh";
 const UPDATE_CHECK_CACHE_SECONDS: u64 = 60 * 60 * 24;
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
