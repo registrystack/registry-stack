@@ -72,24 +72,25 @@ CI compares that generated output with
 `openapi/registry-notary.openapi.json`. Any difference is treated as API drift
 and must be committed intentionally with review.
 
-## Image signing status
+## Image release evidence
 
-Published Registry Notary and source adapter sidecar image tags are signed with
-keyless `cosign` from the container workflow after they are pushed to GHCR. The
-workflow verifies that each pushed alias resolves to the same digest as that
-image's `sha-<commit-sha>` tag and verifies the signature for every pushed ref
-before it completes.
+The root monorepo release workflow publishes Registry Notary image digests,
+image SBOMs, and vulnerability scan reports. Root monorepo image signing is not
+claimed until the root release workflow signs and verifies those images.
 
-Verify a release alias and its immutable SHA tag resolve to the same digest:
+Older product-local workflows used keyless `cosign` for product images under
+the previous GHCR namespace. Treat those records as legacy product-specific
+history, not as evidence that current root monorepo release images are signed.
+
+Verify an immutable image digest from the root release capsule:
 
 ```sh
-docker buildx imagetools inspect ghcr.io/jeremi/registry-notary:sha-<commit-sha>
-docker buildx imagetools inspect ghcr.io/jeremi/registry-notary:<release-alias>
-docker buildx imagetools inspect ghcr.io/jeremi/registry-notary-source-adapter-sidecar:sha-<commit-sha>
-docker buildx imagetools inspect ghcr.io/jeremi/registry-notary-source-adapter-sidecar:<release-alias>
+docker buildx imagetools inspect ghcr.io/registrystack/registry-notary@sha256:<digest>
+docker buildx imagetools inspect ghcr.io/registrystack/registry-notary-source-adapter-sidecar@sha256:<digest>
 ```
 
-Verify the cosign signature for a tag using the triggering Git release tag:
+Legacy product-local cosign verification for old `ghcr.io/jeremi` image tags
+used the triggering Git release tag:
 
 ```sh
 cosign verify \
@@ -103,7 +104,8 @@ cosign verify \
   ghcr.io/jeremi/registry-notary-source-adapter-sidecar:<tag>
 ```
 
-The certificate identity is the Git tag that triggered the workflow, not
+For those legacy image tags, the certificate identity is the Git tag that
+triggered the workflow, not
 necessarily the GHCR tag being verified. When verifying moving aliases such as
 `latest`, `vX`, `vX.Y`, or either image's immutable `sha-<commit-sha>` tag, set
 `<git-tag>` to the stable `vX.Y.Z` tag or

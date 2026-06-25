@@ -12,23 +12,27 @@ on:
         type: string
 
 permissions:
-  contents: write
-  packages: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
   REGISTRY: ghcr.io
   IMAGE_NAMESPACE: registrystack
   SYFT_VERSION: v1.45.1
+  SYFT_LINUX_AMD64_SHA256: 20c84195e24927f50a3b2269946be51f4c4abc9d2f145fee7388b4199149f716
   GRYPE_VERSION: v0.114.0
+  GRYPE_LINUX_AMD64_SHA256: edda0968d8827daab01d32b3cd7de192ae0915005e7bbfcfef9e68e79bc43343
 
 jobs:
   verify:
     name: Verify release source
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
     outputs:
       tag: ${{ steps.release.outputs.tag }}
       version: ${{ steps.release.outputs.version }}
+      tag_target: ${{ steps.release.outputs.tag_target }}
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -51,17 +55,28 @@ jobs:
             echo "Release tag must look like v0.8.0, got ${tag}" >&2
             exit 1
           fi
+          git fetch --force origin "refs/heads/main:refs/remotes/origin/main"
+          tag_target="$(git rev-parse --verify "refs/tags/${tag}^{}")"
+          if [[ "$(git rev-parse HEAD)" != "${tag_target}" ]]; then
+            git checkout --detach "${tag_target}"
+          fi
           version="${tag#v}"
           manifest_version="$(python3 -c 'import yaml; print(yaml.safe_load(open("release/manifests/registry-stack-beta-6.yaml", encoding="utf-8"))["stack"]["version"])')"
           if [[ "${manifest_version}" != "${version}" ]]; then
             echo "Manifest version ${manifest_version} does not match tag ${tag}" >&2
             exit 1
           fi
-          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
-          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "tag=${tag}"
+            echo "version=${version}"
+            echo "tag_target=${tag_target}"
+          } >> "${GITHUB_OUTPUT}"
 
       - name: Validate release manifest
         run: release/scripts/registry-release validate release/manifests/registry-stack-beta-6.yaml
+
+      - name: Validate release source lineage
+        run: release/scripts/registry-release validate-source release/manifests/registry-stack-beta-6.yaml --tag "${{ steps.release.outputs.tag }}" --default-branch origin/main
 
       - name: Audit import map
         run: release/scripts/registry-release audit release/manifests/import-map-2026-06-24.yaml
@@ -76,12 +91,24 @@ jobs:
     name: Build release binaries
     needs: verify
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
+          ref: ${{ needs.verify.outputs.tag_target }}
           fetch-depth: 0
           submodules: false
+
+      - name: Assert verified source checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$(git rev-parse HEAD)" != "${{ needs.verify.outputs.tag_target }}" ]]; then
+            echo "Checkout does not match verified tag target" >&2
+            exit 1
+          fi
 
       - name: Build binaries
         shell: bash
@@ -109,12 +136,25 @@ jobs:
     name: Build and publish images
     needs: verify
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
+          ref: ${{ needs.verify.outputs.tag_target }}
           fetch-depth: 0
           submodules: false
+
+      - name: Assert verified source checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$(git rev-parse HEAD)" != "${{ needs.verify.outputs.tag_target }}" ]]; then
+            echo "Checkout does not match verified tag target" >&2
+            exit 1
+          fi
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435
@@ -130,9 +170,23 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "${HOME}/.local/bin"
-          curl -sSfL "https://raw.githubusercontent.com/anchore/syft/${SYFT_VERSION}/install.sh" | sh -s -- -b "${HOME}/.local/bin" "${SYFT_VERSION}"
-          curl -sSfL "https://raw.githubusercontent.com/anchore/grype/${GRYPE_VERSION}/install.sh" | sh -s -- -b "${HOME}/.local/bin" "${GRYPE_VERSION}"
+          : "${SYFT_VERSION:?}"
+          : "${SYFT_LINUX_AMD64_SHA256:?}"
+          : "${GRYPE_VERSION:?}"
+          : "${GRYPE_LINUX_AMD64_SHA256:?}"
+          mkdir -p "${HOME}/.local/bin" /tmp/registry-stack-tools
+          syft_version="${SYFT_VERSION#v}"
+          grype_version="${GRYPE_VERSION#v}"
+          curl -sSfL \
+            "https://github.com/anchore/syft/releases/download/${SYFT_VERSION}/syft_${syft_version}_linux_amd64.tar.gz" \
+            -o /tmp/registry-stack-tools/syft.tar.gz
+          echo "${SYFT_LINUX_AMD64_SHA256}  /tmp/registry-stack-tools/syft.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/registry-stack-tools/syft.tar.gz -C "${HOME}/.local/bin" syft
+          curl -sSfL \
+            "https://github.com/anchore/grype/releases/download/${GRYPE_VERSION}/grype_${grype_version}_linux_amd64.tar.gz" \
+            -o /tmp/registry-stack-tools/grype.tar.gz
+          echo "${GRYPE_LINUX_AMD64_SHA256}  /tmp/registry-stack-tools/grype.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/registry-stack-tools/grype.tar.gz -C "${HOME}/.local/bin" grype
           echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
 
       - name: Build, push, and scan images
@@ -154,56 +208,14 @@ jobs:
               .
             local digest
             digest="$(jq -r '."containerimage.digest"' "${metadata}")"
-            printf '%s@%s\n' "${REGISTRY}/${IMAGE_NAMESPACE}/${name}" "${digest}" | tee "dist/images/${name}.digest"
-            syft "${image}" -o "spdx-json=dist/sbom/${name}.spdx.json"
-            grype "${image}" -o json > "dist/grype/${name}.grype.json"
+            local digest_ref="${REGISTRY}/${IMAGE_NAMESPACE}/${name}@${digest}"
+            printf '%s\n' "${digest_ref}" | tee "dist/images/${name}.digest"
+            syft "${digest_ref}" -o "spdx-json=dist/sbom/${name}.spdx.json"
+            grype "${digest_ref}" -o json > "dist/grype/${name}.grype.json"
           }
           build_image registry-notary lab/Dockerfile.registry-notary
           build_image registry-notary-source-adapter-sidecar lab/Dockerfile.registry-notary-openfn-sidecar
           build_image registry-relay lab/Dockerfile.registry-relay
-
-      - name: Create release evidence
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p dist/release-evidence
-          python3 - <<'PY'
-          import hashlib
-          import json
-          import pathlib
-          import subprocess
-          import yaml
-
-          root = pathlib.Path(".").resolve()
-          manifest_path = pathlib.Path("release/manifests/registry-stack-beta-6.yaml")
-          manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
-          files = []
-          for pattern in ("dist/images/*", "dist/sbom/*", "dist/grype/*"):
-              for path in sorted(pathlib.Path(".").glob(pattern)):
-                  if path.is_file():
-                      files.append(
-                          {
-                              "path": str(path),
-                              "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-                          }
-                      )
-          evidence = {
-              "release": "${{ needs.verify.outputs.tag }}",
-              "version": "${{ needs.verify.outputs.version }}",
-              "repository": "${{ github.repository }}",
-              "tag_target": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
-              "manifest": {
-                  "path": str(manifest_path),
-                  "source_repo": manifest["stack"]["source_repo"],
-                  "source_ref": manifest["stack"]["source_ref"],
-                  "external": manifest.get("external", {}),
-                  "warnings": manifest.get("warnings", []),
-              },
-              "artifacts": files,
-          }
-          output = pathlib.Path("dist/release-evidence/registry-stack-${{ needs.verify.outputs.tag }}-release-evidence.json")
-          output.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-          PY
 
       - name: Upload image evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -213,7 +225,6 @@ jobs:
             dist/images/*
             dist/sbom/*
             dist/grype/*
-            dist/release-evidence/*
           if-no-files-found: error
 
   github-release:
@@ -223,12 +234,25 @@ jobs:
       - binaries
       - images
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
+          ref: ${{ needs.verify.outputs.tag_target }}
           fetch-depth: 0
           submodules: false
+
+      - name: Assert verified source checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          if [[ "$(git rev-parse HEAD)" != "${{ needs.verify.outputs.tag_target }}" ]]; then
+            echo "Checkout does not match verified tag target" >&2
+            exit 1
+          fi
 
       - name: Download binaries
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
@@ -242,6 +266,25 @@ jobs:
           name: registry-stack-image-evidence
           path: dist/image-evidence
 
+      - name: Render release capsule
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/release-capsule
+          release/scripts/registry-release render-capsule \
+            release/manifests/registry-stack-beta-6.yaml \
+            --tag "${{ needs.verify.outputs.tag }}" \
+            --version "${{ needs.verify.outputs.version }}" \
+            --binary-dir dist/bin \
+            --image-evidence-dir dist/image-evidence \
+            --output-json "dist/release-capsule/registry-stack-${{ needs.verify.outputs.tag }}-release-capsule.json" \
+            --output-markdown "dist/release-capsule/registry-stack-${{ needs.verify.outputs.tag }}-release-capsule.md" \
+            --workflow-run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --workflow-run-id "${{ github.run_id }}" \
+            --default-branch-protection unverified \
+            --repo . \
+            --default-branch origin/main
+
       - name: Create or update release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -250,7 +293,7 @@ jobs:
           set -euo pipefail
           tag="${{ needs.verify.outputs.tag }}"
           notes="release/notes/${tag}.md"
-          mapfile -d '' -t assets < <(find dist/bin dist/image-evidence -type f -print0 | sort -z)
+          mapfile -d '' -t assets < <(find dist/bin dist/image-evidence dist/release-capsule -type f -print0 | sort -z)
           if [[ "${#assets[@]}" -eq 0 ]]; then
             echo "No release assets found" >&2
             exit 1
@@ -264,3 +307,31 @@ jobs:
               --prerelease \
               "${assets[@]}"
           fi
+
+      - name: Reconcile release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ needs.verify.outputs.tag }}"
+          tmp="$(mktemp -d)"
+          find dist/bin dist/image-evidence dist/release-capsule -type f -print0 \
+            | xargs -0 -n1 basename \
+            | sort > "${tmp}/expected-assets"
+          gh release view "${tag}" --json assets --jq '.assets[].name' \
+            | sort > "${tmp}/actual-assets"
+          if ! diff -u "${tmp}/expected-assets" "${tmp}/actual-assets"; then
+            echo "GitHub Release assets differ from generated assets" >&2
+            exit 1
+          fi
+          while IFS= read -r asset; do
+            local_path="$(find dist/bin dist/image-evidence dist/release-capsule -type f -name "${asset}" -print -quit)"
+            gh release download "${tag}" --pattern "${asset}" --dir "${tmp}/downloaded" --clobber
+            expected="$(sha256sum "${local_path}" | awk '{print $1}')"
+            actual="$(sha256sum "${tmp}/downloaded/${asset}" | awk '{print $1}')"
+            if [[ "${expected}" != "${actual}" ]]; then
+              echo "GitHub Release asset ${asset} sha256 mismatch" >&2
+              exit 1
+            fi
+          done < "${tmp}/expected-assets"

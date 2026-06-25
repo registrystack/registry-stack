@@ -1,0 +1,64 @@
+---
+title: OpenSSF evidence
+description: "Registry Stack OpenSSF Scorecard, Best Practices, and OSPS Baseline evidence map."
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-06-24"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+This page maps Registry Stack's public OpenSSF evidence. It is an evidence
+index, not a certification or external audit.
+
+## Scorecard
+
+Registry Stack configures OpenSSF Scorecard in
+`.github/workflows/scorecard.yml`. The workflow is scheduled and runs on
+default-branch changes. Public Scorecard viewer links are not present until a
+non-pull-request default-branch run publishes results.
+
+Use the check-level results as hygiene telemetry. The aggregate score can hide
+important details, so release-integrity findings such as missing root image
+signing or provenance are tracked as explicit caveats until they are fixed.
+
+## Best practices badge
+
+The OpenSSF Best Practices Badge is self-attested. Registry Stack answers badge
+criteria only when a public source file, workflow, release artifact, or docs
+page supports the answer.
+
+Current evidence anchors:
+
+| Criterion area | Public evidence | Status |
+| --- | --- | --- |
+| Vulnerability reporting | [`SECURITY.md`](https://github.com/registrystack/registry-stack/blob/main/SECURITY.md) | Canonical monorepo policy |
+| CI and tests | [CI workflow](https://github.com/registrystack/registry-stack/blob/main/.github/workflows/ci.yml) | Implemented |
+| Release process | [Release workflow](https://github.com/registrystack/registry-stack/blob/main/.github/workflows/release.yml) and release manifests | Implemented with caveats |
+| Dependency policy | [`deny.toml`](https://github.com/registrystack/registry-stack/blob/main/deny.toml) | Configured; root CI enforcement is tracked separately |
+| Source release evidence | GitHub Release assets and generated release capsules | Pending first release workflow run that publishes a capsule |
+
+## OSPS baseline
+
+Registry Stack targets OpenSSF OSPS Baseline 2026-02-19, Level 1 as the first
+version-pinned baseline map. The map distinguishes root monorepo controls from
+legacy imported product controls.
+
+| Control area | Public evidence | Status |
+| --- | --- | --- |
+| Public source repository | [`registry-stack`](https://github.com/registrystack/registry-stack) | Implemented |
+| Vulnerability disclosure | [`SECURITY.md`](https://github.com/registrystack/registry-stack/blob/main/SECURITY.md) | Implemented |
+| Automated tests | [CI workflow](https://github.com/registrystack/registry-stack/blob/main/.github/workflows/ci.yml) | Implemented |
+| Token permissions | CI uses read-only permissions; release write permissions are scoped to publishing jobs | Implemented |
+| Release artifacts | Checksums, image digests, image SBOMs, vulnerability scans, release capsules | Pending first release workflow run that publishes a capsule |
+| Signed releases | Root monorepo release image signing | Planned |
+| Provenance attestations | Root monorepo release provenance or SLSA attestations | Planned |
+
+## Legacy product controls
+
+Imported product docs may describe older product-local release flows. They are
+not cited as active root monorepo controls unless the root workflow implements
+the same behavior or the claim is explicitly product-scoped.

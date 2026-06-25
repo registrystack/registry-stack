@@ -1,0 +1,124 @@
+---
+title: Security self-assessment
+description: "A CNCF TAG Security-style self-assessment for Registry Stack."
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-06-24"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+This is a CNCF TAG Security-style self-assessment. Registry Stack is not
+currently a CNCF project, is not in the CNCF donation track, and has not been
+reviewed by CNCF TAG Security. This document is maintainer self-assessment
+against that public guide.
+
+## Metadata
+
+| Field | Value |
+| --- | --- |
+| Project | Registry Stack |
+| Repository | [registrystack/registry-stack](https://github.com/registrystack/registry-stack) |
+| Assessment type | Maintainer self-assessment |
+| Review history | No public review ledger yet |
+| Last reviewed | 2026-06-24 |
+
+## Overview
+
+Registry Stack helps operators publish governed registry-facing services over
+data they already hold. The two main runtime patterns are protected registry
+APIs through Registry Relay and governed evidence responses through Registry
+Notary.
+
+The public architecture, boundary model, and product roles are documented in
+[Architecture](../../explanation/architecture/) and
+[Boundaries and map](../../map/boundaries-and-map/). The cross-cutting security
+requirements are documented in [RS-SEC-G](../../spec/rs-sec-g/).
+
+## Self-assessment use
+
+This assessment helps reviewers find public evidence quickly. It is not a
+certification, penetration test, production deployment proof, or CNCF review.
+The hosted lab is a synthetic-data behavior demo and does not prove production
+operational assurance.
+
+## Security functions and features
+
+Registry Stack security behavior is split between software guarantees and
+operator responsibilities.
+
+Software guarantees include:
+
+- OIDC token validation through shared platform primitives.
+- Request-scope authorization and policy checks before protected reads or
+  governed evidence evaluation.
+- Disclosure controls that can return narrower evidence instead of source
+  records.
+- Credential issuance for configured Notary surfaces, including SD-JWT VC
+  issuance where configured.
+- Hash-chained audit records emitted by runtime services.
+- Release workflow support for public checksums, image digests, image SBOMs,
+  Grype vulnerability reports, and generated release capsules after the first
+  capsule-producing release run.
+
+Operator responsibilities include:
+
+- choosing and protecting signing-key storage;
+- configuring trusted issuers, audiences, scopes, and peer relationships;
+- retaining audit records in storage appropriate for the deployment's integrity
+  and retention needs;
+- reviewing vulnerability scan results and deployment-specific exposure before
+  production use.
+
+## Project compliance
+
+Registry Stack documents standards alignment in [Standards](../standards/) and
+the public spec register in [Specifications](../../spec/). These pages describe
+implementation evidence and known gaps; they do not claim legal compliance by
+themselves.
+
+## Secure development practices
+
+Development evidence:
+
+- CI runs Rust format, workspace checks, focused tests, release-tool tests, lab
+  source-model checks, and docs checks.
+- OpenSSF Scorecard is configured in the root workflow; public default-branch
+  results are pending the first non-pull-request run after merge.
+- Release manifests pin source refs and external inputs.
+- Release validation checks source tag matching, source-ref ancestry, default
+  branch reachability, and manifest consistency.
+- Release capsules are generated from workflow evidence rather than hand-written
+  prose.
+
+Known release-integrity gaps:
+
+- Root monorepo release images are not yet signed.
+- Root monorepo release provenance or SLSA attestations are not yet published.
+- Public claims about signing are scoped to the product surface or artifact that
+  actually performs signing.
+
+## Security issue resolution
+
+Report vulnerabilities through
+[`SECURITY.md`](https://github.com/registrystack/registry-stack/blob/main/SECURITY.md).
+The project publishes public review-ledger entries only when they are fixed and
+public, or when an open theme is already publicly inferable and approved for
+publication by the security reviewer.
+
+No public review ledger yet.
+
+## Appendix
+
+Primary public evidence:
+
+- [RS-SEC-G](../../spec/rs-sec-g/)
+- [Contracts](../contracts/)
+- [OpenSSF evidence](../openssf-evidence/)
+- [Registry Notary API reference](../apis/registry-notary/)
+- [Registry Relay API reference](../apis/registry-relay/)
+- GitHub Release assets, with generated release capsules after the first
+  capsule-producing release run

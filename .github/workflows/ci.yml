@@ -15,8 +15,103 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  changes:
+    name: Changed paths
+    runs-on: ubuntu-24.04
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+      release_tool: ${{ steps.filter.outputs.release_tool }}
+      lab: ${{ steps.filter.outputs.lab }}
+      docs: ${{ steps.filter.outputs.docs }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Classify changed paths
+        id: filter
+        shell: bash
+        run: |
+          set -euo pipefail
+          rust=false
+          release_tool=false
+          lab=false
+          docs=false
+          all=false
+
+          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.event.pull_request.head.sha }}"
+          else
+            base="${{ github.event.before }}"
+            head="${GITHUB_SHA}"
+            if [[ "${base}" =~ ^0+$ ]]; then
+              base="$(git rev-parse "${head}^" 2>/dev/null || true)"
+            fi
+          fi
+
+          mark_all() {
+            rust=true
+            release_tool=true
+            lab=true
+            docs=true
+          }
+
+          changed_files="${RUNNER_TEMP}/registry-stack-changed-files"
+          if [[ -z "${base}" ]] ||
+             ! git cat-file -e "${base}^{commit}" 2>/dev/null ||
+             ! git cat-file -e "${head}^{commit}" 2>/dev/null; then
+            all=true
+          else
+            git diff --name-only -z "${base}" "${head}" > "${changed_files}"
+          fi
+
+          if [[ "${all}" == "true" ]]; then
+            mark_all
+          else
+            while IFS= read -r -d '' path; do
+              case "${path}" in
+                .github/workflows/*)
+                  mark_all
+                  ;;
+              esac
+              case "${path}" in
+                Cargo.toml|Cargo.lock|deny.toml|rust-toolchain*|crates/*|products/*)
+                  rust=true
+                  docs=true
+                  ;;
+              esac
+              case "${path}" in
+                release/*)
+                  release_tool=true
+                  ;;
+              esac
+              case "${path}" in
+                release/manifests/*|lab/*|vendor/*|.gitmodules)
+                  lab=true
+                  ;;
+              esac
+              case "${path}" in
+                docs/*)
+                  docs=true
+                  ;;
+              esac
+            done < "${changed_files}"
+          fi
+
+          {
+            echo "rust=${rust}"
+            echo "release_tool=${release_tool}"
+            echo "lab=${lab}"
+            echo "docs=${docs}"
+          } >> "${GITHUB_OUTPUT}"
+
   rust:
     name: Rust workspace
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -39,6 +134,8 @@ jobs:
 
   release-tool:
     name: Release tooling
+    needs: changes
+    if: needs.changes.outputs.release_tool == 'true'
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -58,6 +155,8 @@ jobs:
 
   lab:
     name: Lab source proof
+    needs: changes
+    if: needs.changes.outputs.lab == 'true'
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -74,6 +173,8 @@ jobs:
 
   docs:
     name: Docs
+    needs: changes
+    if: needs.changes.outputs.docs == 'true'
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout

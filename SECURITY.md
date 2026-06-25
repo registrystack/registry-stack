@@ -2,7 +2,7 @@
 
 Report vulnerabilities privately through GitHub Security Advisories:
 
-`https://github.com/jeremi/registry-notary/security/advisories/new`
+`https://github.com/registrystack/registry-stack/security/advisories/new`
 
 If GitHub advisories are unavailable, contact Jeremi through an existing private
 project channel before opening a public issue or pull request. Do not open

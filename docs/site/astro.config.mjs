@@ -264,6 +264,8 @@ export default defineConfig({
             { label: 'Environment variables', slug: 'reference/environment-variables' },
             { label: 'Contracts', slug: 'reference/contracts' },
             { label: 'Standards', slug: 'reference/standards' },
+            { label: 'OpenSSF evidence', slug: 'reference/openssf-evidence' },
+            { label: 'Security self-assessment', slug: 'reference/security-self-assessment' },
             { label: 'ITB and SEMIC evidence', slug: 'reference/itb-semic-evidence' },
             { label: 'Glossary', slug: 'reference/glossary' },
           ],

@@ -161,8 +161,9 @@ controls.
   and caches it for a short interval. Revoked keys or newly expired metadata are
   recognized on the next verification (a restart or the next readiness refresh),
   not instantaneously.
-- **Container images are signed by the release workflow.** Pin images by
-  digest and verify the `cosign` signature for release tags. See
+- **Root release images are not signed yet.** Pin images by digest and review
+  the root release capsule, SBOM, and vulnerability scan artifacts. Legacy
+  product-local `cosign` evidence is historical; see
   [Security assurance](security-assurance.md).
 
 ## Development mode
