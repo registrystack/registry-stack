@@ -109,6 +109,24 @@ test('applyDocsetRefs restores archive source paths from a monorepo manifest', (
   assert.equal(repos.repos['registry-relay'].docs[0].src, 'docs/README.md');
 });
 
+test('applyDocsetRefs keeps monorepo paths for monorepo archive docsets', () => {
+  const repos = repoManifest();
+  repos.repos['registry-relay'].docs[0].src = 'crates/registry-relay/docs/README.md';
+  repos.repos['registry-relay'].docs[0].archive_src = 'docs/README.md';
+  const docset = {
+    ...validDocsets().docsets[1],
+    id: 'v0.8.1',
+    repo_docs_source: 'monorepo',
+  };
+
+  applyDocsetRefs(repos, docset);
+
+  assert.equal(repos.repos['registry-relay'].remote, 'https://github.com/registrystack/registry-stack');
+  assert.equal(repos.repos['registry-relay'].local, undefined);
+  assert.equal(repos.repos['registry-relay'].openapi, 'crates/registry-relay/openapi/registry-relay.openapi.json');
+  assert.equal(repos.repos['registry-relay'].docs[0].src, 'crates/registry-relay/docs/README.md');
+});
+
 test('filterRepoDocsForDocset removes entries excluded from selected archive', () => {
   const repos = repoManifest();
   repos.repos['registry-relay'].docs.push({

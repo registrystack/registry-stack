@@ -72,7 +72,7 @@ The record carries the `principal_id`, `request_id` (a ULID also returned in the
 `x-request-id` response header), `dataset_id`, `entity_name`, `scopes_used`, `query_params`
 (names and operators, never values), `status_code`, and `duration_ms`.
 Registry Platform wraps the record with `prev_hash` and `record_hash` for tamper evidence.
-For the full field list, see the [Relay operations runbook](https://github.com/registrystack/registry-stack/blob/v0.8.0/crates/registry-relay/docs/ops.md).
+For the full field list, see the [Relay operations runbook](https://github.com/registrystack/registry-stack/blob/v0.8.1/crates/registry-relay/docs/ops.md).
 
 **4. Respond.** Relay returns the entity-shaped response.
 The response body contains only projected fields for the authenticated caller's visible

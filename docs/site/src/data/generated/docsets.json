@@ -11,19 +11,19 @@
       "description": "Current RegistryStack monorepo documentation build.",
       "products": {
         "registry-stack": {
-          "version": "v0.8.0",
+          "version": "v0.8.1",
           "ref": "HEAD"
         },
         "registry-relay": {
-          "version": "v0.8.0",
+          "version": "v0.8.1",
           "ref": "HEAD"
         },
         "registry-notary": {
-          "version": "v0.8.0",
+          "version": "v0.8.1",
           "ref": "HEAD"
         },
         "registry-manifest": {
-          "version": "v0.8.0",
+          "version": "v0.8.1",
           "ref": "HEAD"
         }
       }

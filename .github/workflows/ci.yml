@@ -147,7 +147,12 @@ jobs:
         run: python3 -m unittest release/scripts/test_registry_release.py
 
       - name: Validate release manifest
-        run: release/scripts/registry-release validate release/manifests/registry-stack-beta-6.yaml
+        shell: bash
+        run: |
+          set -euo pipefail
+          for manifest in release/manifests/registry-stack-*.yaml; do
+            release/scripts/registry-release validate "${manifest}"
+          done
 
       - name: Audit import map
         run: release/scripts/registry-release audit release/manifests/import-map-2026-06-24.yaml

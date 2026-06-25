@@ -34,6 +34,7 @@ jobs:
       tag: ${{ steps.release.outputs.tag }}
       version: ${{ steps.release.outputs.version }}
       tag_target: ${{ steps.release.outputs.tag_target }}
+      manifest: ${{ steps.release.outputs.manifest }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -62,7 +63,26 @@ jobs:
             git checkout --detach "${tag_target}"
           fi
           version="${tag#v}"
-          manifest_version="$(python3 -c 'import yaml; print(yaml.safe_load(open("release/manifests/registry-stack-beta-6.yaml", encoding="utf-8"))["stack"]["version"])')"
+          manifest="$(
+            python3 - "${version}" <<'PY'
+          import glob
+          import sys
+          import yaml
+
+          version = sys.argv[1]
+          matches = []
+          for path in sorted(glob.glob("release/manifests/registry-stack-*.yaml")):
+              with open(path, encoding="utf-8") as handle:
+                  manifest = yaml.safe_load(handle)
+              if str(manifest.get("stack", {}).get("version", "")) == version:
+                  matches.append(path)
+          if len(matches) != 1:
+              print(f"expected exactly one release manifest for {version}, found {matches}", file=sys.stderr)
+              sys.exit(1)
+          print(matches[0])
+          PY
+          )"
+          manifest_version="$(python3 -c 'import sys, yaml; print(yaml.safe_load(open(sys.argv[1], encoding="utf-8"))["stack"]["version"])' "${manifest}")"
           if [[ "${manifest_version}" != "${version}" ]]; then
             echo "Manifest version ${manifest_version} does not match tag ${tag}" >&2
             exit 1
@@ -71,13 +91,14 @@ jobs:
             echo "tag=${tag}"
             echo "version=${version}"
             echo "tag_target=${tag_target}"
+            echo "manifest=${manifest}"
           } >> "${GITHUB_OUTPUT}"
 
       - name: Validate release manifest
-        run: release/scripts/registry-release validate release/manifests/registry-stack-beta-6.yaml
+        run: release/scripts/registry-release validate "${{ steps.release.outputs.manifest }}"
 
       - name: Validate release source lineage
-        run: release/scripts/registry-release validate-source release/manifests/registry-stack-beta-6.yaml --tag "${{ steps.release.outputs.tag }}" --default-branch origin/main
+        run: release/scripts/registry-release validate-source "${{ steps.release.outputs.manifest }}" --tag "${{ steps.release.outputs.tag }}" --default-branch origin/main
 
       - name: Audit import map
         run: release/scripts/registry-release audit release/manifests/import-map-2026-06-24.yaml
@@ -413,7 +434,7 @@ jobs:
           set -euo pipefail
           mkdir -p dist/release-capsule
           release/scripts/registry-release render-capsule \
-            release/manifests/registry-stack-beta-6.yaml \
+            "${{ needs.verify.outputs.manifest }}" \
             --tag "${{ needs.verify.outputs.tag }}" \
             --version "${{ needs.verify.outputs.version }}" \
             --binary-dir dist/bin \

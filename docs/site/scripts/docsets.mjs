@@ -100,15 +100,16 @@ export function applyDocsetRefs(repoManifest, docset, { requireAllActive = true 
     repo.ref = product.ref;
     repo.version = product.version;
     if (docset.status === 'archived') {
-      if (repo.archive_remote) repo.remote = repo.archive_remote;
-      if (Object.hasOwn(repo, 'archive_local')) {
-        repo.local = repo.archive_local;
-      } else if (repo.archive_remote) {
-        delete repo.local;
-      }
-      if (repo.archive_openapi) repo.openapi = repo.archive_openapi;
-      for (const entry of repo.docs ?? []) {
-        if (entry.archive_src) entry.src = entry.archive_src;
+      delete repo.local;
+      if (docset.repo_docs_source !== 'monorepo') {
+        if (repo.archive_remote) repo.remote = repo.archive_remote;
+        if (Object.hasOwn(repo, 'archive_local')) {
+          repo.local = repo.archive_local;
+        }
+        if (repo.archive_openapi) repo.openapi = repo.archive_openapi;
+        for (const entry of repo.docs ?? []) {
+          if (entry.archive_src) entry.src = entry.archive_src;
+        }
       }
     }
   }
