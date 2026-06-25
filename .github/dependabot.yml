@@ -33,3 +33,19 @@ updates:
       actions:
         patterns:
           - "*"
+
+  # Docker base images, pinned by digest. Without this the pinned digests would
+  # silently rot; dependabot keeps them current while preserving the pin.
+  - package-ecosystem: docker
+    directories:
+      - "/lab"
+      - "/release/docker"
+      - "/crates/registry-relay"
+      - "/products/notary"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      docker-images:
+        patterns:
+          - "*"
