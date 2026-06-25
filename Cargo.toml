@@ -144,7 +144,7 @@ url = { version = "2" }
 utoipa = { version = "5" }
 uuid = { version = "1", features = ["v4"] }
 wiremock = { version = "0.6" }
-wkt = { version = "0.12", features = ["geo-types"] }
+wkt = { version = "0.14", features = ["geo-types"] }
 zeroize = { version = "1", features = ["derive"] }
 zip = { version = "8", default-features = false, features = ["deflate"] }
 
