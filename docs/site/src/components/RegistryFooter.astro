@@ -26,7 +26,7 @@ const hasPagination = Boolean(prev || next);
 const pageTitle = entryData?.title ?? 'this page';
 const pagePath = Astro.url.pathname;
 const issueUrl =
-  'https://github.com/jeremi/registry-docs/issues/new?title=' +
+  'https://github.com/registrystack/registry-stack/issues/new?title=' +
   encodeURIComponent(`Docs issue: ${pageTitle}`) +
   '&body=' +
   encodeURIComponent(`Page: ${pagePath}\n\n`);

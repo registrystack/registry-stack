@@ -183,13 +183,13 @@ export default defineConfig({
         MobileMenuFooter: './src/components/RegistryMobileMenuFooter.astro',
       },
       editLink: {
-        baseUrl: 'https://github.com/jeremi/registry-docs/edit/main/',
+        baseUrl: 'https://github.com/registrystack/registry-stack/edit/main/docs/site/',
       },
       social: [
         {
           icon: 'github',
           label: 'GitHub',
-          href: 'https://github.com/jeremi/registry-docs',
+          href: 'https://github.com/registrystack/registry-stack/tree/main/docs/site',
         },
       ],
       // Diataxis IA: Get started, Tutorials, Products, Explanation, Reference.

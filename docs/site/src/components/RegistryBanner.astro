@@ -1,7 +1,7 @@
 ---
 import docsetsManifest from '../data/generated/docsets.json';
 
-const repoUrl = 'https://github.com/jeremi/registry-docs';
+const repoUrl = 'https://github.com/registrystack/registry-stack/tree/main/docs/site';
 const activeDocsetId = process.env.DOCS_DOCSET || docsetsManifest.current;
 const activeDocset =
   docsetsManifest.docsets.find((docset) => docset.id === activeDocsetId) ??
