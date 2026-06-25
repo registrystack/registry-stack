@@ -26,5 +26,9 @@
   "devDependencies": {
     "@openfn/compiler": "1.2.5",
     "@openfn/runtime": "1.9.3"
+  },
+  "overrides": {
+    "undici": "^7.28.0",
+    "js-yaml": "^4.2.0"
   }
 }
