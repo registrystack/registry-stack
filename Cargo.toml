@@ -135,7 +135,7 @@ tokio-util = { version = "0.7" }
 toml = { version = "1.1" }
 tough = { version = "0.22.0" }
 tower = { version = "0.5" }
-tower-http = { version = "0.6", features = ["cors", "limit", "request-id", "set-header", "timeout", "trace"] }
+tower-http = { version = "0.7", features = ["cors", "limit", "request-id", "set-header", "timeout", "trace"] }
 tracing = { version = "0.1" }
 tracing-subscriber = { version = "0.3", features = ["fmt", "json", "env-filter"] }
 ulid = { version = "1" }
