@@ -10,7 +10,7 @@ use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::get;
 use axum::{Extension, Router};
-use geojson::{Geometry, Value as GeoValue};
+use geojson::{Geometry, GeometryValue as GeoValue};
 use ogcapi_types::common::{Conformance, LandingPage, Link};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -1196,17 +1196,19 @@ fn geometry_from_row(
 
 fn count_vertices(value: &GeoValue) -> usize {
     match value {
-        GeoValue::Point(_) => 1,
-        GeoValue::MultiPoint(points) | GeoValue::LineString(points) => points.len(),
-        GeoValue::MultiLineString(lines) | GeoValue::Polygon(lines) => {
-            lines.iter().map(Vec::len).sum()
+        GeoValue::Point { .. } => 1,
+        GeoValue::MultiPoint { coordinates } | GeoValue::LineString { coordinates } => {
+            coordinates.len()
         }
-        GeoValue::MultiPolygon(polygons) => polygons
+        GeoValue::MultiLineString { coordinates } | GeoValue::Polygon { coordinates } => {
+            coordinates.iter().map(Vec::len).sum()
+        }
+        GeoValue::MultiPolygon { coordinates } => coordinates
             .iter()
             .flat_map(|polygon| polygon.iter())
             .map(Vec::len)
             .sum(),
-        GeoValue::GeometryCollection(geometries) => geometries
+        GeoValue::GeometryCollection { geometries } => geometries
             .iter()
             .map(|geometry| count_vertices(&geometry.value))
             .sum(),
