@@ -63,13 +63,13 @@ class HostedDeployValidationTest(unittest.TestCase):
 
     def test_rejects_floating_product_image_tags(self) -> None:
         compose = self._valid_registry_lab()
-        compose["services"]["civil-registry-relay"]["image"] = "ghcr.io/jeremi/registry-relay:main"
+        compose["services"]["civil-registry-relay"]["image"] = "ghcr.io/registrystack/registry-relay:main"
         issues = self._validate(compose, self._valid_esignet())
         self.assertIssue(issues, "floating-product-image-tag")
 
     def test_rejects_floating_citizen_portal_image_tags(self) -> None:
         compose = self._valid_registry_lab()
-        compose["services"]["citizen-portal"]["image"] = "ghcr.io/jeremi/registry-lab-citizen-portal:main"
+        compose["services"]["citizen-portal"]["image"] = "ghcr.io/registrystack/registry-lab-citizen-portal:main"
         issues = self._validate(compose, self._valid_esignet())
         self.assertIssue(issues, "floating-product-image-tag")
 
@@ -77,13 +77,13 @@ class HostedDeployValidationTest(unittest.TestCase):
         compose = self._valid_registry_lab()
         compose["services"]["civil-registry-relay"][
             "image"
-        ] = "ghcr.io/jeremi/registry-relay@sha256:abc"
+        ] = "ghcr.io/registrystack/registry-relay@sha256:abc"
         issues = self._validate(compose, self._valid_esignet())
         self.assertIssue(issues, "product-image-env-var")
 
     def test_rejects_hardcoded_citizen_portal_image_digests(self) -> None:
         compose = self._valid_registry_lab()
-        compose["services"]["citizen-portal"]["image"] = "ghcr.io/jeremi/registry-lab-citizen-portal@sha256:abc"
+        compose["services"]["citizen-portal"]["image"] = "ghcr.io/registrystack/registry-lab-citizen-portal@sha256:abc"
         issues = self._validate(compose, self._valid_esignet())
         self.assertIssue(issues, "product-image-env-var")
 
@@ -148,13 +148,13 @@ class HostedDeployValidationTest(unittest.TestCase):
         compose = self._valid_registry_lab()
         compose["services"]["civil-registry-relay"][
             "image"
-        ] = "${REGISTRY_RELAY_IMAGE:-ghcr.io/jeremi/registry-relay@sha256:abc}"
+        ] = "${REGISTRY_RELAY_IMAGE:-ghcr.io/registrystack/registry-relay@sha256:abc}"
         compose["services"]["citizen-civil-notary"][
             "image"
-        ] = "${REGISTRY_NOTARY_IMAGE:-ghcr.io/jeremi/registry-notary@sha256:abc}"
+        ] = "${REGISTRY_NOTARY_IMAGE:-ghcr.io/registrystack/registry-notary@sha256:abc}"
         compose["services"]["openfn-dhis2-sidecar"][
             "image"
-        ] = "${REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE:-ghcr.io/jeremi/registry-notary-source-adapter-sidecar@sha256:abc}"
+        ] = "${REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE:-ghcr.io/registrystack/registry-notary-source-adapter-sidecar@sha256:abc}"
 
         issues = self._validate(compose, self._valid_esignet())
         self.assertEqual([], issues)
@@ -194,7 +194,7 @@ class HostedDeployValidationTest(unittest.TestCase):
         compose = self._valid_registry_lab()
         compose["services"]["static-metadata-publisher"][
             "image"
-        ] = "ghcr.io/jeremi/registry-lab-static-metadata:main"
+        ] = "ghcr.io/registrystack/registry-lab-static-metadata:main"
         issues = self._validate(compose, self._valid_esignet())
         self.assertIssue(issues, "static-metadata-image-name")
 
@@ -2015,7 +2015,7 @@ cp -a /tmp/repo/scripts/lab_homepage_static /out/static-scripts/
                     },
                 },
                 "citizen-portal": {
-                    "image": "${REGISTRY_LAB_CITIZEN_PORTAL_IMAGE:-ghcr.io/jeremi/registry-lab-citizen-portal@sha256:abc}",
+                    "image": "${REGISTRY_LAB_CITIZEN_PORTAL_IMAGE:-ghcr.io/registrystack/registry-lab-citizen-portal@sha256:abc}",
                     "expose": ["3000"],
                     "environment": {
                         "ORIGIN": f"https://portal.{lab}",
@@ -2137,7 +2137,7 @@ cp -a /tmp/repo/scripts/lab_homepage_static /out/static-scripts/
                 },
                 "redis": {"image": "redis:6.0"},
                 "esignet": {
-                    "image": "${REGISTRY_LAB_ESIGNET_RELAY_IMAGE:-ghcr.io/jeremi/registry-lab-esignet-relay@sha256:" + ("1" * 64) + "}",
+                    "image": "${REGISTRY_LAB_ESIGNET_RELAY_IMAGE:-ghcr.io/registrystack/registry-lab-esignet-relay@sha256:" + ("1" * 64) + "}",
                     "expose": ["8088"],
                     "environment": {
                         "MOSIP_ESIGNET_PUBLIC_URL": f"https://esignet.{lab}",
@@ -2171,7 +2171,7 @@ cp -a /tmp/repo/scripts/lab_homepage_static /out/static-scripts/
                     },
                 },
                 "esignet-seed": {
-                    "image": "${REGISTRY_LAB_ESIGNET_SEED_IMAGE:-ghcr.io/jeremi/registry-lab-esignet-seed@sha256:" + ("2" * 64) + "}",
+                    "image": "${REGISTRY_LAB_ESIGNET_SEED_IMAGE:-ghcr.io/registrystack/registry-lab-esignet-seed@sha256:" + ("2" * 64) + "}",
                     "environment": {
                         "REGISTRY_LAB_ESIGNET_CLIENT_REDIRECT_URIS_JSON": "${REGISTRY_LAB_ESIGNET_CLIENT_REDIRECT_URIS_JSON:-}",
                     },

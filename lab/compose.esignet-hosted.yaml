@@ -81,7 +81,7 @@ services:
   esignet:
     # Build and push this image with .github/workflows/build-images.yml. Coolify
     # should receive a digest-pinned value such as
-    # ghcr.io/jeremi/registry-lab-esignet-relay@sha256:<digest>.
+    # ghcr.io/registrystack/registry-lab-esignet-relay@sha256:<digest>.
     image: ${REGISTRY_LAB_ESIGNET_RELAY_IMAGE:?set digest-pinned REGISTRY_LAB_ESIGNET_RELAY_IMAGE built from Dockerfile.esignet-relay}
     user: root
     depends_on:
