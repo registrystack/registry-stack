@@ -18,6 +18,30 @@ IMAGE_DIGEST_REF = f"ghcr.io/registrystack/registry-notary@{IMAGE_DIGEST}"
 
 
 class RegistryReleaseTest(unittest.TestCase):
+    def test_release_image_packaging_keeps_lab_dockerfiles_source_building(self) -> None:
+        workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        release_dockerfiles = [
+            "release/docker/Dockerfile.registry-notary",
+            "release/docker/Dockerfile.registry-notary-openfn-sidecar",
+            "release/docker/Dockerfile.registry-relay",
+        ]
+        lab_dockerfiles = [
+            "lab/Dockerfile.registry-notary",
+            "lab/Dockerfile.registry-notary-openfn-sidecar",
+            "lab/Dockerfile.registry-relay",
+        ]
+
+        for dockerfile in release_dockerfiles:
+            self.assertIn(dockerfile, workflow)
+            text = (ROOT / dockerfile).read_text(encoding="utf-8")
+            self.assertIn("dist/image-bin", text)
+
+        for dockerfile in lab_dockerfiles:
+            self.assertNotIn(dockerfile, workflow)
+            text = (ROOT / dockerfile).read_text(encoding="utf-8")
+            self.assertNotIn("dist/image-bin", text)
+            self.assertIn("cargo build --release --locked", text)
+
     def test_validate_beta_6_manifest(self) -> None:
         result = run_tool("validate", "release/manifests/registry-stack-beta-6.yaml")
         self.assertEqual(0, result.returncode, result.stderr)

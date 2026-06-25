@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+
+# syntax=docker/dockerfile:1.7
+
+FROM debian:bookworm-slim AS runtime
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --chmod=0755 dist/image-bin/registry-notary /usr/local/bin/registry-notary
+
+USER nobody:nogroup
+EXPOSE 8080
+
+ENTRYPOINT ["registry-notary"]

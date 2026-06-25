@@ -18,6 +18,7 @@ env:
   CARGO_TERM_COLOR: always
   REGISTRY: ghcr.io
   IMAGE_NAMESPACE: registrystack
+  RELEASE_BUILDER_IMAGE: rust:1.95-bookworm@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb
   SYFT_VERSION: v1.45.1
   SYFT_LINUX_AMD64_SHA256: 20c84195e24927f50a3b2269946be51f4c4abc9d2f145fee7388b4199149f716
   GRYPE_VERSION: v0.114.0
@@ -110,20 +111,56 @@ jobs:
             exit 1
           fi
 
+      - name: Restore Cargo release cache
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809
+        with:
+          path: |
+            .cargo-home/registry
+            .cargo-home/git
+            target
+          key: registry-stack-release-cargo-${{ runner.os }}-rust-1.95.0-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          restore-keys: |
+            registry-stack-release-cargo-${{ runner.os }}-rust-1.95.0-
+
       - name: Build binaries
         shell: bash
         run: |
           set -euo pipefail
-          cargo build --release --locked -p registryctl
-          cargo build --release --locked -p registry-manifest-cli
-          cargo build --release --locked -p registry-relay --features spdci-api-standards,standards-cel-mapping,ogcapi-edr
-          cargo build --release --locked -p registry-notary-bin --features registry-notary-cel
-          mkdir -p dist/bin
+          mkdir -p .cargo-home target dist/bin dist/image-bin
+          docker run --rm \
+            --platform linux/amd64 \
+            --user "$(id -u):$(id -g)" \
+            --volume "${PWD}:/workspace" \
+            --workdir /workspace \
+            --env CARGO_HOME=/workspace/.cargo-home \
+            --env CARGO_TARGET_DIR=/workspace/target \
+            --env CARGO_TERM_COLOR="${CARGO_TERM_COLOR}" \
+            --env HOME=/workspace \
+            "${RELEASE_BUILDER_IMAGE}" \
+            bash -c 'set -euo pipefail
+              cargo build --release --locked \
+                -p registryctl \
+                -p registry-manifest-cli \
+                -p registry-relay \
+                -p registry-notary-bin \
+                -p registry-notary-source-adapter-sidecar \
+                --features registry-relay/spdci-api-standards,registry-relay/standards-cel-mapping,registry-relay/ogcapi-edr,registry-notary-bin/registry-notary-cel
+              cp target/release/registry-notary dist/image-bin/registry-notary
+              cargo build --release --locked \
+                -p registry-notary-bin \
+                --features registry-notary-bin/registry-notary-cel,registry-notary-bin/pkcs11
+              cp target/release/registry-notary dist/image-bin/registry-notary-pkcs11'
           cp target/release/registryctl "dist/bin/registryctl-${{ needs.verify.outputs.tag }}-linux-amd64"
           cp target/release/registry-manifest "dist/bin/registry-manifest-${{ needs.verify.outputs.tag }}-linux-amd64"
           cp target/release/registry-relay "dist/bin/registry-relay-${{ needs.verify.outputs.tag }}-linux-amd64"
-          cp target/release/registry-notary "dist/bin/registry-notary-${{ needs.verify.outputs.tag }}-linux-amd64"
+          cp dist/image-bin/registry-notary "dist/bin/registry-notary-${{ needs.verify.outputs.tag }}-linux-amd64"
+          mv dist/image-bin/registry-notary-pkcs11 dist/image-bin/registry-notary
+          cp target/release/registry-notary-source-adapter-sidecar dist/image-bin/registry-notary-openfn-sidecar
+          cp target/release/registry-relay dist/image-bin/registry-relay
+          printf '%s\n' "${RELEASE_BUILDER_IMAGE}" > dist/image-bin/RELEASE_BUILDER_IMAGE
+          chmod 0755 dist/bin/* dist/image-bin/registry-notary dist/image-bin/registry-notary-openfn-sidecar dist/image-bin/registry-relay
           (cd dist/bin && sha256sum -- * > SHA256SUMS)
+          (cd dist/image-bin && sha256sum -- * > SHA256SUMS)
 
       - name: Upload binary artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -132,9 +169,18 @@ jobs:
           path: dist/bin/*
           if-no-files-found: error
 
+      - name: Upload image binary artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: registry-stack-image-binaries
+          path: dist/image-bin/*
+          if-no-files-found: error
+
   images:
     name: Build and publish images
-    needs: verify
+    needs:
+      - verify
+      - binaries
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -155,6 +201,12 @@ jobs:
             echo "Checkout does not match verified tag target" >&2
             exit 1
           fi
+
+      - name: Download image binaries
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: registry-stack-image-binaries
+          path: dist/image-bin
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435
@@ -193,17 +245,23 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          chmod 0755 dist/image-bin/registry-notary dist/image-bin/registry-notary-openfn-sidecar dist/image-bin/registry-relay
+          (cd dist/image-bin && sha256sum --check SHA256SUMS)
           mkdir -p dist/images dist/sbom dist/grype
+          cp dist/image-bin/SHA256SUMS dist/images/image-binaries.SHA256SUMS
+          cp dist/image-bin/RELEASE_BUILDER_IMAGE dist/images/release-builder-image.txt
           build_image() {
             local name="$1"
             local dockerfile="$2"
             local image="${REGISTRY}/${IMAGE_NAMESPACE}/${name}:${{ needs.verify.outputs.tag }}"
             local metadata="dist/images/${name}.metadata.json"
             docker buildx build \
-              --build-context registry_platform_src=. \
+              --platform linux/amd64 \
               --file "${dockerfile}" \
               --tag "${image}" \
               --metadata-file "${metadata}" \
+              --cache-from "type=gha,scope=registry-stack-${name}" \
+              --cache-to "type=gha,mode=max,scope=registry-stack-${name}" \
               --push \
               .
             local digest
@@ -213,9 +271,9 @@ jobs:
             syft "${digest_ref}" -o "spdx-json=dist/sbom/${name}.spdx.json"
             grype "${digest_ref}" -o json > "dist/grype/${name}.grype.json"
           }
-          build_image registry-notary lab/Dockerfile.registry-notary
-          build_image registry-notary-source-adapter-sidecar lab/Dockerfile.registry-notary-openfn-sidecar
-          build_image registry-relay lab/Dockerfile.registry-relay
+          build_image registry-notary release/docker/Dockerfile.registry-notary
+          build_image registry-notary-source-adapter-sidecar release/docker/Dockerfile.registry-notary-openfn-sidecar
+          build_image registry-relay release/docker/Dockerfile.registry-relay
 
       - name: Upload image evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

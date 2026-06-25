@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+
+# syntax=docker/dockerfile:1.7
+
+# Release packaging image for the source-adapter sidecar binary. The OpenFn
+# engine is retired, but the historical image and binary name remain stable for
+# lab compatibility.
+
+FROM node:22-bookworm-slim AS runtime
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/openfn
+COPY --chmod=0755 dist/image-bin/registry-notary-openfn-sidecar /usr/local/bin/registry-notary-openfn-sidecar
+COPY lab/config/openfn/mock-registry-server.mjs ./mock-registry-server.mjs
+
+USER node
+EXPOSE 8080
+
+ENTRYPOINT ["registry-notary-openfn-sidecar"]
