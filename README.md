@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/registrystack/registry-stack/actions/workflows/ci.yml/badge.svg)](https://github.com/registrystack/registry-stack/actions/workflows/ci.yml)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/registrystack/registry-stack/badge)](https://scorecard.dev/viewer/?uri=github.com/registrystack/registry-stack)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/13372/badge)](https://www.bestpractices.dev/projects/13372)
 [![Release](https://img.shields.io/github/v/release/registrystack/registry-stack?include_prereleases&sort=semver)](https://github.com/registrystack/registry-stack/releases)
 [![Docs](https://img.shields.io/badge/docs-docs.registrystack.org-blue)](https://docs.registrystack.org/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
