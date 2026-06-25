@@ -66,9 +66,11 @@ jobs:
             echo "Manifest version ${manifest_version} does not match tag ${tag}" >&2
             exit 1
           fi
-          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
-          echo "version=${version}" >> "${GITHUB_OUTPUT}"
-          echo "tag_target=${tag_target}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "tag=${tag}"
+            echo "version=${version}"
+            echo "tag_target=${tag_target}"
+          } >> "${GITHUB_OUTPUT}"
 
       - name: Validate release manifest
         run: release/scripts/registry-release validate release/manifests/registry-stack-beta-6.yaml
@@ -168,6 +170,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          : "${SYFT_VERSION:?}"
+          : "${SYFT_LINUX_AMD64_SHA256:?}"
+          : "${GRYPE_VERSION:?}"
+          : "${GRYPE_LINUX_AMD64_SHA256:?}"
           mkdir -p "${HOME}/.local/bin" /tmp/registry-stack-tools
           syft_version="${SYFT_VERSION#v}"
           grype_version="${GRYPE_VERSION#v}"

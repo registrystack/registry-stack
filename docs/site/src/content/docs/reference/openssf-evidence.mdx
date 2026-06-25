@@ -1,7 +1,7 @@
 ---
 title: OpenSSF evidence
 description: "Registry Stack OpenSSF Scorecard, Best Practices, and OSPS Baseline evidence map."
-status: draft
+status: current
 owner: registry-docs
 source_repos:
   - registry-stack
@@ -25,7 +25,7 @@ Use the check-level results as hygiene telemetry. The aggregate score can hide
 important details, so release-integrity findings such as missing root image
 signing or provenance are tracked as explicit caveats until they are fixed.
 
-## Best Practices Badge
+## Best practices badge
 
 The OpenSSF Best Practices Badge is self-attested. Registry Stack answers badge
 criteria only when a public source file, workflow, release artifact, or docs
@@ -41,7 +41,7 @@ Current evidence anchors:
 | Dependency policy | [`deny.toml`](https://github.com/registrystack/registry-stack/blob/main/deny.toml) | Configured; root CI enforcement is tracked separately |
 | Source release evidence | GitHub Release assets and generated release capsules | Pending first release workflow run that publishes a capsule |
 
-## OSPS Baseline
+## OSPS baseline
 
 Registry Stack targets OpenSSF OSPS Baseline 2026-02-19, Level 1 as the first
 version-pinned baseline map. The map distinguishes root monorepo controls from
@@ -57,7 +57,7 @@ legacy imported product controls.
 | Signed releases | Root monorepo release image signing | Planned |
 | Provenance attestations | Root monorepo release provenance or SLSA attestations | Planned |
 
-## Legacy Product Controls
+## Legacy product controls
 
 Imported product docs may describe older product-local release flows. They are
 not cited as active root monorepo controls unless the root workflow implements
