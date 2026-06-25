@@ -18,6 +18,20 @@ IMAGE_DIGEST_REF = f"ghcr.io/registrystack/registry-notary@{IMAGE_DIGEST}"
 
 
 class RegistryReleaseTest(unittest.TestCase):
+    def test_contributing_documents_major_functionality_test_policy(self) -> None:
+        text = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+
+        self.assertIn("major new functionality MUST add", text)
+        self.assertIn("automated test suite", text)
+        self.assertIn("change proposal or pull request", text)
+
+    def test_contributing_documents_repeatable_build_policy(self) -> None:
+        text = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+
+        self.assertIn("Repeatable Builds And Generated Outputs", text)
+        self.assertIn("exactly the same bit-for-bit result", text)
+        self.assertIn(".github/workflows/release.yml", text)
+
     def test_release_image_packaging_keeps_lab_dockerfiles_source_building(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
         release_dockerfiles = [
