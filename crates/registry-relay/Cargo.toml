@@ -144,7 +144,7 @@ insta = { version = "1", features = ["json"] }
 # whose `<dimension>` element advertises a cell count over the cap. The
 # package version matches the one calamine 0.35 pulls transitively so we
 # don't multiply build-time copies.
-zip = { version = "7", default-features = false, features = ["deflate"] }
+zip = { version = "8", default-features = false, features = ["deflate"] }
 # Validates credentialSubject payloads against the JSON Schemas we
 # publish at /schemas/...
 jsonschema = { version = "0.18" }
