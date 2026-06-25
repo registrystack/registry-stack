@@ -1,6 +1,6 @@
 ---
-title: OpenSSF evidence
-description: "Registry Stack OpenSSF Scorecard, Best Practices, and OSPS Baseline evidence map."
+title: OpenSSF and release trust
+description: "Registry Stack public OpenSSF status and release verification evidence."
 status: current
 owner: registry-docs
 source_repos:
@@ -11,8 +11,20 @@ locale: en
 standards_referenced: []
 ---
 
-This page maps Registry Stack's public OpenSSF evidence. It is an evidence
-index, not a certification or external audit.
+This page explains which public release-trust checks you can verify for
+Registry Stack, and which OpenSSF signals are self-attested or still incomplete.
+
+For release signature verification commands, use
+[`SECURITY.md`](https://github.com/registrystack/registry-stack/blob/main/SECURITY.md).
+
+## Release trust status
+
+| Question | Current answer | Verification source |
+| --- | --- | --- |
+| Are GitHub Release assets signed? | Yes, for release assets produced after keyless cosign signing landed. Each signed asset has a matching `.sig` and `.pem` file. | [`SECURITY.md`](https://github.com/registrystack/registry-stack/blob/main/SECURITY.md) and [release workflow](https://github.com/registrystack/registry-stack/blob/main/.github/workflows/release.yml) |
+| Is `v0.8.0` signed? | No. The `v0.8.0` prerelease was published before release-asset signing was added and has not been backfilled with `.sig` and `.pem` assets. | [GitHub Release assets](https://github.com/registrystack/registry-stack/releases/tag/v0.8.0) |
+| Are release Git tags signed? | Not yet. The release workflow checks source-tag consistency, but Git tag objects are not yet GPG-, SSH-, or Sigstore-signed. | [Release workflow](https://github.com/registrystack/registry-stack/blob/main/.github/workflows/release.yml) |
+| Are provenance attestations published? | Not yet. Release capsules, checksums, image digests, SBOMs, and vulnerability reports are published separately from SLSA-style provenance. | [GitHub Releases](https://github.com/registrystack/registry-stack/releases) |
 
 ## Scorecard
 
@@ -26,30 +38,30 @@ Current public evidence:
 - [Scorecard workflow run history](https://github.com/registrystack/registry-stack/actions/workflows/scorecard.yml)
 
 Use the check-level results as hygiene telemetry. The aggregate score can hide
-important details, so release-integrity findings such as missing root image
-signing or provenance are tracked as explicit caveats until they are fixed.
+important details, so release-integrity findings such as missing signed Git
+tags or provenance are tracked as explicit caveats until they are fixed.
 
-Known first-pass Scorecard caveats include unsigned releases, missing
-provenance, branch-protection visibility, SAST coverage, unpinned lab images,
-and existing dependency vulnerability findings. These are not certifications
-or blockers for using the published Scorecard as hygiene telemetry; they are
-the remediation backlog the telemetry exposes.
+Known caveats include missing provenance, branch-protection visibility, SAST
+coverage, unpinned lab images, and existing dependency vulnerability findings.
+Check-level Scorecard results are signals, not a certification.
 
 ## Best practices badge
 
-The OpenSSF Best Practices Badge is self-attested. Registry Stack answers badge
-criteria only when a public source file, workflow, release artifact, or docs
-page supports the answer.
+The OpenSSF Best Practices Badge is self-attested. Registry Stack records an
+answer only when a public source file, workflow, release artifact, or docs page
+supports that answer.
 
-Current evidence anchors:
+Current user-visible status:
 
-| Criterion area | Public evidence | Status |
+| Area | Current status | Public evidence |
 | --- | --- | --- |
-| Vulnerability reporting | [`SECURITY.md`](https://github.com/registrystack/registry-stack/blob/main/SECURITY.md) | Canonical monorepo policy |
-| CI and tests | [CI workflow](https://github.com/registrystack/registry-stack/blob/main/.github/workflows/ci.yml) | Implemented |
-| Release process | [Release workflow](https://github.com/registrystack/registry-stack/blob/main/.github/workflows/release.yml) and release manifests | Implemented with caveats |
-| Dependency policy | [`deny.toml`](https://github.com/registrystack/registry-stack/blob/main/deny.toml) | Configured; root CI enforcement is tracked separately |
-| Source release evidence | GitHub Release assets and generated release capsules | Pending first release workflow run that publishes a capsule |
+| Vulnerability reporting | Private reporting policy is published. | [`SECURITY.md`](https://github.com/registrystack/registry-stack/blob/main/SECURITY.md) |
+| CI and tests | CI runs on the public repository. | [CI workflow](https://github.com/registrystack/registry-stack/blob/main/.github/workflows/ci.yml) |
+| Release process | Releases are built by the tag-driven release workflow and checked against release manifests. | [Release workflow](https://github.com/registrystack/registry-stack/blob/main/.github/workflows/release.yml) and [release manifests](https://github.com/registrystack/registry-stack/tree/main/release/manifests) |
+| Signed releases | Newly produced release assets are signed with keyless cosign and include `.sig` and `.pem` files. `v0.8.0` is not signed unless it is backfilled later. | [`SECURITY.md`](https://github.com/registrystack/registry-stack/blob/main/SECURITY.md) and [GitHub Releases](https://github.com/registrystack/registry-stack/releases) |
+| Signed version tags | Not implemented. Git tag objects are not yet cryptographically signed. | [Release workflow](https://github.com/registrystack/registry-stack/blob/main/.github/workflows/release.yml) |
+| Dependency policy | Dependency-deny configuration is present; root CI enforcement is tracked separately. | [`deny.toml`](https://github.com/registrystack/registry-stack/blob/main/deny.toml) |
+| Source release evidence | `v0.8.0` includes release assets and generated release capsules. Later signed releases add signature assets. | [GitHub Releases](https://github.com/registrystack/registry-stack/releases) |
 
 ## OSPS baseline
 
@@ -63,8 +75,9 @@ legacy imported product controls.
 | Vulnerability disclosure | [`SECURITY.md`](https://github.com/registrystack/registry-stack/blob/main/SECURITY.md) | Implemented |
 | Automated tests | [CI workflow](https://github.com/registrystack/registry-stack/blob/main/.github/workflows/ci.yml) | Implemented |
 | Token permissions | CI uses read-only permissions; release write permissions are scoped to publishing jobs | Implemented |
-| Release artifacts | Checksums, image digests, image SBOMs, vulnerability scans, release capsules | Pending first release workflow run that publishes a capsule |
-| Signed releases | Root monorepo release image signing | Planned |
+| Release artifacts | Checksums, image digests, image SBOMs, vulnerability scans, release capsules | Published for `v0.8.0`; signature assets are release-workflow gated |
+| Signed releases | Keyless cosign signing for GitHub Release assets with `.sig` and `.pem` verification material | Implemented for newly produced release assets |
+| Signed version tags | Cryptographic Git tag signatures | Not implemented |
 | Provenance attestations | Root monorepo release provenance or SLSA attestations | Planned |
 
 ## Legacy product controls

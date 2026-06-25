@@ -31,12 +31,12 @@
     "check:links:built": "node scripts/check-built-links.mjs"
   },
   "dependencies": {
-    "@astrojs/sitemap": "^3.7.2",
-    "@astrojs/starlight": "^0.39.2",
+    "@astrojs/sitemap": "^3.7.3",
+    "@astrojs/starlight": "^0.41.1",
     "@fontsource/ibm-plex-mono": "^5.2.7",
     "@fontsource/public-sans": "^5.2.7",
-    "astro": "^6.3.7",
-    "astro-mermaid": "^2.0.2",
+    "astro": "^7.0.2",
+    "astro-mermaid": "^2.1.0",
     "mermaid": "^11.15.0",
     "starlight-openapi": "^0.25.3"
   },
@@ -57,7 +57,9 @@
     "form-data": "^4.0.6",
     "js-yaml": "^4.2.0",
     "markdown-it": "^14.2.0",
-    "@opentelemetry/core": "^2.8.0",
-    "yaml": "^2.8.1"
+    "yaml": "^2.8.1",
+    "starlight-llms-txt": {
+      "astro": "$astro"
+    }
   }
 }
