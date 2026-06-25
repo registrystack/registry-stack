@@ -325,6 +325,10 @@ jobs:
             local digest_ref="${REGISTRY}/${IMAGE_NAMESPACE}/${name}@${digest}"
             printf '%s\n' "${digest_ref}" | tee "dist/images/${name}.digest"
             syft "${digest_ref}" -o "spdx-json=dist/sbom/${name}.spdx.json"
+            release/scripts/registry-release bind-spdx-subject \
+              "dist/sbom/${name}.spdx.json" \
+              --image-name "${name}" \
+              --digest-ref "${digest_ref}"
             grype "${digest_ref}" -o json > "dist/grype/${name}.grype.json"
           }
           build_image registry-notary release/docker/Dockerfile.registry-notary
