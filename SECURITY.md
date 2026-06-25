@@ -27,7 +27,7 @@ security or privacy issue beyond the documented limitation. The source adapter
 sidecar also relies on deployment-network egress controls for outbound source
 traffic; see `crates/registry-notary-source-adapter-sidecar/README.md`.
 
-## Verifying release signatures
+## Verifying release signatures and provenance
 
 Registry Stack release assets are signed by the release workflow with keyless
 Sigstore cosign. Keyless signing does not use a long-lived project private key
@@ -36,6 +36,11 @@ GitHub Actions OIDC identity for
 `registrystack/registry-stack/.github/workflows/release.yml`, and the public
 verification material is the `.pem` certificate, `.sig` signature, Fulcio root,
 and Rekor transparency-log entry used by cosign.
+
+Tag-triggered releases produced by the current release workflow also publish a
+release-level SLSA provenance asset named
+`registry-stack-${tag}-release-provenance.intoto.jsonl`. Earlier releases may
+include cosign signatures without SLSA provenance.
 
 For each signed release asset, download three files from the GitHub Release:
 
@@ -60,7 +65,20 @@ If a release asset does not have matching `.sig` and `.pem` files, treat that
 asset as unsigned. The `v0.8.0` prerelease was published before release-asset
 signing was added and does not currently include cosign signature assets.
 
+For releases with SLSA provenance, download the provenance asset and verify the
+artifact against the release tag:
+
+```bash
+tag=v0.8.3
+asset=registryctl-${tag}-linux-amd64
+provenance=registry-stack-${tag}-release-provenance.intoto.jsonl
+
+slsa-verifier verify-artifact "${asset}" \
+  --provenance-path "${provenance}" \
+  --source-uri github.com/registrystack/registry-stack \
+  --source-tag "${tag}"
+```
+
 Important Git version tags are not yet cryptographically signed with GPG, SSH,
-or Sigstore. The current signed-release control covers GitHub Release assets
-that include matching cosign `.sig` and `.pem` files; signed Git tags remain a
-separate hardening item.
+or Sigstore. The current signed-release control covers GitHub Release assets and
+release-level SLSA provenance; signed Git tags remain a separate hardening item.

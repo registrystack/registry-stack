@@ -2,16 +2,21 @@
 
 Registry Stack GitHub Release assets are signed by the release workflow using
 keyless cosign. Each uploaded release asset has a sibling `.sig` signature and
-`.pem` signing certificate.
+`.pem` signing certificate. Tag-triggered releases produced by the current
+release workflow also include a release-level SLSA provenance asset named
+`registry-stack-${tag}-release-provenance.intoto.jsonl`.
 
-The commands below verify a tag-triggered release such as `v0.8.0`. Replace
-`v0.8.0` and the asset name with the release you are checking.
+Earlier releases, including `v0.8.2`, may include cosign signatures but no SLSA
+provenance asset. The commands below verify a tag-triggered release that
+includes provenance. Replace `v0.8.3` and the asset name with the release you
+are checking.
 
 ## Download Assets
 
 ```bash
-tag=v0.8.0
+tag=v0.8.3
 asset=registryctl-${tag}-linux-amd64
+provenance=registry-stack-${tag}-release-provenance.intoto.jsonl
 
 mkdir -p "verify-${tag}"
 cd "verify-${tag}"
@@ -21,7 +26,8 @@ gh release download "${tag}" \
   --pattern "${asset}" \
   --pattern "${asset}.sig" \
   --pattern "${asset}.pem" \
-  --pattern "SHA256SUMS"
+  --pattern "SHA256SUMS" \
+  --pattern "${provenance}"
 ```
 
 ## Check The Asset Hash
@@ -45,14 +51,27 @@ cosign verify-blob "${asset}" \
 For release-capsule or image-evidence assets, use the same command with that
 asset's filename and matching `.sig` and `.pem` files.
 
+## Verify The SLSA Provenance
+
+```bash
+slsa-verifier verify-artifact "${asset}" \
+  --provenance-path "${provenance}" \
+  --source-uri github.com/registrystack/registry-stack \
+  --source-tag "${tag}"
+```
+
+The provenance subject set covers release artifacts before their generated
+`.sig` and `.pem` files are added.
+
 If a release was rebuilt manually through `workflow_dispatch`, inspect the
-certificate identity and the release capsule's workflow URL before accepting the
-asset. Manual rebuilds can have a workflow identity tied to the branch that ran
-the dispatch instead of `refs/tags/${tag}`.
+certificate identity, the release capsule's workflow URL, and the SLSA
+provenance source before accepting the asset. The release workflow only uploads
+SLSA provenance when the run is associated with `refs/tags/${tag}`.
 
 ## Current Scope
 
 The release workflow signs GitHub Release assets: binaries, checksums, image
-evidence files, SBOMs, Grype reports, and release capsules. OCI image signatures
-and SLSA provenance attestations are not yet published for the root monorepo
-release.
+evidence files, SBOMs, Grype reports, and release capsules. It publishes SLSA
+provenance for those non-signature release assets when the workflow runs from
+the release tag ref. OCI image signatures are not yet published for the root
+monorepo release.

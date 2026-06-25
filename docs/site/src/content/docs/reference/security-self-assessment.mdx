@@ -95,13 +95,15 @@ Development evidence:
 - Release capsules are generated from workflow evidence rather than hand-written
   prose.
 - GitHub Release assets are signed by the root release workflow with keyless
-  cosign, and the public verification process is documented in
+  cosign. Tag-triggered releases produced by the current workflow also publish
+  release-level SLSA provenance. The public verification process is documented in
   [`release/VERIFY.md`](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md).
 
 Known release-integrity gaps:
 
 - OCI image signatures are not yet published for root monorepo releases.
-- Root monorepo release provenance or SLSA attestations are not yet published.
+- Existing releases produced before the provenance workflow change may not
+  include release-level SLSA provenance assets.
 - Public claims about signing are scoped to the release asset or product
   surface that actually performs signing.
 
