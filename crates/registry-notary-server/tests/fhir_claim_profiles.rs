@@ -207,12 +207,11 @@ fn fhir_demo_config(sidecar_base_url: &str) -> StandaloneRegistryNotaryConfig {
     #[cfg(feature = "registry-notary-cel")]
     std::env::set_var("REGISTRY_NOTARY_CEL_WORKER_COMMAND", cel_worker_bin());
 
-    let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let config_path = manifest_dir
+    let config_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(std::path::Path::parent)
         .expect("workspace root")
-        .join("demo/config/fhir-coverage-registry-notary.yaml");
+        .join("products/notary/demo/config/fhir-coverage-registry-notary.yaml");
     let raw = std::fs::read_to_string(config_path).expect("FHIR demo config reads");
     let mut config: StandaloneRegistryNotaryConfig =
         serde_norway::from_str(&raw).expect("FHIR demo config parses");

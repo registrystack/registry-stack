@@ -1,0 +1,150 @@
+---
+title: Trusted context constraints
+description: Explains how Registry Relay and Registry Notary report legal basis, consent, jurisdiction, assurance, and source freshness constraints without flattening product-specific source semantics.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-06-24"
+doc_type: explanation
+locale: en
+standards_referenced:
+  - json-schema
+---
+
+Trusted context constraints describe the cross-cutting policy checks that Registry Relay and
+Registry Notary evaluate with the platform policy layer. The product still owns source identity,
+route identity, lookup semantics, and adapter contracts. The shared report shape makes the
+constraints visible without pretending every product reads the same source in the same way.
+
+## What the platform owns
+
+The platform constraint model covers five families.
+
+- Legal basis: whether a trusted legal-basis reference is required, and whether a configured
+  allow-list is enforced.
+- Consent: whether a trusted consent reference is required, and whether a configured allow-list
+  is enforced.
+- Jurisdiction: which jurisdictions are permitted for the request or credential context.
+- Assurance: which assurance levels are accepted, and whether the value came from authorization
+  context or an authentication event.
+- Source freshness: the maximum accepted age of the source observation used for a claim or read.
+
+These checks are product-safe to report because they describe the policy gates, not raw personal
+data, source tokens, or registry records.
+
+## What products keep
+
+Registry Relay and Registry Notary do not become the same product because they share the
+constraint vocabulary. Relay applies constraints around data access and governed policy.
+Notary applies constraints around claim source bindings and credential evaluation. Each product
+keeps its own config paths, source connection identifiers, route identity, and matching model.
+
+For Notary, a source binding can require legal basis, consent, permitted jurisdiction, allowed
+assurance, and source freshness while still using product-owned matching details such as lookup
+field, allowed target inputs, redaction fields, and DCI response projection. The report names
+those adjacent controls so operators can see which parts are platform policy and which parts are
+Notary behavior.
+
+## Source freshness and `observed_at`
+
+`observed_at` is the time the source observation was made or fetched for the evidence read. It is
+not automatically a domain record date.
+
+A civil-registration record can contain dates such as birth date, registration date, amendment
+date, or a spreadsheet-maintained update column. Those dates describe the registry content. They
+do not prove when Notary observed the source unless the source adapter or DCI response contract
+declares that field as an observation timestamp.
+
+For OpenCRVS DCI starter projects, Registryctl maps the freshness field from the DCI response
+envelope:
+
+```yaml
+dci:
+  field_paths:
+    observed_at: "$response:/message/search_response/0/timestamp"
+```
+
+The Notary source binding then constrains freshness with:
+
+```yaml
+matching:
+  context_constraints:
+    source_freshness:
+      max_age_seconds: 86400
+  source_observed_at_field: observed_at
+```
+
+The report marks this as `observation_timestamp_source: source_observation_timestamp` and
+`observation_contract_proven: true`. If a source freshness rule points at a domain field whose
+observation semantics are not declared, the report must use `unknown` and
+`observation_contract_proven: false`.
+
+## Report shape
+
+Product diagnostic and explanation reports include a `context_constraints` array. Empty means the
+configuration has no reportable context-constraint block.
+
+Each entry names the product config path that owns the block, the stable platform contract, the
+hash-material contract, and one summary object per constraint family.
+
+```json
+{
+  "context_constraints": [
+    {
+      "container_path": "/evidence/claims/0/source_bindings/birth_record/matching",
+      "product": "registry-notary",
+      "platform_contract": "registry-platform-pdp.context_constraints.v1",
+      "hash_material_contract": "registry-platform-pdp.context_constraints.hash_material.v1",
+      "legal_basis": {
+        "required": true,
+        "approved_value_check": false,
+        "allowed_ref_count": 0,
+        "trusted_value_source": "static_credential_authorization_details"
+      },
+      "consent": {
+        "required": true,
+        "approved_value_check": false,
+        "allowed_ref_count": 0,
+        "trusted_value_source": "static_credential_authorization_details"
+      },
+      "jurisdiction": {
+        "permitted_count": 1,
+        "trusted_value_source": "static_credential_authorization_details"
+      },
+      "assurance": {
+        "allowed_count": 1,
+        "minimum": null,
+        "trusted_value_source": "static_credential_authorization_details",
+        "authn_derived": false
+      },
+      "source_freshness": {
+        "max_age_seconds": 86400,
+        "observation_field": "observed_at",
+        "observation_timestamp_source": "source_observation_timestamp",
+        "observation_contract_proven": true
+      },
+      "product_owned_adjacent_controls": [
+        "source_lookup",
+        "target_input_minimization"
+      ]
+    }
+  ]
+}
+```
+
+## Boundaries
+
+The report distinguishes presence checks from allow-list checks. A legal-basis requirement with
+no allowed references is a presence check, not an approved-value check. The same distinction
+applies to consent.
+
+The report also distinguishes authorization-derived assurance from authentication-derived
+assurance. A static credential can carry a trusted authorization detail such as
+`assurance_level: substantial`, but that does not prove how a human user authenticated.
+
+## Related pages
+
+- [Evidence issuance, end to end](../evidence-issuance/)
+- [Integration patterns](../integration-patterns/)
+- [Contracts](../../reference/contracts/)

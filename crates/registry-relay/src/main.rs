@@ -475,6 +475,7 @@ async fn run_explain_config(
                 "defaults_applied": [],
                 "optional_sections_absent": relay_optional_sections_absent(&config),
                 "live_apply": relay_live_apply_classes(),
+                "context_constraints": [],
                 "resolved_config": resolved_config,
                 "hashes": {
                     "internal_config_hash": internal_config_hash(raw.as_bytes()),
@@ -656,6 +657,7 @@ impl DoctorReport {
             },
             "diagnostics": diagnostics,
             "required_env": config.map(required_env_report).unwrap_or_default(),
+            "context_constraints": [],
             "generated_at": now_rfc3339(),
         });
         if let Some(raw) = raw_config {

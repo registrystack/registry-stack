@@ -376,6 +376,27 @@ mod tests {
     }
 
     #[test]
+    fn notary_init_cli_accepts_opencrvs_dci_source_kind() {
+        let cli = Cli::try_parse_from([
+            "registryctl",
+            "init",
+            "notary",
+            "my-opencrvs-notary",
+            "--source-kind",
+            "opencrvs-dci",
+        ])
+        .unwrap();
+
+        let Commands::Init { command } = cli.command else {
+            panic!("expected init command");
+        };
+        let InitCommand::Notary { source_kind, .. } = *command else {
+            panic!("expected init notary command");
+        };
+        assert_eq!(source_kind, NotaryInitSourceKind::OpencrvsDci);
+    }
+
+    #[test]
     fn doctor_skips_automatic_update_check() {
         let cli = Cli::try_parse_from(["registryctl", "doctor"]).unwrap();
 

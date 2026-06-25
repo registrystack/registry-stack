@@ -7127,7 +7127,7 @@ async fn governed_config_rejects_shared_admin_listener_topology() {
 fn governed_config_docs_do_not_ship_unresolved_config_trust_placeholders() {
     let doc = fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../docs/operator-config-reference.md"),
+            .join("../../products/notary/docs/operator-config-reference.md"),
     )
     .expect("operator config reference reads");
 

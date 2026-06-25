@@ -4,8 +4,8 @@ description: Commands, subcommands, and flags for registryctl, the tool that run
 status: current
 owner: registry-docs
 source_repos:
-  - registry-registryctl
-last_reviewed: "2026-06-20"
+  - registry-stack
+last_reviewed: "2026-06-24"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -24,7 +24,7 @@ This page lists the commands, subcommands, and flags defined in the source comma
 | `init relay <dir>` | Create a local Relay-backed spreadsheet API project in `<dir>`. |
 | `init relay --sample <sample>` | Sample project to generate. Defaults to `benefits`. |
 | `init notary <dir>` | Create a standalone local Notary project for an existing API in `<dir>`. |
-| `init notary --source-kind <kind>` | Source kind for the starter Notary project: `registry-data-api` (default) or `fhir-sidecar`. |
+| `init notary --source-kind <kind>` | Source kind for the starter Notary project: `registry-data-api` (default), `fhir-sidecar`, or `opencrvs-dci`. |
 | `init notary --source-url <url>` | Source API base URL as seen from the Notary container. |
 | `init notary --source-token-from-env <var>` | Read the source API bearer token from this process environment variable. |
 | `init notary --source-token-env <var>` | Environment variable name Notary reads for the source API bearer token. |
@@ -37,6 +37,11 @@ This page lists the commands, subcommands, and flags defined in the source comma
 | `init notary --smoke-target-id <id>` | Target id used by generated smoke and Bruno evaluation requests. |
 | `add notary --from <source>` | Add a local Notary backed by the generated project. `--from local-relay` uses the generated Relay project. |
 | `add notary --force` | Replace existing Notary generated files. |
+
+For `opencrvs-dci`, the generated Notary source connection uses OAuth client credentials with
+`DCI_CLIENT_ID` and `DCI_CLIENT_SECRET`, not `--source-token-env`. It also emits nested
+`matching.context_constraints` for legal basis, consent, jurisdiction, assurance, and source
+freshness.
 
 ## Lifecycle
 

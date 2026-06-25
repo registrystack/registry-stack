@@ -37,6 +37,13 @@ pub const REGISTRYCTL_VALIDATION_FIXTURE_V1: &str =
 pub const REDACTION_INPUT_FIXTURE_V1: &str =
     include_str!("../fixtures/diagnostics/redaction-input.json");
 
+pub const CONTEXT_CONSTRAINTS_REPORT_CONTRACT_V1: &str =
+    "registry.config_report.context_constraints.v1";
+pub const PLATFORM_CONTEXT_CONSTRAINTS_CONTRACT_V1: &str =
+    "registry-platform-pdp.context_constraints.v1";
+pub const PLATFORM_CONTEXT_CONSTRAINTS_HASH_MATERIAL_CONTRACT_V1: &str =
+    "registry-platform-pdp.context_constraints.hash_material.v1";
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
@@ -263,6 +270,89 @@ impl ConfigHashes {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum TrustedValueSource {
+    StaticCredentialAuthorizationDetails,
+    OidcAuthorizationDetails,
+    FederationAuthorizationDetails,
+    PrincipalScope,
+    RouteDefault,
+    SourceObservationTimestamp,
+    AdapterInjectedObservationTimestamp,
+    NotConfigured,
+    Unknown,
+}
+
+impl TrustedValueSource {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::StaticCredentialAuthorizationDetails => "static_credential_authorization_details",
+            Self::OidcAuthorizationDetails => "oidc_authorization_details",
+            Self::FederationAuthorizationDetails => "federation_authorization_details",
+            Self::PrincipalScope => "principal_scope",
+            Self::RouteDefault => "route_default",
+            Self::SourceObservationTimestamp => "source_observation_timestamp",
+            Self::AdapterInjectedObservationTimestamp => "adapter_injected_observation_timestamp",
+            Self::NotConfigured => "not_configured",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct ContextConstraintLegalBasisReport {
+    pub required: bool,
+    pub approved_value_check: bool,
+    pub allowed_ref_count: u64,
+    pub trusted_value_source: TrustedValueSource,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct ContextConstraintConsentReport {
+    pub required: bool,
+    pub approved_value_check: bool,
+    pub allowed_ref_count: u64,
+    pub trusted_value_source: TrustedValueSource,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct ContextConstraintJurisdictionReport {
+    pub permitted_count: u64,
+    pub trusted_value_source: TrustedValueSource,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct ContextConstraintAssuranceReport {
+    pub allowed_count: u64,
+    pub minimum: Option<String>,
+    pub trusted_value_source: TrustedValueSource,
+    pub authn_derived: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct ContextConstraintSourceFreshnessReport {
+    pub max_age_seconds: Option<u64>,
+    pub observation_field: Option<String>,
+    pub observation_timestamp_source: TrustedValueSource,
+    pub observation_contract_proven: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct ContextConstraintsReportEntry {
+    pub container_path: String,
+    pub product: String,
+    pub platform_contract: String,
+    pub hash_material_contract: String,
+    pub legal_basis: ContextConstraintLegalBasisReport,
+    pub consent: ContextConstraintConsentReport,
+    pub jurisdiction: ContextConstraintJurisdictionReport,
+    pub assurance: ContextConstraintAssuranceReport,
+    pub source_freshness: ContextConstraintSourceFreshnessReport,
+    pub product_owned_adjacent_controls: Vec<String>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct ConfigDiagnosticReport {
     pub schema_version: String,
@@ -276,6 +366,8 @@ pub struct ConfigDiagnosticReport {
     /// names and presence; must only be exposed behind operator authentication.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub required_env: Vec<RequiredEnvVar>,
+    #[serde(default)]
+    pub context_constraints: Vec<ContextConstraintsReportEntry>,
     #[serde(skip_serializing_if = "config_hashes_option_is_empty")]
     pub hashes: Option<ConfigHashes>,
     pub generated_at: String,
@@ -369,6 +461,8 @@ pub struct ConfigExplanation {
     pub optional_sections_absent: Vec<OptionalSection>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub live_apply: Vec<LiveApplyComponent>,
+    #[serde(default)]
+    pub context_constraints: Vec<ContextConstraintsReportEntry>,
     pub resolved_config: RedactedConfig,
     #[serde(skip_serializing_if = "config_hashes_option_is_empty")]
     pub hashes: Option<ConfigHashes>,
@@ -394,6 +488,8 @@ pub struct ConfigExplanationDocument {
     pub optional_sections_absent: Vec<OptionalSection>,
     #[serde(default)]
     pub live_apply: Vec<LiveApplyComponent>,
+    #[serde(default)]
+    pub context_constraints: Vec<ContextConstraintsReportEntry>,
     pub resolved_config: Value,
     pub hashes: Option<ConfigHashes>,
     pub generated_at: String,

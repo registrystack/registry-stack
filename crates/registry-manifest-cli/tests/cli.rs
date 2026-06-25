@@ -20,6 +20,10 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
+fn manifest_product_root() -> PathBuf {
+    workspace_root().join("products/manifest")
+}
+
 fn temp_dir(name: &str) -> PathBuf {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -98,7 +102,8 @@ fn help_flags_exit_zero_and_print_usage_to_stdout() {
 
 #[test]
 fn render_rejects_undeclared_dcat_profile() {
-    let manifest = workspace_root().join("profiles/example-person-schema/fixtures/metadata.yaml");
+    let manifest =
+        manifest_product_root().join("profiles/example-person-schema/fixtures/metadata.yaml");
     let output = Command::new(bin())
         .args([
             "render",
@@ -232,7 +237,8 @@ datasets:
 
 #[test]
 fn publish_writes_every_indexed_artifact_without_undeclared_profiles() {
-    let manifest = workspace_root().join("profiles/example-person-schema/fixtures/metadata.yaml");
+    let manifest =
+        manifest_product_root().join("profiles/example-person-schema/fixtures/metadata.yaml");
     let out = temp_dir("publish-example-person-schema");
     let output = Command::new(bin())
         .args([
@@ -285,7 +291,8 @@ fn publish_writes_every_indexed_artifact_without_undeclared_profiles() {
 
 #[test]
 fn publish_writes_stable_package_digest_and_artifact_digests() {
-    let manifest = workspace_root().join("profiles/example-person-schema/fixtures/metadata.yaml");
+    let manifest =
+        manifest_product_root().join("profiles/example-person-schema/fixtures/metadata.yaml");
     let first = temp_dir("publish-digest-first");
     let second = temp_dir("publish-digest-second");
 
@@ -370,7 +377,8 @@ struct BetaArtifactReader {
 
 #[test]
 fn publish_bundle_readers_tolerate_additive_artifacts() {
-    let manifest = workspace_root().join("profiles/example-person-schema/fixtures/metadata.yaml");
+    let manifest =
+        manifest_product_root().join("profiles/example-person-schema/fixtures/metadata.yaml");
     let out = temp_dir("publish-additive-artifact");
     let output = Command::new(bin())
         .args([
@@ -429,7 +437,7 @@ fn publish_bundle_readers_tolerate_additive_artifacts() {
 #[test]
 fn render_and_publish_cpsv_ap_service_catalogue() {
     let manifest =
-        workspace_root().join("fixtures/cpsv-ap/health-linked-child-support.metadata.yaml");
+        manifest_product_root().join("fixtures/cpsv-ap/health-linked-child-support.metadata.yaml");
     let output = Command::new(bin())
         .args(["render", manifest.to_str().unwrap(), "--format", "cpsv-ap"])
         .output()
@@ -639,7 +647,7 @@ datasets:
 
 #[test]
 fn validate_profiles_checks_descriptors_and_fixtures() {
-    let profiles = workspace_root().join("profiles");
+    let profiles = manifest_product_root().join("profiles");
     let output = Command::new(bin())
         .args(["validate-profiles", profiles.to_str().unwrap()])
         .output()
@@ -861,7 +869,8 @@ fn collect_paths(root: &Path) -> Vec<PathBuf> {
 fn publish_default_writes_only_inside_out() {
     let parent = temp_dir("publish-contained-parent");
     let out = parent.join("metadata");
-    let manifest = workspace_root().join("profiles/example-person-schema/fixtures/metadata.yaml");
+    let manifest =
+        manifest_product_root().join("profiles/example-person-schema/fixtures/metadata.yaml");
     let status = Command::new(bin())
         .args([
             "publish",
@@ -896,7 +905,8 @@ fn publish_with_site_root_writes_well_known_under_site_root_only() {
     let site_root = parent.join("site");
     fs::create_dir_all(&site_root).expect("site root");
 
-    let manifest = workspace_root().join("profiles/example-person-schema/fixtures/metadata.yaml");
+    let manifest =
+        manifest_product_root().join("profiles/example-person-schema/fixtures/metadata.yaml");
     let status = Command::new(bin())
         .args([
             "publish",
@@ -941,7 +951,8 @@ fn publish_rejects_preexisting_symlink_directories_under_out() {
     fs::create_dir_all(&outside).expect("outside dir");
     symlink(&outside, out.join("schema")).expect("schema symlink");
 
-    let manifest = workspace_root().join("profiles/example-person-schema/fixtures/metadata.yaml");
+    let manifest =
+        manifest_product_root().join("profiles/example-person-schema/fixtures/metadata.yaml");
     let output = Command::new(bin())
         .args([
             "publish",
@@ -1000,7 +1011,8 @@ datasets: []
 #[test]
 fn publish_fails_closed_when_out_cannot_be_created() {
     let dir = temp_dir("publish-bad-out");
-    let manifest = workspace_root().join("profiles/example-person-schema/fixtures/metadata.yaml");
+    let manifest =
+        manifest_product_root().join("profiles/example-person-schema/fixtures/metadata.yaml");
     let blocker = dir.join("blocker");
     fs::write(&blocker, b"not a directory").expect("write blocker");
     let out = blocker.join("nested");
@@ -1073,7 +1085,8 @@ datasets: []
 
 #[test]
 fn render_reports_required_flag_errors() {
-    let manifest = workspace_root().join("profiles/example-person-schema/fixtures/metadata.yaml");
+    let manifest =
+        manifest_product_root().join("profiles/example-person-schema/fixtures/metadata.yaml");
 
     for (format, expected) in &[
         (
@@ -1105,7 +1118,8 @@ fn render_reports_required_flag_errors() {
 
 #[test]
 fn render_reports_lookup_errors_and_unsupported_format() {
-    let manifest = workspace_root().join("profiles/example-person-schema/fixtures/metadata.yaml");
+    let manifest =
+        manifest_product_root().join("profiles/example-person-schema/fixtures/metadata.yaml");
 
     let cases: &[(&[&str], &str)] = &[
         (
@@ -1165,7 +1179,8 @@ fn render_reports_lookup_errors_and_unsupported_format() {
 
 #[test]
 fn render_dcat_with_unsupported_profile_fails_closed() {
-    let manifest = workspace_root().join("profiles/example-person-schema/fixtures/metadata.yaml");
+    let manifest =
+        manifest_product_root().join("profiles/example-person-schema/fixtures/metadata.yaml");
     let output = Command::new(bin())
         .args([
             "render",
@@ -1774,7 +1789,8 @@ datasets: []
 #[test]
 fn publish_fails_closed_when_site_root_is_a_file() {
     let dir = temp_dir("publish-site-root-file");
-    let manifest = workspace_root().join("profiles/example-person-schema/fixtures/metadata.yaml");
+    let manifest =
+        manifest_product_root().join("profiles/example-person-schema/fixtures/metadata.yaml");
     let site_root = dir.join("site-as-file");
     fs::write(&site_root, b"not a directory").expect("write site root file");
     let out = dir.join("out");

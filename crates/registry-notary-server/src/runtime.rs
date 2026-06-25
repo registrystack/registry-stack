@@ -3110,6 +3110,8 @@ fn binding_policy_uses_authorization_details(
         || !matching.permitted_jurisdictions.is_empty()
         || matching.require_legal_basis
         || matching.require_consent
+        || !matching.allowed_legal_basis_refs.is_empty()
+        || !matching.allowed_consent_refs.is_empty()
 }
 
 fn source_authorization_subject_expectation(
@@ -4401,8 +4403,8 @@ fn matching_pdp_decision(
         },
         require_legal_basis: matching.require_legal_basis,
         require_consent: matching.require_consent,
-        allowed_legal_basis_refs: Vec::new(),
-        allowed_consent_refs: Vec::new(),
+        allowed_legal_basis_refs: matching.allowed_legal_basis_refs.clone(),
+        allowed_consent_refs: matching.allowed_consent_refs.clone(),
         redaction_fields: matching.redaction_fields.iter().cloned().collect(),
         allowed_relationships: matching.allowed_relationships.clone(),
         relationship_purpose_constraints: matching
@@ -4743,6 +4745,10 @@ fn matching_purpose_policy_hash(binding: &registry_notary_core::SourceBindingCon
         "allowed_assurance": binding.matching.allowed_assurance,
         "minimum_assurance": binding.matching.minimum_assurance,
         "permitted_jurisdictions": binding.matching.permitted_jurisdictions,
+        "allowed_legal_basis_refs": binding.matching.allowed_legal_basis_refs,
+        "allowed_consent_refs": binding.matching.allowed_consent_refs,
+        "max_source_age_seconds": binding.matching.max_source_age_seconds,
+        "source_observed_at_field": binding.matching.source_observed_at_field,
         "require_legal_basis": binding.matching.require_legal_basis,
         "require_consent": binding.matching.require_consent,
         "redaction_fields": binding.matching.redaction_fields,
@@ -8095,6 +8101,79 @@ mod tests {
             }
         );
         assert!(matching_purpose_policy_hash(&binding).starts_with("sha256:"));
+
+        binding.matching.allowed_legal_basis_refs = vec!["legal-basis:other".to_string()];
+        expect_pdp_denial(
+            matching_pdp_decision(
+                &evidence,
+                &binding,
+                &machine_capability(&[]),
+                &context,
+                "benefits",
+                &trusted_policy,
+                &[],
+                &["value".to_string(), "predicate".to_string()],
+                &[FORMAT_CLAIM_RESULT_JSON.to_string()],
+                DisclosureProfile::Value,
+                FORMAT_CLAIM_RESULT_JSON,
+                None,
+                false,
+            ),
+            registry_platform_pdp::LEGAL_BASIS_REQUIRED,
+        );
+
+        binding.matching.allowed_legal_basis_refs = vec!["legal-basis:benefits".to_string()];
+        binding.matching.allowed_consent_refs = vec!["consent:other".to_string()];
+        expect_pdp_denial(
+            matching_pdp_decision(
+                &evidence,
+                &binding,
+                &machine_capability(&[]),
+                &context,
+                "benefits",
+                &trusted_policy,
+                &[],
+                &["value".to_string(), "predicate".to_string()],
+                &[FORMAT_CLAIM_RESULT_JSON.to_string()],
+                DisclosureProfile::Value,
+                FORMAT_CLAIM_RESULT_JSON,
+                None,
+                false,
+            ),
+            registry_platform_pdp::CONSENT_REQUIRED,
+        );
+
+        binding.matching.allowed_consent_refs = vec!["consent:person-1".to_string()];
+        let effect = expect_pdp_permit(matching_pdp_decision(
+            &evidence,
+            &binding,
+            &machine_capability(&[]),
+            &context,
+            "benefits",
+            &trusted_policy,
+            &[],
+            &["value".to_string(), "predicate".to_string()],
+            &[FORMAT_CLAIM_RESULT_JSON.to_string()],
+            DisclosureProfile::Value,
+            FORMAT_CLAIM_RESULT_JSON,
+            None,
+            false,
+        ));
+        assert_eq!(
+            effect.audit.expect("permit audit").evaluated_rule_ids,
+            matching_gate_rule_ids(
+                &[
+                    "pdp.purpose",
+                    "pdp.jurisdiction",
+                    "pdp.assurance_allowed_set",
+                    "pdp.legal_basis_required",
+                    "pdp.consent_required",
+                    "pdp.legal_basis_allowed_set",
+                    "pdp.consent_allowed_set",
+                ],
+                true,
+            )
+        );
     }
 
     #[test]

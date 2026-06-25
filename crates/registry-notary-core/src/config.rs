@@ -4854,6 +4854,28 @@ fn validate_source_matching_config(
             "permitted_jurisdictions must not contain blanks",
         );
     }
+    if matching
+        .allowed_legal_basis_refs
+        .iter()
+        .any(|value| value.trim().is_empty())
+    {
+        return invalid_matching_config(
+            claim,
+            binding,
+            "allowed_legal_basis_refs must not contain blanks",
+        );
+    }
+    if matching
+        .allowed_consent_refs
+        .iter()
+        .any(|value| value.trim().is_empty())
+    {
+        return invalid_matching_config(
+            claim,
+            binding,
+            "allowed_consent_refs must not contain blanks",
+        );
+    }
     if matching.max_source_age_seconds == Some(0) {
         return invalid_matching_config(
             claim,
@@ -5306,61 +5328,142 @@ pub struct SourceQueryFieldConfig {
     pub op: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SourceMatchingConfig {
-    #[serde(default)]
     pub policy_id: Option<String>,
-    #[serde(default)]
     pub method: Option<String>,
-    #[serde(default)]
     pub target_type: Option<String>,
-    #[serde(default)]
     pub requester_type: Option<String>,
-    #[serde(default)]
     pub allowed_purposes: Vec<String>,
-    #[serde(default)]
     pub allowed_assurance: Vec<String>,
-    #[serde(default)]
     pub minimum_assurance: Option<String>,
-    #[serde(default)]
     pub permitted_jurisdictions: Vec<String>,
-    #[serde(default)]
     pub max_source_age_seconds: Option<u64>,
-    #[serde(default)]
     pub source_observed_at_field: Option<String>,
-    #[serde(default)]
     pub require_legal_basis: bool,
-    #[serde(default)]
     pub require_consent: bool,
-    #[serde(default)]
+    pub allowed_legal_basis_refs: Vec<String>,
+    pub allowed_consent_refs: Vec<String>,
     pub redaction_fields: Vec<String>,
-    #[serde(default)]
     pub ecosystem_binding: Option<EcosystemBindingSelectorConfig>,
-    #[serde(default)]
     pub allowed_relationships: Vec<String>,
     /// Relationship-specific purpose allow-lists. Empty means relationships
     /// accepted by `allowed_relationships` are not purpose-scoped.
-    #[serde(default)]
     pub relationship_purpose_scopes: BTreeMap<String, Vec<String>>,
     /// OR-of-AND groups of request paths. Example:
     /// `[["target.attributes.given_name", "target.attributes.family_name"]]`.
-    #[serde(default)]
     pub sufficient_target_inputs: Vec<Vec<String>>,
     /// Maximum target input paths accepted by this binding. Empty means
     /// unrestricted for backwards-compatible identifier-only configs.
-    #[serde(default)]
     pub allowed_target_inputs: Vec<String>,
     /// Maximum requester input paths accepted by this binding. Empty means
     /// unrestricted.
-    #[serde(default)]
     pub allowed_requester_inputs: Vec<String>,
-    #[serde(default = "default_collapse_matching_errors")]
     pub collapse_matching_errors: bool,
-    #[serde(default)]
     pub require_requester_reauthentication: bool,
-    #[serde(default)]
     pub confidence: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SourceMatchingConfigWire {
+    #[serde(default)]
+    policy_id: Option<String>,
+    #[serde(default)]
+    method: Option<String>,
+    #[serde(default)]
+    target_type: Option<String>,
+    #[serde(default)]
+    requester_type: Option<String>,
+    #[serde(default)]
+    allowed_purposes: Vec<String>,
+    #[serde(default)]
+    allowed_assurance: Vec<String>,
+    #[serde(default)]
+    minimum_assurance: Option<String>,
+    #[serde(default)]
+    permitted_jurisdictions: Vec<String>,
+    #[serde(default)]
+    max_source_age_seconds: Option<u64>,
+    #[serde(default)]
+    source_observed_at_field: Option<String>,
+    #[serde(default)]
+    require_legal_basis: bool,
+    #[serde(default)]
+    require_consent: bool,
+    #[serde(default)]
+    allowed_legal_basis_refs: Vec<String>,
+    #[serde(default)]
+    allowed_consent_refs: Vec<String>,
+    #[serde(default)]
+    context_constraints: SourceContextConstraintsConfig,
+    #[serde(default)]
+    redaction_fields: Vec<String>,
+    #[serde(default)]
+    ecosystem_binding: Option<EcosystemBindingSelectorConfig>,
+    #[serde(default)]
+    allowed_relationships: Vec<String>,
+    #[serde(default)]
+    relationship_purpose_scopes: BTreeMap<String, Vec<String>>,
+    #[serde(default)]
+    sufficient_target_inputs: Vec<Vec<String>>,
+    #[serde(default)]
+    allowed_target_inputs: Vec<String>,
+    #[serde(default)]
+    allowed_requester_inputs: Vec<String>,
+    #[serde(default = "default_collapse_matching_errors")]
+    collapse_matching_errors: bool,
+    #[serde(default)]
+    require_requester_reauthentication: bool,
+    #[serde(default)]
+    confidence: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceContextConstraintsConfig {
+    #[serde(default)]
+    pub legal_basis: ContextPresenceConstraintConfig,
+    #[serde(default)]
+    pub consent: ContextPresenceConstraintConfig,
+    #[serde(default)]
+    pub jurisdiction: ContextJurisdictionConstraintConfig,
+    #[serde(default)]
+    pub assurance: ContextAssuranceConstraintConfig,
+    #[serde(default)]
+    pub source_freshness: SourceFreshnessConstraintConfig,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContextPresenceConstraintConfig {
+    #[serde(default)]
+    pub required: bool,
+    #[serde(default)]
+    pub allowed_refs: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContextJurisdictionConstraintConfig {
+    #[serde(default)]
+    pub permitted: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContextAssuranceConstraintConfig {
+    #[serde(default)]
+    pub allowed: Vec<String>,
+    #[serde(default)]
+    pub minimum: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceFreshnessConstraintConfig {
+    #[serde(default)]
+    pub max_age_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -5397,6 +5500,8 @@ impl Default for SourceMatchingConfig {
             source_observed_at_field: None,
             require_legal_basis: false,
             require_consent: false,
+            allowed_legal_basis_refs: Vec::new(),
+            allowed_consent_refs: Vec::new(),
             redaction_fields: Vec::new(),
             ecosystem_binding: None,
             allowed_relationships: Vec::new(),
@@ -5409,6 +5514,139 @@ impl Default for SourceMatchingConfig {
             confidence: None,
         }
     }
+}
+
+impl<'de> Deserialize<'de> for SourceMatchingConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = SourceMatchingConfigWire::deserialize(deserializer)?;
+        SourceMatchingConfig::from_wire(wire).map_err(serde::de::Error::custom)
+    }
+}
+
+impl SourceMatchingConfig {
+    fn from_wire(wire: SourceMatchingConfigWire) -> Result<Self, String> {
+        let mut matching = SourceMatchingConfig {
+            policy_id: wire.policy_id,
+            method: wire.method,
+            target_type: wire.target_type,
+            requester_type: wire.requester_type,
+            allowed_purposes: wire.allowed_purposes,
+            allowed_assurance: wire.allowed_assurance,
+            minimum_assurance: wire.minimum_assurance,
+            permitted_jurisdictions: wire.permitted_jurisdictions,
+            max_source_age_seconds: wire.max_source_age_seconds,
+            source_observed_at_field: wire.source_observed_at_field,
+            require_legal_basis: wire.require_legal_basis,
+            require_consent: wire.require_consent,
+            allowed_legal_basis_refs: wire.allowed_legal_basis_refs,
+            allowed_consent_refs: wire.allowed_consent_refs,
+            redaction_fields: wire.redaction_fields,
+            ecosystem_binding: wire.ecosystem_binding,
+            allowed_relationships: wire.allowed_relationships,
+            relationship_purpose_scopes: wire.relationship_purpose_scopes,
+            sufficient_target_inputs: wire.sufficient_target_inputs,
+            allowed_target_inputs: wire.allowed_target_inputs,
+            allowed_requester_inputs: wire.allowed_requester_inputs,
+            collapse_matching_errors: wire.collapse_matching_errors,
+            require_requester_reauthentication: wire.require_requester_reauthentication,
+            confidence: wire.confidence,
+        };
+        matching.apply_context_constraints(wire.context_constraints)?;
+        Ok(matching)
+    }
+
+    fn apply_context_constraints(
+        &mut self,
+        constraints: SourceContextConstraintsConfig,
+    ) -> Result<(), String> {
+        if constraints.legal_basis.required {
+            self.require_legal_basis = true;
+        }
+        if constraints.consent.required {
+            self.require_consent = true;
+        }
+        merge_vec_constraint(
+            "matching.allowed_legal_basis_refs",
+            "matching.context_constraints.legal_basis.allowed_refs",
+            &mut self.allowed_legal_basis_refs,
+            constraints.legal_basis.allowed_refs,
+        )?;
+        merge_vec_constraint(
+            "matching.allowed_consent_refs",
+            "matching.context_constraints.consent.allowed_refs",
+            &mut self.allowed_consent_refs,
+            constraints.consent.allowed_refs,
+        )?;
+        merge_vec_constraint(
+            "matching.permitted_jurisdictions",
+            "matching.context_constraints.jurisdiction.permitted",
+            &mut self.permitted_jurisdictions,
+            constraints.jurisdiction.permitted,
+        )?;
+        merge_vec_constraint(
+            "matching.allowed_assurance",
+            "matching.context_constraints.assurance.allowed",
+            &mut self.allowed_assurance,
+            constraints.assurance.allowed,
+        )?;
+        merge_option_constraint(
+            "matching.minimum_assurance",
+            "matching.context_constraints.assurance.minimum",
+            &mut self.minimum_assurance,
+            constraints.assurance.minimum,
+        )?;
+        merge_option_constraint(
+            "matching.max_source_age_seconds",
+            "matching.context_constraints.source_freshness.max_age_seconds",
+            &mut self.max_source_age_seconds,
+            constraints.source_freshness.max_age_seconds,
+        )?;
+        Ok(())
+    }
+}
+
+fn merge_vec_constraint(
+    flattened_name: &str,
+    nested_name: &str,
+    flattened: &mut Vec<String>,
+    nested: Vec<String>,
+) -> Result<(), String> {
+    if nested.is_empty() {
+        return Ok(());
+    }
+    if flattened.is_empty() {
+        *flattened = nested;
+        return Ok(());
+    }
+    if *flattened == nested {
+        return Ok(());
+    }
+    Err(format!("{nested_name} conflicts with {flattened_name}"))
+}
+
+fn merge_option_constraint<T>(
+    flattened_name: &str,
+    nested_name: &str,
+    flattened: &mut Option<T>,
+    nested: Option<T>,
+) -> Result<(), String>
+where
+    T: PartialEq,
+{
+    let Some(nested) = nested else {
+        return Ok(());
+    };
+    if flattened
+        .as_ref()
+        .is_some_and(|flattened| flattened != &nested)
+    {
+        return Err(format!("{nested_name} conflicts with {flattened_name}"));
+    }
+    *flattened = Some(nested);
+    Ok(())
 }
 
 const fn default_collapse_matching_errors() -> bool {
@@ -7038,6 +7276,224 @@ auth:
     }
 
     #[test]
+    fn matching_context_constraints_deserialize_to_runtime_fields() {
+        let config: StandaloneRegistryNotaryConfig = serde_norway::from_str(
+            r#"
+evidence:
+  enabled: true
+  signing_keys:
+    issuer-key:
+      provider: local_jwk_env
+      private_jwk_env: ISSUER_KEY
+      alg: EdDSA
+      kid: did:web:issuer.example#key-1
+      status: active
+  source_connections:
+    registry:
+      base_url: https://registry.example
+      token_env: SOURCE_TOKEN
+  claims:
+    - id: person-is-alive
+      title: Person is alive
+      version: "1.0"
+      subject_type: Person
+      source_bindings:
+        src:
+          connector: registry_data_api
+          connection: registry
+          dataset: people
+          entity: person
+          lookup:
+            input: target.attributes.birthdate
+            field: birthdate
+          matching:
+            context_constraints:
+              legal_basis:
+                required: true
+                allowed_refs:
+                  - law:birth-registration
+              consent:
+                required: true
+                allowed_refs:
+                  - consent:birth-registration
+              jurisdiction:
+                permitted:
+                  - RW
+              assurance:
+                allowed:
+                  - substantial
+                minimum: substantial
+              source_freshness:
+                max_age_seconds: 86400
+            source_observed_at_field: observed_at
+      rule:
+        type: exists
+        source: src
+auth:
+  mode: api_key
+  api_keys:
+    - id: test-key
+      fingerprint:
+        provider: env
+        name: TEST_TOKEN_HASH
+        commitment: sha256:56c3f8e9f68c7acd05bcf1e5d619cb1c4e9f91efafb471a3c60675c983fe7ed6
+"#,
+        )
+        .expect("nested context constraints deserialize");
+        config
+            .validate()
+            .expect("nested context constraints validate");
+        let matching = &config.evidence.claims[0].source_bindings["src"].matching;
+        assert!(matching.require_legal_basis);
+        assert!(matching.require_consent);
+        assert_eq!(
+            matching.allowed_legal_basis_refs,
+            ["law:birth-registration"]
+        );
+        assert_eq!(
+            matching.allowed_consent_refs,
+            ["consent:birth-registration"]
+        );
+        assert_eq!(matching.permitted_jurisdictions, ["RW"]);
+        assert_eq!(matching.allowed_assurance, ["substantial"]);
+        assert_eq!(matching.minimum_assurance.as_deref(), Some("substantial"));
+        assert_eq!(matching.max_source_age_seconds, Some(86400));
+        assert_eq!(
+            matching.source_observed_at_field.as_deref(),
+            Some("observed_at")
+        );
+    }
+
+    #[test]
+    fn matching_context_constraints_reject_conflicting_flattened_fields() {
+        let cases = [
+            (
+                "legal basis allowed refs",
+                r#"
+allowed_legal_basis_refs:
+  - law:existing
+context_constraints:
+  legal_basis:
+    allowed_refs:
+      - law:nested
+"#,
+                "context_constraints.legal_basis.allowed_refs",
+            ),
+            (
+                "consent allowed refs",
+                r#"
+allowed_consent_refs:
+  - consent:existing
+context_constraints:
+  consent:
+    allowed_refs:
+      - consent:nested
+"#,
+                "context_constraints.consent.allowed_refs",
+            ),
+            (
+                "jurisdiction permitted list",
+                r#"
+permitted_jurisdictions:
+  - RW
+context_constraints:
+  jurisdiction:
+    permitted:
+      - KE
+"#,
+                "context_constraints.jurisdiction.permitted",
+            ),
+            (
+                "assurance allowed list",
+                r#"
+allowed_assurance:
+  - substantial
+context_constraints:
+  assurance:
+    allowed:
+      - high
+"#,
+                "context_constraints.assurance.allowed",
+            ),
+            (
+                "assurance minimum",
+                r#"
+minimum_assurance: substantial
+context_constraints:
+  assurance:
+    minimum: high
+"#,
+                "context_constraints.assurance.minimum",
+            ),
+            (
+                "source freshness",
+                r#"
+max_source_age_seconds: 60
+context_constraints:
+  source_freshness:
+    max_age_seconds: 120
+"#,
+                "context_constraints.source_freshness.max_age_seconds",
+            ),
+        ];
+
+        for (name, yaml, expected_path) in cases {
+            let err = match serde_norway::from_str::<SourceMatchingConfig>(yaml) {
+                Ok(_) => panic!("{name} should conflict"),
+                Err(err) => err,
+            };
+            assert!(
+                err.to_string().contains(expected_path),
+                "expected {name} conflict to name {expected_path}, got {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn matching_context_constraints_nested_allowed_refs_validate_blank_entries() {
+        let ecosystem_bindings = BTreeMap::new();
+        let matching: SourceMatchingConfig = serde_norway::from_str(
+            r#"
+context_constraints:
+  legal_basis:
+    allowed_refs:
+      - law:benefits
+      - " "
+  consent:
+    allowed_refs:
+      - consent:benefits
+"#,
+        )
+        .expect("nested allowed refs deserialize");
+        let err = validate_source_matching_config("claim", "src", &matching, &ecosystem_bindings)
+            .expect_err("blank nested legal basis ref is rejected");
+        assert!(
+            matches!(err, EvidenceConfigError::InvalidMatchingConfig { ref reason, .. } if reason.contains("allowed_legal_basis_refs")),
+            "expected allowed_legal_basis_refs rejection, got {err:?}"
+        );
+
+        let matching: SourceMatchingConfig = serde_norway::from_str(
+            r#"
+context_constraints:
+  legal_basis:
+    allowed_refs:
+      - law:benefits
+  consent:
+    allowed_refs:
+      - consent:benefits
+      - " "
+"#,
+        )
+        .expect("nested allowed refs deserialize");
+        let err = validate_source_matching_config("claim", "src", &matching, &ecosystem_bindings)
+            .expect_err("blank nested consent ref is rejected");
+        assert!(
+            matches!(err, EvidenceConfigError::InvalidMatchingConfig { ref reason, .. } if reason.contains("allowed_consent_refs")),
+            "expected allowed_consent_refs rejection, got {err:?}"
+        );
+    }
+
+    #[test]
     fn matching_config_rejects_blank_pdp_policy_entries() {
         let mut assurance = SourceMatchingConfig {
             allowed_assurance: vec!["substantial".to_string(), " ".to_string()],
@@ -7070,6 +7526,25 @@ auth:
         );
 
         assurance.permitted_jurisdictions.clear();
+        assurance.allowed_legal_basis_refs =
+            vec!["legal-basis:benefits".to_string(), " ".to_string()];
+        let err = validate_source_matching_config("claim", "src", &assurance, &ecosystem_bindings)
+            .expect_err("blank legal basis ref is rejected");
+        assert!(
+            matches!(err, EvidenceConfigError::InvalidMatchingConfig { ref reason, .. } if reason.contains("allowed_legal_basis_refs")),
+            "expected allowed_legal_basis_refs rejection, got {err:?}"
+        );
+
+        assurance.allowed_legal_basis_refs.clear();
+        assurance.allowed_consent_refs = vec!["consent:benefits".to_string(), " ".to_string()];
+        let err = validate_source_matching_config("claim", "src", &assurance, &ecosystem_bindings)
+            .expect_err("blank consent ref is rejected");
+        assert!(
+            matches!(err, EvidenceConfigError::InvalidMatchingConfig { ref reason, .. } if reason.contains("allowed_consent_refs")),
+            "expected allowed_consent_refs rejection, got {err:?}"
+        );
+
+        assurance.allowed_consent_refs.clear();
         assurance.redaction_fields = vec!["value".to_string(), " ".to_string()];
         let err = validate_source_matching_config("claim", "src", &assurance, &ecosystem_bindings)
             .expect_err("blank redaction entry is rejected");

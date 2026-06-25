@@ -42,7 +42,7 @@ fn fixture_dir() -> std::path::PathBuf {
         .parent() // crates/
         .and_then(Path::parent) // workspace root
         .expect("workspace root exists")
-        .join("tests/fixtures/sd_jwt_vc")
+        .join("products/notary/tests/fixtures/sd_jwt_vc")
 }
 
 fn read_fixture(name: &str) -> String {
