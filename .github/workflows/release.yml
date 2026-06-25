@@ -176,6 +176,62 @@ jobs:
           path: dist/image-bin/*
           if-no-files-found: error
 
+  registryctl-extra-binaries:
+    name: Build registryctl ${{ matrix.asset }}
+    needs: verify
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            asset: macos-arm64
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            asset: linux-arm64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ needs.verify.outputs.tag_target }}
+          fetch-depth: 0
+          submodules: false
+
+      - name: Assert verified source checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$(git rev-parse HEAD)" != "${{ needs.verify.outputs.tag_target }}" ]]; then
+            echo "Checkout does not match verified tag target" >&2
+            exit 1
+          fi
+
+      - name: Install Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.95.0 --profile minimal --target "${{ matrix.target }}"
+
+      - name: Build registryctl
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/bin
+          cargo build --release --locked -p registryctl --target "${{ matrix.target }}"
+          binary="dist/bin/registryctl-${{ needs.verify.outputs.tag }}-${{ matrix.asset }}"
+          cp "target/${{ matrix.target }}/release/registryctl" "${binary}"
+          chmod 0755 "${binary}"
+
+      - name: Upload registryctl binary artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: registry-stack-registryctl-${{ matrix.asset }}
+          path: dist/bin/registryctl-${{ needs.verify.outputs.tag }}-${{ matrix.asset }}
+          if-no-files-found: error
+
   images:
     name: Build and publish images
     needs:
@@ -290,6 +346,7 @@ jobs:
     needs:
       - verify
       - binaries
+      - registryctl-extra-binaries
       - images
     runs-on: ubuntu-24.04
     permissions:
@@ -318,6 +375,27 @@ jobs:
         with:
           name: registry-stack-binaries
           path: dist/bin
+
+      - name: Download macOS arm64 registryctl binary
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: registry-stack-registryctl-macos-arm64
+          path: dist/bin
+
+      - name: Download Linux arm64 registryctl binary
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: registry-stack-registryctl-linux-arm64
+          path: dist/bin
+
+      - name: Refresh binary checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The hermetic builder's SHA256SUMS covers only the linux/amd64 binaries.
+          # Regenerate over the full dist/bin set so the macOS/arm64 binaries are
+          # checksummed for the release capsule, SHA256SUMS asset, and install.sh.
+          (cd dist/bin && rm -f SHA256SUMS && sha256sum -- * > SHA256SUMS)
 
       - name: Download image evidence
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
