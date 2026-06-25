@@ -33,7 +33,6 @@ export function assertLookupRequest(state) {
 }
 
 export function assertBatchRequest(state) {
-  const data = dataObject(state);
   const signature = querySignature(state);
   const items = batchItems(state);
   for (const term of signature) {

@@ -29,7 +29,6 @@ import {
   handleSummaryFor,
   trackResponse,
   trackExpectedDenyResponse,
-  tagExpected,
   logScenarioStart,
   profile,
 } from './lib/common.js';
@@ -42,11 +41,6 @@ export const options = commonOptions({
   defaultVus: 20,
   defaultDuration: '30s',
 });
-
-// ETag captured during setup for the 304 path.
-let cachedEtag = null;
-// A known record id captured during setup for single-record reads.
-let knownRecordId = null;
 
 export function setup() {
   const token = rowsToken();

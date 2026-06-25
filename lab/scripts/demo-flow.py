@@ -75,7 +75,7 @@ class HttpResult:
 
 
 class DemoError(RuntimeError):
-    pass
+    """Demo flow failure."""
 
 
 def env(name: str, default: str | None = None) -> str:
@@ -381,7 +381,7 @@ def main() -> int:
                 discovered_urls.add(access["discovery_url"])
         step += 1
 
-        openapi = require(request("GET", relay.url, "/openapi.json"), 200, f"{relay.name} OpenAPI")
+        openapi = require(request("GET", relay.url, "/openapi.json", None), 200, f"{relay.name} OpenAPI")
         save(out, step, f"{relay.name}-relay-openapi", openapi)
         step += 1
 
@@ -408,7 +408,7 @@ def main() -> int:
         discovery = require(request("GET", service.url, "/.well-known/evidence-service", token), 200, f"{service.name} discovery")
         save(out, step, f"{service.name}-evidence-discovery", discovery)
         step += 1
-        openapi = require(request("GET", service.url, "/openapi.json"), 200, f"{service.name} Evidence Server OpenAPI")
+        openapi = require(request("GET", service.url, "/openapi.json", None), 200, f"{service.name} Evidence Server OpenAPI")
         save(out, step, f"{service.name}-evidence-openapi", openapi)
         step += 1
         claims = require(request("GET", service.url, "/v1/claims", token), 200, f"{service.name} claims")
@@ -514,7 +514,6 @@ def main() -> int:
         (evidence[2], "health-claim-evaluation", ["health-service-available"], PRIMARY_SUBJECT, "predicate", CLAIM_RESULT_FORMAT),
         (evidence[2], "shared-cross-source-evaluation", ["eligible-for-combined-support"], PRIMARY_SUBJECT, "predicate", CLAIM_RESULT_FORMAT),
     ]
-    first_eval: dict[str, Any] | None = None
     for service, label, claims, subject, disclosure, fmt in eval_specs:
         result = require(
             request(
@@ -542,7 +541,6 @@ def main() -> int:
                     raise DemoError(f"redacted household summary missing {visible}: {value}")
             if redacted.get("disclosure") != "value":
                 raise DemoError(f"redacted household summary should retain value disclosure: {redacted}")
-        first_eval = first_eval or result
         step += 1
 
     matrix_results = []

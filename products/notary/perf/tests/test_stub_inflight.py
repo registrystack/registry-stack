@@ -95,6 +95,7 @@ def stub_proc():
     try:
         os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
     except ProcessLookupError:
+        # The stub may have already exited during fixture teardown.
         pass
     proc.wait(timeout=5)
 

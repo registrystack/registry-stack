@@ -11,7 +11,14 @@ import urllib.error
 import urllib.request
 from urllib.parse import urlparse
 
-from .common import ExplorerHttpResult, auth_header_pair, credential_for_execution, joined_url
+from .common import (
+    ExplorerHttpResult,
+    ExplorerInputError,
+    auth_header_pair,
+    credential_for_execution,
+    joined_url,
+    validate_explorer_outbound_url,
+)
 
 
 DISCOVERY_TTL_SECONDS = 60.0
@@ -41,9 +48,10 @@ class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
 def discovery_http_json(method: str, url: str, headers: dict[str, str], body: Any | None = None, timeout: float = 6.0) -> ExplorerHttpResult:
     if body is not None:
         return ExplorerHttpResult(status=None, body={}, headers={}, error="DiscoveryBodyNotSupported")
-    request = urllib.request.Request(url, headers=dict(headers), method=method)
-    opener = urllib.request.build_opener(_NoRedirectHandler)
     try:
+        validate_explorer_outbound_url(url)
+        request = urllib.request.Request(url, headers=dict(headers), method=method)
+        opener = urllib.request.build_opener(_NoRedirectHandler)
         with opener.open(request, timeout=timeout) as response:
             raw = _read_bounded(response)
             if raw is None:
@@ -60,6 +68,8 @@ def discovery_http_json(method: str, url: str, headers: dict[str, str], body: An
             body=_parse_body(raw or b""),
             headers={key.lower(): value for key, value in error.headers.items()},
         )
+    except ExplorerInputError as error:
+        return ExplorerHttpResult(status=None, body={}, headers={}, error=error.code)
     except Exception as error:  # noqa: BLE001
         return ExplorerHttpResult(status=None, body={}, headers={}, error=error.__class__.__name__)
 

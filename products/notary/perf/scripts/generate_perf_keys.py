@@ -117,6 +117,26 @@ def generate_issuer_jwk() -> str:
     return json.dumps(jwk, separators=(",", ":"))
 
 
+def write_env_file(path: Path, content: str) -> None:
+    tmp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as tmp:
+            fd = -1
+            tmp.write(content)
+        os.replace(tmp_path, path)
+        os.chmod(path, 0o600)
+    except Exception:
+        if fd >= 0:
+            os.close(fd)
+        try:
+            tmp_path.unlink()
+        except FileNotFoundError:
+            # Another cleanup path may already have removed the temp file.
+            pass
+        raise
+
+
 def build_env_lines(
     bearer: str,
     api_key: str,
@@ -301,8 +321,7 @@ def main() -> None:
     )
     env_content = "\n".join(env_lines) + "\n"
 
-    env_path.write_text(env_content, encoding="utf-8")
-    os.chmod(env_path, 0o600)
+    write_env_file(env_path, env_content)
     removed_audit_logs = remove_stale_audit_logs(env_path)
     updated_configs = refresh_config_commitments(env_values_from_lines(env_lines))
 

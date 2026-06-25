@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import shlex
@@ -19,6 +20,8 @@ CLAIM_RESULT_FORMAT = "application/vnd.registry-notary.claim-result+json"
 EXPLORER_MAX_LIMIT = 10
 RUNTIME_TOKEN_HIDDEN = "[runtime demo token hidden]"
 RUNTIME_TOKEN_MISSING = "[runtime demo token missing]"
+EXPLORER_ALLOWED_HOST_SUFFIXES = (".lab.registrystack.org", ".example")
+EXPLORER_ALLOWED_HOSTS = {"lab.registrystack.org", "example"}
 
 
 @dataclass(frozen=True)
@@ -176,6 +179,29 @@ def source_response(result: ExplorerHttpResult) -> dict[str, Any]:
     }
 
 
+def validate_explorer_outbound_url(url: str) -> None:
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.scheme != "https":
+        raise ExplorerInputError("explorer.blocked_url", "Explorer requests must use HTTPS.", field="url")
+    if parsed.username or parsed.password:
+        raise ExplorerInputError("explorer.blocked_url", "Explorer request URLs must not include credentials.", field="url")
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if not host:
+        raise ExplorerInputError("explorer.blocked_url", "Explorer request URLs must include a host.", field="url")
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        # Non-IP hostnames are checked against the explorer allowlist below.
+        pass
+    else:
+        raise ExplorerInputError("explorer.blocked_url", "Explorer request URLs must use allowlisted hostnames.", field="url")
+    if host in EXPLORER_ALLOWED_HOSTS:
+        return
+    if any(host.endswith(suffix) for suffix in EXPLORER_ALLOWED_HOST_SUFFIXES):
+        return
+    raise ExplorerInputError("explorer.blocked_url", "Explorer request URLs must target an allowlisted host.", field="url")
+
+
 def safe_curl(method: str, url: str, headers: dict[str, str], body: Any | None = None) -> str:
     pieces = ["curl", "-fsS", "-X", method.upper(), shlex.quote(url)]
     for name, value in headers.items():
@@ -191,14 +217,17 @@ def http_json(method: str, url: str, headers: dict[str, str], body: Any | None =
     if body is not None:
         data = json.dumps(body).encode("utf-8")
         request_headers.setdefault("Content-Type", "application/json")
-    request = urllib.request.Request(url, headers=request_headers, data=data, method=method)
     try:
+        validate_explorer_outbound_url(url)
+        request = urllib.request.Request(url, headers=request_headers, data=data, method=method)
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return ExplorerHttpResult(
                 status=response.status,
                 body=parse_body(response.read()),
                 headers={key.lower(): value for key, value in response.headers.items()},
             )
+    except ExplorerInputError as error:
+        return ExplorerHttpResult(status=None, body={}, headers={}, error=error.code)
     except urllib.error.HTTPError as error:
         return ExplorerHttpResult(
             status=error.code,

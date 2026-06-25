@@ -285,6 +285,7 @@ PUBLIC_SERVICE_KEYS = {
 URL_RE = re.compile(r"https?://[^\s'\"<>),]+")
 HOST_RULE_RE = re.compile(r"Host\(([^)]*)\)")
 LOOPBACK_RE = re.compile(r"(^|[^a-z0-9_.-])(localhost|127(?:\.\d{1,3}){3})(?=$|[^a-z0-9_.-])", re.I)
+STALE_DEMO_DOMAIN_RE = re.compile(r"demo\.example\.gov", re.I)
 REQUIRED_VAR_RE = re.compile(r"required variable ([A-Za-z_][A-Za-z0-9_]*) is missing")
 SCANNED_FILE_SUFFIXES = {
     ".conf",
@@ -2198,7 +2199,7 @@ def yaml_scalar_int(text: str, key: str) -> int | None:
 
 def validate_public_text(artifact: str, issue_path: str, key: str, text: str) -> list[Issue]:
     issues = []
-    if "demo.example.gov" in text:
+    if STALE_DEMO_DOMAIN_RE.search(text):
         issues.append(
             Issue(
                 "stale-demo-url",

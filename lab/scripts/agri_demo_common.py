@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from dotenv_util import load_dotenv_file, parse_dotenv_file
+from dotenv_util import load_dotenv_file
 
 
 DEMO_ROOT = Path(__file__).resolve().parents[1]
