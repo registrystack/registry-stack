@@ -125,7 +125,7 @@ thiserror = { version = "2" }
 
 # ─── openapi ─────────────────────────────────────────────────────────────────
 ogcapi-types = { version = "0.3.0", optional = true, features = ["features"] }
-geojson = { version = "0.24", optional = true, features = ["geo-types"] }
+geojson = { version = "1.0", optional = true, features = ["geo-types"] }
 geo = { version = "0.31", optional = true }
 geo-types = { version = "0.7", optional = true }
 wkt = { version = "0.12", optional = true, features = ["geo-types"] }

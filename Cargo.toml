@@ -96,7 +96,7 @@ futures = { version = "0.3" }
 futures-core = { version = "0.3" }
 geo = { version = "0.31" }
 geo-types = { version = "0.7" }
-geojson = { version = "0.24", features = ["geo-types"] }
+geojson = { version = "1.0", features = ["geo-types"] }
 getrandom = { version = "0.4" }
 hex = { version = "0.4" }
 hmac = { version = "0.13" }
