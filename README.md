@@ -116,6 +116,12 @@ npm run check
 The GitHub Actions workflow in `.github/workflows/ci.yml` is the reference for
 the current pull request gate.
 
+Major new functionality must include automated tests with the change proposal.
+Release builds and generated repository outputs are required to be repeatable
+bit-for-bit from the same source commit and lockfiles. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the formal test and repeatability
+policies.
+
 ## Release And External Inputs
 
 Crosswalk remains an external pinned input and is not imported into this
