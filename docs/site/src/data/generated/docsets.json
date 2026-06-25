@@ -40,31 +40,31 @@
       "products": {
         "registry-stack": {
           "version": "v0.8.1",
-          "ref": "7072255ce463d24bdb854f2220480ebc815ff305"
+          "ref": "9c6ae33c120c3da59afd3c9ead5c26c875ddaf20"
         },
         "registry-platform": {
           "version": "v0.8.1",
-          "ref": "7072255ce463d24bdb854f2220480ebc815ff305"
+          "ref": "9c6ae33c120c3da59afd3c9ead5c26c875ddaf20"
         },
         "registry-manifest": {
           "version": "v0.8.1",
-          "ref": "7072255ce463d24bdb854f2220480ebc815ff305"
+          "ref": "9c6ae33c120c3da59afd3c9ead5c26c875ddaf20"
         },
         "registry-notary": {
           "version": "v0.8.1",
-          "ref": "7072255ce463d24bdb854f2220480ebc815ff305"
+          "ref": "9c6ae33c120c3da59afd3c9ead5c26c875ddaf20"
         },
         "registry-relay": {
           "version": "v0.8.1",
-          "ref": "7072255ce463d24bdb854f2220480ebc815ff305"
+          "ref": "9c6ae33c120c3da59afd3c9ead5c26c875ddaf20"
         },
         "registry-lab": {
           "version": "v0.8.1",
-          "ref": "7072255ce463d24bdb854f2220480ebc815ff305"
+          "ref": "9c6ae33c120c3da59afd3c9ead5c26c875ddaf20"
         },
         "registry-registryctl": {
           "version": "v0.8.1",
-          "ref": "7072255ce463d24bdb854f2220480ebc815ff305"
+          "ref": "9c6ae33c120c3da59afd3c9ead5c26c875ddaf20"
         },
         "crosswalk": {
           "version": "crosswalk-core-v0.2.0",
