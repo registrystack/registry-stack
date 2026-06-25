@@ -30,6 +30,15 @@ ignore = [
     # request-facing parsing. Review when DataFusion moves off `paste` or when
     # upgrading the DataFusion major version.
     "RUSTSEC-2024-0436",
+    # RUSTSEC-2024-0388: `derivative` is unmaintained; pulled transitively by
+    # registry-manifest-core dev tests through sophia_jsonld/json-ld-syntax.
+    # Review when sophia_jsonld releases a version that drops derivative.
+    "RUSTSEC-2024-0388",
+    # RUSTSEC-2024-0370: `proc-macro-error` is unmaintained; pulled
+    # transitively by registry-manifest-core dev tests through
+    # sophia_jsonld/rdf-types/locspan-derive. Review when sophia_jsonld
+    # releases a version that drops proc-macro-error.
+    "RUSTSEC-2024-0370",
     # RUSTSEC-2025-0068: retained for consumers that still carry `serde_yml`.
     # New platform code should use maintained YAML crates such as
     # `serde-saphyr` or `serde_norway`; review when consumer lockfiles no
@@ -88,5 +97,6 @@ unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = [
+    "https://github.com/PublicSchema/crosswalk",
     "https://github.com/jeremi/registry-manifest",
 ]
