@@ -52,6 +52,12 @@
     "yaml": "^2.8.1"
   },
   "overrides": {
-    "url-template": "^3.1.1"
+    "url-template": "^3.1.1",
+    "dompurify": "^3.4.11",
+    "form-data": "^4.0.6",
+    "js-yaml": "^4.2.0",
+    "markdown-it": "^14.2.0",
+    "@opentelemetry/core": "^2.8.0",
+    "yaml": "^2.8.1"
   }
 }
