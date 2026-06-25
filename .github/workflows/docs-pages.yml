@@ -1,0 +1,82 @@
+name: Deploy RegistryStack Docs
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/docs-pages.yml"
+      - "docs/site/**"
+      - "crates/registry-relay/docs/**"
+      - "crates/registry-relay/openapi/**"
+      - "products/notary/docs/**"
+      - "products/notary/openapi/**"
+      - "products/manifest/docs/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: docs-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build docs site
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.12.0
+          cache: npm
+          cache-dependency-path: docs/site/package-lock.json
+
+      - name: Install docs dependencies
+        working-directory: docs/site
+        run: npm ci
+
+      - name: Build latest docs
+        working-directory: docs/site
+        run: npm run build
+        env:
+          PUBLIC_UMAMI_WEBSITE_ID: ${{ vars.PUBLIC_UMAMI_WEBSITE_ID }}
+          PUBLIC_UMAMI_SCRIPT_SRC: ${{ vars.PUBLIC_UMAMI_SCRIPT_SRC }}
+          PUBLIC_UMAMI_DOMAINS: ${{ vars.PUBLIC_UMAMI_DOMAINS }}
+
+      - name: Build archived docs
+        working-directory: docs/site
+        run: npm run build:archives
+        env:
+          PUBLIC_UMAMI_WEBSITE_ID: ${{ vars.PUBLIC_UMAMI_WEBSITE_ID }}
+          PUBLIC_UMAMI_SCRIPT_SRC: ${{ vars.PUBLIC_UMAMI_SCRIPT_SRC }}
+          PUBLIC_UMAMI_DOMAINS: ${{ vars.PUBLIC_UMAMI_DOMAINS }}
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/site/dist
+
+  deploy:
+    name: Deploy docs site
+    needs: build
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

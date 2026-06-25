@@ -80,7 +80,6 @@ jobs:
               case "${path}" in
                 Cargo.toml|Cargo.lock|deny.toml|rust-toolchain*|crates/*|products/*)
                   rust=true
-                  docs=true
                   ;;
               esac
               case "${path}" in
@@ -94,7 +93,7 @@ jobs:
                   ;;
               esac
               case "${path}" in
-                docs/*)
+                docs/site/*|crates/registry-relay/docs/*|crates/registry-relay/openapi/*|products/notary/docs/*|products/notary/openapi/*|products/manifest/docs/*)
                   docs=true
                   ;;
               esac
