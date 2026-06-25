@@ -166,6 +166,10 @@ jobs:
             image="$(basename "${digest_path}" .digest)"
             digest_ref="$(tr -d '\n' < "${digest_path}")"
             syft "${digest_ref}" -o "spdx-json=dist/staged/image-evidence/${image}.digest-bound.spdx.json"
+            generator/release/scripts/registry-release bind-spdx-subject \
+              "dist/staged/image-evidence/${image}.digest-bound.spdx.json" \
+              --image-name "${image}" \
+              --digest-ref "${digest_ref}"
             grype "${digest_ref}" -o json > "dist/staged/image-evidence/${image}.digest-bound.grype.json"
           done < <(find dist/staged/image-evidence -type f -name "*.digest" | sort)
 

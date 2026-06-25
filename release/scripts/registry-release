@@ -291,6 +291,47 @@ def spdx_subject_contains_digest(data: object, digest_ref: str, digest: str) -> 
     return False
 
 
+def bind_spdx_subject(spdx_path: Path, image_name: str, digest_ref: str) -> int:
+    digest_match = IMAGE_DIGEST_REF.fullmatch(digest_ref)
+    if digest_match is None:
+        print(f"error: digest ref must match image@sha256:<64 hex>, got {digest_ref}", file=sys.stderr)
+        return 1
+    digest = digest_match.group(2)
+    try:
+        data = load_json(spdx_path)
+        if not isinstance(data, dict):
+            raise ValueError("SPDX document must be an object")
+        packages = data.setdefault("packages", [])
+        described = data.setdefault("documentDescribes", [])
+        if not isinstance(packages, list) or not isinstance(described, list):
+            raise ValueError("SPDX document packages and documentDescribes must be arrays")
+        subject_id = f"SPDXRef-RegistryStack-{image_name}-digest-subject"
+        packages[:] = [package for package in packages if not (isinstance(package, dict) and package.get("SPDXID") == subject_id)]
+        packages.append(
+            {
+                "SPDXID": subject_id,
+                "name": digest_ref,
+                "downloadLocation": "NOASSERTION",
+                "filesAnalyzed": False,
+                "externalRefs": [
+                    {
+                        "referenceCategory": "PACKAGE-MANAGER",
+                        "referenceType": "purl",
+                        "referenceLocator": f"pkg:oci/{image_name}@{digest}",
+                    }
+                ],
+            }
+        )
+        if subject_id not in described:
+            described.append(subject_id)
+        spdx_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(f"bound SPDX subject {subject_id} to {digest_ref}")
+    return 0
+
+
 def grype_db_timestamp(report: object) -> str:
     for keys in (
         ("descriptor", "db", "built"),
@@ -593,6 +634,10 @@ def main() -> int:
     stage_parser.add_argument("--tag", required=True)
     stage_parser.add_argument("--binary-dir", type=Path, required=True)
     stage_parser.add_argument("--image-evidence-dir", type=Path, required=True)
+    bind_spdx_parser = subparsers.add_parser("bind-spdx-subject")
+    bind_spdx_parser.add_argument("spdx", type=Path)
+    bind_spdx_parser.add_argument("--image-name", required=True)
+    bind_spdx_parser.add_argument("--digest-ref", required=True)
     capsule_parser = subparsers.add_parser("render-capsule")
     capsule_parser.add_argument("manifest", type=Path)
     capsule_parser.add_argument("--tag", required=True)
@@ -619,6 +664,8 @@ def main() -> int:
         return classify_warning(args.code)
     if args.command == "stage-capsule-backfill-assets":
         return stage_capsule_backfill_assets(args.asset_dir, args.tag, args.binary_dir, args.image_evidence_dir)
+    if args.command == "bind-spdx-subject":
+        return bind_spdx_subject(args.spdx, args.image_name, args.digest_ref)
     if args.command == "render-capsule":
         return render_capsule(
             args.manifest,
