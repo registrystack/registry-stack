@@ -60,9 +60,10 @@ Software guarantees include:
 - Credential issuance for configured Notary surfaces, including SD-JWT VC
   issuance where configured.
 - Hash-chained audit records emitted by runtime services.
-- Release workflow support for public checksums, image digests, image SBOMs,
-  Grype vulnerability reports, and generated release capsules after the first
-  capsule-producing release run.
+- Release workflow support for public checksums, keyless cosign signatures for
+  GitHub Release assets, image digests, image SBOMs, Grype vulnerability
+  reports, and generated release capsules after the first capsule-producing
+  release run.
 
 Operator responsibilities include:
 
@@ -93,13 +94,16 @@ Development evidence:
   branch reachability, and manifest consistency.
 - Release capsules are generated from workflow evidence rather than hand-written
   prose.
+- GitHub Release assets are signed by the root release workflow with keyless
+  cosign, and the public verification process is documented in
+  [`release/VERIFY.md`](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md).
 
 Known release-integrity gaps:
 
-- Root monorepo release images are not yet signed.
+- OCI image signatures are not yet published for root monorepo releases.
 - Root monorepo release provenance or SLSA attestations are not yet published.
-- Public claims about signing are scoped to the product surface or artifact that
-  actually performs signing.
+- Public claims about signing are scoped to the release asset or product
+  surface that actually performs signing.
 
 ## Security issue resolution
 
@@ -122,3 +126,4 @@ Primary public evidence:
 - [Registry Relay API reference](../apis/registry-relay/)
 - GitHub Release assets, with generated release capsules after the first
   capsule-producing release run
+- [Release verification](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md)

@@ -75,18 +75,27 @@ and must be committed intentionally with review.
 ## Image release evidence
 
 The root monorepo release workflow publishes Registry Notary image digests,
-image SBOMs, and vulnerability scan reports. Root monorepo image signing is not
-claimed until the root release workflow signs and verifies those images.
+image SBOMs, vulnerability scan reports, release capsules, and keyless cosign
+signatures for GitHub Release assets. The workflow signs the release asset
+files, including image evidence files, but does not yet publish OCI image
+signatures for the container images themselves.
 
 Older product-local workflows used keyless `cosign` for product images under
 the previous GHCR namespace. Treat those records as legacy product-specific
-history, not as evidence that current root monorepo release images are signed.
+history, not as evidence that current root monorepo OCI images are signed.
 
 Verify an immutable image digest from the root release capsule:
 
 ```sh
 docker buildx imagetools inspect ghcr.io/registrystack/registry-notary@sha256:<digest>
 docker buildx imagetools inspect ghcr.io/registrystack/registry-notary-source-adapter-sidecar@sha256:<digest>
+```
+
+Verify the release capsule, binary assets, SBOMs, and image evidence files with
+the root release verification procedure:
+
+```sh
+less release/VERIFY.md
 ```
 
 Legacy product-local cosign verification for old `ghcr.io/jeremi` image tags

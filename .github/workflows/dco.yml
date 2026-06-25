@@ -1,0 +1,39 @@
+name: DCO
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  dco:
+    name: Check commit sign-offs
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 0
+
+      - name: Require Signed-off-by trailers
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+          missing=0
+
+          while IFS= read -r commit; do
+            subject="$(git log -1 --format=%s "${commit}")"
+            if ! git log -1 --format=%B "${commit}" \
+              | grep -Eiq '^Signed-off-by: .+ <[^>]+>$'; then
+              echo "::error title=Missing DCO sign-off::${commit} ${subject}"
+              missing=1
+            fi
+          done < <(git rev-list --reverse "${base}..${head}")
+
+          if [[ "${missing}" -ne 0 ]]; then
+            echo "Add a Signed-off-by trailer with: git commit -s" >&2
+            exit 1
+          fi
