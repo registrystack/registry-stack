@@ -184,7 +184,7 @@ docker build \
 
 Default builds compile CEL and PKCS#11 into one release-capable image; runtime
 behavior remains config-gated. Release images publish to
-`ghcr.io/jeremi/registry-notary` from stable `vX.Y.Z` tags and
+`ghcr.io/registrystack/registry-notary` from stable `vX.Y.Z` tags and
 `registry-stack-technical-preview-<date-or-version>` tags; deployments should
 consume release tags or immutable digests. The source adapter sidecar image
 builds from `Dockerfile.source-adapter-sidecar` with the same named contexts.
