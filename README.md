@@ -139,8 +139,9 @@ Release evidence lives in:
 - `release/notes/`
 - `release/scripts/`
 
-Release assets are published with SHA256 checksums and keyless cosign
-signatures. See [release/VERIFY.md](release/VERIFY.md) for verification
+Release assets are published with SHA256 checksums, keyless cosign signatures,
+and release-level SLSA provenance for tag-triggered releases produced by the
+current workflow. See [release/VERIFY.md](release/VERIFY.md) for verification
 commands.
 
 ## Support And Contribution

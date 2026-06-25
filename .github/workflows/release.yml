@@ -374,6 +374,8 @@ jobs:
       - registryctl-extra-binaries
       - images
     runs-on: ubuntu-24.04
+    outputs:
+      provenance_subjects: ${{ steps.provenance-subjects.outputs.base64_subjects }}
     permissions:
       contents: write
       id-token: write # keyless cosign signing via OIDC
@@ -446,6 +448,22 @@ jobs:
             --default-branch-protection unverified \
             --repo . \
             --default-branch origin/main
+
+      - name: Generate provenance subjects
+        id: provenance-subjects
+        shell: bash
+        run: |
+          set -euo pipefail
+          subjects="$(mktemp)"
+          while IFS= read -r -d '' file; do
+            digest="$(sha256sum "${file}" | awk '{print $1}')"
+            printf '%s  %s\n' "${digest}" "$(basename "${file}")" >> "${subjects}"
+          done < <(find dist/bin dist/image-evidence dist/release-capsule -type f -print0 | sort -z)
+          if [[ ! -s "${subjects}" ]]; then
+            echo "No release artifacts found for provenance" >&2
+            exit 1
+          fi
+          echo "base64_subjects=$(base64 -w0 "${subjects}")" >> "${GITHUB_OUTPUT}"
 
       - name: Install cosign
         uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
@@ -520,3 +538,49 @@ jobs:
               exit 1
             fi
           done < "${tmp}/expected-assets"
+
+  release-provenance:
+    name: Generate release provenance
+    needs:
+      - verify
+      - github-release
+    if: ${{ startsWith(github.ref, 'refs/tags/') }}
+    permissions:
+      actions: read # read workflow metadata for SLSA provenance
+      id-token: write # sign provenance with GitHub OIDC
+      contents: write # upload provenance to the GitHub Release
+    # The SLSA generator must be referenced by a release tag so it can resolve
+    # the matching builder binary and builder identity.
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
+    with:
+      base64-subjects: ${{ needs.github-release.outputs.provenance_subjects }}
+      upload-assets: true
+      upload-tag-name: ${{ needs.verify.outputs.tag }}
+      provenance-name: registry-stack-${{ needs.verify.outputs.tag }}-release-provenance.intoto.jsonl
+
+  verify-release-provenance:
+    name: Verify release provenance asset
+    needs:
+      - verify
+      - release-provenance
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Check provenance release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ needs.verify.outputs.tag }}"
+          asset="registry-stack-${tag}-release-provenance.intoto.jsonl"
+          for _ in {1..6}; do
+            if gh release view "${tag}" --json assets --jq '.assets[].name' \
+              | grep -Fx "${asset}" >/dev/null; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "GitHub Release asset ${asset} was not found" >&2
+          exit 1

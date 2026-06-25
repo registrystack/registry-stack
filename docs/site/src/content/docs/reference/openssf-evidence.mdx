@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-06-24"
+last_reviewed: "2026-06-25"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -14,8 +14,8 @@ standards_referenced: []
 This page explains which public release-trust checks you can verify for
 Registry Stack, and which OpenSSF signals are self-attested or still incomplete.
 
-For release signature verification commands, use
-[`SECURITY.md`](https://github.com/registrystack/registry-stack/blob/main/SECURITY.md).
+For release signature and provenance verification commands, use
+[`release/VERIFY.md`](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md).
 
 ## Release trust status
 
@@ -24,7 +24,7 @@ For release signature verification commands, use
 | Are GitHub Release assets signed? | Yes, for release assets produced after keyless cosign signing landed. Each signed asset has a matching `.sig` and `.pem` file. | [`SECURITY.md`](https://github.com/registrystack/registry-stack/blob/main/SECURITY.md) and [release workflow](https://github.com/registrystack/registry-stack/blob/main/.github/workflows/release.yml) |
 | Is `v0.8.0` signed? | No. The `v0.8.0` prerelease was published before release-asset signing was added and has not been backfilled with `.sig` and `.pem` assets. | [GitHub Release assets](https://github.com/registrystack/registry-stack/releases/tag/v0.8.0) |
 | Are release Git tags signed? | Not yet. The release workflow checks source-tag consistency, but Git tag objects are not yet GPG-, SSH-, or Sigstore-signed. | [Release workflow](https://github.com/registrystack/registry-stack/blob/main/.github/workflows/release.yml) |
-| Are provenance attestations published? | Not yet. Release capsules, checksums, image digests, SBOMs, and vulnerability reports are published separately from SLSA-style provenance. | [GitHub Releases](https://github.com/registrystack/registry-stack/releases) |
+| Are provenance attestations published? | Enabled for tag-triggered releases produced by the current workflow. Existing releases produced before this workflow change, including `v0.8.2`, may not include `.intoto.jsonl` provenance assets. | [Release workflow](https://github.com/registrystack/registry-stack/blob/main/.github/workflows/release.yml) and [`release/VERIFY.md`](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md) |
 
 ## Scorecard
 
@@ -41,9 +41,10 @@ Use the check-level results as hygiene telemetry. The aggregate score can hide
 important details, so release-integrity findings such as missing signed Git
 tags or provenance are tracked as explicit caveats until they are fixed.
 
-Known caveats include missing provenance, branch-protection visibility, SAST
-coverage, unpinned lab images, and existing dependency vulnerability findings.
-Check-level Scorecard results are signals, not a certification.
+Known caveats include older releases without provenance, branch-protection
+visibility, SAST coverage, unpinned lab images, and existing dependency
+vulnerability findings. Check-level Scorecard results are signals, not a
+certification.
 
 ## Best practices badge
 
@@ -58,10 +59,10 @@ Current user-visible status:
 | Vulnerability reporting | Private reporting policy is published. | [`SECURITY.md`](https://github.com/registrystack/registry-stack/blob/main/SECURITY.md) |
 | CI and tests | CI runs on the public repository. | [CI workflow](https://github.com/registrystack/registry-stack/blob/main/.github/workflows/ci.yml) |
 | Release process | Releases are built by the tag-driven release workflow and checked against release manifests. | [Release workflow](https://github.com/registrystack/registry-stack/blob/main/.github/workflows/release.yml) and [release manifests](https://github.com/registrystack/registry-stack/tree/main/release/manifests) |
-| Signed releases | Newly produced release assets are signed with keyless cosign and include `.sig` and `.pem` files. `v0.8.0` is not signed unless it is backfilled later. | [`SECURITY.md`](https://github.com/registrystack/registry-stack/blob/main/SECURITY.md) and [GitHub Releases](https://github.com/registrystack/registry-stack/releases) |
+| Signed releases | Newly produced release assets are signed with keyless cosign and include `.sig` and `.pem` files. Tag-triggered releases produced by the current workflow also include release-level SLSA provenance. `v0.8.0` is not signed unless it is backfilled later, and `v0.8.2` does not include tag-bound SLSA provenance unless a separate backfill decision is made. | [`release/VERIFY.md`](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md) and [GitHub Releases](https://github.com/registrystack/registry-stack/releases) |
 | Signed version tags | Not implemented. Git tag objects are not yet cryptographically signed. | [Release workflow](https://github.com/registrystack/registry-stack/blob/main/.github/workflows/release.yml) |
 | Dependency policy | Dependency-deny configuration is present; root CI enforcement is tracked separately. | [`deny.toml`](https://github.com/registrystack/registry-stack/blob/main/deny.toml) |
-| Source release evidence | `v0.8.0` includes release assets and generated release capsules. Later signed releases add signature assets. | [GitHub Releases](https://github.com/registrystack/registry-stack/releases) |
+| Source release evidence | Releases include release assets and generated release capsules. Later signed releases add signature assets, and tag-triggered releases produced after the provenance workflow change add `.intoto.jsonl` provenance. | [GitHub Releases](https://github.com/registrystack/registry-stack/releases) |
 
 ## OSPS baseline
 
@@ -78,7 +79,7 @@ legacy imported product controls.
 | Release artifacts | Checksums, image digests, image SBOMs, vulnerability scans, release capsules | Published for `v0.8.0`; signature assets are release-workflow gated |
 | Signed releases | Keyless cosign signing for GitHub Release assets with `.sig` and `.pem` verification material | Implemented for newly produced release assets |
 | Signed version tags | Cryptographic Git tag signatures | Not implemented |
-| Provenance attestations | Root monorepo release provenance or SLSA attestations | Planned |
+| Provenance attestations | Release-level SLSA provenance for non-signature GitHub Release assets | Workflow enabled; first provenance-bearing root release pending |
 
 ## Legacy product controls
 
