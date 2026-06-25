@@ -35,7 +35,7 @@
     "@astrojs/starlight": "^0.39.2",
     "@fontsource/ibm-plex-mono": "^5.2.7",
     "@fontsource/public-sans": "^5.2.7",
-    "astro": "^6.3.7",
+    "astro": "^7.0.2",
     "astro-mermaid": "^2.0.2",
     "mermaid": "^11.15.0",
     "starlight-openapi": "^0.25.3"
