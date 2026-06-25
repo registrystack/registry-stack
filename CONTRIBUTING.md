@@ -34,6 +34,14 @@ repository.
 Run the checks that match the files you changed. The full current gate is in
 `.github/workflows/ci.yml`.
 
+Every change proposal or pull request for major new functionality MUST add
+tests for the new functionality to an automated test suite. The test coverage
+must exercise the behavior at the lowest practical level, such as Rust unit or
+integration tests, Python unittest coverage for scripts, Node test coverage for
+docs or UI scripts, or an existing product-specific automated suite. If a
+maintainer determines that a change is not major new functionality, the pull
+request should say so in the testing notes.
+
 Rust workspace:
 
 ```bash
@@ -63,6 +71,24 @@ npm run check
 ```
 
 If you cannot run a relevant check, say which command was skipped and why.
+
+## Repeatable Builds And Generated Outputs
+
+Release builds and generated repository outputs MUST be repeatable from the
+same source commit and lockfiles with exactly the same bit-for-bit result.
+Release binaries are built from the verified release tag, the pinned Rust
+builder image, and locked Cargo dependencies in `.github/workflows/release.yml`.
+The workflow records SHA256 manifests for binary outputs, image input binaries,
+image evidence, and release capsules, then reconciles published release assets
+against the generated files.
+
+Generated documentation data and checked-in generated snapshots must be produced
+by the documented generator commands, such as `npm run generate` under
+`docs/site`, and committed only when rerunning the generator from the same
+source tree produces the same bytes. Do not introduce generators that depend on
+wall-clock time, unordered traversal, ambient local paths, network responses, or
+unlocked dependencies unless the generated output is normalized or pinned so the
+same source can reproduce it exactly.
 
 ## Security Reports
 
