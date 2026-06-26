@@ -72,6 +72,10 @@ signing. If it contains `kid` or `alg`, those values must match the configured
 key. Startup signs and verifies a fixed self-test payload before the key is
 accepted.
 
+When RS256 is used for the eSignet RP client assertion key, the private RSA JWK
+must include the full two-prime CRT fields `n`, `e`, `d`, `p`, `q`, `dp`, `dq`,
+and `qi` so the key can be imported into AWS-LC.
+
 Generate a local demo key with:
 
 ```sh

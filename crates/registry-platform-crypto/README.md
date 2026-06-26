@@ -62,8 +62,10 @@ Ok(())
 
 This crate currently supports EdDSA with OKP/Ed25519 keys, ES256 with EC/P-256
 keys, and RS256 with RSA keys. Unsupported JWK algorithms are rejected at parse
-time. Add new algorithms only when a registry consumer needs them and can define
-the interoperability and security policy.
+time. RS256 private RSA JWKs must include the full two-prime CRT fields
+`n`, `e`, `d`, `p`, `q`, `dp`, `dq`, and `qi` so the key can be imported into
+AWS-LC. Add new algorithms only when a registry consumer needs them and can
+define the interoperability and security policy.
 
 ## Security Notes
 

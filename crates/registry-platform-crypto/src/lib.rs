@@ -2,6 +2,9 @@
 //! Crypto primitives shared by Registry Platform consumers.
 
 use async_trait::async_trait;
+use aws_lc_rs::rand::SystemRandom;
+use aws_lc_rs::rsa::{KeyPair as AwsRsaKeyPair, PublicKeyComponents as AwsRsaPublicKeyComponents};
+use aws_lc_rs::signature::{RSA_PKCS1_2048_8192_SHA256, RSA_PKCS1_SHA256};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use ed25519_dalek::{
@@ -13,9 +16,7 @@ use p256::ecdsa::{
     signature::Verifier as _, Signature as P256Signature, SigningKey as P256SigningKey,
     VerifyingKey as P256VerifyingKey,
 };
-use rsa::pkcs1v15::Pkcs1v15Sign;
-use rsa::sha2::{Digest as RsaDigest, Sha256 as RsaSha256};
-use rsa::{BigUint, RsaPrivateKey, RsaPublicKey};
+use pkcs1::{der::asn1::UintRef, der::SecretDocument, RsaPrivateKey as Pkcs1RsaPrivateKey};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
@@ -369,13 +370,15 @@ impl PrivateJwk {
                     return Err(JwkError::Invalid("RS256 keys must be RSA"));
                 }
                 // RSA parameters are variable width, so only require non-empty
-                // base64url. dp, dq, qi are optional; the rsa crate recomputes
-                // them from p and q when absent.
+                // base64url. AWS-LC validates the imported PKCS#1 private key.
                 decode_nonempty(self.n.as_deref(), "n")?;
                 decode_nonempty(self.e.as_deref(), "e")?;
                 decode_nonempty(self.d.as_deref(), "d")?;
                 decode_nonempty(self.p.as_deref(), "p")?;
                 decode_nonempty(self.q.as_deref(), "q")?;
+                decode_nonempty(self.dp.as_deref(), "dp")?;
+                decode_nonempty(self.dq.as_deref(), "dq")?;
+                decode_nonempty(self.qi.as_deref(), "qi")?;
             }
             Err(err) => return Err(err),
         }
@@ -746,27 +749,50 @@ fn sign_es256(payload: &[u8], jwk: &PrivateJwk) -> Result<Vec<u8>, CryptoError> 
 
 fn sign_rs256(payload: &[u8], jwk: &PrivateJwk) -> Result<Vec<u8>, CryptoError> {
     let key = rsa_private_key(jwk)?;
-    let digest = RsaSha256::digest(payload);
-    key.sign(Pkcs1v15Sign::new::<RsaSha256>(), &digest)
-        .map_err(|_| CryptoError::Crypto("RS256 signing failed"))
+    let mut signature = vec![0u8; key.public_modulus_len()];
+    key.sign(
+        &RSA_PKCS1_SHA256,
+        &SystemRandom::new(),
+        payload,
+        &mut signature,
+    )
+    .map_err(|_| CryptoError::Crypto("RS256 signing failed"))?;
+    Ok(signature)
 }
 
-fn rsa_private_key(jwk: &PrivateJwk) -> Result<RsaPrivateKey, CryptoError> {
-    let n = decode_biguint(jwk.n.as_deref(), "n")?;
-    let e = decode_biguint(jwk.e.as_deref(), "e")?;
-    let d = decode_biguint(jwk.d.as_deref(), "d")?;
-    let p = decode_biguint(jwk.p.as_deref(), "p")?;
-    let q = decode_biguint(jwk.q.as_deref(), "q")?;
-    let key = RsaPrivateKey::from_components(n, e, d, vec![p, q])
-        .map_err(|_| CryptoError::Crypto("invalid RSA private key components"))?;
-    key.validate()
-        .map_err(|_| CryptoError::Crypto("invalid RSA private key components"))?;
-    Ok(key)
+fn rsa_private_key(jwk: &PrivateJwk) -> Result<AwsRsaKeyPair, CryptoError> {
+    let der = rsa_private_key_der(jwk)?;
+    AwsRsaKeyPair::from_der(der.as_bytes())
+        .map_err(|_| CryptoError::Crypto("invalid RSA private key components"))
 }
 
-fn decode_biguint(value: Option<&str>, field: &'static str) -> Result<BigUint, CryptoError> {
-    let bytes = decode_nonempty(value, field)?;
-    Ok(BigUint::from_bytes_be(&bytes))
+fn rsa_private_key_der(jwk: &PrivateJwk) -> Result<SecretDocument, CryptoError> {
+    let n = decode_nonempty(jwk.n.as_deref(), "n")?;
+    let e = decode_nonempty(jwk.e.as_deref(), "e")?;
+    let d = decode_nonempty(jwk.d.as_deref(), "d")?;
+    let p = decode_nonempty(jwk.p.as_deref(), "p")?;
+    let q = decode_nonempty(jwk.q.as_deref(), "q")?;
+    let dp = decode_nonempty(jwk.dp.as_deref(), "dp")?;
+    let dq = decode_nonempty(jwk.dq.as_deref(), "dq")?;
+    let qi = decode_nonempty(jwk.qi.as_deref(), "qi")?;
+
+    let key = Pkcs1RsaPrivateKey {
+        modulus: rsa_uint(&n, "n")?,
+        public_exponent: rsa_uint(&e, "e")?,
+        private_exponent: rsa_uint(&d, "d")?,
+        prime1: rsa_uint(&p, "p")?,
+        prime2: rsa_uint(&q, "q")?,
+        exponent1: rsa_uint(&dp, "dp")?,
+        exponent2: rsa_uint(&dq, "dq")?,
+        coefficient: rsa_uint(&qi, "qi")?,
+        other_prime_infos: None,
+    };
+    SecretDocument::encode_msg(&key)
+        .map_err(|_| CryptoError::Crypto("invalid RSA private key components"))
+}
+
+fn rsa_uint<'a>(bytes: &'a [u8], field: &'static str) -> Result<UintRef<'a>, CryptoError> {
+    UintRef::new(bytes).map_err(|_| JwkError::Invalid(field).into())
 }
 
 /// Verify `signature` over `payload` using the public key in `jwk`.
@@ -816,11 +842,10 @@ fn p256_verifying_key(jwk: &PublicJwk) -> Result<P256VerifyingKey, CryptoError> 
 }
 
 fn verify_rs256(payload: &[u8], signature: &[u8], jwk: &PublicJwk) -> Result<(), CryptoError> {
-    let n = decode_biguint(jwk.n.as_deref(), "n")?;
-    let e = decode_biguint(jwk.e.as_deref(), "e")?;
-    let key = RsaPublicKey::new(n, e).map_err(|_| CryptoError::InvalidSignature)?;
-    let digest = RsaSha256::digest(payload);
-    key.verify(Pkcs1v15Sign::new::<RsaSha256>(), &digest, signature)
+    let n = decode_nonempty(jwk.n.as_deref(), "n")?;
+    let e = decode_nonempty(jwk.e.as_deref(), "e")?;
+    let key = AwsRsaPublicKeyComponents { n, e };
+    key.verify(&RSA_PKCS1_2048_8192_SHA256, payload, signature)
         .map_err(|_| CryptoError::InvalidSignature)
 }
 
@@ -1300,6 +1325,18 @@ mod tests {
     fn rs256_private_jwk_parses_and_reports_rs256() {
         let private = PrivateJwk::parse(RSA_JWK).expect("rsa private jwk parses");
         assert!(matches!(private.algorithm(), Ok(SigningAlgorithm::Rs256)));
+    }
+
+    #[test]
+    fn rs256_private_jwk_requires_crt_parameters() {
+        let mut value: Value = serde_json::from_str(RSA_JWK).expect("rsa jwk json");
+        value.as_object_mut().expect("rsa jwk object").remove("dp");
+        let json = serde_json::to_string(&value).expect("rsa jwk serializes");
+
+        assert!(matches!(
+            PrivateJwk::parse(&json),
+            Err(JwkError::Invalid("dp"))
+        ));
     }
 
     #[test]
