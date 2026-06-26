@@ -50,6 +50,10 @@ jobs:
           tag="${GITHUB_REF_NAME}"
           if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
             tag="${{ inputs.tag }}"
+            if [[ "${GITHUB_REF}" != "refs/tags/${tag}" ]]; then
+              echo "Manual release dispatch must run from refs/tags/${tag}, got ${GITHUB_REF}" >&2
+              exit 1
+            fi
             git fetch --force --tags origin "refs/tags/${tag}:refs/tags/${tag}"
             git checkout --detach "${tag}"
           fi
@@ -522,7 +526,9 @@ jobs:
           find dist/bin dist/image-evidence dist/release-capsule -type f -print0 \
             | xargs -0 -n1 basename \
             | sort > "${tmp}/expected-assets"
+          provenance_asset="registry-stack-${tag}-release-provenance.intoto.jsonl"
           gh release view "${tag}" --json assets --jq '.assets[].name' \
+            | awk -v provenance_asset="${provenance_asset}" '$0 != provenance_asset { print }' \
             | sort > "${tmp}/actual-assets"
           if ! diff -u "${tmp}/expected-assets" "${tmp}/actual-assets"; then
             echo "GitHub Release assets differ from generated assets" >&2
