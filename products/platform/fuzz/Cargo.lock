@@ -951,7 +951,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-authcommon"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -963,7 +963,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-cache"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "async-trait",
  "redis",
@@ -975,7 +975,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-crypto"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -1012,7 +1012,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-oid4vci"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "base64",
  "registry-platform-crypto",
@@ -1025,7 +1025,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-replay"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "async-trait",
  "registry-platform-cache",
@@ -1035,7 +1035,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-sdjwt"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "base64",
  "getrandom 0.4.3",
