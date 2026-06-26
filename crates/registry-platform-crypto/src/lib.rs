@@ -844,7 +844,10 @@ fn p256_verifying_key(jwk: &PublicJwk) -> Result<P256VerifyingKey, CryptoError> 
 fn verify_rs256(payload: &[u8], signature: &[u8], jwk: &PublicJwk) -> Result<(), CryptoError> {
     let n = decode_nonempty(jwk.n.as_deref(), "n")?;
     let e = decode_nonempty(jwk.e.as_deref(), "e")?;
-    let key = AwsRsaPublicKeyComponents { n, e };
+    let key = AwsRsaPublicKeyComponents {
+        n: n.as_slice(),
+        e: e.as_slice(),
+    };
     key.verify(&RSA_PKCS1_2048_8192_SHA256, payload, signature)
         .map_err(|_| CryptoError::InvalidSignature)
 }
