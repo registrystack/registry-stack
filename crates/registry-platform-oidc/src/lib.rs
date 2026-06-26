@@ -946,15 +946,21 @@ impl TokenVerifier {
 
     fn scopes(&self, claims: &Claims) -> Vec<String> {
         let raw = self.raw_scopes(claims);
+        let require_mapping = reserved_scope_claim_requires_mapping(&self.config.scope_claim);
         if let Some(scope_map) = &self.config.scope_map {
             raw.into_iter()
                 .flat_map(|scope| {
-                    scope_map
-                        .get(&scope)
-                        .cloned()
-                        .unwrap_or_else(|| vec![scope])
+                    if let Some(mapped) = scope_map.get(&scope) {
+                        mapped.clone()
+                    } else if require_mapping {
+                        Vec::new()
+                    } else {
+                        vec![scope]
+                    }
                 })
                 .collect()
+        } else if require_mapping {
+            Vec::new()
         } else {
             raw
         }
@@ -983,6 +989,10 @@ impl TokenVerifier {
             _ => Vec::new(),
         }
     }
+}
+
+fn reserved_scope_claim_requires_mapping(scope_claim: &str) -> bool {
+    matches!(scope_claim, "sub" | "client_id" | "azp" | "aud")
 }
 
 fn scope_values(value: &Value, separator: char) -> Vec<String> {
@@ -1631,6 +1641,184 @@ mod tests {
             verifier.scopes(&claims),
             vec!["social_protection_registry:rows".to_string()]
         );
+    }
+
+    #[test]
+    fn unmapped_reserved_scope_claim_values_do_not_grant_scopes() {
+        let fetcher = Arc::new(JwksFetcher::new(
+            "http://127.0.0.1/jwks".to_string(),
+            JwksFetcherConfig::defaults(),
+        ));
+        let cases = vec![
+            (
+                "sub",
+                Claims {
+                    sub: Some("machine-user".to_string()),
+                    iss: None,
+                    aud: None,
+                    exp: None,
+                    iat: None,
+                    nbf: None,
+                    azp: None,
+                    client_id: None,
+                    extra: Map::new(),
+                },
+            ),
+            (
+                "client_id",
+                Claims {
+                    sub: None,
+                    iss: None,
+                    aud: None,
+                    exp: None,
+                    iat: None,
+                    nbf: None,
+                    azp: None,
+                    client_id: Some("registry-lab-api".to_string()),
+                    extra: Map::new(),
+                },
+            ),
+            (
+                "azp",
+                Claims {
+                    sub: None,
+                    iss: None,
+                    aud: None,
+                    exp: None,
+                    iat: None,
+                    nbf: None,
+                    azp: Some("registry-lab-api".to_string()),
+                    client_id: None,
+                    extra: Map::new(),
+                },
+            ),
+            (
+                "aud",
+                Claims {
+                    sub: None,
+                    iss: None,
+                    aud: Some(Audience::One("registry-lab-api".to_string())),
+                    exp: None,
+                    iat: None,
+                    nbf: None,
+                    azp: None,
+                    client_id: None,
+                    extra: Map::new(),
+                },
+            ),
+        ];
+
+        for (scope_claim, claims) in cases {
+            let verifier = TokenVerifier::new(
+                TokenVerifierConfig {
+                    issuer: "https://issuer.example".to_string(),
+                    audiences: vec!["registry-lab-api".to_string()],
+                    allowed_algorithms: vec![Algorithm::EdDSA],
+                    allowed_typ: vec!["JWT".to_string()],
+                    allowed_id_typ: vec!["JWT".to_string(), "id_token".to_string()],
+                    allowed_userinfo_typ: vec!["JWT".to_string()],
+                    userinfo_requires_exp: true,
+                    scope_claim: scope_claim.to_string(),
+                    scope_separator: ' ',
+                    scope_map: Some(HashMap::from([(
+                        "mapped-machine".to_string(),
+                        vec!["social_protection_registry:rows".to_string()],
+                    )])),
+                    allowed_clients: Vec::new(),
+                    leeway: Duration::from_secs(60),
+                },
+                Arc::clone(&fetcher),
+            );
+
+            assert!(
+                verifier.scopes(&claims).is_empty(),
+                "{scope_claim} should require an explicit scope_map entry"
+            );
+        }
+    }
+
+    #[test]
+    fn reserved_scope_claim_values_without_scope_map_do_not_grant_scopes() {
+        let fetcher = Arc::new(JwksFetcher::new(
+            "http://127.0.0.1/jwks".to_string(),
+            JwksFetcherConfig::defaults(),
+        ));
+        let verifier = TokenVerifier::new(
+            TokenVerifierConfig {
+                issuer: "https://issuer.example".to_string(),
+                audiences: vec!["registry-lab-api".to_string()],
+                allowed_algorithms: vec![Algorithm::EdDSA],
+                allowed_typ: vec!["JWT".to_string()],
+                allowed_id_typ: vec!["JWT".to_string(), "id_token".to_string()],
+                allowed_userinfo_typ: vec!["JWT".to_string()],
+                userinfo_requires_exp: true,
+                scope_claim: "client_id".to_string(),
+                scope_separator: ' ',
+                scope_map: None,
+                allowed_clients: Vec::new(),
+                leeway: Duration::from_secs(60),
+            },
+            fetcher,
+        );
+        let claims = Claims {
+            sub: None,
+            iss: None,
+            aud: None,
+            exp: None,
+            iat: None,
+            nbf: None,
+            azp: None,
+            client_id: Some("social_protection_registry:rows".to_string()),
+            extra: Map::new(),
+        };
+
+        assert!(verifier.scopes(&claims).is_empty());
+    }
+
+    #[test]
+    fn unmapped_custom_scope_claim_values_still_pass_through() {
+        let fetcher = Arc::new(JwksFetcher::new(
+            "http://127.0.0.1/jwks".to_string(),
+            JwksFetcherConfig::defaults(),
+        ));
+        let verifier = TokenVerifier::new(
+            TokenVerifierConfig {
+                issuer: "https://issuer.example".to_string(),
+                audiences: vec!["registry-lab-api".to_string()],
+                allowed_algorithms: vec![Algorithm::EdDSA],
+                allowed_typ: vec!["JWT".to_string()],
+                allowed_id_typ: vec!["JWT".to_string(), "id_token".to_string()],
+                allowed_userinfo_typ: vec!["JWT".to_string()],
+                userinfo_requires_exp: true,
+                scope_claim: "permissions".to_string(),
+                scope_separator: ' ',
+                scope_map: Some(HashMap::from([(
+                    "registry:write".to_string(),
+                    vec!["registry:writer".to_string()],
+                )])),
+                allowed_clients: Vec::new(),
+                leeway: Duration::from_secs(60),
+            },
+            fetcher,
+        );
+        let mut extra = Map::new();
+        extra.insert(
+            "permissions".to_string(),
+            Value::String("registry:read".to_string()),
+        );
+        let claims = Claims {
+            sub: Some("machine-user".to_string()),
+            iss: None,
+            aud: Some(Audience::One("registry-lab-api".to_string())),
+            exp: None,
+            iat: None,
+            nbf: None,
+            azp: None,
+            client_id: None,
+            extra,
+        };
+
+        assert_eq!(verifier.scopes(&claims), vec!["registry:read".to_string()]);
     }
 
     #[test]
