@@ -704,10 +704,6 @@ impl<'a> ParsedSdJwt<'a> {
                 .ok_or(VerificationError::Malformed {
                     code: "token.malformed",
                 })?
-                .strip_suffix('~')
-                .ok_or(VerificationError::Malformed {
-                    code: "token.malformed",
-                })?
         } else {
             compact
         };

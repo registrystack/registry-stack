@@ -244,6 +244,34 @@ async fn verify_sd_jwt_vc_rejects_wrong_key_binding_sd_hash() {
 }
 
 #[tokio::test]
+async fn verify_sd_jwt_vc_rejects_key_binding_sd_hash_without_trailing_separator() {
+    let compact = issue_sd_jwt(ISSUER_JWK, ISSUER, NOW, NOW + 50, Some(&holder_did())).await;
+    let presentation = format!(
+        "{compact}{}",
+        signed_key_binding_jwt_with_payload(json!({
+            "iat": NOW,
+            "exp": NOW + 30,
+            "aud": KB_AUD,
+            "nonce": KB_NONCE,
+            "sd_hash": URL_SAFE_NO_PAD.encode(Sha256::digest(
+                compact.strip_suffix('~').unwrap_or(&compact).as_bytes()
+            )),
+        }))
+    );
+
+    let error = verifier::verify_sd_jwt_vc(
+        &presentation,
+        &jwks(ISSUER_JWK),
+        &options()
+            .holder_binding(HolderBindingPolicy::Required)
+            .key_binding_challenge(KB_AUD, KB_NONCE),
+    )
+    .expect_err("key binding sd_hash must cover the trailing separator");
+
+    assert_code(error, "holder_binding.proof_invalid");
+}
+
+#[tokio::test]
 async fn verify_sd_jwt_vc_rejects_expired_key_binding_jwt() {
     let compact = issue_sd_jwt(ISSUER_JWK, ISSUER, NOW, NOW + 50, Some(&holder_did())).await;
     let presentation = format!(
@@ -254,7 +282,7 @@ async fn verify_sd_jwt_vc_rejects_expired_key_binding_jwt() {
             "aud": KB_AUD,
             "nonce": KB_NONCE,
             "sd_hash": URL_SAFE_NO_PAD.encode(Sha256::digest(
-                compact.strip_suffix('~').unwrap_or(&compact).as_bytes()
+                compact.as_bytes()
             )),
         }))
     );
@@ -555,7 +583,6 @@ fn unsigned_compact_jws() -> String {
 }
 
 fn signed_key_binding_jwt(sd_jwt: &str) -> String {
-    let sd_jwt = sd_jwt.strip_suffix('~').unwrap_or(sd_jwt);
     signed_key_binding_jwt_with_payload(json!({
         "iat": NOW,
         "exp": NOW + 30,
