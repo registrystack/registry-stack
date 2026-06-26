@@ -1516,6 +1516,32 @@ class ExplorerApiPayloadTest(unittest.TestCase):
         self.assertEqual(result.error, "explorer.blocked_url")
         urlopen.assert_not_called()
 
+    def test_explorer_http_json_blocks_plain_http_allowlisted_host_for_internal_runtime(self) -> None:
+        with mock.patch.object(explorer_common.urllib.request, "urlopen") as urlopen:
+            result = explorer_common.http_json(
+                "GET",
+                "http://civil-relay.lab.registrystack.org/ready",
+                {},
+                allow_internal_runtime=True,
+            )
+
+        self.assertIsNone(result.status)
+        self.assertEqual(result.error, "explorer.blocked_url")
+        urlopen.assert_not_called()
+
+    def test_explorer_internal_runtime_rejects_unknown_schemes_with_runtime_message(self) -> None:
+        with self.assertRaises(explorer_common.ExplorerInputError) as raised:
+            explorer_common.validate_explorer_outbound_url(
+                "ftp://civil-notary/ready",
+                allow_internal_runtime=True,
+            )
+
+        self.assertEqual(raised.exception.code, "explorer.blocked_url")
+        self.assertEqual(
+            raised.exception.message,
+            "Explorer request URLs must use HTTPS or an allowed internal runtime HTTP URL.",
+        )
+
     def test_registry_catalog_uses_exact_allowlist(self) -> None:
         payload = server.registry_explorer.registry_catalog_payload(self.config)
         self.assertEqual(

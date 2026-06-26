@@ -193,9 +193,6 @@ def _is_explorer_allowlisted_host(host: str) -> bool:
 
 def validate_explorer_outbound_url(url: str, *, allow_internal_runtime: bool = False) -> None:
     parsed = urllib.parse.urlsplit(url)
-    allowed_schemes = {"http", "https"} if allow_internal_runtime else {"https"}
-    if parsed.scheme not in allowed_schemes:
-        raise ExplorerInputError("explorer.blocked_url", "Explorer requests must use HTTPS.", field="url")
     if parsed.username or parsed.password:
         raise ExplorerInputError("explorer.blocked_url", "Explorer request URLs must not include credentials.", field="url")
     host = (parsed.hostname or "").lower().rstrip(".")
@@ -204,13 +201,31 @@ def validate_explorer_outbound_url(url: str, *, allow_internal_runtime: bool = F
     try:
         address = ipaddress.ip_address(host)
     except ValueError:
-        if _is_explorer_allowlisted_host(host):
+        address = None
+    explorer_host_allowed = address is None and _is_explorer_allowlisted_host(host)
+    internal_runtime_allowed = allow_internal_runtime and (
+        (address is not None and address.is_loopback) or host in EXPLORER_INTERNAL_RUNTIME_HOSTS
+    )
+    if parsed.scheme == "https":
+        if explorer_host_allowed or internal_runtime_allowed:
             return
-        if allow_internal_runtime and host in EXPLORER_INTERNAL_RUNTIME_HOSTS:
+    elif parsed.scheme == "http":
+        if internal_runtime_allowed:
             return
+        if allow_internal_runtime:
+            raise ExplorerInputError(
+                "explorer.blocked_url",
+                "Explorer HTTP runtime URLs must target an allowed internal runtime host.",
+                field="url",
+            )
+        raise ExplorerInputError("explorer.blocked_url", "Explorer requests must use HTTPS.", field="url")
     else:
-        if allow_internal_runtime and address.is_loopback:
-            return
+        message = "Explorer requests must use HTTPS."
+        if allow_internal_runtime:
+            message = "Explorer request URLs must use HTTPS or an allowed internal runtime HTTP URL."
+        raise ExplorerInputError("explorer.blocked_url", message, field="url")
+
+    if address is not None:
         raise ExplorerInputError("explorer.blocked_url", "Explorer request URLs must use allowlisted hostnames.", field="url")
     raise ExplorerInputError("explorer.blocked_url", "Explorer request URLs must target an allowlisted host.", field="url")
 
@@ -241,6 +256,8 @@ def http_json(
     try:
         validate_explorer_outbound_url(url, allow_internal_runtime=allow_internal_runtime)
         request = urllib.request.Request(url, headers=request_headers, data=data, method=method)
+        # URL is constrained to an allowlisted HTTPS host or explicit internal runtime target above.
+        # codeql[py/full-ssrf]
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return ExplorerHttpResult(
                 status=response.status,
