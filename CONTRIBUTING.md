@@ -143,7 +143,8 @@ Release binaries are built from the verified release tag, the pinned Rust
 builder image, and locked Cargo dependencies in `.github/workflows/release.yml`.
 The workflow records SHA256 manifests for binary outputs, image input binaries,
 image evidence, and release capsules, then reconciles published release assets
-against the generated files.
+against the generated files. Public repeatable-build evidence for release
+binaries is recorded in [`release/REPEATABLE-BUILDS.md`](release/REPEATABLE-BUILDS.md).
 
 Generated documentation data and checked-in generated snapshots must be produced
 by the documented generator commands, such as `npm run generate` under
