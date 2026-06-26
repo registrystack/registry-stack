@@ -518,7 +518,14 @@ def default_civil_claims_payload(config: dict[str, Any], *, run_live: bool = Fal
             },
         }
     headers = _execution_headers(config, service, request["request_source"]["headers"])
-    result = http_json("POST", request["request_source"]["url"], headers, request["request_source"]["body"], timeout=timeout)
+    result = http_json(
+        "POST",
+        request["request_source"]["url"],
+        headers,
+        request["request_source"]["body"],
+        timeout=timeout,
+        allow_internal_runtime=bool(service.get("runtime_url_env")),
+    )
     if result.status is None:
         return {
             **base_payload,
@@ -739,7 +746,14 @@ def run_evaluation(config: dict[str, Any], service_id: str, body: dict[str, Any]
                 "error": "",
             },
         }
-    result = http_json("POST", built["request_source"]["url"], headers, built["request_source"]["body"], timeout=timeout)
+    result = http_json(
+        "POST",
+        built["request_source"]["url"],
+        headers,
+        built["request_source"]["body"],
+        timeout=timeout,
+        allow_internal_runtime=bool(validated["service"].get("runtime_url_env")),
+    )
     return {
         **built,
         "mode": "live" if result.status is not None else "retry",

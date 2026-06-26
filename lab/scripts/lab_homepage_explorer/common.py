@@ -22,6 +22,14 @@ RUNTIME_TOKEN_HIDDEN = "[runtime demo token hidden]"
 RUNTIME_TOKEN_MISSING = "[runtime demo token missing]"
 EXPLORER_ALLOWED_HOST_SUFFIXES = (".lab.registrystack.org", ".example")
 EXPLORER_ALLOWED_HOSTS = {"lab.registrystack.org", "example"}
+EXPLORER_INTERNAL_RUNTIME_HOSTS = {
+    "localhost",
+    "host.docker.internal",
+    "civil-notary",
+    "shared-eligibility-notary",
+    "nagdi-agriculture-notary",
+    "agriculture-notary",
+}
 
 
 @dataclass(frozen=True)
@@ -179,9 +187,14 @@ def source_response(result: ExplorerHttpResult) -> dict[str, Any]:
     }
 
 
-def validate_explorer_outbound_url(url: str) -> None:
+def _is_explorer_allowlisted_host(host: str) -> bool:
+    return host in EXPLORER_ALLOWED_HOSTS or any(host.endswith(suffix) for suffix in EXPLORER_ALLOWED_HOST_SUFFIXES)
+
+
+def validate_explorer_outbound_url(url: str, *, allow_internal_runtime: bool = False) -> None:
     parsed = urllib.parse.urlsplit(url)
-    if parsed.scheme != "https":
+    allowed_schemes = {"http", "https"} if allow_internal_runtime else {"https"}
+    if parsed.scheme not in allowed_schemes:
         raise ExplorerInputError("explorer.blocked_url", "Explorer requests must use HTTPS.", field="url")
     if parsed.username or parsed.password:
         raise ExplorerInputError("explorer.blocked_url", "Explorer request URLs must not include credentials.", field="url")
@@ -189,16 +202,16 @@ def validate_explorer_outbound_url(url: str) -> None:
     if not host:
         raise ExplorerInputError("explorer.blocked_url", "Explorer request URLs must include a host.", field="url")
     try:
-        ipaddress.ip_address(host)
+        address = ipaddress.ip_address(host)
     except ValueError:
-        # Non-IP hostnames are checked against the explorer allowlist below.
-        pass
+        if _is_explorer_allowlisted_host(host):
+            return
+        if allow_internal_runtime and host in EXPLORER_INTERNAL_RUNTIME_HOSTS:
+            return
     else:
+        if allow_internal_runtime and address.is_loopback:
+            return
         raise ExplorerInputError("explorer.blocked_url", "Explorer request URLs must use allowlisted hostnames.", field="url")
-    if host in EXPLORER_ALLOWED_HOSTS:
-        return
-    if any(host.endswith(suffix) for suffix in EXPLORER_ALLOWED_HOST_SUFFIXES):
-        return
     raise ExplorerInputError("explorer.blocked_url", "Explorer request URLs must target an allowlisted host.", field="url")
 
 
@@ -211,14 +224,22 @@ def safe_curl(method: str, url: str, headers: dict[str, str], body: Any | None =
     return " ".join(pieces)
 
 
-def http_json(method: str, url: str, headers: dict[str, str], body: Any | None = None, timeout: float = 8.0) -> ExplorerHttpResult:
+def http_json(
+    method: str,
+    url: str,
+    headers: dict[str, str],
+    body: Any | None = None,
+    timeout: float = 8.0,
+    *,
+    allow_internal_runtime: bool = False,
+) -> ExplorerHttpResult:
     data = None
     request_headers = dict(headers)
     if body is not None:
         data = json.dumps(body).encode("utf-8")
         request_headers.setdefault("Content-Type", "application/json")
     try:
-        validate_explorer_outbound_url(url)
+        validate_explorer_outbound_url(url, allow_internal_runtime=allow_internal_runtime)
         request = urllib.request.Request(url, headers=request_headers, data=data, method=method)
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return ExplorerHttpResult(

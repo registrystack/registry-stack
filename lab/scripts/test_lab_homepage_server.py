@@ -1451,6 +1451,71 @@ class ExplorerApiPayloadTest(unittest.TestCase):
         self.assertEqual(result.error, "explorer.blocked_url")
         urlopen.assert_not_called()
 
+    def test_explorer_http_json_allows_loopback_for_internal_runtime(self) -> None:
+        class Resp:
+            status = 200
+            headers = {"Content-Type": "application/json"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc):
+                return False
+
+            def read(self):
+                return b'{"ok":true}'
+
+        with mock.patch.object(explorer_common.urllib.request, "urlopen", return_value=Resp()) as urlopen:
+            result = explorer_common.http_json(
+                "GET",
+                "http://127.0.0.1:4321/ready",
+                {},
+                allow_internal_runtime=True,
+            )
+
+        self.assertEqual(result.status, 200)
+        self.assertEqual(result.body, {"ok": True})
+        urlopen.assert_called_once()
+
+    def test_explorer_http_json_allows_runtime_service_hostname(self) -> None:
+        class Resp:
+            status = 200
+            headers = {"Content-Type": "application/json"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc):
+                return False
+
+            def read(self):
+                return b'{"ok":true}'
+
+        with mock.patch.object(explorer_common.urllib.request, "urlopen", return_value=Resp()) as urlopen:
+            result = explorer_common.http_json(
+                "GET",
+                "http://civil-notary:8080/ready",
+                {},
+                allow_internal_runtime=True,
+            )
+
+        self.assertEqual(result.status, 200)
+        self.assertEqual(result.body, {"ok": True})
+        urlopen.assert_called_once()
+
+    def test_explorer_http_json_blocks_private_runtime_ip_before_request(self) -> None:
+        with mock.patch.object(explorer_common.urllib.request, "urlopen") as urlopen:
+            result = explorer_common.http_json(
+                "GET",
+                "http://10.0.0.4/private",
+                {},
+                allow_internal_runtime=True,
+            )
+
+        self.assertIsNone(result.status)
+        self.assertEqual(result.error, "explorer.blocked_url")
+        urlopen.assert_not_called()
+
     def test_registry_catalog_uses_exact_allowlist(self) -> None:
         payload = server.registry_explorer.registry_catalog_payload(self.config)
         self.assertEqual(
@@ -2033,8 +2098,9 @@ class ExplorerApiPayloadTest(unittest.TestCase):
             headers = {"content-type": "application/json"}
             error = ""
 
-        def fake_http_json(method, url, headers, body, timeout=8.0):
+        def fake_http_json(method, url, headers, body, timeout=8.0, *, allow_internal_runtime=False):
             captured["headers"] = headers
+            captured["allow_internal_runtime"] = allow_internal_runtime
             return Result()
 
         os.environ["CIVIL_EVIDENCE_CLIENT_BEARER"] = "civil-real-token"
@@ -2055,8 +2121,51 @@ class ExplorerApiPayloadTest(unittest.TestCase):
         finally:
             os.environ.pop("CIVIL_EVIDENCE_CLIENT_BEARER", None)
         self.assertEqual(captured["headers"]["Authorization"], "Bearer civil-real-token")
+        self.assertTrue(captured["allow_internal_runtime"])
         self.assertNotIn("civil-real-token", str(payload["request_source"]))
         self.assertIn("[runtime demo token hidden]", str(payload["request_source"]))
+
+    def test_runtime_claim_evaluation_allows_default_loopback_service_url(self) -> None:
+        captured = {}
+
+        class Resp:
+            status = 200
+            headers = {"Content-Type": "application/json"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc):
+                return False
+
+            def read(self):
+                return b'{"results":[{"claim_id":"person-is-alive","satisfied":true}]}'
+
+        def fake_urlopen(req, timeout=None):
+            captured["url"] = req.full_url
+            captured["authorization"] = req.get_header("Authorization")
+            return Resp()
+
+        os.environ["CIVIL_EVIDENCE_CLIENT_BEARER"] = "civil-real-token"
+        try:
+            with mock.patch.object(explorer_common.urllib.request, "urlopen", fake_urlopen):
+                payload = server.claims_explorer.run_evaluation(
+                    server.enrich_config({"credentials": []}),
+                    "civil-notary",
+                    {
+                        "claim_id": "person-is-alive",
+                        "subject": "NID-1001",
+                        "identifier_scheme": "national_id",
+                        "disclosure": "predicate",
+                        "format": server.claims_explorer.CLAIM_RESULT_FORMAT,
+                        "purpose": server.claims_explorer.PURPOSE,
+                    },
+                )
+        finally:
+            os.environ.pop("CIVIL_EVIDENCE_CLIENT_BEARER", None)
+        self.assertEqual(payload["mode"], "live")
+        self.assertEqual(captured["url"], "http://127.0.0.1:4321/v1/evaluations")
+        self.assertEqual(captured["authorization"], "Bearer civil-real-token")
 
     def test_runtime_claim_evaluation_passes_metadata_target_through(self) -> None:
         captured = {}
@@ -2071,7 +2180,7 @@ class ExplorerApiPayloadTest(unittest.TestCase):
             headers = {"content-type": "application/json"}
             error = ""
 
-        def fake_http_json(method, url, headers, body, timeout=8.0):
+        def fake_http_json(method, url, headers, body, timeout=8.0, *, allow_internal_runtime=False):
             captured["body"] = body
             return Result()
 
