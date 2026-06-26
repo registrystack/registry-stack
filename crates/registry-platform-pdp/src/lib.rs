@@ -275,11 +275,10 @@ pub fn decide(context: &EvidenceRequestContext, policy: &PolicyInput) -> Decisio
         let Some(asserted_assurance) = context.asserted_assurance.as_deref() else {
             return deny(trace.audit(policy, Some(context)), ASSURANCE_INSUFFICIENT);
         };
-        let normalized_asserted = normalized_assurance(asserted_assurance);
         if !policy
             .allowed_assurance
             .iter()
-            .any(|allowed| normalized_assurance(allowed) == normalized_asserted)
+            .any(|allowed| assurance_labels_match(allowed, asserted_assurance))
         {
             return deny(trace.audit(policy, Some(context)), ASSURANCE_INSUFFICIENT);
         }
@@ -674,8 +673,8 @@ fn is_sha256_digest(value: &str) -> bool {
 }
 
 fn assurance_rank(level: &str) -> Option<u8> {
-    let compact = normalized_assurance(level);
-    match compact.as_str() {
+    let normalized = normalized_assurance(level)?;
+    match normalized {
         "low" | "ial1" | "loa1" => Some(1),
         "substantial" | "ial2" | "loa2" => Some(2),
         "high" | "ial3" | "loa3" => Some(3),
@@ -683,13 +682,30 @@ fn assurance_rank(level: &str) -> Option<u8> {
     }
 }
 
-fn normalized_assurance(level: &str) -> String {
-    level
-        .trim()
-        .to_ascii_lowercase()
-        .chars()
-        .filter(|ch| ch.is_ascii_alphanumeric())
-        .collect()
+fn normalized_assurance(level: &str) -> Option<&'static str> {
+    match level.trim().to_ascii_lowercase().as_str() {
+        "low" => Some("low"),
+        "substantial" => Some("substantial"),
+        "high" => Some("high"),
+        "ial1" | "ial-1" | "ial 1" | "ial_1" => Some("ial1"),
+        "ial2" | "ial-2" | "ial 2" | "ial_2" => Some("ial2"),
+        "ial3" | "ial-3" | "ial 3" | "ial_3" => Some("ial3"),
+        "loa1" | "loa-1" | "loa 1" | "loa_1" => Some("loa1"),
+        "loa2" | "loa-2" | "loa 2" | "loa_2" => Some("loa2"),
+        "loa3" | "loa-3" | "loa 3" | "loa_3" => Some("loa3"),
+        _ => None,
+    }
+}
+
+fn assurance_labels_match(allowed: &str, asserted: &str) -> bool {
+    match (
+        normalized_assurance(allowed),
+        normalized_assurance(asserted),
+    ) {
+        (Some(allowed), Some(asserted)) => allowed == asserted,
+        (None, None) => allowed.trim().eq_ignore_ascii_case(asserted.trim()),
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -857,6 +873,31 @@ mod tests {
     }
 
     #[test]
+    fn nonstandard_punctuated_minimum_assurance_fails_closed() {
+        let mut policy = policy();
+        policy.minimum_assurance = Some("hi-gh".to_string());
+
+        assert_eq!(
+            deny_code(decide(&context(), &policy)),
+            Some(UNSUPPORTED_POLICY_TERM.to_string())
+        );
+    }
+
+    #[test]
+    fn nonstandard_punctuated_asserted_assurance_is_insufficient() {
+        let mut policy = policy();
+        policy.minimum_assurance = Some("high".to_string());
+
+        let mut context = context();
+        context.asserted_assurance = Some("hi-gh".to_string());
+
+        assert_eq!(
+            deny_code(decide(&context, &policy)),
+            Some(ASSURANCE_INSUFFICIENT.to_string())
+        );
+    }
+
+    #[test]
     fn denies_when_assurance_is_not_in_allowed_set() {
         let mut policy = policy();
         policy.allowed_assurance = vec!["urn:example:loa:high".to_string()];
@@ -883,6 +924,28 @@ mod tests {
         policy.allowed_assurance = vec!["LOA 2".to_string()];
         context.asserted_assurance = Some("loa_2".to_string());
         assert!(matches!(decide(&context, &policy), Decision::Permit(_)));
+    }
+
+    #[test]
+    fn allowed_assurance_rejects_punctuation_collision_labels() {
+        let mut policy = policy();
+        policy.allowed_assurance = vec!["urn:example:loa:high".to_string()];
+
+        let mut context = context();
+        context.asserted_assurance = Some("urnexampleloahigh".to_string());
+
+        assert_eq!(
+            deny_code(decide(&context, &policy)),
+            Some(ASSURANCE_INSUFFICIENT.to_string())
+        );
+
+        policy.allowed_assurance = vec!["high".to_string()];
+        context.asserted_assurance = Some("h-igh".to_string());
+
+        assert_eq!(
+            deny_code(decide(&context, &policy)),
+            Some(ASSURANCE_INSUFFICIENT.to_string())
+        );
     }
 
     #[test]
