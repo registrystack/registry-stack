@@ -166,8 +166,9 @@ good signer serving. Use a new `kid` and governed config change for real key
 rotation.
 
 RS256 is reserved for the eSignet RP client assertion key. Its private RSA JWK
-must include `n`, `e`, `d`, `p`, `q`, `dp`, `dq`, and `qi`; shorter RSA JWKs
-that omit CRT parameters are rejected at key load.
+must use a 2048-8192-bit modulus and include `n`, `e`, `d`, `p`, `q`, `dp`,
+`dq`, and `qi`; keys outside that size range or missing CRT parameters are
+rejected before use.
 
 For local development, the binary accepts `--env-file`. For shared
 environments, prefer the platform secret store and avoid checking dotenv files
@@ -428,6 +429,7 @@ naming the replacement field.
 - `allowed_algorithms`: explicit token signing algorithms accepted from the
   identity provider. Match the provider and do not mix unrelated algorithm
   families in one deployment.
+  RS256 JWKS keys must use a 2048-8192-bit RSA modulus.
 - `scope_claim`, `scope_separator`, and `scope_map`: how external token scopes
   map to Registry Notary scopes.
 - `principal_claim`: claim used for audit principal identity. The default is

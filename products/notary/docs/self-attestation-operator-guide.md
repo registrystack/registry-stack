@@ -95,6 +95,7 @@ Before enabling the flow, confirm with the identity-provider owner:
 - The token signing algorithm is explicit and stable. Configure the algorithm
   your provider actually uses, such as `EdDSA` or `RS256`, and do not mix
   symmetric and asymmetric algorithms in one deployment.
+  RS256 JWKS keys must use a 2048-8192-bit RSA modulus.
 - Token lifetime, auth age, assurance, and clock skew can satisfy your policy.
 - External scopes can be mapped to the Notary scopes you require.
 

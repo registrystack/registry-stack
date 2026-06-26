@@ -1082,6 +1082,11 @@ mod tests {
     // production key.
     const RSA_JWK: &str = r#"{"kty":"RSA","kid":"registry-notary-rs256-test","alg":"RS256","n":"yIgEn3IXWI3CRyUY0gvZ-kJ55EC36MRFvj-ICsitN1-50phRS4CKMBRwbHwjgeTkbMDndOCmVfIbyKhJjOMIPxAzIHeMn9oWj5i-s8nlSgjHZpvCTnRbwZhbq6mEVoHJliX36IfV_iUopcwSL5lPd2wZmJ-msUmZFs6CTRExu0JGUJScOwFO5dqxBwiKyh7yGEPXI3u4tc3_47SZYxyde7fb-o3wl2RBJ28upa2jVRP9r-WjOGjE6tbZ35HnVUY4ECdYWzsiotg_XA9QVWa-pAKXV2Flr-gocCQ9E2qrSYjEbNXuFjPtMnuL6AHi0o5PiwT1dllcl925hpKd7Xt60w","e":"AQAB","d":"ATDtMhpe_z1-GTUV7NLO3V_Z0kb8W1YXkC7JbJTAdcE-FdKJrtu84Q87WpxG0tPcutFPLqW12QAQp2fbmxhZ6VrfVYneeOlEjO14ukqM_g35Z-eRDmYhwoFYrEWGqlH9XrZysHhKFZyKHW_G0lJV-Ks8Na_RFNNIXeVedVMQiytAFXibTHvdAdIrBGtt0M4tlQOCeRwnuoAQU-a5VB7rKGpxnJtUA7F_jjeX6jQPnUhkOXs20pPRey-i-jxwBbsF4XijHgTnGwAo5uOoY9b0kOmOb3Hs5TVqZCb3a4JoYAqZBbWrkKxccJTGMqLHCe0MBgQzKqP5KyrHRgQdzlmTnQ","p":"5xhkHe5lD7tUYJAFffHiRpy4unHfKDvTEASu8RBgWvHP2Hu5XLQU5n6DvI47LsW42swTcT6Ce1pWB2LK3SjKcw9FPEEGg8m5-tmfixaRq4DBaK0hj17763HmnYR0eQC0n_5y-My8WSC1y80T-AhKHJ_3xTtLXQd5Z9bf9MEiKS8","q":"3iRoiwbnn8oRJMjZUZhqKB-GVa7AJV0SUqXiUsBAJnqtbhuIESbkJKpt5eULeUQgdNkoG65KD-jXFUipWX1zlentc1FliCaB46jntqtxUsui8LNwKw_eb3nujQO7H1He4NJ5pfaLfRcmBOLwB-u2Z1cxrRDWhIgiHtGaAdQ7F50","dp":"j4h9vn1wNbozaRpq3tPap-L1dY_-e93UdPGDuuRiBHqGjr4h3itXg-X2aqmopp9V9kekl8SshHMSVdoNiBmqzJYieY8lvbsQkXaTem8VIQGCn0JRQtxK-eyvwQwgz3sZtPn0bQW0wmLnp2KD0Z1McsUEvnLalzhqNo2mYj2Guy8","dq":"0T6ySuLCIz2PUHrwWW-b7xdizirBS3CT5c3jldcJljVQT7sXPDDKDc-LnVVWrW-Csw4qPYi6sqm8j4vWGTmWOswSouE1Jj4_c1aSjPqI0FiIrvoW2jkkaRUNoz60cBgKPPOFKtNFKRs48LljJ9LcChOT81U8-7HPkgAVdUuYLfE","qi":"PnMeCE0dvWDLp2Dn1wsxtl-a0qjpkT9cp8EkvHYjCvVqqWqrVv84CoEo-1wA9j_VDvCG6T4n0UO9K0jfBf5yvPnahSQCLJk2nw-2uZ9YzBZKwkm21wU6hTknPst5Vk5ZbYJmzqXsCqEB5T2Bn5vqeXMe3SOB5hD2CbTFFfp3TC4"}"#;
 
+    // Test-only 1024-bit RSA private JWK plus a valid RS256 signature over
+    // `registry-notary-rs256-1024`. These pin the AWS-LC 2048-bit RSA floor.
+    const RSA_1024_JWK: &str = r#"{"kty":"RSA","kid":"registry-notary-rs256-1024-test","alg":"RS256","n":"0XamHpbNC-FqjNCuvjTv3JlceEpQlZtsULPcCTy0CYnGxMNHNYUdcUuVXSFtIQCpHPWUwLL-GWu5PmF_svocDHHsbnlbPj3Eg9dVN2m1g-du7jK1IA3eeTmfWZAkZC9R_ITsULIr7QjrMrUm2GgejMLqnaeZpVxmCD6X6ER02Ik","e":"AQAB","d":"yOuWzSC57vt6yTgjZjBBJMm2-WvPgLJlY8Qi_HlN-Rg_od3vIFdftp1Z2MuHcnC_xxeKaI1JT_kU59F-PJ_M5iWqT5f4fXLgEcBMkBjXTgK-uK3hwHQUKz7F20p3_hJDZoG9v1bBxLhBtk1NPx2O1GggRsrAVpw1yy6ZwcwdRkE","p":"-Vee6DQ7Sam8Gr1BFda8bkY2RufiBmJ6rQvZiOD3kOU8Lm9lQYQ0l4_w2n3KBblsQ6qamCfw2_WLDxgBiyn94w","q":"1w5vxxGu66T1WEJo-yl8Xz109DrG9upv-YNuPUPHy9U6B4A8_2iaK1ony6jwwmEDmroepEw8CpX9M0IySA3bow","dp":"D3seNaKQj8lHEY3wjY-QkXQwiIR7JxRUM4xJzFLTbB6fdu6ZpdC0hzh7psUqluJlU2ozQQEx1iZPpPdDmUVZKw","dq":"TCmWuJ-wnU_cfBd46op0u54eT2iJkmTQp0M-xX-9wJiRZpqp_6JiBzx0n5IDQjPtfNyxgWpmUTFxbLfi6tXNlQ","qi":"qA3t0sbVQvSRcUYOZmh9re_Ln6B5qxfqUcgRG7naqe1HL_7pGpE9CaeVZ_koLmXSRrYZ8Y5m14vJjQd7aGta8w"}"#;
+    const RSA_1024_SIGNATURE: &str = "AHSzPijESokHRJWCXV0Vc_n0Faee3y4fU1z4-f8qT5BbvHX8sM9BknCVTfg4AWCB6szaVJV5J3oeLlTM8qGIrLj1qMewYjhxbNymNoDkzXTiYDt_NJw28LooZiXAZYmy8HK7EJqwnbvyS4-0j4KpiXl1MkNHYIe_l3JuvG-af24";
+
     #[test]
     fn private_jwk_parse_debug_redacts_and_public_strips_private_material() {
         let private = PrivateJwk::parse(RAW_JWK).expect("private jwk parses");
@@ -1336,6 +1341,31 @@ mod tests {
         assert!(matches!(
             PrivateJwk::parse(&json),
             Err(JwkError::Invalid("dp"))
+        ));
+    }
+
+    #[test]
+    fn rs256_sign_rejects_sub_2048_bit_private_key() {
+        let private = PrivateJwk::parse(RSA_1024_JWK).expect("1024-bit rsa jwk parses");
+
+        assert!(matches!(
+            sign(b"registry-notary-rs256-1024", &private),
+            Err(CryptoError::Crypto(_))
+        ));
+    }
+
+    #[test]
+    fn rs256_verify_rejects_sub_2048_bit_public_key() {
+        let public = PrivateJwk::parse(RSA_1024_JWK)
+            .expect("1024-bit rsa jwk parses")
+            .public();
+        let signature = URL_SAFE_NO_PAD
+            .decode(RSA_1024_SIGNATURE)
+            .expect("1024-bit rsa signature fixture decodes");
+
+        assert!(matches!(
+            verify(b"registry-notary-rs256-1024", &signature, &public),
+            Err(CryptoError::InvalidSignature)
         ));
     }
 
