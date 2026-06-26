@@ -24,7 +24,6 @@ import os
 import platform
 import subprocess
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -173,7 +172,6 @@ def build_report(
     # Run metadata from k6 summary.
     # k6 summary-export puts state at root or in 'state' key depending on version.
     state = root.get("state", root)
-    start_time  = _fmt(state.get("testRunDurationMs") and root.get("timestamp"))
     # k6 --summary-export: 'timestamp' is the end time; derive duration.
     duration_ms = state.get("testRunDurationMs")
     duration_str = f"{duration_ms / 1000:.1f}s" if isinstance(duration_ms, (int, float)) else "n/a"
@@ -192,6 +190,7 @@ def build_report(
         try:
             mean_per_response = _human_bytes(_to_int(data_received_bytes) // _to_int(req_count))
         except (TypeError, ValueError, ZeroDivisionError):
+            # Keep rendering the report when optional summary metrics are malformed.
             pass
 
     # CPU / memory from proc stats.

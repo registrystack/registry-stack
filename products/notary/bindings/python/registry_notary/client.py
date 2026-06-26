@@ -800,6 +800,7 @@ def _problem_error_from_response(
         if isinstance(decoded, dict):
             problem = decoded
     except (UnicodeDecodeError, json.JSONDecodeError):
+        # Fall back to status-derived problem fields when the server body is not JSON.
         pass
 
     if error_kind == "oid4vci":

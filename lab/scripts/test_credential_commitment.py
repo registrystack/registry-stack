@@ -36,12 +36,10 @@ class CredentialCommitmentTest(unittest.TestCase):
     def test_notary_api_key_fixed_vector(self) -> None:
         raw = "notary-api-key-fixture"
         fingerprint = (
-            "sha256:"
-            "768a5e740400fbab0ea42d185b3013b7ff4139db77f02112b7e8023b6840e71e"
+            "sha256:768a5e740400fbab0ea42d185b3013b7ff4139db77f02112b7e8023b6840e71e"
         )
         commitment = (
-            "sha256:"
-            "e07fecaa013f1e460b183f7d941c4e2a380110fa08b5eb9a4261f7fd6d84949b"
+            "sha256:e07fecaa013f1e460b183f7d941c4e2a380110fa08b5eb9a4261f7fd6d84949b"
         )
 
         fp_result = self.run_script(
@@ -109,10 +107,8 @@ class CredentialCommitmentTest(unittest.TestCase):
             result.stdout,
             "\n".join(
                 [
-                    "RAW_NOTARY_BEARER_TOKEN_HASH="
-                    "sha256:8a56007ccf5e455a408af4634b38f24272cd3eeb7d149a900935a136891149e3",
-                    "RAW_NOTARY_BEARER_TOKEN_COMMITMENT="
-                    "sha256:2fc0e5fbd41675ae920bf0874a1686187135f73abad88448dd264818f0a56803",
+                    "RAW_NOTARY_BEARER_TOKEN_HASH=sha256:8a56007ccf5e455a408af4634b38f24272cd3eeb7d149a900935a136891149e3",
+                    "RAW_NOTARY_BEARER_TOKEN_COMMITMENT=sha256:2fc0e5fbd41675ae920bf0874a1686187135f73abad88448dd264818f0a56803",
                     "",
                 ]
             ),
@@ -136,10 +132,8 @@ class CredentialCommitmentTest(unittest.TestCase):
             result.stdout,
             "\n".join(
                 [
-                    "RAW_RELAY_API_KEY_HASH="
-                    "sha256:3234da03c4bc49ebab2a458c9a5e55036a1e5b6d9f58621d152499242276e76f",
-                    "RAW_RELAY_API_KEY_COMMITMENT="
-                    "sha256:486f4de7246e413e9f51e70e4ea7851ffbd3d507d55cb5f1976c22def3dd77e3",
+                    "RAW_RELAY_API_KEY_HASH=sha256:3234da03c4bc49ebab2a458c9a5e55036a1e5b6d9f58621d152499242276e76f",
+                    "RAW_RELAY_API_KEY_COMMITMENT=sha256:486f4de7246e413e9f51e70e4ea7851ffbd3d507d55cb5f1976c22def3dd77e3",
                     "",
                 ]
             ),
@@ -250,6 +244,7 @@ class CredentialCommitmentTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         commitment_match = re.search(r"OPENCRVS_EVIDENCE_CLIENT_TOKEN_COMMITMENT=(sha256:[0-9a-f]{64})", result.stdout)
         self.assertIsNotNone(commitment_match)
+        assert commitment_match is not None
         commitment = commitment_match.group(1)
 
         for config_path in (

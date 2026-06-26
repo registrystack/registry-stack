@@ -63,7 +63,7 @@ class HttpResult:
 
 
 class DemoError(RuntimeError):
-    pass
+    """Demo flow failure."""
 
 
 def b64url(data: bytes) -> str:
@@ -550,7 +550,7 @@ def production_readiness_report(service: dict[str, Any]) -> dict[str, Any]:
         "notes": [
             "The demo proves evaluation-bound SD-JWT VC issuance and JWKS publication.",
             "Production needs managed issuer keys, key history, credential status or "
-            "revocation, verifier metadata, and production identity mapping.",
+            + "revocation, verifier metadata, and production identity mapping.",
         ],
     }
 

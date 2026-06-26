@@ -7,17 +7,21 @@ import importlib.util
 import json
 import os
 import unittest
+import unittest.mock as mock
 import urllib.error
 from email.message import Message
 from pathlib import Path
-from unittest import mock
+from typing import Any
+
+import lab_homepage_scenarios
+import lab_homepage_scenarios.common as scenario_common
+from lab_homepage_explorer import common as explorer_common
 
 MODULE_PATH = Path(__file__).resolve().parent / "lab-homepage-server.py"
 _spec = importlib.util.spec_from_file_location("lab_homepage_server", MODULE_PATH)
 assert _spec and _spec.loader
 server = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(server)
-from lab_homepage_scenarios import common as scenario_common
 
 # The CSS/JS that used to be inlined in the page templates now lives in real static asset
 # files served from /static/<name>. Tests that assert on that CSS/JS read the asset files
@@ -594,13 +598,12 @@ class ScenarioPayloadTest(unittest.TestCase):
         self.assertEqual(story["availability_state"]["label"], "Hosted")
 
     def test_public_label_check_rejects_raw_compatibility_ids(self) -> None:
-        from lab_homepage_scenarios import public_label_check
         from lab_homepage_scenarios.attestations import RAW_COMPATIBILITY_IDS
 
         for raw_id in RAW_COMPATIBILITY_IDS:
             with self.subTest(raw_id=raw_id):
                 self.assertEqual(
-                    public_label_check(
+                    lab_homepage_scenarios.public_label_check(
                         [
                             {
                                 "id": "bad-story",
@@ -623,8 +626,7 @@ class ScenarioPayloadTest(unittest.TestCase):
         self.assertNotIn("compatibility_claim_aliases", metadata)
 
     def test_public_label_check_reports_path_for_raw_compatibility_ids(self) -> None:
-        from lab_homepage_scenarios import public_label_check
-        violations = public_label_check(
+        violations = lab_homepage_scenarios.public_label_check(
             [
                 {
                     "id": "bad-story",
@@ -639,8 +641,7 @@ class ScenarioPayloadTest(unittest.TestCase):
         self.assertEqual(violations, ["bad-story.title: person-is-alive"])
 
     def test_public_scenario_labels_do_not_expose_raw_compatibility_ids(self) -> None:
-        from lab_homepage_scenarios import public_label_check
-        self.assertEqual(public_label_check(), [])
+        self.assertEqual(lab_homepage_scenarios.public_label_check(), [])
 
     def test_wallet_story_uses_adult_persona(self) -> None:
         story = server.scenario_payload(self._payload_config(), "wallet-credential")["story"]
@@ -1417,6 +1418,130 @@ class ExplorerApiPayloadTest(unittest.TestCase):
         os.environ.clear()
         os.environ.update(self._saved)
 
+    def test_explorer_http_json_allows_lab_https_hosts(self) -> None:
+        class Resp:
+            status = 200
+            headers = {"Content-Type": "application/json"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc):
+                return False
+
+            def read(self):
+                return b'{"ok":true}'
+
+        with mock.patch.object(explorer_common.urllib.request, "urlopen", return_value=Resp()) as urlopen:
+            result = explorer_common.http_json(
+                "GET",
+                "https://civil-relay.lab.registrystack.org/ready",
+                {},
+            )
+
+        self.assertEqual(result.status, 200)
+        self.assertEqual(result.body, {"ok": True})
+        urlopen.assert_called_once()
+
+    def test_explorer_http_json_blocks_loopback_before_request(self) -> None:
+        with mock.patch.object(explorer_common.urllib.request, "urlopen") as urlopen:
+            result = explorer_common.http_json("GET", "http://127.0.0.1/private", {})
+
+        self.assertIsNone(result.status)
+        self.assertEqual(result.error, "explorer.blocked_url")
+        urlopen.assert_not_called()
+
+    def test_explorer_http_json_allows_loopback_for_internal_runtime(self) -> None:
+        class Resp:
+            status = 200
+            headers = {"Content-Type": "application/json"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc):
+                return False
+
+            def read(self):
+                return b'{"ok":true}'
+
+        with mock.patch.object(explorer_common.urllib.request, "urlopen", return_value=Resp()) as urlopen:
+            result = explorer_common.http_json(
+                "GET",
+                "http://127.0.0.1:4321/ready",
+                {},
+                allow_internal_runtime=True,
+            )
+
+        self.assertEqual(result.status, 200)
+        self.assertEqual(result.body, {"ok": True})
+        urlopen.assert_called_once()
+
+    def test_explorer_http_json_allows_runtime_service_hostname(self) -> None:
+        class Resp:
+            status = 200
+            headers = {"Content-Type": "application/json"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc):
+                return False
+
+            def read(self):
+                return b'{"ok":true}'
+
+        with mock.patch.object(explorer_common.urllib.request, "urlopen", return_value=Resp()) as urlopen:
+            result = explorer_common.http_json(
+                "GET",
+                "http://civil-notary:8080/ready",
+                {},
+                allow_internal_runtime=True,
+            )
+
+        self.assertEqual(result.status, 200)
+        self.assertEqual(result.body, {"ok": True})
+        urlopen.assert_called_once()
+
+    def test_explorer_http_json_blocks_private_runtime_ip_before_request(self) -> None:
+        with mock.patch.object(explorer_common.urllib.request, "urlopen") as urlopen:
+            result = explorer_common.http_json(
+                "GET",
+                "http://10.0.0.4/private",
+                {},
+                allow_internal_runtime=True,
+            )
+
+        self.assertIsNone(result.status)
+        self.assertEqual(result.error, "explorer.blocked_url")
+        urlopen.assert_not_called()
+
+    def test_explorer_http_json_blocks_plain_http_allowlisted_host_for_internal_runtime(self) -> None:
+        with mock.patch.object(explorer_common.urllib.request, "urlopen") as urlopen:
+            result = explorer_common.http_json(
+                "GET",
+                "http://civil-relay.lab.registrystack.org/ready",
+                {},
+                allow_internal_runtime=True,
+            )
+
+        self.assertIsNone(result.status)
+        self.assertEqual(result.error, "explorer.blocked_url")
+        urlopen.assert_not_called()
+
+    def test_explorer_internal_runtime_rejects_unknown_schemes_with_runtime_message(self) -> None:
+        with self.assertRaises(explorer_common.ExplorerInputError) as raised:
+            explorer_common.validate_explorer_outbound_url(
+                "ftp://civil-notary/ready",
+                allow_internal_runtime=True,
+            )
+
+        self.assertEqual(raised.exception.code, "explorer.blocked_url")
+        self.assertEqual(
+            raised.exception.message,
+            "Explorer request URLs must use HTTPS or an allowed internal runtime HTTP URL.",
+        )
+
     def test_registry_catalog_uses_exact_allowlist(self) -> None:
         payload = server.registry_explorer.registry_catalog_payload(self.config)
         self.assertEqual(
@@ -1999,8 +2124,9 @@ class ExplorerApiPayloadTest(unittest.TestCase):
             headers = {"content-type": "application/json"}
             error = ""
 
-        def fake_http_json(method, url, headers, body, timeout=8.0):
+        def fake_http_json(method, url, headers, body, timeout=8.0, *, allow_internal_runtime=False):
             captured["headers"] = headers
+            captured["allow_internal_runtime"] = allow_internal_runtime
             return Result()
 
         os.environ["CIVIL_EVIDENCE_CLIENT_BEARER"] = "civil-real-token"
@@ -2021,8 +2147,51 @@ class ExplorerApiPayloadTest(unittest.TestCase):
         finally:
             os.environ.pop("CIVIL_EVIDENCE_CLIENT_BEARER", None)
         self.assertEqual(captured["headers"]["Authorization"], "Bearer civil-real-token")
+        self.assertTrue(captured["allow_internal_runtime"])
         self.assertNotIn("civil-real-token", str(payload["request_source"]))
         self.assertIn("[runtime demo token hidden]", str(payload["request_source"]))
+
+    def test_runtime_claim_evaluation_allows_default_loopback_service_url(self) -> None:
+        captured = {}
+
+        class Resp:
+            status = 200
+            headers = {"Content-Type": "application/json"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc):
+                return False
+
+            def read(self):
+                return b'{"results":[{"claim_id":"person-is-alive","satisfied":true}]}'
+
+        def fake_urlopen(req, timeout=None):
+            captured["url"] = req.full_url
+            captured["authorization"] = req.get_header("Authorization")
+            return Resp()
+
+        os.environ["CIVIL_EVIDENCE_CLIENT_BEARER"] = "civil-real-token"
+        try:
+            with mock.patch.object(explorer_common.urllib.request, "urlopen", fake_urlopen):
+                payload = server.claims_explorer.run_evaluation(
+                    server.enrich_config({"credentials": []}),
+                    "civil-notary",
+                    {
+                        "claim_id": "person-is-alive",
+                        "subject": "NID-1001",
+                        "identifier_scheme": "national_id",
+                        "disclosure": "predicate",
+                        "format": server.claims_explorer.CLAIM_RESULT_FORMAT,
+                        "purpose": server.claims_explorer.PURPOSE,
+                    },
+                )
+        finally:
+            os.environ.pop("CIVIL_EVIDENCE_CLIENT_BEARER", None)
+        self.assertEqual(payload["mode"], "live")
+        self.assertEqual(captured["url"], "http://127.0.0.1:4321/v1/evaluations")
+        self.assertEqual(captured["authorization"], "Bearer civil-real-token")
 
     def test_runtime_claim_evaluation_passes_metadata_target_through(self) -> None:
         captured = {}
@@ -2037,7 +2206,7 @@ class ExplorerApiPayloadTest(unittest.TestCase):
             headers = {"content-type": "application/json"}
             error = ""
 
-        def fake_http_json(method, url, headers, body, timeout=8.0):
+        def fake_http_json(method, url, headers, body, timeout=8.0, *, allow_internal_runtime=False):
             captured["body"] = body
             return Result()
 
@@ -2273,8 +2442,6 @@ class LabModePayloadTest(unittest.TestCase):
         def fail_if_called(*_args, **_kwargs):
             raise AssertionError("urlopen must not be called in hosted mode for local-only scenario")
 
-        import lab_homepage_scenarios
-        import lab_homepage_scenarios.common as _common
         original_story_by_id = lab_homepage_scenarios.STORY_BY_ID
         class LocalOnlyModule:
             @staticmethod
@@ -2282,7 +2449,7 @@ class LabModePayloadTest(unittest.TestCase):
                 return {"id": "local-only-test", "short_title": "Local Only Test", "availability": "local-only"}
 
         lab_homepage_scenarios.STORY_BY_ID = {**original_story_by_id, "local-only-test": LocalOnlyModule}
-        with mock.patch.object(_common, "http_json", side_effect=fail_if_called):
+        with mock.patch.object(scenario_common, "http_json", side_effect=fail_if_called):
             try:
                 result = server.run_scenario_step(self._config(), "local-only-test", "discover", lab_mode="hosted")
             finally:
@@ -2325,7 +2492,6 @@ class LabModePayloadTest(unittest.TestCase):
     # ---- availability_note copy ----
 
     def test_availability_notes_contain_no_http_status_codes(self) -> None:
-        import re
         for module in ("social_aggregate", "combined_support", "agriculture_voucher"):
             from importlib import import_module
             mod = import_module(f"lab_homepage_scenarios.{module}")
@@ -2394,18 +2560,15 @@ class InternalRequestSourceTest(unittest.TestCase):
     # ---- request_source() flag behaviour ----
 
     def test_request_source_internal_true_includes_flag(self) -> None:
-        from lab_homepage_scenarios.common import request_source as rs
-        result = rs("POST", "http://internal:8080/v1/evaluations", {"Authorization": "Bearer x"}, internal=True)
+        result = scenario_common.request_source("POST", "http://internal:8080/v1/evaluations", {"Authorization": "Bearer x"}, internal=True)
         self.assertTrue(result.get("internal"), "internal=True must set the key to True")
 
     def test_request_source_internal_false_omits_key(self) -> None:
-        from lab_homepage_scenarios.common import request_source as rs
-        result = rs("GET", "https://relay.example/metadata", {"Authorization": "Bearer x"})
+        result = scenario_common.request_source("GET", "https://relay.example/metadata", {"Authorization": "Bearer x"})
         self.assertNotIn("internal", result, "internal key must be absent when not set")
 
     def test_request_source_internal_explicit_false_omits_key(self) -> None:
-        from lab_homepage_scenarios.common import request_source as rs
-        result = rs("GET", "https://relay.example/metadata", {"Authorization": "Bearer x"}, internal=False)
+        result = scenario_common.request_source("GET", "https://relay.example/metadata", {"Authorization": "Bearer x"}, internal=False)
         self.assertNotIn("internal", result, "internal key must be absent when False")
 
     # ---- alive-proof scenario: prepare-evidence uses runtime_bearer_credential -> internal ----
@@ -2769,7 +2932,6 @@ class ChooserAndMetadataTest(unittest.TestCase):
     # ---- 5. Favicon ----
 
     def test_favicon_route_returns_svg(self) -> None:
-        handler = server.LabHomepageHandler
         # Build a minimal fake handler to call _serve_favicon_svg directly.
         # We test via the route logic: call the helper that produces SVG bytes.
         svg = server.favicon_svg()
@@ -2799,14 +2961,6 @@ class ChooserAndMetadataTest(unittest.TestCase):
         import io
         import http.server
 
-        class FakeSocket:
-            def makefile(self, mode):
-                return io.BytesIO(b"GET /favicon.svg HTTP/1.0\r\n\r\n")
-
-            def sendall(self, data):
-                self._sent = getattr(self, "_sent", b"") + data
-
-        sock = FakeSocket()
         h = server.LabHomepageHandler.__new__(server.LabHomepageHandler)
         output = io.BytesIO()
         h.rfile = io.BytesIO(b"")

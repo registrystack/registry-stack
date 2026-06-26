@@ -263,4 +263,5 @@ if __name__ == "__main__":
     try:
         ThreadingHTTPServer(("0.0.0.0", 8080), Handler).serve_forever()
     except KeyboardInterrupt:
+        # Ctrl-C is the expected way to stop the local fixture server.
         pass

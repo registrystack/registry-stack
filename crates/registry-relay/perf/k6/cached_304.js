@@ -11,7 +11,7 @@
 // cached_304_large thresholds when that env var is set.
 
 import http from 'k6/http';
-import { check, fail, group } from 'k6';
+import { check, fail } from 'k6';
 import {
   commonOptions,
   baseUrl,
@@ -21,7 +21,6 @@ import {
   handleSummaryFor,
   trackExpectedStatus,
   logScenarioStart,
-  profile,
 } from './lib/common.js';
 
 const thresholdKey = (__ENV.REGISTRY_RELAY_PROFILE === 'large') ? 'cached_304_large' : 'cached_304_small';
@@ -71,7 +70,7 @@ export default function (ctx) {
     }),
   });
 
-  const ok = check(res, {
+  check(res, {
     'status is 304': (r) => r.status === 304,
     'body is empty': (r) => !r.body || r.body.length === 0,
   });

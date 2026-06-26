@@ -112,6 +112,7 @@ def _terminate(proc: subprocess.Popen, name: str) -> None:
         proc.wait(timeout=SIGTERM_WAIT)
         return
     except subprocess.TimeoutExpired:
+        # Escalate below when the child ignores the graceful shutdown window.
         pass
     print(f"{name} did not exit on SIGTERM; sending SIGKILL", file=sys.stderr)
     try:
@@ -155,6 +156,7 @@ def _summarise_scenario(results_dir: Path, scenario: str) -> dict:
     try:
         values = data["metrics"][duration_key]["values"]
     except (KeyError, TypeError):
+        # Missing latency metrics are reported as None in the generated baseline.
         pass
     p50 = values.get("med") or values.get("p(50)")
     p99 = values.get("p(99)") or values.get("p(95)")

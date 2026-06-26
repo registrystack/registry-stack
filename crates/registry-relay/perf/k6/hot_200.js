@@ -11,7 +11,7 @@
 //   large-full:               hot_200_50mb   (p95 < 1500ms, p99 < 5000ms)
 
 import http from 'k6/http';
-import { check, group } from 'k6';
+import { check } from 'k6';
 import {
   commonOptions,
   baseUrl,
@@ -71,7 +71,7 @@ export default function (ctx) {
     },
   });
 
-  const ok = check(res, {
+  check(res, {
     'status is 200': (r) => r.status === 200,
     'has ETag': (r) => !!r.headers['Etag'] || !!r.headers['ETag'],
     'body is JSON object': (r) => {
