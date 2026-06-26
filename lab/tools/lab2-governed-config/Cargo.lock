@@ -1289,9 +1289,9 @@ dependencies = [
 
 [[package]]
 name = "quinn-proto"
-version = "0.11.14"
+version = "0.11.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "434b42fec591c96ef50e21e886936e66d3cc3f737104fdb9b737c40ffb94c098"
+checksum = "4fcb935c5bec503c2f0e306bdd3e58bb9029dcb14fa8d9ac76e3a5256ac0763e"
 dependencies = [
  "bytes",
  "getrandom 0.3.4",
@@ -1420,7 +1420,7 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
 name = "registry-platform-config"
-version = "0.3.2"
+version = "0.8.2"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -1439,7 +1439,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-crypto"
-version = "0.3.2"
+version = "0.8.2"
 dependencies = [
  "async-trait",
  "base64",
@@ -1458,7 +1458,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-httputil"
-version = "0.3.2"
+version = "0.8.2"
 dependencies = [
  "bytes",
  "http",
@@ -1470,7 +1470,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-ops"
-version = "0.3.2"
+version = "0.8.2"
 dependencies = [
  "fs2",
  "registry-platform-crypto",
@@ -1775,6 +1775,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
+name = "signal-hook-registry"
+version = "1.4.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c4db69cba1110affc0e9f7bcd48bbf87b3f4fc7c61fc9155afd4c469eb3d6c1b"
+dependencies = [
+ "errno",
+ "libc",
+]
+
+[[package]]
 name = "signature"
 version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1956,6 +1966,7 @@ dependencies = [
  "libc",
  "mio",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2",
  "tokio-macros",
  "windows-sys 0.61.2",
