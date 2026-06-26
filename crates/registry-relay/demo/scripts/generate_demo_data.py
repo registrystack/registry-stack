@@ -1805,7 +1805,7 @@ def main() -> int:
         second = tmp.read_bytes()
         tmp.unlink()
         if first != second:
-            print(f"DETERMINISM CHECK FAILED: writing {name} twice produced different bytes", file=sys.stderr)
+            print("DETERMINISM CHECK FAILED: writing a workbook twice produced different bytes", file=sys.stderr)
             sys.exit(1)
     print("Determinism self-check: OK")
 

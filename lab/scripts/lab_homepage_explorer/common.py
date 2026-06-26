@@ -255,9 +255,9 @@ def http_json(
         request_headers.setdefault("Content-Type", "application/json")
     try:
         validate_explorer_outbound_url(url, allow_internal_runtime=allow_internal_runtime)
-        request = urllib.request.Request(url, headers=request_headers, data=data, method=method)
         # URL is constrained to an allowlisted HTTPS host or explicit internal runtime target above.
         # codeql[py/full-ssrf]
+        request = urllib.request.Request(url, headers=request_headers, data=data, method=method)
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return ExplorerHttpResult(
                 status=response.status,
