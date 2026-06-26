@@ -23,7 +23,7 @@ read spreadsheet data through a secured route, and open the local API reference.
   outcome="A protected registry API over a sample workbook, with anonymous reads denied and an authorized read returning data."
   time="About 10 minutes after Docker is installed"
   level="Local single-node"
-  prerequisites={['registryctl 0.8.2+', 'A Docker Compose provider', 'curl']}
+  prerequisites={['registryctl 0.8.3+', 'A Docker Compose provider', 'curl']}
 />
 
 This tutorial uses synthetic data and local demo credentials.
@@ -40,20 +40,20 @@ Install:
 - `~/.local/bin` on your `PATH` (the installer writes there by default; a new shell cannot find
   `registryctl` otherwise)
 
-Use `registryctl` 0.8.2 or newer.
+Use `registryctl` 0.8.3 or newer.
 
-The `v0.8.2` release publishes binaries for Linux x86_64, Linux arm64, and macOS arm64.
+The `v0.8.3` release publishes binaries for Linux x86_64, Linux arm64, and macOS arm64.
 On other platforms, install from source with Rust or run the tutorial from a Linux x86_64
 environment such as a VM or container.
 
 Install `registryctl` without cloning a product repository:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/v0.8.2/crates/registryctl/install.sh | REGISTRYCTL_VERSION=v0.8.2 sh
+curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/v0.8.3/crates/registryctl/install.sh | REGISTRYCTL_VERSION=v0.8.3 sh
 ```
 
 The installer downloads the pinned release selected by `REGISTRYCTL_VERSION`.
-It defaults to `v0.8.2` in the current stack release.
+It defaults to `v0.8.3` in the current stack release.
 The container images are published for linux/amd64; on Apple Silicon your Docker provider runs
 them under emulation and prints a platform warning, which is harmless here.
 
@@ -62,7 +62,7 @@ the source install path.
 Install Rust with [`rustup`](https://rustup.rs), then build the pinned release tag:
 
 ```sh
-cargo install --git https://github.com/registrystack/registry-stack --tag v0.8.2 registryctl --locked
+cargo install --git https://github.com/registrystack/registry-stack --tag v0.8.3 registryctl --locked
 ```
 
 Confirm the CLI is available:
