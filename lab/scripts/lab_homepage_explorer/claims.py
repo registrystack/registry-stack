@@ -518,9 +518,10 @@ def default_civil_claims_payload(config: dict[str, Any], *, run_live: bool = Fal
             },
         }
     headers = _execution_headers(config, service, request["request_source"]["headers"])
+    request_url = evaluation_url_for_service_id(config, "civil-notary")
     result = http_json(
         "POST",
-        request["request_source"]["url"],
+        request_url,
         headers,
         request["request_source"]["body"],
         timeout=timeout,
@@ -720,6 +721,7 @@ def run_evaluation(config: dict[str, Any], service_id: str, body: dict[str, Any]
         target=validated["target"],
     )
     headers = _execution_headers(config, validated["service"], built["request_source"]["headers"])
+    request_url = evaluation_url_for_service_id(config, service_id)
     credential = credential_for_execution(
         config,
         validated["service"]["client_credential_id"],
@@ -748,7 +750,7 @@ def run_evaluation(config: dict[str, Any], service_id: str, body: dict[str, Any]
         }
     result = http_json(
         "POST",
-        built["request_source"]["url"],
+        request_url,
         headers,
         built["request_source"]["body"],
         timeout=timeout,
@@ -834,6 +836,27 @@ def evaluation_url(config: dict[str, Any], service: dict[str, Any]) -> str:
     if credential.get("service_url"):
         return service_url(config, credential_id, "/v1/evaluations", fallback_base_url=service["base_url"])
     return joined_url(service["base_url"], "/v1/evaluations")
+
+
+def evaluation_url_for_service_id(config: dict[str, Any], service_id: str) -> str:
+    if service_id == "civil-notary":
+        return evaluation_url(config, claim_service_config_for(config, "civil-notary"))
+    if service_id == "social-protection-notary":
+        return evaluation_url(config, claim_service_config_for(config, "social-protection-notary"))
+    if service_id == "shared-eligibility-notary":
+        return evaluation_url(config, claim_service_config_for(config, "shared-eligibility-notary"))
+    if service_id == "dhis2-health-notary":
+        return evaluation_url(config, claim_service_config_for(config, "dhis2-health-notary"))
+    if service_id == "opencrvs-dci-notary":
+        return evaluation_url(config, claim_service_config_for(config, "opencrvs-dci-notary"))
+    if service_id == "agriculture-notary":
+        return evaluation_url(config, claim_service_config_for(config, "agriculture-notary"))
+    raise ExplorerInputError(
+        "explorer.unknown_claim_service",
+        "Unknown claim service id.",
+        field="service_id",
+        allowed=claim_service_ids(),
+    )
 
 
 def controlled_exception_payload(error: Exception) -> dict[str, Any]:
