@@ -819,11 +819,13 @@ impl TokenVerifier {
         access_token: &VerifiedToken,
     ) -> Result<Claims, OidcError> {
         let issuers = [self.config.issuer.as_str()];
+        let client_audience = matched_client_audience(access_token)?;
+        let accepted_audiences = [client_audience];
         self.verify_userinfo_jwt_with_claims_policy(
             userinfo_jwt,
             access_token,
             &issuers,
-            &self.config.audiences,
+            &accepted_audiences,
         )
         .await
     }
@@ -1101,6 +1103,19 @@ fn issuer_from_untrusted_payload(token: &str) -> Option<String> {
     let decoded = URL_SAFE_NO_PAD.decode(payload).ok()?;
     let claims: Claims = serde_json::from_slice(&decoded).ok()?;
     claims.iss.filter(|issuer| !issuer.is_empty())
+}
+
+fn matched_client_audience(access_token: &VerifiedToken) -> Result<String, OidcError> {
+    let matched_client = access_token
+        .matched_client
+        .as_deref()
+        .ok_or(OidcError::ClientNotAllowed)?;
+    matched_client
+        .strip_prefix("azp:")
+        .or_else(|| matched_client.strip_prefix("client_id:"))
+        .filter(|audience| !audience.is_empty())
+        .map(ToOwned::to_owned)
+        .ok_or(OidcError::ClientNotAllowed)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1991,6 +2006,71 @@ mod tests {
                 )
                 .await,
             Err(OidcError::InvalidToken)
+        ));
+    }
+
+    #[tokio::test]
+    async fn oidc_userinfo_default_helper_uses_matched_client_audience() {
+        let secret = b"registry-platform-oidc-default-userinfo-secret";
+        let verifier = hs256_test_verifier(
+            "https://issuer.example",
+            vec!["registry-api".to_string()],
+            vec!["citizen-client".to_string()],
+            "kid",
+            secret,
+        )
+        .await;
+        let access = VerifiedToken {
+            claims: test_claims(
+                Some("https://issuer.example"),
+                Some("registry-api"),
+                Some("subject-1"),
+            ),
+            matched_client: Some("azp:citizen-client".to_string()),
+            scopes: Vec::new(),
+        };
+
+        let client_audience = signed_hs256_token(
+            "kid",
+            test_claims(
+                Some("https://issuer.example"),
+                Some("citizen-client"),
+                Some("subject-1"),
+            ),
+            secret,
+            Some("JWT"),
+        );
+        verifier
+            .verify_userinfo_jwt(&client_audience, &access)
+            .await
+            .expect("client-audience UserInfo JWT verifies");
+
+        let resource_audience = signed_hs256_token(
+            "kid",
+            test_claims(
+                Some("https://issuer.example"),
+                Some("registry-api"),
+                Some("subject-1"),
+            ),
+            secret,
+            Some("JWT"),
+        );
+        assert!(matches!(
+            verifier
+                .verify_userinfo_jwt(&resource_audience, &access)
+                .await,
+            Err(OidcError::AudienceMismatch)
+        ));
+
+        let access_without_client = VerifiedToken {
+            matched_client: None,
+            ..access
+        };
+        assert!(matches!(
+            verifier
+                .verify_userinfo_jwt(&client_audience, &access_without_client)
+                .await,
+            Err(OidcError::ClientNotAllowed)
         ));
     }
 
