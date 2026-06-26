@@ -5005,7 +5005,6 @@ fn principal_from_oidc(
             .and_then(Value::as_str)
             .map(ToOwned::to_owned)
     }
-    .or_else(|| verified.matched_client.clone())
     .ok_or(EvidenceError::MissingCredential)?;
     let authorization_details = authorization_details_from_oidc(verified)?;
     Ok(EvidencePrincipal {
@@ -10604,6 +10603,25 @@ sources:
         assert_eq!(verified_claims.exp, Some(1_700_003_600));
         assert_eq!(verified_claims.iat, Some(1_700_000_000));
         assert_eq!(verified_claims.nbf, Some(1_699_999_900));
+    }
+
+    #[test]
+    fn oidc_principal_requires_configured_principal_claim() {
+        let verified = verified_token_with_extra(Map::new());
+
+        let error = principal_from_oidc(
+            &verified,
+            None,
+            None,
+            verified_claim_value("JWT"),
+            "national_id",
+            None,
+            SelfAttestationClaimSource::AccessToken,
+            SelfAttestationAssuranceClaimSource::AccessToken,
+        )
+        .expect_err("missing configured principal claim must not fall back to matched client");
+
+        assert!(matches!(error, EvidenceError::MissingCredential));
     }
 
     #[test]
