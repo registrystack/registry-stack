@@ -11,14 +11,6 @@ db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
 # Advisory ignores must include a scoped rationale and a review trigger.
 ignore = [
-    # RUSTSEC-2023-0071: `rsa` has no patched stable release. It is pulled in
-    # directly for RS256 local JWK signing/verification and transitively through
-    # `jsonwebtoken` for RS*/PS* JWT compatibility. RS256 is confined to
-    # reviewed client-assertion/provider-compatibility paths; credential profile
-    # signing remains EdDSA/ES256. Review when `rsa` publishes a patched stable
-    # version, when replacing local RSA with an external signing provider, or
-    # before expanding platform-owned RSA usage.
-    "RUSTSEC-2023-0071",
     # RUSTSEC-2023-0089: `atomic-polyfill` is pulled transitively by
     # `crosswalk-core` through phonenumber's build dependency stack (postcard
     # → heapless 0.7) in consumers. Review when `crosswalk-core` or phonenumber

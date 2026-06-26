@@ -139,8 +139,8 @@ Config files should contain names, not secret values.
 | API key or bearer-token auth | `auth.api_keys[].fingerprint`, `auth.bearer_tokens[].fingerprint` | `sha256:<hex>` fingerprint |
 | Static upstream source token | `evidence.source_connections.<id>.token_env` | Raw upstream bearer token |
 | OAuth2 client credential source auth | `source_auth.client_id_env`, `source_auth.client_secret_env` | OAuth client id and secret |
-| Local JWK signing key | `evidence.signing_keys.<id>.private_jwk_env` | Private Ed25519 JWK JSON |
-| Watched local JWK signing key | `evidence.signing_keys.<id>.path` with `provider: file_watch` | Private Ed25519 JWK JSON in a host-local file |
+| Local JWK signing key | `evidence.signing_keys.<id>.private_jwk_env` | Private JWK JSON matching the configured `alg` |
+| Watched local JWK signing key | `evidence.signing_keys.<id>.path` with `provider: file_watch` | Private JWK JSON matching the configured `alg` in a host-local file |
 | Publish-only JWK | `evidence.signing_keys.<id>.public_jwk_env` | Public JWK JSON |
 | Publish-only deadline | `evidence.signing_keys.<id>.publish_until_unix_seconds` | Optional public metadata, not a secret |
 | PKCS#11 PIN | `evidence.signing_keys.<id>.pin_env` | HSM token PIN |
@@ -164,6 +164,11 @@ public JWK identity is picked up without process restart; a malformed, missing,
 or different-public-key replacement marks the key degraded and keeps the last
 good signer serving. Use a new `kid` and governed config change for real key
 rotation.
+
+RS256 is reserved for the eSignet RP client assertion key. Its private RSA JWK
+must use a 2048-8192-bit modulus and include `n`, `e`, `d`, `p`, `q`, `dp`,
+`dq`, and `qi`; keys outside that size range or missing CRT parameters are
+rejected before use.
 
 For local development, the binary accepts `--env-file`. For shared
 environments, prefer the platform secret store and avoid checking dotenv files
@@ -424,6 +429,7 @@ naming the replacement field.
 - `allowed_algorithms`: explicit token signing algorithms accepted from the
   identity provider. Match the provider and do not mix unrelated algorithm
   families in one deployment.
+  RS256 JWKS keys must use a 2048-8192-bit RSA modulus.
 - `scope_claim`, `scope_separator`, and `scope_map`: how external token scopes
   map to Registry Notary scopes.
 - `principal_claim`: claim used for audit principal identity. The default is
