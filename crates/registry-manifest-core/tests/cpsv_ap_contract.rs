@@ -1,15 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
 
+use oxjsonld::JsonLdParser;
 use registry_manifest_core::{compile_manifest, render_cpsv_ap, MetadataManifest};
 use serde_json::{json, Value};
-use sophia_api::{prelude::QuadParser, quad::Spog, source::QuadSource};
-use sophia_jsonld::loader::NoLoader;
-use sophia_jsonld::vocabulary::ArcIri;
-use sophia_jsonld::{JsonLdOptions, JsonLdParser};
-use sophia_term::ArcTerm;
 
 #[test]
 fn cpsv_ap_service_first_fixture_satisfies_jsonld_rdf_contract() {
@@ -45,17 +40,15 @@ fn cpsv_ap_jsonld_parser_rejects_broken_context() {
 
 fn parse_jsonld_to_rdf(document: &Value) -> Result<usize, String> {
     let raw = serde_json::to_string(document).map_err(|error| error.to_string())?;
-    let options = JsonLdOptions::new()
-        .with_default_document_loader::<NoLoader>()
-        .with_base(ArcIri::new_unchecked(Arc::from(
-            "https://child-support.example.gov/metadata/cpsv-ap",
-        )));
-    let parser = JsonLdParser::new_with_options(options);
-    let quads: Vec<Spog<ArcTerm>> = parser
-        .parse_str(&raw)
-        .collect_quads()
+    let parser = JsonLdParser::new()
+        .with_base_iri("https://child-support.example.gov/metadata/cpsv-ap")
         .map_err(|error| error.to_string())?;
-    Ok(quads.len())
+    let mut quad_count = 0;
+    for quad in parser.for_slice(&raw) {
+        quad.map_err(|error| error.to_string())?;
+        quad_count += 1;
+    }
+    Ok(quad_count)
 }
 
 fn validate_cpsv_ap_service_first_contract(document: &Value) -> Result<(), Vec<String>> {
