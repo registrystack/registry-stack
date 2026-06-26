@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import shlex
@@ -19,6 +20,16 @@ CLAIM_RESULT_FORMAT = "application/vnd.registry-notary.claim-result+json"
 EXPLORER_MAX_LIMIT = 10
 RUNTIME_TOKEN_HIDDEN = "[runtime demo token hidden]"
 RUNTIME_TOKEN_MISSING = "[runtime demo token missing]"
+EXPLORER_ALLOWED_HOST_SUFFIXES = (".lab.registrystack.org", ".example")
+EXPLORER_ALLOWED_HOSTS = {"lab.registrystack.org", "example"}
+EXPLORER_INTERNAL_RUNTIME_HOSTS = {
+    "localhost",
+    "host.docker.internal",
+    "civil-notary",
+    "shared-eligibility-notary",
+    "nagdi-agriculture-notary",
+    "agriculture-notary",
+}
 
 
 @dataclass(frozen=True)
@@ -176,6 +187,49 @@ def source_response(result: ExplorerHttpResult) -> dict[str, Any]:
     }
 
 
+def _is_explorer_allowlisted_host(host: str) -> bool:
+    return host in EXPLORER_ALLOWED_HOSTS or any(host.endswith(suffix) for suffix in EXPLORER_ALLOWED_HOST_SUFFIXES)
+
+
+def validate_explorer_outbound_url(url: str, *, allow_internal_runtime: bool = False) -> None:
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.username or parsed.password:
+        raise ExplorerInputError("explorer.blocked_url", "Explorer request URLs must not include credentials.", field="url")
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if not host:
+        raise ExplorerInputError("explorer.blocked_url", "Explorer request URLs must include a host.", field="url")
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        address = None
+    explorer_host_allowed = address is None and _is_explorer_allowlisted_host(host)
+    internal_runtime_allowed = allow_internal_runtime and (
+        (address is not None and address.is_loopback) or host in EXPLORER_INTERNAL_RUNTIME_HOSTS
+    )
+    if parsed.scheme == "https":
+        if explorer_host_allowed or internal_runtime_allowed:
+            return
+    elif parsed.scheme == "http":
+        if internal_runtime_allowed:
+            return
+        if allow_internal_runtime:
+            raise ExplorerInputError(
+                "explorer.blocked_url",
+                "Explorer HTTP runtime URLs must target an allowed internal runtime host.",
+                field="url",
+            )
+        raise ExplorerInputError("explorer.blocked_url", "Explorer requests must use HTTPS.", field="url")
+    else:
+        message = "Explorer requests must use HTTPS."
+        if allow_internal_runtime:
+            message = "Explorer request URLs must use HTTPS or an allowed internal runtime HTTP URL."
+        raise ExplorerInputError("explorer.blocked_url", message, field="url")
+
+    if address is not None:
+        raise ExplorerInputError("explorer.blocked_url", "Explorer request URLs must use allowlisted hostnames.", field="url")
+    raise ExplorerInputError("explorer.blocked_url", "Explorer request URLs must target an allowlisted host.", field="url")
+
+
 def safe_curl(method: str, url: str, headers: dict[str, str], body: Any | None = None) -> str:
     pieces = ["curl", "-fsS", "-X", method.upper(), shlex.quote(url)]
     for name, value in headers.items():
@@ -185,20 +239,33 @@ def safe_curl(method: str, url: str, headers: dict[str, str], body: Any | None =
     return " ".join(pieces)
 
 
-def http_json(method: str, url: str, headers: dict[str, str], body: Any | None = None, timeout: float = 8.0) -> ExplorerHttpResult:
+def http_json(
+    method: str,
+    url: str,
+    headers: dict[str, str],
+    body: Any | None = None,
+    timeout: float = 8.0,
+    *,
+    allow_internal_runtime: bool = False,
+) -> ExplorerHttpResult:
     data = None
     request_headers = dict(headers)
     if body is not None:
         data = json.dumps(body).encode("utf-8")
         request_headers.setdefault("Content-Type", "application/json")
-    request = urllib.request.Request(url, headers=request_headers, data=data, method=method)
     try:
+        validate_explorer_outbound_url(url, allow_internal_runtime=allow_internal_runtime)
+        # URL is constrained to an allowlisted HTTPS host or explicit internal runtime target above.
+        # codeql[py/full-ssrf]
+        request = urllib.request.Request(url, headers=request_headers, data=data, method=method)
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return ExplorerHttpResult(
                 status=response.status,
                 body=parse_body(response.read()),
                 headers={key.lower(): value for key, value in response.headers.items()},
             )
+    except ExplorerInputError as error:
+        return ExplorerHttpResult(status=None, body={}, headers={}, error=error.code)
     except urllib.error.HTTPError as error:
         return ExplorerHttpResult(
             status=error.code,

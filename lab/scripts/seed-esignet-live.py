@@ -62,6 +62,7 @@ def wait_for_table(database: str, table_name: str) -> None:
             if psql(database, query, capture=True).strip() == "t":
                 return
         except subprocess.CalledProcessError:
+            # The database may still be starting; retry until the readiness deadline.
             pass
         time.sleep(2)
     raise RuntimeError(f"timed out waiting for {database}.{table_name}")

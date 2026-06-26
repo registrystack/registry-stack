@@ -30,7 +30,6 @@ const tsSource = readFileSync(srcPath, 'utf8');
 const jsSource = tsSource
   .replace(/^\/\*\*[\s\S]*?\*\//gm, '') // remove JSDoc block comments
   .replace(/:\s*string\b/g, '')          // remove ": string" type annotations
-  .replace(/= '\/'/, "= '/'")            // leave default param value intact
   .replace(/^export\s+function/, 'export function'); // keep export
 
 // Use a data: URL so Node treats it as an ES module.

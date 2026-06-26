@@ -26,10 +26,10 @@ from agri_demo_common import (
     DemoError,
     env,
     load_dotenv,
-    parse_dotenv_file,
     prepare_output_dir,
     save_json,
 )
+from dotenv_util import parse_dotenv_file
 
 FEDERATION_PROTOCOL = "registry-notary-federation/v0.1"
 REQUEST_TYP = "registry-notary-request+jwt"
@@ -109,10 +109,8 @@ def sign_compact_jws(private_jwk: dict[str, Any], kid: str, typ: str, payload: d
     ).encode("ascii")
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
-        key_path = tmp_path / "key.pem"
         input_path = tmp_path / "input"
         sig_path = tmp_path / "signature"
-        key_path.write_text(private_pem_from_jwk(private_jwk), encoding="utf-8")
         input_path.write_bytes(signing_input)
         subprocess.run(
             [
@@ -120,7 +118,7 @@ def sign_compact_jws(private_jwk: dict[str, Any], kid: str, typ: str, payload: d
                 "pkeyutl",
                 "-sign",
                 "-inkey",
-                str(key_path),
+                "/dev/stdin",
                 "-rawin",
                 "-in",
                 str(input_path),
@@ -128,6 +126,7 @@ def sign_compact_jws(private_jwk: dict[str, Any], kid: str, typ: str, payload: d
                 str(sig_path),
             ],
             check=True,
+            input=private_pem_from_jwk(private_jwk).encode("utf-8"),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
@@ -143,10 +142,8 @@ def verify_compact_jws(public_jwk: dict[str, Any], token: str) -> tuple[dict[str
     signature = b64url_decode(parts[2])
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
-        key_path = tmp_path / "key.pem"
         input_path = tmp_path / "input"
         sig_path = tmp_path / "signature"
-        key_path.write_text(public_pem_from_jwk(public_jwk), encoding="utf-8")
         input_path.write_bytes(signing_input)
         sig_path.write_bytes(signature)
         result = subprocess.run(
@@ -156,13 +153,14 @@ def verify_compact_jws(public_jwk: dict[str, Any], token: str) -> tuple[dict[str
                 "-verify",
                 "-pubin",
                 "-inkey",
-                str(key_path),
+                "/dev/stdin",
                 "-rawin",
                 "-in",
                 str(input_path),
                 "-sigfile",
                 str(sig_path),
             ],
+            input=public_pem_from_jwk(public_jwk).encode("utf-8"),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )

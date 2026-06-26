@@ -145,7 +145,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return args.func(args)
     except ValueError as exc:
-        parser.exit(2, f"error: {exc}\n")
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":
