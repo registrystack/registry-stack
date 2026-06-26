@@ -249,6 +249,7 @@ impl StandaloneRegistryNotaryConfig {
             }
         }
         self.replay.validate()?;
+        validate_static_credential_ids(&self.auth.api_keys, &self.auth.bearer_tokens)?;
         match self.auth.mode {
             EvidenceAuthMode::ApiKey => {
                 if self.auth.api_keys.is_empty() && self.auth.bearer_tokens.is_empty() {
@@ -827,6 +828,27 @@ impl StandaloneRegistryNotaryConfig {
         }
         Ok(())
     }
+}
+
+fn validate_static_credential_ids(
+    api_keys: &[EvidenceCredentialConfig],
+    bearer_tokens: &[EvidenceCredentialConfig],
+) -> Result<(), EvidenceConfigError> {
+    let mut ids = HashSet::with_capacity(api_keys.len() + bearer_tokens.len());
+    for (field, credentials) in [
+        ("auth.api_keys", api_keys),
+        ("auth.bearer_tokens", bearer_tokens),
+    ] {
+        for credential in credentials {
+            if ids.insert(credential.id.as_str()) {
+                continue;
+            }
+            return Err(EvidenceConfigError::InvalidAuthConfig {
+                reason: format!("{field} contains duplicate id '{}'", credential.id),
+            });
+        }
+    }
+    Ok(())
 }
 
 pub const FEDERATION_PROTOCOL_V0_1: &str = "registry-notary-federation/v0.1";
@@ -4479,6 +4501,8 @@ pub enum EvidenceConfigError {
     EvidenceDisabled,
     #[error("at least one API key or bearer token must be configured")]
     NoCredentialsConfigured,
+    #[error("invalid auth config: {reason}")]
+    InvalidAuthConfig { reason: String },
     #[error("auth.mode = oidc requires an auth.oidc block")]
     MissingOidcConfig,
     #[error("invalid auth.oidc config: {reason}")]
@@ -9239,6 +9263,70 @@ vct: https://vct.example/test
         });
 
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn duplicate_static_credential_api_key_id_rejected() {
+        let mut config = minimal_config();
+        let duplicate = config.auth.api_keys[0].clone();
+        config.auth.api_keys.push(duplicate);
+
+        let reason = match config
+            .validate()
+            .expect_err("duplicate API key id must fail validation")
+        {
+            EvidenceConfigError::InvalidAuthConfig { reason } => reason,
+            other => panic!("unexpected error variant: {other}"),
+        };
+
+        assert!(
+            reason.contains("auth.api_keys") && reason.contains("test-key"),
+            "unexpected reason: {reason}"
+        );
+    }
+
+    #[test]
+    fn duplicate_static_credential_bearer_token_id_rejected() {
+        let mut config = minimal_config();
+        let mut token = config.auth.api_keys[0].clone();
+        token.id = "shared-bearer-token".to_string();
+        config.auth.bearer_tokens.push(token.clone());
+        config.auth.bearer_tokens.push(token);
+
+        let reason = match config
+            .validate()
+            .expect_err("duplicate bearer token id must fail validation")
+        {
+            EvidenceConfigError::InvalidAuthConfig { reason } => reason,
+            other => panic!("unexpected error variant: {other}"),
+        };
+
+        assert!(
+            reason.contains("auth.bearer_tokens") && reason.contains("shared-bearer-token"),
+            "unexpected reason: {reason}"
+        );
+    }
+
+    #[test]
+    fn duplicate_static_credential_id_across_api_key_and_bearer_token_rejected() {
+        let mut config = minimal_config();
+        config
+            .auth
+            .bearer_tokens
+            .push(config.auth.api_keys[0].clone());
+
+        let reason = match config
+            .validate()
+            .expect_err("duplicate static credential id across types must fail validation")
+        {
+            EvidenceConfigError::InvalidAuthConfig { reason } => reason,
+            other => panic!("unexpected error variant: {other}"),
+        };
+
+        assert!(
+            reason.contains("auth.bearer_tokens") && reason.contains("test-key"),
+            "unexpected reason: {reason}"
+        );
     }
 
     #[test]
