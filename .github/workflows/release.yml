@@ -576,7 +576,7 @@ jobs:
           tag="${{ needs.verify.outputs.tag }}"
           asset="registry-stack-${tag}-release-provenance.intoto.jsonl"
           for _ in {1..6}; do
-            if gh release view "${tag}" --json assets --jq '.assets[].name' \
+            if gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name' \
               | grep -Fx "${asset}" >/dev/null; then
               exit 0
             fi
