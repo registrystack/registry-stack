@@ -1066,6 +1066,46 @@ async fn aggregate_required_filters_require_principal_bindings_in_config() {
 }
 
 #[tokio::test]
+async fn aggregate_required_filters_allow_single_principal_binding_as_or_gate() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = tmp.path().join("aggregates_entity.yaml");
+    let config = AGGREGATE_CONFIG.replace(
+        r#"        allowed_filters:
+          - field: municipality_code
+            ops: [eq, in]
+        required_filters:
+          - municipality_code
+"#,
+        r#"        allowed_filters:
+          - field: municipality_code
+            ops: [eq, in]
+          - field: household_id
+            ops: [eq]
+        required_filters:
+          - municipality_code
+          - household_id
+"#,
+    );
+    std::fs::write(&config_path, config).expect("write config");
+
+    let config = config::load(&config_path).expect("aggregate required_filters load");
+    let aggregate = config.datasets[0]
+        .aggregates
+        .iter()
+        .find(|aggregate| aggregate.id.as_str() == "by_required_municipality")
+        .expect("aggregate exists");
+    assert_eq!(
+        aggregate.required_filters,
+        ["municipality_code", "household_id"]
+    );
+    assert_eq!(aggregate.required_filter_bindings.len(), 1);
+    assert_eq!(
+        aggregate.required_filter_bindings[0].field,
+        "municipality_code"
+    );
+}
+
+#[tokio::test]
 async fn caller_filters_do_not_satisfy_aggregate_required_filters() {
     let query = aggregate_query_engine(AGGREGATE_CONFIG.to_string()).await;
 

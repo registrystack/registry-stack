@@ -214,7 +214,7 @@ Common forms:
 
 Operators are configured per field with `ops: [eq, in, gte, lte, between]`. Arbitrary SQL is never exposed.
 
-Some entities declare `required_filters`. Collection reads for those entities must include at least one of those fields or the gateway returns `400 entity.filter_required`. This protects sensitive resources from accidental unfiltered enumeration.
+Some entities declare `required_filters`. Protected reads for those entities must carry a principal-bound equality filter for at least one listed field or the gateway returns `400 entity.filter_required`; caller-supplied filters can narrow results but do not satisfy the gate. The list is an OR gate, so configure multiple fields only when each field is an acceptable row boundary.
 
 Collection reads accept at most 20 filter parameters. The cap applies before query planning so overly broad or machine-generated requests fail predictably.
 
@@ -289,7 +289,7 @@ Auth and scope requirements for OGC API Features routes:
 | `GET /ogc/v1/datasets/{dataset_id}/collections/{collection_id}/items` | read scope for the collection's entity |
 | `GET /ogc/v1/datasets/{dataset_id}/collections/{collection_id}/items/{feature_id}` | read scope for the collection's entity |
 
-Required filters, purpose headers, and field projection all apply on item routes. `bbox` alone does not satisfy a non-spatial `required_filters` constraint; item-by-id reads also enforce required filters to prevent filter-bypass via direct feature links. Item links in FeatureCollections preserve active required filters so they remain valid when followed.
+Required filters, purpose headers, and field projection all apply on item routes. `bbox` alone does not satisfy a non-spatial `required_filters` constraint; item-by-id reads also enforce required filters to prevent filter-bypass via direct feature links. When multiple `required_filters` are configured, any one principal-bound equality filter on a listed field satisfies the gate. Item links in FeatureCollections preserve active required filters so they remain valid when followed.
 
 OGC item routes return `application/geo+json`; landing, conformance, and collection routes return `application/json`. Errors return `application/problem+json` with a stable `code` extension member.
 
