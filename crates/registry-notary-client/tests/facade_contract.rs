@@ -206,7 +206,7 @@ async fn problem_handler() -> Response {
         StatusCode::NOT_FOUND,
         [("content-type", "application/problem+json")],
         Json(json!({
-            "type": "https://docs.registry-notary.dev/problems/target/not-found",
+            "type": "https://id.registrystack.org/problems/registry-notary/target/not-found",
             "title": "Target not found",
             "status": 404,
             "detail": "target identifier subj-sensitive was not found",

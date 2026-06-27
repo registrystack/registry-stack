@@ -1936,7 +1936,7 @@
                   "detail": "missing authentication credential",
                   "status": 401,
                   "title": "Missing credential",
-                  "type": "https://docs.registry-notary.dev/problems/auth/missing_credential"
+                  "type": "https://id.registrystack.org/problems/registry-notary/auth/missing_credential"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -2219,7 +2219,7 @@
                   "detail": "missing authentication credential",
                   "status": 401,
                   "title": "Missing credential",
-                  "type": "https://docs.registry-notary.dev/problems/auth/missing_credential"
+                  "type": "https://id.registrystack.org/problems/registry-notary/auth/missing_credential"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -2236,7 +2236,7 @@
                   "detail": "missing required scope",
                   "status": 403,
                   "title": "Scope denied",
-                  "type": "https://docs.registry-notary.dev/problems/auth/scope_denied"
+                  "type": "https://id.registrystack.org/problems/registry-notary/auth/scope_denied"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -2298,7 +2298,7 @@
                   "detail": "candidate config could not be parsed",
                   "status": 400,
                   "title": "Candidate config invalid",
-                  "type": "https://docs.registry-notary.dev/problems/config/candidate_invalid"
+                  "type": "https://id.registrystack.org/problems/registry-notary/config/candidate_invalid"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -2315,7 +2315,7 @@
                   "detail": "missing authentication credential",
                   "status": 401,
                   "title": "Missing credential",
-                  "type": "https://docs.registry-notary.dev/problems/auth/missing_credential"
+                  "type": "https://id.registrystack.org/problems/registry-notary/auth/missing_credential"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -2332,7 +2332,7 @@
                   "detail": "missing required scope",
                   "status": 403,
                   "title": "Scope denied",
-                  "type": "https://docs.registry-notary.dev/problems/auth/scope_denied"
+                  "type": "https://id.registrystack.org/problems/registry-notary/auth/scope_denied"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -2412,7 +2412,7 @@
                   "detail": "candidate config could not be parsed",
                   "status": 400,
                   "title": "Candidate config invalid",
-                  "type": "https://docs.registry-notary.dev/problems/config/candidate_invalid"
+                  "type": "https://id.registrystack.org/problems/registry-notary/config/candidate_invalid"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -2429,7 +2429,7 @@
                   "detail": "missing authentication credential",
                   "status": 401,
                   "title": "Missing credential",
-                  "type": "https://docs.registry-notary.dev/problems/auth/missing_credential"
+                  "type": "https://id.registrystack.org/problems/registry-notary/auth/missing_credential"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -2446,7 +2446,7 @@
                   "detail": "missing required scope",
                   "status": 403,
                   "title": "Scope denied",
-                  "type": "https://docs.registry-notary.dev/problems/auth/scope_denied"
+                  "type": "https://id.registrystack.org/problems/registry-notary/auth/scope_denied"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -2508,7 +2508,7 @@
                   "detail": "candidate config could not be parsed",
                   "status": 400,
                   "title": "Candidate config invalid",
-                  "type": "https://docs.registry-notary.dev/problems/config/candidate_invalid"
+                  "type": "https://id.registrystack.org/problems/registry-notary/config/candidate_invalid"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -2525,7 +2525,7 @@
                   "detail": "missing authentication credential",
                   "status": 401,
                   "title": "Missing credential",
-                  "type": "https://docs.registry-notary.dev/problems/auth/missing_credential"
+                  "type": "https://id.registrystack.org/problems/registry-notary/auth/missing_credential"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -2542,7 +2542,7 @@
                   "detail": "missing required scope",
                   "status": 403,
                   "title": "Scope denied",
-                  "type": "https://docs.registry-notary.dev/problems/auth/scope_denied"
+                  "type": "https://id.registrystack.org/problems/registry-notary/auth/scope_denied"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -2611,7 +2611,7 @@
                   "detail": "status must be valid, suspended, or revoked",
                   "status": 400,
                   "title": "Invalid credential status",
-                  "type": "https://docs.registry-notary.dev/problems/credential_status/invalid_status"
+                  "type": "https://id.registrystack.org/problems/registry-notary/credential_status/invalid_status"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -2628,7 +2628,7 @@
                   "detail": "missing authentication credential",
                   "status": 401,
                   "title": "Missing credential",
-                  "type": "https://docs.registry-notary.dev/problems/auth/missing_credential"
+                  "type": "https://id.registrystack.org/problems/registry-notary/auth/missing_credential"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -2645,7 +2645,7 @@
                   "detail": "missing required scope",
                   "status": 403,
                   "title": "Scope denied",
-                  "type": "https://docs.registry-notary.dev/problems/auth/scope_denied"
+                  "type": "https://id.registrystack.org/problems/registry-notary/auth/scope_denied"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -2662,7 +2662,7 @@
                   "detail": "credential status record was not found",
                   "status": 404,
                   "title": "Credential status not found",
-                  "type": "https://docs.registry-notary.dev/problems/credential_status/not_found"
+                  "type": "https://id.registrystack.org/problems/registry-notary/credential_status/not_found"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -2679,7 +2679,7 @@
                   "detail": "credential status store is unavailable",
                   "status": 503,
                   "title": "Credential status unavailable",
-                  "type": "https://docs.registry-notary.dev/problems/credential_status/unavailable"
+                  "type": "https://id.registrystack.org/problems/registry-notary/credential_status/unavailable"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -2713,7 +2713,7 @@
                   "detail": "missing authentication credential",
                   "status": 401,
                   "title": "Missing credential",
-                  "type": "https://docs.registry-notary.dev/problems/auth/missing_credential"
+                  "type": "https://id.registrystack.org/problems/registry-notary/auth/missing_credential"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -2730,7 +2730,7 @@
                   "detail": "missing required scope",
                   "status": 403,
                   "title": "Scope denied",
-                  "type": "https://docs.registry-notary.dev/problems/auth/scope_denied"
+                  "type": "https://id.registrystack.org/problems/registry-notary/auth/scope_denied"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -2749,7 +2749,7 @@
                   "schema": "registry.admin.error.v1",
                   "status": 501,
                   "title": "Admin capability not supported",
-                  "type": "https://docs.registry-notary.dev/problems/registry/admin/capability/not_supported"
+                  "type": "https://id.registrystack.org/problems/registry-notary/registry/admin/capability/not_supported"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -2922,7 +2922,7 @@
                   "detail": "the evidence request is invalid",
                   "status": 400,
                   "title": "Invalid evidence request",
-                  "type": "https://docs.registry-notary.dev/problems/request/invalid"
+                  "type": "https://id.registrystack.org/problems/registry-notary/request/invalid"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -3421,7 +3421,7 @@
                   "detail": "missing authentication credential",
                   "status": 401,
                   "title": "Missing credential",
-                  "type": "https://docs.registry-notary.dev/problems/auth/missing_credential"
+                  "type": "https://id.registrystack.org/problems/registry-notary/auth/missing_credential"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -3461,7 +3461,7 @@
                   "detail": "the evidence request is invalid",
                   "status": 400,
                   "title": "Invalid evidence request",
-                  "type": "https://docs.registry-notary.dev/problems/request/invalid"
+                  "type": "https://id.registrystack.org/problems/registry-notary/request/invalid"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -3478,7 +3478,7 @@
                   "detail": "one or more readiness checks are not ready",
                   "status": 503,
                   "title": "Evidence runtime is not ready",
-                  "type": "https://docs.registry-notary.dev/problems/readiness/not_ready"
+                  "type": "https://id.registrystack.org/problems/registry-notary/readiness/not_ready"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -3605,7 +3605,7 @@
                   "detail": "the evidence request is invalid",
                   "status": 400,
                   "title": "Invalid evidence request",
-                  "type": "https://docs.registry-notary.dev/problems/request/invalid"
+                  "type": "https://id.registrystack.org/problems/registry-notary/request/invalid"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -3622,7 +3622,7 @@
                   "detail": "missing authentication credential",
                   "status": 401,
                   "title": "Missing credential",
-                  "type": "https://docs.registry-notary.dev/problems/auth/missing_credential"
+                  "type": "https://id.registrystack.org/problems/registry-notary/auth/missing_credential"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -3639,7 +3639,7 @@
                   "detail": "the requested disclosure profile is not allowed",
                   "status": 403,
                   "title": "Disclosure not allowed",
-                  "type": "https://docs.registry-notary.dev/problems/claim/disclosure_not_allowed"
+                  "type": "https://id.registrystack.org/problems/registry-notary/claim/disclosure_not_allowed"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -3656,7 +3656,7 @@
                   "detail": "the requested claim format is not supported",
                   "status": 406,
                   "title": "Claim format not supported",
-                  "type": "https://docs.registry-notary.dev/problems/format/unsupported"
+                  "type": "https://id.registrystack.org/problems/registry-notary/format/unsupported"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -3673,7 +3673,7 @@
                   "detail": "the request conflicts with existing state",
                   "status": 409,
                   "title": "Request conflict",
-                  "type": "https://docs.registry-notary.dev/problems/request/conflict"
+                  "type": "https://id.registrystack.org/problems/registry-notary/request/conflict"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -3690,7 +3690,7 @@
                   "detail": "the request body or batch is too large",
                   "status": 413,
                   "title": "Request too large",
-                  "type": "https://docs.registry-notary.dev/problems/request/too_large"
+                  "type": "https://id.registrystack.org/problems/registry-notary/request/too_large"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -3707,7 +3707,7 @@
                   "detail": "self-attestation request is rate limited",
                   "status": 429,
                   "title": "Self-attestation rate limited",
-                  "type": "https://docs.registry-notary.dev/problems/self_attestation/rate_limited"
+                  "type": "https://id.registrystack.org/problems/registry-notary/self_attestation/rate_limited"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -3724,7 +3724,7 @@
                   "detail": "the evidence source is unavailable",
                   "status": 503,
                   "title": "Source unavailable",
-                  "type": "https://docs.registry-notary.dev/problems/source/unavailable"
+                  "type": "https://id.registrystack.org/problems/registry-notary/source/unavailable"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -3865,7 +3865,7 @@
                   "detail": "missing authentication credential",
                   "status": 401,
                   "title": "Missing credential",
-                  "type": "https://docs.registry-notary.dev/problems/auth/missing_credential"
+                  "type": "https://id.registrystack.org/problems/registry-notary/auth/missing_credential"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -3983,7 +3983,7 @@
                   "detail": "missing authentication credential",
                   "status": 401,
                   "title": "Missing credential",
-                  "type": "https://docs.registry-notary.dev/problems/auth/missing_credential"
+                  "type": "https://id.registrystack.org/problems/registry-notary/auth/missing_credential"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -4000,7 +4000,7 @@
                   "detail": "the requested claim is not available",
                   "status": 404,
                   "title": "Claim not found",
-                  "type": "https://docs.registry-notary.dev/problems/claim/not_found"
+                  "type": "https://id.registrystack.org/problems/registry-notary/claim/not_found"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -4054,7 +4054,7 @@
                   "detail": "holder proof of possession is required",
                   "status": 400,
                   "title": "Holder proof required",
-                  "type": "https://docs.registry-notary.dev/problems/credential/holder_proof_required"
+                  "type": "https://id.registrystack.org/problems/registry-notary/credential/holder_proof_required"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -4071,7 +4071,7 @@
                   "detail": "missing authentication credential",
                   "status": 401,
                   "title": "Missing credential",
-                  "type": "https://docs.registry-notary.dev/problems/auth/missing_credential"
+                  "type": "https://id.registrystack.org/problems/registry-notary/auth/missing_credential"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -4088,7 +4088,7 @@
                   "detail": "the evaluation id is unknown or expired",
                   "status": 404,
                   "title": "Evaluation not found",
-                  "type": "https://docs.registry-notary.dev/problems/evaluation/not_found"
+                  "type": "https://id.registrystack.org/problems/registry-notary/evaluation/not_found"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -4105,7 +4105,7 @@
                   "detail": "the requested claim format is not supported",
                   "status": 406,
                   "title": "Claim format not supported",
-                  "type": "https://docs.registry-notary.dev/problems/format/unsupported"
+                  "type": "https://id.registrystack.org/problems/registry-notary/format/unsupported"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -4122,7 +4122,7 @@
                   "detail": "the request conflicts with existing state",
                   "status": 409,
                   "title": "Request conflict",
-                  "type": "https://docs.registry-notary.dev/problems/request/conflict"
+                  "type": "https://id.registrystack.org/problems/registry-notary/request/conflict"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -4139,7 +4139,7 @@
                   "detail": "the request body or batch is too large",
                   "status": 413,
                   "title": "Request too large",
-                  "type": "https://docs.registry-notary.dev/problems/request/too_large"
+                  "type": "https://id.registrystack.org/problems/registry-notary/request/too_large"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -4156,7 +4156,7 @@
                   "detail": "self-attestation request is rate limited",
                   "status": 429,
                   "title": "Self-attestation rate limited",
-                  "type": "https://docs.registry-notary.dev/problems/self_attestation/rate_limited"
+                  "type": "https://id.registrystack.org/problems/registry-notary/self_attestation/rate_limited"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -4173,7 +4173,7 @@
                   "detail": "the evidence source is unavailable",
                   "status": 503,
                   "title": "Source unavailable",
-                  "type": "https://docs.registry-notary.dev/problems/source/unavailable"
+                  "type": "https://id.registrystack.org/problems/registry-notary/source/unavailable"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -4224,7 +4224,7 @@
                   "detail": "credential status record was not found",
                   "status": 404,
                   "title": "Credential status not found",
-                  "type": "https://docs.registry-notary.dev/problems/credential_status/not_found"
+                  "type": "https://id.registrystack.org/problems/registry-notary/credential_status/not_found"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -4241,7 +4241,7 @@
                   "detail": "credential status store is unavailable",
                   "status": 503,
                   "title": "Credential status unavailable",
-                  "type": "https://docs.registry-notary.dev/problems/credential_status/unavailable"
+                  "type": "https://id.registrystack.org/problems/registry-notary/credential_status/unavailable"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -4344,7 +4344,7 @@
                   "detail": "the evidence request is invalid",
                   "status": 400,
                   "title": "Invalid evidence request",
-                  "type": "https://docs.registry-notary.dev/problems/request/invalid"
+                  "type": "https://id.registrystack.org/problems/registry-notary/request/invalid"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -4361,7 +4361,7 @@
                   "detail": "missing authentication credential",
                   "status": 401,
                   "title": "Missing credential",
-                  "type": "https://docs.registry-notary.dev/problems/auth/missing_credential"
+                  "type": "https://id.registrystack.org/problems/registry-notary/auth/missing_credential"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -4378,7 +4378,7 @@
                   "detail": "missing required scope",
                   "status": 403,
                   "title": "Scope denied",
-                  "type": "https://docs.registry-notary.dev/problems/auth/scope_denied"
+                  "type": "https://id.registrystack.org/problems/registry-notary/auth/scope_denied"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -4395,7 +4395,7 @@
                   "detail": "the requested claim format is not supported",
                   "status": 406,
                   "title": "Claim format not supported",
-                  "type": "https://docs.registry-notary.dev/problems/format/unsupported"
+                  "type": "https://id.registrystack.org/problems/registry-notary/format/unsupported"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -4412,7 +4412,7 @@
                   "detail": "the request body or batch is too large",
                   "status": 413,
                   "title": "Request too large",
-                  "type": "https://docs.registry-notary.dev/problems/request/too_large"
+                  "type": "https://id.registrystack.org/problems/registry-notary/request/too_large"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -4429,7 +4429,7 @@
                   "detail": "self-attestation request is rate limited",
                   "status": 429,
                   "title": "Self-attestation rate limited",
-                  "type": "https://docs.registry-notary.dev/problems/self_attestation/rate_limited"
+                  "type": "https://id.registrystack.org/problems/registry-notary/self_attestation/rate_limited"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -4446,7 +4446,7 @@
                   "detail": "the evidence source is unavailable",
                   "status": 503,
                   "title": "Source unavailable",
-                  "type": "https://docs.registry-notary.dev/problems/source/unavailable"
+                  "type": "https://id.registrystack.org/problems/registry-notary/source/unavailable"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -4558,7 +4558,7 @@
                   "detail": "the evidence request is invalid",
                   "status": 400,
                   "title": "Invalid evidence request",
-                  "type": "https://docs.registry-notary.dev/problems/request/invalid"
+                  "type": "https://id.registrystack.org/problems/registry-notary/request/invalid"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -4575,7 +4575,7 @@
                   "detail": "missing authentication credential",
                   "status": 401,
                   "title": "Missing credential",
-                  "type": "https://docs.registry-notary.dev/problems/auth/missing_credential"
+                  "type": "https://id.registrystack.org/problems/registry-notary/auth/missing_credential"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -4592,7 +4592,7 @@
                   "detail": "the evaluation id is unknown or expired",
                   "status": 404,
                   "title": "Evaluation not found",
-                  "type": "https://docs.registry-notary.dev/problems/evaluation/not_found"
+                  "type": "https://id.registrystack.org/problems/registry-notary/evaluation/not_found"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -4609,7 +4609,7 @@
                   "detail": "the requested claim format is not supported",
                   "status": 406,
                   "title": "Claim format not supported",
-                  "type": "https://docs.registry-notary.dev/problems/format/unsupported"
+                  "type": "https://id.registrystack.org/problems/registry-notary/format/unsupported"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -4626,7 +4626,7 @@
                   "detail": "the request body or batch is too large",
                   "status": 413,
                   "title": "Request too large",
-                  "type": "https://docs.registry-notary.dev/problems/request/too_large"
+                  "type": "https://id.registrystack.org/problems/registry-notary/request/too_large"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -4643,7 +4643,7 @@
                   "detail": "self-attestation request is rate limited",
                   "status": 429,
                   "title": "Self-attestation rate limited",
-                  "type": "https://docs.registry-notary.dev/problems/self_attestation/rate_limited"
+                  "type": "https://id.registrystack.org/problems/registry-notary/self_attestation/rate_limited"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -4660,7 +4660,7 @@
                   "detail": "the evidence source is unavailable",
                   "status": 503,
                   "title": "Source unavailable",
-                  "type": "https://docs.registry-notary.dev/problems/source/unavailable"
+                  "type": "https://id.registrystack.org/problems/registry-notary/source/unavailable"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -4711,7 +4711,7 @@
                   "detail": "missing authentication credential",
                   "status": 401,
                   "title": "Missing credential",
-                  "type": "https://docs.registry-notary.dev/problems/auth/missing_credential"
+                  "type": "https://id.registrystack.org/problems/registry-notary/auth/missing_credential"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"

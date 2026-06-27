@@ -22,7 +22,8 @@ pub mod runtime;
 pub mod self_attestation_rate_limit;
 pub mod standalone;
 
-pub(crate) const PROBLEM_TYPE_BASE_URL: &str = "https://docs.registry-notary.dev/problems";
+pub(crate) const PROBLEM_TYPE_BASE_URL: &str =
+    "https://id.registrystack.org/problems/registry-notary";
 
 pub use api::{
     router, EvidenceAuditContext, EvidenceErrorCodeContext, EvidenceIssuerResolver,

@@ -32,14 +32,14 @@ const FIXTURES: &[VcFixture] = &[
         dir: "aggregate-result-v1",
         issuer: "did:web:aggregate.fixture.example",
         claim_type: "AggregateResult",
-        schema_id: "https://schemas.registry-relay.org/aggregate-result/v1.json",
+        schema_id: "https://id.registrystack.org/schemas/registry-relay/aggregate-result/v1.json",
         schema_path: "resources/schemas/aggregate-result/v1.json",
     },
     VcFixture {
         dir: "entity-record-v1",
         issuer: "did:web:entity.fixture.example",
         claim_type: "EntityRecord",
-        schema_id: "https://schemas.registry-relay.org/entity-record/v1.json",
+        schema_id: "https://id.registrystack.org/schemas/registry-relay/entity-record/v1.json",
         schema_path: "resources/schemas/entity-record/v1.json",
     },
 ];
@@ -243,7 +243,7 @@ fn node_verifier_rejects_unexpected_schema_id() {
     replace_arg(
         &mut args,
         "--schema-id",
-        "https://schemas.registry-relay.org/entity-record/v1.json",
+        "https://id.registrystack.org/schemas/registry-relay/entity-record/v1.json",
     );
     let output = run_with_owned_args(&args);
     assert!(
@@ -253,7 +253,7 @@ fn node_verifier_rejects_unexpected_schema_id() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains(
-            "credentialSchema.id must be https://schemas.registry-relay.org/entity-record/v1.json"
+            "credentialSchema.id must be https://id.registrystack.org/schemas/registry-relay/entity-record/v1.json"
         ),
         "unexpected stderr: {stderr}"
     );

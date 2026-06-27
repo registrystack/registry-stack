@@ -4491,7 +4491,7 @@ mod tests {
             example["type"]
                 .as_str()
                 .is_some_and(|value| {
-                    value.starts_with("https://docs.registry-notary.dev/problems/")
+                    value.starts_with("https://id.registrystack.org/problems/registry-notary/")
                 }),
             "problem example must include a Registry Notary problem type for {method} {path} {status}"
         );

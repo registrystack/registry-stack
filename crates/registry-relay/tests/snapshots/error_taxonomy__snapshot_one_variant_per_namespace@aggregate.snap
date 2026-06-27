@@ -7,5 +7,5 @@ expression: json
   "detail": "query engine returned an execution error",
   "status": 500,
   "title": "Aggregate execution failed",
-  "type": "https://registry-relay.dev/problems/aggregate/execution_failed"
+  "type": "https://id.registrystack.org/problems/registry-relay/aggregate/execution_failed"
 }

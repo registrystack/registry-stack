@@ -107,4 +107,4 @@ datasets:
             required: true
 vocabularies:
   spdci: https://schema.spdci.org/
-  registry_relay: https://registry-relay.dev/
+  registry_relay: https://id.registrystack.org/ns/registry-relay/v1#

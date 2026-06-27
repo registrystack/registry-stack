@@ -325,7 +325,7 @@ class RegistryNotaryClientTests(unittest.TestCase):
         recorder = _Recorder(
             status=404,
             body={
-                "type": "https://docs.registry-notary.dev/problems/target/not-found",
+                "type": "https://id.registrystack.org/problems/registry-notary/target/not-found",
                 "title": "Target not found",
                 "status": 404,
                 "detail": "target subj-secret was not found",

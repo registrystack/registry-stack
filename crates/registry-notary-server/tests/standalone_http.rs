@@ -10015,7 +10015,7 @@ async fn self_attestation_subject_mismatch_audit_names_token_claim_not_value() {
     assert_eq!(body["code"], json!("self_attestation.denied"));
     assert_eq!(
         body["type"],
-        json!("https://docs.registry-notary.dev/problems/self_attestation/denied")
+        json!("https://id.registrystack.org/problems/registry-notary/self_attestation/denied")
     );
 
     let audit = std::fs::read_to_string(&audit_path).expect("audit was written");
@@ -10089,7 +10089,7 @@ async fn request_body_limit_returns_413_above_threshold() {
     assert_eq!(body["status"], json!(413));
     assert_eq!(
         body["type"],
-        json!("https://registry-platform.dev/problems/request/body-too-large")
+        json!("https://id.registrystack.org/problems/registry-platform/request/body-too-large")
     );
 }
 
@@ -10129,7 +10129,7 @@ async fn request_uri_limit_returns_414_problem_details() {
     assert_eq!(body["status"], json!(414));
     assert_eq!(
         body["type"],
-        json!("https://docs.registry-notary.dev/problems/request/uri-too-long")
+        json!("https://id.registrystack.org/problems/registry-notary/request/uri-too-long")
     );
     assert_eq!(body["code"], json!("request.uri_too_long"));
 }
@@ -10170,9 +10170,9 @@ async fn error_responses_match_rfc_9457_problem_details_shape() {
     assert_eq!(body["status"], json!(401));
     assert_eq!(body["title"], json!("Missing credential"));
     assert_eq!(body["code"], json!("auth.missing_credential"));
-    assert!(body["type"]
-        .as_str()
-        .is_some_and(|value| value.starts_with("https://docs.registry-notary.dev/problems/")));
+    assert!(body["type"].as_str().is_some_and(
+        |value| value.starts_with("https://id.registrystack.org/problems/registry-notary/")
+    ));
     assert!(body["detail"].as_str().is_some());
 }
 
