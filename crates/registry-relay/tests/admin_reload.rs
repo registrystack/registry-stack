@@ -2877,6 +2877,56 @@ async fn config_apply_stored_break_glass_rejects_ordinary_change_class_for_emerg
 }
 
 #[tokio::test]
+async fn config_apply_stored_break_glass_rejects_invalid_approval_reference_syntax() {
+    let fixture = build_fixture();
+    let candidate = std::fs::read_to_string(&fixture.config_path)
+        .expect("config reads")
+        .replace(
+            "owner: Test Ministry",
+            "owner: Invalid Reference Emergency Ministry",
+        );
+    let candidate_hash = internal_config_hash(candidate.as_bytes());
+    let invalid_reference = "../BG-4242";
+    write_local_approval(
+        &fixture,
+        durable_break_glass_approval(invalid_reference, &candidate_hash, None, &[]),
+    );
+    let wrong_previous_hash =
+        "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+    let signed = write_signed_config_tuf_fixture_with_previous_hash_and_change_classes(
+        &fixture,
+        &candidate,
+        5,
+        "relay-test-instance",
+        &["kid-a", "kid-b"],
+        &["public_metadata", EMERGENCY_CHANGE_CLASS],
+        wrong_previous_hash,
+    )
+    .await;
+    let mut request = signed_tuf_apply_request(&signed);
+    request["break_glass"] = json!(true);
+    request["break_glass_approval_reference"] = json!(invalid_reference);
+
+    let response = post_admin_config(&fixture, "/admin/v1/config/apply", request, ADMIN_KEY).await;
+
+    response.assert_status(StatusCode::CONFLICT);
+    let body: Value = response.json();
+    assert_eq!(body["result"], "rejected_break_glass");
+    assert_eq!(body["applied"], false);
+
+    let record = FileAntiRollbackStore::new(&fixture.antirollback_path)
+        .load(&AntiRollbackKey {
+            product: "registry-relay".to_string(),
+            instance_id: "relay-test-instance".to_string(),
+            environment: "lab".to_string(),
+            stream_id: "test-stream".to_string(),
+        })
+        .expect("antirollback state loads");
+    assert_eq!(record.last_sequence, 0);
+    assert!(record.break_glass.accepted.is_empty());
+}
+
+#[tokio::test]
 async fn config_apply_break_glass_rejects_client_supplied_rate_limit() {
     let fixture = build_fixture();
     let candidate = std::fs::read_to_string(&fixture.config_path)
@@ -3027,6 +3077,53 @@ async fn config_apply_signed_root_transition_with_local_approval_swaps_runtime_s
     assert!(!serde_json::to_string(config_audit)
         .expect("config audit serializes")
         .contains("approve local root transition"));
+}
+
+#[tokio::test]
+async fn config_apply_signed_root_transition_rejects_invalid_local_approval_reference_syntax() {
+    let fixture = build_fixture();
+    let candidate = candidate_with_additional_accepted_root(&fixture);
+    let candidate_hash = internal_config_hash(candidate.as_bytes());
+    let invalid_reference = "ROOT/2026-Q2";
+    write_local_approval(
+        &fixture,
+        local_approval(
+            invalid_reference,
+            &candidate_hash,
+            &fixture.current_config_hash,
+        ),
+    );
+    let signed = write_signed_config_tuf_fixture_with_change_classes(
+        &fixture,
+        &candidate,
+        5,
+        "relay-test-instance",
+        &[TUF_TARGETS_SIGNER_KID],
+        &["root_transition"],
+    )
+    .await;
+    let mut request = signed_tuf_apply_request(&signed);
+    request["local_approval_reference"] = json!(invalid_reference);
+
+    let response = post_admin_config(&fixture, "/admin/v1/config/apply", request, ADMIN_KEY).await;
+
+    response.assert_status(StatusCode::CONFLICT);
+    let body: Value = response.json();
+    assert_eq!(body["result"], "rejected_local_approval");
+    assert_eq!(body["applied"], false);
+    assert_eq!(body["restart_required"], false);
+
+    let record = FileAntiRollbackStore::new(&fixture.antirollback_path)
+        .load(&AntiRollbackKey {
+            product: "registry-relay".to_string(),
+            instance_id: "relay-test-instance".to_string(),
+            environment: "lab".to_string(),
+            stream_id: "test-stream".to_string(),
+        })
+        .expect("antirollback state loads");
+    assert_eq!(record.last_sequence, 0);
+    assert_eq!(record.last_config_hash, fixture.current_config_hash);
+    assert!(record.local_approvals.accepted.is_empty());
 }
 
 #[tokio::test]
