@@ -9,7 +9,7 @@
   "validFrom": "2026-05-16T09:30:00Z",
   "validUntil": "2026-05-16T09:35:00Z",
   "credentialSchema": {
-    "id": "https://schemas.registry-relay.org/aggregate-result/v1.json",
+    "id": "https://id.registrystack.org/schemas/registry-relay/aggregate-result/v1.json",
     "type": "JsonSchema"
   },
   "credentialSubject": {

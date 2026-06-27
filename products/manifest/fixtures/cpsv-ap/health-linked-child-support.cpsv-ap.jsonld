@@ -137,7 +137,7 @@
     "rdfs:seeAlso": {
       "@type": "@id"
     },
-    "registry_manifest": "https://registry-manifest.dev/ns/v1#",
+    "registry_manifest": "https://id.registrystack.org/ns/registry-manifest/v1#",
     "registry_manifest:dataType": {
       "@type": "@id"
     },

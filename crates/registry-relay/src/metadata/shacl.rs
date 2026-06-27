@@ -1064,7 +1064,7 @@ fn context() -> Value {
         "org": "http://www.w3.org/ns/org#",
         "sh": "http://www.w3.org/ns/shacl#",
         "skos": "http://www.w3.org/2004/02/skos/core#",
-        "registry_relay": "https://registry-relay.dev/ns#",
+        "registry_relay": "https://id.registrystack.org/ns/registry-relay/v1#",
         "xsd": "http://www.w3.org/2001/XMLSchema#",
         "adms:status": { "@type": "@id" },
         "dcat:accessURL": { "@type": "@id" },

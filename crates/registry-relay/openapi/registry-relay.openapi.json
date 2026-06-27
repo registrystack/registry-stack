@@ -2138,7 +2138,7 @@
             "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
             "status": 401,
             "title": "Missing credential",
-            "type": "https://registry-relay.dev/problems/auth/missing_credential"
+            "type": "https://id.registrystack.org/problems/registry-relay/auth/missing_credential"
           }
         ],
         "properties": {

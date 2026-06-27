@@ -6,6 +6,7 @@ owner: registry-docs
 source_repos:
   - registry-notary
   - registry-relay
+  - registry-platform
 last_reviewed: "2026-06-20"
 doc_type: reference
 locale: en
@@ -14,7 +15,21 @@ standards_referenced: []
 
 Registry Notary and Registry Relay return errors as RFC 9457 problem details with the media type `application/problem+json`. Each problem carries a stable string in the `code` extension member alongside the standard `type`, `title`, `status`, and `detail` fields. The tables below list every `code` value, the message the source attaches to it, and the usual cause.
 
-The HTTP status is omitted from these tables. The Relay source maps each code to a status, but the same code can render at different statuses across versions, and the Notary public code does not carry a status in the taxonomy itself. Treat the standard `status` field of the problem response as authoritative for a given request.
+Registry-owned problem type URIs use `https://id.registrystack.org/problems/...`.
+Client code must branch on the stable `code` extension and the response `status`, not by parsing `type` URI paths.
+The `type` URI identifies and documents the problem type.
+
+The HTTP status is omitted from the Registry Notary and Registry Relay tables.
+The Relay source maps each code to a status, but the same code can render at different statuses across versions, and the Notary public code does not carry a status in the taxonomy itself.
+Treat the standard `status` field of the problem response as authoritative for a given request.
+
+## Shared platform
+
+Shared Registry Platform HTTP middleware can return platform-scoped problem types before a request reaches Registry Notary or Registry Relay application code.
+
+| Type path | Meaning | Usual cause |
+| --- | --- | --- |
+| `registry-platform/request/body-too-large` | payload too large | The request body exceeds the configured limit. |
 
 ## Registry Notary
 

@@ -109,4 +109,4 @@ datasets:
             type: date
             required: true
 vocabularies:
-  registry_relay: https://registry-relay.dev/
+  registry_relay: https://id.registrystack.org/ns/registry-relay/v1#

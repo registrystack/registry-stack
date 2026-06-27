@@ -53,7 +53,7 @@ async fn body_limit_wired_with_problem_response_returns_rfc9457_on_oversized_bod
     let body: serde_json::Value = serde_json::from_slice(&bytes).expect("problem body is JSON");
     assert_eq!(
         body["type"],
-        "https://registry-platform.dev/problems/request/body-too-large"
+        "https://id.registrystack.org/problems/registry-platform/request/body-too-large"
     );
     assert_eq!(body["title"], "Payload Too Large");
     assert_eq!(body["status"], 413);

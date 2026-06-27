@@ -109,7 +109,7 @@ async fn sample_axum_app_wires_middleware_oidc_and_audit_chain() {
     assert_eq!(oversized_value["status"], 413);
     assert_eq!(
         oversized_value["type"],
-        "https://registry-platform.dev/problems/request/body-too-large"
+        "https://id.registrystack.org/problems/registry-platform/request/body-too-large"
     );
     assert_eq!(oversized_value["title"], "Payload Too Large");
     assert_eq!(

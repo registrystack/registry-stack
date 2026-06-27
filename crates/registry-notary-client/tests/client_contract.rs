@@ -221,7 +221,7 @@ async fn ready_503_returns_problem_details() {
                 StatusCode::SERVICE_UNAVAILABLE,
                 [("content-type", "application/problem+json")],
                 Json(json!({
-                    "type": "https://docs.registry-notary.dev/problems/readiness/not-ready",
+                    "type": "https://id.registrystack.org/problems/registry-notary/readiness/not-ready",
                     "title": "Evidence runtime is not ready",
                     "status": 503,
                     "detail": "one or more readiness checks are not ready",
@@ -1238,7 +1238,7 @@ async fn retry_after_then_claims_handler(State(counter): State<Arc<AtomicUsize>>
             StatusCode::SERVICE_UNAVAILABLE,
             [("retry-after", "0")],
             Json(json!({
-                "type": "https://docs.registry-notary.dev/problems/source/unavailable",
+                "type": "https://id.registrystack.org/problems/registry-notary/source/unavailable",
                 "title": "Source unavailable",
                 "status": 503,
                 "detail": "source unavailable",
@@ -1262,7 +1262,7 @@ async fn retry_after_http_date_then_claims_handler(
                 ("date", "Wed, 31 Dec 2099 00:00:00 GMT"),
             ],
             Json(json!({
-                "type": "https://docs.registry-notary.dev/problems/source/unavailable",
+                "type": "https://id.registrystack.org/problems/registry-notary/source/unavailable",
                 "title": "Source unavailable",
                 "status": 503,
                 "detail": "source unavailable",
@@ -1346,7 +1346,7 @@ fn problem(status: StatusCode) -> Response {
         status,
         [("content-type", "application/problem+json")],
         Json(json!({
-            "type": "https://docs.registry-notary.dev/problems/source/unavailable",
+            "type": "https://id.registrystack.org/problems/registry-notary/source/unavailable",
             "title": "Source unavailable",
             "status": status.as_u16(),
             "detail": "the source registry is unavailable",
@@ -1361,7 +1361,7 @@ async fn problem_with_sensitive_detail() -> Response {
         StatusCode::NOT_FOUND,
         [("content-type", "application/problem+json")],
         Json(json!({
-            "type": "https://docs.registry-notary.dev/problems/source/not-found",
+            "type": "https://id.registrystack.org/problems/registry-notary/source/not-found",
             "title": "Source missing",
             "status": 404,
             "detail": "subject subj-sensitive was not found",

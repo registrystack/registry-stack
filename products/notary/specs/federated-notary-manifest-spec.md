@@ -693,19 +693,19 @@ and no subject-existence detail.
 
 | Case | Status | `type` |
 | --- | --- | --- |
-| malformed JSON or JWT | `400` | `https://registry-notary.dev/problems/federation/bad-request` |
-| missing or invalid authentication | `401` | `https://registry-notary.dev/problems/federation/unauthorized` |
-| known peer denied by local policy | `403` | `https://registry-notary.dev/problems/federation/forbidden` |
-| unsupported protocol or profile | `422` | `https://registry-notary.dev/problems/federation/unsupported` |
-| replayed `jti` or nonce | `409` | `https://registry-notary.dev/problems/federation/replay` |
-| rate limit | `429` | `https://registry-notary.dev/problems/federation/rate-limited` |
-| source or issuer unavailable | `503` | `https://registry-notary.dev/problems/federation/temporarily-unavailable` |
+| malformed JSON or JWT | `400` | `https://id.registrystack.org/problems/registry-notary/federation/bad-request` |
+| missing or invalid authentication | `401` | `https://id.registrystack.org/problems/registry-notary/federation/unauthorized` |
+| known peer denied by local policy | `403` | `https://id.registrystack.org/problems/registry-notary/federation/forbidden` |
+| unsupported protocol or profile | `422` | `https://id.registrystack.org/problems/registry-notary/federation/unsupported` |
+| replayed `jti` or nonce | `409` | `https://id.registrystack.org/problems/registry-notary/federation/replay` |
+| rate limit | `429` | `https://id.registrystack.org/problems/registry-notary/federation/rate-limited` |
+| source or issuer unavailable | `503` | `https://id.registrystack.org/problems/registry-notary/federation/temporarily-unavailable` |
 
 Example:
 
 ```json
 {
-  "type": "https://registry-notary.dev/problems/federation/forbidden",
+  "type": "https://id.registrystack.org/problems/registry-notary/federation/forbidden",
   "title": "Federation request denied",
   "status": 403,
   "detail": "The request is not permitted by local federation policy.",
@@ -862,7 +862,7 @@ Batched response result shape:
       "index": 1,
       "ok": false,
       "error": {
-        "type": "https://registry-notary.dev/problems/federation/temporarily-unavailable",
+        "type": "https://id.registrystack.org/problems/registry-notary/federation/temporarily-unavailable",
         "title": "Evaluation unavailable"
       }
     }
