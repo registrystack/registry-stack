@@ -35,8 +35,12 @@ fn id<T: serde::de::DeserializeOwned>(value: &str) -> T {
 }
 
 fn principal(scopes: &[&str]) -> Principal {
+    principal_with_id(scopes, "item-1")
+}
+
+fn principal_with_id(scopes: &[&str], principal_id: &str) -> Principal {
     Principal {
-        principal_id: "test".to_string(),
+        principal_id: principal_id.to_string(),
         scopes: scopes.iter().copied().collect::<ScopeSet>(),
         auth_mode: AuthMode::ApiKey,
     }
@@ -2137,6 +2141,13 @@ async fn storage_shaped_resources_rows_route_is_not_registered() {
 }
 
 async fn server_with_required_filters() -> TestServer {
+    server_with_required_filters_and_principal("item-1", Arc::new(CursorSigner::new_random())).await
+}
+
+async fn server_with_required_filters_and_principal(
+    principal_id: &str,
+    signer: Arc<CursorSigner>,
+) -> TestServer {
     let tmp = TempDir::new().expect("tempdir");
     let config_path = tmp.path().join("required_filters.yaml");
     std::fs::write(
@@ -2196,6 +2207,11 @@ datasets:
           - name: id
             from: item_id
           - name: group_id
+        relationships:
+          - name: thing
+            kind: belongs_to
+            target: thing
+            foreign_key: group_id
         access:
           metadata_scope: test_dataset:metadata
           aggregate_scope: test_dataset:aggregate
@@ -2203,7 +2219,32 @@ datasets:
         api:
           default_limit: 100
           max_limit: 1000
-          required_filters: [id, group_id]
+          required_filters: [id]
+          required_filter_bindings:
+            - field: id
+              source: principal_id
+          allowed_filters:
+            - field: id
+              ops: [eq]
+            - field: group_id
+              ops: [eq]
+      - name: group_item
+        table: items_table
+        fields:
+          - name: id
+            from: item_id
+          - name: group_id
+        access:
+          metadata_scope: test_dataset:metadata
+          aggregate_scope: test_dataset:aggregate
+          read_scope: test_dataset:rows
+        api:
+          default_limit: 100
+          max_limit: 1000
+          required_filters: [group_id]
+          required_filter_bindings:
+            - field: group_id
+              source: principal_id
           allowed_filters:
             - field: id
               ops: [eq]
@@ -2214,6 +2255,11 @@ datasets:
         fields:
           - name: id
             from: thing_id
+        relationships:
+          - name: group_items
+            kind: has_many
+            target: group_item
+            foreign_key: group_id
         access:
           metadata_scope: test_dataset:metadata
           aggregate_scope: test_dataset:aggregate
@@ -2221,6 +2267,7 @@ datasets:
         api:
           default_limit: 100
           max_limit: 1000
+          allowed_expansions: [group_items]
           allowed_filters:
             - field: id
               ops: [eq]
@@ -2240,8 +2287,8 @@ audit:
     let batch = RecordBatch::try_new(
         Arc::clone(&schema),
         vec![
-            Arc::new(StringArray::from(vec!["item-1"])),
-            Arc::new(StringArray::from(vec!["grp-1"])),
+            Arc::new(StringArray::from(vec!["item-1", "item-2"])),
+            Arc::new(StringArray::from(vec!["thing-1", "thing-1"])),
         ],
     )
     .expect("batch");
@@ -2296,8 +2343,6 @@ audit:
     );
     let (_tx, readiness) = watch::channel(snapshot);
 
-    let signer = Arc::new(CursorSigner::new_random());
-
     TestServer::new(
         entity_router::<()>()
             .layer(Extension(query))
@@ -2305,19 +2350,22 @@ audit:
             .layer(Extension(cfg))
             .layer(Extension(readiness))
             .layer(Extension(signer))
-            .layer(Extension(principal(&[
-                "test_dataset:metadata",
-                "test_dataset:rows",
-                "test_dataset:evidence_verification",
-            ]))),
+            .layer(Extension(principal_with_id(
+                &[
+                    "test_dataset:metadata",
+                    "test_dataset:rows",
+                    "test_dataset:evidence_verification",
+                ],
+                principal_id,
+            ))),
     )
 }
 
 #[tokio::test]
-async fn entity_collection_with_required_filter_satisfied_returns_200() {
+async fn entity_collection_with_principal_bound_required_filter_returns_200() {
     let resp = server_with_required_filters()
         .await
-        .get("/v1/datasets/test_dataset/entities/item/records?id=item-1")
+        .get("/v1/datasets/test_dataset/entities/item/records")
         .await;
 
     resp.assert_status(StatusCode::OK);
@@ -2326,31 +2374,15 @@ async fn entity_collection_with_required_filter_satisfied_returns_200() {
 }
 
 #[tokio::test]
-async fn entity_collection_with_required_filter_group_id_satisfied_returns_200() {
+async fn entity_collection_with_caller_chosen_required_filter_value_returns_empty_page() {
     let resp = server_with_required_filters()
         .await
-        .get("/v1/datasets/test_dataset/entities/item/records?group_id=grp-1")
+        .get("/v1/datasets/test_dataset/entities/item/records?id=item-2")
         .await;
 
     resp.assert_status(StatusCode::OK);
     let body: Value = resp.json();
-    assert_eq!(body["data"][0]["group_id"], "grp-1");
-}
-
-#[tokio::test]
-async fn entity_collection_with_broad_required_filter_ops_returns_filter_required() {
-    for query in ["id.in=item-1,item-2", "id.gte=item-1", "id="] {
-        let resp = server_with_required_filters()
-            .await
-            .get(&format!(
-                "/v1/datasets/test_dataset/entities/item/records?{query}"
-            ))
-            .await;
-
-        resp.assert_status(StatusCode::BAD_REQUEST);
-        let body: Value = resp.json();
-        assert_eq!(body["code"], "entity.filter_required", "{query}");
-    }
+    assert!(body["data"].as_array().expect("data array").is_empty());
 }
 
 #[tokio::test]
@@ -2367,16 +2399,118 @@ async fn entity_collection_with_unrelated_filter_returns_filter_required() {
 }
 
 #[tokio::test]
-async fn entity_collection_with_no_filters_returns_filter_required() {
+async fn entity_collection_with_no_caller_filters_uses_principal_bound_filter() {
     let resp = server_with_required_filters()
         .await
         .get("/v1/datasets/test_dataset/entities/item/records")
         .await;
 
-    resp.assert_status(StatusCode::BAD_REQUEST);
+    resp.assert_status(StatusCode::OK);
     let body: Value = resp.json();
-    assert_eq!(body["code"], "entity.filter_required");
-    assert!(body["detail"].as_str().unwrap().contains("id"));
+    assert_eq!(body["data"][0]["id"], "item-1");
+}
+
+#[tokio::test]
+async fn entity_record_with_principal_bound_required_filter_rejects_other_id() {
+    let resp = server_with_required_filters()
+        .await
+        .get("/v1/datasets/test_dataset/entities/item/records/item-2")
+        .await;
+
+    resp.assert_status(StatusCode::NOT_FOUND);
+    assert_eq!(resp.json::<Value>()["code"], "schema.unknown_resource");
+}
+
+#[tokio::test]
+async fn entity_relationship_with_principal_bound_required_filter_rejects_other_host_id() {
+    let resp = server_with_required_filters()
+        .await
+        .get("/v1/datasets/test_dataset/entities/item/records/item-2/relationships/thing")
+        .await;
+
+    resp.assert_status(StatusCode::NOT_FOUND);
+    assert_eq!(resp.json::<Value>()["code"], "schema.unknown_resource");
+}
+
+#[tokio::test]
+async fn entity_relationship_with_principal_bound_target_filter_rejects_other_target_rows() {
+    let resp = server_with_required_filters_and_principal(
+        "thing-2",
+        Arc::new(CursorSigner::new_random()),
+    )
+    .await
+    .get("/v1/datasets/test_dataset/entities/thing/records/thing-1/relationships/group_items")
+    .await;
+
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+    assert!(body["data"].as_array().expect("data array").is_empty());
+}
+
+#[tokio::test]
+async fn entity_expansion_with_principal_bound_target_filter_rejects_other_target_rows() {
+    let resp =
+        server_with_required_filters_and_principal("thing-2", Arc::new(CursorSigner::new_random()))
+            .await
+            .get("/v1/datasets/test_dataset/entities/thing/records?expand=group_items")
+            .await;
+
+    resp.assert_status(StatusCode::OK);
+    let body: Value = resp.json();
+    let rows = body["data"].as_array().expect("data array");
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0]["group_items"]
+        .as_array()
+        .expect("expanded rows")
+        .is_empty());
+}
+
+#[tokio::test]
+async fn entity_collection_principal_bound_etag_varies_by_principal() {
+    let item_1 =
+        server_with_required_filters_and_principal("item-1", Arc::new(CursorSigner::new_random()))
+            .await
+            .get("/v1/datasets/test_dataset/entities/item/records")
+            .await;
+    item_1.assert_status(StatusCode::OK);
+    let item_1_etag = item_1.header("etag").to_str().expect("etag").to_string();
+
+    let item_2 =
+        server_with_required_filters_and_principal("item-2", Arc::new(CursorSigner::new_random()))
+            .await
+            .get("/v1/datasets/test_dataset/entities/item/records")
+            .await;
+    item_2.assert_status(StatusCode::OK);
+    let item_2_etag = item_2.header("etag").to_str().expect("etag").to_string();
+
+    assert_ne!(item_1_etag, item_2_etag);
+}
+
+#[tokio::test]
+async fn entity_collection_cursor_is_bound_to_principal_context() {
+    let signer = Arc::new(CursorSigner::new_random());
+    let first = server_with_required_filters_and_principal("thing-1", Arc::clone(&signer))
+        .await
+        .get("/v1/datasets/test_dataset/entities/group_item/records?limit=1")
+        .await;
+    first.assert_status(StatusCode::OK);
+    let body: Value = first.json();
+    let cursor = body["pagination"]["next_cursor"]
+        .as_str()
+        .expect("first page has cursor");
+
+    let url =
+        format!("/v1/datasets/test_dataset/entities/group_item/records?limit=1&cursor={cursor}");
+    let resp = server_with_required_filters_and_principal("thing-2", signer)
+        .await
+        .get(&url)
+        .await;
+
+    resp.assert_status(StatusCode::BAD_REQUEST);
+    assert_eq!(
+        resp.json::<Value>()["code"],
+        "pagination.cursor_invalidated"
+    );
 }
 
 #[tokio::test]

@@ -1311,9 +1311,31 @@ pub struct EntityApiConfig {
     #[serde(default)]
     pub required_filters: Vec<String>,
     #[serde(default)]
+    pub required_filter_bindings: Vec<RequiredFilterBindingConfig>,
+    #[serde(default)]
     pub allowed_filters: Vec<AllowedFilter>,
     #[serde(default)]
     pub allowed_expansions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct RequiredFilterBindingConfig {
+    pub field: String,
+    #[serde(default)]
+    pub source: RequiredFilterBindingSource,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RequiredFilterBindingSource {
+    PrincipalId,
+}
+
+impl Default for RequiredFilterBindingSource {
+    fn default() -> Self {
+        Self::PrincipalId
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
@@ -1471,6 +1493,8 @@ pub struct AggregateConfig {
     pub allowed_filters: Vec<AllowedFilter>,
     #[serde(default)]
     pub required_filters: Vec<String>,
+    #[serde(default)]
+    pub required_filter_bindings: Vec<RequiredFilterBindingConfig>,
     #[serde(default)]
     pub temporal_field: Option<String>,
     #[serde(default)]

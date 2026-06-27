@@ -392,6 +392,9 @@ datasets:
             - id
             - school_id
             - home_district
+          required_filter_bindings:
+            - field: id
+              source: principal_id
           allowed_filters:
             - field: id
               ops: [eq, in]

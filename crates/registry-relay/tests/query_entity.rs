@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Entity query tests over in-memory DataFusion tables.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use datafusion::arrow::array::StringArray;
@@ -275,6 +276,8 @@ async fn single_record_filters_by_entity_primary_key() {
             json!("hh-2"),
             None,
             Vec::new(),
+            BTreeMap::new(),
+            Vec::new(),
         )
         .await
         .expect("read record")
@@ -464,6 +467,8 @@ async fn single_record_expands_belongs_to() {
             json!("p-1"),
             None,
             vec!["household".to_string()],
+            BTreeMap::new(),
+            Vec::new(),
         )
         .await
         .expect("read record")
@@ -485,13 +490,25 @@ async fn belongs_to_relationship_endpoint_returns_unknown_resource_for_null_or_d
     let engine = query_engine().await;
 
     let null_fk = engine
-        .read_relationship("social_registry", "individual", json!("p-4"), "household")
+        .read_relationship(
+            "social_registry",
+            "individual",
+            json!("p-4"),
+            "household",
+            Vec::new(),
+        )
         .await
         .expect_err("null FK is not a target resource");
     assert_eq!(null_fk.code(), "schema.unknown_resource");
 
     let dangling_fk = engine
-        .read_relationship("social_registry", "individual", json!("p-5"), "household")
+        .read_relationship(
+            "social_registry",
+            "individual",
+            json!("p-5"),
+            "household",
+            Vec::new(),
+        )
         .await
         .expect_err("dangling FK is not a target resource");
     assert_eq!(dangling_fk.code(), "schema.unknown_resource");

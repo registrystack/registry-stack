@@ -17,7 +17,10 @@ use registry_relay::auth::{AuthMode, Principal, ScopeSet};
 use registry_relay::config::{self, DatasetId, ResourceId};
 use registry_relay::entity::EntityRegistry;
 use registry_relay::ingest::table_name;
-use registry_relay::query::{AggregateQueryEngine, EntityQueryEngine};
+use registry_relay::query::{
+    AggregateFilter, AggregateFilterOp, AggregateQueryEngine, AggregateQueryRequest,
+    EntityQueryEngine,
+};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 
@@ -29,8 +32,12 @@ fn id<T: serde::de::DeserializeOwned>(value: &str) -> T {
 }
 
 fn principal(scopes: &[&str]) -> Principal {
+    principal_with_id(scopes, "test")
+}
+
+fn principal_with_id(scopes: &[&str], principal_id: &str) -> Principal {
     Principal {
-        principal_id: "test".to_string(),
+        principal_id: principal_id.to_string(),
         scopes: scopes.iter().copied().collect::<ScopeSet>(),
         auth_mode: AuthMode::ApiKey,
     }
@@ -176,6 +183,9 @@ datasets:
             ops: [eq, in]
         required_filters:
           - municipality_code
+        required_filter_bindings:
+          - field: municipality_code
+            source: principal_id
         disclosure_control:
           min_group_size: 1
           suppression: omit
@@ -251,11 +261,32 @@ async fn server_with_aggregates() -> TestServer {
     .await
 }
 
+async fn server_with_aggregates_and_principal_id(principal_id: &str) -> TestServer {
+    server_with_aggregate_config_and_principal_id(
+        AGGREGATE_CONFIG.to_string(),
+        &[
+            "social_registry:metadata",
+            "social_registry:aggregate",
+            "social_registry:rows",
+        ],
+        principal_id,
+    )
+    .await
+}
+
 async fn server_with_aggregate_scopes(scopes: &[&str]) -> TestServer {
     server_with_aggregate_config(AGGREGATE_CONFIG.to_string(), scopes).await
 }
 
 async fn server_with_aggregate_config(config_yaml: String, scopes: &[&str]) -> TestServer {
+    server_with_aggregate_config_and_principal_id(config_yaml, scopes, "test").await
+}
+
+async fn server_with_aggregate_config_and_principal_id(
+    config_yaml: String,
+    scopes: &[&str],
+    principal_id: &str,
+) -> TestServer {
     let tmp = TempDir::new().expect("tempdir");
     let config_path = tmp.path().join("aggregates_entity.yaml");
     std::fs::write(&config_path, config_yaml).expect("write config");
@@ -276,8 +307,22 @@ async fn server_with_aggregate_config(config_yaml: String, scopes: &[&str]) -> T
         aggregates_router::<()>()
             .layer(Extension(query))
             .layer(Extension(registry))
-            .layer(Extension(principal(scopes))),
+            .layer(Extension(principal_with_id(scopes, principal_id))),
     )
+}
+
+async fn aggregate_query_engine(config_yaml: String) -> AggregateQueryEngine {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = tmp.path().join("aggregates_entity.yaml");
+    std::fs::write(&config_path, config_yaml).expect("write config");
+    let cfg = Arc::new(config::load(&config_path).expect("config loads"));
+    let registry = Arc::new(EntityRegistry::from_config(&cfg).expect("registry"));
+    let ctx = Arc::new(SessionContext::new());
+
+    register_households(&ctx);
+    register_individuals(&ctx);
+
+    AggregateQueryEngine::new(Arc::clone(&ctx), Arc::clone(&registry), Arc::clone(&cfg))
 }
 
 async fn server_with_aggregate_config_and_audit(
@@ -1003,38 +1048,77 @@ async fn aggregate_only_execution_on_secret_dataset_requires_min_cell_size_two()
 }
 
 #[tokio::test]
-async fn required_filters_are_enforced_for_aggregate_queries() {
-    let server = server_with_aggregates().await;
+async fn aggregate_required_filters_require_principal_bindings_in_config() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = tmp.path().join("aggregates_entity.yaml");
+    let config = AGGREGATE_CONFIG.replace(
+        r#"        required_filter_bindings:
+          - field: municipality_code
+            source: principal_id
+"#,
+        "",
+    );
+    std::fs::write(&config_path, config).expect("write config");
 
-    let missing = server
+    let err = config::load(&config_path)
+        .expect_err("aggregate required_filters without bindings must be rejected");
+    assert_eq!(err.code(), "config.validation_error");
+}
+
+#[tokio::test]
+async fn caller_filters_do_not_satisfy_aggregate_required_filters() {
+    let query = aggregate_query_engine(AGGREGATE_CONFIG.to_string()).await;
+
+    let err = query
+        .execute_aggregate(
+            "social_registry",
+            "by_required_municipality",
+            AggregateQueryRequest {
+                filters: vec![AggregateFilter {
+                    field: "municipality_code".to_string(),
+                    op: AggregateFilterOp::Eq,
+                    value: json!("mun-1"),
+                }],
+                ..AggregateQueryRequest::default()
+            },
+        )
+        .await
+        .expect_err("caller filter alone must not satisfy required aggregate filters");
+    assert_eq!(err.code(), "aggregate.filter_required");
+
+    let result = query
+        .execute_aggregate(
+            "social_registry",
+            "by_required_municipality",
+            AggregateQueryRequest {
+                principal_bound_filters: vec![AggregateFilter {
+                    field: "municipality_code".to_string(),
+                    op: AggregateFilterOp::Eq,
+                    value: json!("mun-1"),
+                }],
+                ..AggregateQueryRequest::default()
+            },
+        )
+        .await
+        .expect("principal-bound filter satisfies required aggregate filters");
+    assert_eq!(
+        result.data,
+        vec![json!({
+            "municipality_code": "mun-1",
+            "individual_count": 2
+        })]
+    );
+}
+
+#[tokio::test]
+async fn aggregate_route_binds_required_filters_to_principal_identity() {
+    let server = server_with_aggregates_and_principal_id("mun-1").await;
+
+    let scoped = server
         .get("/v1/datasets/social_registry/aggregates/by_required_municipality")
         .await;
-    missing.assert_status_bad_request();
-    let body: Value = missing.json();
-    assert_eq!(body["code"], "aggregate.filter_required");
-
-    for filters in [
-        json!({ "municipality_code": ["mun-1", "mun-2"] }),
-        json!({ "municipality_code": "" }),
-        json!({ "municipality_code": {} }),
-    ] {
-        let rejected = server
-            .post("/v1/datasets/social_registry/aggregates/by_required_municipality/query")
-            .json(&json!({ "filters": filters }))
-            .await;
-        rejected.assert_status_bad_request();
-        let body: Value = rejected.json();
-        assert_eq!(body["code"], "aggregate.filter_required");
-    }
-
-    let satisfied = server
-        .post("/v1/datasets/social_registry/aggregates/by_required_municipality/query")
-        .json(&json!({
-            "filters": { "municipality_code": "mun-1" }
-        }))
-        .await;
-    satisfied.assert_status_ok();
-    let body: Value = satisfied.json();
+    scoped.assert_status_ok();
+    let body: Value = scoped.json();
     assert_eq!(
         sorted_rows(&body),
         vec![json!({
@@ -1042,6 +1126,16 @@ async fn required_filters_are_enforced_for_aggregate_queries() {
             "individual_count": 2
         })]
     );
+
+    let narrowed_away = server
+        .post("/v1/datasets/social_registry/aggregates/by_required_municipality/query")
+        .json(&json!({
+            "filters": { "municipality_code": "mun-2" }
+        }))
+        .await;
+    narrowed_away.assert_status_ok();
+    let body: Value = narrowed_away.json();
+    assert!(sorted_rows(&body).is_empty());
 }
 
 #[tokio::test]

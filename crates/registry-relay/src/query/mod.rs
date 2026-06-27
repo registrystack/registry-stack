@@ -10,15 +10,17 @@ use datafusion::execution::context::SessionContext;
 use datafusion::prelude::{col, lit};
 use serde_json::Value;
 
-use crate::config::{FilterOp, RelationshipKind};
+use crate::config::{
+    FilterOp, RelationshipKind, RequiredFilterBindingConfig, RequiredFilterBindingSource,
+};
 use crate::entity::{EntityField, EntityModel, EntityRegistry};
-use crate::error::{Error, FilterError, InternalError, SchemaError};
+use crate::error::{EntityError, Error, FilterError, InternalError, SchemaError};
 use crate::table_provider::{publication_read_guard, table_name, table_snapshot};
 
 pub mod aggregates;
 pub use aggregates::{
-    AggregateFilter, AggregateFilterOp, AggregateListItem, AggregateQueryEngine,
-    AggregateQueryRequest, AggregateResult,
+    principal_bound_aggregate_filters, AggregateFilter, AggregateFilterOp, AggregateListItem,
+    AggregateQueryEngine, AggregateQueryRequest, AggregateResult,
 };
 
 /// Executes public entity reads against private DataFusion tables.
@@ -40,6 +42,12 @@ pub struct EntityCollectionQuery {
     /// bbox predicates and primary-key item lookup while still applying
     /// `allowed_filters` to normal query parameters.
     pub trusted_filters: Vec<EntityFilter>,
+    /// Gateway-owned filters derived from authenticated principal data. This
+    /// lane is the only one that can satisfy `required_filters` security gates.
+    pub principal_bound_filters: Vec<EntityFilter>,
+    /// Principal-bound filters for relationship expansion targets, keyed by
+    /// expansion name.
+    pub expansion_principal_bound_filters: BTreeMap<String, Vec<EntityFilter>>,
     pub expansions: Vec<String>,
 }
 
@@ -66,6 +74,72 @@ pub fn satisfies_required_filter(required_filters: &[String], filter: &EntityFil
         .any(|required| required == &filter.field)
         && filter.op == EntityFilterOp::Eq
         && is_single_scalar_filter_value(&filter.value)
+}
+
+pub fn required_filters_are_satisfied(
+    required_filters: &[String],
+    filters: &[EntityFilter],
+) -> bool {
+    filters
+        .iter()
+        .any(|filter| satisfies_required_filter(required_filters, filter))
+}
+
+pub fn principal_bound_required_filters(
+    required_filters: &[String],
+    bindings: &[RequiredFilterBindingConfig],
+    principal_id: Option<&str>,
+) -> Result<Vec<EntityFilter>, Error> {
+    if required_filters.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut filters = Vec::with_capacity(bindings.len());
+    for binding in bindings {
+        let value = match binding.source {
+            RequiredFilterBindingSource::PrincipalId => {
+                principal_id.ok_or_else(|| EntityError::FilterRequired {
+                    required: required_filters.to_vec(),
+                })?
+            }
+        };
+        filters.push(EntityFilter::eq(binding.field.clone(), value.to_string()));
+    }
+    Ok(filters)
+}
+
+pub fn bind_principal_required_filters(
+    required_filters: &[String],
+    bindings: &[RequiredFilterBindingConfig],
+    principal_id: Option<&str>,
+    query: &mut EntityCollectionQuery,
+) -> Result<(), Error> {
+    query
+        .principal_bound_filters
+        .extend(principal_bound_required_filters(
+            required_filters,
+            bindings,
+            principal_id,
+        )?);
+    Ok(())
+}
+
+fn validate_required_filter_gate(
+    entity: &EntityModel,
+    _caller_filters: &[EntityFilter],
+    _trusted_filters: &[EntityFilter],
+    principal_bound_filters: &[EntityFilter],
+) -> Result<(), Error> {
+    let required_filters = &entity.api.required_filters;
+    if required_filters.is_empty() {
+        return Ok(());
+    }
+    if required_filters_are_satisfied(required_filters, principal_bound_filters) {
+        return Ok(());
+    }
+    Err(EntityError::FilterRequired {
+        required: required_filters.clone(),
+    }
+    .into())
 }
 
 pub(super) fn is_single_scalar_filter_value(value: &Value) -> bool {
@@ -100,6 +174,8 @@ pub struct EntityExists {
 pub struct RelationshipPageQuery {
     pub limit: Option<usize>,
     pub after_primary_key: Option<Value>,
+    pub host_principal_bound_filters: Vec<EntityFilter>,
+    pub target_principal_bound_filters: Vec<EntityFilter>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -123,6 +199,12 @@ impl EntityQueryEngine {
     ) -> Result<(), Error> {
         let entity = self.entity(dataset_id, entity_name)?;
         validate_allowed_expansions(entity, &query.expansions)?;
+        validate_expansion_principal_bound_filters(
+            self,
+            dataset_id,
+            entity,
+            &query.expansion_principal_bound_filters,
+        )?;
         projected_fields(entity, query.fields.as_deref())?;
         match query.limit {
             Some(limit) if limit == 0 || limit > entity.api.max_limit as usize => {
@@ -132,6 +214,13 @@ impl EntityQueryEngine {
         }
         validate_allowed_filters(entity, &query.filters)?;
         validate_filter_fields_exist(entity, &query.trusted_filters)?;
+        validate_filter_fields_exist(entity, &query.principal_bound_filters)?;
+        validate_required_filter_gate(
+            entity,
+            &query.filters,
+            &query.trusted_filters,
+            &query.principal_bound_filters,
+        )?;
         Ok(())
     }
 
@@ -144,6 +233,12 @@ impl EntityQueryEngine {
         let _publication_guard = publication_read_guard().await;
         let entity = self.entity(dataset_id, entity_name)?;
         validate_allowed_expansions(entity, &query.expansions)?;
+        validate_expansion_principal_bound_filters(
+            self,
+            dataset_id,
+            entity,
+            &query.expansion_principal_bound_filters,
+        )?;
         let requested_fields = query.fields.clone();
         let mut projected_fields = projected_fields(entity, requested_fields.as_deref())?;
         let strip_fields =
@@ -162,8 +257,16 @@ impl EntityQueryEngine {
         };
         validate_allowed_filters(entity, &query.filters)?;
         validate_filter_fields_exist(entity, &query.trusted_filters)?;
+        validate_filter_fields_exist(entity, &query.principal_bound_filters)?;
+        validate_required_filter_gate(
+            entity,
+            &query.filters,
+            &query.trusted_filters,
+            &query.principal_bound_filters,
+        )?;
         let mut filters = query.filters;
         filters.extend(query.trusted_filters);
+        filters.extend(query.principal_bound_filters);
         let mut result = self
             .execute_entity_query(
                 dataset_id,
@@ -178,8 +281,14 @@ impl EntityQueryEngine {
         let next_primary_key = truncate_page(&mut result.rows, limit, &entity.primary_key.name);
         merge_versions(
             &mut result.versions,
-            self.expand_rows(dataset_id, entity, &mut result.rows, &query.expansions)
-                .await?,
+            self.expand_rows(
+                dataset_id,
+                entity,
+                &mut result.rows,
+                &query.expansions,
+                &query.expansion_principal_bound_filters,
+            )
+            .await?,
         );
         strip_projection_fields(&mut result.rows, &strip_fields);
         if strip_primary_key {
@@ -203,27 +312,50 @@ impl EntityQueryEngine {
         primary_key: Value,
         fields: Option<Vec<String>>,
         expansions: Vec<String>,
+        expansion_principal_bound_filters: BTreeMap<String, Vec<EntityFilter>>,
+        principal_bound_filters: Vec<EntityFilter>,
     ) -> Result<Option<EntityRecord>, Error> {
         let _publication_guard = publication_read_guard().await;
         let entity = self.entity(dataset_id, entity_name)?;
         validate_allowed_expansions(entity, &expansions)?;
+        validate_expansion_principal_bound_filters(
+            self,
+            dataset_id,
+            entity,
+            &expansion_principal_bound_filters,
+        )?;
+        validate_filter_fields_exist(entity, &principal_bound_filters)?;
         let mut projected_fields = projected_fields(entity, fields.as_deref())?;
         let strip_fields = add_expansion_source_fields(entity, &expansions, &mut projected_fields)?;
         let filter = EntityFilter::eq(entity.primary_key.name.clone(), primary_key);
+        validate_required_filter_gate(
+            entity,
+            &[],
+            std::slice::from_ref(&filter),
+            &principal_bound_filters,
+        )?;
+        let mut filters = vec![filter];
+        filters.extend(principal_bound_filters);
         let mut result = self
             .execute_entity_query(
                 dataset_id,
                 entity,
                 &projected_fields,
-                vec![filter],
+                filters,
                 Some(1),
                 None,
             )
             .await?;
         merge_versions(
             &mut result.versions,
-            self.expand_rows(dataset_id, entity, &mut result.rows, &expansions)
-                .await?,
+            self.expand_rows(
+                dataset_id,
+                entity,
+                &mut result.rows,
+                &expansions,
+                &expansion_principal_bound_filters,
+            )
+            .await?,
         );
         strip_projection_fields(&mut result.rows, &strip_fields);
         Ok(result.rows.into_iter().next().map(|value| EntityRecord {
@@ -264,21 +396,29 @@ impl EntityQueryEngine {
         entity_name: &str,
         primary_key: Value,
         relationship_name: &str,
+        host_principal_bound_filters: Vec<EntityFilter>,
     ) -> Result<Value, Error> {
         let _publication_guard = publication_read_guard().await;
         let entity = self.entity(dataset_id, entity_name)?;
         let Some(relationship) = entity.relationships.get(relationship_name) else {
             return Err(SchemaError::UnknownResource.into());
         };
+        validate_filter_fields_exist(entity, &host_principal_bound_filters)?;
+        let host_filter = EntityFilter::eq(entity.primary_key.name.clone(), primary_key);
+        validate_required_filter_gate(
+            entity,
+            &[],
+            std::slice::from_ref(&host_filter),
+            &host_principal_bound_filters,
+        )?;
+        let mut host_filters = vec![host_filter];
+        host_filters.extend(host_principal_bound_filters);
         let mut result = self
             .execute_entity_query(
                 dataset_id,
                 entity,
                 &entity.fields.iter().collect::<Vec<_>>(),
-                vec![EntityFilter::eq(
-                    entity.primary_key.name.clone(),
-                    primary_key,
-                )],
+                host_filters,
                 Some(1),
                 None,
             )
@@ -287,7 +427,14 @@ impl EntityQueryEngine {
             return Err(SchemaError::UnknownResource.into());
         };
         let expanded = self
-            .expand_relationship(dataset_id, entity, &row, relationship_name, relationship)
+            .expand_relationship(
+                dataset_id,
+                entity,
+                &row,
+                relationship_name,
+                relationship,
+                &[],
+            )
             .await?;
         if relationship.kind == RelationshipKind::BelongsTo && expanded.value.is_null() {
             return Err(SchemaError::UnknownResource.into());
@@ -308,15 +455,22 @@ impl EntityQueryEngine {
         let Some(relationship) = entity.relationships.get(relationship_name) else {
             return Err(SchemaError::UnknownResource.into());
         };
+        validate_filter_fields_exist(entity, &page.host_principal_bound_filters)?;
+        let host_filter = EntityFilter::eq(entity.primary_key.name.clone(), primary_key);
+        validate_required_filter_gate(
+            entity,
+            &[],
+            std::slice::from_ref(&host_filter),
+            &page.host_principal_bound_filters,
+        )?;
+        let mut host_filters = vec![host_filter];
+        host_filters.extend(page.host_principal_bound_filters.clone());
         let mut host_result = self
             .execute_entity_query(
                 dataset_id,
                 entity,
                 &entity.fields.iter().collect::<Vec<_>>(),
-                vec![EntityFilter::eq(
-                    entity.primary_key.name.clone(),
-                    primary_key,
-                )],
+                host_filters,
                 Some(1),
                 None,
             )
@@ -326,7 +480,14 @@ impl EntityQueryEngine {
         };
         if relationship.kind != RelationshipKind::HasMany {
             let expanded = self
-                .expand_relationship(dataset_id, entity, &row, relationship_name, relationship)
+                .expand_relationship(
+                    dataset_id,
+                    entity,
+                    &row,
+                    relationship_name,
+                    relationship,
+                    &page.target_principal_bound_filters,
+                )
                 .await?;
             if relationship.kind == RelationshipKind::BelongsTo && expanded.value.is_null() {
                 return Err(SchemaError::UnknownResource.into());
@@ -341,6 +502,7 @@ impl EntityQueryEngine {
         }
 
         let target = self.entity(dataset_id, &relationship.target)?;
+        validate_filter_fields_exist(target, &page.target_principal_bound_filters)?;
         let Some(value) = row.get(&entity.primary_key.name) else {
             return Err(SchemaError::ResourceUnavailable.into());
         };
@@ -353,12 +515,21 @@ impl EntityQueryEngine {
             None => target.api.default_limit as usize,
         };
         let target_fields = target.fields.iter().collect::<Vec<_>>();
+        let target_filter = EntityFilter::eq(target_fk.name.clone(), value.clone());
+        validate_required_filter_gate(
+            target,
+            &[],
+            std::slice::from_ref(&target_filter),
+            &page.target_principal_bound_filters,
+        )?;
+        let mut target_filters = vec![target_filter];
+        target_filters.extend(page.target_principal_bound_filters);
         let mut target_result = self
             .execute_entity_query(
                 dataset_id,
                 target,
                 &target_fields,
-                vec![EntityFilter::eq(target_fk.name.clone(), value.clone())],
+                target_filters,
                 Some(limit.saturating_add(1)),
                 page.after_primary_key,
             )
@@ -492,6 +663,7 @@ impl EntityQueryEngine {
         entity: &EntityModel,
         rows: &mut [Value],
         expansions: &[String],
+        expansion_principal_bound_filters: &BTreeMap<String, Vec<EntityFilter>>,
     ) -> Result<VersionMap, Error> {
         let mut versions = BTreeMap::new();
         for expansion in expansions {
@@ -499,9 +671,20 @@ impl EntityQueryEngine {
                 .relationships
                 .get(expansion)
                 .ok_or(FilterError::NotAllowed)?;
+            let target_principal_bound_filters = expansion_principal_bound_filters
+                .get(expansion)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
             for row in rows.iter_mut() {
                 let expanded = self
-                    .expand_relationship(dataset_id, entity, row, expansion, relationship)
+                    .expand_relationship(
+                        dataset_id,
+                        entity,
+                        row,
+                        expansion,
+                        relationship,
+                        target_principal_bound_filters,
+                    )
                     .await?;
                 merge_versions(&mut versions, expanded.versions.clone());
                 if let Value::Object(object) = row {
@@ -522,8 +705,10 @@ impl EntityQueryEngine {
         row: &Value,
         relationship_name: &str,
         relationship: &crate::config::EntityRelationshipConfig,
+        target_principal_bound_filters: &[EntityFilter],
     ) -> Result<ExpandedRelationship, Error> {
         let target = self.entity(dataset_id, &relationship.target)?;
+        validate_filter_fields_exist(target, target_principal_bound_filters)?;
         let (filter_field, filter_value, limit) = match relationship.kind {
             RelationshipKind::BelongsTo => {
                 let source_fk = entity_field_by_table_column(entity, &relationship.foreign_key)?;
@@ -559,12 +744,21 @@ impl EntityQueryEngine {
             }
         };
         let target_fields = target.fields.iter().collect::<Vec<_>>();
+        let target_filter = EntityFilter::eq(filter_field, filter_value);
+        validate_required_filter_gate(
+            target,
+            &[],
+            std::slice::from_ref(&target_filter),
+            target_principal_bound_filters,
+        )?;
+        let mut target_filters = vec![target_filter];
+        target_filters.extend(target_principal_bound_filters.iter().cloned());
         let mut result = self
             .execute_entity_query(
                 dataset_id,
                 target,
                 &target_fields,
-                vec![EntityFilter::eq(filter_field, filter_value)],
+                target_filters,
                 limit,
                 None,
             )
@@ -675,11 +869,24 @@ impl EntityCollectionQuery {
         self
     }
 
+    pub fn with_principal_bound_filter(mut self, filter: EntityFilter) -> Self {
+        self.principal_bound_filters.push(filter);
+        self
+    }
+
     pub fn with_expansions(
         mut self,
         expansions: impl IntoIterator<Item = impl Into<String>>,
     ) -> Self {
         self.expansions = expansions.into_iter().map(Into::into).collect();
+        self
+    }
+
+    pub fn with_expansion_principal_bound_filters(
+        mut self,
+        filters: BTreeMap<String, Vec<EntityFilter>>,
+    ) -> Self {
+        self.expansion_principal_bound_filters = filters;
         self
     }
 }
@@ -696,6 +903,22 @@ impl RelationshipPageQuery {
 
     pub fn with_after_primary_key(mut self, primary_key: impl Into<Value>) -> Self {
         self.after_primary_key = Some(primary_key.into());
+        self
+    }
+
+    pub fn with_host_principal_bound_filters(
+        mut self,
+        filters: impl IntoIterator<Item = EntityFilter>,
+    ) -> Self {
+        self.host_principal_bound_filters = filters.into_iter().collect();
+        self
+    }
+
+    pub fn with_target_principal_bound_filters(
+        mut self,
+        filters: impl IntoIterator<Item = EntityFilter>,
+    ) -> Self {
+        self.target_principal_bound_filters = filters.into_iter().collect();
         self
     }
 }
@@ -888,6 +1111,22 @@ fn validate_allowed_expansions(entity: &EntityModel, expansions: &[String]) -> R
         if !declared || !allowed {
             return Err(FilterError::NotAllowed.into());
         }
+    }
+    Ok(())
+}
+
+fn validate_expansion_principal_bound_filters(
+    query: &EntityQueryEngine,
+    dataset_id: &str,
+    entity: &EntityModel,
+    filters: &BTreeMap<String, Vec<EntityFilter>>,
+) -> Result<(), Error> {
+    for (expansion, principal_filters) in filters {
+        let Some(relationship) = entity.relationships.get(expansion) else {
+            return Err(FilterError::NotAllowed.into());
+        };
+        let target = query.entity(dataset_id, &relationship.target)?;
+        validate_filter_fields_exist(target, principal_filters)?;
     }
     Ok(())
 }
