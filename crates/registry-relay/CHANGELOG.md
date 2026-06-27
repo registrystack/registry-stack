@@ -4,8 +4,9 @@
 
 ### Added
 
-- Added `registry-relay --version` and `registry-relay -V` output so the Relay
-  binary matches the stack's user-facing version command convention.
+- `registry-relay --version` and `registry-relay -V` output so the Relay binary
+  matches the stack's user-facing version command convention, ignoring any
+  trailing arguments to mirror the clap-based binaries.
 
 ## 0.4.0 - 2026-06-21
 
