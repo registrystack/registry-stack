@@ -394,6 +394,9 @@ datasets:
             - id
             - household_id
             - eligibility_status
+          required_filter_bindings:
+            - field: id
+              source: principal_id
           allowed_filters:
             - field: id
               ops: [eq, in]
@@ -1623,6 +1626,9 @@ datasets:
             - id
             - school_id
             - home_district
+          required_filter_bindings:
+            - field: id
+              source: principal_id
           allowed_filters:
             - field: id
               ops: [eq, in]
@@ -2031,6 +2037,9 @@ datasets:
             - benefits_household_alias
             - education_student_alias
             - education_guardian_alias
+          required_filter_bindings:
+            - field: canonical_id
+              source: principal_id
           allowed_filters:
             - field: canonical_id
               ops: [eq, in]

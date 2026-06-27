@@ -1308,12 +1308,39 @@ pub struct EntityApiConfig {
     pub require_purpose_header: bool,
     #[serde(default)]
     pub governed_policy: Option<GovernedPolicyConfig>,
+    /// Alternative fields that can satisfy the row-scope gate. A
+    /// principal-bound equality filter on any listed field is sufficient, so
+    /// list multiple fields only when each is an acceptable boundary.
     #[serde(default)]
     pub required_filters: Vec<String>,
+    /// Principal-derived bindings that both satisfy the required filter gate
+    /// and are applied to the query.
+    #[serde(default)]
+    pub required_filter_bindings: Vec<RequiredFilterBindingConfig>,
     #[serde(default)]
     pub allowed_filters: Vec<AllowedFilter>,
     #[serde(default)]
     pub allowed_expansions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct RequiredFilterBindingConfig {
+    pub field: String,
+    #[serde(default)]
+    pub source: RequiredFilterBindingSource,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RequiredFilterBindingSource {
+    PrincipalId,
+}
+
+impl Default for RequiredFilterBindingSource {
+    fn default() -> Self {
+        Self::PrincipalId
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
@@ -1469,8 +1496,15 @@ pub struct AggregateConfig {
     pub indicators: Vec<AggregateIndicatorConfig>,
     #[serde(default)]
     pub allowed_filters: Vec<AllowedFilter>,
+    /// Alternative fields or dimensions that can satisfy the aggregate gate. A
+    /// principal-bound equality filter on any listed field is sufficient, so
+    /// list multiple fields only when each is an acceptable boundary.
     #[serde(default)]
     pub required_filters: Vec<String>,
+    /// Principal-derived bindings that both satisfy the required filter gate
+    /// and are applied to the aggregate query.
+    #[serde(default)]
+    pub required_filter_bindings: Vec<RequiredFilterBindingConfig>,
     #[serde(default)]
     pub temporal_field: Option<String>,
     #[serde(default)]

@@ -762,42 +762,29 @@ async fn disabled_status_denies_when_status_source_field_is_redacted() {
 }
 
 #[tokio::test]
-async fn spdci_routes_enforce_entity_required_filter_gate() {
-    let server =
-        try_server_with_entity_api_extra("          required_filters: [impairment_type]\n")
+async fn spdci_required_filter_gate_requires_principal_binding_config() {
+    let err =
+        match try_server_with_entity_api_extra("          required_filters: [impairment_type]\n")
             .await
-            .expect("test server builds");
-    for (path, body) in [
-        (
-            "/dci/dr/registry/sync/search",
-            sync_search_body("msg-required-search", "txn-required-search"),
-        ),
-        (
-            "/dci/dr/registry/sync/disabled",
-            disabled_criteria_body("msg-required-disabled", "txn-required-disabled"),
-        ),
-        (
-            "/dci/dr/registry/sync/get-disability-details",
-            disabled_criteria_body("msg-required-details", "txn-required-details"),
-        ),
-        (
-            "/dci/dr/registry/sync/get-disability-support",
-            disabled_criteria_body("msg-required-support", "txn-required-support"),
-        ),
-    ] {
-        let response = server.post(path).json(&body).await;
-        response.assert_status(StatusCode::BAD_REQUEST);
-        let body: Value = response.json();
-        assert_eq!(body["code"], "entity.filter_required", "{path}");
-    }
+        {
+            Ok(_) => panic!("server should reject required_filters without principal binding"),
+            Err(error) => error,
+        };
+
+    assert_eq!(err.code, "config.validation_error");
 }
 
 #[tokio::test]
-async fn spdci_required_filter_gate_rejects_broad_predicates() {
-    let server =
-        try_server_with_entity_api_extra("          required_filters: [impairment_type]\n")
-            .await
-            .expect("test server builds");
+async fn spdci_required_filter_gate_intersects_broad_predicates_with_principal_binding() {
+    let server = try_server_with_entity_api_extra(
+        r#"          required_filters: [impairment_type]
+          required_filter_bindings:
+            - field: impairment_type
+              source: principal_id
+"#,
+    )
+    .await
+    .expect("test server builds");
 
     let response = server
         .post("/dci/dr/registry/sync/search")
@@ -824,9 +811,13 @@ async fn spdci_required_filter_gate_rejects_broad_predicates() {
         }))
         .await;
 
-    response.assert_status(StatusCode::BAD_REQUEST);
+    response.assert_status(StatusCode::OK);
     let body: Value = response.json();
-    assert_eq!(body["code"], "entity.filter_required");
+    assert_eq!(body["header"]["total_count"], 0);
+    assert!(body["message"]["search_response"][0]["data"]["reg_records"]
+        .as_array()
+        .expect("reg_records array")
+        .is_empty());
 }
 
 #[tokio::test]

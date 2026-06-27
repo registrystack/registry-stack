@@ -15,7 +15,8 @@ use serde::Serialize;
 
 use crate::config::{
     AggregateConfig, AggregateDimensionConfig, AggregateFunction, AggregateIndicatorConfig, Config,
-    DatasetConfig, RelationshipKind, Sensitivity, Suppression,
+    DatasetConfig, RelationshipKind, RequiredFilterBindingConfig, RequiredFilterBindingSource,
+    Sensitivity, Suppression,
 };
 use crate::entity::{EntityField, EntityModel, EntityRegistry};
 use crate::error::{AggregateError, Error, FilterError, SchemaError};
@@ -75,6 +76,7 @@ pub struct AggregateQueryRequest {
     pub indicators: Option<Vec<String>>,
     pub group_by: Option<Vec<String>>,
     pub filters: Vec<AggregateFilter>,
+    pub principal_bound_filters: Vec<AggregateFilter>,
     pub max_rows: Option<usize>,
 }
 
@@ -177,7 +179,7 @@ impl AggregateQueryEngine {
         &self,
         dataset_id: &str,
         aggregate_id: &str,
-        request: AggregateQueryRequest,
+        mut request: AggregateQueryRequest,
     ) -> Result<AggregateResult, Error> {
         let _publication_guard = publication_read_guard().await;
         let (dataset, aggregate) = self.aggregate_config(dataset_id, aggregate_id)?;
@@ -189,7 +191,8 @@ impl AggregateQueryEngine {
         let indicators = selected_indicators(aggregate, request.indicators.as_deref())?;
         let group_by = selected_group_by(aggregate, request.group_by.as_deref())?;
         validate_query_limits(&indicators, &group_by, &request.filters)?;
-        enforce_required_filters(aggregate, &request.filters)?;
+        enforce_required_filters(aggregate, &request.principal_bound_filters)?;
+        request.filters.append(&mut request.principal_bound_filters);
 
         let plan = AggregatePlan::build(
             dataset_id,
@@ -272,6 +275,32 @@ impl AggregateQueryEngine {
             .entity(entity_name)
             .ok_or_else(|| SchemaError::UnknownResource.into())
     }
+}
+
+pub fn principal_bound_aggregate_filters(
+    required_filters: &[String],
+    bindings: &[RequiredFilterBindingConfig],
+    principal_id: Option<&str>,
+) -> Result<Vec<AggregateFilter>, Error> {
+    if required_filters.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut filters = Vec::with_capacity(bindings.len());
+    for binding in bindings {
+        let value = match binding.source {
+            RequiredFilterBindingSource::PrincipalId => {
+                principal_id.ok_or_else(|| AggregateError::FilterRequired {
+                    required: required_filters.to_vec(),
+                })?
+            }
+        };
+        filters.push(AggregateFilter {
+            field: binding.field.clone(),
+            op: AggregateFilterOp::Eq,
+            value: Value::String(value.to_string()),
+        });
+    }
+    Ok(filters)
 }
 
 impl AggregatePlan {

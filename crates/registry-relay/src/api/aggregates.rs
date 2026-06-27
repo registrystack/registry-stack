@@ -27,7 +27,10 @@ use crate::auth::Principal;
 use crate::config::{DatasetConfig, EntityConfig};
 use crate::error::{AuthError, Error, FilterError, SchemaError};
 use crate::ingest::ReadinessSnapshot;
-use crate::query::{AggregateFilter, AggregateFilterOp, AggregateQueryRequest, AggregateResult};
+use crate::query::{
+    principal_bound_aggregate_filters, AggregateFilter, AggregateFilterOp, AggregateQueryRequest,
+    AggregateResult,
+};
 use crate::runtime_config::RuntimeSnapshot;
 
 const PROBLEM_JSON: HeaderValue = HeaderValue::from_static("application/problem+json");
@@ -371,10 +374,20 @@ async fn run_aggregate(
             Err(error) => return error.into_response(),
         }
     };
-    let request = match aggregate_query_request(body, aggregate) {
+    let mut request = match aggregate_query_request(body, aggregate) {
         Ok(request) => request,
         Err(error) => return error.into_response(),
     };
+    match principal_bound_aggregate_filters(
+        &aggregate.required_filters,
+        &aggregate.required_filter_bindings,
+        principal
+            .as_ref()
+            .map(|Extension(principal)| principal.principal_id.as_str()),
+    ) {
+        Ok(filters) => request.principal_bound_filters = filters,
+        Err(error) => return error.into_response(),
+    }
     match query
         .execute_aggregate(&path.dataset_id, &path.aggregate_id, request)
         .await
@@ -516,6 +529,7 @@ fn aggregate_query_request(
         indicators: body.measures.or(body.indicators),
         group_by: body.group_by,
         filters,
+        principal_bound_filters: Vec::new(),
         max_rows: body.max_rows,
     })
 }

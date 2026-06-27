@@ -26,14 +26,14 @@ use crate::api::governed::{
 use crate::audit::{AuditContextExt, ErrorCodeExt};
 use crate::auth::scopes::require_scope;
 use crate::auth::Principal;
-use crate::config::{DatasetId, ResourceId};
+use crate::config::{DatasetId, RequiredFilterBindingConfig, ResourceId};
 use crate::entity::{EntityModel, EntityRegistry};
-use crate::error::{AuthError, EntityError, Error, InternalError, SchemaError};
+use crate::error::{AuthError, Error, InternalError, SchemaError};
 use crate::ingest::ReadinessSnapshot;
 use crate::metadata;
 use crate::query::{
-    satisfies_required_filter, EntityCollectionQuery, EntityFilter, EntityFilterOp, EntityRecord,
-    RelationshipPageQuery,
+    bind_principal_required_filters, principal_bound_required_filters, EntityCollectionQuery,
+    EntityFilter, EntityFilterOp, EntityRecord, RelationshipPageQuery,
 };
 use crate::runtime_config::{CursorSigner, RuntimeSnapshot, CURSOR_MAC_LEN};
 
@@ -211,6 +211,7 @@ async fn entity_collection(
             };
             EntityCollectionAccess {
                 required_filters: entity.api.required_filters.clone(),
+                required_filter_bindings: entity.api.required_filter_bindings.clone(),
                 read_decision,
                 expansion_decisions,
             }
@@ -230,33 +231,49 @@ async fn entity_collection(
         );
     };
 
-    let validator = params_validator(&params);
     let link_params = params.clone();
+    let principal_id = principal
+        .as_ref()
+        .map(|Extension(principal)| principal.principal_id.as_str());
     let cursor_context = CursorContext {
         dataset_id: path.dataset_id.clone(),
         entity: path.entity.clone(),
         relationship: None,
+        principal_id: principal_id.map(str::to_string),
         filters: Vec::new(),
         ingest_version: None,
     };
-    let query_params = match collection_query_from_params(&signer, params, cursor_context) {
+    let mut query_params = match collection_query_from_params(&signer, params, cursor_context) {
         Ok(query_params) => query_params,
         Err(PageParamError::CursorInvalidated) => return cursor_invalidated(),
         Err(PageParamError::Error(error)) => return error.into_response(),
     };
-    if !collection_access.required_filters.is_empty() {
-        let satisfied =
-            query_params.query.filters.iter().any(|filter| {
-                satisfies_required_filter(&collection_access.required_filters, filter)
-            });
-        if !satisfied {
-            return Error::from(EntityError::FilterRequired {
-                required: collection_access.required_filters,
-            })
-            .into_response();
-        }
+    if let Err(error) = bind_principal_required_filters(
+        &collection_access.required_filters,
+        &collection_access.required_filter_bindings,
+        principal_id,
+        &mut query_params.query,
+    ) {
+        return error.into_response();
     }
+    let expansion_principal_bound_filters = match build_expansion_principal_bound_filters(
+        &registry,
+        &path.dataset_id,
+        &path.entity,
+        &query_params.query.expansions,
+        principal_id,
+    ) {
+        Ok(filters) => filters,
+        Err(error) => return error.into_response(),
+    };
+    query_params.query = query_params
+        .query
+        .with_expansion_principal_bound_filters(expansion_principal_bound_filters);
     let cursor = query_params.cursor.clone();
+    let principal_filters_for_validator = principal_filters_for_validator(
+        &query_params.query.principal_bound_filters,
+        &query_params.query.expansion_principal_bound_filters,
+    );
     if cursor.is_none() && query_params.query.expansions.is_empty() {
         if let Some(dataset) = registry.dataset(&path.dataset_id) {
             if dataset.entity(&path.entity).is_some() {
@@ -284,6 +301,7 @@ async fn entity_collection(
                 dataset_id: path.dataset_id.clone(),
                 entity: path.entity.clone(),
                 relationship: None,
+                principal_id: principal_id.map(str::to_string),
                 filters: query_params.filters.clone(),
                 ingest_version: rows.cursor_ingest_version.clone(),
             };
@@ -301,6 +319,7 @@ async fn entity_collection(
                     relationship: cursor_context.relationship,
                     position,
                     filters: cursor_context.filters,
+                    principal_id: cursor_context.principal_id,
                     ingest_version: cursor_context.ingest_version,
                 };
                 let encoded = match encode_cursor(&signer, &cursor) {
@@ -312,6 +331,10 @@ async fn entity_collection(
                 None
             };
             let body = paginated_body(Value::Array(rows.rows), next_cursor.as_deref());
+            let validator = params_validator_with_principal_filters(
+                &link_params,
+                &principal_filters_for_validator,
+            );
             let validator = governed_cache_variant_for_expansions(
                 &validator,
                 &collection_access.read_decision,
@@ -396,6 +419,8 @@ async fn entity_record(
                 BTreeMap::new()
             };
             EntityRecordAccess {
+                required_filters: entity.api.required_filters.clone(),
+                required_filter_bindings: entity.api.required_filter_bindings.clone(),
                 read_decision,
                 expansion_decisions,
             }
@@ -409,15 +434,47 @@ async fn entity_record(
         );
     };
 
-    let validator = governed_cache_variant_for_expansions(
-        &format!("{}?{}", path.id, params_validator(&params)),
-        &record_access.read_decision,
-        &record_access.expansion_decisions,
-    );
     let query_params = match record_query_from_params(params) {
         Ok(query_params) => query_params,
         Err(error) => return error.into_response(),
     };
+    let principal_id = principal
+        .as_ref()
+        .map(|Extension(principal)| principal.principal_id.as_str());
+    let principal_bound_filters = match principal_bound_required_filters(
+        &record_access.required_filters,
+        &record_access.required_filter_bindings,
+        principal_id,
+    ) {
+        Ok(filters) => filters,
+        Err(error) => return error.into_response(),
+    };
+    let expansion_principal_bound_filters = match build_expansion_principal_bound_filters(
+        &registry,
+        &path.dataset_id,
+        &path.entity,
+        &query_params.expansions,
+        principal_id,
+    ) {
+        Ok(filters) => filters,
+        Err(error) => return error.into_response(),
+    };
+    let principal_filters_for_validator = principal_filters_for_validator(
+        &principal_bound_filters,
+        &expansion_principal_bound_filters,
+    );
+    let validator = governed_cache_variant_for_expansions(
+        &format!(
+            "{}?{}",
+            path.id,
+            params_validator_with_principal_filters(
+                &query_params.raw_params,
+                &principal_filters_for_validator,
+            )
+        ),
+        &record_access.read_decision,
+        &record_access.expansion_decisions,
+    );
     // Preserve the expansion list locally so the provenance helper can
     // partition the record into `{fields, expanded}` later. The plain
     // JSON path consumes `query_params.expansions` so we clone first.
@@ -429,6 +486,8 @@ async fn entity_record(
             json!(path.id.clone()),
             query_params.fields,
             query_params.expansions,
+            expansion_principal_bound_filters,
+            principal_bound_filters,
         )
         .await
     {
@@ -525,32 +584,49 @@ async fn entity_relationship(
                 Ok(decision) => decision,
                 Err(error) => return access_error_response(error, audit_context),
             };
-            if let Some(relationship) = entity.relationships.get(&path.relationship) {
-                let target =
-                    match entity_from_registry(&registry, &path.dataset_id, &relationship.target) {
+            let (target_required_filters, target_required_filter_bindings) =
+                if let Some(relationship) = entity.relationships.get(&path.relationship) {
+                    let target = match entity_from_registry(
+                        &registry,
+                        &path.dataset_id,
+                        &relationship.target,
+                    ) {
                         Ok(target) => target,
                         Err(error) => return error.into_response(),
                     };
-                if relationship.kind == crate::config::RelationshipKind::HasMany {
-                    let target_fk_name =
-                        match field_name_by_table_column(target, &relationship.foreign_key) {
-                            Ok(field) => field,
-                            Err(error) => return error.into_response(),
-                        };
-                    page_context = Some(CursorContext {
-                        dataset_id: path.dataset_id.clone(),
-                        entity: path.entity.clone(),
-                        relationship: Some(path.relationship.clone()),
-                        filters: vec![CursorFilter {
-                            field: target_fk_name,
-                            op: "eq".to_string(),
-                            value: json!(path.id.clone()),
-                        }],
-                        ingest_version: None,
-                    });
-                }
-            }
+                    if relationship.kind == crate::config::RelationshipKind::HasMany {
+                        let target_fk_name =
+                            match field_name_by_table_column(target, &relationship.foreign_key) {
+                                Ok(field) => field,
+                                Err(error) => return error.into_response(),
+                            };
+                        page_context = Some(CursorContext {
+                            dataset_id: path.dataset_id.clone(),
+                            entity: path.entity.clone(),
+                            relationship: Some(path.relationship.clone()),
+                            filters: vec![CursorFilter {
+                                field: target_fk_name,
+                                op: "eq".to_string(),
+                                value: json!(path.id.clone()),
+                            }],
+                            principal_id: principal
+                                .as_ref()
+                                .map(|Extension(principal)| principal.principal_id.clone()),
+                            ingest_version: None,
+                        });
+                    }
+                    (
+                        target.api.required_filters.clone(),
+                        target.api.required_filter_bindings.clone(),
+                    )
+                } else {
+                    (Vec::new(), Vec::new())
+                };
             EntityRelationshipAccess {
+                required_filters: entity.api.required_filters.clone(),
+                required_filter_bindings: entity.api.required_filter_bindings.clone(),
+                target_required_filters,
+                target_required_filter_bindings,
                 read_decision,
                 target_read_decision,
             }
@@ -571,24 +647,52 @@ async fn entity_relationship(
     };
 
     let link_params = params.clone();
+    let principal_id = principal
+        .as_ref()
+        .map(|Extension(principal)| principal.principal_id.as_str());
+    let mut relationship_query =
+        match relationship_query_from_params(&signer, params, page_context.as_ref()) {
+            Ok(query) => query,
+            Err(PageParamError::CursorInvalidated) => return cursor_invalidated(),
+            Err(PageParamError::Error(error)) => return error.into_response(),
+        };
+    let host_principal_bound_filters = match principal_bound_required_filters(
+        &relationship_access.required_filters,
+        &relationship_access.required_filter_bindings,
+        principal_id,
+    ) {
+        Ok(filters) => filters,
+        Err(error) => return error.into_response(),
+    };
+    let target_principal_bound_filters = match principal_bound_required_filters(
+        &relationship_access.target_required_filters,
+        &relationship_access.target_required_filter_bindings,
+        principal_id,
+    ) {
+        Ok(filters) => filters,
+        Err(error) => return error.into_response(),
+    };
+    relationship_query.query = relationship_query
+        .query
+        .with_host_principal_bound_filters(host_principal_bound_filters.clone())
+        .with_target_principal_bound_filters(target_principal_bound_filters.clone());
+    let mut relationship_principal_filters_for_validator = host_principal_bound_filters.clone();
+    relationship_principal_filters_for_validator.extend(target_principal_bound_filters.clone());
     let validator = governed_cache_variant(
         &format!(
             "{}:{}?{}",
             path.id,
             path.relationship,
-            params_validator(&link_params)
+            params_validator_with_principal_filters(
+                &link_params,
+                &relationship_principal_filters_for_validator
+            )
         ),
         [
             &relationship_access.read_decision,
             &relationship_access.target_read_decision,
         ],
     );
-    let relationship_query =
-        match relationship_query_from_params(&signer, params, page_context.as_ref()) {
-            Ok(query) => query,
-            Err(PageParamError::CursorInvalidated) => return cursor_invalidated(),
-            Err(PageParamError::Error(error)) => return error.into_response(),
-        };
     let cursor = relationship_query.cursor.clone();
     match query
         .read_relationship_page(
@@ -628,6 +732,7 @@ async fn entity_relationship(
                         relationship: context.relationship,
                         position,
                         filters: context.filters,
+                        principal_id: context.principal_id,
                         ingest_version: context.ingest_version,
                     };
                     let encoded = match encode_cursor(&signer, &cursor) {
@@ -749,6 +854,33 @@ fn require_expansion_access(
     Ok(decisions)
 }
 
+fn build_expansion_principal_bound_filters(
+    registry: &EntityRegistry,
+    dataset_id: &str,
+    entity_name: &str,
+    expansions: &[String],
+    principal_id: Option<&str>,
+) -> Result<BTreeMap<String, Vec<EntityFilter>>, Error> {
+    let entity = entity_from_registry(registry, dataset_id, entity_name)?;
+    let mut filters = BTreeMap::new();
+    for expansion in expansions {
+        let relationship = entity
+            .relationships
+            .get(expansion)
+            .ok_or(crate::error::FilterError::NotAllowed)?;
+        let target = entity_from_registry(registry, dataset_id, &relationship.target)?;
+        let principal_filters = principal_bound_required_filters(
+            &target.api.required_filters,
+            &target.api.required_filter_bindings,
+            principal_id,
+        )?;
+        if !principal_filters.is_empty() {
+            filters.insert(expansion.clone(), principal_filters);
+        }
+    }
+    Ok(filters)
+}
+
 #[allow(clippy::result_large_err)]
 fn require_relationship_target_access(
     registry: &EntityRegistry,
@@ -785,16 +917,23 @@ fn require_relationship_target_access(
 
 struct EntityCollectionAccess {
     required_filters: Vec<String>,
+    required_filter_bindings: Vec<RequiredFilterBindingConfig>,
     read_decision: GovernedReadDecision,
     expansion_decisions: BTreeMap<String, GovernedReadDecision>,
 }
 
 struct EntityRecordAccess {
+    required_filters: Vec<String>,
+    required_filter_bindings: Vec<RequiredFilterBindingConfig>,
     read_decision: GovernedReadDecision,
     expansion_decisions: BTreeMap<String, GovernedReadDecision>,
 }
 
 struct EntityRelationshipAccess {
+    required_filters: Vec<String>,
+    required_filter_bindings: Vec<RequiredFilterBindingConfig>,
+    target_required_filters: Vec<String>,
+    target_required_filter_bindings: Vec<RequiredFilterBindingConfig>,
     read_decision: GovernedReadDecision,
     target_read_decision: GovernedReadDecision,
 }
@@ -956,6 +1095,44 @@ fn params_validator(params: &HashMap<String, String>) -> String {
         .map(|(name, value)| (name.as_str(), value.as_str()))
         .collect::<BTreeMap<_, _>>();
     serde_json::to_string(&params).expect("string map serializes")
+}
+
+fn principal_filters_for_validator(
+    principal_filters: &[EntityFilter],
+    expansion_principal_filters: &BTreeMap<String, Vec<EntityFilter>>,
+) -> Vec<EntityFilter> {
+    let mut filters = principal_filters.to_vec();
+    for expansion_filters in expansion_principal_filters.values() {
+        filters.extend(expansion_filters.iter().cloned());
+    }
+    filters
+}
+
+fn params_validator_with_principal_filters(
+    params: &HashMap<String, String>,
+    principal_filters: &[EntityFilter],
+) -> String {
+    let mut value = serde_json::Map::new();
+    value.insert(
+        "params".to_string(),
+        serde_json::from_str(&params_validator(params)).expect("params validator is JSON"),
+    );
+    value.insert(
+        "principal_bound_filters".to_string(),
+        Value::Array(
+            cursor_filters_from_filters(principal_filters)
+                .into_iter()
+                .map(|filter| {
+                    json!({
+                        "field": filter.field,
+                        "op": filter.op,
+                        "value": filter.value,
+                    })
+                })
+                .collect(),
+        ),
+    );
+    Value::Object(value).to_string()
 }
 
 fn with_optional_etag(response: Response, etag: Option<&str>) -> Response {
@@ -1248,6 +1425,7 @@ struct CursorContext {
     dataset_id: String,
     entity: String,
     relationship: Option<String>,
+    principal_id: Option<String>,
     filters: Vec<CursorFilter>,
     ingest_version: Option<String>,
 }
@@ -1259,6 +1437,7 @@ struct PageCursor {
     entity: String,
     relationship: Option<String>,
     position: Value,
+    principal_id: Option<String>,
     filters: Vec<CursorFilter>,
     ingest_version: Option<String>,
 }
@@ -1309,6 +1488,7 @@ fn validate_cursor(cursor: &PageCursor, context: &CursorContext) -> Result<(), P
         || cursor.dataset_id != context.dataset_id
         || cursor.entity != context.entity
         || cursor.relationship != context.relationship
+        || cursor.principal_id != context.principal_id
         || cursor.filters != context.filters
         || (context.ingest_version.is_some() && cursor.ingest_version != context.ingest_version)
     {
@@ -1435,12 +1615,14 @@ fn hex_value(byte: u8) -> Option<u8> {
 
 #[derive(Default)]
 struct EntityRecordQuery {
+    raw_params: HashMap<String, String>,
     fields: Option<Vec<String>>,
     expansions: Vec<String>,
 }
 
 fn record_query_from_params(params: HashMap<String, String>) -> Result<EntityRecordQuery, Error> {
     let mut query = EntityRecordQuery::default();
+    query.raw_params = params.clone();
     for (name, value) in params {
         match name.as_str() {
             "fields" => {
