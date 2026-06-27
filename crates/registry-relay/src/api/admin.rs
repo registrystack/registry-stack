@@ -938,6 +938,24 @@ async fn config_apply(
     {
         return response;
     }
+    let intent_audit = resolved_config_audit(
+        ConfigAdminAction::Apply,
+        &resolved,
+        "accepted",
+        "apply_intent",
+        false,
+        false,
+    )
+    .with_break_glass_request(&request)
+    .with_break_glass_approval(break_glass.as_ref())
+    .with_local_approval_request(
+        &request,
+        local_approval.as_ref(),
+        local_approval_change_class,
+    );
+    if let Err(response) = write_config_apply_intent_audit(&runtime, intent_audit).await {
+        return response;
+    }
     if let Err(error) = antirollback_store.accept(
         &antirollback_key(&current.config, &resolved.stream_id),
         AntiRollbackProposal {
@@ -1313,6 +1331,38 @@ async fn fail_closed_admin_mutation_preflight(
     {
         tracing::error!(error = %error, event, "audit.write_failed");
         return Err(audit_write_failed_response());
+    }
+    Ok(())
+}
+
+async fn write_config_apply_intent_audit(
+    runtime: &RuntimeSnapshot,
+    audit: ConfigAuditExt,
+) -> Result<(), Response> {
+    let fail_closed = runtime.config().map_or(false, |config| {
+        config.audit.write_policy == AuditWritePolicy::FailClosed
+    });
+    let Some(sink) = runtime.audit_sink() else {
+        return if fail_closed {
+            Err(audit_write_failed_response())
+        } else {
+            Ok(())
+        };
+    };
+    if let Err(error) = sink
+        .write_operational_event(
+            OperationalAuditEvent::success("admin.config_apply.intent").with_config(audit),
+        )
+        .await
+    {
+        tracing::error!(
+            error = %error,
+            event = "admin.config_apply.intent",
+            "audit.write_failed"
+        );
+        if fail_closed {
+            return Err(audit_write_failed_response());
+        }
     }
     Ok(())
 }
@@ -2228,6 +2278,7 @@ fn request_config_source(request: &ConfigApplyRequest) -> ConfigSource {
 fn apply_result_to_posture_audit(apply_result: &str) -> &'static str {
     match apply_result {
         "verified" => ApplyReportResult::Verified.as_posture_result().as_str(),
+        "apply_intent" => "accepted",
         "applied" => ApplyReportResult::Applied.as_posture_result().as_str(),
         "rejected_restart_required" | "restart_required" => {
             ApplyReportResult::RejectedRestartRequired
