@@ -302,6 +302,7 @@ pub fn compile_notary_runtime(
         federation_signing_provider,
     )?
     .with_auth_state(Arc::clone(&auth_state))
+    .with_audit_pipeline(auth_state.audit.clone())
     .with_preauth_runtime(preauth_runtime)
     .with_signer_readiness(signer_readiness)
     .with_posture_context(posture_context)
