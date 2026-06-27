@@ -10620,6 +10620,52 @@ sources:
     }
 
     #[test]
+    fn oidc_principal_rejects_matched_client_id_when_default_sub_is_missing() {
+        let mut verified = verified_token_with_extra(Map::new());
+        verified.claims.sub = None;
+        verified.claims.azp = None;
+        verified.claims.client_id = Some("service-client".to_string());
+        verified.matched_client = Some("client_id:service-client".to_string());
+
+        let error = principal_from_oidc(
+            &verified,
+            None,
+            None,
+            verified_claim_value("JWT"),
+            "sub",
+            None,
+            SelfAttestationClaimSource::AccessToken,
+            SelfAttestationAssuranceClaimSource::AccessToken,
+        )
+        .expect_err("matched client_id must not replace a missing sub principal");
+
+        assert!(matches!(error, EvidenceError::MissingCredential));
+    }
+
+    #[test]
+    fn oidc_principal_rejects_matched_azp_when_default_sub_is_missing() {
+        let mut verified = verified_token_with_extra(Map::new());
+        verified.claims.sub = None;
+        verified.claims.azp = Some("service-client".to_string());
+        verified.claims.client_id = None;
+        verified.matched_client = Some("azp:service-client".to_string());
+
+        let error = principal_from_oidc(
+            &verified,
+            None,
+            None,
+            verified_claim_value("JWT"),
+            "sub",
+            None,
+            SelfAttestationClaimSource::AccessToken,
+            SelfAttestationAssuranceClaimSource::AccessToken,
+        )
+        .expect_err("matched azp alone is not a client-credentials principal");
+
+        assert!(matches!(error, EvidenceError::MissingCredential));
+    }
+
+    #[test]
     fn oidc_principal_rejects_malformed_matching_authorization_details() {
         let mut extra = Map::new();
         extra.insert(
