@@ -3733,7 +3733,13 @@ fn ensure_redaction_disclosure_allowed(
     disclosure: DisclosureProfile,
     redaction_fields: &BTreeSet<String>,
 ) -> Result<(), EvidenceError> {
-    if redaction_fields.is_empty() || disclosure != DisclosureProfile::Value {
+    if redaction_fields.is_empty() {
+        return Ok(());
+    }
+    if disclosure == DisclosureProfile::Predicate {
+        return Err(EvidenceError::DisclosureNotAllowed);
+    }
+    if disclosure != DisclosureProfile::Value {
         return Ok(());
     }
     if supports_object_field_redaction(claim_value_type, redaction_fields) {
@@ -5563,6 +5569,9 @@ fn view_claim(
         {
             return Err(EvidenceError::DisclosureNotAllowed);
         }
+    }
+    if effective_disclosure == DisclosureProfile::Predicate && !result.redaction_fields.is_empty() {
+        return Err(EvidenceError::DisclosureNotAllowed);
     }
     let value = match effective_disclosure {
         DisclosureProfile::Value if field_redaction => {
@@ -7816,6 +7825,29 @@ mod tests {
         .expect("configured fields are redacted");
 
         assert_eq!(view.value, Some(json!({"name": "Ada"})));
+    }
+
+    #[test]
+    fn predicate_disclosure_rejects_redacted_claim_result() {
+        let keys = SelfAttestationRateLimitKeys::new(AuditKeyHasher::unkeyed_dev_only());
+        let mut claim = test_claim("selected", Vec::new(), false);
+        claim.disclosure.allowed.push("predicate".to_string());
+        let result = test_claim_result(
+            "selected",
+            json!(true),
+            BTreeSet::from(["value".to_string()]),
+        );
+
+        let err = view_claim(
+            &keys,
+            &result,
+            &claim,
+            DisclosureProfile::Predicate,
+            FORMAT_CLAIM_RESULT_JSON,
+        )
+        .expect_err("predicate disclosure must not bypass redaction");
+
+        assert!(matches!(err, EvidenceError::DisclosureNotAllowed));
     }
 
     #[test]
