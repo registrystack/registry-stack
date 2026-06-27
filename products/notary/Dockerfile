@@ -3,7 +3,7 @@
 # syntax=docker/dockerfile:1.7
 
 # Keep the tag for humans and the digest for reproducible pulls.
-FROM rust:1-bookworm@sha256:54152db00aafd37bc5ce1f3585aaa42f17cdd5c8e5ef9eabfbc0718b42bce312 AS builder
+FROM rust:1-bookworm@sha256:5e2214abe154fe26e39f64488952e5c991eeed1d6d6da7cc8381ae83927f0cfc AS builder
 
 WORKDIR /workspace/registry-notary
 COPY --from=registry-platform Cargo.toml README.md LICENSE /workspace/registry-platform/
