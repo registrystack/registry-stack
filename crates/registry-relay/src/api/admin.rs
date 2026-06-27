@@ -1092,7 +1092,7 @@ fn stored_break_glass_approval(
     config_hash: &str,
     previous_config_hash: Option<&str>,
 ) -> Result<BreakGlassApproval, ()> {
-    if reference.trim().is_empty() {
+    if !is_valid_approval_reference(reference) {
         return Err(());
     }
     if !resolved
@@ -1140,6 +1140,20 @@ fn stored_break_glass_approval(
         expires_at_unix_seconds: approval.expires_at_unix_seconds,
         rate_limit_identity: approval.rate_limit_identity,
     })
+}
+
+/// Validate a caller-supplied approval `reference` before it reaches the
+/// platform `FileLocalApprovalStore`. The store keys approvals by this value, so
+/// constrain it to a safe charset and reject path-traversal markers as
+/// defense-in-depth even though the current store does not use references as
+/// filesystem paths.
+fn is_valid_approval_reference(reference: &str) -> bool {
+    if reference.trim().is_empty() || reference.contains("..") {
+        return false;
+    }
+    reference
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ':' | '-'))
 }
 
 fn effective_approver_count(approval: &LocalOperatorApproval) -> usize {
@@ -1226,7 +1240,7 @@ fn local_approval_proposal(
     let Some(reference) = request.local_approval_reference.as_deref() else {
         return Err(());
     };
-    if reference.trim().is_empty() {
+    if !is_valid_approval_reference(reference) {
         return Err(());
     }
     FileLocalApprovalStore::new(&config_trust.local_approval_state_path)
@@ -2952,6 +2966,21 @@ audit:
 datasets: []
 "#
         .to_string()
+    }
+
+    #[test]
+    fn approval_reference_validator_rejects_path_traversal_and_separators() {
+        assert!(is_valid_approval_reference("approval-2026.01:abc_DEF"));
+        assert!(!is_valid_approval_reference(""));
+        assert!(!is_valid_approval_reference("   "));
+        assert!(!is_valid_approval_reference(".."));
+        assert!(!is_valid_approval_reference("../etc/passwd"));
+        assert!(!is_valid_approval_reference("a/b"));
+        assert!(!is_valid_approval_reference("a\\b"));
+        assert!(!is_valid_approval_reference("/abs/path"));
+        assert!(!is_valid_approval_reference("with space"));
+        assert!(!is_valid_approval_reference("nul\0byte"));
+        assert!(!is_valid_approval_reference("ctrl\nchar"));
     }
 
     struct ReadinessTestSigner {
