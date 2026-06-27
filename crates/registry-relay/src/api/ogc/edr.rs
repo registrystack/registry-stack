@@ -516,13 +516,11 @@ async fn matching_admin_geometries(
     geometry_entity: &str,
     geometry_id_field: &str,
     geometry_field: &str,
-    aggregate_only_execution: bool,
+    _aggregate_only_execution: bool,
     max_geometry_vertices: u32,
     input_geometry: &Geometry,
 ) -> Result<Vec<AdminGeometry>, Error> {
-    if !aggregate_only_execution {
-        require_geometry_entity_read_scope(config, principal, dataset_id, geometry_entity)?;
-    }
+    require_geometry_entity_read_scope(config, principal, dataset_id, geometry_entity)?;
     let input_geo = geo_geometry(input_geometry)?;
     let mut matched = Vec::new();
     let mut after_primary_key = None;
