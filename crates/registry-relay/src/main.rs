@@ -1344,11 +1344,10 @@ fn parse_cli_command_from(args: Vec<String>) -> Result<CliCommand, CliError> {
         .first()
         .is_some_and(|arg| arg == "--version" || arg == "-V")
     {
-        if rest.len() == 1 {
-            Ok(CliCommand::Version)
-        } else {
-            Err(CliError("--version does not accept arguments".to_string()))
-        }
+        // Match clap's built-in version flag: print the version and ignore any
+        // trailing arguments rather than rejecting them, so the version surface
+        // is consistent across registry-notary, registryctl, and registry-relay.
+        Ok(CliCommand::Version)
     } else if rest.first().is_some_and(|arg| arg == HEALTHCHECK_COMMAND) {
         parse_healthcheck_command(&rest[1..])
     } else if rest
@@ -2400,16 +2399,18 @@ audit:
     }
 
     #[test]
-    fn version_cli_rejects_extra_arguments() {
-        let err = parse_cli_command_from(command_args(&[
+    fn version_cli_ignores_trailing_arguments() {
+        // clap's built-in version flag short-circuits and ignores anything that
+        // follows; the manual relay parser mirrors that behaviour.
+        let command = parse_cli_command_from(command_args(&[
             "registry-relay",
             "--version",
             "--config",
             "config.yaml",
         ]))
-        .expect_err("version command rejects extra arguments");
+        .expect("version command ignores trailing arguments");
 
-        assert_eq!(err.to_string(), "--version does not accept arguments");
+        assert_eq!(command, CliCommand::Version);
     }
 
     #[test]
