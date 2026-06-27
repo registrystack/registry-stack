@@ -870,6 +870,8 @@ entities:
 
 When `fields` is present, only listed fields are exposed. When it is omitted, every table column is exposed. For sensitive datasets, prefer an explicit field list. Use entity `read_scope`, required filters, purpose-header requirements, and explicit field projection for exposure control; `sensitive: true` controls audit redaction only.
 
+`required_filters` is an OR gate, not an AND gate: a principal-bound equality filter on any listed field satisfies the requirement. Use `required_filter_bindings` for the principal-derived fields that may satisfy the gate, and list multiple `required_filters` only when each field is an acceptable row boundary.
+
 Row-level authorization scopes are not supported. The `row_scope` resource setting is rejected by config parsing; model row exposure with dataset/entity read scopes, required filters, purpose headers, and projected fields instead.
 
 Relationships are dataset-local in V1. Cross-dataset workflows must compose client-side with separate scoped calls and separate audit records.

@@ -390,6 +390,26 @@ fn required_filters_with_principal_bindings_load_cleanly() {
 }
 
 #[test]
+fn required_filters_with_single_principal_binding_load_as_or_gate() {
+    let tmp = TempDir::new().expect("tempdir");
+    let dataset = dataset_with_required_filters(
+        "[id, group_id]",
+        r#"          required_filter_bindings:
+            - field: id
+              source: principal_id
+"#,
+    );
+    let config_path = write_config(&tmp, &base_config(&dataset));
+    let config = registry_relay::config::load(&config_path).expect("config loads");
+    let registry = EntityRegistry::from_config(&config).expect("entity registry compiles");
+    let dataset = registry.dataset("my_dataset").expect("dataset");
+    let entity = dataset.entity("record").expect("entity");
+    assert_eq!(entity.api.required_filters, ["id", "group_id"]);
+    assert_eq!(entity.api.required_filter_bindings.len(), 1);
+    assert_eq!(entity.api.required_filter_bindings[0].field, "id");
+}
+
+#[test]
 fn required_filters_empty_is_accepted() {
     let tmp = TempDir::new().expect("tempdir");
     let dataset = dataset_with_required_filters("[]", "");
