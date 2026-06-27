@@ -7,7 +7,7 @@ source_repos:
   - registry-lab
   - registry-relay
   - registry-notary
-last_reviewed: "2026-06-12"
+last_reviewed: "2026-06-26"
 doc_type: tutorial
 locale: en
 standards_referenced:
@@ -117,7 +117,7 @@ The default topology runs three Relay instances (civil `4311`, social protection
 `4323`), live Postgres and Zitadel services, the source adapter sidecar, the static metadata publisher
 (`4331`), and a profile-gated narrated demo client. For the full service inventory with host ports
 and network layout, see the
-[Registry Lab directory](https://github.com/registrystack/registry-stack/tree/v0.8.1/lab).
+[Registry Lab directory](https://github.com/registrystack/registry-stack/tree/v0.8.3/lab).
 
 ## Expected output
 
@@ -225,7 +225,7 @@ This scenario exercises the static metadata publisher (port `4331`), the shared 
 
 What this proves: the Notary fans out to all three Relay services using per-source bearer tokens
 configured in
-[`config/notary/shared-eligibility-notary.yaml`](https://github.com/registrystack/registry-stack/blob/v0.8.1/lab/config/notary/shared-eligibility-notary.yaml).
+[`config/notary/shared-eligibility-notary.yaml`](https://github.com/registrystack/registry-stack/blob/v0.8.3/lab/config/notary/shared-eligibility-notary.yaml).
 The result carries `provenance.used.source_count >= 2` once at least two sources contribute. A single Notary
 aggregates evidence across independently operated registries and reports how many authorities
 contributed, without merging or exposing the underlying rows.
@@ -256,7 +256,7 @@ issuer and key configuration, and the wallet-driven OID4VCI alternative, see
 [Registry Notary](../../products/registry-notary/). The lab also drives an end-to-end citizen wallet
 flow through the `just citizen-oid4vci-login`, `just citizen-oid4vci-code`,
 `just citizen-oid4vci-token`, and `just citizen-oid4vci-report` recipes; see the
-[Registry Lab directory](https://github.com/registrystack/registry-stack/tree/v0.8.1/lab) for that path and its extra
+[Registry Lab directory](https://github.com/registrystack/registry-stack/tree/v0.8.3/lab) for that path and its extra
 services.
 
 ## Cross-authority evaluation
@@ -372,7 +372,7 @@ just down
 
 ## Next
 
-- [Registry Lab](https://github.com/registrystack/registry-stack/tree/v0.8.1/lab): the full demo topology, fixture data
+- [Registry Lab](https://github.com/registrystack/registry-stack/tree/v0.8.3/lab): the full demo topology, fixture data
   contract, and per-scenario tutorials.
 - [Registry Relay](../../products/registry-relay/): route reference, auth scopes, and configuration
   guide.

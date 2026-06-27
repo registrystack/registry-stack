@@ -27,7 +27,7 @@ mod stored_zip;
 const RELAY_IMAGE: &str =
     "ghcr.io/registrystack/registry-relay@sha256:da9332ef30ba252d54ba275eb2a9be443a65e95ef78c493b9b0ce30cbc391e71";
 const NOTARY_IMAGE: &str =
-    "ghcr.io/registrystack/registry-notary@sha256:303a059085be02caed17b4166115c6d69ef6d8c703b3c08f9254b380e73d923e";
+    "ghcr.io/registrystack/registry-notary@sha256:338d3ac7ddbea55f6e76014b9c23e4ff4e7206c2c40e356452288de06a745ff3";
 const NOTARY_REDIS_IMAGE: &str = "redis:7.4-alpine";
 const RELAY_BASE_URL: &str = "http://127.0.0.1:4242";
 const NOTARY_BASE_URL: &str = "http://127.0.0.1:4255";
@@ -4876,6 +4876,7 @@ workflows:
         assert!(matching.get("permitted_jurisdictions").is_none());
         assert!(matching.get("allowed_assurance").is_none());
         assert!(matching.get("max_source_age_seconds").is_none());
+        assert_eq!(matching["allowed_purposes"][0], TUTORIAL_PURPOSE);
         let context_constraints = &matching["context_constraints"];
         assert_eq!(context_constraints["legal_basis"]["required"], true);
         assert!(context_constraints["legal_basis"]["allowed_refs"].is_null());

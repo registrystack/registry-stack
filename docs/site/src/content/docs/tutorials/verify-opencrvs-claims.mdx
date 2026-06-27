@@ -1,28 +1,27 @@
 ---
 title: Verify OpenCRVS claims with registryctl
-description: Generate a local Registry Notary project from OpenCRVS credentials, validate the config, and run a live birth-record claim smoke test.
+description: Generate a local Registry Notary project from OpenCRVS credentials, validate the config, and run a live birth-record claim evaluation smoke test.
 status: current
 owner: registry-docs
 source_repos:
   - registry-registryctl
   - registry-notary
-last_reviewed: "2026-06-20"
+last_reviewed: "2026-06-26"
 doc_type: tutorial
 locale: en
 standards_referenced:
   - openapi
-  - sd-jwt-vc
 ---
 
 Use this tutorial when you have OpenCRVS client credentials and want the shortest local
 Registry Notary path to a live claim check.
-`registryctl` generates the Notary project, keeps your OpenCRVS credentials in `.env`, and writes
-local Notary demo credentials under `secrets/`.
+`registryctl` generates the Notary project, stores your OpenCRVS client credentials in
+`secrets/local.env`, and writes local Notary demo credentials under `secrets/`.
 The generated project evaluates the starter `opencrvs-birth-record-exists` claim.
 
-This tutorial does not configure governed policy, production signing, or wallet issuance.
-The generated project includes one local demo SD-JWT VC profile for the starter claim.
-OpenCRVS remains the evidence source, and Registry Notary signs the demo credential.
+This tutorial validates delegated claim evaluation only.
+It does not configure governed policy, production signing, or credential issuance.
+OpenCRVS remains the evidence source, and Registry Notary evaluates the claim locally.
 
 Estimated time: about 10 minutes after you have credentials and a test UIN.
 
@@ -31,62 +30,54 @@ Estimated time: about 10 minutes after you have credentials and a test UIN.
 You need:
 
 - Docker with Compose v2.20 or later.
-- `registryctl` with `init notary --recipe opencrvs-dci` support.
-- `curl` and `jq` for the credential issuance check.
+- `registryctl` 0.8.3 or newer, with `init notary --source-kind opencrvs-dci` support.
+- `curl` and `jq` for the explicit evaluation check.
 - OpenCRVS OAuth client credentials for a test environment.
 - A known test UIN for the live smoke test.
 
 Install `registryctl` if you have not already:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/v0.8.1/crates/registryctl/install.sh | REGISTRYCTL_VERSION=v0.8.1 sh
+curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/v0.8.3/crates/registryctl/install.sh | REGISTRYCTL_VERSION=v0.8.3 sh
 registryctl --version
 ```
 
-## Prepare the credential file
+## Generate the Notary project
 
-Create a working directory with one `.env` file:
+Generate the project with the OpenCRVS DCI source kind and the known test UIN:
 
 ```sh
-mkdir opencrvs-notary
+registryctl init notary opencrvs-notary \
+  --source-kind opencrvs-dci \
+  --source-url https://opencrvs.example.gov \
+  --smoke-target-id <test-uin>
+
 cd opencrvs-notary
 ```
 
-Add your source credentials to `.env`. The generated Notary config uses these
-connector-level env names:
+The generated `notary/config.yaml` records the source URL, including the OAuth token URL.
+The generated `registryctl.yaml` records the smoke target.
+
+## Set the source credentials
+
+Open `secrets/local.env` and replace the generated placeholders with your OpenCRVS
+OAuth client credentials:
 
 ```dotenv
-DCI_BASE_URL=https://opencrvs.example.gov
 DCI_CLIENT_ID=<opencrvs-client-id>
 DCI_CLIENT_SECRET=<opencrvs-client-secret>
 ```
 
-The recipe also accepts these OpenCRVS-specific aliases from existing demo
-credential files:
-
-```dotenv
-OPENCRVS_DCI_BASE_URL=https://opencrvs.example.gov
-OPENCRVS_DCI_CLIENT_ID=<opencrvs-client-id>
-OPENCRVS_DCI_CLIENT_SECRET=<opencrvs-client-secret>
-```
-
-Keep `.env` private.
-Do not paste bearer tokens into the file for this recipe.
+Keep `secrets/local.env` private.
+Use the exact `DCI_CLIENT_ID` and `DCI_CLIENT_SECRET` names.
+The 0.8.3 generator does not read `OPENCRVS_DCI_*` aliases or a DCI SHA secret.
+Do not paste bearer tokens into the file.
 Registry Notary uses the OAuth client-credentials settings to fetch a source token.
-
-## Generate the Notary project
-
-Run the recipe in the directory that contains `.env`:
-
-```sh
-registryctl init notary . --recipe opencrvs-dci --env-file .env
-```
 
 The generated project contains:
 
 ```text
 opencrvs-notary/
-  .env
   .gitignore
   registryctl.yaml
   compose.yaml
@@ -94,31 +85,40 @@ opencrvs-notary/
   notary/
     config.yaml
   secrets/
-    notary.local.env
+    local.env
   output/
   bruno/
 ```
 
-Your `.env` file is preserved.
-`secrets/notary.local.env` contains local Notary API, audit, replay, and demo issuer values.
-The generated `compose.yaml` loads both files.
+`secrets/local.env` contains local Notary API, audit, replay, demo issuer, and OpenCRVS
+OAuth values.
+The generated `compose.yaml` loads that file into the Notary container.
 
 ## Validate and start
 
 Run the local doctor before starting services:
 
 ```sh
-registryctl doctor --profile local --format json
+registryctl doctor --profile local --format json | jq '{ok, result}'
 ```
 
 `doctor` checks the generated project and delegates Registry Notary config validation when a
 compatible `registry-notary` binary is available.
+If the report says the `registry-notary` doctor binary is not installed, continue with the Docker
+smoke test below.
 The report must not print your OpenCRVS client secret.
 
 Start the generated stack:
 
 ```sh
 registryctl start
+```
+
+On Apple silicon, v0.8.3 images are published for linux/amd64.
+If Docker reports that no linux/arm64 manifest exists, start with the amd64 platform override:
+
+```sh
+DOCKER_DEFAULT_PLATFORM=linux/amd64 registryctl start
 ```
 
 Registry Notary listens on:
@@ -135,22 +135,10 @@ registryctl notary open
 
 ## Run the first live claim
 
-Set the known test UIN in your shell:
-
-```sh
-export OPENCRVS_DEMO_SUBJECT_UIN='<test-uin>'
-```
-
 Run the live smoke test:
 
 ```sh
-registryctl notary smoke --target-env OPENCRVS_DEMO_SUBJECT_UIN
-```
-
-You can also pass the test UIN directly:
-
-```sh
-registryctl notary smoke --target-id <test-uin>
+registryctl notary smoke
 ```
 
 The smoke test checks health, readiness, authenticated Notary access, and the live OpenCRVS-backed
@@ -161,8 +149,8 @@ evaluation.
 output/notary-smoke-results.json
 ```
 
-If you run the smoke test without `--target-id` or `--target-env`, the generated project can still
-pass structural checks, but the live OpenCRVS evaluation is not run.
+To test a different UIN, edit `notary.smoke_target_id` in `registryctl.yaml` and rerun
+`registryctl notary smoke`.
 
 ## Read the result safely
 
@@ -176,60 +164,41 @@ Do not paste the full report into support channels unless you have reviewed it.
 The smoke report is designed to avoid raw OpenCRVS rows, target UINs, and secret values, but local
 operators remain responsible for handling evidence reports as sensitive artifacts.
 
-## Issue the demo credential
+## Run an explicit evaluation
 
 The smoke command proves the live claim works, but it does not print the raw evaluation response.
-Run one explicit evaluation to capture the stored evaluation id:
+Run one explicit evaluation when you want a safe, minimal result summary:
 
 ```sh
+export OPENCRVS_DEMO_SUBJECT_UIN='<test-uin>'
+
 NOTARY_API_KEY="$(
-  awk -F= '$1 == "NOTARY_API_KEY_RAW" { sub(/^[^=]*=/, ""); print; exit }' \
-    secrets/notary.local.env
+  awk -F= '$1 == "REGISTRY_NOTARY_TUTORIAL_EVALUATOR_RAW" { sub(/^[^=]*=/, ""); print; exit }' \
+    secrets/local.env
 )"
 
-EVALUATION_ID="$(
-  curl -fsS http://127.0.0.1:4255/v1/evaluations \
-    -H "content-type: application/json" \
-    -H "accept: application/vnd.registry-notary.claim-result+json" \
-    -H "x-api-key: $NOTARY_API_KEY" \
-    -H "data-purpose: https://example.local/purpose/tutorial" \
-    -d '{
-      "target": {
-        "type": "person",
-        "identifiers": [
-          {
-            "scheme": "UIN",
-            "value": "'"$OPENCRVS_DEMO_SUBJECT_UIN"'"
-          }
-        ]
-      },
-      "claims": ["opencrvs-birth-record-exists"],
-      "disclosure": "predicate",
-      "format": "application/dc+sd-jwt",
-      "purpose": "https://example.local/purpose/tutorial"
-    }' | jq -r '.results[0].evaluation_id'
-)"
-
-test -n "$EVALUATION_ID"
-```
-
-Issue the local demo SD-JWT VC from that evaluation:
-
-```sh
-curl -fsS http://127.0.0.1:4255/v1/credentials \
+curl -fsS http://127.0.0.1:4255/v1/evaluations \
   -H "content-type: application/json" \
+  -H "accept: application/vnd.registry-notary.claim-result+json" \
   -H "x-api-key: $NOTARY_API_KEY" \
   -H "data-purpose: https://example.local/purpose/tutorial" \
   -d '{
-    "evaluation_id": "'"$EVALUATION_ID"'",
-    "credential_profile": "opencrvs_birth_record_sd_jwt",
+    "target": {
+      "type": "person",
+      "identifiers": [
+        {
+          "scheme": "UIN",
+          "value": "'"$OPENCRVS_DEMO_SUBJECT_UIN"'"
+        }
+      ]
+    },
     "claims": ["opencrvs-birth-record-exists"],
     "disclosure": "predicate",
-    "format": "application/dc+sd-jwt"
+    "purpose": "https://example.local/purpose/tutorial"
   }' | jq '{
-    credential_profile,
-    format,
-    credential_present: (.credential != null)
+    claim_id: .results[0].claim_id,
+    satisfied: .results[0].satisfied,
+    evaluation_id_present: (.results[0].evaluation_id != null)
   }'
 ```
 
@@ -237,14 +206,13 @@ Expected result:
 
 ```json
 {
-  "credential_profile": "opencrvs_birth_record_sd_jwt",
-  "format": "application/dc+sd-jwt",
-  "credential_present": true
+  "claim_id": "opencrvs-birth-record-exists",
+  "satisfied": true,
+  "evaluation_id_present": true
 }
 ```
 
-Do not paste the full credential into support channels.
-It is a local demo credential signed by Registry Notary, not an OpenCRVS-issued credential.
+Do not paste the full evaluation response into support channels unless you have reviewed it.
 
 ## What the generated config does
 
@@ -256,14 +224,14 @@ The generated `notary/config.yaml` configures:
 - A UIN lookup for birth registrations.
 - The `opencrvs-birth-record-exists` claim.
 - `predicate` disclosure as the default response.
-- The `opencrvs_birth_record_sd_jwt` local demo credential profile.
-- Local Notary signing material for demo issuance, not production trust.
+- Claim-result JSON as the starter response format.
+- Local signing material for later demo issuance configuration, not production trust.
 
 For the mental model behind these blocks, see the Registry Notary
-[OpenCRVS onboarding model](https://docs.registrystack.org/products/registry-notary/opencrvs-onboarding/).
+[OpenCRVS onboarding model](../../products/registry-notary/opencrvs-dci-onboarding/).
 
 ## Next
 
-- [OpenCRVS onboarding model](https://docs.registrystack.org/products/registry-notary/opencrvs-onboarding/)
+- [OpenCRVS onboarding model](../../products/registry-notary/opencrvs-dci-onboarding/)
 - [Registry Notary overview](../../products/registry-notary/)
 - [Signing key providers](../../products/registry-notary/signing-key-provider/)

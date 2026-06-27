@@ -92,6 +92,8 @@ evidence:
           matching:
             policy_id: registryctl.opencrvs-dci.birth-record.lookup.v1
             method: configured_lookup
+            allowed_purposes:
+              - https://example.local/purpose/tutorial
             context_constraints:
               legal_basis:
                 required: true
