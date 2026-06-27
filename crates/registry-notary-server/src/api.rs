@@ -4236,6 +4236,38 @@ async fn oid4vci_credential(
         );
         return response;
     }
+    if let Err(error) = require_oid4vci_configuration_scope(configuration, &principal) {
+        let mut response = oid4vci_error_response(error);
+        attach_oid4vci_self_attestation_denial_audit(
+            &mut response,
+            "oid4vci_credential_denied",
+            &configuration_claim_ids,
+            configuration_id,
+            Some(SelfAttestationDenialCode::OperationDenied),
+            Some(state.self_attestation.subject_binding.token_claim.as_str()),
+        );
+        return response;
+    }
+    let preauth = preauth_runtime(&state);
+    if let Err(error) = require_oid4vci_issuance_authorization_details(
+        evidence,
+        &state.self_attestation,
+        configuration,
+        &principal,
+        oid4vci_requires_authorization_details(&principal, preauth.as_deref()),
+    ) {
+        let denial_code = denial_code_from_error(&error);
+        let mut response = oid4vci_error_response(oid4vci_error_from_evidence(&error));
+        attach_oid4vci_self_attestation_denial_audit(
+            &mut response,
+            "oid4vci_credential_denied",
+            &configuration_claim_ids,
+            configuration_id,
+            denial_code,
+            Some(state.self_attestation.subject_binding.token_claim.as_str()),
+        );
+        return response;
+    }
     let expected_nonce = if state.oid4vci.nonce.enabled {
         let Some(nonce) = validated_proof.nonce.as_deref() else {
             return oid4vci_error_response(Oid4vciWireError::InvalidProof);
@@ -4985,14 +5017,52 @@ async fn oid4vci_token(
         )
         .await;
     };
+    let Some((configuration_id, configuration)) = state
+        .oid4vci
+        .credential_configurations
+        .get_key_value(&configuration_id)
+    else {
+        return token_error_after_invalid_attempt(
+            &state,
+            &preauth,
+            path,
+            &client_address,
+            Some(&configuration_id),
+            TokenWireError::InvalidGrant,
+        )
+        .await;
+    };
+    let mut bound_subject = bound_subject;
+    add_scope_if_missing(&mut bound_subject.scopes, &configuration.scope);
+    let authorization_details = match oid4vci_issuance_authorization_details(
+        &state.evidence,
+        &state.self_attestation,
+        configuration,
+    )
+    .and_then(|details| {
+        serde_json::to_value(details).map_err(|_| EvidenceError::CredentialIssuanceFailed)
+    }) {
+        Ok(details) => vec![details],
+        Err(_) => {
+            return token_error_with_audit(
+                &preauth,
+                path,
+                Some(configuration_id),
+                SelfAttestationDenialCode::OperationDenied,
+                TokenWireError::ServerError,
+            )
+            .await;
+        }
+    };
+    let configuration_id = configuration_id.as_str();
     let access_token_claims = AccessTokenClaims {
         issuer: preauth.notary_issuer().to_string(),
         jti: None,
         audiences: preauth.notary_audiences().to_vec(),
         token_type: "Bearer".to_string(),
-        credential_configuration_id: configuration_id.clone(),
+        credential_configuration_id: configuration_id.to_string(),
         subject: bound_subject,
-        authorization_details: Vec::new(),
+        authorization_details,
         confirmation: None,
         actor: None,
         iat: now,
@@ -5037,7 +5107,7 @@ async fn oid4vci_token(
         "preauth_token_issued",
         PreAuthAuditFields {
             credential_configuration_id: registry_notary_core::ConfigMetadata::new(
-                &configuration_id,
+                configuration_id,
             )
             .ok(),
             ..PreAuthAuditFields::default()
@@ -7091,6 +7161,116 @@ fn require_oid4vci_token_audience(
         Ok(())
     } else {
         Err(Oid4vciWireError::InvalidToken)
+    }
+}
+
+fn require_oid4vci_configuration_scope(
+    configuration: &Oid4vciCredentialConfigurationConfig,
+    principal: &EvidencePrincipal,
+) -> Result<(), Oid4vciWireError> {
+    if principal.has_scope(&configuration.scope) {
+        Ok(())
+    } else {
+        Err(Oid4vciWireError::AccessDenied)
+    }
+}
+
+fn oid4vci_issuance_authorization_details(
+    evidence: &EvidenceConfig,
+    config: &SelfAttestationConfig,
+    configuration: &Oid4vciCredentialConfigurationConfig,
+) -> Result<registry_notary_core::EvidenceAuthorizationDetails, EvidenceError> {
+    let claims = oid4vci_credential_claim_refs(configuration);
+    let claim_ids = claim_ids(&claims);
+    let disclosure = selected_disclosure(evidence, &claim_ids, None)
+        .map_err(|_| EvidenceError::InvalidRequest)?;
+    let purpose = common_self_attestation_purpose(evidence, &claims)?;
+    Ok(registry_notary_core::EvidenceAuthorizationDetails {
+        detail_type: registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_TYPE.to_string(),
+        schema_version: registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_SCHEMA_VERSION
+            .to_string(),
+        actions: vec!["evaluate".to_string()],
+        locations: vec![evidence.service_id.clone()],
+        claims,
+        disclosure: Some(disclosure),
+        format: Some(FORMAT_SD_JWT_VC.to_string()),
+        purpose: Some(purpose),
+        subject: Some(registry_notary_core::EvidenceAuthorizationSubject {
+            binding_claim: config.subject_binding.token_claim.clone(),
+            id_type: config.subject_binding.id_type.clone(),
+        }),
+        access_mode: Some(AccessMode::SelfAttestation),
+        ..Default::default()
+    })
+}
+
+fn require_oid4vci_issuance_authorization_details(
+    evidence: &EvidenceConfig,
+    config: &SelfAttestationConfig,
+    configuration: &Oid4vciCredentialConfigurationConfig,
+    principal: &EvidencePrincipal,
+    require_details: bool,
+) -> Result<(), EvidenceError> {
+    let Some(details) = principal.authorization_details.as_ref() else {
+        if require_details {
+            return Err(self_attestation_denied(
+                SelfAttestationDenialCode::OperationDenied,
+            ));
+        }
+        return Ok(());
+    };
+    let expected = oid4vci_issuance_authorization_details(evidence, config, configuration)?;
+    crate::authz_details::validate_scoped_authorization_details(
+        details,
+        &crate::authz_details::ScopedAuthorizationRequest {
+            service_id: evidence.service_id.as_str(),
+            action: "evaluate",
+            claims: &expected.claims,
+            disclosure: expected.disclosure.as_deref().unwrap_or(""),
+            format: expected.format.as_deref().unwrap_or(""),
+            purpose: expected.purpose.as_deref().unwrap_or(""),
+            access_mode: AccessMode::SelfAttestation,
+            subject: Some(crate::authz_details::ScopedAuthorizationSubject {
+                binding_claim: config.subject_binding.token_claim.clone(),
+                id_type: config.subject_binding.id_type.clone(),
+            }),
+            target: None,
+            allow_subset_claims: false,
+            allowed_claims: None,
+        },
+    )
+    .map_err(self_attestation_authorization_details_denial)
+}
+
+fn oid4vci_requires_authorization_details(
+    principal: &EvidencePrincipal,
+    preauth: Option<&PreAuthRuntime>,
+) -> bool {
+    let Some(token_type) = principal
+        .verified_claims
+        .as_ref()
+        .and_then(|claims| claims.token_type.as_ref())
+    else {
+        return false;
+    };
+    token_type.as_str() == registry_notary_core::tokens::NOTARY_TRANSACTION_TOKEN_JWT_TYP
+        || token_type.as_str() == registry_notary_core::tokens::NOTARY_ACCESS_TOKEN_JWT_TYP
+        || preauth.is_some_and(|preauth| token_type.as_str() == preauth.access_token_typ())
+}
+
+fn oid4vci_credential_claim_refs(
+    configuration: &Oid4vciCredentialConfigurationConfig,
+) -> Vec<ClaimRef> {
+    configuration
+        .credential_claim_ids()
+        .into_iter()
+        .map(ClaimRef::from)
+        .collect()
+}
+
+fn add_scope_if_missing(scopes: &mut Vec<String>, scope: &str) {
+    if !scopes.iter().any(|candidate| candidate == scope) {
+        scopes.push(scope.to_string());
     }
 }
 
@@ -11431,6 +11611,168 @@ mod tests {
         assert_eq!(reads.load(Ordering::SeqCst), 0);
     }
 
+    #[tokio::test]
+    async fn oid4vci_credential_scope_prevents_cross_configuration_issuance_before_nonce_consume() {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let store = Arc::new(EvidenceStore::default());
+        let evidence = Arc::new(oid4vci_evidence_config());
+        let self_attestation = Arc::new(self_attestation_config());
+        let mut oid4vci = oid4vci_config();
+        oid4vci.accepted_token_audiences = vec!["registry-notary-citizen".to_string()];
+        let mut other_configuration = oid4vci
+            .credential_configurations
+            .get("person_is_alive_sd_jwt")
+            .expect("base configuration exists")
+            .clone();
+        other_configuration.scope = "date_of_birth".to_string();
+        other_configuration.vct = "https://issuer.example/credentials/date-of-birth".to_string();
+        oid4vci
+            .credential_configurations
+            .insert("date_of_birth_sd_jwt".to_string(), other_configuration);
+        let principal = oid4vci_authorized_principal(
+            &evidence,
+            &self_attestation,
+            &oid4vci,
+            "person_is_alive_sd_jwt",
+            &["self_attestation", "person_is_alive"],
+        );
+        let oid4vci = Arc::new(oid4vci);
+        let state = Arc::new(
+            RegistryNotaryApiState::new_with_self_attestation_and_oid4vci(
+                Arc::clone(&evidence),
+                Arc::clone(&self_attestation),
+                Arc::clone(&oid4vci),
+                AuditKeyHasher::unkeyed_dev_only(),
+                Arc::new(CountingSource {
+                    reads: Arc::clone(&reads),
+                }),
+                Arc::clone(&store),
+                Arc::new(TestIssuerResolver),
+            ),
+        );
+        let nonce = "cross-configuration-nonce";
+        let (nonce_scope, nonce_key) =
+            reserve_oid4vci_test_nonce(&state, "date_of_birth_sd_jwt", nonce).await;
+        let proof = sign_oid4vci_proof(&state.oid4vci.credential_issuer, nonce);
+
+        let response = oid4vci_credential(
+            Some(Extension(Arc::clone(&state))),
+            Some(Extension(principal)),
+            Some(Extension(validated_oid4vci_proof(
+                &state,
+                &proof,
+                Some(nonce),
+            ))),
+            Json(Oid4vciCredentialRequest {
+                format: SD_JWT_VC_FORMAT.to_string(),
+                credential_identifier: Some("date_of_birth_sd_jwt".to_string()),
+                credential_configuration_id: None,
+                vct: None,
+                proof: registry_platform_oid4vci::CredentialRequestProof {
+                    proof_type: PROOF_TYPE_JWT.to_string(),
+                    jwt: proof,
+                },
+                proofs: registry_platform_oid4vci::CredentialRequestProofs::default(),
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body reads");
+        let body: Value = serde_json::from_slice(&body).expect("error body parses");
+        assert_eq!(body["error"], "access_denied");
+        assert_eq!(reads.load(Ordering::SeqCst), 0);
+        assert!(matches!(
+            state
+                .replay
+                .nonce_store()
+                .consume_nonce(&nonce_scope, &nonce_key)
+                .await
+                .expect("nonce store is available"),
+            ReplayInsertOutcome::Inserted
+        ));
+    }
+
+    #[tokio::test]
+    async fn oid4vci_credential_requires_authorization_details_before_nonce_consume() {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let store = Arc::new(EvidenceStore::default());
+        let evidence = Arc::new(oid4vci_evidence_config());
+        let self_attestation = Arc::new(self_attestation_config());
+        let mut oid4vci = oid4vci_config();
+        oid4vci.accepted_token_audiences = vec!["registry-notary-citizen".to_string()];
+        let oid4vci = Arc::new(oid4vci);
+        let state = Arc::new(
+            RegistryNotaryApiState::new_with_self_attestation_and_oid4vci(
+                Arc::clone(&evidence),
+                Arc::clone(&self_attestation),
+                Arc::clone(&oid4vci),
+                AuditKeyHasher::unkeyed_dev_only(),
+                Arc::new(CountingSource {
+                    reads: Arc::clone(&reads),
+                }),
+                Arc::clone(&store),
+                Arc::new(TestIssuerResolver),
+            ),
+        );
+        let nonce = "missing-authz-nonce";
+        let (nonce_scope, nonce_key) =
+            reserve_oid4vci_test_nonce(&state, "person_is_alive_sd_jwt", nonce).await;
+        let proof = sign_oid4vci_proof(&state.oid4vci.credential_issuer, nonce);
+        let mut principal = fresh_oidc_principal(
+            Some("client_id:citizen-portal"),
+            &["self_attestation", "person_is_alive"],
+        );
+        let claims = principal
+            .verified_claims
+            .as_mut()
+            .expect("test principal has claims");
+        claims.token_type = Some(bounded(
+            registry_notary_core::tokens::NOTARY_ACCESS_TOKEN_JWT_TYP,
+        ));
+
+        let response = oid4vci_credential(
+            Some(Extension(Arc::clone(&state))),
+            Some(Extension(principal)),
+            Some(Extension(validated_oid4vci_proof(
+                &state,
+                &proof,
+                Some(nonce),
+            ))),
+            Json(Oid4vciCredentialRequest {
+                format: SD_JWT_VC_FORMAT.to_string(),
+                credential_identifier: Some("person_is_alive_sd_jwt".to_string()),
+                credential_configuration_id: None,
+                vct: None,
+                proof: registry_platform_oid4vci::CredentialRequestProof {
+                    proof_type: PROOF_TYPE_JWT.to_string(),
+                    jwt: proof,
+                },
+                proofs: registry_platform_oid4vci::CredentialRequestProofs::default(),
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body reads");
+        let body: Value = serde_json::from_slice(&body).expect("error body parses");
+        assert_eq!(body["error"], "access_denied");
+        assert_eq!(reads.load(Ordering::SeqCst), 0);
+        assert!(matches!(
+            state
+                .replay
+                .nonce_store()
+                .consume_nonce(&nonce_scope, &nonce_key)
+                .await
+                .expect("nonce store is available"),
+            ReplayInsertOutcome::Inserted
+        ));
+    }
+
     #[test]
     fn oid4vci_type_metadata_defaults_display_locale_when_unconfigured() {
         let mut oid4vci = oid4vci_config();
@@ -11624,11 +11966,14 @@ mod tests {
         );
         let mut oid4vci = oid4vci_config();
         oid4vci.accepted_token_audiences = vec!["registry-notary-citizen".to_string()];
+        let evidence = Arc::new(evidence);
+        let self_attestation = Arc::new(self_attestation);
+        let oid4vci = Arc::new(oid4vci);
         let state = Arc::new(
             RegistryNotaryApiState::new_with_self_attestation_and_oid4vci(
-                Arc::new(evidence),
-                Arc::new(self_attestation),
-                Arc::new(oid4vci),
+                Arc::clone(&evidence),
+                Arc::clone(&self_attestation),
+                Arc::clone(&oid4vci),
                 AuditKeyHasher::unkeyed_dev_only(),
                 Arc::new(CountingSource {
                     reads: Arc::clone(&reads),
@@ -11670,9 +12015,12 @@ mod tests {
             sign_oid4vci_proof_without_nonce(&state.oid4vci.credential_issuer);
         let missing_validated_nonce = oid4vci_credential(
             Some(Extension(Arc::clone(&state))),
-            Some(Extension(fresh_oidc_principal(
-                Some("client_id:citizen-portal"),
-                &["self_attestation"],
+            Some(Extension(oid4vci_authorized_principal(
+                &evidence,
+                &self_attestation,
+                &oid4vci,
+                "person_is_alive_sd_jwt",
+                &["self_attestation", "person_is_alive"],
             ))),
             Some(Extension(validated_oid4vci_proof(
                 &state,
@@ -11740,9 +12088,12 @@ mod tests {
 
         let response = oid4vci_credential(
             Some(Extension(Arc::clone(&state))),
-            Some(Extension(fresh_oidc_principal(
-                Some("client_id:citizen-portal"),
-                &["self_attestation"],
+            Some(Extension(oid4vci_authorized_principal(
+                &evidence,
+                &self_attestation,
+                &oid4vci,
+                "person_is_alive_sd_jwt",
+                &["self_attestation", "person_is_alive"],
             ))),
             Some(Extension(validated_proof.clone())),
             Json(request.clone()),
@@ -11764,10 +12115,13 @@ mod tests {
         assert_eq!(reads.load(Ordering::SeqCst), 0);
 
         let replay = oid4vci_credential(
-            Some(Extension(state)),
-            Some(Extension(fresh_oidc_principal(
-                Some("client_id:citizen-portal"),
-                &["self_attestation"],
+            Some(Extension(Arc::clone(&state))),
+            Some(Extension(oid4vci_authorized_principal(
+                &evidence,
+                &self_attestation,
+                &oid4vci,
+                "person_is_alive_sd_jwt",
+                &["self_attestation", "person_is_alive"],
             ))),
             Some(Extension(validated_proof)),
             Json(request),
@@ -11822,11 +12176,14 @@ mod tests {
         );
         let mut oid4vci = oid4vci_config();
         oid4vci.accepted_token_audiences = vec!["registry-notary-citizen".to_string()];
+        let evidence = Arc::new(evidence);
+        let self_attestation = Arc::new(self_attestation);
+        let oid4vci = Arc::new(oid4vci);
         let state = Arc::new(
             RegistryNotaryApiState::new_with_self_attestation_and_oid4vci(
-                Arc::new(evidence),
-                Arc::new(self_attestation),
-                Arc::new(oid4vci),
+                Arc::clone(&evidence),
+                Arc::clone(&self_attestation),
+                Arc::clone(&oid4vci),
                 AuditKeyHasher::unkeyed_dev_only(),
                 Arc::new(CountingSource {
                     reads: Arc::clone(&reads),
@@ -11861,9 +12218,12 @@ mod tests {
 
         let response = oid4vci_credential(
             Some(Extension(Arc::clone(&state))),
-            Some(Extension(fresh_oidc_principal(
-                Some("client_id:citizen-portal"),
-                &["self_attestation"],
+            Some(Extension(oid4vci_authorized_principal(
+                &evidence,
+                &self_attestation,
+                &oid4vci,
+                "person_is_alive_sd_jwt",
+                &["self_attestation", "person_is_alive"],
             ))),
             Some(Extension(validated_oid4vci_proof(
                 &state,
@@ -11952,6 +12312,60 @@ mod tests {
         );
     }
 
+    #[test]
+    fn oid4vci_issuance_authorization_details_bind_selected_configuration() {
+        let evidence = oid4vci_evidence_config();
+        let config = self_attestation_config();
+        let oid4vci = oid4vci_config();
+        let configuration = oid4vci
+            .credential_configurations
+            .get("person_is_alive_sd_jwt")
+            .expect("configuration exists");
+
+        let details = oid4vci_issuance_authorization_details(&evidence, &config, configuration)
+            .expect("details build");
+
+        assert_eq!(details.actions, vec!["evaluate"]);
+        assert_eq!(details.locations, vec![evidence.service_id.clone()]);
+        assert_eq!(details.claims, vec![ClaimRef::from("person-is-alive")]);
+        assert_eq!(details.disclosure.as_deref(), Some("predicate"));
+        assert_eq!(details.format.as_deref(), Some(FORMAT_SD_JWT_VC));
+        assert_eq!(details.purpose.as_deref(), Some("citizen_self_attestation"));
+        assert_eq!(details.access_mode, Some(AccessMode::SelfAttestation));
+        let subject = details.subject.as_ref().expect("subject binding is set");
+        assert_eq!(subject.binding_claim, SUBJECT_BINDING_CLAIM);
+        assert_eq!(subject.id_type, "national_id");
+
+        let principal = oid4vci_authorized_principal(
+            &evidence,
+            &config,
+            &oid4vci,
+            "person_is_alive_sd_jwt",
+            &["self_attestation", "person_is_alive"],
+        );
+        require_oid4vci_issuance_authorization_details(
+            &evidence,
+            &config,
+            configuration,
+            &principal,
+            true,
+        )
+        .expect("matching details authorize issuance");
+
+        let direct_esignet_principal = fresh_oidc_principal(
+            Some("client_id:citizen-portal"),
+            &["self_attestation", "person_is_alive"],
+        );
+        require_oid4vci_issuance_authorization_details(
+            &evidence,
+            &config,
+            configuration,
+            &direct_esignet_principal,
+            false,
+        )
+        .expect("direct eSignet tokens can rely on scope without RAR details");
+    }
+
     fn oidc_principal(client_id: Option<&str>, scopes: &[&str]) -> EvidencePrincipal {
         EvidencePrincipal {
             principal_id: "citizen-subject".to_string(),
@@ -11990,6 +12404,49 @@ mod tests {
         claims.iat = Some(now);
         claims.exp = Some(now + 600);
         principal
+    }
+
+    fn oid4vci_authorized_principal(
+        evidence: &EvidenceConfig,
+        config: &SelfAttestationConfig,
+        oid4vci: &Oid4vciConfig,
+        configuration_id: &str,
+        scopes: &[&str],
+    ) -> EvidencePrincipal {
+        let mut principal = fresh_oidc_principal(Some("client_id:citizen-portal"), scopes);
+        let configuration = oid4vci
+            .credential_configurations
+            .get(configuration_id)
+            .expect("credential configuration exists");
+        principal.authorization_details = Some(
+            oid4vci_issuance_authorization_details(evidence, config, configuration)
+                .expect("authorization details build"),
+        );
+        principal
+    }
+
+    async fn reserve_oid4vci_test_nonce(
+        state: &RegistryNotaryApiState,
+        configuration_id: &str,
+        nonce: &str,
+    ) -> (ReplayScope, ReplayKey) {
+        let nonce_key = state
+            .self_attestation_rate_keys
+            .oid4vci_nonce(&state.oid4vci.credential_issuer, configuration_id, nonce)
+            .expect("nonce hashes");
+        let nonce_scope = oid4vci_nonce_replay_scope(state, configuration_id).expect("nonce scope");
+        let nonce_key = ReplayKey::new(nonce_key).expect("nonce replay key");
+        state
+            .replay
+            .nonce_store()
+            .reserve_nonce(
+                &nonce_scope,
+                &nonce_key,
+                OffsetDateTime::now_utc() + time::Duration::seconds(60),
+            )
+            .await
+            .expect("nonce reserves");
+        (nonce_scope, nonce_key)
     }
 
     fn evaluate_request(subject_id: &str) -> EvaluateRequest {

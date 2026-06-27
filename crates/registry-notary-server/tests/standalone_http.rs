@@ -9190,7 +9190,7 @@ async fn oid4vci_credential_route_issues_holder_bound_sd_jwt() {
         "sub": "citizen-subject",
         "aud": "registry-notary-citizen",
         "azp": "citizen-portal",
-        "scope": "self_attestation",
+        "scope": "self_attestation person-is-alive",
         "national_id": "person-1",
         "auth_time": now,
         "iat": now,
@@ -9449,7 +9449,7 @@ async fn oid4vci_field_projection_issues_separate_disclosures() {
         "sub": "citizen-subject",
         "aud": "registry-notary-citizen",
         "azp": "citizen-portal",
-        "scope": "self_attestation",
+        "scope": "self_attestation person-is-alive",
         "national_id": "person-1",
         "auth_time": now,
         "iat": now,
@@ -9552,7 +9552,7 @@ async fn oid4vci_credential_route_rejects_replayed_nonce() {
         "sub": "citizen-subject",
         "aud": "registry-notary-citizen",
         "azp": "citizen-portal",
-        "scope": "self_attestation",
+        "scope": "self_attestation person-is-alive",
         "national_id": "person-1",
         "auth_time": now,
         "iat": now,
@@ -12588,6 +12588,63 @@ async fn preauth_token_endpoint_issues_access_token_and_c_nonce() {
     assert_eq!(body["token_type"], json!("Bearer"));
     assert!(body["c_nonce"].is_string());
     assert_eq!(body["expires_in"], json!(300));
+
+    let access_token = body["access_token"].as_str().expect("access token minted");
+    let claims = jwt_payload(access_token);
+    assert_eq!(
+        claims["credential_configuration_id"],
+        json!("person_is_alive_sd_jwt")
+    );
+    let scopes: BTreeSet<&str> = claims["scope"]
+        .as_str()
+        .expect("scope claim is present")
+        .split(' ')
+        .collect();
+    assert!(scopes.contains("self_attestation"));
+    assert!(scopes.contains("person-is-alive"));
+    assert_eq!(
+        claims["authorization_details"][0]["type"],
+        json!("registry_notary_evidence_transaction")
+    );
+    assert_eq!(
+        claims["authorization_details"][0]["schema_version"],
+        json!("registry-notary-authorization-details/v1")
+    );
+    assert_eq!(
+        claims["authorization_details"][0]["actions"],
+        json!(["evaluate"])
+    );
+    assert_eq!(
+        claims["authorization_details"][0]["locations"],
+        json!(["evidence.test"])
+    );
+    assert_eq!(
+        claims["authorization_details"][0]["claims"][0]["id"],
+        json!("person-is-alive")
+    );
+    assert_eq!(
+        claims["authorization_details"][0]["disclosure"],
+        json!("value")
+    );
+    assert_eq!(
+        claims["authorization_details"][0]["format"],
+        json!("application/dc+sd-jwt")
+    );
+    assert_eq!(
+        claims["authorization_details"][0]["purpose"],
+        json!("citizen_self_attestation")
+    );
+    assert_eq!(
+        claims["authorization_details"][0]["access_mode"],
+        json!("self_attestation")
+    );
+    assert_eq!(
+        claims["authorization_details"][0]["subject"],
+        json!({
+            "binding_claim": "national_id",
+            "id_type": "national_id"
+        })
+    );
     idp.stop().await;
 }
 
@@ -13893,7 +13950,7 @@ async fn preauth_credential_subject_and_evaluation_match_esignet_token_path() {
         "sub": "citizen-subject",
         "aud": NOTARY_AUDIENCE,
         "azp": "citizen-portal",
-        "scope": "self_attestation",
+        "scope": "self_attestation person-is-alive",
         "national_id": "person-1",
         "auth_time": now,
         "iat": now,
