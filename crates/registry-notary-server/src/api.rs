@@ -71,6 +71,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
+use ulid::Ulid;
 
 #[cfg(feature = "registry-notary-cel")]
 use crate::cel_worker::CelWorker;
@@ -940,6 +941,20 @@ async fn admin_config_apply(
         local_approval: local_approval.clone(),
         local_approval_rate_limit: local_approval.as_ref().map(|approval| approval.rate_limit),
     };
+    let intent_audit = resolved_config_audit(
+        ConfigAdminAction::Apply,
+        &candidate,
+        "accepted",
+        "apply_intent",
+        false,
+        false,
+    )
+    .with_break_glass_request(&request)
+    .with_break_glass_approval(break_glass.as_ref())
+    .with_local_approval(local_approval.as_ref());
+    if let Err(response) = emit_config_apply_intent_audit(&state, intent_audit).await {
+        return response;
+    }
     if let Err(error) = accept_antirollback_and_publish_apply_blocking(
         antirollback_store.clone(),
         antirollback_key.clone(),
@@ -2532,6 +2547,7 @@ fn request_config_source(request: &ConfigApplyRequest) -> ConfigSource {
 fn apply_result_to_posture_audit(apply_result: &str) -> &'static str {
     match apply_result {
         "verified" => ApplyReportResult::Verified.as_posture_result().as_str(),
+        "apply_intent" => "accepted",
         "applied" => ApplyReportResult::Applied.as_posture_result().as_str(),
         "rejected_restart_required" | "restart_required" => {
             ApplyReportResult::RejectedRestartRequired
@@ -2554,6 +2570,77 @@ fn apply_result_to_posture_audit(apply_result: &str) -> &'static str {
         | "rejected_compile"
         | "internal_error" => "rejected",
         _ => "rejected",
+    }
+}
+
+async fn emit_config_apply_intent_audit(
+    state: &RegistryNotaryApiState,
+    audit: ConfigAuditEvent,
+) -> Result<(), Response> {
+    let Some(audit_pipeline) = state.audit.clone() else {
+        return Ok(());
+    };
+    let event = config_apply_intent_audit_event(audit);
+    audit_pipeline
+        .emit(&event)
+        .await
+        .map_err(crate::standalone::audit_error_response)
+}
+
+fn config_apply_intent_audit_event(audit: ConfigAuditEvent) -> EvidenceAuditEvent {
+    let occurred_at = OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string());
+    EvidenceAuditEvent {
+        event_id: Ulid::new().to_string(),
+        occurred_at,
+        principal_id_hash: None,
+        decision: "accepted".to_string(),
+        method: "BACKGROUND".to_string(),
+        path: "/__events/admin.config_apply.intent".to_string(),
+        status: 202,
+        verification_id: None,
+        claim_hash: None,
+        purposes: None,
+        row_count: None,
+        source_read_count: None,
+        forwarded: None,
+        error_code: None,
+        access_mode: None,
+        federation_peer_id_hash: None,
+        federation_issuer: None,
+        federation_profile: None,
+        federation_purpose: None,
+        federation_request_jti_hash: None,
+        federation_subject_ref_hash: None,
+        denial_code: None,
+        token_claim_name: None,
+        correlation_id_hash: None,
+        credential_profile: None,
+        protocol: None,
+        credential_configuration_id: None,
+        holder_binding_mode: None,
+        rate_limit_bucket: None,
+        policy_version: None,
+        policy_hash: None,
+        target_type: None,
+        target_ref_hash: None,
+        requester_type: None,
+        requester_ref_hash: None,
+        matching_policy_id: None,
+        matching_policy_hash: None,
+        matching_evaluated_rule_ids: None,
+        ecosystem_binding_id: None,
+        ecosystem_binding_version: None,
+        pack_id: None,
+        pack_version: None,
+        matching_method: None,
+        matching_outcome: None,
+        matching_error_code: None,
+        redacted_fields: None,
+        batch_items: None,
+        source_sidecar_config_hashes: None,
+        config: Some(audit),
     }
 }
 
@@ -3437,6 +3524,7 @@ pub struct RegistryNotaryApiState {
     pub(crate) store: Arc<EvidenceStore>,
     runtime: Arc<RwLock<Arc<ApiRuntimeSnapshot>>>,
     auth_state: Option<Arc<AuthAuditState>>,
+    audit: Option<crate::standalone::AuditPipeline>,
     pub(crate) posture: Option<Arc<PostureContext>>,
     pub(crate) deployment_gates: Arc<crate::standalone::DeploymentGateState>,
     config_apply_posture: Arc<RwLock<ConfigApplyPosture>>,
@@ -3666,6 +3754,7 @@ impl RegistryNotaryApiState {
             store,
             runtime: Arc::new(RwLock::new(runtime)),
             auth_state: None,
+            audit: None,
             posture: None,
             deployment_gates: Arc::new(crate::standalone::DeploymentGateState::default()),
             config_apply_posture: Arc::new(RwLock::new(ConfigApplyPosture::default())),
@@ -3679,6 +3768,12 @@ impl RegistryNotaryApiState {
     #[must_use]
     pub(crate) fn with_auth_state(mut self, auth_state: Arc<AuthAuditState>) -> Self {
         self.auth_state = Some(auth_state);
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn with_audit_pipeline(mut self, audit: crate::standalone::AuditPipeline) -> Self {
+        self.audit = Some(audit);
         self
     }
 
@@ -10665,6 +10760,46 @@ mod tests {
             audit.previous_config_hash.as_deref(),
             Some("sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
         );
+    }
+
+    #[test]
+    fn config_apply_intent_audit_event_carries_config_payload() {
+        let request = ConfigApplyRequest {
+            bundle_id: Some("demo-bundle".to_string()),
+            sequence: Some(7),
+            config_yaml: None,
+            stream_id: default_stream_id(),
+            previous_config_hash: None,
+            root_version: None,
+            break_glass: false,
+            break_glass_approval: None,
+            break_glass_approval_reference: None,
+            break_glass_rate_limit: None,
+            local_approval_reference: None,
+            tuf: None,
+        };
+        let audit = unresolved_config_audit(
+            ConfigAdminAction::Apply,
+            &request,
+            "accepted",
+            "apply_intent",
+            false,
+            false,
+        );
+
+        let event = config_apply_intent_audit_event(audit);
+
+        assert_eq!(event.path, "/__events/admin.config_apply.intent");
+        assert_eq!(event.method, "BACKGROUND");
+        assert_eq!(event.status, 202);
+        assert_eq!(event.decision, "accepted");
+        let config = event.config.expect("config audit payload is attached");
+        assert_eq!(config.action, "apply");
+        assert_eq!(config.bundle_id.as_deref(), Some("demo-bundle"));
+        assert_eq!(config.sequence, Some(7));
+        assert_eq!(config.apply_result, "apply_intent");
+        assert_eq!(config.posture_result, "accepted");
+        assert!(!config.applied);
     }
 
     #[test]
