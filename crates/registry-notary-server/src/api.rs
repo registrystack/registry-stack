@@ -4364,7 +4364,11 @@ async fn oid4vci_credential(
         &state.self_attestation,
         configuration,
         &principal,
-        oid4vci_requires_authorization_details(&principal, preauth.as_deref()),
+        oid4vci_requires_authorization_details(
+            &principal,
+            state.runtime_config().as_deref(),
+            preauth.as_deref(),
+        ),
     ) {
         let denial_code = denial_code_from_error(&error);
         let mut response = oid4vci_error_response(oid4vci_error_from_evidence(&error));
@@ -7321,13 +7325,21 @@ fn require_oid4vci_issuance_authorization_details(
     principal: &EvidencePrincipal,
     require_details: bool,
 ) -> Result<(), EvidenceError> {
-    let Some(details) = principal.authorization_details.as_ref() else {
-        if require_details {
+    let details = match principal.authorization_details.as_ref() {
+        Some(details) if crate::authz_details::has_transaction_scope(details) => details,
+        Some(_) | None if require_details => {
             return Err(self_attestation_denied(
                 SelfAttestationDenialCode::OperationDenied,
             ));
         }
-        return Ok(());
+        Some(_) | None => {
+            // Direct Walt/Inji/eSignet OIDC issuance can arrive without
+            // RAR-style transaction details, so those tokens keep using the
+            // configured credential scope. Notary-minted pre-auth tokens are
+            // local to this issuer and must carry the scoped detail minted by
+            // `oid4vci_token`; empty or context-only details are not enough.
+            return Ok(());
+        }
     };
     let expected = oid4vci_issuance_authorization_details(evidence, config, configuration)?;
     crate::authz_details::validate_scoped_authorization_details(
@@ -7354,18 +7366,28 @@ fn require_oid4vci_issuance_authorization_details(
 
 fn oid4vci_requires_authorization_details(
     principal: &EvidencePrincipal,
+    runtime_config: Option<&StandaloneRegistryNotaryConfig>,
     preauth: Option<&PreAuthRuntime>,
 ) -> bool {
-    let Some(token_type) = principal
-        .verified_claims
-        .as_ref()
-        .and_then(|claims| claims.token_type.as_ref())
-    else {
+    let Some(claims) = principal.verified_claims.as_ref() else {
         return false;
     };
-    token_type.as_str() == registry_notary_core::tokens::NOTARY_TRANSACTION_TOKEN_JWT_TYP
-        || token_type.as_str() == registry_notary_core::tokens::NOTARY_ACCESS_TOKEN_JWT_TYP
-        || preauth.is_some_and(|preauth| token_type.as_str() == preauth.access_token_typ())
+    let Some(token_type) = claims.token_type.as_ref() else {
+        return false;
+    };
+    let Some(config) = runtime_config else {
+        return token_type.as_str()
+            == registry_notary_core::tokens::NOTARY_TRANSACTION_TOKEN_JWT_TYP
+            || token_type.as_str() == registry_notary_core::tokens::NOTARY_ACCESS_TOKEN_JWT_TYP
+            || preauth.is_some_and(|preauth| token_type.as_str() == preauth.access_token_typ());
+    };
+    let signing = &config.auth.access_token_signing;
+    let notary_issuer_matches = signing.enabled && claims.issuer.as_str() == signing.issuer;
+    notary_issuer_matches
+        && (token_type.as_str() == registry_notary_core::tokens::NOTARY_TRANSACTION_TOKEN_JWT_TYP
+            || token_type.as_str() == registry_notary_core::tokens::NOTARY_ACCESS_TOKEN_JWT_TYP
+            || preauth.is_some_and(|preauth| token_type.as_str() == preauth.access_token_typ())
+            || token_type.as_str() == signing.token_typ)
 }
 
 fn oid4vci_credential_claim_refs(
@@ -11923,6 +11945,85 @@ mod tests {
         ));
     }
 
+    #[tokio::test]
+    async fn oid4vci_credential_requires_custom_notary_typ_details_before_nonce_consume() {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let store = Arc::new(EvidenceStore::default());
+        let evidence = Arc::new(oid4vci_evidence_config());
+        let self_attestation = Arc::new(self_attestation_config());
+        let mut oid4vci = oid4vci_config();
+        oid4vci.accepted_token_audiences = vec!["registry-notary-citizen".to_string()];
+        let oid4vci = Arc::new(oid4vci);
+        let runtime_config = Arc::new(runtime_config_with_custom_access_token_typ());
+        let state = Arc::new(
+            RegistryNotaryApiState::new_with_self_attestation_and_oid4vci(
+                Arc::clone(&evidence),
+                Arc::clone(&self_attestation),
+                Arc::clone(&oid4vci),
+                AuditKeyHasher::unkeyed_dev_only(),
+                Arc::new(CountingSource {
+                    reads: Arc::clone(&reads),
+                }),
+                Arc::clone(&store),
+                Arc::new(TestIssuerResolver),
+            )
+            .with_runtime_config(runtime_config),
+        );
+        let nonce = "custom-typ-missing-authz-nonce";
+        let (nonce_scope, nonce_key) =
+            reserve_oid4vci_test_nonce(&state, "person_is_alive_sd_jwt", nonce).await;
+        let proof = sign_oid4vci_proof(&state.oid4vci.credential_issuer, nonce);
+        let mut principal = fresh_oidc_principal(
+            Some("client_id:citizen-portal"),
+            &["self_attestation", "person_is_alive"],
+        );
+        let claims = principal
+            .verified_claims
+            .as_mut()
+            .expect("test principal has claims");
+        claims.issuer = bounded("https://notary.example.test");
+        claims.token_type = Some(bounded("custom-notary-access+jwt"));
+
+        let response = oid4vci_credential(
+            Some(Extension(Arc::clone(&state))),
+            Some(Extension(principal)),
+            Some(Extension(validated_oid4vci_proof(
+                &state,
+                &proof,
+                Some(nonce),
+            ))),
+            Json(Oid4vciCredentialRequest {
+                format: SD_JWT_VC_FORMAT.to_string(),
+                credential_identifier: Some("person_is_alive_sd_jwt".to_string()),
+                credential_configuration_id: None,
+                vct: None,
+                proof: registry_platform_oid4vci::CredentialRequestProof {
+                    proof_type: PROOF_TYPE_JWT.to_string(),
+                    jwt: proof,
+                },
+                proofs: registry_platform_oid4vci::CredentialRequestProofs::default(),
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body reads");
+        let body: Value = serde_json::from_slice(&body).expect("error body parses");
+        assert_eq!(body["error"], "access_denied");
+        assert_eq!(reads.load(Ordering::SeqCst), 0);
+        assert!(matches!(
+            state
+                .replay
+                .nonce_store()
+                .consume_nonce(&nonce_scope, &nonce_key)
+                .await
+                .expect("nonce store is available"),
+            ReplayInsertOutcome::Inserted
+        ));
+    }
+
     #[test]
     fn oid4vci_type_metadata_defaults_display_locale_when_unconfigured() {
         let mut oid4vci = oid4vci_config();
@@ -12514,6 +12615,127 @@ mod tests {
             false,
         )
         .expect("direct eSignet tokens can rely on scope without RAR details");
+    }
+
+    #[test]
+    fn oid4vci_issuance_authorization_details_fail_closed_for_empty_notary_details() {
+        let evidence = oid4vci_evidence_config();
+        let config = self_attestation_config();
+        let oid4vci = oid4vci_config();
+        let configuration = oid4vci
+            .credential_configurations
+            .get("person_is_alive_sd_jwt")
+            .expect("configuration exists");
+        let mut principal = fresh_oidc_principal(
+            Some("client_id:citizen-portal"),
+            &["self_attestation", "person_is_alive"],
+        );
+        principal.authorization_details = Some(EvidenceAuthorizationDetails {
+            detail_type: registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_TYPE
+                .to_string(),
+            schema_version:
+                registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_SCHEMA_VERSION
+                    .to_string(),
+            legal_basis_ref: Some("wallet-compat-context".to_string()),
+            ..EvidenceAuthorizationDetails::default()
+        });
+
+        require_oid4vci_issuance_authorization_details(
+            &evidence,
+            &config,
+            configuration,
+            &principal,
+            false,
+        )
+        .expect("direct eSignet/OIDC tokens can carry context-only details");
+
+        let err = require_oid4vci_issuance_authorization_details(
+            &evidence,
+            &config,
+            configuration,
+            &principal,
+            true,
+        )
+        .expect_err("Notary-issued tokens must carry transaction-scoped details");
+
+        assert!(matches!(
+            err,
+            EvidenceError::SelfAttestationDenied {
+                reason: SelfAttestationDenialCode::OperationDenied
+            }
+        ));
+    }
+
+    #[test]
+    fn oid4vci_requires_authorization_details_for_custom_notary_access_typ() {
+        let runtime_config = runtime_config_with_custom_access_token_typ();
+        let mut principal = fresh_oidc_principal(
+            Some("client_id:citizen-portal"),
+            &["self_attestation", "person_is_alive"],
+        );
+        {
+            let claims = principal
+                .verified_claims
+                .as_mut()
+                .expect("test principal has claims");
+            claims.issuer = bounded("https://notary.example.test");
+            claims.token_type = Some(bounded("custom-notary-access+jwt"));
+        }
+
+        assert!(oid4vci_requires_authorization_details(
+            &principal,
+            Some(&runtime_config),
+            None
+        ));
+
+        principal
+            .verified_claims
+            .as_mut()
+            .expect("test principal has claims")
+            .issuer = bounded("https://id.example.gov");
+
+        assert!(!oid4vci_requires_authorization_details(
+            &principal,
+            Some(&runtime_config),
+            None
+        ));
+
+        {
+            let claims = principal
+                .verified_claims
+                .as_mut()
+                .expect("test principal has claims");
+            claims.issuer = bounded("https://notary.example.test");
+            claims.token_type = Some(bounded(
+                registry_notary_core::tokens::NOTARY_ACCESS_TOKEN_JWT_TYP,
+            ));
+        }
+
+        assert!(oid4vci_requires_authorization_details(
+            &principal,
+            Some(&runtime_config),
+            None
+        ));
+
+        principal
+            .verified_claims
+            .as_mut()
+            .expect("test principal has claims")
+            .issuer = bounded("https://id.example.gov");
+
+        assert!(!oid4vci_requires_authorization_details(
+            &principal,
+            Some(&runtime_config),
+            None
+        ));
+    }
+
+    fn runtime_config_with_custom_access_token_typ() -> StandaloneRegistryNotaryConfig {
+        let mut config = classifier_config();
+        config.auth.access_token_signing.enabled = true;
+        config.auth.access_token_signing.issuer = "https://notary.example.test".to_string();
+        config.auth.access_token_signing.token_typ = "custom-notary-access+jwt".to_string();
+        config
     }
 
     fn oidc_principal(client_id: Option<&str>, scopes: &[&str]) -> EvidencePrincipal {
