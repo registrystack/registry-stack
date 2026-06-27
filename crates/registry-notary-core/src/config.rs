@@ -395,6 +395,7 @@ impl StandaloneRegistryNotaryConfig {
                 return Err(EvidenceConfigError::InvalidClaim);
             }
             validate_claim_semantics(claim)?;
+            let mut source_lookup_dependencies_by_binding = BTreeMap::new();
             for (binding_id, binding) in &claim.source_bindings {
                 if binding.connection.is_none() {
                     return Err(EvidenceConfigError::MissingSourceConnection);
@@ -423,6 +424,13 @@ impl StandaloneRegistryNotaryConfig {
                         },
                     );
                 }
+                let dependencies = source_lookup_dependencies(
+                    &claim.id,
+                    binding_id,
+                    binding,
+                    &claim.source_bindings,
+                )?;
+                source_lookup_dependencies_by_binding.insert(binding_id.clone(), dependencies);
                 if binding.connector == SourceConnectorKind::SourceAdapterSidecar {
                     let has_static_token = !connection.token_env.trim().is_empty();
                     if !has_static_token || connection.source_auth.is_some() {
@@ -477,6 +485,10 @@ impl StandaloneRegistryNotaryConfig {
                     }
                 }
             }
+            validate_source_lookup_dependency_graph(
+                &claim.id,
+                &source_lookup_dependencies_by_binding,
+            )?;
         }
         // Registry Notary currently resolves holder material only from
         // did:jwk. Reject any other configured method so discovery metadata
@@ -4546,6 +4558,23 @@ pub enum EvidenceConfigError {
         binding: String,
         reason: String,
     },
+    #[error(
+        "claim '{claim}' binding '{binding}' source lookup input '{input}' references unknown source binding '{unknown}'"
+    )]
+    UnknownSourceLookupBinding {
+        claim: String,
+        binding: String,
+        input: String,
+        unknown: String,
+    },
+    #[error(
+        "claim '{claim}' source lookup dependencies contain a cycle or unresolved binding graph: {bindings}",
+        bindings = bindings.join(", ")
+    )]
+    SourceLookupDependencyCycle {
+        claim: String,
+        bindings: Vec<String>,
+    },
     #[error("each standalone source binding must reference a configured source connection")]
     MissingSourceConnection,
     #[error(
@@ -4810,6 +4839,78 @@ impl EvidenceConfig {
 }
 
 const SUPPORTED_ECOSYSTEM_BINDING_PROFILE: &str = "registry-notary/source-policy/v1";
+
+fn source_lookup_reference_binding_id(input: &str) -> Option<&str> {
+    let remainder = input
+        .strip_prefix("sources.")
+        .or_else(|| input.strip_prefix("source."))?;
+    let (binding_id, field_path) = remainder.split_once('.')?;
+    if binding_id.is_empty() || field_path.is_empty() {
+        return None;
+    }
+    Some(binding_id)
+}
+
+fn source_lookup_dependencies(
+    claim: &str,
+    binding: &str,
+    source_binding: &SourceBindingConfig,
+    source_bindings: &BTreeMap<String, SourceBindingConfig>,
+) -> Result<BTreeSet<String>, EvidenceConfigError> {
+    let mut dependencies = BTreeSet::new();
+    let inputs = std::iter::once(source_binding.lookup.input.as_str()).chain(
+        source_binding
+            .query_fields
+            .iter()
+            .map(|field| field.input.as_str()),
+    );
+    for input in inputs {
+        let Some(referenced_binding) = source_lookup_reference_binding_id(input) else {
+            continue;
+        };
+        if !source_bindings.contains_key(referenced_binding) {
+            return Err(EvidenceConfigError::UnknownSourceLookupBinding {
+                claim: claim.to_string(),
+                binding: binding.to_string(),
+                input: input.to_string(),
+                unknown: referenced_binding.to_string(),
+            });
+        }
+        dependencies.insert(referenced_binding.to_string());
+    }
+    Ok(dependencies)
+}
+
+fn validate_source_lookup_dependency_graph(
+    claim: &str,
+    dependencies_by_binding: &BTreeMap<String, BTreeSet<String>>,
+) -> Result<(), EvidenceConfigError> {
+    let mut pending: BTreeSet<String> = dependencies_by_binding.keys().cloned().collect();
+    let mut resolved = BTreeSet::new();
+    while !pending.is_empty() {
+        let ready: Vec<String> = pending
+            .iter()
+            .filter_map(|id| {
+                let dependencies = dependencies_by_binding.get(id)?;
+                dependencies
+                    .iter()
+                    .all(|dependency| resolved.contains(dependency))
+                    .then(|| id.clone())
+            })
+            .collect();
+        if ready.is_empty() {
+            return Err(EvidenceConfigError::SourceLookupDependencyCycle {
+                claim: claim.to_string(),
+                bindings: pending.into_iter().collect(),
+            });
+        }
+        for id in ready {
+            pending.remove(&id);
+            resolved.insert(id);
+        }
+    }
+    Ok(())
+}
 
 fn validate_source_matching_config(
     claim: &str,
@@ -9758,6 +9859,145 @@ source_auth:
                 op: "eq".to_string(),
             },
         ];
+    }
+
+    #[test]
+    fn dependent_source_lookup_rejects_unknown_binding_reference() {
+        let mut config = minimal_config();
+        config.evidence.source_connections.insert(
+            "farmer_registry".to_string(),
+            SourceConnectionConfig {
+                base_url: "https://upstream.example".to_string(),
+                allow_insecure_localhost: false,
+                allow_insecure_private_network: false,
+                token_env: "SRC_TOKEN".to_string(),
+                source_auth: None,
+                expected_sidecar: None,
+                dci: DciSourceConnectionConfig::default(),
+                max_in_flight: 8,
+                retry_on_5xx: true,
+                bulk_mode: BulkMode::None,
+                bulk_mode_lookup_unique: false,
+                bulk_timeout_max_ms: 30_000,
+            },
+        );
+        let mut claim = minimal_claim("birth-event");
+        let mut binding = rda_binding("farmer_registry", "one");
+        binding.lookup.input = "sources.missing.birth_event_id".to_string();
+        claim
+            .source_bindings
+            .insert("birth_event".to_string(), binding);
+        config.evidence.claims = vec![claim];
+
+        let err = config
+            .validate()
+            .expect_err("unknown dependent source binding must fail validation");
+        match err {
+            EvidenceConfigError::UnknownSourceLookupBinding {
+                claim,
+                binding,
+                input,
+                unknown,
+            } => {
+                assert_eq!(claim, "birth-event");
+                assert_eq!(binding, "birth_event");
+                assert_eq!(input, "sources.missing.birth_event_id");
+                assert_eq!(unknown, "missing");
+            }
+            other => panic!("unexpected error variant: {other}"),
+        }
+    }
+
+    #[test]
+    fn dependent_source_query_field_rejects_unknown_binding_reference() {
+        let mut config = minimal_config();
+        config.evidence.source_connections.insert(
+            "farmer_registry".to_string(),
+            SourceConnectionConfig {
+                base_url: "https://upstream.example".to_string(),
+                allow_insecure_localhost: false,
+                allow_insecure_private_network: false,
+                token_env: "SRC_TOKEN".to_string(),
+                source_auth: None,
+                expected_sidecar: None,
+                dci: DciSourceConnectionConfig::default(),
+                max_in_flight: 8,
+                retry_on_5xx: true,
+                bulk_mode: BulkMode::None,
+                bulk_mode_lookup_unique: false,
+                bulk_timeout_max_ms: 30_000,
+            },
+        );
+        let mut claim = minimal_claim("birth-event");
+        let mut binding = rda_binding("farmer_registry", "one");
+        binding.query_fields = vec![SourceQueryFieldConfig {
+            input: "source.missing.birth_event_id".to_string(),
+            field: "birth_event_id".to_string(),
+            op: "eq".to_string(),
+        }];
+        claim
+            .source_bindings
+            .insert("birth_event".to_string(), binding);
+        config.evidence.claims = vec![claim];
+
+        let err = config
+            .validate()
+            .expect_err("unknown dependent query field binding must fail validation");
+        match err {
+            EvidenceConfigError::UnknownSourceLookupBinding {
+                claim,
+                binding,
+                input,
+                unknown,
+            } => {
+                assert_eq!(claim, "birth-event");
+                assert_eq!(binding, "birth_event");
+                assert_eq!(input, "source.missing.birth_event_id");
+                assert_eq!(unknown, "missing");
+            }
+            other => panic!("unexpected error variant: {other}"),
+        }
+    }
+
+    #[test]
+    fn dependent_source_lookup_rejects_binding_cycle() {
+        let mut config = minimal_config();
+        config.evidence.source_connections.insert(
+            "farmer_registry".to_string(),
+            SourceConnectionConfig {
+                base_url: "https://upstream.example".to_string(),
+                allow_insecure_localhost: false,
+                allow_insecure_private_network: false,
+                token_env: "SRC_TOKEN".to_string(),
+                source_auth: None,
+                expected_sidecar: None,
+                dci: DciSourceConnectionConfig::default(),
+                max_in_flight: 8,
+                retry_on_5xx: true,
+                bulk_mode: BulkMode::None,
+                bulk_mode_lookup_unique: false,
+                bulk_timeout_max_ms: 30_000,
+            },
+        );
+        let mut claim = minimal_claim("birth-event");
+        let mut first = rda_binding("farmer_registry", "one");
+        first.lookup.input = "sources.second.birth_event_id".to_string();
+        let mut second = rda_binding("farmer_registry", "one");
+        second.lookup.input = "sources.first.birth_event_id".to_string();
+        claim.source_bindings =
+            BTreeMap::from([("first".to_string(), first), ("second".to_string(), second)]);
+        config.evidence.claims = vec![claim];
+
+        let err = config
+            .validate()
+            .expect_err("dependent source binding cycle must fail validation");
+        match err {
+            EvidenceConfigError::SourceLookupDependencyCycle { claim, bindings } => {
+                assert_eq!(claim, "birth-event");
+                assert_eq!(bindings, vec!["first".to_string(), "second".to_string()]);
+            }
+            other => panic!("unexpected error variant: {other}"),
+        }
     }
 
     #[test]
