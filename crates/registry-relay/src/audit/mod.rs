@@ -491,6 +491,7 @@ pub struct OperationalAuditEvent {
     pub status_code: u16,
     pub dataset_id: Option<String>,
     pub table_id_hash: Option<String>,
+    pub config: Option<ConfigAuditExt>,
 }
 
 impl OperationalAuditEvent {
@@ -502,6 +503,7 @@ impl OperationalAuditEvent {
             status_code: 500,
             dataset_id: None,
             table_id_hash: None,
+            config: None,
         }
     }
 
@@ -513,6 +515,7 @@ impl OperationalAuditEvent {
             status_code: 200,
             dataset_id: None,
             table_id_hash: None,
+            config: None,
         }
     }
 
@@ -535,6 +538,12 @@ impl OperationalAuditEvent {
             "with_table_id_hash expects a precomputed audit hash"
         );
         self.table_id_hash = Some(table_id_hash);
+        self
+    }
+
+    #[must_use]
+    pub fn with_config(mut self, config: ConfigAuditExt) -> Self {
+        self.config = Some(config);
         self
     }
 
@@ -583,7 +592,7 @@ impl OperationalAuditEvent {
             duration_ms: 0,
             error_code: self.error_code.map(ToString::to_string),
             provenance: None,
-            config: None,
+            config: self.config,
             ar_profile_id: None,
             ar_profile_version: None,
             ar_subject_id_type: None,

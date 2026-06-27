@@ -3173,6 +3173,15 @@ async fn config_apply_signed_tuf_target_swaps_runtime_snapshot() {
     assert!(!audit_text.contains("registry-relay.yaml"));
     assert!(!audit_text.contains("signed-config-5"));
     assert!(!audit_text.contains("private-jwk-material"));
+
+    let intent_record = config_audit_record(&fixture, "/__events/admin.config_apply.intent");
+    let intent_audit = &intent_record["config"];
+    assert_eq!(intent_audit["action"], "apply");
+    assert_eq!(intent_audit["bundle_id"], "test-bundle");
+    assert_eq!(intent_audit["bundle_sequence"], 5);
+    assert_eq!(intent_audit["apply_result"], "apply_intent");
+    assert_eq!(intent_audit["posture_result"], "accepted");
+    assert_eq!(intent_audit["applied"], false);
 }
 
 #[tokio::test]
