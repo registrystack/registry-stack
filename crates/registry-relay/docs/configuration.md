@@ -537,6 +537,18 @@ audit:
 
 `hash_secret_env` is required at runtime and must name an environment variable containing at least 32 bytes of deployment-specific random secret material. Startup fails closed when it is missing, empty, unset, or weak.
 
+Registry Relay uses this secret to pseudonymize sensitive audit handles. Values for
+configured sensitive fields, record primary keys, table identifiers, and
+attribute-release subject identifiers are written as stable audit hashes instead
+of raw strings. This gives an auditor a way to see that the same subject or
+source was accessed more than once without storing the underlying person
+identifier, address, date of birth, or table id in the audit sink.
+
+The handles are stable only for the same hash secret and audit hash domain. If
+you rotate the secret, retain the old secret under your audit retention controls
+for any period when older records must remain comparable, or accept that new
+records will not match old handles.
+
 Audit output uses `registry-platform-audit` envelopes with `prev_hash` and `record_hash` on every record. These fields detect ordering gaps and accidental corruption in retained logs, but they do not protect against an actor who can rewrite the audit sink. Use an append-only external sink or independent tail-hash anchoring when stronger integrity is required. `chain` is retained in config for compatibility with older deployments, but platform audit envelopes are always chained.
 
 A normally booted relay always reports keyed integrity `hmac` in its posture because startup requires the audit hash secret (`hash_secret_env`); the `none` value appears only in dev or test configurations that build the posture without that secret.
@@ -822,7 +834,14 @@ Field types:
 string, number, integer, boolean, date, timestamp
 ```
 
-Use `sensitive: true` on source or entity fields whose query values are redacted or deterministically hashed in audit records. This flag is audit-only in beta: it does not hide a field from API responses and does not grant or deny read access.
+Use `sensitive: true` on source or entity fields whose query values need audit
+correlation without raw value storage. With `audit.hash_secret_env` configured,
+Registry Relay writes a deterministic `hmac-sha256:<digest>` audit handle for
+those lookup values. This flag is audit-only in beta: it does not hide a field
+from API responses and does not grant or deny read access. Choose it for
+identifiers, names, dates of birth, addresses, consent references, and other
+values you may need to investigate later without retaining the raw value in
+audit logs.
 
 ## Entities
 
