@@ -11,6 +11,9 @@ provenance asset. The commands below verify a tag-triggered release that
 includes provenance. Replace `v0.8.3` and the asset name with the release you
 are checking.
 
+Repeatable build evidence for the `v0.8.3` Linux amd64 binary assets is
+documented in [`release/REPEATABLE-BUILDS.md`](REPEATABLE-BUILDS.md).
+
 ## Download Assets
 
 ```bash

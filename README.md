@@ -142,7 +142,8 @@ Release evidence lives in:
 Release assets are published with SHA256 checksums, keyless cosign signatures,
 and release-level SLSA provenance for tag-triggered releases produced by the
 current workflow. See [release/VERIFY.md](release/VERIFY.md) for verification
-commands.
+commands and [release/REPEATABLE-BUILDS.md](release/REPEATABLE-BUILDS.md) for
+repeatable-build evidence.
 
 ## Support And Contribution
 
