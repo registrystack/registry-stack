@@ -1436,6 +1436,31 @@ mod tests {
     }
 
     #[test]
+    fn config_env_expansion_quotes_whole_scalar_yaml_syntax_values() {
+        let expanded = expand_config_env_vars_with(
+            "anchor: ${ANCHOR}\nalias: ${ALIAS}\ntag: ${TAG}\ncomment: ${COMMENT}\nblock: ${BLOCK}\nflow: ${FLOW}\n",
+            |name| match name {
+                "ANCHOR" => Some("&admin".to_string()),
+                "ALIAS" => Some("*admin".to_string()),
+                "TAG" => Some("!vault secret".to_string()),
+                "COMMENT" => Some("value # hidden".to_string()),
+                "BLOCK" => Some("line1\nline2".to_string()),
+                "FLOW" => Some("[admin, true]".to_string()),
+                _ => None,
+            },
+        )
+        .expect("whole-scalar config env vars are quoted");
+
+        assert!(expanded.contains("anchor: \"&admin\""));
+        assert!(expanded.contains("alias: \"*admin\""));
+        assert!(expanded.contains("tag: \"!vault secret\""));
+        assert!(expanded.contains("comment: \"value # hidden\""));
+        assert!(expanded.contains("block: \"line1\\nline2\""));
+        assert!(expanded.contains("flow: \"[admin, true]\""));
+        assert!(!expanded.contains("\nline2"));
+    }
+
+    #[test]
     fn config_env_expansion_rejects_unsafe_embedded_values() {
         let err = expand_config_env_vars_with("base: https://${HOST}\n", |name| match name {
             "HOST" => Some("registry.example\nadmin: false".to_string()),
@@ -1453,6 +1478,35 @@ mod tests {
         .expect_err("embedded comma cannot expand into a YAML flow sequence");
         assert!(err.to_string().contains("VALUE"));
         assert!(!err.to_string().contains("trusted"));
+    }
+
+    #[test]
+    fn config_env_expansion_rejects_embedded_yaml_syntax_classes() {
+        for value in [
+            "registry.example # hidden",
+            "admin: false",
+            "[admin]",
+            "trusted, attacker",
+            "line1\nline2",
+            "| block",
+            "> folded",
+            "&anchor",
+            "*alias",
+            "!tagged",
+            "%YAML 1.2",
+            "---",
+            "...",
+        ] {
+            let err = expand_config_env_vars_with("base: https://${VALUE}\n", |name| match name {
+                "VALUE" => Some(value.to_string()),
+                _ => None,
+            })
+            .expect_err("embedded YAML syntax value must be rejected")
+            .to_string();
+
+            assert!(err.contains("VALUE"));
+            assert!(!err.contains(value));
+        }
     }
 
     #[test]
