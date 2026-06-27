@@ -231,6 +231,10 @@ fn reject_unsafe_embedded_config_env_value(
     reject_config_env_nul(name, value)?;
     if value.contains('\n')
         || value.contains('\r')
+        // unsafe-libyaml treats NEL, LS, and PS as line breaks too.
+        || value.contains('\u{0085}')
+        || value.contains('\u{2028}')
+        || value.contains('\u{2029}')
         || value.contains('"')
         || value.contains('\'')
         || value.contains('{')
@@ -1488,6 +1492,10 @@ mod tests {
             "[admin]",
             "trusted, attacker",
             "line1\nline2",
+            "line1\u{0085}line2",
+            "evil.example\u{2028}admin:",
+            "evil.example\u{2028}---\u{2028}x:",
+            "line1\u{2029}line2",
             "| block",
             "> folded",
             "&anchor",
