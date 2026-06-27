@@ -111,8 +111,16 @@ pub fn expand_config_env_vars_with(
             ));
         };
         let expression = &after_start[..end];
-        expanded.push_str(&resolve_config_env_expression(expression, &lookup)?);
-        rest = &after_start[end + 1..];
+        let after_expression = &after_start[end + 1..];
+        let (name, value) = resolve_config_env_expression(expression, &lookup)?;
+        if config_env_expression_is_whole_yaml_scalar(&expanded, after_expression) {
+            reject_config_env_nul(name, &value)?;
+            expanded.push_str(&yaml_double_quoted_scalar(&value));
+        } else {
+            reject_unsafe_embedded_config_env_value(name, &value)?;
+            expanded.push_str(&value);
+        }
+        rest = after_expression;
     }
     expanded.push_str(rest);
     Ok(expanded)
@@ -137,7 +145,7 @@ fn config_value_at_path<'a>(root: &'a Value, path: &[String]) -> Option<&'a Valu
 fn resolve_config_env_expression(
     expression: &str,
     lookup: impl Fn(&str) -> Option<String>,
-) -> Result<String, ConfigEnvExpansionError> {
+) -> Result<(&str, String), ConfigEnvExpansionError> {
     let (name, operator, fallback) = if let Some((name, fallback)) = expression.split_once(":-") {
         (name, ":-", fallback)
     } else if let Some((name, fallback)) = expression.split_once(":?") {
@@ -152,9 +160,9 @@ fn resolve_config_env_expression(
     }
 
     match lookup(name) {
-        Some(value) if !value.is_empty() => Ok(value),
-        Some(value) if operator.is_empty() => Ok(value),
-        _ if operator == ":-" => Ok(fallback.to_string()),
+        Some(value) if !value.is_empty() => Ok((name, value)),
+        Some(value) if operator.is_empty() => Ok((name, value)),
+        _ if operator == ":-" => Ok((name, fallback.to_string())),
         _ if operator == ":?" => {
             if fallback.trim().is_empty() {
                 Err(ConfigEnvExpansionError(format!(
@@ -168,6 +176,93 @@ fn resolve_config_env_expression(
             "missing required env var {name}"
         ))),
     }
+}
+
+fn config_env_expression_is_whole_yaml_scalar(before: &str, after: &str) -> bool {
+    let line_prefix = before.rsplit_once('\n').map_or(before, |(_, line)| line);
+    let trimmed_prefix = line_prefix.trim_start();
+    let prefix_is_scalar = trimmed_prefix.is_empty()
+        || trimmed_prefix.trim_end() == "-"
+        || trimmed_prefix.trim_end().ends_with(':');
+    if !prefix_is_scalar {
+        return false;
+    }
+
+    let line_suffix = after.split_once('\n').map_or(after, |(line, _)| line);
+    let trimmed_suffix = line_suffix.trim_start();
+    trimmed_suffix.is_empty() || trimmed_suffix.starts_with('#')
+}
+
+fn yaml_double_quoted_scalar(value: &str) -> String {
+    let mut quoted = String::with_capacity(value.len() + 2);
+    quoted.push('"');
+    for ch in value.chars() {
+        match ch {
+            '"' => quoted.push_str("\\\""),
+            '\\' => quoted.push_str("\\\\"),
+            '\n' => quoted.push_str("\\n"),
+            '\r' => quoted.push_str("\\r"),
+            '\t' => quoted.push_str("\\t"),
+            '\0' => quoted.push_str("\\0"),
+            ch if ch.is_control() => {
+                use std::fmt::Write;
+                let _ = write!(quoted, "\\x{:02X}", ch as u32);
+            }
+            ch => quoted.push(ch),
+        }
+    }
+    quoted.push('"');
+    quoted
+}
+
+fn reject_config_env_nul(name: &str, value: &str) -> Result<(), ConfigEnvExpansionError> {
+    if value.contains('\0') {
+        return Err(ConfigEnvExpansionError(format!(
+            "env var {name} contains characters that cannot be used in config expansion"
+        )));
+    }
+    Ok(())
+}
+
+fn reject_unsafe_embedded_config_env_value(
+    name: &str,
+    value: &str,
+) -> Result<(), ConfigEnvExpansionError> {
+    reject_config_env_nul(name, value)?;
+    if value.contains('\n')
+        || value.contains('\r')
+        || value.contains('"')
+        || value.contains('\'')
+        || value.contains('{')
+        || value.contains('}')
+        || value.contains('[')
+        || value.contains(']')
+        || value.contains(',')
+        || value.contains('|')
+        || value.contains('>')
+        || value.contains('`')
+        || value.contains(": ")
+        || value.contains(" #")
+    {
+        return Err(ConfigEnvExpansionError(format!(
+            "env var {name} contains characters that are unsafe in embedded config expansion"
+        )));
+    }
+    let trimmed = value.trim_start();
+    if trimmed.starts_with('#')
+        || trimmed.starts_with('&')
+        || trimmed.starts_with('*')
+        || trimmed.starts_with('!')
+        || trimmed.starts_with('%')
+        || trimmed.starts_with('@')
+        || trimmed.starts_with("---")
+        || trimmed.starts_with("...")
+    {
+        return Err(ConfigEnvExpansionError(format!(
+            "env var {name} contains characters that are unsafe in embedded config expansion"
+        )));
+    }
+    Ok(())
 }
 
 fn valid_env_key(key: &str) -> bool {
@@ -1305,8 +1400,8 @@ mod tests {
         )
         .expect("config expands");
 
-        assert!(expanded.contains("base: https://registry.example"));
-        assert!(expanded.contains("optional: https://fallback.example"));
+        assert!(expanded.contains("base: \"https://registry.example\""));
+        assert!(expanded.contains("optional: \"https://fallback.example\""));
     }
 
     #[test]
@@ -1322,7 +1417,42 @@ mod tests {
         let expanded = expand_config_env_vars_with("${BASE_URL}", |_| Some(String::new()))
             .expect("empty env var is allowed for plain expressions");
 
-        assert_eq!(expanded, "");
+        assert_eq!(expanded, "\"\"");
+    }
+
+    #[test]
+    fn config_env_expansion_scalarizes_whole_yaml_values() {
+        let expanded =
+            expand_config_env_vars_with("base: ${BASE_URL}\nflow: ${FLOW}\n", |name| match name {
+                "BASE_URL" => Some("https://registry.example\nadmin: false".to_string()),
+                "FLOW" => Some("{admin: false}".to_string()),
+                _ => None,
+            })
+            .expect("whole-scalar config env vars are quoted");
+
+        assert!(expanded.contains("base: \"https://registry.example\\nadmin: false\""));
+        assert!(expanded.contains("flow: \"{admin: false}\""));
+        assert!(!expanded.contains("\nadmin: false"));
+    }
+
+    #[test]
+    fn config_env_expansion_rejects_unsafe_embedded_values() {
+        let err = expand_config_env_vars_with("base: https://${HOST}\n", |name| match name {
+            "HOST" => Some("registry.example\nadmin: false".to_string()),
+            _ => None,
+        })
+        .expect_err("embedded newline cannot be expanded into YAML structure");
+
+        assert!(err.to_string().contains("HOST"));
+        assert!(!err.to_string().contains("admin"));
+
+        let err = expand_config_env_vars_with("allowed: [${VALUE}]\n", |name| match name {
+            "VALUE" => Some("trusted, attacker".to_string()),
+            _ => None,
+        })
+        .expect_err("embedded comma cannot expand into a YAML flow sequence");
+        assert!(err.to_string().contains("VALUE"));
+        assert!(!err.to_string().contains("trusted"));
     }
 
     #[test]
