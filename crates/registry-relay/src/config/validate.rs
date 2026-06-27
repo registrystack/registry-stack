@@ -3144,6 +3144,7 @@ fn validate_dataset_aggregates(dataset: &DatasetConfig) -> Result<(), ConfigErro
                 return Err(ConfigError::ValidationError);
             }
         }
+        let mut required_filter_fields = HashSet::new();
         for required in &aggregate.required_filters {
             if !filter_fields.contains(required.as_str()) {
                 tracing::error!(
@@ -3155,6 +3156,58 @@ fn validate_dataset_aggregates(dataset: &DatasetConfig) -> Result<(), ConfigErro
                 );
                 return Err(ConfigError::ValidationError);
             }
+            if !required_filter_fields.insert(required.as_str()) {
+                tracing::error!(
+                    code = "config.validation_error",
+                    dataset_id = %dataset.id,
+                    aggregate_id = %aggregate.id,
+                    field = %required,
+                    "aggregate required_filters contains a duplicate field"
+                );
+                return Err(ConfigError::ValidationError);
+            }
+        }
+        let mut binding_fields = HashSet::new();
+        for binding in &aggregate.required_filter_bindings {
+            if !filter_fields.contains(binding.field.as_str()) {
+                tracing::error!(
+                    code = "config.validation_error",
+                    dataset_id = %dataset.id,
+                    aggregate_id = %aggregate.id,
+                    field = %binding.field,
+                    "aggregate required_filter_bindings references neither a source field nor dimension id"
+                );
+                return Err(ConfigError::ValidationError);
+            }
+            if !required_filter_fields.contains(binding.field.as_str()) {
+                tracing::error!(
+                    code = "config.validation_error",
+                    dataset_id = %dataset.id,
+                    aggregate_id = %aggregate.id,
+                    field = %binding.field,
+                    "aggregate required_filter_bindings entry is not present in required_filters"
+                );
+                return Err(ConfigError::ValidationError);
+            }
+            if !binding_fields.insert(binding.field.as_str()) {
+                tracing::error!(
+                    code = "config.validation_error",
+                    dataset_id = %dataset.id,
+                    aggregate_id = %aggregate.id,
+                    field = %binding.field,
+                    "aggregate required_filter_bindings contains a duplicate field"
+                );
+                return Err(ConfigError::ValidationError);
+            }
+        }
+        if !aggregate.required_filters.is_empty() && binding_fields.is_empty() {
+            tracing::error!(
+                code = "config.validation_error",
+                dataset_id = %dataset.id,
+                aggregate_id = %aggregate.id,
+                "aggregate required_filters must declare at least one required_filter_bindings principal binding"
+            );
+            return Err(ConfigError::ValidationError);
         }
         validate_aggregate_spatial(dataset, aggregate, &entities, &exposed_by_entity)?;
     }
@@ -3376,13 +3429,6 @@ fn validate_entity_filters(
     entity: &EntityConfig,
     exposed_fields: &BTreeMap<String, String>,
 ) -> Result<(), ConfigError> {
-    let allowed_filter_fields: HashSet<&str> = entity
-        .api
-        .allowed_filters
-        .iter()
-        .map(|f| f.field.as_str())
-        .collect();
-
     for filter in &entity.api.allowed_filters {
         if !exposed_fields.contains_key(&filter.field) {
             tracing::error!(
@@ -3406,17 +3452,70 @@ fn validate_entity_filters(
         }
     }
 
+    let mut required_filter_fields = HashSet::new();
     for field in &entity.api.required_filters {
-        if !allowed_filter_fields.contains(field.as_str()) {
+        if !exposed_fields.contains_key(field) {
             tracing::error!(
                 code = "config.validation_error",
                 dataset_id = %dataset.id,
                 entity = %entity.name,
                 field = %field,
-                "entity required_filters entry is not present in allowed_filters"
+                "entity required_filters references a non-exposed field"
             );
             return Err(ConfigError::ValidationError);
         }
+        if !required_filter_fields.insert(field.as_str()) {
+            tracing::error!(
+                code = "config.validation_error",
+                dataset_id = %dataset.id,
+                entity = %entity.name,
+                field = %field,
+                "entity required_filters contains a duplicate field"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+    }
+    let mut binding_fields = HashSet::new();
+    for binding in &entity.api.required_filter_bindings {
+        if !exposed_fields.contains_key(&binding.field) {
+            tracing::error!(
+                code = "config.validation_error",
+                dataset_id = %dataset.id,
+                entity = %entity.name,
+                field = %binding.field,
+                "entity required_filter_bindings references a non-exposed field"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+        if !required_filter_fields.contains(binding.field.as_str()) {
+            tracing::error!(
+                code = "config.validation_error",
+                dataset_id = %dataset.id,
+                entity = %entity.name,
+                field = %binding.field,
+                "entity required_filter_bindings entry is not present in required_filters"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+        if !binding_fields.insert(binding.field.as_str()) {
+            tracing::error!(
+                code = "config.validation_error",
+                dataset_id = %dataset.id,
+                entity = %entity.name,
+                field = %binding.field,
+                "entity required_filter_bindings contains a duplicate field"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+    }
+    if !entity.api.required_filters.is_empty() && binding_fields.is_empty() {
+        tracing::error!(
+            code = "config.validation_error",
+            dataset_id = %dataset.id,
+            entity = %entity.name,
+            "entity required_filters must declare at least one required_filter_bindings principal binding"
+        );
+        return Err(ConfigError::ValidationError);
     }
     if let Some(policy) = entity.api.governed_policy.as_ref() {
         validate_entity_governed_policy(dataset, entity, policy)?;

@@ -179,6 +179,9 @@ datasets:
             - benefits_household_alias
             - education_student_alias
             - education_guardian_alias
+          required_filter_bindings:
+            - field: canonical_id
+              source: principal_id
           allowed_filters:
             - field: canonical_id
               ops: [eq, in]

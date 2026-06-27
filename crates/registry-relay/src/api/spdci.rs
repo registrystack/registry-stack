@@ -35,8 +35,8 @@ use crate::error::{
     AuthError, EntityError, Error, FilterError, InternalError, SchemaError, SpdciError,
 };
 use crate::query::{
-    satisfies_required_filter, EntityCollectionQuery, EntityFilter, EntityFilterOp,
-    EntityQueryEngine,
+    bind_principal_required_filters, required_filters_are_satisfied, EntityCollectionQuery,
+    EntityFilter, EntityFilterOp, EntityQueryEngine,
 };
 use crate::runtime_config::RuntimeSnapshot;
 use crate::spdci::SpdciResponseMapper;
@@ -162,15 +162,14 @@ async fn run_disabled_status(
         });
     }
     let request = SpdciRequest::from_body(body, &route.config)?;
-    require_entity_filters_for_query(
-        &route.entity,
-        &[EntityFilter {
-            field: route.config.query_field.clone(),
-            op: EntityFilterOp::Eq,
-            value: request.query_value.clone(),
-        }],
-    )?;
-    let rows = read_rows(route, &request, Some(projected_status_fields(route))).await?;
+    let principal_query = principal_bound_required_filter_query(&route.entity, principal_ref)?;
+    let rows = read_rows(
+        route,
+        &request,
+        Some(projected_status_fields(route)),
+        principal_query,
+    )
+    .await?;
     let row_count = rows.len() as u64;
     let disabled = rows.first().is_some_and(|row| {
         row.get(&route.config.disabled_status_field)
@@ -246,13 +245,11 @@ async fn run_sync_search_response(
         "spdci_search",
     )?;
     let request = SearchRequest::from_body(body, &route.config)?;
-    for item in &request.items {
-        require_entity_filters_for_query(&route.entity, &item.filters)?;
-    }
+    let principal_query = principal_bound_required_filter_query(&route.entity, principal_ref)?;
     let mut search_response = Vec::with_capacity(request.items.len());
     let mut total_count = 0_u64;
     for item in request.items {
-        let rows = read_search_rows(route, &item).await?;
+        let rows = read_search_rows(route, &item, principal_query.clone()).await?;
         total_count += rows.len() as u64;
         let reg_records = project_search_records(
             &route.registry_name,
@@ -368,15 +365,8 @@ async fn run_search_response(
         "spdci_disability_details",
     )?;
     let request = SpdciRequest::from_body(body, &route.config)?;
-    require_entity_filters_for_query(
-        &route.entity,
-        &[EntityFilter {
-            field: route.config.query_field.clone(),
-            op: EntityFilterOp::Eq,
-            value: request.query_value.clone(),
-        }],
-    )?;
-    let rows = read_rows(route, &request, None).await?;
+    let principal_query = principal_bound_required_filter_query(&route.entity, principal_ref)?;
+    let rows = read_rows(route, &request, None, principal_query).await?;
     let row_count = rows.len() as u64;
     let reg_records = project_search_records(
         registry_name,
@@ -712,23 +702,18 @@ async fn read_rows(
     route: &RouteState,
     request: &SpdciRequest,
     fields: Option<Vec<String>>,
+    mut query: EntityCollectionQuery,
 ) -> Result<Vec<Value>, Error> {
+    query.fields = fields;
+    query.limit = Some(1);
+    query.filters.push(EntityFilter {
+        field: route.config.query_field.clone(),
+        op: EntityFilterOp::Eq,
+        value: request.query_value.clone(),
+    });
     let result = route
         .query
-        .read_collection(
-            route.config.dataset.as_str(),
-            &route.config.entity,
-            EntityCollectionQuery {
-                fields,
-                limit: Some(1),
-                filters: vec![EntityFilter {
-                    field: route.config.query_field.clone(),
-                    op: EntityFilterOp::Eq,
-                    value: request.query_value.clone(),
-                }],
-                ..EntityCollectionQuery::default()
-            },
-        )
+        .read_collection(route.config.dataset.as_str(), &route.config.entity, query)
         .await?;
     Ok(result.rows)
 }
@@ -736,18 +721,13 @@ async fn read_rows(
 async fn read_search_rows(
     route: &SearchRouteState,
     request: &SearchRequestItem,
+    mut query: EntityCollectionQuery,
 ) -> Result<Vec<Value>, Error> {
+    query.limit = Some(request.limit);
+    query.filters.extend(request.filters.clone());
     let result = route
         .query
-        .read_collection(
-            route.config.dataset.as_str(),
-            &route.config.entity,
-            EntityCollectionQuery {
-                limit: Some(request.limit),
-                filters: request.filters.clone(),
-                ..EntityCollectionQuery::default()
-            },
-        )
+        .read_collection(route.config.dataset.as_str(), &route.config.entity, query)
         .await?;
     Ok(result.rows)
 }
@@ -1158,18 +1138,23 @@ fn require_entity_route_gates(
     )
 }
 
-fn require_entity_filters_for_query(
+fn principal_bound_required_filter_query(
     entity: &EntityModel,
-    filters: &[EntityFilter],
-) -> Result<(), Error> {
+    principal: Option<&Principal>,
+) -> Result<EntityCollectionQuery, Error> {
+    let mut query = EntityCollectionQuery::default();
+    bind_principal_required_filters(
+        &entity.api.required_filters,
+        &entity.api.required_filter_bindings,
+        principal.map(|principal| principal.principal_id.as_str()),
+        &mut query,
+    )?;
     if entity.api.required_filters.is_empty() {
-        return Ok(());
+        return Ok(query);
     }
-    if filters
-        .iter()
-        .any(|filter| satisfies_required_filter(&entity.api.required_filters, filter))
+    if required_filters_are_satisfied(&entity.api.required_filters, &query.principal_bound_filters)
     {
-        return Ok(());
+        return Ok(query);
     }
     Err(EntityError::FilterRequired {
         required: entity.api.required_filters.clone(),

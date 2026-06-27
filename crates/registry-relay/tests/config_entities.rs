@@ -289,7 +289,7 @@ fn derived_table_names_must_be_globally_unique() {
     assert_eq!(err.code(), "config.duplicate_id");
 }
 
-fn dataset_with_required_filters(required_filters: &str) -> String {
+fn dataset_with_required_filters(required_filters: &str, required_filter_bindings: &str) -> String {
     format!(
         r#"
   - id: my_dataset
@@ -332,6 +332,7 @@ fn dataset_with_required_filters(required_filters: &str) -> String {
           default_limit: 100
           max_limit: 1000
           required_filters: {required_filters}
+{required_filter_bindings}
           allowed_filters:
             - field: id
               ops: [eq]
@@ -342,9 +343,15 @@ fn dataset_with_required_filters(required_filters: &str) -> String {
 }
 
 #[test]
-fn required_filters_not_in_allowed_filters_is_rejected() {
+fn required_filters_unknown_field_is_rejected() {
     let tmp = TempDir::new().expect("tempdir");
-    let dataset = dataset_with_required_filters("[id, unknown_field]");
+    let dataset = dataset_with_required_filters(
+        "[id, unknown_field]",
+        r#"          required_filter_bindings:
+            - field: id
+              source: principal_id
+"#,
+    );
     let config_path = write_config(&tmp, &base_config(&dataset));
     let err = registry_relay::config::load(&config_path)
         .expect_err("config rejects required_filters with unknown field");
@@ -352,21 +359,40 @@ fn required_filters_not_in_allowed_filters_is_rejected() {
 }
 
 #[test]
-fn required_filters_all_in_allowed_filters_loads_cleanly() {
+fn required_filters_without_principal_binding_is_rejected() {
     let tmp = TempDir::new().expect("tempdir");
-    let dataset = dataset_with_required_filters("[id, group_id]");
+    let dataset = dataset_with_required_filters("[id]", "");
+    let config_path = write_config(&tmp, &base_config(&dataset));
+    let err = registry_relay::config::load(&config_path)
+        .expect_err("config rejects required_filters without principal binding");
+    assert_eq!(err.code(), "config.validation_error");
+}
+
+#[test]
+fn required_filters_with_principal_bindings_load_cleanly() {
+    let tmp = TempDir::new().expect("tempdir");
+    let dataset = dataset_with_required_filters(
+        "[id, group_id]",
+        r#"          required_filter_bindings:
+            - field: id
+              source: principal_id
+            - field: group_id
+              source: principal_id
+"#,
+    );
     let config_path = write_config(&tmp, &base_config(&dataset));
     let config = registry_relay::config::load(&config_path).expect("config loads");
     let registry = EntityRegistry::from_config(&config).expect("entity registry compiles");
     let dataset = registry.dataset("my_dataset").expect("dataset");
     let entity = dataset.entity("record").expect("entity");
     assert_eq!(entity.api.required_filters, ["id", "group_id"]);
+    assert_eq!(entity.api.required_filter_bindings.len(), 2);
 }
 
 #[test]
 fn required_filters_empty_is_accepted() {
     let tmp = TempDir::new().expect("tempdir");
-    let dataset = dataset_with_required_filters("[]");
+    let dataset = dataset_with_required_filters("[]", "");
     let config_path = write_config(&tmp, &base_config(&dataset));
     let config = registry_relay::config::load(&config_path).expect("config loads");
     let registry = EntityRegistry::from_config(&config).expect("entity registry compiles");
@@ -378,7 +404,7 @@ fn required_filters_empty_is_accepted() {
 #[test]
 fn governed_entity_policy_rejects_blank_policy_terms() {
     let tmp = TempDir::new().expect("tempdir");
-    let dataset = dataset_with_required_filters("[]").replace(
+    let dataset = dataset_with_required_filters("[]", "").replace(
         "          allowed_filters:\n",
         r#"          governed_policy:
             permitted_purposes: [" "]
@@ -399,7 +425,7 @@ fn governed_entity_policy_rejects_blank_policy_terms() {
 #[test]
 fn allowed_expansions_without_matching_relationship_are_rejected() {
     let tmp = TempDir::new().expect("tempdir");
-    let dataset = dataset_with_required_filters("[]").replace(
+    let dataset = dataset_with_required_filters("[]", "").replace(
         "          max_limit: 1000\n",
         "          max_limit: 1000\n          allowed_expansions: [ghost]\n",
     );

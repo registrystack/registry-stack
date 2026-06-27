@@ -30,7 +30,8 @@ use crate::error::{
     AuthError, Error, FilterError, InternalError, OgcError, QueryError, SpatialError,
 };
 use crate::query::{
-    satisfies_required_filter, EntityCollectionQuery, EntityFilter, EntityFilterOp,
+    bind_principal_required_filters, required_filters_are_satisfied, EntityCollectionQuery,
+    EntityFilter, EntityFilterOp,
 };
 use crate::runtime_config::{CursorSigner, RuntimeSnapshot, CURSOR_MAC_LEN};
 
@@ -252,11 +253,21 @@ async fn collection_items(
         }
     };
 
-    let parsed = match parse_items_query(entity, spatial, params, None) {
+    let mut parsed = match parse_items_query(entity, spatial, params, None) {
         Ok(parsed) => parsed,
         Err(error) => return error.into_response(),
     };
-    if let Err(error) = enforce_required_filters(entity, &parsed.caller_filters) {
+    if let Err(error) = bind_principal_required_filters(
+        &entity.api.required_filters,
+        &entity.api.required_filter_bindings,
+        principal_ref.map(|principal| principal.principal_id.as_str()),
+        &mut parsed.entity_query,
+    ) {
+        return error.into_response();
+    }
+    if let Err(error) =
+        enforce_required_filters(entity, &parsed.entity_query.principal_bound_filters)
+    {
         return error.into_response();
     }
     let query_context = cursor_context(
@@ -410,7 +421,7 @@ async fn feature_item(
         }
     };
 
-    let parsed = match parse_items_query(entity, spatial, params, Some(&path.feature_id)) {
+    let mut parsed = match parse_items_query(entity, spatial, params, Some(&path.feature_id)) {
         Ok(parsed) => parsed,
         Err(error) => return error.into_response(),
     };
@@ -420,7 +431,17 @@ async fn feature_item(
         })
         .into_response();
     }
-    if let Err(error) = enforce_required_filters(entity, &parsed.caller_filters) {
+    if let Err(error) = bind_principal_required_filters(
+        &entity.api.required_filters,
+        &entity.api.required_filter_bindings,
+        principal_ref.map(|principal| principal.principal_id.as_str()),
+        &mut parsed.entity_query,
+    ) {
+        return error.into_response();
+    }
+    if let Err(error) =
+        enforce_required_filters(entity, &parsed.entity_query.principal_bound_filters)
+    {
         return error.into_response();
     }
 
@@ -679,7 +700,6 @@ fn property_names(entity: &EntityModel, spatial: &EntitySpatialModel) -> Vec<Str
 
 struct ParsedItemsQuery {
     entity_query: EntityCollectionQuery,
-    caller_filters: Vec<EntityFilter>,
     link_params: BTreeMap<String, String>,
     cursor_params: BTreeMap<String, String>,
     after: Option<String>,
@@ -765,7 +785,6 @@ fn parse_items_query(
 
     Ok(ParsedItemsQuery {
         entity_query: query,
-        caller_filters,
         link_params,
         cursor_params,
         after,
@@ -841,10 +860,7 @@ fn enforce_required_filters(entity: &EntityModel, filters: &[EntityFilter]) -> R
     if entity.api.required_filters.is_empty() {
         return Ok(());
     }
-    if filters
-        .iter()
-        .any(|filter| satisfies_required_filter(&entity.api.required_filters, filter))
-    {
+    if required_filters_are_satisfied(&entity.api.required_filters, filters) {
         Ok(())
     } else {
         Err(crate::error::EntityError::FilterRequired {
@@ -1581,6 +1597,7 @@ mod tests {
                 max_limit: 1000,
                 require_purpose_header: false,
                 required_filters: Vec::new(),
+                required_filter_bindings: Vec::new(),
                 allowed_filters: Vec::new(),
                 allowed_expansions: Vec::new(),
                 governed_policy: None,

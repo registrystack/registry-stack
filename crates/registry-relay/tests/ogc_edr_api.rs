@@ -23,8 +23,12 @@ use serde_json::{json, Value};
 use tempfile::TempDir;
 
 fn principal(scopes: &[&str]) -> Principal {
+    principal_with_id(scopes, "test-principal")
+}
+
+fn principal_with_id(scopes: &[&str], principal_id: &str) -> Principal {
     Principal {
-        principal_id: "test-principal".to_string(),
+        principal_id: principal_id.to_string(),
         scopes: scopes.iter().copied().collect::<ScopeSet>(),
         auth_mode: AuthMode::ApiKey,
     }
@@ -117,6 +121,25 @@ fn server_with_aggregate_only_source_entity_api_extra(
     server_from_config(scopes, yaml)
 }
 
+fn server_with_geometry_entity_api_extra_and_principal_id(
+    scopes: &[&str],
+    geometry_entity_api_extra: &str,
+    principal_id: &str,
+) -> TestServer {
+    let mut yaml = edr_config_yaml_with_geometry_read_scope(
+        false,
+        true,
+        100,
+        true,
+        "social_registry:geometry",
+    )
+    .replace("min_group_size: 1", "min_group_size: 2");
+    let marker = "          max_limit: 10000\n";
+    let insert_at = yaml.rfind(marker).expect("municipality api max_limit") + marker.len();
+    yaml.insert_str(insert_at, geometry_entity_api_extra);
+    server_from_config_with_principal_id(scopes, yaml, principal_id)
+}
+
 fn server_with_source_entity_api_extra_and_audit(
     scopes: &[&str],
     require_purpose_header: bool,
@@ -146,6 +169,14 @@ fn server_with_source_entity_api_extra_and_audit(
 }
 
 fn server_from_config(scopes: &[&str], yaml: String) -> TestServer {
+    server_from_config_with_principal_id(scopes, yaml, "test-principal")
+}
+
+fn server_from_config_with_principal_id(
+    scopes: &[&str],
+    yaml: String,
+    principal_id: &str,
+) -> TestServer {
     let tmp = TempDir::new().expect("tempdir");
     let config_path = tmp.path().join("ogc_edr.yaml");
     std::fs::write(&config_path, yaml).expect("write config");
@@ -176,7 +207,7 @@ fn server_from_config(scopes: &[&str], yaml: String) -> TestServer {
             .layer(Extension(aggregate_query))
             .layer(Extension(registry))
             .layer(Extension(cfg))
-            .layer(Extension(principal(scopes))),
+            .layer(Extension(principal_with_id(scopes, principal_id))),
     )
 }
 
@@ -867,6 +898,38 @@ async fn area_allows_aggregate_only_execution_when_explicitly_configured() {
         "social_registry:aggregate",
         "social_registry:geometry",
     ]);
+
+    let resp = server
+        .get("/ogc/edr/v1/collections/social_registry_beneficiaries_by_municipality/area")
+        .add_query_param("coords", "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))")
+        .add_query_param("parameter-name", "individual_count")
+        .add_query_param("group_by", "municipality")
+        .await;
+
+    resp.assert_status_ok();
+    let body: Value = resp.json();
+    let features = body["features"].as_array().expect("features");
+    assert_eq!(features.len(), 1);
+    assert_eq!(features[0]["properties"]["municipality"], "mun-1");
+    assert_eq!(features[0]["properties"]["individual_count"], 2);
+}
+
+#[tokio::test]
+async fn area_geometry_scan_uses_principal_bound_required_filter() {
+    let server = server_with_geometry_entity_api_extra_and_principal_id(
+        &[
+            "social_registry:metadata",
+            "social_registry:aggregate",
+            "social_registry:geometry",
+        ],
+        r#"          required_filters:
+            - code
+          required_filter_bindings:
+            - field: code
+              source: principal_id
+"#,
+        "mun-1",
+    );
 
     let resp = server
         .get("/ogc/edr/v1/collections/social_registry_beneficiaries_by_municipality/area")

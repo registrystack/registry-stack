@@ -27,8 +27,8 @@ use crate::entity::EntityRegistry;
 use crate::error::{AggregateError, AuthError, Error, FilterError, OgcError, SpatialError};
 use crate::ingest::ReadinessSnapshot;
 use crate::query::{
-    AggregateFilter, AggregateFilterOp, AggregateQueryRequest, EntityCollectionQuery,
-    EntityQueryEngine,
+    bind_principal_required_filters, principal_bound_aggregate_filters, AggregateFilter,
+    AggregateFilterOp, AggregateQueryRequest, EntityCollectionQuery, EntityQueryEngine,
 };
 use crate::runtime_config::RuntimeSnapshot;
 
@@ -322,10 +322,19 @@ async fn area_common(
         Ok(mut extra_filters) => filters.append(&mut extra_filters),
         Err(error) => return error.into_response(),
     }
+    let principal_bound_filters = match principal_bound_aggregate_filters(
+        &collection.aggregate.required_filters,
+        &collection.aggregate.required_filter_bindings,
+        Some(principal.principal_id.as_str()),
+    ) {
+        Ok(filters) => filters,
+        Err(error) => return error.into_response(),
+    };
     let request = AggregateQueryRequest {
         indicators: indicator_ids,
         group_by: Some(group_by),
         filters,
+        principal_bound_filters,
         max_rows: None,
     };
     let mut result = match aggregate_query
@@ -520,7 +529,8 @@ async fn matching_admin_geometries(
     max_geometry_vertices: u32,
     input_geometry: &Geometry,
 ) -> Result<Vec<AdminGeometry>, Error> {
-    require_geometry_entity_read_scope(config, principal, dataset_id, geometry_entity)?;
+    let geometry_entity_config = geometry_entity_config(config, dataset_id, geometry_entity)?;
+    require_scope(principal, geometry_entity_config.access.read_scope.as_str())?;
     let input_geo = geo_geometry(input_geometry)?;
     let mut matched = Vec::new();
     let mut after_primary_key = None;
@@ -529,6 +539,12 @@ async fn matching_admin_geometries(
         let mut query = EntityCollectionQuery::new()
             .with_fields([geometry_id_field.to_string(), geometry_field.to_string()])
             .with_limit(10_000);
+        bind_principal_required_filters(
+            &geometry_entity_config.api.required_filters,
+            &geometry_entity_config.api.required_filter_bindings,
+            Some(principal.principal_id.as_str()),
+            &mut query,
+        )?;
         if let Some(after) = after_primary_key {
             query = query.with_after_primary_key(after);
         }
@@ -566,13 +582,12 @@ async fn matching_admin_geometries(
     Ok(matched)
 }
 
-fn require_geometry_entity_read_scope(
-    config: &Config,
-    principal: &Principal,
+fn geometry_entity_config<'a>(
+    config: &'a Config,
     dataset_id: &str,
     geometry_entity: &str,
-) -> Result<(), Error> {
-    let read_scope = config
+) -> Result<&'a EntityConfig, Error> {
+    config
         .datasets
         .iter()
         .find(|dataset| dataset.id.as_str() == dataset_id)
@@ -582,10 +597,7 @@ fn require_geometry_entity_read_scope(
                 .iter()
                 .find(|entity| entity.name == geometry_entity)
         })
-        .map(|entity| entity.access.read_scope.as_str())
-        .ok_or(OgcError::CollectionNotFound)?;
-    require_scope(principal, read_scope)?;
-    Ok(())
+        .ok_or_else(|| OgcError::CollectionNotFound.into())
 }
 
 fn grouped_features(

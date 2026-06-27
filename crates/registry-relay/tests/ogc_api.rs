@@ -19,9 +19,9 @@ use registry_relay::query::EntityQueryEngine;
 use serde_json::Value;
 use tempfile::TempDir;
 
-fn principal(scopes: &[&str]) -> Principal {
+fn principal_with_id(scopes: &[&str], principal_id: &str) -> Principal {
     Principal {
-        principal_id: "test-principal".to_string(),
+        principal_id: principal_id.to_string(),
         scopes: scopes.iter().copied().collect::<ScopeSet>(),
         auth_mode: AuthMode::ApiKey,
     }
@@ -110,6 +110,9 @@ datasets:
           require_purpose_header: {require_purpose_header}
 {entity_api_extra}
           required_filters: [facility_type]
+          required_filter_bindings:
+            - field: facility_type
+              source: principal_id
           allowed_filters:
             - field: facility_type
               ops: [eq]
@@ -142,6 +145,21 @@ async fn server_with_purpose_and_entity_api_extra(
     scopes: &[&str],
     require_purpose_header: bool,
     entity_api_extra: &str,
+) -> TestServer {
+    server_with_purpose_entity_api_extra_and_principal_id(
+        scopes,
+        require_purpose_header,
+        entity_api_extra,
+        "clinic",
+    )
+    .await
+}
+
+async fn server_with_purpose_entity_api_extra_and_principal_id(
+    scopes: &[&str],
+    require_purpose_header: bool,
+    entity_api_extra: &str,
+    principal_id: &str,
 ) -> TestServer {
     let tmp = TempDir::new().expect("tempdir");
     let cfg = Arc::new(
@@ -208,7 +226,7 @@ async fn server_with_purpose_and_entity_api_extra(
             .layer(Extension(query))
             .layer(Extension(registry))
             .layer(Extension(cfg))
-            .layer(Extension(principal(scopes))),
+            .layer(Extension(principal_with_id(scopes, principal_id))),
     )
 }
 
@@ -293,15 +311,16 @@ async fn items_apply_required_filters_bbox_and_geometry_mapping() {
 }
 
 #[tokio::test]
-async fn bbox_alone_does_not_satisfy_required_filters() {
+async fn bbox_uses_principal_bound_required_filter() {
     let server = server(&["civic_registry:metadata", "civic_registry:rows"]).await;
 
     let response = server
         .get("/ogc/v1/datasets/civic_registry/collections/facilities/items?bbox=100.5,13.7,100.7,13.9")
         .await;
-    response.assert_status_bad_request();
+    response.assert_status_ok();
     let body: Value = response.json();
-    assert_eq!(body["code"], "entity.filter_required");
+    assert_eq!(body["numberReturned"], 1);
+    assert_eq!(body["features"][0]["properties"]["facility_type"], "clinic");
 }
 
 #[tokio::test]
@@ -314,7 +333,7 @@ async fn broad_ogc_required_filter_ops_return_filter_required() {
 
     response.assert_status_bad_request();
     let body: Value = response.json();
-    assert_eq!(body["code"], "entity.filter_required");
+    assert_eq!(body["code"], "filter.not_allowed");
 }
 
 #[tokio::test]
@@ -324,11 +343,8 @@ async fn item_by_id_preserves_required_filter_context_and_null_geometry() {
     let missing_filter = server
         .get("/ogc/v1/datasets/civic_registry/collections/facilities/items/FAC-001")
         .await;
-    missing_filter.assert_status_bad_request();
-    assert_eq!(
-        missing_filter.json::<Value>()["code"],
-        "entity.filter_required"
-    );
+    missing_filter.assert_status_ok();
+    assert_eq!(missing_filter.json::<Value>()["id"], "FAC-001");
 
     let response = server
         .get("/ogc/v1/datasets/civic_registry/collections/facilities/items/FAC-003?facility_type=clinic")
@@ -487,7 +503,13 @@ async fn signed_cursor_is_bound_to_query_context() {
 
 #[tokio::test]
 async fn feature_links_percent_encode_query_values_and_path_segments() {
-    let server = server(&["civic_registry:metadata", "civic_registry:rows"]).await;
+    let server = server_with_purpose_entity_api_extra_and_principal_id(
+        &["civic_registry:metadata", "civic_registry:rows"],
+        false,
+        "",
+        "clinic & urgent",
+    )
+    .await;
 
     let response = server
         .get("/ogc/v1/datasets/civic_registry/collections/facilities/items?facility_type=clinic%20%26%20urgent")
