@@ -1436,6 +1436,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn challenged_proof_rejects_expired_reserved_nonce() {
+        let key = PrivateJwk::parse(RAW_JWK).expect("key parses");
+        let store = InMemoryConsumableNonceStore::new();
+        let scope = ReplayScope::oid4vci_nonce("tenant-a", "issuer-a", "profile-a").expect("scope");
+        let nonce = ReplayKey::new("n-replay").expect("nonce key");
+        store
+            .reserve_nonce(
+                &scope,
+                &nonce,
+                OffsetDateTime::now_utc() + time::Duration::milliseconds(10),
+            )
+            .await
+            .expect("nonce reserves");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let proof = valid_proof(&key, "n-replay");
+        let p = policy(Some("n-replay"));
+
+        assert_eq!(
+            validate_challenged_proof_jwt(&proof, &p, 1001, &store, &scope).await,
+            Err(ProofError::InvalidNonce)
+        );
+    }
+
+    #[tokio::test]
     async fn challenged_proof_requires_expected_nonce() {
         let key = PrivateJwk::parse(RAW_JWK).expect("key parses");
         let store = InMemoryConsumableNonceStore::new();

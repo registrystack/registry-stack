@@ -935,6 +935,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn required_consume_helper_fails_closed_on_expired_nonce() {
+        let store = InMemoryConsumableNonceStore::new();
+        let scope =
+            ReplayScope::oid4vci_nonce("tenant-a", "issuer-a", "profile-a").expect("valid scope");
+        let key = key("nonce-1");
+
+        store
+            .reserve_nonce(
+                &scope,
+                &key,
+                OffsetDateTime::now_utc() + Duration::from_millis(10),
+            )
+            .await
+            .expect("nonce reserves");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        assert!(matches!(
+            require_consume_once(&store, &scope, &key).await,
+            Err(RequiredReplayError::AlreadySeen)
+        ));
+    }
+
+    #[tokio::test]
     async fn required_consume_helper_fails_closed_on_store_errors() {
         struct FailingNonceStore;
 

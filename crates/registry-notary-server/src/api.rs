@@ -1336,14 +1336,11 @@ fn effective_approver_count(
     config_trust: &registry_notary_core::ConfigTrustConfig,
     approval: &LocalOperatorApproval,
 ) -> usize {
-    let mut approvers = BTreeSet::from([approval.approved_by.clone()]);
-    approvers.extend(
-        approval
-            .approvers
-            .iter()
-            .filter(|approver| !approver.trim().is_empty())
-            .cloned(),
-    );
+    let mut approvers = BTreeSet::new();
+    insert_approver_identity(&mut approvers, &approval.approved_by);
+    for approver in &approval.approvers {
+        insert_approver_identity(&mut approvers, approver);
+    }
     let Ok(bytes) = fs::read(&config_trust.local_approval_state_path) else {
         return approvers.len();
     };
@@ -1359,16 +1356,20 @@ fn effective_approver_count(
             && candidate.expires_at_unix_seconds > now
             && !candidate.approved_by.trim().is_empty()
         {
-            approvers.insert(candidate.approved_by);
-            approvers.extend(
-                candidate
-                    .approvers
-                    .into_iter()
-                    .filter(|approver| !approver.trim().is_empty()),
-            );
+            insert_approver_identity(&mut approvers, &candidate.approved_by);
+            for approver in &candidate.approvers {
+                insert_approver_identity(&mut approvers, approver);
+            }
         }
     }
     approvers.len()
+}
+
+fn insert_approver_identity(approvers: &mut BTreeSet<String>, identity: &str) {
+    let identity = identity.trim();
+    if !identity.is_empty() {
+        approvers.insert(identity.to_string());
+    }
 }
 
 fn required_break_glass_approver_count(
@@ -10310,6 +10311,67 @@ mod tests {
         assert!(!is_valid_approval_reference("with space"));
         assert!(!is_valid_approval_reference("nul\0byte"));
         assert!(!is_valid_approval_reference("ctrl\nchar"));
+    }
+
+    #[test]
+    fn effective_approver_count_trims_and_deduplicates_identities() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let approval_state_path = tmp.path().join("approvals.json");
+        let config_hash = test_hash('b');
+        let previous_config_hash = Some(test_hash('a'));
+        let approval = LocalOperatorApproval {
+            approved_by: "ops@example.test".to_string(),
+            approvers: vec![
+                " ops@example.test ".to_string(),
+                " security@example.test ".to_string(),
+            ],
+            reason: "approve emergency config change".to_string(),
+            approval_reference: "APPROVAL-1".to_string(),
+            change_class: "client_access".to_string(),
+            config_hash: config_hash.clone(),
+            previous_config_hash: previous_config_hash.clone(),
+            expires_at_unix_seconds: 4_102_444_800,
+            rate_limit_identity: "ops@example.test".to_string(),
+            rate_limit: BreakGlassRateLimit {
+                max_accepted: 1,
+                window_seconds: 60,
+            },
+        };
+        let matching_stored = LocalOperatorApproval {
+            approved_by: " security@example.test ".to_string(),
+            approvers: vec![
+                "ops@example.test".to_string(),
+                " audit@example.test ".to_string(),
+                "   ".to_string(),
+            ],
+            ..approval.clone()
+        };
+        let expired_stored = LocalOperatorApproval {
+            approved_by: "expired@example.test".to_string(),
+            expires_at_unix_seconds: 1,
+            ..approval.clone()
+        };
+        fs::write(
+            &approval_state_path,
+            serde_json::to_vec(&json!({
+                "approvals": [matching_stored, expired_stored]
+            }))
+            .expect("approval state serializes"),
+        )
+        .expect("approval state writes");
+        let config_trust = registry_notary_core::ConfigTrustConfig {
+            antirollback_state_path: tmp.path().join("antirollback.json"),
+            local_approval_state_path: approval_state_path,
+            break_glass_rate_limit: registry_notary_core::ConfigTrustRateLimit {
+                max_accepted: 1,
+                window_seconds: 3600,
+            },
+            required_approver_count: BTreeMap::new(),
+            accepted_roots: Vec::new(),
+            remote_tuf_repositories: Vec::new(),
+        };
+
+        assert_eq!(effective_approver_count(&config_trust, &approval), 3);
     }
 
     #[test]

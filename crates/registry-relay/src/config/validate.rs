@@ -1461,6 +1461,18 @@ fn is_trusted_proxy_spec(s: &str) -> bool {
 }
 
 fn validate_ids_and_uniqueness(config: &Config) -> Result<(), ConfigError> {
+    let mut api_key_ids: HashSet<&str> = HashSet::new();
+    for key in &config.auth.api_keys {
+        if !api_key_ids.insert(key.id.as_str()) {
+            tracing::error!(
+                code = "config.duplicate_id",
+                api_key_id = %key.id,
+                "duplicate API key id"
+            );
+            return Err(ConfigError::DuplicateId);
+        }
+    }
+
     let mut dataset_ids: HashSet<&str> = HashSet::new();
     let mut datafusion_table_names: BTreeMap<String, (String, String)> = BTreeMap::new();
     // Attribute-release profiles are identified by a globally unique

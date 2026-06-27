@@ -311,11 +311,20 @@ impl CacheStore for InMemoryCacheStore {
     }
 
     async fn delete(&self, key: &CacheKey) -> Result<bool, CacheStoreError> {
+        let now = OffsetDateTime::now_utc();
         let mut records = self
             .records
             .lock()
             .expect("in-memory cache store lock is healthy");
-        Ok(records.remove(key).is_some())
+        let Some(record) = records.get(key) else {
+            return Ok(false);
+        };
+        if record.expires_at <= now {
+            records.remove(key);
+            return Ok(false);
+        }
+        records.remove(key);
+        Ok(true)
     }
 
     async fn check_ready(&self) -> Result<(), CacheStoreError> {
@@ -638,6 +647,23 @@ mod tests {
             Some(b"value".to_vec())
         );
         assert!(store.delete(&key).await.expect("delete succeeds"));
+        assert_eq!(store.get(&key).await.expect("get succeeds"), None);
+    }
+
+    #[tokio::test]
+    async fn in_memory_cache_delete_treats_expired_records_as_missing() {
+        let store = InMemoryCacheStore::new();
+        let key = CacheKey::new("test:expired-delete").expect("key is valid");
+
+        store.records.lock().unwrap().insert(
+            key.clone(),
+            CacheRecord {
+                value: b"old".to_vec(),
+                expires_at: OffsetDateTime::UNIX_EPOCH,
+            },
+        );
+
+        assert!(!store.delete(&key).await.expect("delete succeeds"));
         assert_eq!(store.get(&key).await.expect("get succeeds"), None);
     }
 

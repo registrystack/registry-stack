@@ -219,7 +219,7 @@ impl OidcAuth {
             &self.scope_object_required_keys,
         )
         .into_iter()
-        .map(|s| self.scope_map.get(&s).cloned().unwrap_or(s))
+        .filter_map(|s| map_scope(&self.scope_claim, &self.scope_map, s))
         .collect();
 
         let principal_id = claims
@@ -435,6 +435,24 @@ fn extract_scopes(
         "aud" => Vec::new(),
         _ => Vec::new(),
     }
+}
+
+fn map_scope(
+    scope_claim: &str,
+    scope_map: &BTreeMap<String, String>,
+    scope: String,
+) -> Option<String> {
+    if let Some(mapped) = scope_map.get(&scope) {
+        Some(mapped.clone())
+    } else if reserved_scope_claim_requires_mapping(scope_claim) {
+        None
+    } else {
+        Some(scope)
+    }
+}
+
+fn reserved_scope_claim_requires_mapping(scope_claim: &str) -> bool {
+    matches!(scope_claim, "sub" | "client_id" | "azp" | "aud")
 }
 
 fn extract_scope_values(
@@ -947,6 +965,53 @@ mod tests {
         let provider = provider_from(config, jwks_for(TEST_KID, &vk));
         let principal = provider.verify(&token).await.expect("ok");
         assert!(principal.scopes.contains("social_protection_registry:rows"));
+    }
+
+    #[tokio::test]
+    async fn unmapped_reserved_scope_claim_values_do_not_grant_scopes() {
+        let cases = [
+            (
+                "sub",
+                TokenOpts {
+                    sub: Some("social_protection_registry:rows".to_string()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "client_id",
+                TokenOpts {
+                    extra: Map::from_iter([(
+                        "client_id".to_string(),
+                        Value::String("social_protection_registry:rows".to_string()),
+                    )]),
+                    ..Default::default()
+                },
+            ),
+            (
+                "azp",
+                TokenOpts {
+                    extra: Map::from_iter([(
+                        "azp".to_string(),
+                        Value::String("social_protection_registry:rows".to_string()),
+                    )]),
+                    ..Default::default()
+                },
+            ),
+        ];
+
+        for (scope_claim, opts) in cases {
+            let (sk, vk) = fresh_keypair();
+            let token = mint(&sk, opts);
+            let mut config = base_config();
+            config.scope_claim = scope_claim.to_string();
+            let provider = provider_from(config, jwks_for(TEST_KID, &vk));
+
+            let principal = provider.verify(&token).await.expect("ok");
+            assert!(
+                !principal.scopes.contains("social_protection_registry:rows"),
+                "{scope_claim} must require an explicit scope_map entry"
+            );
+        }
     }
 
     #[tokio::test]

@@ -428,6 +428,42 @@ fn duplicate_dataset_id_rejected() {
 }
 
 #[test]
+fn duplicate_api_key_id_rejected() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = write_config(
+        &tmp,
+        r#"
+server:
+  bind: 127.0.0.1:0
+catalog:
+  title: Test
+  base_url: https://data.example.test
+  publisher: Test
+vocabularies: {}
+auth:
+  mode: api_key
+  api_keys:
+    - id: duplicate_key
+      fingerprint:
+        provider: env
+        name: TEST_KEY_HASH_DUPLICATE_ID_ONE
+        commitment: sha256:1111111111111111111111111111111111111111111111111111111111111111
+    - id: duplicate_key
+      fingerprint:
+        provider: env
+        name: TEST_KEY_HASH_DUPLICATE_ID_TWO
+        commitment: sha256:2222222222222222222222222222222222222222222222222222222222222222
+datasets: []
+audit:
+  sink: stdout
+  format: jsonl
+"#,
+    );
+
+    assert_config_code(config::load(&config_path), "config.duplicate_id");
+}
+
+#[test]
 fn unknown_vocabulary_prefix_rejected() {
     seed_fingerprint_env("TEST_KEY_HASH_VOCAB");
     let result = config::load(&fixture_path("unknown_vocab_prefix.yaml"));
