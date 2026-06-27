@@ -2,7 +2,7 @@
      font-family="'Public Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
      text-rendering="geometricPrecision">
   <title>Registry Relay request lifecycle</title>
-  <desc>Registry Relay validates its manifest and binds runtime config once at startup; the process exits non-zero on any mismatch. Every authorized request then flows through four phases in order: Match scope (verify credential and require route scope), Query (project only declared fields, no raw SQL), Audit (write one JSONL record with names and operators only), and Respond (return projected fields, never storage identifiers).</desc>
+  <desc>Registry Relay validates its manifest and binds runtime config once at startup; the process exits non-zero on any mismatch. Every authorized request then flows through four phases in order: Match scope (verify credential and require route scope), Query (project only declared fields, no raw SQL), Audit (write one JSONL record without raw sensitive lookup values), and Respond (return projected fields, never storage identifiers).</desc>
 
   <text x="16" y="22" fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">PRE-FLIGHT · ONCE</text>
   <rect x="16" y="30" width="32" height="2" fill="#000091"/>
@@ -37,8 +37,8 @@
     <text x="16" y="236">Require route scope.</text>
     <text x="192" y="218">Project declared fields</text>
     <text x="192" y="236">only. No raw SQL.</text>
-    <text x="368" y="218">Write JSONL: names</text>
-    <text x="368" y="236">and operators only.</text>
+    <text x="368" y="218">Write JSONL audit.</text>
+    <text x="368" y="236">No raw values.</text>
     <text x="544" y="218">Return projected</text>
     <text x="544" y="236">fields. No table IDs.</text>
   </g>
