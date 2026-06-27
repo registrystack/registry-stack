@@ -7901,11 +7901,24 @@ fn verified_client_matches(candidate: &str, allowed: &str) -> bool {
             .is_some_and(|raw| raw == allowed)
 }
 
+#[cfg(test)]
 fn require_self_attestation_evaluate(
     evidence: &EvidenceConfig,
     config: &SelfAttestationConfig,
     principal: &EvidencePrincipal,
     request: &EvaluateRequest,
+) -> Result<(), EvidenceError> {
+    require_self_attestation_evaluate_with_runtime_config(
+        evidence, config, principal, request, None,
+    )
+}
+
+fn require_self_attestation_evaluate_with_runtime_config(
+    evidence: &EvidenceConfig,
+    config: &SelfAttestationConfig,
+    principal: &EvidencePrincipal,
+    request: &EvaluateRequest,
+    runtime_config: Option<&StandaloneRegistryNotaryConfig>,
 ) -> Result<(), EvidenceError> {
     if !config.allowed_operations.evaluate {
         return Err(self_attestation_denied(
@@ -7995,6 +8008,7 @@ fn require_self_attestation_evaluate(
         &disclosure,
         format,
         &purpose,
+        runtime_config,
     )?;
 
     let subject_binding = &config.subject_binding;
@@ -8036,9 +8050,10 @@ fn require_self_attestation_authorization_details(
     disclosure: &str,
     format: &str,
     purpose: &str,
+    runtime_config: Option<&StandaloneRegistryNotaryConfig>,
 ) -> Result<(), EvidenceError> {
     let Some(details) = principal.authorization_details.as_ref() else {
-        if self_attestation_requires_authorization_details(principal) {
+        if self_attestation_requires_authorization_details(principal, runtime_config) {
             return Err(self_attestation_denied(
                 SelfAttestationDenialCode::OperationDenied,
             ));
@@ -8295,14 +8310,24 @@ fn require_delegated_attestation_authorization_details(
     Ok(())
 }
 
-fn self_attestation_requires_authorization_details(principal: &EvidencePrincipal) -> bool {
-    principal
-        .verified_claims
-        .as_ref()
-        .and_then(|claims| claims.token_type.as_ref())
-        .is_some_and(|token_type| {
-            token_type.as_str() == registry_notary_core::tokens::NOTARY_TRANSACTION_TOKEN_JWT_TYP
-        })
+fn self_attestation_requires_authorization_details(
+    principal: &EvidencePrincipal,
+    runtime_config: Option<&StandaloneRegistryNotaryConfig>,
+) -> bool {
+    let Some(claims) = principal.verified_claims.as_ref() else {
+        return false;
+    };
+    let Some(token_type) = claims.token_type.as_ref() else {
+        return false;
+    };
+    if token_type.as_str() != registry_notary_core::tokens::NOTARY_TRANSACTION_TOKEN_JWT_TYP {
+        return false;
+    }
+    let Some(config) = runtime_config else {
+        return true;
+    };
+    let signing = &config.auth.access_token_signing;
+    signing.enabled && claims.issuer.as_str() == signing.issuer
 }
 
 fn self_attestation_authorization_details_denial(
@@ -8412,7 +8437,14 @@ fn prepare_self_attestation_evaluate(
     if principal.access_mode() == AccessMode::DelegatedAttestation {
         return prepare_delegated_attestation_evaluate(state, evidence, principal, request);
     }
-    require_self_attestation_evaluate(evidence, &state.self_attestation, principal, request)?;
+    let runtime_config = state.runtime_config();
+    require_self_attestation_evaluate_with_runtime_config(
+        evidence,
+        &state.self_attestation,
+        principal,
+        request,
+        runtime_config.as_deref(),
+    )?;
     require_self_attestation_token_policy(&state.self_attestation, principal)?;
 
     let purpose = common_self_attestation_purpose(evidence, &request.claims)?;
@@ -13337,6 +13369,85 @@ mod tests {
         assert!(matches!(
             context.source_capability,
             SourceCapability::SelfAttestation { .. }
+        ));
+    }
+
+    #[test]
+    fn self_attestation_external_standard_at_jwt_uses_scope_without_notary_details() {
+        let config = self_attestation_config();
+        let evidence = evidence_config();
+        let mut principal = classify_self_attestation_principal(
+            &config,
+            &fresh_oidc_principal(Some("client_id:citizen-portal"), &["self_attestation"]),
+        )
+        .expect("citizen principal classifies");
+        let claims = principal
+            .verified_claims
+            .as_mut()
+            .expect("classified principal carries verified claims");
+        claims.issuer = bounded("https://id.example.gov");
+        claims.token_type = Some(bounded(
+            registry_notary_core::tokens::NOTARY_TRANSACTION_TOKEN_JWT_TYP,
+        ));
+        let state = RegistryNotaryApiState::new_with_self_attestation(
+            Arc::new(evidence.clone()),
+            Arc::new(config),
+            AuditKeyHasher::unkeyed_dev_only(),
+            Arc::new(CountingSource::default()),
+            Arc::new(EvidenceStore::default()),
+            Arc::new(NoopIssuerResolver),
+        )
+        .with_runtime_config(Arc::new(runtime_config_with_custom_access_token_typ()));
+
+        prepare_self_attestation_evaluate(
+            &state,
+            &evidence,
+            &principal,
+            &evaluate_request("NAT-123"),
+        )
+        .expect("external standard at+jwt can rely on configured self-attestation scope");
+    }
+
+    #[test]
+    fn self_attestation_notary_standard_at_jwt_still_requires_transaction_details() {
+        let config = self_attestation_config();
+        let evidence = evidence_config();
+        let mut principal = classify_self_attestation_principal(
+            &config,
+            &fresh_oidc_principal(Some("client_id:citizen-portal"), &["self_attestation"]),
+        )
+        .expect("citizen principal classifies");
+        let claims = principal
+            .verified_claims
+            .as_mut()
+            .expect("classified principal carries verified claims");
+        claims.issuer = bounded("https://notary.example.test");
+        claims.token_type = Some(bounded(
+            registry_notary_core::tokens::NOTARY_TRANSACTION_TOKEN_JWT_TYP,
+        ));
+        let state = RegistryNotaryApiState::new_with_self_attestation(
+            Arc::new(evidence.clone()),
+            Arc::new(config),
+            AuditKeyHasher::unkeyed_dev_only(),
+            Arc::new(CountingSource::default()),
+            Arc::new(EvidenceStore::default()),
+            Arc::new(NoopIssuerResolver),
+        )
+        .with_runtime_config(Arc::new(runtime_config_with_custom_access_token_typ()));
+
+        let err = prepare_self_attestation_evaluate(
+            &state,
+            &evidence,
+            &principal,
+            &evaluate_request("NAT-123"),
+        )
+        .expect_err("Notary-issued standard at+jwt must carry transaction details");
+
+        assert!(matches!(
+            err,
+            EvidenceError::SelfAttestationDenied {
+                reason: SelfAttestationDenialCode::OperationDenied
+            }
         ));
     }
 
