@@ -616,7 +616,10 @@ impl StandaloneRegistryNotaryConfig {
             admin_shared_exposure: self.server.admin_listener.mode
                 == RegistryNotaryAdminListenerMode::SharedWithPublic,
             openapi_public: !self.server.openapi_requires_auth,
-            config_unsigned: self.config_trust.is_none(),
+            config_unsigned: self
+                .config_trust
+                .as_ref()
+                .map_or(true, |trust| trust.accepted_roots.is_empty()),
             self_attestation_enabled: self.self_attestation.enabled,
             transaction_token_anchor_configured: self.auth.access_token_signing.enabled,
             // DPoP/mTLS proof validation for transaction tokens is not yet
@@ -6822,11 +6825,11 @@ expected_sidecar:
     }
 
     #[test]
-    fn gate_input_clears_config_unsigned_when_trust_configured() {
+    fn gate_input_reports_config_unsigned_when_trust_has_no_roots() {
         let mut config = minimal_config();
-        // Setting config_trust to Some makes config_unsigned false. We set the
-        // admin listener to dedicated because validate() requires it; this test
-        // only calls gate_input(), which is pure projection and does not validate.
+        // Empty config_trust metadata is not enough to prove a signed trust root
+        // was loaded. This test only calls gate_input(), which is pure projection
+        // and does not validate.
         config.server.admin_listener.mode = RegistryNotaryAdminListenerMode::Dedicated;
         config.config_trust = Some(ConfigTrustConfig {
             antirollback_state_path: PathBuf::from(
@@ -6838,6 +6841,47 @@ expected_sidecar:
             break_glass_rate_limit: default_break_glass_rate_limit(),
             required_approver_count: BTreeMap::new(),
             accepted_roots: Vec::new(),
+            remote_tuf_repositories: Vec::new(),
+        });
+        assert!(config.gate_input().config_unsigned);
+    }
+
+    #[test]
+    fn gate_input_clears_config_unsigned_when_trust_roots_configured() {
+        let mut config = minimal_config();
+        config.server.admin_listener.mode = RegistryNotaryAdminListenerMode::Dedicated;
+        config.config_trust = Some(ConfigTrustConfig {
+            antirollback_state_path: PathBuf::from(
+                "/var/lib/registry-notary/config-antirollback.json",
+            ),
+            local_approval_state_path: PathBuf::from(
+                "/var/lib/registry-notary/config-local-approvals.json",
+            ),
+            break_glass_rate_limit: default_break_glass_rate_limit(),
+            required_approver_count: BTreeMap::new(),
+            accepted_roots: vec![RegistryTrustRoot {
+                root_id: "ops-root".to_string(),
+                production: false,
+                tuf_root_sha256:
+                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        .to_string(),
+                valid_from_unix_seconds: None,
+                valid_until_unix_seconds: None,
+                high_risk_change_classes: BTreeSet::new(),
+                signers: BTreeMap::from([(
+                    "kid-a".to_string(),
+                    TrustRootSigner {
+                        kid: "kid-a".to_string(),
+                        enabled: true,
+                    },
+                )]),
+                roles: vec![TrustRootRole {
+                    name: "config-admin".to_string(),
+                    threshold: 1,
+                    signer_kids: vec!["kid-a".to_string()],
+                    allowed_change_classes: BTreeSet::from(["public_metadata".to_string()]),
+                }],
+            }],
             remote_tuf_repositories: Vec::new(),
         });
         assert!(!config.gate_input().config_unsigned);
