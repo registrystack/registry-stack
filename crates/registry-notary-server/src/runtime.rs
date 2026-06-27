@@ -116,8 +116,6 @@ type BindingFetchResult =
 
 type ClaimVersionSelections = BTreeMap<String, Option<String>>;
 
-const SOURCE_LOOKUP_INPUT_PREFIX: &str = "sources.";
-const SOURCE_LOOKUP_INPUT_ALIAS_PREFIX: &str = "source.";
 const SOURCE_LOOKUP_CONTEXT_ATTRIBUTE_PREFIX: &str = "__registry_notary_source_lookup_";
 
 pub(crate) fn claim_ids(claims: &[ClaimRef]) -> Vec<String> {
@@ -266,18 +264,19 @@ use crosswalk_core::{
     ErrorSeverity, MappingRuntime, RuntimeOptions, SecurityLimits, StandaloneExpressionInput,
 };
 use registry_notary_core::{
-    missing_context_error, AccessMode, BatchClaimResultView, BatchEvaluateRequest,
-    BatchEvaluateResponse, BatchItemError, BatchItemResponse, BatchItemStatus, BatchStatus,
-    BatchSummary, BoundedClaimId, BoundedCorrelationId, BulkMode, CelBindingsConfig,
-    ClaimDefinition, ClaimProvenance, ClaimRef, ClaimResultView, CredentialProfileConfig,
-    DisclosureDowngrade, DisclosureProfile, EvaluateRequest, EvidenceAuthorizationDetails,
-    EvidenceConfig, EvidenceEntity, EvidenceEntityRef, EvidenceError, EvidenceFormat,
-    EvidencePrincipal, EvidenceRequestContext, MatchingMetadata, ProvenanceUsed,
-    RegistryNotaryCelConfig, RenderRequest, RuleConfig, SelfAttestationConfig,
-    SelfAttestationDenialCode, SourceBindingConfig, SourceCapability, SourceRuntimeSummary,
-    StoredSelfAttestationMetadata, SubjectRequest, TargetRefView, FORMAT_CCCEV_JSONLD,
-    FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC, SD_JWT_VC_HOLDER_BINDING_METHOD,
-    SD_JWT_VC_ISSUER_KEY_TYPE, SD_JWT_VC_JWT_TYP, SD_JWT_VC_SIGNING_ALG,
+    detect_dependency_cycle, missing_context_error, parse_source_lookup_reference, AccessMode,
+    BatchClaimResultView, BatchEvaluateRequest, BatchEvaluateResponse, BatchItemError,
+    BatchItemResponse, BatchItemStatus, BatchStatus, BatchSummary, BoundedClaimId,
+    BoundedCorrelationId, BulkMode, CelBindingsConfig, ClaimDefinition, ClaimProvenance, ClaimRef,
+    ClaimResultView, CredentialProfileConfig, DisclosureDowngrade, DisclosureProfile,
+    EvaluateRequest, EvidenceAuthorizationDetails, EvidenceConfig, EvidenceEntity,
+    EvidenceEntityRef, EvidenceError, EvidenceFormat, EvidencePrincipal, EvidenceRequestContext,
+    MatchingMetadata, ProvenanceUsed, RegistryNotaryCelConfig, RenderRequest, RuleConfig,
+    SelfAttestationConfig, SelfAttestationDenialCode, SourceBindingConfig, SourceCapability,
+    SourceLookupReference, SourceRuntimeSummary, StoredSelfAttestationMetadata, SubjectRequest,
+    TargetRefView, FORMAT_CCCEV_JSONLD, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
+    SD_JWT_VC_HOLDER_BINDING_METHOD, SD_JWT_VC_ISSUER_KEY_TYPE, SD_JWT_VC_JWT_TYP,
+    SD_JWT_VC_SIGNING_ALG,
 };
 use registry_platform_audit::AuditKeyHasher;
 #[cfg(feature = "registry-notary-cel")]
@@ -3415,6 +3414,10 @@ async fn load_sources_with_dependencies(
 
         let mut tasks: JoinSet<(String, BindingFetchResult)> = JoinSet::new();
         for (id, binding, read_binding, read_context) in ready_bindings {
+            // Defensive: each `id` is a unique key cloned from `pending` in the
+            // materialization phase above with nothing removed in between, so
+            // this always succeeds. Guard the invariant rather than silently
+            // drop a binding.
             if pending.remove(&id).is_none() {
                 return Err(EvidenceError::InvalidRequest);
             }
@@ -4052,26 +4055,6 @@ fn validate_required_binding_fields(
     Ok(())
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct SourceLookupReference<'a> {
-    binding_id: &'a str,
-    field_path: &'a str,
-}
-
-fn parse_source_lookup_reference(input: &str) -> Option<SourceLookupReference<'_>> {
-    let remainder = input
-        .strip_prefix(SOURCE_LOOKUP_INPUT_PREFIX)
-        .or_else(|| input.strip_prefix(SOURCE_LOOKUP_INPUT_ALIAS_PREFIX))?;
-    let (binding_id, field_path) = remainder.split_once('.')?;
-    if binding_id.is_empty() || field_path.is_empty() {
-        return None;
-    }
-    Some(SourceLookupReference {
-        binding_id,
-        field_path,
-    })
-}
-
 fn binding_has_source_lookup_inputs(binding: &registry_notary_core::SourceBindingConfig) -> bool {
     parse_source_lookup_reference(&binding.lookup.input).is_some()
         || binding
@@ -4083,26 +4066,8 @@ fn binding_has_source_lookup_inputs(binding: &registry_notary_core::SourceBindin
 fn validate_source_lookup_dependency_graph(
     dependencies_by_binding: &BTreeMap<String, BTreeSet<String>>,
 ) -> Result<(), EvidenceError> {
-    let mut pending: BTreeSet<String> = dependencies_by_binding.keys().cloned().collect();
-    let mut resolved = BTreeSet::new();
-    while !pending.is_empty() {
-        let ready: Vec<String> = pending
-            .iter()
-            .filter_map(|id| {
-                let dependencies = dependencies_by_binding.get(id)?;
-                dependencies
-                    .iter()
-                    .all(|dependency| resolved.contains(dependency))
-                    .then(|| id.clone())
-            })
-            .collect();
-        if ready.is_empty() {
-            return Err(EvidenceError::InvalidRequest);
-        }
-        for id in ready {
-            pending.remove(&id);
-            resolved.insert(id);
-        }
+    if detect_dependency_cycle(dependencies_by_binding).is_some() {
+        return Err(EvidenceError::InvalidRequest);
     }
     Ok(())
 }
@@ -4932,6 +4897,21 @@ fn collapse_matching_error(
     }
 }
 
+/// Collapse errors raised while resolving a binding's *dependent* lookup
+/// context (see `binding_with_resolved_source_lookup_context`).
+///
+/// The source read path routes its matching errors through
+/// `collapse_matching_error`; this resolution stage needs a separate helper
+/// because it can additionally surface `EvidenceError::InvalidRequest` when a
+/// prior source field is non-scalar (`scalar_source_lookup_value`). That
+/// condition is a function of upstream row data the client is not authorized to
+/// observe, so it must collapse to the generic `evidence.not_available` while
+/// retaining the specific `audit_code` for operators. Config-deterministic
+/// failures (unknown binding, dependency cycle) are rejected before any read is
+/// spawned and never reach here, so collapsing every `InvalidRequest` at this
+/// call site cannot mask a genuine client request error. The
+/// `collapse_matching_errors` guard intentionally gates the `InvalidRequest`
+/// branch too: when collapse is disabled the raw error is preserved.
 fn collapse_dependent_lookup_error(
     binding: &registry_notary_core::SourceBindingConfig,
     error: EvidenceError,
@@ -7677,6 +7657,142 @@ mod tests {
         .expect_err("non-scalar source row query field fails");
 
         assert_collapsed_matching_error(error, "request.invalid");
+    }
+
+    #[tokio::test]
+    async fn source_binding_query_field_lookup_missing_prior_field_collapses_matching_error() {
+        let source = Arc::new(DependentLookupSource::new(json!({
+            "person_id": "person-1",
+        })));
+        let mut claim = test_claim("selected", Vec::new(), false);
+        let mut birth_event = dependent_source_binding("birth_event", "target.id", "person_id");
+        birth_event.query_fields = vec![registry_notary_core::SourceQueryFieldConfig {
+            input: "sources.civil_status.birth_event_id".to_string(),
+            field: "id".to_string(),
+            op: "eq".to_string(),
+        }];
+        claim.source_bindings = BTreeMap::from([
+            (
+                "civil_status".to_string(),
+                dependent_source_binding("civil_status_record", "target.id", "person_id"),
+            ),
+            ("birth_event".to_string(), birth_event),
+        ]);
+        let evidence = test_evidence(vec![claim.clone()]);
+        let context = test_request("selected")
+            .request_context()
+            .expect("test request has target context");
+
+        let error = load_sources(
+            evidence,
+            source as Arc<dyn SourceReader>,
+            Arc::new(claim),
+            machine_capability(&[]),
+            context,
+            TrustedPolicyContext::default(),
+            "test".to_string(),
+            DisclosureProfile::Value,
+            FORMAT_CLAIM_RESULT_JSON.to_string(),
+            Arc::new(Semaphore::new(4)),
+            None,
+        )
+        .await
+        .expect_err("missing source row query field fails");
+
+        assert_collapsed_matching_error(error, "target.not_found");
+    }
+
+    #[tokio::test]
+    async fn source_binding_query_field_lookup_ambiguous_prior_rows_collapses_matching_error() {
+        let source = Arc::new(DependentLookupSource::new(json!([
+            {
+                "person_id": "person-1",
+                "birth_event_id": "birth-123"
+            },
+            {
+                "person_id": "person-1",
+                "birth_event_id": "birth-456"
+            }
+        ])));
+        let mut claim = test_claim("selected", Vec::new(), false);
+        let mut birth_event = dependent_source_binding("birth_event", "target.id", "person_id");
+        birth_event.query_fields = vec![registry_notary_core::SourceQueryFieldConfig {
+            input: "sources.civil_status.birth_event_id".to_string(),
+            field: "id".to_string(),
+            op: "eq".to_string(),
+        }];
+        claim.source_bindings = BTreeMap::from([
+            (
+                "civil_status".to_string(),
+                dependent_source_binding("civil_status_record", "target.id", "person_id"),
+            ),
+            ("birth_event".to_string(), birth_event),
+        ]);
+        let evidence = test_evidence(vec![claim.clone()]);
+        let context = test_request("selected")
+            .request_context()
+            .expect("test request has target context");
+
+        let error = load_sources(
+            evidence,
+            source as Arc<dyn SourceReader>,
+            Arc::new(claim),
+            machine_capability(&[]),
+            context,
+            TrustedPolicyContext::default(),
+            "test".to_string(),
+            DisclosureProfile::Value,
+            FORMAT_CLAIM_RESULT_JSON.to_string(),
+            Arc::new(Semaphore::new(4)),
+            None,
+        )
+        .await
+        .expect_err("ambiguous source rows query field fails");
+
+        assert_collapsed_matching_error(error, "target.match_ambiguous");
+    }
+
+    #[tokio::test]
+    async fn source_binding_lookup_non_scalar_prior_field_preserves_error_when_collapse_disabled() {
+        let source = Arc::new(DependentLookupSource::new(json!({
+            "person_id": "person-1",
+            "birth_event_id": {
+                "id": "birth-123"
+            },
+        })));
+        let mut claim = test_claim("selected", Vec::new(), false);
+        let mut birth_event =
+            dependent_source_binding("birth_event", "sources.civil_status.birth_event_id", "id");
+        birth_event.matching.collapse_matching_errors = false;
+        claim.source_bindings = BTreeMap::from([
+            (
+                "civil_status".to_string(),
+                dependent_source_binding("civil_status_record", "target.id", "person_id"),
+            ),
+            ("birth_event".to_string(), birth_event),
+        ]);
+        let evidence = test_evidence(vec![claim.clone()]);
+        let context = test_request("selected")
+            .request_context()
+            .expect("test request has target context");
+
+        let error = load_sources(
+            evidence,
+            source as Arc<dyn SourceReader>,
+            Arc::new(claim),
+            machine_capability(&[]),
+            context,
+            TrustedPolicyContext::default(),
+            "test".to_string(),
+            DisclosureProfile::Value,
+            FORMAT_CLAIM_RESULT_JSON.to_string(),
+            Arc::new(Semaphore::new(4)),
+            None,
+        )
+        .await
+        .expect_err("non-scalar source row field fails");
+
+        assert!(matches!(error, EvidenceError::InvalidRequest));
     }
 
     #[tokio::test]

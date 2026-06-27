@@ -4568,11 +4568,12 @@ pub enum EvidenceConfigError {
         unknown: String,
     },
     #[error(
-        "claim '{claim}' source lookup dependencies contain a cycle or unresolved binding graph: {bindings}",
+        "claim '{claim}' source lookup dependencies contain a cycle: {bindings}",
         bindings = bindings.join(", ")
     )]
     SourceLookupDependencyCycle {
         claim: String,
+        /// Sorted binding ids participating in or blocked by the cycle.
         bindings: Vec<String>,
     },
     #[error("each standalone source binding must reference a configured source connection")]
@@ -4840,7 +4841,20 @@ impl EvidenceConfig {
 
 const SUPPORTED_ECOSYSTEM_BINDING_PROFILE: &str = "registry-notary/source-policy/v1";
 
-fn source_lookup_reference_binding_id(input: &str) -> Option<&str> {
+/// A parsed dependent source-lookup reference of the form
+/// `sources.<binding>.<field>` (the `source.` prefix is an accepted alias).
+/// `field_path` may be a dotted path into nested JSON on the referenced source
+/// row. Both the config validator and the runtime enforcer parse references
+/// through [`parse_source_lookup_reference`] so they can never disagree about
+/// what counts as a dependent reference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SourceLookupReference<'a> {
+    pub binding_id: &'a str,
+    pub field_path: &'a str,
+}
+
+#[must_use]
+pub fn parse_source_lookup_reference(input: &str) -> Option<SourceLookupReference<'_>> {
     let remainder = input
         .strip_prefix("sources.")
         .or_else(|| input.strip_prefix("source."))?;
@@ -4848,7 +4862,10 @@ fn source_lookup_reference_binding_id(input: &str) -> Option<&str> {
     if binding_id.is_empty() || field_path.is_empty() {
         return None;
     }
-    Some(binding_id)
+    Some(SourceLookupReference {
+        binding_id,
+        field_path,
+    })
 }
 
 fn source_lookup_dependencies(
@@ -4865,9 +4882,10 @@ fn source_lookup_dependencies(
             .map(|field| field.input.as_str()),
     );
     for input in inputs {
-        let Some(referenced_binding) = source_lookup_reference_binding_id(input) else {
+        let Some(reference) = parse_source_lookup_reference(input) else {
             continue;
         };
+        let referenced_binding = reference.binding_id;
         if !source_bindings.contains_key(referenced_binding) {
             return Err(EvidenceConfigError::UnknownSourceLookupBinding {
                 claim: claim.to_string(),
@@ -4881,10 +4899,20 @@ fn source_lookup_dependencies(
     Ok(dependencies)
 }
 
-fn validate_source_lookup_dependency_graph(
-    claim: &str,
+/// Detect a dependency cycle in a binding dependency graph using Kahn's
+/// algorithm. Returns `None` when the graph is acyclic, otherwise `Some` with
+/// the sorted set of bindings that could not be resolved (those participating
+/// in or blocked by a cycle).
+///
+/// Shared by config-time validation and runtime enforcement so the two can
+/// never disagree about which graphs are acceptable. Precondition: every
+/// referenced binding exists as a key in the map (callers verify references
+/// first), so a non-empty remainder here is necessarily a cycle, including a
+/// self-reference.
+#[must_use]
+pub fn detect_dependency_cycle(
     dependencies_by_binding: &BTreeMap<String, BTreeSet<String>>,
-) -> Result<(), EvidenceConfigError> {
+) -> Option<Vec<String>> {
     let mut pending: BTreeSet<String> = dependencies_by_binding.keys().cloned().collect();
     let mut resolved = BTreeSet::new();
     while !pending.is_empty() {
@@ -4895,21 +4923,31 @@ fn validate_source_lookup_dependency_graph(
                 dependencies
                     .iter()
                     .all(|dependency| resolved.contains(dependency))
-                    .then(|| id.clone())
+                    .then_some(id.clone())
             })
             .collect();
         if ready.is_empty() {
-            return Err(EvidenceConfigError::SourceLookupDependencyCycle {
-                claim: claim.to_string(),
-                bindings: pending.into_iter().collect(),
-            });
+            return Some(pending.into_iter().collect());
         }
         for id in ready {
             pending.remove(&id);
             resolved.insert(id);
         }
     }
-    Ok(())
+    None
+}
+
+fn validate_source_lookup_dependency_graph(
+    claim: &str,
+    dependencies_by_binding: &BTreeMap<String, BTreeSet<String>>,
+) -> Result<(), EvidenceConfigError> {
+    match detect_dependency_cycle(dependencies_by_binding) {
+        Some(bindings) => Err(EvidenceConfigError::SourceLookupDependencyCycle {
+            claim: claim.to_string(),
+            bindings,
+        }),
+        None => Ok(()),
+    }
 }
 
 fn validate_source_matching_config(
@@ -9998,6 +10036,94 @@ source_auth:
             }
             other => panic!("unexpected error variant: {other}"),
         }
+    }
+
+    #[test]
+    fn dependent_source_lookup_rejects_self_reference_cycle() {
+        let mut config = minimal_config();
+        config.evidence.source_connections.insert(
+            "farmer_registry".to_string(),
+            SourceConnectionConfig {
+                base_url: "https://upstream.example".to_string(),
+                allow_insecure_localhost: false,
+                allow_insecure_private_network: false,
+                token_env: "SRC_TOKEN".to_string(),
+                source_auth: None,
+                expected_sidecar: None,
+                dci: DciSourceConnectionConfig::default(),
+                max_in_flight: 8,
+                retry_on_5xx: true,
+                bulk_mode: BulkMode::None,
+                bulk_mode_lookup_unique: false,
+                bulk_timeout_max_ms: 30_000,
+            },
+        );
+        let mut claim = minimal_claim("birth-event");
+        let mut solo = rda_binding("farmer_registry", "one");
+        solo.lookup.input = "sources.solo.birth_event_id".to_string();
+        claim.source_bindings = BTreeMap::from([("solo".to_string(), solo)]);
+        config.evidence.claims = vec![claim];
+
+        let err = config
+            .validate()
+            .expect_err("self-referential source binding cycle must fail validation");
+        match err {
+            EvidenceConfigError::SourceLookupDependencyCycle { claim, bindings } => {
+                assert_eq!(claim, "birth-event");
+                assert_eq!(bindings, vec!["solo".to_string()]);
+            }
+            other => panic!("unexpected error variant: {other}"),
+        }
+    }
+
+    #[test]
+    fn detect_dependency_cycle_accepts_acyclic_chain() {
+        let graph = BTreeMap::from([
+            ("a".to_string(), BTreeSet::new()),
+            ("b".to_string(), BTreeSet::from(["a".to_string()])),
+            ("c".to_string(), BTreeSet::from(["b".to_string()])),
+        ]);
+        assert_eq!(detect_dependency_cycle(&graph), None);
+    }
+
+    #[test]
+    fn detect_dependency_cycle_accepts_diamond_graph() {
+        // `d` depends on `b` and `c`, both of which depend on `a`.
+        let graph = BTreeMap::from([
+            ("a".to_string(), BTreeSet::new()),
+            ("b".to_string(), BTreeSet::from(["a".to_string()])),
+            ("c".to_string(), BTreeSet::from(["a".to_string()])),
+            (
+                "d".to_string(),
+                BTreeSet::from(["b".to_string(), "c".to_string()]),
+            ),
+        ]);
+        assert_eq!(detect_dependency_cycle(&graph), None);
+    }
+
+    #[test]
+    fn detect_dependency_cycle_reports_three_node_cycle() {
+        let graph = BTreeMap::from([
+            ("a".to_string(), BTreeSet::from(["c".to_string()])),
+            ("b".to_string(), BTreeSet::from(["a".to_string()])),
+            ("c".to_string(), BTreeSet::from(["b".to_string()])),
+        ]);
+        assert_eq!(
+            detect_dependency_cycle(&graph),
+            Some(vec!["a".to_string(), "b".to_string(), "c".to_string()])
+        );
+    }
+
+    #[test]
+    fn detect_dependency_cycle_reports_self_reference_after_resolving_others() {
+        let graph = BTreeMap::from([
+            ("a".to_string(), BTreeSet::new()),
+            ("solo".to_string(), BTreeSet::from(["solo".to_string()])),
+        ]);
+        assert_eq!(
+            detect_dependency_cycle(&graph),
+            Some(vec!["solo".to_string()])
+        );
     }
 
     #[test]
