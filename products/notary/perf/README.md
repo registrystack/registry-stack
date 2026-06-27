@@ -30,7 +30,7 @@ tracked separately.
 2. Build the release binary:
 
    ```bash
-   cargo build --release -p registry-notary-bin
+   cargo build --release -p registry-notary
    ```
 
    The binary is written to `target/release/registry-notary`.

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Added `registry-relay --version` and `registry-relay -V` output so the Relay
+  binary matches the stack's user-facing version command convention.
+
 ## 0.4.0 - 2026-06-21
 
 ### Added

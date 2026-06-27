@@ -33,7 +33,7 @@
       "label": "Registry Notary OpenAPI generator",
       "url": "https://github.com/registrystack/registry-stack/blob/v0.8.3/crates/registry-notary-server/src/openapi.rs"
     },
-    "consumer_note": "Generate with `cargo run -p registry-notary-bin -- openapi`."
+    "consumer_note": "Generate with `cargo run -p registry-notary -- openapi`."
   },
   {
     "id": "registry-notary.oid4vci",

@@ -1369,7 +1369,7 @@ wait_http "civil relay health" "http://127.0.0.1:4311/healthz" "${CIVIL_METADATA
 rm -f "${log_path}"
 (
   cd "${notary_dir}"
-  cargo run -p registry-notary-bin --features registry-notary-cel -- --config "${config_path}"
+  cargo run -p registry-notary --features registry-notary-cel -- --config "${config_path}"
 ) >"${log_path}" 2>&1 &
 notary_pid="$!"
 trap 'kill "${notary_pid}" >/dev/null 2>&1 || true' EXIT

@@ -154,7 +154,7 @@ class EsignetRelayLabTest(unittest.TestCase):
     def test_smoke_runs_citizen_notary_with_cel_feature(self) -> None:
         smoke = text("scripts/smoke-citizen-self-attestation.sh")
 
-        self.assertIn("cargo run -p registry-notary-bin --features registry-notary-cel", smoke)
+        self.assertIn("cargo run -p registry-notary --features registry-notary-cel", smoke)
 
     def test_smoke_waits_for_notary_health_before_authenticated_discovery(self) -> None:
         smoke = text("scripts/smoke-citizen-self-attestation.sh")

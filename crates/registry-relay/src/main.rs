@@ -146,6 +146,7 @@ const RELAY_CONFIG_SCHEMA_VERSION: &str = "registry.relay.config.v1";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum CliCommand {
+    Version,
     Serve {
         config_path: PathBuf,
         env_file: Option<PathBuf>,
@@ -271,6 +272,10 @@ async fn main() -> ExitCode {
 
 async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     match parse_cli_command_from(env::args().collect())? {
+        CliCommand::Version => {
+            println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+            Ok(())
+        }
         CliCommand::Serve {
             config_path,
             env_file,
@@ -1335,7 +1340,16 @@ fn parse_cli_command_from(args: Vec<String>) -> Result<CliCommand, CliError> {
     let mut args = args.into_iter();
     let _program = args.next();
     let rest: Vec<String> = args.collect();
-    if rest.first().is_some_and(|arg| arg == HEALTHCHECK_COMMAND) {
+    if rest
+        .first()
+        .is_some_and(|arg| arg == "--version" || arg == "-V")
+    {
+        if rest.len() == 1 {
+            Ok(CliCommand::Version)
+        } else {
+            Err(CliError("--version does not accept arguments".to_string()))
+        }
+    } else if rest.first().is_some_and(|arg| arg == HEALTHCHECK_COMMAND) {
         parse_healthcheck_command(&rest[1..])
     } else if rest
         .first()

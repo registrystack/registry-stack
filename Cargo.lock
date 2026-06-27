@@ -5130,7 +5130,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "registry-notary-bin"
+name = "registry-notary"
 version = "0.8.3"
 dependencies = [
  "axum",
