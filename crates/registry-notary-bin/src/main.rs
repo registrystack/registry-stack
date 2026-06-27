@@ -3164,8 +3164,8 @@ CLIENT_SECRET='secret value'
         )
         .expect("config expands");
 
-        assert!(expanded.contains("base_url: https://upstream.example"));
-        assert!(expanded.contains("optional: fallback"));
+        assert!(expanded.contains("base_url: \"https://upstream.example\""));
+        assert!(expanded.contains("optional: \"fallback\""));
         std::env::remove_var("RN_CONFIG_EXPAND_REQUIRED");
     }
 
