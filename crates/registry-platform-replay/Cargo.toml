@@ -9,6 +9,7 @@ publish = false
 
 [dependencies]
 async-trait.workspace = true
+getrandom.workspace = true
 registry-platform-cache = { workspace = true }
 thiserror.workspace = true
 time.workspace = true

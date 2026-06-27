@@ -5498,6 +5498,7 @@ name = "registry-platform-replay"
 version = "0.8.3"
 dependencies = [
  "async-trait",
+ "getrandom 0.4.3",
  "registry-platform-cache",
  "thiserror 2.0.18",
  "time",
