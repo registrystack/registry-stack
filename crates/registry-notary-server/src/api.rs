@@ -111,6 +111,7 @@ const IDEMPOTENCY_KEY_HEADER: &str = "idempotency-key";
 pub(crate) const ADMIN_SCOPE: &str = "registry_notary:admin";
 pub(crate) const METRICS_SCOPE: &str = "registry_notary:metrics_read";
 pub(crate) const OPS_READ_SCOPE: &str = "registry_notary:ops_read";
+const DEFAULT_BREAK_GLASS_EMERGENCY_CHANGE_CLASS: &str = "emergency.break_glass";
 const OID4VCI_CREDENTIAL_PATH: &str = "/oid4vci/credential";
 // SD-JWT VC Type Metadata well-known prefix inserted between host and vct path.
 const WELL_KNOWN_VCT_PREFIX: &str = "/.well-known/vct";
@@ -1292,38 +1293,48 @@ fn stored_break_glass_approval_blocking(
     previous_config_hash: Option<&str>,
     reference: &str,
 ) -> Result<BreakGlassApproval, ()> {
-    let store = FileLocalApprovalStore::new(&config_trust.local_approval_state_path);
-    for change_class in change_classes {
-        let loaded = previous_config_hash
-            .and_then(|previous| {
-                store
-                    .load_for_apply(reference, change_class, config_hash, Some(previous))
-                    .ok()
-            })
-            .or_else(|| {
-                store
-                    .load_for_apply(reference, change_class, config_hash, None)
-                    .ok()
-            });
-        let Some(approval) = loaded else {
-            continue;
-        };
-        enforce_break_glass_approval_satisfies_candidate(
-            config_trust,
-            change_classes,
-            &approval.change_class,
-            effective_approver_count(config_trust, &approval),
-        )?;
-        return Ok(BreakGlassApproval {
-            approved_by: approval.approved_by,
-            reason: approval.reason,
-            approval_reference: approval.approval_reference,
-            emergency_change_class: approval.change_class,
-            expires_at_unix_seconds: approval.expires_at_unix_seconds,
-            rate_limit_identity: approval.rate_limit_identity,
-        });
+    if !change_classes.contains(DEFAULT_BREAK_GLASS_EMERGENCY_CHANGE_CLASS) {
+        return Err(());
     }
-    Err(())
+    let store = FileLocalApprovalStore::new(&config_trust.local_approval_state_path);
+    let loaded = previous_config_hash
+        .and_then(|previous| {
+            store
+                .load_for_apply(
+                    reference,
+                    DEFAULT_BREAK_GLASS_EMERGENCY_CHANGE_CLASS,
+                    config_hash,
+                    Some(previous),
+                )
+                .ok()
+        })
+        .or_else(|| {
+            store
+                .load_for_apply(
+                    reference,
+                    DEFAULT_BREAK_GLASS_EMERGENCY_CHANGE_CLASS,
+                    config_hash,
+                    None,
+                )
+                .ok()
+        });
+    let Some(approval) = loaded else {
+        return Err(());
+    };
+    enforce_break_glass_approval_satisfies_candidate(
+        config_trust,
+        change_classes,
+        &approval.change_class,
+        effective_approver_count(config_trust, &approval),
+    )?;
+    Ok(BreakGlassApproval {
+        approved_by: approval.approved_by,
+        reason: approval.reason,
+        approval_reference: approval.approval_reference,
+        emergency_change_class: approval.change_class,
+        expires_at_unix_seconds: approval.expires_at_unix_seconds,
+        rate_limit_identity: approval.rate_limit_identity,
+    })
 }
 
 #[derive(Deserialize)]
@@ -1400,7 +1411,10 @@ fn enforce_break_glass_approval_satisfies_candidate(
     approval_change_class: &str,
     actual_count: usize,
 ) -> Result<(), ()> {
-    if !change_classes.contains(approval_change_class) {
+    if approval_change_class != DEFAULT_BREAK_GLASS_EMERGENCY_CHANGE_CLASS {
+        return Err(());
+    }
+    if !change_classes.contains(DEFAULT_BREAK_GLASS_EMERGENCY_CHANGE_CLASS) {
         return Err(());
     }
     let required_count = max_required_break_glass_approver_count(config_trust, change_classes);
@@ -1423,9 +1437,10 @@ fn require_break_glass_emergency_change_class(
     let Some(approval) = approval else {
         return Ok(());
     };
-    if candidate
-        .change_classes
-        .contains(&approval.emergency_change_class)
+    if approval.emergency_change_class == DEFAULT_BREAK_GLASS_EMERGENCY_CHANGE_CLASS
+        && candidate
+            .change_classes
+            .contains(DEFAULT_BREAK_GLASS_EMERGENCY_CHANGE_CLASS)
     {
         Ok(())
     } else {

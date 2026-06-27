@@ -68,6 +68,7 @@ const RUNTIME_UNAVAILABLE_CODE: &str = "registry.admin.runtime_unavailable";
 const ADMIN_SCOPE: &str = "registry_relay:admin";
 const METRICS_SCOPE: &str = crate::observability::METRICS_SCOPE;
 const OPS_READ_SCOPE: &str = "registry_relay:ops_read";
+const DEFAULT_BREAK_GLASS_EMERGENCY_CHANGE_CLASS: &str = "emergency.break_glass";
 
 struct AdminPrincipal;
 
@@ -1064,8 +1065,9 @@ fn break_glass_proposal(
         request.break_glass_approval_reference.as_deref(),
     ) {
         (Some(approval), None) => {
-            enforce_required_break_glass_approvers(
+            enforce_break_glass_approval_satisfies_candidate(
                 config_trust,
+                &resolved.change_classes,
                 &approval.emergency_change_class,
                 1,
             )?;
@@ -1093,53 +1095,97 @@ fn stored_break_glass_approval(
     if reference.trim().is_empty() {
         return Err(());
     }
-    let store = FileLocalApprovalStore::new(&config_trust.local_approval_state_path);
-    for change_class in &resolved.change_classes {
-        let loaded = previous_config_hash
-            .and_then(|previous| {
-                store
-                    .load_for_apply(reference, change_class, config_hash, Some(previous))
-                    .ok()
-            })
-            .or_else(|| {
-                store
-                    .load_for_apply(reference, change_class, config_hash, None)
-                    .ok()
-            });
-        let Some(approval) = loaded else {
-            continue;
-        };
-        enforce_required_break_glass_approvers(
-            config_trust,
-            &approval.change_class,
-            effective_approver_count(&approval),
-        )?;
-        return Ok(BreakGlassApproval {
-            approved_by: approval.approved_by,
-            reason: approval.reason,
-            approval_reference: approval.approval_reference,
-            emergency_change_class: approval.change_class,
-            expires_at_unix_seconds: approval.expires_at_unix_seconds,
-            rate_limit_identity: approval.rate_limit_identity,
-        });
+    if !resolved
+        .change_classes
+        .contains(DEFAULT_BREAK_GLASS_EMERGENCY_CHANGE_CLASS)
+    {
+        return Err(());
     }
-    Err(())
+    let store = FileLocalApprovalStore::new(&config_trust.local_approval_state_path);
+    let loaded = previous_config_hash
+        .and_then(|previous| {
+            store
+                .load_for_apply(
+                    reference,
+                    DEFAULT_BREAK_GLASS_EMERGENCY_CHANGE_CLASS,
+                    config_hash,
+                    Some(previous),
+                )
+                .ok()
+        })
+        .or_else(|| {
+            store
+                .load_for_apply(
+                    reference,
+                    DEFAULT_BREAK_GLASS_EMERGENCY_CHANGE_CLASS,
+                    config_hash,
+                    None,
+                )
+                .ok()
+        });
+    let Some(approval) = loaded else {
+        return Err(());
+    };
+    enforce_break_glass_approval_satisfies_candidate(
+        config_trust,
+        &resolved.change_classes,
+        &approval.change_class,
+        effective_approver_count(&approval),
+    )?;
+    Ok(BreakGlassApproval {
+        approved_by: approval.approved_by,
+        reason: approval.reason,
+        approval_reference: approval.approval_reference,
+        emergency_change_class: approval.change_class,
+        expires_at_unix_seconds: approval.expires_at_unix_seconds,
+        rate_limit_identity: approval.rate_limit_identity,
+    })
 }
 
 fn effective_approver_count(approval: &LocalOperatorApproval) -> usize {
     1 + approval.approvers.len()
 }
 
-fn enforce_required_break_glass_approvers(
+fn required_break_glass_approver_count(
     config_trust: &crate::config::ConfigTrustConfig,
     emergency_change_class: &str,
-    actual_count: usize,
-) -> Result<(), ()> {
-    let required_count = config_trust
+) -> usize {
+    config_trust
         .required_approver_count
         .get(emergency_change_class)
         .copied()
-        .unwrap_or(1);
+        .unwrap_or(1)
+}
+
+fn max_required_break_glass_approver_count(
+    config_trust: &crate::config::ConfigTrustConfig,
+    change_classes: &BTreeSet<String>,
+) -> usize {
+    change_classes
+        .iter()
+        .map(|change_class| required_break_glass_approver_count(config_trust, change_class))
+        .max()
+        .unwrap_or(1)
+}
+
+fn enforce_break_glass_approval_satisfies_candidate(
+    config_trust: &crate::config::ConfigTrustConfig,
+    change_classes: &BTreeSet<String>,
+    approval_change_class: &str,
+    actual_count: usize,
+) -> Result<(), ()> {
+    if approval_change_class != DEFAULT_BREAK_GLASS_EMERGENCY_CHANGE_CLASS {
+        return Err(());
+    }
+    if !change_classes.contains(DEFAULT_BREAK_GLASS_EMERGENCY_CHANGE_CLASS) {
+        return Err(());
+    }
+    let required_count = max_required_break_glass_approver_count(config_trust, change_classes);
+    let approval_required_count =
+        required_break_glass_approver_count(config_trust, approval_change_class);
+    if approval_required_count < required_count {
+        return Err(());
+    }
     if actual_count < required_count {
         Err(())
     } else {
@@ -1196,9 +1242,10 @@ fn require_break_glass_emergency_change_class(
     let Some(approval) = approval else {
         return Ok(());
     };
-    if resolved
-        .change_classes
-        .contains(&approval.emergency_change_class)
+    if approval.emergency_change_class == DEFAULT_BREAK_GLASS_EMERGENCY_CHANGE_CLASS
+        && resolved
+            .change_classes
+            .contains(DEFAULT_BREAK_GLASS_EMERGENCY_CHANGE_CLASS)
     {
         Ok(())
     } else {

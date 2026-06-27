@@ -6002,6 +6002,12 @@ async fn admin_config_apply_signed_break_glass_issuer_rotation_swaps_without_res
         .expect("config trust exists")
         .required_approver_count
         .insert(EMERGENCY_CHANGE_CLASS.to_string(), 2);
+    config
+        .config_trust
+        .as_mut()
+        .expect("config trust exists")
+        .required_approver_count
+        .insert("signing_key_rotation".to_string(), 2);
     let current_config_yaml = serde_norway::to_string(&config).expect("current config serializes");
     initialize_notary_antirollback_state(&antirollback_path, &current_config_yaml, 1);
 
@@ -6069,6 +6075,65 @@ async fn admin_config_apply_signed_break_glass_issuer_rotation_swaps_without_res
         .post("/admin/v1/config/apply")
         .add_header("authorization", authorization.clone())
         .json(&missing_emergency_class_request)
+        .await;
+
+    response.assert_status(StatusCode::CONFLICT);
+    let body: Value = response.json();
+    assert_eq!(body["result"], "rejected_break_glass");
+    assert_eq!(body["applied"], false);
+    let record = FileAntiRollbackStore::new(&antirollback_path)
+        .load(&AntiRollbackKey {
+            product: "registry-notary".to_string(),
+            instance_id: "registry-notary-standalone".to_string(),
+            environment: "development".to_string(),
+            stream_id: "notary-test-stream".to_string(),
+        })
+        .expect("anti-rollback state loads");
+    assert_eq!(record.last_sequence, 1);
+    assert!(record.break_glass.accepted.is_empty());
+
+    let mut ordinary_approval = break_glass_approval();
+    ordinary_approval["emergency_change_class"] = json!("signing_key_rotation");
+    let mut ordinary_inline_request = signed_tuf_apply_request(&missing_emergency_class_signed);
+    ordinary_inline_request["break_glass"] = json!(true);
+    ordinary_inline_request["break_glass_approval"] = ordinary_approval;
+    let response = server
+        .post("/admin/v1/config/apply")
+        .add_header("authorization", authorization.clone())
+        .json(&ordinary_inline_request)
+        .await;
+
+    response.assert_status(StatusCode::CONFLICT);
+    let body: Value = response.json();
+    assert_eq!(body["result"], "rejected_break_glass");
+    assert_eq!(body["applied"], false);
+    let record = FileAntiRollbackStore::new(&antirollback_path)
+        .load(&AntiRollbackKey {
+            product: "registry-notary".to_string(),
+            instance_id: "registry-notary-standalone".to_string(),
+            environment: "development".to_string(),
+            stream_id: "notary-test-stream".to_string(),
+        })
+        .expect("anti-rollback state loads");
+    assert_eq!(record.last_sequence, 1);
+    assert!(record.break_glass.accepted.is_empty());
+
+    write_local_approval_state(
+        &local_approval_path,
+        local_operator_approval_for_change_class(
+            &candidate_yaml,
+            wrong_previous_hash,
+            "signing_key_rotation",
+            "BG-ORDINARY",
+        ),
+    );
+    let mut ordinary_stored_request = signed_tuf_apply_request(&missing_emergency_class_signed);
+    ordinary_stored_request["break_glass"] = json!(true);
+    ordinary_stored_request["break_glass_approval_reference"] = json!("BG-ORDINARY");
+    let response = server
+        .post("/admin/v1/config/apply")
+        .add_header("authorization", authorization.clone())
+        .json(&ordinary_stored_request)
         .await;
 
     response.assert_status(StatusCode::CONFLICT);

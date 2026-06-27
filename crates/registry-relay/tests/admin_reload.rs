@@ -2413,6 +2413,24 @@ async fn config_apply_break_glass_requires_signed_emergency_change_class() {
     assert_eq!(body["result"], "rejected_break_glass");
     assert_eq!(body["applied"], false);
 
+    let mut ordinary_approval = break_glass_approval();
+    ordinary_approval["emergency_change_class"] = json!("public_metadata");
+    let mut ordinary_request = signed_tuf_apply_request(&signed);
+    ordinary_request["break_glass"] = json!(true);
+    ordinary_request["break_glass_approval"] = ordinary_approval;
+    let ordinary_response = post_admin_config(
+        &fixture,
+        "/admin/v1/config/apply",
+        ordinary_request,
+        ADMIN_KEY,
+    )
+    .await;
+
+    ordinary_response.assert_status(StatusCode::CONFLICT);
+    let ordinary_body: Value = ordinary_response.json();
+    assert_eq!(ordinary_body["result"], "rejected_break_glass");
+    assert_eq!(ordinary_body["applied"], false);
+
     let record = FileAntiRollbackStore::new(&fixture.antirollback_path)
         .load(&AntiRollbackKey {
             product: "registry-relay".to_string(),
@@ -2777,6 +2795,85 @@ async fn config_apply_stored_break_glass_requires_matching_signed_change_class()
     let body: Value = response.json();
     assert_eq!(body["result"], "rejected_break_glass");
     assert_eq!(body["applied"], false);
+
+    write_local_approval(
+        &fixture,
+        local_approval_for_change_class(
+            "BG-PUBLIC-4243",
+            "public_metadata",
+            &candidate_hash,
+            wrong_previous_hash,
+        ),
+    );
+    let mut ordinary_request = signed_tuf_apply_request(&signed);
+    ordinary_request["break_glass"] = json!(true);
+    ordinary_request["break_glass_approval_reference"] = json!("BG-PUBLIC-4243");
+
+    let ordinary_response = post_admin_config(
+        &fixture,
+        "/admin/v1/config/apply",
+        ordinary_request,
+        ADMIN_KEY,
+    )
+    .await;
+
+    ordinary_response.assert_status(StatusCode::CONFLICT);
+    let ordinary_body: Value = ordinary_response.json();
+    assert_eq!(ordinary_body["result"], "rejected_break_glass");
+    assert_eq!(ordinary_body["applied"], false);
+}
+
+#[tokio::test]
+async fn config_apply_stored_break_glass_rejects_ordinary_change_class_for_emergency_candidate() {
+    let fixture = build_fixture();
+    let candidate = std::fs::read_to_string(&fixture.config_path)
+        .expect("config reads")
+        .replace(
+            "owner: Test Ministry",
+            "owner: Ordinary Approval Emergency Ministry",
+        );
+    let candidate_hash = internal_config_hash(candidate.as_bytes());
+    let wrong_previous_hash =
+        "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+    write_local_approval(
+        &fixture,
+        local_approval_for_change_class(
+            "BG-PUBLIC-4242",
+            "public_metadata",
+            &candidate_hash,
+            wrong_previous_hash,
+        ),
+    );
+    let signed = write_signed_config_tuf_fixture_with_previous_hash_and_change_classes(
+        &fixture,
+        &candidate,
+        5,
+        "relay-test-instance",
+        &["kid-a", "kid-b"],
+        &["public_metadata", EMERGENCY_CHANGE_CLASS],
+        wrong_previous_hash,
+    )
+    .await;
+    let mut request = signed_tuf_apply_request(&signed);
+    request["break_glass"] = json!(true);
+    request["break_glass_approval_reference"] = json!("BG-PUBLIC-4242");
+
+    let response = post_admin_config(&fixture, "/admin/v1/config/apply", request, ADMIN_KEY).await;
+
+    response.assert_status(StatusCode::CONFLICT);
+    let body: Value = response.json();
+    assert_eq!(body["result"], "rejected_break_glass");
+    assert_eq!(body["applied"], false);
+    let record = FileAntiRollbackStore::new(&fixture.antirollback_path)
+        .load(&AntiRollbackKey {
+            product: "registry-relay".to_string(),
+            instance_id: "relay-test-instance".to_string(),
+            environment: "lab".to_string(),
+            stream_id: "test-stream".to_string(),
+        })
+        .expect("antirollback state loads");
+    assert_eq!(record.last_sequence, 0);
+    assert!(record.break_glass.accepted.is_empty());
 }
 
 #[tokio::test]
