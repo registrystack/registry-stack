@@ -21,7 +21,7 @@ members = [
     "crates/registry-notary-core",
     "crates/registry-notary-client",
     "crates/registry-notary-server",
-    "crates/registry-notary-bin",
+    "crates/registry-notary",
     "crates/registry-notary-worker-harness",
     "crates/registry-notary-source-adapter-sidecar",
     "crates/registry-notary-source-adapter-rhai",
