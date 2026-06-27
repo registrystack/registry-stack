@@ -21,7 +21,6 @@ auth:
       fingerprint:
         provider: env
         name: PERF_ROWS_KEY_HASH
-        commitment: sha256:df466c5c32dfeab9b96dbb5888d3cb362120db1dd64aa9890ac52aaa83c5686d
       scopes:
         - clinic_capacity:rows
 
@@ -29,7 +28,6 @@ auth:
       fingerprint:
         provider: env
         name: PERF_METADATA_KEY_HASH
-        commitment: sha256:efac4b6b9c528b19a3cfc6bb8781671dcd19ca0d7bac1295112655550bf92873
       scopes:
         - clinic_capacity:metadata
 
@@ -37,7 +35,6 @@ auth:
       fingerprint:
         provider: env
         name: PERF_AGGREGATE_KEY_HASH
-        commitment: sha256:49506182846acdd8a4f9eab9e1352829165e489cc158b5389721317468240152
       scopes:
         - clinic_capacity:aggregate
 
@@ -45,14 +42,12 @@ auth:
       fingerprint:
         provider: env
         name: PERF_NO_SCOPE_KEY_HASH
-        commitment: sha256:1ec2768cbf1bd1e06c8650bc68f54fa3c78d33e461039862f97e85e711264a2e
       scopes: []
 
     - id: perf_evidence_verification
       fingerprint:
         provider: env
         name: PERF_EVIDENCE_VERIFICATION_KEY_HASH
-        commitment: sha256:b3260cacfbac8cdabe060288053b35f707ec03d98d50bc16b0b8c2edb4b93d6a
       scopes:
         - clinic_capacity:evidence_verification
 
@@ -60,7 +55,6 @@ auth:
       fingerprint:
         provider: env
         name: PERF_ADMIN_KEY_HASH
-        commitment: sha256:0000000000000000000000000000000000000000000000000000000000000000
       scopes:
         - registry_relay:admin
 

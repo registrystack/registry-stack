@@ -7,10 +7,7 @@ use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
 use chrono::Utc;
-use registry_platform_authcommon::{
-    credential_fingerprint_commitment, fingerprint_api_key, CredentialCommitmentContext,
-    CredentialProduct, CredentialType,
-};
+use registry_platform_authcommon::fingerprint_api_key;
 use registry_platform_config::sha256_uri;
 use registry_platform_ops::{
     internal_config_hash, AntiRollbackKey, AntiRollbackRecord, FileAntiRollbackStore,
@@ -91,18 +88,8 @@ fn candidate_config_yaml(tmp: &TempDir, public_bind: SocketAddr, admin_bind: Soc
     config_yaml(tmp, public_bind, admin_bind, true)
 }
 
-fn fingerprint_ref_yaml(id: &str, env_name: &str, fingerprint: &str) -> String {
-    let commitment = credential_fingerprint_commitment(
-        CredentialCommitmentContext {
-            product: CredentialProduct::RegistryRelay,
-            credential_type: CredentialType::ApiKey,
-            credential_id: id,
-        },
-        fingerprint,
-    );
-    format!(
-        "fingerprint:\n        provider: env\n        name: {env_name}\n        commitment: {commitment}"
-    )
+fn fingerprint_ref_yaml(_id: &str, env_name: &str, _fingerprint: &str) -> String {
+    format!("fingerprint:\n        provider: env\n        name: {env_name}")
 }
 
 fn config_yaml(

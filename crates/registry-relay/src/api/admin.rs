@@ -1791,6 +1791,7 @@ fn is_client_credential_rotation_change(current: &Config, candidate: &Config) ->
     equivalent_except_auth(current, candidate)
         && api_key_auth_changed(current, candidate)
         && same_api_key_ids_and_scopes(&current.auth.api_keys, &candidate.auth.api_keys)
+        && api_key_fingerprint_refs_changed(&current.auth.api_keys, &candidate.auth.api_keys)
 }
 
 fn is_client_access_change(current: &Config, candidate: &Config) -> bool {
@@ -1815,6 +1816,30 @@ fn same_api_key_ids_and_scopes(
         return false;
     };
     current_scopes == candidate_scopes
+}
+
+fn api_key_fingerprint_refs_changed(
+    current: &[crate::config::ApiKeyConfig],
+    candidate: &[crate::config::ApiKeyConfig],
+) -> bool {
+    api_key_fingerprints_by_id(current)
+        .zip(api_key_fingerprints_by_id(candidate))
+        .is_some_and(|(current, candidate)| current != candidate)
+}
+
+fn api_key_fingerprints_by_id(
+    keys: &[crate::config::ApiKeyConfig],
+) -> Option<BTreeMap<&str, Value>> {
+    let mut by_id = BTreeMap::new();
+    for key in keys {
+        let fingerprint = serde_json::to_value(&key.fingerprint).ok()?;
+        if let Some(existing) = by_id.insert(key.id.as_str(), fingerprint.clone()) {
+            if existing != fingerprint {
+                return None;
+            }
+        }
+    }
+    Some(by_id)
 }
 
 fn api_key_scopes_by_id(

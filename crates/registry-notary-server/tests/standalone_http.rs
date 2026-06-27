@@ -32,10 +32,7 @@ use registry_notary_server::{
     StandaloneServerError,
 };
 use registry_platform_audit::{verify_jsonl_lines_with_hasher, AuditChainHasher, AuditEnvelope};
-use registry_platform_authcommon::{
-    credential_fingerprint_commitment, CredentialCommitmentContext, CredentialFingerprintProvider,
-    CredentialFingerprintRef, CredentialProduct, CredentialType,
-};
+use registry_platform_authcommon::{CredentialFingerprintProvider, CredentialFingerprintRef};
 use registry_platform_config::{RegistryTrustRoot, TrustRootRole, TrustRootSigner};
 #[cfg(feature = "registry-notary-cel")]
 use registry_platform_crypto::verify;
@@ -216,19 +213,11 @@ retention_seconds: 3600
     .expect("credential status config parses");
 }
 
-fn env_fingerprint_ref(id: &str, env_name: &str, fingerprint: &str) -> CredentialFingerprintRef {
+fn env_fingerprint_ref(_id: &str, env_name: &str, _fingerprint: &str) -> CredentialFingerprintRef {
     CredentialFingerprintRef {
         provider: CredentialFingerprintProvider::Env,
         name: Some(env_name.to_string()),
         path: None,
-        commitment: credential_fingerprint_commitment(
-            CredentialCommitmentContext {
-                product: CredentialProduct::RegistryNotary,
-                credential_type: CredentialType::ApiKey,
-                credential_id: id,
-            },
-            fingerprint,
-        ),
     }
 }
 
@@ -1177,7 +1166,6 @@ auth:
       fingerprint:
         provider: env
         name: TEST_EVIDENCE_API_KEY_HASH
-        commitment: sha256:6c1874c8df397cc85277166d01625853a21afb53a4cff37e66fc108a0fc8cffb
       scopes: [farmer_registry:evidence_verification]
 audit:
   sink: file
@@ -1926,7 +1914,6 @@ auth:
       fingerprint:
         provider: env
         name: TEST_EVIDENCE_API_KEY_HASH
-        commitment: sha256:6c1874c8df397cc85277166d01625853a21afb53a4cff37e66fc108a0fc8cffb
       scopes: [civil_registry:evidence_verification]
 audit:
   sink: file
@@ -2038,7 +2025,6 @@ auth:
       fingerprint:
         provider: env
         name: TEST_EVIDENCE_API_KEY_HASH
-        commitment: sha256:6c1874c8df397cc85277166d01625853a21afb53a4cff37e66fc108a0fc8cffb
       scopes: [farmer_registry:evidence_verification]
 audit:
   sink: file

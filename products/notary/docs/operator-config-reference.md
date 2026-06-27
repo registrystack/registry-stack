@@ -315,7 +315,6 @@ auth:
       fingerprint:
         provider: env
         name: REGISTRY_NOTARY_API_KEY_HASH
-        commitment: sha256:0000000000000000000000000000000000000000000000000000000000000000
       scopes:
         - civil_registry:evidence_verification
         - registry_notary:credential_issue

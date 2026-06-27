@@ -127,7 +127,6 @@ auth:
       fingerprint:
         provider: env
         name: PROGRAM_SYSTEM_API_KEY_HASH
-        commitment: sha256:0000000000000000000000000000000000000000000000000000000000000000
       scopes:
         - social_registry:metadata
         - social_registry:rows
@@ -196,12 +195,6 @@ audit:
   hash_secret_env: REGISTRY_RELAY_AUDIT_HASH_SECRET
 ```
 
-:::caution
-The `commitment` value above is an all-zero placeholder. Relay fails closed at startup until you
-replace it with the real commitment emitted by `generate-api-key` in the
-[next section](#provision-the-api-key-fingerprint-and-commitment).
-:::
-
 Key points the configuration guide spells out in full:
 
 - **Storage stays private.** `tables[].id` (`individuals_table`) never appears in a public URL.
@@ -233,37 +226,32 @@ For aggregates, relationships, OIDC auth, Postgres sources, live materialization
 signing, follow the corresponding sections of the
 [configuration guide](https://github.com/registrystack/registry-stack/blob/v0.8.3/crates/registry-relay/docs/configuration.md).
 
-## Provision the API-key fingerprint and commitment
+## Provision the API-key fingerprint
 
-The config stores a committed fingerprint reference, never a raw API key.
-For each `api_keys` entry you supply two things at runtime:
+The config stores a fingerprint reference, never a raw API key.
+For each `api_keys` entry, supply the environment variable named by `fingerprint.name`
+(here `PROGRAM_SYSTEM_API_KEY_HASH`).
+Its value is the fingerprint of the raw key, in the form `sha256:<64 lowercase hex chars>`.
 
-1. The environment variable named by `fingerprint.name` (here `PROGRAM_SYSTEM_API_KEY_HASH`),
-   whose value is the fingerprint of the raw key, in the form `sha256:<64 lowercase hex chars>`.
-2. The `fingerprint.commitment` field in the YAML, a governed commitment over the product,
-   credential type, credential id, and fingerprint.
-
-The Relay binary generates all of these together.
+The Relay binary generates the raw key and fingerprint together.
 Run it through the same container image, passing the `id` from your `api_keys` entry:
 
 ```sh
 docker run --rm ghcr.io/registrystack/registry-relay:v0.8.3 generate-api-key --id program_system
 ```
 
-The command emits four shell-friendly lines:
+The command emits three shell-friendly lines:
 
 ```text
 api_key_id=program_system
 api_key=<send-this-raw-key-to-the-client>
 fingerprint=sha256:<store-this-in-the-secret-store>
-commitment=sha256:<paste-this-into-config>
 ```
 
 Use the values as follows:
 
 - Store the emitted `fingerprint` in your secret store under the configured `fingerprint.name`
   (here `PROGRAM_SYSTEM_API_KEY_HASH`).
-- Replace the all-zero `commitment` placeholder in the YAML with the emitted `commitment`.
 - Give the raw `api_key` only to the authorized client. Relay never stores it.
 
 The verification commands later on this page send the raw key as `$RAW_KEY`.
@@ -273,10 +261,11 @@ Keep it available in the shell you will verify from:
 export RAW_KEY=<api_key value from the generate-api-key output>
 ```
 
-The commitment binds the key's fingerprint to the product, the credential type, and the
-credential id, so the `--id` you pass must match the `api_keys` entry's `id` exactly.
-If you later rotate the key or rename the entry, rerun the command and update both the secret
-and the YAML commitment together.
+If you rotate a key while keeping the same `fingerprint.name`, update the secret value and
+restart or roll Relay so it resolves the new fingerprint.
+For governed rotation, publish the new fingerprint under a new immutable or versioned reference,
+update `fingerprint.name` or `fingerprint.path`, and apply that signed config change with the new
+binary.
 The [API keys section](https://github.com/registrystack/registry-stack/blob/v0.8.3/crates/registry-relay/docs/configuration.md#api-keys)
 of the configuration guide documents the underlying contract.
 
@@ -427,7 +416,6 @@ read scope:
       fingerprint:
         provider: env
         name: NOTARY_SOURCE_API_KEY_HASH
-        commitment: sha256:0000000000000000000000000000000000000000000000000000000000000000
       scopes:
         - social_registry:rows
 ```
@@ -438,9 +426,8 @@ Generate the key material the same way as before, with the matching `--id`:
 docker run --rm ghcr.io/registrystack/registry-relay:v0.8.3 generate-api-key --id notary_source
 ```
 
-Replace the placeholder `commitment` with the emitted one, store the emitted `fingerprint` for
-the Relay container's `NOTARY_SOURCE_API_KEY_HASH` environment variable, and keep the raw
-`api_key`: it becomes Notary's source token below.
+Store the emitted `fingerprint` for the Relay container's `NOTARY_SOURCE_API_KEY_HASH`
+environment variable, and keep the raw `api_key`: it becomes Notary's source token below.
 
 ```sh
 export RELAY_SOURCE_TOKEN=<api_key value from the generate-api-key output>
@@ -488,8 +475,6 @@ The command prints two lines: `api_key=<raw key for the calling system>` and
 `hash=sha256:<fingerprint>`.
 Store the hash for the `REGISTRY_NOTARY_API_KEY_HASH` environment variable and give the raw key
 only to the authorized caller.
-Unlike Relay's `generate-api-key`, `hash-api-key` does not emit a commitment; the Notary
-operator configuration reference uses the all-zero commitment value shown in the config below.
 
 Notary also needs its own audit hash secret, with the same generation and stability rules as
 Relay's:
@@ -516,7 +501,6 @@ auth:
       fingerprint:
         provider: env
         name: REGISTRY_NOTARY_API_KEY_HASH
-        commitment: sha256:0000000000000000000000000000000000000000000000000000000000000000
       scopes:
         - social_registry:evidence_verification
 

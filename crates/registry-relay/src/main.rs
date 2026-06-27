@@ -43,10 +43,7 @@ use registry_config_report::{
     redact_config_value, ConfigValueClassification, LiveApplyClass, ReportStatus, RequiredEnvStatus,
 };
 use registry_platform_audit::AuditChainProfile;
-use registry_platform_authcommon::{
-    credential_fingerprint_commitment, fingerprint_api_key, CredentialCommitmentContext,
-    CredentialFingerprintProvider, CredentialProduct, CredentialType,
-};
+use registry_platform_authcommon::{fingerprint_api_key, CredentialFingerprintProvider};
 use registry_platform_config::expand_config_env_vars;
 use registry_platform_ops::{internal_config_hash, ConfigSource, DeploymentProfile};
 use registry_relay::audit::{AuditPipeline, FileSink, StdoutSink, SyslogSink};
@@ -92,7 +89,7 @@ const ID_FLAG: &str = "--id";
 /// Top-level command for shell-free container liveness probing.
 const HEALTHCHECK_COMMAND: &str = "healthcheck";
 
-/// Generates a standalone API key and its governed config commitment.
+/// Generates a standalone API key and canonical fingerprint.
 const GENERATE_API_KEY_COMMAND: &str = "generate-api-key";
 
 /// Top-level command for generating the OpenAPI release artifact.
@@ -2073,15 +2070,7 @@ fn generate_api_key_output(id: &str) -> Result<String, CliError> {
 fn render_generated_api_key(id: &str, bytes: &[u8]) -> String {
     let key = URL_SAFE_NO_PAD.encode(bytes);
     let fingerprint = fingerprint_api_key(&key);
-    let commitment = credential_fingerprint_commitment(
-        CredentialCommitmentContext {
-            product: CredentialProduct::RegistryRelay,
-            credential_type: CredentialType::ApiKey,
-            credential_id: id,
-        },
-        &fingerprint,
-    );
-    format!("api_key_id={id}\napi_key={key}\nfingerprint={fingerprint}\ncommitment={commitment}")
+    format!("api_key_id={id}\napi_key={key}\nfingerprint={fingerprint}")
 }
 
 /// Instantiate the configured audit sink.
@@ -2707,13 +2696,13 @@ audit:
     }
 
     #[test]
-    fn generated_api_key_output_contains_fingerprint_and_commitment() {
+    fn generated_api_key_output_contains_fingerprint_without_commitment() {
         let output = render_generated_api_key("operator_reader", &[7_u8; 32]);
 
         assert!(output.contains("api_key_id=operator_reader\n"));
         assert!(output.contains("api_key=BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc\n"));
         assert!(output.contains("fingerprint=sha256:"));
-        assert!(output.contains("commitment=sha256:"));
+        assert!(!output.contains("commitment="));
     }
 
     #[test]

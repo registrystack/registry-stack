@@ -17,10 +17,6 @@ use ed25519_dalek::SigningKey;
 use rand_core::OsRng;
 use registry_manifest_core::{canonicalize_json, source_manifest_digest, MetadataManifest};
 use registry_platform_audit::{AuditChainHasher, AuditEnvelope, AuditError, AuditSink};
-use registry_platform_authcommon::{
-    credential_fingerprint_commitment, CredentialCommitmentContext, CredentialProduct,
-    CredentialType,
-};
 use registry_platform_ops::{
     internal_config_hash, posture_safe_runtime_config_hash, AntiRollbackKey, AntiRollbackRecord,
     ConfigProvenance, FileAntiRollbackStore, FileLocalApprovalStore,
@@ -189,18 +185,8 @@ fn make_fingerprint(plain: &str) -> String {
     format!("sha256:{}", hex_lower(&Sha256::digest(plain.as_bytes())))
 }
 
-fn fingerprint_ref_yaml(id: &str, env_name: &str, fingerprint: &str, indent: &str) -> String {
-    let commitment = credential_fingerprint_commitment(
-        CredentialCommitmentContext {
-            product: CredentialProduct::RegistryRelay,
-            credential_type: CredentialType::ApiKey,
-            credential_id: id,
-        },
-        fingerprint,
-    );
-    format!(
-        "{indent}fingerprint:\n{indent}  provider: env\n{indent}  name: {env_name}\n{indent}  commitment: {commitment}"
-    )
+fn fingerprint_ref_yaml(_id: &str, env_name: &str, _fingerprint: &str, indent: &str) -> String {
+    format!("{indent}fingerprint:\n{indent}  provider: env\n{indent}  name: {env_name}")
 }
 
 fn hex_lower(bytes: &[u8]) -> String {

@@ -21,12 +21,7 @@ fn parse_key_value_output(output: &[u8]) -> BTreeMap<String, String> {
         .collect()
 }
 
-fn write_config(
-    tmp: &TempDir,
-    key_id: &str,
-    fingerprint_env: &str,
-    commitment: &str,
-) -> std::path::PathBuf {
+fn write_config(tmp: &TempDir, key_id: &str, fingerprint_env: &str) -> std::path::PathBuf {
     let path = tmp.path().join("relay.yaml");
     std::fs::write(
         &path,
@@ -46,7 +41,6 @@ auth:
       fingerprint:
         provider: env
         name: {fingerprint_env}
-        commitment: {commitment}
       scopes:
         - registry_relay:ops_read
 datasets: []
@@ -82,28 +76,19 @@ async fn generated_api_key_round_trips_through_startup_validation() {
     let key_id = values.get("api_key_id").expect("id emitted");
     let api_key = values.get("api_key").expect("raw api key emitted");
     let fingerprint = values.get("fingerprint").expect("fingerprint emitted");
-    let commitment = values.get("commitment").expect("commitment emitted");
+    assert!(!values.contains_key("commitment"));
     assert_eq!(key_id, "operator_reader");
     assert_eq!(verify_api_key(api_key, fingerprint), Ok(true));
 
     let env_name = "REGISTRY_RELAY_TEST_GENERATED_OPERATOR_READER_HASH";
     std::env::set_var(env_name, fingerprint);
     let tmp = tempfile::tempdir().expect("tempdir");
-    let config_path = write_config(&tmp, key_id, env_name, commitment);
+    let config_path = write_config(&tmp, key_id, env_name);
 
-    let config = config::load(&config_path).expect("generated commitment validates");
+    let config = config::load(&config_path).expect("generated fingerprint reference validates");
     build_auth(&config)
         .await
-        .expect("generated commitment builds startup auth provider");
-
-    let bad_config_path = write_config(
-        &tmp,
-        key_id,
-        env_name,
-        "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-    );
-    let err = config::load(&bad_config_path).expect_err("mismatched commitment is rejected");
-    assert_eq!(err.code(), "config.validation_error");
+        .expect("generated fingerprint reference builds startup auth provider");
 
     std::env::remove_var(env_name);
 }

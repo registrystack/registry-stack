@@ -1,5 +1,16 @@
 # Release Notes
 
+## Unreleased
+
+- BREAKING: Static API-key and bearer-token config no longer accepts
+  `fingerprint.commitment`.
+  Remove that field from Notary YAML.
+  Keep `fingerprint.provider` with `fingerprint.name` or `fingerprint.path`; the
+  referenced value must contain `sha256:<64 lowercase hex chars>`.
+- Static credential rotation is now either a secret-plane update plus restart, or a
+  governed config change to a new immutable or versioned fingerprint reference.
+  OIDC remains the preferred production model for citizen and wallet flows.
+
 ## 0.6.2
 
 - Fixed federated evaluation policy-context handling so federation profiles can

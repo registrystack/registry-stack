@@ -14,20 +14,14 @@ use registry_notary_core::{
 use registry_notary_server::{
     compile_notary_runtime, notary_router_from_runtime, standalone_router, StandaloneServerError,
 };
-use registry_platform_authcommon::{
-    credential_fingerprint_commitment, CredentialCommitmentContext, CredentialFingerprintProvider,
-    CredentialFingerprintRef, CredentialProduct, CredentialType,
-};
+use registry_platform_authcommon::{CredentialFingerprintProvider, CredentialFingerprintRef};
 use serde_json::Value;
 
 const AUDIT_SECRET: &str = "0123456789abcdef0123456789abcdef";
-// The raw caseworker API-key fingerprint env value and its precomputed
-// commitment. The tests here never present the credential (they exercise
-// startup, readiness, and posture only), so the pair only needs to load.
+// The raw caseworker API-key fingerprint env value. The tests here never
+// present the credential; they exercise startup, readiness, and posture only.
 const CASEWORKER_KEY_HASH: &str =
     "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51";
-const CASEWORKER_COMMITMENT: &str =
-    "sha256:6c1874c8df397cc85277166d01625853a21afb53a4cff37e66fc108a0fc8cffb";
 
 fn set_env() {
     // SAFETY: the integration test binary is single-threaded at setup time.
@@ -148,7 +142,6 @@ impl ConfigBuilder {
       fingerprint:
         provider: env
         name: TEST_GATES_API_KEY_HASH
-        commitment: {CASEWORKER_COMMITMENT}
       scopes: [farmer_registry:evidence_verification]
 {audit}evidence:
   enabled: true
@@ -209,19 +202,11 @@ impl ConfigBuilder {
     }
 }
 
-fn env_fingerprint_ref(id: &str, env_name: &str, fingerprint: &str) -> CredentialFingerprintRef {
+fn env_fingerprint_ref(_id: &str, env_name: &str, _fingerprint: &str) -> CredentialFingerprintRef {
     CredentialFingerprintRef {
         provider: CredentialFingerprintProvider::Env,
         name: Some(env_name.to_string()),
         path: None,
-        commitment: credential_fingerprint_commitment(
-            CredentialCommitmentContext {
-                product: CredentialProduct::RegistryNotary,
-                credential_type: CredentialType::ApiKey,
-                credential_id: id,
-            },
-            fingerprint,
-        ),
     }
 }
 
