@@ -9257,6 +9257,14 @@ async fn oid4vci_credential_route_issues_holder_bound_sd_jwt() {
         "azp": "citizen-portal",
         "scope": "self_attestation person-is-alive",
         "national_id": "person-1",
+        "authorization_details": [{
+            "type": registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_TYPE,
+            "schema_version": registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_SCHEMA_VERSION,
+            "legal_basis_ref": "wallet-compat-context",
+            "consent_ref": "wallet-compat-consent",
+            "jurisdiction": "ZZ",
+            "assurance_level": "substantial"
+        }],
         "auth_time": now,
         "iat": now,
         "exp": now + 300,
@@ -13641,15 +13649,35 @@ fn mint_notary_access_token(
     issuer: &str,
     national_id: &str,
 ) -> String {
+    mint_notary_access_token_with_scope_and_authorization_details(
+        private_jwk,
+        kid,
+        typ,
+        issuer,
+        national_id,
+        "self_attestation",
+        None,
+    )
+}
+
+fn mint_notary_access_token_with_scope_and_authorization_details(
+    private_jwk: &str,
+    kid: &str,
+    typ: &str,
+    issuer: &str,
+    national_id: &str,
+    scope: &str,
+    authorization_details: Option<Value>,
+) -> String {
     let key = PrivateJwk::parse(private_jwk).expect("test JWK parses");
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let header = json!({ "alg": "EdDSA", "typ": typ, "kid": kid });
-    let payload = json!({
+    let mut payload = json!({
         "iss": issuer,
         "aud": NOTARY_AUDIENCE,
         "sub": "esignet-citizen-subject",
         "client_id": ESIGNET_RP_CLIENT_ID,
-        "scope": "self_attestation",
+        "scope": scope,
         "national_id": national_id,
         "token_type": "Bearer",
         "credential_configuration_id": "person_is_alive_sd_jwt",
@@ -13657,6 +13685,12 @@ fn mint_notary_access_token(
         "nbf": now,
         "exp": now + 300,
     });
+    if let Some(authorization_details) = authorization_details {
+        payload
+            .as_object_mut()
+            .expect("payload is an object")
+            .insert("authorization_details".to_string(), authorization_details);
+    }
     let header_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header).expect("header"));
     let payload_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).expect("payload"));
     let signing_input = format!("{header_b64}.{payload_b64}");
@@ -13816,6 +13850,67 @@ async fn preauth_existing_esignet_token_still_authenticates_credential_endpoint(
         .add_header("authorization", format!("Bearer {esignet_token}"))
         .await;
     jwks.assert_status_ok();
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn preauth_notary_access_token_with_empty_authorization_details_cannot_issue_credential() {
+    set_preauth_env();
+    let idp = MockIdp::start().await;
+    let token_upstream = MockHttpUpstream::start().await;
+    let upstream = TestServer::builder()
+        .http_transport()
+        .build(Router::new().route(
+            "/v1/datasets/people/entities/person/records",
+            get(self_attestation_registry_data_api),
+        ));
+    let base_url = upstream
+        .server_address()
+        .expect("upstream address")
+        .to_string();
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let app = standalone_router(preauth_test_config(
+        base_url.trim_end_matches('/'),
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp,
+        &token_upstream,
+    ))
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let old_shape_token = mint_notary_access_token_with_scope_and_authorization_details(
+        TEST_ACCESS_TOKEN_JWK,
+        "did:web:issuer.example#access-token-key",
+        "registry-notary-access+jwt",
+        NOTARY_ISSUER,
+        "person-1",
+        "self_attestation person-is-alive",
+        Some(json!([])),
+    );
+    let nonce = server
+        .post("/oid4vci/nonce")
+        .json(&json!({"credential_configuration_id": "person_is_alive_sd_jwt"}))
+        .await;
+    nonce.assert_status_ok();
+    let c_nonce = nonce.json::<Value>()["c_nonce"]
+        .as_str()
+        .expect("nonce returned")
+        .to_string();
+    let proof = sign_oid4vci_proof(NOTARY_ISSUER, &c_nonce);
+
+    let credential = server
+        .post("/oid4vci/credential")
+        .add_header("authorization", format!("Bearer {old_shape_token}"))
+        .json(&json!({
+            "format": "dc+sd-jwt",
+            "credential_configuration_id": "person_is_alive_sd_jwt",
+            "proof": { "proof_type": "jwt", "jwt": proof }
+        }))
+        .await;
+
+    credential.assert_status(StatusCode::FORBIDDEN);
+    assert_eq!(credential.json::<Value>()["error"], json!("access_denied"));
     idp.stop().await;
 }
 

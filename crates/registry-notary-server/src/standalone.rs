@@ -5032,13 +5032,7 @@ fn authorization_details_from_oidc(
         return Ok(None);
     };
     let details = crate::authz_details::extract_notary_transaction_authorization_details(details)?;
-    if details
-        .as_ref()
-        .is_some_and(|details| !crate::authz_details::has_transaction_scope(details))
-    {
-        return Err(EvidenceError::MissingCredential);
-    }
-    Ok(details)
+    Ok(details.filter(crate::authz_details::has_transaction_scope))
 }
 
 fn bounded_verified_claims_from_oidc(
@@ -10684,7 +10678,7 @@ sources:
     }
 
     #[test]
-    fn oidc_principal_rejects_context_only_matching_authorization_details() {
+    fn oidc_principal_ignores_context_only_matching_authorization_details() {
         let mut extra = Map::new();
         extra.insert(
             "authorization_details".to_string(),
@@ -10699,7 +10693,7 @@ sources:
         );
         let verified = verified_token_with_extra(extra);
 
-        let error = principal_from_oidc(
+        let principal = principal_from_oidc(
             &verified,
             None,
             None,
@@ -10709,9 +10703,9 @@ sources:
             SelfAttestationClaimSource::AccessToken,
             SelfAttestationAssuranceClaimSource::AccessToken,
         )
-        .expect_err("OIDC authorization_details must be transaction scoped");
+        .expect("context-only OIDC authorization_details fall back to scope checks");
 
-        assert!(matches!(error, EvidenceError::MissingCredential));
+        assert!(principal.authorization_details.is_none());
     }
 
     #[test]
