@@ -29,6 +29,7 @@ const RELAY_IMAGE: &str =
 const NOTARY_IMAGE: &str =
     "ghcr.io/registrystack/registry-notary@sha256:338d3ac7ddbea55f6e76014b9c23e4ff4e7206c2c40e356452288de06a745ff3";
 const NOTARY_REDIS_IMAGE: &str = "redis:7.4-alpine";
+const LINUX_AMD64_PLATFORM: &str = "linux/amd64";
 const RELAY_BASE_URL: &str = "http://127.0.0.1:4242";
 const NOTARY_BASE_URL: &str = "http://127.0.0.1:4255";
 const NOTARY_SOURCE_RELAY_SERVICE_URL: &str = "http://registry-relay:8080";
@@ -712,7 +713,7 @@ fn start_project_with_timeout(project_dir: &Path, timeout: Duration) -> Result<(
     let project = Project::load(project_dir)?;
     validate_project_fingerprints(project_dir, &project)?;
     validate_notary_fingerprint(project_dir, &project)?;
-    run_compose(project_dir, &["up", "-d"])?;
+    run_compose_for_project(project_dir, &project, &["up", "-d"])?;
     if project.relay.is_some() {
         let relay_base_url = project.relay_base_url()?;
         wait_for_ready("Relay", relay_base_url, timeout)?;
@@ -729,14 +730,14 @@ fn start_project_with_timeout(project_dir: &Path, timeout: Duration) -> Result<(
 }
 
 pub fn stop_project(project_dir: &Path) -> Result<()> {
-    Project::load(project_dir)?;
-    run_compose(project_dir, &["down"])?;
+    let project = Project::load(project_dir)?;
+    run_compose_for_project(project_dir, &project, &["down"])?;
     Ok(())
 }
 
 pub fn status_project(project_dir: &Path) -> Result<()> {
     let project = Project::load(project_dir)?;
-    run_compose(project_dir, &["ps"])?;
+    run_compose_for_project(project_dir, &project, &["ps"])?;
     if project.relay.is_some() {
         let relay_base_url = project.relay_base_url()?;
         print_probe_status("healthz", &format!("{relay_base_url}/healthz"));
@@ -768,8 +769,8 @@ pub fn open_project(project_dir: &Path) -> Result<()> {
 }
 
 pub fn logs_project(project_dir: &Path) -> Result<()> {
-    Project::load(project_dir)?;
-    run_compose(project_dir, &["logs"])?;
+    let project = Project::load(project_dir)?;
+    run_compose_for_project(project_dir, &project, &["logs"])?;
     Ok(())
 }
 
@@ -2908,7 +2909,12 @@ struct ProjectNotary {
 #[derive(Debug, Deserialize)]
 struct ProjectRuntime {
     #[serde(default)]
+    relay_image: Option<String>,
+    #[serde(default)]
     relay_base_url: Option<String>,
+    #[serde(default)]
+    notary_image: Option<String>,
+    #[serde(default)]
     notary_base_url: Option<String>,
 }
 
@@ -3014,15 +3020,33 @@ fn upsert_env_values(contents: &str, values: &[(String, String)]) -> String {
     output
 }
 
-fn run_compose(project_dir: &Path, args: &[&str]) -> Result<()> {
-    run_compose_command(project_dir, "docker", args)
+fn run_compose_for_project(project_dir: &Path, project: &Project, args: &[&str]) -> Result<()> {
+    let explicit_platform = std::env::var("DOCKER_DEFAULT_PLATFORM").ok();
+    let server_platform = should_probe_compose_platform(args)
+        .then(|| docker_server_platform("docker"))
+        .flatten();
+    let platform_override = compose_platform_override(
+        project,
+        explicit_platform.as_deref(),
+        server_platform.as_deref(),
+    );
+    run_compose_command_with_platform(project_dir, "docker", args, platform_override)
 }
 
-fn run_compose_command(project_dir: &Path, binary: &str, args: &[&str]) -> Result<()> {
+fn run_compose_command_with_platform(
+    project_dir: &Path,
+    binary: &str,
+    args: &[&str],
+    platform_override: Option<&str>,
+) -> Result<()> {
     let command_args = compose_command_args("compose.yaml", args);
-    let status = Command::new(binary)
-        .args(&command_args)
-        .current_dir(project_dir)
+    let mut command = Command::new(binary);
+    command.args(&command_args).current_dir(project_dir);
+    if let Some(platform) = platform_override {
+        eprintln!("Using DOCKER_DEFAULT_PLATFORM={platform} for Registry Stack release images on this Docker host.");
+        command.env("DOCKER_DEFAULT_PLATFORM", platform);
+    }
+    let status = command
         .status()
         .with_context(|| format!("failed to run {binary} compose"))?;
     if status.success() {
@@ -3030,6 +3054,49 @@ fn run_compose_command(project_dir: &Path, binary: &str, args: &[&str]) -> Resul
     } else {
         bail!("{binary} compose exited with {status}")
     }
+}
+
+fn should_probe_compose_platform(args: &[&str]) -> bool {
+    args.first().is_some_and(|arg| *arg == "up")
+}
+
+fn docker_server_platform(binary: &str) -> Option<String> {
+    let output = Command::new(binary)
+        .args(["version", "--format", "{{.Server.Os}}/{{.Server.Arch}}"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let platform = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!platform.is_empty()).then_some(platform)
+}
+
+fn compose_platform_override(
+    project: &Project,
+    explicit_platform: Option<&str>,
+    docker_server_platform: Option<&str>,
+) -> Option<&'static str> {
+    if explicit_platform.is_some_and(|platform| !platform.trim().is_empty()) {
+        return None;
+    }
+    if !project_uses_amd64_only_release_image(project) {
+        return None;
+    }
+    docker_server_platform
+        .filter(|platform| is_linux_arm64_platform(platform))
+        .map(|_| LINUX_AMD64_PLATFORM)
+}
+
+fn project_uses_amd64_only_release_image(project: &Project) -> bool {
+    project.runtime.relay_image.as_deref() == Some(RELAY_IMAGE)
+        || project.runtime.notary_image.as_deref() == Some(NOTARY_IMAGE)
+}
+
+fn is_linux_arm64_platform(platform: &str) -> bool {
+    let normalized = platform.trim().to_ascii_lowercase();
+    matches!(normalized.as_str(), "linux/arm64" | "linux/aarch64")
+        || normalized.starts_with("linux/arm64/")
 }
 
 fn compose_command_args(compose_file: &str, args: &[&str]) -> Vec<String> {
@@ -4933,6 +5000,53 @@ workflows:
     }
 
     #[test]
+    fn compose_platform_override_targets_amd64_for_arm64_relay_project() {
+        let temp = TempDir::new().unwrap();
+        let project_dir = temp.path().join("my-first-api");
+        init_spreadsheet_api(&project_dir, Sample::Benefits).unwrap();
+        let project = Project::load(&project_dir).unwrap();
+
+        assert_eq!(
+            compose_platform_override(&project, None, Some("linux/arm64")),
+            Some(LINUX_AMD64_PLATFORM)
+        );
+        assert_eq!(
+            compose_platform_override(&project, None, Some("linux/arm64/v8")),
+            Some(LINUX_AMD64_PLATFORM)
+        );
+        assert_eq!(
+            compose_platform_override(&project, None, Some("linux/amd64")),
+            None
+        );
+    }
+
+    #[test]
+    fn compose_platform_override_respects_operator_platform() {
+        let temp = TempDir::new().unwrap();
+        let project_dir = temp.path().join("my-first-api");
+        init_spreadsheet_api(&project_dir, Sample::Benefits).unwrap();
+        let project = Project::load(&project_dir).unwrap();
+
+        assert_eq!(
+            compose_platform_override(&project, Some("linux/arm64"), Some("linux/arm64")),
+            None
+        );
+    }
+
+    #[test]
+    fn compose_platform_override_targets_amd64_for_arm64_notary_project() {
+        let temp = TempDir::new().unwrap();
+        let project_dir = temp.path().join("my-notary");
+        init_standalone_notary_project(&project_dir, default_notary_options()).unwrap();
+        let project = Project::load(&project_dir).unwrap();
+
+        assert_eq!(
+            compose_platform_override(&project, None, Some("linux/arm64")),
+            Some(LINUX_AMD64_PLATFORM)
+        );
+    }
+
+    #[test]
     fn relay_only_manifest_loads_without_notary_section() {
         let temp = TempDir::new().unwrap();
         let project = temp.path().join("my-first-api");
@@ -5356,8 +5470,9 @@ workflows:
     fn compose_runner_surfaces_nonzero_exit() {
         let temp = TempDir::new().unwrap();
 
-        run_compose_command(temp.path(), "true", &["ps"]).unwrap();
-        let error = run_compose_command(temp.path(), "false", &["ps"]).unwrap_err();
+        run_compose_command_with_platform(temp.path(), "true", &["ps"], None).unwrap();
+        let error =
+            run_compose_command_with_platform(temp.path(), "false", &["ps"], None).unwrap_err();
 
         assert!(error.to_string().contains("false compose exited"));
     }
