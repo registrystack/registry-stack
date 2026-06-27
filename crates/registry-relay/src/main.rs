@@ -2390,6 +2390,29 @@ audit:
     }
 
     #[test]
+    fn version_cli_parses_long_and_short_flags() {
+        for flag in ["--version", "-V"] {
+            let command = parse_cli_command_from(command_args(&["registry-relay", flag]))
+                .expect("version command parses");
+
+            assert_eq!(command, CliCommand::Version);
+        }
+    }
+
+    #[test]
+    fn version_cli_rejects_extra_arguments() {
+        let err = parse_cli_command_from(command_args(&[
+            "registry-relay",
+            "--version",
+            "--config",
+            "config.yaml",
+        ]))
+        .expect_err("version command rejects extra arguments");
+
+        assert_eq!(err.to_string(), "--version does not accept arguments");
+    }
+
+    #[test]
     fn healthcheck_cli_defaults_to_container_health_endpoint() {
         let command = parse_cli_command_from(command_args(&["registry-relay", "healthcheck"]))
             .expect("healthcheck command parses");
