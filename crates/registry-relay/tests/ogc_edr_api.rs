@@ -842,10 +842,30 @@ async fn area_requires_geometry_entity_read_scope() {
 }
 
 #[tokio::test]
+async fn area_aggregate_only_execution_requires_geometry_entity_read_scope() {
+    let server = server_with_aggregate_only_execution(&[
+        "social_registry:metadata",
+        "social_registry:aggregate",
+    ]);
+
+    let resp = server
+        .get("/ogc/edr/v1/collections/social_registry_beneficiaries_by_municipality/area")
+        .add_query_param("coords", "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))")
+        .add_query_param("parameter-name", "individual_count")
+        .add_query_param("group_by", "municipality")
+        .await;
+
+    resp.assert_status_forbidden();
+    let body: Value = resp.json();
+    assert_eq!(body["code"], "auth.scope_denied");
+}
+
+#[tokio::test]
 async fn area_allows_aggregate_only_execution_when_explicitly_configured() {
     let server = server_with_aggregate_only_execution(&[
         "social_registry:metadata",
         "social_registry:aggregate",
+        "social_registry:geometry",
     ]);
 
     let resp = server
@@ -871,7 +891,11 @@ async fn area_aggregate_only_governed_policy_uses_aggregate_checked_scope() {
             trusted_context: {}
 "#;
     let server = server_with_aggregate_only_source_entity_api_extra(
-        &["social_registry:metadata", "social_registry:aggregate"],
+        &[
+            "social_registry:metadata",
+            "social_registry:aggregate",
+            "social_registry:geometry",
+        ],
         policy,
     );
 
