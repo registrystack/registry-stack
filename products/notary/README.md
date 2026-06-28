@@ -45,7 +45,7 @@ That path creates a standalone Notary project and points it at an API you operat
 - [`crates/registry-notary-client`](crates/registry-notary-client/README.md):
   typed Rust HTTP client, JSON facade, route-aware retry, bounded response
   reads, JWKS refresh, and redacted errors.
-- [`crates/registry-notary-bin`](crates/registry-notary-bin/README.md):
+- [`crates/registry-notary`](crates/registry-notary/README.md):
   process startup, config loading, bind address, tracing, graceful shutdown, and
   OpenAPI generation.
 - [`crates/registry-notary-source-adapter-sidecar`](crates/registry-notary-source-adapter-sidecar/README.md):
@@ -97,14 +97,14 @@ export REGISTRY_NOTARY_BEARER_TOKEN_HASH='sha256:<sha256-hex-of-your-bearer-toke
 export REGISTRY_NOTARY_AUDIT_HASH_SECRET='<stable-random-audit-hash-secret>'
 export EVIDENCE_SOURCE_REGISTRY_RELAY_TOKEN='<registry-relay-source-token>'
 export REGISTRY_NOTARY_ISSUER_JWK='{"kty":"OKP","crv":"Ed25519","d":"...","x":"...","alg":"EdDSA"}'
-cargo run -p registry-notary-bin -- --config demo/config/registry-notary.yaml
+cargo run -p registry-notary -- --config demo/config/registry-notary.yaml
 ```
 
 Config-aware commands and server startup also accept `--env-file` for
 env-backed local runs:
 
 ```bash
-cargo run -p registry-notary-bin -- \
+cargo run -p registry-notary -- \
   --config demo/config/registry-notary.yaml \
   --env-file .env.local
 ```
@@ -132,7 +132,7 @@ cargo test --workspace --all-features
 # cargo-deny is pinned through this wrapper.
 ./scripts/cargo-deny-check.sh
 cargo build --workspace --all-features
-cargo run -p registry-notary-bin -- openapi > target/registry-notary.openapi.json
+cargo run -p registry-notary -- openapi > target/registry-notary.openapi.json
 ```
 
 Use the wrapper for dependency policy checks. It installs and runs the pinned
@@ -197,7 +197,7 @@ for listener, admin port, healthcheck, config expansion, and rollback guidance.
 Registry Notary owns its OpenAPI output. Generate the current document with:
 
 ```bash
-cargo run -p registry-notary-bin -- openapi
+cargo run -p registry-notary -- openapi
 ```
 
 ## Distribution

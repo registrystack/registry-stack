@@ -17,7 +17,6 @@ auth:
       fingerprint:
         provider: env
         name: REGISTRY_NOTARY_API_KEY_HASH
-        commitment: sha256:433544e3ca381b2913aa3e624a086ddb08cd68c6deb30a52b4ba3da551fb2a73
       scopes:
         - civil_registry:evidence_verification
         - farmer_registry:evidence_verification
@@ -25,14 +24,12 @@ auth:
       fingerprint:
         provider: env
         name: REGISTRY_NOTARY_NO_SCOPE_TOKEN_HASH
-        commitment: sha256:eec3849d2fc1ee5e1266e9e1a752dc2e756bb77eff4c83e8d45a780c97d22ece
       scopes: []
   bearer_tokens:
     - id: perf_verification_service
       fingerprint:
         provider: env
         name: REGISTRY_NOTARY_BEARER_TOKEN_HASH
-        commitment: sha256:f6ac0d6cfd392f4588839f6bc4e9c052912a473cdc1de2675c24147e75cb96c3
       scopes:
         - civil_registry:evidence_verification
         - farmer_registry:evidence_verification

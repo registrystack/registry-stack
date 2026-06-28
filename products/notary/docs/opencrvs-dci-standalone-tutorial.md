@@ -52,7 +52,7 @@ already have one:
 
 ```bash
 export REGISTRY_NOTARY_REPO="$PWD"
-cargo build --release -p registry-notary-bin
+cargo build --release -p registry-notary
 export PATH="$PWD/target/release:$PATH"
 registry-notary --help
 ```

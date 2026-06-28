@@ -12,10 +12,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use base64::Engine as _;
 use clap::ValueEnum;
 use ed25519_dalek::SigningKey;
-use registry_platform_authcommon::{
-    credential_fingerprint_commitment, fingerprint_api_key, validate_api_key_entropy,
-    CredentialCommitmentContext, CredentialProduct, CredentialType,
-};
+use registry_platform_authcommon::{fingerprint_api_key, validate_api_key_entropy};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -29,6 +26,7 @@ const RELAY_IMAGE: &str =
 const NOTARY_IMAGE: &str =
     "ghcr.io/registrystack/registry-notary@sha256:338d3ac7ddbea55f6e76014b9c23e4ff4e7206c2c40e356452288de06a745ff3";
 const NOTARY_REDIS_IMAGE: &str = "redis:7.4-alpine";
+const LINUX_AMD64_PLATFORM: &str = "linux/amd64";
 const RELAY_BASE_URL: &str = "http://127.0.0.1:4242";
 const NOTARY_BASE_URL: &str = "http://127.0.0.1:4255";
 const NOTARY_SOURCE_RELAY_SERVICE_URL: &str = "http://registry-relay:8080";
@@ -712,7 +710,7 @@ fn start_project_with_timeout(project_dir: &Path, timeout: Duration) -> Result<(
     let project = Project::load(project_dir)?;
     validate_project_fingerprints(project_dir, &project)?;
     validate_notary_fingerprint(project_dir, &project)?;
-    run_compose(project_dir, &["up", "-d"])?;
+    run_compose_for_project(project_dir, &project, &["up", "-d"])?;
     if project.relay.is_some() {
         let relay_base_url = project.relay_base_url()?;
         wait_for_ready("Relay", relay_base_url, timeout)?;
@@ -729,14 +727,14 @@ fn start_project_with_timeout(project_dir: &Path, timeout: Duration) -> Result<(
 }
 
 pub fn stop_project(project_dir: &Path) -> Result<()> {
-    Project::load(project_dir)?;
-    run_compose(project_dir, &["down"])?;
+    let project = Project::load(project_dir)?;
+    run_compose_for_project(project_dir, &project, &["down"])?;
     Ok(())
 }
 
 pub fn status_project(project_dir: &Path) -> Result<()> {
     let project = Project::load(project_dir)?;
-    run_compose(project_dir, &["ps"])?;
+    run_compose_for_project(project_dir, &project, &["ps"])?;
     if project.relay.is_some() {
         let relay_base_url = project.relay_base_url()?;
         print_probe_status("healthz", &format!("{relay_base_url}/healthz"));
@@ -768,8 +766,8 @@ pub fn open_project(project_dir: &Path) -> Result<()> {
 }
 
 pub fn logs_project(project_dir: &Path) -> Result<()> {
-    Project::load(project_dir)?;
-    run_compose(project_dir, &["logs"])?;
+    let project = Project::load(project_dir)?;
+    run_compose_for_project(project_dir, &project, &["logs"])?;
     Ok(())
 }
 
@@ -2908,7 +2906,12 @@ struct ProjectNotary {
 #[derive(Debug, Deserialize)]
 struct ProjectRuntime {
     #[serde(default)]
+    relay_image: Option<String>,
+    #[serde(default)]
     relay_base_url: Option<String>,
+    #[serde(default)]
+    notary_image: Option<String>,
+    #[serde(default)]
     notary_base_url: Option<String>,
 }
 
@@ -3014,15 +3017,33 @@ fn upsert_env_values(contents: &str, values: &[(String, String)]) -> String {
     output
 }
 
-fn run_compose(project_dir: &Path, args: &[&str]) -> Result<()> {
-    run_compose_command(project_dir, "docker", args)
+fn run_compose_for_project(project_dir: &Path, project: &Project, args: &[&str]) -> Result<()> {
+    let explicit_platform = std::env::var("DOCKER_DEFAULT_PLATFORM").ok();
+    let server_platform = should_probe_compose_platform(args)
+        .then(|| docker_server_platform("docker"))
+        .flatten();
+    let platform_override = compose_platform_override(
+        project,
+        explicit_platform.as_deref(),
+        server_platform.as_deref(),
+    );
+    run_compose_command_with_platform(project_dir, "docker", args, platform_override)
 }
 
-fn run_compose_command(project_dir: &Path, binary: &str, args: &[&str]) -> Result<()> {
+fn run_compose_command_with_platform(
+    project_dir: &Path,
+    binary: &str,
+    args: &[&str],
+    platform_override: Option<&str>,
+) -> Result<()> {
     let command_args = compose_command_args("compose.yaml", args);
-    let status = Command::new(binary)
-        .args(&command_args)
-        .current_dir(project_dir)
+    let mut command = Command::new(binary);
+    command.args(&command_args).current_dir(project_dir);
+    if let Some(platform) = platform_override {
+        eprintln!("Using DOCKER_DEFAULT_PLATFORM={platform} for Registry Stack release images on this Docker host.");
+        command.env("DOCKER_DEFAULT_PLATFORM", platform);
+    }
+    let status = command
         .status()
         .with_context(|| format!("failed to run {binary} compose"))?;
     if status.success() {
@@ -3030,6 +3051,49 @@ fn run_compose_command(project_dir: &Path, binary: &str, args: &[&str]) -> Resul
     } else {
         bail!("{binary} compose exited with {status}")
     }
+}
+
+fn should_probe_compose_platform(args: &[&str]) -> bool {
+    args.first().is_some_and(|arg| *arg == "up")
+}
+
+fn docker_server_platform(binary: &str) -> Option<String> {
+    let output = Command::new(binary)
+        .args(["version", "--format", "{{.Server.Os}}/{{.Server.Arch}}"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let platform = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!platform.is_empty()).then_some(platform)
+}
+
+fn compose_platform_override(
+    project: &Project,
+    explicit_platform: Option<&str>,
+    docker_server_platform: Option<&str>,
+) -> Option<&'static str> {
+    if explicit_platform.is_some_and(|platform| !platform.trim().is_empty()) {
+        return None;
+    }
+    if !project_uses_amd64_only_release_image(project) {
+        return None;
+    }
+    docker_server_platform
+        .filter(|platform| is_linux_arm64_platform(platform))
+        .map(|_| LINUX_AMD64_PLATFORM)
+}
+
+fn project_uses_amd64_only_release_image(project: &Project) -> bool {
+    project.runtime.relay_image.as_deref() == Some(RELAY_IMAGE)
+        || project.runtime.notary_image.as_deref() == Some(NOTARY_IMAGE)
+}
+
+fn is_linux_arm64_platform(platform: &str) -> bool {
+    let normalized = platform.trim().to_ascii_lowercase();
+    matches!(normalized.as_str(), "linux/arm64" | "linux/aarch64")
+        || normalized.starts_with("linux/arm64/")
 }
 
 fn compose_command_args(compose_file: &str, args: &[&str]) -> Vec<String> {
@@ -3061,9 +3125,6 @@ fn validate_project_fingerprints(project_dir: &Path, project: &Project) -> Resul
         let hash_env = api_key["fingerprint"]["name"]
             .as_str()
             .ok_or_else(|| anyhow!("relay config api key {id} is missing fingerprint env name"))?;
-        let configured_commitment = api_key["fingerprint"]["commitment"]
-            .as_str()
-            .ok_or_else(|| anyhow!("relay config api key {id} is missing commitment"))?;
 
         let fingerprint = secrets.required(hash_env)?;
         let raw_env = raw_env_name_for(id)?;
@@ -3071,18 +3132,6 @@ fn validate_project_fingerprints(project_dir: &Path, project: &Project) -> Resul
         let expected_fingerprint = fingerprint_api_key(raw_key);
         if fingerprint != expected_fingerprint {
             bail!("local raw key and fingerprint do not match for {id}");
-        }
-
-        let expected_commitment = credential_fingerprint_commitment(
-            CredentialCommitmentContext {
-                product: CredentialProduct::RegistryRelay,
-                credential_type: CredentialType::ApiKey,
-                credential_id: id,
-            },
-            fingerprint,
-        );
-        if configured_commitment != expected_commitment {
-            bail!("local fingerprint commitment does not match relay config for {id}");
         }
     }
 
@@ -3110,27 +3159,12 @@ fn validate_notary_fingerprint(project_dir: &Path, project: &Project) -> Result<
         let hash_env = api_key["fingerprint"]["name"]
             .as_str()
             .ok_or_else(|| anyhow!("notary config api key {id} is missing fingerprint env name"))?;
-        let configured_commitment = api_key["fingerprint"]["commitment"]
-            .as_str()
-            .ok_or_else(|| anyhow!("notary config api key {id} is missing commitment"))?;
 
         let fingerprint = secrets.required(hash_env)?;
         let raw_key = secrets.required(raw_env_name_for_notary(id)?)?;
         let expected_fingerprint = fingerprint_api_key(raw_key);
         if fingerprint != expected_fingerprint {
             bail!("local raw key and fingerprint do not match for notary api key {id}");
-        }
-
-        let expected_commitment = credential_fingerprint_commitment(
-            CredentialCommitmentContext {
-                product: CredentialProduct::RegistryNotary,
-                credential_type: CredentialType::ApiKey,
-                credential_id: id,
-            },
-            fingerprint,
-        );
-        if configured_commitment != expected_commitment {
-            bail!("local fingerprint commitment does not match notary config for {id}");
         }
     }
 
@@ -3186,15 +3220,9 @@ struct LocalCredentials {
 impl LocalCredentials {
     fn generate() -> Result<Self> {
         Ok(Self {
-            metadata_reader: Credential::generate(
-                CredentialProduct::RegistryRelay,
-                "metadata_reader",
-            )?,
-            row_reader: Credential::generate(CredentialProduct::RegistryRelay, "row_reader")?,
-            aggregate_reader: Credential::generate(
-                CredentialProduct::RegistryRelay,
-                "aggregate_reader",
-            )?,
+            metadata_reader: Credential::generate("metadata_reader")?,
+            row_reader: Credential::generate("row_reader")?,
+            aggregate_reader: Credential::generate("aggregate_reader")?,
             audit_hash_secret: random_token(48)?,
         })
     }
@@ -3232,10 +3260,7 @@ struct NotaryLocalCredentials {
 impl NotaryLocalCredentials {
     fn generate(relay_source_token: String) -> Result<Self> {
         Ok(Self {
-            evaluator: Credential::generate(
-                CredentialProduct::RegistryNotary,
-                "tutorial_evaluator",
-            )?,
+            evaluator: Credential::generate("tutorial_evaluator")?,
             audit_hash_secret: random_token(48)?,
             relay_source_token,
             issuer_jwk: demo_issuer_jwk(NOTARY_DEMO_ISSUER_KID)?,
@@ -3302,27 +3327,17 @@ struct Credential {
     id: &'static str,
     raw: String,
     fingerprint: String,
-    commitment: String,
 }
 
 impl Credential {
-    fn generate(product: CredentialProduct, id: &'static str) -> Result<Self> {
+    fn generate(id: &'static str) -> Result<Self> {
         let raw = random_token(32)?;
         validate_api_key_entropy(&raw)?;
         let fingerprint = fingerprint_api_key(&raw);
-        let commitment = credential_fingerprint_commitment(
-            CredentialCommitmentContext {
-                product,
-                credential_type: CredentialType::ApiKey,
-                credential_id: id,
-            },
-            &fingerprint,
-        );
         Ok(Self {
             id,
             raw,
             fingerprint,
-            commitment,
         })
     }
 }
@@ -3542,23 +3557,13 @@ fn standalone_notary_readme() -> &'static str {
 fn relay_config(credentials: &LocalCredentials) -> String {
     include_str!("templates/relay_config.yaml.tmpl")
         .replace("{{metadata_id}}", credentials.metadata_reader.id)
-        .replace(
-            "{{metadata_commitment}}",
-            &credentials.metadata_reader.commitment,
-        )
         .replace("{{row_id}}", credentials.row_reader.id)
-        .replace("{{row_commitment}}", &credentials.row_reader.commitment)
         .replace("{{aggregate_id}}", credentials.aggregate_reader.id)
-        .replace(
-            "{{aggregate_commitment}}",
-            &credentials.aggregate_reader.commitment,
-        )
 }
 
 fn notary_config(evaluator: &Credential) -> String {
     include_str!("templates/notary_config.yaml.tmpl")
         .replace("{{evaluator_id}}", evaluator.id)
-        .replace("{{evaluator_commitment}}", &evaluator.commitment)
         .replace("{{issuer_key_id}}", NOTARY_DEMO_ISSUER_KEY_ID)
         .replace("{{issuer_kid}}", NOTARY_DEMO_ISSUER_KID)
 }
@@ -3571,7 +3576,6 @@ fn notary_config_for_source(evaluator: &Credential, options: &NotaryInitOptions)
     };
     template
         .replace("{{evaluator_id}}", evaluator.id)
-        .replace("{{evaluator_commitment}}", &evaluator.commitment)
         .replace("{{issuer_key_id}}", NOTARY_DEMO_ISSUER_KEY_ID)
         .replace("{{issuer_kid}}", NOTARY_DEMO_ISSUER_KID)
         .replace("{{source_connection}}", options.source_kind.connection_id())
@@ -3992,10 +3996,6 @@ impl ParsedHttpUrl {
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
-    use registry_platform_authcommon::{
-        credential_fingerprint_commitment, CredentialCommitmentContext, CredentialProduct,
-        CredentialType,
-    };
     use serde_yaml::Value;
     use tempfile::TempDir;
 
@@ -4933,6 +4933,53 @@ workflows:
     }
 
     #[test]
+    fn compose_platform_override_targets_amd64_for_arm64_relay_project() {
+        let temp = TempDir::new().unwrap();
+        let project_dir = temp.path().join("my-first-api");
+        init_spreadsheet_api(&project_dir, Sample::Benefits).unwrap();
+        let project = Project::load(&project_dir).unwrap();
+
+        assert_eq!(
+            compose_platform_override(&project, None, Some("linux/arm64")),
+            Some(LINUX_AMD64_PLATFORM)
+        );
+        assert_eq!(
+            compose_platform_override(&project, None, Some("linux/arm64/v8")),
+            Some(LINUX_AMD64_PLATFORM)
+        );
+        assert_eq!(
+            compose_platform_override(&project, None, Some("linux/amd64")),
+            None
+        );
+    }
+
+    #[test]
+    fn compose_platform_override_respects_operator_platform() {
+        let temp = TempDir::new().unwrap();
+        let project_dir = temp.path().join("my-first-api");
+        init_spreadsheet_api(&project_dir, Sample::Benefits).unwrap();
+        let project = Project::load(&project_dir).unwrap();
+
+        assert_eq!(
+            compose_platform_override(&project, Some("linux/arm64"), Some("linux/arm64")),
+            None
+        );
+    }
+
+    #[test]
+    fn compose_platform_override_targets_amd64_for_arm64_notary_project() {
+        let temp = TempDir::new().unwrap();
+        let project_dir = temp.path().join("my-notary");
+        init_standalone_notary_project(&project_dir, default_notary_options()).unwrap();
+        let project = Project::load(&project_dir).unwrap();
+
+        assert_eq!(
+            compose_platform_override(&project, None, Some("linux/arm64")),
+            Some(LINUX_AMD64_PLATFORM)
+        );
+    }
+
+    #[test]
     fn relay_only_manifest_loads_without_notary_section() {
         let temp = TempDir::new().unwrap();
         let project = temp.path().join("my-first-api");
@@ -5013,9 +5060,9 @@ workflows:
         let relay_config: Value =
             serde_yaml::from_str(&fs::read_to_string(project.join("relay/config.yaml")).unwrap())
                 .unwrap();
-        let notary_config: Value =
-            serde_yaml::from_str(&fs::read_to_string(project.join("notary/config.yaml")).unwrap())
-                .unwrap();
+        let notary_config_body = fs::read_to_string(project.join("notary/config.yaml")).unwrap();
+        assert!(!notary_config_body.contains("commitment:"));
+        let notary_config: Value = serde_yaml::from_str(&notary_config_body).unwrap();
         assert_eq!(relay_config["auth"]["mode"], "api_key");
         assert_eq!(notary_config["auth"]["mode"], "api_key");
         assert_eq!(
@@ -5202,7 +5249,7 @@ workflows:
     }
 
     #[test]
-    fn generated_credentials_match_config_commitments() {
+    fn generated_credentials_reference_fingerprints_without_commitments() {
         let temp = TempDir::new().unwrap();
         let project = temp.path().join("my-first-api");
         init_spreadsheet_api(&project, Sample::Benefits).unwrap();
@@ -5211,6 +5258,7 @@ workflows:
         let config = fs::read_to_string(project.join("relay/config.yaml")).unwrap();
         let config_yaml: Value = serde_yaml::from_str(&config).unwrap();
         assert_eq!(config_yaml["server"]["openapi_requires_auth"], false);
+        assert!(!config.contains("commitment:"));
 
         for (id, env_name) in [
             ("metadata_reader", "METADATA_READER_HASH"),
@@ -5218,17 +5266,13 @@ workflows:
             ("aggregate_reader", "AGGREGATE_READER_HASH"),
         ] {
             let fingerprint = env_value(&env, env_name);
-            let commitment = credential_fingerprint_commitment(
-                CredentialCommitmentContext {
-                    product: CredentialProduct::RegistryRelay,
-                    credential_type: CredentialType::ApiKey,
-                    credential_id: id,
-                },
-                &fingerprint,
+            assert!(
+                fingerprint.starts_with("sha256:"),
+                "generated env should contain fingerprint for {id}"
             );
             assert!(
-                config.contains(&commitment),
-                "config should contain commitment for {id}"
+                config.contains(&format!("name: {env_name}")),
+                "config should reference fingerprint env for {id}"
             );
         }
     }
@@ -5356,8 +5400,9 @@ workflows:
     fn compose_runner_surfaces_nonzero_exit() {
         let temp = TempDir::new().unwrap();
 
-        run_compose_command(temp.path(), "true", &["ps"]).unwrap();
-        let error = run_compose_command(temp.path(), "false", &["ps"]).unwrap_err();
+        run_compose_command_with_platform(temp.path(), "true", &["ps"], None).unwrap();
+        let error =
+            run_compose_command_with_platform(temp.path(), "false", &["ps"], None).unwrap_err();
 
         assert!(error.to_string().contains("false compose exited"));
     }

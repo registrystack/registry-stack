@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """Generate local credentials for the decentralized evidence demo.
 
-Relay and Notary configs store committed SHA-256 fingerprint references. Raw
-values are used only by demo clients and Evidence Server source connectors.
+Relay and Notary configs reference SHA-256 fingerprint env values. Raw values
+are used only by demo clients and Evidence Server source connectors.
 """
 
 from __future__ import annotations
 
 import argparse
-import ast
 import base64
 import hashlib
 import json
@@ -26,7 +25,10 @@ def resolve_relay_scripts_dir() -> Path:
     if configured := os.environ.get("REGISTRY_RELAY_SOURCE_DIR"):
         candidates = [Path(configured).resolve() / "demo/scripts"]
     else:
-        candidates = [DEMO_ROOT / "vendor" / "registry-relay" / "demo/scripts"]
+        candidates = [
+            DEMO_ROOT.parent / "crates" / "registry-relay" / "demo/scripts",
+            DEMO_ROOT / "vendor" / "registry-relay" / "demo/scripts",
+        ]
         candidates.extend(parent / "registry-relay" / "demo/scripts" for parent in DEMO_ROOT.parents)
     for candidate in candidates:
         if (candidate / "generate_demo_keys.py").exists():
@@ -98,42 +100,9 @@ EVIDENCE_CLIENT_NAMES = [
     "FHIR_EVIDENCE_CLIENT",
 ]
 
-LOCAL_CONFIG_FINGERPRINT_PATHS = [
-    ("registry-relay", "config/relay/*.yaml"),
-    ("registry-notary", "config/notary/*.yaml"),
-]
-
-HOSTED_CONFIG_FINGERPRINT_PATHS = [
-    ("registry-relay", "config/coolify/relay/*.yaml"),
-    ("registry-notary", "config/coolify/notary/*.yaml"),
-]
-
-AUTH_LIST_RE = re.compile(r"^(\s*)(api_keys|bearer_tokens):\s*$")
-ENTRY_ID_RE = re.compile(r"^(\s*)-\s+id:\s*(.+?)\s*$")
-HASH_ENV_RE = re.compile(r"^(\s*)hash_env:\s*(.+?)\s*$")
-FINGERPRINT_RE = re.compile(r"^(\s*)fingerprint:\s*$")
-FINGERPRINT_NAME_RE = re.compile(r"^(\s*)name:\s*(.+?)\s*$")
-FINGERPRINT_COMMITMENT_RE = re.compile(r"^(\s*)commitment:\s*(.+?)\s*$")
-
 
 def fingerprint(raw: str) -> str:
     return f"sha256:{hashlib.sha256(raw.encode('ascii')).hexdigest()}"
-
-
-def credential_commitment(
-    product: str,
-    credential_type: str,
-    credential_id: str,
-    credential_fingerprint: str,
-) -> str:
-    payload = {
-        "product": product,
-        "credential_type": credential_type,
-        "credential_id": credential_id,
-        "fingerprint": credential_fingerprint,
-    }
-    encoded = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
 
 
 def env_line(key: str, value: str) -> str:
@@ -306,166 +275,6 @@ def write_env_file(path: Path, values: dict[str, str]) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def write_config_fingerprint_commitments(
-    values: dict[str, str],
-    *,
-    include_hosted: bool = False,
-) -> int:
-    updated = 0
-    paths = list(LOCAL_CONFIG_FINGERPRINT_PATHS)
-    if include_hosted:
-        paths.extend(HOSTED_CONFIG_FINGERPRINT_PATHS)
-    for product, pattern in paths:
-        for path in sorted(DEMO_ROOT.glob(pattern)):
-            if update_config_fingerprint_commitments(path, product, values):
-                updated += 1
-    return updated
-
-
-def update_config_fingerprint_commitments(
-    path: Path,
-    product: str,
-    values: dict[str, str],
-) -> bool:
-    original = path.read_text(encoding="utf-8").splitlines(keepends=True)
-    rewritten: list[str] = []
-    index = 0
-    changed = False
-    current_type: str | None = None
-    current_list_indent: int | None = None
-    while index < len(original):
-        line = original[index]
-        list_match = AUTH_LIST_RE.match(line)
-        if list_match:
-            current_type = "api_key" if list_match.group(2) == "api_keys" else "bearer_token"
-            current_list_indent = len(list_match.group(1))
-            rewritten.append(line)
-            index += 1
-            continue
-        if current_type is not None and current_list_indent is not None:
-            if line.strip() and leading_spaces(line) <= current_list_indent:
-                current_type = None
-                current_list_indent = None
-                rewritten.append(line)
-                index += 1
-                continue
-            entry_match = ENTRY_ID_RE.match(line)
-            if entry_match:
-                entry_indent = len(entry_match.group(1))
-                block_end = index + 1
-                while block_end < len(original):
-                    candidate = original[block_end]
-                    if candidate.strip() and leading_spaces(candidate) <= current_list_indent:
-                        break
-                    if ENTRY_ID_RE.match(candidate) and leading_spaces(candidate) == entry_indent:
-                        break
-                    block_end += 1
-                block, block_changed = rewrite_credential_block(
-                    original[index:block_end],
-                    product,
-                    current_type,
-                    yaml_scalar(entry_match.group(2)),
-                    values,
-                )
-                rewritten.extend(block)
-                changed = changed or block_changed
-                index = block_end
-                continue
-        rewritten.append(line)
-        index += 1
-    if changed:
-        path.write_text("".join(rewritten), encoding="utf-8")
-    return changed
-
-
-def rewrite_credential_block(
-    block: list[str],
-    product: str,
-    credential_type: str,
-    credential_id: str,
-    values: dict[str, str],
-) -> tuple[list[str], bool]:
-    for index, line in enumerate(block):
-        hash_match = HASH_ENV_RE.match(line)
-        if not hash_match:
-            continue
-        env_name = yaml_scalar(hash_match.group(2))
-        commitment = commitment_for_env(product, credential_type, credential_id, env_name, values)
-        indent = hash_match.group(1)
-        replacement = [
-            f"{indent}fingerprint:\n",
-            f"{indent}  provider: env\n",
-            f"{indent}  name: {env_name}\n",
-            f"{indent}  commitment: {commitment}\n",
-        ]
-        return block[:index] + replacement + block[index + 1 :], True
-
-    fingerprint_index = next(
-        (index for index, line in enumerate(block) if FINGERPRINT_RE.match(line)),
-        None,
-    )
-    if fingerprint_index is None:
-        return block, False
-    fingerprint_indent = len(FINGERPRINT_RE.match(block[fingerprint_index]).group(1))  # type: ignore[union-attr]
-    name_index = None
-    commitment_index = None
-    env_name = None
-    for index in range(fingerprint_index + 1, len(block)):
-        line = block[index]
-        if line.strip() and leading_spaces(line) <= fingerprint_indent:
-            break
-        if name_match := FINGERPRINT_NAME_RE.match(line):
-            name_index = index
-            env_name = yaml_scalar(name_match.group(2))
-        if FINGERPRINT_COMMITMENT_RE.match(line):
-            commitment_index = index
-    if env_name is None or name_index is None:
-        return block, False
-    commitment = commitment_for_env(product, credential_type, credential_id, env_name, values)
-    rewritten = list(block)
-    if commitment_index is None:
-        indent = " " * (fingerprint_indent + 2)
-        rewritten.insert(name_index + 1, f"{indent}commitment: {commitment}\n")
-        return rewritten, True
-    commitment_match = FINGERPRINT_COMMITMENT_RE.match(rewritten[commitment_index])
-    assert commitment_match is not None
-    new_line = f"{commitment_match.group(1)}commitment: {commitment}\n"
-    if rewritten[commitment_index] == new_line:
-        return block, False
-    rewritten[commitment_index] = new_line
-    return rewritten, True
-
-
-def commitment_for_env(
-    product: str,
-    credential_type: str,
-    credential_id: str,
-    env_name: str,
-    values: dict[str, str],
-) -> str:
-    if env_name not in values:
-        raise KeyError(f"{env_name} is required by {product} config but was not generated")
-    return credential_commitment(product, credential_type, credential_id, values[env_name])
-
-
-def leading_spaces(line: str) -> int:
-    return len(line) - len(line.lstrip(" "))
-
-
-def yaml_scalar(value: str) -> str:
-    value = value.strip()
-    if not value:
-        return ""
-    if value[0] in {"'", '"'}:
-        try:
-            parsed = ast.literal_eval(value)
-        except (SyntaxError, ValueError) as exc:
-            raise ValueError(f"invalid quoted YAML string scalar: {value!r}") from exc
-        if not isinstance(parsed, str):
-            raise TypeError(f"expected YAML string scalar, got {parsed!r}")
-        return parsed
-    return value
-
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -480,37 +289,14 @@ def main() -> int:
         action="store_true",
         help="print generated variable names without raw secret values",
     )
-    parser.add_argument(
-        "--include-hosted",
-        action="store_true",
-        help=(
-            "also update config/coolify commitments; only use with the matching "
-            "hosted credentials installed in Coolify"
-        ),
-    )
     args = parser.parse_args()
 
     values = generate_env()
     write_env_file(args.env_file, values)
-    updated_configs = write_config_fingerprint_commitments(
-        values,
-        include_hosted=args.include_hosted,
-    )
     print(
         f"wrote local demo credentials to {args.env_file}; raw values are for this machine only",
         file=sys.stderr,
     )
-    if args.include_hosted:
-        print(
-            "WARNING: updated hosted Coolify credential commitments; install the "
-            "matching raw credentials and fingerprints in Coolify before deploy",
-            file=sys.stderr,
-        )
-    if updated_configs:
-        print(
-            f"updated fingerprint commitments in {updated_configs} demo config files",
-            file=sys.stderr,
-        )
     if args.print_summary:
         summary = {
             "raw_secret_variables": sorted(

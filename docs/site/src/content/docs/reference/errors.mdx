@@ -18,7 +18,7 @@ The HTTP status is omitted from these tables. The Relay source maps each code to
 
 ## Registry Notary
 
-Registry Notary returns the codes below from its evidence taxonomy. Several distinct internal conditions intentionally collapse to one public code so that the public response does not disclose more than the caller is entitled to know. The audit record can carry a more specific code than the public response.
+Registry Notary returns the codes in the table below from its evidence taxonomy. Several distinct internal conditions intentionally collapse to one public code so that the public response does not disclose more than the caller is entitled to know. The audit record can carry a more specific code than the public response.
 
 | Code | Meaning | Usual cause |
 | --- | --- | --- |
@@ -28,8 +28,8 @@ Registry Notary returns the codes below from its evidence taxonomy. Several dist
 | `claim.operation_unsupported` | claim operation is unsupported | The requested operation is not supported for the claim. |
 | `request.invalid` | evidence request is invalid | The request body or parameters failed validation. |
 | `claim.disclosure_not_allowed` | requested disclosure is not allowed | The requested disclosure level is not permitted for the claim. |
-| `target.not_found` | source record was not found | The target lookup matched no source record. |
-| `target.match_ambiguous` | source lookup returned more than one record | The target lookup matched more than one source record. |
+| `target.not_found` | target record was not found | The target lookup matched no source record. |
+| `target.match_ambiguous` | target lookup returned more than one record | The target lookup matched more than one source record. |
 | `target.identifier_missing` | target identifier is missing | The request omits a required target identifier. |
 | `target.attributes_insufficient` | target attributes are insufficient for matching | The supplied target attributes cannot resolve a match. |
 | `target.matching_policy_rejected` | target matching policy rejected the request | The target matching policy denied the request. |
@@ -68,6 +68,68 @@ Registry Notary returns the codes below from its evidence taxonomy. Several dist
 | `self_attestation.rate_limited` | self-attestation request is rate limited | Too many self-attestation requests in the configured window. |
 
 Policy decision denials surface a stable `pdp.*` code carried through from the shared Policy Decision Point, for example `pdp.purpose_not_permitted`, `pdp.assurance_insufficient`, or `pdp.evidence_stale`. The same `pdp.*` codes are listed under [Registry Relay policy](#policy).
+
+The codes above are the evidence-evaluation taxonomy. The Notary server also returns the operational codes below from its federation, credential-status, configuration, admin, readiness, and request-handling surfaces.
+
+### Federation
+
+`federation.*` codes from the server-to-server federation surface. Federation problems use URN `type` URIs of the form `urn:registry-notary:problem:federation:<suffix>` rather than the `https://` types used by the evidence taxonomy. The exception is `federation.stale_source_observation`: it is not a problem response but a signed evaluation result (HTTP 200, `application/jwt`) that carries the code in its signed body.
+
+| Code | Meaning | Usual cause |
+| --- | --- | --- |
+| `federation.invalid_request` | federation request is invalid | A federation JSON or JWT request failed validation. |
+| `federation.invalid_token` | federation token is invalid | A federation request is missing valid authentication or its token failed verification. |
+| `federation.forbidden` | federation request is forbidden | A known federation peer was denied by local policy. |
+| `federation.unsupported_media_type` | federation media type is unsupported | The federation request used a content type the surface does not accept. |
+| `federation.payload_too_large` | federation payload is too large | The federation request body exceeds the configured limit. |
+| `federation.replay` | federation request was replayed | A federation `jti` or nonce was already used. |
+| `federation.server_error` | federation server error | The federation request could not be served for an internal reason. |
+| `federation.disabled` | federation is disabled | The federation surface is turned off in configuration. |
+| `federation.stale_source_observation` | federation source observation is stale | The federation source observation is older than policy allows; returned in a signed response body. |
+
+### Credential status
+
+`credential_status.*` codes for credential status reads and transitions.
+
+| Code | Meaning | Usual cause |
+| --- | --- | --- |
+| `credential_status.not_found` | credential status was not found | The requested credential status record does not exist. |
+| `credential_status.invalid_status` | credential status is invalid | The requested credential status value is not valid. |
+| `credential_status.invalid_transition` | credential status transition is invalid | The requested status transition is not permitted. |
+| `credential_status.disabled` | credential status is disabled | The credential status surface is turned off for this deployment. |
+| `credential_status.unavailable` | credential status is unavailable | Credential status could not be checked at this time. |
+
+### Administration and configuration
+
+`config.*`, `admin.*`, and `registry.admin.*` codes for the runtime configuration and admin surfaces. These are returned to admin callers, not to data-plane clients.
+
+| Code | Meaning | Usual cause |
+| --- | --- | --- |
+| `config.candidate_invalid` | config candidate is invalid | A submitted runtime configuration candidate failed validation. |
+| `admin.config_bundle_invalid` | config bundle is invalid | A submitted configuration bundle could not be validated. |
+| `config.apply_unavailable` | config apply is unavailable | Runtime configuration apply is not available for this deployment. |
+| `registry.admin.capability.not_supported` | registry admin capability is not supported | The requested registry administration capability is not supported. |
+| `registry.admin.posture.invalid_tier` | registry admin posture tier is invalid | The requested posture tier is not a recognized value. |
+| `registry.admin.config.inline_apply_rejected` | registry admin inline config apply was rejected | An inline configuration apply was rejected. |
+
+### Readiness and posture
+
+| Code | Meaning | Usual cause |
+| --- | --- | --- |
+| `readiness.not_ready` | service is not ready | The service is not ready to serve traffic. |
+| `posture.filter_failed` | posture filter failed | A posture report filter could not be evaluated. |
+| `posture.unavailable` | posture state is unavailable | Posture state could not be read at this time. |
+
+### Request handling
+
+`request.*` and `audit.*` transport-level codes.
+
+| Code | Meaning | Usual cause |
+| --- | --- | --- |
+| `request.uri_too_long` | request uri is too long | The request URI exceeds the configured limit. |
+| `audit.write_failed` | audit write failed | An audit record could not be written. |
+
+The Notary OpenAPI document also uses three generic umbrella problem types as status-keyed examples: `request.conflict` (409), `request.too_large` (413), and `format.unsupported` (406). These are illustrative placeholders: runtime responses use the specific codes above, such as `idempotency.conflict`, `batch.too_large`, and `claim.format_not_supported`. One 413 is an exception: an oversized HTTP request body is rejected by the shared body-limit middleware with problem `type` `https://registry-platform.dev/problems/request/body-too-large` and no `code` extension.
 
 ## Registry Relay
 
@@ -304,3 +366,5 @@ Registry Relay returns namespaced codes from its error taxonomy. Codes in the co
 ## Source
 
 The codes above are transcribed from the error taxonomies in the owning repos. For the canonical definitions, read the [Registry Notary `EvidenceError` taxonomy](https://github.com/registrystack/registry-stack/blob/v0.8.1/crates/registry-notary-core/src/error.rs) and the [Registry Relay error taxonomy](https://github.com/registrystack/registry-stack/blob/v0.8.1/crates/registry-relay/src/error.rs).
+
+The Notary server-layer codes (federation, credential status, configuration, admin, readiness, posture, and request handling) are defined in the `registry-notary-server` crate, principally `src/federation/errors.rs`, `src/federation/mod.rs`, and `src/api.rs`.

@@ -14,7 +14,6 @@ auth:
       fingerprint:
         provider: env
         name: TEST_KEY_HASH_VOCAB
-        commitment: sha256:d91e6e03e681c2ba7a95a367fe95d95dd4283921e9d41ee9540a647077a45a07
       scopes:
         - ds_one:metadata
 audit:

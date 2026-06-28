@@ -30,7 +30,7 @@ tracked separately.
 2. Build the release binary:
 
    ```bash
-   cargo build --release -p registry-notary-bin
+   cargo build --release -p registry-notary
    ```
 
    The binary is written to `target/release/registry-notary`.
@@ -340,8 +340,8 @@ Tests cover:
 Client scenarios use raw bearer and API-key values. Server config reads only
 `sha256:<64 hex>` fingerprints from committed `fingerprint` references; raw
 tokens must not be stored in config. Regenerate perf credentials with
-`perf/scripts/generate_perf_keys.py` so the config commitments match the new
-fingerprints.
+`perf/scripts/generate_perf_keys.py` so the configured fingerprint references
+resolve to the new fingerprints.
 
 ---
 

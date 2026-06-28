@@ -125,7 +125,7 @@ jobs:
         env:
           RUSTFLAGS: ""
         run: |
-          cargo build --release --locked -p registry-notary-bin --features "$REGISTRY_NOTARY_FEATURES"
+          cargo build --release --locked -p registry-notary --features "$REGISTRY_NOTARY_FEATURES"
           cargo build --release --locked -p registry-notary-server --bin registry-notary-cel-worker --features "$REGISTRY_NOTARY_FEATURES"
 
       - name: Smoke build capabilities

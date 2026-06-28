@@ -167,13 +167,13 @@ jobs:
                 -p registryctl \
                 -p registry-manifest-cli \
                 -p registry-relay \
-                -p registry-notary-bin \
+                -p registry-notary \
                 -p registry-notary-source-adapter-sidecar \
-                --features registry-relay/spdci-api-standards,registry-relay/standards-cel-mapping,registry-relay/ogcapi-edr,registry-notary-bin/registry-notary-cel
+                --features registry-relay/spdci-api-standards,registry-relay/standards-cel-mapping,registry-relay/ogcapi-edr,registry-notary/registry-notary-cel
               cp target/release/registry-notary dist/image-bin/registry-notary
               cargo build --release --locked \
-                -p registry-notary-bin \
-                --features registry-notary-bin/registry-notary-cel,registry-notary-bin/pkcs11
+                -p registry-notary \
+                --features registry-notary/registry-notary-cel,registry-notary/pkcs11
               cp target/release/registry-notary dist/image-bin/registry-notary-pkcs11'
           cp target/release/registryctl "dist/bin/registryctl-${{ needs.verify.outputs.tag }}-linux-amd64"
           cp target/release/registry-manifest "dist/bin/registry-manifest-${{ needs.verify.outputs.tag }}-linux-amd64"

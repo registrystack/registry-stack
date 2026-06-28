@@ -17,10 +17,6 @@ use ed25519_dalek::SigningKey;
 use rand_core::OsRng;
 use registry_manifest_core::{canonicalize_json, source_manifest_digest, MetadataManifest};
 use registry_platform_audit::{AuditChainHasher, AuditEnvelope, AuditError, AuditSink};
-use registry_platform_authcommon::{
-    credential_fingerprint_commitment, CredentialCommitmentContext, CredentialProduct,
-    CredentialType,
-};
 use registry_platform_ops::{
     internal_config_hash, posture_safe_runtime_config_hash, AntiRollbackKey, AntiRollbackRecord,
     ConfigProvenance, FileAntiRollbackStore, FileLocalApprovalStore,
@@ -189,18 +185,8 @@ fn make_fingerprint(plain: &str) -> String {
     format!("sha256:{}", hex_lower(&Sha256::digest(plain.as_bytes())))
 }
 
-fn fingerprint_ref_yaml(id: &str, env_name: &str, fingerprint: &str, indent: &str) -> String {
-    let commitment = credential_fingerprint_commitment(
-        CredentialCommitmentContext {
-            product: CredentialProduct::RegistryRelay,
-            credential_type: CredentialType::ApiKey,
-            credential_id: id,
-        },
-        fingerprint,
-    );
-    format!(
-        "{indent}fingerprint:\n{indent}  provider: env\n{indent}  name: {env_name}\n{indent}  commitment: {commitment}"
-    )
+fn fingerprint_ref_yaml(env_name: &str, indent: &str) -> String {
+    format!("{indent}fingerprint:\n{indent}  provider: env\n{indent}  name: {env_name}")
 }
 
 fn hex_lower(bytes: &[u8]) -> String {
@@ -1598,9 +1584,13 @@ fn fixture_hash_placeholder() -> String {
 }
 
 fn write_local_approval(fixture: &AdminFixture, approval: Value) {
+    write_local_approvals(fixture, vec![approval]);
+}
+
+fn write_local_approvals(fixture: &AdminFixture, approvals: Vec<Value>) {
     std::fs::write(
         &fixture.local_approval_path,
-        serde_json::to_vec_pretty(&json!({ "approvals": [approval] }))
+        serde_json::to_vec_pretty(&json!({ "approvals": approvals }))
             .expect("local approval file serializes"),
     )
     .expect("local approval file writes");
@@ -2192,18 +2182,92 @@ async fn config_apply_instance_identity_change_is_restart_required_without_swapp
 }
 
 #[tokio::test]
+async fn config_apply_client_credential_rotation_swaps_auth_provider_by_reference() {
+    const CURRENT_ADMIN_HASH_ENV: &str = "REGISTRY_RELAY_TEST_CURRENT_ADMIN_API_KEY_HASH";
+    const ROTATED_ADMIN_KEY: &str = "rotated-admin-token";
+    const ROTATED_ADMIN_HASH_ENV: &str = "REGISTRY_RELAY_TEST_ROTATED_API_KEY_HASH";
+    std::env::set_var(CURRENT_ADMIN_HASH_ENV, make_fingerprint(ADMIN_KEY));
+    std::env::set_var(ROTATED_ADMIN_HASH_ENV, make_fingerprint(ROTATED_ADMIN_KEY));
+
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = write_config(&tmp);
+    let current_fingerprint_ref = fingerprint_ref_yaml(CURRENT_ADMIN_HASH_ENV, "      ");
+    let current_config = std::fs::read_to_string(&config_path)
+        .expect("config reads")
+        .replace("\nmetadata:\n  source:\n    path: metadata.yaml\n", "\n")
+        .replace(
+            "api_keys: []",
+            &format!(
+                "api_keys:\n    - id: admin\n{current_fingerprint_ref}\n      scopes:\n        - registry_relay:admin\n        - registry_relay:ops_read"
+            ),
+        );
+    std::fs::write(&config_path, current_config).expect("config writes");
+    let fixture = build_fixture_from_config_path(tmp, config_path);
+
+    let candidate = std::fs::read_to_string(&fixture.config_path)
+        .expect("config reads")
+        .replace(CURRENT_ADMIN_HASH_ENV, ROTATED_ADMIN_HASH_ENV);
+    let candidate_hash = internal_config_hash(candidate.as_bytes());
+    write_local_approval(
+        &fixture,
+        local_approval_for_change_class(
+            "CLIENT-CREDENTIAL-ROTATION-1",
+            "client_credential_rotation",
+            &candidate_hash,
+            &fixture.current_config_hash,
+        ),
+    );
+    let signed = write_signed_config_tuf_fixture_with_change_classes(
+        &fixture,
+        &candidate,
+        5,
+        "relay-test-instance",
+        &["kid-a", "kid-b"],
+        &["client_credential_rotation"],
+    )
+    .await;
+    let mut request = signed_tuf_apply_request(&signed);
+    request["local_approval_reference"] = json!("CLIENT-CREDENTIAL-ROTATION-1");
+
+    let response = post_admin_config(&fixture, "/admin/v1/config/apply", request, ADMIN_KEY).await;
+
+    if response.status_code() != StatusCode::OK {
+        let body: Value = response.json();
+        panic!("client credential rotation apply should succeed, got {body:#}");
+    }
+    let body: Value = response.json();
+    assert_eq!(body["result"], "applied");
+    assert_eq!(body["applied"], true);
+    assert_eq!(body["restart_required"], false);
+
+    let old_admin = fixture
+        .server
+        .get("/admin/v1/posture")
+        .add_header("Authorization", format!("Bearer {ADMIN_KEY}"))
+        .await;
+    assert_problem(
+        old_admin,
+        StatusCode::UNAUTHORIZED,
+        "auth.invalid_credential",
+    )
+    .await;
+
+    let rotated_admin = fixture
+        .server
+        .get("/admin/v1/posture")
+        .add_header("Authorization", format!("Bearer {ROTATED_ADMIN_KEY}"))
+        .await;
+    rotated_admin.assert_status(StatusCode::OK);
+}
+
+#[tokio::test]
 async fn config_apply_client_access_change_swaps_auth_provider() {
     const ROTATED_ADMIN_KEY: &str = "rotated-admin-token";
     const ROTATED_ADMIN_HASH_ENV: &str = "REGISTRY_RELAY_TEST_ROTATED_API_KEY_HASH";
     let rotated_fingerprint = make_fingerprint(ROTATED_ADMIN_KEY);
     std::env::set_var(ROTATED_ADMIN_HASH_ENV, &rotated_fingerprint);
     let fixture = build_fixture_without_metadata();
-    let rotated_fingerprint_ref = fingerprint_ref_yaml(
-        "rotated_admin",
-        ROTATED_ADMIN_HASH_ENV,
-        &rotated_fingerprint,
-        "      ",
-    );
+    let rotated_fingerprint_ref = fingerprint_ref_yaml(ROTATED_ADMIN_HASH_ENV, "      ");
     let candidate = std::fs::read_to_string(&fixture.config_path)
         .expect("config reads")
         .replace(
@@ -2718,6 +2782,44 @@ async fn config_apply_break_glass_required_approver_count_rejects_inline_and_sin
     let stored_body: Value = stored_response.json();
     assert_eq!(stored_body["result"], "rejected_break_glass");
 
+    let duplicate_primary = durable_break_glass_approval("BG-DUP", &candidate_hash, None, &[]);
+    let mut duplicate_same_operator =
+        durable_break_glass_approval("BG-DUP", &candidate_hash, None, &[]);
+    duplicate_same_operator["reason"] = json!("duplicate stored emergency approval reason");
+    write_local_approvals(&fixture, vec![duplicate_primary, duplicate_same_operator]);
+    let mut duplicate_request = signed_tuf_apply_request(&signed);
+    duplicate_request["break_glass"] = json!(true);
+    duplicate_request["break_glass_approval_reference"] = json!("BG-DUP");
+    let duplicate_response = post_admin_config(
+        &fixture,
+        "/admin/v1/config/apply",
+        duplicate_request,
+        ADMIN_KEY,
+    )
+    .await;
+    duplicate_response.assert_status(StatusCode::CONFLICT);
+    let duplicate_body: Value = duplicate_response.json();
+    assert_eq!(duplicate_body["result"], "rejected_break_glass");
+
+    let valid_member = durable_break_glass_approval("BG-EXPIRED", &candidate_hash, None, &[]);
+    let mut expired_member = durable_break_glass_approval("BG-EXPIRED", &candidate_hash, None, &[]);
+    expired_member["approved_by"] = json!("ops-peer@example.test");
+    expired_member["expires_at_unix_seconds"] = json!(1);
+    write_local_approvals(&fixture, vec![valid_member, expired_member]);
+    let mut expired_request = signed_tuf_apply_request(&signed);
+    expired_request["break_glass"] = json!(true);
+    expired_request["break_glass_approval_reference"] = json!("BG-EXPIRED");
+    let expired_response = post_admin_config(
+        &fixture,
+        "/admin/v1/config/apply",
+        expired_request,
+        ADMIN_KEY,
+    )
+    .await;
+    expired_response.assert_status(StatusCode::CONFLICT);
+    let expired_body: Value = expired_response.json();
+    assert_eq!(expired_body["result"], "rejected_break_glass");
+
     let record = FileAntiRollbackStore::new(&fixture.antirollback_path)
         .load(&AntiRollbackKey {
             product: "registry-relay".to_string(),
@@ -2729,10 +2831,10 @@ async fn config_apply_break_glass_required_approver_count_rejects_inline_and_sin
     assert_eq!(record.last_sequence, 0);
     assert!(record.break_glass.accepted.is_empty());
 
-    write_local_approval(
-        &fixture,
-        durable_break_glass_approval("BG-4243", &candidate_hash, None, &["ops-peer@example.test"]),
-    );
+    let primary = durable_break_glass_approval("BG-4243", &candidate_hash, None, &[]);
+    let mut peer = durable_break_glass_approval("BG-4243", &candidate_hash, None, &[]);
+    peer["approved_by"] = json!("ops-peer@example.test");
+    write_local_approvals(&fixture, vec![primary, peer]);
     let mut two_approver_request = signed_tuf_apply_request(&signed);
     two_approver_request["break_glass"] = json!(true);
     two_approver_request["break_glass_approval_reference"] = json!("BG-4243");

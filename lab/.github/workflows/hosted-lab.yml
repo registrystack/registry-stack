@@ -29,8 +29,6 @@ on:
       - "scripts/lab-homepage-server.py"
       - "scripts/lab_homepage_scenarios/**"
       - "scripts/test_lab_homepage_server.py"
-      - "scripts/credential-commitment.py"
-      - "scripts/test_credential_commitment.py"
       - "scripts/check-evidence-gateway-fixtures.py"
       - "scripts/test_evidence_gateway_fixtures.py"
       - "scripts/run-evidence-gateway-live-fixtures.py"
@@ -79,8 +77,6 @@ on:
       - "scripts/lab-homepage-server.py"
       - "scripts/lab_homepage_scenarios/**"
       - "scripts/test_lab_homepage_server.py"
-      - "scripts/credential-commitment.py"
-      - "scripts/test_credential_commitment.py"
       - "scripts/check-evidence-gateway-fixtures.py"
       - "scripts/test_evidence_gateway_fixtures.py"
       - "scripts/run-evidence-gateway-live-fixtures.py"
@@ -168,8 +164,6 @@ jobs:
             scripts/lab-homepage-server.py \
             scripts/lab_homepage_scenarios \
             scripts/test_lab_homepage_server.py \
-            scripts/credential-commitment.py \
-            scripts/test_credential_commitment.py \
             scripts/check-evidence-gateway-fixtures.py \
             scripts/test_evidence_gateway_fixtures.py \
             scripts/run-evidence-gateway-live-fixtures.py \
@@ -228,9 +222,6 @@ jobs:
 
       - name: Run DHIS2 programme VC config tests
         run: python3 scripts/test_dhis2_programme_vc_config.py
-
-      - name: Run credential commitment tests
-        run: python3 scripts/test_credential_commitment.py
 
       - name: Run evidence gateway fixture tests
         run: python3 scripts/test_evidence_gateway_fixtures.py

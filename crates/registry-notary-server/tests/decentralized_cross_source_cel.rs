@@ -13,10 +13,6 @@ use axum::{Json, Router};
 use axum_test::TestServer;
 use registry_notary_core::StandaloneRegistryNotaryConfig;
 use registry_notary_server::standalone_router;
-use registry_platform_authcommon::{
-    credential_fingerprint_commitment, CredentialCommitmentContext, CredentialProduct,
-    CredentialType,
-};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -50,18 +46,8 @@ fn set_audit_secret() {
     std::env::set_var("REGISTRY_NOTARY_CEL_WORKER_COMMAND", cel_worker_bin());
 }
 
-fn test_api_key_fingerprint_ref_yaml(id: &str, env_name: &str, fingerprint: &str) -> String {
-    let commitment = credential_fingerprint_commitment(
-        CredentialCommitmentContext {
-            product: CredentialProduct::RegistryNotary,
-            credential_type: CredentialType::ApiKey,
-            credential_id: id,
-        },
-        fingerprint,
-    );
-    format!(
-        "fingerprint:\n        provider: env\n        name: {env_name}\n        commitment: {commitment}"
-    )
+fn test_api_key_fingerprint_ref_yaml(_id: &str, env_name: &str, _fingerprint: &str) -> String {
+    format!("fingerprint:\n        provider: env\n        name: {env_name}")
 }
 
 async fn civil_source(

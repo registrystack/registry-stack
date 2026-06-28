@@ -44,8 +44,7 @@ use registry_platform_audit::{
     JsonlFileSink, JsonlStdoutSink, SyslogSink,
 };
 use registry_platform_authcommon::{
-    parse_bearer_token, verify_api_key, CredentialCommitmentContext, CredentialFingerprintRefError,
-    CredentialProduct, CredentialType, FingerprintFormatError,
+    parse_bearer_token, verify_api_key, CredentialFingerprintRefError, FingerprintFormatError,
 };
 use registry_platform_crypto::{
     sign, verify, KeyReadiness, LocalJwkSigner, PrivateJwk, PublicJwk, SigningProvider,
@@ -3993,11 +3992,8 @@ impl Authenticator {
     fn from_config(config: &StandaloneRegistryNotaryConfig) -> Result<Self, StandaloneServerError> {
         match config.auth.mode {
             EvidenceAuthMode::ApiKey => Ok(Self::Static {
-                api_keys: resolve_credentials(&config.auth.api_keys, CredentialType::ApiKey)?,
-                bearer_tokens: resolve_credentials(
-                    &config.auth.bearer_tokens,
-                    CredentialType::BearerToken,
-                )?,
+                api_keys: resolve_credentials(&config.auth.api_keys)?,
+                bearer_tokens: resolve_credentials(&config.auth.bearer_tokens)?,
             }),
             EvidenceAuthMode::Oidc => {
                 let oidc = config.auth.oidc.as_ref().ok_or_else(|| {
@@ -4448,6 +4444,19 @@ async fn emit_audit_or_error(
         }
         Err(error) => {
             state.metrics.record_audit_event("failure");
+            if response.status() == StatusCode::SERVICE_UNAVAILABLE
+                && response
+                    .extensions()
+                    .get::<EvidenceErrorCodeContext>()
+                    .is_some_and(|context| context.0 == "audit.write_failed")
+            {
+                tracing::error!(
+                    target: "registry_notary_server::audit",
+                    error = %error,
+                    "audit event write failed while preserving prior audit failure response"
+                );
+                return response;
+            }
             audit_error_response(error)
         }
     }
@@ -4677,7 +4686,6 @@ fn new_request_correlation_id() -> BoundedCorrelationId {
 
 fn resolve_credentials(
     credentials: &[EvidenceCredentialConfig],
-    credential_type: CredentialType,
 ) -> Result<Vec<ResolvedCredential>, StandaloneServerError> {
     credentials
         .iter()
@@ -4696,17 +4704,12 @@ fn resolve_credentials(
                 .unwrap_or_else(|| credential.id.clone());
             let fingerprint = credential
                 .fingerprint
-                .resolve(CredentialCommitmentContext {
-                    product: CredentialProduct::RegistryNotary,
-                    credential_type,
-                    credential_id: &credential.id,
-                })
+                .resolve()
                 .map_err(|error| match error {
                     CredentialFingerprintRefError::MissingSecret => {
                         StandaloneServerError::MissingCredentialEnv(secret_ref.clone())
                     }
-                    CredentialFingerprintRefError::InvalidFingerprint(format_error)
-                    | CredentialFingerprintRefError::InvalidCommitment(format_error) => {
+                    CredentialFingerprintRefError::InvalidFingerprint(format_error) => {
                         StandaloneServerError::InvalidCredentialHash(
                             secret_ref.clone(),
                             format_error,
@@ -4715,8 +4718,7 @@ fn resolve_credentials(
                     CredentialFingerprintRefError::EmptySecret => {
                         StandaloneServerError::MissingCredentialEnv(secret_ref.clone())
                     }
-                    CredentialFingerprintRefError::CommitmentMismatch
-                    | CredentialFingerprintRefError::InvalidShape => {
+                    CredentialFingerprintRefError::InvalidShape => {
                         StandaloneServerError::InvalidCredentialHash(
                             secret_ref.clone(),
                             FingerprintFormatError::InvalidHex,
@@ -5032,13 +5034,7 @@ fn authorization_details_from_oidc(
         return Ok(None);
     };
     let details = crate::authz_details::extract_notary_transaction_authorization_details(details)?;
-    if details
-        .as_ref()
-        .is_some_and(|details| !crate::authz_details::has_transaction_scope(details))
-    {
-        return Err(EvidenceError::MissingCredential);
-    }
-    Ok(details)
+    Ok(details.filter(crate::authz_details::has_transaction_scope))
 }
 
 fn bounded_verified_claims_from_oidc(
@@ -10626,6 +10622,52 @@ sources:
     }
 
     #[test]
+    fn oidc_principal_rejects_matched_client_id_when_default_sub_is_missing() {
+        let mut verified = verified_token_with_extra(Map::new());
+        verified.claims.sub = None;
+        verified.claims.azp = None;
+        verified.claims.client_id = Some("service-client".to_string());
+        verified.matched_client = Some("client_id:service-client".to_string());
+
+        let error = principal_from_oidc(
+            &verified,
+            None,
+            None,
+            verified_claim_value("JWT"),
+            "sub",
+            None,
+            SelfAttestationClaimSource::AccessToken,
+            SelfAttestationAssuranceClaimSource::AccessToken,
+        )
+        .expect_err("matched client_id must not replace a missing sub principal");
+
+        assert!(matches!(error, EvidenceError::MissingCredential));
+    }
+
+    #[test]
+    fn oidc_principal_rejects_matched_azp_when_default_sub_is_missing() {
+        let mut verified = verified_token_with_extra(Map::new());
+        verified.claims.sub = None;
+        verified.claims.azp = Some("service-client".to_string());
+        verified.claims.client_id = None;
+        verified.matched_client = Some("azp:service-client".to_string());
+
+        let error = principal_from_oidc(
+            &verified,
+            None,
+            None,
+            verified_claim_value("JWT"),
+            "sub",
+            None,
+            SelfAttestationClaimSource::AccessToken,
+            SelfAttestationAssuranceClaimSource::AccessToken,
+        )
+        .expect_err("matched azp alone is not a client-credentials principal");
+
+        assert!(matches!(error, EvidenceError::MissingCredential));
+    }
+
+    #[test]
     fn oidc_principal_rejects_malformed_matching_authorization_details() {
         let mut extra = Map::new();
         extra.insert(
@@ -10684,7 +10726,7 @@ sources:
     }
 
     #[test]
-    fn oidc_principal_rejects_context_only_matching_authorization_details() {
+    fn oidc_principal_ignores_context_only_matching_authorization_details() {
         let mut extra = Map::new();
         extra.insert(
             "authorization_details".to_string(),
@@ -10699,7 +10741,7 @@ sources:
         );
         let verified = verified_token_with_extra(extra);
 
-        let error = principal_from_oidc(
+        let principal = principal_from_oidc(
             &verified,
             None,
             None,
@@ -10709,9 +10751,9 @@ sources:
             SelfAttestationClaimSource::AccessToken,
             SelfAttestationAssuranceClaimSource::AccessToken,
         )
-        .expect_err("OIDC authorization_details must be transaction scoped");
+        .expect("context-only OIDC authorization_details fall back to scope checks");
 
-        assert!(matches!(error, EvidenceError::MissingCredential));
+        assert!(principal.authorization_details.is_none());
     }
 
     #[test]

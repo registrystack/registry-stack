@@ -5130,7 +5130,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "registry-notary-bin"
+name = "registry-notary"
 version = "0.8.3"
 dependencies = [
  "axum",
@@ -5498,6 +5498,7 @@ name = "registry-platform-replay"
 version = "0.8.3"
 dependencies = [
  "async-trait",
+ "getrandom 0.4.3",
  "registry-platform-cache",
  "thiserror 2.0.18",
  "time",
@@ -5573,7 +5574,7 @@ dependencies = [
 
 [[package]]
 name = "registry-relay"
-version = "0.4.0"
+version = "0.8.3"
 dependencies = [
  "arc-swap",
  "assert-json-diff",
@@ -5648,7 +5649,7 @@ dependencies = [
 
 [[package]]
 name = "registryctl"
-version = "0.1.0"
+version = "0.8.3"
 dependencies = [
  "anyhow",
  "base64",

@@ -16,9 +16,9 @@ ARG REGISTRY_NOTARY_FEATURES="registry-notary-cel,pkcs11"
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/workspace/target \
     if [ -n "$REGISTRY_NOTARY_FEATURES" ]; then \
-        CARGO_TARGET_DIR=/workspace/target cargo build --release --locked -p registry-notary-bin --features "$REGISTRY_NOTARY_FEATURES"; \
+        CARGO_TARGET_DIR=/workspace/target cargo build --release --locked -p registry-notary --features "$REGISTRY_NOTARY_FEATURES"; \
     else \
-        CARGO_TARGET_DIR=/workspace/target cargo build --release --locked -p registry-notary-bin; \
+        CARGO_TARGET_DIR=/workspace/target cargo build --release --locked -p registry-notary; \
     fi \
     && mkdir -p /workspace/out \
     && cp /workspace/target/release/registry-notary /workspace/out/registry-notary \

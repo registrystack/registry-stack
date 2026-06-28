@@ -34,7 +34,7 @@ Audit, Respond).
             the process exits non-zero on any mismatch. Every authorized request then flows
             through four phases in order: Match scope (verify credential and require route
             scope), Query (project only declared fields, no raw SQL), Audit (write one JSONL
-            record with names and operators only), and Respond (return projected fields,
+            record with pseudonymized sensitive lookup values), and Respond (return projected fields,
             never storage identifiers)." />
 </figure>
 
@@ -45,10 +45,11 @@ Binding maps each logical dataset and entity from the manifest to physical sourc
 physical table columns, declared filters, and scopes.
 If a dataset in the manifest has no matching `config.yaml` entry, startup fails with
 `runtime.binding.dataset_missing` and the process exits non-zero.
-API-key auth has its own startup prerequisite: each `api_keys` entry needs a pre-generated
-fingerprint and commitment (emitted together by `registry-relay generate-api-key`), and
-Relay fails closed at startup if they are missing or malformed; see the
-[deployment guide](../../tutorials/deploy-standalone-with-own-data/#provision-the-api-key-fingerprint-and-commitment).
+API-key auth has its own startup prerequisite: each `api_keys` entry needs a configured
+fingerprint reference, and the referenced value must resolve to a canonical
+`sha256:<64 lowercase hex chars>` fingerprint.
+Relay fails closed at startup if the reference is missing or malformed; see the
+[deployment guide](../../tutorials/deploy-standalone-with-own-data/).
 Bind runs once per process; the per-request path assumes the bound state is valid.
 
 ### Per request: four phases in sequence
@@ -70,8 +71,21 @@ expressions to the source.
 configured audit sink (stdout, file, or syslog).
 The record carries the `principal_id`, `request_id` (a ULID also returned in the
 `x-request-id` response header), `dataset_id`, `entity_name`, `scopes_used`, `query_params`
-(names and operators, never values), `status_code`, and `duration_ms`.
+(parameter names and operators, plus `value_hash` for fields marked `sensitive: true`),
+`status_code`, and `duration_ms`.
+Raw submitted values are not written to the audit sink.
 Registry Platform wraps the record with `prev_hash` and `record_hash` for tamper evidence.
+For deployment, set `audit.hash_secret_env` to a deployment-specific secret and mark
+identifier fields with `sensitive: true`.
+Relay uses the secret to write stable `hmac-sha256:` handles for sensitive lookups, record
+identifiers, and storage table identifiers.
+That lets an auditor correlate repeated access to the same subject inside one deployment
+without retaining names, national IDs, dates of birth, addresses, or source table names in
+the log.
+Protect the audit secret with the same controls as the audit log; rotating it makes new
+handles different from older records.
+The [Relay configuration page](../../products/registry-relay/configuration/) documents
+`audit.hash_secret_env` and the `sensitive: true` field flag.
 For the full field list, see the [Relay operations runbook](https://github.com/registrystack/registry-stack/blob/v0.8.1/crates/registry-relay/docs/ops.md).
 
 **4. Respond.** Relay returns the entity-shaped response.
@@ -119,7 +133,8 @@ Five constraints a reviewer can verify against the code:
   its own plan.
 - **Storage details stay private.** Table names, column names, and connection strings
   never appear in responses or error messages.
-- **Filter values stay out of audit.** Records capture filter parameter names and
-  operators but never the submitted values, so personal identifiers are not logged.
+- **Raw lookup values stay out of audit.** Records capture operators for ordinary filters
+  and keyed hashes for configured sensitive lookups, record identifiers, and table
+  identifiers; they do not write raw submitted values.
 - **No token minting.** In OIDC mode, Relay is a resource server: it verifies tokens
   issued by an external identity provider and never mints or refreshes them.

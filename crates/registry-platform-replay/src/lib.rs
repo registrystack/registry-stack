@@ -5,12 +5,17 @@ use std::{error::Error as StdError, fmt, sync::Arc};
 
 use async_trait::async_trait;
 use registry_platform_cache::{
-    CacheKey, CacheKeyError, CacheSetOutcome, CacheStore, CacheStoreError, InMemoryCacheStore,
+    CacheCompareAndSetOutcome, CacheKey, CacheKeyError, CacheSetOutcome, CacheStore,
+    CacheStoreError, InMemoryCacheStore,
 };
 #[cfg(feature = "redis")]
 use registry_platform_cache::{RedisCacheBuildError, RedisCacheStore};
 use thiserror::Error;
 use time::OffsetDateTime;
+
+const NONCE_RESERVATION_PREFIX: &[u8] = b"reservation:";
+const NONCE_CONSUMED_VALUE: &[u8] = b"consumed";
+const NONCE_CONSUMED_TOMBSTONE_SECONDS: i64 = 60;
 
 /// A structured namespace for replay identifiers.
 ///
@@ -201,7 +206,7 @@ pub trait ConsumableNonceStore: Send + Sync {
         expires_at: OffsetDateTime,
     ) -> Result<(), ReplayStoreError>;
 
-    /// Consume a nonce and report whether it existed.
+    /// Consume a nonce and report whether it existed and had not expired.
     ///
     /// Callers that require nonce replay protection should prefer
     /// [`require_consume_once`] so missing, already-consumed, and store-error
@@ -317,9 +322,10 @@ impl ConsumableNonceStore for ConsumableNonceCacheStore {
         expires_at: OffsetDateTime,
     ) -> Result<(), ReplayStoreError> {
         let cache_key = self.cache_key(scope, key)?;
+        let reservation = nonce_reservation_value()?;
         match self
             .cache
-            .set_if_absent(&cache_key, b"1", expires_at)
+            .set_if_absent(&cache_key, &reservation, expires_at)
             .await?
         {
             CacheSetOutcome::Stored => Ok(()),
@@ -335,11 +341,31 @@ impl ConsumableNonceStore for ConsumableNonceCacheStore {
         key: &ReplayKey,
     ) -> Result<ReplayInsertOutcome, ReplayStoreError> {
         let cache_key = self.cache_key(scope, key)?;
-        Ok(if self.cache.delete(&cache_key).await? {
-            ReplayInsertOutcome::Inserted
-        } else {
-            ReplayInsertOutcome::AlreadySeen
-        })
+        let Some(reservation) = self.cache.get(&cache_key).await? else {
+            return Ok(ReplayInsertOutcome::AlreadySeen);
+        };
+        if reservation == NONCE_CONSUMED_VALUE {
+            return Ok(ReplayInsertOutcome::AlreadySeen);
+        }
+        match self
+            .cache
+            .compare_and_set(
+                &cache_key,
+                &reservation,
+                NONCE_CONSUMED_VALUE,
+                OffsetDateTime::now_utc()
+                    + time::Duration::seconds(NONCE_CONSUMED_TOMBSTONE_SECONDS),
+            )
+            .await?
+        {
+            CacheCompareAndSetOutcome::Stored => {
+                self.cache.delete(&cache_key).await?;
+                Ok(ReplayInsertOutcome::Inserted)
+            }
+            CacheCompareAndSetOutcome::Mismatch | CacheCompareAndSetOutcome::Missing => {
+                Ok(ReplayInsertOutcome::AlreadySeen)
+            }
+        }
     }
 }
 
@@ -659,6 +685,17 @@ fn replay_cache_key(
     }
     parts.push(("key", key.as_str()));
     CacheKey::from_hashed_parts(key_prefix, flow, parts)
+}
+
+fn nonce_reservation_value() -> Result<Vec<u8>, ReplayStoreError> {
+    let mut random = [0_u8; 16];
+    getrandom::fill(&mut random).map_err(|_| ReplayStoreError::Operation {
+        message: "failed to generate nonce reservation value".to_string(),
+    })?;
+    let mut value = Vec::with_capacity(NONCE_RESERVATION_PREFIX.len() + random.len());
+    value.extend_from_slice(NONCE_RESERVATION_PREFIX);
+    value.extend_from_slice(&random);
+    Ok(value)
 }
 
 struct RedactedPart<'a> {
@@ -1008,6 +1045,7 @@ mod tests {
             .reserve_nonce(&scope, &key, future())
             .await
             .expect("nonce reserves");
+        assert_eq!(store.len(), 1);
         assert_eq!(
             store
                 .consume_nonce(&wrong_scope, &key)
@@ -1015,6 +1053,7 @@ mod tests {
                 .expect("wrong scope checks cleanly"),
             ReplayInsertOutcome::AlreadySeen
         );
+        assert_eq!(store.len(), 1);
         assert_eq!(
             store
                 .consume_nonce(&scope, &key)
@@ -1022,12 +1061,99 @@ mod tests {
                 .expect("first consume succeeds"),
             ReplayInsertOutcome::Inserted
         );
+        assert!(store.is_empty());
         assert_eq!(
             store
                 .consume_nonce(&scope, &key)
                 .await
                 .expect("second consume checks cleanly"),
             ReplayInsertOutcome::AlreadySeen
+        );
+        assert!(store.is_empty());
+    }
+
+    #[tokio::test]
+    async fn consumable_nonce_store_rejects_expired_nonce_at_consume_time() {
+        let store = InMemoryConsumableNonceStore::new();
+        let scope =
+            ReplayScope::oid4vci_nonce("tenant-a", "issuer-a", "profile-a").expect("valid scope");
+        let key = key("nonce-1");
+
+        store
+            .reserve_nonce(
+                &scope,
+                &key,
+                OffsetDateTime::now_utc() + Duration::from_millis(10),
+            )
+            .await
+            .expect("nonce reserves");
+        assert_eq!(store.len(), 1);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        assert_eq!(
+            store
+                .consume_nonce(&scope, &key)
+                .await
+                .expect("expired consume checks cleanly"),
+            ReplayInsertOutcome::AlreadySeen
+        );
+        assert!(store.is_empty());
+    }
+
+    #[tokio::test]
+    async fn consumable_nonce_store_stale_generation_cannot_consume_rereserved_nonce() {
+        let cache = InMemoryCacheStore::new();
+        let store =
+            ConsumableNonceCacheStore::new(Arc::new(cache.clone()), "registry-platform-replay");
+        let scope =
+            ReplayScope::oid4vci_nonce("tenant-a", "issuer-a", "profile-a").expect("valid scope");
+        let key = key("nonce-1");
+        let cache_key = store.cache_key(&scope, &key).expect("cache key builds");
+
+        store
+            .reserve_nonce(
+                &scope,
+                &key,
+                OffsetDateTime::now_utc() + Duration::from_millis(10),
+            )
+            .await
+            .expect("nonce reserves");
+        let stale_generation = cache
+            .get(&cache_key)
+            .await
+            .expect("cache get succeeds")
+            .expect("stale generation exists");
+        assert!(stale_generation.starts_with(NONCE_RESERVATION_PREFIX));
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        store
+            .reserve_nonce(&scope, &key, future())
+            .await
+            .expect("same nonce can reserve after expiry");
+        let current_generation = cache
+            .get(&cache_key)
+            .await
+            .expect("cache get succeeds")
+            .expect("current generation exists");
+        assert_ne!(stale_generation, current_generation);
+        assert_eq!(
+            cache
+                .compare_and_set(
+                    &cache_key,
+                    &stale_generation,
+                    NONCE_CONSUMED_VALUE,
+                    OffsetDateTime::now_utc() + time::Duration::seconds(60),
+                )
+                .await
+                .expect("stale compare-and-set checks cleanly"),
+            CacheCompareAndSetOutcome::Mismatch
+        );
+        assert_eq!(
+            store
+                .consume_nonce(&scope, &key)
+                .await
+                .expect("current generation consumes"),
+            ReplayInsertOutcome::Inserted
         );
     }
 

@@ -34,14 +34,12 @@ auth:
       fingerprint:
         provider: env
         name: POPULATION_METADATA_CLIENT_HASH
-        commitment: sha256:e40bf04f8f3443aa49811aa66b7c0590764ed46d9574386430d585917df6e8d8
       scopes:
         - population_registry:metadata
     - id: esignet_identity_release
       fingerprint:
         provider: env
         name: POPULATION_ESIGNET_IDENTITY_RELEASE_HASH
-        commitment: sha256:76e150004c34591b733d67af15f0f14f39a9bd127cddd132fe22d8e95542eb7e
       scopes:
         - population_registry:metadata
         - population_registry:identity_release
