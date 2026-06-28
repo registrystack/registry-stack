@@ -6,7 +6,7 @@
 
 ## Problem
 
-Registry-stack runtime code and committed artifacts emit machine identifiers (problem `type` URIs, JSON Schema `$id`, JSON-LD namespace prefixes, SHACL shape IRIs) under six domains that do not exist and never resolve:
+Registry-stack runtime code and committed artifacts emit machine identifiers (problem `type` URIs, JSON Schema `$id`, JSON-LD namespace prefixes, SHACL shape IRIs) under seven domains that do not exist and never resolve:
 
 | Host | Occurrences | Used for |
 | --- | --- | --- |
@@ -15,9 +15,10 @@ Registry-stack runtime code and committed artifacts emit machine identifiers (pr
 | `schemas.registry-relay.org` | 9 | Relay JSON Schema `$id`, provenance context `dg` prefix |
 | `registry-notary.dev` | 9 | Notary identifiers / spec prose |
 | `registry-manifest.dev` | 7 | Manifest identifiers |
+| `registry-platform.example` | 7 | Platform ops / config-report JSON Schema `$id` |
 | `registry-platform.dev` | 6 | Platform (httpsec) problem `type` URIs |
 
-153 occurrences across **61 files**. A consumer that dereferences any of these gets nothing.
+160 occurrences across **68 files**. A consumer that dereferences any of these gets nothing.
 
 The resolver at `apps/registrystack-id` already re-homes all of these to `id.registrystack.org` in its generated output, so the *published* surface is correct. The gap is that the source of truth emits the placeholders, so the resolver is compensating by hand-copying and host-rewriting rather than mirroring what the services actually serve.
 
@@ -30,6 +31,7 @@ A single canonical host for all machine identifiers: **`id.registrystack.org`**,
 | Relay problem type | `https://registry-relay.dev/problems/...` | `https://id.registrystack.org/problems/registry-relay/...` |
 | Notary problem type | `https://docs.registry-notary.dev/problems/...` | `https://id.registrystack.org/problems/registry-notary/...` |
 | Platform problem type | `https://registry-platform.dev/problems/...` | `https://id.registrystack.org/problems/registry-platform/...` |
+| Platform schema `$id` | `https://registry-platform.example/schemas/<x>.json` | `https://id.registrystack.org/schemas/registry-platform/<x>.json` |
 | Relay schema `$id` | `https://schemas.registry-relay.org/<x>/v1.json` | `https://id.registrystack.org/schemas/registry-relay/<x>/v1.json` |
 | Provenance context `dg` | `https://schemas.registry-relay.org/provenance/v1#` | `https://id.registrystack.org/ns/registry-relay/provenance/v1#` |
 | Relay SHACL namespace | `https://registry-relay.dev/ns#` | `https://id.registrystack.org/ns/registry-relay/...#` |
@@ -49,7 +51,7 @@ The target equals the resolver's current output, so consolidation makes the sour
 3. **Relay schema/context: config vs artifact.** Relay provenance emission uses operator-configured base URLs (`config/provenance.rs`: `schema_base_url`, `context_base_url`), while the committed resource files (`resources/schemas/*`, `resources/jsonld/*`) hardcode `$id`/`dg`. Both must move to `id.registrystack.org`, and the lab configs that currently set placeholder bases must be updated too.
 4. **Resolver follow-up.** Once the source emits `id.registrystack.org` natively, two resolver simplifications become possible: (a) `build.mjs` no longer needs to host-rewrite copied artifacts; (b) `scripts/check-upstream-artifacts.mjs` can tighten from "normalize `$id`/`dg`" to exact `$id` match. Track as a cleanup after this lands.
 
-## Scope inventory (61 files)
+## Scope inventory (68 files)
 
 **A. Runtime emitters (source of truth), edit directly (6):**
 - `crates/registry-relay/src/error.rs` (`PROBLEM_TYPE_BASE`)
@@ -93,11 +95,15 @@ The target equals the resolver's current output, so consolidation makes the sour
 - `products/notary/specs/federated-notary-manifest-spec.md`
 - (plus the resolver-side docs already covered in the review)
 
+**H. Platform / config-report JSON Schemas (committed `$id`, edit directly) (7):**
+- `crates/registry-platform-ops/schemas/*.json` (4): `registry.ops.posture.v1`, `registry.admin.capabilities.v1`, `registry.platform.config_apply_report.v1`, `registry.admin.error.v1`.
+- `crates/registry-config-report/schemas/*.json` (3): `registry.config.explanation.v1`, `registry.config.diagnostic_report.v1`, `registryctl.validation.report.v1`.
+
 ## Execution sequence
 
 1. **Settle the four decisions above** (URNs, shared constant, config vs artifact, resolver follow-up).
 2. **Centralize the base** per product (optional but recommended) so the host is defined once.
-3. **Edit the source of truth:** group A (runtime emitters), B (artifacts), C (ttl), D (config). Keep one host string per product.
+3. **Edit the source of truth:** group A (runtime emitters), B and H (artifacts), C (ttl), D (config). Keep one host string per product.
 4. **Re-pin hashes:** regenerate the three `MANIFEST.toml` SHA-256 values; update `decisions/wave-3-data-provenance.md` §10 if it names the old host.
 5. **Regenerate derived artifacts** (group E): `cargo insta accept`, golden/fixture updates, OpenAPI regen. Never hand-edit these.
 6. **Update inline test expectations** (group F) and docs/specs (group G).

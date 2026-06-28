@@ -74,13 +74,13 @@ Stable machine identifiers for the registry stack resolve at `https://id.registr
 
 ### Verifiable credential schemas and context
 
-Registry Relay issues signed responses as verifiable credentials whose `credentialSubject` shape is described by published JSON Schemas, alongside a JSON-LD context for the credential terms. A running Relay gateway serves them unauthenticated under its `/schemas/{type}/{version}` and `/contexts/{vocab}/{version}` routes:
+Registry Relay issues signed responses as verifiable credentials whose `credentialSubject` shape is described by published JSON Schemas, alongside a JSON-LD context for the credential terms. A Relay gateway serves them unauthenticated under its `/schemas/{type}/{version}` and `/contexts/{vocab}/{version}` routes when provenance is enabled; deployments with provenance disabled do not expose these routes:
 
 - **EntityRecord schema**: the `credentialSubject` envelope of an EntityRecord credential.
 - **AggregateResult schema**: the `credentialSubject` envelope of an AggregateResult credential.
 - **Provenance context**: the JSON-LD 1.1 context for the credential terms.
 
-These three are production contracts: they are embedded in issued credentials, served by the gateway, and content-pinned in the relay resource manifest. Their canonical identifiers resolve under `id.registrystack.org/schemas/registry-relay/...` and `id.registrystack.org/contexts/registry-relay/...`.
+These three are production contracts: they are embedded in issued credentials, served by the gateway, and content-pinned in the relay resource manifest. The `$id` and context IRIs emitted today are under `schemas.registry-relay.org`; the resolver also publishes them under `id.registrystack.org/schemas/registry-relay/...` and `id.registrystack.org/contexts/registry-relay/...`, and consolidation of the emitted identifiers onto that host is in progress.
 
 ### JSON-LD namespaces
 
