@@ -3,7 +3,6 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs,
     net::{IpAddr, SocketAddr},
     sync::{Arc, RwLock},
     time::Duration,
@@ -40,7 +39,7 @@ use registry_notary_core::{
     StandaloneRegistryNotaryConfig, StoredSelfAttestationMetadata, SubjectRequest,
     VerifiedClaimValue, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
 };
-use registry_platform_audit::AuditKeyHasher;
+use registry_platform_audit::{AuditError, AuditKeyHasher};
 use registry_platform_config::RegistryTrustRoot;
 use registry_platform_crypto::KeyReadiness;
 use registry_platform_crypto::PublicJwk;
@@ -55,10 +54,11 @@ use registry_platform_oid4vci::{
     PRE_AUTHORIZED_CODE_GRANT_TYPE, PROOF_TYPE_JWT, SD_JWT_VC_FORMAT,
 };
 use registry_platform_ops::{
-    internal_config_hash, posture_safe_runtime_config_hash, AntiRollbackKey, AntiRollbackProposal,
-    AntiRollbackRecord, AntiRollbackStoreError, ApplyReportResult, BreakGlassApproval,
-    BreakGlassRateLimit, ConfigSource, FileAntiRollbackStore, FileLocalApprovalStore,
-    LocalApprovalStoreError, LocalOperatorApproval, PostureApplyResult,
+    distinct_approver_count, internal_config_hash, is_valid_approval_reference,
+    posture_safe_runtime_config_hash, AntiRollbackKey, AntiRollbackProposal, AntiRollbackRecord,
+    AntiRollbackStoreError, ApplyReportResult, BreakGlassApproval, BreakGlassRateLimit,
+    ConfigSource, FileAntiRollbackStore, FileLocalApprovalStore, LocalApprovalStoreError,
+    LocalOperatorApproval, PostureApplyResult,
 };
 use registry_platform_pdp::{
     decide as pdp_decide, Decision as PdpDecision, EvidenceRequestContext as PdpRequestContext,
@@ -1262,19 +1262,6 @@ async fn break_glass_proposal(
     }
 }
 
-/// Validate a caller-supplied approval `reference` before it reaches the
-/// platform `FileLocalApprovalStore`. The store keys approvals by this value,
-/// so constrain it to a safe charset and reject path-traversal markers as
-/// defense-in-depth, regardless of how the store ultimately keys it.
-fn is_valid_approval_reference(reference: &str) -> bool {
-    if reference.trim().is_empty() || reference.contains("..") {
-        return false;
-    }
-    reference
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ':' | '-'))
-}
-
 async fn stored_break_glass_approval(
     config_trust: &registry_notary_core::ConfigTrustConfig,
     candidate: &ResolvedConfigCandidate,
@@ -1312,35 +1299,14 @@ fn stored_break_glass_approval_blocking(
         return Err(());
     }
     let store = FileLocalApprovalStore::new(&config_trust.local_approval_state_path);
-    let loaded = previous_config_hash
-        .and_then(|previous| {
-            store
-                .load_for_apply(
-                    reference,
-                    DEFAULT_BREAK_GLASS_EMERGENCY_CHANGE_CLASS,
-                    config_hash,
-                    Some(previous),
-                )
-                .ok()
-        })
-        .or_else(|| {
-            store
-                .load_for_apply(
-                    reference,
-                    DEFAULT_BREAK_GLASS_EMERGENCY_CHANGE_CLASS,
-                    config_hash,
-                    None,
-                )
-                .ok()
-        });
-    let Some(approval) = loaded else {
-        return Err(());
-    };
+    let approvals =
+        load_break_glass_approval_set(&store, reference, config_hash, previous_config_hash)?;
+    let approval = approvals.first().cloned().ok_or(())?;
     enforce_break_glass_approval_satisfies_candidate(
         config_trust,
         change_classes,
         &approval.change_class,
-        effective_approver_count(config_trust, &approval),
+        distinct_approver_count(&approvals),
     )?;
     Ok(BreakGlassApproval {
         approved_by: approval.approved_by,
@@ -1352,50 +1318,32 @@ fn stored_break_glass_approval_blocking(
     })
 }
 
-#[derive(Deserialize)]
-struct LocalApprovalFileView {
-    #[serde(default)]
-    approvals: Vec<LocalOperatorApproval>,
-}
-
-fn effective_approver_count(
-    config_trust: &registry_notary_core::ConfigTrustConfig,
-    approval: &LocalOperatorApproval,
-) -> usize {
-    let mut approvers = BTreeSet::new();
-    insert_approver_identity(&mut approvers, &approval.approved_by);
-    for approver in &approval.approvers {
-        insert_approver_identity(&mut approvers, approver);
-    }
-    let Ok(bytes) = fs::read(&config_trust.local_approval_state_path) else {
-        return approvers.len();
-    };
-    let Ok(state) = serde_json::from_slice::<LocalApprovalFileView>(&bytes) else {
-        return approvers.len();
-    };
-    let now = OffsetDateTime::now_utc().unix_timestamp().max(0) as u64;
-    for candidate in state.approvals {
-        if candidate.approval_reference == approval.approval_reference
-            && candidate.change_class == approval.change_class
-            && candidate.config_hash == approval.config_hash
-            && candidate.previous_config_hash == approval.previous_config_hash
-            && candidate.expires_at_unix_seconds > now
-            && !candidate.approved_by.trim().is_empty()
-        {
-            insert_approver_identity(&mut approvers, &candidate.approved_by);
-            for approver in &candidate.approvers {
-                insert_approver_identity(&mut approvers, approver);
-            }
+fn load_break_glass_approval_set(
+    store: &FileLocalApprovalStore,
+    reference: &str,
+    config_hash: &str,
+    previous_config_hash: Option<&str>,
+) -> Result<Vec<LocalOperatorApproval>, ()> {
+    if let Some(previous) = previous_config_hash {
+        match store.load_approval_set_for_apply(
+            reference,
+            DEFAULT_BREAK_GLASS_EMERGENCY_CHANGE_CLASS,
+            config_hash,
+            Some(previous),
+        ) {
+            Ok(approvals) => return Ok(approvals),
+            Err(LocalApprovalStoreError::ApprovalNotFound) => {}
+            Err(_) => return Err(()),
         }
     }
-    approvers.len()
-}
-
-fn insert_approver_identity(approvers: &mut BTreeSet<String>, identity: &str) {
-    let identity = identity.trim();
-    if !identity.is_empty() {
-        approvers.insert(identity.to_string());
-    }
+    store
+        .load_approval_set_for_apply(
+            reference,
+            DEFAULT_BREAK_GLASS_EMERGENCY_CHANGE_CLASS,
+            config_hash,
+            None,
+        )
+        .map_err(|_| ())
 }
 
 fn required_break_glass_approver_count(
@@ -2584,7 +2532,31 @@ async fn emit_config_apply_intent_audit(
     audit_pipeline
         .emit(&event)
         .await
-        .map_err(crate::standalone::audit_error_response)
+        .map_err(config_apply_audit_error_response)
+}
+
+fn config_apply_audit_error_response(error: AuditError) -> Response {
+    tracing::error!(target: "registry_notary_server::audit", error = %error, "config apply audit event write failed");
+    let status = StatusCode::SERVICE_UNAVAILABLE;
+    let mut response = (
+        status,
+        Json(json!({
+            "type": format!("{}/audit/write_failed", crate::PROBLEM_TYPE_BASE_URL),
+            "title": "Audit write failed",
+            "status": status.as_u16(),
+            "detail": "audit event could not be written",
+            "code": "audit.write_failed",
+        })),
+    )
+        .into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        "application/problem+json".parse().unwrap(),
+    );
+    response
+        .extensions_mut()
+        .insert(EvidenceErrorCodeContext("audit.write_failed".to_string()));
+    response
 }
 
 fn config_apply_intent_audit_event(audit: ConfigAuditEvent) -> EvidenceAuditEvent {
@@ -10640,82 +10612,6 @@ mod tests {
             ),
             Some("http://proxy.example/credentials/identity".to_string())
         );
-    }
-
-    #[test]
-    fn approval_reference_validator_rejects_path_traversal_and_separators() {
-        assert!(is_valid_approval_reference("approval-2026.01:abc_DEF"));
-        assert!(!is_valid_approval_reference(""));
-        assert!(!is_valid_approval_reference("   "));
-        assert!(!is_valid_approval_reference(".."));
-        assert!(!is_valid_approval_reference("../etc/passwd"));
-        assert!(!is_valid_approval_reference("a/b"));
-        assert!(!is_valid_approval_reference("a\\b"));
-        assert!(!is_valid_approval_reference("/abs/path"));
-        assert!(!is_valid_approval_reference("with space"));
-        assert!(!is_valid_approval_reference("nul\0byte"));
-        assert!(!is_valid_approval_reference("ctrl\nchar"));
-    }
-
-    #[test]
-    fn effective_approver_count_trims_and_deduplicates_identities() {
-        let tmp = tempfile::TempDir::new().expect("tempdir");
-        let approval_state_path = tmp.path().join("approvals.json");
-        let config_hash = test_hash('b');
-        let previous_config_hash = Some(test_hash('a'));
-        let approval = LocalOperatorApproval {
-            approved_by: "ops@example.test".to_string(),
-            approvers: vec![
-                " ops@example.test ".to_string(),
-                " security@example.test ".to_string(),
-            ],
-            reason: "approve emergency config change".to_string(),
-            approval_reference: "APPROVAL-1".to_string(),
-            change_class: "client_access".to_string(),
-            config_hash: config_hash.clone(),
-            previous_config_hash: previous_config_hash.clone(),
-            expires_at_unix_seconds: 4_102_444_800,
-            rate_limit_identity: "ops@example.test".to_string(),
-            rate_limit: BreakGlassRateLimit {
-                max_accepted: 1,
-                window_seconds: 60,
-            },
-        };
-        let matching_stored = LocalOperatorApproval {
-            approved_by: " security@example.test ".to_string(),
-            approvers: vec![
-                "ops@example.test".to_string(),
-                " audit@example.test ".to_string(),
-                "   ".to_string(),
-            ],
-            ..approval.clone()
-        };
-        let expired_stored = LocalOperatorApproval {
-            approved_by: "expired@example.test".to_string(),
-            expires_at_unix_seconds: 1,
-            ..approval.clone()
-        };
-        fs::write(
-            &approval_state_path,
-            serde_json::to_vec(&json!({
-                "approvals": [matching_stored, expired_stored]
-            }))
-            .expect("approval state serializes"),
-        )
-        .expect("approval state writes");
-        let config_trust = registry_notary_core::ConfigTrustConfig {
-            antirollback_state_path: tmp.path().join("antirollback.json"),
-            local_approval_state_path: approval_state_path,
-            break_glass_rate_limit: registry_notary_core::ConfigTrustRateLimit {
-                max_accepted: 1,
-                window_seconds: 3600,
-            },
-            required_approver_count: BTreeMap::new(),
-            accepted_roots: Vec::new(),
-            remote_tuf_repositories: Vec::new(),
-        };
-
-        assert_eq!(effective_approver_count(&config_trust, &approval), 3);
     }
 
     #[test]

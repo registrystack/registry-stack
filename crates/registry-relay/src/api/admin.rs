@@ -18,11 +18,12 @@ use registry_manifest_core::CompiledMetadata;
 use registry_platform_config::RegistryTrustRoot;
 use registry_platform_crypto::{KeyProviderKind, KeyReadiness};
 use registry_platform_ops::{
-    filter_posture_for_tier, internal_config_hash, is_sha256_config_hash,
-    posture_safe_runtime_config_hash, AntiRollbackKey, AntiRollbackProposal, AntiRollbackRecord,
-    AntiRollbackStoreError, ApplyReportResult, AuditWritePolicy, BreakGlassApproval,
-    BreakGlassRateLimit, ConfigProvenance, ConfigSource, FileAntiRollbackStore,
-    FileLocalApprovalStore, LocalOperatorApproval, PostureFilterError, PostureTier,
+    distinct_approver_count, filter_posture_for_tier, internal_config_hash, is_sha256_config_hash,
+    is_valid_approval_reference, posture_safe_runtime_config_hash, AntiRollbackKey,
+    AntiRollbackProposal, AntiRollbackRecord, AntiRollbackStoreError, ApplyReportResult,
+    AuditWritePolicy, BreakGlassApproval, BreakGlassRateLimit, ConfigProvenance, ConfigSource,
+    FileAntiRollbackStore, FileLocalApprovalStore, LocalOperatorApproval, PostureFilterError,
+    PostureTier,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -1102,35 +1103,14 @@ fn stored_break_glass_approval(
         return Err(());
     }
     let store = FileLocalApprovalStore::new(&config_trust.local_approval_state_path);
-    let loaded = previous_config_hash
-        .and_then(|previous| {
-            store
-                .load_for_apply(
-                    reference,
-                    DEFAULT_BREAK_GLASS_EMERGENCY_CHANGE_CLASS,
-                    config_hash,
-                    Some(previous),
-                )
-                .ok()
-        })
-        .or_else(|| {
-            store
-                .load_for_apply(
-                    reference,
-                    DEFAULT_BREAK_GLASS_EMERGENCY_CHANGE_CLASS,
-                    config_hash,
-                    None,
-                )
-                .ok()
-        });
-    let Some(approval) = loaded else {
-        return Err(());
-    };
+    let approvals =
+        load_break_glass_approval_set(&store, reference, config_hash, previous_config_hash)?;
+    let approval = approvals.first().cloned().ok_or(())?;
     enforce_break_glass_approval_satisfies_candidate(
         config_trust,
         &resolved.change_classes,
         &approval.change_class,
-        effective_approver_count(&approval),
+        distinct_approver_count(&approvals),
     )?;
     Ok(BreakGlassApproval {
         approved_by: approval.approved_by,
@@ -1142,22 +1122,32 @@ fn stored_break_glass_approval(
     })
 }
 
-/// Validate a caller-supplied approval `reference` before it reaches the
-/// platform `FileLocalApprovalStore`. The store keys approvals by this value, so
-/// constrain it to a safe charset and reject path-traversal markers as
-/// defense-in-depth even though the current store does not use references as
-/// filesystem paths.
-fn is_valid_approval_reference(reference: &str) -> bool {
-    if reference.trim().is_empty() || reference.contains("..") {
-        return false;
+fn load_break_glass_approval_set(
+    store: &FileLocalApprovalStore,
+    reference: &str,
+    config_hash: &str,
+    previous_config_hash: Option<&str>,
+) -> Result<Vec<LocalOperatorApproval>, ()> {
+    if let Some(previous) = previous_config_hash {
+        match store.load_approval_set_for_apply(
+            reference,
+            DEFAULT_BREAK_GLASS_EMERGENCY_CHANGE_CLASS,
+            config_hash,
+            Some(previous),
+        ) {
+            Ok(approvals) => return Ok(approvals),
+            Err(registry_platform_ops::LocalApprovalStoreError::ApprovalNotFound) => {}
+            Err(_) => return Err(()),
+        }
     }
-    reference
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ':' | '-'))
-}
-
-fn effective_approver_count(approval: &LocalOperatorApproval) -> usize {
-    1 + approval.approvers.len()
+    store
+        .load_approval_set_for_apply(
+            reference,
+            DEFAULT_BREAK_GLASS_EMERGENCY_CHANGE_CLASS,
+            config_hash,
+            None,
+        )
+        .map_err(|_| ())
 }
 
 fn required_break_glass_approver_count(
@@ -1400,9 +1390,9 @@ async fn write_config_apply_intent_audit(
     runtime: &RuntimeSnapshot,
     audit: ConfigAuditExt,
 ) -> Result<(), Response> {
-    let fail_closed = runtime.config().map_or(false, |config| {
-        config.audit.write_policy == AuditWritePolicy::FailClosed
-    });
+    let fail_closed = runtime
+        .config()
+        .is_some_and(|config| config.audit.write_policy == AuditWritePolicy::FailClosed);
     let Some(sink) = runtime.audit_sink() else {
         return if fail_closed {
             Err(audit_write_failed_response())
@@ -2966,21 +2956,6 @@ audit:
 datasets: []
 "#
         .to_string()
-    }
-
-    #[test]
-    fn approval_reference_validator_rejects_path_traversal_and_separators() {
-        assert!(is_valid_approval_reference("approval-2026.01:abc_DEF"));
-        assert!(!is_valid_approval_reference(""));
-        assert!(!is_valid_approval_reference("   "));
-        assert!(!is_valid_approval_reference(".."));
-        assert!(!is_valid_approval_reference("../etc/passwd"));
-        assert!(!is_valid_approval_reference("a/b"));
-        assert!(!is_valid_approval_reference("a\\b"));
-        assert!(!is_valid_approval_reference("/abs/path"));
-        assert!(!is_valid_approval_reference("with space"));
-        assert!(!is_valid_approval_reference("nul\0byte"));
-        assert!(!is_valid_approval_reference("ctrl\nchar"));
     }
 
     struct ReadinessTestSigner {
