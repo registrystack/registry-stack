@@ -4087,6 +4087,94 @@ async fn admin_config_apply_signed_openapi_auth_policy_change_updates_runtime_po
 }
 
 #[tokio::test]
+async fn fail_closed_audit_failure_blocks_config_apply_before_state_mutation() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let blocked_parent = tmp.path().join("blocked-audit-parent");
+    fs::write(&blocked_parent, b"not a directory").expect("blocked parent writes");
+    let audit_path = blocked_parent.join("audit.jsonl");
+    let antirollback_path = tmp.path().join("config-antirollback.json");
+    let mut config = registry_data_api_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+    );
+    add_admin_api_key(&mut config);
+    add_config_trust(&mut config, antirollback_path.clone());
+    let current_config_yaml = serde_norway::to_string(&config).expect("current config serializes");
+    initialize_notary_antirollback_state(&antirollback_path, &current_config_yaml, 1);
+    let current_config_hash = internal_config_hash(current_config_yaml.as_bytes());
+
+    let mut candidate = config.clone();
+    candidate.server.openapi_requires_auth = false;
+    let candidate_yaml = serde_norway::to_string(&candidate).expect("candidate serializes");
+    let local_approval_path = config
+        .config_trust
+        .as_ref()
+        .expect("config trust exists")
+        .local_approval_state_path
+        .clone();
+    write_local_approval_state(
+        &local_approval_path,
+        local_operator_approval_for_change_class(
+            &candidate_yaml,
+            &current_config_hash,
+            "openapi_auth_policy_change",
+            "OPENAPI-AUDIT-FAIL",
+        ),
+    );
+    let signed = write_signed_notary_config_tuf_fixture_with_change_classes(
+        &tmp,
+        &current_config_hash,
+        &candidate_yaml,
+        2,
+        "registry-notary-standalone",
+        &["kid-a", "kid-b"],
+        &["openapi_auth_policy_change"],
+    )
+    .await;
+    let app = standalone_config_admin_test_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let response = server
+        .post("/admin/v1/config/apply")
+        .add_header("x-api-key", "admin-token")
+        .json(&signed_tuf_apply_request_with_local_approval(
+            &signed,
+            "OPENAPI-AUDIT-FAIL",
+        ))
+        .await;
+
+    response.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    let body: Value = response.json();
+    assert_eq!(body["code"], json!("audit.write_failed"));
+    assert_eq!(body["status"], json!(503));
+
+    let antirollback = FileAntiRollbackStore::new(&antirollback_path)
+        .load(&AntiRollbackKey {
+            product: "registry-notary".to_string(),
+            instance_id: "registry-notary-standalone".to_string(),
+            environment: "development".to_string(),
+            stream_id: "notary-test-stream".to_string(),
+        })
+        .expect("antirollback state loads");
+    assert_eq!(antirollback.last_sequence, 1);
+    assert_eq!(antirollback.last_config_hash, current_config_hash);
+
+    fs::remove_file(&blocked_parent).expect("blocked parent removes");
+    fs::create_dir(&blocked_parent).expect("audit parent dir creates");
+    server
+        .get("/openapi.json")
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
 async fn admin_config_apply_signed_openapi_auth_policy_change_can_relock_runtime_policy() {
     set_audit_secret();
     std::env::set_var(
@@ -6271,6 +6359,72 @@ async fn admin_config_apply_signed_break_glass_issuer_rotation_swaps_without_res
         .post("/admin/v1/config/apply")
         .add_header("authorization", authorization.clone())
         .json(&stored_single_approver_request)
+        .await;
+
+    response.assert_status(StatusCode::CONFLICT);
+    let body: Value = response.json();
+    assert_eq!(body["result"], "rejected_break_glass");
+    assert_eq!(body["applied"], false);
+    let record = FileAntiRollbackStore::new(&antirollback_path)
+        .load(&AntiRollbackKey {
+            product: "registry-notary".to_string(),
+            instance_id: "registry-notary-standalone".to_string(),
+            environment: "development".to_string(),
+            stream_id: "notary-test-stream".to_string(),
+        })
+        .expect("anti-rollback state loads");
+    assert_eq!(record.last_sequence, 1);
+    assert!(record.break_glass.accepted.is_empty());
+
+    write_local_approval_states(
+        &local_approval_path,
+        vec![
+            durable_break_glass_approval(&candidate_yaml, None, "BG-DUP", &[]),
+            durable_break_glass_approval(&candidate_yaml, None, "BG-DUP", &[]),
+        ],
+    );
+    let mut duplicate_identity_request = signed_tuf_apply_request(&signed);
+    duplicate_identity_request["break_glass"] = json!(true);
+    duplicate_identity_request["break_glass_approval_reference"] = json!("BG-DUP");
+    let response = server
+        .post("/admin/v1/config/apply")
+        .add_header("authorization", authorization.clone())
+        .json(&duplicate_identity_request)
+        .await;
+
+    response.assert_status(StatusCode::CONFLICT);
+    let body: Value = response.json();
+    assert_eq!(body["result"], "rejected_break_glass");
+    assert_eq!(body["applied"], false);
+    let record = FileAntiRollbackStore::new(&antirollback_path)
+        .load(&AntiRollbackKey {
+            product: "registry-notary".to_string(),
+            instance_id: "registry-notary-standalone".to_string(),
+            environment: "development".to_string(),
+            stream_id: "notary-test-stream".to_string(),
+        })
+        .expect("anti-rollback state loads");
+    assert_eq!(record.last_sequence, 1);
+    assert!(record.break_glass.accepted.is_empty());
+
+    let mut expired_approvals = durable_break_glass_approvals(
+        &candidate_yaml,
+        None,
+        "BG-EXPIRED",
+        &["ops-peer@example.test"],
+    );
+    expired_approvals
+        .last_mut()
+        .expect("expired approval exists")
+        .expires_at_unix_seconds = 1;
+    write_local_approval_states(&local_approval_path, expired_approvals);
+    let mut expired_member_request = signed_tuf_apply_request(&signed);
+    expired_member_request["break_glass"] = json!(true);
+    expired_member_request["break_glass_approval_reference"] = json!("BG-EXPIRED");
+    let response = server
+        .post("/admin/v1/config/apply")
+        .add_header("authorization", authorization.clone())
+        .json(&expired_member_request)
         .await;
 
     response.assert_status(StatusCode::CONFLICT);

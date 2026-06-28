@@ -1584,9 +1584,13 @@ fn fixture_hash_placeholder() -> String {
 }
 
 fn write_local_approval(fixture: &AdminFixture, approval: Value) {
+    write_local_approvals(fixture, vec![approval]);
+}
+
+fn write_local_approvals(fixture: &AdminFixture, approvals: Vec<Value>) {
     std::fs::write(
         &fixture.local_approval_path,
-        serde_json::to_vec_pretty(&json!({ "approvals": [approval] }))
+        serde_json::to_vec_pretty(&json!({ "approvals": approvals }))
             .expect("local approval file serializes"),
     )
     .expect("local approval file writes");
@@ -2778,6 +2782,44 @@ async fn config_apply_break_glass_required_approver_count_rejects_inline_and_sin
     let stored_body: Value = stored_response.json();
     assert_eq!(stored_body["result"], "rejected_break_glass");
 
+    let duplicate_primary = durable_break_glass_approval("BG-DUP", &candidate_hash, None, &[]);
+    let mut duplicate_same_operator =
+        durable_break_glass_approval("BG-DUP", &candidate_hash, None, &[]);
+    duplicate_same_operator["reason"] = json!("duplicate stored emergency approval reason");
+    write_local_approvals(&fixture, vec![duplicate_primary, duplicate_same_operator]);
+    let mut duplicate_request = signed_tuf_apply_request(&signed);
+    duplicate_request["break_glass"] = json!(true);
+    duplicate_request["break_glass_approval_reference"] = json!("BG-DUP");
+    let duplicate_response = post_admin_config(
+        &fixture,
+        "/admin/v1/config/apply",
+        duplicate_request,
+        ADMIN_KEY,
+    )
+    .await;
+    duplicate_response.assert_status(StatusCode::CONFLICT);
+    let duplicate_body: Value = duplicate_response.json();
+    assert_eq!(duplicate_body["result"], "rejected_break_glass");
+
+    let valid_member = durable_break_glass_approval("BG-EXPIRED", &candidate_hash, None, &[]);
+    let mut expired_member = durable_break_glass_approval("BG-EXPIRED", &candidate_hash, None, &[]);
+    expired_member["approved_by"] = json!("ops-peer@example.test");
+    expired_member["expires_at_unix_seconds"] = json!(1);
+    write_local_approvals(&fixture, vec![valid_member, expired_member]);
+    let mut expired_request = signed_tuf_apply_request(&signed);
+    expired_request["break_glass"] = json!(true);
+    expired_request["break_glass_approval_reference"] = json!("BG-EXPIRED");
+    let expired_response = post_admin_config(
+        &fixture,
+        "/admin/v1/config/apply",
+        expired_request,
+        ADMIN_KEY,
+    )
+    .await;
+    expired_response.assert_status(StatusCode::CONFLICT);
+    let expired_body: Value = expired_response.json();
+    assert_eq!(expired_body["result"], "rejected_break_glass");
+
     let record = FileAntiRollbackStore::new(&fixture.antirollback_path)
         .load(&AntiRollbackKey {
             product: "registry-relay".to_string(),
@@ -2789,10 +2831,10 @@ async fn config_apply_break_glass_required_approver_count_rejects_inline_and_sin
     assert_eq!(record.last_sequence, 0);
     assert!(record.break_glass.accepted.is_empty());
 
-    write_local_approval(
-        &fixture,
-        durable_break_glass_approval("BG-4243", &candidate_hash, None, &["ops-peer@example.test"]),
-    );
+    let primary = durable_break_glass_approval("BG-4243", &candidate_hash, None, &[]);
+    let mut peer = durable_break_glass_approval("BG-4243", &candidate_hash, None, &[]);
+    peer["approved_by"] = json!("ops-peer@example.test");
+    write_local_approvals(&fixture, vec![primary, peer]);
     let mut two_approver_request = signed_tuf_apply_request(&signed);
     two_approver_request["break_glass"] = json!(true);
     two_approver_request["break_glass_approval_reference"] = json!("BG-4243");

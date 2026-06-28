@@ -432,6 +432,39 @@ pub struct LocalOperatorApproval {
     pub rate_limit: BreakGlassRateLimit,
 }
 
+pub fn distinct_approver_count(approvals: &[LocalOperatorApproval]) -> usize {
+    let mut approvers = std::collections::BTreeSet::new();
+    for approval in approvals {
+        insert_trimmed_approver(&mut approvers, &approval.approved_by);
+        for approver in &approval.approvers {
+            insert_trimmed_approver(&mut approvers, approver);
+        }
+    }
+    approvers.len()
+}
+
+fn insert_trimmed_approver<'a>(
+    approvers: &mut std::collections::BTreeSet<&'a str>,
+    value: &'a str,
+) {
+    let value = value.trim();
+    if !value.is_empty() {
+        approvers.insert(value);
+    }
+}
+
+/// Validate a caller-supplied approval reference before it reaches a local
+/// approval store. The store keys approvals by this value, so constrain it to a
+/// safe charset and reject path-traversal markers as defense-in-depth.
+pub fn is_valid_approval_reference(reference: &str) -> bool {
+    if reference.trim().is_empty() || reference.contains("..") {
+        return false;
+    }
+    reference
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ':' | '-'))
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct BreakGlassApproval {
     pub approved_by: String,
@@ -1005,6 +1038,10 @@ impl FileLocalApprovalStore {
         )
     }
 
+    /// Load the first matching approval record for legacy single-record callers.
+    ///
+    /// This preserves the historical first-match contract. Quorum-sensitive
+    /// callers must use `load_approval_set_for_apply[_at]` instead.
     pub fn load_for_apply_at(
         &self,
         approval_reference: &str,
@@ -1040,6 +1077,67 @@ impl FileLocalApprovalStore {
         )
         .map_err(local_approval_store_error)?;
         Ok(approval)
+    }
+
+    pub fn load_approval_set_for_apply(
+        &self,
+        approval_reference: &str,
+        change_class: &str,
+        config_hash: &str,
+        previous_config_hash: Option<&str>,
+    ) -> Result<Vec<LocalOperatorApproval>, LocalApprovalStoreError> {
+        self.load_approval_set_for_apply_at(
+            approval_reference,
+            change_class,
+            config_hash,
+            previous_config_hash,
+            current_unix_seconds()
+                .map_err(|error| LocalApprovalStoreError::Io(error.to_string()))?,
+        )
+    }
+
+    /// Load the validated approval set for one candidate tuple.
+    ///
+    /// Every matching record is part of the set. If any matching member is
+    /// malformed, bound to the wrong candidate, or expired, the whole load fails
+    /// closed rather than silently dropping that member.
+    pub fn load_approval_set_for_apply_at(
+        &self,
+        approval_reference: &str,
+        change_class: &str,
+        config_hash: &str,
+        previous_config_hash: Option<&str>,
+        now_unix_seconds: u64,
+    ) -> Result<Vec<LocalOperatorApproval>, LocalApprovalStoreError> {
+        let bytes = match fs::read(&self.path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Err(LocalApprovalStoreError::MissingState);
+            }
+            Err(error) => return Err(LocalApprovalStoreError::Io(error.to_string())),
+        };
+        let state: LocalApprovalFile = serde_json::from_slice(&bytes)
+            .map_err(|error| LocalApprovalStoreError::Json(error.to_string()))?;
+        let mut approvals = Vec::new();
+        for approval in state.approvals.into_iter().filter(|approval| {
+            approval.approval_reference == approval_reference
+                && approval.change_class == change_class
+                && approval.config_hash == config_hash
+                && approval.previous_config_hash.as_deref() == previous_config_hash
+        }) {
+            validate_local_approval(
+                &approval,
+                config_hash,
+                previous_config_hash,
+                now_unix_seconds,
+            )
+            .map_err(local_approval_store_error)?;
+            approvals.push(approval);
+        }
+        if approvals.is_empty() {
+            return Err(LocalApprovalStoreError::ApprovalNotFound);
+        }
+        Ok(approvals)
     }
 }
 
@@ -1417,12 +1515,196 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn test_hash(label: char) -> String {
+        format!("sha256:{}", label.to_string().repeat(64))
+    }
+
+    fn local_approval(expires_at_unix_seconds: u64, config_hash: &str) -> LocalOperatorApproval {
+        LocalOperatorApproval {
+            approved_by: "ops@example.test".to_string(),
+            approvers: Vec::new(),
+            reason: "approve governed config change".to_string(),
+            approval_reference: "ROOT-2026-Q2".to_string(),
+            change_class: "root_transition".to_string(),
+            config_hash: config_hash.to_string(),
+            previous_config_hash: Some(test_hash('a')),
+            expires_at_unix_seconds,
+            rate_limit_identity: "registry-relay/relay-a/production/national-config".to_string(),
+            rate_limit: BreakGlassRateLimit {
+                max_accepted: 1,
+                window_seconds: 60,
+            },
+        }
+    }
+
     #[test]
     fn clone_allowed_leaf_value_preserves_only_empty_objects() {
         assert_eq!(clone_allowed_leaf_value(&json!({})), Some(json!({})));
         assert_eq!(
             clone_allowed_leaf_value(&json!({ "secret": "value" })),
             None
+        );
+    }
+
+    #[test]
+    fn distinct_approver_count_trims_and_deduplicates_identities_across_set() {
+        let mut approval = local_approval(2_000, &test_hash('b'));
+        approval.approved_by = " ops@example.test ".to_string();
+        approval.approvers = vec![
+            "ops@example.test".to_string(),
+            " security@example.test ".to_string(),
+            "audit@example.test".to_string(),
+            "security@example.test".to_string(),
+            "   ".to_string(),
+        ];
+        let mut second = approval.clone();
+        second.approved_by = " audit@example.test ".to_string();
+        second.approvers = vec![
+            "security@example.test".to_string(),
+            "release@example.test".to_string(),
+        ];
+
+        assert_eq!(distinct_approver_count(&[approval, second]), 4);
+    }
+
+    #[test]
+    fn approval_reference_validator_rejects_path_traversal_and_invalid_charset() {
+        assert!(is_valid_approval_reference("approval-2026.01:abc_DEF"));
+        assert!(!is_valid_approval_reference(""));
+        assert!(!is_valid_approval_reference("   "));
+        assert!(!is_valid_approval_reference(".."));
+        assert!(!is_valid_approval_reference("../etc/passwd"));
+        assert!(!is_valid_approval_reference("a/b"));
+        assert!(!is_valid_approval_reference("a\\b"));
+        assert!(!is_valid_approval_reference("/abs/path"));
+        assert!(!is_valid_approval_reference("with space"));
+        assert!(!is_valid_approval_reference("nul\0byte"));
+        assert!(!is_valid_approval_reference("ctrl\nchar"));
+    }
+
+    #[test]
+    fn local_operator_approval_store_loads_matching_candidate_record_set() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let approval_path = dir.path().join("config-approvals.json");
+        let mut second = local_approval(2_000, &test_hash('b'));
+        second.approved_by = "security@example.test".to_string();
+        std::fs::write(
+            &approval_path,
+            serde_json::to_vec_pretty(&LocalApprovalFile {
+                approvals: vec![
+                    local_approval(2_000, &test_hash('b')),
+                    second,
+                    local_approval(2_000, &test_hash('c')),
+                ],
+            })
+            .expect("approval file serializes"),
+        )
+        .expect("approval file writes");
+        let store = FileLocalApprovalStore::new(&approval_path);
+
+        let approvals = store
+            .load_approval_set_for_apply_at(
+                "ROOT-2026-Q2",
+                "root_transition",
+                &test_hash('b'),
+                Some(test_hash('a').as_str()),
+                1_000,
+            )
+            .expect("matching approval set loads");
+
+        assert_eq!(approvals.len(), 2);
+        assert_eq!(distinct_approver_count(&approvals), 2);
+    }
+
+    #[test]
+    fn local_operator_approval_store_load_for_apply_preserves_first_match_contract() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let approval_path = dir.path().join("config-approvals.json");
+        let mut malformed_later_match = local_approval(2_000, &test_hash('b'));
+        malformed_later_match.approved_by = "   ".to_string();
+        std::fs::write(
+            &approval_path,
+            serde_json::to_vec_pretty(&LocalApprovalFile {
+                approvals: vec![
+                    local_approval(2_000, &test_hash('b')),
+                    malformed_later_match,
+                ],
+            })
+            .expect("approval file serializes"),
+        )
+        .expect("approval file writes");
+        let store = FileLocalApprovalStore::new(&approval_path);
+
+        let approval = store
+            .load_for_apply_at(
+                "ROOT-2026-Q2",
+                "root_transition",
+                &test_hash('b'),
+                Some(test_hash('a').as_str()),
+                1_000,
+            )
+            .expect("first matching approval loads");
+
+        assert_eq!(approval.approved_by, "ops@example.test");
+    }
+
+    #[test]
+    fn local_operator_approval_store_rejects_expired_matching_set_member() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let approval_path = dir.path().join("config-approvals.json");
+        let mut expired = local_approval(999, &test_hash('b'));
+        expired.approved_by = "security@example.test".to_string();
+        std::fs::write(
+            &approval_path,
+            serde_json::to_vec_pretty(&LocalApprovalFile {
+                approvals: vec![local_approval(2_000, &test_hash('b')), expired],
+            })
+            .expect("approval file serializes"),
+        )
+        .expect("approval file writes");
+        let store = FileLocalApprovalStore::new(&approval_path);
+
+        assert_eq!(
+            store
+                .load_approval_set_for_apply_at(
+                    "ROOT-2026-Q2",
+                    "root_transition",
+                    &test_hash('b'),
+                    Some(test_hash('a').as_str()),
+                    1_000,
+                )
+                .expect_err("expired matching set member is rejected"),
+            LocalApprovalStoreError::ApprovalExpired
+        );
+    }
+
+    #[test]
+    fn local_operator_approval_store_rejects_malformed_matching_set_member() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let approval_path = dir.path().join("config-approvals.json");
+        let mut malformed = local_approval(2_000, &test_hash('b'));
+        malformed.approved_by = "   ".to_string();
+        std::fs::write(
+            &approval_path,
+            serde_json::to_vec_pretty(&LocalApprovalFile {
+                approvals: vec![local_approval(2_000, &test_hash('b')), malformed],
+            })
+            .expect("approval file serializes"),
+        )
+        .expect("approval file writes");
+        let store = FileLocalApprovalStore::new(&approval_path);
+
+        assert_eq!(
+            store
+                .load_approval_set_for_apply_at(
+                    "ROOT-2026-Q2",
+                    "root_transition",
+                    &test_hash('b'),
+                    Some(test_hash('a').as_str()),
+                    1_000,
+                )
+                .expect_err("malformed matching set member is rejected"),
+            LocalApprovalStoreError::InvalidApproval("approved_by")
         );
     }
 }
