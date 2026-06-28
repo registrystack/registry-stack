@@ -10,6 +10,10 @@ doc_type: explanation
 locale: en
 standards_referenced:
   - sd-jwt-vc
+  - oid4vci
+  - w3c-did
+  - json-ld
+  - cccev
 ---
 
 The overview establishes the boundary: Registry Relay returns scoped records, Registry Notary
@@ -98,8 +102,10 @@ The `redacted` mode withholds both. `REQ-PR-NOTARY-010` requires that a redacted
 carry the underlying source value and not convey the satisfaction outcome: the body withholds
 both the value and the predicate. The runtime matches this: the disclosed value is absent, and
 the `satisfied` outcome is populated only for `value` and `predicate` (by reading the value as a
-boolean) and is absent for `redacted` (`runtime.rs`). A redacted answer carries no value and no
-yes/no.
+boolean) and is absent for `redacted` (`runtime.rs`). In the claim-result JSON shape a redacted answer
+carries no value and no yes/no. The CCCEV JSON-LD render is the exception: it serializes
+`cccev:isConformantTo` from `satisfied` with a `false` fallback, so a redacted CCCEV node still
+carries a boolean outcome field (`runtime.rs`).
 
 ## How policy binds a mode
 
