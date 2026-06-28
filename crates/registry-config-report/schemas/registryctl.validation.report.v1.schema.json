@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registry-platform.example/schemas/registryctl.validation.report.v1.schema.json",
+  "$id": "https://id.registrystack.org/schemas/registry-platform/registryctl.validation.report.v1.schema.json",
   "title": "Registryctl Validation Report v1",
   "type": "object",
   "required": [

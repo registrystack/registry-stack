@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registry-platform.example/schemas/registry.admin.error.v1.schema.json",
+  "$id": "https://id.registrystack.org/schemas/registry-platform/registry.admin.error.v1.schema.json",
   "title": "Registry Admin Error v1",
   "type": "object",
   "additionalProperties": false,
