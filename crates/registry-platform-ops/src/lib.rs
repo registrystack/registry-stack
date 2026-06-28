@@ -1038,6 +1038,10 @@ impl FileLocalApprovalStore {
         )
     }
 
+    /// Load the first matching approval record for legacy single-record callers.
+    ///
+    /// This preserves the historical first-match contract. Quorum-sensitive
+    /// callers must use `load_approval_set_for_apply[_at]` instead.
     pub fn load_for_apply_at(
         &self,
         approval_reference: &str,
@@ -1046,16 +1050,33 @@ impl FileLocalApprovalStore {
         previous_config_hash: Option<&str>,
         now_unix_seconds: u64,
     ) -> Result<LocalOperatorApproval, LocalApprovalStoreError> {
-        self.load_approval_set_for_apply_at(
-            approval_reference,
-            change_class,
+        let bytes = match fs::read(&self.path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Err(LocalApprovalStoreError::MissingState);
+            }
+            Err(error) => return Err(LocalApprovalStoreError::Io(error.to_string())),
+        };
+        let state: LocalApprovalFile = serde_json::from_slice(&bytes)
+            .map_err(|error| LocalApprovalStoreError::Json(error.to_string()))?;
+        let approval = state
+            .approvals
+            .into_iter()
+            .find(|approval| {
+                approval.approval_reference == approval_reference
+                    && approval.change_class == change_class
+                    && approval.config_hash == config_hash
+                    && approval.previous_config_hash.as_deref() == previous_config_hash
+            })
+            .ok_or(LocalApprovalStoreError::ApprovalNotFound)?;
+        validate_local_approval(
+            &approval,
             config_hash,
             previous_config_hash,
             now_unix_seconds,
-        )?
-        .into_iter()
-        .next()
-        .ok_or(LocalApprovalStoreError::ApprovalNotFound)
+        )
+        .map_err(local_approval_store_error)?;
+        Ok(approval)
     }
 
     pub fn load_approval_set_for_apply(
@@ -1593,6 +1614,38 @@ mod tests {
 
         assert_eq!(approvals.len(), 2);
         assert_eq!(distinct_approver_count(&approvals), 2);
+    }
+
+    #[test]
+    fn local_operator_approval_store_load_for_apply_preserves_first_match_contract() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let approval_path = dir.path().join("config-approvals.json");
+        let mut malformed_later_match = local_approval(2_000, &test_hash('b'));
+        malformed_later_match.approved_by = "   ".to_string();
+        std::fs::write(
+            &approval_path,
+            serde_json::to_vec_pretty(&LocalApprovalFile {
+                approvals: vec![
+                    local_approval(2_000, &test_hash('b')),
+                    malformed_later_match,
+                ],
+            })
+            .expect("approval file serializes"),
+        )
+        .expect("approval file writes");
+        let store = FileLocalApprovalStore::new(&approval_path);
+
+        let approval = store
+            .load_for_apply_at(
+                "ROOT-2026-Q2",
+                "root_transition",
+                &test_hash('b'),
+                Some(test_hash('a').as_str()),
+                1_000,
+            )
+            .expect("first matching approval loads");
+
+        assert_eq!(approval.approved_by, "ops@example.test");
     }
 
     #[test]
