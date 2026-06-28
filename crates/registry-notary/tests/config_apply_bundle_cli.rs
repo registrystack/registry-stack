@@ -230,7 +230,6 @@ auth:
       fingerprint:
         provider: env
         name: TEST_ADMIN_BEARER_HASH
-        commitment: sha256:ac59f6b6db38a7728847b7187ff8b5c483849410ed0bf53ced93ac5fc3400b56
       scopes: [registry_notary:admin, registry_notary:ops_read]
 audit:
   sink: file

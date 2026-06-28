@@ -13,7 +13,6 @@ auth:
       fingerprint:
         provider: env
         name: TEST_KEY_HASH_MISSING_NOPE
-        commitment: sha256:1a5586e27a0ca57a7ae7a6d1f5eb378fdaaa1a816abc8a4bffad55ee6a6b62f8
       scopes:
         - registry_relay:admin
 audit:

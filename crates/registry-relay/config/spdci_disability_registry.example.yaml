@@ -21,14 +21,12 @@ auth:
       fingerprint:
         provider: env
         name: DISABILITY_VERIFICATION_API_KEY_HASH
-        commitment: sha256:120e8c63c3b5f4f8ef1ddc0c84b8887bbc127fbcaaa9e07768d1dc545f3dd716
       scopes:
         - disability_registry:evidence_verification
     - id: disability_casework_system
       fingerprint:
         provider: env
         name: DISABILITY_CASEWORK_API_KEY_HASH
-        commitment: sha256:fc4f5b803289fd47526c4e5416ff3c4dabbfa7324e47b0d3580eab8e9a1abd57
       scopes:
         - disability_registry:metadata
         - disability_registry:rows

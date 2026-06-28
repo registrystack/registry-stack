@@ -6,7 +6,7 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
+use serde::{de, Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use thiserror::Error;
@@ -172,56 +172,6 @@ pub fn validate_api_key_entropy(plaintext: &str) -> Result<(), EntropyError> {
     Ok(())
 }
 
-/// Product component that owns a caller credential.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum CredentialProduct {
-    /// Registry Relay caller auth.
-    RegistryRelay,
-    /// Registry Notary caller auth.
-    RegistryNotary,
-}
-
-impl CredentialProduct {
-    /// Stable product label used in credential commitments.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::RegistryRelay => "registry-relay",
-            Self::RegistryNotary => "registry-notary",
-        }
-    }
-}
-
-/// Static caller credential type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum CredentialType {
-    /// Caller credential presented as an API key.
-    ApiKey,
-    /// Caller credential presented as an Authorization bearer token.
-    BearerToken,
-}
-
-impl CredentialType {
-    /// Stable credential-type label used in credential commitments.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::ApiKey => "api_key",
-            Self::BearerToken => "bearer_token",
-        }
-    }
-}
-
-/// Context that binds a resolved fingerprint to a specific configured caller.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CredentialCommitmentContext<'a> {
-    pub product: CredentialProduct,
-    pub credential_type: CredentialType,
-    pub credential_id: &'a str,
-}
-
 /// Provider for a canonical credential fingerprint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -245,27 +195,58 @@ impl CredentialFingerprintProvider {
 }
 
 /// Configured local reference to a canonical credential fingerprint.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CredentialFingerprintRef {
     pub provider: CredentialFingerprintProvider,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<PathBuf>,
-    pub commitment: String,
+}
+
+impl<'de> Deserialize<'de> for CredentialFingerprintRef {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct RawCredentialFingerprintRef {
+            provider: CredentialFingerprintProvider,
+            #[serde(default)]
+            name: Option<String>,
+            #[serde(default)]
+            path: Option<PathBuf>,
+            #[serde(
+                rename = "commitment",
+                default,
+                deserialize_with = "reject_removed_commitment"
+            )]
+            _commitment: (),
+        }
+
+        let raw = RawCredentialFingerprintRef::deserialize(deserializer)?;
+        Ok(Self {
+            provider: raw.provider,
+            name: raw.name,
+            path: raw.path,
+        })
+    }
+}
+
+fn reject_removed_commitment<'de, D>(_deserializer: D) -> Result<(), D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Err(de::Error::custom(
+        "fingerprint.commitment was removed; configure fingerprint.provider with fingerprint.name or fingerprint.path only",
+    ))
 }
 
 impl CredentialFingerprintRef {
-    /// Resolve, parse, and commitment-check the referenced credential
-    /// fingerprint.
-    pub fn resolve(
-        &self,
-        context: CredentialCommitmentContext<'_>,
-    ) -> Result<String, CredentialFingerprintRefError> {
+    /// Resolve and parse the referenced credential fingerprint.
+    pub fn resolve(&self) -> Result<String, CredentialFingerprintRefError> {
         self.validate_shape()?;
-        parse_fingerprint(&self.commitment)
-            .map_err(CredentialFingerprintRefError::InvalidCommitment)?;
         let fingerprint = match self.provider {
             CredentialFingerprintProvider::Env => {
                 let name = self
@@ -288,10 +269,6 @@ impl CredentialFingerprintRef {
         }
         parse_fingerprint(&fingerprint)
             .map_err(CredentialFingerprintRefError::InvalidFingerprint)?;
-        let expected = credential_fingerprint_commitment(context, &fingerprint);
-        if expected != self.commitment {
-            return Err(CredentialFingerprintRefError::CommitmentMismatch);
-        }
         Ok(fingerprint)
     }
 
@@ -325,41 +302,9 @@ pub enum CredentialFingerprintRefError {
     /// The resolved value was empty after permitted line-ending trimming.
     #[error("credential fingerprint secret is empty")]
     EmptySecret,
-    /// The signed commitment is not a canonical SHA-256 value.
-    #[error("credential fingerprint commitment is invalid")]
-    InvalidCommitment(FingerprintFormatError),
     /// The resolved value is not a canonical SHA-256 fingerprint.
     #[error("credential fingerprint secret is invalid")]
     InvalidFingerprint(FingerprintFormatError),
-    /// The resolved fingerprint does not match the signed commitment.
-    #[error("credential fingerprint commitment mismatch")]
-    CommitmentMismatch,
-}
-
-#[derive(Serialize)]
-struct CredentialCommitmentPayload<'a> {
-    product: &'static str,
-    credential_type: &'static str,
-    credential_id: &'a str,
-    fingerprint: &'a str,
-}
-
-/// Compute the signed-config commitment for a credential fingerprint.
-#[must_use]
-pub fn credential_fingerprint_commitment(
-    context: CredentialCommitmentContext<'_>,
-    fingerprint: &str,
-) -> String {
-    let payload = CredentialCommitmentPayload {
-        product: context.product.as_str(),
-        credential_type: context.credential_type.as_str(),
-        credential_id: context.credential_id,
-        fingerprint,
-    };
-    let bytes =
-        serde_json::to_vec(&payload).expect("credential commitment payload serializes to JSON");
-    let digest = Sha256::digest(&bytes);
-    format!("{}{}", FINGERPRINT_PREFIX, hex_lower(&digest))
 }
 
 fn read_bounded_fingerprint_file(path: &Path) -> Result<String, CredentialFingerprintRefError> {
@@ -533,62 +478,80 @@ mod tests {
     }
 
     #[test]
-    fn credential_fingerprint_ref_resolves_env_with_commitment() {
+    fn credential_fingerprint_ref_resolves_env() {
         let fingerprint = fingerprint_api_key(SAMPLE_KEY);
-        let context = CredentialCommitmentContext {
-            product: CredentialProduct::RegistryRelay,
-            credential_type: CredentialType::ApiKey,
-            credential_id: "civil_reader",
-        };
-        let commitment = credential_fingerprint_commitment(context, &fingerprint);
         std::env::set_var("AUTHCOMMON_TEST_FINGERPRINT", &fingerprint);
         let reference = CredentialFingerprintRef {
             provider: CredentialFingerprintProvider::Env,
             name: Some("AUTHCOMMON_TEST_FINGERPRINT".to_string()),
             path: None,
-            commitment,
         };
 
-        assert_eq!(
-            reference.resolve(context).as_deref(),
-            Ok(fingerprint.as_str())
-        );
+        assert_eq!(reference.resolve().as_deref(), Ok(fingerprint.as_str()));
         std::env::remove_var("AUTHCOMMON_TEST_FINGERPRINT");
+    }
+
+    #[test]
+    fn credential_fingerprint_ref_deserializes_env_reference() {
+        let reference = serde_json::from_str::<CredentialFingerprintRef>(
+            r#"
+{
+  "provider": "env",
+  "name": "AUTHCOMMON_TEST_FINGERPRINT"
+}
+"#,
+        )
+        .expect("env fingerprint reference deserializes");
+
+        assert_eq!(
+            reference,
+            CredentialFingerprintRef {
+                provider: CredentialFingerprintProvider::Env,
+                name: Some("AUTHCOMMON_TEST_FINGERPRINT".to_string()),
+                path: None,
+            }
+        );
+    }
+
+    #[test]
+    fn credential_fingerprint_ref_deserializes_file_reference() {
+        let reference = serde_json::from_str::<CredentialFingerprintRef>(
+            r#"
+{
+  "provider": "file",
+  "path": "/run/secrets/api-key.sha256"
+}
+"#,
+        )
+        .expect("file fingerprint reference deserializes");
+
+        assert_eq!(
+            reference,
+            CredentialFingerprintRef {
+                provider: CredentialFingerprintProvider::File,
+                name: None,
+                path: Some(PathBuf::from("/run/secrets/api-key.sha256")),
+            }
+        );
     }
 
     #[test]
     fn credential_fingerprint_ref_resolves_file_with_one_trailing_newline() {
         let fingerprint = fingerprint_api_key(SAMPLE_KEY);
-        let context = CredentialCommitmentContext {
-            product: CredentialProduct::RegistryNotary,
-            credential_type: CredentialType::BearerToken,
-            credential_id: "openfn_sidecar",
-        };
-        let commitment = credential_fingerprint_commitment(context, &fingerprint);
         let mut file = tempfile::NamedTempFile::new().expect("temp file");
         writeln!(file, "{fingerprint}").expect("fingerprint writes");
         let reference = CredentialFingerprintRef {
             provider: CredentialFingerprintProvider::File,
             name: None,
             path: Some(file.path().to_path_buf()),
-            commitment,
         };
 
-        assert_eq!(
-            reference.resolve(context).as_deref(),
-            Ok(fingerprint.as_str())
-        );
+        assert_eq!(reference.resolve().as_deref(), Ok(fingerprint.as_str()));
     }
 
     #[test]
     fn credential_fingerprint_ref_rejects_oversized_file_before_parsing() {
         let fingerprint = fingerprint_api_key(SAMPLE_KEY);
-        let context = CredentialCommitmentContext {
-            product: CredentialProduct::RegistryNotary,
-            credential_type: CredentialType::BearerToken,
-            credential_id: "openfn_sidecar",
-        };
-        let commitment = credential_fingerprint_commitment(context, &fingerprint);
         let mut file = tempfile::NamedTempFile::new().expect("temp file");
         write!(
             file,
@@ -600,11 +563,10 @@ mod tests {
             provider: CredentialFingerprintProvider::File,
             name: None,
             path: Some(file.path().to_path_buf()),
-            commitment,
         };
 
         assert!(matches!(
-            reference.resolve(context),
+            reference.resolve(),
             Err(CredentialFingerprintRefError::InvalidFingerprint(
                 FingerprintFormatError::InvalidLength
             ))
@@ -613,23 +575,15 @@ mod tests {
 
     #[test]
     fn credential_fingerprint_ref_rejects_non_regular_file_before_reading() {
-        let fingerprint = fingerprint_api_key(SAMPLE_KEY);
-        let context = CredentialCommitmentContext {
-            product: CredentialProduct::RegistryNotary,
-            credential_type: CredentialType::BearerToken,
-            credential_id: "openfn_sidecar",
-        };
-        let commitment = credential_fingerprint_commitment(context, &fingerprint);
         let dir = tempfile::TempDir::new().expect("temp dir");
         let reference = CredentialFingerprintRef {
             provider: CredentialFingerprintProvider::File,
             name: None,
             path: Some(dir.path().to_path_buf()),
-            commitment,
         };
 
         assert!(matches!(
-            reference.resolve(context),
+            reference.resolve(),
             Err(CredentialFingerprintRefError::InvalidFingerprint(
                 FingerprintFormatError::InvalidLength
             ))
@@ -637,52 +591,114 @@ mod tests {
     }
 
     #[test]
-    fn credential_fingerprint_ref_rejects_commitment_mismatch() {
+    fn credential_fingerprint_ref_rejects_legacy_commitment_field() {
+        let error = serde_json::from_str::<CredentialFingerprintRef>(
+            r#"
+{
+  "provider": "env",
+  "name": "AUTHCOMMON_TEST_FINGERPRINT",
+  "commitment": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+}
+"#,
+        )
+        .expect_err("legacy commitment field is rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("fingerprint.commitment was removed"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn credential_fingerprint_ref_rejects_null_legacy_commitment_field() {
+        let error = serde_json::from_str::<CredentialFingerprintRef>(
+            r#"
+{
+  "provider": "env",
+  "name": "AUTHCOMMON_TEST_FINGERPRINT",
+  "commitment": null
+}
+"#,
+        )
+        .expect_err("legacy commitment field is rejected even when null");
+
+        assert!(
+            error
+                .to_string()
+                .contains("fingerprint.commitment was removed"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn credential_fingerprint_ref_rejects_env_file_shape_violations() {
         let fingerprint = fingerprint_api_key(SAMPLE_KEY);
-        let context = CredentialCommitmentContext {
-            product: CredentialProduct::RegistryRelay,
-            credential_type: CredentialType::ApiKey,
-            credential_id: "civil_reader",
-        };
-        let wrong_context = CredentialCommitmentContext {
-            credential_id: "other_reader",
-            ..context
-        };
-        std::env::set_var("AUTHCOMMON_TEST_MISMATCH", &fingerprint);
+        std::env::set_var("AUTHCOMMON_TEST_SHAPE", &fingerprint);
         let reference = CredentialFingerprintRef {
             provider: CredentialFingerprintProvider::Env,
-            name: Some("AUTHCOMMON_TEST_MISMATCH".to_string()),
-            path: None,
-            commitment: credential_fingerprint_commitment(wrong_context, &fingerprint),
+            name: Some("AUTHCOMMON_TEST_SHAPE".to_string()),
+            path: Some(PathBuf::from("/tmp/should-not-also-be-set")),
         };
 
         assert_eq!(
-            reference.resolve(context),
-            Err(CredentialFingerprintRefError::CommitmentMismatch)
+            reference.resolve(),
+            Err(CredentialFingerprintRefError::InvalidShape)
         );
-        std::env::remove_var("AUTHCOMMON_TEST_MISMATCH");
+        std::env::remove_var("AUTHCOMMON_TEST_SHAPE");
+    }
+
+    #[test]
+    fn credential_fingerprint_ref_rejects_file_provider_name_shape_violation() {
+        let fingerprint = fingerprint_api_key(SAMPLE_KEY);
+        let mut file = tempfile::NamedTempFile::new().expect("temp file");
+        writeln!(file, "{fingerprint}").expect("fingerprint writes");
+        let reference = serde_json::from_value::<CredentialFingerprintRef>(serde_json::json!({
+            "provider": "file",
+            "name": "AUTHCOMMON_TEST_SHAPE",
+            "path": file.path(),
+        }))
+        .expect("file fingerprint reference deserializes before shape validation");
+
+        assert_eq!(
+            reference.resolve(),
+            Err(CredentialFingerprintRefError::InvalidShape)
+        );
+    }
+
+    #[test]
+    fn credential_fingerprint_ref_rejects_unknown_fields() {
+        let error = serde_json::from_str::<CredentialFingerprintRef>(
+            r#"
+{
+  "provider": "env",
+  "name": "AUTHCOMMON_TEST_FINGERPRINT",
+  "unexpected": true
+}
+"#,
+        )
+        .expect_err("unknown fingerprint reference field is rejected");
+
+        assert!(
+            error.to_string().contains("unknown field `unexpected`"),
+            "{error}"
+        );
     }
 
     #[test]
     fn credential_fingerprint_ref_rejects_extra_whitespace() {
         let fingerprint = fingerprint_api_key(SAMPLE_KEY);
-        let context = CredentialCommitmentContext {
-            product: CredentialProduct::RegistryRelay,
-            credential_type: CredentialType::ApiKey,
-            credential_id: "civil_reader",
-        };
-        let commitment = credential_fingerprint_commitment(context, &fingerprint);
         let mut file = tempfile::NamedTempFile::new().expect("temp file");
         writeln!(file, "{fingerprint}\n").expect("fingerprint writes");
         let reference = CredentialFingerprintRef {
             provider: CredentialFingerprintProvider::File,
             name: None,
             path: Some(file.path().to_path_buf()),
-            commitment,
         };
 
         assert!(matches!(
-            reference.resolve(context),
+            reference.resolve(),
             Err(CredentialFingerprintRefError::InvalidFingerprint(_))
         ));
     }

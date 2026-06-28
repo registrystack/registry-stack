@@ -13,7 +13,6 @@ auth:
       fingerprint:
         provider: env
         name: TEST_KEY_HASH_SCOPE
-        commitment: sha256:3078a84f5d36c04aaa4879745a73cb98c9ca66e3732cec587e2726cfd4841764
       scopes:
         - nonexistent_dataset:rows
 audit:

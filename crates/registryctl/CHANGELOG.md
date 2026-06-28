@@ -18,6 +18,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   the stack release, verifies it against the release `SHA256SUMS`, and falls back to a
   source-install hint on platforms without a published binary. The stack release publishes
   binaries for Linux x86_64, Linux arm64, and macOS arm64.
+- BREAKING: Generated Relay and Notary projects no longer write
+  `fingerprint.commitment` in YAML.
+  Generated configs reference fingerprint env vars only; local raw keys and matching
+  fingerprint values remain in `secrets/local.env`.
 
 ## [0.1.0] - 2026-06-12
 

@@ -20,7 +20,6 @@ auth:
       fingerprint:
         provider: env
         name: CATALOG_VIEWER_HASH
-        commitment: sha256:8e1a97e93d31a6c8e57a2e47fede65dc52655e4c40c4ddb3836395a6c12ef17f
       scopes:
         - public_works_projects:metadata
 
@@ -28,7 +27,6 @@ auth:
       fingerprint:
         provider: env
         name: PLANNING_ANALYST_HASH
-        commitment: sha256:2ff911bb5cf147eafc2024bb123df859f731d087e02e7da96a2b4c49687b5320
       scopes:
         - public_works_projects:metadata
         - public_works_projects:aggregate
@@ -42,7 +40,6 @@ auth:
       fingerprint:
         provider: env
         name: CASEWORK_SYSTEM_HASH
-        commitment: sha256:31eaa0644ee0593bf88482417b113d4e4f01b07848d5b2a628d97a01be899779
       scopes:
         - public_works_projects:metadata
         - public_works_projects:rows
@@ -52,7 +49,6 @@ auth:
       fingerprint:
         provider: env
         name: VERIFICATION_SERVICE_HASH
-        commitment: sha256:a0bd21e279907c6fada5bb839a461a3e3014617dbb49c2e9a03e87e7f1f3344b
       scopes:
         - public_works_projects:evidence_verification
 
@@ -60,7 +56,6 @@ auth:
       fingerprint:
         provider: env
         name: OPERATIONS_ADMIN_HASH
-        commitment: sha256:379ad2d16e275e6fc7de478764353606569f30507c6e73647dc28045d79b2f17
       scopes:
         - registry_relay:admin
         - registry_relay:ops_read

@@ -1791,6 +1791,7 @@ fn is_client_credential_rotation_change(current: &Config, candidate: &Config) ->
     equivalent_except_auth(current, candidate)
         && api_key_auth_changed(current, candidate)
         && same_api_key_ids_and_scopes(&current.auth.api_keys, &candidate.auth.api_keys)
+        && api_key_fingerprint_refs_changed(&current.auth.api_keys, &candidate.auth.api_keys)
 }
 
 fn is_client_access_change(current: &Config, candidate: &Config) -> bool {
@@ -1815,6 +1816,30 @@ fn same_api_key_ids_and_scopes(
         return false;
     };
     current_scopes == candidate_scopes
+}
+
+fn api_key_fingerprint_refs_changed(
+    current: &[crate::config::ApiKeyConfig],
+    candidate: &[crate::config::ApiKeyConfig],
+) -> bool {
+    api_key_fingerprints_by_id(current)
+        .zip(api_key_fingerprints_by_id(candidate))
+        .is_some_and(|(current, candidate)| current != candidate)
+}
+
+fn api_key_fingerprints_by_id(
+    keys: &[crate::config::ApiKeyConfig],
+) -> Option<BTreeMap<&str, Value>> {
+    let mut by_id = BTreeMap::new();
+    for key in keys {
+        let fingerprint = serde_json::to_value(&key.fingerprint).ok()?;
+        if let Some(existing) = by_id.insert(key.id.as_str(), fingerprint.clone()) {
+            if existing != fingerprint {
+                return None;
+            }
+        }
+    }
+    Some(by_id)
 }
 
 fn api_key_scopes_by_id(
@@ -2968,6 +2993,32 @@ datasets: []
         .to_string()
     }
 
+    fn api_key_classifier_config() -> Config {
+        parse_minimal_config(
+            r#"
+server:
+  bind: "127.0.0.1:8080"
+catalog:
+  title: "Test Registry"
+  base_url: "https://data.example.test"
+  publisher: "Test Ministry"
+auth:
+  mode: api_key
+  api_keys:
+    - id: primary
+      fingerprint:
+        provider: env
+        name: PRIMARY_API_KEY_HASH
+      scopes:
+        - registry_relay:admin
+        - registry_relay:ops_read
+audit:
+  sink: stdout
+datasets: []
+"#,
+        )
+    }
+
     #[test]
     fn approval_reference_validator_rejects_path_traversal_and_separators() {
         assert!(is_valid_approval_reference("approval-2026.01:abc_DEF"));
@@ -3096,6 +3147,38 @@ datasets: []
             Some(&oidc_b),
             "OidcConfig with different issuers must not compare equal"
         );
+    }
+
+    #[test]
+    fn client_credential_rotation_accepts_same_id_scopes_and_reference_change() {
+        let current = api_key_classifier_config();
+        let mut candidate = current.clone();
+        candidate.auth.api_keys[0].fingerprint.name = Some("PRIMARY_API_KEY_HASH_V2".to_string());
+
+        assert!(is_client_access_change(&current, &candidate));
+        assert!(is_client_credential_rotation_change(&current, &candidate));
+    }
+
+    #[test]
+    fn client_credential_rotation_rejects_scope_changes() {
+        let current = api_key_classifier_config();
+        let mut candidate = current.clone();
+        candidate.auth.api_keys[0].fingerprint.name = Some("PRIMARY_API_KEY_HASH_V2".to_string());
+        candidate.auth.api_keys[0]
+            .scopes
+            .push("social_registry:rows".to_string());
+
+        assert!(is_client_access_change(&current, &candidate));
+        assert!(!is_client_credential_rotation_change(&current, &candidate));
+    }
+
+    #[test]
+    fn client_credential_rotation_rejects_no_change() {
+        let current = api_key_classifier_config();
+        let candidate = current.clone();
+
+        assert!(!is_client_access_change(&current, &candidate));
+        assert!(!is_client_credential_rotation_change(&current, &candidate));
     }
 
     #[test]

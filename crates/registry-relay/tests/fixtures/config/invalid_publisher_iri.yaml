@@ -16,7 +16,6 @@ auth:
       fingerprint:
         provider: env
         name: TEST_KEY_HASH_PUBLISHER_IRI
-        commitment: sha256:8e472ed47b754cf197be958e1bab890607015c4373ffa1528c5674904a2cc8e8
       scopes:
         - ds_one:metadata
 audit:
