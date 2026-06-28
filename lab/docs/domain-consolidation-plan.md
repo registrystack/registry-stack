@@ -53,6 +53,8 @@ The target equals the resolver's current output, so consolidation makes the sour
 
 ## Scope inventory (70 files)
 
+The host counts in the table above are the authoritative totals. The groups below are representative of the kinds of edit required and call out the load-bearing files; they are not an exhaustive file list. For example, further `registry-relay.dev` occurrences live in `crates/registry-relay/demo/**` metadata configs, `crates/registry-relay/openapi/registry-relay.openapi.json`, and `crates/registry-relay/docs/api.md`. Drive the actual removal from a fresh repo-wide search per host, not from this list alone.
+
 **A. Runtime emitters (source of truth), edit directly (6):**
 - `crates/registry-relay/src/error.rs` (`PROBLEM_TYPE_BASE`)
 - `crates/registry-relay/src/metadata/shacl.rs` (shape namespace IRI)

@@ -12,7 +12,7 @@ locale: en
 standards_referenced: []
 ---
 
-Registry Notary and Registry Relay return errors as RFC 9457 problem details with the media type `application/problem+json`. Each problem carries a stable string in the `code` extension member alongside the standard `type`, `title`, `status`, and `detail` fields. The tables below list every `code` value, the message the source attaches to it, and the usual cause.
+Registry Notary and Registry Relay return errors as RFC 9457 problem details, usually with the media type `application/problem+json`; some Notary configuration and posture responses carry the same problem body but are served as `application/json`. Each problem carries a stable string in the `code` extension member alongside the standard `type`, `title`, `status`, and `detail` fields. The tables below list every `code` value, the message the source attaches to it, and the usual cause.
 
 The HTTP status is omitted from these tables. The Relay source maps each code to a status, but the same code can render at different statuses across versions, and the Notary public code does not carry a status in the taxonomy itself. Treat the standard `status` field of the problem response as authoritative for a given request.
 
@@ -73,7 +73,7 @@ The codes above are the evidence-evaluation taxonomy. The Notary server also ret
 
 ### Federation
 
-`federation.*` codes from the server-to-server federation surface. Federation problems use URN `type` URIs of the form `urn:registry-notary:problem:federation:<suffix>` rather than the `https://` types used by the evidence taxonomy.
+`federation.*` codes from the server-to-server federation surface. Federation problems use URN `type` URIs of the form `urn:registry-notary:problem:federation:<suffix>` rather than the `https://` types used by the evidence taxonomy. The exception is `federation.stale_source_observation`: it is not a problem response but a signed evaluation result (HTTP 200, `application/jwt`) that carries the code in its signed body.
 
 | Code | Meaning | Usual cause |
 | --- | --- | --- |
