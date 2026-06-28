@@ -1696,7 +1696,17 @@ fn is_client_credential_rotation_change(
         && same_credential_ids_and_scopes(
             &current.auth.bearer_tokens,
             &candidate.auth.bearer_tokens,
-        ))
+        )
+        && same_credential_authorization_details(&current.auth.api_keys, &candidate.auth.api_keys)
+        && same_credential_authorization_details(
+            &current.auth.bearer_tokens,
+            &candidate.auth.bearer_tokens,
+        )
+        && (credential_fingerprint_refs_changed(&current.auth.api_keys, &candidate.auth.api_keys)
+            || credential_fingerprint_refs_changed(
+                &current.auth.bearer_tokens,
+                &candidate.auth.bearer_tokens,
+            )))
 }
 
 fn is_client_access_change(
@@ -1726,6 +1736,54 @@ fn same_credential_ids_and_scopes(
     credential_scopes_by_id(current)
         .zip(credential_scopes_by_id(candidate))
         .is_some_and(|(current, candidate)| current == candidate)
+}
+
+fn same_credential_authorization_details(
+    current: &[registry_notary_core::EvidenceCredentialConfig],
+    candidate: &[registry_notary_core::EvidenceCredentialConfig],
+) -> bool {
+    credential_authorization_details_by_id(current)
+        .zip(credential_authorization_details_by_id(candidate))
+        .is_some_and(|(current, candidate)| current == candidate)
+}
+
+fn credential_fingerprint_refs_changed(
+    current: &[registry_notary_core::EvidenceCredentialConfig],
+    candidate: &[registry_notary_core::EvidenceCredentialConfig],
+) -> bool {
+    credential_fingerprints_by_id(current)
+        .zip(credential_fingerprints_by_id(candidate))
+        .is_some_and(|(current, candidate)| current != candidate)
+}
+
+fn credential_authorization_details_by_id(
+    credentials: &[registry_notary_core::EvidenceCredentialConfig],
+) -> Option<BTreeMap<&str, Value>> {
+    let mut by_id = BTreeMap::new();
+    for credential in credentials {
+        let details = serde_json::to_value(&credential.authorization_details).ok()?;
+        if let Some(existing) = by_id.insert(credential.id.as_str(), details.clone()) {
+            if existing != details {
+                return None;
+            }
+        }
+    }
+    Some(by_id)
+}
+
+fn credential_fingerprints_by_id(
+    credentials: &[registry_notary_core::EvidenceCredentialConfig],
+) -> Option<BTreeMap<&str, Value>> {
+    let mut by_id = BTreeMap::new();
+    for credential in credentials {
+        let fingerprint = serde_json::to_value(&credential.fingerprint).ok()?;
+        if let Some(existing) = by_id.insert(credential.id.as_str(), fingerprint.clone()) {
+            if existing != fingerprint {
+                return None;
+            }
+        }
+    }
+    Some(by_id)
 }
 
 fn credential_scopes_by_id(
@@ -10976,8 +11034,7 @@ mod tests {
                     "id": "primary-api-key",
                     "fingerprint": {
                         "provider": "env",
-                        "name": "PRIMARY_API_KEY_HASH",
-                        "commitment": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                        "name": "PRIMARY_API_KEY_HASH"
                     },
                     "scopes": ["claims:read"]
                 }],
@@ -10985,8 +11042,7 @@ mod tests {
                     "id": "primary-bearer-token",
                     "fingerprint": {
                         "provider": "env",
-                        "name": "PRIMARY_BEARER_TOKEN_HASH",
-                        "commitment": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+                        "name": "PRIMARY_BEARER_TOKEN_HASH"
                     },
                     "scopes": ["claims:write"]
                 }]
@@ -10996,12 +11052,12 @@ mod tests {
     }
 
     #[test]
-    fn client_access_change_allows_api_key_and_bearer_token_value_changes() {
+    fn client_access_change_allows_api_key_and_bearer_token_reference_changes() {
         let current = classifier_config();
 
         let mut api_key_candidate = current.clone();
-        api_key_candidate.auth.api_keys[0].fingerprint.commitment =
-            "sha256:2222222222222222222222222222222222222222222222222222222222222222".to_string();
+        api_key_candidate.auth.api_keys[0].fingerprint.name =
+            Some("PRIMARY_API_KEY_HASH_V2".to_string());
         assert!(is_client_access_change(&current, &api_key_candidate)
             .expect("api key change classifies"));
         assert!(
@@ -11010,16 +11066,35 @@ mod tests {
         );
 
         let mut bearer_candidate = current.clone();
-        bearer_candidate.auth.bearer_tokens[0]
-            .fingerprint
-            .commitment =
-            "sha256:3333333333333333333333333333333333333333333333333333333333333333".to_string();
+        bearer_candidate.auth.bearer_tokens[0].fingerprint.name =
+            Some("PRIMARY_BEARER_TOKEN_HASH_V2".to_string());
         assert!(is_client_access_change(&current, &bearer_candidate)
             .expect("bearer token change classifies"));
         assert!(
             is_client_credential_rotation_change(&current, &bearer_candidate)
                 .expect("bearer token rotation classifies")
         );
+    }
+
+    #[test]
+    fn client_credential_rotation_rejects_authorization_detail_changes() {
+        let current = classifier_config();
+
+        let mut candidate = current.clone();
+        candidate.auth.api_keys[0].fingerprint.name = Some("PRIMARY_API_KEY_HASH_V2".to_string());
+        candidate.auth.api_keys[0].authorization_details = Some(EvidenceAuthorizationDetails {
+            detail_type: "registry-notary/evidence-authorization/v1".to_string(),
+            schema_version: "v1".to_string(),
+            legal_basis_ref: Some("law:registry-access".to_string()),
+            jurisdiction: Some("ZZ".to_string()),
+            ..EvidenceAuthorizationDetails::default()
+        });
+
+        assert!(
+            is_client_access_change(&current, &candidate).expect("client access change classifies")
+        );
+        assert!(!is_client_credential_rotation_change(&current, &candidate)
+            .expect("credential rotation classifies"));
     }
 
     #[test]
@@ -11038,8 +11113,7 @@ mod tests {
         let mut access_token_signing_candidate = current.clone();
         access_token_signing_candidate.auth.api_keys[0]
             .fingerprint
-            .commitment =
-            "sha256:4444444444444444444444444444444444444444444444444444444444444444".to_string();
+            .name = Some("PRIMARY_API_KEY_HASH_V2".to_string());
         access_token_signing_candidate
             .auth
             .access_token_signing
@@ -11062,8 +11136,8 @@ mod tests {
         );
 
         let mut oidc_candidate = current.clone();
-        oidc_candidate.auth.bearer_tokens[0].fingerprint.commitment =
-            "sha256:5555555555555555555555555555555555555555555555555555555555555555".to_string();
+        oidc_candidate.auth.bearer_tokens[0].fingerprint.name =
+            Some("PRIMARY_BEARER_TOKEN_HASH_V2".to_string());
         oidc_candidate
             .auth
             .oidc
@@ -11076,8 +11150,8 @@ mod tests {
         );
 
         let mut mode_candidate = current.clone();
-        mode_candidate.auth.api_keys[0].fingerprint.commitment =
-            "sha256:6666666666666666666666666666666666666666666666666666666666666666".to_string();
+        mode_candidate.auth.api_keys[0].fingerprint.name =
+            Some("PRIMARY_API_KEY_HASH_V2".to_string());
         mode_candidate.auth.mode = EvidenceAuthMode::Oidc;
         assert!(!is_client_access_change(&current, &mode_candidate)
             .expect("auth mode candidate classifies"));

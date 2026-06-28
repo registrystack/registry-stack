@@ -299,8 +299,7 @@ mod tests {
                     "key_id": "ops",
                     "fingerprint": {
                         "provider": "env",
-                        "name": "KEY_HASH_A",
-                        "commitment": "sha256:dd137781fa21a07dab0c30e53cde951cd974d201b8fa2183a5bef5f6ad3219d5"
+                        "name": "KEY_HASH_A"
                     }
                 }]
             },
@@ -324,8 +323,6 @@ mod tests {
         changed["server"]["cache_dir"] = json!("/srv/relay");
         changed["audit"]["hash_secret_env"] = json!("AUDIT_SECRET_B");
         changed["auth"]["api_keys"][0]["fingerprint"]["name"] = json!("KEY_HASH_B");
-        changed["auth"]["api_keys"][0]["fingerprint"]["commitment"] =
-            json!("sha256:3b25f6aee025d6b906b835f3d18d0a6a683c9ab8cb91c43517e2fe2c74f7be65");
         changed["datasets"][0]["tables"][0]["source"]["path"] = json!("/private/b.csv");
         changed["provenance"]["issuer"]["did"] = json!("did:web:issuer-b.example");
         changed["provenance"]["issuer"]["verification_method_id"] =

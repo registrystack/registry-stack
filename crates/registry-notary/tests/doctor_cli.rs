@@ -10,8 +10,6 @@ use tempfile::TempDir;
 
 const TEST_API_HASH: &str =
     "sha256:31f2999a69fa6301763a9f61eea44388a13318ce8b80a16a115a9efdb62b883b";
-const TEST_API_COMMITMENT: &str =
-    "sha256:a185ffbb208d5b11fc66f149bd880882de96256b0dfe5357a78b78ed13c17fed";
 const TEST_AUDIT_SECRET: &str = "doctor-audit-secret-32-bytes-minimum";
 const TEST_ISSUER_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}"#;
 const TEST_SOURCE_TOKEN: &str = "doctor-source-token";
@@ -47,6 +45,22 @@ fn write_config_with_options(tmp: &TempDir, options: TestConfigOptions<'_>) -> P
             r#"config_trust:
   antirollback_state_path: {}
   local_approval_state_path: {}
+  accepted_roots:
+    - root_id: doctor-test-root
+      production: false
+      tuf_root_sha256: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      high_risk_change_classes: []
+      signers:
+        doctor-test-signer:
+          kid: doctor-test-signer
+          enabled: true
+      roles:
+        - name: config-admin
+          threshold: 1
+          signer_kids:
+            - doctor-test-signer
+          allowed_change_classes:
+            - public_metadata
 "#,
             tmp.path().join("antirollback.json").display(),
             tmp.path().join("local-approvals.json").display()
@@ -114,7 +128,6 @@ server:
       fingerprint:
         provider: env
         name: TEST_DOCTOR_JSON_API_HASH
-        commitment: {TEST_API_COMMITMENT}
       scopes: [registry_notary:credential_issue]
 {deployment}{audit}evidence:
   enabled: true
@@ -166,7 +179,6 @@ auth:
       fingerprint:
         provider: env
         name: TEST_DOCTOR_JSON_API_HASH
-        commitment: {TEST_API_COMMITMENT}
       scopes: [civil_registry:evidence_verification]
       authorization_details:
         type: registry-notary/evidence-authorization/v1
@@ -978,7 +990,6 @@ fn doctor_json_reports_success_as_single_redacted_document() {
     assert!(!stdout.contains(TEST_ISSUER_JWK));
     assert!(!stdout.contains(TEST_AUDIT_SECRET));
     assert!(!stdout.contains(TEST_API_HASH));
-    assert!(!stdout.contains(TEST_API_COMMITMENT));
 }
 
 #[test]
@@ -1014,7 +1025,6 @@ fn explain_config_json_reports_redacted_resolved_config() {
     assert!(!stdout.contains(TEST_ISSUER_JWK));
     assert!(!stdout.contains(TEST_AUDIT_SECRET));
     assert!(!stdout.contains(TEST_API_HASH));
-    assert!(!stdout.contains(TEST_API_COMMITMENT));
 }
 
 #[test]

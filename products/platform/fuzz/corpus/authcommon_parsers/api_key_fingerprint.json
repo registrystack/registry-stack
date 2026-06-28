@@ -1,1 +1,1 @@
-{"provider":"inline","commitment":"sha256:0e0d95347b11d7b982684299601a67717a7bb4fa80a057922a0f013d5087217b"}
+{"provider":"env","name":"REGISTRY_API_KEY_SHA256"}

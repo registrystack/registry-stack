@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Renamed the binary package from `registry-notary-bin` to `registry-notary`
+  so the Cargo package, executable, release artifact, and visible version output
+  use the same user-facing command name.
 - **BREAKING: removed OpenFn sidecar naming from the current source-adapter
   path.** Claim provenance, config connector values, batch-mode values,
   examples, Dockerfile naming, metrics, security inventories, and operator docs

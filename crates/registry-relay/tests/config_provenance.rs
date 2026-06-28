@@ -81,7 +81,6 @@ auth:
       fingerprint:
         provider: env
         name: PROVENANCE_TEST_OPERATOR_HASH
-        commitment: sha256:264a06f96fe260125bf53a1b604312881dcfdd4c13a87e6d469d1c6f2bfe529d
       scopes: ["registry_relay:admin"]
 
 audit:

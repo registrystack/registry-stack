@@ -12,7 +12,7 @@ COPY --from=registry_platform_src products/notary/xtask ./products/notary/xtask
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/workspace/target \
-    CARGO_TARGET_DIR=/workspace/target cargo build --release --locked -p registry-notary-bin --features "${REGISTRY_NOTARY_FEATURES}" \
+    CARGO_TARGET_DIR=/workspace/target cargo build --release --locked -p registry-notary --features "${REGISTRY_NOTARY_FEATURES}" \
     && cp /workspace/target/release/registry-notary /usr/local/bin/registry-notary
 
 FROM debian:bookworm-slim@sha256:60eac759739651111db372c07be67863818726f754804b8707c90979bda511df AS runtime

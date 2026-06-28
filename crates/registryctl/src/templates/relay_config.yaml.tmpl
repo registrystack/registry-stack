@@ -19,7 +19,6 @@ auth:
       fingerprint:
         provider: env
         name: METADATA_READER_HASH
-        commitment: {{metadata_commitment}}
       scopes:
         - benefits_casework:metadata
 
@@ -27,7 +26,6 @@ auth:
       fingerprint:
         provider: env
         name: ROW_READER_HASH
-        commitment: {{row_commitment}}
       scopes:
         - benefits_casework:metadata
         - benefits_casework:rows
@@ -36,7 +34,6 @@ auth:
       fingerprint:
         provider: env
         name: AGGREGATE_READER_HASH
-        commitment: {{aggregate_commitment}}
       scopes:
         - benefits_casework:metadata
         - benefits_casework:aggregate

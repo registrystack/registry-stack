@@ -345,6 +345,46 @@ fn unknown_field_rejected() {
 }
 
 #[test]
+fn legacy_api_key_fingerprint_commitment_rejected() {
+    let tmp = TempDir::new().expect("tempdir");
+    let path = write_config(
+        &tmp,
+        r#"
+server:
+  bind: 127.0.0.1:0
+catalog:
+  title: Test
+  base_url: https://data.example.test
+  publisher: Test
+vocabularies: {}
+auth:
+  mode: api_key
+  api_keys:
+    - id: old-key
+      fingerprint:
+        provider: env
+        name: TEST_KEY_HASH_LEGACY_COMMITMENT
+        commitment: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+datasets: []
+audit:
+  sink: stdout
+  format: jsonl
+"#,
+    );
+
+    assert_config_code(config::load(&path), "config.parse_error");
+
+    let raw = std::fs::read_to_string(&path).expect("read config");
+    let err = serde_saphyr::from_str::<config::Config>(&raw)
+        .expect_err("legacy fingerprint commitment must fail deserialization");
+    assert!(
+        err.to_string()
+            .contains("fingerprint.commitment was removed"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn server_transport_limits_must_be_nonzero() {
     let tmp = TempDir::new().expect("tempdir");
     let path = write_config(
@@ -447,12 +487,10 @@ auth:
       fingerprint:
         provider: env
         name: TEST_KEY_HASH_DUPLICATE_ID_ONE
-        commitment: sha256:1111111111111111111111111111111111111111111111111111111111111111
     - id: duplicate_key
       fingerprint:
         provider: env
         name: TEST_KEY_HASH_DUPLICATE_ID_TWO
-        commitment: sha256:2222222222222222222222222222222222222222222222222222222222222222
 datasets: []
 audit:
   sink: stdout
@@ -1866,7 +1904,6 @@ auth:
       fingerprint:
         provider: env
         name: SHOULD_NOT_BE_READ
-        commitment: sha256:c1731a9bbf5fdb74547daffeffe5975a756127a50adc1aac043363fcd402856c
       scopes: []
   oidc:
     issuer: https://idp.example.test

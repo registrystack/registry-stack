@@ -14,7 +14,6 @@ auth:
       fingerprint:
         provider: env
         name: REGISTRY_NOTARY_API_KEY_HASH
-        commitment: sha256:29b82cfd026f8458578c9df2b34766e42b7211af160d4c5c2c9608531103b224
       scopes:
         - health_registry:evidence_verification
 

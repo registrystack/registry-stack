@@ -44,8 +44,7 @@ use registry_platform_audit::{
     JsonlFileSink, JsonlStdoutSink, SyslogSink,
 };
 use registry_platform_authcommon::{
-    parse_bearer_token, verify_api_key, CredentialCommitmentContext, CredentialFingerprintRefError,
-    CredentialProduct, CredentialType, FingerprintFormatError,
+    parse_bearer_token, verify_api_key, CredentialFingerprintRefError, FingerprintFormatError,
 };
 use registry_platform_crypto::{
     sign, verify, KeyReadiness, LocalJwkSigner, PrivateJwk, PublicJwk, SigningProvider,
@@ -3993,11 +3992,8 @@ impl Authenticator {
     fn from_config(config: &StandaloneRegistryNotaryConfig) -> Result<Self, StandaloneServerError> {
         match config.auth.mode {
             EvidenceAuthMode::ApiKey => Ok(Self::Static {
-                api_keys: resolve_credentials(&config.auth.api_keys, CredentialType::ApiKey)?,
-                bearer_tokens: resolve_credentials(
-                    &config.auth.bearer_tokens,
-                    CredentialType::BearerToken,
-                )?,
+                api_keys: resolve_credentials(&config.auth.api_keys)?,
+                bearer_tokens: resolve_credentials(&config.auth.bearer_tokens)?,
             }),
             EvidenceAuthMode::Oidc => {
                 let oidc = config.auth.oidc.as_ref().ok_or_else(|| {
@@ -4690,7 +4686,6 @@ fn new_request_correlation_id() -> BoundedCorrelationId {
 
 fn resolve_credentials(
     credentials: &[EvidenceCredentialConfig],
-    credential_type: CredentialType,
 ) -> Result<Vec<ResolvedCredential>, StandaloneServerError> {
     credentials
         .iter()
@@ -4709,17 +4704,12 @@ fn resolve_credentials(
                 .unwrap_or_else(|| credential.id.clone());
             let fingerprint = credential
                 .fingerprint
-                .resolve(CredentialCommitmentContext {
-                    product: CredentialProduct::RegistryNotary,
-                    credential_type,
-                    credential_id: &credential.id,
-                })
+                .resolve()
                 .map_err(|error| match error {
                     CredentialFingerprintRefError::MissingSecret => {
                         StandaloneServerError::MissingCredentialEnv(secret_ref.clone())
                     }
-                    CredentialFingerprintRefError::InvalidFingerprint(format_error)
-                    | CredentialFingerprintRefError::InvalidCommitment(format_error) => {
+                    CredentialFingerprintRefError::InvalidFingerprint(format_error) => {
                         StandaloneServerError::InvalidCredentialHash(
                             secret_ref.clone(),
                             format_error,
@@ -4728,8 +4718,7 @@ fn resolve_credentials(
                     CredentialFingerprintRefError::EmptySecret => {
                         StandaloneServerError::MissingCredentialEnv(secret_ref.clone())
                     }
-                    CredentialFingerprintRefError::CommitmentMismatch
-                    | CredentialFingerprintRefError::InvalidShape => {
+                    CredentialFingerprintRefError::InvalidShape => {
                         StandaloneServerError::InvalidCredentialHash(
                             secret_ref.clone(),
                             FingerprintFormatError::InvalidHex,

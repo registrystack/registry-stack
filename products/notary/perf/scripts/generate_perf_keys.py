@@ -44,7 +44,6 @@ import base64
 import hashlib
 import json
 import os
-import re
 import secrets
 import shlex
 import sys
@@ -55,14 +54,6 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 INVALID_TOKEN_VALUE = "not-a-real-token-xxxx"
 ISSUER_KID = "did:web:perf.registry-notary.example#perf-key-1"
-SCRIPT_ROOT = Path(__file__).resolve().parents[1]
-
-AUTH_LIST_RE = re.compile(r"^(\s*)(api_keys|bearer_tokens):\s*$")
-ENTRY_ID_RE = re.compile(r"^(\s*)-\s+id:\s*(.+?)\s*$")
-FINGERPRINT_NAME_RE = re.compile(r"^(\s*)name:\s*(.+?)\s*$")
-FINGERPRINT_COMMITMENT_RE = re.compile(r"^(\s*)commitment:\s*(.+?)\s*$")
-
-
 def generate_token() -> str:
     return secrets.token_urlsafe(32)
 
@@ -70,20 +61,6 @@ def generate_token() -> str:
 def fingerprint_api_key(token: str) -> str:
     return f"sha256:{hashlib.sha256(token.encode('utf-8')).hexdigest()}"
 
-
-def credential_commitment(
-    credential_type: str,
-    credential_id: str,
-    credential_fingerprint: str,
-) -> str:
-    payload = {
-        "product": "registry-notary",
-        "credential_type": credential_type,
-        "credential_id": credential_id,
-        "fingerprint": credential_fingerprint,
-    }
-    encoded = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
 
 
 def _b64url(raw: bytes) -> str:
@@ -178,15 +155,6 @@ def build_env_lines(
     ]
 
 
-def env_values_from_lines(lines: list[str]) -> dict[str, str]:
-    values: dict[str, str] = {}
-    for line in lines:
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        values[key] = value
-    return values
-
 
 def remove_stale_audit_logs(env_path: Path) -> int:
     """Remove generated perf audit chains invalidated by a new hash secret."""
@@ -196,94 +164,6 @@ def remove_stale_audit_logs(env_path: Path) -> int:
         removed += 1
     return removed
 
-
-def refresh_config_commitments(values: dict[str, str]) -> int:
-    updated = 0
-    for path in sorted((SCRIPT_ROOT / "config").glob("*.yaml")):
-        if refresh_config_file(path, values):
-            updated += 1
-    return updated
-
-
-def refresh_config_file(path: Path, values: dict[str, str]) -> bool:
-    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
-    rewritten: list[str] = []
-    index = 0
-    changed = False
-    current_type: str | None = None
-    list_indent: int | None = None
-    while index < len(lines):
-        line = lines[index]
-        if match := AUTH_LIST_RE.match(line):
-            current_type = "api_key" if match.group(2) == "api_keys" else "bearer_token"
-            list_indent = len(match.group(1))
-            rewritten.append(line)
-            index += 1
-            continue
-        if current_type is not None and list_indent is not None:
-            if line.strip() and leading_spaces(line) <= list_indent:
-                current_type = None
-                list_indent = None
-                rewritten.append(line)
-                index += 1
-                continue
-            if entry_match := ENTRY_ID_RE.match(line):
-                entry_indent = len(entry_match.group(1))
-                block_end = index + 1
-                while block_end < len(lines):
-                    candidate = lines[block_end]
-                    if candidate.strip() and leading_spaces(candidate) <= list_indent:
-                        break
-                    if ENTRY_ID_RE.match(candidate) and leading_spaces(candidate) == entry_indent:
-                        break
-                    block_end += 1
-                block, block_changed = refresh_credential_block(
-                    lines[index:block_end],
-                    current_type,
-                    entry_match.group(2).strip(),
-                    values,
-                )
-                rewritten.extend(block)
-                changed = changed or block_changed
-                index = block_end
-                continue
-        rewritten.append(line)
-        index += 1
-    if changed:
-        path.write_text("".join(rewritten), encoding="utf-8")
-    return changed
-
-
-def refresh_credential_block(
-    block: list[str],
-    credential_type: str,
-    credential_id: str,
-    values: dict[str, str],
-) -> tuple[list[str], bool]:
-    env_name = None
-    commitment_index = None
-    for index, line in enumerate(block):
-        if name_match := FINGERPRINT_NAME_RE.match(line):
-            env_name = name_match.group(2).strip()
-        if FINGERPRINT_COMMITMENT_RE.match(line):
-            commitment_index = index
-    if env_name is None or commitment_index is None:
-        return block, False
-    if env_name not in values:
-        raise KeyError(f"{env_name} is required by a perf config but was not generated")
-    commitment = credential_commitment(credential_type, credential_id, values[env_name])
-    commitment_match = FINGERPRINT_COMMITMENT_RE.match(block[commitment_index])
-    assert commitment_match is not None
-    new_line = f"{commitment_match.group(1)}commitment: {commitment}\n"
-    if block[commitment_index] == new_line:
-        return block, False
-    rewritten = list(block)
-    rewritten[commitment_index] = new_line
-    return rewritten, True
-
-
-def leading_spaces(line: str) -> int:
-    return len(line) - len(line.lstrip(" "))
 
 
 def main() -> None:
@@ -323,13 +203,10 @@ def main() -> None:
 
     write_env_file(env_path, env_content)
     removed_audit_logs = remove_stale_audit_logs(env_path)
-    updated_configs = refresh_config_commitments(env_values_from_lines(env_lines))
 
     print(f"Wrote: {env_path}")
     if removed_audit_logs:
         print(f"Removed {removed_audit_logs} stale perf audit log file(s)")
-    if updated_configs:
-        print(f"Updated fingerprint commitments in {updated_configs} perf config files")
     print("Variables written:")
     for name in (
         "REGISTRY_NOTARY_BEARER_TOKEN",

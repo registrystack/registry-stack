@@ -1,4 +1,4 @@
-# registry-notary-bin
+# registry-notary
 
 Process entrypoint for the standalone Registry Notary service.
 
@@ -33,19 +33,19 @@ The crate builds the `registry-notary` binary.
 Run the service:
 
 ```sh
-cargo run -p registry-notary-bin -- --config demo/config/registry-notary.yaml
+cargo run -p registry-notary -- --config demo/config/registry-notary.yaml
 ```
 
 Print the OpenAPI document:
 
 ```sh
-cargo run -p registry-notary-bin -- openapi > target/registry-notary.openapi.json
+cargo run -p registry-notary -- openapi > target/registry-notary.openapi.json
 ```
 
 Probe the container health endpoint without requiring curl in the image:
 
 ```sh
-cargo run -p registry-notary-bin -- healthcheck --url http://127.0.0.1:8080/healthz
+cargo run -p registry-notary -- healthcheck --url http://127.0.0.1:8080/healthz
 ```
 
 ## Features
@@ -57,8 +57,8 @@ cargo run -p registry-notary-bin -- healthcheck --url http://127.0.0.1:8080/heal
 ## Testing
 
 ```sh
-cargo test -p registry-notary-bin
-cargo run -p registry-notary-bin -- openapi > target/registry-notary.openapi.json
+cargo test -p registry-notary
+cargo run -p registry-notary -- openapi > target/registry-notary.openapi.json
 ```
 
 ## License

@@ -45,7 +45,7 @@ audit:
 
 # Generate the OpenAPI document to stdout.
 openapi-generate:
-    cargo run -q -p registry-notary-bin -- openapi
+    cargo run -q -p registry-notary -- openapi
 
 # Validate the committed OpenAPI baseline.
 openapi-check:
@@ -83,7 +83,7 @@ ci: ci-preflight fmt-check lint-default lint test-default test deny openapi-chec
 # Usage: just run
 #        just run config=path/to/config.yaml
 run config="demo/config/registry-notary.yaml":
-    cargo run -p registry-notary-bin -- --config {{config}}
+    cargo run -p registry-notary -- --config {{config}}
 
 # Generate synthetic perf API keys and write target/perf/perf.env.
 perf-keys env="target/perf/perf.env" force="":
