@@ -466,9 +466,8 @@ pub enum AuthMode {
     Oidc,
 }
 
-/// One configured API key, identified by an id and a governed fingerprint
-/// reference. The raw key never appears in config; only a signed commitment
-/// to the fingerprint is stored here.
+/// One configured API key, identified by an id and a fingerprint reference.
+/// The raw key never appears in config.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ApiKeyConfig {

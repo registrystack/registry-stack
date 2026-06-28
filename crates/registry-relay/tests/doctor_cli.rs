@@ -163,7 +163,6 @@ auth:
       fingerprint:
         provider: env
         name: REGISTRY_RELAY_DOCTOR_TEST_MISSING_HASH
-        commitment: sha256:0000000000000000000000000000000000000000000000000000000000000000
       scopes:
         - registry_relay:ops_read
 datasets: []

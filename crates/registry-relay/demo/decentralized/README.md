@@ -95,9 +95,9 @@ credentials so the smoke flow can prove row-reader credentials cannot run the
 aggregate endpoint.
 
 Relay configs should reference only `*_HASH` env vars. Registry Notary auth
-configs should reference fingerprint hashes and commitments; Registry Notary
-source connections still use `token_env` names for upstream Relay credentials.
-No raw token should be committed.
+configs should reference fingerprint hashes; Registry Notary source connections
+still use `token_env` names for upstream Relay credentials. No raw token should
+be committed.
 
 ## Static Metadata
 

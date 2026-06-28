@@ -34,14 +34,12 @@ auth:
       fingerprint:
         provider: env
         name: AGRI_METADATA_CLIENT_HASH
-        commitment: sha256:037ef64edab8d9cfc333c4af85478a02689d287a9cbbf7cdb8bf31059ae36e81
       scopes:
         - agri_registry:metadata
     - id: agri_evidence_source
       fingerprint:
         provider: env
         name: AGRI_EVIDENCE_SOURCE_HASH
-        commitment: sha256:74fd686d1463ba7e8663c2d6e4642e91e913f10de78155c834a1370392a9a5b6
       scopes:
         - agri_registry:metadata
         - agri_registry:rows
@@ -50,7 +48,6 @@ auth:
       fingerprint:
         provider: env
         name: AGRI_EVIDENCE_ONLY_HASH
-        commitment: sha256:bebbc28a65dd1e2974d433b81640299c4243e37f9e0a34e0d380c908dfb55e7a
       scopes:
         - agri_registry:metadata
         - agri_registry:evidence_verification
@@ -58,7 +55,6 @@ auth:
       fingerprint:
         provider: env
         name: AGRI_ROW_READER_HASH
-        commitment: sha256:1d73a5501256fc90f9dc72d9f5a673e53a5fea31268f02577ef3c0cda518f412
       scopes:
         - agri_registry:metadata
         - agri_registry:rows
@@ -66,7 +62,6 @@ auth:
       fingerprint:
         provider: env
         name: AGRI_AGGREGATE_READER_HASH
-        commitment: sha256:dffc4df00bec620dd720fe545edf190fcedda2ef2694c8f84139be0b35525c5e
       scopes:
         - agri_registry:metadata
         - agri_registry:aggregate

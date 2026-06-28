@@ -26,6 +26,42 @@ pub const POLICY_REQUIRED: &str = "pdp.policy_required";
 pub const POLICY_ID_REQUIRED: &str = "pdp.policy_id_required";
 pub const POLICY_HASH_INVALID: &str = "pdp.policy_hash_invalid";
 
+/// Every stable problem code `decide` can emit, in declaration order. This is
+/// the canonical allow-list services use to validate or normalize a denial
+/// code without re-spelling each `pdp.*` constant.
+pub const ALL_STABLE_CODES: &[&str] = &[
+    CONTEXT_REQUIRED,
+    PURPOSE_NOT_PERMITTED,
+    ASSURANCE_INSUFFICIENT,
+    EVIDENCE_STALE,
+    LEGAL_BASIS_REQUIRED,
+    CONSENT_REQUIRED,
+    JURISDICTION_NOT_PERMITTED,
+    RELATIONSHIP_NOT_PERMITTED,
+    REQUESTED_FACT_NOT_PERMITTED,
+    DISCLOSURE_NOT_PERMITTED,
+    CREDENTIAL_FORMAT_NOT_PERMITTED,
+    SOURCE_BINDING_NOT_PERMITTED,
+    ROUTE_IDENTITY_NOT_PERMITTED,
+    CHECKED_SCOPE_REQUIRED,
+    UNSUPPORTED_POLICY_TERM,
+    POLICY_REQUIRED,
+    POLICY_ID_REQUIRED,
+    POLICY_HASH_INVALID,
+];
+
+/// Returns the canonical `'static` spelling of `code` when it is a stable
+/// problem code emitted by [`decide`], or `None` otherwise. Lets a caller turn
+/// the owned `String` from a [`Decision::Deny`] back into a borrowed,
+/// validated code without maintaining its own allow-list.
+#[must_use]
+pub fn known_stable_code(code: &str) -> Option<&'static str> {
+    ALL_STABLE_CODES
+        .iter()
+        .copied()
+        .find(|known| *known == code)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EvidenceRequestContext {
     pub purpose: String,
@@ -550,6 +586,63 @@ impl DecisionTrace {
 }
 
 impl PolicyGate {
+    /// Every gate, in evaluation order. Lets callers build a complete
+    /// gate-keyed map without hand-listing variants (and silently drifting
+    /// when a gate is added).
+    pub const ALL: [PolicyGate; 21] = [
+        PolicyGate::PolicyIdentity,
+        PolicyGate::RequiredContext,
+        PolicyGate::OdrlTerms,
+        PolicyGate::Purpose,
+        PolicyGate::Jurisdiction,
+        PolicyGate::AssuranceAllowedSet,
+        PolicyGate::MinimumAssurance,
+        PolicyGate::SourceFreshness,
+        PolicyGate::LegalBasisRequired,
+        PolicyGate::ConsentRequired,
+        PolicyGate::LegalBasisAllowedSet,
+        PolicyGate::ConsentAllowedSet,
+        PolicyGate::Relationship,
+        PolicyGate::RelationshipPurpose,
+        PolicyGate::RequestedFact,
+        PolicyGate::RequestedDisclosure,
+        PolicyGate::CredentialFormat,
+        PolicyGate::SourceBinding,
+        PolicyGate::RouteIdentity,
+        PolicyGate::CheckedScope,
+        PolicyGate::Redaction,
+    ];
+
+    /// The gate's rule-id suffix (the `default_rule_id` without the `pdp.`
+    /// prefix). Services compose this with their own policy rule-id to label
+    /// which gate produced an audit entry.
+    #[must_use]
+    pub fn rule_id_suffix(self) -> &'static str {
+        match self {
+            PolicyGate::PolicyIdentity => "policy_identity",
+            PolicyGate::RequiredContext => "required_context",
+            PolicyGate::OdrlTerms => "odrl_terms",
+            PolicyGate::Purpose => "purpose",
+            PolicyGate::Jurisdiction => "jurisdiction",
+            PolicyGate::AssuranceAllowedSet => "assurance_allowed_set",
+            PolicyGate::MinimumAssurance => "minimum_assurance",
+            PolicyGate::SourceFreshness => "source_freshness",
+            PolicyGate::LegalBasisRequired => "legal_basis_required",
+            PolicyGate::ConsentRequired => "consent_required",
+            PolicyGate::LegalBasisAllowedSet => "legal_basis_allowed_set",
+            PolicyGate::ConsentAllowedSet => "consent_allowed_set",
+            PolicyGate::Relationship => "relationship",
+            PolicyGate::RelationshipPurpose => "relationship_purpose",
+            PolicyGate::RequestedFact => "requested_fact",
+            PolicyGate::RequestedDisclosure => "requested_disclosure",
+            PolicyGate::CredentialFormat => "credential_format",
+            PolicyGate::SourceBinding => "source_binding",
+            PolicyGate::RouteIdentity => "route_identity",
+            PolicyGate::CheckedScope => "checked_scope",
+            PolicyGate::Redaction => "redaction",
+        }
+    }
+
     fn default_rule_id(self) -> &'static str {
         match self {
             PolicyGate::PolicyIdentity => "pdp.policy_identity",
@@ -575,6 +668,17 @@ impl PolicyGate {
             PolicyGate::Redaction => "pdp.redaction",
         }
     }
+}
+
+/// Builds the gate-keyed rule-id map a service hands to [`PolicyInput`], where
+/// every gate maps to a single `"{prefix}.{suffix}"` rule id. Covers all
+/// gates so services can't drift by omitting one.
+#[must_use]
+pub fn rule_ids_by_gate(prefix: &str) -> BTreeMap<PolicyGate, Vec<String>> {
+    PolicyGate::ALL
+        .into_iter()
+        .map(|gate| (gate, vec![format!("{prefix}.{}", gate.rule_id_suffix())]))
+        .collect()
 }
 
 fn is_blank(value: Option<&str>) -> bool {
@@ -1431,6 +1535,38 @@ mod tests {
             }
             other => panic!("expected PermitWithRedaction, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn default_rule_id_is_prefixed_suffix_for_every_gate() {
+        for gate in PolicyGate::ALL {
+            assert_eq!(
+                gate.default_rule_id(),
+                format!("pdp.{}", gate.rule_id_suffix()),
+                "default_rule_id and rule_id_suffix disagree for {gate:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rule_ids_by_gate_covers_all_gates_with_prefix() {
+        let map = rule_ids_by_gate("example-policy");
+        assert_eq!(map.len(), PolicyGate::ALL.len());
+        for gate in PolicyGate::ALL {
+            assert_eq!(
+                map.get(&gate).map(Vec::as_slice),
+                Some([format!("example-policy.{}", gate.rule_id_suffix())].as_slice()),
+            );
+        }
+    }
+
+    #[test]
+    fn known_stable_code_round_trips_and_rejects_unknown() {
+        for code in ALL_STABLE_CODES {
+            assert_eq!(known_stable_code(code), Some(*code));
+        }
+        assert_eq!(known_stable_code("pdp.denied"), None);
+        assert_eq!(known_stable_code(""), None);
     }
 
     fn permit_rule_ids() -> Vec<String> {

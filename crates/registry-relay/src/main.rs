@@ -43,10 +43,7 @@ use registry_config_report::{
     redact_config_value, ConfigValueClassification, LiveApplyClass, ReportStatus, RequiredEnvStatus,
 };
 use registry_platform_audit::AuditChainProfile;
-use registry_platform_authcommon::{
-    credential_fingerprint_commitment, fingerprint_api_key, CredentialCommitmentContext,
-    CredentialFingerprintProvider, CredentialProduct, CredentialType,
-};
+use registry_platform_authcommon::{fingerprint_api_key, CredentialFingerprintProvider};
 use registry_platform_config::expand_config_env_vars;
 use registry_platform_ops::{internal_config_hash, ConfigSource, DeploymentProfile};
 use registry_relay::audit::{AuditPipeline, FileSink, StdoutSink, SyslogSink};
@@ -92,7 +89,7 @@ const ID_FLAG: &str = "--id";
 /// Top-level command for shell-free container liveness probing.
 const HEALTHCHECK_COMMAND: &str = "healthcheck";
 
-/// Generates a standalone API key and its governed config commitment.
+/// Generates a standalone API key and canonical fingerprint.
 const GENERATE_API_KEY_COMMAND: &str = "generate-api-key";
 
 /// Top-level command for generating the OpenAPI release artifact.
@@ -146,6 +143,7 @@ const RELAY_CONFIG_SCHEMA_VERSION: &str = "registry.relay.config.v1";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum CliCommand {
+    Version,
     Serve {
         config_path: PathBuf,
         env_file: Option<PathBuf>,
@@ -271,6 +269,10 @@ async fn main() -> ExitCode {
 
 async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     match parse_cli_command_from(env::args().collect())? {
+        CliCommand::Version => {
+            println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+            Ok(())
+        }
         CliCommand::Serve {
             config_path,
             env_file,
@@ -1335,7 +1337,15 @@ fn parse_cli_command_from(args: Vec<String>) -> Result<CliCommand, CliError> {
     let mut args = args.into_iter();
     let _program = args.next();
     let rest: Vec<String> = args.collect();
-    if rest.first().is_some_and(|arg| arg == HEALTHCHECK_COMMAND) {
+    if rest
+        .first()
+        .is_some_and(|arg| arg == "--version" || arg == "-V")
+    {
+        // Match clap's built-in version flag: print the version and ignore any
+        // trailing arguments rather than rejecting them, so the version surface
+        // is consistent across registry-notary, registryctl, and registry-relay.
+        Ok(CliCommand::Version)
+    } else if rest.first().is_some_and(|arg| arg == HEALTHCHECK_COMMAND) {
         parse_healthcheck_command(&rest[1..])
     } else if rest
         .first()
@@ -2073,15 +2083,7 @@ fn generate_api_key_output(id: &str) -> Result<String, CliError> {
 fn render_generated_api_key(id: &str, bytes: &[u8]) -> String {
     let key = URL_SAFE_NO_PAD.encode(bytes);
     let fingerprint = fingerprint_api_key(&key);
-    let commitment = credential_fingerprint_commitment(
-        CredentialCommitmentContext {
-            product: CredentialProduct::RegistryRelay,
-            credential_type: CredentialType::ApiKey,
-            credential_id: id,
-        },
-        &fingerprint,
-    );
-    format!("api_key_id={id}\napi_key={key}\nfingerprint={fingerprint}\ncommitment={commitment}")
+    format!("api_key_id={id}\napi_key={key}\nfingerprint={fingerprint}")
 }
 
 /// Instantiate the configured audit sink.
@@ -2373,6 +2375,31 @@ audit:
                 .expect("test admin server serves");
         });
         (format!("http://{addr}"), received)
+    }
+
+    #[test]
+    fn version_cli_parses_long_and_short_flags() {
+        for flag in ["--version", "-V"] {
+            let command = parse_cli_command_from(command_args(&["registry-relay", flag]))
+                .expect("version command parses");
+
+            assert_eq!(command, CliCommand::Version);
+        }
+    }
+
+    #[test]
+    fn version_cli_ignores_trailing_arguments() {
+        // clap's built-in version flag short-circuits and ignores anything that
+        // follows; the manual relay parser mirrors that behaviour.
+        let command = parse_cli_command_from(command_args(&[
+            "registry-relay",
+            "--version",
+            "--config",
+            "config.yaml",
+        ]))
+        .expect("version command ignores trailing arguments");
+
+        assert_eq!(command, CliCommand::Version);
     }
 
     #[test]
@@ -2707,13 +2734,13 @@ audit:
     }
 
     #[test]
-    fn generated_api_key_output_contains_fingerprint_and_commitment() {
+    fn generated_api_key_output_contains_fingerprint_without_commitment() {
         let output = render_generated_api_key("operator_reader", &[7_u8; 32]);
 
         assert!(output.contains("api_key_id=operator_reader\n"));
         assert!(output.contains("api_key=BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc\n"));
         assert!(output.contains("fingerprint=sha256:"));
-        assert!(output.contains("commitment=sha256:"));
+        assert!(!output.contains("commitment="));
     }
 
     #[test]

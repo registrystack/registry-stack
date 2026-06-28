@@ -12,10 +12,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use base64::Engine as _;
 use clap::ValueEnum;
 use ed25519_dalek::SigningKey;
-use registry_platform_authcommon::{
-    credential_fingerprint_commitment, fingerprint_api_key, validate_api_key_entropy,
-    CredentialCommitmentContext, CredentialProduct, CredentialType,
-};
+use registry_platform_authcommon::{fingerprint_api_key, validate_api_key_entropy};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -3128,9 +3125,6 @@ fn validate_project_fingerprints(project_dir: &Path, project: &Project) -> Resul
         let hash_env = api_key["fingerprint"]["name"]
             .as_str()
             .ok_or_else(|| anyhow!("relay config api key {id} is missing fingerprint env name"))?;
-        let configured_commitment = api_key["fingerprint"]["commitment"]
-            .as_str()
-            .ok_or_else(|| anyhow!("relay config api key {id} is missing commitment"))?;
 
         let fingerprint = secrets.required(hash_env)?;
         let raw_env = raw_env_name_for(id)?;
@@ -3138,18 +3132,6 @@ fn validate_project_fingerprints(project_dir: &Path, project: &Project) -> Resul
         let expected_fingerprint = fingerprint_api_key(raw_key);
         if fingerprint != expected_fingerprint {
             bail!("local raw key and fingerprint do not match for {id}");
-        }
-
-        let expected_commitment = credential_fingerprint_commitment(
-            CredentialCommitmentContext {
-                product: CredentialProduct::RegistryRelay,
-                credential_type: CredentialType::ApiKey,
-                credential_id: id,
-            },
-            fingerprint,
-        );
-        if configured_commitment != expected_commitment {
-            bail!("local fingerprint commitment does not match relay config for {id}");
         }
     }
 
@@ -3177,27 +3159,12 @@ fn validate_notary_fingerprint(project_dir: &Path, project: &Project) -> Result<
         let hash_env = api_key["fingerprint"]["name"]
             .as_str()
             .ok_or_else(|| anyhow!("notary config api key {id} is missing fingerprint env name"))?;
-        let configured_commitment = api_key["fingerprint"]["commitment"]
-            .as_str()
-            .ok_or_else(|| anyhow!("notary config api key {id} is missing commitment"))?;
 
         let fingerprint = secrets.required(hash_env)?;
         let raw_key = secrets.required(raw_env_name_for_notary(id)?)?;
         let expected_fingerprint = fingerprint_api_key(raw_key);
         if fingerprint != expected_fingerprint {
             bail!("local raw key and fingerprint do not match for notary api key {id}");
-        }
-
-        let expected_commitment = credential_fingerprint_commitment(
-            CredentialCommitmentContext {
-                product: CredentialProduct::RegistryNotary,
-                credential_type: CredentialType::ApiKey,
-                credential_id: id,
-            },
-            fingerprint,
-        );
-        if configured_commitment != expected_commitment {
-            bail!("local fingerprint commitment does not match notary config for {id}");
         }
     }
 
@@ -3253,15 +3220,9 @@ struct LocalCredentials {
 impl LocalCredentials {
     fn generate() -> Result<Self> {
         Ok(Self {
-            metadata_reader: Credential::generate(
-                CredentialProduct::RegistryRelay,
-                "metadata_reader",
-            )?,
-            row_reader: Credential::generate(CredentialProduct::RegistryRelay, "row_reader")?,
-            aggregate_reader: Credential::generate(
-                CredentialProduct::RegistryRelay,
-                "aggregate_reader",
-            )?,
+            metadata_reader: Credential::generate("metadata_reader")?,
+            row_reader: Credential::generate("row_reader")?,
+            aggregate_reader: Credential::generate("aggregate_reader")?,
             audit_hash_secret: random_token(48)?,
         })
     }
@@ -3299,10 +3260,7 @@ struct NotaryLocalCredentials {
 impl NotaryLocalCredentials {
     fn generate(relay_source_token: String) -> Result<Self> {
         Ok(Self {
-            evaluator: Credential::generate(
-                CredentialProduct::RegistryNotary,
-                "tutorial_evaluator",
-            )?,
+            evaluator: Credential::generate("tutorial_evaluator")?,
             audit_hash_secret: random_token(48)?,
             relay_source_token,
             issuer_jwk: demo_issuer_jwk(NOTARY_DEMO_ISSUER_KID)?,
@@ -3369,27 +3327,17 @@ struct Credential {
     id: &'static str,
     raw: String,
     fingerprint: String,
-    commitment: String,
 }
 
 impl Credential {
-    fn generate(product: CredentialProduct, id: &'static str) -> Result<Self> {
+    fn generate(id: &'static str) -> Result<Self> {
         let raw = random_token(32)?;
         validate_api_key_entropy(&raw)?;
         let fingerprint = fingerprint_api_key(&raw);
-        let commitment = credential_fingerprint_commitment(
-            CredentialCommitmentContext {
-                product,
-                credential_type: CredentialType::ApiKey,
-                credential_id: id,
-            },
-            &fingerprint,
-        );
         Ok(Self {
             id,
             raw,
             fingerprint,
-            commitment,
         })
     }
 }
@@ -3609,23 +3557,13 @@ fn standalone_notary_readme() -> &'static str {
 fn relay_config(credentials: &LocalCredentials) -> String {
     include_str!("templates/relay_config.yaml.tmpl")
         .replace("{{metadata_id}}", credentials.metadata_reader.id)
-        .replace(
-            "{{metadata_commitment}}",
-            &credentials.metadata_reader.commitment,
-        )
         .replace("{{row_id}}", credentials.row_reader.id)
-        .replace("{{row_commitment}}", &credentials.row_reader.commitment)
         .replace("{{aggregate_id}}", credentials.aggregate_reader.id)
-        .replace(
-            "{{aggregate_commitment}}",
-            &credentials.aggregate_reader.commitment,
-        )
 }
 
 fn notary_config(evaluator: &Credential) -> String {
     include_str!("templates/notary_config.yaml.tmpl")
         .replace("{{evaluator_id}}", evaluator.id)
-        .replace("{{evaluator_commitment}}", &evaluator.commitment)
         .replace("{{issuer_key_id}}", NOTARY_DEMO_ISSUER_KEY_ID)
         .replace("{{issuer_kid}}", NOTARY_DEMO_ISSUER_KID)
 }
@@ -3638,7 +3576,6 @@ fn notary_config_for_source(evaluator: &Credential, options: &NotaryInitOptions)
     };
     template
         .replace("{{evaluator_id}}", evaluator.id)
-        .replace("{{evaluator_commitment}}", &evaluator.commitment)
         .replace("{{issuer_key_id}}", NOTARY_DEMO_ISSUER_KEY_ID)
         .replace("{{issuer_kid}}", NOTARY_DEMO_ISSUER_KID)
         .replace("{{source_connection}}", options.source_kind.connection_id())
@@ -4059,10 +3996,6 @@ impl ParsedHttpUrl {
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
-    use registry_platform_authcommon::{
-        credential_fingerprint_commitment, CredentialCommitmentContext, CredentialProduct,
-        CredentialType,
-    };
     use serde_yaml::Value;
     use tempfile::TempDir;
 
@@ -5127,9 +5060,9 @@ workflows:
         let relay_config: Value =
             serde_yaml::from_str(&fs::read_to_string(project.join("relay/config.yaml")).unwrap())
                 .unwrap();
-        let notary_config: Value =
-            serde_yaml::from_str(&fs::read_to_string(project.join("notary/config.yaml")).unwrap())
-                .unwrap();
+        let notary_config_body = fs::read_to_string(project.join("notary/config.yaml")).unwrap();
+        assert!(!notary_config_body.contains("commitment:"));
+        let notary_config: Value = serde_yaml::from_str(&notary_config_body).unwrap();
         assert_eq!(relay_config["auth"]["mode"], "api_key");
         assert_eq!(notary_config["auth"]["mode"], "api_key");
         assert_eq!(
@@ -5316,7 +5249,7 @@ workflows:
     }
 
     #[test]
-    fn generated_credentials_match_config_commitments() {
+    fn generated_credentials_reference_fingerprints_without_commitments() {
         let temp = TempDir::new().unwrap();
         let project = temp.path().join("my-first-api");
         init_spreadsheet_api(&project, Sample::Benefits).unwrap();
@@ -5325,6 +5258,7 @@ workflows:
         let config = fs::read_to_string(project.join("relay/config.yaml")).unwrap();
         let config_yaml: Value = serde_yaml::from_str(&config).unwrap();
         assert_eq!(config_yaml["server"]["openapi_requires_auth"], false);
+        assert!(!config.contains("commitment:"));
 
         for (id, env_name) in [
             ("metadata_reader", "METADATA_READER_HASH"),
@@ -5332,17 +5266,13 @@ workflows:
             ("aggregate_reader", "AGGREGATE_READER_HASH"),
         ] {
             let fingerprint = env_value(&env, env_name);
-            let commitment = credential_fingerprint_commitment(
-                CredentialCommitmentContext {
-                    product: CredentialProduct::RegistryRelay,
-                    credential_type: CredentialType::ApiKey,
-                    credential_id: id,
-                },
-                &fingerprint,
+            assert!(
+                fingerprint.starts_with("sha256:"),
+                "generated env should contain fingerprint for {id}"
             );
             assert!(
-                config.contains(&commitment),
-                "config should contain commitment for {id}"
+                config.contains(&format!("name: {env_name}")),
+                "config should reference fingerprint env for {id}"
             );
         }
     }

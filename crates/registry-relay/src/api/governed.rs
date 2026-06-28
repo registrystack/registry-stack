@@ -8,8 +8,9 @@ use registry_manifest_core::{
     CompiledDatasetPolicy, CompiledMetadata, CompiledPolicyOperandValue, EvidencePackMetadata,
 };
 use registry_platform_pdp::{
-    decide as pdp_decide, Decision as PdpDecision, DecisionAudit as PdpDecisionAudit,
-    EvidenceRequestContext as PdpRequestContext, PolicyGate, PolicyInput as PdpPolicyInput,
+    decide as pdp_decide, rule_ids_by_gate, Decision as PdpDecision,
+    DecisionAudit as PdpDecisionAudit, EvidenceRequestContext as PdpRequestContext,
+    PolicyInput as PdpPolicyInput,
 };
 use sha2::{Digest, Sha256};
 
@@ -193,7 +194,7 @@ pub(crate) fn require_governed_read_access<E: GovernedEntity + ?Sized>(
             .as_ref()
             .and_then(|policy| policy.ecosystem_binding_version.clone()),
         rule_ids: vec![policy_rule_id.clone()],
-        rule_ids_by_gate: governed_rule_ids_by_gate(&policy_rule_id),
+        rule_ids_by_gate: rule_ids_by_gate(&policy_rule_id),
         permit_unconstrained: false,
         required_context: Default::default(),
         odrl_constraint_terms: selected_policy
@@ -249,29 +250,6 @@ pub(crate) fn require_governed_read_access<E: GovernedEntity + ?Sized>(
             audit,
         )),
     }
-}
-
-fn governed_rule_ids_by_gate(rule_id: &str) -> std::collections::BTreeMap<PolicyGate, Vec<String>> {
-    [
-        (PolicyGate::PolicyIdentity, "policy_identity"),
-        (PolicyGate::OdrlTerms, "odrl_terms"),
-        (PolicyGate::Purpose, "purpose"),
-        (PolicyGate::Jurisdiction, "jurisdiction"),
-        (PolicyGate::AssuranceAllowedSet, "assurance_allowed_set"),
-        (PolicyGate::MinimumAssurance, "minimum_assurance"),
-        (PolicyGate::SourceFreshness, "source_freshness"),
-        (PolicyGate::LegalBasisRequired, "legal_basis_required"),
-        (PolicyGate::ConsentRequired, "consent_required"),
-        (PolicyGate::Redaction, "redaction"),
-        (PolicyGate::RequestedFact, "requested_fact"),
-        (PolicyGate::RequestedDisclosure, "requested_disclosure"),
-        (PolicyGate::SourceBinding, "source_binding"),
-        (PolicyGate::RouteIdentity, "route_identity"),
-        (PolicyGate::CheckedScope, "checked_scope"),
-    ]
-    .into_iter()
-    .map(|(gate, suffix)| (gate, vec![format!("{rule_id}.{suffix}")]))
-    .collect()
 }
 
 #[allow(clippy::result_large_err)]

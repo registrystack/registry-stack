@@ -65,7 +65,7 @@ least-privilege permissions and unsafe event handling.
 Notary's OpenAPI generator is deterministic:
 
 ```sh
-cargo run -p registry-notary-bin -- openapi
+cargo run -p registry-notary -- openapi
 ```
 
 CI compares that generated output with

@@ -384,7 +384,7 @@ evidence:
 
         self.assertIssue(issues, "dhis2-programme-claims-missing")
 
-    def test_rejects_notary_credential_commitment_mismatch_in_strict_env(self) -> None:
+    def test_rejects_notary_invalid_credential_fingerprint_in_strict_env(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             config_dir = root / "config" / "coolify" / "notary"
@@ -398,24 +398,19 @@ auth:
       fingerprint:
         provider: env
         name: CIVIL_EVIDENCE_CLIENT_BEARER_HASH
-        commitment: sha256:0000000000000000000000000000000000000000000000000000000000000000
 """,
                 encoding="utf-8",
             )
 
-            issues = self.validator.validate_credential_commitments(
+            issues = self.validator.validate_credential_fingerprints(
                 "registry-lab",
                 root,
-                {
-                    "CIVIL_EVIDENCE_CLIENT_BEARER_HASH": (
-                        "sha256:f6091e63acf60468a49a94982b1143f5c88802ab35747bb5cd22839fc21620a5"
-                    )
-                },
+                {"CIVIL_EVIDENCE_CLIENT_BEARER_HASH": "not-a-fingerprint"},
             )
 
-        self.assertIssue(issues, "credential-commitment-mismatch")
+        self.assertIssue(issues, "credential-fingerprint-invalid")
 
-    def test_rejects_relay_credential_commitment_mismatch_in_strict_env(self) -> None:
+    def test_rejects_relay_invalid_credential_fingerprint_in_strict_env(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             config_dir = root / "config" / "coolify" / "relay"
@@ -429,22 +424,17 @@ auth:
       fingerprint:
         provider: env
         name: CIVIL_METADATA_CLIENT_HASH
-        commitment: sha256:0000000000000000000000000000000000000000000000000000000000000000
 """,
                 encoding="utf-8",
             )
 
-            issues = self.validator.validate_credential_commitments(
+            issues = self.validator.validate_credential_fingerprints(
                 "registry-lab",
                 root,
-                {
-                    "CIVIL_METADATA_CLIENT_HASH": (
-                        "sha256:54e6c08b6ce02c56d258b4f40313d8ec7a2cf9a222fdfa88789d720cb923c254"
-                    )
-                },
+                {"CIVIL_METADATA_CLIENT_HASH": "not-a-fingerprint"},
             )
 
-        self.assertIssue(issues, "credential-commitment-mismatch")
+        self.assertIssue(issues, "credential-fingerprint-invalid")
 
     @staticmethod
     def _stub_manifest_oracle(root: Path) -> list[str]:
@@ -1191,8 +1181,6 @@ evidence:
     def test_hosted_workflow_paths_cover_deployment_automation(self) -> None:
         workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
         for path in (
-            "scripts/credential-commitment.py",
-            "scripts/test_credential_commitment.py",
             "scripts/test_dhis2_programme_vc_config.py",
             "scripts/generate-holder-proof.js",
             "scripts/summarize-dhis2-programme-vc.py",

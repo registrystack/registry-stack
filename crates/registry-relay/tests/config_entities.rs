@@ -645,7 +645,7 @@ fn release_scope_is_grantable_to_api_keys() {
     let mut body = base_config(&dataset);
     body = body.replace(
         "  api_keys: []",
-        "  api_keys:\n    - id: release_client\n      fingerprint:\n        provider: env\n        name: RELEASE_CLIENT_HASH\n        commitment: sha256:069a5a49b48c64e1644c2c7ac9a746aa9785b2c18cee1eaee395f04d51736ff3\n      scopes:\n        - social_registry:identity_release",
+        "  api_keys:\n    - id: release_client\n      fingerprint:\n        provider: env\n        name: RELEASE_CLIENT_HASH\n      scopes:\n        - social_registry:identity_release",
     );
     let config_path = write_config(&tmp, &body);
     // The `social_registry:identity_release` key scope must clear scope-level
