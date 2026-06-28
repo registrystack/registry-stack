@@ -28,8 +28,10 @@ The mental model is one sentence: **a scoped question crosses into the instituti
 record is read in place, and only a computed answer crosses back out.**
 
 A caller never sends the value it is asking about and never receives the underlying
-record. It sends a subject identifier and the id of a *claim* (a single, pre-modelled
-question) and receives one of a few narrow shapes of answer: a yes/no, a single value, a
+record. It sends the id of a *claim* (a single, pre-modelled question) and the inputs that
+claim needs to resolve the subject: a subject identifier, plus, where the claim's matching
+policy requires them, target or requester attributes, further identifiers, or relationship
+attributes. It receives one of a few narrow shapes of answer: a yes/no, a single value, a
 machine-readable evaluation result, or a credential the subject can carry in a wallet. The source row that the
 answer was computed from stays behind.
 
@@ -39,20 +41,23 @@ answer was computed from stays behind.
 flowchart LR
     subgraph inst["Institution: data stays here"]
         src[("Source registry\nCSV · XLSX · Parquet · PostgreSQL")]
-        relay["Registry Relay\nprotected read API"]
+        relay["Registry Relay\nprotected read API · scoped consultation"]
         notary["Registry Notary\nevaluate · disclose · issue"]
         key>"Signing key\n(private half never leaves)"]
         audit[("Audit log")]
         src -- read in place --> relay
         relay -- governed read --> notary
         notary -. records .-> audit
+        relay -. records .-> audit
         key -. signs .-> notary
     end
     caller["Caller / verifier"]
     holder(["Subject / wallet"])
-    caller == "request: subject id + claim id + scope" ==> notary
+    caller == "request: claim id + subject inputs + scope" ==> notary
     notary == "answer: yes/no · value · evaluation result" ==> caller
     notary == "holder-bound credential" ==> holder
+    caller == "scoped record read · dataset:rows" ==> relay
+    relay == "authorized source records" ==> caller
 
     classDef inside fill:#eef,stroke:#334,stroke-width:1px;
     classDef outside fill:#f7f7f7,stroke:#777,stroke-dasharray:3 3;
@@ -60,11 +65,14 @@ flowchart LR
     class caller,holder outside;
 ```
 
-*A request and an answer cross the boundary. The source record does not.* Registry Relay
+*Two surfaces cross the boundary, both governed.* Registry Notary evaluates one modelled
+question against a source and returns a shaped, minimized answer; it is the only component
+that evaluates claims, applies disclosure policy, and issues credentials. Registry Relay
 turns an existing file or database table into a read-only, access-controlled API without
-replacing the source. Registry Notary evaluates one modelled question against that source
-and returns a shaped result; it is the only component that evaluates claims, applies
-disclosure policy, and issues credentials.
+replacing the source, and publishes restricted, scoped consultation routes that return
+source records to authorized callers holding the `dataset:rows` permission. Notary is the
+strongest minimization; Relay record reads are scoped and audited, not open data. Either
+way the source is read in place, never written back, and never aggregated centrally.
 
 ## What stays home
 
@@ -84,12 +92,15 @@ disclosure policy, and issues credentials.
 
 ## What crosses the boundary
 
-Only a computed answer crosses out, never the source row. The answer takes one of a few
-shapes:
+What crosses depends on the surface. Registry Relay returns scoped records to an
+authorized caller: a governed, audited read under the `dataset:rows` permission, never a
+bulk export. Registry Notary returns the answer a rule computes rather than the source row;
+keeping that answer narrow is a modelling discipline, since a well-modelled claim returns
+one decision or one extracted value. A Notary answer takes one of a few shapes:
 
 - **A yes/no**: only the true/false satisfaction of the modelled rule.
 - **A single value**: the evaluated value itself, when the claim's disclosure mode is
-  `value` (this returns the full value).
+  `value`.
 - **A machine-readable evaluation result**: a claim-result document carrying *provenance
   metadata*: which evaluation produced it, under which policy, across how many sources. This
   provenance lets a receiving system trace the result; it is not a cryptographic signature.
@@ -107,14 +118,15 @@ receives. There are exactly three:
 
 | Mode | Discloses | Withholds |
 |------|-----------|-----------|
-| `value` | the full evaluated value | nothing about the value |
+| `value` | the evaluated value, less any object fields the policy redacts | nothing beyond policy-redacted object fields |
 | `predicate` | only the true/false satisfaction | the underlying value |
 | `redacted` | neither: the result carries no value **and** no yes/no | the value *and* the outcome |
 
 The mode is policy-bound: a caller may request a mode, but a claim defines an `allowed`
-set and a `default`, the service refuses a requested mode outside the allowed set and
-applies the default when the caller requests none, and every result records which mode was
-applied. A privacy-sensitive claim is expected to default to the
+set, a `default`, and a `downgrade` policy. Under the default `deny` downgrade the service
+refuses a requested mode outside the allowed set; a `default` or `redacted` downgrade
+instead substitutes that fallback mode when the fallback is itself allowed. The default mode
+applies when the caller requests none, and every result records which mode was applied. A privacy-sensitive claim is expected to default to the
 least-revealing mode that still answers the question.
 
 This is the mechanism behind "prove a fact without sharing the record". To check whether a
@@ -150,7 +162,8 @@ Security material:
   a permit before data is returned; a denial fails closed with a stable reason rather than
   falling back to an ungoverned read.
 - **Every person-level request is audited.** An audit record captures at least the caller,
-  the scopes exercised, a request id, and the declared purpose where one was supplied. A
+  a request id, the scope or claim the request exercised, and the declared purpose where
+  one was supplied. A
   deployment can run audit fail-closed, so a request whose audit record cannot be written
   does not return success.
 
@@ -162,9 +175,11 @@ mistake, so the limits are stated plainly here.
 - **It is not "data never moves" and not "air-gapped".** The promise is *read-in-place, no
   write-back, retained custody*. Authorized, minimized answers do leave the boundary by
   design: that is the point of the system.
-- **Minimization is modelled, not automatic.** `value` mode discloses the full value. A
-  claim reveals only what its author configured it to reveal; least disclosure is a design
-  choice the claim makes, not a property the stack imposes on every answer.
+- **Minimization is modelled, not automatic.** `value` mode discloses the evaluated value,
+  less any object fields the matching policy marks for redaction; it is not constrained to a
+  scalar, so a claim modelled to return an object or extracted record returns one. A claim
+  reveals only what its author configured it to reveal; least disclosure is a design choice
+  the claim makes, not a property the stack imposes on every answer.
 - **Correctness depends on the source.** Notary reports what the configured source says; it
   does not independently vouch for whether the source is correct or current.
 - **A plain result is provenance-tagged, not signed.** The everyday evaluation response
