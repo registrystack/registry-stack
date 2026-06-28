@@ -144,7 +144,7 @@ The codes above are the evidence-evaluation taxonomy. The Notary server also ret
 | `request.uri_too_long` | request uri is too long | The request URI exceeds the configured limit. |
 | `audit.write_failed` | audit write failed | An audit record could not be written. |
 
-The Notary OpenAPI document also uses three generic umbrella problem types as status-keyed examples: `request.conflict` (409), `request.too_large` (413), and `format.unsupported` (406). These are illustrative placeholders: runtime responses use the specific codes above, such as `idempotency.conflict`, `batch.too_large`, and `claim.format_not_supported`. One 413 is an exception: an oversized HTTP request body is rejected by the shared body-limit middleware with problem `type` `https://registry-platform.dev/problems/request/body-too-large` and no `code` extension.
+The Notary OpenAPI document also uses three generic umbrella problem types as status-keyed examples: `request.conflict` (409), `request.too_large` (413), and `format.unsupported` (406). These are illustrative placeholders: runtime responses use the specific codes above, such as `idempotency.conflict`, `batch.too_large`, and `claim.format_not_supported`. One 413 is an exception: an oversized HTTP request body is rejected by the shared body-limit middleware with problem `type` `https://id.registrystack.org/problems/registry-platform/request/body-too-large` and no `code` extension.
 
 ## Registry Relay
 
