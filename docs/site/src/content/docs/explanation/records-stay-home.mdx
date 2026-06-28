@@ -93,8 +93,9 @@ way the source is read in place, never written back, and never aggregated centra
 ## What crosses the boundary
 
 What crosses depends on the surface. Registry Relay returns scoped records to an
-authorized caller: a governed, audited read under the `dataset:rows` permission, never a
-bulk export. Registry Notary returns the answer a rule computes rather than the source row;
+authorized caller: a governed, audited, paginated read bounded by the caller's `dataset:rows`
+scope and the dataset's configured filters and limits. Registry Notary returns the answer a
+rule computes rather than the source row;
 keeping that answer narrow is a modelling discipline, since a well-modelled claim returns
 one decision or one extracted value. A Notary answer takes one of a few shapes:
 
@@ -143,7 +144,9 @@ SHA-256 *digest* of each selectively disclosable field rather than the field val
 field the holder does not present stays hidden. Holder binding is set by the credential profile. A holder-bound profile ties the credential
 to the holder's key so it is not presentable without the matching private key; the default
 `none` mode issues an unbound credential. Either way, the holder chooses which fields to
-reveal to which verifier. Anyone can verify it against the issuer's
+reveal to which verifier. Each selectively disclosable field is a whole claim output, so an
+object-valued output is revealed as a unit, not field by field within the object. Anyone can
+verify it against the issuer's
 published public keys, served without authentication so a verifier needs no credential of
 its own. The issued credential carries no full record payload.
 
