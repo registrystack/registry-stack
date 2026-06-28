@@ -1353,7 +1353,6 @@ fn init_benefits_project(dir: &Path) -> Result<()> {
     write_text(dir.join("README.md"), project_readme())?;
     write_text(dir.join(".gitignore"), include_str!("templates/gitignore"))?;
     write_text(dir.join("relay/config.yaml"), &relay_config(&credentials))?;
-    write_text(dir.join("relay/metadata.yaml"), relay_metadata())?;
     write_text(dir.join("secrets/local.env"), &credentials.env_file())?;
     write_text(dir.join("output/.gitkeep"), "")?;
     sample::write_benefits_workbook(&dir.join("data/benefits_casework.xlsx"))?;
@@ -2554,8 +2553,22 @@ fn generated_file(path: &str, contents: &str) -> GeneratedFile {
 }
 
 fn bruno_relay_files(relay_base_url: &str, _secrets: &LocalEnv) -> Vec<GeneratedFile> {
+    let application_query_body = r#"{
+  "measures": ["application_count"],
+  "group_by": ["program", "application_status"],
+  "filters": {
+    "program": "cash_transfer"
+  }
+}"#;
+
     vec![
-        bruno_get("Relay/Health.bru", "Relay health", 1, "{{relay_base_url}}/healthz", &[]),
+        bruno_get(
+            "Relay/Health.bru",
+            "Relay health",
+            1,
+            "{{relay_base_url}}/healthz",
+            &[],
+        ),
         bruno_get("Relay/Ready.bru", "Relay ready", 2, "{{relay_base_url}}/ready", &[]),
         bruno_get(
             "Relay/OpenAPI.bru",
@@ -2579,14 +2592,161 @@ fn bruno_relay_files(relay_base_url: &str, _secrets: &LocalEnv) -> Vec<Generated
             &[("Authorization", "Bearer {{relay_metadata_key}}")],
         ),
         bruno_get(
+            "Relay/Get dataset detail.bru",
+            "Get dataset detail",
+            6,
+            "{{relay_base_url}}/v1/datasets/benefits_casework",
+            &[("Authorization", "Bearer {{relay_metadata_key}}")],
+        ),
+        bruno_get(
+            "Relay/Metadata catalog.bru",
+            "Metadata catalog",
+            7,
+            "{{relay_base_url}}/metadata/catalog",
+            &[("Authorization", "Bearer {{relay_metadata_key}}")],
+        ),
+        bruno_get(
+            "Relay/Household schema.bru",
+            "Household schema",
+            8,
+            "{{relay_base_url}}/v1/datasets/benefits_casework/entities/household/schema",
+            &[("Authorization", "Bearer {{relay_metadata_key}}")],
+        ),
+        bruno_get(
+            "Relay/Person schema.bru",
+            "Person schema",
+            9,
+            "{{relay_base_url}}/v1/datasets/benefits_casework/entities/person/schema",
+            &[("Authorization", "Bearer {{relay_metadata_key}}")],
+        ),
+        bruno_get(
+            "Relay/Application schema.bru",
+            "Application schema",
+            10,
+            "{{relay_base_url}}/v1/datasets/benefits_casework/entities/application/schema",
+            &[("Authorization", "Bearer {{relay_metadata_key}}")],
+        ),
+        bruno_get(
+            "Relay/Read households by district.bru",
+            "Read households by district",
+            11,
+            "{{relay_base_url}}/v1/datasets/benefits_casework/entities/household/records?district=south",
+            &[("Authorization", "Bearer {{relay_row_key}}")],
+        ),
+        bruno_get(
+            "Relay/Read household with members.bru",
+            "Read household with members",
+            12,
+            "{{relay_base_url}}/v1/datasets/benefits_casework/entities/household/records/hh-1001?expand=members",
+            &[
+                ("Authorization", "Bearer {{relay_row_key}}"),
+                ("Data-Purpose", "{{purpose}}"),
+            ],
+        ),
+        bruno_get(
             "Relay/Read sample people.bru",
             "Read sample people",
-            6,
+            13,
             "{{relay_base_url}}/v1/datasets/benefits_casework/entities/person/records?household_id=hh-1001",
             &[
                 ("Authorization", "Bearer {{relay_row_key}}"),
                 ("Data-Purpose", "{{purpose}}"),
             ],
+        ),
+        bruno_get(
+            "Relay/Read pending people.bru",
+            "Read pending people",
+            14,
+            "{{relay_base_url}}/v1/datasets/benefits_casework/entities/person/records?eligibility_status=pending_review",
+            &[
+                ("Authorization", "Bearer {{relay_row_key}}"),
+                ("Data-Purpose", "{{purpose}}"),
+            ],
+        ),
+        bruno_get(
+            "Relay/Read person with household.bru",
+            "Read person with household",
+            15,
+            "{{relay_base_url}}/v1/datasets/benefits_casework/entities/person/records/per-2001?expand=household",
+            &[
+                ("Authorization", "Bearer {{relay_row_key}}"),
+                ("Data-Purpose", "{{purpose}}"),
+            ],
+        ),
+        bruno_get(
+            "Relay/Read approved applications.bru",
+            "Read approved applications",
+            16,
+            "{{relay_base_url}}/v1/datasets/benefits_casework/entities/application/records?application_status=approved",
+            &[
+                ("Authorization", "Bearer {{relay_row_key}}"),
+                ("Data-Purpose", "{{purpose}}"),
+            ],
+        ),
+        bruno_get(
+            "Relay/Read application with applicant.bru",
+            "Read application with applicant",
+            17,
+            "{{relay_base_url}}/v1/datasets/benefits_casework/entities/application/records/app-3001?expand=applicant",
+            &[
+                ("Authorization", "Bearer {{relay_row_key}}"),
+                ("Data-Purpose", "{{purpose}}"),
+            ],
+        ),
+        bruno_get(
+            "Relay/People missing purpose.bru",
+            "People missing purpose",
+            18,
+            "{{relay_base_url}}/v1/datasets/benefits_casework/entities/person/records?household_id=hh-1001",
+            &[("Authorization", "Bearer {{relay_row_key}}")],
+        ),
+        bruno_get(
+            "Relay/Metadata key cannot read people.bru",
+            "Metadata key cannot read people",
+            19,
+            "{{relay_base_url}}/v1/datasets/benefits_casework/entities/person/records?household_id=hh-1001",
+            &[
+                ("Authorization", "Bearer {{relay_metadata_key}}"),
+                ("Data-Purpose", "{{purpose}}"),
+            ],
+        ),
+        bruno_get(
+            "Relay/List aggregates.bru",
+            "List aggregates",
+            20,
+            "{{relay_base_url}}/v1/datasets/benefits_casework/aggregates",
+            &[("Authorization", "Bearer {{relay_aggregate_key}}")],
+        ),
+        bruno_get(
+            "Relay/Run households by district aggregate.bru",
+            "Run households by district aggregate",
+            21,
+            "{{relay_base_url}}/v1/datasets/benefits_casework/aggregates/by_district",
+            &[("Authorization", "Bearer {{relay_aggregate_key}}")],
+        ),
+        bruno_get(
+            "Relay/Run applications aggregate as CSV.bru",
+            "Run applications aggregate as CSV",
+            22,
+            "{{relay_base_url}}/v1/datasets/benefits_casework/aggregates/applications_by_program_status?f=csv",
+            &[
+                ("Authorization", "Bearer {{relay_aggregate_key}}"),
+                ("Data-Purpose", "{{purpose}}"),
+                ("Accept", "text/csv"),
+            ],
+        ),
+        bruno_post_json(
+            "Relay/Query applications aggregate.bru",
+            "Query applications aggregate",
+            23,
+            "{{relay_base_url}}/v1/datasets/benefits_casework/aggregates/applications_by_program_status/query",
+            &[
+                ("Authorization", "Bearer {{relay_aggregate_key}}"),
+                ("Data-Purpose", "{{purpose}}"),
+                ("Content-Type", "application/json"),
+                ("Accept", "application/json"),
+            ],
+            application_query_body,
         ),
         generated_file(
             "Relay/folder.bru",
@@ -2820,6 +2980,10 @@ fn bruno_env(project: &Project, secrets: &LocalEnv, example: bool) -> Result<Str
         values.push((
             "relay_row_key",
             bruno_env_value(secrets, "ROW_READER_RAW", example),
+        ));
+        values.push((
+            "relay_aggregate_key",
+            bruno_env_value(secrets, "AGGREGATE_READER_RAW", example),
         ));
     }
     if project.notary.is_some() {
@@ -3400,7 +3564,8 @@ struct RuntimeSection<'a> {
 #[derive(Serialize)]
 struct RelaySection<'a> {
     config: &'a str,
-    metadata: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    metadata: Option<&'a str>,
     data: Vec<&'a str>,
 }
 
@@ -3511,7 +3676,7 @@ fn registryctl_manifest(dir: &Path, kind: ProjectManifestKind<'_>) -> Result<Str
         },
         relay: include_relay.then_some(RelaySection {
             config: "relay/config.yaml",
-            metadata: "relay/metadata.yaml",
+            metadata: None,
             data: vec!["data/benefits_casework.xlsx"],
         }),
         notary,
@@ -3609,10 +3774,6 @@ fn standalone_notary_env_file(
     env
 }
 
-fn relay_metadata() -> &'static str {
-    include_str!("templates/relay_metadata.yaml")
-}
-
 #[derive(Debug, Deserialize, Serialize)]
 struct SmokeReport {
     base_url: String,
@@ -3681,12 +3842,11 @@ fn run_smoke_checks(base_url: &str, secrets: &LocalEnv) -> SmokeReport {
         400,
         &[bearer_header(secrets.value("ROW_READER_RAW"))],
     );
-    record_smoke_check(
+    record_row_data_smoke_check(
         &mut checks,
         base_url,
         "row reader can read filtered records",
         "/v1/datasets/benefits_casework/entities/person/records?household_id=hh-1001",
-        200,
         &[
             bearer_header(secrets.value("ROW_READER_RAW")),
             (
@@ -3828,6 +3988,44 @@ fn record_smoke_check(
             method: "GET".to_string(),
             path: path.to_string(),
             expected_status,
+            actual_status: None,
+            passed: false,
+            error: Some(redact_error(&err.to_string())),
+        }),
+    }
+}
+
+fn record_row_data_smoke_check(
+    checks: &mut Vec<SmokeCheck>,
+    base_url: &str,
+    name: &'static str,
+    path: &'static str,
+    headers: &[(String, String)],
+) {
+    let url = format!("{base_url}{path}");
+    match http_get(&url, headers) {
+        Ok(response) => {
+            let has_rows = response.status == 200
+                && serde_json::from_str::<serde_json::Value>(&response.body)
+                    .ok()
+                    .and_then(|value| value["data"].as_array().map(|data| !data.is_empty()))
+                    .unwrap_or(false);
+            checks.push(SmokeCheck {
+                name: name.to_string(),
+                method: "GET".to_string(),
+                path: path.to_string(),
+                expected_status: 200,
+                actual_status: Some(response.status),
+                passed: has_rows,
+                error: (!has_rows)
+                    .then(|| "row response did not include any sample records".to_string()),
+            });
+        }
+        Err(err) => checks.push(SmokeCheck {
+            name: name.to_string(),
+            method: "GET".to_string(),
+            path: path.to_string(),
+            expected_status: 200,
             actual_status: None,
             passed: false,
             error: Some(redact_error(&err.to_string())),
@@ -4523,7 +4721,6 @@ workflows:
             "README.md",
             ".gitignore",
             "relay/config.yaml",
-            "relay/metadata.yaml",
             "data/benefits_casework.xlsx",
             "secrets/local.env",
             "output/.gitkeep",
@@ -4535,6 +4732,38 @@ workflows:
         ] {
             assert!(project.join(path).exists(), "{path} should exist");
         }
+        assert!(!project.join("relay/metadata.yaml").exists());
+
+        let config_text = fs::read_to_string(project.join("relay/config.yaml")).unwrap();
+        assert!(config_text.contains("# This file is the Relay contract"));
+        assert!(config_text.contains("# The raw bearer keys live in secrets/local.env."));
+        assert!(config_text.contains("# Tables describe the source workbook."));
+        assert!(config_text.contains("# Aggregates expose predeclared grouped statistics."));
+        assert!(config_text.contains("# Entities are the public API surface."));
+        let config: Value = serde_yaml::from_str(&config_text).unwrap();
+        let manifest: Value =
+            serde_yaml::from_str(&fs::read_to_string(project.join("registryctl.yaml")).unwrap())
+                .unwrap();
+        let compose = fs::read_to_string(project.join("compose.yaml")).unwrap();
+        assert!(config.get("metadata").is_none());
+        assert!(manifest["relay"].get("metadata").is_none());
+        assert!(!compose.contains("metadata.yaml"));
+        assert_eq!(
+            config["datasets"][0]["aggregates"][0]["access"]["aggregate_only_execution"],
+            true
+        );
+        assert_eq!(
+            config["datasets"][0]["aggregates"][0]["disclosure_control"]["min_group_size"],
+            2
+        );
+        assert_eq!(
+            config["datasets"][0]["aggregates"][1]["access"]["aggregate_only_execution"],
+            true
+        );
+        assert_eq!(
+            config["datasets"][0]["aggregates"][1]["disclosure_control"]["min_group_size"],
+            2
+        );
 
         let readme = fs::read_to_string(project.join("README.md")).unwrap();
         assert!(readme.contains("registryctl doctor --profile local --format json"));
@@ -4556,15 +4785,28 @@ workflows:
         let request =
             fs::read_to_string(project.join("bruno/registry-api/Relay/Read sample people.bru"))
                 .unwrap();
+        let aggregate_request = fs::read_to_string(
+            project.join("bruno/registry-api/Relay/Run households by district aggregate.bru"),
+        )
+        .unwrap();
+        let application_aggregate_request = fs::read_to_string(
+            project.join("bruno/registry-api/Relay/Query applications aggregate.bru"),
+        )
+        .unwrap();
         let openapi_request =
             fs::read_to_string(project.join("bruno/registry-api/Relay/OpenAPI.bru")).unwrap();
 
         assert!(local_bru.contains(&env_value(&env, "METADATA_READER_RAW")));
         assert!(local_bru.contains(&env_value(&env, "ROW_READER_RAW")));
+        assert!(local_bru.contains(&env_value(&env, "AGGREGATE_READER_RAW")));
         assert!(example_bru.contains("replace-with-metadata_reader_raw"));
+        assert!(example_bru.contains("replace-with-aggregate_reader_raw"));
         assert!(!request.contains(&env_value(&env, "METADATA_READER_RAW")));
         assert!(!request.contains(&env_value(&env, "ROW_READER_RAW")));
+        assert!(!aggregate_request.contains(&env_value(&env, "AGGREGATE_READER_RAW")));
         assert!(request.contains("{{relay_row_key}}"));
+        assert!(aggregate_request.contains("{{relay_aggregate_key}}"));
+        assert!(application_aggregate_request.contains("Data-Purpose"));
         assert!(!openapi_request.contains("Authorization"));
         assert!(!openapi_request.contains("{{relay_metadata_key}}"));
     }
@@ -4927,7 +5169,9 @@ workflows:
             "ghcr.io/registrystack/registry-relay",
         );
         assert_eq!(manifest["runtime"]["relay_base_url"], RELAY_BASE_URL);
+        assert!(manifest["relay"].get("metadata").is_none());
         assert!(compose.contains(&format!("image: {RELAY_IMAGE}")));
+        assert!(!compose.contains("metadata.yaml"));
         assert!(!compose.contains("registry-relay:snapshot"));
         assert!(!compose.contains("registry-relay:latest"));
     }
@@ -5050,6 +5294,8 @@ workflows:
             "bruno/registry-api/environments/local.example.bru",
             "bruno/registry-api/Relay/List datasets.bru",
             "bruno/registry-api/Relay/Read sample people.bru",
+            "bruno/registry-api/Relay/Read approved applications.bru",
+            "bruno/registry-api/Relay/List aggregates.bru",
             "bruno/registry-api/Notary/List claims.bru",
             "bruno/registry-api/Notary/Evaluate person exists.bru",
         ] {
@@ -5362,7 +5608,6 @@ workflows:
             "compose.yaml",
             "README.md",
             "relay/config.yaml",
-            "relay/metadata.yaml",
         ] {
             let contents = fs::read_to_string(project.join(path)).unwrap();
             for secret in &secrets {
@@ -5385,7 +5630,9 @@ workflows:
         let lossy = String::from_utf8_lossy(&workbook);
         assert!(lossy.contains("Households"));
         assert!(lossy.contains("Persons"));
+        assert!(lossy.contains("Applications"));
         assert!(lossy.contains("hh-1001"));
+        assert!(lossy.contains("app-3001"));
     }
 
     #[test]
@@ -5506,12 +5753,7 @@ workflows:
             )
         );
         let rendered = fs::read_to_string(&doctor_config).unwrap();
-        assert!(rendered.contains(
-            &project_dir
-                .join("relay/metadata.yaml")
-                .display()
-                .to_string()
-        ));
+        assert!(!rendered.contains("metadata.yaml"));
         assert!(rendered.contains(
             &project_dir
                 .join("data/benefits_casework.xlsx")

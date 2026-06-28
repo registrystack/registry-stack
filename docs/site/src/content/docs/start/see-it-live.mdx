@@ -6,7 +6,7 @@ owner: registry-docs
 source_repos:
   - registry-lab
   - registry-registryctl
-last_reviewed: "2026-06-13"
+last_reviewed: "2026-06-28"
 doc_type: tutorial
 locale: en
 standards_referenced:
@@ -21,8 +21,7 @@ will read a protected registry API from your terminal (**Registry Relay**, which
 authorized callers), then have **Registry Notary** issue a signed credential, delivered to a hosted
 demo wallet, that answers a question without exposing the record. The Relay reads are pure `curl`
 with zero install; the credential step is a guided browser flow using the lab's hosted wallet, so it
-needs no install either; only the optional developer round-trip at the end also uses `registryctl`,
-`jq`, and `node`. Everything runs in the hosted lab at
+needs no install either. Everything runs in the hosted lab at
 [lab.registrystack.org](https://lab.registrystack.org), so the main flow has no setup on your
 machine.
 
@@ -30,7 +29,7 @@ machine.
   outcome="One protected registry read and one signed, privacy-preserving credential, against the public hosted lab."
   time="About 10 minutes"
   level="Hosted lab, zero install"
-  prerequisites={['A web browser', 'Optional: curl, registryctl, jq, node']}
+  prerequisites={['A web browser', 'Optional: curl']}
 />
 
 This lab uses synthetic data and public demo-only credentials by design.
@@ -45,7 +44,7 @@ The lab runs three services that you will touch directly:
 - A citizen **Notary**: an issuer that hands out a privacy-preserving credential instead of the raw
   record, at [citizen-notary.lab.registrystack.org](https://citizen-notary.lab.registrystack.org).
 - A health-program **Notary** in front of a demo DHIS2 health information system, used only by the
-  optional developer round-trip at the end of this page, at
+  DHIS2 integration tutorial, at
   [dhis2-notary.lab.registrystack.org](https://dhis2-notary.lab.registrystack.org).
 
 For how these connect to the rest of the stack, see the
@@ -187,155 +186,25 @@ refuses: it will not issue a credential for a subject you did not authenticate a
 be talked into vouching for someone else. For more on this service, see
 [Registry Notary](../../products/registry-notary/).
 
-### Developer API round-trip
+### DHIS2 integration path
 
-For a pure API credential flow, use the hosted DHIS2 Notary: the lab runs a demo
-[DHIS2](https://dhis2.org/) health information system with a Notary in front of it, so the same
-issuance contract can be exercised against a second, independent source system. This path does
-not use the browser wallet sign-in, and unlike the curl-only reads above it also needs
-`registryctl`, `jq`, and `node` on your machine. It evaluates DHIS2 child-program claims, issues an
-`application/dc+sd-jwt` credential, fetches the issuer JWKS, verifies the Ed25519 signature, and
-checks that each disclosure hash is listed in the issuer-signed JWT.
-
-Load the hosted Notary URL, current demo bearer token, and purpose URI from the lab manifest.
-The `dhis2-bearer` credential is the demo evidence-client token for this Notary.
-
-```sh
-eval "$(registryctl lab env --credential dhis2-bearer)"
-```
-
-Evaluate the credential claims for the live demo tracked entity:
-
-```sh
-cat > evaluation-request.json <<'JSON'
-{
-  "target": {
-    "type": "TrackedEntity",
-    "identifiers": [
-      { "scheme": "dhis2_tracked_entity", "value": "PQfMcpmXeFE" }
-    ]
-  },
-  "claims": [
-    "dhis2-tracked-entity-first-name",
-    "dhis2-tracked-entity-last-name",
-    "dhis2-child-program-active"
-  ],
-  "disclosure": "value",
-  "format": "application/dc+sd-jwt"
-}
-JSON
-
-curl -fsS -X POST "$REGISTRY_NOTARY_BASE_URL/v1/evaluations" \
-  -H "Authorization: Bearer $REGISTRY_NOTARY_BEARER_TOKEN" \
-  -H "Content-Type: application/json" \
-  -H "Data-Purpose: $REGISTRY_NOTARY_PURPOSE" \
-  --data @evaluation-request.json \
-  -o evaluation.json
-
-jq '.results[] | {claim_id, value, evaluation_id, format}' evaluation.json
-```
-
-Issue the SD-JWT VC from that evaluation:
-
-```sh
-EVALUATION_ID="$(jq -r '.results[0].evaluation_id' evaluation.json)"
-
-jq -n --arg evaluation_id "$EVALUATION_ID" '{
-  evaluation_id: $evaluation_id,
-  credential_profile: "dhis2_child_program_sd_jwt",
-  format: "application/dc+sd-jwt",
-  claims: [
-    "dhis2-tracked-entity-first-name",
-    "dhis2-tracked-entity-last-name",
-    "dhis2-child-program-active"
-  ],
-  disclosure: "value"
-}' > credential-request.json
-
-curl -fsS -X POST "$REGISTRY_NOTARY_BASE_URL/v1/credentials" \
-  -H "Authorization: Bearer $REGISTRY_NOTARY_BEARER_TOKEN" \
-  -H "Content-Type: application/json" \
-  --data @credential-request.json \
-  -o credential.json
-
-jq '{credential_id, credential_profile, issuer, format, disclosure_count: (.disclosures | length)}' credential.json
-```
-
-Fetch the issuer keys and verify the credential.
-The JWKS endpoint is public: any verifier can fetch the issuer keys without a credential.
-
-```sh
-curl -fsS "$REGISTRY_NOTARY_BASE_URL/.well-known/evidence/jwks.json" -o jwks.json
-
-node <<'NODE'
-const { createHash, createPublicKey, verify } = require('node:crypto');
-const { readFileSync } = require('node:fs');
-
-const credential = JSON.parse(readFileSync('credential.json', 'utf8'));
-const jwks = JSON.parse(readFileSync('jwks.json', 'utf8'));
-const [header64, payload64, signature64] = credential.issuer_signed_jwt.split('.');
-const header = JSON.parse(Buffer.from(header64, 'base64url').toString('utf8'));
-const payload = JSON.parse(Buffer.from(payload64, 'base64url').toString('utf8'));
-const keys = Array.isArray(jwks.keys) ? jwks.keys : [];
-const key = keys.find((candidate) => candidate.kid === header.kid);
-
-if (!key) throw new Error(`Missing JWKS key ${header.kid}`);
-
-const signed = Buffer.from(`${header64}.${payload64}`);
-const signature = Buffer.from(signature64, 'base64url');
-const signatureValid = verify(null, signed, createPublicKey({ key, format: 'jwk' }), signature);
-
-if (!signatureValid) throw new Error('Bad issuer signature');
-
-const disclosureDigests = new Set(payload._sd || []);
-const disclosureClaims = [];
-
-for (const disclosure of credential.disclosures || []) {
-  const digest = createHash('sha256').update(disclosure).digest('base64url');
-  if (!disclosureDigests.has(digest)) {
-    throw new Error(`Disclosure digest not present in _sd: ${digest}`);
-  }
-  const decoded = JSON.parse(Buffer.from(disclosure, 'base64url').toString('utf8'));
-  disclosureClaims.push(decoded[1]);
-}
-
-console.log(JSON.stringify({
-  issuer: payload.iss,
-  vct: payload.vct,
-  signature_valid: signatureValid,
-  disclosure_count: disclosureClaims.length,
-  disclosure_claims: disclosureClaims.sort()
-}, null, 2));
-NODE
-```
-
-Expected verification summary:
-
-```json
-{
-  "issuer": "did:web:dhis2-notary.lab.registrystack.org",
-  "vct": "https://dhis2-notary.lab.registrystack.org/credentials/dhis2/child-program/v1",
-  "signature_valid": true,
-  "disclosure_count": 3,
-  "disclosure_claims": [
-    "dhis2-child-program-active",
-    "dhis2-tracked-entity-first-name",
-    "dhis2-tracked-entity-last-name"
-  ]
-}
-```
+The lab also runs a DHIS2-backed Notary for API credential and claim-evaluation work.
+Because that path is about integrating an existing source system, it lives in its own tutorial:
+[Configure DHIS2 claim checks](../../tutorials/configure-dhis2-claim-checks/).
 
 ## Now run your own
 
 You have seen the two payoffs against the hosted lab. To run the same shapes on your own machine,
 start with the local single-node tutorials:
 
-- [Publish a spreadsheet as a secured registry API](../../tutorials/publish-spreadsheet-secured-registry-api/):
+- [Run a protected registry API locally](../../tutorials/publish-spreadsheet-secured-registry-api/):
   stand up your own protected Relay from a sample workbook.
-- [Verify a claim with Registry Notary](../../tutorials/verify-claim-registry-api/): run a Notary
-  against the Relay you published and evaluate a claim. Already have your own API? The same
-  tutorial ends with a
-  [standalone Notary path](../../tutorials/verify-claim-registry-api/#run-notary-standalone-for-an-api-you-operate).
+- [Evaluate a claim with Registry Notary](../../tutorials/verify-claim-registry-api/): run a Notary
+  against the Relay you published and evaluate a claim.
+- [Connect Notary to a Registry Data API source](../../tutorials/run-notary-standalone-for-api/):
+  run Notary in a separate project against a Registry Data API-shaped source.
+- [Configure DHIS2 claim checks](../../tutorials/configure-dhis2-claim-checks/): connect Registry
+  Notary to a DHIS2 source adapter and inspect the fields to change for your own DHIS2 deployment.
 
 Only assessing fit? You do not need to install anything:
 [When to use Registry Stack](../when-to-use/) covers fit and non-goals, and

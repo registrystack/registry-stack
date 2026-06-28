@@ -1,12 +1,12 @@
 ---
-title: Publish a spreadsheet as a secured registry API
-description: Create a local Registry Relay project from a sample Excel workbook, start a protected API, and verify authorized and denied reads.
+title: Run a protected registry API locally
+description: Start a local Registry Relay over a tiny benefits workbook, make denied and allowed requests, and inspect the generated contract.
 status: current
 owner: registry-docs
 source_repos:
   - registry-registryctl
   - registry-relay
-last_reviewed: "2026-06-26"
+last_reviewed: "2026-06-28"
 doc_type: tutorial
 locale: en
 standards_referenced:
@@ -15,12 +15,12 @@ standards_referenced:
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-Use this tutorial to create a local Registry Relay project from a sample Excel workbook.
-You will install `registryctl`, start a protected registry API, prove anonymous access is denied,
-read spreadsheet data through a secured route, and open the local API reference.
+Use this tutorial to start a protected registry API on your machine.
+You will create a local project from a tiny benefits workbook, make one denied request, make one
+allowed request, and inspect the contract Registry Stack generated.
 
 <QuickstartMeta
-  outcome="A protected registry API over a sample workbook, with anonymous reads denied and an authorized read returning data."
+  outcome="A protected local API over a benefits workbook, with anonymous access denied and an authorized record read succeeding."
   time="About 10 minutes after Docker is installed"
   level="Local single-node"
   prerequisites={['registryctl 0.8.3+', 'A Docker Compose provider', 'curl']}
@@ -28,53 +28,20 @@ read spreadsheet data through a secured route, and open the local API reference.
 
 This tutorial uses synthetic data and local demo credentials.
 Do not use the generated local keys in production.
-Estimated time: about 10 minutes after Docker is installed.
 
-## Before you start
+## Install registryctl
 
-Install:
-
-- `curl` and `uname`
-- `shasum` or `sha256sum` for release checksum verification
-- Docker Desktop, OrbStack, Colima, Podman, or another Docker Compose provider
-- `~/.local/bin` on your `PATH` (the installer writes there by default; a new shell cannot find
-  `registryctl` otherwise)
-
-Use `registryctl` 0.8.3 or newer.
-
-The `v0.8.3` release publishes binaries for Linux x86_64, Linux arm64, and macOS arm64.
-On other platforms, install from source with Rust or run the tutorial from a Linux x86_64
-environment such as a VM or container.
-
-Install `registryctl` without cloning a product repository:
+Install `registryctl` without cloning the repository:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/v0.8.3/crates/registryctl/install.sh | REGISTRYCTL_VERSION=v0.8.3 sh
-```
-
-The installer downloads the pinned release selected by `REGISTRYCTL_VERSION`.
-It defaults to `v0.8.3` in the current stack release.
-The container images are published for linux/amd64; on Apple Silicon your Docker provider runs
-them under emulation and prints a platform warning, which is harmless here.
-
-If the installer reports that the release asset is unavailable, or if you are on Intel macOS, use
-the source install path.
-Install Rust with [`rustup`](https://rustup.rs), then build the pinned release tag:
-
-```sh
-cargo install --git https://github.com/registrystack/registry-stack --tag v0.8.3 registryctl --locked
-```
-
-Confirm the CLI is available:
-
-```sh
 registryctl --version
 ```
 
 If your shell cannot find `registryctl`, add the install directory printed by the installer to your
 `PATH`.
 
-## Create a local spreadsheet API project
+## Create the sample project
 
 Create a project from the benefits sample:
 
@@ -83,66 +50,28 @@ registryctl init relay my-first-api --sample benefits
 cd my-first-api
 ```
 
-`registryctl` creates:
+The sample workbook has three sheets:
 
-```text
-my-first-api/
-  registryctl.yaml
-  compose.yaml
-  README.md
-  relay/
-    config.yaml
-    metadata.yaml
-  data/
-    benefits_casework.xlsx
-  bruno/
-    registry-api/
-  secrets/
-    local.env
-  output/
-  .gitignore
-```
+- `Households`: household registration and district attributes.
+- `Persons`: household members, eligibility status, and sensitive identity fields.
+- `Applications`: benefit applications, decisions, verification flags, and review dates.
 
-The `secrets/local.env` file contains local demo bearer keys and matching fingerprints.
-The Relay config contains only fingerprint references.
-Raw credentials and fingerprint values live in `secrets/local.env`.
+## Start the local stack
 
-## Start the registry API
-
-Start the local project:
+Start the generated project:
 
 ```sh
 registryctl start
 ```
 
-The command starts the published Registry Relay container, waits for health and readiness, and
-after the Docker Compose progress lines prints:
+After the Docker Compose progress lines, `registryctl` prints the local URLs:
 
 ```text
 Relay API:  http://127.0.0.1:4242
 API docs:   http://127.0.0.1:4242/docs
 ```
 
-Check status:
-
-```sh
-registryctl status
-```
-
-The service reports `healthz: 200` and `ready: 200` when startup is complete.
-
-Validate the generated runtime config with the product doctor:
-
-```sh
-registryctl doctor --format json
-```
-
-The JSON report uses `schema_version: registryctl.validation.report.v1`. For a Relay-only
-project it contains one product report under `products[]`; that embedded report uses
-`schema_version: registry.config.diagnostic_report.v1` and a `status` of `ok`, `warning`,
-`error`, or `not_run`.
-
-## Run the smoke test
+## Run the smoke check
 
 Run the smoke checks:
 
@@ -150,7 +79,7 @@ Run the smoke checks:
 registryctl smoke
 ```
 
-The smoke test passes with these checks:
+You should see the core checks pass:
 
 ```text
 PASS healthz is public
@@ -163,7 +92,7 @@ PASS row reader can read filtered records
 PASS anonymous caller can fetch runtime OpenAPI
 ```
 
-`registryctl` writes detailed results to:
+`registryctl` writes the detailed report to:
 
 ```text
 output/smoke-results.json
@@ -179,27 +108,21 @@ set -a
 set +a
 ```
 
-`set -a` exports every variable the sourced file defines, so later commands such as `curl` can read
-them; `set +a` turns automatic export back off.
-Run the three lines in the same shell session you use for the rest of the tutorial.
+The same `secrets/local.env` file contains the raw demo keys and matching fingerprints.
+Generated public config files contain only fingerprint environment variable names.
 
-The generated principals are labels wired to Relay scope strings in the generated config.
+## Make one denied request
 
-| Principal | Environment variable | What it can do |
-| --- | --- | --- |
-| `metadata_reader` | `METADATA_READER_RAW` | Read catalog and schema metadata |
-| `row_reader` | `ROW_READER_RAW` | Read configured entity records with a purpose header |
-| `aggregate_reader` | `AGGREGATE_READER_RAW` | Run configured aggregates, if present |
-
-## Prove anonymous access is denied
-
-Call a protected route without a credential:
+Call the dataset route without a credential:
 
 ```sh
 curl -i http://127.0.0.1:4242/v1/datasets
 ```
 
 Relay returns `401 Unauthorized`.
+The registry is online, but the route is protected.
+
+## Make one allowed request
 
 Call the same route with the metadata key:
 
@@ -209,12 +132,12 @@ curl -i \
   http://127.0.0.1:4242/v1/datasets
 ```
 
-Relay returns `200 OK` and shows the dataset visible to that principal.
+Relay returns `200 OK` and lists the dataset visible to that principal.
 
-## Read spreadsheet data through the API
+## Read one protected record
 
 Relay exposes configured entities, not spreadsheet sheet names.
-The sample workbook has a `Persons` sheet, but callers read the `person` entity.
+The workbook has a `Persons` sheet, but callers read the `person` entity.
 
 Read records for one household:
 
@@ -226,11 +149,11 @@ curl -sS -G \
   http://127.0.0.1:4242/v1/datasets/benefits_casework/entities/person/records
 ```
 
-The response includes synthetic person records from household `hh-1001`.
+The response includes synthetic people from household `hh-1001`.
 Sensitive source columns such as full names, national identifiers, and addresses are not exposed as
 public entity fields in this sample.
 
-Try the same request with the metadata-only key:
+Try the same route with the metadata-only key:
 
 ```sh
 curl -i -G \
@@ -241,57 +164,47 @@ curl -i -G \
 ```
 
 Relay returns `403 Forbidden`.
+The key is valid, but it does not have row-read scope.
 
-## Open the API reference
+## Inspect the generated contract
 
-Open the local API docs:
+Now that the API works, inspect what `registryctl` generated:
+
+```sh
+sed -n '1,180p' relay/config.yaml
+```
+
+The generated Relay contract defines the local service metadata, API-key scopes, source tables,
+public entities, filters, relationships, aggregates, and audit sink.
+Raw keys stay in `secrets/local.env`.
+
+Open the runtime API reference:
 
 ```sh
 registryctl open
 ```
 
-The command opens the docs page in your default browser.
-In an environment that cannot launch one, such as a remote shell, it prints the URL instead:
+In an environment that cannot launch a browser, the command prints:
 
 ```text
 http://127.0.0.1:4242/docs
 ```
 
-The tutorial config leaves the docs shell and runtime OpenAPI document public.
-Protected data routes still require a bearer key and the right scope.
+## Run an aggregate
 
-Fetch the runtime OpenAPI document directly:
-
-```sh
-curl -sS http://127.0.0.1:4242/openapi.json
-```
-
-## Explore requests in Bruno
-
-`registryctl` generates a Bruno collection so you can inspect and run the local API requests
-visually.
-Bruno is optional.
-The tutorial and API work without it.
-
-Open the generated collection:
+Aggregate readers can run configured aggregate definitions without row-read scope.
+This request returns household counts by district and applies the configured disclosure rule:
 
 ```sh
-registryctl bruno open
+curl -sS \
+  -H "Authorization: Bearer $AGGREGATE_READER_RAW" \
+  http://127.0.0.1:4242/v1/datasets/benefits_casework/aggregates/by_district
 ```
 
-If Bruno is installed, the collection opens.
-If Bruno is not installed, the command prints the collection path and an install link.
+The generated Bruno collection includes more examples, including application counts grouped by
+program and status.
 
-If the Bruno CLI is installed, you can also run the collection:
-
-```sh
-registryctl bruno run
-```
-
-If `bru` is not installed, the command prints a fallback and exits without blocking the Relay
-workflow.
-
-## Clean up
+## Stop the stack
 
 When you are done:
 
@@ -304,9 +217,10 @@ It does not delete your workbook, generated config, local keys, or smoke results
 
 ## Next
 
-- [Verify a claim with Registry Notary](../verify-claim-registry-api/): add Registry Notary to
-  the project and evaluate a claim without exposing the source row, or run Notary standalone
-  against an API you operate.
+- [Evaluate a claim with Registry Notary](../verify-claim-registry-api/): add Notary to this same
+  project and answer a narrow question without exposing the source row.
+- [Connect Notary to a Registry Data API source](../run-notary-standalone-for-api/): run Notary
+  separately from a Registry Data API-shaped source.
 - [See it live](../../start/see-it-live/): explore the hosted demo to see the full stack in action.
 
 ## Troubleshooting
@@ -314,9 +228,7 @@ It does not delete your workbook, generated config, local keys, or smoke results
 | Symptom | Cause | Resolution |
 | --- | --- | --- |
 | `registryctl` is not found | The install directory is not on `PATH`. | Add the directory printed by the installer, usually `~/.local/bin`, to `PATH`. |
-| The installer reports an unsupported platform | No binary is published for that OS or CPU yet. | Use a supported Linux or macOS aarch64 machine, or install from source with Cargo. |
 | `registryctl start` cannot find Docker | Docker or another Compose provider is not installed or running. | Start Docker Desktop, OrbStack, Colima, Podman, or your supported provider, then run `registryctl start` again. |
-| `registryctl start` fails and the container log shows `failed to parse config YAML ... unknown field` | The locally cached container image does not match the digest-pinned image in the generated `compose.yaml`. | Run `docker compose pull` in the project directory to refresh the pinned images, or re-run `registryctl init relay` to regenerate the compose file, then `registryctl start` again. |
+| `registryctl start` fails and the container log shows `failed to parse config YAML ... unknown field` | The locally cached container image does not match the digest-pinned image in the generated `compose.yaml`. | Run `docker compose pull` in the project directory, then `registryctl start` again. |
 | A row read returns `403 Forbidden` | The key is valid but lacks the row-read scope. | Use `ROW_READER_RAW` for row reads. |
 | A row read returns `400 auth.purpose_required` | The entity requires a `Data-Purpose` header. | Send `Data-Purpose: https://example.local/purpose/tutorial` or another purpose URI. |
-| A collection row read returns a filter error | The entity requires at least one configured filter. | Add a filter such as `household_id=hh-1001`. |

@@ -51,10 +51,10 @@ const cards: RouteCard[] = [
     id: 'try-locally',
     question: 'How do I try it on my own machine?',
     start: {
-      label: 'Publish a spreadsheet as a secured registry API',
+      label: 'Run a protected registry API locally',
       href: '/tutorials/publish-spreadsheet-secured-registry-api/',
     },
-    then: [{ label: 'Verify a claim with Registry Notary', href: '/tutorials/verify-claim-registry-api/' }],
+    then: [{ label: 'Evaluate a claim with Registry Notary', href: '/tutorials/verify-claim-registry-api/' }],
   },
   {
     id: 'full-demo',
@@ -64,8 +64,14 @@ const cards: RouteCard[] = [
   },
   {
     id: 'fhir',
-    question: 'How do I try claim checks from FHIR-shaped health data?',
+    question: 'How do I integrate FHIR-shaped health data?',
     start: { label: 'Getting started with FHIR evidence', href: '/tutorials/getting-started-fhir-evidence/' },
+    then: [{ label: 'Integration patterns', href: '/explanation/integration-patterns/' }],
+  },
+  {
+    id: 'dhis2',
+    question: 'How do I configure claim checks from DHIS2?',
+    start: { label: 'Configure DHIS2 claim checks', href: '/tutorials/configure-dhis2-claim-checks/' },
     then: [{ label: 'Integration patterns', href: '/explanation/integration-patterns/' }],
   },
   {
@@ -79,16 +85,16 @@ const cards: RouteCard[] = [
   },
   {
     id: 'existing-api',
-    question: 'I already have an API. How do I verify claims from it?',
+    question: 'I already have a Registry Data API source. How do I evaluate claims from it?',
     start: {
-      label: 'Run Notary standalone for an API you operate',
-      href: '/tutorials/verify-claim-registry-api/#run-notary-standalone-for-an-api-you-operate',
+      label: 'Connect Notary to a Registry Data API source',
+      href: '/tutorials/run-notary-standalone-for-api/',
     },
     then: [{ label: 'Registry Notary', href: '/products/registry-notary/' }],
   },
   {
     id: 'opencrvs',
-    question: 'How do I verify claims from OpenCRVS?',
+    question: 'How do I integrate OpenCRVS claim checks?',
     start: { label: 'Verify OpenCRVS claims with registryctl', href: '/tutorials/verify-opencrvs-claims/' },
     then: [
       {

@@ -89,9 +89,12 @@ Smoke commands run built-in local checks and write a JSON result file.
 | `notary smoke` | Run built-in local Notary smoke checks. |
 | `notary open` | Open or print the local Notary API docs URL. |
 
-## OpenFn
+## Legacy OpenFn conversion
 
-`openfn` converts OpenFn workflow exports into Registry Notary OpenFn sidecar runtime files. The flags below apply to both `openfn import` and `openfn convert` unless noted.
+`openfn` is a compatibility command for converting existing OpenFn workflow exports into sidecar
+runtime files. Current source-adapter projects use the built-in `http_json`, `http_flow`, `fhir`,
+or `script_rhai` engines instead. The flags below apply to both `openfn import` and `openfn convert`
+unless noted.
 
 | Subcommand or flag | Purpose |
 | --- | --- |

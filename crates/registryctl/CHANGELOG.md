@@ -22,6 +22,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `fingerprint.commitment` in YAML.
   Generated configs reference fingerprint env vars only; local raw keys and matching
   fingerprint values remain in `secrets/local.env`.
+- The generated benefits sample now uses a richer three-sheet workbook
+  (`Households`, `Persons`, `Applications`) and a broader Bruno collection covering
+  discovery, row reads, relationship expansion, purpose-header failures, and aggregates.
+- The generated Relay sample config now includes focused YAML comments that explain auth
+  fingerprints, source tables, public entities, relationships, filters, and aggregates.
+- `registryctl init relay <dir>` no longer generates a duplicate split `relay/metadata.yaml`
+  manifest for the local sample; Relay derives standards metadata from `relay/config.yaml`
+  unless a project explicitly opts into split metadata.
+
+### Fixed
+
+- The generated Relay sample no longer binds `person.id` to the API-key principal id,
+  which made the Bruno "Read sample people" request return an empty result set.
 
 ## [0.1.0] - 2026-06-12
 

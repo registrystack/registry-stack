@@ -1,0 +1,223 @@
+---
+title: Connect Notary to a Registry Data API source
+description: Generate a standalone Registry Notary project, point it at a Registry Data API-shaped source, and evaluate a starter claim.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-registryctl
+  - registry-notary
+last_reviewed: "2026-06-28"
+doc_type: tutorial
+locale: en
+standards_referenced: []
+---
+
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+
+Use this tutorial when you already operate a source that exposes the Registry Data API lookup
+contract and want Registry Notary to evaluate claims against it from a separate project.
+
+The reproducible path below uses the local Relay project from
+[Run a protected registry API locally](../publish-spreadsheet-secured-registry-api/) as a stand-in
+source.
+
+If your source is not Registry Data API-shaped, choose a source-adapter path instead:
+
+| Source shape | Use |
+| --- | --- |
+| Single HTTP JSON lookup | Built-in source-adapter `http_json` engine |
+| Short dependent GET sequence | Built-in source-adapter `http_flow` engine |
+| FHIR R4 source | [Getting started with FHIR evidence](../getting-started-fhir-evidence/) |
+| OpenCRVS DCI source | [OpenCRVS claims](../verify-opencrvs-claims/) |
+| DHIS2 Tracker source | [Configure DHIS2 claim checks](../configure-dhis2-claim-checks/) |
+| POSTs, fallback behavior, or small custom branching | Source-adapter `script_rhai` engine |
+
+The source-adapter paths still present the same Registry Data API-shaped lookup route to Notary.
+The adapter owns the source-specific request shape and normalization.
+
+<QuickstartMeta
+  outcome="A standalone Notary project evaluating a starter claim against a Registry Data API source."
+  time="About 10 minutes after a Registry Data API source is available"
+  level="Local single-node"
+  prerequisites={['registryctl', 'A running Registry Data API source', 'A Docker Compose provider']}/>
+
+This tutorial uses synthetic data and local demo credentials.
+Do not use the generated local keys in production.
+
+## Start with a running source
+
+For a local reproducible source, complete the first tutorial and leave the Relay project running:
+
+```sh
+registryctl init relay my-first-api --sample benefits
+cd my-first-api
+registryctl start
+registryctl smoke
+set -a
+. secrets/local.env
+set +a
+```
+
+The `set -a` block exports `ROW_READER_RAW`, which the standalone Notary project uses once when it
+is generated.
+
+## Create the Notary project
+
+From the parent directory of `my-first-api`, create the standalone Notary project:
+
+```sh
+cd ..
+registryctl init notary my-standalone-notary \
+  --source-url http://registry-relay:8080 \
+  --source-network my-first-api_default \
+  --source-token-from-env ROW_READER_RAW
+cd my-standalone-notary
+```
+
+`--source-token-from-env ROW_READER_RAW` reads the token value from your current shell and writes it
+into the new project's `secrets/local.env`.
+
+`my-first-api_default` is the Compose network name Docker derives from the Relay project directory.
+If you named that directory differently, use that name with the `_default` suffix.
+
+## Start Notary
+
+Start the standalone project:
+
+```sh
+registryctl start
+```
+
+`registryctl` starts Notary, waits for readiness, and prints the local API URL:
+
+```text
+Notary API: http://127.0.0.1:4255
+API docs:   http://127.0.0.1:4255/docs
+```
+
+Run the smoke check:
+
+```sh
+registryctl notary smoke
+```
+
+The smoke check lists claims, evaluates the generated starter claim, and writes a detailed report:
+
+```text
+output/notary-smoke-results.json
+```
+
+## Evaluate the starter claim
+
+Load this project's local keys:
+
+```sh
+set -a
+. secrets/local.env
+set +a
+```
+
+Evaluate the starter claim:
+
+```sh
+curl -sS -X POST \
+  -H "x-api-key: $REGISTRY_NOTARY_TUTORIAL_EVALUATOR_RAW" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/vnd.registry-notary.claim-result+json" \
+  -d '{
+    "target": { "type": "person", "id": "per-2001" },
+    "claims": ["benefits-person-exists"],
+    "disclosure": "predicate",
+    "purpose": "https://example.local/purpose/tutorial"
+  }' \
+  http://127.0.0.1:4255/v1/evaluations
+```
+
+Notary returns a claim result without returning the source row.
+
+## Use another Registry Data API source
+
+Change the source options at project creation time.
+The three `<...>` values must match the Registry Data API lookup route your source exposes:
+
+```sh
+registryctl init notary my-notary \
+  --source-url https://api.example.com \
+  --source-token-env EVIDENCE_SOURCE_API_TOKEN \
+  --source-dataset <your-dataset-id> \
+  --source-entity <your-entity> \
+  --source-lookup-field <your-lookup-field>
+```
+
+Notary will read:
+
+```text
+GET /v1/datasets/{dataset}/entities/{entity}/records?{lookup_field}={lookup_value}&fields=...&limit=2
+Authorization: Bearer <source-token>
+Data-Purpose: <purpose>
+```
+
+Successful responses must use:
+
+```json
+{ "data": [{ "field": "value" }] }
+```
+
+`--source-token-env` names the environment variable the Notary container reads at runtime.
+After project creation, edit `secrets/local.env` and set `EVIDENCE_SOURCE_API_TOKEN` to the source
+token.
+
+If the source API is another Compose service, pass `--source-network <compose-network>` so Notary
+can join that network.
+
+## Adapt a custom HTTP source
+
+Use a source-adapter sidecar when your source API has its own routes, auth, response envelopes, or
+matching behavior.
+
+The adapter runs privately next to Notary and exposes the Registry Data API-shaped route that Notary
+expects.
+
+Start with the smallest engine that fits:
+
+| Engine | Use when |
+| --- | --- |
+| `http_json` | One governed HTTP JSON request can return the fields Notary needs. |
+| `http_flow` | You need 2 to 5 dependent GET requests, such as search first and fetch detail second. |
+| `fhir` | You are projecting bounded FHIR R4 resources into Notary-ready facts. |
+| `script_rhai` | You need POST, fallback behavior, or small custom branching that the built-in declarative engines cannot express. |
+
+Keep the source-specific logic in the adapter.
+Keep claim semantics, disclosure, caller policy, and credential issuance in Notary.
+
+## Clean up
+
+Stop the standalone Notary project from its directory:
+
+```sh
+registryctl stop
+```
+
+If you also started the sample Relay source, stop it from the `my-first-api` directory.
+
+## Next
+
+- [Evaluate a claim with Registry Notary](../verify-claim-registry-api/): learn the core local
+  path where Relay and Notary run in one generated project.
+- [Configure DHIS2 claim checks](../configure-dhis2-claim-checks/): see a named source-system
+  integration backed by a source-adapter `http_json` path.
+- [Getting started with FHIR evidence](../getting-started-fhir-evidence/): see the FHIR
+  source-adapter path.
+- [Deploy Relay and Notary standalone with your own data](../deploy-standalone-with-own-data/):
+  move from a local tutorial to an operator-shaped deployment.
+- [Source and claim modeling](../../products/registry-notary/source-claim-modeling-guide/):
+  configure source connections, source adapters, and claim boundaries.
+
+## Troubleshooting
+
+| Symptom | Cause | Resolution |
+| --- | --- | --- |
+| `registryctl init notary` cannot read `ROW_READER_RAW` | The Relay keys were not exported in this shell. | Run the `set -a` block from the Relay project directory, then retry. |
+| `registryctl start` fails with `network ... not found` | The source Compose network name is wrong or the source project is not running. | Start the source project and pass the correct `<project>_default` network name. |
+| Claim evaluation returns a source auth error | Notary cannot authenticate to the source. | Confirm the source token in `secrets/local.env` and restart Notary. |
+| Claim evaluation returns `409 Evidence not available` | The target id is not available from the source, or the dataset, entity, or lookup field does not match the source contract. | Use a known target id or inspect the Registry Data API source contract. |

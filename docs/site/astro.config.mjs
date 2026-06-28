@@ -67,8 +67,8 @@ export default defineConfig({
     // quickstart's "Choose by question" router merged into the homepage (2026-06).
     '/start/quickstart/': internalRedirect('/'),
     '/start/your-first-call/': internalRedirect('/tutorials/first-run-with-registry-lab/'),
-    // verify-claim-own-api merged into the claim-verification tutorial (2026-06).
-    '/tutorials/verify-claim-own-api/': internalRedirect('/tutorials/verify-claim-registry-api/'),
+    // verify-claim-own-api moved into the Apply to your stack path (2026-06).
+    '/tutorials/verify-claim-own-api/': internalRedirect('/tutorials/run-notary-standalone-for-api/'),
     '/tutorials/verify-opencrvs-dci-claims/': internalRedirect('/tutorials/verify-opencrvs-claims/'),
     // Problems -> marketing /why
     '/problems/': `${marketing}/why/`,
@@ -204,8 +204,9 @@ export default defineConfig({
       //
       // "Get started" is orientation only: Overview (which carries the
       // "Choose by question" router), the zero-install demo, and the
-      // evaluation page. The hands-on pages live under Tutorials, ordered by
-      // weight: the lightest local run first, the full multi-service lab last.
+      // evaluation page. The core Tutorials path stays on one generated local
+      // project; operator paths live under Apply to your stack, and named
+      // source-system paths live under Integrate existing systems.
       sidebar: [
         {
           label: 'Get started',
@@ -220,11 +221,23 @@ export default defineConfig({
         {
           label: 'Tutorials',
           items: [
-            { label: 'Publish a spreadsheet', slug: 'tutorials/publish-spreadsheet-secured-registry-api' },
-            { label: 'Verify a claim', slug: 'tutorials/verify-claim-registry-api' },
-            { label: 'OpenCRVS claims', slug: 'tutorials/verify-opencrvs-claims' },
+            { label: 'Run a protected API', slug: 'tutorials/publish-spreadsheet-secured-registry-api' },
+            { label: 'Evaluate a claim', slug: 'tutorials/verify-claim-registry-api' },
+          ],
+        },
+        {
+          label: 'Apply to your stack',
+          items: [
+            { label: 'Notary for a Registry Data API', slug: 'tutorials/run-notary-standalone-for-api' },
             { label: 'Deploy with own data', slug: 'tutorials/deploy-standalone-with-own-data' },
             { label: 'Run the lab', slug: 'tutorials/first-run-with-registry-lab' },
+          ],
+        },
+        {
+          label: 'Integrate existing systems',
+          items: [
+            { label: 'OpenCRVS claims', slug: 'tutorials/verify-opencrvs-claims' },
+            { label: 'DHIS2 claim checks', slug: 'tutorials/configure-dhis2-claim-checks' },
             { label: 'FHIR evidence', slug: 'tutorials/getting-started-fhir-evidence' },
           ],
         },
