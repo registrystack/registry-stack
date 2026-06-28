@@ -4444,6 +4444,19 @@ async fn emit_audit_or_error(
         }
         Err(error) => {
             state.metrics.record_audit_event("failure");
+            if response.status() == StatusCode::SERVICE_UNAVAILABLE
+                && response
+                    .extensions()
+                    .get::<EvidenceErrorCodeContext>()
+                    .is_some_and(|context| context.0 == "audit.write_failed")
+            {
+                tracing::error!(
+                    target: "registry_notary_server::audit",
+                    error = %error,
+                    "audit event write failed while preserving prior audit failure response"
+                );
+                return response;
+            }
             audit_error_response(error)
         }
     }
