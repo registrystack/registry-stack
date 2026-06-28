@@ -1011,10 +1011,39 @@ mobile-starlight-toc summary {
   font-size: var(--sl-text-sm);
 }
 
-/* The same ledger key/value strip, used standalone on tutorial pages to carry
-   Outcome / Time / Prerequisites under the lead paragraph. */
+/* The same ledger top/bottom rules, but laid out as a two-column key/value
+   grid for tutorial pages: a label column on the left and the value on the
+   right, so long values (e.g. Outcome) align cleanly instead of wrapping
+   under their label the way the inline flex strip does. */
 .quickstart-meta {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  column-gap: 20px;
+  row-gap: 8px;
   margin-block: 16px 28px;
+}
+
+.quickstart-meta dt {
+  margin-inline-end: 0;
+  padding-block-start: 1px;
+}
+
+.quickstart-meta dd {
+  margin-inline-end: 0;
+}
+
+/* On narrow screens the label column squeezes the value column, so stack each
+   label above its value. This gives the prerequisite chips the full width they
+   need (they do not wrap internally). */
+@media (max-width: 50rem) {
+  .quickstart-meta {
+    grid-template-columns: 1fr;
+    row-gap: 2px;
+  }
+
+  .quickstart-meta dt:not(:first-of-type) {
+    margin-block-start: 12px;
+  }
 }
 
 .card-meta dt {
