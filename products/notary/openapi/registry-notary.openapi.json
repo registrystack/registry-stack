@@ -2367,7 +2367,7 @@
                   "detail": "config_trust.antirollback_state_path is not configured",
                   "status": 503,
                   "title": "Config apply unavailable",
-                  "type": "https://docs.registry-notary.dev/problems/config/apply_unavailable"
+                  "type": "https://id.registrystack.org/problems/registry-notary/config/apply_unavailable"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -2847,7 +2847,7 @@
                   "schema": "registry.admin.error.v1",
                   "status": 400,
                   "title": "Admin posture tier invalid",
-                  "type": "https://docs.registry-notary.dev/problems/registry/admin/posture/invalid_tier"
+                  "type": "https://id.registrystack.org/problems/registry-notary/registry/admin/posture/invalid_tier"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -2864,7 +2864,7 @@
                   "detail": "missing authentication credential",
                   "status": 401,
                   "title": "Missing credential",
-                  "type": "https://docs.registry-notary.dev/problems/auth/missing_credential"
+                  "type": "https://id.registrystack.org/problems/registry-notary/auth/missing_credential"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -2881,7 +2881,7 @@
                   "detail": "missing required scope",
                   "status": 403,
                   "title": "Scope denied",
-                  "type": "https://docs.registry-notary.dev/problems/auth/scope_denied"
+                  "type": "https://id.registrystack.org/problems/registry-notary/auth/scope_denied"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -2898,7 +2898,7 @@
                   "detail": "admin posture could not be filtered for the requested tier",
                   "status": 500,
                   "title": "Admin posture unavailable",
-                  "type": "https://docs.registry-notary.dev/problems/posture/filter_failed"
+                  "type": "https://id.registrystack.org/problems/registry-notary/posture/filter_failed"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -2917,7 +2917,7 @@
                   "schema": "registry.admin.error.v1",
                   "status": 503,
                   "title": "Admin posture unavailable",
-                  "type": "https://docs.registry-notary.dev/problems/posture/unavailable"
+                  "type": "https://id.registrystack.org/problems/registry-notary/posture/unavailable"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
