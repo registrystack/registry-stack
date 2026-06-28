@@ -8,7 +8,8 @@ source_repos:
 last_reviewed: "2026-06-28"
 doc_type: explanation
 locale: en
-standards_referenced: []
+standards_referenced:
+  - sd-jwt-vc
 ---
 
 An institution that runs a civil registry, a social-protection database, or a health
@@ -78,7 +79,8 @@ disclosure policy, and issues credentials.
   authority retains control of its own registry data, and the stack does not aggregate
   records into a central system. It provides the exchange surface, not a data lake.
 - **Private signing keys never leave the issuer.** The institution publishes the *public*
-  half of its signing key so anyone can verify a result; the private half stays inside.
+  half of its signing key so anyone can verify a signed credential or signed result; the
+  private half stays inside.
 
 ## What crosses the boundary
 
@@ -138,9 +140,10 @@ Security material:
 
 - **Scope-before-source, deny-by-default.** A service checks the caller's scope *before* it
   reads any source or evaluates any claim, and does not widen a caller's reach at request
-  time beyond what its configuration grants. Only liveness probes and the public verification
-  keys are reachable without authentication; anything that touches a record or a claim
-  requires it.
+  time beyond what its configuration grants. Anything that touches a record or a claim
+  requires authentication; the routes reachable without it are limited to operational and
+  discovery surfaces: liveness and readiness probes, the public verification keys, and
+  credential-issuance discovery metadata.
 - **A permit, or a closed door.** On a governed read, the policy decision point must return
   a permit before data is returned; a denial fails closed with a stable reason rather than
   falling back to an ungoverned read.
@@ -186,9 +189,9 @@ mistake, so the limits are stated plainly here.
 
 ## Related
 
-- The security model and protocol contracts: [RS-SEC-G](/spec/rs-sec-g/),
-  [RS-PR-RELAY](/spec/rs-pr-relay/), [RS-PR-NOTARY](/spec/rs-pr-notary/),
-  [RS-DM-CLAIM](/spec/rs-dm-claim/)
+- The security model and protocol contracts: [RS-SEC-G](../../spec/rs-sec-g/),
+  [RS-PR-RELAY](../../spec/rs-pr-relay/), [RS-PR-NOTARY](../../spec/rs-pr-notary/),
+  [RS-DM-CLAIM](../../spec/rs-dm-claim/)
 - Evidence issuance, end to end *(explanation)*
 - Disclosure and minimization in depth *(Trust &amp; Security)*
 - The threat model and security posture *(Trust &amp; Security)*
