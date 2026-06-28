@@ -12,13 +12,13 @@ Registry-stack runtime code and committed artifacts emit machine identifiers (pr
 | --- | --- | --- |
 | `docs.registry-notary.dev` | 76 | Notary problem `type` URIs + doc links |
 | `registry-relay.dev` | 46 | Relay problem `type` base, SHACL shape/namespace IRIs |
-| `schemas.registry-relay.org` | 9 | Relay JSON Schema `$id`, provenance context `dg` prefix |
+| `schemas.registry-relay.org` | 10 | Relay JSON Schema `$id`, provenance context `dg` prefix |
 | `registry-notary.dev` | 9 | Notary identifiers / spec prose |
 | `registry-manifest.dev` | 7 | Manifest identifiers |
 | `registry-platform.example` | 7 | Platform ops / config-report JSON Schema `$id` |
-| `registry-platform.dev` | 6 | Platform (httpsec) problem `type` URIs |
+| `registry-platform.dev` | 7 | Platform (httpsec) problem `type` URIs |
 
-160 occurrences across **68 files**. A consumer that dereferences any of these gets nothing.
+162 occurrences across **70 files**. A consumer that dereferences any of these gets nothing.
 
 The resolver at `apps/registrystack-id` already re-homes all of these to `id.registrystack.org` in its generated output, so the *published* surface is correct. The gap is that the source of truth emits the placeholders, so the resolver is compensating by hand-copying and host-rewriting rather than mirroring what the services actually serve.
 
@@ -51,7 +51,7 @@ The target equals the resolver's current output, so consolidation makes the sour
 3. **Relay schema/context: config vs artifact.** Relay provenance emission uses operator-configured base URLs (`config/provenance.rs`: `schema_base_url`, `context_base_url`), while the committed resource files (`resources/schemas/*`, `resources/jsonld/*`) hardcode `$id`/`dg`. Both must move to `id.registrystack.org`, and the lab configs that currently set placeholder bases must be updated too.
 4. **Resolver follow-up.** Once the source emits `id.registrystack.org` natively, two resolver simplifications become possible: (a) `build.mjs` no longer needs to host-rewrite copied artifacts; (b) `scripts/check-upstream-artifacts.mjs` can tighten from "normalize `$id`/`dg`" to exact `$id` match. Track as a cleanup after this lands.
 
-## Scope inventory (68 files)
+## Scope inventory (70 files)
 
 **A. Runtime emitters (source of truth), edit directly (6):**
 - `crates/registry-relay/src/error.rs` (`PROBLEM_TYPE_BASE`)
