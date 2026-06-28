@@ -364,7 +364,7 @@ def check_openapi_baseline() -> None:
     if not baseline.exists():
         fail("missing openapi/registry-notary.openapi.json baseline")
     generated = subprocess.run(
-        ["cargo", "run", "-q", "-p", "registry-notary-bin", "--", "openapi"],
+        ["cargo", "run", "-q", "-p", "registry-notary", "--", "openapi"],
         cwd=ROOT,
         check=False,
         text=True,

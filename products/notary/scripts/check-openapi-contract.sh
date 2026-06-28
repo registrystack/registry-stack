@@ -12,7 +12,7 @@ BASELINE="$WORK_DIR/base.openapi.json"
 
 mkdir -p "$WORK_DIR"
 
-cargo run -q -p registry-notary-bin -- openapi > "$GENERATED"
+cargo run -q -p registry-notary -- openapi > "$GENERATED"
 
 python3 - "$SPEC_PATH" "$GENERATED" <<'PY'
 import json

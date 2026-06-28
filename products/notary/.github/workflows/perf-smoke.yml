@@ -84,7 +84,7 @@ jobs:
         run: cargo bench --no-run --workspace --all-features
 
       - name: Build release binary for k6 smoke
-        run: cargo build --release -p registry-notary-bin
+        run: cargo build --release -p registry-notary
 
       - name: Generate perf credentials
         run: uv run perf/scripts/generate_perf_keys.py --env-file target/perf/perf.env --force

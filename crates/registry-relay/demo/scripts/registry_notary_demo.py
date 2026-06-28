@@ -1170,7 +1170,7 @@ def main() -> int:
                 "registry-notary",
                 cwd=registry_notary_root,
                 features=args.notary_features,
-                package="registry-notary-bin",
+                package="registry-notary",
             )
         wait_for_evidence_server(args.base_url, token, notary_process)
         run_demo(args.base_url, args.registry_base_url, token, output_dir)

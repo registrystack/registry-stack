@@ -52,7 +52,7 @@ For operators deploying, configuring, and running a Registry Notary.
 For maintainers changing the code or reviewing design history.
 
 - [Workspace layout](../README.md#layout): the crates and bindings and what each owns.
-- [Command-line interface](../../../crates/registry-notary-bin/README.md): the server binary and its subcommands.
+- [Command-line interface](../../../crates/registry-notary/README.md): the server binary and its subcommands.
 - [Design records](../specs/README.md): specifications and implementation traces, kept as design history.
 - [Security assurance](https://github.com/jeremi/registry-notary/blob/f182385a5065873aac030c41d9fe020704afc4e2/docs/security-assurance.md): CI security gates, image publication and signing policy.
 

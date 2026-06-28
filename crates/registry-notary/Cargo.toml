@@ -1,5 +1,5 @@
 [package]
-name = "registry-notary-bin"
+name = "registry-notary"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

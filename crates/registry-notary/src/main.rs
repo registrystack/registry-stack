@@ -3814,7 +3814,7 @@ ESCAPED="client \"quoted\" value" # comment with "quote"
     #[test]
     fn build_info_reports_compiled_pkcs11_capability() {
         let info = build_info();
-        assert_eq!(info["package"], "registry-notary-bin");
+        assert_eq!(info["package"], "registry-notary");
         assert_eq!(
             info["capabilities"]["signing_providers"]["pkcs11"],
             json!(cfg!(feature = "pkcs11"))

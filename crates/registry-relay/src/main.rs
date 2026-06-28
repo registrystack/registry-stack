@@ -143,6 +143,7 @@ const RELAY_CONFIG_SCHEMA_VERSION: &str = "registry.relay.config.v1";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum CliCommand {
+    Version,
     Serve {
         config_path: PathBuf,
         env_file: Option<PathBuf>,
@@ -268,6 +269,10 @@ async fn main() -> ExitCode {
 
 async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     match parse_cli_command_from(env::args().collect())? {
+        CliCommand::Version => {
+            println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+            Ok(())
+        }
         CliCommand::Serve {
             config_path,
             env_file,
@@ -1332,7 +1337,15 @@ fn parse_cli_command_from(args: Vec<String>) -> Result<CliCommand, CliError> {
     let mut args = args.into_iter();
     let _program = args.next();
     let rest: Vec<String> = args.collect();
-    if rest.first().is_some_and(|arg| arg == HEALTHCHECK_COMMAND) {
+    if rest
+        .first()
+        .is_some_and(|arg| arg == "--version" || arg == "-V")
+    {
+        // Match clap's built-in version flag: print the version and ignore any
+        // trailing arguments rather than rejecting them, so the version surface
+        // is consistent across registry-notary, registryctl, and registry-relay.
+        Ok(CliCommand::Version)
+    } else if rest.first().is_some_and(|arg| arg == HEALTHCHECK_COMMAND) {
         parse_healthcheck_command(&rest[1..])
     } else if rest
         .first()
@@ -2362,6 +2375,31 @@ audit:
                 .expect("test admin server serves");
         });
         (format!("http://{addr}"), received)
+    }
+
+    #[test]
+    fn version_cli_parses_long_and_short_flags() {
+        for flag in ["--version", "-V"] {
+            let command = parse_cli_command_from(command_args(&["registry-relay", flag]))
+                .expect("version command parses");
+
+            assert_eq!(command, CliCommand::Version);
+        }
+    }
+
+    #[test]
+    fn version_cli_ignores_trailing_arguments() {
+        // clap's built-in version flag short-circuits and ignores anything that
+        // follows; the manual relay parser mirrors that behaviour.
+        let command = parse_cli_command_from(command_args(&[
+            "registry-relay",
+            "--version",
+            "--config",
+            "config.yaml",
+        ]))
+        .expect("version command ignores trailing arguments");
+
+        assert_eq!(command, CliCommand::Version);
     }
 
     #[test]

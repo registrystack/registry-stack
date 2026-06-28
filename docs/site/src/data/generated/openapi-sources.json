@@ -12,7 +12,7 @@
     "id": "registry-notary",
     "name": "Registry Notary API",
     "owner": "registry-notary",
-    "source": "Pulled from `registry-notary/openapi/registry-notary.openapi.json` at the pinned ref in `src/data/repo-docs.yaml` by `scripts/fetch-openapi.mjs`. The repo generates the spec with `cargo run -p registry-notary-bin -- openapi`.",
+    "source": "Pulled from `registry-notary/openapi/registry-notary.openapi.json` at the pinned ref in `src/data/repo-docs.yaml` by `scripts/fetch-openapi.mjs`. The repo generates the spec with `cargo run -p registry-notary -- openapi`.",
     "artifact": "openapi/registry-notary.openapi.json",
     "status": "pulled at the pinned ref (build artifact, regenerated each build) with federation, OID4VCI, and response examples",
     "reference_path": "/reference/apis/notary/"

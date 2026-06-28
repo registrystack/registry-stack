@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Added
+
+- `registry-relay --version` and `registry-relay -V` output so the Relay binary
+  matches the stack's user-facing version command convention, ignoring any
+  trailing arguments to mirror the clap-based binaries.
+
 ### Changed
 
 - BREAKING: API-key fingerprint config no longer accepts `fingerprint.commitment`.

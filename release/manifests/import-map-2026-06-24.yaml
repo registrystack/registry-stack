@@ -29,6 +29,7 @@ imports:
     old_ref: 4fb5fcf137edb628f3dc4bfedd42891dbbdebb03
     imported_path_prefix: imports/registry-notary
     final_paths:
+      - crates/registry-notary
       - crates/registry-notary-*
       - products/notary
     imported_ref: 8a3b02614c8eef0a4c3dbe07b92b6edbbc0870bd
