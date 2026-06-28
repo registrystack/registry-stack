@@ -68,6 +68,30 @@ The table is generated from `src/data/contracts.yaml`.
 
 */}
 
+## Machine identifiers
+
+Stable machine identifiers for the registry stack resolve at `https://id.registrystack.org/`: RFC 9457 problem types, JSON-LD namespaces, JSON Schemas, and JSON-LD contexts. The resolver identifies each one and links back to the owning documentation. The running service response and the artifacts below remain authoritative for runtime behavior.
+
+### Verifiable credential schemas and context
+
+Registry Relay issues signed responses as verifiable credentials whose `credentialSubject` shape is described by published JSON Schemas, alongside a JSON-LD context for the credential terms. A running Relay gateway serves them unauthenticated under its `/schemas/{type}/{version}` and `/contexts/{vocab}/{version}` routes:
+
+- **EntityRecord schema**: the `credentialSubject` envelope of an EntityRecord credential.
+- **AggregateResult schema**: the `credentialSubject` envelope of an AggregateResult credential.
+- **Provenance context**: the JSON-LD 1.1 context for the credential terms.
+
+These three are production contracts: they are embedded in issued credentials, served by the gateway, and content-pinned in the relay resource manifest. Their canonical identifiers resolve under `id.registrystack.org/schemas/registry-relay/...` and `id.registrystack.org/contexts/registry-relay/...`.
+
+### JSON-LD namespaces
+
+The registry stack defines JSON-LD vocabularies for its metadata and provenance terms:
+
+- `registry-relay/v1`: Registry Relay metadata terms, used in emitted DCAT-AP catalogs.
+- `registry-manifest/v1`: Registry Manifest terms.
+- `registry-relay/provenance/v1`: Registry Relay provenance credential terms (the context above).
+
+Their canonical home is `id.registrystack.org/ns/registry-relay/...` and `.../registry-manifest/...`. Consolidation of the runtime emission onto this host is in progress.
+
 ## Known gaps
 
 - The Registry Relay OpenAPI artifact is a `hand-authored-abstract-contract`; see [API references provenance and freshness](../apis/) for detail on what that means and how to get an instance-specific shape.
