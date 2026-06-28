@@ -8,6 +8,7 @@ const FORBIDDEN_DOMAINS: &[&str] = &[
     concat!("registry-notary", ".dev"),
     concat!("docs.registry-notary", ".dev"),
     concat!("registry-platform", ".dev"),
+    concat!("registry-platform", ".example"),
     concat!("registry-manifest", ".dev"),
     concat!("registry-metadata", ".dev"),
     concat!("schemas.registry-relay", ".org"),

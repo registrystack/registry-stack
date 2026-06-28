@@ -15,7 +15,7 @@ config_trust:
 metadata:
   source:
     path: agri-registry-relay.metadata.yaml
-    digest: sha256:70ea93450db69603c7a347625da0f76e33c65e5990e95ad9417656fd4d8119fb
+    digest: sha256:1b3a2642a64aa77743b7e09b3090fad561cbc6584566b06a45d94e0a64d8cf13
 
 catalog:
   title: NAgDI Agricultural Registry Relay (Decentralized Demo)

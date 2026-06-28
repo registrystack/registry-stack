@@ -10,7 +10,7 @@
 
 [[resource]]
 path = "jsonld/provenance/v1/context.jsonld"
-sha256 = "7db4c10c16eb8e8b8c64c28151b90a9d458134bbb0415596e1b4e2dd1886d7a1"
+sha256 = "c8e9096a02c4a93ef4a8e7884eb9d5f05b9d544c3549d060d313a32fdedc1b1c"
 served_as = "context"
 
 [[resource]]
@@ -20,12 +20,12 @@ served_as = "vendored"
 
 [[resource]]
 path = "schemas/aggregate-result/v1.json"
-sha256 = "e7e785a396846409abc2f8d51d51f0bf9b4c11ea69d4d3dec5e759702949f681"
+sha256 = "058dd6cd062e8567baed1438f454aa3dd19c3631c41f94788d387719d29d0f0a"
 served_as = "schema"
 
 [[resource]]
 path = "schemas/entity-record/v1.json"
-sha256 = "4ec670064f4d9f4717b9870ec7ca87167359d239e113c875168f09288cb0b80c"
+sha256 = "3e2a5a29f0587fdac9b671c648c5c972c09ef2a55125ea81c44eee45ac9157c8"
 served_as = "schema"
 
 # SDMX-JSON 2.1.0 data message schema for offline validation of aggregate

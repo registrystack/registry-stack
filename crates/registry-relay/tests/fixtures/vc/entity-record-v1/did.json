@@ -11,7 +11,7 @@
       "controller": "did:web:entity.fixture.example",
       "publicKeyJwk": {
         "crv": "Ed25519",
-        "x": "UeWzNAe-zgOlvyKlVsWqppQg9nUnfzebkaR2xnWzjFk",
+        "x": "XsMmaG4hyJaOq0hInm1DolJ6FuM6QXdR4k_Efl-LRZA",
         "kty": "OKP",
         "alg": "EdDSA",
         "kid": "did:web:entity.fixture.example#fixture-2026"
