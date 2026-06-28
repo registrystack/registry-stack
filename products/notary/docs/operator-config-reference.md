@@ -409,7 +409,7 @@ therefore aligned with the default policy.
 ## Authentication
 
 `auth.mode: api_key` is for backend integrations. Configure at least one API key
-or bearer token. Each entry has an `id`, a committed `fingerprint`, and scopes.
+or bearer token. Each entry has an `id`, a `fingerprint` reference, and scopes.
 Use the smallest scope set each caller needs. Admin functions, including metrics
 and credential status mutation, require `registry_notary:admin`.
 

@@ -5060,9 +5060,9 @@ workflows:
         let relay_config: Value =
             serde_yaml::from_str(&fs::read_to_string(project.join("relay/config.yaml")).unwrap())
                 .unwrap();
-        let notary_config: Value =
-            serde_yaml::from_str(&fs::read_to_string(project.join("notary/config.yaml")).unwrap())
-                .unwrap();
+        let notary_config_body = fs::read_to_string(project.join("notary/config.yaml")).unwrap();
+        assert!(!notary_config_body.contains("commitment:"));
+        let notary_config: Value = serde_yaml::from_str(&notary_config_body).unwrap();
         assert_eq!(relay_config["auth"]["mode"], "api_key");
         assert_eq!(notary_config["auth"]["mode"], "api_key");
         assert_eq!(

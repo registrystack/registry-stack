@@ -492,6 +492,50 @@ mod tests {
     }
 
     #[test]
+    fn credential_fingerprint_ref_deserializes_env_reference() {
+        let reference = serde_json::from_str::<CredentialFingerprintRef>(
+            r#"
+{
+  "provider": "env",
+  "name": "AUTHCOMMON_TEST_FINGERPRINT"
+}
+"#,
+        )
+        .expect("env fingerprint reference deserializes");
+
+        assert_eq!(
+            reference,
+            CredentialFingerprintRef {
+                provider: CredentialFingerprintProvider::Env,
+                name: Some("AUTHCOMMON_TEST_FINGERPRINT".to_string()),
+                path: None,
+            }
+        );
+    }
+
+    #[test]
+    fn credential_fingerprint_ref_deserializes_file_reference() {
+        let reference = serde_json::from_str::<CredentialFingerprintRef>(
+            r#"
+{
+  "provider": "file",
+  "path": "/run/secrets/api-key.sha256"
+}
+"#,
+        )
+        .expect("file fingerprint reference deserializes");
+
+        assert_eq!(
+            reference,
+            CredentialFingerprintRef {
+                provider: CredentialFingerprintProvider::File,
+                name: None,
+                path: Some(PathBuf::from("/run/secrets/api-key.sha256")),
+            }
+        );
+    }
+
+    #[test]
     fn credential_fingerprint_ref_resolves_file_with_one_trailing_newline() {
         let fingerprint = fingerprint_api_key(SAMPLE_KEY);
         let mut file = tempfile::NamedTempFile::new().expect("temp file");
@@ -603,6 +647,43 @@ mod tests {
             Err(CredentialFingerprintRefError::InvalidShape)
         );
         std::env::remove_var("AUTHCOMMON_TEST_SHAPE");
+    }
+
+    #[test]
+    fn credential_fingerprint_ref_rejects_file_provider_name_shape_violation() {
+        let fingerprint = fingerprint_api_key(SAMPLE_KEY);
+        let mut file = tempfile::NamedTempFile::new().expect("temp file");
+        writeln!(file, "{fingerprint}").expect("fingerprint writes");
+        let reference = serde_json::from_value::<CredentialFingerprintRef>(serde_json::json!({
+            "provider": "file",
+            "name": "AUTHCOMMON_TEST_SHAPE",
+            "path": file.path(),
+        }))
+        .expect("file fingerprint reference deserializes before shape validation");
+
+        assert_eq!(
+            reference.resolve(),
+            Err(CredentialFingerprintRefError::InvalidShape)
+        );
+    }
+
+    #[test]
+    fn credential_fingerprint_ref_rejects_unknown_fields() {
+        let error = serde_json::from_str::<CredentialFingerprintRef>(
+            r#"
+{
+  "provider": "env",
+  "name": "AUTHCOMMON_TEST_FINGERPRINT",
+  "unexpected": true
+}
+"#,
+        )
+        .expect_err("unknown fingerprint reference field is rejected");
+
+        assert!(
+            error.to_string().contains("unknown field `unexpected`"),
+            "{error}"
+        );
     }
 
     #[test]

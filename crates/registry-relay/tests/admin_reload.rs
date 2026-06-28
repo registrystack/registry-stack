@@ -185,7 +185,7 @@ fn make_fingerprint(plain: &str) -> String {
     format!("sha256:{}", hex_lower(&Sha256::digest(plain.as_bytes())))
 }
 
-fn fingerprint_ref_yaml(_id: &str, env_name: &str, _fingerprint: &str, indent: &str) -> String {
+fn fingerprint_ref_yaml(env_name: &str, indent: &str) -> String {
     format!("{indent}fingerprint:\n{indent}  provider: env\n{indent}  name: {env_name}")
 }
 
@@ -2178,18 +2178,92 @@ async fn config_apply_instance_identity_change_is_restart_required_without_swapp
 }
 
 #[tokio::test]
+async fn config_apply_client_credential_rotation_swaps_auth_provider_by_reference() {
+    const CURRENT_ADMIN_HASH_ENV: &str = "REGISTRY_RELAY_TEST_CURRENT_ADMIN_API_KEY_HASH";
+    const ROTATED_ADMIN_KEY: &str = "rotated-admin-token";
+    const ROTATED_ADMIN_HASH_ENV: &str = "REGISTRY_RELAY_TEST_ROTATED_API_KEY_HASH";
+    std::env::set_var(CURRENT_ADMIN_HASH_ENV, make_fingerprint(ADMIN_KEY));
+    std::env::set_var(ROTATED_ADMIN_HASH_ENV, make_fingerprint(ROTATED_ADMIN_KEY));
+
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = write_config(&tmp);
+    let current_fingerprint_ref = fingerprint_ref_yaml(CURRENT_ADMIN_HASH_ENV, "      ");
+    let current_config = std::fs::read_to_string(&config_path)
+        .expect("config reads")
+        .replace("\nmetadata:\n  source:\n    path: metadata.yaml\n", "\n")
+        .replace(
+            "api_keys: []",
+            &format!(
+                "api_keys:\n    - id: admin\n{current_fingerprint_ref}\n      scopes:\n        - registry_relay:admin\n        - registry_relay:ops_read"
+            ),
+        );
+    std::fs::write(&config_path, current_config).expect("config writes");
+    let fixture = build_fixture_from_config_path(tmp, config_path);
+
+    let candidate = std::fs::read_to_string(&fixture.config_path)
+        .expect("config reads")
+        .replace(CURRENT_ADMIN_HASH_ENV, ROTATED_ADMIN_HASH_ENV);
+    let candidate_hash = internal_config_hash(candidate.as_bytes());
+    write_local_approval(
+        &fixture,
+        local_approval_for_change_class(
+            "CLIENT-CREDENTIAL-ROTATION-1",
+            "client_credential_rotation",
+            &candidate_hash,
+            &fixture.current_config_hash,
+        ),
+    );
+    let signed = write_signed_config_tuf_fixture_with_change_classes(
+        &fixture,
+        &candidate,
+        5,
+        "relay-test-instance",
+        &["kid-a", "kid-b"],
+        &["client_credential_rotation"],
+    )
+    .await;
+    let mut request = signed_tuf_apply_request(&signed);
+    request["local_approval_reference"] = json!("CLIENT-CREDENTIAL-ROTATION-1");
+
+    let response = post_admin_config(&fixture, "/admin/v1/config/apply", request, ADMIN_KEY).await;
+
+    if response.status_code() != StatusCode::OK {
+        let body: Value = response.json();
+        panic!("client credential rotation apply should succeed, got {body:#}");
+    }
+    let body: Value = response.json();
+    assert_eq!(body["result"], "applied");
+    assert_eq!(body["applied"], true);
+    assert_eq!(body["restart_required"], false);
+
+    let old_admin = fixture
+        .server
+        .get("/admin/v1/posture")
+        .add_header("Authorization", format!("Bearer {ADMIN_KEY}"))
+        .await;
+    assert_problem(
+        old_admin,
+        StatusCode::UNAUTHORIZED,
+        "auth.invalid_credential",
+    )
+    .await;
+
+    let rotated_admin = fixture
+        .server
+        .get("/admin/v1/posture")
+        .add_header("Authorization", format!("Bearer {ROTATED_ADMIN_KEY}"))
+        .await;
+    rotated_admin.assert_status(StatusCode::OK);
+}
+
+#[tokio::test]
 async fn config_apply_client_access_change_swaps_auth_provider() {
     const ROTATED_ADMIN_KEY: &str = "rotated-admin-token";
     const ROTATED_ADMIN_HASH_ENV: &str = "REGISTRY_RELAY_TEST_ROTATED_API_KEY_HASH";
     let rotated_fingerprint = make_fingerprint(ROTATED_ADMIN_KEY);
     std::env::set_var(ROTATED_ADMIN_HASH_ENV, &rotated_fingerprint);
     let fixture = build_fixture_without_metadata();
-    let rotated_fingerprint_ref = fingerprint_ref_yaml(
-        "rotated_admin",
-        ROTATED_ADMIN_HASH_ENV,
-        &rotated_fingerprint,
-        "      ",
-    );
+    let rotated_fingerprint_ref = fingerprint_ref_yaml(ROTATED_ADMIN_HASH_ENV, "      ");
     let candidate = std::fs::read_to_string(&fixture.config_path)
         .expect("config reads")
         .replace(

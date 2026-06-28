@@ -9501,6 +9501,31 @@ auth:
     }
 
     #[test]
+    fn legacy_bearer_token_fingerprint_commitment_rejected() {
+        let err = serde_norway::from_str::<StandaloneRegistryNotaryConfig>(
+            r#"
+evidence:
+  enabled: true
+auth:
+  mode: api_key
+  bearer_tokens:
+    - id: test-bearer
+      fingerprint:
+        provider: env
+        name: TEST_BEARER_HASH
+        commitment: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+"#,
+        )
+        .expect_err("legacy bearer token fingerprint commitment must fail deserialization");
+
+        assert!(
+            err.to_string()
+                .contains("fingerprint.commitment was removed"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn unsupported_auth_mode_is_rejected_at_parse_time() {
         let err = serde_norway::from_str::<StandaloneRegistryNotaryConfig>(
             r#"

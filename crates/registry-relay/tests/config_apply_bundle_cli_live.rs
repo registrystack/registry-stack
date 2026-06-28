@@ -88,7 +88,7 @@ fn candidate_config_yaml(tmp: &TempDir, public_bind: SocketAddr, admin_bind: Soc
     config_yaml(tmp, public_bind, admin_bind, true)
 }
 
-fn fingerprint_ref_yaml(_id: &str, env_name: &str, _fingerprint: &str) -> String {
+fn fingerprint_ref_yaml(env_name: &str) -> String {
     format!("fingerprint:\n        provider: env\n        name: {env_name}")
 }
 
@@ -98,11 +98,8 @@ fn config_yaml(
     admin_bind: SocketAddr,
     include_next_root: bool,
 ) -> String {
-    let admin_fingerprint = fingerprint_api_key(ADMIN_TOKEN);
-    let ops_fingerprint = fingerprint_api_key(OPS_TOKEN);
-    let admin_fingerprint_ref =
-        fingerprint_ref_yaml("admin", ADMIN_TOKEN_HASH_ENV, &admin_fingerprint);
-    let ops_fingerprint_ref = fingerprint_ref_yaml("ops", OPS_TOKEN_HASH_ENV, &ops_fingerprint);
+    let admin_fingerprint_ref = fingerprint_ref_yaml(ADMIN_TOKEN_HASH_ENV);
+    let ops_fingerprint_ref = fingerprint_ref_yaml(OPS_TOKEN_HASH_ENV);
     let tuf_root_sha256 = sha256_uri(
         &std::fs::read(tough_fixture("simple-rsa").join("root.json"))
             .expect("trusted TUF root fixture reads"),
