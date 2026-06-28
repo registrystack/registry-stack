@@ -7,5 +7,5 @@ expression: json
   "detail": "declared schema does not match observed columns or types",
   "status": 500,
   "title": "Schema mismatch",
-  "type": "https://registry-relay.dev/problems/ingest/schema_mismatch"
+  "type": "https://id.registrystack.org/problems/registry-relay/ingest/schema_mismatch"
 }

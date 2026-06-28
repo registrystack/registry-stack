@@ -35,7 +35,7 @@
 #                       src/metadata/shacl.rs::dcat_dataset)
 # ---------------------------------------------------------------------------
 
-<https://registry-relay.dev/shapes/BRegDatasetMandatoryShape>
+<https://id.registrystack.org/shapes/registry-relay/BRegDatasetMandatoryShape>
     a sh:NodeShape ;
     sh:targetClass dcat:Dataset ;
     sh:property [
@@ -59,7 +59,7 @@
 # `dcterms:references` on Dataset is optional in BRegDCAT-AP; this emitter
 # uses it (project convention) to surface codelist IRIs as typed
 # `skos:ConceptScheme` related resources. When present it must be IRI-valued.
-<https://registry-relay.dev/shapes/BRegDatasetReferencesShape>
+<https://id.registrystack.org/shapes/registry-relay/BRegDatasetReferencesShape>
     a sh:NodeShape ;
     sh:targetClass dcat:Dataset ;
     sh:property [
@@ -76,7 +76,7 @@
 #   When present it must be an IRI.
 # ---------------------------------------------------------------------------
 
-<https://registry-relay.dev/shapes/BRegAgentTypeShape>
+<https://id.registrystack.org/shapes/registry-relay/BRegAgentTypeShape>
     a sh:NodeShape ;
     sh:targetClass foaf:Agent ;
     sh:property [
@@ -98,7 +98,7 @@
 # registry_relay:codelist predicate.
 # ---------------------------------------------------------------------------
 
-<https://registry-relay.dev/shapes/BRegConceptSchemeSmokeShape>
+<https://id.registrystack.org/shapes/registry-relay/BRegConceptSchemeSmokeShape>
     a sh:NodeShape ;
     sh:targetClass skos:ConceptScheme ;
     sh:nodeKind sh:IRI .

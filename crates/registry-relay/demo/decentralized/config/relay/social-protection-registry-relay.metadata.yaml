@@ -184,4 +184,4 @@ datasets:
             target_entity: person
             cardinality: zero_or_one
 vocabularies:
-  registry_relay: https://registry-relay.dev/
+  registry_relay: https://id.registrystack.org/ns/registry-relay/v1#

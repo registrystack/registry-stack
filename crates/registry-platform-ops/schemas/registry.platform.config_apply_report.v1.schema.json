@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registry-platform.example/schemas/registry.platform.config_apply_report.v1.schema.json",
+  "$id": "https://id.registrystack.org/schemas/registry-platform/registry.platform.config_apply_report.v1.schema.json",
   "title": "Registry Platform Config Apply Report v1",
   "type": "object",
   "additionalProperties": false,

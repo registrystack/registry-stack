@@ -33,7 +33,7 @@ use thiserror::Error;
 
 /// Base URL for RFC 9457 `type` URIs. Becomes configurable in V1.x;
 /// pinned at compile time for V1.
-pub(crate) const PROBLEM_TYPE_BASE: &str = "https://registry-relay.dev/problems/";
+pub(crate) const PROBLEM_TYPE_BASE: &str = "https://id.registrystack.org/problems/registry-relay/";
 
 /// Maximum number of characters retained from an operator-supplied
 /// scope name when rendered into a detail message.

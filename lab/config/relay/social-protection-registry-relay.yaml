@@ -15,7 +15,7 @@ config_trust:
 metadata:
   source:
     path: social-protection-registry-relay.metadata.yaml
-    digest: sha256:a00b3c12512b7c079a3b39b3f053f88936c0b16c65d936da23198995886a3c24
+    digest: sha256:843bc82520c8b084cc2512634b035d5a3093a94f9fbad642b3334ca3c31ebdb5
   ecosystem_binding:
     id: combined-support-eligibility/v1
     version: v1

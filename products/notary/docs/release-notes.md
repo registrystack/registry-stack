@@ -100,7 +100,7 @@
 - Hardened SD-JWT VC conformance for `dc+sd-jwt`, holder binding, proof
   validation, and OpenAPI documentation.
 - Replaced fake Problem Details type URLs with
-  `https://docs.registry-notary.dev/problems/...`.
+  `https://id.registrystack.org/problems/registry-notary/...`.
 - Changed self-attestation subject-binding hashes to keyed HMAC values and
   stopped recording raw query strings in request spans or audit paths.
 - Known limitations: this release is `dc+sd-jwt` only, does not serve

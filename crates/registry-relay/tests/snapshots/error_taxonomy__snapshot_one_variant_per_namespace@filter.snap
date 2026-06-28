@@ -7,5 +7,5 @@ expression: json
   "detail": "query parameter references a field not in the resource schema",
   "status": 400,
   "title": "Unknown filter field",
-  "type": "https://registry-relay.dev/problems/filter/unknown_field"
+  "type": "https://id.registrystack.org/problems/registry-relay/filter/unknown_field"
 }

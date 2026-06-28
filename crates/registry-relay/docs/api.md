@@ -374,7 +374,7 @@ Errors use RFC 9457 Problem Details with a stable `code` field:
 
 ```json
 {
-  "type": "https://registry-relay.dev/problems/auth/scope_denied",
+  "type": "https://id.registrystack.org/problems/registry-relay/auth/scope_denied",
   "title": "Scope denied",
   "status": 403,
   "code": "auth.scope_denied",

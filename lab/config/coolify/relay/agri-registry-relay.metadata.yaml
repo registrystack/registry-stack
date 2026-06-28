@@ -910,5 +910,5 @@ datasets:
             type: boolean
             required: true
 vocabularies:
-  registry_relay: https://registry-relay.dev/
+  registry_relay: https://id.registrystack.org/ns/registry-relay/v1#
   nagdi: https://metadata.lab.registrystack.org/vocab/nagdi/
