@@ -1317,6 +1317,15 @@ fn add_response_examples(document: &mut Value) {
             "config_trust.antirollback_state_path is not configured",
         ),
     );
+    set_json_response(
+        document,
+        "/admin/v1/posture",
+        "get",
+        "200",
+        "Redacted posture for the requested tier",
+        serde_json::from_str(registry_platform_ops::NOTARY_POSTURE_EXAMPLE_V1)
+            .expect("notary posture example is valid JSON"),
+    );
     set_problem_response(
         document,
         "/admin/v1/posture",
@@ -4002,6 +4011,11 @@ mod tests {
                 "posture documents the {status} response"
             );
         }
+        // The 200 body is documented with the real posture document shape.
+        assert_eq!(
+            posture["responses"]["200"]["content"]["application/json"]["example"]["schema"],
+            json!("registry.ops.posture.v1")
+        );
     }
 
     #[test]
@@ -4163,6 +4177,7 @@ mod tests {
             ("/healthz", "get", "200"),
             ("/ready", "get", "200"),
             ("/admin/v1/capabilities", "get", "200"),
+            ("/admin/v1/posture", "get", "200"),
             ("/admin/v1/config/verify", "post", "200"),
             ("/admin/v1/config/dry-run", "post", "200"),
             ("/admin/v1/config/apply", "post", "200"),

@@ -2738,6 +2738,103 @@
         ],
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "build": {
+                    "package": "registry-notary",
+                    "version": "0.1.0"
+                  },
+                  "component": "registry-notary",
+                  "configuration": {
+                    "dynamic_reload_supported": false,
+                    "last_apply_at": null,
+                    "last_apply_result": null,
+                    "last_bundle_id": null,
+                    "last_bundle_sequence": null,
+                    "last_config_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "restart_required": false,
+                    "source": "local_file"
+                  },
+                  "instance": {
+                    "environment": "production",
+                    "id": "civil-notary-prod",
+                    "jurisdiction": "example-country",
+                    "owner": "Ministry of Interior"
+                  },
+                  "notary": {
+                    "claim_count": 6,
+                    "credential_profile_count": 2,
+                    "credential_status": {
+                      "enabled": true,
+                      "storage": "redis"
+                    },
+                    "federation": {
+                      "allowed_profile_count": 3,
+                      "allowed_purpose_count": 4,
+                      "enabled": true,
+                      "peer_count": 2,
+                      "supported_protocol_versions": [
+                        "registry-notary-federation/v0.1"
+                      ]
+                    },
+                    "oid4vci": {
+                      "credential_configuration_count": 1,
+                      "enabled": true
+                    },
+                    "replay": {
+                      "ready": true,
+                      "storage": "redis"
+                    },
+                    "self_attestation": {
+                      "allowed_claim_count": 1,
+                      "allowed_purpose_count": 1,
+                      "credential_profile_count": 1,
+                      "enabled": true,
+                      "rate_limit_mode": "in_process",
+                      "wallet_origin_count": 1
+                    },
+                    "source_connection_counts": {
+                      "http": 2,
+                      "postgres": 1
+                    }
+                  },
+                  "observed_at": "2026-06-04T10:00:00Z",
+                  "posture": {
+                    "audit": {
+                      "checkpoint_status": "available",
+                      "configured": true,
+                      "latest_sequence": 88,
+                      "latest_tail_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+                      "sink_type": "file",
+                      "verification_status": "verified",
+                      "verified_at": "2026-06-04T09:59:30Z"
+                    },
+                    "findings": [],
+                    "warnings": []
+                  },
+                  "runtime": {
+                    "admin_enabled": true,
+                    "auth_mode": "oidc",
+                    "readiness": "ready"
+                  },
+                  "schema": "registry.ops.posture.v1",
+                  "standards_artifacts": {
+                    "evidence_service_discovery": {
+                      "media_type": "application/json",
+                      "observed_status": "available",
+                      "sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                    },
+                    "jwks": {
+                      "media_type": "application/jwk-set+json",
+                      "observed_status": "available",
+                      "sha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+                    }
+                  },
+                  "tier": "default"
+                }
+              }
+            },
             "description": "Redacted posture for the requested tier"
           },
           "400": {
