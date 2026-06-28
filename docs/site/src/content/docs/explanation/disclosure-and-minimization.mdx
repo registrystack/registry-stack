@@ -209,8 +209,8 @@ signed evaluation result, never a credential. A peer posts a compact signed JWT 
 evaluation result; before any source read, the serving Notary verifies peer policy, replay
 state, purpose, profile, and audience (`REQ-PR-NOTARY-018`). Federation is static-peer only:
 peers are loaded from configuration at startup, a request from an unconfigured peer is rejected,
-and dynamic discovery, shared replay storage, and federated credential issuance are out of scope
-(`REQ-PR-NOTARY-019`). The federated answer is the same kind of minimized, mode-governed
+and dynamic discovery, cross-peer shared replay storage, and federated credential issuance are out
+of scope (`REQ-PR-NOTARY-019`). The federated answer is the same kind of minimized, mode-governed
 evaluation result, signed for transport, rather than a portable credential.
 
 ## Honest limits

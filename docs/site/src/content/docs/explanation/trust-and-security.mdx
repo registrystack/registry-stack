@@ -43,9 +43,13 @@ edge, deployment configuration, and incident response (`RS-SEC-G` Section 9). Th
 the primitives; the operator provisions, configures, and operates them.
 
 The responsibilities below also split along a service line within the stack. Registry Notary owns
-claim evaluation, disclosure policy, and credential issuance; Registry Relay must not perform claim
-evaluation or issue credentials (`REQ-ARC-G-007`). That boundary does not prohibit Relay from
-enforcing runtime access, freshness, and redaction policy on its own governed consultation routes.
+claim evaluation, disclosure policy, and claim-credential issuance; Registry Relay must not perform
+claim evaluation or issue claim credentials (`REQ-ARC-G-007`). That boundary does not prohibit Relay
+from enforcing runtime access, freshness, and redaction policy on its own governed consultation
+routes. It also does not cover signed response credentials: with `provenance` enabled, Relay attaches
+its own VCDM 2.0 VC-JWT to an entity-record or aggregate response and, in gateway issuer mode,
+publishes a `did:web` document, a second issuer and key surface distinct from the Notary claim
+SD-JWT VC (`REQ-PR-RELAY-013`, `REQ-PR-RELAY-014`, `REQ-SEC-G-007`).
 
 ## Posture table
 
@@ -64,15 +68,23 @@ that is configured (a stack primitive whose effect depends on deployment configu
 | Revocation / credential status | An optional, default-disabled status-list surface; `CredentialStatusConfig.enabled` defaults to `false`. No revocation flow is specified by the `RS-*` set. | Operator (optional surface) |
 | Federation | Static-peer only: peers loaded from config at startup, an unconfigured peer rejected; the answer is a compact signed JWT carrying a scoped evaluation result, never a credential (`REQ-PR-NOTARY-018`, `REQ-PR-NOTARY-019`). | Stack; peers configured |
 | Key custody | The stack never serves the private half (the `PublicJwk` type rejects private members); storage, injection, and rotation of keys are the operator's (`REQ-SEC-G-007`, `REQ-SEC-G-013`, `RS-SEC-G` Section 9). | Stack (public-only surface) + operator |
-| Network egress | An outbound SSRF-guard primitive constrains destinations (scheme allowlist, deny private ranges, deny cloud-metadata), applied at `SHOULD` level; edge rate limiting and egress limits are the operator's (`REQ-SEC-G-012`, `RS-SEC-G` Section 9). | Stack (primitive) + operator |
+| Network egress | An outbound SSRF-guard primitive constrains destinations (scheme allowlist, deny private ranges, deny cloud-metadata), applied at `SHOULD` level. The strict default denies private ranges, but a per-connection or per-peer `allow_insecure_private_network` opt-in re-enables private-network HTTP destinations while still denying cloud-metadata. Edge rate limiting and egress limits are the operator's (`REQ-SEC-G-012`, `RS-SEC-G` Section 9). | Stack (primitive) + operator |
 | Transport / tenant isolation | Outside the security model; assigned to the operator (`RS-SEC-G` Section 1 and Section 9). | Operator |
 
 ## Authorization in detail
 
-Authorization is scope-based and deny-by-default. A caller must hold the scope a route requires,
-and the service enforces that scope before it reads any source or evaluates any claim, so a caller
-that lacks the scope is refused before source access rather than after (`REQ-SEC-G-005`). On the
-Relay data plane, access is scope-checked per dataset (`REQ-PR-RELAY-006`).
+Authorization is scope-based and deny-by-default. A scope-authorized caller must hold the scope a
+route requires, and the service enforces that scope before it reads any source or evaluates any
+claim, so a caller that lacks the scope is refused before source access rather than after
+(`REQ-SEC-G-005`). On the Relay data plane, access is scope-checked per dataset
+(`REQ-PR-RELAY-006`).
+
+Self-attestation principals are gated differently. `require_claim_access` and
+`require_evaluation_access` return early for a self-attestation principal, so the per-source
+required-scope check is not applied. The gate before source access is instead the self-attestation
+trust-context policy (citizen client or audience match plus `self_attestation.scope_policy`). That
+policy defaults to `Required` and enforces the configured scopes, but a deployment can set it to
+`Disabled`, in which case no caller scope is required before source access.
 
 The per-dataset data-plane scopes follow the pattern `<dataset_id>:<suffix>`. The bare suffixes
 are `metadata`, `rows`, `aggregate`, `verify`, `evidence_verification`, and `identity_release`
@@ -100,7 +112,12 @@ record-bearing route requires authentication (`REQ-SEC-G-006`). On the Notary li
 auth-exempt surface is broader than probes alone: it covers `/healthz`, `/ready`, the evidence
 JWKS, the OpenID credential-issuer metadata, the OID4VCI issuance-flow routes, the credential-status
 route, the VCT routes, and the docs/OpenAPI routes (the OpenAPI document only when
-`openapi_requires_auth` is disabled) (`crates/registry-notary-server/src/standalone.rs`). The
+`openapi_requires_auth` is disabled) (`crates/registry-notary-server/src/standalone.rs`). On the
+Relay listener the auth-exempt surface is likewise broader than probes: it covers `/healthz`,
+`/ready`, `/docs`, the `/.well-known/api-catalog` linkset, and the OpenAPI document when
+`openapi_requires_auth` is disabled, and when `provenance` is enabled it adds the verifier-support
+routes `/schemas/...` and `/contexts/...`, plus the `/.well-known/did.json` document in gateway
+issuer mode (`REQ-PR-RELAY-013`; `crates/registry-relay/src/server.rs`). The
 federation evaluations route is exempt from API-key/OIDC middleware only: the federation handler
 still requires and verifies the peer-signed JWS, so delegated evaluation is not unauthenticated.
 
@@ -153,9 +170,14 @@ from the configured set is rejected as an invalid token
 (`POST /federation/v1/evaluations`) accepts a compact signed JWT request and returns a compact
 signed JWT response carrying a scoped evaluation result; before any source read the serving Notary
 verifies peer policy, replay state, purpose, profile, and audience (`REQ-PR-NOTARY-018`). The
-federated answer is never a credential, and each federation runtime holds its own replay store.
-Dynamic trust-chain discovery, shared replay storage, and federated credential issuance are out of
-scope for this version and must not be implied by a conformance claim (`REQ-PR-NOTARY-019`).
+federated answer is never a credential, and federation reuses the deployment replay store rather
+than a separate one: federation replay checks run against the same `replay.storage` store the rest
+of the runtime uses, which a multi-instance deployment must back with `redis` so a replay accepted
+by one process is rejected by another (`crates/registry-notary-core/src/config.rs`). The shared
+replay storage that `REQ-PR-NOTARY-019` places out of scope is replay state coordinated across
+federation peers, not a deployment backing its own store with Redis. Dynamic trust-chain discovery,
+cross-peer shared replay storage, and federated credential issuance are out of scope for this
+version and must not be implied by a conformance claim (`REQ-PR-NOTARY-019`).
 
 A verifier needs no credential to obtain a public key. The issuer JWKS
 (`GET /.well-known/evidence/jwks.json`) is served without authentication (`REQ-PR-NOTARY-002`), and
