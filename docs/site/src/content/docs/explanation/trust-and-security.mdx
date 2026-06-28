@@ -1,0 +1,218 @@
+---
+title: Trust and security
+description: A single map of the Registry Stack trust posture, the stack-versus-operator responsibility split, and the honest gaps a reviewer should weigh.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-06-28"
+doc_type: explanation
+locale: en
+standards_referenced:
+  - sd-jwt-vc
+  - oid4vci
+  - w3c-did
+---
+
+This page is the trust map for a security reviewer or operator: one place to read the posture of
+the runtime services and the line where their guarantees stop and the deployment's begin. It does
+not repeat the disclosure model or the boundary narrative in full. For the boundary overview see
+[Records stay home](../records-stay-home/); for the disclosure model in depth see
+[Disclosure and minimization](../disclosure-and-minimization/). The normative source is the draft
+`RS-*` specification set, principally [RS-SEC-G](../../spec/rs-sec-g/),
+[RS-PR-RELAY](../../spec/rs-pr-relay/), and [RS-PR-NOTARY](../../spec/rs-pr-notary/).
+
+## The trust model in one frame
+
+The stack draws an explicit boundary between what the runtime services guarantee and what the
+deployment supplies. `RS-SEC-G` Section 9 states it plainly: the security model ends where the
+deployment begins. Inside the boundary the runtime services provide cryptographic and policy
+primitives. Outside it the operator provisions, configures, and operates them.
+
+Three properties stay inside the boundary by design. Custody is distributed: each authority keeps
+control of its own registry data, and the stack does not aggregate records into a central store
+(`records-stay-home.mdx`). Consultation is read-in-place with no write-back: in v1 the runtime
+services must not expose source-registry data mutation routes, and consultation APIs are read-only
+(`REQ-ARC-G-003`). The private signing key never leaves the issuer: an issuer signs with an
+asymmetric key and publishes only the public half (`REQ-SEC-G-007`).
+
+Several guarantees sit outside the boundary and are the operator's to provide:
+secret and key provisioning, key custody and rotation schedule, audit retention and storage,
+tenant isolation, transport termination and certificate management, network rate limiting at the
+edge, deployment configuration, and incident response (`RS-SEC-G` Section 9). The stack provides
+the primitives; the operator provisions, configures, and operates them.
+
+The responsibilities below also split along a service line within the stack. Registry Notary owns
+claim evaluation, disclosure policy, and credential issuance; Registry Relay must not perform claim
+evaluation or issue credentials (`REQ-ARC-G-007`). That boundary does not prohibit Relay from
+enforcing runtime access, freshness, and redaction policy on its own governed consultation routes.
+
+## Posture table
+
+The table maps the key properties to their current grounded posture and to who provides each. The
+"Provided by" column distinguishes a stack primitive, an operator responsibility, and a property
+that is configured (a stack primitive whose effect depends on deployment configuration).
+
+| Property | Current posture | Provided by |
+|------|------|------|
+| Authentication | A runtime service runs exactly one authentication mode (static credentials/API key or OIDC) and authenticates every route returning person-level records or claim results before producing a response (`REQ-SEC-G-002`, `REQ-PR-RELAY-005`). | Stack (primitive); mode configured |
+| Authorization / scope | Scope-based and deny-by-default, with scope-before-source: the required scope is enforced before any source read or claim evaluation, so a caller lacking the scope is refused before source access (`REQ-SEC-G-005`, `REQ-PR-RELAY-006`). | Stack (primitive); scopes configured |
+| Audit | An audit envelope is a hash-chained append record; a deployment can run audit fail-closed, so a request whose audit record cannot be written does not return a successful result (`REQ-SEC-G-009`). The Notary record body omits one spec-required field (scopes); see Known gaps. | Stack (primitive); fail-closed configured |
+| Disclosure and minimization | A claim answer carries one of three policy-bound modes; minimization is modelled by the claim author, not imposed on every answer. See [Disclosure and minimization](../disclosure-and-minimization/). | Stack (primitive); claim-modelled |
+| Credential signing | An issued credential is an SD-JWT VC (`typ` `dc+sd-jwt`) signed with the profile's configured algorithm (EdDSA over Ed25519 by default, or ES256 over P-256), with no W3C VC JSON-LD envelope (`REQ-PR-NOTARY-013`). | Stack; algorithm configured |
+| Holder binding | Spec requires binding via `did:jwk` in `cnf` (`REQ-PR-NOTARY-015`); the implementation default is `none` (unbound), with `did` binding forced only on the self-attestation / OID4VCI path. Gap under review (below). | Stack; gap under review |
+| Revocation / credential status | An optional, default-disabled status-list surface; `CredentialStatusConfig.enabled` defaults to `false`. No revocation flow is specified by the `RS-*` set. | Operator (optional surface) |
+| Federation | Static-peer only: peers loaded from config at startup, an unconfigured peer rejected; the answer is a compact signed JWT carrying a scoped evaluation result, never a credential (`REQ-PR-NOTARY-018`, `REQ-PR-NOTARY-019`). | Stack; peers configured |
+| Key custody | The stack never serves the private half (the `PublicJwk` type rejects private members); storage, injection, and rotation of keys are the operator's (`REQ-SEC-G-007`, `REQ-SEC-G-013`, `RS-SEC-G` Section 9). | Stack (public-only surface) + operator |
+| Network egress | An outbound SSRF-guard primitive constrains destinations (scheme allowlist, deny private ranges, deny cloud-metadata), applied at `SHOULD` level; edge rate limiting and egress limits are the operator's (`REQ-SEC-G-012`, `RS-SEC-G` Section 9). | Stack (primitive) + operator |
+| Transport / tenant isolation | Outside the security model; assigned to the operator (`RS-SEC-G` Section 1 and Section 9). | Operator |
+
+## Authorization in detail
+
+Authorization is scope-based and deny-by-default. A caller must hold the scope a route requires,
+and the service enforces that scope before it reads any source or evaluates any claim, so a caller
+that lacks the scope is refused before source access rather than after (`REQ-SEC-G-005`). On the
+Relay data plane, access is scope-checked per dataset (`REQ-PR-RELAY-006`).
+
+The per-dataset data-plane scopes follow the pattern `<dataset_id>:<suffix>`. The bare suffixes
+are `metadata`, `rows`, `aggregate`, `verify`, `evidence_verification`, and `identity_release`
+(`crates/registry-relay/src/config/validate.rs`). The implementation also accepts a parameterized
+`evidence_verification:<suffix>` form where the suffix is non-empty, so the data-plane vocabulary
+is not closed at exactly six fixed strings.
+
+Three service-level scopes sit outside the per-dataset pattern and are accepted directly by scope
+validation: `registry_relay:admin` (reload and configuration-mutation routes),
+`registry_relay:ops_read` (operational posture reads), and `registry_relay:metrics_read` (metrics)
+(`validate.rs`; `REQ-PR-RELAY-018`).
+
+A governed read passes through a policy decision point before governed data is returned. A governed
+Relay read must receive a PDP permit before returning entity-backed or aggregate data; on denial
+Relay fails closed and returns a stable `pdp.*` problem code rather than falling back to an
+ungoverned read (`REQ-PR-RELAY-019`). Scope authorization runs ahead of the PDP gate: an aggregate
+route performs ordinary aggregate and source-read scope authorization first, and a scope denial
+returns `auth.scope_denied` without reporting PDP policy provenance (`REQ-PR-RELAY-021`). Unscoped
+or malformed trust metadata must not satisfy the PDP gate (`REQ-PR-RELAY-020`).
+
+A service must not widen a caller's reach at request time beyond what configuration grants. Only
+liveness and readiness probes and public verification-key discovery (the issuer JWKS and, where
+published, the `did:web` document) are served without authentication; every claim-bearing and
+record-bearing route requires authentication (`REQ-SEC-G-006`). On the Notary listener the
+auth-exempt surface is broader than probes alone: it covers `/healthz`, `/ready`, the evidence
+JWKS, the OpenID credential-issuer metadata, the OID4VCI issuance-flow routes, the credential-status
+route, the VCT routes, and the docs/OpenAPI routes (the OpenAPI document only when
+`openapi_requires_auth` is disabled) (`crates/registry-notary-server/src/standalone.rs`). The
+federation evaluations route is exempt from API-key/OIDC middleware only: the federation handler
+still requires and verifies the peer-signed JWS, so delegated evaluation is not unauthenticated.
+
+A note on coverage: `REQ-SEC-G-002` and `REQ-SEC-G-008` state an invariant a conforming deployment
+meets, not a per-route audit of a given build. The posture above is the specified invariant plus
+the route-registration evidence, not an enumeration of every route in a running binary.
+
+## Audit as a control
+
+Audit is a security control, not best-effort logging. A deployment must be able to run audit
+fail-closed, so a request whose audit record cannot be written does not return a successful result,
+and a service must not silently drop an audit record on the success path (`REQ-SEC-G-009`). For
+Registry Notary, every evaluated request must emit an `EvidenceAuditEvent` in an audit envelope,
+and an audit write failure must surface as a request error rather than being swallowed as a silent
+log entry (`REQ-PR-NOTARY-020`, `REQ-PR-NOTARY-021`).
+
+The audit envelope is a hash-chained append record: each `AuditEnvelope` carries an envelope id, a
+timestamp, the previous envelope hash, the consumer-owned record body, and the record hash
+(`crates/registry-platform-audit/src/lib.rs`). The envelope carries no retention or TTL field,
+which is why audit retention and storage are the operator's (`RS-SEC-G` Section 9). `REQ-SEC-G-009`
+is phrased as a capability the deployment must be able to enable, so fail-closed audit is a
+configurable obligation rather than an unconditional runtime guarantee in every deployment. One
+spec-required envelope field, the scopes exercised, is not captured on the Notary record body; see
+Known gaps.
+
+## Credentials and disclosure
+
+Cryptographic verifiability comes from the issued credential and the signed federation result, not
+from the everyday evaluation response. An issued credential is an SD-JWT VC (media type and `typ`
+header `dc+sd-jwt`) signed with EdDSA over Ed25519 by default, with no W3C VC JSON-LD envelope
+(`REQ-PR-NOTARY-013`). Credential-profile signing keys may be configured
+as `EdDSA` or `ES256` over P-256; `RS256` is rejected for credential profiles and is reserved for
+the eSignet client-assertion path, while access-token and federation signing remain EdDSA-only
+(`crates/registry-notary-core/src/config.rs`). `ES256` is a configurable profile signing
+algorithm, not the default issued-credential signature.
+
+Selective disclosure is digest-based: the signed credential body carries the SHA-256 digest of each
+selectively disclosable field rather than the value, so an unselected field stays hidden and a
+holder cannot present a disclosure that was not in the original credential (`REQ-PR-NOTARY-014`).
+Public claim results, by contrast, are provenance-tagged (`registry-notary-claim-provenance/v1`),
+not signed (`REQ-PR-NOTARY-028`). The mechanics of the three disclosure modes, mode selection, and
+the minimization discipline live in [Disclosure and minimization](../disclosure-and-minimization/).
+
+## Federation and keys
+
+Federation is static-peer only. Peers are loaded from configuration at startup and a request from
+an unconfigured peer is rejected: the runtime keys peers by their `iss` claim, and an issuer absent
+from the configured set is rejected as an invalid token
+(`crates/registry-notary-server/src/federation/`). Delegated evaluation
+(`POST /federation/v1/evaluations`) accepts a compact signed JWT request and returns a compact
+signed JWT response carrying a scoped evaluation result; before any source read the serving Notary
+verifies peer policy, replay state, purpose, profile, and audience (`REQ-PR-NOTARY-018`). The
+federated answer is never a credential, and each federation runtime holds its own replay store.
+Dynamic trust-chain discovery, shared replay storage, and federated credential issuance are out of
+scope for this version and must not be implied by a conformance claim (`REQ-PR-NOTARY-019`).
+
+A verifier needs no credential to obtain a public key. The issuer JWKS
+(`GET /.well-known/evidence/jwks.json`) is served without authentication (`REQ-PR-NOTARY-002`), and
+it exposes public JWKs only: the `PublicJwk` type rejects private key members, so the private half
+never appears on the published surface (`crates/registry-platform-crypto/src/lib.rs`). A key
+rotated out may remain published so existing results stay verifiable; that is not a revocation
+mechanism (`records-stay-home.mdx`). The stack never serving the private half is a property of the
+public surface, not a guarantee that the deployment's key storage is secure: how keys are stored,
+injected, and rotated (environment, file, or hardware module) is an operator responsibility, and an
+implementation must not embed secret material in any portable or distributable artifact
+(`REQ-SEC-G-013`, `RS-SEC-G` Section 9).
+
+## Known gaps
+
+Two specification requirements diverge from the current implementation. Both are stated here as
+spec-says-X, implementation-does-Y, under review, not as resolved decisions.
+
+- **Holder binding default.** `REQ-PR-NOTARY-015` says a credential MUST bind its holder by naming
+  the holder's public key as a `did:jwk` in the `cnf` claim, with `did:jwk` the only supported
+  method and a fresh, audience-bound holder proof required at presentation. The implementation
+  defaults `holder_binding` mode to `none`, which issues an unbound credential carrying no `cnf`
+  and requiring no holder proof; `did` binding is forced only on the self-attestation / OID4VCI
+  credential-profile path, where profile validation rejects any mode other than `did` and requires
+  `proof_of_possession` (`crates/registry-notary-core/src/config.rs`). The general default
+  therefore leaves credentials unbound, diverging from the MUST. Under review.
+- **Audit scope capture on the Notary path.** `REQ-SEC-G-008` requires the audit envelope to
+  capture at least the caller principal, the scopes exercised, a request identifier, and the
+  `Data-Purpose` value where supplied. The Notary `EvidenceAuditEvent` struct records a principal
+  hash, decision, method, path, status, claim hash, purposes, and a correlation hash, but has no
+  field capturing the scopes exercised (`crates/registry-notary-core/src/model.rs`). The Relay
+  `AuditRecord` does carry `scopes_used` (`crates/registry-relay/src/audit/mod.rs`), so the
+  omission is specific to the Notary record, not stack-wide. Under review.
+
+## Honest limits
+
+The following are documented honest framing, not discovered defects.
+
+- **This is not zero-knowledge.** A `predicate` answer is a policy-enforced boolean computed inside
+  the service, and SD-JWT selective disclosure is digest omission. Neither is a zero-knowledge
+  proof, and the documentation should not imply one (`records-stay-home.mdx`).
+- **Minimization is modelled, not automatic.** `value` mode is not constrained to a scalar; a claim
+  modelled to return an object or extracted record returns one. Least disclosure is a design choice
+  the claim makes, not a property the stack imposes on every answer (`records-stay-home.mdx`).
+- **Correctness depends on the configured source.** Notary reports what its configured source says
+  and does not independently vouch for whether the source is correct or current
+  (`records-stay-home.mdx`).
+- **Several guarantees are the operator's.** Network egress limits, key custody, tenant isolation,
+  audit retention, and transport security are supplied by the deployment, not guaranteed by the
+  stack (`records-stay-home.mdx`).
+- **The model is specified in draft.** The behaviour above is defined in the `RS-*` specifications,
+  which are still drafts and may change. Alignment with an external standard is not a claim of
+  conformance to it or of legal compliance (`records-stay-home.mdx`; `RS-SEC-G`; `RS-PR-NOTARY`).
+
+## Related
+
+- The security and protocol contracts: [RS-SEC-G](../../spec/rs-sec-g/),
+  [RS-ARC-G](../../spec/rs-arc-g/), [RS-PR-RELAY](../../spec/rs-pr-relay/),
+  [RS-PR-NOTARY](../../spec/rs-pr-notary/)
+- The boundary overview: [Records stay home](../records-stay-home/) *(explanation)*
+- The disclosure model in depth: [Disclosure and minimization](../disclosure-and-minimization/) *(explanation)*

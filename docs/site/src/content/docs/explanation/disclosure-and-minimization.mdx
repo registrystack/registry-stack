@@ -146,7 +146,8 @@ was disclosed, not the intent of the asker.
 
 Disclosure modes govern an evaluation result. An issued credential is a distinct layer with its
 own disclosure mechanism, and the two should not be conflated. The credential is an SD-JWT VC
-(`typ` header `dc+sd-jwt`, signed with EdDSA over Ed25519, `REQ-PR-NOTARY-013`) that gives the
+(`typ` header `dc+sd-jwt`, signed with the profile's configured algorithm, EdDSA over Ed25519 by
+default or ES256 over P-256, `REQ-PR-NOTARY-013`) that gives the
 holder selective disclosure: the holder chooses which fields to reveal to which verifier. The
 signed body carries a SHA-256 digest of each selectively disclosable field rather than the field
 value, so an unselected field stays hidden and a holder cannot present a disclosure that was not
@@ -231,7 +232,7 @@ The limits below are the documented honest framing, not discovered defects.
   the `ClaimProvenance` struct in `model.rs` holds `schema_version`, `generated_by`, `used`, and
   `derived_from`, with no signature field). Provenance is correlation context, not a signature
   over the result. Cryptographic verifiability comes from the SD-JWT VC credential (signed with
-  EdDSA over Ed25519, `REQ-PR-NOTARY-013`) or the signed federation result (a compact signed JWT,
+  its configured EdDSA or ES256 key, `REQ-PR-NOTARY-013`) or the signed federation result (a compact signed JWT,
   `REQ-PR-NOTARY-018`), not from the default evaluation response.
 - **Correctness depends on the configured source.** Notary reports what its configured source
   says and does not independently vouch for whether the source is correct or current
@@ -248,3 +249,4 @@ The limits below are the documented honest framing, not discovered defects.
   [RS-DM-CLAIM](../../spec/rs-dm-claim/), [RS-SEC-G](../../spec/rs-sec-g/)
 - The overview: [Records stay home](../records-stay-home/) *(explanation)*
 - Evidence issuance, end to end: [Evidence issuance](../evidence-issuance/) *(explanation)*
+- The security posture: [Trust and security](../trust-and-security/) *(explanation)*
