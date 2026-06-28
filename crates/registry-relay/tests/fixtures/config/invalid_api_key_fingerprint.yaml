@@ -14,7 +14,6 @@ auth:
       fingerprint:
         provider: env
         name: TEST_KEY_HASH_BAD_FINGERPRINT
-        commitment: sha256:7f887644dfa6f08d5efed9aa8c6aa3f1dd9f204b61e506b921053653964531c6
       scopes:
         - registry_relay:admin
 audit:

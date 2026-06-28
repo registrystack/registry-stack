@@ -9,10 +9,7 @@ use axum::{Json, Router};
 use axum_test::TestServer;
 use registry_notary_core::StandaloneRegistryNotaryConfig;
 use registry_notary_server::standalone_router;
-use registry_platform_authcommon::{
-    credential_fingerprint_commitment, fingerprint_api_key, CredentialCommitmentContext,
-    CredentialProduct, CredentialType,
-};
+use registry_platform_authcommon::fingerprint_api_key;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 #[cfg(feature = "registry-notary-cel")]
@@ -193,14 +190,6 @@ async fn fhir_demo_claim_profiles_fail_closed_when_source_facts_are_absent() {
 
 fn fhir_demo_config(sidecar_base_url: &str) -> StandaloneRegistryNotaryConfig {
     let fingerprint = fingerprint_api_key(API_KEY);
-    let commitment = credential_fingerprint_commitment(
-        CredentialCommitmentContext {
-            product: CredentialProduct::RegistryNotary,
-            credential_type: CredentialType::ApiKey,
-            credential_id: "verification_service",
-        },
-        &fingerprint,
-    );
     std::env::set_var("REGISTRY_NOTARY_API_KEY_HASH", fingerprint);
     std::env::set_var("REGISTRY_NOTARY_AUDIT_HASH_SECRET", AUDIT_SECRET);
     std::env::set_var("FHIR_SIDECAR_TOKEN", SIDECAR_TOKEN);
@@ -215,7 +204,6 @@ fn fhir_demo_config(sidecar_base_url: &str) -> StandaloneRegistryNotaryConfig {
     let raw = std::fs::read_to_string(config_path).expect("FHIR demo config reads");
     let mut config: StandaloneRegistryNotaryConfig =
         serde_norway::from_str(&raw).expect("FHIR demo config parses");
-    config.auth.api_keys[0].fingerprint.commitment = commitment;
     config
         .evidence
         .source_connections

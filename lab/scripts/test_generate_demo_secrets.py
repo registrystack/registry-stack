@@ -40,42 +40,30 @@ class GenerateDemoSecretsTest(unittest.TestCase):
     def setUp(self) -> None:
         self.generator = load_generator()
 
-    def test_default_commitment_rewrite_leaves_hosted_configs_unchanged(self) -> None:
+    def test_local_config_shape_does_not_include_commitments(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             local_config = root / "config/relay/civil-registry-relay.yaml"
-            hosted_config = root / "config/coolify/relay/civil-registry-relay.yaml"
             local_config.parent.mkdir(parents=True)
-            hosted_config.parent.mkdir(parents=True)
-            original = self.relay_config("sha256:" + ("0" * 64))
+            original = self.relay_config()
             local_config.write_text(original, encoding="utf-8")
-            hosted_config.write_text(original, encoding="utf-8")
 
             self.generator.DEMO_ROOT = root
-            updated = self.generator.write_config_fingerprint_commitments(
-                {"CIVIL_METADATA_CLIENT_HASH": "sha256:" + ("1" * 64)}
-            )
+            values = self.generator.generate_env()
 
-            self.assertEqual(updated, 1)
-            self.assertNotEqual(local_config.read_text(encoding="utf-8"), original)
-            self.assertEqual(hosted_config.read_text(encoding="utf-8"), original)
+            self.assertIn("CIVIL_METADATA_CLIENT_HASH", values)
+            self.assertEqual(local_config.read_text(encoding="utf-8"), original)
+            self.assertNotIn("commitment:", original)
 
-    def test_include_hosted_rewrites_hosted_configs(self) -> None:
+    def test_generated_env_contains_fingerprint_pairs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            hosted_config = root / "config/coolify/relay/civil-registry-relay.yaml"
-            hosted_config.parent.mkdir(parents=True)
-            original = self.relay_config("sha256:" + ("0" * 64))
-            hosted_config.write_text(original, encoding="utf-8")
-
             self.generator.DEMO_ROOT = root
-            updated = self.generator.write_config_fingerprint_commitments(
-                {"CIVIL_METADATA_CLIENT_HASH": "sha256:" + ("1" * 64)},
-                include_hosted=True,
-            )
+            values = self.generator.generate_env()
 
-            self.assertEqual(updated, 1)
-            self.assertNotEqual(hosted_config.read_text(encoding="utf-8"), original)
+            raw = values["CIVIL_METADATA_CLIENT_RAW"]
+            expected = self.generator.fingerprint(raw)
+            self.assertEqual(values["CIVIL_METADATA_CLIENT_HASH"], expected)
 
     def test_generates_esignet_relay_credentials(self) -> None:
         values = self.generator.generate_env()
@@ -95,44 +83,15 @@ class GenerateDemoSecretsTest(unittest.TestCase):
                 self.assertIn(key, values)
                 self.assertTrue(values[key])
 
-    def test_commitment_rewrite_uses_signed_commitment_not_fingerprint(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            local_config = root / "config/relay/population-registry-relay.yaml"
-            local_config.parent.mkdir(parents=True)
-            local_config.write_text(
-                self.relay_config("sha256:" + ("0" * 64)).replace(
-                    "CIVIL_METADATA_CLIENT_HASH", "POPULATION_METADATA_CLIENT_HASH"
-                ),
-                encoding="utf-8",
-            )
-            fingerprint = "sha256:" + ("1" * 64)
-
-            self.generator.DEMO_ROOT = root
-            self.generator.write_config_fingerprint_commitments(
-                {"POPULATION_METADATA_CLIENT_HASH": fingerprint}
-            )
-
-            expected = self.generator.credential_commitment(
-                "registry-relay",
-                "api_key",
-                "metadata_client",
-                fingerprint,
-            )
-            updated = local_config.read_text(encoding="utf-8")
-            self.assertIn(f"commitment: {expected}", updated)
-            self.assertNotIn(f"commitment: {fingerprint}", updated)
-
     @staticmethod
-    def relay_config(commitment: str) -> str:
-        return f"""auth:
+    def relay_config() -> str:
+        return """auth:
   mode: api_key
   api_keys:
     - id: metadata_client
       fingerprint:
         provider: env
         name: CIVIL_METADATA_CLIENT_HASH
-        commitment: {commitment}
 """
 
 

@@ -357,20 +357,8 @@ for module in [
     load("generate_demo_keys", "demo/scripts/generate_demo_keys.py"),
     load("generate_perf_keys", "perf/scripts/generate_perf_keys.py"),
 ]:
-    fingerprint = "sha256:" + "a" * 64
-    block, changed = module.refresh_credential_block(
-        [
-            "  - id: 'quoted-id'\n",
-            "    fingerprint_ref:\n",
-            '      name: "QUOTED_HASH"\n',
-            "      commitment: sha256:" + "0" * 64 + "\n",
-        ],
-        "'quoted-id'",
-        {"QUOTED_HASH": fingerprint},
-    )
-    assert changed, module.__name__
-    expected = module.credential_commitment("quoted-id", fingerprint)
-    assert block[-1] == f"      commitment: {expected}\n", block
+    assert not hasattr(module, "credential_commitment"), module.__name__
+    assert not hasattr(module, "refresh_credential_block"), module.__name__
 "#;
 
     let output = Command::new(python())
@@ -495,9 +483,7 @@ fn decentralized_secret_generator_writes_scoped_env_files_0600() {
     let civil_notary_values = assert_exact_env_keys(
         &civil_notary,
         &[
-            "CIVIL_EVIDENCE_CLIENT_BEARER_COMMITMENT",
             "CIVIL_EVIDENCE_CLIENT_BEARER_HASH",
-            "CIVIL_EVIDENCE_CLIENT_TOKEN_COMMITMENT",
             "CIVIL_EVIDENCE_CLIENT_TOKEN_HASH",
             "CIVIL_EVIDENCE_ISSUER_JWK",
             "CIVIL_EVIDENCE_SOURCE_RAW",
@@ -506,9 +492,7 @@ fn decentralized_secret_generator_writes_scoped_env_files_0600() {
     let social_notary_values = assert_exact_env_keys(
         &social_notary,
         &[
-            "SOCIAL_EVIDENCE_CLIENT_BEARER_COMMITMENT",
             "SOCIAL_EVIDENCE_CLIENT_BEARER_HASH",
-            "SOCIAL_EVIDENCE_CLIENT_TOKEN_COMMITMENT",
             "SOCIAL_EVIDENCE_CLIENT_TOKEN_HASH",
             "SOCIAL_EVIDENCE_SOURCE_RAW",
             "SOCIAL_PROTECTION_EVIDENCE_ISSUER_JWK",
@@ -519,9 +503,7 @@ fn decentralized_secret_generator_writes_scoped_env_files_0600() {
         &[
             "SHARED_CIVIL_EVIDENCE_SOURCE_RAW",
             "SHARED_ELIGIBILITY_EVIDENCE_ISSUER_JWK",
-            "SHARED_EVIDENCE_CLIENT_BEARER_COMMITMENT",
             "SHARED_EVIDENCE_CLIENT_BEARER_HASH",
-            "SHARED_EVIDENCE_CLIENT_TOKEN_COMMITMENT",
             "SHARED_EVIDENCE_CLIENT_TOKEN_HASH",
             "SHARED_HEALTH_EVIDENCE_SOURCE_RAW",
             "SHARED_SOCIAL_EVIDENCE_SOURCE_RAW",
@@ -579,6 +561,10 @@ fn decentralized_secret_generator_writes_scoped_env_files_0600() {
                     || key.starts_with("SHARED_") && key.ends_with("_EVIDENCE_SOURCE_RAW")
             }),
             "notary env files must not receive raw client credentials"
+        );
+        assert!(
+            values.keys().all(|key| !key.ends_with("_COMMITMENT")),
+            "notary env files must not receive removed credential commitments"
         );
     }
     assert_ne!(

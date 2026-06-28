@@ -82,8 +82,8 @@ my-first-api/
 ```
 
 `registryctl` keeps Relay and Notary credentials in `secrets/local.env`.
-The Relay and Notary runtime configs contain only fingerprint references, commitments, and
-environment variable names.
+The Relay and Notary runtime configs contain only fingerprint references and environment
+variable names.
 This local demo uses generated API keys only; it does not require OIDC, eSignet, or an
 assisted-access service.
 
@@ -438,7 +438,7 @@ project-creation time, and writes it into the new project's `secrets/local.env`.
 directory name; if you named that directory differently, use that name with the `_default`
 suffix.
 The generated Notary config contains the source API URL, source dataset, entity, lookup field,
-environment variable names, and credential commitments.
+and environment variable names.
 The raw keys and tokens live only in this project's own `secrets/local.env`.
 
 ### For an API you operate

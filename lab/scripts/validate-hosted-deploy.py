@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import ast
-import hashlib
 import json
 import os
 import re
@@ -466,7 +465,7 @@ def validate_artifacts(
         issues.extend(validate_dhis2_programme_vc_contract(artifact, root))
         issues.extend(validate_attestation_metadata_contract(artifact, root))
         if require_secret_values:
-            issues.extend(validate_credential_commitments(artifact, root, env))
+            issues.extend(validate_credential_fingerprints(artifact, root, env))
         if check_metadata_digest_pins:
             issues.extend(
                 validate_metadata_digest_pins(artifact, root, env, manifest_cli=manifest_cli)
@@ -1736,7 +1735,7 @@ def validate_attestation_metadata_contract(artifact: str, root: Path) -> list[Is
     return issues
 
 
-def validate_credential_commitments(
+def validate_credential_fingerprints(
     artifact: str,
     root: Path,
     env: dict[str, str],
@@ -1761,9 +1760,8 @@ def validate_credential_commitments(
                 if not isinstance(fingerprint, dict):
                     continue
                 env_name = fingerprint.get("name")
-                commitment = fingerprint.get("commitment")
                 credential_id = entry.get("id")
-                if not all(isinstance(value, str) for value in (env_name, commitment, credential_id)):
+                if not all(isinstance(value, str) for value in (env_name, credential_id)):
                     continue
                 supplied_fingerprint = env.get(str(env_name))
                 if not supplied_fingerprint:
@@ -1775,22 +1773,6 @@ def validate_credential_commitments(
                             artifact,
                             f"{path.relative_to(root)}:{credential_id}",
                             f"{env_name} must contain a sha256 fingerprint",
-                        )
-                    )
-                    continue
-                expected = credential_commitment(
-                    product,
-                    credential_type,
-                    str(credential_id),
-                    supplied_fingerprint,
-                )
-                if commitment != expected:
-                    issues.append(
-                        Issue(
-                            "credential-commitment-mismatch",
-                            artifact,
-                            f"{path.relative_to(root)}:{credential_id}",
-                            f"{env_name} commitment does not match the supplied fingerprint",
                         )
                     )
     return issues
@@ -1810,21 +1792,6 @@ def iter_credential_entries(product: str, config: dict[str, Any]):
             if isinstance(entry, dict):
                 yield "api_key", entry
 
-
-def credential_commitment(
-    product: str,
-    credential_type: str,
-    credential_id: str,
-    fingerprint: str,
-) -> str:
-    payload = {
-        "product": product,
-        "credential_type": credential_type,
-        "credential_id": credential_id,
-        "fingerprint": fingerprint,
-    }
-    encoded = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-    return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
 MANIFEST_DIGEST_RE = re.compile(r"^source_manifest_digest:\s*(sha256:[0-9a-f]{64})\s*$", re.MULTILINE)

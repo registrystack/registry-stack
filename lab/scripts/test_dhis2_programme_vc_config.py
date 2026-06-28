@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import re
 import unittest
@@ -51,27 +50,6 @@ def claim_block(body: str, claim_id: str) -> str:
     if next_claim == -1:
         return body[start:]
     return body[start:next_claim]
-
-
-def credential_commitment(credential_type: str, credential_id: str, fingerprint: str) -> str:
-    payload = {
-        "product": "registry-notary",
-        "credential_type": credential_type,
-        "credential_id": credential_id,
-        "fingerprint": fingerprint,
-    }
-    encoded = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
-
-
-def credential_commitment_for_env(body: str, env_name: str) -> str:
-    pattern = re.compile(
-        rf"name:\s*{re.escape(env_name)}\n\s+commitment:\s*(sha256:[0-9a-f]{{64}})"
-    )
-    match = pattern.search(body)
-    if match is None:
-        raise AssertionError(f"{env_name} commitment was not found")
-    return match.group(1)
 
 
 def fingerprint(raw: str) -> str:
@@ -129,23 +107,11 @@ class Dhis2ProgrammeVcConfigTest(unittest.TestCase):
             "https://dhis2-notary.lab.registrystack.org/credentials/dhis2/programme-participation/v1",
         )
 
-    def test_coolify_dhis2_commitments_match_supplied_hosted_hashes(self) -> None:
-        if os.environ.get("VERIFY_HOSTED_DHIS2_CREDENTIALS") != "1":
-            self.skipTest("set VERIFY_HOSTED_DHIS2_CREDENTIALS=1 to verify hosted commitments")
-        token_hash = os.environ.get("DHIS2_EVIDENCE_CLIENT_TOKEN_HASH")
-        bearer_hash = os.environ.get("DHIS2_EVIDENCE_CLIENT_BEARER_HASH")
-        if not token_hash or not bearer_hash:
-            self.skipTest("set hosted DHIS2 hash envs to verify hosted commitments")
-
+    def test_coolify_dhis2_references_hosted_fingerprint_envs(self) -> None:
         body = read(COOLIFY_NOTARY)
-        self.assertEqual(
-            credential_commitment("api_key", "dhis2_evidence_client", token_hash),
-            credential_commitment_for_env(body, "DHIS2_EVIDENCE_CLIENT_TOKEN_HASH"),
-        )
-        self.assertEqual(
-            credential_commitment("bearer_token", "dhis2_evidence_client", bearer_hash),
-            credential_commitment_for_env(body, "DHIS2_EVIDENCE_CLIENT_BEARER_HASH"),
-        )
+        self.assertRegex(body, r"name:\s*DHIS2_EVIDENCE_CLIENT_TOKEN_HASH")
+        self.assertRegex(body, r"name:\s*DHIS2_EVIDENCE_CLIENT_BEARER_HASH")
+        self.assertNotIn("commitment:", body)
 
     def test_coolify_dhis2_raw_credentials_match_supplied_hosted_hashes(self) -> None:
         if os.environ.get("VERIFY_HOSTED_DHIS2_CREDENTIALS") != "1":

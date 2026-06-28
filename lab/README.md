@@ -734,11 +734,10 @@ federation, Notary client, narrated client, and selected live-service checks.
 matching SHA-256 fingerprints for Relay, Notary, and OpenFn sidecar auth. The
 committed `.env.example` contains inert examples only.
 
-By default, the script updates only local demo configs under `config/relay/` and
-`config/notary/`. It intentionally leaves hosted Coolify configs byte-identical
-because those commitments must match the live Coolify credential fingerprints.
-Use `--include-hosted` only when rotating hosted credentials and installing the
-matching raw values and fingerprints in Coolify in the same deployment change.
+The script leaves Relay and Notary config files byte-identical. Static
+credential rotation updates the raw values and matching `*_HASH` fingerprint
+env values, then restarts or redeploys the affected services so the references
+are resolved again.
 
 Credential classes:
 

@@ -215,7 +215,8 @@ local builds, keep those checkouts next to this repository or set
 `REGISTRY_PLATFORM_DIR`, `REGISTRY_MANIFEST_DIR`, and `CROSSWALK_DIR` before
 running `scripts/build-image.sh`.
 
-Before promoting an image, inspect the effective config and verify that every env-backed `fingerprint.name` is supplied by the runtime environment and matches its signed commitment. Do not bake API keys or API-key hashes into the image.
+Before promoting an image, inspect the effective config and verify that every env-backed `fingerprint.name` is supplied by the runtime environment and resolves to a `sha256:<64 lowercase hex chars>` fingerprint.
+Do not bake API keys or API-key hashes into the image.
 
 If the runtime config uses `metadata.source.path`, validate the manifest and
 runtime bindings before promotion:
@@ -300,18 +301,17 @@ API-key config stores only:
 
 - a stable key id;
 - an environment variable name holding the SHA-256 fingerprint of the raw key;
-- the governed commitment for that key id and fingerprint;
 - the key's scopes.
 
 Recommended rotation procedure:
 
 1. Run `registry-relay generate-api-key --id <key_id>`.
 2. Store the emitted `fingerprint` in the deployment secret store.
-3. Add a new `auth.api_keys[]` entry or update the existing entry's `fingerprint` reference with the emitted `commitment`.
-4. Apply the signed `client_credential_rotation` or `client_access_change` governed config bundle.
+3. For a secret-plane rotation, keep the same `fingerprint.name` and restart or roll Relay after the secret changes.
+4. For a governed rotation, publish the fingerprint under a new immutable or versioned reference and apply a signed `client_credential_rotation` config bundle that changes only that reference.
 5. Confirm the new key can call the intended lowest-privilege endpoint.
 6. Update the consumer to use the emitted raw `api_key`.
-7. Remove the old key entry or old secret and restart or roll again.
+7. Remove the old key entry or old secret after callers move.
 
 Live keyring reload is not wired in V1. Treat key rotation as a rolling restart operation.
 
@@ -640,7 +640,8 @@ Config fails at startup:
 
 - Check YAML shape against [config/example.yaml](../config/example.yaml).
 - Confirm every env-backed `fingerprint.name` variable is set.
-- Confirm each referenced fingerprint value is a `sha256:<64 lowercase hex chars>` fingerprint and matches the signed commitment. For API keys, regenerate the tuple with `registry-relay generate-api-key --id <key_id>` and paste the emitted `commitment` into the config entry with the same `id`.
+- Confirm each referenced fingerprint value is a `sha256:<64 lowercase hex chars>` fingerprint.
+  For API keys, regenerate a raw key and fingerprint with `registry-relay generate-api-key --id <key_id>`, then store the emitted fingerprint under the configured reference.
 - Confirm ids are lower-snake and unique.
 - Check vocabulary prefixes used by `concept_uri` and `conforms_to`.
 - For `metadata.manifest.*` errors, validate the portable metadata manifest.

@@ -2635,7 +2635,6 @@ fn redact_value(value: &mut Value) {
                     || lower == "credential"
                     || lower.ends_with("_credential")
                     || lower == "credential_env"
-                    || lower == "commitment"
                 {
                     *value = Value::String("[redacted]".to_string());
                 } else {
@@ -2810,7 +2809,6 @@ auth:
       fingerprint:
         provider: env
         name: REGISTRY_NOTARY_API_KEY_HASH
-        commitment: sha256:0000000000000000000000000000000000000000000000000000000000000000
       scopes: [dci:evidence_verification]
 audit:
   sink: file
@@ -3284,7 +3282,6 @@ auth:
       fingerprint:
         provider: env
         name: TEST_ADMIN_WARNING_API_HASH
-        commitment: sha256:31f2999a69fa6301763a9f61eea44388a13318ce8b80a16a115a9efdb62b883b
       scopes: [registry_notary:credential_issue]
 audit:
   sink: stdout
@@ -3958,7 +3955,6 @@ auth:
       fingerprint:
         provider: env
         name: TEST_STARTUP_API_HASH
-        commitment: sha256:31f2999a69fa6301763a9f61eea44388a13318ce8b80a16a115a9efdb62b883b
       scopes: [registry_notary:credential_issue]
 audit:
   sink: stdout
@@ -4450,7 +4446,6 @@ auth:
       fingerprint:
         provider: env
         name: TEST_DOCTOR_API_HASH
-        commitment: sha256:31f2999a69fa6301763a9f61eea44388a13318ce8b80a16a115a9efdb62b883b
       scopes: [dci:evidence_verification]
 audit:
   sink: stdout

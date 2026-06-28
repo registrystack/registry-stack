@@ -15,9 +15,7 @@ use std::time::Duration;
 use crate::error::{ConfigError, Error, RuntimeBindingError};
 use crate::table_provider::table_name;
 use registry_manifest_core::CompiledMetadata;
-use registry_platform_authcommon::{
-    CredentialCommitmentContext, CredentialFingerprintRefError, CredentialProduct, CredentialType,
-};
+use registry_platform_authcommon::CredentialFingerprintRefError;
 use registry_platform_crypto::{validate_did, DidMethod};
 use registry_platform_httpsec::CorsPolicy;
 use registry_platform_ops::ConfigSource;
@@ -2099,12 +2097,7 @@ fn validate_env_vars_and_hashes(config: &Config) -> Result<(), ConfigError> {
     }
     let mut fingerprints = HashSet::with_capacity(config.auth.api_keys.len());
     for key in &config.auth.api_keys {
-        let context = CredentialCommitmentContext {
-            product: CredentialProduct::RegistryRelay,
-            credential_type: CredentialType::ApiKey,
-            credential_id: &key.id,
-        };
-        match key.fingerprint.resolve(context) {
+        match key.fingerprint.resolve() {
             Ok(fingerprint) => {
                 if !fingerprints.insert(fingerprint) {
                     tracing::error!(
@@ -2124,13 +2117,6 @@ fn validate_env_vars_and_hashes(config: &Config) -> Result<(), ConfigError> {
                             "configured API key fingerprint secret is not set"
                         );
                         return Err(ConfigError::MissingSecret);
-                    }
-                    CredentialFingerprintRefError::CommitmentMismatch => {
-                        tracing::error!(
-                            code = "config.validation_error",
-                            api_key_id = %key.id,
-                            "configured API key fingerprint does not match its signed commitment"
-                        );
                     }
                     other => {
                         tracing::error!(

@@ -14,7 +14,6 @@ auth:
       fingerprint:
         provider: env
         name: TEST_KEY_HASH_FILTER
-        commitment: sha256:0a31891748bc7cd19b09dddaa744481775ef146f1ebe300f107aa5aa6d2f57a3
       scopes:
         - ds_one:metadata
 audit:

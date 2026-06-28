@@ -8,6 +8,13 @@
   matches the stack's user-facing version command convention, ignoring any
   trailing arguments to mirror the clap-based binaries.
 
+### Changed
+
+- BREAKING: API-key fingerprint config no longer accepts `fingerprint.commitment`.
+  Remove that field from Relay YAML.
+  Config should keep `fingerprint.provider` with `fingerprint.name` or `fingerprint.path`;
+  the referenced env var or file must contain `sha256:<64 lowercase hex chars>`.
+
 ## 0.4.0 - 2026-06-21
 
 ### Added

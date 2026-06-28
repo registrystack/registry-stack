@@ -1,1 +1,1 @@
-{"provider":"env","name":"REGISTRY_API_KEY_SHA256","commitment":"sha256:2bb80d537b1da3e38bd30361aa855686bde0ba0ea20113751d02653977aaaaf9"}
+{"provider":"file","path":"/run/secrets/registry-api-key.sha256"}

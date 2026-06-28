@@ -206,14 +206,14 @@ class EsignetRelayLabTest(unittest.TestCase):
         self.assertIn("require_purpose_header: true", civil_person)
         self.assertNotIn("governed_policy:", civil_person)
 
-    def test_hosted_esignet_identity_release_uses_real_commitment(self) -> None:
+    def test_hosted_esignet_identity_release_uses_fingerprint_reference(self) -> None:
         hosted = text("config/coolify/relay/civil-registry-relay.yaml")
         start = hosted.index("    - id: esignet_identity_release\n")
         end = hosted.index("    - id:", start + 1)
         block = hosted[start:end]
 
         self.assertIn("name: CIVIL_ESIGNET_IDENTITY_RELEASE_HASH", block)
-        self.assertNotIn("commitment: sha256:" + ("0" * 64), block)
+        self.assertNotIn("commitment:", block)
 
     def test_hosted_esignet_compose_declares_required_env(self) -> None:
         hosted = text("compose.esignet-hosted.yaml")

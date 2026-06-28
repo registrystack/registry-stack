@@ -14,7 +14,6 @@ auth:
       fingerprint:
         provider: env
         name: DHIS2_EVIDENCE_CLIENT_TOKEN_HASH
-        commitment: sha256:e83695034edd591c605f1840a0ee1bdb6416ca12c1526d976e7a2df60355a76d
       scopes:
         - dhis2_health:evidence_verification
   bearer_tokens:
@@ -22,7 +21,6 @@ auth:
       fingerprint:
         provider: env
         name: DHIS2_EVIDENCE_CLIENT_BEARER_HASH
-        commitment: sha256:5c9076dd2dda87f79a8716262161b6d99ec99f6c435b2ffd4bc554200b1f45db
       scopes:
         - dhis2_health:evidence_verification
 

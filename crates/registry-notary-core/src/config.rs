@@ -6756,7 +6756,6 @@ auth:
       fingerprint:
         provider: env
         name: TEST_TOKEN_HASH
-        commitment: sha256:56c3f8e9f68c7acd05bcf1e5d619cb1c4e9f91efafb471a3c60675c983fe7ed6
 "#,
         )
         .expect("minimal config is valid YAML")
@@ -7402,7 +7401,6 @@ auth:
       fingerprint:
         provider: env
         name: TEST_TOKEN_HASH
-        commitment: sha256:56c3f8e9f68c7acd05bcf1e5d619cb1c4e9f91efafb471a3c60675c983fe7ed6
 cel:
   mode: worker
   worker_count: 4
@@ -7471,7 +7469,6 @@ auth:
       fingerprint:
         provider: env
         name: TEST_TOKEN_HASH
-        commitment: sha256:56c3f8e9f68c7acd05bcf1e5d619cb1c4e9f91efafb471a3c60675c983fe7ed6
 "#,
         )
         .expect("config shape parses");
@@ -7543,7 +7540,6 @@ auth:
       fingerprint:
         provider: env
         name: TEST_TOKEN_HASH
-        commitment: sha256:56c3f8e9f68c7acd05bcf1e5d619cb1c4e9f91efafb471a3c60675c983fe7ed6
 "#,
         )
         .expect("nested context constraints deserialize");
@@ -9619,6 +9615,56 @@ auth:
     }
 
     #[test]
+    fn legacy_api_key_fingerprint_commitment_rejected() {
+        let err = serde_norway::from_str::<StandaloneRegistryNotaryConfig>(
+            r#"
+evidence:
+  enabled: true
+auth:
+  mode: api_key
+  api_keys:
+    - id: test-key
+      fingerprint:
+        provider: env
+        name: TEST_TOKEN_HASH
+        commitment: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+"#,
+        )
+        .expect_err("legacy fingerprint commitment must fail deserialization");
+
+        assert!(
+            err.to_string()
+                .contains("fingerprint.commitment was removed"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn legacy_bearer_token_fingerprint_commitment_rejected() {
+        let err = serde_norway::from_str::<StandaloneRegistryNotaryConfig>(
+            r#"
+evidence:
+  enabled: true
+auth:
+  mode: api_key
+  bearer_tokens:
+    - id: test-bearer
+      fingerprint:
+        provider: env
+        name: TEST_BEARER_HASH
+        commitment: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+"#,
+        )
+        .expect_err("legacy bearer token fingerprint commitment must fail deserialization");
+
+        assert!(
+            err.to_string()
+                .contains("fingerprint.commitment was removed"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn unsupported_auth_mode_is_rejected_at_parse_time() {
         let err = serde_norway::from_str::<StandaloneRegistryNotaryConfig>(
             r#"
@@ -9646,9 +9692,6 @@ auth:
                 provider: registry_platform_authcommon::CredentialFingerprintProvider::Env,
                 name: Some("LEGACY_API_KEY_HASH".to_string()),
                 path: None,
-                commitment:
-                    "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-                        .to_string(),
             },
             scopes: vec!["self_attestation".to_string()],
             authorization_details: None,
@@ -10517,7 +10560,6 @@ auth:
       fingerprint:
         provider: env
         name: TEST_HASH
-        commitment: sha256:99292e759add3e4112a464b31437bebf77accdf88e2ca09d6a538f909ea6d694
       scopes: [civil_registry:evidence_verification]
 evidence:
   enabled: true
@@ -11627,9 +11669,6 @@ rule:
                 provider: registry_platform_authcommon::CredentialFingerprintProvider::Env,
                 name: Some("API_HASH".to_string()),
                 path: None,
-                commitment:
-                    "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-                        .to_string(),
             },
             scopes: Vec::new(),
             authorization_details: None,
