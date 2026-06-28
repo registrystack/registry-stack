@@ -25,7 +25,7 @@ const validEvidence = new Set(['aspirational', 'partial', 'verified']);
 // optional and only validated when present; layer enumerates the stack's real
 // layers, audience the reader roles.
 const validLayer = new Set(['metadata', 'consultation', 'evaluation', 'credential', 'federation', 'administration', 'operations']);
-const validAudience = new Set(['integrator', 'operator', 'maintainer', 'specification editor', 'tooling']);
+const validAudience = new Set(['integrator', 'operator', 'maintainer', 'specification editor', 'tooling', 'auditor', 'decision-maker']);
 const docIdPattern = /^RS-[A-Z0-9]+(-[A-Z0-9]+)*$/;
 const seenDocIds = new Map();
 const standardsRegister = YAML.parse(await readFile('src/data/standards.yaml', 'utf8'));
