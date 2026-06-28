@@ -12,7 +12,7 @@ locale: en
 standards_referenced: []
 ---
 
-Registry Notary and Registry Relay return errors as RFC 9457 problem details, usually with the media type `application/problem+json`; some Notary configuration and posture responses carry the same problem body but are served as `application/json`. Each problem carries a stable string in the `code` extension member alongside the standard `type`, `title`, `status`, and `detail` fields. The tables below list every `code` value, the message the source attaches to it, and the usual cause.
+Registry Notary and Registry Relay return errors as RFC 9457 problem details with the media type `application/problem+json`. Each problem carries a stable string in the `code` extension member alongside the standard `type`, `title`, `status`, and `detail` fields. The tables below list every `code` value, the message the source attaches to it, and the usual cause.
 
 The HTTP status is omitted from these tables. The Relay source maps each code to a status, but the same code can render at different statuses across versions, and the Notary public code does not carry a status in the taxonomy itself. Treat the standard `status` field of the problem response as authoritative for a given request.
 

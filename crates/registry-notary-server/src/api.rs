@@ -2674,47 +2674,55 @@ fn config_apply_intent_audit_event(audit: ConfigAuditEvent) -> EvidenceAuditEven
     }
 }
 
+/// Build a JSON response carrying an RFC 9457 problem body with the
+/// `application/problem+json` media type.
+fn problem_json_response(status: StatusCode, body: Value) -> Response {
+    let mut response = (status, Json(body)).into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/problem+json"),
+    );
+    response
+}
+
 fn config_candidate_invalid(detail: impl Into<String>) -> Response {
     let detail = detail.into();
-    (
+    problem_json_response(
         StatusCode::BAD_REQUEST,
-        Json(json!({
+        json!({
             "type": format!("{}/config/candidate_invalid", crate::PROBLEM_TYPE_BASE_URL),
             "title": "Candidate config invalid",
             "status": 400,
             "code": CONFIG_CANDIDATE_INVALID_CODE,
             "detail": detail,
-        })),
+        }),
     )
-        .into_response()
 }
 
 fn config_bundle_invalid(detail: &'static str) -> Response {
-    (
+    problem_json_response(
         StatusCode::BAD_REQUEST,
-        Json(json!({
+        json!({
             "type": format!("{}/config/bundle_invalid", crate::PROBLEM_TYPE_BASE_URL),
             "title": "Signed config bundle invalid",
             "status": 400,
             "code": CONFIG_BUNDLE_INVALID_CODE,
             "detail": detail,
-        })),
+        }),
     )
-        .into_response()
 }
 
 fn config_apply_unavailable(detail: &'static str) -> Response {
-    (
+    problem_json_response(
         StatusCode::SERVICE_UNAVAILABLE,
-        Json(json!({
+        json!({
             "type": format!("{}/config/apply_unavailable", crate::PROBLEM_TYPE_BASE_URL),
             "title": "Config apply unavailable",
             "status": 503,
             "code": "config.apply_unavailable",
             "detail": detail,
-        })),
+        }),
     )
-        .into_response()
 }
 
 fn oid4vci_single_proof_jwt(request: &Oid4vciCredentialRequest) -> Result<&str, Oid4vciWireError> {
@@ -3072,14 +3080,7 @@ async fn admin_posture(
         });
     }
     let Some(Extension(state)) = state else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({
-                "code": "posture.unavailable",
-                "detail": "posture state is unavailable",
-            })),
-        )
-            .into_response();
+        return posture_unavailable();
     };
     let tier = match query.tier.as_deref() {
         Some("restricted") => registry_platform_ops::PostureTier::Restricted,
@@ -3125,6 +3126,19 @@ fn admin_problem_response(
         HeaderValue::from_static("application/problem+json"),
     );
     response
+}
+
+/// Service-unavailable problem for the admin posture endpoint when shared
+/// server state is not installed. Mirrors the other admin posture problems so
+/// the body shape and `application/problem+json` media type stay consistent.
+fn posture_unavailable() -> Response {
+    admin_problem_response(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "posture.unavailable",
+        "Admin posture unavailable",
+        "posture state is unavailable",
+        None,
+    )
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -14111,6 +14125,28 @@ mod tests {
             evidence_detail(&error),
             "the configured policy denied the evidence request"
         );
+    }
+
+    #[test]
+    fn config_and_posture_problem_responses_use_problem_json() {
+        // RFC 9457 problem details must be served as application/problem+json,
+        // not application/json.
+        let responses = [
+            config_candidate_invalid("candidate invalid"),
+            config_bundle_invalid("bundle invalid"),
+            config_apply_unavailable("apply unavailable"),
+            posture_unavailable(),
+        ];
+        for response in responses {
+            let content_type = response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .expect("problem response sets a content-type");
+            assert_eq!(
+                content_type, "application/problem+json",
+                "RFC 9457 problem responses must use application/problem+json"
+            );
+        }
     }
 
     #[test]
