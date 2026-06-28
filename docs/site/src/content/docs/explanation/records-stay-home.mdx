@@ -56,7 +56,7 @@ flowchart LR
     caller == "request: claim id + subject inputs + scope" ==> notary
     notary == "answer: yes/no · value · evaluation result" ==> caller
     notary == "holder-bound credential" ==> holder
-    caller == "scoped record read · dataset:rows" ==> relay
+    caller == "scoped record read · per-dataset row scope" ==> relay
     relay == "authorized source records" ==> caller
 
     classDef inside fill:#eef,stroke:#334,stroke-width:1px;
@@ -70,7 +70,7 @@ question against a source and returns a shaped, minimized answer; it is the only
 that evaluates claims, applies disclosure policy, and issues credentials. Registry Relay
 turns an existing file or database table into a read-only, access-controlled API without
 replacing the source, and publishes restricted, scoped consultation routes that return
-source records to authorized callers holding the `dataset:rows` permission. Notary is the
+source records to authorized callers holding the dataset's `<dataset_id>:rows` permission. Notary is the
 strongest minimization; Relay record reads are scoped and audited, not open data. Either
 way the source is read in place, never written back, and never aggregated centrally.
 
@@ -93,8 +93,8 @@ way the source is read in place, never written back, and never aggregated centra
 ## What crosses the boundary
 
 What crosses depends on the surface. Registry Relay returns scoped records to an
-authorized caller: a governed, audited, paginated read bounded by the caller's `dataset:rows`
-scope and the dataset's configured filters and limits. Registry Notary returns the answer a
+authorized caller: a governed, audited, paginated read bounded by the caller's per-dataset row
+scope (`<dataset_id>:rows`) and the dataset's configured filters and limits. Registry Notary returns the answer a
 rule computes rather than the source row;
 keeping that answer narrow is a modelling discipline, since a well-modelled claim returns
 one decision or one extracted value. A Notary answer takes one of a few shapes:
@@ -120,7 +120,7 @@ receives. There are exactly three:
 | Mode | Discloses | Withholds |
 |------|-----------|-----------|
 | `value` | the evaluated value, less any object fields the policy redacts | nothing beyond policy-redacted object fields |
-| `predicate` | only the true/false satisfaction | the underlying value |
+| `predicate` | only the true/false satisfaction, for a claim whose rule yields a boolean | the underlying value |
 | `redacted` | neither: the result carries no value **and** no yes/no | the value *and* the outcome |
 
 The mode is policy-bound: a caller may request a mode, but a claim defines an `allowed`
@@ -198,8 +198,8 @@ mistake, so the limits are stated plainly here.
   zero-knowledge proof, and the documentation should not imply one.
 - **No revocation or erasure flow is specified; revocation is an optional operator surface.**
   The `RS-*` specifications define no credential revocation, credential status, or
-  data-subject erasure. The implementation ships an optional credential-status surface (an
-  IETF Token Status List with states `valid`, `suspended`, `revoked`, and `expired`),
+  data-subject erasure. The implementation ships an optional credential-status surface (a status
+  list with states `valid`, `suspended`, `revoked`, and `expired`),
   disabled by default and enabled per deployment; with it enabled, an admin-scoped route can
   move a credential to `revoked`. Data-subject erasure is absent from both the specifications
   and the implementation. A key rotated out may remain published so existing results stay
