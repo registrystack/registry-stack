@@ -2358,6 +2358,23 @@
               }
             },
             "description": "Candidate config requires restart and was not applied"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "example": {
+                  "code": "config.apply_unavailable",
+                  "detail": "config_trust.antirollback_state_path is not configured",
+                  "status": 503,
+                  "title": "Config apply unavailable",
+                  "type": "https://docs.registry-notary.dev/problems/config/apply_unavailable"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Config apply is unavailable"
           }
         },
         "security": [
@@ -2698,6 +2715,130 @@
           }
         ],
         "summary": "Update credential lifecycle status"
+      }
+    },
+    "/admin/v1/posture": {
+      "get": {
+        "description": "Returns redacted runtime posture for the requested tier. The response body is a registry.ops.posture.v1 document describing instance, configuration, notary, deployment, and audit posture.",
+        "operationId": "adminPosture",
+        "parameters": [
+          {
+            "description": "Redaction tier for the posture document. Defaults to default.",
+            "in": "query",
+            "name": "tier",
+            "required": false,
+            "schema": {
+              "enum": [
+                "default",
+                "restricted"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Redacted posture for the requested tier"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "example": {
+                  "code": "registry.admin.posture.invalid_tier",
+                  "detail": "posture tier must be default or restricted",
+                  "message": "posture tier must be default or restricted",
+                  "schema": "registry.admin.error.v1",
+                  "status": 400,
+                  "title": "Admin posture tier invalid",
+                  "type": "https://docs.registry-notary.dev/problems/registry/admin/posture/invalid_tier"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Posture tier is invalid"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "example": {
+                  "code": "auth.missing_credential",
+                  "detail": "missing authentication credential",
+                  "status": 401,
+                  "title": "Missing credential",
+                  "type": "https://docs.registry-notary.dev/problems/auth/missing_credential"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Missing or invalid credential"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "example": {
+                  "code": "auth.scope_denied",
+                  "detail": "missing required scope",
+                  "status": 403,
+                  "title": "Scope denied",
+                  "type": "https://docs.registry-notary.dev/problems/auth/scope_denied"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Caller lacks registry_notary:ops_read scope"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "example": {
+                  "code": "posture.filter_failed",
+                  "detail": "admin posture could not be filtered for the requested tier",
+                  "status": 500,
+                  "title": "Admin posture unavailable",
+                  "type": "https://docs.registry-notary.dev/problems/posture/filter_failed"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Posture could not be filtered for the requested tier"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "example": {
+                  "code": "posture.unavailable",
+                  "detail": "posture state is unavailable",
+                  "message": "posture state is unavailable",
+                  "schema": "registry.admin.error.v1",
+                  "status": 503,
+                  "title": "Admin posture unavailable",
+                  "type": "https://docs.registry-notary.dev/problems/posture/unavailable"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Posture state is unavailable"
+          }
+        },
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Read redacted runtime posture"
       }
     },
     "/admin/v1/reload": {
