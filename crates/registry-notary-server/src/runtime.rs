@@ -8,8 +8,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use registry_platform_pdp::{
-    decide as pdp_decide, Decision as PdpDecision, DecisionAudit as PdpDecisionAudit,
-    EvidenceRequestContext as PdpRequestContext, PolicyGate, PolicyInput as PdpPolicyInput,
+    decide as pdp_decide, known_stable_code, rule_ids_by_gate as pdp_rule_ids_by_gate,
+    Decision as PdpDecision, DecisionAudit as PdpDecisionAudit,
+    EvidenceRequestContext as PdpRequestContext, PolicyInput as PdpPolicyInput,
     RelationshipPurposeConstraint as PdpRelationshipPurposeConstraint,
 };
 
@@ -4352,7 +4353,7 @@ fn matching_pdp_decision(
     let matching = &binding.matching;
     let selected_policy = selected_evidence_pack_policy(evidence, binding);
     let policy_identity = matching_policy_audit_identity(evidence, binding);
-    let rule_ids_by_gate = matching_rule_ids_by_gate(
+    let rule_ids_by_gate = pdp_rule_ids_by_gate(
         policy_identity
             .evaluated_rule_ids
             .first()
@@ -4449,80 +4450,10 @@ fn matching_pdp_decision(
             stable_problem_code,
             audit,
         } => Err(pdp_denial_error(
-            match stable_problem_code.as_str() {
-                registry_platform_pdp::PURPOSE_NOT_PERMITTED => {
-                    registry_platform_pdp::PURPOSE_NOT_PERMITTED
-                }
-                registry_platform_pdp::ASSURANCE_INSUFFICIENT => {
-                    registry_platform_pdp::ASSURANCE_INSUFFICIENT
-                }
-                registry_platform_pdp::JURISDICTION_NOT_PERMITTED => {
-                    registry_platform_pdp::JURISDICTION_NOT_PERMITTED
-                }
-                registry_platform_pdp::EVIDENCE_STALE => registry_platform_pdp::EVIDENCE_STALE,
-                registry_platform_pdp::LEGAL_BASIS_REQUIRED => {
-                    registry_platform_pdp::LEGAL_BASIS_REQUIRED
-                }
-                registry_platform_pdp::CONSENT_REQUIRED => registry_platform_pdp::CONSENT_REQUIRED,
-                registry_platform_pdp::UNSUPPORTED_POLICY_TERM => {
-                    registry_platform_pdp::UNSUPPORTED_POLICY_TERM
-                }
-                registry_platform_pdp::POLICY_REQUIRED => registry_platform_pdp::POLICY_REQUIRED,
-                registry_platform_pdp::CONTEXT_REQUIRED => registry_platform_pdp::CONTEXT_REQUIRED,
-                registry_platform_pdp::RELATIONSHIP_NOT_PERMITTED => {
-                    registry_platform_pdp::RELATIONSHIP_NOT_PERMITTED
-                }
-                registry_platform_pdp::REQUESTED_FACT_NOT_PERMITTED => {
-                    registry_platform_pdp::REQUESTED_FACT_NOT_PERMITTED
-                }
-                registry_platform_pdp::DISCLOSURE_NOT_PERMITTED => {
-                    registry_platform_pdp::DISCLOSURE_NOT_PERMITTED
-                }
-                registry_platform_pdp::CREDENTIAL_FORMAT_NOT_PERMITTED => {
-                    registry_platform_pdp::CREDENTIAL_FORMAT_NOT_PERMITTED
-                }
-                registry_platform_pdp::SOURCE_BINDING_NOT_PERMITTED => {
-                    registry_platform_pdp::SOURCE_BINDING_NOT_PERMITTED
-                }
-                registry_platform_pdp::ROUTE_IDENTITY_NOT_PERMITTED => {
-                    registry_platform_pdp::ROUTE_IDENTITY_NOT_PERMITTED
-                }
-                registry_platform_pdp::CHECKED_SCOPE_REQUIRED => {
-                    registry_platform_pdp::CHECKED_SCOPE_REQUIRED
-                }
-                _ => "pdp.denied",
-            },
+            known_stable_code(&stable_problem_code).unwrap_or("pdp.denied"),
             audit,
         )),
     }
-}
-
-fn matching_rule_ids_by_gate(rule_id: &str) -> BTreeMap<PolicyGate, Vec<String>> {
-    [
-        (PolicyGate::PolicyIdentity, "policy_identity"),
-        (PolicyGate::OdrlTerms, "odrl_terms"),
-        (PolicyGate::Purpose, "purpose"),
-        (PolicyGate::Jurisdiction, "jurisdiction"),
-        (PolicyGate::AssuranceAllowedSet, "assurance_allowed_set"),
-        (PolicyGate::MinimumAssurance, "minimum_assurance"),
-        (PolicyGate::SourceFreshness, "source_freshness"),
-        (PolicyGate::LegalBasisRequired, "legal_basis_required"),
-        (PolicyGate::ConsentRequired, "consent_required"),
-        (PolicyGate::LegalBasisAllowedSet, "legal_basis_allowed_set"),
-        (PolicyGate::ConsentAllowedSet, "consent_allowed_set"),
-        (PolicyGate::Relationship, "relationship"),
-        (PolicyGate::RelationshipPurpose, "relationship_purpose"),
-        (PolicyGate::RequestedFact, "requested_fact"),
-        (PolicyGate::RequestedDisclosure, "requested_disclosure"),
-        (PolicyGate::CredentialFormat, "credential_format"),
-        (PolicyGate::SourceBinding, "source_binding"),
-        (PolicyGate::RouteIdentity, "route_identity"),
-        (PolicyGate::CheckedScope, "checked_scope"),
-        (PolicyGate::Redaction, "redaction"),
-    ]
-    .into_iter()
-    .map(|(gate, suffix)| (gate, vec![format!("{rule_id}.{suffix}")]))
-    .collect()
 }
 
 fn matching_context_requester_identity(context: &EvidenceRequestContext) -> Option<String> {
