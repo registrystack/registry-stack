@@ -1,6 +1,6 @@
 ---
 title: Records stay home
-description: How an institution proves facts from registries it already holds — without the records leaving.
+description: How an institution proves facts from registries it already holds, without the records leaving.
 status: draft
 owner: registry-docs
 source_repos:
@@ -14,12 +14,12 @@ standards_referenced:
 
 An institution that runs a civil registry, a social-protection database, or a health
 registry already holds the records it needs. Registry Stack lets it **answer questions
-about those records** — *is this person alive? is this household eligible?* — and return
+about those records** (*is this person alive? is this household eligible?*) and return
 a result another system can trust, while the records themselves are **read where they
-already live, never written back, and never handed over**.
+already live, never written back, and never returned as the answer**.
 
 This page explains what that means in practice: what stays inside the institution's
-boundary, what crosses it, and — equally important — what the design does and does not
+boundary, what crosses it, and, equally important, what the design does and does not
 guarantee.
 
 ## A question goes in, an answer comes out
@@ -28,8 +28,8 @@ The mental model is one sentence: **a scoped question crosses into the instituti
 record is read in place, and only a computed answer crosses back out.**
 
 A caller never sends the value it is asking about and never receives the underlying
-record. It sends a subject identifier and the id of a *claim* — a single, pre-modelled
-question — and receives one of a few narrow shapes of answer: a yes/no, a single value, a
+record. It sends a subject identifier and the id of a *claim* (a single, pre-modelled
+question) and receives one of a few narrow shapes of answer: a yes/no, a single value, a
 machine-readable evaluation result, or a credential the subject can carry in a wallet. The source row that the
 answer was computed from stays behind.
 
@@ -37,7 +37,7 @@ answer was computed from stays behind.
 
 ```mermaid
 flowchart LR
-    subgraph inst["Institution — data stays here"]
+    subgraph inst["Institution: data stays here"]
         src[("Source registry\nCSV · XLSX · Parquet · PostgreSQL")]
         relay["Registry Relay\nprotected read API"]
         notary["Registry Notary\nevaluate · disclose · issue"]
@@ -84,20 +84,20 @@ disclosure policy, and issues credentials.
 
 ## What crosses the boundary
 
-Only a computed answer crosses out — never the source row. The answer takes one of a few
+Only a computed answer crosses out, never the source row. The answer takes one of a few
 shapes:
 
-- **A yes/no** — only the true/false satisfaction of the modelled rule.
-- **A single value** — the evaluated value itself, when the claim's disclosure mode is
+- **A yes/no**: only the true/false satisfaction of the modelled rule.
+- **A single value**: the evaluated value itself, when the claim's disclosure mode is
   `value` (this returns the full value).
-- **A machine-readable evaluation result** — a claim-result document carrying *provenance
+- **A machine-readable evaluation result**: a claim-result document carrying *provenance
   metadata*: which evaluation produced it, under which policy, across how many sources. This
   provenance lets a receiving system trace the result; it is not a cryptographic signature.
-- **A holder-bound credential** — an SD-JWT VC the subject can store in a wallet and present
+- **A holder-bound credential**: an SD-JWT VC the subject can store in a wallet and present
   later. Unlike the plain result, the credential is cryptographically verifiable against the
   issuer's published keys.
 
-Across a federation boundary — one institution's Notary asking another's — what crosses is
+Across a federation boundary (one institution's Notary asking another's) what crosses is
 a scoped, signed evaluation result, never a credential.
 
 ## How much an answer reveals: the three disclosure modes
@@ -109,11 +109,12 @@ receives. There are exactly three:
 |------|-----------|-----------|
 | `value` | the full evaluated value | nothing about the value |
 | `predicate` | only the true/false satisfaction | the underlying value |
-| `redacted` | neither — the result carries no value **and** no yes/no | the value *and* the outcome |
+| `redacted` | neither: the result carries no value **and** no yes/no | the value *and* the outcome |
 
-The mode is policy-bound, not caller's choice: a claim defines an `allowed` set and a
-`default`, the service refuses a mode outside the allowed set, and every result records
-which mode was applied. A privacy-sensitive claim is expected to default to the
+The mode is policy-bound: a caller may request a mode, but a claim defines an `allowed`
+set and a `default`, the service refuses a requested mode outside the allowed set and
+applies the default when the caller requests none, and every result records which mode was
+applied. A privacy-sensitive claim is expected to default to the
 least-revealing mode that still answers the question.
 
 This is the mechanism behind "prove a fact without sharing the record". To check whether a
@@ -127,9 +128,10 @@ stays home.
 
 A credential is not a copy of the record. It is an **SD-JWT VC**: the signed body carries a
 SHA-256 *digest* of each selectively disclosable field rather than the field value, so a
-field the holder does not present stays hidden. It is **holder-bound** — tied to the
-holder's key, and not presentable without the matching private key — and the holder chooses
-which fields to reveal to which verifier. Anyone can verify it against the issuer's
+field the holder does not present stays hidden. Holder binding is set by the credential profile. A holder-bound profile ties the credential
+to the holder's key so it is not presentable without the matching private key; the default
+`none` mode issues an unbound credential. Either way, the holder chooses which fields to
+reveal to which verifier. Anyone can verify it against the issuer's
 published public keys, served without authentication so a verifier needs no credential of
 its own. The issued credential carries no full record payload.
 
@@ -152,14 +154,14 @@ Security material:
   deployment can run audit fail-closed, so a request whose audit record cannot be written
   does not return success.
 
-## What this guarantees — and what it does not
+## What this guarantees, and what it does not
 
 "Records stay home" is a precise, narrow promise. Reading it as more than it is would be a
 mistake, so the limits are stated plainly here.
 
 - **It is not "data never moves" and not "air-gapped".** The promise is *read-in-place, no
   write-back, retained custody*. Authorized, minimized answers do leave the boundary by
-  design — that is the point of the system.
+  design: that is the point of the system.
 - **Minimization is modelled, not automatic.** `value` mode discloses the full value. A
   claim reveals only what its author configured it to reveal; least disclosure is a design
   choice the claim makes, not a property the stack imposes on every answer.
@@ -167,19 +169,23 @@ mistake, so the limits are stated plainly here.
   does not independently vouch for whether the source is correct or current.
 - **A plain result is provenance-tagged, not signed.** The everyday evaluation response
   carries provenance metadata, not a cryptographic signature. Cryptographic verifiability
-  comes from the SD-JWT VC credential and the signed federation result — a receiving system
+  comes from the SD-JWT VC credential and the signed federation result. A receiving system
   that must verify an answer cryptographically uses the credential, not the default response.
 - **Matching is only as strict as it is configured.** Notary resolves a subject through its
   configured matching policy and does not independently verify identity beyond that. By
-  default a matching failure collapses to a single public reason, so the lookup surface
+  default a matching failure collapses to a single public reason, so the matching surface
   cannot be used as an existence oracle.
 - **This is not zero-knowledge.** A `predicate` answer is a policy-enforced boolean computed
   inside the service; SD-JWT selective disclosure is digest omission. Neither is a
   zero-knowledge proof, and the documentation should not imply one.
-- **No revocation or erasure flow is defined.** This version specifies issuance,
-  disclosure, presentation, and verification, but not credential revocation or
-  data-subject erasure. A key rotated out may remain published so existing results stay
-  verifiable — that is not a revocation mechanism.
+- **No revocation or erasure flow is specified; revocation is an optional operator surface.**
+  The `RS-*` specifications define no credential revocation, credential status, or
+  data-subject erasure. The implementation ships an optional credential-status surface (an
+  IETF Token Status List with states `valid`, `suspended`, `revoked`, and `expired`),
+  disabled by default and enabled per deployment; with it enabled, an admin-scoped route can
+  move a credential to `revoked`. Data-subject erasure is absent from both the specifications
+  and the implementation. A key rotated out may remain published so existing results stay
+  verifiable; that is not a revocation mechanism.
 - **Several guarantees are the operator's to provide.** Network egress limits, key custody,
   tenant isolation, audit retention, and transport security are supplied by the deployment,
   not guaranteed by the stack.
