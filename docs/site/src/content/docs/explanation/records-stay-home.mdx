@@ -133,8 +133,9 @@ least-revealing mode that still answers the question.
 
 This is the mechanism behind "prove a fact without sharing the record". To check whether a
 person has a registered record, model the question as an *existence* rule and disclose it
-as a `predicate`: the caller learns `true` or `false`, and the row never crosses the
-boundary. To check eligibility without exposing an income figure, derive the decision with
+as a `predicate`: a resolved record returns `true`, and the row never crosses the
+boundary. By default a record that does not resolve collapses to a single not-available
+reason rather than a `false`, so the lookup cannot be used as an existence oracle. To check eligibility without exposing an income figure, derive the decision with
 an expression rule and disclose the eligibility boolean as a `predicate`; the income value
 stays home.
 
