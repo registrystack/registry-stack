@@ -45,7 +45,7 @@ Every evaluation result records which disclosure mode was applied, so a downstre
 
 ## Why predicate and redacted avoid sharing the underlying record
 
-This is the core of the privacy story. Because Notary computes the answer from its own sources, a `predicate` result can satisfy a question while disclosing only a boolean. A question of whether someone has a registered record is modelled as an `exists` rule disclosed as `predicate`: the caller learns `true` or `false`, and the source row never leaves the service. A question about an eligibility threshold without exposing the figure behind it is modelled as a `cel` rule whose eligibility boolean is disclosed as `predicate`; the underlying value stays inside the service.
+This is the core of the privacy story. Because Notary computes the answer from its own sources, a `predicate` result can satisfy a question while disclosing only a boolean. A question of whether someone has a registered record is modelled as an `exists` rule disclosed as `predicate`: the caller learns `true` when a matching record is found, while a subject with no matching record returns `evidence.not_available` (collapsed to a single public reason by default) rather than `false` — absence is surfaced as no-evidence, not as a negative result. Either way the source row never leaves the service. A question about an eligibility threshold without exposing the figure behind it is modelled as a `cel` rule whose eligibility boolean is disclosed as `predicate`; the underlying value stays inside the service.
 
 A `redacted` result goes further: it carries neither the source value nor the satisfaction outcome. Both are withheld.
 

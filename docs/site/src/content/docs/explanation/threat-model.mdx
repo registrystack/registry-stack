@@ -215,17 +215,18 @@ These are the risks the design does *not* close and states honestly:
   workflow in this version.
 - **Admin reload is non-functional standalone.** Notary's admin reload route returns HTTP 501
   (`registry.admin.capability.not_supported`) in the standalone router and performs no
-  reload; key and configuration changes require a service restart. Do not treat hot reload as
-  a capability.
+  reload, and non-swappable changes require a service restart. Some changes do hot-apply
+  without a restart, though — signing-key rotation and auth-policy swaps among them.
 
 ## What is explicitly out of scope
 
 These are non-goals for this version. None of them should be read into a Registry Stack
 conformance claim:
 
-- **Dynamic federation.** Dynamic trust-chain discovery, shared replay storage, audit
-  checkpoint exchange, and federated credential issuance are out of scope. Federation is
-  static-peer only — not a dynamic trust mesh.
+- **Dynamic federation.** Dynamic trust-chain discovery, audit checkpoint exchange, and
+  federated credential issuance are out of scope. Federation is static-peer only — not a
+  dynamic trust mesh. Replay protection defaults to in-memory, with a Redis-backed shared
+  store available.
 - **Full Evidence Gateway / external-policy interoperability.** Governed Relay PDP enforcement
   covers only the supported Evidence Gateway PDP profile (`registry-evidence-gateway-pdp/v1`).
   It is not full Evidence Gateway interoperability, not full OID4VCI issuer behavior, not
@@ -239,10 +240,11 @@ conformance claim:
   speaking the shape of OIDC, OAuth 2.0, SD-JWT VC, OID4VCI, CCCEV, W3C DID, or the rest does
   not certify conformance to any of them, and CCCEV-shaped output is not conformant to CCCEV
   2.00.
-- **Feature-gated surfaces of other builds.** Several runtime surfaces — OGC API
-  Features/Records/EDR adapters, SP DCI sync, and signed response credentials — are
-  feature-gated and mount only when the build is configured with the matching Cargo feature.
-  Do not infer their presence from the route catalog of a different build. Admin routes run on
+- **Feature-gated surfaces of other builds.** Several runtime surfaces — the OGC API
+  Features/Records/EDR adapters and SP DCI sync — are feature-gated and mount only when the
+  build is configured with the matching Cargo feature. Do not infer their presence from the
+  route catalog of a different build. Relay signed response credentials are not Cargo-gated;
+  they are config-gated through `provenance`. Admin routes run on
   a separate optional listener and are documented in the generated OpenAPI, but standalone mode
   does not implement runtime config reload — it returns HTTP 501.
 

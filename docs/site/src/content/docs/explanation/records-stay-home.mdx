@@ -70,7 +70,10 @@ disclosure policy, and issues credentials.
 
 - **Source data is read in place.** Relay reads sources as batch snapshots or table scans;
   there is no write-back to the source registry, and runtime services expose no
-  data-mutation routes. The source keeps running as it always has.
+  data-mutation routes. The source keeps running as it always has. "No write-back to the
+  source and no external handoff" is not the same as "no copy exists": in snapshot mode —
+  the default — Relay materializes a projected copy into its local cache (`cache_dir`), which
+  carries its own retention and access considerations.
 - **Storage internals stay private.** The paths, table names, and backend credentials that
   point at the source live in the service's runtime configuration, decided at startup. They
   are never part of the public API surface, and never part of a portable metadata file that
