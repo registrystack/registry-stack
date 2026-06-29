@@ -201,12 +201,14 @@ These are the risks the design does *not* close and states honestly:
   overlapping aggregate queries. Do not describe a Relay aggregate as privacy-budgeted unless
   a separate deployed control provides it. This is a residual disclosure risk left to the
   operator.
-- **Some claim-definition invariants surface only at runtime.** Duplicate claim ids, a
-  disclosure default outside the allowed set, a rule source naming an undeclared binding, and
-  the unimplemented plugin rule are not enforced at configuration load — they surface only at
-  evaluation or request time. A source binding with no matching policy resolves on identifiers
-  alone, with no purpose, relationship, or input-minimization gating. These are residual
-  misconfiguration risks left to the operator.
+- **Some claim-definition invariants surface only at runtime.** A disclosure default outside
+  the allowed set, a rule source naming an undeclared binding, and the unimplemented plugin
+  rule are not enforced at configuration load — they surface only at evaluation or request
+  time. Duplicate claim ids are different and worse: they are not rejected at load and are
+  never reported, because the runtime lookup returns the first match by id, so a later
+  duplicate is silently shadowed. A source binding with no matching policy resolves on
+  identifiers alone, with no purpose, relationship, or input-minimization gating. These are
+  residual misconfiguration risks left to the operator.
 - **Known product gaps.** No revocation flow is specified — though an optional,
   off-by-default credential-status surface can be enabled to mark a credential `revoked` —
   there is no `/.well-known/jwt-vc-issuer` endpoint, and no built-in data-subject erasure
