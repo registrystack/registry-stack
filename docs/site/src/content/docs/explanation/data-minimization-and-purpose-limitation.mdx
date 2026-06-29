@@ -22,7 +22,7 @@ A note on terms, since you do not need Registry Stack internals to follow this. 
 
 The first place minimization appears is in the unit of data the system is built around. A claim definition describes one decision or one extracted value — not a whole record — so returning a full record would over-collect relative to the question actually asked. The design treats the narrow question, not the record, as the thing to be answered.
 
-That principle is enforced one layer down, at the binding between a claim and its source. A source binding reads only the fields its rule needs, and a request that supplies an input path outside a declared allow-list is rejected, so a binding cannot over-collect by accident. The allow-list converts "read only what you need" from an aspiration into a gate that refuses out-of-scope inputs before they reach the source.
+That principle is enforced one layer down, at the binding between a claim and its source. A source binding reads the fields it is configured to project — the declared `binding.fields`, plus the lookup and freshness fields — so "read only what the rule needs" depends on the binding being configured that way rather than being automatically derived from the rule. A request that supplies an input path outside a declared allow-list is rejected, so a binding cannot over-collect by accident. The allow-list converts "read only what you need" from an aspiration into a gate that refuses out-of-scope inputs before they reach the source.
 
 ## Purpose limitation as an enforced gate, not a label
 

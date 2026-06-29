@@ -127,9 +127,10 @@ stays home.
 
 A credential is not a copy of the record. It is an **SD-JWT VC**: the signed body carries a
 SHA-256 *digest* of each selectively disclosable field rather than the field value, so a
-field the holder does not present stays hidden. It is **holder-bound** — tied to the
-holder's key, and not presentable without the matching private key — and the holder chooses
-which fields to reveal to which verifier. Anyone can verify it against the issuer's
+field the holder does not present stays hidden. It **can be** holder-bound — tied to the
+holder's key so it is not presentable without the matching private key — when the issuing
+profile enables binding (the wallet issuance path does); the default profile issues an unbound
+credential. Either way, the holder chooses which fields to reveal to which verifier. Anyone can verify it against the issuer's
 published public keys, served without authentication so a verifier needs no credential of
 its own. The issued credential carries no full record payload.
 
@@ -148,9 +149,9 @@ Security material:
   a permit before data is returned; a denial fails closed with a stable reason rather than
   falling back to an ungoverned read.
 - **Every person-level request is audited.** An audit record captures at least the caller,
-  the scopes exercised, a request id, and the declared purpose where one was supplied. A
-  deployment can run audit fail-closed, so a request whose audit record cannot be written
-  does not return success.
+  a request id, and the declared purpose where one was supplied; Relay additionally records
+  the scopes exercised (Notary's record does not). A deployment can run audit fail-closed, so
+  a request whose audit record cannot be written does not return success.
 
 ## What this guarantees — and what it does not
 

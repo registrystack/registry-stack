@@ -234,8 +234,9 @@ conformance claim:
 - **Feature-gated surfaces of other builds.** Several runtime surfaces — OGC API
   Features/Records/EDR adapters, SP DCI sync, and signed response credentials — are
   feature-gated and mount only when the build is configured with the matching Cargo feature.
-  Do not infer their presence from the route catalog of a different build. Admin routes sit on
-  a separate optional listener and are not in the public OpenAPI document.
+  Do not infer their presence from the route catalog of a different build. Admin routes run on
+  a separate optional listener and are documented in the generated OpenAPI, but standalone mode
+  does not implement runtime config reload — it returns HTTP 501.
 
 ## Related
 
