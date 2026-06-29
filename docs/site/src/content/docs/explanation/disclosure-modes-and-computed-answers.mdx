@@ -49,6 +49,8 @@ This is the core of the privacy story. Because Notary computes the answer from i
 
 A `redacted` result goes further: it carries neither the source value nor the satisfaction outcome. Both are withheld.
 
+One current renderer limitation to note: this no-outcome guarantee holds for the standard result body, but the CCCEV JSON-LD renderer currently emits `cccev:isConformantTo: false` for a redacted result instead of omitting it. A deployment that allows both redacted disclosure and CCCEV output should be aware that the outcome is not fully withheld in that render.
+
 The difference between the two matters. `predicate` is not "zero disclosure" — it still tells the caller a true-or-false fact about the subject. `redacted` goes one step further: it does not leak even a yes/no. They are not interchangeable.
 
 ## How disclosure policy is configured per claim
