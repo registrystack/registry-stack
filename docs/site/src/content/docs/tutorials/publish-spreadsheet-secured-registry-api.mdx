@@ -6,7 +6,7 @@ owner: registry-docs
 source_repos:
   - registry-registryctl
   - registry-relay
-last_reviewed: "2026-06-26"
+last_reviewed: "2026-06-28"
 doc_type: tutorial
 locale: en
 standards_referenced:
@@ -15,9 +15,14 @@ standards_referenced:
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
+Registry Relay turns a sensitive tabular source — a spreadsheet or a database table — into a
+protected, read-only consultation API, without copying the data out and without you editing a
+config file by hand: the CLI writes a working configuration for you.
+
 Use this tutorial to create a local Registry Relay project from a sample Excel workbook.
-You will install `registryctl`, start a protected registry API, prove anonymous access is denied,
-read spreadsheet data through a secured route, and open the local API reference.
+You will install `registryctl`, start a protected registry API, prove an anonymous read is
+denied, read spreadsheet data through an authorized request, and confirm that a key without the
+right scope is refused.
 
 <QuickstartMeta
   outcome="A protected registry API over a sample workbook, with anonymous reads denied and an authorized read returning data."
@@ -199,7 +204,9 @@ Call a protected route without a credential:
 curl -i http://127.0.0.1:4242/v1/datasets
 ```
 
-Relay returns `401 Unauthorized`.
+Relay refuses the request with `401 Unauthorized` and a `problem+json` body whose stable `code`
+is `auth.missing_credential`. Check the status and the `code` rather than the human-readable
+message — the code is the part that won't change.
 
 Call the same route with the metadata key:
 
@@ -240,7 +247,8 @@ curl -i -G \
   http://127.0.0.1:4242/v1/datasets/benefits_casework/entities/person/records
 ```
 
-Relay returns `403 Forbidden`.
+Relay refuses this with `403 Forbidden` and the code `auth.scope_denied`. A valid key isn't
+enough on its own — it has to carry the scope for the surface it's reading.
 
 ## Open the API reference
 
@@ -301,6 +309,14 @@ registryctl stop
 
 This stops the local containers.
 It does not delete your workbook, generated config, local keys, or smoke results.
+
+## What you built
+
+You turned a sample Excel workbook into a protected API and watched the boundary hold: an
+anonymous read was refused with `401` (`auth.missing_credential`), an authorized read returned
+only the rows you asked for, and a key that lacked the row-read scope was refused with `403`
+(`auth.scope_denied`). Relay read the workbook in place and never wrote back to it — the data
+stayed where it started, and only an authorized, scoped request got an answer out.
 
 ## Next
 

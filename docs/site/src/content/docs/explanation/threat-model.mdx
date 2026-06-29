@@ -1,0 +1,246 @@
+---
+title: Threat model
+description: The trust boundaries, assets, and threats the Registry Stack design considers — what it mitigates, and the residual risks it leaves to the operator or treats as out of scope.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-06-28"
+doc_type: explanation
+locale: en
+standards_referenced:
+  - sd-jwt-vc
+  - oid4vci
+  - w3c-did
+  - odrl
+---
+
+This page is for a reviewer or auditor who already reasons in terms of assets, trust
+boundaries, and adversaries, but does not yet know where the Registry Stack's boundaries
+actually sit. It answers one question: **why does this design produce the security
+properties it claims — which threats does the architecture consider, what does it actually
+mitigate, and where do the residual risks lie?**
+
+It is deliberately a map of boundaries and limits, not a runbook. Hardening procedures
+belong to the Operate section, the high-level posture summary to the Trust &amp; Security
+overview, and privacy obligations to [Data minimization and purpose limitation](../data-minimization-and-purpose-limitation/). Here the goal is a
+defensible threat model: the boundaries the design draws, the threats it places in and out
+of scope, and the residual risks stated honestly.
+
+## The two-layer architecture and its primary trust boundary
+
+The stack is a two-layer design, and the split between the layers is the first trust
+boundary the model relies on. A **portable metadata layer** only *describes*: it carries no
+production data, no authentication, and no secrets. A **runtime services layer** *enforces*:
+it is where authentication, authorization, and disclosure actually happen.
+
+The consequence for a reviewer is that the metadata layer authorizes nothing, enforces
+nothing, and does not assert that any record exists or satisfies a claim. Publishing a
+dataset, a policy, an offering, or a federation relationship does not grant access and is
+not proof that a record exists; a published ODRL policy only describes intent until a
+runtime service binds it into an enforced profile it supports. This also closes one threat
+directly: because the metadata layer is meant to be distributed and inspected, secrets are
+never embedded in it. The operator injects them at deployment, which keeps secret material
+out of the portable artifact entirely.
+
+## Components and where they sit on the boundaries
+
+Five components sit on or beside the trust boundaries:
+
+- **Registry Manifest** — the offline metadata producer. No production data, no auth, no
+  secrets. It lives entirely on the describe side of the primary boundary.
+- **Registry Relay** — a read-only consultation gateway over sources.
+- **Registry Notary** — claim evaluation, credential issuance, and federation. This is the
+  component that evaluates a modelled question, applies disclosure policy, and issues
+  credentials.
+- **Registry Platform** — the shared security primitives that the runtime services build on.
+- **Registry Lab** — demonstration only, running on fixture credentials. Treat it as out of
+  scope for production trust: its demo and template integrations are integration examples,
+  not a production freshness or replay-protection profile, and a team copying them into
+  production must add request freshness, expiry, or nonce checks itself.
+
+Security-critical primitives are concentrated in Registry Platform so that the behavior is
+identical across services and reviewable in one place. This is a deliberate attack-surface
+decision: it removes the risk of divergent, per-service security code that would each need
+auditing separately.
+
+## Trust boundaries in detail
+
+**The service edge (authentication).** Authentication is the trust boundary at the service
+edge. Each service runs exactly one authentication mode — either static-credential
+fingerprint or OIDC — and authenticates every claim- or record-bearing route before
+responding. The only unauthenticated surfaces are probes and public JWKS / `did:web`
+discovery.
+
+**Notary to its sources.** A runtime boundary sits between Registry Notary and the sources
+it reads. Notary calls Relay over HTTP as a data source; it does not link Relay code. The
+only connectors are HTTP (`registry_data_api`, `dci`, and the source adapter sidecar) — there
+is no file or database connector.
+
+**The source adapter sidecar.** The sidecar is an *internal* trust boundary, not a
+subject-authorization boundary, and this distinction matters for an auditor. Its bearer
+token authenticates only the Notary-to-sidecar hop; it is not an end-user, tenant, or
+subject authorization boundary. It is an internal, private deployment surface behind Notary,
+not a public subject-facing API. Keeping the token off the public network and scoping its
+credentials, cache, and backoff state is outside the security model — it is an operator
+responsibility — and shared cache or backoff state across authorization contexts is not
+something the model reasons about.
+
+**Federation between two Notary services.** Federation is a deliberate trust boundary
+between two Notary services, and it is **static-peer only**: only configured static peers are
+admitted. It is not a dynamic trust mesh.
+
+**Delegated self-attestation.** Delegated self-attestation is a distinct trust context from
+peer federation — don't confuse the two. It does not delegate trust to a peer
+Notary; it stays inside the citizen / OIDC trust context.
+
+## Assets protected by the design
+
+The assets the design sets out to protect are:
+
+- **Private signing keys.** The private signing key never leaves the issuer; only the public
+  half is published — through JWKS, and through `did:web` in Relay gateway mode. A verifier
+  never needs a credential to verify, which keeps verification off the protected side
+  entirely.
+- **Person-level source data.** The source rows behind a claim are read in place and never
+  cross the boundary; only a computed, disclosure-shaped answer does.
+- **Audit integrity.** Audit is treated as a security control rather than best-effort
+  logging (see below).
+- **Secret material.** Bearer tokens, raw credentials, and key material are kept out of both
+  the portable layer and client-facing surfaces.
+
+The project itself treats a specific set of threat classes as security-relevant, which is a
+useful framing for "threats considered": authentication bypass, credential disclosure,
+audit redaction or integrity failure, signing-key handling bugs, source-connector data
+leakage, and privacy regressions that expose raw subject identifiers.
+
+## Threats the design considers and mitigates
+
+- **Secret disclosure via stored credentials or timing.** Static credentials are stored only
+  as SHA-256 fingerprints — never the raw secret — and compared in constant time.
+- **Token forgery / acceptance of untrusted tokens (OIDC mode).** A token is trusted only
+  after signature verification against the configured issuer JWKS, plus issuer, audience, and
+  algorithm checks. The service still owns its route scopes regardless of the token.
+- **Privilege escalation / over-reach.** Authorization is scope-based, deny-by-default, and
+  scope-before-source: a caller is refused before any source read or claim evaluation if it
+  lacks the required scope, and reach is never widened at request time.
+- **An existence / matching oracle.** By default a matching failure collapses to a single
+  public reason (`evidence.not_available`), with the granular reason kept only in audit, so
+  the matching surface cannot be used to probe whether a record exists. A deployment may
+  disable this collapse only in a controlled environment; disabling it is a residual
+  confidentiality risk.
+- **Information leakage in error and cache surfaces.** `problem+json` error bodies carry
+  stable codes only. Bearer tokens, private keys, source values, filesystem paths, and
+  internal error chains stay in protected operator logs, never in responses; principal-scoped
+  responses are not public cache entries.
+- **Over-collection and value injection in claim evaluation.** The caller supplies only a
+  subject id and a claim id and must not supply the evaluated value; bindings read only the
+  fields they need and reject input paths outside a declared allow-list.
+- **Disclosure leakage.** A redacted result carries neither the value nor the predicate
+  outcome. Selective-disclosure credentials carry SHA-256 digests of unselected fields, so a
+  holder cannot present an undisclosed field. Holder binding is configurable per credential
+  profile and defaults to off; where a profile enables it (using `did:jwk`) — and on the
+  self-attestation issuance path, which requires it — the holder is bound by a fresh
+  audience-bound proof-of-possession. Binding applies only to an issued credential; the plain
+  evaluation result is not a credential and is never holder-bound.
+- **Self-attested data crossing a trust gate.** Self-attestation and delegated
+  self-attestation derive subject, requester, and relationship from the authenticated
+  principal and scoped authorization details; caller-supplied `requester`, `relationship`, and
+  `on_behalf_of` fields are rejected before any source read, and self-asserted target fields do
+  not satisfy trusted-principal gates.
+- **Spoofed trust context and ungoverned reads (Relay side).** Relay ignores trust-context
+  headers unless the principal is scoped to assert that exact value, and a governed read must
+  receive a PDP permit or fail closed with a stable `pdp.*` code rather than falling back to an
+  ungoverned read.
+- **SSRF / uncontrolled egress.** Outbound source fetches are meant to be constrained by Registry
+  Platform's outbound-HTTP-policy. Where it is applied, it limits the destinations a source
+  connector may reach. This is recommended posture rather than a hard guarantee — confirm it
+  is enabled rather than assuming it. One detail an auditor should note: the guard exposes an
+  `allow_insecure_private_network` opt-in that, per source connection, re-enables plain-HTTP
+  private-network and link-local destinations the strict policy would otherwise refuse. Even
+  with that opt-in, cloud-metadata addresses (such as `169.254.169.254` and its IPv6
+  equivalent) stay denied. Treat the opt-in as a deployment decision to review, not a default.
+- **Untrusted federation peers, replay, and wrong-purpose requests.** Only configured static
+  peers are admitted, and before any source read the server verifies peer identity, request
+  signature, freshness, single use, purpose, profile, and audience. The single-use and
+  freshness checks are backed by a real replay-store primitive that tracks one-time JWT `jti`
+  and nonce values (federation request `jti`, OID4VCI `c_nonce`, and holder-proof `jti`).
+
+**Audit as a control.** Every request touching person-level data is recorded — principal,
+request id, and `Data-Purpose` — and a deployment can run audit fail-closed, so an
+unrecordable request does not return success. Two caveats for the auditor. First, this is a
+capability a deployment can turn on, not a guarantee that every route in a given build has
+been individually audited; treat per-route audit coverage as something to verify in your
+deployment. Second, the security model expects the audit record to capture the scopes
+exercised as well, but Notary's audit record does not yet include that field — Relay's does —
+so Notary audit alone cannot reconstruct which scopes authorized a request.
+
+## Residual risks and what is left to the operator
+
+The canonical inventory of every current limit is [Known limitations and non-guarantees](../known-limitations/); the residual risks below are the subset a threat model must weigh.
+
+These are the risks the design does *not* close and states honestly:
+
+- **Key custody is not certified by health checks.** Readiness, liveness, and conformance
+  checks do not certify production-grade private-key custody. A deployment using software
+  keys, local JWK files, or demo-generated keys can be reachable and internally consistent yet
+  not production-secure. Custody, rotation, and provider approval remain operator
+  responsibilities.
+- **The operator boundary is where coverage ends.** Secret and key provisioning, key custody
+  and rotation, audit retention and storage, tenant isolation, TLS termination and
+  certificates, edge rate limiting, deployment configuration, and incident response are
+  operator responsibilities, not behavior the model defines.
+- **The sidecar depends on deployment-network controls.** The source adapter sidecar relies
+  on deployment-network egress controls; the model does not enforce them.
+- **Aggregate routes are not a privacy budget.** Relay aggregate routes do not constitute a
+  longitudinal privacy budget; v1 does not track cumulative disclosure across repeated or
+  overlapping aggregate queries. Do not describe a Relay aggregate as privacy-budgeted unless
+  a separate deployed control provides it. This is a residual disclosure risk left to the
+  operator.
+- **Some claim-definition invariants surface only at runtime.** Duplicate claim ids, a
+  disclosure default outside the allowed set, a rule source naming an undeclared binding, and
+  the unimplemented plugin rule are not enforced at configuration load — they surface only at
+  evaluation or request time. A source binding with no matching policy resolves on identifiers
+  alone, with no purpose, relationship, or input-minimization gating. These are residual
+  misconfiguration risks left to the operator.
+- **Known product gaps.** There is no revocation service, no `/.well-known/jwt-vc-issuer`
+  endpoint, and no built-in data-subject erasure workflow in this version.
+- **Admin reload is non-functional standalone.** Notary's admin reload route returns HTTP 501
+  (`registry.admin.capability.not_supported`) in the standalone router and performs no
+  reload; key and configuration changes require a service restart. Do not treat hot reload as
+  a capability.
+
+## What is explicitly out of scope
+
+These are non-goals for this version. None of them should be read into a Registry Stack
+conformance claim:
+
+- **Dynamic federation.** Dynamic trust-chain discovery, shared replay storage, audit
+  checkpoint exchange, and federated credential issuance are out of scope. Federation is
+  static-peer only — not a dynamic trust mesh.
+- **Full Evidence Gateway / external-policy interoperability.** Governed Relay PDP enforcement
+  covers only the supported Evidence Gateway PDP profile (`registry-evidence-gateway-pdp/v1`).
+  It is not full Evidence Gateway interoperability, not full OID4VCI issuer behavior, not
+  dynamic external policy discovery, and not enforcement of ODRL terms outside the supported
+  profile. Unsupported ODRL terms or invalid policy identity fail closed.
+- **A full credential issuer.** The OID4VCI surface is a scoped self-attestation issuance
+  subset of OID4VCI Draft 13, not a full issuer or general external-wallet interoperability.
+  Notary advertises `openid4vci.support: not_full_issuer`, and delegated-attestation
+  transaction tokens are rejected at the credential endpoint.
+- **Certified standards compliance.** Aligning with a standard is not conforming to it:
+  speaking the shape of OIDC, OAuth 2.0, SD-JWT VC, OID4VCI, CCCEV, W3C DID, or the rest does
+  not certify conformance to any of them, and CCCEV-shaped output is not conformant to CCCEV
+  2.00.
+- **Feature-gated surfaces of other builds.** Several runtime surfaces — OGC API
+  Features/Records/EDR adapters, SP DCI sync, and signed response credentials — are
+  feature-gated and mount only when the build is configured with the matching Cargo feature.
+  Do not infer their presence from the route catalog of a different build. Admin routes sit on
+  a separate optional listener and are not in the public OpenAPI document.
+
+## Related
+
+- [RS-SEC-G](../../spec/rs-sec-g/) — the security model
+- [RS-PR-NOTARY](../../spec/rs-pr-notary/), [RS-PR-RELAY](../../spec/rs-pr-relay/) — protocol contracts
+- [RS-ARC-G](../../spec/rs-arc-g/) — the two-layer architecture
+- [RS-DM-CLAIM](../../spec/rs-dm-claim/) — claim definitions and disclosure
+- Hardening procedures *(Operate)* · Trust posture summary *(Trust &amp; Security overview)* · [Data minimization and purpose limitation](../data-minimization-and-purpose-limitation/)

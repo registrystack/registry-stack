@@ -1,0 +1,87 @@
+---
+title: Data minimization and purpose limitation by design
+description: How the Registry Stack architecture supports data minimization and purpose limitation, where those supports depend on operator configuration, and which data-subject-rights obligations it does not address.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-06-28"
+doc_type: explanation
+locale: en
+standards_referenced:
+  - sd-jwt-vc
+---
+
+As a data protection officer or privacy reviewer, you are asked whether a system supports the principles you work to — data minimization, purpose limitation, accountability — and where those supports stop. This page answers one question about Registry Stack: how does its architecture support data minimization and purpose limitation by design, where are those supports conditional on how an operator configures a deployment, and which data-protection obligations does the architecture not address at all?
+
+Two things this page does not do. It makes no compliance claim: conformance to the underlying specifications does not imply conformance to any external standard, nor to GDPR or any data-protection regulation. And it gives no legal advice and no jurisdiction-specific reading — that judgement remains yours. The specifications here are all draft, pre-1.0 documents and may change, so treat the design as a posture under development rather than a finished or warranted product.
+
+A note on terms, since you do not need Registry Stack internals to follow this. A *claim* is one pre-modelled question — one decision or one extracted value — that a system can ask about a person against a registry the institution already holds. A *source binding* is the configured rule that connects a claim to the specific source fields it reads. *Minimized evidence* means a response shaped by data minimization or selective disclosure; a *purpose-bound request* is a request that carries or is evaluated against a stated purpose. Those last two are the principles you already know, expressed in the system's own vocabulary.
+
+## How the claim model limits collection at the source
+
+The first place minimization appears is in the unit of data the system is built around. A claim definition describes one decision or one extracted value — not a whole record — so returning a full record would over-collect relative to the question actually asked. The design treats the narrow question, not the record, as the thing to be answered.
+
+That principle is enforced one layer down, at the binding between a claim and its source. A source binding reads only the fields its rule needs, and a request that supplies an input path outside a declared allow-list is rejected, so a binding cannot over-collect by accident. The allow-list converts "read only what you need" from an aspiration into a gate that refuses out-of-scope inputs before they reach the source.
+
+## Purpose limitation as an enforced gate, not a label
+
+Purpose limitation in this design is more than a field written into a log. It is enforced as a policy decision before any source is read. Where a source is configured to require a purpose, a request that omits the purpose header is rejected, and the supplied purpose is recorded in the audit record. Beyond recording it, the evaluation component combines the claim's permitted purposes with the source binding's permitted purposes and denies the request before source access if either set rejects the stated purpose.
+
+A matching policy carries the same idea further: it binds a source read to a declared purpose and relationship context and constrains which inputs may identify the subject, and a request whose purpose, relationship, or inputs the policy does not admit is refused before the source is touched. The effect a reviewer should take away is that purpose, when configured, acts as a precondition for access rather than an after-the-fact annotation.
+
+The phrase "when configured" is load-bearing, and the section on operator responsibilities returns to it.
+
+## Minimization at the output: disclosure modes and selective credentials
+
+Minimization also applies to what leaves the boundary. A claim's result can be shaped into one of three disclosure modes: *value* returns the full value, *predicate* returns only the true/false satisfaction, and *redacted* hides the value entirely. A privacy-sensitive claim is expected to default to the least-revealing mode that still answers the question. (How a mode is selected and policy-bound is covered in [Disclosure modes and computed answers](../disclosure-modes-and-computed-answers/) and is out of scope here.)
+
+The redacted mode is worth a reviewer's attention because it shows minimization without loss of accountability: a redacted result carries neither the underlying value nor the satisfaction outcome, yet the evaluation stays referenceable and verifiable through an evaluation identifier, a verification identifier, and a claim hash. You can audit that an evaluation happened and verify it later without the result itself disclosing anything about the person.
+
+When the system issues a credential rather than returning a direct answer, minimization continues at presentation time. Issued credentials are SD-JWT VC — a verifiable-credential format in which the signed body carries only a SHA-256 digest of each selectively disclosable field, so a field the holder does not present stays hidden, and the holder controls what is revealed. Holder binding — tying the credential to a holder key with `did:jwk` — is a per-profile setting that defaults to off, though the self-attestation (wallet) issuance path requires it; the direct claim or evaluation result is not a credential and is never holder-bound. One caveat for a reviewer: the issuance surface is a profiled, partial subset, not a full credential-issuer implementation, and should not be read as general wallet interoperability or full standards conformance.
+
+A further minimization detail guards against a subtler leak. A failed subject match collapses by default to a single public reason (evidence not available), with the granular reason kept only in the audit record, so the lookup surface cannot by default be used to confirm whether a person exists in a registry.
+
+## Data stays at source: distributed custody
+
+Underneath all of this is an architectural choice that matters for minimization at the system level: data stays at source. The design premise is distributed custody — the stack provides an API surface for lawful exchange between authorities and does not aggregate data into a central system. The read component must not mutate source registry data and exposes no write-back route, and runtime services are read-only in this version, with no source-registry data-mutation routes at all.
+
+For a reviewer this has a direct consequence. Because the architecture cannot alter or delete source records, it is also why no erasure flow exists at the source layer: the design has no mechanism to reach into and change the registry it reads from. That is described more fully in the next section as a limit, not a feature.
+
+One related boundary is positive rather than cautionary. The portable metadata the stack publishes must not carry person-level data or runtime secrets and bindings, which is precisely why those artifacts are safe to share — they hold no personal data. But publishing metadata only describes; it does not authorize access, enforce a policy, or assert that any record exists, so a published manifest carries no data-protection guarantee about live data.
+
+## Audit as an accountability primitive
+
+Accountability is supported through audit, which is treated as a security control rather than an optional log. Every request that returns person-level records or claim results must be recorded with at least the caller principal, a request identifier, and the purpose value where one was supplied, and a deployment can run audit fail-closed so that a request whose audit record cannot be written does not succeed. The security model expects the scopes exercised to be recorded too; in practice Relay's audit record captures them, but Notary's audit record does not yet include that field — a gap noted in the limitations inventory.
+
+One precise reading matters here. Audit fail-closed is a capability a deployment can turn on — not a guarantee that every route in any given build has been individually audited against it. Whether a particular deployment meets it is something a reviewer verifies in that deployment, not something the design asserts on its behalf.
+
+## What the architecture does not provide
+
+Some of the most important things for a DPO to know are the absences. Stating them plainly prevents the design from being read as more than it is. The full, canonical inventory is in [Known limitations and non-guarantees](../known-limitations/).
+
+- **No data-subject erasure or right-to-be-forgotten workflow.** There is no built-in erasure or deletion flow anywhere in the design, so it does not satisfy erasure obligations on its own. As noted above, the read-only design cannot mutate source records, so erasure, where it is required, remains an operation on the source registry outside this system.
+- **No rectification or data-subject-rights flow.** Beyond erasure, there is no rectification or general data-subject-rights mechanism.
+- **No credential revocation service.** There is no revocation flow. Key rotation exists — a rotated-out key may remain published so existing results stay verifiable — but that is not a way to revoke an already-issued credential. Don't count on revocation as a supported capability.
+- **No broad cross-authority exchange beyond static peering.** Federation between authorities is static-peer only; dynamic trust-chain discovery, shared replay storage, and federated credential issuance are out of scope, so the design supports a narrower cross-authority data-exchange surface than the word "federation" might suggest.
+- **No privacy-budgeted analytics.** Aggregate routes produce statistical outputs, not a longitudinal privacy budget. A data-protection impact assessment should not describe an aggregate route as privacy-budgeted unless a separate, deployed control actually provides that.
+- **No compliance claim.** Conformance to these specifications does not imply conformance to any external standard or any data-protection regulation, and the specifications themselves are draft.
+
+## Operator responsibilities: what the design leaves to you
+
+The minimization and purpose-limitation posture described above is the design default, but the operator owns the configuration. Several of the protections are conditional, and a reviewer should test the deployment, not the design, for each one.
+
+The clearest example is the fallback when no matching policy is configured. With no matching policy in place, a binding falls back to unrestricted, identifier-only resolution with no purpose gating, no relationship gating, and no input minimization. Equivalently, purpose limitation is supported but partial: a purpose is recorded in audit only where the caller supplies one, and is enforced as a hard gate only where a claim or source binding configures a matching policy. The enforced gate described earlier exists only when someone has configured it.
+
+The existence-oracle protection is also defeasible. The matching surface collapses failures to a single public reason by default, but a deployment may disable that collapse and surface not-found, ambiguous, or rejected outcomes — an over-disclosure risk the operator controls.
+
+More broadly, the architecture defines primitives and leaves a large set of data-protection-relevant controls to the operator. Secret and key provisioning, audit retention and storage, tenant isolation, transport security, edge rate limiting, deployment configuration, and incident response are not defined by the design; they are responsibilities you provision and verify in a deployment. The clear-eyed view, then, is this: Registry Stack offers minimization, purpose limitation, and accountability as enforceable design primitives, but whether a given deployment realizes them — and whether it meets any legal obligation — depends on how the operator configures and runs it.
+
+## Related
+
+- [Disclosure modes and computed answers](../disclosure-modes-and-computed-answers/) — how disclosure modes are selected and policy-bound
+- [Threat model](../threat-model/) — the boundaries, assets, and threats behind this posture
+- [Trust posture and security guarantees](../trust-posture-and-security-guarantees/) — the high-level security summary
+- [Known limitations and non-guarantees](../known-limitations/) — the full inventory of edges
+- [Records stay home](../records-stay-home/) — what stays inside the institution's boundary and what crosses it
+- The security and protocol specifications: [RS-SEC-G](../../spec/rs-sec-g/), [RS-DM-CLAIM](../../spec/rs-dm-claim/), [RS-PR-NOTARY](../../spec/rs-pr-notary/), [RS-PR-RELAY](../../spec/rs-pr-relay/)

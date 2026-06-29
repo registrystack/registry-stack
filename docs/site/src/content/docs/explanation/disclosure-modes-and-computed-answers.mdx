@@ -1,0 +1,87 @@
+---
+title: Disclosure modes and computed answers
+description: Why Registry Notary can answer a question about a subject by returning a computed result — value, predicate, or redacted — instead of handing back the source record.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-06-28"
+doc_type: explanation
+locale: en
+standards_referenced: []
+---
+
+You are weighing whether Registry Stack actually keeps a sensitive registry record private while still answering questions about the subjects in it. The short answer is that a caller asks a question and receives a *computed answer*, not the record. This page explains how that works, what each kind of answer does and does not reveal, and where the privacy claim has edges.
+
+You will see one product term used throughout: a **claim**, which is a single pre-modelled question — one decision or one extracted value, such as "is this person registered?" or "what is this person's registration date?". A claim is deliberately narrow: a claim that tried to return a whole record would over-collect and be hard to authorize, which is exactly the outcome this design avoids.
+
+## How Registry Notary controls what leaves the service
+
+Registry Notary is the component that evaluates a claim and decides what the caller receives back. It controls the answer through three **disclosure modes**: `value`, `predicate`, and `redacted`. They are the only modes — there is no fourth mode and no gradation between them.
+
+Per-claim disclosure control is enforced at runtime by the service. It is not left to a caller's good behaviour.
+
+## The evaluation pipeline: computed answers, not record handoffs
+
+The reason an answer can stand in for a record is that the caller never supplies the value being asked about. To evaluate a claim, the caller sends a **subject identifier** and a **claim id** over a REST call authenticated the way the rest of the service is — an API key or bearer token in static-credential mode, or an OIDC token, whichever your deployment is configured for. Registry Notary then performs the evaluation against its own configured sources. The caller does not supply the evaluated value, and cannot inject one.
+
+The evaluation runs as a pipeline: a source connector resolves facts about the subject, a rule computes the configured condition, a disclosure mode shapes what leaves the service, and a response format carries the result. Because Notary computes the answer itself, it can return that computed answer rather than handing back the source record it read.
+
+The rule that does the computing is one of three kinds. An **exists** rule checks for the presence of **exactly one** matching source record. An **extract** rule reads a value from a source field. A **cel** rule derives a value from source fields or earlier claim results through a hardened expression. Each kind produces an answer about the subject without that answer being a copy of the source row.
+
+## The three disclosure modes
+
+The disclosure mode fixes how much of the computed answer the caller receives:
+
+| Mode | What the caller receives |
+|------|--------------------------|
+| `value` | the full evaluated value |
+| `predicate` | only the true/false satisfaction of the rule |
+| `redacted` | no value and no satisfaction outcome |
+
+`value` returns the full value, so this mode does hand over the computed result in full — it is the least private of the three and is appropriate only where the use case calls for the actual value. `predicate` returns only the boolean satisfaction. `redacted` returns neither the underlying value nor the yes/no outcome.
+
+Every evaluation result records which disclosure mode was applied, so a downstream system can tell how much was revealed.
+
+## Why predicate and redacted avoid sharing the underlying record
+
+This is the core of the privacy story. Because Notary computes the answer from its own sources, a `predicate` result can satisfy a question while disclosing only a boolean. A question of whether someone has a registered record is modelled as an `exists` rule disclosed as `predicate`: the caller learns `true` or `false`, and the source row never leaves the service. A question about an eligibility threshold without exposing the figure behind it is modelled as a `cel` rule whose eligibility boolean is disclosed as `predicate`; the underlying value stays inside the service.
+
+A `redacted` result goes further: it carries neither the source value nor the satisfaction outcome. Both are withheld.
+
+The difference between the two matters. `predicate` is not "zero disclosure" — it still tells the caller a true-or-false fact about the subject. `redacted` goes one step further: it does not leak even a yes/no. They are not interchangeable.
+
+## How disclosure policy is configured per claim
+
+The caller does not freely pick a mode. Each claim configures a **disclosure policy**: a `default` mode plus an `allowed` set drawn from the three modes. When a caller requests a mode, Notary refuses any mode not in that claim's allowed set; when the caller requests no mode, Notary applies the claim's default. The mode is bound to the claim's policy, not the caller's choice. A privacy-sensitive claim can be configured to default to the least-revealing mode that still answers the question.
+
+## What a redacted result still reveals (and to whom)
+
+"Reveals nothing to the caller" is not the same as "leaves no trace." A `redacted` evaluation can still be pointed back at: it carries an `evaluation_id`, and the audit record carries a `verification_id` and a `claim_hash`. That lets you reference the evaluation that happened — it is not a cryptographic signature on the answer. Redaction shapes what the caller sees; it does not erase the fact that an evaluation happened.
+
+That trace is by design. Every evaluation — redacted or not — is audited, and a deployment can run audit fail-closed, so that a request whose audit record cannot be written does not succeed. So redaction does not mean an unlogged request; it means an unrevealed answer.
+
+There is a related protection on the matching surface. By default, a matching failure collapses to a single public reason, `evidence.not_available`, so the lookup cannot be used as an existence oracle — a "not found" answer does not tell the caller whether a record exists. This complements `redacted` disclosure by not leaking record existence. A deployment can turn this off, but only in a controlled environment; it is not always on.
+
+## Disclosure control is one safeguard among several
+
+Disclosure modes are one runtime safeguard within a broader posture that also includes authentication, scoped routes, no source mutation, and audit. They are not the whole privacy guarantee. A few protections are not the software's to make at all: secret and key custody, audit retention, tenant isolation, transport, and rate limiting are your deployment's job, not built-in guarantees.
+
+## Honest limits
+
+A few boundaries matter when you evaluate this design:
+
+- **Minimization is conditional, not absolute.** A minimized answer can be narrower than the full source record only where the configured use case supports that pattern. Notary does not always return less than the record — `value` mode returns the full value, and a claim reveals only what its policy was configured to reveal.
+- **Governance depends on configured policy.** A source binding with no matching policy falls back to unrestricted, identifier-only resolution, with no purpose, relationship, or input-minimization gating. Minimization is not automatic; it follows the configuration.
+- **The caller cannot inject a value, but matching strictness is configured.** The "computed answer avoids sharing the record" guarantee rests on Notary computing the answer from a subject id and claim id. Identity matching is only as strict as its configured policy.
+- **A sidecar token is not a per-subject boundary.** A source adapter sidecar's internal static bearer token is not by itself an end-user, tenant, or subject authorization boundary; the sidecar hop does not enforce per-subject access.
+- **Disclosure modes are not credential selective disclosure.** A holder's later choice of which credential fields to present is a separate mechanism from Notary's three evaluation modes. Do not read `value`/`predicate`/`redacted` as the same thing as a wallet holder selectively disclosing credential fields.
+- **Aligning with a standard is not conforming to it.** This page describes Notary's own disclosure behaviour. It is not an endorsement of, or conformance to, any outside specification.
+
+## Related
+
+- [Trust posture and security guarantees](../trust-posture-and-security-guarantees/) — the full posture this fits into
+- [Data minimization and purpose limitation](../data-minimization-and-purpose-limitation/) — the privacy view
+- [Known limitations and non-guarantees](../known-limitations/) — where the edges are
+- [Records stay home](../records-stay-home/) — what stays inside the institution and what crosses out
+- How a claim and its disclosure policy are defined: [RS-DM-CLAIM](../../spec/rs-dm-claim/); disclosure modes, credentials, and federation: [RS-PR-NOTARY](../../spec/rs-pr-notary/)
