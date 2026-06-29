@@ -17,7 +17,7 @@ You will see one product term used throughout: a **claim**, which is a single pr
 
 ## How Registry Notary controls what leaves the service
 
-Registry Notary is the component that evaluates a claim and decides what the caller receives back. It controls the answer through three **disclosure modes**: `value`, `predicate`, and `redacted`. They are the only modes — there is no fourth mode and no gradation between them.
+Registry Notary is the component that evaluates a claim and decides what the caller receives back. It controls the answer through three **disclosure modes**: `value`, `predicate`, and `redacted`. There are exactly three — there is no fourth mode. `value` is not always all-or-nothing, though: when a claim returns an object, `value` mode can have specific fields redacted (configured through `redaction_fields`), and the result carries the object minus those fields plus a list of what was withheld.
 
 Per-claim disclosure control is enforced at runtime by the service. It is not left to a caller's good behaviour.
 
@@ -53,7 +53,7 @@ The difference between the two matters. `predicate` is not "zero disclosure" —
 
 ## How disclosure policy is configured per claim
 
-The caller does not freely pick a mode. Each claim configures a **disclosure policy**: a `default` mode plus an `allowed` set drawn from the three modes. When a caller requests a mode, Notary refuses any mode not in that claim's allowed set; when the caller requests no mode, Notary applies the claim's default. The mode is bound to the claim's policy, not the caller's choice. A privacy-sensitive claim can be configured to default to the least-revealing mode that still answers the question.
+The caller does not freely pick from all three modes. Each claim configures a **disclosure policy**: a `default` mode plus an `allowed` set drawn from the three modes. A caller may request a mode: Notary honours it when it is in that claim's allowed set and refuses it (`claim.disclosure_not_allowed`) otherwise; when the caller requests no mode, Notary applies the claim's default. So the policy bounds which modes are allowed, and the caller chooses among the allowed modes. A privacy-sensitive claim can be configured to default to the least-revealing mode that still answers the question.
 
 ## What a redacted result still reveals (and to whom)
 

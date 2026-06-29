@@ -63,8 +63,8 @@ always on by default.
 
 **An answer is shaped, not a copy of the record.** Every claim is answered in one of three
 modes: `value` hands back the computed value, `predicate` returns only a yes/no, and `redacted`
-returns neither the value nor the yes/no. The mode is fixed by the claim's policy, not chosen
-by the caller. [Disclosure modes and computed answers](../disclosure-modes-and-computed-answers/)
+returns neither the value nor the yes/no. The claim's policy fixes which modes are allowed;
+within that set the caller can request one, and otherwise the default applies. [Disclosure modes and computed answers](../disclosure-modes-and-computed-answers/)
 covers this in depth.
 
 **Credentials are selective, and can be holder-bound.** When Notary issues a credential it's an

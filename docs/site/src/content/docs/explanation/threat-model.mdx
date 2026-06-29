@@ -69,8 +69,12 @@ auditing separately.
 **The service edge (authentication).** Authentication is the trust boundary at the service
 edge. Each service runs exactly one authentication mode — either static-credential
 fingerprint or OIDC — and authenticates every claim- or record-bearing route before
-responding. The only unauthenticated surfaces are probes and public JWKS / `did:web`
-discovery.
+responding. The unauthenticated surfaces are the operational, discovery, and
+protocol-bootstrap routes: liveness and readiness probes, the public verification keys
+(JWKS / `did:web`), credential-issuer discovery, the OID4VCI wallet-flow endpoints, the
+docs, public credential-status reads, and credential type metadata. The federation
+evaluations route is exempt from the API-key/OIDC middleware but still requires a verified
+peer-signed JWS, so it is not anonymous.
 
 **Notary to its sources.** A runtime boundary sits between Registry Notary and the sources
 it reads. Notary calls Relay over HTTP as a data source; it does not link Relay code. The
@@ -203,8 +207,10 @@ These are the risks the design does *not* close and states honestly:
   evaluation or request time. A source binding with no matching policy resolves on identifiers
   alone, with no purpose, relationship, or input-minimization gating. These are residual
   misconfiguration risks left to the operator.
-- **Known product gaps.** There is no revocation service, no `/.well-known/jwt-vc-issuer`
-  endpoint, and no built-in data-subject erasure workflow in this version.
+- **Known product gaps.** No revocation flow is specified — though an optional,
+  off-by-default credential-status surface can be enabled to mark a credential `revoked` —
+  there is no `/.well-known/jwt-vc-issuer` endpoint, and no built-in data-subject erasure
+  workflow in this version.
 - **Admin reload is non-functional standalone.** Notary's admin reload route returns HTTP 501
   (`registry.admin.capability.not_supported`) in the standalone router and performs no
   reload; key and configuration changes require a service restart. Do not treat hot reload as

@@ -111,10 +111,11 @@ receives. There are exactly three:
 | `predicate` | only the true/false satisfaction | the underlying value |
 | `redacted` | neither — the result carries no value **and** no yes/no | the value *and* the outcome |
 
-The mode is policy-bound, not caller's choice: a claim defines an `allowed` set and a
-`default`, the service refuses a mode outside the allowed set, and every result records
-which mode was applied. A privacy-sensitive claim is expected to default to the
-least-revealing mode that still answers the question.
+The policy bounds which modes are allowed, and the caller chooses among them: a claim
+defines an `allowed` set and a `default`, the service honours a requested mode when it is in
+the allowed set and refuses it otherwise, applies the default when none is requested, and
+every result records which mode was applied. A privacy-sensitive claim is expected to default
+to the least-revealing mode that still answers the question.
 
 This is the mechanism behind "prove a fact without sharing the record". To check whether a
 person has a registered record, model the question as an *existence* rule and disclose it
@@ -142,9 +143,10 @@ Security material:
 - **Scope-before-source, deny-by-default.** A service checks the caller's scope *before* it
   reads any source or evaluates any claim, and does not widen a caller's reach at request
   time beyond what its configuration grants. Anything that touches a record or a claim
-  requires authentication; the routes reachable without it are limited to operational and
-  discovery surfaces: liveness and readiness probes, the public verification keys, and
-  credential-issuance discovery metadata.
+  requires authentication; the routes reachable without it are the operational, discovery,
+  and protocol-bootstrap surfaces: liveness and readiness probes, the public verification
+  keys, credential-issuance discovery metadata, the OID4VCI wallet-flow endpoints, the docs,
+  public credential-status reads, and credential type metadata.
 - **A permit, or a closed door.** On a governed read, the policy decision point must return
   a permit before data is returned; a denial fails closed with a stable reason rather than
   falling back to an ungoverned read.
@@ -177,9 +179,11 @@ mistake, so the limits are stated plainly here.
 - **This is not zero-knowledge.** A `predicate` answer is a policy-enforced boolean computed
   inside the service; SD-JWT selective disclosure is digest omission. Neither is a
   zero-knowledge proof, and the documentation should not imply one.
-- **No revocation or erasure flow is defined.** This version specifies issuance,
-  disclosure, presentation, and verification, but not credential revocation or
-  data-subject erasure. A key rotated out may remain published so existing results stay
+- **No revocation flow is specified, and no erasure flow.** This version specifies issuance,
+  disclosure, presentation, and verification, but no credential-revocation flow and no
+  data-subject erasure. An optional, off-by-default credential-status surface can be enabled
+  to mark a credential `revoked`, but that is an operator-enabled capability rather than a
+  specified flow. A key rotated out may remain published so existing results stay
   verifiable — that is not a revocation mechanism.
 - **Several guarantees are the operator's to provide.** Network egress limits, key custody,
   tenant isolation, audit retention, and transport security are supplied by the deployment,
