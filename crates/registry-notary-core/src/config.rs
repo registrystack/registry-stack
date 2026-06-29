@@ -6674,7 +6674,7 @@ pub struct HolderBindingConfig {
     pub mode: String,
     #[serde(default)]
     pub proof_of_possession: Option<String>,
-    #[serde(default)]
+    #[serde(default = "default_holder_binding_allowed_did_methods")]
     pub allowed_did_methods: Vec<String>,
 }
 
@@ -6683,13 +6683,17 @@ impl Default for HolderBindingConfig {
         Self {
             mode: default_holder_binding_mode(),
             proof_of_possession: None,
-            allowed_did_methods: Vec::new(),
+            allowed_did_methods: default_holder_binding_allowed_did_methods(),
         }
     }
 }
 
 fn default_holder_binding_mode() -> String {
-    "none".to_string()
+    "did".to_string()
+}
+
+fn default_holder_binding_allowed_did_methods() -> Vec<String> {
+    vec![SD_JWT_VC_HOLDER_BINDING_METHOD.to_string()]
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -8677,6 +8681,51 @@ allowed_claims:
         .expect("profile YAML is valid");
 
         assert_eq!(profile.validity_seconds, 600);
+    }
+
+    #[test]
+    fn credential_profile_default_holder_binding_is_did_jwk() {
+        let profile: CredentialProfileConfig = serde_norway::from_str(
+            r#"
+format: application/dc+sd-jwt
+issuer: https://issuer.example
+signing_key: issuer-key
+vct: https://vct.example/test
+allowed_claims:
+  - some-claim
+"#,
+        )
+        .expect("profile YAML is valid");
+
+        assert_eq!(profile.holder_binding.mode, "did");
+        assert_eq!(
+            profile.holder_binding.allowed_did_methods,
+            vec!["did:jwk".to_string()]
+        );
+        assert!(profile.holder_binding.proof_of_possession.is_none());
+    }
+
+    #[test]
+    fn credential_profile_can_explicitly_opt_out_of_holder_binding() {
+        let profile: CredentialProfileConfig = serde_norway::from_str(
+            r#"
+format: application/dc+sd-jwt
+issuer: https://issuer.example
+signing_key: issuer-key
+vct: https://vct.example/test
+holder_binding:
+  mode: none
+allowed_claims:
+  - some-claim
+"#,
+        )
+        .expect("profile YAML is valid");
+
+        assert_eq!(profile.holder_binding.mode, "none");
+        assert_eq!(
+            profile.holder_binding.allowed_did_methods,
+            vec!["did:jwk".to_string()]
+        );
     }
 
     #[test]

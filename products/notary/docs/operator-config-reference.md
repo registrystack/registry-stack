@@ -902,14 +902,16 @@ Notes:
 
 Credential profiles control SD-JWT VC issuance.
 
-Required fields:
+Profile fields:
 
 - `format: application/dc+sd-jwt`.
 - `issuer`: DID issuer for the credential.
 - `signing_key`: key id from `evidence.signing_keys`.
 - `vct`: credential type URL.
 - `allowed_claims`: explicit allow-list. Empty allow-lists are rejected.
-- `holder_binding`: currently implemented holder binding is `did:jwk`.
+- `holder_binding`: defaults to `mode: did` with `did:jwk` as the allowed
+  method. Set `mode: none` only for an explicit bearer-style credential profile;
+  `registry-notary doctor` reports a warning for unbound profiles.
 - `disclosure.allowed`: disclosure modes the profile may carry.
 
 `validity_seconds` defaults to 600 and must be between 1 and

@@ -381,6 +381,21 @@ impl Diagnostic {
         }
     }
 
+    fn warn_with_code(
+        label: impl Into<String>,
+        action: impl Into<String>,
+        code: impl Into<String>,
+    ) -> Self {
+        Self {
+            ok: true,
+            warning: true,
+            label: label.into(),
+            action: Some(action.into()),
+            report_code: Some(code.into()),
+            report_severity: Some("warning"),
+        }
+    }
+
     fn fail(label: impl Into<String>, action: impl Into<String>) -> Self {
         Self {
             ok: false,
@@ -1263,6 +1278,7 @@ async fn doctor(
         }
         diagnostics.extend(deployment_profile_diagnostics(config, &deployment_profile));
         diagnostics.extend(local_env_diagnostics(config, env_report));
+        diagnostics.extend(holder_binding_diagnostics(config));
         if let Some(diagnostic) = pkcs11_preflight_diagnostic(config) {
             diagnostics.push(diagnostic);
         }
@@ -1369,6 +1385,27 @@ fn deployment_finding_action(finding: &EvaluatedFinding) -> String {
         return "review the active deployment waiver and expiry".to_string();
     }
     "update deployment config or runtime settings to clear the gate".to_string()
+}
+
+fn holder_binding_diagnostics(config: &StandaloneRegistryNotaryConfig) -> Vec<Diagnostic> {
+    let unbound_profiles = config
+        .evidence
+        .credential_profiles
+        .iter()
+        .filter(|(_, profile)| profile.holder_binding.mode == "none")
+        .map(|(profile_id, _)| profile_id.as_str())
+        .collect::<Vec<_>>();
+    if unbound_profiles.is_empty() {
+        return Vec::new();
+    }
+    vec![Diagnostic::warn_with_code(
+        format!(
+            "credential profile(s) issue unbound SD-JWT VC credentials: {}",
+            unbound_profiles.join(", ")
+        ),
+        "set holder_binding.mode: did with allowed_did_methods: [did:jwk], or keep mode: none only for an explicit bearer-style credential profile",
+        "notary.credential_profile.unbound_holder_binding",
+    )]
 }
 
 /// Today's date in UTC as a `YYYY-MM-DD` string, for waiver-expiry comparison.

@@ -8319,7 +8319,11 @@ mod tests {
             signing_key: "issuer-key".to_string(),
             vct: "https://vct.example/test".to_string(),
             validity_seconds: 60,
-            holder_binding: Default::default(),
+            holder_binding: registry_notary_core::HolderBindingConfig {
+                mode: "none".to_string(),
+                proof_of_possession: None,
+                allowed_did_methods: Vec::new(),
+            },
             allowed_claims: Vec::new(),
             disclosure: Default::default(),
         };
