@@ -1,10 +1,10 @@
 # Registry Notary Source Adapter Sidecar
 
 This crate exposes a synchronous Registry Data API-shaped source endpoint.
-Sources run through the built-in `http_json`, `http_flow`, and `fhir` adapters
-for governed source reads. The Rust sidecar owns the HTTP contract, manifest
-validation, concurrency limits, timeouts, normalization, health checks, and
-credential non-disclosure boundary.
+Sources run through the built-in `http_json`, `http_flow`, `fhir`, and
+`script_rhai` adapters for governed source reads. The Rust sidecar owns the
+HTTP contract, manifest validation, concurrency limits, timeouts,
+normalization, health checks, and credential non-disclosure boundary.
 
 Registry Notary should connect to this sidecar with the `source_adapter_sidecar`
 source connector:
@@ -239,8 +239,13 @@ rejected; keep the raw sidecar bearer in the caller's secret store and expose
 only its `sha256:<hex>` fingerprint through the configured `hash_env`. Runtime
 execution must not fetch packages from the network.
 
-The sidecar's own source engines are the built-in `http_json`, `http_flow`, and
-`fhir` adapters described below. The local `@registry/notary-openfn` caller
+The sidecar's declarative source engines are the built-in `http_json`,
+`http_flow`, and `fhir` adapters described below. It also supports
+`script_rhai`, documented in the
+[Script (Rhai) source adapter guide](../../products/notary/docs/script-rhai-source-adapter-guide.md),
+for small governed JSON POST lookups, including GraphQL servers where the
+sidecar posts a static query with variables and normalizes the `data` envelope.
+The local `@registry/notary-openfn` caller
 adaptor under
 [workers/adaptors/registry-notary](workers/adaptors/registry-notary) still
 exists, but it is no longer used by the sidecar's source engines. It supports

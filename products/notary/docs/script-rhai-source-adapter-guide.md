@@ -30,6 +30,9 @@ Reach for `script_rhai` only when the declarative engines do not fit:
   mappers cannot express.
 
 If a single request with a CEL projection works, prefer `http_json`.
+For GraphQL servers, use `script_rhai` when the sidecar must post a pinned
+GraphQL document with variables and normalize the `data` envelope into Notary
+records.
 
 ## Security model
 
@@ -62,7 +65,7 @@ so a buggy script or a hostile *upstream response* cannot escalate:
 ## The script contract
 
 A source names an entrypoint (default `lookup`) that receives one `ctx` and
-returns an array of record maps (or one map):
+returns an array of record maps:
 
 ```rhai
 fn lookup(ctx) {
@@ -116,6 +119,61 @@ fn lookup(ctx) {
   source.get("primary", "/people/" + search.body[0].national_id, #{}).body
 }
 ```
+
+### Rhai Syntax Cheat Sheet
+
+This is the small Rhai subset most source adapters need:
+
+| Task | Rhai shape |
+| --- | --- |
+| Entrypoint | `fn lookup(ctx) { ... }` |
+| Local variable | `let r = source.get("primary", "/people", #{});` |
+| Last value is returned | `if r.status == 404 { [] } else { r.body }` |
+| Empty array | `[]` |
+| Array with records | `[#{ national_id: ctx.lookup.value }]` |
+| Empty map/object | `#{}` |
+| Map/object with fields | `#{ value: ctx.lookup.value, limit: ctx.limit }` |
+| Field access | `r.body.data.people` |
+| Indexed access | `rows[0].national_id` |
+| Null / missing value | `()` |
+| Equality | `if r.body.errors != () { throw "graphql_error"; }` |
+| String concatenation | `"people/" + ctx.lookup.value` |
+| Comment | `// normalize the upstream response` |
+
+Common patterns:
+
+```rhai
+fn lookup(ctx) {
+  let rows = source.get("primary", "/people", #{ id: ctx.lookup.value }).body;
+  if rows == () { [] } else { rows }
+}
+```
+
+```rhai
+fn lookup(ctx) {
+  let records = [];
+  for row in source.get("primary", "/people", #{}).body {
+    records.push(#{
+      national_id: row.national_id,
+      birth_date: row.birth_date
+    });
+  }
+  records
+}
+```
+
+Remember the non-JavaScript bits:
+
+- Use `#{}` for maps/objects. Plain `{}` is a block, not a JSON object.
+- Use `()` for null or missing values.
+- Return an array of record maps, even for one record.
+- Use `==` and `!=`; do not use JavaScript `===`.
+- Use `+` for strings; there are no JavaScript template strings.
+- Keep loops bounded. Source calls are budgeted and the engine has operation
+  and wall-clock limits.
+- Do not call generic HTTP, filesystem, environment, process, module, `eval`, or
+  package APIs. Only `source.get`, `source.post_json`, and registered `xw.*`
+  helpers are available.
 
 ### Pure `xw` helpers
 
@@ -179,6 +237,155 @@ sources:
 fields. `credential_public_fields` lists the subset the script may see; every
 other field stays host-only. `credential_env` is required only when at least one
 target configures `auth`.
+
+### Example: GraphQL Source With Rhai
+
+Use this shape when a civil-registry-style source exposes a GraphQL server
+instead of Registry Data API or DCI. The sidecar still selects the
+`script_rhai` engine; the Rhai script is only responsible for posting a static
+GraphQL document with variables and shaping the returned JSON into Notary
+records. Use test-only smoke identifiers, never a live citizen identifier.
+
+Notary still uses `connector: source_adapter_sidecar`. The sidecar posts one
+pinned GraphQL query and returns only the normalized fields needed by Notary:
+
+```yaml
+sources:
+  # Internal sidecar source id. Notary does not use this value directly; it
+  # routes through the Notary source connection and dataset/entity below.
+  civil_registry_graphql_rhai:
+    # Select the sandboxed Rhai sidecar engine.
+    engine: script_rhai
+
+    # The Registry Data API-shaped dataset/entity exposed by the sidecar to
+    # Notary. The GraphQL server stays hidden behind this normalized facade.
+    dataset: civil_registry
+    entity: civil_person
+
+    # Sidecar-only credential JSON. The Rhai script never receives this raw
+    # value; the host uses it to apply target auth.
+    credential_env: CIVIL_REGISTRY_GRAPHQL_CREDENTIAL_JSON
+
+    # Every outbound target URL must be allow-listed. This is checked before
+    # the sidecar sends requests.
+    allowed_base_urls:
+      - https://civil-registry.example.test
+
+    # Protect the upstream source independently from Notary's own concurrency.
+    limits:
+      max_in_flight: 2
+      requests_per_second: 5
+      burst: 5
+
+    rhai:
+      # Function called by the sidecar for each lookup.
+      entrypoint: lookup
+
+      # Sandbox budgets for this script run.
+      limits:
+        timeout_ms: 4000
+        max_http_calls: 1
+        max_output_bytes: 65536
+
+      # This block is Rhai, not YAML. It posts a static GraphQL document with
+      # variables and returns an array of normalized record maps.
+      script: |
+        fn lookup(ctx) {
+          // Keep the GraphQL document static. Request values go in variables.
+          let query =
+            "query PersonByNationalId($nationalId: String!, $limit: Int!) { " +
+            "people(filter: { nationalId: { eq: $nationalId } }, limit: $limit) { " +
+            "national_id: nationalId birth_date: birthDate given_name_th: givenNameTh family_name_th: familyNameTh } }";
+
+          let r = source.post_json(
+            // Target name. This must match rhai.targets.graphql below.
+            "graphql",
+            // Path under the target base_url.
+            "/graphql",
+            // Query string parameters. Empty for this GraphQL POST.
+            #{},
+            // JSON body posted to the GraphQL server.
+            #{
+              query: query,
+              operationName: "PersonByNationalId",
+              variables: #{
+                // ctx.lookup.value comes from Notary's source binding lookup.
+                nationalId: ctx.lookup.value,
+                // ctx.limit is Notary's requested record cap.
+                limit: ctx.limit
+              }
+            }
+          );
+
+          // GraphQL often reports application errors in a 200 response.
+          if r.body.errors != () {
+            throw "graphql_error";
+          }
+
+          // Return only the record array that Notary should evaluate.
+          let people = r.body.data.people;
+          if people == () { [] } else { people }
+        }
+
+      # Named outbound targets the script is allowed to use.
+      targets:
+        # This key is the first argument to source.post_json("graphql", ...).
+        graphql:
+          base_url: https://civil-registry.example.test
+          headers:
+            Accept: application/json
+          auth:
+            type: bearer
+            token:
+              # Secret field inside CIVIL_REGISTRY_GRAPHQL_CREDENTIAL_JSON.
+              secret: accessToken
+
+    # Startup readiness probe. Use a non-production synthetic identifier.
+    smoke_lookup:
+      field: national_id
+      value: smoke-person
+      fields:
+        - national_id
+        - birth_date
+      purpose: startup-smoke
+```
+
+The credential environment variable contains only target-service material for
+the sidecar host:
+
+```bash
+export CIVIL_REGISTRY_GRAPHQL_CREDENTIAL_JSON='{"accessToken":"..."}'
+```
+
+Keep the GraphQL document static and pass lookup values through GraphQL
+variables. Do not build the query string from citizen identifiers or other
+request data. GraphQL servers may return an HTTP `200` with an `errors` array;
+the example throws a coarse `graphql_error`, which maps to
+`source.unavailable` without exposing upstream error details. If the GraphQL
+server returns one object instead of an array, wrap the object in an array before
+returning it.
+
+The matching Notary claim binding stays the ordinary sidecar shape:
+
+```yaml
+source_bindings:
+  crvs:
+    connector: source_adapter_sidecar
+    connection: civil_registry_sidecar
+    required_scope: civil_registry:evidence_verification
+    dataset: civil_registry
+    entity: civil_person
+    lookup:
+      input: target.identifiers.national_id
+      field: national_id
+      op: eq
+      cardinality: one
+    fields:
+      birth_date:
+        field: birth_date
+        type: date
+        required: true
+```
 
 ### Target authentication
 
