@@ -80,7 +80,7 @@ Registry Relay issues signed responses as verifiable credentials whose `credenti
 - **AggregateResult schema**: the `credentialSubject` envelope of an AggregateResult credential.
 - **Provenance context**: the JSON-LD 1.1 context for the credential terms.
 
-These three are production contracts: they are embedded in issued credentials, served by the gateway, and content-pinned in the relay resource manifest. The `$id` and context IRIs emitted today are under `schemas.registry-relay.org`; the resolver also publishes them under `id.registrystack.org/schemas/registry-relay/...` and `id.registrystack.org/contexts/registry-relay/...`, and consolidation of the emitted identifiers onto that host is in progress.
+These three are production contracts: they are embedded in issued credentials, served by the gateway, and content-pinned in the relay resource manifest. The emitted `$id` values resolve under `id.registrystack.org/schemas/registry-relay/...`; the provenance context terms resolve under `id.registrystack.org/ns/registry-relay/provenance/v1#`.
 
 ### JSON-LD namespaces
 
@@ -90,7 +90,7 @@ The registry stack defines JSON-LD vocabularies for its metadata and provenance 
 - `registry-manifest/v1`: Registry Manifest terms.
 - `registry-relay/provenance/v1`: Registry Relay provenance credential terms (the context above).
 
-Their canonical home is `id.registrystack.org/ns/registry-relay/...` and `.../registry-manifest/...`. Consolidation of the runtime emission onto this host is in progress.
+Their canonical home is `id.registrystack.org/ns/registry-relay/...` and `id.registrystack.org/ns/registry-manifest/...`.
 
 ## Known gaps
 

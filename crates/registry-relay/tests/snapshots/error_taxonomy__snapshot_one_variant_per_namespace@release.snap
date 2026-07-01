@@ -7,5 +7,5 @@ expression: json
   "detail": "subject attributes cannot be released for this request",
   "status": 403,
   "title": "Subject denied",
-  "type": "https://registry-relay.dev/problems/release/subject_denied"
+  "type": "https://id.registrystack.org/problems/registry-relay/release/subject_denied"
 }

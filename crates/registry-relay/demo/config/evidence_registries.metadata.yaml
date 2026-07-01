@@ -156,4 +156,4 @@ datasets:
             required: true
 vocabularies:
   spdci: https://schema.spdci.org/
-  registry-notary: https://registry-relay.dev/registry-notary/
+  registry-notary: https://id.registrystack.org/ns/registry-notary/v1#

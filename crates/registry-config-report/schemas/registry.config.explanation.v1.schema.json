@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registry-platform.example/schemas/registry.config.explanation.v1.schema.json",
+  "$id": "https://id.registrystack.org/schemas/registry-platform/registry.config.explanation.v1.schema.json",
   "title": "Registry Product Config Explanation v1",
   "type": "object",
   "required": [

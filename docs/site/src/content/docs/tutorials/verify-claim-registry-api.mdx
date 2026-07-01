@@ -199,10 +199,24 @@ curl -sS -X POST \
   http://127.0.0.1:4255/v1/evaluations
 ```
 
-Notary returns `409 Evidence not available`.
-A missing subject is an evidence error, not a negative claim result.
+Notary does not return `satisfied: false` for a missing person.
+It returns a `409` problem document, because there is no evidence to evaluate:
 
-## Compare row read and claim result
+```json
+{
+  "code": "evidence.not_available",
+  "detail": "the evidence is not available",
+  "request_id": "01KTS31QC7184F5487VW0P7XM3",
+  "status": 409,
+  "title": "Evidence not available",
+  "type": "https://id.registrystack.org/problems/registry-notary/evidence/not_available"
+}
+```
+
+This distinction matters to integrators: a claim result answers the configured question about a
+known subject, while a missing subject is an evidence error, not a negative answer.
+
+## Compare a row read and a claim result
 
 Relay still exposes the source-facing consultation API:
 

@@ -98,6 +98,34 @@ fn build_openapi_document() -> Value {
                     }
                 }
             },
+            "/admin/v1/posture": {
+                "get": {
+                    "summary": "Read redacted runtime posture",
+                    "description": "Returns redacted runtime posture for the requested tier. The response body is a registry.ops.posture.v1 document describing instance, configuration, notary, deployment, and audit posture.",
+                    "operationId": "adminPosture",
+                    "security": [
+                        { "apiKeyAuth": [] },
+                        { "bearerAuth": [] }
+                    ],
+                    "parameters": [
+                        {
+                            "name": "tier",
+                            "in": "query",
+                            "required": false,
+                            "description": "Redaction tier for the posture document. Defaults to default.",
+                            "schema": { "type": "string", "enum": ["default", "restricted"] }
+                        }
+                    ],
+                    "responses": {
+                        "200": { "description": "Redacted posture for the requested tier" },
+                        "400": { "description": "Posture tier is invalid" },
+                        "401": { "description": "Missing or invalid credential" },
+                        "403": { "description": "Caller lacks registry_notary:ops_read scope" },
+                        "500": { "description": "Posture could not be filtered for the requested tier" },
+                        "503": { "description": "Posture state is unavailable" }
+                    }
+                }
+            },
             "/admin/v1/config/verify": {
                 "post": {
                     "summary": "Validate a candidate runtime config",
@@ -149,7 +177,8 @@ fn build_openapi_document() -> Value {
                         "409": { "description": "Candidate config requires restart and was not applied" },
                         "400": { "description": "Candidate config is invalid" },
                         "401": { "description": "Missing or invalid credential" },
-                        "403": { "description": "Caller lacks registry_notary:admin scope" }
+                        "403": { "description": "Caller lacks registry_notary:admin scope" },
+                        "503": { "description": "Config apply is unavailable" }
                     }
                 }
             },
@@ -1275,6 +1304,88 @@ fn add_response_examples(document: &mut Value) {
             ),
         );
     }
+    set_problem_response(
+        document,
+        "/admin/v1/config/apply",
+        "post",
+        "503",
+        "Config apply is unavailable",
+        problem_example(
+            503,
+            "config.apply_unavailable",
+            "Config apply unavailable",
+            "config_trust.antirollback_state_path is not configured",
+        ),
+    );
+    set_json_response(
+        document,
+        "/admin/v1/posture",
+        "get",
+        "200",
+        "Redacted posture for the requested tier",
+        serde_json::from_str(registry_platform_ops::NOTARY_POSTURE_EXAMPLE_V1)
+            .expect("notary posture example is valid JSON"),
+    );
+    set_problem_response(
+        document,
+        "/admin/v1/posture",
+        "get",
+        "400",
+        "Posture tier is invalid",
+        admin_error_example(
+            400,
+            "registry.admin.posture.invalid_tier",
+            "Admin posture tier invalid",
+            "posture tier must be default or restricted",
+        ),
+    );
+    set_problem_response(
+        document,
+        "/admin/v1/posture",
+        "get",
+        "401",
+        "Missing or invalid credential",
+        missing_credential_example(),
+    );
+    set_problem_response(
+        document,
+        "/admin/v1/posture",
+        "get",
+        "403",
+        "Caller lacks registry_notary:ops_read scope",
+        problem_example(
+            403,
+            "auth.scope_denied",
+            "Scope denied",
+            "missing required scope",
+        ),
+    );
+    set_problem_response(
+        document,
+        "/admin/v1/posture",
+        "get",
+        "500",
+        "Posture could not be filtered for the requested tier",
+        problem_example(
+            500,
+            "posture.filter_failed",
+            "Admin posture unavailable",
+            "admin posture could not be filtered for the requested tier",
+        ),
+    );
+    set_problem_response(
+        document,
+        "/admin/v1/posture",
+        "get",
+        "503",
+        "Posture state is unavailable",
+        admin_error_example(
+            503,
+            "posture.unavailable",
+            "Admin posture unavailable",
+            "posture state is unavailable",
+        ),
+    );
     set_json_response(
         document,
         "/openapi.json",
@@ -3850,6 +3961,7 @@ mod tests {
             "/admin/v1/config/verify",
             "/admin/v1/config/dry-run",
             "/admin/v1/config/apply",
+            "/admin/v1/posture",
             "/openapi.json",
             "/.well-known/evidence-service",
             "/.well-known/evidence/jwks.json",
@@ -3875,6 +3987,35 @@ mod tests {
         ] {
             assert!(paths.contains_key(route), "missing {route}");
         }
+    }
+
+    #[test]
+    fn documents_admin_posture_query_and_response_contract() {
+        let doc = openapi_document();
+        let posture = &doc["paths"]["/admin/v1/posture"]["get"];
+        assert!(posture.is_object(), "admin posture GET is documented");
+        // Authenticated read: posture must not be exposed as a public route.
+        assert_eq!(
+            posture["security"],
+            json!([{ "apiKeyAuth": [] }, { "bearerAuth": [] }])
+        );
+        // The tier query parameter is constrained to the runtime-accepted values.
+        let tier = &posture["parameters"][0];
+        assert_eq!(tier["name"], json!("tier"));
+        assert_eq!(tier["in"], json!("query"));
+        assert_eq!(tier["schema"]["enum"], json!(["default", "restricted"]));
+        // Every response the handler can return is documented.
+        for status in ["200", "400", "401", "403", "500", "503"] {
+            assert!(
+                posture["responses"][status].is_object(),
+                "posture documents the {status} response"
+            );
+        }
+        // The 200 body is documented with the real posture document shape.
+        assert_eq!(
+            posture["responses"]["200"]["content"]["application/json"]["example"]["schema"],
+            json!("registry.ops.posture.v1")
+        );
     }
 
     #[test]
@@ -4036,6 +4177,7 @@ mod tests {
             ("/healthz", "get", "200"),
             ("/ready", "get", "200"),
             ("/admin/v1/capabilities", "get", "200"),
+            ("/admin/v1/posture", "get", "200"),
             ("/admin/v1/config/verify", "post", "200"),
             ("/admin/v1/config/dry-run", "post", "200"),
             ("/admin/v1/config/apply", "post", "200"),
@@ -4154,6 +4296,12 @@ mod tests {
             ("/admin/v1/config/apply", "post", "400"),
             ("/admin/v1/config/apply", "post", "401"),
             ("/admin/v1/config/apply", "post", "403"),
+            ("/admin/v1/config/apply", "post", "503"),
+            ("/admin/v1/posture", "get", "400"),
+            ("/admin/v1/posture", "get", "401"),
+            ("/admin/v1/posture", "get", "403"),
+            ("/admin/v1/posture", "get", "500"),
+            ("/admin/v1/posture", "get", "503"),
             ("/.well-known/evidence-service", "get", "401"),
             ("/v1/claims", "get", "401"),
             ("/v1/claims/{claim_id}", "get", "401"),
@@ -4491,7 +4639,7 @@ mod tests {
             example["type"]
                 .as_str()
                 .is_some_and(|value| {
-                    value.starts_with("https://docs.registry-notary.dev/problems/")
+                    value.starts_with("https://id.registrystack.org/problems/registry-notary/")
                 }),
             "problem example must include a Registry Notary problem type for {method} {path} {status}"
         );

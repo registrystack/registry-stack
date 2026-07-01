@@ -813,7 +813,7 @@ fn vocabularies_protect_builtins_and_validate_custom_namespaces() {
     );
     manifest.vocabularies.insert(
         "registry_relay".to_string(),
-        "https://registry-relay.dev/".to_string(),
+        "https://id.registrystack.org/ns/registry-relay/v1#".to_string(),
     );
     validate_manifest(&manifest)
         .expect("safe custom vocabulary and identical protected values pass");
@@ -1143,7 +1143,7 @@ fn cpsv_ap_service_first_fixture_matches_contract_golden() {
         .is_none());
     assert_eq!(
         cpsv["@context"]["registry_manifest"],
-        json!("https://registry-manifest.dev/ns/v1#")
+        json!("https://id.registrystack.org/ns/registry-manifest/v1#")
     );
 
     let graph = cpsv["@graph"].as_array().expect("@graph");

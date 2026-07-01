@@ -464,7 +464,7 @@ pub mod problem {
 
 pub async fn body_limit_problem_response(_request: Request<Body>) -> Response<Body> {
     Problem::new(
-        "https://registry-platform.dev/problems/request/body-too-large",
+        "https://id.registrystack.org/problems/registry-platform/request/body-too-large",
         "Payload Too Large",
         StatusCode::PAYLOAD_TOO_LARGE,
     )
@@ -530,7 +530,7 @@ mod tests {
     fn problem_response_serialises_type_title_status_and_detail() {
         let value = serde_json::to_value(
             Problem::new(
-                "https://registry-platform.dev/problems/test",
+                "https://example.com/problems/test",
                 "Test Error",
                 StatusCode::UNPROCESSABLE_ENTITY,
             )
@@ -538,7 +538,7 @@ mod tests {
         )
         .expect("problem serializes");
 
-        assert_eq!(value["type"], "https://registry-platform.dev/problems/test");
+        assert_eq!(value["type"], "https://example.com/problems/test");
         assert_eq!(value["title"], "Test Error");
         assert_eq!(value["status"], 422);
         assert_eq!(value["detail"], "something was wrong");

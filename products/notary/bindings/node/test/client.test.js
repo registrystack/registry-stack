@@ -261,7 +261,7 @@ test("Problem Details errors are mapped and detail is redacted by default", asyn
     fetch: async () =>
       jsonResponse(
         {
-          type: "https://docs.registry-notary.dev/problems/target/not-found",
+          type: "https://id.registrystack.org/problems/registry-notary/target/not-found",
           title: "Target not found",
           status: 404,
           detail: "secret target subj-0000001 was not found",
@@ -283,7 +283,7 @@ test("Problem Details errors are mapped and detail is redacted by default", asyn
       assert.equal(error.code, "target.not_found");
       assert.equal(error.title, "Target not found");
       assert.equal(error.requestId, "req-123");
-      assert.equal(error.problemType, "https://docs.registry-notary.dev/problems/target/not-found");
+      assert.equal(error.problemType, "https://id.registrystack.org/problems/registry-notary/target/not-found");
       assert.equal(error.detail, undefined);
       assert.equal(error.message.includes("secret target"), false);
       assert.deepEqual(error.toJSON(), {
