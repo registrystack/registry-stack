@@ -15,6 +15,8 @@ standards_referenced:
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
+Registry Relay turns a tabular source you already hold, such as a spreadsheet or a database
+table, into a protected, read-only API without copying the data out.
 Use this tutorial to start a protected registry API on your machine.
 You will create a local project from a tiny benefits workbook, make one denied request, make one
 allowed request, and inspect the contract Registry Stack generated.
@@ -119,8 +121,11 @@ Call the dataset route without a credential:
 curl -i http://127.0.0.1:4242/v1/datasets
 ```
 
-Relay returns `401 Unauthorized`.
+Relay refuses the request with `401 Unauthorized` and a `problem+json` body whose stable `code`
+is `auth.missing_credential`.
 The registry is online, but the route is protected.
+When you script against Relay, check the status and the `code` rather than the human-readable
+message; the code is the part that will not change.
 
 ## Make one allowed request
 
@@ -163,7 +168,7 @@ curl -i -G \
   http://127.0.0.1:4242/v1/datasets/benefits_casework/entities/person/records
 ```
 
-Relay returns `403 Forbidden`.
+Relay refuses this with `403 Forbidden` and the code `auth.scope_denied`.
 The key is valid, but it does not have row-read scope.
 
 ## Inspect the generated contract
@@ -214,6 +219,14 @@ registryctl stop
 
 This stops the local containers.
 It does not delete your workbook, generated config, local keys, or smoke results.
+
+## What you built
+
+You turned a sample Excel workbook into a protected API and watched the boundary hold: an
+anonymous read was refused with `401` (`auth.missing_credential`), an authorized read returned
+only the rows you asked for, and a key that lacked the row-read scope was refused with `403`
+(`auth.scope_denied`). Relay read the workbook in place and never wrote back to it: the data
+stayed where it started, and only an authorized, scoped request got an answer out.
 
 ## Next
 

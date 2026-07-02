@@ -1,0 +1,138 @@
+---
+title: Trust posture and security guarantees
+description: A plain account of what Registry Stack protects for you, what it recommends you confirm, and what it deliberately leaves to your deployment.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-06-28"
+doc_type: explanation
+locale: en
+standards_referenced:
+  - sd-jwt-vc
+  - oid4vci
+  - cccev
+  - w3c-did
+  - odrl
+---
+
+Before you adopt Registry Stack you want a straight answer to three questions: what does it
+guarantee about security and privacy, what does it leave for you to get right, and what does
+it deliberately *not* do? This page answers all three in plain terms. It is not a substitute
+for the specifications — at the end you'll find links to the exact documents where each
+property is defined — but it is the honest summary you can read first.
+
+## At a glance
+
+| What | Where it stands |
+|------|-----------------|
+| Authentication on every route that touches a record or a claim | **Built in** |
+| Deny-by-default authorization, checked before any data is read | **Built in** |
+| Only the public half of a signing key is ever published | **Built in** |
+| Person-level access is written to an audit log | **Built in** (fail-closed is yours to switch on) |
+| Three disclosure modes, with `redacted` revealing neither value nor answer | **Built in** |
+| Selective-disclosure credentials, with holder binding configurable per profile (off by default) | **Built in** |
+| Federation limited to peers you configure | **Built in** |
+| Hardened HTTP headers and outbound-traffic limits | **Recommended** — confirm your build applies them |
+| Key custody, retention, isolation, TLS, rate limiting | **Your deployment's job** |
+| Compliance with any external standard it cites | **Not claimed** |
+
+## What's built in
+
+**Nothing answers without authenticating first.** Every route that returns a record or a
+claim result checks the caller's credential before it does anything else. A service runs one
+authentication mode at a time — either API-key fingerprints (it stores a hash, never the raw
+key, and compares in constant time) or OIDC tokens (it checks the signature, issuer, audience,
+and algorithm). The routes open to an anonymous caller are the operational and discovery
+surfaces — health and readiness probes, the public verification keys, credential-issuer
+discovery and the OID4VCI wallet-flow endpoints, the docs, public credential-status lookups,
+and credential type metadata — while everything that returns a record or claim result still
+requires a credential.
+
+**Authorization is deny-by-default, and it happens before any data is touched.** A caller has
+to hold the scope a route requires, and that check runs *before* Relay reads a source or
+Notary evaluates a claim — so a request can never quietly widen its own reach at the last
+moment.
+
+**Access leaves a trail.** Every request that returns person-level data is recorded with who
+asked, a request id, and the declared purpose. (Relay's audit record also captures the scopes
+exercised; Notary's audit record does not yet include that field — see the limitations hub.) You
+can run audit fail-closed, so that if the audit record can't be written the request doesn't
+succeed — that's a switch you turn on for a deployment that needs it, not something that's
+always on by default.
+
+**An answer is shaped, not a copy of the record.** Every claim is answered in one of three
+modes: `value` hands back the computed value, `predicate` returns only a yes/no, and `redacted`
+returns neither the value nor the yes/no. The claim's policy fixes which modes are allowed;
+within that set the caller can request one, and otherwise the default applies. [Disclosure modes and computed answers](../disclosure-modes-and-computed-answers/)
+covers this in depth.
+
+**Credentials are selective, and can be holder-bound.** When Notary issues a credential it's an
+SD-JWT VC: the signed body carries hashes of each disclosable field rather than the values, so
+the holder reveals only what they choose. Holder binding is configurable per credential profile
+and defaults to off — when a profile enables it (using `did:jwk`), the credential is tied to the
+holder's own key and can't be presented by anyone else. The self-attestation (wallet) issuance
+path requires binding with proof-of-possession, so credentials issued there are always bound.
+Anyone can verify a credential against the issuer's published keys without needing a credential
+of their own. The plain claim or evaluation result is not a credential, so it is never
+holder-bound — binding applies only to an issued SD-JWT VC. Credentials are signed with
+EdDSA/Ed25519 by default, with ES256/P-256 also available per profile.
+
+**Federation only talks to peers you configured.** There's no automatic trust discovery. Peers
+are loaded from configuration at startup, anything else is rejected, and a federated request is
+checked for identity, signature, freshness, purpose, and audience before any source is read.
+What crosses a federation boundary is a scoped answer — never a credential.
+
+## What's recommended — and worth confirming
+
+Two things are strong recommendations rather than hard guarantees, so they're worth a moment in
+a review:
+
+- **Shared security primitives.** Authentication, audit, cryptography, and the credential
+  helpers are meant to come from one shared component (Registry Platform) so they behave the
+  same everywhere and can be reviewed in one place. The specs recommend this rather than force
+  it — so confirm a given service actually does it rather than reimplementing its own.
+- **HTTP hardening.** Security headers and limits on outbound traffic are recommended posture.
+  Check that your build applies them rather than assuming it.
+
+## Where the guarantees stop
+
+A trustworthy posture is as honest about its edges as its strengths. The full inventory lives in
+[Known limitations and non-guarantees](../known-limitations/); the three that matter most for a
+trust review are:
+
+- **Your deployment owns the operational security.** Key custody and rotation, audit retention,
+  tenant isolation, TLS, rate limiting, and incident response are yours, not the stack's. A
+  deployment can pass every health and conformance check and still be running on demo keys — so
+  passing checks is not the same as production-grade key custody.
+- **Aligning with a standard is not conforming to it.** Registry Stack speaks several standards'
+  shapes — SD-JWT VC, OID4VCI, CCCEV, W3C DID, ODRL — but conformance to a Registry Stack spec
+  does not imply certified conformance to any of them. The OID4VCI and CCCEV surfaces in
+  particular are deliberately partial subsets.
+- **A published catalog grants nothing.** Listing a dataset or policy in a discovery artifact
+  describes intent; it doesn't grant access or prove a record exists. Only an authorized runtime
+  read decides that.
+
+## Verifying a release, and reading the source
+
+For checking what you're actually running, GitHub release assets are signed with keyless
+Sigstore cosign, and tag-built releases also publish SLSA provenance. You can verify both with
+`cosign verify-blob` and `slsa-verifier`; the steps are in `SECURITY.md` and `release/VERIFY.md`
+in the repository. (Git tags themselves and container images aren't signed yet.)
+
+Everything above is defined normatively in the specifications, which are the place to go when
+you want to check a claim rather than take it on trust:
+
+- [RS-SEC-G](../../spec/rs-sec-g/) — the security model (authentication, authorization, audit,
+  key boundary, the operator boundary)
+- [RS-PR-NOTARY](../../spec/rs-pr-notary/) — disclosure modes, credentials, and federation
+- [RS-PR-RELAY](../../spec/rs-pr-relay/) — the protected read API
+- [RS-DM-CLAIM](../../spec/rs-dm-claim/) — how a claim and its disclosure policy are defined
+- [RS-ARC-G](../../spec/rs-arc-g/) — the component boundaries these rest on
+
+## Related
+
+- [Records stay home](../records-stay-home/) — what stays inside the institution and what crosses out
+- [Threat model](../threat-model/) — the boundaries, assets, and threats behind this posture
+- [Data minimization and purpose limitation](../data-minimization-and-purpose-limitation/) — the privacy view
+- [Known limitations and non-guarantees](../known-limitations/) — the full list of edges

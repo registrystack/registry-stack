@@ -250,12 +250,26 @@ export default defineConfig({
           collapsed: true,
           items: [
             { label: 'Architecture', slug: 'explanation/architecture' },
+            { label: 'Records stay home', slug: 'explanation/records-stay-home' },
             { label: 'Boundaries and map', slug: 'map/boundaries-and-map' },
             { label: 'Consultation flow', slug: 'explanation/consultation-flow' },
             { label: 'Evidence issuance', slug: 'explanation/evidence-issuance' },
+            { label: 'Disclosure modes', slug: 'explanation/disclosure-modes-and-computed-answers' },
             { label: 'Trusted context', slug: 'explanation/trusted-context-constraints' },
             { label: 'Integration patterns', slug: 'explanation/integration-patterns' },
             { label: 'DPI safeguards', slug: 'explanation/dpi-safeguards-alignment' },
+          ],
+        },
+        {
+          // Trust & Security rail (roadmap §6): the reviewer/auditor-facing
+          // posture, threat model, privacy story, and the canonical limits hub.
+          label: 'Trust & security',
+          collapsed: true,
+          items: [
+            { label: 'Trust posture', slug: 'explanation/trust-posture-and-security-guarantees' },
+            { label: 'Threat model', slug: 'explanation/threat-model' },
+            { label: 'Data minimization', slug: 'explanation/data-minimization-and-purpose-limitation' },
+            { label: 'Known limitations', slug: 'explanation/known-limitations' },
           ],
         },
         {
