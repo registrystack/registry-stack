@@ -22,9 +22,9 @@ use registry_notary_core::{
     AccessMode, BatchEvaluateItemRequest, BatchEvaluateRequest, ClaimDefinition,
     ClaimOperationsConfig, ClaimRef, ClaimResultView, ClaimValueConfig, ConcurrencyConfig,
     CredentialProfileConfig, DisclosureConfig, EvidenceConfig, EvidenceError, EvidencePrincipal,
-    RuleConfig, SourceBindingConfig, SourceConnectorKind, SourceFieldConfig, SourceLookupConfig,
-    SourceMatchingConfig, StandaloneRegistryNotaryConfig, SubjectRequest, FORMAT_CLAIM_RESULT_JSON,
-    FORMAT_SD_JWT_VC,
+    HolderBindingConfig, RuleConfig, SourceBindingConfig, SourceConnectorKind, SourceFieldConfig,
+    SourceLookupConfig, SourceMatchingConfig, StandaloneRegistryNotaryConfig, SubjectRequest,
+    FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
 };
 use registry_notary_server::{
     standalone_router, BatchEvaluateOptions, EvidenceStore, MemoState, RegistryNotaryRuntime,
@@ -1307,7 +1307,11 @@ fn test_credential_profile() -> CredentialProfileConfig {
         signing_key: "issuer-key".to_string(),
         vct: "https://vct.example/test".to_string(),
         validity_seconds: 60,
-        holder_binding: Default::default(),
+        holder_binding: HolderBindingConfig {
+            mode: "none".to_string(),
+            proof_of_possession: None,
+            allowed_did_methods: Vec::new(),
+        },
         allowed_claims: Vec::new(),
         disclosure: Default::default(),
     }

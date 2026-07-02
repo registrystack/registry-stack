@@ -121,7 +121,9 @@ Three mechanics make selective disclosure work.
 - Holder binding via `did:jwk`. The credential's `cnf` claim names the holder's public key as a
   `did:jwk`. To present the credential, the holder must produce a fresh signed proof from that
   key, audience-bound to the verifier. A stolen credential without the matching private key is
-  not presentable.
+  not presentable. Holder binding is the default: a credential profile that omits `holder_binding`
+  binds with `did:jwk`, and issuing an unbound, bearer-style credential requires an explicit
+  `holder_binding.mode: none`.
 
 ## Where this fits with Relay
 

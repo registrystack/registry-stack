@@ -6,8 +6,9 @@
 //! - `issue` with one disclosure: the minimal single-claim credential.
 //! - `issue` with three disclosures: a realistic multi-claim credential.
 //!
-//! All `issue` benches use holder_binding.mode = "none", holder_id = None,
-//! and a fixed iat (OffsetDateTime::UNIX_EPOCH) to avoid wall-clock noise.
+//! All `issue` benches explicitly use holder_binding.mode = "none",
+//! holder_id = None, and a fixed iat (OffsetDateTime::UNIX_EPOCH) to avoid
+//! wall-clock noise.
 
 use std::collections::BTreeMap;
 use std::hint::black_box;
@@ -32,7 +33,11 @@ fn build_profile() -> CredentialProfileConfig {
         signing_key: "perf-key".to_string(),
         vct: "https://data.example.gov/credentials/smallholder/v1".to_string(),
         validity_seconds: 24 * 60 * 60,
-        holder_binding: HolderBindingConfig::default(),
+        holder_binding: HolderBindingConfig {
+            mode: "none".to_string(),
+            proof_of_possession: None,
+            allowed_did_methods: Vec::new(),
+        },
         allowed_claims: vec![
             "date-of-birth".into(),
             "farmer-under-4ha".into(),
