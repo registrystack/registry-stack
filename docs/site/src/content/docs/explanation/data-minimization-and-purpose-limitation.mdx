@@ -58,7 +58,7 @@ One related boundary is positive rather than cautionary. The portable metadata t
 
 ## Audit as an accountability primitive
 
-Accountability is supported through audit, which is treated as a security control rather than an optional log. Every request that returns person-level records or claim results must be recorded with at least the caller principal, a request identifier, and the purpose value where one was supplied, and a deployment can run audit fail-closed so that a request whose audit record cannot be written does not succeed. The security model expects the scopes exercised to be recorded too; in practice Relay's audit record captures them, but Notary's audit record does not yet include that field, a gap noted in the limitations inventory.
+Accountability is supported through audit, which is treated as a security control rather than an optional log. Every request that returns person-level records or claim results must be recorded with at least the caller principal, the scopes exercised, a request identifier, and the purpose value where one was supplied, and a deployment can run audit fail-closed so that a request whose audit record cannot be written does not succeed.
 
 One precise reading matters here. Audit fail-closed is a capability a deployment can turn on, not a guarantee that every route in any given build has been individually audited against it. Whether a particular deployment meets it is something a reviewer verifies in that deployment, not something the design asserts on its behalf.
 

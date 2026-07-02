@@ -154,9 +154,9 @@ Security material:
   a permit before data is returned; a denial fails closed with a stable reason rather than
   falling back to an ungoverned read.
 - Every person-level request is audited: An audit record captures at least the caller,
-  a request id, and the declared purpose where one was supplied; Relay additionally records
-  the scopes exercised (Notary's record does not). A deployment can run audit fail-closed, so
-  a request whose audit record cannot be written does not return success.
+  the scopes exercised, a request id, and the declared purpose where one was supplied.
+  A deployment can run audit fail-closed, so a request whose audit record cannot be
+  written does not return success.
 
 ## What this guarantees, and what it does not
 
