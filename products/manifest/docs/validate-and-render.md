@@ -25,7 +25,7 @@ If you have installed the binary directly, replace that prefix with `registry-ma
 
 The four example profile fixtures in the repository serve as ready-made manifest inputs.
 The commands in this how-to use
-[`profiles/example-civil-registration/fixtures/metadata.yaml`](https://github.com/jeremi/registry-manifest/blob/bb7bc6d015f519a9d1a6b6a0b661a2d28566af9d/profiles/example-civil-registration/fixtures/metadata.yaml)
+[`profiles/example-civil-registration/fixtures/metadata.yaml`](../profiles/example-civil-registration/fixtures/metadata.yaml)
 as the example path.
 Substitute your own manifest path as needed.
 

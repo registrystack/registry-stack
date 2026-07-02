@@ -13,7 +13,7 @@ The general governed-configuration model (signed bundles, TUF verification, trus
 roots, signer thresholds, and anti-rollback) is a shared Registry Platform
 capability used by Registry Relay and Registry Notary alike. This page does not
 restate it. See
-[Governed configuration](../../registry-platform/docs/governed-configuration.md)
+[Governed configuration](../../platform/docs/governed-configuration.md)
 for the shared model and how verification, authorization, and rollback protection
 work. Configuration integrity there is built on TUF (The Update Framework)
 through a standard, maintained client, not homegrown cryptography. What follows
@@ -39,7 +39,7 @@ is the Notary- and sidecar-specific layer on top of that model.
 ## What you are responsible for
 
 Key custody and trust-root distribution are part of the
-[shared governed-configuration model](../../registry-platform/docs/governed-configuration.md#trust-roots-roles-and-change-classes)
+[shared governed-configuration model](../../platform/docs/governed-configuration.md#trust-roots-roles-and-change-classes)
 and matter just as much here: the guarantees above are only as strong as your
 protection of the signing keys. Specific to the sidecar path:
 
@@ -134,7 +134,7 @@ without production key custody.
 
 ## Where to go next
 
-- [Governed configuration](../../registry-platform/docs/governed-configuration.md):
+- [Governed configuration](../../platform/docs/governed-configuration.md):
   the shared platform model behind signed configuration, trust roots, signer
   thresholds, and anti-rollback. Read this first for the trust model itself.
 - [Model sources and claims](source-claim-modeling-guide.md): configure the

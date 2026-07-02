@@ -189,11 +189,11 @@ These are examples until reviewed against official OpenCRVS, OpenSPP, OpenIMIS, 
 or maintainer-provided artifacts.
 
 Four additional subdirectories exist in `profiles/` for
-[`opencrvs`](https://github.com/jeremi/registry-manifest/tree/bb7bc6d015f519a9d1a6b6a0b661a2d28566af9d/profiles/opencrvs/),
-[`openimis`](https://github.com/jeremi/registry-manifest/tree/bb7bc6d015f519a9d1a6b6a0b661a2d28566af9d/profiles/openimis/),
-[`openspp`](https://github.com/jeremi/registry-manifest/tree/bb7bc6d015f519a9d1a6b6a0b661a2d28566af9d/profiles/openspp/),
+[`opencrvs`](../profiles/opencrvs/),
+[`openimis`](../profiles/openimis/),
+[`openspp`](../profiles/openspp/),
 and
-[`spdci`](https://github.com/jeremi/registry-manifest/tree/bb7bc6d015f519a9d1a6b6a0b661a2d28566af9d/profiles/spdci/).
+[`spdci`](../profiles/spdci/).
 Each contains only a `README.md` that marks it as a placeholder pending official review.
 
 ## v0 caveats
