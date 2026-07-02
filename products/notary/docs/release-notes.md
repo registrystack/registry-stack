@@ -81,11 +81,10 @@
   `fingerprint` reference (`provider`, `name`, `commitment`) in place of
   `hash_env`, so signed config apply can govern caller-credential rotation.
 - Renamed OIDC config fields to the shared Registry service convention:
-  `auth.oidc.jwks_uri` -> `auth.oidc.jwks_url`,
-  `auth.oidc.leeway_seconds` -> `auth.oidc.leeway`, and
-  `auth.oidc.allowed_typ` -> `auth.oidc.allowed_token_types`. Old names fail
-  config load with an error naming the replacement. `auth.oidc.leeway` now uses
-  humantime strings such as `30s`; self-attestation
+  `auth.oidc.jwks_url`, `auth.oidc.leeway`, and
+  `auth.oidc.allowed_token_types`. Legacy aliases fail config load with an error
+  naming the replacement. `auth.oidc.leeway` now uses humantime strings such as
+  `30s`; self-attestation
   `token_policy.max_clock_leeway_seconds` still bounds the resolved duration.
 - Removed `server.cors.allow_credentials`; Registry Notary now always disables
   credentialed CORS on the operator-configured server CORS layer. Remove the
