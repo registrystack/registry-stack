@@ -305,6 +305,7 @@ impl EntityQueryEngine {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn read_record(
         &self,
         dataset_id: &str,
