@@ -8,12 +8,67 @@
         "slug": "products/registry-relay"
       },
       {
-        "label": "Client integration",
-        "slug": "products/registry-relay/client-integration"
+        "label": "How-to",
+        "items": [
+          {
+            "label": "Client integration",
+            "slug": "products/registry-relay/client-integration"
+          },
+          {
+            "label": "Operations runbook",
+            "slug": "products/registry-relay/ops"
+          },
+          {
+            "label": "Signed response credentials",
+            "slug": "products/registry-relay/provenance"
+          },
+          {
+            "label": "Call Relay from OpenFn",
+            "slug": "products/registry-relay/openfn-relay-adaptor-guide"
+          },
+          {
+            "label": "Standards adapter operator guide",
+            "slug": "products/registry-relay/standards-adapter-operator-guide"
+          }
+        ]
       },
       {
-        "label": "Configuration",
-        "slug": "products/registry-relay/configuration"
+        "label": "Reference",
+        "items": [
+          {
+            "label": "API guide",
+            "slug": "products/registry-relay/api"
+          },
+          {
+            "label": "Configuration",
+            "slug": "products/registry-relay/configuration"
+          },
+          {
+            "label": "Portable metadata",
+            "slug": "products/registry-relay/metadata"
+          },
+          {
+            "label": "XLSX readiness contract",
+            "slug": "products/registry-relay/xlsx-readiness-contract"
+          },
+          {
+            "label": "Release notes",
+            "slug": "products/registry-relay/release-notes"
+          }
+        ]
+      },
+      {
+        "label": "Explanation",
+        "items": [
+          {
+            "label": "Standards assumptions",
+            "slug": "products/registry-relay/standards-assumptions"
+          },
+          {
+            "label": "Relay scenario catalog",
+            "slug": "products/registry-relay/relay-scenario-catalog"
+          }
+        ]
       }
     ]
   },
@@ -24,6 +79,15 @@
       {
         "label": "Overview",
         "slug": "products/registry-notary"
+      },
+      {
+        "label": "Tutorials",
+        "items": [
+          {
+            "label": "OpenCRVS DCI standalone tutorial",
+            "slug": "products/registry-notary/opencrvs-dci-standalone-tutorial"
+          }
+        ]
       },
       {
         "label": "How-to",
@@ -37,12 +101,40 @@
             "slug": "products/registry-notary/source-claim-modeling-guide"
           },
           {
+            "label": "FHIR source adapter",
+            "slug": "products/registry-notary/fhir-source-adapter-guide"
+          },
+          {
+            "label": "Script and Rhai source adapters",
+            "slug": "products/registry-notary/script-rhai-source-adapter-guide"
+          },
+          {
+            "label": "OpenCRVS onboarding",
+            "slug": "products/registry-notary/opencrvs-onboarding"
+          },
+          {
+            "label": "Federated evaluation operator guide",
+            "slug": "products/registry-notary/federated-evaluation-operator-guide"
+          },
+          {
+            "label": "Self-attestation operator guide",
+            "slug": "products/registry-notary/self-attestation-operator-guide"
+          },
+          {
             "label": "Credential lifecycle and status",
             "slug": "products/registry-notary/credential-lifecycle-status"
           },
           {
+            "label": "Sidecar trust and secrets",
+            "slug": "products/registry-notary/sidecar-trust-and-secrets"
+          },
+          {
             "label": "Signing key provider",
             "slug": "products/registry-notary/signing-key-provider"
+          },
+          {
+            "label": "Deployment hardening runbook",
+            "slug": "products/registry-notary/deployment-hardening-runbook"
           }
         ]
       },
@@ -54,8 +146,20 @@
             "slug": "products/registry-notary/operator-config-reference"
           },
           {
+            "label": "API reference",
+            "slug": "products/registry-notary/api-reference"
+          },
+          {
+            "label": "OID4VCI wallet interop",
+            "slug": "products/registry-notary/oid4vci-wallet-interop"
+          },
+          {
             "label": "SD-JWT VC conformance profile",
             "slug": "products/registry-notary/sd-jwt-vc-conformance-profile"
+          },
+          {
+            "label": "Release notes",
+            "slug": "products/registry-notary/release-notes"
           }
         ]
       },
@@ -65,6 +169,14 @@
           {
             "label": "Notary architecture",
             "slug": "products/registry-notary/architecture-overview"
+          },
+          {
+            "label": "Capability matrix",
+            "slug": "products/registry-notary/notary-capability-matrix"
+          },
+          {
+            "label": "Scenario patterns",
+            "slug": "products/registry-notary/notary-scenario-patterns"
           },
           {
             "label": "Identity and record matching",
@@ -89,6 +201,10 @@
       {
         "label": "Validate against profile fixtures",
         "slug": "products/registry-manifest/profile-fixtures"
+      },
+      {
+        "label": "ITB and SEMIC validation",
+        "slug": "products/registry-manifest/itb-semic-validation"
       },
       {
         "label": "Reference",
