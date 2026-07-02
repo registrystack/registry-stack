@@ -56,6 +56,7 @@ pub(super) fn federation_audit_event(
         event_id: Ulid::new().to_string(),
         occurred_at,
         principal_id_hash: None,
+        scopes_used: Vec::new(),
         decision: audit.decision,
         method: "POST".to_string(),
         path: "/federation/v1/evaluations".to_string(),

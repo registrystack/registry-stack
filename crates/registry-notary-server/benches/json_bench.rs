@@ -33,6 +33,7 @@ fn build_audit_event() -> EvidenceAuditEvent {
         principal_id_hash: Some(Hashed::<PrincipalIdentifier>::from_hash(
             "hmac-sha256:client-bench-001",
         )),
+        scopes_used: vec!["farmer_registry:evidence_verification".to_string()],
         decision: "allow".to_string(),
         method: "POST".to_string(),
         path: "/v1/evaluations".to_string(),

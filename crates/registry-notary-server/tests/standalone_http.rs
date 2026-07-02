@@ -8195,6 +8195,15 @@ async fn oidc_mode_verifies_token_from_fixture_idp() {
     assert!(envelopes
         .iter()
         .all(|envelope| envelope.record.get("principal_id").is_none()));
+    let claims_audit = envelopes
+        .iter()
+        .map(|envelope| &envelope.record)
+        .find(|record| record["path"] == json!("/v1/claims") && record["status"] == json!(200))
+        .expect("claims audit record exists");
+    assert_eq!(
+        claims_audit["scopes_used"],
+        json!(["farmer_registry:evidence_verification"])
+    );
     assert!(!audit.contains(&token));
 
     idp.stop().await;
@@ -8427,6 +8436,7 @@ async fn oidc_self_attestation_evaluates_renders_and_audits_access_mode() {
         .starts_with("hmac-sha256:"));
     assert!(evaluate_audit.get("principal_id").is_none());
     assert!(evaluate_audit.get("principal_id_hash").is_some());
+    assert_eq!(evaluate_audit["scopes_used"], json!(["self_attestation"]));
 
     let render_audit = records
         .iter()
@@ -8437,6 +8447,7 @@ async fn oidc_self_attestation_evaluates_renders_and_audits_access_mode() {
         })
         .expect("render audit record exists");
     assert_eq!(render_audit["access_mode"], json!("self_attestation"));
+    assert_eq!(render_audit["scopes_used"], json!(["self_attestation"]));
     assert_eq!(
         render_audit["purposes"],
         json!(["citizen_self_attestation"])
