@@ -52,16 +52,11 @@ client also has no `data/` mount.
 
 ## Quick start
 
-Clone with submodules:
+This lab lives at `lab/` inside the registry-stack monorepo. From a checkout of
+the monorepo:
 
 ```bash
-git clone --recurse-submodules git@github.com:jeremi/registry-lab.git
-cd registry-lab
-```
-
-For an existing checkout, or after pulling changes:
-
-```bash
+cd lab
 just setup
 just generate
 just build
@@ -70,10 +65,13 @@ just smoke
 just client
 ```
 
-The service-first metadata path uses the `vendor/registry-manifest` submodule by
-default. Override `REGISTRY_MANIFEST_REPO` when you want to test a sibling
-checkout or another local path. `just generate` and `just smoke` fail early when
-`registry-manifest` is missing.
+`just setup` initializes the `vendor/` submodules this lab still depends on
+(Crosswalk, registry-atlas, the eSignet Relay authenticator). The Registry
+Relay, Notary, Platform, and Manifest source now live as crates in the
+monorepo root rather than as separate submodules or sibling checkouts, so the
+plain commands above only resolve correctly when run through a monorepo-aware
+recipe such as `just release-fast` (see below). `just generate` and `just
+smoke` fail early when `registry-manifest` is missing.
 
 `just generate` writes `.env`, fixture files, and static metadata. Run it before
 `just up` the first time, and run it again after pulling demo changes that add
@@ -87,13 +85,25 @@ When you are done:
 just down
 ```
 
-For a single command that generates, builds, starts, and runs the core checks:
+For a single command that generates, builds, starts, and runs the core checks,
+in this monorepo use:
 
 ```bash
-just quick
+just release-fast
 ```
 
-For commons release validation across sibling source checkouts:
+Plain `just quick` predates the monorepo migration: it still expects sibling
+`registry-relay`, `registry-notary`, `registry-platform`, and
+`registry-manifest` checkouts (or the now-removed `vendor/` submodule pins for
+those) and fails without `REGISTRY_RELAY_SOURCE_DIR`,
+`REGISTRY_NOTARY_SOURCE_DIR`, `REGISTRY_PLATFORM_SOURCE_DIR`, and
+`REGISTRY_MANIFEST_REPO` overrides. `just release-fast` runs
+`scripts/release-check.sh`, which defaults to
+`REGISTRY_LAB_RELEASE_SOURCE_MODE=monorepo` and wires those variables to the
+monorepo root and `../crates/registry-relay` automatically.
+
+If you still have sibling Platform, Relay, and Notary checkouts and want to
+validate against them directly, `commons-check` remains available:
 
 ```bash
 REGISTRY_PLATFORM_SOURCE_DIR=../registry-platform \
@@ -103,10 +113,6 @@ REGISTRY_NOTARY_SOURCE_DIR=../registry-notary \
 just commons-check
 ```
 
-`commons-check` intentionally uses source dirs instead of `vendor/` pins. Update
-Lab vendor or submodule pins only after Platform, Manifest, Relay, and Notary
-source changes are committed.
-
 For the first release, keep the two proof paths separate:
 
 - Source proof: run against sibling Platform, Relay, and Notary checkouts with
@@ -114,10 +120,12 @@ For the first release, keep the two proof paths separate:
   reflected in Lab `vendor/` pins, also set
   `REGISTRY_LAB_ALLOW_PENDING_PINS=1`; the release source model check will print
   each pending pin or dirty source checkout. This is a pre-tag proof only.
-- Lab pin proof: run `scripts/release-check.sh` without
-  `REGISTRY_LAB_RELEASE_SOURCE_MODE`. The script forces Platform, Relay, Notary,
-  Manifest, and Crosswalk to the committed `vendor/` submodules even when
-  sibling checkouts exist. This is the clean-clone/no-sibling release proof.
+- Monorepo proof: run `scripts/release-check.sh` with the default
+  `REGISTRY_LAB_RELEASE_SOURCE_MODE=monorepo` (or explicitly). The script
+  resolves Platform, Relay, Notary, and Manifest against this monorepo
+  checkout and Crosswalk, registry-atlas, and the eSignet Relay authenticator
+  against the committed `vendor/` submodules. This is the primary release
+  proof for this monorepo.
 
 ## Demo commands
 
@@ -624,17 +632,21 @@ the full setup sequence, which starts with `just generate` before
 ## Source repositories
 
 This demo keeps runtime orchestration, fixtures, static metadata config, and
-walkthrough scripts in this repository. Supporting source repositories are
-submodules under `vendor/`:
+walkthrough scripts in this repository. Registry Platform, Registry Relay,
+Registry Notary, and Registry Manifest now live as crates in the
+registry-stack monorepo root rather than as `vendor/` submodules; the justfile
+and scripts default to the monorepo checkout (`..` from `lab/`) when no
+sibling checkout is present. The following remain real submodules under
+`vendor/`:
 
-- `vendor/registry-platform`: shared platform crates used by Relay and Notary.
-- `vendor/registry-relay`: Relay source used by `Dockerfile.registry-relay`.
-- `vendor/registry-notary`: Registry Notary source used by
-  `Dockerfile.registry-notary`.
-- `vendor/registry-manifest`: static metadata publishing CLI and profiles.
+- `vendor/crosswalk`: the Crosswalk mapping engine, pinned as a git dependency.
+- `vendor/registry-atlas`: registry-atlas source.
+- `vendor/esignet-relay-authenticator`: the eSignet Relay authenticator plugin
+  used by `just esignet-up`.
 
-The Compose build uses Docker named contexts so local source checkouts can be
-used without changing `compose.yaml`:
+The Compose build uses Docker named contexts, and defaults to this monorepo
+checkout for Platform, Relay, and Notary. Override with sibling checkouts when
+you need to build from another local path:
 
 ```bash
 REGISTRY_RELAY_SOURCE_DIR=../registry-relay \
@@ -644,40 +656,39 @@ CROSSWALK_SOURCE_DIR=../crosswalk \
 just build
 ```
 
-`just lab2-up` uses the same source selection model through `compose.lab2.yaml`.
-That makes Lab 2 useful as a pre-pin regression pass against sibling Relay,
-Notary, and Platform checkouts. `just lab2-generate` also rewrites a temporary
-tool manifest when `REGISTRY_PLATFORM_SOURCE_DIR` points outside the vendored
-Platform submodule, so generated governed artifacts can be checked against a
-Platform source checkout. For release evidence, keep using `scripts/release-check.sh`
-in `vendor` mode or pin the `vendor/` submodules before tagging.
+`just lab2-up` uses the same source selection model through `compose.lab2.yaml`,
+which makes Lab 2 useful as a regression pass against sibling Relay, Notary,
+and Platform checkouts as well as the monorepo default. `just lab2-generate`
+also rewrites a temporary tool manifest when `REGISTRY_PLATFORM_SOURCE_DIR`
+points outside this monorepo, so generated governed artifacts can be checked
+against a Platform source checkout. For release evidence, use
+`scripts/release-check.sh` (monorepo mode by default).
 
 Use the same variables with `scripts/generate-demo-secrets.py` when you want
-that script to use a sibling Relay checkout instead of the
-`vendor/registry-relay` submodule. `scripts/publish-static-metadata.sh` uses
-the Registry Manifest CLI from `REGISTRY_MANIFEST_REPO`, defaulting to the
-`vendor/registry-manifest` submodule. For a release, pin the submodules to
-commits that already include the Registry Platform, Registry Relay, and Registry
-Notary behavior required by this demo.
+that script to use a sibling Relay checkout instead of the monorepo default.
+`scripts/publish-static-metadata.sh` uses the Registry Manifest CLI from
+`REGISTRY_MANIFEST_REPO`, defaulting to this monorepo checkout.
 
 OpenFn image builds can use `REGISTRY_OPENFN_NOTARY_SOURCE_DIR` separately from
 the core Notary image. The lab default points OpenFn at the selected Notary
-source, so local source checkouts can be tested before the lab submodule pin
-moves.
+source.
 
 `scripts/check-release-source-model.sh source` compares sibling Platform,
-Relay, and Notary SHAs with the Lab `vendor/` pins and fails on mismatches or
-dirty source checkouts. Use `REGISTRY_LAB_ALLOW_PENDING_PINS=1` only while the
-final source commits are still waiting for the Lab submodule pin update.
-`scripts/check-release-source-model.sh vendor` proves that the selected release
-paths resolve to committed Lab pins.
+Relay, and Notary SHAs with the Lab `vendor/` pins (Crosswalk, registry-atlas,
+and the eSignet Relay authenticator) and fails on mismatches or dirty source
+checkouts. Use `REGISTRY_LAB_ALLOW_PENDING_PINS=1` only while the final source
+commits are still waiting for the Lab submodule pin update.
+`scripts/check-release-source-model.sh monorepo` (the default) proves that the
+selected release paths resolve to this monorepo checkout and the committed
+`vendor/` pins.
 
 `just notary-client` imports the Registry Notary Python client directly from a
 source checkout and runs it against the default lab Notary services. It looks at
-`REGISTRY_NOTARY_CLIENT_SOURCE_DIR` first, then `REGISTRY_NOTARY_SOURCE_DIR`,
-then `../registry-notary`, and finally `vendor/registry-notary`. Use
-`REGISTRY_NOTARY_CLIENT_SOURCE_DIR` when validating a client SDK branch before
-the lab submodule pin has moved. This smoke is explicit and is not part of
+`REGISTRY_NOTARY_CLIENT_SOURCE_DIR` first, then `REGISTRY_NOTARY_SOURCE_DIR`
+(which the justfile and `release-check.sh` default to this monorepo checkout),
+then falls back to the standalone sibling paths `../registry-notary` and
+`vendor/registry-notary`. Use `REGISTRY_NOTARY_CLIENT_SOURCE_DIR` when
+validating a client SDK branch. This smoke is explicit and is not part of
 `just quick`.
 
 ## Fixture data
