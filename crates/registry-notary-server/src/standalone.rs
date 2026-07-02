@@ -3291,6 +3291,7 @@ pub(crate) fn pre_auth_audit_event(
         event_id: Ulid::new().to_string(),
         occurred_at,
         principal_id_hash: fields.principal_id_hash,
+        scopes_used: Vec::new(),
         decision: decision.to_string(),
         method: method.to_string(),
         path: path.to_string(),
@@ -4629,6 +4630,7 @@ fn build_audit_event(
         principal_id_hash: principal.map(|principal| {
             Hashed::<PrincipalIdentifier>::from_hash(hasher.hash(&principal.principal_id))
         }),
+        scopes_used: principal.map_or_else(Vec::new, |principal| principal.scopes.clone()),
         decision,
         method: method.to_string(),
         path: path.to_string(),
@@ -7993,6 +7995,7 @@ credential_profiles:
             event_id: "01HX0000000000000000000000".to_string(),
             occurred_at: "2026-05-22T00:00:00Z".to_string(),
             principal_id_hash: Some(Hashed::from_hash("sha256:caseworker")),
+            scopes_used: vec!["registry_notary:admin".to_string()],
             decision: "allowed".to_string(),
             method: "GET".to_string(),
             path: "/v1/claims".to_string(),
