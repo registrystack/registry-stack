@@ -631,7 +631,7 @@ impl StandaloneRegistryNotaryConfig {
             config_unsigned: self
                 .config_trust
                 .as_ref()
-                .map_or(true, |trust| trust.accepted_roots.is_empty()),
+                .is_none_or(|trust| trust.accepted_roots.is_empty()),
             self_attestation_enabled: self.self_attestation.enabled,
             transaction_token_anchor_configured: self.auth.access_token_signing.enabled,
             // DPoP/mTLS proof validation for transaction tokens is not yet

@@ -5239,20 +5239,20 @@ async fn oid4vci_token(
             return token_error_with_audit(
                 &preauth,
                 path,
-                Some(&configuration_id),
+                Some(configuration_id),
                 SelfAttestationDenialCode::OperationDenied,
                 TokenWireError::ServerError,
             )
             .await;
         }
     };
-    let c_nonce = match issue_c_nonce(&state, &configuration_id).await {
+    let c_nonce = match issue_c_nonce(&state, configuration_id).await {
         Some(c_nonce) => c_nonce,
         None => {
             return token_error_with_audit(
                 &preauth,
                 path,
-                Some(&configuration_id),
+                Some(configuration_id),
                 SelfAttestationDenialCode::OperationDenied,
                 TokenWireError::ServerError,
             )
@@ -8087,6 +8087,7 @@ fn require_self_attestation_evaluate_with_runtime_config(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn require_self_attestation_authorization_details(
     service_id: &str,
     config: &SelfAttestationConfig,

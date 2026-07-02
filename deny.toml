@@ -22,6 +22,16 @@ ignore = [
     # request-facing parsing. Review when DataFusion moves off `paste` or when
     # upgrading the DataFusion major version.
     "RUSTSEC-2024-0436",
+    # RUSTSEC-2026-0194: quick-xml <=0.39 has quadratic duplicate-attribute
+    # checks. It is currently pinned by calamine 0.35 in Relay's XLSX connector
+    # and by phonenumber through the pinned Crosswalk stack. Review when
+    # calamine supports quick-xml >=0.41, when Crosswalk/phonenumber moves off
+    # quick-xml <=0.38, or before accepting untrusted end-user XLSX/XML inputs.
+    "RUSTSEC-2026-0194",
+    # RUSTSEC-2026-0195: quick-xml <=0.39 can over-allocate namespace
+    # declarations in NsReader. Same temporary scope and review triggers as
+    # RUSTSEC-2026-0194.
+    "RUSTSEC-2026-0195",
 ]
 
 [licenses]

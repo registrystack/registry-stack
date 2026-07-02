@@ -119,6 +119,14 @@ jobs:
           fetch-depth: 0
           submodules: false
 
+      - name: Cache Cargo registry and build artifacts
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Install cargo-deny and just
+        uses: taiki-e/install-action@25435dc8dd3baed7417e0c96d3fe89013a5b2e09 # v2.81.3
+        with:
+          tool: cargo-deny@0.19.8,just@1.51.0
+
       - name: Cargo metadata
         run: cargo metadata --locked --format-version 1 >/tmp/registry-stack-cargo-metadata.json
 
@@ -128,8 +136,22 @@ jobs:
       - name: Workspace check
         run: cargo check --locked --workspace --all-targets
 
-      - name: Focused tests
-        run: cargo test --locked -p registryctl
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Workspace tests
+        run: cargo test --locked --workspace
+
+      - name: Cargo deny
+        run: cargo deny check
+
+      - name: Notary OpenAPI baseline
+        working-directory: products/notary
+        run: just openapi-check
+
+      - name: Relay OpenAPI contract
+        working-directory: crates/registry-relay
+        run: just openapi-contract
 
   release-tool:
     name: Release tooling

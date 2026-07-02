@@ -168,8 +168,7 @@ fn write_opencrvs_dci_config(tmp: &TempDir) -> PathBuf {
     let path = tmp.path().join("opencrvs-dci.yaml");
     std::fs::write(
         &path,
-        format!(
-            r#"
+        r#"
 server:
   bind: 127.0.0.1:0
 auth:
@@ -240,7 +239,7 @@ evidence:
             field: UIN
             op: eq
             cardinality: one
-          fields: {{}}
+          fields: {}
           matching:
             policy_id: registryctl.opencrvs-dci.birth-record.lookup.v1
             method: configured_lookup
@@ -269,8 +268,7 @@ evidence:
         allowed: [predicate, redacted]
       formats:
         - application/vnd.registry-notary.claim-result+json
-"#
-        ),
+"#,
     )
     .expect("config writes");
     path

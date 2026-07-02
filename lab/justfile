@@ -1,10 +1,11 @@
 set dotenv-load := true
 set positional-arguments := true
 
-default_relay_src := if path_exists("../registry-relay/Cargo.toml") == "true" { "../registry-relay" } else { if path_exists("../../registry-relay/Cargo.toml") == "true" { "../../registry-relay" } else { "./vendor/registry-relay" } }
-default_notary_src := if path_exists("../registry-notary/Cargo.toml") == "true" { "../registry-notary" } else { if path_exists("../../registry-notary/Cargo.toml") == "true" { "../../registry-notary" } else { "./vendor/registry-notary" } }
-default_platform_src := if path_exists("../registry-platform/Cargo.toml") == "true" { "../registry-platform" } else { if path_exists("../../registry-platform/Cargo.toml") == "true" { "../../registry-platform" } else { "./vendor/registry-platform" } }
-default_manifest_src := if path_exists("../registry-manifest/Cargo.toml") == "true" { "../registry-manifest" } else { if path_exists("../../registry-manifest/Cargo.toml") == "true" { "../../registry-manifest" } else { "./vendor/registry-manifest" } }
+default_stack_src := if path_exists("../Cargo.toml") == "true" { if path_exists("../crates/registry-relay/Cargo.toml") == "true" { ".." } else { "" } } else { "" }
+default_relay_src := if default_stack_src != "" { "../crates/registry-relay" } else { if path_exists("../registry-relay/Cargo.toml") == "true" { "../registry-relay" } else { if path_exists("../../registry-relay/Cargo.toml") == "true" { "../../registry-relay" } else { "./vendor/registry-relay" } } }
+default_notary_src := if default_stack_src != "" { default_stack_src } else { if path_exists("../registry-notary/Cargo.toml") == "true" { "../registry-notary" } else { if path_exists("../../registry-notary/Cargo.toml") == "true" { "../../registry-notary" } else { "./vendor/registry-notary" } } }
+default_platform_src := if default_stack_src != "" { default_stack_src } else { if path_exists("../registry-platform/Cargo.toml") == "true" { "../registry-platform" } else { if path_exists("../../registry-platform/Cargo.toml") == "true" { "../../registry-platform" } else { "./vendor/registry-platform" } } }
+default_manifest_src := if default_stack_src != "" { default_stack_src } else { if path_exists("../registry-manifest/Cargo.toml") == "true" { "../registry-manifest" } else { if path_exists("../../registry-manifest/Cargo.toml") == "true" { "../../registry-manifest" } else { "./vendor/registry-manifest" } } }
 default_esignet_relay_authenticator_src := "./vendor/esignet-relay-authenticator"
 
 relay_src := env_var_or_default("REGISTRY_RELAY_SOURCE_DIR", default_relay_src)
@@ -40,7 +41,7 @@ default:
 
 # Initialize git submodules.
 setup:
-    git submodule update --init --recursive
+    git -C "$$(git rev-parse --show-toplevel)" submodule update --init --recursive -- lab/vendor/crosswalk lab/vendor/registry-atlas lab/vendor/esignet-relay-authenticator
 
 # Generate deterministic fixtures, demo secrets, and static metadata.
 generate:

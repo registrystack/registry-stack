@@ -1621,8 +1621,10 @@ struct EntityRecordQuery {
 }
 
 fn record_query_from_params(params: HashMap<String, String>) -> Result<EntityRecordQuery, Error> {
-    let mut query = EntityRecordQuery::default();
-    query.raw_params = params.clone();
+    let mut query = EntityRecordQuery {
+        raw_params: params.clone(),
+        ..Default::default()
+    };
     for (name, value) in params {
         match name.as_str() {
             "fields" => {

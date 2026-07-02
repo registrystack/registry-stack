@@ -56,7 +56,6 @@ flowchart LR
 
     source --> relay
     manifest --> relay
-    manifest --> notary
     relay --> caller
     relay --> notary
     notary --> caller

@@ -1802,7 +1802,7 @@
     },
     "summary": "Standalone evidence evaluation, rendering, and credential issuance service.",
     "title": "Registry Notary API",
-    "version": "0.6.2"
+    "version": "0.8.3"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -2741,6 +2741,16 @@
             "content": {
               "application/json": {
                 "example": {
+                  "audit": {
+                    "anchoring": "none",
+                    "checkpoints": "unsupported",
+                    "hash_chain": "process_local",
+                    "keyed_integrity": "hmac",
+                    "redaction_mode": "redacted",
+                    "retention_owner": "operator",
+                    "sink_class": "file",
+                    "write_policy": "fail_closed_route_families"
+                  },
                   "build": {
                     "package": "registry-notary",
                     "version": "0.1.0"
@@ -2755,6 +2765,10 @@
                     "last_config_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                     "restart_required": false,
                     "source": "local_file"
+                  },
+                  "deployment": {
+                    "findings": [],
+                    "profile": "production"
                   },
                   "instance": {
                     "environment": "production",
@@ -2822,13 +2836,11 @@
                   "standards_artifacts": {
                     "evidence_service_discovery": {
                       "media_type": "application/json",
-                      "observed_status": "available",
-                      "sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                      "observed_status": "available"
                     },
                     "jwks": {
                       "media_type": "application/jwk-set+json",
-                      "observed_status": "available",
-                      "sha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+                      "observed_status": "available"
                     }
                   },
                   "tier": "default"
@@ -3640,7 +3652,7 @@
                 "example": {
                   "info": {
                     "title": "Registry Notary API",
-                    "version": "0.6.2"
+                    "version": "0.8.3"
                   },
                   "openapi": "3.1.0",
                   "paths": {

@@ -1330,16 +1330,11 @@ pub struct RequiredFilterBindingConfig {
     pub source: RequiredFilterBindingSource,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RequiredFilterBindingSource {
+    #[default]
     PrincipalId,
-}
-
-impl Default for RequiredFilterBindingSource {
-    fn default() -> Self {
-        Self::PrincipalId
-    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]

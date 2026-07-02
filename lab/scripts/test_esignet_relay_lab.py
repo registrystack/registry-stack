@@ -8,10 +8,15 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = ROOT.parent
 
 
 def text(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
+
+
+def repo_text(path: str) -> str:
+    return (REPO_ROOT / path).read_text(encoding="utf-8")
 
 
 class EsignetRelayLabTest(unittest.TestCase):
@@ -63,9 +68,10 @@ class EsignetRelayLabTest(unittest.TestCase):
                 self.assertNotIn("if eSignet asks", value)
 
     def test_plugin_submodule_is_declared(self) -> None:
-        modules = text(".gitmodules")
+        modules = repo_text(".gitmodules")
 
-        self.assertIn("[submodule \"vendor/esignet-relay-authenticator\"]", modules)
+        self.assertIn("[submodule \"lab/vendor/esignet-relay-authenticator\"]", modules)
+        self.assertIn("path = lab/vendor/esignet-relay-authenticator", modules)
         self.assertIn("url = git@github.com:jeremi/esignet-relay-authenticator.git", modules)
 
     def test_esignet_relay_image_rebuilds_plugin_classes_from_source(self) -> None:

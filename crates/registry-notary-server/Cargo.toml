@@ -8,6 +8,9 @@ readme = "README.md"
 repository.workspace = true
 publish = false
 
+# not opted into [workspace.lints]: unsafe std::env::set_var/remove_var in
+# #[cfg(test)] code (src/standalone.rs, tests/)
+
 [features]
 default = []
 registry-notary-cel = ["dep:crosswalk-core", "dep:registry-notary-worker-harness"]
