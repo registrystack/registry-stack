@@ -41,6 +41,16 @@ const base = process.env.DOCS_BASE || undefined;
 const basePath = base?.replace(/\/$/, '');
 const isArchivedBuild = Boolean(basePath);
 const productSidebar = loadProductSidebar();
+
+// Lift a generated per-product group to the top level of the sidebar.
+// Fails the build loudly if the generator's labels change, so the nav can
+// never silently lose a product section.
+/** @param {string} label */
+function generatedProduct(label) {
+  const group = productSidebar.find((/** @type {{ label: string }} */ entry) => entry.label === label);
+  if (!group) throw new Error(`generated sidebar group "${label}" not found`);
+  return group;
+}
 const disabledSitemap = {
   name: '@astrojs/sitemap',
   hooks: {},
@@ -64,8 +74,11 @@ export default defineConfig({
   // to their new homes so old links and search results keep resolving.
   redirects: {
     '/start/': internalRedirect('/'),
+    '/start/see-it-live/': internalRedirect('/start/quickstart/'),
+    '/explanation/trust-posture-and-security-guarantees/': internalRedirect('/security/'),
+    '/reference/security-self-assessment/': internalRedirect('/security/self-assessment/'),
+    '/reference/openssf-evidence/': internalRedirect('/security/openssf-evidence/'),
     // quickstart's "Choose by question" router merged into the homepage (2026-06).
-    '/start/quickstart/': internalRedirect('/'),
     '/start/your-first-call/': internalRedirect('/tutorials/first-run-with-registry-lab/'),
     // verify-claim-own-api moved into the Apply to your stack path (2026-06).
     '/tutorials/verify-claim-own-api/': internalRedirect('/tutorials/run-notary-standalone-for-api/'),
@@ -109,7 +122,7 @@ export default defineConfig({
     '/products/registry-notary/opencrvs-dci-onboarding/': 'https://docs.registrystack.org/products/registry-notary/opencrvs-onboarding/',
     // registry-manifest, registry-atlas, registry-platform, registry-lab projects/*
     // redirects removed: targets are deferred from the MVP docs cut.
-    '/projects/registry-lab/demo-flow/': internalRedirect('/start/see-it-live/'),
+    '/projects/registry-lab/demo-flow/': internalRedirect('/start/quickstart/'),
     // The API reference moved from static Redoc HTML to native, theme-aware,
     // searchable pages. Keep the old shareable links working.
     '/api/registry-relay.html': internalRedirect('/reference/apis/relay/'),
@@ -193,20 +206,19 @@ export default defineConfig({
         },
       ],
       // Diataxis IA: Get started, Tutorials, Products, Explanation, Reference.
-      // The per-product groups inside Products are generated from
-      // src/data/repo-docs.yaml by scripts/generate-sidebar.mjs (the
-      // productSidebar array), so the menu follows each product's
-      // doc_type/nav_order and never drifts from the manifest. Within a
-      // product, pages are sub-grouped by Diataxis type once the product grows
-      // past a threshold; smaller products stay flat. Product labels drop the
-      // shared "Registry" prefix (Relay, Notary, ...) since the site title and
-      // the Products group already supply that context.
+      // The per-product groups are generated from src/data/repo-docs.yaml by
+      // scripts/generate-sidebar.mjs (the productSidebar array), so each
+      // product menu follows its doc_type/nav_order and never drifts from the
+      // manifest. Within a product, pages are sub-grouped by Diataxis type
+      // once the product grows past a threshold; smaller products stay flat.
+      // generatedProduct() lifts each group into its own top-level product
+      // section; hand-authored operator tutorials append after the generated
+      // items.
       //
-      // "Get started" is orientation only: Overview (which carries the
-      // "Choose by question" router), the zero-install demo, and the
-      // evaluation page. The core Tutorials path stays on one generated local
-      // project; operator paths live under Apply to your stack, and named
-      // source-system paths live under Integrate existing systems.
+      // "Get started" is the first-run journey in reading order: the hosted
+      // quickstart and credential tour, then the two local first-run
+      // tutorials, then the evaluation and lab pages. Named source-system
+      // paths live under Integrations.
       sidebar: [
         {
           label: 'Get started',
@@ -214,27 +226,37 @@ export default defineConfig({
             // Short nav labels to avoid wrapping in the narrow sidebar; page
             // titles keep the full wording.
             { label: 'Overview', link: '/' },
-            { label: 'See it live', slug: 'start/see-it-live' },
+            { label: 'Quickstart', slug: 'start/quickstart' },
+            { label: 'Credential tour', slug: 'start/credential-tour' },
+            { label: 'Your first Relay', slug: 'tutorials/publish-spreadsheet-secured-registry-api' },
+            { label: 'Your first Notary', slug: 'tutorials/verify-claim-registry-api' },
             { label: 'When to use', slug: 'start/when-to-use' },
-          ],
-        },
-        {
-          label: 'Tutorials',
-          items: [
-            { label: 'Run a protected API', slug: 'tutorials/publish-spreadsheet-secured-registry-api' },
-            { label: 'Evaluate a claim', slug: 'tutorials/verify-claim-registry-api' },
-          ],
-        },
-        {
-          label: 'Apply to your stack',
-          items: [
-            { label: 'Notary for a Registry Data API', slug: 'tutorials/run-notary-standalone-for-api' },
-            { label: 'Deploy with own data', slug: 'tutorials/deploy-standalone-with-own-data' },
             { label: 'Run the lab', slug: 'tutorials/first-run-with-registry-lab' },
           ],
         },
         {
-          label: 'Integrate existing systems',
+          label: 'Registry Relay',
+          collapsed: true,
+          items: [
+            ...generatedProduct('Relay').items,
+            { label: 'Deploy with own data', slug: 'tutorials/deploy-standalone-with-own-data' },
+          ],
+        },
+        {
+          label: 'Registry Notary',
+          collapsed: true,
+          items: [
+            ...generatedProduct('Notary').items,
+            { label: 'Notary for a Registry Data API', slug: 'tutorials/run-notary-standalone-for-api' },
+          ],
+        },
+        {
+          label: 'Registry Manifest',
+          collapsed: true,
+          items: generatedProduct('Manifest').items,
+        },
+        {
+          label: 'Integrations',
           items: [
             { label: 'OpenCRVS claims', slug: 'tutorials/verify-opencrvs-claims' },
             { label: 'DHIS2 claim checks', slug: 'tutorials/configure-dhis2-claim-checks' },
@@ -242,11 +264,7 @@ export default defineConfig({
           ],
         },
         {
-          label: 'Products',
-          items: productSidebar,
-        },
-        {
-          label: 'Explanation',
+          label: 'Concepts',
           collapsed: true,
           items: [
             { label: 'Architecture', slug: 'explanation/architecture' },
@@ -255,21 +273,26 @@ export default defineConfig({
             { label: 'Consultation flow', slug: 'explanation/consultation-flow' },
             { label: 'Evidence issuance', slug: 'explanation/evidence-issuance' },
             { label: 'Disclosure modes', slug: 'explanation/disclosure-modes-and-computed-answers' },
+            { label: 'Data minimization', slug: 'explanation/data-minimization-and-purpose-limitation' },
             { label: 'Trusted context', slug: 'explanation/trusted-context-constraints' },
             { label: 'Integration patterns', slug: 'explanation/integration-patterns' },
             { label: 'DPI safeguards', slug: 'explanation/dpi-safeguards-alignment' },
           ],
         },
         {
-          // Trust & Security rail (roadmap §6): the reviewer/auditor-facing
-          // posture, threat model, privacy story, and the canonical limits hub.
-          label: 'Trust & security',
+          // The reviewer/auditor-facing rail: the enforced model, the threat
+          // model, the canonical limits hub, and the public evidence a
+          // security reviewer can check.
+          label: 'Security',
           collapsed: true,
           items: [
-            { label: 'Trust posture', slug: 'explanation/trust-posture-and-security-guarantees' },
+            { label: 'Overview', slug: 'security' },
             { label: 'Threat model', slug: 'explanation/threat-model' },
-            { label: 'Data minimization', slug: 'explanation/data-minimization-and-purpose-limitation' },
             { label: 'Known limitations', slug: 'explanation/known-limitations' },
+            { label: 'Harden a deployment', slug: 'security/hardening-checklist' },
+            { label: 'Report a vulnerability', slug: 'security/report-a-vulnerability' },
+            { label: 'Self-assessment', slug: 'security/self-assessment' },
+            { label: 'OpenSSF evidence', slug: 'security/openssf-evidence' },
           ],
         },
         {
@@ -292,8 +315,6 @@ export default defineConfig({
             { label: 'Environment variables', slug: 'reference/environment-variables' },
             { label: 'Contracts', slug: 'reference/contracts' },
             { label: 'Standards', slug: 'reference/standards' },
-            { label: 'OpenSSF evidence', slug: 'reference/openssf-evidence' },
-            { label: 'Security self-assessment', slug: 'reference/security-self-assessment' },
             { label: 'ITB and SEMIC evidence', slug: 'reference/itb-semic-evidence' },
             { label: 'Glossary', slug: 'reference/glossary' },
           ],
