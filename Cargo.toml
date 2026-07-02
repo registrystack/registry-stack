@@ -89,7 +89,7 @@ crc32fast = { version = "1.4" }
 criterion = { version = "0.8", features = ["html_reports", "async_tokio"] }
 cryptoki = { version = "0.12" }
 csv = { version = "1" }
-datafusion = { version = "53.1" }
+datafusion = { version = "54.0" }
 ed25519-dalek = { version = "2", features = ["pkcs8", "rand_core"] }
 fs2 = { version = "0.4" }
 futures = { version = "0.3" }
