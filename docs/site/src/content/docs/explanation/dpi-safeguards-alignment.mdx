@@ -8,7 +8,7 @@ source_repos:
   - registry-relay
   - registry-manifest
   - registry-notary
-last_reviewed: "2026-06-23"
+last_reviewed: "2026-07-02"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -36,8 +36,11 @@ claims still belong to the institution that governs, deploys, and operates the D
 
 ## Claim scope
 
-The registry stack is compared against the [Universal DPI Safeguards Framework](https://www.dpi-safeguards.org/assessments)
+The registry stack is compared against version 2.0 of the
+[Universal DPI Safeguards Framework](https://www.dpi-safeguards.org/framework)
 as implementation evidence, not as certification.
+The principle IDs on this page follow that version, as recorded in the
+[standards register](../../reference/standards/).
 The framework spans 18 principles, 13 risks, responsible authorities, five DPI life-cycle stages, and
 adoption pathways across law, institutions, technical foundations, capacity, and whole-of-society
 participation.
@@ -54,7 +57,7 @@ Use the registry stack when a program needs controlled registry facts instead of
 - A ministry needs a read-only consultation API over an existing registry.
 - A program needs eligibility evidence without copying the source record.
 - An integrator needs to inspect schemas, policies, services, and evidence offerings before connecting.
-- A reviewer needs audit events, stable denial codes, bundle digests, or signed evidence artifacts.
+- A reviewer needs audit events, stable denial codes, package and configuration-bundle digests, or signed evidence artifacts.
 - A known peer needs delegated evaluation through a configured Registry Notary relationship.
 
 Do not use the stack as an unrestricted data portal, data warehouse, ad-hoc SQL service, consent
@@ -67,10 +70,10 @@ framework.
 | --- | --- | --- |
 | What does the registry expose? | Registry Manifest renders portable catalog, schema, service, policy, and evidence-offering metadata. | Metadata describes a surface. It does not authorize access. |
 | Who can read protected data? | Registry Relay and Registry Notary authenticate protected routes and enforce scopes before source access. | Deployment policy decides who receives scopes. |
-| Is the exchange purpose-bound? | Governed runtime routes can require purpose and trusted context, then fail closed with stable `pdp.*` denial codes. | Static policy metadata is not enforcement until a runtime service binds it. |
-| Is data minimized? | Relay exposes configured fields, relationships, and aggregates. Notary can return `value`, `predicate`, or `redacted` results. | The operator still chooses the fields, claims, and disclosure defaults. |
-| Can the exchange be reviewed later? | Relay and Notary audit events, PDP provenance, package and content digests, signed response credentials, and SD-JWT VC credentials provide review evidence. | Audit records support accountability. They are not accountability by themselves. |
-| Can other systems interoperate? | Manifest emits standards-shaped metadata; Relay and Notary publish OpenAPI; Notary issues SD-JWT VC credentials and exposes a profiled OID4VCI flow. | These are scoped adoption claims, not blanket conformance to every named standard. |
+| Is the exchange purpose-bound? | Governed runtime routes can require purpose and trusted context, then fail closed with stable [`pdp.*` denial codes](../../reference/errors/). | Static policy metadata is not enforcement until a runtime service binds it. |
+| Is data minimized? | Relay exposes configured fields, relationships, and aggregates. Notary can return `value`, `predicate`, or `redacted` [disclosure results](../disclosure-modes-and-computed-answers/). | The operator still chooses the fields, claims, and disclosure defaults. |
+| Can the exchange be reviewed later? | Relay and Notary audit events, Policy Decision Point (PDP) provenance, package and content digests, signed response credentials, and Selective Disclosure JWT Verifiable Credentials (SD-JWT VC) provide review evidence. | Audit records support accountability. They are not accountability by themselves. |
+| Can other systems interoperate? | Manifest emits standards-shaped metadata; Relay and Notary publish OpenAPI; Notary issues SD-JWT VC credentials and exposes a profiled OpenID for Verifiable Credential Issuance (OID4VCI) flow. | These are scoped adoption claims, not blanket conformance to every named standard. |
 
 ## Project roles
 
@@ -94,8 +97,9 @@ principles; the remaining principles are governance and institutional work outsi
 | Data security by design (O4) | Protected routes use API key or OIDC modes, scope-before-source authorization, shared security primitives, separate admin surfaces, and fail-closed governed decisions. | Key custody, network controls, incident response, security audits, and production hardening remain operator responsibilities. |
 | Data protection during use (O5) | Runtime services can record purpose, checked scopes, PDP policy provenance, stable denials, and audit events for reads and evaluations. | A program still needs lawful basis, oversight, retention policy, and protections against overreaching requests. |
 | Transparency and accountability (F4) | Portable metadata, runtime metadata, OpenAPI references, stable error codes, audit records, signed responses, credentials, and the [standards register](../../reference/standards/) make behavior reviewable. | Public governance, remedies, procurement discipline, and independent accountability mechanisms are institutional controls. |
+| Evolve with evidence (O2) | [ITB and SEMIC validation evidence](../../reference/itb-semic-evidence/), the [security self-assessment](../../security/self-assessment/), and [OpenSSF status and release verification evidence](../../security/openssf-evidence/) give assessors material they can re-run and re-check. | Independent assessments, audits, engagement with affected people, and acting on findings remain program and institutional responsibilities. |
 | Build and share open assets (O9) | The stack emits or uses open, standards-shaped artifacts and documented HTTP contracts rather than one-off integration agreements. | External conformance and certification require separate validation against each standard or program rule. |
-| Autonomy and agency (F6) | Notary credentials support holder binding through `did:jwk`; claim results and credentials can avoid exposing more than the configured disclosure mode allows. | The stack does not provide a complete wallet, consent journey, opt-out path, appeal process, or assisted service channel. |
+| Autonomy and agency (F6) | Notary credentials support holder binding through `did:jwk` when the credential profile enables it (off by default); a bound credential can be presented only by the key holder; claim results and credentials can avoid exposing more than the configured disclosure mode allows. | The stack does not provide a complete wallet, consent journey, opt-out path, appeal process, or assisted service channel. |
 | Inclusion and non-discrimination (F2, F3, O6) | Metadata, audit, and claim evidence can help reviewers inspect what a service exposes and how it behaves. | Accessibility, language access, community participation, gender or disability inclusion, and non-digital alternatives are not solved by these components. |
 
 ## Fit boundaries
