@@ -1,0 +1,252 @@
+---
+title: Disclosure and minimization
+description: How Registry Notary bounds what a claim answer reveals through three disclosure modes, policy-bound mode selection, and a minimization discipline the claim author models.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-06-28"
+doc_type: explanation
+locale: en
+standards_referenced:
+  - sd-jwt-vc
+  - oid4vci
+  - w3c-did
+  - json-ld
+  - cccev
+---
+
+The overview establishes the boundary: Registry Relay returns scoped records, Registry Notary
+returns a minimized answer, and a claim carries one of three disclosure modes. This page goes
+underneath that summary. It explains the disclosure model as a mechanism (what each mode
+computes, how a requested mode is bounded, what a downgrade does) and the minimization
+discipline as a modelling stance rather than an enforced invariant. The distinction matters:
+the strength of any single answer is a property of how its claim was modelled, not a guarantee
+the stack imposes on every answer.
+
+## Disclosure controls a result, minimization shapes a claim
+
+Two separate ideas are often conflated. Disclosure is a runtime control: given an evaluated
+value, a disclosure mode decides what the result body carries. Minimization is a design-time
+discipline: a claim author decides what a claim evaluates in the first place, and therefore the
+most a disclosure mode could ever reveal.
+
+Minimization is modelled rather than automatic. The spec states the discipline in prose: a
+claim definition describes one decision or one extracted value, and a claim that tries to
+return a whole record over-collects and is hard to authorize (`rs-dm-claim.mdx`). That sentence
+is guidance, not a config-load invariant. `REQ-DM-CLAIM-003` makes reading only the fields a
+rule needs a `SHOULD`; its single hard `MUST` is that a binding declaring an input allow-list
+(`allowed_target_inputs` or `allowed_requester_inputs`) rejects any request supplying a path
+outside that list, so a binding cannot over-collect by accident. Least disclosure is likewise a
+per-claim `SHOULD`: `REQ-DM-CLAIM-008` says a privacy-sensitive claim should default to the
+least-revealing useful mode, while the enforced behavior is narrower (apply the claim's
+`default` when the caller requests none, refuse a mode outside `allowed`). The stack does not
+force a narrow read or a least-revealing default; it enforces the policy a claim declares.
+
+A claim does declare exactly one rule. `REQ-DM-CLAIM-006` requires one rule of one implemented
+kind: `exists` (the presence of exactly one source record), `extract` (a value read from a
+source field), or `cel` (a value derived from source fields or earlier claim results through a
+hardened expression). The rule is the single decision at the center of a claim. That single-rule
+shape is what gives a claim a chance to be minimal; whether it is minimal depends on what the
+rule evaluates and which mode discloses it.
+
+## The three modes in depth
+
+Registry Notary defines exactly three disclosure modes, `value`, `predicate`, and `redacted`
+(Section 5 of `rs-pr-notary.mdx`; the `DisclosureProfile` enum in `registry-notary-core/src/model.rs`). Each
+mode is a projection over the evaluated value, and each carries a distinct privacy contract.
+
+### `value`: the full value, minus policy-marked fields
+
+The `value` mode returns the evaluated value whole. In the runtime, with no field redaction in
+play, the result is the evaluated value cloned in full (`runtime.rs`), not a coerced scalar. A
+claim's declared value type may be an object or an array, and the runtime accepts those types,
+so a broadly modelled `extract`, `cel`, or object claim returns row-shaped, record-like data
+under `value`. This is precisely the over-collection risk the modelling discipline warns about:
+`value` mode is not a safeguard against record-shaped disclosure, it permits it when the claim
+is modelled that way.
+
+Object-field redaction narrows `value` mode, but only under tight preconditions. It applies
+when the claim value type is `object`, the redaction set is non-empty, and every entry is a
+non-empty top-level field name with no dots or brackets and not the literal `value`
+(`runtime.rs`). When those hold, the matching policy's named fields are removed from the
+returned object and the rest of the object is returned. If a field marked for redaction is
+absent from the object, the result is refused (`DisclosureNotAllowed`) rather than silently
+returned. Field redaction is therefore a per-field subtraction inside an object value, not a
+general mechanism for trimming arbitrary structure.
+
+Row-level redaction on a non-object value behaves differently. When redaction fields are present
+but the value does not qualify for object-field redaction, a `value` request is forced to
+`redacted` before the allowed-set check runs (`runtime.rs`). The whole result collapses; there
+is no partial reveal of a non-object value.
+
+### `predicate`: a boolean satisfaction, and only when the value is boolean
+
+The `predicate` mode conveys only the rule's true/false satisfaction (`rs-pr-notary.mdx`
+Section 5). It is derived by interpreting the evaluated value as a boolean: the runtime projects
+`result.value.as_bool()` (`runtime.rs`), which yields a value only for a JSON boolean. A
+non-boolean evaluated value therefore yields an absent value under `predicate`, and the
+satisfaction outcome is likewise absent. `predicate` does not threshold, coerce, or summarize a
+non-boolean value; it is meaningful only for a claim whose rule yields a boolean. A claim that
+needs to answer yes/no without exposing a figure must model the decision so the rule itself
+produces the boolean (for example a `cel` comparison), rather than expecting `predicate` to
+reduce a numeric value for it.
+
+`predicate` is also incompatible with a redacted-field result. When redaction fields are present
+and the effective mode is `predicate`, the request is refused (`DisclosureNotAllowed`,
+`runtime.rs`). Field-level redaction and predicate disclosure do not combine.
+
+### `redacted`: neither value nor outcome
+
+The `redacted` mode withholds both. `REQ-PR-NOTARY-010` requires that a redacted result not
+carry the underlying source value and not convey the satisfaction outcome: the body withholds
+both the value and the predicate. The runtime matches this: the disclosed value is absent, and
+the `satisfied` outcome is populated only for `value` and `predicate` (by reading the value as a
+boolean) and is absent for `redacted` (`runtime.rs`). In the claim-result JSON shape a redacted answer
+carries no value and no yes/no. The CCCEV JSON-LD render is the exception: it serializes
+`cccev:isConformantTo` from `satisfied` with a `false` fallback, so a redacted CCCEV node still
+carries a boolean outcome field (`runtime.rs`).
+
+## How policy binds a mode
+
+A claim's disclosure policy is three settings in the claim definition: a `default` mode, an
+`allowed` set of modes, and a `downgrade` policy (`DisclosureConfig` in
+`registry-notary-core/src/config.rs`). The defaults are the most restrictive available: the
+`default` mode is `redacted`, and the sole default `allowed` entry is `redacted`
+(`config.rs`). A claim that says nothing about disclosure reveals nothing.
+
+A caller may request a mode (the evaluation request carries an optional `disclosure` field), but
+the request is bounded. When the caller requests none, the claim's `default` applies; in the
+multi-claim case the runtime falls back to the `default` of the first requested claim
+(`runtime.rs`). `REQ-PR-NOTARY-009` fixes the rest: Notary refuses a mode not in the claim's
+`allowed` set, and applies the `default` when the caller requests none.
+
+The `downgrade` policy decides what happens when a requested mode is outside `allowed`. It has
+exactly three variants, `deny`, `default`, and `redacted` (`DisclosureDowngrade` in
+`model.rs`), and it defaults to `deny` (`config.rs`). The runtime resolves them so:
+
+| `downgrade` | When the requested mode is not allowed |
+|------|------|
+| `deny` (default) | refuse the request (`DisclosureNotAllowed`) |
+| `default` | substitute the claim's `default` mode |
+| `redacted` | substitute the `redacted` mode |
+
+A downgrade does not bypass the allowed-set rule. When the substituted fallback (`default` or
+`redacted`) is itself not in the claim's `allowed` set, the request is still refused
+(`runtime.rs`). The fallback is a choice among permitted modes, not an escape hatch around them.
+
+One consequence is worth stating directly. Every
+evaluation result records the disclosure mode that was actually applied (`REQ-PR-NOTARY-008`),
+and that recorded mode is the effective mode after any forcing or downgrade, not the mode the
+caller requested. The view emits the effective mode (`runtime.rs`). A request that asked for
+`value` and was forced to `redacted` records `redacted`. The recorded mode is the truth of what
+was disclosed, not the intent of the asker.
+
+## Selective disclosure in the credential
+
+Disclosure modes govern an evaluation result. An issued credential is a distinct layer with its
+own disclosure mechanism, and the two should not be conflated. The credential is an SD-JWT VC
+(`typ` header `dc+sd-jwt`, signed with the profile's configured algorithm, EdDSA over Ed25519 by
+default or ES256 over P-256, `REQ-PR-NOTARY-013`) that gives the
+holder selective disclosure: the holder chooses which fields to reveal to which verifier. The
+signed body carries a SHA-256 digest of each selectively disclosable field rather than the field
+value, so an unselected field stays hidden and a holder cannot present a disclosure that was not
+in the original credential (`REQ-PR-NOTARY-014`).
+
+The granularity of that selection is the claim output, not a field inside an output's value. The
+issuer builds one Disclosure per output. In projection mode there is one Disclosure per
+configured projection output, named by its `output_name`, whose value is the claim result's
+value taken whole (`sd_jwt.rs`); a projection entry maps one `claim_id` to one `output_name`. In
+the default, non-projection mode there is one Disclosure per claim result, named by `claim_id`,
+whose value is the entire claim-result object (`sd_jwt.rs`). Either way an object-valued output
+is emitted as a single Disclosure value, not split field by field. A holder who reveals an
+object-valued output reveals all of it; the unit of selective disclosure is the output.
+
+Projection is also conditional. A projected claim whose result is unsatisfied or whose value is
+null or absent is rejected (`CredentialIssuanceFailed`, `sd_jwt.rs`), so projection does not
+unconditionally disclose every configured output.
+
+Holder binding sits alongside selective disclosure and is profile-conditional, not universal.
+The default `holder_binding` mode is the literal string `none`, which issues an unbound
+credential (`HolderBindingConfig` in `config.rs`). The self-attestation and OID4VCI path forces
+binding: profile validation rejects any profile whose `holder_binding.mode` is not `did`, whose
+`proof_of_possession` is not `required`, or whose `allowed_did_methods` is not exactly `did:jwk`
+(`config.rs`). When a credential is holder-bound, `REQ-PR-NOTARY-015` names the holder's public
+key as a `did:jwk` in the `cnf` claim (`did:jwk` is the only supported binding method) and
+requires a fresh, audience-bound holder proof at presentation; the wallet credential endpoint
+(`POST /oid4vci/credential`) must require a valid access token and a proof of possession, and
+must not issue without one (`REQ-PR-NOTARY-017`). Binding is a property of the issuance path, not
+of the three evaluation-disclosure modes.
+
+## Disclosing non-existence
+
+A subtle disclosure question is what a caller learns when an answer cannot be produced. A
+matching failure can leak existence: a granular "subject not found" tells the caller the subject
+is absent, and a granular "ambiguous" tells the caller more than one record matched. By default
+that leak is closed. `REQ-DM-CLAIM-005` requires a matching failure to collapse to a single
+public reason (`evidence.not_available`), with the granular reason retained only in the audit
+record, so the matching surface cannot be used as an existence oracle. A deployment may disable
+the collapse, but only in a controlled environment where exposing not-found, ambiguous, and
+rejected outcomes to the caller is acceptable.
+
+In code, collapse defaults to enabled (`default_collapse_matching_errors` returns `true`,
+`config.rs`) and is a per-source-binding setting, a field of the binding's matching config, not
+a single deployment-wide switch (`runtime.rs` reads `binding.matching.collapse_matching_errors`
+per binding). When collapse is enabled, a broad set of matching errors (source, requester, and
+relationship not-found; ambiguous; insufficient-attributes; policy-rejected; and others) maps to
+`MatchingEvidenceNotAvailable`, which surfaces the public code `evidence.not_available` while
+retaining the granular reason as an `audit_code` (`runtime.rs`). When the binding's flag is
+false, the raw error is returned unchanged. A separate helper handles the dependent-lookup
+resolution stage and additionally folds `InvalidRequest` (for example a non-scalar prior source
+field) into `evidence.not_available` with its specific `audit_code`, because that condition is a
+function of upstream row data the caller is not authorized to observe (`runtime.rs`).
+
+## Disclosing across a federation boundary
+
+When one Registry Notary delegates an evaluation to a configured peer, what crosses is a scoped,
+signed evaluation result, never a credential. A peer posts a compact signed JWT request to
+`POST /federation/v1/evaluations` and receives a compact signed JWT response carrying a scoped
+evaluation result; before any source read, the serving Notary verifies peer policy, replay
+state, purpose, profile, and audience (`REQ-PR-NOTARY-018`). Federation is static-peer only:
+peers are loaded from configuration at startup, a request from an unconfigured peer is rejected,
+and dynamic discovery, cross-peer shared replay storage, and federated credential issuance are out
+of scope (`REQ-PR-NOTARY-019`). The federated answer is the same kind of minimized, mode-governed
+evaluation result, signed for transport, rather than a portable credential.
+
+## Honest limits
+
+The disclosure model is a set of policy-enforced controls, not a cryptographic privacy proof.
+The limits below are the documented honest framing, not discovered defects.
+
+- **This is not zero-knowledge.** A `predicate` answer is a policy-enforced boolean computed
+  inside the service, and SD-JWT selective disclosure is digest omission (the body carries a
+  SHA-256 digest of each disclosable field, `sd_jwt.rs`). Neither is a zero-knowledge proof, and
+  the documentation should not imply one (`records-stay-home.mdx`).
+- **Minimization is modelled, not automatic.** A claim reveals only what its author configured.
+  `value` mode discloses the evaluated value less any object fields the policy redacts and is not
+  constrained to a scalar, so a claim modelled to return an object or extracted record returns
+  one. The single-rule shape and the least-revealing-default guidance are a modelling stance the
+  author adopts, not a property imposed on every answer.
+- **A plain result is provenance-tagged, not signed.** The everyday evaluation response carries
+  provenance metadata using the `registry-notary-claim-provenance/v1` shape (`REQ-PR-NOTARY-028`;
+  the `ClaimProvenance` struct in `model.rs` holds `schema_version`, `generated_by`, `used`, and
+  `derived_from`, with no signature field). Provenance is correlation context, not a signature
+  over the result. Cryptographic verifiability comes from the SD-JWT VC credential (signed with
+  its configured EdDSA or ES256 key, `REQ-PR-NOTARY-013`) or the signed federation result (a compact signed JWT,
+  `REQ-PR-NOTARY-018`), not from the default evaluation response.
+- **Correctness depends on the configured source.** Notary reports what its configured source
+  says and does not independently vouch for whether the source is correct or current
+  (`REQ-PR-NOTARY-005`).
+- **Alignment with a standard is not conformance.** Conformance to `RS-PR-NOTARY` does not imply
+  conformance to any external standard cited in its `standards_referenced` (`rs-pr-notary.mdx`),
+  and a CCCEV-shaped JSON-LD output is a profiled subset that must not assert conformance to CCCEV
+  2.00 (`REQ-PR-NOTARY-012`). In the standards register, `aligns_with` means the project follows a
+  standard's model and intent without claiming formal conformance (`standards.mdx`).
+
+## Related
+
+- The protocol and data-model contracts: [RS-PR-NOTARY](../../spec/rs-pr-notary/),
+  [RS-DM-CLAIM](../../spec/rs-dm-claim/), [RS-SEC-G](../../spec/rs-sec-g/)
+- The overview: [Records stay home](../records-stay-home/) *(explanation)*
+- Evidence issuance, end to end: [Evidence issuance](../evidence-issuance/) *(explanation)*
+- The security posture: [Trust and security](../trust-and-security/) *(explanation)*
