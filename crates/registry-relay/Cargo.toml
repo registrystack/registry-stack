@@ -56,7 +56,7 @@ tower-http = { version = "0.7", features = [
 # datafusion minor is pinned because bumping means re-typing the Source
 # trait's RecordBatch return across multiple modules.
 # Current pin: 53.1.
-datafusion = { version = "53.1" }
+datafusion = { version = "54.0" }
 calamine = { version = "0.35" }
 csv = { version = "1" }
 tokio-postgres = { version = "0.7.18", features = ["with-time-0_3"] }
