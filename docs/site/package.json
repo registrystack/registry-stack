@@ -32,22 +32,22 @@
   },
   "dependencies": {
     "@astrojs/sitemap": "^3.7.3",
-    "@astrojs/starlight": "^0.41.1",
+    "@astrojs/starlight": "^0.41.2",
     "@fontsource/ibm-plex-mono": "^5.2.7",
     "@fontsource/public-sans": "^5.2.7",
-    "astro": "^7.0.2",
+    "astro": "^7.0.5",
     "astro-mermaid": "^2.1.0",
     "mermaid": "^11.15.0",
-    "starlight-openapi": "^0.25.3"
+    "starlight-openapi": "^0.26.0"
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.9",
-    "@redocly/cli": "^2.31.4",
+    "@redocly/cli": "^2.36.0",
     "@vvago/vale": "^3.12.0",
     "linkinator": "^7.6.1",
-    "markdownlint-cli2": "^0.22.1",
+    "markdownlint-cli2": "^0.23.0",
     "remark-gfm": "^4.0.1",
-    "starlight-llms-txt": "^0.10.0",
+    "starlight-llms-txt": "^0.11.0",
     "typescript": "^6.0.3",
     "yaml": "^2.8.1"
   },
