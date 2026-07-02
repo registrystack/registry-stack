@@ -5,7 +5,7 @@ orchestration script** when a source API needs a little imperative shaping that
 is awkward for the declarative `http_json` / `http_flow` engines but too small to
 justify a bespoke adapter. The script is **orchestration-only**: it decides which
 configured request to make next and shapes the returned JSON into records. It
-never holds network authority, credentials, or policy — the sidecar host keeps
+never holds network authority, credentials, or policy; the sidecar host keeps
 all of those.
 
 Notary configs use the normal `connector: source_adapter_sidecar`; the
@@ -21,10 +21,10 @@ row shape every engine returns:
 
 Reach for `script_rhai` only when the declarative engines do not fit:
 
-- `http_json` — one governed request and a JSON/CEL projection.
-- `http_flow` — a fixed declarative sequence of dependent reads.
-- `fhir` — a bounded FHIR R4 GET graph.
-- `script_rhai` — 1–3 governed source calls where the script must **branch** on
+- `http_json`: one governed request and a JSON/CEL projection.
+- `http_flow`: a fixed declarative sequence of dependent reads.
+- `fhir`: a bounded FHIR R4 GET graph.
+- `script_rhai`: 1–3 governed source calls where the script must **branch** on
   a response (e.g. POST a search body, then GET a returned id; try one path,
   fall back on a 404), or normalize source-specific JSON that the declarative
   mappers cannot express.
@@ -56,7 +56,7 @@ so a buggy script or a hostile *upstream response* cannot escalate:
   concurrency are all bounded. The script is **compiled and smoke-tested at
   startup**; a compile, policy, or smoke failure blocks readiness.
 - **Governed provenance.** The script is embedded inline in the signed runtime
-  target, so it is covered by the target's `config_hash` — the same TUF-verified
+  target, so it is covered by the target's `config_hash`, the same TUF-verified
   content anchor used for inline CEL today.
 
 ## The script contract
@@ -222,7 +222,7 @@ for upstreams that require a JSON token request. Optional fields are `scope`,
 or a vendor API-version header) on every call to that target. Header values are
 governed config and flow through the `config_hash`. Authentication, cookie,
 host/length framing, hop-by-hop, and forwarding headers (and any `Proxy-*`
-header) are **rejected at startup** — put credentials in `auth`, not `headers`.
+header) are **rejected at startup**: put credentials in `auth`, not `headers`.
 
 ### Observable statuses
 
@@ -230,7 +230,7 @@ By default any non-2xx terminates the run and maps to a problem code
 (`401`/`403` → `source.target_auth`, `429` → `source.target_rate_limit`,
 timeout → `source.timeout`, everything else → `source.unavailable`). List a
 status in a target's `visible_statuses` to let the script **observe** it as
-`#{ status, body }` and branch instead — for example a `404` that means
+`#{ status, body }` and branch instead, for example a `404` that means
 "not found here, try the fallback". The engine is compiled with the union of all
 targets' visible statuses as a ceiling, and the per-target list is enforced by
 the host.
@@ -261,7 +261,7 @@ engines. Because the script is inline in the signed runtime target, it is
 covered by the target `config_hash` that Notary verifies before source reads.
 The `/ready` and `/v1/assurance` booleans (`expression_hashes_verified`,
 `runtime_verified`, `smoke_verified`) attest that whole-target hash together
-with the startup compile and smoke check — a startup failure on any of them
+with the startup compile and smoke check; a startup failure on any of them
 blocks readiness, so a sidecar that serves these values has satisfied all three.
 
 ## Local verification
