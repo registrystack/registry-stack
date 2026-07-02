@@ -8,7 +8,7 @@ source_repos:
   - registry-relay
   - registry-manifest
   - registry-notary
-last_reviewed: "2026-06-23"
+last_reviewed: "2026-07-02"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -36,8 +36,11 @@ claims still belong to the institution that governs, deploys, and operates the D
 
 ## Claim scope
 
-The registry stack is compared against the [Universal DPI Safeguards Framework](https://www.dpi-safeguards.org/assessments)
+The registry stack is compared against version 2.0 of the
+[Universal DPI Safeguards Framework](https://www.dpi-safeguards.org/framework)
 as implementation evidence, not as certification.
+The principle IDs on this page follow that version, as recorded in the
+[standards register](../../reference/standards/).
 The framework spans 18 principles, 13 risks, responsible authorities, five DPI life-cycle stages, and
 adoption pathways across law, institutions, technical foundations, capacity, and whole-of-society
 participation.
@@ -94,6 +97,7 @@ principles; the remaining principles are governance and institutional work outsi
 | Data security by design (O4) | Protected routes use API key or OIDC modes, scope-before-source authorization, shared security primitives, separate admin surfaces, and fail-closed governed decisions. | Key custody, network controls, incident response, security audits, and production hardening remain operator responsibilities. |
 | Data protection during use (O5) | Runtime services can record purpose, checked scopes, PDP policy provenance, stable denials, and audit events for reads and evaluations. | A program still needs lawful basis, oversight, retention policy, and protections against overreaching requests. |
 | Transparency and accountability (F4) | Portable metadata, runtime metadata, OpenAPI references, stable error codes, audit records, signed responses, credentials, and the [standards register](../../reference/standards/) make behavior reviewable. | Public governance, remedies, procurement discipline, and independent accountability mechanisms are institutional controls. |
+| Evolve with evidence (O2) | [ITB and SEMIC validation evidence](../../reference/itb-semic-evidence/), the [security self-assessment](../../security/self-assessment/), [OpenSSF status and release verification evidence](../../security/openssf-evidence/), and CI-gated tests and conformance fixtures give assessors material they can re-run and re-check. | Independent assessments, audits, engagement with affected people, and acting on findings remain program and institutional responsibilities. |
 | Build and share open assets (O9) | The stack emits or uses open, standards-shaped artifacts and documented HTTP contracts rather than one-off integration agreements. | External conformance and certification require separate validation against each standard or program rule. |
 | Autonomy and agency (F6) | Notary credentials support holder binding through `did:jwk`; claim results and credentials can avoid exposing more than the configured disclosure mode allows. | The stack does not provide a complete wallet, consent journey, opt-out path, appeal process, or assisted service channel. |
 | Inclusion and non-discrimination (F2, F3, O6) | Metadata, audit, and claim evidence can help reviewers inspect what a service exposes and how it behaves. | Accessibility, language access, community participation, gender or disability inclusion, and non-digital alternatives are not solved by these components. |
