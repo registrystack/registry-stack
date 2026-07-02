@@ -7503,6 +7503,90 @@ async fn admin_posture_reports_configured_instance_override() {
 }
 
 #[tokio::test]
+async fn admin_posture_top_level_keys_match_documented_example() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = registry_data_api_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+    );
+    enable_shared_admin_listener(&mut config);
+    add_ops_read_api_key(&mut config);
+
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let default_posture = server
+        .get("/admin/v1/posture")
+        .add_header("x-api-key", "ops-token")
+        .await;
+    default_posture.assert_status_ok();
+    let default_body: Value = default_posture.json();
+    assert_matches_posture_schema(&default_body);
+
+    let default_live_keys = default_body
+        .as_object()
+        .expect("posture is object")
+        .keys()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let default_example: Value =
+        serde_json::from_str(registry_platform_ops::NOTARY_POSTURE_EXAMPLE_V1)
+            .expect("notary posture example parses");
+    let default_example_keys = default_example
+        .as_object()
+        .expect("example posture is object")
+        .keys()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        default_example_keys, default_live_keys,
+        "NOTARY_POSTURE_EXAMPLE_V1 top-level keys drifted from the live default-tier posture document \
+         (missing from example: {:?}, extra in example: {:?})",
+        default_live_keys.difference(&default_example_keys).collect::<Vec<_>>(),
+        default_example_keys.difference(&default_live_keys).collect::<Vec<_>>(),
+    );
+
+    let restricted_posture = server
+        .get("/admin/v1/posture?tier=restricted")
+        .add_header("x-api-key", "ops-token")
+        .await;
+    restricted_posture.assert_status_ok();
+    let restricted_body: Value = restricted_posture.json();
+    assert_matches_posture_schema(&restricted_body);
+
+    let restricted_live_keys = restricted_body
+        .as_object()
+        .expect("posture is object")
+        .keys()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let restricted_fixture: Value =
+        serde_json::from_str(registry_platform_ops::RESTRICTED_POSTURE_FIXTURE_V1)
+            .expect("restricted posture fixture parses");
+    let restricted_fixture_keys = restricted_fixture
+        .as_object()
+        .expect("restricted fixture posture is object")
+        .keys()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        restricted_fixture_keys, restricted_live_keys,
+        "RESTRICTED_POSTURE_FIXTURE_V1 top-level keys drifted from the live restricted-tier posture document \
+         (missing from fixture: {:?}, extra in fixture: {:?})",
+        restricted_live_keys.difference(&restricted_fixture_keys).collect::<Vec<_>>(),
+        restricted_fixture_keys.difference(&restricted_live_keys).collect::<Vec<_>>(),
+    );
+}
+
+#[tokio::test]
 async fn admin_posture_reports_self_attestation_summary_and_redacts_signing_key_ids() {
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");

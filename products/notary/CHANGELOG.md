@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Corrected the `GET /admin/v1/posture` OpenAPI example to include the
+  `deployment` and `audit` sections that the live default-tier posture
+  document already returns.
+
 ### Changed
 
 - Renamed the binary package from `registry-notary-bin` to `registry-notary`

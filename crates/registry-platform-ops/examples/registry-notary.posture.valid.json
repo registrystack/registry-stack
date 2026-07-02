@@ -18,6 +18,20 @@
     "admin_enabled": true,
     "readiness": "ready"
   },
+  "deployment": {
+    "profile": "production",
+    "findings": []
+  },
+  "audit": {
+    "write_policy": "fail_closed_route_families",
+    "redaction_mode": "redacted",
+    "hash_chain": "process_local",
+    "keyed_integrity": "hmac",
+    "sink_class": "file",
+    "retention_owner": "operator",
+    "checkpoints": "unsupported",
+    "anchoring": "none"
+  },
   "configuration": {
     "source": "local_file",
     "dynamic_reload_supported": false,
