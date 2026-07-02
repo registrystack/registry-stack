@@ -1,0 +1,334 @@
+---
+title: Configure DHIS2 claim checks
+description: Run the DHIS2 source-adapter profile, evaluate DHIS2 Tracker claims with Registry Notary, and identify the config blocks to adapt for your own DHIS2 deployment.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-lab
+  - registry-notary
+last_reviewed: "2026-06-28"
+doc_type: tutorial
+locale: en
+standards_referenced:
+  - openapi
+  - sd-jwt-vc
+---
+
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+
+Use this tutorial when DHIS2 is already your source system and you want Registry Notary to answer
+narrow programme-status claims without sharing full DHIS2 records.
+The tutorial uses the public DHIS2 play instance as the source, runs a private source-adapter
+sidecar, and exposes only the Registry Notary API to the caller.
+
+You will configure three pieces:
+
+- The DHIS2 source adapter, which calls the DHIS2 Tracker API through the built-in `http_json`
+  engine.
+- Registry Notary source bindings, which map projected DHIS2 fields into claim rules.
+- Credential profiles, which issue SD-JWT VCs from selected DHIS2 claim results.
+
+<QuickstartMeta
+  outcome="Registry Notary evaluating DHIS2 Tracker claims locally, with a programme participation SD-JWT VC issued from the evaluated results."
+  time="About 15 minutes after the container images build"
+  level="Existing system integration"
+  prerequisites={['Docker Compose 2.20+', 'just', 'A Registry Lab checkout with submodules', 'Network access to the DHIS2 play instance']}
+/>
+
+The demo uses the public DHIS2 sandbox at `https://play.im.dhis2.org/stable-2-43-0-1`.
+The same configuration shape applies to a private DHIS2 deployment once you replace the source URL,
+credentials, Tracker query, field projection, and claim rules.
+
+## Before you start
+
+You need:
+
+- Docker with Compose v2.20 or later.
+- The `just` command runner.
+- `jq` and `node` for manual checks and holder-proof generation.
+- A Registry Lab checkout, which is the `lab` directory of the `registry-stack` monorepo.
+- Network access to the DHIS2 source you are testing.
+
+Clone the monorepo if you do not already have it:
+
+```sh
+git clone https://github.com/registrystack/registry-stack.git
+cd registry-stack/lab
+just setup
+```
+
+For an existing checkout, update submodules before running the profile:
+
+```sh
+cd registry-stack/lab
+just setup
+```
+
+## Set DHIS2 source access
+
+The local demo defaults to the public DHIS2 play credentials. The current lab profile still uses
+legacy `OPENFN_*` variable names for this DHIS2 sidecar. To point the profile at another DHIS2
+environment, set these values before you run the profile:
+
+```sh
+export OPENFN_DHIS2_HOST_URL="https://play.im.dhis2.org/stable-2-43-0-1"
+export OPENFN_DHIS2_USERNAME="admin"
+export OPENFN_DHIS2_PASSWORD="district"
+```
+
+In a private deployment, replace those values with a DHIS2 base URL and a reader account scoped to
+the Tracker data you need. Do not use public sandbox credentials outside the demo.
+
+The Compose profile turns those values into the credential JSON consumed by the sidecar:
+
+```json
+{
+  "baseUrl": "https://play.im.dhis2.org/stable-2-43-0-1",
+  "username": "admin",
+  "password": "district"
+}
+```
+
+## Generate local credentials
+
+Generate local Notary tokens, sidecar tokens, signing material, and static metadata:
+
+```sh
+just generate
+```
+
+This writes `.env`, including:
+
+- `DHIS2_EVIDENCE_CLIENT_BEARER`, used by callers when they call Registry Notary.
+- `OPENFN_SIDECAR_TOKEN_RAW`, the legacy variable name Registry Notary uses when it calls the
+  private DHIS2 sidecar.
+- `OPENFN_SIDECAR_TOKEN_HASH`, the legacy variable name the sidecar uses to authenticate Notary.
+
+Do not use generated demo credentials outside the local lab.
+
+## Run the DHIS2 profile
+
+Build the lab images:
+
+```sh
+just build
+```
+
+Run the DHIS2 smoke:
+
+```sh
+just dhis2
+```
+
+The profile starts:
+
+| Service | Local URL | Role |
+| --- | --- | --- |
+| `openfn-dhis2-sidecar` | private Compose network only | DHIS2 source adapter that calls DHIS2 Tracker through `http_json` |
+| `dhis2-health-notary` | `http://127.0.0.1:4326` | Registry Notary claim evaluator and SD-JWT VC issuer |
+
+The service name keeps the legacy `openfn` prefix, but this path uses the built-in `http_json`
+engine. There is no Node worker pool or OpenFn workflow runtime in the DHIS2 lookup path.
+
+Expected ending:
+
+```text
+DHIS2 health evidence and VC smoke passed
+```
+
+## Inspect the results
+
+The smoke writes artifacts under:
+
+```text
+output/dhis2-openfn/
+```
+
+Inspect the predicate checks:
+
+```sh
+jq '{claim_id: .results[0].claim_id, satisfied: .results[0].satisfied}' \
+  output/dhis2-openfn/smoke-dhis2-child-program-active.json
+```
+
+Inspect the programme participation credential summary:
+
+```sh
+jq '{
+  credential_profile,
+  issuer,
+  format,
+  disclosure_count,
+  disclosure_claim_ids,
+  programme_active,
+  reconciliation_ref_available
+}' output/dhis2-openfn/smoke-dhis2-programme-participation-credential-summary.json
+```
+
+The full credential response and holder proof are also written under `output/dhis2-openfn/`.
+Treat those files as local debug artifacts and review them before sharing.
+
+## Call Notary manually
+
+Load the generated local credentials:
+
+```sh
+set -a
+. .env
+set +a
+```
+
+Call Notary discovery:
+
+```sh
+curl -fsS http://127.0.0.1:4326/.well-known/evidence-service \
+  -H "Authorization: Bearer ${DHIS2_EVIDENCE_CLIENT_BEARER}" | jq
+```
+
+Evaluate the programme participation claims for the demo tracked entity:
+
+```sh
+curl -fsS -X POST http://127.0.0.1:4326/v1/evaluations \
+  -H "Authorization: Bearer ${DHIS2_EVIDENCE_CLIENT_BEARER}" \
+  -H "Content-Type: application/json" \
+  -H "Data-Purpose: https://demo.example.gov/purpose/dhis2-openfn-health-evidence" \
+  -o output/dhis2-openfn/manual-programme-evaluation.json \
+  -d '{
+    "target": {
+      "type": "TrackedEntity",
+      "identifiers": [
+        { "scheme": "dhis2_tracked_entity", "value": "PQfMcpmXeFE" }
+      ]
+    },
+    "claims": [
+      "dhis2-tracked-entity-first-name",
+      "dhis2-tracked-entity-last-name",
+      "dhis2-child-age-band",
+      "dhis2-programme-code",
+      "dhis2-child-program-active",
+      "dhis2-reconciliation-ref"
+    ],
+    "disclosure": "value",
+    "format": "application/dc+sd-jwt"
+  }'
+
+jq '.results[] | {claim_id, value, satisfied, evaluation_id}' \
+  output/dhis2-openfn/manual-programme-evaluation.json
+```
+
+## Issue the programme credential
+
+Generate a holder proof for the returned evaluation:
+
+```sh
+EVALUATION_ID="$(
+  jq -r '.results[0].evaluation_id' \
+    output/dhis2-openfn/manual-programme-evaluation.json
+)"
+
+CLAIMS='[
+  "dhis2-tracked-entity-first-name",
+  "dhis2-tracked-entity-last-name",
+  "dhis2-child-age-band",
+  "dhis2-programme-code",
+  "dhis2-child-program-active",
+  "dhis2-reconciliation-ref"
+]'
+
+scripts/generate-holder-proof.js \
+  --audience dhis2-health-notary \
+  --evaluation-id "$EVALUATION_ID" \
+  --credential-profile dhis2_programme_participation_sd_jwt \
+  --disclosure value \
+  --claims-json "$CLAIMS" \
+  > output/dhis2-openfn/manual-programme-holder.json
+```
+
+Issue the SD-JWT VC:
+
+```sh
+curl -fsS -X POST http://127.0.0.1:4326/v1/credentials \
+  -H "Authorization: Bearer ${DHIS2_EVIDENCE_CLIENT_BEARER}" \
+  -H "Content-Type: application/json" \
+  -o output/dhis2-openfn/manual-programme-credential.json \
+  -d "$(jq -nc \
+    --arg evaluation_id "$EVALUATION_ID" \
+    --argjson claims "$CLAIMS" \
+    --slurpfile holder output/dhis2-openfn/manual-programme-holder.json \
+    '{
+      evaluation_id: $evaluation_id,
+      credential_profile: "dhis2_programme_participation_sd_jwt",
+      format: "application/dc+sd-jwt",
+      claims: $claims,
+      disclosure: "value",
+      holder: $holder[0].holder
+    }')"
+
+jq '{credential_id, credential_profile, issuer, format, disclosure_count: (.disclosures | length)}' \
+  output/dhis2-openfn/manual-programme-credential.json
+```
+
+The issued credential is holder-bound to the generated `did:jwk` proof and uses the
+`dhis2_programme_participation_sd_jwt` profile.
+
+## How the adapter is configured
+
+The DHIS2 source adapter is configured in `config/source-adapter/dhis2-health-sidecar.yaml`.
+
+Key settings:
+
+| Setting | What it does |
+| --- | --- |
+| `sources.dhis2_health.engine` | Uses the built-in `http_json` engine. |
+| `sources.dhis2_health.credential_env` | Reads DHIS2 `baseUrl`, `username`, and `password` from the legacy `OPENFN_DHIS2_DEMO_CREDENTIAL_JSON` variable. |
+| `sources.dhis2_health.allowed_base_urls` | Pins which DHIS2 base URLs the sidecar may call. |
+| `sources.dhis2_health.http_json.path` | Calls `/api/tracker/trackedEntities`. |
+| `sources.dhis2_health.http_json.query` | Maps the Notary lookup value into DHIS2 Tracker query parameters. |
+| `sources.dhis2_health.http_json.response.records` | Projects the DHIS2 Tracker JSON response into the fields Notary can evaluate. |
+
+The demo maps one DHIS2 tracked entity into fields such as `first_name`, `last_name`,
+`child_program_active`, `child_age_band`, `programme_code`, and `reconciliation_ref`.
+For your deployment, change the DHIS2 base URL allow-list, program IDs, attribute IDs, source
+projection, and smoke lookup subject to match your DHIS2 configuration.
+
+## How Notary is configured
+
+Registry Notary is configured in `config/notary/dhis2-health-notary.yaml`.
+
+Key settings:
+
+| Setting | What it does |
+| --- | --- |
+| `evidence.source_connections.dhis2_openfn.base_url` | Points Notary at the private sidecar. |
+| `evidence.source_connections.dhis2_openfn.token_env` | Sends the shared sidecar token from the legacy `OPENFN_SIDECAR_TOKEN_RAW` variable. |
+| `evidence.allowed_purposes` | Restricts which `Data-Purpose` values may be used. |
+| `evidence.claims[].source_bindings` | Binds each claim to the projected DHIS2 fields. |
+| `evidence.claims[].rule` | Extracts a value or evaluates a predicate from the projected fields. |
+| `evidence.credential_profiles` | Controls which claims can be issued as SD-JWT VCs, validity, issuer, disclosure, and holder binding. |
+
+For your deployment, update the claims to match the programme facts your relying services need.
+Keep the sidecar private; expose Notary, not DHIS2, to callers.
+
+## Stop the profile
+
+Stop the DHIS2 services:
+
+```sh
+docker compose -f compose.yaml --profile dhis2 down
+```
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| `missing .env` | Local credentials have not been generated. | Run `just generate`. |
+| Notary discovery returns `401` | The request is missing the local bearer token. | Add `Authorization: Bearer ${DHIS2_EVIDENCE_CLIENT_BEARER}`. |
+| The sidecar cannot reach DHIS2 | The source URL, credentials, or network path is wrong, or the public sandbox reset. | Check `OPENFN_DHIS2_HOST_URL`, `OPENFN_DHIS2_USERNAME`, `OPENFN_DHIS2_PASSWORD`, then rerun `just dhis2`. |
+| A claim is unsatisfied | The Tracker record does not contain the projected field or programme state. | Inspect the JSON artifact in `output/dhis2-openfn/`, then compare the field with `config/source-adapter/dhis2-health-sidecar.yaml` and `config/notary/dhis2-health-notary.yaml`. |
+| `child_age_band` looks coarse | The public child programme demo does not expose date of birth for the tracked entity. | Treat `5_to_17` as lab-derived programme context, not a clinical age calculation. |
+
+## Next
+
+- [OpenCRVS claims](../verify-opencrvs-claims/)
+- [Getting started with FHIR evidence](../getting-started-fhir-evidence/)
+- [Integration patterns](../../explanation/integration-patterns/)

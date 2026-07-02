@@ -26,7 +26,7 @@ Keep source connectors narrow and keep claim semantics in Notary config.
 | --- | --- | --- |
 | DCI | The upstream speaks a DCI-style search envelope | `connector: dci` |
 | Registry Data API | The upstream exposes `/v1/datasets/{dataset}/entities/{entity}/records` lookups | `connector: registry_data_api` |
-| Source adapter sidecar | A private sidecar must normalize a target system outside Notary, using built-in `http_json`, `http_flow`, or `fhir` source engines | `connector: source_adapter_sidecar` |
+| Source adapter sidecar | A private sidecar must normalize a target system outside Notary, using built-in `http_json`, `http_flow`, `fhir`, or `script_rhai` source engines | `connector: source_adapter_sidecar` |
 
 Prefer the simplest direct source. Add a sidecar when the target system needs
 private credentials, governed request shaping, or output normalization outside
@@ -118,8 +118,10 @@ The source adapter sidecar is a separate private process that normalizes a targe
 system into Notary's source-read contracts. The Notary connector value remains
 `source_adapter_sidecar`. Inside the sidecar, a source can use the built-in
 `http_json` engine for straightforward HTTP JSON APIs, the built-in `http_flow`
-engine for short dependent GET-only HTTP JSON reads, or the built-in `fhir`
-engine. Use the first-class connector for new configs:
+engine for short dependent GET-only HTTP JSON reads, the built-in `fhir`
+engine, or the sandboxed `script_rhai` engine for small branching cases that
+do not fit the declarative engines. Use the first-class connector for new
+configs:
 
 ```yaml
 evidence:
@@ -188,7 +190,9 @@ Boundary rules:
 - The sidecar must be reachable only over localhost or a private pod network
   from Notary. Do not expose it publicly or place it behind an internet-facing
   ingress.
-- Pin worker runtime and adaptor versions for source-adapter sources.
+- Pin the sidecar image and governed runtime config for source-adapter sources.
+  If you use a compatibility path that carries separate runtime or adaptor
+  versions, pin those too.
 - Store sidecar target credentials in sidecar env, not in Notary config.
 - Return no more than two records for a lookup.
 - Return only normalized fields needed by Notary.

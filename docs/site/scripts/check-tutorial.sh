@@ -150,8 +150,8 @@ done
 # inside `sh` fences. Bump the expected count when you intentionally add or
 # remove a documented command.
 REGISTRYCTL_TUTORIALS=(
-	"publish-spreadsheet-secured-registry-api:31"
-	"verify-claim-registry-api:74"
+	"publish-spreadsheet-secured-registry-api:29"
+	"verify-claim-registry-api:55"
 )
 
 count_sh_command_lines() {
