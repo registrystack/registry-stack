@@ -65,13 +65,12 @@ just smoke
 just client
 ```
 
-`just setup` initializes the `vendor/` submodules this lab still depends on
-(Crosswalk, registry-atlas, the eSignet Relay authenticator). The Registry
-Relay, Notary, Platform, and Manifest source now live as crates in the
-monorepo root rather than as separate submodules or sibling checkouts, so the
-plain commands above only resolve correctly when run through a monorepo-aware
-recipe such as `just release-fast` (see below). `just generate` and `just
-smoke` fail early when `registry-manifest` is missing.
+`just setup` initializes the remaining `lab/vendor/` submodules: Crosswalk,
+registry-atlas, and the eSignet Relay authenticator. The Registry Relay,
+Notary, Platform, and Manifest source now live as crates in the monorepo root;
+the lab justfile defaults to those monorepo paths, while Crosswalk,
+registry-atlas, and the eSignet Relay authenticator stay pinned as vendor
+submodules.
 
 `just generate` writes `.env`, fixture files, and static metadata. Run it before
 `just up` the first time, and run it again after pulling demo changes that add
@@ -92,15 +91,10 @@ in this monorepo use:
 just release-fast
 ```
 
-Plain `just quick` predates the monorepo migration: it still expects sibling
-`registry-relay`, `registry-notary`, `registry-platform`, and
-`registry-manifest` checkouts (or the now-removed `vendor/` submodule pins for
-those) and fails without `REGISTRY_RELAY_SOURCE_DIR`,
-`REGISTRY_NOTARY_SOURCE_DIR`, `REGISTRY_PLATFORM_SOURCE_DIR`, and
-`REGISTRY_MANIFEST_REPO` overrides. `just release-fast` runs
-`scripts/release-check.sh`, which defaults to
-`REGISTRY_LAB_RELEASE_SOURCE_MODE=monorepo` and wires those variables to the
-monorepo root and `../crates/registry-relay` automatically.
+Plain `just quick` runs the same monorepo defaults for generate, build, smoke,
+OpenFn, and client checks. `just release-fast` runs `scripts/release-check.sh`,
+which defaults to `REGISTRY_LAB_RELEASE_SOURCE_MODE=monorepo` and also gates
+the release source model.
 
 If you still have sibling Platform, Relay, and Notary checkouts and want to
 validate against them directly, `commons-check` remains available:
@@ -319,11 +313,11 @@ removes demo volumes after a successful run. Use the individual checks above
 when you want to keep the current Postgres, Zitadel, or OpenFn containers
 running for inspection.
 
-The `justfile` defaults `REGISTRY_RELAY_SOURCE_DIR`,
-`REGISTRY_NOTARY_SOURCE_DIR`, and `REGISTRY_PLATFORM_SOURCE_DIR` to sibling
-checkouts when present, otherwise to the pinned `vendor/` submodules.
-`REGISTRY_OPENFN_NOTARY_SOURCE_DIR` follows `REGISTRY_NOTARY_SOURCE_DIR` by
-default. Override those variables when you want to build from another local
+The `justfile` defaults `REGISTRY_RELAY_SOURCE_DIR` to
+`../crates/registry-relay` and `REGISTRY_NOTARY_SOURCE_DIR`,
+`REGISTRY_PLATFORM_SOURCE_DIR`, and `REGISTRY_MANIFEST_REPO` to the monorepo
+root. `REGISTRY_OPENFN_NOTARY_SOURCE_DIR` follows `REGISTRY_NOTARY_SOURCE_DIR`
+by default. Override those variables when you want to build from another local
 path.
 
 ## Live Notary Redis checks
@@ -634,10 +628,9 @@ the full setup sequence, which starts with `just generate` before
 This demo keeps runtime orchestration, fixtures, static metadata config, and
 walkthrough scripts in this repository. Registry Platform, Registry Relay,
 Registry Notary, and Registry Manifest now live as crates in the
-registry-stack monorepo root rather than as `vendor/` submodules; the justfile
-and scripts default to the monorepo checkout (`..` from `lab/`) when no
-sibling checkout is present. The following remain real submodules under
-`vendor/`:
+registry-stack monorepo root rather than as `vendor/` submodules; the lab
+justfile and release scripts default to the monorepo source paths. The
+following remain real submodules under `lab/vendor/`:
 
 - `vendor/crosswalk`: the Crosswalk mapping engine, pinned as a git dependency.
 - `vendor/registry-atlas`: registry-atlas source.
@@ -645,8 +638,8 @@ sibling checkout is present. The following remain real submodules under
   used by `just esignet-up`.
 
 The Compose build uses Docker named contexts, and defaults to this monorepo
-checkout for Platform, Relay, and Notary. Override with sibling checkouts when
-you need to build from another local path:
+checkout for Platform, Manifest, and Notary plus the Relay crate path. Override
+with sibling checkouts when you need to build from another local path:
 
 ```bash
 REGISTRY_RELAY_SOURCE_DIR=../registry-relay \
