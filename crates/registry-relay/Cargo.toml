@@ -137,7 +137,7 @@ wkt = { version = "0.14", optional = true, features = ["geo-types"] }
 # ─── dev / test ──────────────────────────────────────────────────────────────
 [dev-dependencies]
 aws-lc-rs = { version = "1" }
-axum-test = { version = "20" }
+axum-test = { version = "21" }
 assert-json-diff = { version = "2" }
 chrono = { version = "0.4" }
 registry-platform-testing = { workspace = true, features = ["test-utils"] }

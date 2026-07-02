@@ -40,7 +40,7 @@ tracing.workspace = true
 
 [dev-dependencies]
 axum.workspace = true
-axum-test = { version = "20" }
+axum-test = { version = "21" }
 registry-platform-crypto.workspace = true
 registry-platform-sdjwt.workspace = true
 registry-notary-server = { workspace = true }

@@ -40,7 +40,7 @@ tracing-subscriber.workspace = true
 libc = { version = "0.2" }
 
 [dev-dependencies]
-axum-test = { version = "20" }
+axum-test = { version = "21" }
 tempfile = { version = "3" }
 
 [[bin]]
