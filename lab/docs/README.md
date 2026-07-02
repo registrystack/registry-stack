@@ -13,7 +13,7 @@ available `just` commands. The tutorials below focus on one working path each.
 flowchart TD
     Root["Root README<br/>setup, ports, just commands"]
     Ops["Operations posture lab contract<br/>admin posture and credentials"]
-    Lab2["Lab 2 governed operations demo spec<br/>signed config verification and apply"]
+    Lab2["Lab 2 governed ops<br/>signed config verification and apply"]
     Tutorials["First credential tutorials<br/>OpenCRVS, DHIS2, OpenFn"]
     Citizen["Citizen and wallet flows<br/>OID4VCI and subject binding"]
     Agri["Agriculture demo specs<br/>registry and consumer demos"]
@@ -77,5 +77,7 @@ flowchart TD
 
 - [Evidence Gateway packs](evidence-gateway-packs.md): current pack IDs,
   binding IDs, identifier/demographic lookup support, and fast test commands.
+- [Identifier domain consolidation plan](domain-consolidation-plan.md): deferred
+  plan to consolidate machine identifiers onto `id.registrystack.org`.
 - [Commons release cleanup plan](commons-release-cleanup-plan.md): maintainer
   cleanup plan for shared Platform, Notary, Relay, and Manifest release work.
