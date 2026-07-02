@@ -80,7 +80,7 @@ serde_json = { version = "1" }
 # Optional Crosswalk CEL mapping support. Disabled by default so the core VC
 # path does not pull in the mapping dependency graph.
 crosswalk-core = { workspace = true, optional = true }
-jsonschema = { version = "0.18", optional = true }
+jsonschema = { version = "0.46", optional = true }
 # Pure Rust YAML parser used instead of the previous unmaintained YAML stack.
 serde-saphyr = { version = "0.0.26" }
 humantime-serde = { version = "1" }
@@ -151,7 +151,7 @@ insta = { version = "1", features = ["json"] }
 zip = { version = "8", default-features = false, features = ["deflate"] }
 # Validates credentialSubject payloads against the JSON Schemas we
 # publish at /schemas/...
-jsonschema = { version = "0.18" }
+jsonschema = { version = "0.46" }
 # Ed25519 key generation for tests so they can mint fresh keypairs and
 # convert them to/from JWK without shelling out to openssl.
 ed25519-dalek = { version = "2", features = ["pkcs8", "rand_core"] }
