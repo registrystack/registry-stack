@@ -136,15 +136,17 @@ jobs:
       - name: Workspace check
         run: cargo check --locked --workspace --all-targets
 
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
       - name: Workspace tests
         run: cargo test --locked --workspace
 
       # Enforces the licenses, bans, and sources sections of deny.toml on every
       # Rust change. The advisories section is intentionally not gated here:
-      # the current tree fails `cargo deny check advisories` on fresh upstream
-      # RUSTSEC advisories (anyhow, quick-xml) whose fixes are dependency bumps,
-      # not code changes. Promote this to a full `cargo deny check` once the
-      # lockfile is updated so the advisories section passes.
+      # RUSTSEC-2026-0194/0195 (quick-xml) have no upgrade path until upstream
+      # calamine and phonenumber move off quick-xml <=0.39. Promote this to a
+      # full `cargo deny check` once those advisories are resolvable.
       - name: Cargo deny (licenses, bans, sources)
         run: cargo deny check bans licenses sources
 
