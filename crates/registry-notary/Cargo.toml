@@ -47,7 +47,7 @@ tracing-subscriber.workspace = true
 ulid.workspace = true
 
 [dev-dependencies]
-axum-test = { version = "20" }
+axum-test = { version = "21" }
 chrono = { version = "0.4" }
 jsonschema.workspace = true
 registry-platform-ops.workspace = true

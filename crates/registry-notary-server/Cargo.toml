@@ -58,7 +58,7 @@ zeroize.workspace = true
 
 [dev-dependencies]
 aws-lc-rs = { version = "1" }
-axum-test = { version = "20" }
+axum-test = { version = "21" }
 chrono = { version = "0.4" }
 registry-notary-client = { workspace = true, features = ["verifier"] }
 registry-platform-testing = { workspace = true, features = ["test-utils"] }
