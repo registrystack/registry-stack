@@ -111,8 +111,15 @@ Rust workspace:
 cargo metadata --locked --format-version 1
 cargo fmt --check
 cargo check --locked --workspace --all-targets
-cargo test --locked -p registryctl
+cargo test --locked --workspace
+cargo deny check bans licenses sources
+(cd products/notary && just openapi-check)
+(cd crates/registry-relay && just openapi-contract)
 ```
+
+Clippy (`cargo clippy --workspace --all-targets -- -D warnings`) and the
+cargo-deny advisories section are the house convention but are not yet in the
+root gate; run them locally.
 
 Release and lab source checks:
 
