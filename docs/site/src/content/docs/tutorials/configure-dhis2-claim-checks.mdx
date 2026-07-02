@@ -16,10 +16,11 @@ standards_referenced:
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-Use this tutorial when DHIS2 is already your source system and you want Registry Notary to answer
-narrow programme-status claims without sharing full DHIS2 records.
-The tutorial uses the public DHIS2 play instance as the source, runs a private source-adapter
-sidecar, and exposes only the Registry Notary API to the caller.
+This tutorial runs Registry Notary against the public DHIS2 play sandbox.
+A private source-adapter sidecar calls the DHIS2 Tracker API, Registry Notary evaluates
+programme-status claims from the projected fields, and Notary issues a holder-bound SD-JWT VC
+(Selective Disclosure JWT Verifiable Credential) from the evaluated results, with only the Notary
+API exposed to the caller.
 
 You will configure three pieces:
 
@@ -45,7 +46,8 @@ You need:
 
 - Docker with Compose v2.20 or later.
 - The `just` command runner.
-- `jq` and `node` for manual checks and holder-proof generation.
+- `jq` and `node` for manual checks and holder-proof generation (a holder proof is a signed
+  attestation binding an issued credential to the holder's key).
 - A Registry Lab checkout, which is the `lab` directory of the `registry-stack` monorepo.
 - Network access to the DHIS2 source you are testing.
 
@@ -268,7 +270,8 @@ jq '{credential_id, credential_profile, issuer, format, disclosure_count: (.disc
   output/dhis2-openfn/manual-programme-credential.json
 ```
 
-The issued credential is holder-bound to the generated `did:jwk` proof and uses the
+The issued credential is holder-bound to the generated `did:jwk` proof (a DID that encodes a
+public key directly, with no separate registry lookup) and uses the
 `dhis2_programme_participation_sd_jwt` profile.
 
 ## How the adapter is configured
@@ -288,8 +291,6 @@ Key settings:
 
 The demo maps one DHIS2 tracked entity into fields such as `first_name`, `last_name`,
 `child_program_active`, `child_age_band`, `programme_code`, and `reconciliation_ref`.
-For your deployment, change the DHIS2 base URL allow-list, program IDs, attribute IDs, source
-projection, and smoke lookup subject to match your DHIS2 configuration.
 
 ## How Notary is configured
 
@@ -306,9 +307,6 @@ Key settings:
 | `evidence.claims[].rule` | Extracts a value or evaluates a predicate from the projected fields. |
 | `evidence.credential_profiles` | Controls which claims can be issued as SD-JWT VCs, validity, issuer, disclosure, and holder binding. |
 
-For your deployment, update the claims to match the programme facts your relying services need.
-Keep the sidecar private; expose Notary, not DHIS2, to callers.
-
 ## Stop the profile
 
 Stop the DHIS2 services:
@@ -316,6 +314,18 @@ Stop the DHIS2 services:
 ```sh
 docker compose -f compose.yaml --profile dhis2 down
 ```
+
+## Make it yours
+
+- Update `sources.dhis2_health.allowed_base_urls` in `config/source-adapter/dhis2-health-sidecar.yaml`
+  to your DHIS2 base URL when you point the sidecar at a private deployment.
+- Change the program IDs and attribute IDs in that same file's `http_json.query` and
+  `http_json.response.records` blocks to match your DHIS2 Tracker configuration.
+- Update `evidence.claims[].source_bindings` and `evidence.claims[].rule` in
+  `config/notary/dhis2-health-notary.yaml` to match the programme facts your relying services need.
+- Replace `OPENFN_DHIS2_HOST_URL`, `OPENFN_DHIS2_USERNAME`, and `OPENFN_DHIS2_PASSWORD` with a
+  reader account scoped to your DHIS2 instance instead of the public sandbox credentials.
+- Keep the DHIS2 sidecar private and expose only Registry Notary to callers, as this demo does.
 
 ## Troubleshooting
 

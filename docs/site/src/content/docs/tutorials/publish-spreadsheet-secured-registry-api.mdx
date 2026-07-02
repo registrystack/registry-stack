@@ -241,6 +241,7 @@ stayed where it started, and only an authorized, scoped request got an answer ou
 | Symptom | Cause | Resolution |
 | --- | --- | --- |
 | `registryctl` is not found | The install directory is not on `PATH`. | Add the directory printed by the installer, usually `~/.local/bin`, to `PATH`. |
+| The installer reports an unsupported platform | No binary is published for that OS or CPU. | Install Rust with [`rustup`](https://rustup.rs), then run `cargo install --git https://github.com/registrystack/registry-stack --tag v0.8.3 registryctl --locked`. |
 | `registryctl start` cannot find Docker | Docker or another Compose provider is not installed or running. | Start Docker Desktop, OrbStack, Colima, Podman, or your supported provider, then run `registryctl start` again. |
 | `registryctl start` fails and the container log shows `failed to parse config YAML ... unknown field` | The locally cached container image does not match the digest-pinned image in the generated `compose.yaml`. | Run `docker compose pull` in the project directory, then `registryctl start` again. |
 | A row read returns `403 Forbidden` | The key is valid but lacks the row-read scope. | Use `ROW_READER_RAW` for row reads. |

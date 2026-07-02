@@ -14,23 +14,28 @@ standards_referenced: []
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-Use this tutorial when you already operate a source that exposes the Registry Data API lookup
-contract and want Registry Notary to evaluate claims against it from a separate project.
+Registry Notary runs as its own project against any Registry Data API-shaped source: a source
+exposing the Registry Data API contract, the protected read API shape Registry Relay serves.
+This tutorial generates a standalone Notary project, points it at that source, and evaluates a
+starter claim against it.
 
-The reproducible path below uses the local Relay project from
+The reproducible path in this tutorial uses the local Relay project from
 [Run a protected registry API locally](../publish-spreadsheet-secured-registry-api/) as a stand-in
 source.
 
-If your source is not Registry Data API-shaped, choose a source-adapter path instead:
+If your source is not Registry Data API-shaped, put a source-adapter sidecar in front of it: a
+small service that runs next to Notary and translates the source's own routes, auth, and response
+shape into the Registry Data API-shaped lookup route Notary expects.
+Choose the sidecar engine that fits your source:
 
 | Source shape | Use |
 | --- | --- |
-| Single HTTP JSON lookup | Built-in source-adapter `http_json` engine |
-| Short dependent GET sequence | Built-in source-adapter `http_flow` engine |
+| Single HTTP JSON lookup | Built-in source-adapter `http_json` engine (one governed HTTP JSON request) |
+| Short dependent GET sequence | Built-in source-adapter `http_flow` engine (2 to 5 dependent GET requests) |
 | FHIR R4 source | [Getting started with FHIR evidence](../getting-started-fhir-evidence/) |
 | OpenCRVS DCI source | [OpenCRVS claims](../verify-opencrvs-claims/) |
 | DHIS2 Tracker source | [Configure DHIS2 claim checks](../configure-dhis2-claim-checks/) |
-| POSTs, fallback behavior, or small custom branching | Source-adapter `script_rhai` engine |
+| POSTs, fallback behavior, or small custom branching | Source-adapter `script_rhai` engine (custom scripted branching) |
 
 The source-adapter paths still present the same Registry Data API-shaped lookup route to Notary.
 The adapter owns the source-specific request shape and normalization.
@@ -39,7 +44,7 @@ The adapter owns the source-specific request shape and normalization.
   outcome="A standalone Notary project evaluating a starter claim against a Registry Data API source."
   time="About 10 minutes after a Registry Data API source is available"
   level="Local single-node"
-  prerequisites={['registryctl', 'A running Registry Data API source', 'A Docker Compose provider']}/>
+  prerequisites={['registryctl', 'The running local Relay project from Run a protected registry API locally, or your own Registry Data API-shaped source you already operate', 'A Docker Compose provider']}/>
 
 This tutorial uses synthetic data and local demo credentials.
 Do not use the generated local keys in production.
@@ -184,7 +189,7 @@ Start with the smallest engine that fits:
 | --- | --- |
 | `http_json` | One governed HTTP JSON request can return the fields Notary needs. |
 | `http_flow` | You need 2 to 5 dependent GET requests, such as search first and fetch detail second. |
-| `fhir` | You are projecting bounded FHIR R4 resources into Notary-ready facts. |
+| `fhir` (FHIR R4 resource projection engine) | You are projecting bounded FHIR R4 resources into Notary-ready facts. |
 | `script_rhai` | You need POST, fallback behavior, or small custom branching that the built-in declarative engines cannot express. |
 
 Keep the source-specific logic in the adapter.
