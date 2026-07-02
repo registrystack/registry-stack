@@ -2836,13 +2836,11 @@
                   "standards_artifacts": {
                     "evidence_service_discovery": {
                       "media_type": "application/json",
-                      "observed_status": "available",
-                      "sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                      "observed_status": "available"
                     },
                     "jwks": {
                       "media_type": "application/jwk-set+json",
-                      "observed_status": "available",
-                      "sha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+                      "observed_status": "available"
                     }
                   },
                   "tier": "default"

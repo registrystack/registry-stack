@@ -142,13 +142,8 @@ jobs:
       - name: Workspace tests
         run: cargo test --locked --workspace
 
-      # Enforces the licenses, bans, and sources sections of deny.toml on every
-      # Rust change. The advisories section is intentionally not gated here:
-      # RUSTSEC-2026-0194/0195 (quick-xml) have no upgrade path until upstream
-      # calamine and phonenumber move off quick-xml <=0.39. Promote this to a
-      # full `cargo deny check` once those advisories are resolvable.
-      - name: Cargo deny (licenses, bans, sources)
-        run: cargo deny check bans licenses sources
+      - name: Cargo deny
+        run: cargo deny check
 
       - name: Notary OpenAPI baseline
         working-directory: products/notary

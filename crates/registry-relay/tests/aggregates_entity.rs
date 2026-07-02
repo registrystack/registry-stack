@@ -952,7 +952,16 @@ audit:"#,
         "redacted aggregate dimension must not be present in observations: {observations:?}"
     );
     assert_eq!(body["structure"]["dimensions"], json!([]));
-    assert_eq!(observations[0]["individual_count"], 2);
+    let mut counts = observations
+        .iter()
+        .map(|row| {
+            row["individual_count"]
+                .as_i64()
+                .expect("individual_count is an integer")
+        })
+        .collect::<Vec<_>>();
+    counts.sort_unstable();
+    assert_eq!(counts, vec![1, 2]);
 }
 
 #[tokio::test]

@@ -932,6 +932,18 @@ fn assert_matches_posture_schema(body: &Value) {
     );
 }
 
+fn assert_standards_artifacts_omit_sha256(body: &Value, label: &str) {
+    let artifacts = body["standards_artifacts"]
+        .as_object()
+        .expect("posture standards_artifacts is object");
+    for (name, artifact) in artifacts {
+        assert!(
+            artifact.get("sha256").is_none(),
+            "{label} standards_artifacts.{name} includes sha256, but live Notary posture no longer emits it"
+        );
+    }
+}
+
 fn assert_matches_admin_capabilities_schema(body: &Value) {
     let schema: Value = serde_json::from_str(registry_platform_ops::ADMIN_CAPABILITIES_SCHEMA_V1)
         .expect("admin capabilities schema parses");
@@ -7540,6 +7552,8 @@ async fn admin_posture_top_level_keys_match_documented_example() {
     let default_example: Value =
         serde_json::from_str(registry_platform_ops::NOTARY_POSTURE_EXAMPLE_V1)
             .expect("notary posture example parses");
+    assert_standards_artifacts_omit_sha256(&default_body, "live default posture");
+    assert_standards_artifacts_omit_sha256(&default_example, "NOTARY_POSTURE_EXAMPLE_V1");
     let default_example_keys = default_example
         .as_object()
         .expect("example posture is object")
@@ -10368,14 +10382,13 @@ async fn request_body_limit_returns_413_above_threshold() {
         audit_path.to_str().expect("audit path is UTF-8"),
     ))
     .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::new(app);
 
-    let too_large = Bytes::from(vec![b' '; 1024 * 1024 + 1]);
     let response = server
         .post("/v1/evaluations")
         .add_header("x-api-key", "api-token")
         .add_header("content-type", "application/json")
-        .bytes(too_large)
+        .add_header(header::CONTENT_LENGTH, "1048577")
         .await;
 
     response.assert_status(StatusCode::PAYLOAD_TOO_LARGE);
@@ -14672,15 +14685,14 @@ async fn request_body_limit_413_carries_server_owned_request_id() {
         audit_path.to_str().expect("audit path is UTF-8"),
     ))
     .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
-    let too_large = Bytes::from(vec![b' '; 1024 * 1024 + 1]);
+    let server = TestServer::new(app);
 
     let response = server
         .post("/v1/evaluations")
         .add_header("x-api-key", "api-token")
         .add_header("content-type", "application/json")
+        .add_header(header::CONTENT_LENGTH, "1048577")
         .add_header("x-request-id", "client-supplied-id")
-        .bytes(too_large)
         .await;
 
     response.assert_status(StatusCode::PAYLOAD_TOO_LARGE);

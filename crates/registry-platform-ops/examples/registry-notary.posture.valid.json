@@ -45,12 +45,10 @@
   "standards_artifacts": {
     "evidence_service_discovery": {
       "media_type": "application/json",
-      "sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       "observed_status": "available"
     },
     "jwks": {
       "media_type": "application/jwk-set+json",
-      "sha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
       "observed_status": "available"
     }
   },
