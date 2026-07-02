@@ -19,7 +19,7 @@
     "check:content": "node scripts/check-doc-frontmatter.mjs",
     "check:svg": "node scripts/check-svg-a11y.mjs",
     "check:markdown": "markdownlint-cli2",
-    "check:style": "node scripts/run-vale.mjs --no-exit --glob=!**/products/** src/content/docs README.md",
+    "check:style": "node scripts/run-vale.mjs --glob=!**/products/** src/content/docs README.md",
     "check:style:fixtures": "node scripts/check-vale-fixtures.mjs",
     "check:openapi": "redocly lint registry-relay registry-notary",
     "check:config-vocabulary": "scripts/check-stale-config-vocabulary.sh",
