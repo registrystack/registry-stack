@@ -159,7 +159,7 @@ ed25519-dalek = { version = "2", features = ["pkcs8", "rand_core"] }
 rand_core = { version = "0.6", features = ["std"] }
 # Parses `resources/MANIFEST.toml` in the resource pinning test.
 toml = { version = "1.1" }
-tough = { version = "0.22.0" }
+tough = { version = "0.23.0" }
 wiremock = { version = "0.6" }
 # Criterion drives the microbenchmarks under `benches/`. The benches are
 # manually invoked via `cargo bench`; CI only smoke-checks `cargo bench --no-run`.

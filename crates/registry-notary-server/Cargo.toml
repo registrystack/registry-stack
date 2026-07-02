@@ -65,7 +65,7 @@ registry-platform-testing = { workspace = true, features = ["test-utils"] }
 registry-notary-source-adapter-sidecar = { workspace = true }
 jsonschema.workspace = true
 tempfile = { version = "3" }
-tough = { version = "0.22.0" }
+tough = { version = "0.23.0" }
 wiremock = { version = "0.6" }
 # Criterion drives the microbenchmarks under `benches/`. The benches are
 # manually invoked via `cargo bench`; CI smoke-checks `cargo bench --no-run`.
