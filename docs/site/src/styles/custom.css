@@ -709,7 +709,8 @@ pre,
 
 .status-chip,
 .claim-chip,
-.adoption-chip {
+.adoption-chip,
+.gap-chip {
   display: inline;
   border: 0;
   padding: 0;
@@ -722,6 +723,12 @@ pre,
 
 .claim-chip {
   background: transparent;
+}
+
+/* Unresolved evidence_gap flag from standards.yaml; ink weight, not color. */
+.gap-chip {
+  color: var(--registry-ink);
+  font-weight: 600;
 }
 
 .source-note {

@@ -42,6 +42,9 @@ async function loadYaml(name) {
         throw new Error(`${name}.yaml entry ${index + 1} is missing ${key}`);
       }
     }
+    if (name === 'standards' && 'evidence_gap' in item && typeof item.evidence_gap !== 'boolean') {
+      throw new Error(`standards.yaml entry ${index + 1} evidence_gap must be true or false`);
+    }
   }
   return parsed;
 }
