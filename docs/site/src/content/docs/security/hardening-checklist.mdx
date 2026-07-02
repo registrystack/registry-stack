@@ -1,0 +1,171 @@
+---
+title: Harden a production deployment
+description: An actionable checklist for the operator responsibilities RS-SEC-G Section 9 leaves to your deployment, grouped by key custody, audit, transport, deployment profile, and incident response.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-relay
+  - registry-notary
+  - registry-platform
+last_reviewed: "2026-07-02"
+doc_type: how-to
+locale: en
+standards_referenced: []
+---
+
+Registry Relay and Registry Notary enforce authentication, authorization, key publication, and
+audit as software controls (see [Security overview](../)).
+[RS-SEC-G](../../spec/rs-sec-g/) Section 9 draws a line at the deployment: secret and key
+provisioning, key custody and rotation, audit retention and storage, tenant isolation, transport
+termination and certificate management, edge rate limiting, deployment configuration, and incident
+response stay with the operator.
+This page turns that boundary into a checklist you work through before you call a deployment
+production-ready.
+
+## When to use this
+
+Use this checklist before a `production` or `evidence_grade` deployment goes live, and again after
+any change to signing keys, audit sinks, network placement, or the declared deployment profile. It
+assumes you have already completed the [Registry Relay configuration reference](../../products/registry-relay/configuration/)
+or the [Registry Notary operator configuration reference](../../products/registry-notary/operator-config-reference/)
+for your service.
+
+## Before you start
+
+- Decide the deployment profile (`local`, `hosted_lab`, `production`, or `evidence_grade`) you are
+  claiming; see the deployment profile section of the
+  [Registry Relay configuration reference](../../products/registry-relay/configuration/). The
+  profile is never inferred from hostname or network position; you declare it.
+- Have `registry-notary doctor` (Notary) or your Relay startup logs available to check gate
+  findings as you work through each item.
+
+## Keys and custody
+
+- Configure signing keys through the provider abstraction (`local_jwk_env`, `file_watch`, or
+  `pkcs11`) under `evidence.signing_keys`, not as inline YAML values. Startup fails closed if an
+  active signing provider cannot be constructed. See the
+  [signing key provider reference](../../products/registry-notary/signing-key-provider/).
+- Provision secrets (API-key fingerprints, source tokens, private JWKs, the audit hash secret) only
+  through the environment variables named in config. For local development the binary accepts
+  `--env-file`; for shared environments use the platform secret store and do not check dotenv files
+  into the repository.
+- Rotate a signing key by adding a new `kid`, moving credential profiles to it, then moving the old
+  key to `publish_only` until its configured publication window ends or verifiers no longer need
+  it. Do not delete a key verifiers may still need.
+- Keep RS256 scoped to the eSignet RP client assertion key (eSignet, the MOSIP-project identity
+  provider, is the one integration that needs RS256). Credential profile, access token, and
+  federation response signing use Ed25519 EdDSA or ES256/P-256; RS256 is rejected there.
+- If a signing key uses `provider: pkcs11`, confirm the deployed binary was built with the
+  `pkcs11` capability (`registry-notary build-info`) and validate the module, token, and key lookup
+  with `registry-notary doctor --config <path>`.
+- Relay: confirm every env-backed `fingerprint.name` referenced in config exists in the runtime
+  environment, and that no raw key, fingerprint, private JWK, or full environment dump reaches a
+  log line; see the production checklist in the
+  [Registry Relay configuration reference](../../products/registry-relay/configuration/).
+
+## Audit sink and retention
+
+- Configure a durable audit sink (`file` or `syslog`, not bare `stdout`) before you declare
+  `production` or `evidence_grade`. A missing durable sink trips `relay.audit.sink_missing` /
+  `notary.audit.sink_missing`, which fails startup at `evidence_grade` (`startup_fail` for both
+  services, and already `startup_fail` at `production` for Notary).
+- Set `audit.hash_secret_env` to an environment variable holding at least 32 bytes of
+  deployment-specific random secret material. Relay startup fails closed if it is missing, empty,
+  unset, or weak.
+- Keep `audit.write_policy: fail_closed` (the default) unless an explicit availability exception
+  accepts best-effort audit durability under `availability_first`. `fail_closed` means a request
+  whose audit record cannot be written returns `503 audit.write_failed` instead of a success
+  (REQ-SEC-G-009).
+- If you rotate the audit hash secret, retain the old secret under your audit retention controls
+  for any period during which older records must remain comparable to new ones, or accept that new
+  records will not match old audit handles.
+- Hash-chained envelopes (`prev_hash`, `record_hash`) detect ordering gaps and accidental
+  corruption, but they do not protect against an actor who can rewrite the audit sink itself. Use
+  an append-only external sink or independent tail-hash anchoring when you need stronger integrity
+  than the envelope alone provides.
+
+## Transport and edge
+
+- Terminate TLS and manage certificates at your reverse proxy or load balancer; RS-SEC-G Section 9
+  leaves transport termination and certificate management to the operator.
+- Keep the admin listener private. A publicly exposed admin surface trips
+  `relay.admin.public_exposure` or `notary.admin.shared_exposure`, both `startup_fail` at
+  `evidence_grade`.
+- Set explicit `cors.allowed_origins`. The default CORS policy is deny by omission; add only the
+  origins your integration actually needs.
+- Enable `server.trust_proxy` with an explicit `trusted_proxies` list only when a reverse proxy
+  sits in front of Relay. Both `enabled` and `trusted_proxies` default to off/empty.
+- Enforce ingress rate limiting at your gateway or edge, then either declare
+  `deployment.evidence.ingress_rate_limit: true` or accept the `relay.ingress.rate_limit_missing`
+  finding it otherwise raises. The flag defaults to `false`.
+- Leave `allow_insecure_localhost` and `allow_insecure_private_network` false on Notary source
+  connections in production unless a deployment review explicitly accepts the private-network
+  source; a plain `http://` source with neither allowance trips `notary.source.insecure_url`, and
+  enabling the escape hatch trips `notary.source.private_network_escape`.
+- For Postgres sources, require `sslmode=require` on the connection string and use read-only
+  database credentials; for live materialization, scope that role to `SELECT` only the configured
+  table or view.
+- Apply the Registry Platform HTTP-security response headers and outbound-HTTP-policy primitive on
+  source-connector egress; both are RS-SEC-G recommendations (REQ-SEC-G-012), not an enforced
+  default, so confirm your build turns them on.
+
+## Deployment profile and posture endpoint
+
+- Declare `deployment.profile` explicitly. An omitted profile binds no gates and only raises a
+  `deployment.profile_undeclared` warning, so a silent gap stays silent until you declare a
+  profile.
+- Treat `evidence_grade` as requiring a signed, governed config bundle: running it from a plain
+  local YAML file trips `relay.config.unsigned` / `notary.config.unsigned` and the process refuses
+  to start.
+- Review `GET /admin/v1/posture` regularly. It reports the declared profile, active findings, and
+  active waivers, so the deployment's actual state is inspectable rather than asserted.
+- Give every waiver a non-empty, non-secret reason and a mandatory expiry date. `startup_fail`
+  gates are never waivable; a waiver naming one is rejected. Waiver reasons appear only in the
+  restricted posture tier.
+- Use `deployment.evidence.*` flags (for example `ingress_rate_limit`, `api_key_rotation`) only to
+  assert controls that live outside the process and cannot be observed by it. Each flag defaults to
+  `false`.
+- If a Notary instance runs active-active with peers, declare `multi_instance` and use Redis-backed
+  replay storage. In-memory replay under a multi-instance or federated declaration trips
+  `notary.replay.in_memory_high_risk`.
+
+## Incident response
+
+- Know your private disclosure channel before you need it: see
+  [Report a vulnerability](../report-a-vulnerability/).
+- If credential-status is enabled, use the admin status endpoint (requires the
+  `registry:notary:admin` scope) to mark a compromised credential `revoked`. Registry Notary
+  defines no other revocation flow; a credential issued with credential-status disabled cannot be
+  revoked through the API. See [Known limitations and non-guarantees](../../explanation/known-limitations/).
+- Rotate a compromised signing key using the documented rotation procedure (new `kid`, old key to
+  `publish_only`) rather than deleting it outright, so previously issued, still-valid credentials
+  remain verifiable through the rotation.
+- Preserve the audit trail for post-incident review: hash-chained, fail-closed audit records are
+  the record a deployment reconstructs a request timeline from (REQ-SEC-G-008, REQ-SEC-G-009).
+
+## Verify
+
+- Start the service against your production config and confirm it starts (or fails closed as
+  expected for a deliberately unmet `startup_fail` gate).
+- Query `GET /admin/v1/posture` and read the `deployment` object: confirm the profile matches what
+  you declared, and that no unwaived finding at or above your profile's threshold is outstanding.
+- Send a request that should be audited and confirm a corresponding record lands in your configured
+  sink, not only `stdout`.
+- Attempt an admin-listener request from outside the private network it is meant to be bound to,
+  and confirm it is refused.
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| Process refuses to start after declaring `production` or `evidence_grade` | A `startup_fail` gate tripped (for example missing audit sink or unsigned config) | Check the posture or startup log for the finding id, then fix the underlying condition; `startup_fail` gates cannot be waived |
+| Posture reports `deployment.profile_undeclared` | No `deployment.profile` set | Declare a profile explicitly; an omitted profile is not the same as `local` |
+| Posture reports `deployment.waiver_expired` | A waiver's `expires` date passed | Re-review the finding and either fix it or issue a new waiver with a new expiry |
+
+## Next
+
+- [Security overview](../)
+- [Report a vulnerability](../report-a-vulnerability/)
+- [Registry Relay configuration reference](../../products/registry-relay/configuration/)
+- [Registry Notary operator configuration reference](../../products/registry-notary/operator-config-reference/)
+- [Known limitations and non-guarantees](../../explanation/known-limitations/)

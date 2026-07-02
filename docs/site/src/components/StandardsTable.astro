@@ -1,9 +1,12 @@
 ---
 import standards from '../data/generated/standards.json';
+
+// evidence_gap is an optional flag; absent from the JSON unless a row sets it.
+const rows = standards as ((typeof standards)[number] & { evidence_gap?: boolean })[];
 ---
 
 <div class="standards-list">
-  {standards.map((standard) => (
+  {rows.map((standard) => (
     <section class="standards-card" id={standard.id}>
       <header class="card-header">
         <h3>
@@ -21,7 +24,10 @@ import standards from '../data/generated/standards.json';
           {standard.last_checked && <span class="meta-date">· {standard.last_checked}</span>}
         </dd>
         <dt>Claim level</dt>
-        <dd><span class="claim-chip">{standard.claim_level}</span></dd>
+        <dd>
+          <span class="claim-chip">{standard.claim_level}</span>
+          {standard.evidence_gap && <span class="gap-chip">· evidence gap</span>}
+        </dd>
         <dt>Adoption mode</dt>
         <dd><span class="adoption-chip">{standard.adoption_mode}</span></dd>
         <dt>Used by</dt>

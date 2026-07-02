@@ -128,7 +128,7 @@ Preferred terms.
 - Do not capitalize the target page's title inside link text unless it is a proper noun.
 - Cap one paragraph at three links. Cap one page at fifteen. If you need more, the page should be a list.
 - Link to upstream standards bodies first, then to mirrors or summaries.
-- Link to a commit SHA, not a branch, when linking to code that may move.
+- Pin links to code to a release tag (`v0.8.3`) or a commit SHA, never a branch, when the claim depends on the code state.
 
 ## Tables
 
@@ -200,7 +200,7 @@ This applies to every page that touches a standard or a contract.
 - No animated GIFs or videos in v0.
 - No screenshots as the only source of instructions.
 - No real user data, real production hostnames, or real tokens, even in `example` blocks.
-- No relative links into source repos. Use full URLs with a commit SHA.
+- No relative links into source repos. Use full URLs pinned to a release tag or commit SHA.
 - No nested admonitions. No admonition immediately under H1.
 - No anchor links into other pages; link to the page and use the sidebar's on-this-page index.
 - No `should` as a promise. Either it does or it does not.

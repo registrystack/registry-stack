@@ -74,16 +74,16 @@ integrations to a release tag or commit.
 
 ```toml
 [dependencies]
-registry-notary-client = { git = "https://github.com/jeremi/registry-notary", tag = "vX.Y.Z" }
-registry-notary-core = { git = "https://github.com/jeremi/registry-notary", tag = "vX.Y.Z" }
+registry-notary-client = { git = "https://github.com/registrystack/registry-stack", tag = "vX.Y.Z" }
+registry-notary-core = { git = "https://github.com/registrystack/registry-stack", tag = "vX.Y.Z" }
 ```
 
 ```bash
-python -m pip install "git+https://github.com/jeremi/registry-notary.git@vX.Y.Z#subdirectory=bindings/python"
+python -m pip install "git+https://github.com/registrystack/registry-stack.git@vX.Y.Z#subdirectory=products/notary/bindings/python"
 ```
 
 ```bash
-pnpm add "github:jeremi/registry-notary#vX.Y.Z&path:bindings/node"
+pnpm add "github:registrystack/registry-stack#vX.Y.Z&path:products/notary/bindings/node"
 ```
 
 npm does not support installing from a subdirectory of a git repository. With
@@ -857,7 +857,7 @@ In Rust, enable the `oid4vci` feature:
 
 ```toml
 registry-notary-client = {
-  git = "https://github.com/jeremi/registry-notary",
+  git = "https://github.com/registrystack/registry-stack",
   tag = "vX.Y.Z",
   features = ["oid4vci"]
 }
@@ -890,7 +890,7 @@ In Rust, enable the `federation` feature:
 
 ```toml
 registry-notary-client = {
-  git = "https://github.com/jeremi/registry-notary",
+  git = "https://github.com/registrystack/registry-stack",
   tag = "vX.Y.Z",
   features = ["federation"]
 }
@@ -1006,7 +1006,7 @@ Enable optional routes only when needed:
 
 ```toml
 registry-notary-client = {
-  git = "https://github.com/jeremi/registry-notary",
+  git = "https://github.com/registrystack/registry-stack",
   tag = "vX.Y.Z",
   features = ["oid4vci", "federation", "json-facade"]
 }
@@ -1059,7 +1059,7 @@ network refreshes or trust-policy decisions.
 
 ```toml
 registry-notary-client = {
-  git = "https://github.com/jeremi/registry-notary",
+  git = "https://github.com/registrystack/registry-stack",
   tag = "vX.Y.Z",
   features = ["verifier"]
 }

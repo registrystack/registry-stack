@@ -1,0 +1,150 @@
+---
+title: Quickstart
+description: With zero install, read a protected registry API from your terminal against the public hosted lab and watch Registry Relay enforce scope.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-lab
+  - registry-relay
+last_reviewed: "2026-06-28"
+doc_type: tutorial
+locale: en
+standards_referenced: []
+---
+
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+
+In about five minutes you can read a protected registry API from your terminal, with zero install,
+against a public hosted lab. You will call **Registry Relay**, which returns records to authorized
+callers, and watch it enforce scope: the same API answers some requests and refuses others,
+depending on what the caller's token allows. Everything runs in the hosted lab at
+[lab.registrystack.org](https://lab.registrystack.org), so this page has no setup on your machine.
+
+<QuickstartMeta
+  outcome="One protected registry read against the public hosted lab, with scope enforcement visible in the response."
+  time="About 5 minutes"
+  level="Hosted lab, zero install"
+  prerequisites={['curl']}
+/>
+
+This lab uses synthetic data and public demo-only credentials by design.
+Do not reuse anything you copy here outside the lab.
+
+## What is running
+
+The lab runs a civil-registry **Relay** you will call directly in this tutorial: a protected,
+scoped, read-only HTTP API over a civil registry source, at
+[civil-relay.lab.registrystack.org](https://civil-relay.lab.registrystack.org). The lab also runs
+**Registry Notary** services for the next step in this journey; see
+[Get a credential from the hosted lab](../credential-tour/). For how these connect to the rest of
+the stack, see the [architecture overview](../../explanation/architecture/). For the full set of
+live demo credentials, identities, and ready-made requests, open the lab homepage at
+[lab.registrystack.org](https://lab.registrystack.org).
+
+:::note
+Lab tokens are public demo-only values that rotate, so this page shows placeholders, never live
+tokens. Get the current tokens and identities from the **For developers** section near the bottom
+of the lab homepage, which shows every demo credential with a copy button and a prebuilt curl
+example. The same data is available
+unauthenticated as JSON at
+[lab.registrystack.org/api/lab.json](https://lab.registrystack.org/api/lab.json).
+:::
+
+## Get your bearer tokens
+
+The civil Relay authenticates callers with `Authorization: Bearer <token>`. Each token carries a
+scope, so the same API answers some requests and refuses others.
+
+Open [lab.registrystack.org](https://lab.registrystack.org), scroll to the **For developers**
+section near the bottom, and copy two bearer tokens from the demo credential cards: a
+metadata-scope token and a row-reader token. Set them in your shell. The placeholders below stand
+in for the live tokens.
+
+```sh
+export CIVIL_METADATA_TOKEN="<metadata token from lab.registrystack.org>"
+export CIVIL_ROW_READER_TOKEN="<row-reader token from lab.registrystack.org>"
+```
+
+## List datasets (metadata scope)
+
+The metadata-scope token can list the datasets the Relay publishes:
+
+```sh
+curl -sS \
+  -H "Authorization: Bearer $CIVIL_METADATA_TOKEN" \
+  https://civil-relay.lab.registrystack.org/v1/datasets
+```
+
+The Relay returns `200 OK` with the catalog. Each dataset entry carries more fields than shown;
+they are omitted here for brevity:
+
+```json
+{ "data": [ { "dataset_id": "civil_registry" } ] }
+```
+
+## Read rows (row scope plus a purpose)
+
+Reading actual records needs a token with the row scope and a `Data-Purpose` header that declares why
+you are reading:
+
+```sh
+curl -sS \
+  -H "Authorization: Bearer $CIVIL_ROW_READER_TOKEN" \
+  -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo" \
+  "https://civil-relay.lab.registrystack.org/v1/datasets/civil_registry/entities/civil_person/records?limit=1"
+```
+
+The Relay returns `200 OK` with one record and pagination metadata (synthetic demo data):
+
+```json
+{
+  "data": [
+    {
+      "national_id": "NID-1001",
+      "given_name": "Miguel",
+      "surname": "Santos",
+      "birth_date": "2016-01-15",
+      "life_stage": "child",
+      "deceased": false,
+      "district": "north"
+    }
+  ],
+  "pagination": { "has_more": true, "next_cursor": "..." }
+}
+```
+
+## See access control hold
+
+The point of the gateway is that it never widens reach at request time. Send the metadata-scope token
+to the rows endpoint and the Relay refuses it:
+
+```sh
+curl -sS -i \
+  -H "Authorization: Bearer $CIVIL_METADATA_TOKEN" \
+  -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo" \
+  "https://civil-relay.lab.registrystack.org/v1/datasets/civil_registry/entities/civil_person/records?limit=1"
+```
+
+The Relay refuses with `403 Forbidden`, and the `problem+json` body carries the stable code
+`auth.scope_denied`. For more on this service, see
+[Registry Relay](../../products/registry-relay/).
+
+## What you built
+
+You read a protected registry API from your terminal and watched Registry Relay enforce scope: a
+metadata-scope token listed the dataset catalog (`200`), a row-scope token with a declared purpose
+read one record (`200`), and the same metadata-scope token was refused at the rows endpoint (`403`,
+`auth.scope_denied`). Same API, same network call, different scope, different answer.
+
+## Next
+
+- [Get a credential from the hosted lab](../credential-tour/): continue in the same hosted lab and
+  see Registry Notary issue a privacy-preserving credential.
+- [Run a protected registry API locally](../../tutorials/publish-spreadsheet-secured-registry-api/):
+  stand up your own protected Relay from a sample workbook.
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| The hosted lab or a service URL does not respond | n/a | Run the same multi-service topology locally with [First run with Registry Lab](../../tutorials/first-run-with-registry-lab/) |

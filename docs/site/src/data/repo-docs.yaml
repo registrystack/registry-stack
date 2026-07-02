@@ -27,6 +27,66 @@ repos:
         label: Configuration
         nav_order: 30
         doc_type: reference
+      - src: crates/registry-relay/docs/api.md
+        dest: products/registry-relay/api
+        label: API guide
+        nav_order: 25
+        doc_type: reference
+        exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
+      - src: crates/registry-relay/docs/metadata.md
+        dest: products/registry-relay/metadata
+        label: Portable metadata
+        nav_order: 35
+        doc_type: reference
+        exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
+      - src: crates/registry-relay/docs/ops.md
+        dest: products/registry-relay/ops
+        label: Operations runbook
+        nav_order: 40
+        doc_type: how-to
+        exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
+      - src: crates/registry-relay/docs/provenance.md
+        dest: products/registry-relay/provenance
+        label: Signed response credentials
+        nav_order: 45
+        doc_type: how-to
+        exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
+      - src: crates/registry-relay/docs/openfn-relay-adaptor-guide.md
+        dest: products/registry-relay/openfn-relay-adaptor-guide
+        label: Call Relay from OpenFn
+        nav_order: 50
+        doc_type: how-to
+        exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
+      - src: crates/registry-relay/docs/standards-adapter-operator-guide.md
+        dest: products/registry-relay/standards-adapter-operator-guide
+        label: Standards adapter operator guide
+        nav_order: 55
+        doc_type: how-to
+        exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
+      - src: crates/registry-relay/docs/xlsx-readiness-contract.md
+        dest: products/registry-relay/xlsx-readiness-contract
+        label: XLSX readiness contract
+        nav_order: 60
+        doc_type: reference
+        exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
+      - src: crates/registry-relay/STANDARDS_ASSUMPTIONS.md
+        dest: products/registry-relay/standards-assumptions
+        label: Standards assumptions
+        nav_order: 65
+        doc_type: explanation
+        exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
+      - src: crates/registry-relay/docs/relay-scenario-catalog.md
+        dest: products/registry-relay/relay-scenario-catalog
+        label: Relay scenario catalog
+        nav_order: 70
+        doc_type: explanation
+        exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
+      - src: crates/registry-relay/docs/release-notes.md
+        dest: products/registry-relay/release-notes
+        label: Release notes
+        nav_order: 80
+        doc_type: reference
+        exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
   registry-notary:
     remote: https://github.com/registrystack/registry-stack
     ref: HEAD
@@ -91,6 +151,84 @@ repos:
         label: SD-JWT VC conformance profile
         nav_order: 130
         doc_type: reference
+      - src: products/notary/docs/notary-capability-matrix.md
+        dest: products/registry-notary/notary-capability-matrix
+        label: Capability matrix
+        nav_order: 15
+        doc_type: explanation
+        exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
+      - src: products/notary/docs/notary-scenario-patterns.md
+        dest: products/registry-notary/notary-scenario-patterns
+        label: Scenario patterns
+        nav_order: 20
+        doc_type: explanation
+        exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
+      - src: products/notary/docs/fhir-source-adapter-guide.md
+        dest: products/registry-notary/fhir-source-adapter-guide
+        label: FHIR source adapter
+        nav_order: 62
+        doc_type: how-to
+        exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
+      - src: products/notary/docs/script-rhai-source-adapter-guide.md
+        dest: products/registry-notary/script-rhai-source-adapter-guide
+        label: Script and Rhai source adapters
+        nav_order: 64
+        doc_type: how-to
+        exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
+      - src: products/notary/docs/opencrvs-onboarding.md
+        dest: products/registry-notary/opencrvs-onboarding
+        label: OpenCRVS onboarding
+        nav_order: 66
+        doc_type: how-to
+        exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
+      - src: products/notary/docs/opencrvs-dci-standalone-tutorial.md
+        dest: products/registry-notary/opencrvs-dci-standalone-tutorial
+        label: OpenCRVS DCI standalone tutorial
+        nav_order: 68
+        doc_type: tutorial
+        exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
+      - src: products/notary/docs/federated-evaluation-operator-guide.md
+        dest: products/registry-notary/federated-evaluation-operator-guide
+        label: Federated evaluation operator guide
+        nav_order: 72
+        doc_type: how-to
+        exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
+      - src: products/notary/docs/self-attestation-operator-guide.md
+        dest: products/registry-notary/self-attestation-operator-guide
+        label: Self-attestation operator guide
+        nav_order: 75
+        doc_type: how-to
+        exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
+      - src: products/notary/docs/sidecar-trust-and-secrets.md
+        dest: products/registry-notary/sidecar-trust-and-secrets
+        label: Sidecar trust and secrets
+        nav_order: 85
+        doc_type: how-to
+        exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
+      - src: products/notary/docs/deployment-hardening-runbook.md
+        dest: products/registry-notary/deployment-hardening-runbook
+        label: Deployment hardening runbook
+        nav_order: 95
+        doc_type: how-to
+        exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
+      - src: products/notary/docs/api-reference.md
+        dest: products/registry-notary/api-reference
+        label: API reference
+        nav_order: 100
+        doc_type: reference
+        exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
+      - src: products/notary/docs/oid4vci-wallet-interop.md
+        dest: products/registry-notary/oid4vci-wallet-interop
+        label: OID4VCI wallet interop
+        nav_order: 110
+        doc_type: reference
+        exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
+      - src: products/notary/docs/release-notes.md
+        dest: products/registry-notary/release-notes
+        label: Release notes
+        nav_order: 140
+        doc_type: reference
+        exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
   registry-manifest:
     remote: https://github.com/registrystack/registry-stack
     ref: HEAD
@@ -123,3 +261,9 @@ repos:
         label: Reference
         nav_order: 30
         doc_type: reference
+      - src: products/manifest/docs/itb-semic-validation.md
+        dest: products/registry-manifest/itb-semic-validation
+        label: ITB and SEMIC validation
+        nav_order: 25
+        doc_type: how-to
+        exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]

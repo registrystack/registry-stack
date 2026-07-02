@@ -66,10 +66,9 @@ data-theme concept scheme and EuroVoc concept scheme so consumers can see both
 catalogue theme taxonomies. The public 2.x warning profiles may still flag one
 value while accepting the artifact with zero validation errors.
 
-Tracked follow-up issues:
-
-- [#23 Investigate BRegDCAT publisher CorporateBodyRestriction warning](https://github.com/jeremi/registry-manifest/issues/23)
-- [#24 Resolve profile-specific `dcat:themeTaxonomy` warnings from BRegDCAT validation](https://github.com/jeremi/registry-manifest/issues/24)
+These warning classes are intentionally documented rather than hidden: the
+smoke script retains the validator reports, and public release notes should
+carry the profile and warning count when BRegDCAT-AP evidence is cited.
 
 ## Public Claim Boundary
 

@@ -8,7 +8,6 @@ services:
       - "4242:8080"
     volumes:
       - ./relay/config.yaml:/etc/registry-relay/config.yaml:ro
-      - ./relay/metadata.yaml:/etc/registry-relay/metadata.yaml:ro
       - ./data:/var/lib/registry-relay/data:ro
 
   registry-notary:

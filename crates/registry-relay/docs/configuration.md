@@ -270,7 +270,7 @@ Keep standard-facing meaning in the manifest: catalog, datasets, entities,
 fields, constraints, vocabularies, codelists, profiles, conformance claims, and
 descriptive ODRL policy metadata.
 
-See [metadata.md](https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/docs/metadata.md) for the manifest schema, static publication, and
+See [metadata.md](metadata.md) for the manifest schema, static publication, and
 the `metadata.manifest.*` / `runtime.binding.*` startup error codes.
 
 ODRL policy belongs in the portable metadata manifest, not in runtime dataset
@@ -499,7 +499,7 @@ Token verification failures map to specific `auth.*` codes so audit pipelines ca
 | `auth.invalid_credential`       | 401  | JWT decode failure not covered by a more specific variant      |
 | `auth.jwks_unavailable`         | 503  | JWKS fetch failed; Registry Relay cannot verify any token     |
 
-For a worked example of running Registry Relay against a local OIDC provider (using the project's dev Zitadel stack), see [development.md](https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/docs/development.md).
+For a worked example of running Registry Relay against a local OIDC provider (using the project's dev Zitadel stack), see [development.md](development.md).
 
 ## Audit
 
@@ -977,7 +977,7 @@ publicschema:
 | `schema_url` | `https://publicschema.org/schemas/{target}.schema.json` | `credentialSchema.id` in the issued VC |
 | `credential_type` | `{target}` | `type[1]` value in the issued VC |
 
-See [provenance.md](https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/docs/provenance.md) for CEL context variables, issuance behavior, audit records, and the build and test commands for this feature.
+See [provenance.md](provenance.md) for CEL context variables, issuance behavior, audit records, and the build and test commands for this feature.
 
 ## Aggregates
 
@@ -1058,7 +1058,7 @@ The `provenance` block is optional. When absent or `enabled: false`, the gateway
 
 The key is named `provenance` for compatibility; it governs the response-credential issuer (DID, signing key, claim validity, and accepted media types). These credentials are W3C VCDM 2.0 VC-JWT with a Registry Relay JSON-LD context; they are not W3C PROV-O.
 
-See [provenance.md](https://github.com/jeremi/registry-relay/blob/3938fdf3930e134d6dca97360baf64ac3a16bed2/docs/provenance.md) for the full signer, DID, schema, context, and rotation contract.
+See [provenance.md](provenance.md) for the full signer, DID, schema, context, and rotation contract.
 
 ## Production checklist
 

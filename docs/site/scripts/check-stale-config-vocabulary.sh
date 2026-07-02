@@ -12,7 +12,7 @@ PATHS=(
 
 status=0
 if command -v rg >/dev/null 2>&1; then
-  rg -n --glob '!scripts/check-stale-config-vocabulary.sh' "$PATTERN" "${PATHS[@]}" || status=$?
+  rg -n --no-ignore --glob '!scripts/check-stale-config-vocabulary.sh' "$PATTERN" "${PATHS[@]}" || status=$?
 else
   grep -RInE --exclude='check-stale-config-vocabulary.sh' "$PATTERN" "${PATHS[@]}" || status=$?
 fi

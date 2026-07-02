@@ -12,27 +12,42 @@ locale: en
 standards_referenced: []
 ---
 
-import HomeLanding from '../../components/HomeLanding.astro';
+Registry Stack adds registry-facing services, protected reads,
+[governed evidence](reference/glossary/), and audit
+records, over data an institution already holds.
+The data never leaves the source system.
 
-Registry Stack is for building registry-facing services over data an institution already holds. It
-adds controlled read access, governed evidence responses, and audit records without turning the
-registry into a shared database.
+Start with the [quickstart](start/quickstart/): no install required, about five minutes.
+Then take the [credential tour](start/credential-tour/).
 
-Registry Stack has two runtime patterns:
+## Two products
 
-- **Protected Registry APIs** are scoped, read-only HTTP APIs over existing files, extracts,
-  databases, or legacy registry systems. Registry Relay implements this surface.
-- **Evidence Gateway** is the governed evidence path. A runtime service checks request context,
-  source context, supported policy terms, freshness, redaction, and audit provenance before it
-  returns a claim result, credential, redacted response, protected read, or denial. Registry Notary
-  implements claim evaluation and credential issuance; governed Registry Relay routes use the same
-  Policy Decision Point (PDP) pattern for protected reads.
+Registry Relay protects what an institution already holds. Registry Notary certifies answers drawn
+from that data.
+Take the quickstart first; the tutorials here are the follow-up, on your own machine.
 
-Use these docs to build and operate both patterns. The product pages are pulled from each repository
-at build time, so they match the code. For audience, problem, and ecosystem context, see
-[registrystack.org](https://registrystack.org/).
+### Registry Relay
 
-Start with [See it live](start/see-it-live/): a hosted lab, zero install, one protected read and one
-signed credential in under two minutes.
+Registry Relay exposes protected, scoped, read-only APIs over existing sources: files, extracts,
+databases, and legacy registry systems.
 
-<HomeLanding />
+[Your first Relay](tutorials/publish-spreadsheet-secured-registry-api/): run a protected registry
+API locally over a sample spreadsheet.
+
+### Registry Notary
+
+Registry Notary certifies evidence: claim evaluation, credential issuance, disclosure policy, and
+audit provenance.
+
+[Your first Notary](tutorials/verify-claim-registry-api/): evaluate a claim and compare the result
+with a protected row read.
+
+## Security
+
+Registry Stack authorization is scope-based and deny-by-default.
+Every request writes to a hash-chained audit envelope.
+These docs are evidence-anchored: every claim about product behavior points to code, a fixture, a
+test, or a specification requirement ID.
+
+Read the [security overview](security/) for the threat model and the public evidence a reviewer can
+check.

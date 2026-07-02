@@ -1,0 +1,152 @@
+---
+title: Security overview
+description: "The enforced security model of Registry Stack, the responsibilities that stay with the operator, and the public evidence a security reviewer can check."
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-relay
+  - registry-notary
+  - registry-platform
+last_reviewed: "2026-07-02"
+doc_type: explanation
+locale: en
+standards_referenced: []
+---
+
+Use this page to assess the security posture of Registry Stack before you deploy it or integrate
+with it.
+It summarizes the model the software enforces, names the responsibilities that stay with the
+operator, and links the public evidence a reviewer can verify.
+The normative source for everything on this page is the security model specification
+[RS-SEC-G](../spec/rs-sec-g/); this page is its narrative summary.
+
+## At a glance
+
+| What | Where it stands |
+|------|-----------------|
+| Authentication on every route that touches a record or a claim | Built in |
+| Deny-by-default authorization, checked before any data is read | Built in |
+| Only the public half of a signing key is ever published | Built in |
+| Person-level access is written to an audit log | Built in (fail-closed is yours to switch on) |
+| Three disclosure modes, with `redacted` revealing neither value nor answer | Built in |
+| Selective-disclosure credentials, with holder binding configurable per profile (off by default) | Built in |
+| Federation limited to peers you configure | Built in |
+| Hardened HTTP headers and outbound-traffic limits | Recommended, confirm your build applies them |
+| Key custody, retention, isolation, TLS, rate limiting | Your deployment's job |
+| Compliance with any external standard it cites | Not claimed |
+
+## The model in one pass
+
+Every request that returns person-level records or claim results moves through the same pipeline:
+authenticate, authorize, serve, audit.
+
+- Authenticate: a runtime service runs exactly one authentication mode, fixed by
+  configuration: static credentials or OIDC (REQ-SEC-G-002). Static credentials are configured as
+  SHA-256 fingerprints, never raw secrets, and compared in constant time (REQ-SEC-G-003). OIDC
+  tokens are trusted only after signature, issuer, audience, and algorithm checks (REQ-SEC-G-004).
+- Authorize: authorization is scope-based and deny-by-default. The required scope is enforced
+  before any source is read, and a caller's reach is never widened at request time
+  (REQ-SEC-G-005, REQ-SEC-G-006).
+- Serve: the service returns the configured surface: a protected read, a claim result, a
+  selected value, a signed credential, or a denial. Every claim is answered in one of three
+  disclosure modes: `value` hands back the computed value, `predicate` returns only a yes/no, and
+  `redacted` returns neither the value nor the yes/no; the claim's policy fixes which modes are
+  allowed. [Disclosure modes and computed answers](../explanation/disclosure-modes-and-computed-answers/)
+  covers this in depth.
+- Audit: the request is recorded in a hash-chained audit envelope capturing the caller
+  principal, the scopes exercised, a request identifier, and the declared purpose
+  (REQ-SEC-G-008). A deployment can run
+  audit fail-closed, so a request whose audit record cannot be written does not succeed
+  (REQ-SEC-G-009).
+
+Only liveness and readiness probes and public verification-key discovery are served without
+authentication.
+Issuers sign with asymmetric keys and publish only the public half, so any verifier can check an
+issued credential without holding a credential of its own (REQ-SEC-G-007).
+
+When Notary issues a credential it is an SD-JWT VC: the signed body carries hashes of each
+disclosable field rather than the values, so the holder reveals only what they choose.
+Holder binding, which cryptographically ties a credential to a key the holder controls, is
+configurable per credential profile and defaults to off; the self-attestation
+(wallet) issuance path requires it.
+See [Evidence issuance, end to end](../explanation/evidence-issuance/) for the full credential
+lifecycle.
+
+Delegated evaluation, where one Notary asks a trusted peer to evaluate a claim against a source
+only that peer can read, is admitted only from statically configured peers, and the
+peer's identity, signature, freshness, and purpose are verified before any source read
+(REQ-SEC-G-010).
+
+## What's recommended, not enforced
+
+Two behaviors are recommended rather than required, so confirm them rather than assume them.
+
+- Registry Platform sourcing: security-critical primitives (authentication, OIDC verification,
+  audit envelopes, HTTP security, outbound HTTP policy, cryptography, and SD-JWT VC helpers) are
+  meant to come from Registry Platform rather than be reimplemented per service, so they behave
+  the same everywhere and can be reviewed in one place. RS-SEC-G recommends this rather than
+  forcing it (REQ-SEC-G-001), so confirm a given service actually does it rather than
+  reimplementing its own.
+- HTTP hardening: security response headers and limits on outbound source-fetch traffic are
+  recommended posture (REQ-SEC-G-012). Check that your build applies them rather than assuming
+  it.
+
+## Declared deployment assurance
+
+A deployment states the assurance level it claims; the software then enforces gates that match the
+claim.
+Both runtime services accept a `deployment` block with a profile of `local`, `hosted_lab`,
+`production`, or `evidence_grade`.
+Each profile binds a findings catalog at escalating severities: a `production` deployment with no
+durable audit sink refuses to start, and an `evidence_grade` deployment refuses to start from an
+unsigned local config file.
+Findings, waivers (each with a mandatory reason and expiry), and the declared profile are reported
+by the operations posture endpoint, so the deployment's actual state is inspectable rather than
+asserted.
+The gate catalogs are documented in the
+[Registry Relay configuration reference](../products/registry-relay/configuration/) and the
+[Registry Notary operator configuration reference](../products/registry-notary/operator-config-reference/).
+
+## What stays with the operator
+
+The security model ends where the deployment begins.
+Secret and key provisioning, key custody and rotation schedules, audit retention and storage,
+tenant isolation, transport termination and certificate management, edge rate limiting, deployment
+configuration, and incident response are operator responsibilities (RS-SEC-G Section 9).
+The software keeps secrets out of distributable artifacts (REQ-SEC-G-013) and provides the
+primitives; the operator provisions, configures, and operates them.
+[Harden a production deployment](hardening-checklist/) turns this boundary into an actionable
+checklist.
+
+## Evidence for reviewers
+
+Public, checkable evidence, from most to least formal:
+
+- [RS-SEC-G](../spec/rs-sec-g/) is the normative security model; [RS-PR-RELAY](../spec/rs-pr-relay/)
+  and [RS-PR-NOTARY](../spec/rs-pr-notary/) carry its wire-level form per service.
+- [Security self-assessment](self-assessment/) is a CNCF TAG Security-style maintainer
+  self-assessment, including known gaps.
+- [OpenSSF and release trust](openssf-evidence/) records which release-integrity checks are
+  verifiable today (signatures, provenance, Scorecard) and which are still incomplete.
+- The [standards register](../reference/standards/) records the adoption mode and evidence for each
+  cited standard.
+- [DPI safeguards alignment](../explanation/dpi-safeguards-alignment/) maps the stack to safeguards
+  language for review programs.
+
+These documents state known gaps alongside implemented controls.
+None of them is a certification, and the hosted lab is a synthetic-data demo, not a production
+assurance claim.
+
+## Report a vulnerability
+
+Suspected vulnerabilities go through the private disclosure process, never public issues or pull
+requests.
+See [Report a vulnerability](report-a-vulnerability/).
+
+## Next
+
+- [Harden a production deployment](hardening-checklist/)
+- [Threat model](../explanation/threat-model/): the boundaries, assets, and threats behind this posture
+- [Known limitations and non-guarantees](../explanation/known-limitations/): the full list of edges
+- [RS-SEC-G: Registry family security model](../spec/rs-sec-g/)
+- [Security self-assessment](self-assessment/)

@@ -19,7 +19,7 @@ Use this guide when you operate your own registry data and want to run Registry 
 optionally, Registry Notary) as self-hosted services against that data, rather than the
 `registryctl` sample project.
 The sample-based tutorial,
-[Publish a spreadsheet as a secured registry API](../publish-spreadsheet-secured-registry-api/),
+[Run a protected registry API locally](../publish-spreadsheet-secured-registry-api/),
 generates a project from the built-in `benefits` sample.
 There is no `registryctl` initializer for your own dataset today: `registryctl init relay`
 accepts only `--sample benefits`.
@@ -601,7 +601,7 @@ docker run --rm \
 fingerprints, and broken source references. `explain-config --format json` prints the resolved
 configuration and the env vars it requires.
 For exercising the claim end to end (request shapes, outcomes, and credential issuance on top),
-work through [Verify a claim with Registry Notary](../verify-claim-registry-api/), which runs
+work through [Evaluate a claim with Registry Notary](../verify-claim-registry-api/), which runs
 the same claim lifecycle against a `registryctl` sample project.
 
 ### Go deeper on Notary
