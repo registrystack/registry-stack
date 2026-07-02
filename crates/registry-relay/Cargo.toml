@@ -82,7 +82,7 @@ serde_json = { version = "1" }
 crosswalk-core = { workspace = true, optional = true }
 jsonschema = { version = "0.18", optional = true }
 # Pure Rust YAML parser used instead of the previous unmaintained YAML stack.
-serde-saphyr = { version = "0.0.26" }
+serde-saphyr = { version = "0.0.28" }
 humantime-serde = { version = "1" }
 registry-manifest-core = { workspace = true }
 
