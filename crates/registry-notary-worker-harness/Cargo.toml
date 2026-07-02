@@ -8,6 +8,9 @@ readme = "README.md"
 repository.workspace = true
 publish = false
 
+# not opted into [workspace.lints]: uses unsafe (libc setrlimit, `unsafe
+# extern "C"` in src/lib.rs)
+
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true

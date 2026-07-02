@@ -10,6 +10,8 @@ keywords = ["registry", "metadata", "manifest", "cli", "publish"]
 categories = ["command-line-utilities", "encoding"]
 publish = false
 
+# not opted into [workspace.lints]: uses unsafe (libyaml FFI in src/main.rs)
+
 [[bin]]
 name = "registry-manifest"
 path = "src/main.rs"

@@ -8,6 +8,9 @@ readme = "README.md"
 repository.workspace = true
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 base64.workspace = true
 humantime-serde.workspace = true

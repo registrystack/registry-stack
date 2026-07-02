@@ -7,6 +7,9 @@ readme = "README.md"
 repository.workspace = true
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 base64.workspace = true
 registry-platform-crypto = { workspace = true }

@@ -8,6 +8,9 @@ readme = "README.md"
 repository.workspace = true
 publish = false
 
+# not opted into [workspace.lints]: unsafe std::env::set_var/remove_var in
+# #[cfg(test)] code (src/main.rs)
+
 [[bin]]
 name = "registry-notary"
 path = "src/main.rs"

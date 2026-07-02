@@ -7,6 +7,9 @@ description = "Signed/governed runtime configuration verification contracts for 
 repository.workspace = true
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 async-trait.workspace = true
 aws-lc-rs = "1.17.0"

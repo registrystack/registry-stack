@@ -6,6 +6,9 @@ license = "Apache-2.0"
 # Internal workspace tooling; not published.
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 base64 = { version = "0.22" }
 registry-platform-crypto = { workspace = true }
