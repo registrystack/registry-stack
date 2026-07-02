@@ -119,14 +119,14 @@ The point of the gateway is that it never widens reach at request time. Send the
 to the rows endpoint and the Relay refuses it:
 
 ```sh
-curl -sS -o /dev/null -w "%{http_code}\n" \
+curl -sS -i \
   -H "Authorization: Bearer $CIVIL_METADATA_TOKEN" \
   -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo" \
   "https://civil-relay.lab.registrystack.org/v1/datasets/civil_registry/entities/civil_person/records?limit=1"
 ```
 
-The Relay returns `403 Forbidden` with `{"code":"auth.scope_denied"}`. Same API, same network call,
-different scope, different answer. For more on this service, see
+The Relay refuses with `403 Forbidden`, and the `problem+json` body carries the stable code
+`auth.scope_denied`. For more on this service, see
 [Registry Relay](../../products/registry-relay/).
 
 ## What you built

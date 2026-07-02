@@ -66,12 +66,14 @@ issued credential without holding a credential of its own (REQ-SEC-G-007).
 
 When Notary issues a credential it is an SD-JWT VC: the signed body carries hashes of each
 disclosable field rather than the values, so the holder reveals only what they choose.
-Holder binding is configurable per credential profile and defaults to off; the self-attestation
+Holder binding, which cryptographically ties a credential to a key the holder controls, is
+configurable per credential profile and defaults to off; the self-attestation
 (wallet) issuance path requires it.
 See [Evidence issuance, end to end](../explanation/evidence-issuance/) for the full credential
 lifecycle.
 
-Delegated evaluation between services is admitted only from statically configured peers, and the
+Delegated evaluation, where one Notary asks a trusted peer to evaluate a claim against a source
+only that peer can read, is admitted only from statically configured peers, and the
 peer's identity, signature, freshness, and purpose are verified before any source read
 (REQ-SEC-G-010).
 

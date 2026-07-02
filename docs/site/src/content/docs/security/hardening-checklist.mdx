@@ -52,7 +52,8 @@ for your service.
 - Rotate a signing key by adding a new `kid`, moving credential profiles to it, then moving the old
   key to `publish_only` until its configured publication window ends or verifiers no longer need
   it. Do not delete a key verifiers may still need.
-- Keep RS256 scoped to the eSignet RP client assertion key. Credential profile, access token, and
+- Keep RS256 scoped to the eSignet RP client assertion key (eSignet, the MOSIP-project identity
+  provider, is the one integration that needs RS256). Credential profile, access token, and
   federation response signing use Ed25519 EdDSA or ES256/P-256; RS256 is rejected there.
 - If a signing key uses `provider: pkcs11`, confirm the deployed binary was built with the
   `pkcs11` capability (`registry-notary build-info`) and validate the module, token, and key lookup
