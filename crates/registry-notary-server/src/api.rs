@@ -2625,6 +2625,7 @@ fn config_apply_intent_audit_event(audit: ConfigAuditEvent) -> EvidenceAuditEven
         event_id: Ulid::new().to_string(),
         occurred_at,
         principal_id_hash: None,
+        scopes_used: Vec::new(),
         decision: "accepted".to_string(),
         method: "BACKGROUND".to_string(),
         path: "/__events/admin.config_apply.intent".to_string(),

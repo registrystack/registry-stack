@@ -1593,6 +1593,8 @@ pub struct EvidenceAuditEvent {
     pub occurred_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub principal_id_hash: Option<Hashed<PrincipalIdentifier>>,
+    #[serde(default)]
+    pub scopes_used: Vec<String>,
     pub decision: String,
     pub method: String,
     pub path: String,
@@ -2267,6 +2269,7 @@ mod tests {
             event_id: "01HX".to_string(),
             occurred_at: "2026-05-25T00:00:00Z".to_string(),
             principal_id_hash: Some(Hashed::from_hash("hmac-sha256:principal")),
+            scopes_used: vec!["self_attestation".to_string()],
             decision: "denied".to_string(),
             method: "POST".to_string(),
             path: "/v1/evaluations".to_string(),
@@ -2349,6 +2352,7 @@ mod tests {
             json!("person_is_alive_sd_jwt")
         );
         assert_eq!(value["principal_id_hash"], json!("hmac-sha256:principal"));
+        assert_eq!(value["scopes_used"], json!(["self_attestation"]));
         assert_eq!(
             value["source_sidecar_config_hashes"],
             json!(["sha256:2222222222222222222222222222222222222222222222222222222222222222"])
@@ -2373,6 +2377,7 @@ mod tests {
         let decoded: EvidenceAuditEvent =
             serde_json::from_value(value).expect("audit event deserializes");
         assert_eq!(decoded.event_id, event.event_id);
+        assert_eq!(decoded.scopes_used, vec!["self_attestation"]);
         assert_eq!(decoded.access_mode, Some(AccessMode::SelfAttestation));
         assert_eq!(
             decoded.denial_code,
@@ -2427,6 +2432,7 @@ mod tests {
         assert!(decoded.verification_id.is_none());
         assert!(decoded.claim_hash.is_none());
         assert!(decoded.purposes.is_none());
+        assert!(decoded.scopes_used.is_empty());
         assert!(decoded.row_count.is_none());
         assert!(decoded.error_code.is_none());
         assert!(decoded.access_mode.is_none());
