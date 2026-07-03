@@ -5408,6 +5408,34 @@ workflows:
     }
 
     #[test]
+    fn local_relay_notary_config_permits_tutorial_purpose() {
+        let temp = TempDir::new().unwrap();
+        let project = temp.path().join("my-first-api");
+        init_spreadsheet_api(&project, Sample::Benefits).unwrap();
+        add_notary(&project, NotarySource::LocalRelay, false).unwrap();
+
+        let notary_config = fs::read_to_string(project.join("notary/config.yaml")).unwrap();
+        let parsed_config: registry_notary_core::StandaloneRegistryNotaryConfig =
+            serde_yaml::from_str(&notary_config).unwrap();
+        parsed_config.validate().unwrap();
+
+        // The source-binding PDP policy fails closed: with no purpose allow-list the
+        // notary evaluate step denies every request with pdp.purpose_not_permitted
+        // before any evidence lookup. The generated project must permit the same
+        // tutorial purpose its smoke check and docs send.
+        let matching = &parsed_config.evidence.claims[0].source_bindings["person"].matching;
+        assert!(
+            matching
+                .allowed_purposes
+                .iter()
+                .any(|purpose| purpose == TUTORIAL_PURPOSE),
+            "generated local-relay notary source binding must permit the tutorial purpose; \
+             got allowed_purposes = {:?}",
+            matching.allowed_purposes
+        );
+    }
+
+    #[test]
     fn local_env_after_notary_add_appends_notary_and_source_tokens() {
         let temp = TempDir::new().unwrap();
         let project = temp.path().join("my-first-api");

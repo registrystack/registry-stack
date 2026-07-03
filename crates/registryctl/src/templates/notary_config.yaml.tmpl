@@ -66,6 +66,13 @@ evidence:
             op: eq
             cardinality: one
           fields: {}
+          matching:
+            # The source-binding PDP policy fails closed on purpose: with no
+            # allow-list every evaluate request is denied with
+            # pdp.purpose_not_permitted before any evidence lookup. Permit the
+            # tutorial purpose this sample's smoke check and docs send.
+            allowed_purposes:
+              - https://example.local/purpose/tutorial
       rule:
         type: exists
         source: person
