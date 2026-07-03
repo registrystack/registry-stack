@@ -758,11 +758,18 @@ pub fn open_project(project_dir: &Path) -> Result<()> {
         return notary_open_project(project_dir);
     }
     let docs_url = format!("{}{}", project.relay_base_url()?, RELAY_DOCS_PATH);
-    let open_result = Command::new("open").arg(&docs_url).status();
-    if !matches!(open_result, Ok(status) if status.success()) {
-        println!("{docs_url}");
+    // Always surface the URL: `open` reports success even in headless macOS
+    // sessions where nothing actually launches, so a conditional fallback would
+    // silently print nothing. Then best-effort open a browser for desktops.
+    for line in relay_open_lines(&docs_url) {
+        println!("{line}");
     }
+    let _ = Command::new("open").arg(&docs_url).status();
     Ok(())
+}
+
+fn relay_open_lines(docs_url: &str) -> Vec<String> {
+    vec![docs_url.to_string()]
 }
 
 pub fn logs_project(project_dir: &Path) -> Result<()> {
@@ -838,12 +845,21 @@ pub fn notary_open_project(project_dir: &Path) -> Result<()> {
     let project = Project::load(project_dir)?;
     let notary_base_url = project.notary_base_url()?;
     let docs_url = format!("{notary_base_url}{NOTARY_DOCS_PATH}");
-    let open_result = Command::new("open").arg(&docs_url).status();
-    if !matches!(open_result, Ok(status) if status.success()) {
-        println!("Notary API docs: {docs_url}");
-        println!("OpenAPI JSON: {notary_base_url}{NOTARY_OPENAPI_PATH}");
+    // Always surface the URLs: `open` reports success even in headless macOS
+    // sessions where nothing actually launches, so a conditional fallback would
+    // silently print nothing. Then best-effort open a browser for desktops.
+    for line in notary_open_lines(notary_base_url) {
+        println!("{line}");
     }
+    let _ = Command::new("open").arg(&docs_url).status();
     Ok(())
+}
+
+fn notary_open_lines(notary_base_url: &str) -> Vec<String> {
+    vec![
+        format!("Notary API docs: {notary_base_url}{NOTARY_DOCS_PATH}"),
+        format!("OpenAPI JSON: {notary_base_url}{NOTARY_OPENAPI_PATH}"),
+    ]
 }
 
 pub fn bruno_generate_project(project_dir: &Path, force: bool) -> Result<()> {
@@ -5404,6 +5420,89 @@ workflows:
         assert_eq!(
             notary_config_yaml["replay"]["redis"]["url_env"],
             "REGISTRY_NOTARY_REPLAY_REDIS_URL"
+        );
+    }
+
+    #[test]
+    fn relay_open_always_reports_docs_url_for_headless_fallback() {
+        // On macOS `open <url>` returns success even over SSH with no display,
+        // so a conditional fallback never fires. The URL must always be surfaced.
+        let lines = relay_open_lines("http://127.0.0.1:4242/docs");
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("http://127.0.0.1:4242/docs")),
+            "relay open must always print the docs URL for headless environments; got {lines:?}"
+        );
+    }
+
+    #[test]
+    fn notary_open_always_reports_docs_url_for_headless_fallback() {
+        let lines = notary_open_lines("http://127.0.0.1:4255");
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("http://127.0.0.1:4255/docs")),
+            "notary open must always print the docs URL for headless environments; got {lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("http://127.0.0.1:4255/openapi.json")),
+            "notary open must always print the OpenAPI URL for headless environments; got {lines:?}"
+        );
+    }
+
+    #[test]
+    fn local_relay_notary_config_permits_tutorial_purpose() {
+        let temp = TempDir::new().unwrap();
+        let project = temp.path().join("my-first-api");
+        init_spreadsheet_api(&project, Sample::Benefits).unwrap();
+        add_notary(&project, NotarySource::LocalRelay, false).unwrap();
+
+        let notary_config = fs::read_to_string(project.join("notary/config.yaml")).unwrap();
+        let parsed_config: registry_notary_core::StandaloneRegistryNotaryConfig =
+            serde_yaml::from_str(&notary_config).unwrap();
+        parsed_config.validate().unwrap();
+
+        // The source-binding PDP policy fails closed: with no purpose allow-list the
+        // notary evaluate step denies every request with pdp.purpose_not_permitted
+        // before any evidence lookup. The generated project must permit the same
+        // tutorial purpose its smoke check and docs send.
+        let matching = &parsed_config.evidence.claims[0].source_bindings["person"].matching;
+        assert!(
+            matching
+                .allowed_purposes
+                .iter()
+                .any(|purpose| purpose == TUTORIAL_PURPOSE),
+            "generated local-relay notary source binding must permit the tutorial purpose; \
+             got allowed_purposes = {:?}",
+            matching.allowed_purposes
+        );
+    }
+
+    #[test]
+    fn standalone_notary_config_permits_tutorial_purpose() {
+        let temp = TempDir::new().unwrap();
+        let project = temp.path().join("my-notary");
+        init_standalone_notary_project(&project, default_notary_options()).unwrap();
+
+        let notary_config = fs::read_to_string(project.join("notary/config.yaml")).unwrap();
+        let parsed_config: registry_notary_core::StandaloneRegistryNotaryConfig =
+            serde_yaml::from_str(&notary_config).unwrap();
+        parsed_config.validate().unwrap();
+
+        // `registryctl notary smoke` sends the tutorial purpose for standalone
+        // projects too, so the fail-closed source-binding policy must permit it.
+        let matching = &parsed_config.evidence.claims[0].source_bindings["person"].matching;
+        assert!(
+            matching
+                .allowed_purposes
+                .iter()
+                .any(|purpose| purpose == TUTORIAL_PURPOSE),
+            "generated standalone notary source binding must permit the tutorial purpose; \
+             got allowed_purposes = {:?}",
+            matching.allowed_purposes
         );
     }
 
