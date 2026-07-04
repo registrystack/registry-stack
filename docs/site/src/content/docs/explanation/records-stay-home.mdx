@@ -16,22 +16,26 @@ An institution that runs a civil registry, a social-protection database, or a he
 registry already holds the records it needs.
 Registry Stack lets it **answer questions about those records** (*is this person alive? is
 this household eligible?*) and return a result another system can trust, while the records
-themselves are **read where they already live, never written back, and never handed
-over**.
+themselves are **read where they already live, never written back, and not copied into a
+central exchange**.
 This page explains what that means in practice: what stays inside the institution's
 boundary, what crosses it, and (equally important) what the design does and does not
 guarantee.
 
 ## A question goes in, an answer comes out
 
-The mental model is one sentence: **a scoped question crosses into the institution, the
-record is read in place, and only a computed answer crosses back out.**
+The Notary mental model is one sentence: **a scoped question crosses into the
+institution, the record is read in place, and a computed answer crosses back out.**
 
-A caller never sends the value it is asking about and never receives the underlying
-record. It sends a subject identifier and the id of a *claim* (a single, pre-modelled
-question) and receives one of a few narrow shapes of answer: a yes/no, a single value, a
-machine-readable evaluation result, or a credential the subject can carry in a wallet. The source row that the
-answer was computed from stays behind.
+A Notary caller never sends the value it is asking about and never receives the
+underlying record as the answer.
+It sends the id of a *claim* (a single, pre-modelled question) and the inputs that
+claim needs to resolve the subject: a subject identifier, plus, where the claim's
+matching policy requires them, target or requester attributes, further identifiers, or
+relationship attributes.
+It receives one of a few narrow shapes of answer: a yes/no, a single value, a
+machine-readable evaluation result, or a credential the subject can carry in a wallet.
+The source row that the answer was computed from stays behind.
 
 ## The boundary
 
@@ -50,9 +54,11 @@ flowchart LR
     end
     caller["Caller / verifier"]
     holder(["Subject / wallet"])
-    caller == "request: subject id + claim id + scope" ==> notary
+    caller == "request: claim id + subject inputs + scope" ==> notary
     notary == "answer: yes/no · value · evaluation result" ==> caller
-    notary == "holder-bound credential" ==> holder
+    notary == "issued credential" ==> holder
+    caller == "scoped record read" ==> relay
+    relay == "authorized source records" ==> caller
 
     classDef inside fill:#eef,stroke:#334,stroke-width:1px;
     classDef outside fill:#f7f7f7,stroke:#777,stroke-dasharray:3 3;
@@ -60,11 +66,15 @@ flowchart LR
     class caller,holder outside;
 ```
 
-*A request and an answer cross the boundary. The source record does not.* Registry Relay
-turns an existing file or database table into a read-only, access-controlled API without
-replacing the source. Registry Notary evaluates one modelled question against that source
-and returns a shaped result; it is the only component that evaluates claims, applies
-disclosure policy, and issues credentials.
+*Two governed surfaces can cross the boundary.* Registry Relay turns an existing file or
+database table into a read-only, access-controlled API without replacing the source.
+Its scoped record routes can return source records to authorized callers that hold the
+dataset's row-read permission.
+Registry Notary evaluates one modelled question against that source and returns a shaped
+answer; it is the only component that evaluates claims, applies disclosure policy, and
+issues credentials.
+Notary is the strongest minimization surface.
+Relay record reads are scoped and audited, not open data.
 
 ## What stays home
 
@@ -87,8 +97,14 @@ disclosure policy, and issues credentials.
 
 ## What crosses the boundary
 
-Only a computed answer crosses out: never the source row. The answer takes one of a few
-shapes:
+What crosses depends on the surface.
+Registry Relay can return scoped source records to an authorized caller through a
+governed, audited read bounded by the caller's per-dataset row scope and the dataset's
+configured filters and limits.
+Registry Notary returns the answer a rule computes rather than the source row; keeping
+that answer narrow is a modelling discipline, because a well-modelled claim returns one
+decision or one extracted value.
+A Notary answer takes one of a few shapes:
 
 - A yes/no: only the true/false satisfaction of the modelled rule.
 - A single value: the evaluated value itself, when the claim's disclosure mode is
@@ -96,9 +112,10 @@ shapes:
 - A machine-readable evaluation result: a claim-result document carrying *provenance
   metadata*: which evaluation produced it, under which policy, across how many sources. This
   provenance lets a receiving system trace the result; it is not a cryptographic signature.
-- A holder-bound credential: an SD-JWT VC the subject can store in a wallet and present
-  later. Unlike the plain result, the credential is cryptographically verifiable against the
-  issuer's published keys.
+- An issued credential: an SD-JWT VC the subject can store in a wallet and present later.
+  Unlike the plain result, the credential is cryptographically verifiable against the
+  issuer's published keys. Credential profiles are holder-bound by default, but an
+  operator can explicitly configure an unbound profile.
 
 Across a federation boundary (one institution's Notary asking another's), what crosses is
 a scoped, signed evaluation result, never a credential.
@@ -110,33 +127,47 @@ receives. There are exactly three:
 
 | Mode | Discloses | Withholds |
 |------|-----------|-----------|
-| `value` | the full evaluated value | nothing about the value |
-| `predicate` | only the true/false satisfaction | the underlying value |
+| `value` | the evaluated value, less any object fields the policy redacts | nothing beyond policy-redacted object fields |
+| `predicate` | only the true/false satisfaction, for a claim whose rule yields a boolean | the underlying value |
 | `redacted` | neither: the result carries no value **and** no yes/no | the value *and* the outcome |
 
-The policy bounds which modes are allowed, and the caller chooses among them: a claim
-defines an `allowed` set and a `default`, the service honours a requested mode when it is in
-the allowed set and refuses it otherwise, applies the default when none is requested, and
-every result records which mode was applied. A privacy-sensitive claim is expected to default
-to the least-revealing mode that still answers the question.
+The mode is policy-bound: a claim defines an `allowed` set, a `default`, and a downgrade
+policy.
+A caller may request a mode.
+Under the default `deny` downgrade, the service refuses a requested mode outside the
+allowed set; a `default` or `redacted` downgrade substitutes that fallback mode when the
+fallback is itself allowed.
+The default mode applies when the caller requests none, and every result records which
+mode was applied.
+A privacy-sensitive claim is expected to default to the least-revealing mode that still
+answers the question.
 
 This is the mechanism behind "prove a fact without sharing the record". To check whether a
 person has a registered record, model the question as an *existence* rule and disclose it
-as a `predicate`: the caller learns `true` or `false`, and the row never crosses the
-boundary. To check eligibility without exposing an income figure, derive the decision with
-an expression rule and disclose the eligibility boolean as a `predicate`; the income value
+as a `predicate`: a resolved record returns `true`, and the row never crosses the
+boundary.
+By default, a record that does not resolve collapses to a single not-available reason
+rather than a `false`, so the lookup cannot be used as an existence oracle.
+To check eligibility without exposing an income figure, derive the decision with an
+expression rule and disclose the eligibility boolean as a `predicate`; the income value
 stays home.
 
 ## Why the answer is not the record
 
 A credential is not a copy of the record. It is an **SD-JWT VC**: the signed body carries a
 SHA-256 *digest* of each selectively disclosable field rather than the field value, so a
-field the holder does not present stays hidden. It **can be** holder-bound (tied to the
-holder's key so it is not presentable without the matching private key) when the issuing
-profile enables binding (the wallet issuance path does); the default profile issues an unbound
-credential. Either way, the holder chooses which fields to reveal to which verifier. Anyone can verify it against the issuer's
-published public keys, served without authentication so a verifier needs no credential of
-its own. The issued credential carries no full record payload.
+field the holder does not present stays hidden.
+Holder binding is set by the credential profile.
+By default, a profile with no `holder_binding` block uses `did:jwk` holder binding.
+A holder-bound profile ties the credential to the holder's key so it is not presentable
+without the matching private key; an operator that intentionally needs a bearer-style
+credential can set `holder_binding.mode: none`.
+Each selectively disclosable field is a whole claim output, so an object-valued output is
+revealed as a unit unless an explicit projection splits it into separately disclosable
+fields.
+Anyone can verify the credential against the issuer's published public keys, served
+without authentication so a verifier needs no credential of its own.
+The issued credential carries no full record payload.
 
 ## How the boundary is enforced
 
@@ -146,10 +177,10 @@ Security material:
 - Scope-before-source, deny-by-default: A service checks the caller's scope *before* it
   reads any source or evaluates any claim, and does not widen a caller's reach at request
   time beyond what its configuration grants. Anything that touches a record or a claim
-  requires authentication; the routes reachable without it are the operational, discovery,
-  and protocol-bootstrap surfaces: liveness and readiness probes, the public verification
-  keys, credential-issuance discovery metadata, the OID4VCI wallet-flow endpoints, the docs,
-  public credential-status reads, and credential type metadata.
+  requires authentication. Routes reachable without it return no record or claim result on
+  their own: liveness and readiness probes, public verification keys, public metadata, and,
+  where OID4VCI issuance or credential status is enabled, the protocol surfaces that run
+  their own flow checks.
 - A permit, or a closed door: On a governed read, the policy decision point must return
   a permit before data is returned; a denial fails closed with a stable reason rather than
   falling back to an ungoverned read.
@@ -166,9 +197,11 @@ mistake, so the limits are stated plainly here.
 - It is not "data never moves" and not "air-gapped": The promise is *read-in-place, no
   write-back, retained custody*. Authorized, minimized answers do leave the boundary by
   design: that is the point of the system.
-- Minimization is modelled, not automatic: `value` mode discloses the full value. A
-  claim reveals only what its author configured it to reveal; least disclosure is a design
-  choice the claim makes, not a property the stack imposes on every answer.
+- Minimization is modelled, not automatic: `value` mode discloses the evaluated value,
+  less any object fields the policy marks for redaction; it is not constrained to a
+  scalar, so a claim modelled to return an object or extracted record returns one. A claim
+  reveals only what its author configured it to reveal; least disclosure is a design choice
+  the claim makes, not a property the stack imposes on every answer.
 - Correctness depends on the source: Notary reports what the configured source says; it
   does not independently vouch for whether the source is correct or current.
 - A plain result is provenance-tagged, not signed: The everyday evaluation response
@@ -200,6 +233,6 @@ mistake, so the limits are stated plainly here.
 - The security model and protocol contracts: [RS-SEC-G](../../spec/rs-sec-g/),
   [RS-PR-RELAY](../../spec/rs-pr-relay/), [RS-PR-NOTARY](../../spec/rs-pr-notary/),
   [RS-DM-CLAIM](../../spec/rs-dm-claim/)
-- Evidence issuance, end to end *(explanation)*
-- Disclosure and minimization in depth *(Trust &amp; Security)*
-- The threat model and security posture *(Trust &amp; Security)*
+- [Evidence issuance, end to end](../evidence-issuance/)
+- [Disclosure modes and computed answers](../disclosure-modes-and-computed-answers/)
+- [Threat model](../threat-model/)

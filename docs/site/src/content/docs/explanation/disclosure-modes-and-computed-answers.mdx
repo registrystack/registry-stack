@@ -25,7 +25,7 @@ Per-claim disclosure control is enforced at runtime by the service. It is not le
 
 ## The evaluation pipeline: computed answers, not record handoffs
 
-The reason an answer can stand in for a record is that the caller never supplies the value being asked about. To evaluate a claim, the caller sends a **subject identifier** and a **claim id** over a REST call authenticated the way the rest of the service is: an API key or bearer token in static-credential mode, or an OIDC token, whichever your deployment is configured for. Registry Notary then performs the evaluation against its own configured sources. The caller does not supply the evaluated value, and cannot inject one.
+The reason an answer can stand in for a record is that the caller never supplies the value being asked about. To evaluate a claim, the caller sends a **claim id** plus the subject-resolution inputs the claim policy admits: a subject identifier, and, when matching policy requires them, target or requester attributes, further identifiers, or relationship attributes. The REST call is authenticated the way the rest of the service is: an API key or bearer token in static-credential mode, or an OIDC token, whichever your deployment is configured for. Registry Notary then performs the evaluation against its own configured sources. The caller does not supply the evaluated value, and cannot inject one.
 
 The evaluation runs as a pipeline: a source connector resolves facts about the subject, a rule computes the configured condition, a disclosure mode shapes what leaves the service, and a response format carries the result. Because Notary computes the answer itself, it can return that computed answer rather than handing back the source record it read.
 
@@ -37,11 +37,11 @@ The disclosure mode fixes how much of the computed answer the caller receives:
 
 | Mode | What the caller receives |
 |------|--------------------------|
-| `value` | the full evaluated value |
-| `predicate` | only the true/false satisfaction of the rule |
+| `value` | the evaluated value, less any object fields the policy redacts |
+| `predicate` | only the true/false satisfaction of a boolean result |
 | `redacted` | no value and no satisfaction outcome |
 
-`value` returns the full value, so this mode does hand over the computed result in full; it is the least private of the three and is appropriate only where the use case calls for the actual value. `predicate` returns only the boolean satisfaction. `redacted` returns neither the underlying value nor the yes/no outcome.
+`value` returns the computed result, minus configured object-field redactions, so this mode is the least private of the three and is appropriate only where the use case calls for the actual value. `predicate` returns only the boolean satisfaction. `redacted` returns neither the underlying value nor the yes/no outcome in the standard claim-result body.
 
 Every evaluation result records which disclosure mode was applied, so a downstream system can tell how much was revealed.
 
@@ -57,7 +57,7 @@ The difference between the two matters. `predicate` is not "zero disclosure"; it
 
 ## How disclosure policy is configured per claim
 
-The caller does not freely pick from all three modes. Each claim configures a **disclosure policy**: a `default` mode plus an `allowed` set drawn from the three modes. A caller may request a mode: Notary honours it when it is in that claim's allowed set and refuses it (`claim.disclosure_not_allowed`) otherwise; when the caller requests no mode, Notary applies the claim's default. So the policy bounds which modes are allowed, and the caller chooses among the allowed modes. A privacy-sensitive claim can be configured to default to the least-revealing mode that still answers the question.
+The caller does not freely pick from all three modes. Each claim configures a **disclosure policy**: a `default` mode, an `allowed` set drawn from the three modes, and a `downgrade` policy. A caller may request a mode: Notary honours it when it is in that claim's allowed set. Under the default `deny` downgrade, a disallowed request is refused (`claim.disclosure_not_allowed`); a `default` or `redacted` downgrade substitutes that fallback mode when the fallback is itself allowed. When the caller requests no mode, Notary applies the claim's default. So the policy bounds which modes are allowed, and the caller chooses among the allowed modes. A privacy-sensitive claim can be configured to default to the least-revealing mode that still answers the question.
 
 ## What a redacted result still reveals (and to whom)
 
@@ -80,6 +80,7 @@ A few boundaries matter when you evaluate this design:
 - The caller cannot inject a value, but matching strictness is configured: The "computed answer avoids sharing the record" guarantee rests on Notary computing the answer from a subject id and claim id. Identity matching is only as strict as its configured policy.
 - A sidecar token is not a per-subject boundary: A source adapter sidecar's internal static bearer token is not by itself an end-user, tenant, or subject authorization boundary; the sidecar hop does not enforce per-subject access.
 - Disclosure modes are not credential selective disclosure: A holder's later choice of which credential fields to present is a separate mechanism from Notary's three evaluation modes. Do not read `value`/`predicate`/`redacted` as the same thing as a wallet holder selectively disclosing credential fields.
+- Credential selective disclosure is claim-output scoped by default: without an explicit projection, each claim becomes one disclosure carrying the whole value, so an object-valued output is revealed as a unit.
 - Aligning with a standard is not conforming to it: This page describes Notary's own disclosure behaviour. It is not an endorsement of, or conformance to, any outside specification.
 
 ## Related

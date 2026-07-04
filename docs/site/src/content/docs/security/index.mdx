@@ -29,7 +29,7 @@ The normative source for everything on this page is the security model specifica
 | Only the public half of a signing key is ever published | Built in |
 | Person-level access is written to an audit log | Built in (fail-closed is yours to switch on) |
 | Three disclosure modes, with `redacted` revealing neither value nor answer | Built in |
-| Selective-disclosure credentials, with holder binding configurable per profile (off by default) | Built in |
+| Selective-disclosure credentials, with `did:jwk` holder binding by default per profile | Built in |
 | Federation limited to peers you configure | Built in |
 | Hardened HTTP headers and outbound-traffic limits | Recommended, confirm your build applies them |
 | Key custody, retention, isolation, TLS, rate limiting | Your deployment's job |
@@ -59,16 +59,20 @@ authenticate, authorize, serve, audit.
   audit fail-closed, so a request whose audit record cannot be written does not succeed
   (REQ-SEC-G-009).
 
-Only liveness and readiness probes and public verification-key discovery are served without
+Every route that returns a record, evaluates a claim, or issues from a stored evaluation requires
 authentication.
+Operational probes, public verification keys, discovery metadata, docs or OpenAPI when configured,
+OID4VCI bootstrap routes, credential-status reads, and Relay provenance support routes may be
+public because they do not return record or claim results on their own.
 Issuers sign with asymmetric keys and publish only the public half, so any verifier can check an
 issued credential without holding a credential of its own (REQ-SEC-G-007).
 
 When Notary issues a credential it is an SD-JWT VC: the signed body carries hashes of each
 disclosable field rather than the values, so the holder reveals only what they choose.
 Holder binding, which cryptographically ties a credential to a key the holder controls, is
-configurable per credential profile and defaults to off; the self-attestation
-(wallet) issuance path requires it.
+enabled by default with `did:jwk`; an operator can set `holder_binding.mode: none` only for an
+explicit bearer-style credential profile, and `registry-notary doctor` warns on that choice.
+The self-attestation (wallet) issuance path requires holder proof of possession.
 See [Evidence issuance, end to end](../explanation/evidence-issuance/) for the full credential
 lifecycle.
 
