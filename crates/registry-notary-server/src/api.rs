@@ -15850,7 +15850,11 @@ evaluation_profiles:
                 claims: Some(vec!["person-is-alive".to_string()]),
                 disclosure: Some("predicate".to_string()),
                 purpose: None,
-                holder: None,
+                holder: Some(HolderRequest {
+                    binding: Some("did".to_string()),
+                    id: Some(holder_did_jwk()),
+                    proof: None,
+                }),
             })),
         )
         .await;
