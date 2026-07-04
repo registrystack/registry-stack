@@ -17,7 +17,7 @@ auth:
       scopes:
         - civil_registry:evidence_verification
   bearer_tokens:
-    - id: openfn_civil_evidence_client
+    - id: openfn_civil_evidence_client_bearer
       fingerprint:
         provider: env
         name: CIVIL_EVIDENCE_CLIENT_BEARER_HASH

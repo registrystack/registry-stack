@@ -66,6 +66,34 @@ cleanup() {
 }
 trap cleanup EXIT
 
+has_opencrvs_dci_credentials() {
+  [[ -f "${demo_dir}/.env.local" ]] && return 0
+  [[ -n "${OPENCRVS_DCI_CLIENT_ID:-}" && -n "${OPENCRVS_DCI_CLIENT_SECRET:-}" ]]
+}
+
+run_opencrvs_dci_check() {
+  local mode="${REGISTRY_LAB_CHECK_OPENCRVS_DCI:-auto}"
+  case "${mode}" in
+    1|true|yes)
+      scripts/smoke-opencrvs-dci.sh
+      ;;
+    0|false|no)
+      echo "skipping OpenCRVS DCI smoke: disabled by REGISTRY_LAB_CHECK_OPENCRVS_DCI=${mode}"
+      ;;
+    auto|"")
+      if has_opencrvs_dci_credentials; then
+        scripts/smoke-opencrvs-dci.sh
+      else
+        echo "skipping OpenCRVS DCI smoke: provide lab/.env.local or OPENCRVS_DCI_CLIENT_ID/OPENCRVS_DCI_CLIENT_SECRET to enable it"
+      fi
+      ;;
+    *)
+      echo "REGISTRY_LAB_CHECK_OPENCRVS_DCI must be 1, 0, or auto, got ${mode}" >&2
+      exit 2
+      ;;
+  esac
+}
+
 cd "${demo_dir}"
 
 scripts/check-release-source-model.sh "${source_mode}"
@@ -98,8 +126,6 @@ if [[ "${REGISTRY_LAB_CHECK_OPENFN:-1}" == "1" ]]; then
   scripts/smoke-openfn.sh
 fi
 
-if [[ "${REGISTRY_LAB_CHECK_OPENCRVS_DCI:-1}" == "1" ]]; then
-  scripts/smoke-opencrvs-dci.sh
-fi
+run_opencrvs_dci_check
 
 echo "release check OK"

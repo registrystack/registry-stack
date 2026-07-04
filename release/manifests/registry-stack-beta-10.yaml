@@ -1,19 +1,19 @@
 stack:
-  release: beta-9
-  version: 0.8.3
+  release: beta-10
+  version: 0.8.4
   source_repo: registrystack/registry-stack
-  source_ref: 4507906491e4a580295a9221e60d1ac6ae541c33
-  source_tag: v0.8.3
-  status: released
+  source_ref: ebe613a7e712341884d10bf4e5c64e48b2591bad
+  source_tag: v0.8.4
+  status: release-candidate
 
 artifacts:
-  registry-notary: 0.8.3
-  registry-notary-source-adapter-sidecar: 0.8.3
-  registry-relay: 0.8.3
-  registry-manifest-cli: 0.8.3
-  registryctl: 0.8.3
-  registry-lab: 0.8.3
-  registry-docs: 0.8.3
+  registry-notary: 0.8.4
+  registry-notary-source-adapter-sidecar: 0.8.4
+  registry-relay: 0.8.4
+  registry-manifest-cli: 0.8.4
+  registryctl: 0.8.4
+  registry-lab: 0.8.4
+  registry-docs: 0.8.4
 
 external:
   crosswalk:

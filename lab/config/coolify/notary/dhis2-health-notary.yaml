@@ -17,7 +17,7 @@ auth:
       scopes:
         - dhis2_health:evidence_verification
   bearer_tokens:
-    - id: dhis2_evidence_client
+    - id: dhis2_evidence_client_bearer
       fingerprint:
         provider: env
         name: DHIS2_EVIDENCE_CLIENT_BEARER_HASH

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.8.4 - 2026-07-04
+
 ### Added
 
 - `registry-relay --version` and `registry-relay -V` output so the Relay binary

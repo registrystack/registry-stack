@@ -32,6 +32,17 @@ load_env_file() {
   fi
 }
 
+restore_optional_env() {
+  local key="$1"
+  local value="$2"
+  if [[ -n "${value}" ]]; then
+    printf -v "${key}" '%s' "${value}"
+    export "${key}"
+  else
+    unset "${key}"
+  fi
+}
+
 has_custom_cel_mapping_source_dir() {
   case "${CEL_MAPPING_SOURCE_DIR:-}" in
     ""|"./vendor/cel-mapping"|"vendor/cel-mapping"|"${demo_dir}/vendor/cel-mapping")
@@ -155,6 +166,12 @@ require_tool docker
 require_tool jq
 require_tool python
 
+provided_opencrvs_dci_base_url="${OPENCRVS_DCI_BASE_URL:-}"
+provided_opencrvs_dci_client_id="${OPENCRVS_DCI_CLIENT_ID:-}"
+provided_opencrvs_dci_client_secret="${OPENCRVS_DCI_CLIENT_SECRET:-}"
+provided_opencrvs_dci_notary_port="${OPENCRVS_DCI_NOTARY_PORT:-}"
+provided_opencrvs_demo_subject_uin="${OPENCRVS_DEMO_SUBJECT_UIN:-}"
+
 if [[ -f "${demo_dir}/.env" ]]; then
   load_env_file "${demo_dir}/.env"
 else
@@ -167,10 +184,16 @@ demo_opencrvs_evidence_deny_jurisdiction_token="${OPENCRVS_EVIDENCE_DENY_JURISDI
 demo_opencrvs_evidence_deny_legal_basis_token="${OPENCRVS_EVIDENCE_DENY_LEGAL_BASIS_TOKEN:-}"
 demo_opencrvs_evidence_deny_consent_token="${OPENCRVS_EVIDENCE_DENY_CONSENT_TOKEN:-}"
 
+restore_optional_env "OPENCRVS_DCI_BASE_URL" "${provided_opencrvs_dci_base_url}"
+restore_optional_env "OPENCRVS_DCI_CLIENT_ID" "${provided_opencrvs_dci_client_id}"
+restore_optional_env "OPENCRVS_DCI_CLIENT_SECRET" "${provided_opencrvs_dci_client_secret}"
+restore_optional_env "OPENCRVS_DCI_NOTARY_PORT" "${provided_opencrvs_dci_notary_port}"
+restore_optional_env "OPENCRVS_DEMO_SUBJECT_UIN" "${provided_opencrvs_demo_subject_uin}"
+
 if [[ -f "${local_env}" ]]; then
   load_env_file "${local_env}"
 elif [[ -z "${OPENCRVS_DCI_CLIENT_ID:-}" || -z "${OPENCRVS_DCI_CLIENT_SECRET:-}" ]]; then
-  fail "missing .env.local; copy .env.example OpenCRVS values or create it with OPENCRVS_DCI_CLIENT_ID and OPENCRVS_DCI_CLIENT_SECRET"
+  fail "missing OpenCRVS DCI credentials; create .env.local or export OPENCRVS_DCI_CLIENT_ID and OPENCRVS_DCI_CLIENT_SECRET"
 fi
 
 OPENCRVS_EVIDENCE_CLIENT_TOKEN="${demo_opencrvs_evidence_client_token:-${OPENCRVS_EVIDENCE_CLIENT_TOKEN:-}}"

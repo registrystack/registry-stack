@@ -31,7 +31,7 @@ auth:
         jurisdiction: ZZ
         assurance_level: substantial
   bearer_tokens:
-    - id: civil_evidence_client
+    - id: civil_evidence_client_bearer
       fingerprint:
         provider: env
         name: CIVIL_EVIDENCE_CLIENT_BEARER_HASH

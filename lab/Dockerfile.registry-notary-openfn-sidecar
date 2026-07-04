@@ -36,7 +36,7 @@ WORKDIR /opt/openfn
 COPY --from=builder /usr/local/bin/registry-notary-openfn-sidecar /usr/local/bin/registry-notary-openfn-sidecar
 # Mock civil registry server for the demo (vendored here; formerly shipped by
 # registry-notary). Pure node:http with no npm dependencies, so no npm install.
-COPY lab/config/openfn/mock-registry-server.mjs ./mock-registry-server.mjs
+COPY config/openfn/mock-registry-server.mjs ./mock-registry-server.mjs
 
 USER node
 EXPOSE 8080

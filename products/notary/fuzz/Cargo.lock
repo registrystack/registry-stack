@@ -1438,7 +1438,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "registry-notary-core"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "base64",
  "humantime-serde",
@@ -1467,10 +1467,9 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-authcommon"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "serde",
- "serde_json",
  "sha2 0.11.0",
  "subtle",
  "thiserror",
@@ -1479,7 +1478,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-cache"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "async-trait",
  "redis",
@@ -1491,7 +1490,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-config"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -1510,7 +1509,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-crypto"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -1530,7 +1529,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-httputil"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "bytes",
  "http",
@@ -1542,7 +1541,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-oid4vci"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "base64",
  "registry-platform-crypto",
@@ -1555,9 +1554,10 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-replay"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "async-trait",
+ "getrandom 0.4.3",
  "registry-platform-cache",
  "thiserror",
  "time",
@@ -1565,7 +1565,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-sdjwt"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "base64",
  "getrandom 0.4.3",

@@ -94,7 +94,9 @@ just release-fast
 Plain `just quick` runs the same monorepo defaults for generate, build, smoke,
 OpenFn, and client checks. `just release-fast` runs `scripts/release-check.sh`,
 which defaults to `REGISTRY_LAB_RELEASE_SOURCE_MODE=monorepo` and also gates
-the release source model.
+the release source model. The live OpenCRVS DCI smoke runs during release
+checks only when `.env.local` or exported `OPENCRVS_DCI_CLIENT_ID` and
+`OPENCRVS_DCI_CLIENT_SECRET` values are available.
 
 If you still have sibling Platform, Relay, and Notary checkouts and want to
 validate against them directly, `commons-check` remains available:
@@ -267,6 +269,8 @@ OPENCRVS_DCI_NOTARY_PORT=4352
 Registry Notary fetches OpenCRVS source tokens with OAuth client credentials.
 The smoke script also fetches a short-lived token to discover a seeded demo UIN
 when `OPENCRVS_DEMO_SUBJECT_UIN` is unset, but it does not store that token.
+The default release check auto-skips this live smoke when those credentials are
+not configured. Set `REGISTRY_LAB_CHECK_OPENCRVS_DCI=1` to require it.
 It derives local Registry Notary API-key hashes from the corresponding token
 values when the hash env vars are unset or still contain placeholder zero
 digests.
@@ -680,9 +684,10 @@ source checkout and runs it against the default lab Notary services. It looks at
 `REGISTRY_NOTARY_CLIENT_SOURCE_DIR` first, then `REGISTRY_NOTARY_SOURCE_DIR`
 (which the justfile and `release-check.sh` default to this monorepo checkout),
 then falls back to the standalone sibling paths `../registry-notary` and
-`vendor/registry-notary`. Use `REGISTRY_NOTARY_CLIENT_SOURCE_DIR` when
-validating a client SDK branch. This smoke is explicit and is not part of
-`just quick`.
+`vendor/registry-notary`. Each source candidate may use either the split-repo
+`bindings/python` layout or the monorepo `products/notary/bindings/python`
+layout. Use `REGISTRY_NOTARY_CLIENT_SOURCE_DIR` when validating a client SDK
+branch. This smoke is explicit and is not part of `just quick`.
 
 ## Fixture data
 
