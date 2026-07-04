@@ -174,13 +174,14 @@ leakage, and privacy regressions that expose raw subject identifiers.
   freshness checks are backed by a real replay-store primitive that tracks one-time JWT `jti`
   and nonce values (federation request `jti`, OID4VCI `c_nonce`, and holder-proof `jti`).
 
-**Audit as a control.** Every request touching person-level data is recorded (principal,
-request id, checked scopes, and `Data-Purpose`) and a deployment can run audit fail-closed,
-so an unrecordable request does not return success. Two caveats for the auditor. First,
-this is a capability a deployment can turn on, not a guarantee that every route in a given
-build has been individually audited; treat per-route audit coverage as something to verify
-in your deployment. Second, Notary records hashed principal and correlation identifiers, so
-operator-side investigation depends on retaining the hashing secret and request context.
+**Audit as a control.** Every request touching person-level data can be recorded with the
+hashed principal, request id, the principal's granted scopes, and `Data-Purpose` context
+when present, and a deployment can run audit fail-closed, so an unrecordable request does
+not return success. Two caveats for the auditor. First, the recorded scope list is not a
+per-route proof of which scope check authorized the request, and per-route audit coverage
+is something to verify in your deployment. Second, Notary records hashed principal and
+correlation identifiers, so operator-side investigation depends on retaining the hashing
+secret and request context.
 
 ## Residual risks and what is left to the operator
 

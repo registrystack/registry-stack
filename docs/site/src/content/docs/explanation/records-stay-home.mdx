@@ -147,7 +147,9 @@ person has a registered record, model the question as an *existence* rule and di
 as a `predicate`: a resolved record returns `true`, and the row never crosses the
 boundary.
 By default, a record that does not resolve collapses to a single not-available reason
-rather than a `false`, so the lookup cannot be used as an existence oracle.
+rather than a `false`, which hides the reason matching failed. An authorized caller can
+still distinguish a resolved record from a not-available response, so use this pattern for
+minimization, not for hiding whether a requested subject matched.
 To check eligibility without exposing an income figure, derive the decision with an
 expression rule and disclose the eligibility boolean as a `predicate`; the income value
 stays home.
@@ -210,8 +212,8 @@ mistake, so the limits are stated plainly here.
   that must verify an answer cryptographically uses the credential, not the default response.
 - Matching is only as strict as it is configured: Notary resolves a subject through its
   configured matching policy and does not independently verify identity beyond that. By
-  default a matching failure collapses to a single public reason, so the lookup surface
-  cannot be used as an existence oracle.
+  default a matching failure collapses to a single public reason, but an authorized caller
+  can still tell a resolved record from a not-available response.
 - This is not zero-knowledge: A `predicate` answer is a policy-enforced boolean computed
   inside the service; SD-JWT selective disclosure is digest omission. Neither is a
   zero-knowledge proof, and the documentation should not imply one.
