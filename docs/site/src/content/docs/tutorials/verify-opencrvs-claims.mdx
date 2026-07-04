@@ -30,7 +30,7 @@ Estimated time: about 10 minutes after you have credentials and a test UIN.
 You need:
 
 - Docker with Compose v2.20 or later.
-- `registryctl` 0.8.3 or newer, with `init notary --source-kind opencrvs-dci` support.
+- `registryctl` 0.8.4 or newer, with `init notary --source-kind opencrvs-dci` support.
 - `curl` and `jq` for the explicit evaluation check.
 - OpenCRVS OAuth client credentials for a test environment.
 - A known test UIN for the live smoke test.
@@ -38,7 +38,7 @@ You need:
 Install `registryctl` if you have not already:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/v0.8.3/crates/registryctl/install.sh | REGISTRYCTL_VERSION=v0.8.3 sh
+curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/v0.8.4/crates/registryctl/install.sh | REGISTRYCTL_VERSION=v0.8.4 sh
 registryctl --version
 ```
 
@@ -70,7 +70,7 @@ DCI_CLIENT_SECRET=<opencrvs-client-secret>
 
 Keep `secrets/local.env` private.
 Use the exact `DCI_CLIENT_ID` and `DCI_CLIENT_SECRET` names.
-The 0.8.3 generator does not read `OPENCRVS_DCI_*` aliases or a DCI SHA secret.
+The 0.8.4 generator does not read `OPENCRVS_DCI_*` aliases or a DCI SHA secret.
 Do not paste bearer tokens into the file.
 Registry Notary uses the OAuth client-credentials settings to fetch a source token.
 
@@ -114,7 +114,7 @@ Start the generated stack:
 registryctl start
 ```
 
-On Apple silicon, v0.8.3 images are published for linux/amd64.
+On Apple silicon, v0.8.4 images are published for linux/amd64.
 If Docker reports that no linux/arm64 manifest exists, start with the amd64 platform override:
 
 ```sh

@@ -17,7 +17,7 @@ auth:
       scopes:
         - health_registry:evidence_verification
   bearer_tokens:
-    - id: fhir_health_evidence_client
+    - id: fhir_health_evidence_client_bearer
       fingerprint:
         provider: env
         name: FHIR_EVIDENCE_CLIENT_BEARER_HASH

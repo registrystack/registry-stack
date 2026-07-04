@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.8.4
+
 - BREAKING: Static API-key and bearer-token config no longer accepts
   `fingerprint.commitment`.
   Remove that field from Notary YAML.

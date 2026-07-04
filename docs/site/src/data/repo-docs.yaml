@@ -2,7 +2,7 @@ repos:
   registry-relay:
     remote: https://github.com/registrystack/registry-stack
     ref: HEAD
-    version: v0.8.3
+    version: v0.8.4
     local: ../..
     openapi: crates/registry-relay/openapi/registry-relay.openapi.json
     archive_remote: https://github.com/jeremi/registry-relay
@@ -90,7 +90,7 @@ repos:
   registry-notary:
     remote: https://github.com/registrystack/registry-stack
     ref: HEAD
-    version: v0.8.3
+    version: v0.8.4
     local: ../..
     openapi: products/notary/openapi/registry-notary.openapi.json
     archive_remote: https://github.com/jeremi/registry-notary
@@ -232,7 +232,7 @@ repos:
   registry-manifest:
     remote: https://github.com/registrystack/registry-stack
     ref: HEAD
-    version: v0.8.3
+    version: v0.8.4
     local: ../..
     archive_remote: https://github.com/jeremi/registry-manifest
     docs:

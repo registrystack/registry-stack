@@ -17,7 +17,7 @@ auth:
       scopes:
         - agri_registry:evidence_verification
   bearer_tokens:
-    - id: nagdi_agriculture_evidence_client
+    - id: nagdi_agriculture_evidence_client_bearer
       fingerprint:
         provider: env
         name: AGRI_EVIDENCE_CLIENT_BEARER_HASH

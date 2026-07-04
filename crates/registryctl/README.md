@@ -5,7 +5,7 @@
 Install a pinned release without cloning this repo:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/v0.8.3/crates/registryctl/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/v0.8.4/crates/registryctl/install.sh | sh
 ```
 
 Then create and start your first secured spreadsheet API:
@@ -44,16 +44,16 @@ source-adapter contract and defaults the sidecar URL to
 `http://host.docker.internal:4360`. It does not start a FHIR server or the
 FHIR sidecar for you.
 
-The installer defaults to `v0.8.3`. To install a different pinned release, set
+The installer defaults to `v0.8.4`. To install a different pinned release, set
 `REGISTRYCTL_VERSION`:
 
 ```sh
-REGISTRYCTL_VERSION=vX.Y.Z curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/v0.8.3/crates/registryctl/install.sh | sh
+REGISTRYCTL_VERSION=vX.Y.Z curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/v0.8.4/crates/registryctl/install.sh | sh
 ```
 
-Prebuilt binaries are published for the `v0.8.3` stack release on Linux x86_64,
+Prebuilt binaries are published for the `v0.8.4` stack release on Linux x86_64,
 Linux arm64, and macOS arm64. On other platforms, install from source with
-`cargo install --git https://github.com/registrystack/registry-stack --tag v0.8.3 registryctl --locked`.
+`cargo install --git https://github.com/registrystack/registry-stack --tag v0.8.4 registryctl --locked`.
 
 ## Update checks
 

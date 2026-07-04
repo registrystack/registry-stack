@@ -16,7 +16,7 @@ auth:
         - social_protection_registry:evidence_verification
         - health_registry:evidence_verification
   bearer_tokens:
-    - id: shared_evidence_client
+    - id: shared_evidence_client_bearer
       fingerprint:
         provider: env
         name: SHARED_EVIDENCE_CLIENT_BEARER_HASH

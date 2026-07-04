@@ -9,17 +9,56 @@ docsets:
     description: Current RegistryStack monorepo documentation build.
     products:
       registry-stack:
-        version: v0.8.3
+        version: v0.8.4
         ref: HEAD
       registry-relay:
-        version: v0.8.3
+        version: v0.8.4
         ref: HEAD
       registry-notary:
-        version: v0.8.3
+        version: v0.8.4
         ref: HEAD
       registry-manifest:
-        version: v0.8.3
+        version: v0.8.4
         ref: HEAD
+  - id: v0.8.4
+    label: v0.8.4
+    path: /v/0.8.4/
+    status: archived
+    source: registry-stack-v0.8.4
+    repo_docs_source: monorepo
+    published_at: 2026-07-04
+    description: RegistryStack v0.8.4 beta-10 documentation set.
+    products:
+      registry-stack:
+        version: v0.8.4
+        ref: ebe613a7e712341884d10bf4e5c64e48b2591bad
+      registry-platform:
+        version: v0.8.4
+        ref: ebe613a7e712341884d10bf4e5c64e48b2591bad
+      registry-manifest:
+        version: v0.8.4
+        ref: ebe613a7e712341884d10bf4e5c64e48b2591bad
+      registry-notary:
+        version: v0.8.4
+        ref: ebe613a7e712341884d10bf4e5c64e48b2591bad
+      registry-relay:
+        version: v0.8.4
+        ref: ebe613a7e712341884d10bf4e5c64e48b2591bad
+      registry-lab:
+        version: v0.8.4
+        ref: ebe613a7e712341884d10bf4e5c64e48b2591bad
+      registry-registryctl:
+        version: v0.8.4
+        ref: ebe613a7e712341884d10bf4e5c64e48b2591bad
+      crosswalk:
+        version: crosswalk-core-v0.2.0
+        ref: 1d44ec735fdc8a7c719264b339574371e8330337
+      registry-atlas:
+        version: beta-10 held lab input
+        ref: d46f943b9fdcbab787d1d4eed114058aa43980be
+      esignet-relay-authenticator:
+        version: beta-10 held lab input
+        ref: 23cc0abb6469e0d18c8e6776f87de1691bdf40ee
   - id: v0.8.3
     label: v0.8.3
     path: /v/0.8.3/

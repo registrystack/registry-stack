@@ -127,7 +127,7 @@ Release and lab source checks:
 
 ```bash
 python3 -m unittest release/scripts/test_registry_release.py
-release/scripts/registry-release validate release/manifests/registry-stack-beta-9.yaml
+release/scripts/registry-release validate release/manifests/registry-stack-beta-10.yaml
 release/scripts/registry-release audit release/manifests/import-map-2026-06-24.yaml
 REGISTRY_LAB_RELEASE_SOURCE_MODE=monorepo lab/scripts/check-release-source-model.sh
 python3 -m unittest lab/scripts/test_check_release_source_model.py

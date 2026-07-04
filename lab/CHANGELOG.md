@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## registry-stack-beta-10-2026-07-04
+
+- Removed `fingerprint.commitment` from Lab Relay and Notary demo configs in
+  favor of fingerprint references.
+- Aligned Lab source-adapter, hosted validation, and demo secret-generation
+  paths with the v0.8.4 Relay and Notary configuration model.
+- Kept Registry Atlas and the eSignet Relay authenticator held as lab-only
+  external inputs for the source release.
+
 ## registry-stack-beta-4-2026-06-22
 
 - Advanced vendor pins for Platform, Manifest, Notary, and Relay to the beta-4

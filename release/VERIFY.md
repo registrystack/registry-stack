@@ -8,7 +8,7 @@ release workflow also include a release-level SLSA provenance asset named
 
 Earlier releases, including `v0.8.2`, may include cosign signatures but no SLSA
 provenance asset. The commands below verify a tag-triggered release that
-includes provenance. Replace `v0.8.3` and the asset name with the release you
+includes provenance. Replace `v0.8.4` and the asset name with the release you
 are checking.
 
 Repeatable build evidence for the `v0.8.3` Linux amd64 binary assets is
@@ -17,7 +17,7 @@ documented in [`release/REPEATABLE-BUILDS.md`](REPEATABLE-BUILDS.md).
 ## Download Assets
 
 ```bash
-tag=v0.8.3
+tag=v0.8.4
 asset=registryctl-${tag}-linux-amd64
 provenance=registry-stack-${tag}-release-provenance.intoto.jsonl
 

@@ -84,7 +84,7 @@ auth:
         jurisdiction: ZZ
         assurance_level: substantial
   bearer_tokens:
-    - id: shared_evidence_client
+    - id: shared_evidence_client_bearer
       fingerprint:
         provider: env
         name: SHARED_EVIDENCE_CLIENT_BEARER_HASH

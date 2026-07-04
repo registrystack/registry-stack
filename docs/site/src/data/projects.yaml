@@ -14,9 +14,9 @@
     - Product-level authorization policy, tenant isolation, audit retention, secret provisioning, or deployment configuration.
   source_docs:
     - label: README
-      url: https://github.com/registrystack/registry-stack/blob/v0.8.3/products/platform/README.md
+      url: https://github.com/registrystack/registry-stack/blob/v0.8.4/products/platform/README.md
     - label: Registry Platform crates
-      url: https://github.com/registrystack/registry-stack/tree/v0.8.3/crates
+      url: https://github.com/registrystack/registry-stack/tree/v0.8.4/crates
   rename_status: New shared workspace; not part of the 2026-05-23 rename wave.
 - id: registry-manifest
   name: Registry Manifest
@@ -34,9 +34,9 @@
     - Production source configuration.
   source_docs:
     - label: README
-      url: https://github.com/registrystack/registry-stack/blob/v0.8.3/products/manifest/README.md
+      url: https://github.com/registrystack/registry-stack/blob/v0.8.4/products/manifest/README.md
     - label: Local examples
-      url: https://github.com/registrystack/registry-stack/blob/v0.8.3/products/manifest/examples/README.md
+      url: https://github.com/registrystack/registry-stack/blob/v0.8.4/products/manifest/examples/README.md
   rename_status: Already using the target repo name locally.
 - id: registry-relay
   name: Registry Relay
@@ -57,11 +57,11 @@
     - Storage table ids or arbitrary SQL in public APIs.
   source_docs:
     - label: README
-      url: https://github.com/registrystack/registry-stack/blob/v0.8.3/crates/registry-relay/README.md
+      url: https://github.com/registrystack/registry-stack/blob/v0.8.4/crates/registry-relay/README.md
     - label: Local API docs
-      url: https://github.com/registrystack/registry-stack/blob/v0.8.3/crates/registry-relay/docs/api.md
+      url: https://github.com/registrystack/registry-stack/blob/v0.8.4/crates/registry-relay/docs/api.md
     - label: Local metadata docs
-      url: https://github.com/registrystack/registry-stack/blob/v0.8.3/crates/registry-relay/docs/metadata.md
+      url: https://github.com/registrystack/registry-stack/blob/v0.8.4/crates/registry-relay/docs/metadata.md
   rename_status: Local checkout renamed to `registry-relay`; old worktrees under `registry_relay-*` remain for historical evidence.
 - id: registry-notary
   name: Registry Notary
@@ -84,9 +84,9 @@
     - Browser inspection workflows outside the current formal v1 stack scope.
   source_docs:
     - label: README
-      url: https://github.com/registrystack/registry-stack/blob/v0.8.3/products/notary/README.md
+      url: https://github.com/registrystack/registry-stack/blob/v0.8.4/products/notary/README.md
     - label: OpenAPI source
-      url: https://github.com/registrystack/registry-stack/blob/v0.8.3/crates/registry-notary-server/src/openapi.rs
+      url: https://github.com/registrystack/registry-stack/blob/v0.8.4/crates/registry-notary-server/src/openapi.rs
   rename_status: Already using the target repo name locally.
 - id: registry-lab
   name: Registry Lab
@@ -104,7 +104,7 @@
     - Real product integrations for OpenCRVS, OpenSPP, DHIS2, OpenIMIS, MOSIP, or other systems.
   source_docs:
     - label: README
-      url: https://github.com/registrystack/registry-stack/blob/v0.8.3/lab/README.md
+      url: https://github.com/registrystack/registry-stack/blob/v0.8.4/lab/README.md
     - label: Rename plan
       url: https://github.com/jeremi/registry-docs/blob/e926f05441f39eb2d633979c3bc5a3552f5cf6e2/rename-plan-2026-05-23.md
   rename_status: Local checkout renamed to `registry-lab`; stable demo identifiers may still contain `decentralized-demo` as protocol and artifact values.

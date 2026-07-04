@@ -1300,7 +1300,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "registry-platform-config"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -1319,7 +1319,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-crypto"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -1339,7 +1339,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-httputil"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "bytes",
  "http",
@@ -1351,7 +1351,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-ops"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "fs2",
  "registry-platform-crypto",

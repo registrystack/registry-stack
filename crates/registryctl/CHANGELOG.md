@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.8.4] - 2026-07-04
+
 ### Added
 
 - `registryctl init notary <dir> --source-kind fhir-sidecar` - scaffold a standalone Notary

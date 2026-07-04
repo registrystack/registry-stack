@@ -14,7 +14,7 @@ auth:
       scopes:
         - social_protection_registry:evidence_verification
   bearer_tokens:
-    - id: social_protection_evidence_client
+    - id: social_protection_evidence_client_bearer
       fingerprint:
         provider: env
         name: SOCIAL_EVIDENCE_CLIENT_BEARER_HASH

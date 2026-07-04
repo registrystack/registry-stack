@@ -68,15 +68,20 @@ def resolve_client_source(demo_dir: Path) -> Path:
         if not candidate:
             continue
         source = Path(candidate).expanduser().resolve()
-        package_dir = source / "bindings" / "python"
-        checked.append(str(package_dir))
-        if (package_dir / "registry_notary" / "__init__.py").exists():
-            sys.path.insert(0, str(package_dir))
-            return source
+        package_dirs = [
+            source / "bindings" / "python",
+            source / "products" / "notary" / "bindings" / "python",
+        ]
+        for package_dir in package_dirs:
+            checked.append(str(package_dir))
+            if (package_dir / "registry_notary" / "__init__.py").exists():
+                sys.path.insert(0, str(package_dir))
+                return source
     fail(
         "Registry Notary Python client was not found. "
         "Set REGISTRY_NOTARY_CLIENT_SOURCE_DIR to a Registry Notary checkout "
-        f"that contains bindings/python. Checked: {', '.join(checked)}"
+        "or registry-stack monorepo checkout that contains the Python bindings. "
+        f"Checked: {', '.join(checked)}"
     )
 
 
