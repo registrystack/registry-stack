@@ -138,16 +138,19 @@ leakage, and privacy regressions that expose raw subject identifiers.
   stable codes only. Bearer tokens, private keys, source values, filesystem paths, and
   internal error chains stay in protected operator logs, never in responses; principal-scoped
   responses are not public cache entries.
-- Over-collection and value injection in claim evaluation: The caller supplies only a
-  subject id and a claim id and must not supply the evaluated value; bindings read only the
-  fields they need and reject input paths outside a declared allow-list.
+- Over-collection and value injection in claim evaluation: The caller supplies a claim id
+  plus the subject-resolution inputs the claim policy admits, but never the evaluated
+  value; bindings read only the fields they need and reject input paths outside a declared
+  allow-list.
 - Disclosure leakage: A redacted result carries neither the value nor the predicate
   outcome. Selective-disclosure credentials carry SHA-256 digests of unselected fields, so a
-  holder cannot present an undisclosed field. Holder binding is configurable per credential
-  profile and defaults to off; where a profile enables it (using `did:jwk`), and on the
-  self-attestation issuance path, which requires it, the holder is bound by a fresh
-  audience-bound proof-of-possession. Binding applies only to an issued credential; the plain
-  evaluation result is not a credential and is never holder-bound.
+  holder cannot present an undisclosed field. Holder binding defaults to `did:jwk` for
+  credential profiles; where a profile keeps binding enabled, and on the self-attestation
+  issuance path, which requires it, the holder is bound by a fresh audience-bound
+  proof-of-possession. An operator can explicitly configure `holder_binding.mode: none` for
+  a bearer-style credential profile, and `registry-notary doctor` warns on that choice.
+  Binding applies only to an issued credential; the plain evaluation result is not a
+  credential and is never holder-bound.
 - Self-attested data crossing a trust gate: Self-attestation and delegated
   self-attestation derive subject, requester, and relationship from the authenticated
   principal and scoped authorization details; caller-supplied `requester`, `relationship`, and
@@ -172,13 +175,12 @@ leakage, and privacy regressions that expose raw subject identifiers.
   and nonce values (federation request `jti`, OID4VCI `c_nonce`, and holder-proof `jti`).
 
 **Audit as a control.** Every request touching person-level data is recorded (principal,
-request id, and `Data-Purpose`) and a deployment can run audit fail-closed, so an
-unrecordable request does not return success. Two caveats for the auditor. First, this is a
-capability a deployment can turn on, not a guarantee that every route in a given build has
-been individually audited; treat per-route audit coverage as something to verify in your
-deployment. Second, the security model expects the audit record to capture the scopes
-exercised as well, but Notary's audit record does not yet include that field (Relay's does),
-so Notary audit alone cannot reconstruct which scopes authorized a request.
+request id, checked scopes, and `Data-Purpose`) and a deployment can run audit fail-closed,
+so an unrecordable request does not return success. Two caveats for the auditor. First,
+this is a capability a deployment can turn on, not a guarantee that every route in a given
+build has been individually audited; treat per-route audit coverage as something to verify
+in your deployment. Second, Notary records hashed principal and correlation identifiers, so
+operator-side investigation depends on retaining the hashing secret and request context.
 
 ## Residual risks and what is left to the operator
 
