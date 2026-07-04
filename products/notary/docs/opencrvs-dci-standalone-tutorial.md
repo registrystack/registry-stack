@@ -243,6 +243,8 @@ Expected result:
 
 The credential is a demo SD-JWT VC issued by Registry Notary from OpenCRVS
 evidence. It is not an OpenCRVS-issued credential.
+The generated `dci_record_sd_jwt` profile sets `holder_binding.mode: none`, so
+this direct demo request does not require wallet holder material.
 
 ## Issue a birth-attributes credential
 
@@ -459,3 +461,7 @@ that the test UIN exists in that environment.
 - Do not commit OpenCRVS client credentials, bearer tokens, test UINs, or
   generated issuer private keys.
 - Do not store OpenCRVS access tokens in the config or env file.
+- The generated demo credential profile uses `holder_binding.mode: none` for
+  direct local issuance. For citizen-wallet issuance, create a profile with
+  `holder_binding.mode: did`, `proof_of_possession: required`, and
+  `allowed_did_methods: [did:jwk]`.

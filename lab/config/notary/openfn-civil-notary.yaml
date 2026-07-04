@@ -62,6 +62,8 @@ evidence:
       validity_seconds: 600
       allowed_claims:
         - date-of-birth
+      holder_binding:
+        mode: none
       disclosure:
         allowed:
           - value
