@@ -263,6 +263,7 @@ fn format_time(value: OffsetDateTime) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::HolderBindingConfig;
     use crate::model::{ClaimProvenance, TargetRefView, FORMAT_SD_JWT_VC, SD_JWT_VC_JWT_TYP};
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;
@@ -779,6 +780,26 @@ mod tests {
     }
 
     #[test]
+    fn default_holder_binding_rejects_credential_without_holder() {
+        let issuer = EvidenceIssuer::from_jwk_str(RAW_JWK, "did:web:issuer.test#key-1".to_string())
+            .expect("test issuer builds");
+        let profile = default_bound_profile();
+
+        let err = issue(
+            &profile,
+            &issuer,
+            &[claim_result("first")],
+            "registry-subject-ref",
+            None,
+            OffsetDateTime::now_utc(),
+            IssueOptions::default(),
+        )
+        .expect_err("default holder-bound profile requires holder material");
+
+        assert!(matches!(err, EvidenceError::HolderProofRequired));
+    }
+
+    #[test]
     fn holder_required_profile_rejects_missing_or_unsupported_holder_binding() {
         let issuer = EvidenceIssuer::from_jwk_str(RAW_JWK, "did:web:issuer.test#key-1".to_string())
             .expect("test issuer builds");
@@ -955,9 +976,20 @@ mod tests {
             signing_key: "issuer-key".to_string(),
             vct: "https://vct.example/test".to_string(),
             validity_seconds: 60,
-            holder_binding: Default::default(),
+            holder_binding: HolderBindingConfig {
+                mode: "none".to_string(),
+                proof_of_possession: None,
+                allowed_did_methods: Vec::new(),
+            },
             allowed_claims: Vec::new(),
             disclosure: Default::default(),
+        }
+    }
+
+    fn default_bound_profile() -> CredentialProfileConfig {
+        CredentialProfileConfig {
+            holder_binding: Default::default(),
+            ..test_profile()
         }
     }
 
