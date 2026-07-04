@@ -30,6 +30,7 @@ use registry_notary_server::{
     standalone_router, BatchEvaluateOptions, EvidenceStore, MemoState, RegistryNotaryRuntime,
     SourceReader,
 };
+use registry_platform_crypto::{did_jwk_from_public_jwk, PrivateJwk};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -1243,12 +1244,13 @@ async fn subjects_sharing_memoized_read_produce_identical_iat() {
         .target_ref
         .handle
         .as_str();
+    let holder_id = test_holder_did_jwk();
     let signed_1 = sd_jwt_issue(
         &profile,
         &issuer,
         &results,
         subject_ref,
-        None,
+        Some(&holder_id),
         iat_anchor,
         IssueOptions::default(),
     )
@@ -1262,7 +1264,7 @@ async fn subjects_sharing_memoized_read_produce_identical_iat() {
         &issuer,
         &results,
         subject_ref,
-        None,
+        Some(&holder_id),
         iat_anchor,
         IssueOptions::default(),
     )
@@ -1299,6 +1301,13 @@ fn jwt_payload_iat(compact: &str) -> i64 {
 
 /// Same Ed25519 JWK as the core `sd_jwt` unit tests use. Test-only fixture.
 const TEST_ISSUER_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}"#;
+
+const TEST_HOLDER_JWK: &str = r#"{"crv":"Ed25519","d":"f4QIxnAyRWzhuBOmNRgvBTE56mWePdsPL0mvCtl8Gys","x":"pv4e_hXHBLN27rcs6VDFV1ED0TiU8M3xy9vsuWFEsec","kty":"OKP","alg":"EdDSA"}"#;
+
+fn test_holder_did_jwk() -> String {
+    let holder = PrivateJwk::parse(TEST_HOLDER_JWK).expect("holder JWK parses");
+    did_jwk_from_public_jwk(&holder.public()).expect("holder did:jwk encodes")
+}
 
 fn test_credential_profile() -> CredentialProfileConfig {
     CredentialProfileConfig {

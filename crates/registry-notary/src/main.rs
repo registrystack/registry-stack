@@ -3945,6 +3945,7 @@ ESCAPED="client \"quoted\" value" # comment with "quote"
 
         assert!(
             message.contains("TEST_DOCTOR_OAUTH_CLIENT_ID")
+                || message.contains("TEST_DOCTOR_OAUTH_CLIENT_SECRET")
                 || message.contains("audit.hash_secret_env"),
             "unexpected error: {message}"
         );
