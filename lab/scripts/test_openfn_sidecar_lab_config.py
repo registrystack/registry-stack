@@ -51,6 +51,11 @@ def claim_source_bindings(path: Path) -> list[dict[str, object]]:
     ]
 
 
+def credential_profile(path: Path, profile_id: str) -> dict[str, object]:
+    config = yaml.safe_load(read(path))
+    return config["evidence"]["credential_profiles"][profile_id]
+
+
 class BuiltinSidecarLabConfigTest(unittest.TestCase):
     def test_local_sidecars_use_unsigned_dev_escape_hatch(self) -> None:
         body = read(LOCAL_COMPOSE)
@@ -93,6 +98,9 @@ class BuiltinSidecarLabConfigTest(unittest.TestCase):
             self.assertIn('default_source_dir "../registry-platform" "vendor/registry-platform"', body)
 
     def test_openfn_notary_bindings_use_sidecar_connector(self) -> None:
+        civil_profile = credential_profile(LOCAL_CIVIL_NOTARY, "openfn_civil_sd_jwt")
+        self.assertEqual({"mode": "none"}, civil_profile["holder_binding"])
+
         civil_bindings = claim_source_bindings(LOCAL_CIVIL_NOTARY)
         self.assertEqual(1, len(civil_bindings))
         self.assertEqual("openfn_civil", civil_bindings[0]["connection"])

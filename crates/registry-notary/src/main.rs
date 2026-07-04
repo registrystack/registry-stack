@@ -2826,6 +2826,8 @@ fn dci_config_yaml(options: &InitDciOptions) -> String {
       signing_key: registry-notary-demo
       vct: https://registry-notary.local/credentials/dci-record
       allowed_claims: [{claim_id}]
+      holder_binding:
+        mode: none
 "#
         )
     } else {
@@ -4213,6 +4215,13 @@ evidence:
         let config: StandaloneRegistryNotaryConfig =
             serde_norway::from_str(&yaml).expect("generated config parses");
         config.validate().expect("generated config validates");
+        let profile = config
+            .evidence
+            .credential_profiles
+            .get("dci_record_sd_jwt")
+            .expect("demo DCI credential profile exists");
+        assert_eq!(profile.holder_binding.mode, "none");
+        assert!(profile.holder_binding.proof_of_possession.is_none());
     }
 
     #[test]
