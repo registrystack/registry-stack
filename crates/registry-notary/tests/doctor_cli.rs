@@ -23,6 +23,7 @@ struct TestConfigOptions<'a> {
     config_trust: bool,
     multi_instance: bool,
     durable_audit: Option<bool>,
+    unbound_credential_profile: bool,
 }
 
 fn write_config(tmp: &TempDir) -> PathBuf {
@@ -115,6 +116,40 @@ fn write_config_with_options(tmp: &TempDir, options: TestConfigOptions<'_>) -> P
             )
         })
         .unwrap_or_default();
+    let credential_profiles = if options.unbound_credential_profile {
+        r#"  credential_profiles:
+    unbound_sd_jwt:
+      format: application/dc+sd-jwt
+      issuer: did:web:issuer.example
+      signing_key: issuer
+      vct: https://issuer.example/credentials/unbound
+      holder_binding:
+        mode: none
+      allowed_claims:
+        - person-is-alive
+"#
+        .to_string()
+    } else {
+        String::new()
+    };
+    let credential_profile_claims = if options.unbound_credential_profile {
+        r#"  claims:
+    - id: person-is-alive
+      title: Person is alive
+      version: "1.0"
+      subject_type: person
+      rule:
+        type: cel
+        expression: "true"
+      formats:
+        - application/dc+sd-jwt
+      credential_profiles:
+        - unbound_sd_jwt
+"#
+        .to_string()
+    } else {
+        String::new()
+    };
     std::fs::write(
         &path,
         format!(
@@ -139,7 +174,7 @@ server:
       alg: EdDSA
       kid: did:web:issuer.example#key-1
       status: active
-{source_connections}
+{source_connections}{credential_profiles}{credential_profile_claims}
 "#
         ),
     )
@@ -946,6 +981,44 @@ fn doctor_json_local_insecure_source_url_has_no_profile_finding() {
         diagnostic_with_code(&report, "notary.source.insecure_url").is_none(),
         "local profile must allow HTTP source URLs"
     );
+}
+
+#[test]
+fn doctor_json_warns_on_explicit_unbound_credential_profile() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config = write_config_with_options(
+        &tmp,
+        TestConfigOptions {
+            unbound_credential_profile: true,
+            ..TestConfigOptions::default()
+        },
+    );
+    let env_file = write_env_file(&tmp);
+
+    let output = doctor_command(&config, Some(&env_file))
+        .args(["--profile", "local", "--format", "json"])
+        .output()
+        .expect("doctor runs");
+
+    assert!(
+        output.status.success(),
+        "explicit unbound profile should warn, not fail\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout is utf8");
+    let report: Value = serde_json::from_str(&stdout).expect("doctor emits JSON");
+    assert_product_diagnostic_report(&report);
+    assert_eq!(report["status"], "warning");
+
+    let diagnostic =
+        diagnostic_with_code(&report, "notary.credential_profile.unbound_holder_binding")
+            .expect("unbound holder-binding warning");
+    assert_eq!(diagnostic["severity"], "warning");
+    assert!(diagnostic["message"]
+        .as_str()
+        .expect("message string")
+        .contains("unbound_sd_jwt"));
 }
 
 #[test]

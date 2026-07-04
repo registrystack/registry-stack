@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING: credential profiles now default to holder binding.** When
+  `holder_binding` is omitted, Registry Notary defaults to `mode: did` with
+  `allowed_did_methods: [did:jwk]`, so direct SD-JWT VC issuance requires a
+  holder DID before it can mint a credential. Deployments that intentionally
+  issue unbound, bearer-style credentials must set `holder_binding.mode: none`
+  explicitly; `registry-notary doctor` now warns on those profiles.
 - Renamed the binary package from `registry-notary-bin` to `registry-notary`
   so the Cargo package, executable, release artifact, and visible version output
   use the same user-facing command name.
