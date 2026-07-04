@@ -1,0 +1,250 @@
+name: Nightly Security
+
+on:
+  schedule:
+    - cron: "41 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_FUZZ_VERSION: "0.13.2"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  changes:
+    name: Changed security surfaces
+    runs-on: ubuntu-24.04
+    outputs:
+      run: ${{ steps.classify.outputs.run }}
+      head_sha: ${{ steps.classify.outputs.head_sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
+
+      - name: Restore last successful nightly state
+        uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: .nightly-security-state
+          key: nightly-security-state-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            nightly-security-state-
+
+      - name: Classify changed paths
+        id: classify
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          head_sha="$(git rev-parse HEAD)"
+          run=false
+
+          changed_files="${RUNNER_TEMP}/registry-stack-nightly-security-files"
+          : > "${changed_files}"
+
+          is_relevant_path() {
+            local path="$1"
+            case "${path}" in
+              .github/workflows/*|.github/dependabot.yml)
+                return 0
+                ;;
+              Cargo.toml|Cargo.lock|deny.toml|rust-toolchain*)
+                return 0
+                ;;
+              crates/registry-relay/*|crates/registry-notary*/*)
+                return 0
+                ;;
+              crates/registry-platform-authcommon/*|crates/registry-platform-crypto/*)
+                return 0
+                ;;
+              crates/registry-platform-oid4vci/*|crates/registry-platform-sdjwt/*)
+                return 0
+                ;;
+              products/notary/*|products/platform/*|release/docker/*)
+                return 0
+                ;;
+              *)
+                return 1
+                ;;
+            esac
+          }
+
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            run=true
+          elif [[ ! -f .nightly-security-state/last-success-sha ]]; then
+            run=true
+          else
+            base_sha="$(tr -d '[:space:]' < .nightly-security-state/last-success-sha)"
+            if [[ -z "${base_sha}" ]] ||
+               ! git cat-file -e "${base_sha}^{commit}" 2>/dev/null; then
+              run=true
+            elif [[ "${base_sha}" != "${head_sha}" ]]; then
+              git diff --name-only -z "${base_sha}" "${head_sha}" > "${changed_files}"
+              while IFS= read -r -d '' path; do
+                if is_relevant_path "${path}"; then
+                  run=true
+                  break
+                fi
+              done < "${changed_files}"
+            fi
+          fi
+
+          {
+            echo "run=${run}"
+            echo "head_sha=${head_sha}"
+          } >> "${GITHUB_OUTPUT}"
+
+  assurance:
+    name: Security assurance manifests
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Test assurance ratchets
+        run: |
+          python3 -m unittest \
+            crates/registry-relay/tests/security_assurance_check_test.py \
+            crates/registry-relay/tests/advisory_baseline_check_test.py \
+            products/notary/tests/security_assurance_check_test.py \
+            products/notary/tests/advisory_baseline_check_test.py
+
+      - name: Relay exposure and container checks
+        working-directory: crates/registry-relay
+        run: |
+          python3 scripts/check_security_assurance.py manifest
+          python3 scripts/check_security_assurance.py dockerfile-secrets
+
+      - name: Notary container and OpenAPI checks
+        working-directory: products/notary
+        run: |
+          python3 scripts/check_security_assurance.py dockerfile-secrets
+          python3 scripts/check_security_assurance.py openapi-baseline
+
+  notary-fuzz:
+    name: Notary fuzz smoke
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # nightly
+        with:
+          toolchain: nightly
+
+      - name: Cache Cargo registry and build artifacts
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Install cargo-fuzz
+        uses: taiki-e/install-action@25435dc8dd3baed7417e0c96d3fe89013a5b2e09 # v2.81.3
+        with:
+          tool: cargo-fuzz@${{ env.CARGO_FUZZ_VERSION }}
+
+      - name: Run request parser fuzz smoke
+        working-directory: products/notary
+        run: |
+          set -euo pipefail
+          mkdir -p fuzz/artifacts/core_request_bodies
+          cargo +nightly fuzz run --fuzz-dir fuzz --target x86_64-unknown-linux-gnu core_request_bodies -- \
+            -max_total_time=120 \
+            -rss_limit_mb=1024 \
+            -artifact_prefix=fuzz/artifacts/core_request_bodies/ \
+            -print_final_stats=1
+
+      - name: Upload notary fuzz artifacts
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: nightly-notary-fuzz-artifacts
+          path: products/notary/fuzz/artifacts
+          if-no-files-found: ignore
+
+  platform-fuzz:
+    name: Platform fuzz smoke
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # nightly
+        with:
+          toolchain: nightly
+
+      - name: Cache Cargo registry and build artifacts
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Install cargo-fuzz
+        uses: taiki-e/install-action@25435dc8dd3baed7417e0c96d3fe89013a5b2e09 # v2.81.3
+        with:
+          tool: cargo-fuzz@${{ env.CARGO_FUZZ_VERSION }}
+
+      - name: Run parser and credential fuzz smoke
+        working-directory: products/platform
+        run: |
+          set -euo pipefail
+          for target in \
+            authcommon_parsers \
+            oid4vci_request_and_proof \
+            sdjwt_holder_proof \
+            sdjwt_issuance
+          do
+            mkdir -p "fuzz/artifacts/${target}"
+            cargo +nightly fuzz run --fuzz-dir fuzz --target x86_64-unknown-linux-gnu "${target}" -- \
+              -max_total_time=60 \
+              -rss_limit_mb=1024 \
+              -artifact_prefix="fuzz/artifacts/${target}/" \
+              -print_final_stats=1
+          done
+
+      - name: Upload platform fuzz artifacts
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: nightly-platform-fuzz-artifacts
+          path: products/platform/fuzz/artifacts
+          if-no-files-found: ignore
+
+  save-state:
+    name: Save successful nightly state
+    needs:
+      - changes
+      - assurance
+      - notary-fuzz
+      - platform-fuzz
+    if: needs.changes.outputs.run == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Write successful head
+        run: |
+          mkdir -p .nightly-security-state
+          printf '%s\n' "${{ needs.changes.outputs.head_sha }}" > .nightly-security-state/last-success-sha
+
+      - name: Save last successful nightly state
+        uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: .nightly-security-state
+          key: nightly-security-state-${{ github.run_id }}-${{ github.run_attempt }}
