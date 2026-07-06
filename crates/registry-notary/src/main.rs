@@ -1279,6 +1279,7 @@ async fn doctor(
         diagnostics.extend(deployment_profile_diagnostics(config, &deployment_profile));
         diagnostics.extend(local_env_diagnostics(config, env_report));
         diagnostics.extend(holder_binding_diagnostics(config));
+        diagnostics.extend(matching_policy_diagnostics(config));
         if let Some(diagnostic) = pkcs11_preflight_diagnostic(config) {
             diagnostics.push(diagnostic);
         }
@@ -1405,6 +1406,32 @@ fn holder_binding_diagnostics(config: &StandaloneRegistryNotaryConfig) -> Vec<Di
         ),
         "set holder_binding.mode: did with allowed_did_methods: [did:jwk], or keep mode: none only for an explicit bearer-style credential profile",
         "notary.credential_profile.unbound_holder_binding",
+    )]
+}
+
+fn matching_policy_diagnostics(config: &StandaloneRegistryNotaryConfig) -> Vec<Diagnostic> {
+    let unconstrained_bindings = config
+        .evidence
+        .claims
+        .iter()
+        .flat_map(|claim| {
+            claim
+                .source_bindings
+                .iter()
+                .filter(|(_, binding)| binding.matching.lacks_matching_policy())
+                .map(move |(binding_id, _)| format!("{}/{binding_id}", claim.id))
+        })
+        .collect::<Vec<_>>();
+    if unconstrained_bindings.is_empty() {
+        return Vec::new();
+    }
+    vec![Diagnostic::warn_with_code(
+        format!(
+            "claim source binding(s) declare no matching policy, so resolution falls back to unrestricted, identifier-only matching: {}",
+            unconstrained_bindings.join(", ")
+        ),
+        "declare a matching: block (policy_id or explicit gates such as context_constraints) on each binding, or accept unrestricted identifier-only resolution knowingly",
+        "notary.source_binding.no_matching_policy",
     )]
 }
 
@@ -2462,14 +2489,7 @@ fn notary_context_constraints_report(config: &StandaloneRegistryNotaryConfig) ->
 fn notary_matching_has_context_constraints(
     matching: &registry_notary_core::SourceMatchingConfig,
 ) -> bool {
-    matching.require_legal_basis
-        || matching.require_consent
-        || !matching.allowed_legal_basis_refs.is_empty()
-        || !matching.allowed_consent_refs.is_empty()
-        || !matching.permitted_jurisdictions.is_empty()
-        || !matching.allowed_assurance.is_empty()
-        || matching.minimum_assurance.is_some()
-        || matching.max_source_age_seconds.is_some()
+    matching.has_context_constraints()
 }
 
 fn notary_legal_basis_configured(matching: &registry_notary_core::SourceMatchingConfig) -> bool {

@@ -638,6 +638,12 @@ impl StandaloneRegistryNotaryConfig {
             // implemented. Keep this explicit so production/evidence profiles
             // surface the missing sender-constraint assurance.
             transaction_token_sender_constrained: false,
+            source_binding_without_matching_policy: self.evidence.claims.iter().any(|claim| {
+                claim
+                    .source_bindings
+                    .values()
+                    .any(|binding| binding.matching.lacks_matching_policy())
+            }),
         }
     }
 
@@ -5724,6 +5730,28 @@ impl SourceMatchingConfig {
         Ok(matching)
     }
 
+    /// True when this matching config declares any context-constraint gate:
+    /// legal basis, consent, jurisdiction, assurance, or source freshness.
+    pub fn has_context_constraints(&self) -> bool {
+        self.require_legal_basis
+            || self.require_consent
+            || !self.allowed_legal_basis_refs.is_empty()
+            || !self.allowed_consent_refs.is_empty()
+            || !self.permitted_jurisdictions.is_empty()
+            || !self.allowed_assurance.is_empty()
+            || self.minimum_assurance.is_some()
+            || self.max_source_age_seconds.is_some()
+    }
+
+    /// True when the binding declares neither a `policy_id` nor any context
+    /// constraint gate. Per spec RS-DM-CLAIM, such a binding falls back to
+    /// unrestricted, identifier-only resolution: resolution behavior is
+    /// unchanged, but operators should see it so they can accept it knowingly
+    /// or declare a matching policy.
+    pub fn lacks_matching_policy(&self) -> bool {
+        self.policy_id.is_none() && !self.has_context_constraints()
+    }
+
     fn apply_context_constraints(
         &mut self,
         constraints: SourceContextConstraintsConfig,
@@ -7050,6 +7078,30 @@ token_env: SRC_TOKEN
             .expect("source connection parses"),
         );
         assert!(!config.gate_input().source_insecure_url);
+    }
+
+    #[test]
+    fn gate_input_reports_source_binding_without_matching_policy() {
+        let mut config = minimal_config();
+        let mut claim = minimal_claim("residency");
+        claim
+            .source_bindings
+            .insert("registry".to_string(), rda_binding("registry_src", "one"));
+        config.evidence.claims = vec![claim];
+        assert!(config.gate_input().source_binding_without_matching_policy);
+    }
+
+    #[test]
+    fn gate_input_clears_source_binding_without_matching_policy_with_policy_id() {
+        let mut config = minimal_config();
+        let mut claim = minimal_claim("residency");
+        let mut binding = rda_binding("registry_src", "one");
+        binding.matching.policy_id = Some("registry.residency.lookup.v1".to_string());
+        claim
+            .source_bindings
+            .insert("registry".to_string(), binding);
+        config.evidence.claims = vec![claim];
+        assert!(!config.gate_input().source_binding_without_matching_policy);
     }
 
     #[test]

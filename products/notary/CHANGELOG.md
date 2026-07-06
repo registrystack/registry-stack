@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `registry-notary doctor` now warns (`notary.source_binding.no_matching_policy`)
+  when a claim source binding declares no matching policy (no `policy_id`, no
+  context constraints), naming each affected binding. A matching new
+  deployment gate surfaces the same condition as a `finding_warn` under
+  `production` and a `finding_error` under `evidence_grade`; `hosted_lab` and
+  `local` stay quiet. Claim resolution behavior is unchanged: such bindings
+  already fell back to unrestricted, identifier-only resolution per spec
+  RS-DM-CLAIM; this only adds visibility so operators can accept that
+  knowingly or declare a matching policy.
+
 ## [0.8.4] - 2026-07-04
 
 ### Fixed
