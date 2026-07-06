@@ -72,6 +72,7 @@ fn main() -> Result<()> {
         },
         Commands::Start => registryctl::start_project(&std::env::current_dir()?)?,
         Commands::Stop => registryctl::stop_project(&std::env::current_dir()?)?,
+        Commands::Restart => registryctl::restart_project(&std::env::current_dir()?)?,
         Commands::Status => registryctl::status_project(&std::env::current_dir()?)?,
         Commands::Open => registryctl::open_project(&std::env::current_dir()?)?,
         Commands::Smoke => registryctl::smoke_project(&std::env::current_dir()?)?,
@@ -269,6 +270,8 @@ enum Commands {
     Start,
     /// Stop the local Registry Commons project.
     Stop,
+    /// Restart the local Registry Commons project so config edits take effect.
+    Restart,
     /// Print local runtime status.
     Status,
     /// Open or print the local API docs URL.
@@ -342,6 +345,13 @@ mod tests {
         let cli = Cli::try_parse_from(["registryctl", "update-check"]).unwrap();
 
         assert!(matches!(cli.command, Commands::UpdateCheck));
+    }
+
+    #[test]
+    fn restart_cli_parses() {
+        let cli = Cli::try_parse_from(["registryctl", "restart"]).unwrap();
+
+        assert!(matches!(cli.command, Commands::Restart));
     }
 
     #[test]

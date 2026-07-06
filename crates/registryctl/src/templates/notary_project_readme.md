@@ -28,6 +28,8 @@ The generated local demo credentials live in `secrets/local.env`. They are for
 this local project only and are not production credentials.
 
 Run `registryctl doctor --format json` after config edits. It calls the Notary
-validator and redacts local secret values in the report.
+validator and redacts local secret values in the report. Then run
+`registryctl restart` so the running containers pick up the edited config; a
+plain `start` leaves running containers unchanged.
 
 The sample exposes Notary on `http://127.0.0.1:4255`.
