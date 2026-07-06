@@ -179,7 +179,7 @@ repos:
         dest: products/registry-notary/opencrvs-onboarding
         label: OpenCRVS onboarding
         nav_order: 66
-        doc_type: how-to
+        doc_type: explanation
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
       - src: products/notary/docs/opencrvs-dci-standalone-tutorial.md
         dest: products/registry-notary/opencrvs-dci-standalone-tutorial
@@ -203,7 +203,7 @@ repos:
         dest: products/registry-notary/sidecar-trust-and-secrets
         label: Sidecar trust and secrets
         nav_order: 85
-        doc_type: how-to
+        doc_type: explanation
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
       - src: products/notary/docs/deployment-hardening-runbook.md
         dest: products/registry-notary/deployment-hardening-runbook
@@ -221,7 +221,7 @@ repos:
         dest: products/registry-notary/oid4vci-wallet-interop
         label: OID4VCI wallet interop
         nav_order: 110
-        doc_type: reference
+        doc_type: how-to
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
       - src: products/notary/docs/release-notes.md
         dest: products/registry-notary/release-notes
