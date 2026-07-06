@@ -17,11 +17,11 @@ For profile fixture validation, see [Validate against profile fixtures](./profil
 Build the CLI before running commands:
 
 ```sh
-cargo build -p registry-manifest-cli
+cargo build --bin registry-manifest
 ```
 
-The commands in this page use `cargo run -p registry-manifest-cli --` as a prefix.
-If you have installed the binary directly, replace that prefix with `registry-manifest-cli`.
+The commands in this page use `cargo run --bin registry-manifest --` as a prefix.
+If you have installed the binary directly, replace that prefix with `registry-manifest`.
 
 The four example profile fixtures in the repository serve as ready-made manifest inputs.
 The commands in this how-to use
@@ -34,7 +34,7 @@ Substitute your own manifest path as needed.
 ### 1. Validate the manifest
 
 ```sh
-cargo run -p registry-manifest-cli -- validate \
+cargo run --bin registry-manifest -- validate \
   profiles/example-civil-registration/fixtures/metadata.yaml
 ```
 
@@ -52,7 +52,8 @@ Validation checks include:
 - `schema_version` equals `"registry-manifest/v1"`.
 - Catalog `base_url` is a valid HTTP URL.
 - Entity names match the required identifier pattern.
-- Cardinality strings are well-formed (`"0..1"`, `"1..n"`, `"1..1"`).
+- A relationship's `cardinality` value is one of `one`, `zero_or_one`, `many`, or
+  `zero_or_more`.
 - Codelist references resolve to defined codelists.
 - Grouped evidence type lists reference known evidence types that prove the owning requirement.
 - Public service, authority, channel, form, and data-service references resolve.
@@ -68,7 +69,7 @@ The `--format` flag selects the renderer.
 Render the catalog JSON:
 
 ```sh
-cargo run -p registry-manifest-cli -- render \
+cargo run --bin registry-manifest -- render \
   profiles/example-civil-registration/fixtures/metadata.yaml \
   --format catalog
 ```
@@ -76,7 +77,7 @@ cargo run -p registry-manifest-cli -- render \
 Render base DCAT JSON-LD:
 
 ```sh
-cargo run -p registry-manifest-cli -- render \
+cargo run --bin registry-manifest -- render \
   profiles/example-civil-registration/fixtures/metadata.yaml \
   --format dcat
 ```
@@ -84,7 +85,7 @@ cargo run -p registry-manifest-cli -- render \
 Render a Core Public Service Vocabulary Application Profile (CPSV-AP) service catalogue:
 
 ```sh
-cargo run -p registry-manifest-cli -- render \
+cargo run --bin registry-manifest -- render \
   fixtures/cpsv-ap/health-linked-child-support.metadata.yaml \
   --format cpsv-ap
 ```
@@ -95,7 +96,7 @@ Alternatively, use the `--format bregdcat-ap` shorthand:
 Render BRegDCAT-AP JSON-LD:
 
 ```sh
-cargo run -p registry-manifest-cli -- render \
+cargo run --bin registry-manifest -- render \
   profiles/example-civil-registration/fixtures/metadata.yaml \
   --format bregdcat-ap
 ```
@@ -107,7 +108,7 @@ BRegDCAT-AP artifacts, see
 Render SHACL (Shapes Constraint Language) node shapes:
 
 ```sh
-cargo run -p registry-manifest-cli -- render \
+cargo run --bin registry-manifest -- render \
   profiles/example-civil-registration/fixtures/metadata.yaml \
   --format shacl
 ```
@@ -117,7 +118,7 @@ The civil-registration fixture has dataset `vital-events` with entities `person`
 `vital_event`. Substitute accordingly for your manifest:
 
 ```sh
-cargo run -p registry-manifest-cli -- render \
+cargo run --bin registry-manifest -- render \
   profiles/example-civil-registration/fixtures/metadata.yaml \
   --format json-schema \
   --dataset vital-events \
@@ -127,7 +128,7 @@ cargo run -p registry-manifest-cli -- render \
 Render a form JSON Schema Draft 2020-12 document:
 
 ```sh
-cargo run -p registry-manifest-cli -- render \
+cargo run --bin registry-manifest -- render \
   fixtures/cpsv-ap/health-linked-child-support.metadata.yaml \
   --format form-json-schema \
   --form child-support-review-form
@@ -136,7 +137,7 @@ cargo run -p registry-manifest-cli -- render \
 Render OGC API Records item bodies:
 
 ```sh
-cargo run -p registry-manifest-cli -- render \
+cargo run --bin registry-manifest -- render \
   profiles/example-civil-registration/fixtures/metadata.yaml \
   --format ogc-records
 ```
@@ -144,7 +145,7 @@ cargo run -p registry-manifest-cli -- render \
 Render the ODRL (Open Digital Rights Language) policy collection:
 
 ```sh
-cargo run -p registry-manifest-cli -- render \
+cargo run --bin registry-manifest -- render \
   profiles/example-civil-registration/fixtures/metadata.yaml \
   --format policies
 ```
@@ -152,7 +153,7 @@ cargo run -p registry-manifest-cli -- render \
 Render a per-dataset ODRL policy document (substitute your dataset ID for `vital-events`):
 
 ```sh
-cargo run -p registry-manifest-cli -- render \
+cargo run --bin registry-manifest -- render \
   profiles/example-civil-registration/fixtures/metadata.yaml \
   --format policy \
   --dataset vital-events
@@ -161,7 +162,7 @@ cargo run -p registry-manifest-cli -- render \
 Render evidence offerings:
 
 ```sh
-cargo run -p registry-manifest-cli -- render \
+cargo run --bin registry-manifest -- render \
   profiles/example-civil-registration/fixtures/metadata.yaml \
   --format evidence-offerings
 ```
@@ -170,7 +171,7 @@ Render a single evidence offering by ID (substitute the offering ID defined in y
 `evidence_offerings` list):
 
 ```sh
-cargo run -p registry-manifest-cli -- render \
+cargo run --bin registry-manifest -- render \
   profiles/example-civil-registration/fixtures/metadata.yaml \
   --format evidence-offering \
   --offering <offering-id>
@@ -180,7 +181,7 @@ All `render` output goes to stdout.
 Redirect to a file when you want to inspect or diff it:
 
 ```sh
-cargo run -p registry-manifest-cli -- render \
+cargo run --bin registry-manifest -- render \
   profiles/example-civil-registration/fixtures/metadata.yaml \
   --format bregdcat-ap > /tmp/breg.jsonld
 ```
@@ -192,7 +193,7 @@ cargo run -p registry-manifest-cli -- render \
 digest.
 
 ```sh
-cargo run -p registry-manifest-cli -- publish \
+cargo run --bin registry-manifest -- publish \
   profiles/example-civil-registration/fixtures/metadata.yaml \
   --out target/metadata/public
 ```
@@ -200,9 +201,23 @@ cargo run -p registry-manifest-cli -- publish \
 The output directory will contain `catalog.json`, `dcat.jsonld`, `cpsv-ap.jsonld` when the
 manifest declares the profile, `shacl.jsonld`, per-entity JSON Schema files, form JSON Schema
 files, `ogc-records/items.json`, evidence-offering files, and per-dataset policy documents.
+`publish` always writes two discovery documents under `.well-known/` too:
+`api-catalog` (a linkset of the published artifact URLs) and `registry-manifest.json` (a
+legacy discovery document retained for compatibility with early Registry Manifest clients).
 Linked-data outputs include embedded SKOS-shaped codelist nodes when the manifest declares
 codelists.
 See [Registry Manifest reference](./reference.md) for the full artifact list.
+
+By default, `.well-known/*` writes under `--out` alongside every other artifact. Pass
+`--site-root <dir>` to write the two discovery documents under a separate directory instead,
+useful when the metadata bundle is published as a sibling of a larger site root:
+
+```sh
+cargo run --bin registry-manifest -- publish \
+  profiles/example-civil-registration/fixtures/metadata.yaml \
+  --out target/metadata/public \
+  --site-root target/site
+```
 
 The `index.json` at the root of the output directory carries schema version
 `registry-manifest-index/v1`, links to every artifact, and includes:
@@ -211,7 +226,7 @@ The `index.json` at the root of the output directory carries schema version
 - `package_digest`: a digest over the source manifest digest and the published artifact inventory.
 - `artifacts`: per-artifact `path`, `media_type`, and `sha256` entries.
 
-`artifacts` excludes `index.json` itself and `.well-known/*` discovery documents. The index
+`artifacts` excludes `index.json` itself and the `.well-known/*` discovery documents. The index
 is excluded because it contains the package digest, and `.well-known/*` may be written under
 `--site-root` while still discovering the same metadata bundle.
 
@@ -225,7 +240,7 @@ an artifact changes the `package_digest` because the digest covers the full arti
 After `validate`, confirm the exit code is zero:
 
 ```sh
-cargo run -p registry-manifest-cli -- validate \
+cargo run --bin registry-manifest -- validate \
   profiles/example-civil-registration/fixtures/metadata.yaml
 echo "exit code: $?"
 ```
@@ -237,7 +252,9 @@ ls target/metadata/public/catalog.json \
    target/metadata/public/dcat.jsonld \
    target/metadata/public/ogc-records/items.json \
    target/metadata/public/shacl.jsonld \
-   target/metadata/public/index.json
+   target/metadata/public/index.json \
+   target/metadata/public/.well-known/api-catalog \
+   target/metadata/public/.well-known/registry-manifest.json
 ```
 
 Profile-specific artifacts such as `cpsv-ap.jsonld` or `dcat.<profile-id>.jsonld` are only
@@ -250,10 +267,14 @@ written when the manifest declares the corresponding application profile.
 The manifest root must declare `schema_version: registry-manifest/v1`.
 Check the first line of your YAML.
 
-### Validation prints errors about cardinality strings
+### Validation prints errors about cardinality values
 
-Cardinality values must match the pattern `"0..1"`, `"1..1"`, or `"1..n"`.
-Check your `cardinality_expectations` blocks.
+A relationship's `cardinality` field must be one of `one`, `zero_or_one`, `many`, or
+`zero_or_more`. Check each entity's `relationships` list.
+
+Profile-level cardinality expectations (`cardinality_expectations` in a profile descriptor)
+are a different check, run by `validate-profiles`. See
+[Validate against profile fixtures](./profile-fixtures.md).
 
 ### `--format json-schema` produces no output or errors
 

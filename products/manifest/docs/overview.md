@@ -52,7 +52,7 @@ catalog, OGC Records item collection, Shapes Constraint Language (SHACL) shapes,
 for API contract documentation, a local form profile, codelist metadata, or Open Digital
 Rights Language (ODRL) policies
 declaring access terms.
-Write one `metadata.yaml`, run `registry-manifest-cli publish`, and get a static directory
+Write one `metadata.yaml`, run `registry-manifest publish`, and get a static directory
 of all those artifacts ready to host anywhere.
 The published `index.json` includes a canonical digest of the source manifest, a package
 digest, and per-artifact digests so operators can compare or pin bundles without running
@@ -160,7 +160,7 @@ becomes a full IRI) and resolves codelist concept references before any renderer
 
 ## The CLI surface
 
-`registry-manifest-cli` exposes four subcommands:
+The `registry-manifest` binary exposes four subcommands:
 
 - `validate`: parse and validate a manifest file. Exits non-zero on any validation error.
 - `render`: compile a manifest and write one renderer's output to stdout. Accepts
@@ -199,7 +199,8 @@ Each contains only a `README.md` that marks it as a placeholder pending official
 
 ## v0 caveats
 
-Registry Manifest is at v0.1.
+As of the 0.2.1 release (2026-06-21), Registry Manifest remains pre-1.0.
+See the [CHANGELOG](../CHANGELOG.md) for the current released version.
 The manifest schema version `registry-manifest/v1` is enforced in code.
 Manifest-owned formats freeze at beta, including the root manifest schema,
 profile descriptor schema, generated artifact formats, codelists, and the static
