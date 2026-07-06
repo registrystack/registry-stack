@@ -73,9 +73,12 @@ sequence. The [revert section](#roll-back-to-the-previous-release) covers this.
 
 6. Verify the new deployment:
 
-   - `/healthz` returns 200 and `/ready` returns 200. A 503 from `/ready` with a
-     `deployment/not_ready` problem body means a profile gate is failing; check the admin
-     posture surface for the finding.
+   - `/healthz` returns 200 and `/ready` returns 200 on both products.
+   - On Registry Relay, a 503 from `/ready` with a `deployment/not_ready` problem body means a
+     profile gate is failing; check the admin posture surface for the finding.
+   - On Registry Notary, a 503 from `/ready` returns the generic `readiness.not_ready` problem
+     body for any failing readiness check, including a profile gate; check the admin posture
+     surface's deployment object to confirm whether a gate finding caused the failure.
    - The audit sink is writing: confirm new records appear in the audit log after a probe
      request.
    - A canary request per critical path: one governed read on Registry Relay, one claim
@@ -124,9 +127,12 @@ If the new release misbehaves and the cause is not a config error you can fix fo
 - The new binary refuses to start with a config validation error naming a key you use: the
   key was removed or renamed. The error message and the release's migration notes name the
   replacement. Fix the config; do not downgrade to avoid the message.
-- `/ready` stays 503 after upgrade: read the problem body. `deployment/not_ready` is a
-  profile gate, inspect the admin posture surface; `schema/resource_unavailable` on Registry
-  Relay means a configured resource failed ingest.
+- `/ready` stays 503 after upgrade: read the problem body. On Registry Relay,
+  `deployment/not_ready` is a profile gate, inspect the admin posture surface;
+  `schema/resource_unavailable` means a configured resource failed ingest. On Registry Notary,
+  the problem body reports the generic code `readiness.not_ready` for any failing readiness
+  check, including a profile gate; check the admin posture surface's deployment object to
+  confirm whether a gate finding is the cause.
 - Config bundle apply rejected with a rollback outcome after reverting: expected. The
   anti-rollback store saw a newer sequence. Issue a new bundle with a higher sequence
   instead of re-applying the old one.
