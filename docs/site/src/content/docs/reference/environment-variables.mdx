@@ -42,6 +42,7 @@ The Registry Relay binary reads the variables below.
 | `REGISTRY_RELAY_ENV_FILE` | Dotenv-style file to load before config validation resolves env vars, used when `--env-file` is not passed. | Optional. |
 | `REGISTRY_RELAY_BIND` | Override `server.bind`. | Optional. |
 | `REGISTRY_RELAY_LOG_FORMAT` | Operational log format: `json` or `jsonl` select JSON output; any other value selects text. | Defaults to text. |
+| `DATA_GATE_POSTGRES_ROOT_CERT_PATH` | Path to a PEM file with a custom root certificate to trust for a Postgres source connector's TLS connection. | Optional. Falls back to the system default trust store when unset. |
 
 The audit hash secret and other secret material are read from operator-named variables declared in config fields such as `audit.hash_secret_env` (for example, `REGISTRY_RELAY_AUDIT_HASH_SECRET`), the API key fingerprint env names, the provenance signer `jwk_env`, and the Postgres `connection_env`. For the full list of config fields that name secret environment variables, see the [Registry Relay configuration reference](../../products/registry-relay/configuration/).
 
@@ -65,7 +66,6 @@ registryctl also passes through operator-named source and sidecar variables. The
 | `OPENFN_TOKEN` | Legacy OpenFn API token name for `registryctl openfn import` URL imports. | Default name; override with `--openfn-token-env`. |
 | `OPENFN_SIDECAR_TOKEN` | Legacy notary-to-sidecar bearer token name written into compatibility snippets. | Default name; override with `--sidecar-token-env`. |
 | `DEV_SIDECAR_TOKEN_HASH` | Notary-to-sidecar bearer token hash. | Default name; override with `--auth-hash-env`. |
-| `REGISTRY_NOTARY_BASE_URL`, `REGISTRY_NOTARY_BEARER_TOKEN`, `REGISTRY_NOTARY_API_KEY`, `REGISTRY_NOTARY_PURPOSE` | Shell exports emitted by `registryctl lab env` for hosted-lab SDK quickstarts. | Emitted by `lab env`; these are public synthetic lab values. |
 
 ## Source
 
