@@ -149,6 +149,10 @@ jobs:
         working-directory: products/notary
         run: just openapi-check
 
+      - name: Notary exposure check
+        working-directory: products/notary
+        run: just exposure-check
+
       - name: Relay OpenAPI contract
         working-directory: crates/registry-relay
         run: just openapi-contract
