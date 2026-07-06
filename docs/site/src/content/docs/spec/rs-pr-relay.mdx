@@ -48,6 +48,7 @@ The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 
 | 0.1.1 | 2026-06-20 | draft | Document governed Evidence Gateway PDP enforcement, aggregate authorization ordering, metadata filtering boundaries, and PDP audit provenance. |
 | 0.1.2 | 2026-06-21 | draft | Clarified aggregate disclosure limits and privacy-budget boundaries. |
 | 0.2.0 | 2026-07-07 | draft | Corrected REQ-PR-RELAY-020's trust-context header names to the actual wire names, and clarified that the signed response credential surfaces of Section 8 are gated by runtime configuration (the `provenance` key), not a Cargo feature, distinguishing them from the genuinely feature-gated OGC and SP DCI adapters. |
+| 0.2.1 | 2026-07-07 | draft | Documented the five further trust-context headers Relay parses without a scope guard alongside REQ-PR-RELAY-020, noting they are not currently wired to any Relay policy decision. |
 
 ## 1. Scope and references
 
@@ -64,10 +65,10 @@ This specification covers Registry Relay's externally observable protocol behavi
 
 This specification does not define:
 
-- **Exact routes and schemas.** The generated OpenAPI document, rendered as the [Registry Relay API reference](../../reference/apis/registry-relay/), is the authoritative abstract route and schema reference. A configured gateway can also expose its instance-specific `GET /openapi.json` when `openapi_requires_auth` allows it. This document states behavior a schema cannot, and does not restate request and response shapes that would drift from the generated source.
-- **The metadata manifest format.** The `metadata.yaml` schema and its renderers are owned by Registry Manifest and specified by [RS-DM-MANIFEST](../rs-dm-manifest/). This document refers to the manifest only where Relay serves or scopes its compiled artifacts.
-- **Security model internals.** Key management, the OIDC trust configuration, and audit-envelope structure belong to [RS-SEC-G](../rs-sec-g/) and deeper security specifications. This document states the authorization behavior a caller observes.
-- **Per-deployment shape.** Concrete dataset ids, entity names, aggregate ids, scope strings, and evidence-offering ids are runtime configuration, not contract data.
+- Exact routes and schemas: The generated OpenAPI document, rendered as the [Registry Relay API reference](../../reference/apis/registry-relay/), is the authoritative abstract route and schema reference. A configured gateway can also expose its instance-specific `GET /openapi.json` when `openapi_requires_auth` allows it. This document states behavior a schema cannot, and does not restate request and response shapes that would drift from the generated source.
+- The metadata manifest format: The `metadata.yaml` schema and its renderers are owned by Registry Manifest and specified by [RS-DM-MANIFEST](../rs-dm-manifest/). This document refers to the manifest only where Relay serves or scopes its compiled artifacts.
+- Security model internals: Key management, the OIDC trust configuration, and audit-envelope structure belong to [RS-SEC-G](../rs-sec-g/) and deeper security specifications. This document states the authorization behavior a caller observes.
+- Per-deployment shape: Concrete dataset ids, entity names, aggregate ids, scope strings, and evidence-offering ids are runtime configuration, not contract data.
 
 For how a manifest's compiled artifacts flow into the runtime services, see the [architecture overview](../../explanation/architecture/) and [RS-ARC-G](../rs-arc-g/) Section 4. For the component boundaries, see [RS-ARC-G](../rs-arc-g/) Section 3 and the [boundary map](../../map/boundaries-and-map/). Media types and feature names are used per [RS-TERMS](../rs-terms/).
 
@@ -110,6 +111,8 @@ Governed Evidence Gateway policy enforcement is an additional runtime decision, 
 REQ-PR-RELAY-019: A governed Relay read MUST receive a PDP permit before returning entity-backed data or aggregate data. If the PDP denies the request, Relay MUST fail closed and return a stable `pdp.*` problem code rather than falling back to an ungoverned read. The stable denial codes include `pdp.purpose_not_permitted`, `pdp.assurance_insufficient`, `pdp.evidence_stale`, `pdp.legal_basis_required`, `pdp.consent_required`, `pdp.jurisdiction_not_permitted`, `pdp.unsupported_policy_term`, `pdp.policy_id_required`, and `pdp.policy_hash_invalid`.
 
 REQ-PR-RELAY-020: Relay MUST ignore request trust-context headers unless the authenticated principal is scoped to assert that exact trust value. The supported trust-context headers are `x-registry-trust-jurisdiction`, `x-registry-trust-assurance`, `x-registry-trust-legal-basis`, `x-registry-trust-consent`, and `x-registry-source-observed-age-seconds`. Unscoped or malformed trust metadata MUST NOT satisfy the PDP gate.
+
+Relay also parses five further headers without a scope guard: `x-registry-subject-ref`, `x-registry-relationship`, `x-registry-on-behalf-of`, `x-registry-credential-format`, and `x-registry-source-observed-at-unix-seconds`. These populate the request's trust context for the PDP, but none of them are currently wired to any Relay policy decision.
 
 REQ-PR-RELAY-021: Aggregate routes MUST perform ordinary aggregate and source-read scope authorization before invoking governed PDP enforcement. A scope denial MUST return `auth.scope_denied` and MUST NOT report PDP policy provenance. For aggregate execution, the PDP checked-scope value MUST be the source entity read scope unless the aggregate is configured for aggregate-only execution, in which case it MUST be the aggregate scope.
 
@@ -175,12 +178,12 @@ REQ-PR-RELAY-018: Admin routes MUST be served on a separate, optional admin list
 
 These constraints are stated so a reader does not infer a capability from the route list that the reviewed implementation does not provide.
 
-- **No source mutation, no streaming.** Registry Relay does not mutate source registry data in v1 and reads sources as batch snapshots or table scans; there is no event-stream backend (REQ-PR-RELAY-001).
+- No source mutation, no streaming: Registry Relay does not mutate source registry data in v1 and reads sources as batch snapshots or table scans; there is no event-stream backend (REQ-PR-RELAY-001).
 - Feature-gated and config-gated surfaces: OGC adapters and SP DCI sync are present only in builds compiled with the matching Cargo feature; signed response credentials are present only when runtime configuration enables the `provenance` key, not via a Cargo feature (REQ-PR-RELAY-017).
-- **No claim evaluation.** Relay describes evidence offerings but never evaluates a claim or issues a credential; that is Registry Notary's role (REQ-PR-RELAY-012).
-- **Manifest format not owned here.** The metadata schema and renderers belong to Registry Manifest; Relay serves and scopes the artifacts only (REQ-PR-RELAY-011).
-- **PDP enforcement boundary.** Governed PDP enforcement applies to configured runtime reads; scoped metadata publication remains a separate publication and discovery surface (REQ-PR-RELAY-019, REQ-PR-RELAY-023).
-- **Aggregate disclosure boundary.** Aggregate routes return configured statistical observations and may be protected by scopes and PDP policy, but they do not provide a built-in longitudinal privacy budget or cumulative differencing protection (REQ-PR-RELAY-009).
+- No claim evaluation: Relay describes evidence offerings but never evaluates a claim or issues a credential; that is Registry Notary's role (REQ-PR-RELAY-012).
+- Manifest format not owned here: The metadata schema and renderers belong to Registry Manifest; Relay serves and scopes the artifacts only (REQ-PR-RELAY-011).
+- PDP enforcement boundary: Governed PDP enforcement applies to configured runtime reads; scoped metadata publication remains a separate publication and discovery surface (REQ-PR-RELAY-019, REQ-PR-RELAY-023).
+- Aggregate disclosure boundary: Aggregate routes return configured statistical observations and may be protected by scopes and PDP policy, but they do not provide a built-in longitudinal privacy budget or cumulative differencing protection (REQ-PR-RELAY-009).
 
 ## Conformance
 
