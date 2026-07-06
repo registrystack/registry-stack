@@ -1,4 +1,4 @@
-# Self-Attestation Operator Guide
+# Self-attestation operator guide
 
 > **Page type:** How-to · **Product:** Registry Notary · **Layer:** credential · **Audience:** operator
 
@@ -14,13 +14,11 @@ a wallet using the OID4VCI facade. Use this guide for the shared
 self-attestation policy that sits underneath wallet and non-wallet citizen
 flows.
 
-## Security Goal
+## Security goal
 
-The core guarantee is:
-
-> A citizen token can only be used for the exact self or dependent subject
-> authorized by policy, and only for explicitly allowed claims, purposes,
-> formats, disclosures, and credential profiles.
+The core guarantee is that a citizen token can only be used for the exact self
+or dependent subject authorized by policy, and only for explicitly allowed
+claims, purposes, formats, disclosures, and credential profiles.
 
 Notary validates the token, checks client and audience policy, checks subject
 binding, checks scopes and operation allow-lists, then reads sources. Source
@@ -64,7 +62,7 @@ authorization details must also name the same dependent target by `id_type` and
 `id`. Caller-supplied `requester`, `relationship`, or `on_behalf_of` fields are
 rejected before any source read.
 
-## When To Use It
+## When to use it
 
 Use self-attestation when:
 
@@ -84,7 +82,7 @@ Do not use it when:
 - Claims require batch evaluation. Batch evaluation is not supported for self-attestation.
 - The source owner has not approved citizen-token driven access.
 
-## Identity Provider Requirements
+## Identity provider requirements
 
 Before enabling the flow, confirm with the identity-provider owner:
 
@@ -103,7 +101,7 @@ Avoid using `sub` as a civil identifier unless the identity-provider owner has
 confirmed it is the right identifier for source lookups. If you do use `sub`,
 set `allow_sub_as_civil_id: true` so the config records that decision.
 
-## OIDC Auth Config
+## OIDC auth config
 
 Self-attestation requires `auth.mode: oidc`:
 
@@ -133,7 +131,7 @@ auth:
 When OIDC mode is active, static `api_keys` and `bearer_tokens` must be empty.
 Use a separate deployment or config if you need machine clients with API keys.
 
-## Subject Binding
+## Subject binding
 
 Subject binding is the most important part of the config:
 
@@ -164,7 +162,7 @@ Exact matching is deliberate. Do not rely on case folding, punctuation removal,
 or local identifier normalization unless that behavior is implemented and
 reviewed as part of the product.
 
-## Citizen Client Policy
+## Citizen client policy
 
 Restrict which OIDC clients can use the flow:
 
@@ -181,7 +179,7 @@ At least one client id or audience is required. Any allowed audience must also
 appear in `auth.oidc.audiences`. If `auth.oidc.allowed_clients` is nonempty,
 each self-attestation client id must also be listed there.
 
-## Token Policy
+## Token policy
 
 Set explicit policy ceilings:
 
@@ -210,7 +208,7 @@ Guidance:
 - Use `required_acr_values` when the identity provider can represent assurance
   level reliably.
 
-## Allowed Operations And Claims
+## Allowed operations and claims
 
 Every self-attestation surface is allow-listed:
 
@@ -245,7 +243,7 @@ Rules:
 - Claims and profiles must agree that the credential profile can issue that
   claim.
 
-## Delegated Self-Attestation
+## Delegated self-attestation
 
 Delegated self-attestation is optional and disabled by default. Enable it only
 when the source owner has approved a relationship proof claim and the identity
@@ -308,7 +306,7 @@ Runtime behavior:
 - OID4VCI credential issuance rejects delegated transaction tokens in this
   version. Use direct self-attestation for wallet issuance.
 
-## Scope Policy
+## Scope policy
 
 Use scope policy to require citizen tokens to carry an explicit permission:
 
@@ -328,7 +326,7 @@ self_attestation:
 Prefer `required` for shared or public deployments. Use `disabled` only for
 controlled demos where client and audience policy are sufficient.
 
-## Wallet Origins
+## Wallet origins
 
 For browser-based wallets or portals, list exact HTTPS origins:
 
@@ -341,7 +339,7 @@ self_attestation:
 Wildcards are rejected. HTTP origins are rejected. Empty origins are acceptable
 for non-browser or backend-mediated flows where CORS is not part of the path.
 
-## Rate Limits
+## Rate limits
 
 The implemented limiter is in-process:
 
@@ -360,7 +358,7 @@ All values must be greater than zero. In-process limits are useful guardrails,
 but public deployments should also use gateway and identity-provider controls,
 especially when more than one Notary process is serving traffic.
 
-## Source And Purpose Review
+## Source and purpose review
 
 Self-attestation still reads configured source registries. Before launch:
 
@@ -374,7 +372,7 @@ Self-attestation still reads configured source registries. Before launch:
 Use [`source-claim-modeling-guide.md`](source-claim-modeling-guide.md) to review
 claim boundaries and source bindings.
 
-## Rollout Checklist
+## Rollout checklist
 
 - OIDC issuer, JWKS, audience, and client id are stable.
 - The subject-binding claim is reviewed and present in test tokens.

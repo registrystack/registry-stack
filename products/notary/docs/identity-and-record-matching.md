@@ -82,8 +82,9 @@ flowchart TD
 ```
 
 *How a matching request flows from the policy gate through one gated source read
-to claim evaluation. Record cardinality decides found, match, or ambiguous; the
-granular outcome codes and error collapsing are covered below.*
+to claim evaluation. Record cardinality decides found, match, or ambiguous; see
+[The outcome model](#the-outcome-model) for the granular outcome codes and error
+collapsing.*
 
 ## Request identity model
 
@@ -273,7 +274,15 @@ With default error collapsing, callers see `evidence.not_available` and operator
 can inspect the granular audit code.
 
 The `profile` and `on_behalf_of` fields are accepted by the request model but
-are not evaluated. Minimum-assurance gating for target inputs is not implemented.
+are not evaluated by matching.
+`target.assurance` and `requester.assurance` (metadata about how the request's
+attributes were obtained) are likewise accepted but not evaluated by matching.
+Minimum- and allowed-assurance gating is implemented at the binding level
+through `matching.allowed_assurance` and `matching.minimum_assurance` (see
+[matching policy](operator-config-reference.md#matching-policy)), and it
+checks the requester's authenticated assurance level from the trusted policy
+context, not the caller-supplied `target.assurance`/`requester.assurance`
+metadata.
 
 ## Operator checklist
 

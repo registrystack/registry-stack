@@ -1,4 +1,4 @@
-# Script (Rhai) Source Adapter Guide
+# Script (Rhai) source adapter guide
 
 Registry Notary can read source data through a small, sandboxed **Rhai
 orchestration script** when a source API needs a little imperative shaping that
@@ -25,9 +25,9 @@ Reach for `script_rhai` only when the declarative engines do not fit:
 - `http_flow`: a fixed declarative sequence of dependent reads.
 - `fhir`: a bounded FHIR R4 GET graph.
 - `script_rhai`: 1–3 governed source calls where the script must **branch** on
-  a response (e.g. POST a search body, then GET a returned id; try one path,
-  fall back on a 404), or normalize source-specific JSON that the declarative
-  mappers cannot express.
+  a response (for example, POST a search body, then GET a returned id; try one
+  path, fall back on a 404), or normalize source-specific JSON that the
+  declarative mappers cannot express.
 
 If a single request with a CEL projection works, prefer `http_json`.
 
@@ -282,7 +282,7 @@ cargo test -p registry-notary-server --lib governed_script_rhai
 Gate checks: `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check`,
 and `cargo deny check`.
 
-## Current Limits
+## Current limits
 
 - Supported source calls are `source.get` and `source.post_json`; there is no
   built-in pagination helper yet.

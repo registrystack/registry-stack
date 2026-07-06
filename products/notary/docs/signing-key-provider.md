@@ -1,4 +1,4 @@
-# Signing Key Provider Configuration
+# Signing key provider configuration
 
 > **Page type:** How-to · **Product:** Registry Notary · **Layer:** credential · **Audience:** operator
 
@@ -11,7 +11,7 @@ Credential profile signing supports Ed25519 EdDSA and ES256 over P-256. RS256
 is reserved for the eSignet pre-authorized-code RP client assertion key and is
 rejected for credential profiles, access tokens, and federation responses.
 
-## Runtime Contract
+## Runtime contract
 
 - `active` keys can sign new credentials and are published in
   `/.well-known/evidence/jwks.json`.
@@ -34,7 +34,7 @@ The public JWKS endpoint is intentionally unauthenticated for wallet and
 verifier discovery. It publishes public verification keys only; private JWK
 members such as `d` are rejected on public-key inputs and never emitted.
 
-## Provider Fields
+## Provider fields
 
 | Provider | Status | Required fields | Forbidden fields |
 | --- | --- | --- | --- |
@@ -45,7 +45,7 @@ members such as `d` are rejected on public-key inputs and never emitted.
 | `pkcs11` | `publish_only` | `public_jwk_env`, `alg`, `kid` | HSM lookup fields, local JWK and PKCS#12 fields |
 | `local_pkcs12_file` | any | none | all runtime use is rejected |
 
-## Local JWK Active Key
+## Local JWK active key
 
 Use this for local development, tests, and simple mounted-secret deployments.
 
@@ -86,7 +86,7 @@ registry-notary demo-issuer-key
 The generated private JWK belongs in the environment variable named by
 `private_jwk_env`, not inline in the YAML config.
 
-## Local JWK Rotation Key
+## Local JWK rotation key
 
 Use `publish_only` for old verification keys that must remain in JWKS but must
 not sign new credentials. Publish-only local keys use public metadata only.
@@ -113,7 +113,7 @@ class `signing_key_cleanup` once they are no longer active signing references.
 Cleanup before `publish_until_unix_seconds` has elapsed is rejected before
 anti-rollback advances.
 
-## Federation Response Signing
+## Federation response signing
 
 Federation response JWTs use the same provider abstraction as credential
 issuance. The federation block references an active key by id:
@@ -138,7 +138,7 @@ For HSM-backed federation response signing, configure the referenced key with
 `provider: pkcs11`. The JWT `kid` is taken from the provider's configured
 public key id.
 
-## Rotation Procedure
+## Rotation procedure
 
 1. Add the new key as `active` with a new `kid`.
 2. Move credential profiles to the new `signing_key`.
@@ -175,7 +175,7 @@ stateDiagram-v2
 *Signing key status through a rotation. The notes restate the runtime contract
 for each status; the numbered steps in the rotation procedure walk the same transitions.*
 
-## PKCS#11 Active Key
+## PKCS#11 active key
 
 Enable the server feature `pkcs11` to use an HSM-backed Ed25519 signing key.
 Published product binaries and container images compile this feature, but they
@@ -219,7 +219,7 @@ timeout first, the provider is marked unhealthy and `/ready` fails for that
 process so traffic can drain while the vendor call finishes or the process is
 restarted.
 
-### SoftHSM Smoke Setup
+### SoftHSM smoke setup
 
 The test suite verifies the PKCS#11 path with SoftHSM when `softhsm2-util` and
 `openssl` are available:
@@ -244,7 +244,7 @@ softhsm2-util --import issuer-ed25519.pem \
 The public JWK in `public_jwk_env` must match the public half of the imported
 key and must contain the configured `kid` and `alg`.
 
-## PKCS#11 Rotation Key
+## PKCS#11 rotation key
 
 Old HSM-backed verification keys can be published without HSM access.
 
@@ -260,7 +260,7 @@ evidence:
       publish_until_unix_seconds: 1772592000
 ```
 
-## Disabled Keys
+## Disabled keys
 
 Disabled keys are ignored by issuance and JWKS publication.
 
@@ -279,7 +279,7 @@ evidence:
 `local_pkcs12_file` is intentionally rejected. It is present in the config enum
 only to reserve the provider name until a real, tested implementation exists.
 
-## Verification Checklist
+## Verification checklist
 
 After changing signing configuration or provider code, run the test suite as described in
 [Verification in the workspace README](../README.md#verification).

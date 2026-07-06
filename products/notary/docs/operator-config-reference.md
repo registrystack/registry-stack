@@ -1,4 +1,4 @@
-# Operator Configuration Reference
+# Operator configuration reference
 
 > **Page type:** Reference · **Product:** Registry Notary · **Layer:** all · **Audience:** operator
 
@@ -12,7 +12,7 @@ how credentials are signed, and which operational stores are used. Secrets
 should stay in environment variables or a secret manager; config fields name the
 environment variable to read.
 
-## Adoption Decisions
+## Adoption decisions
 
 Before editing YAML, decide these items:
 
@@ -33,7 +33,7 @@ Start with one narrow claim, one source connection, one signing key, and one
 credential profile. Add federation, wallet issuance, and batch evaluation after
 the basic path passes `doctor`.
 
-## Top-Level Shape
+## Top-level shape
 
 | Block | Purpose | Required for startup |
 | --- | --- | --- |
@@ -53,7 +53,7 @@ the basic path passes `doctor`.
 Unknown fields are rejected. That is intentional: a misspelled field should fail
 at config validation instead of becoming an accidental open policy.
 
-## Deployment Profile and Gates
+## Deployment profile and gates
 
 The `deployment` block lets an operator declare the assurance shape of a
 deployment. The profile is always declared by the operator and is never inferred
@@ -121,6 +121,15 @@ The gates bound for Registry Notary:
 | `notary.openapi.public` | OpenAPI is served without authentication | warn | error | error |
 | `notary.config.unsigned` | Local YAML config rather than signed governed config | warn | error | startup_fail |
 | `notary.source_binding.no_matching_policy` | A claim source binding declares no matching policy (no `policy_id`, no context constraints), so resolution falls back to unrestricted, identifier-only matching | - | warn | error |
+| `notary.assisted_access.transaction_token_anchor_missing` | `self_attestation.enabled` is true (citizen or wallet flows) while `auth.access_token_signing` is not enabled | error | readiness_fail | startup_fail |
+| `notary.assisted_access.sender_constraint_missing` | `auth.access_token_signing` is enabled but the issued transaction token is not sender-constrained | warn | error | readiness_fail |
+
+`notary.assisted_access.sender_constraint_missing` currently triggers whenever
+its anchor condition is met: DPoP or mTLS proof validation for transaction
+tokens is not yet implemented, so no config makes a transaction token
+sender-constrained today. Enabling `auth.access_token_signing` for citizen or
+wallet flows always leaves this finding active under `production` and
+`evidence_grade`.
 
 ### Waivers
 
@@ -141,7 +150,7 @@ Active waivers and gate findings appear in the admin posture document under the
 the top-level `audit` object. See `docs/security-assurance.md` for the assurance
 vocabulary.
 
-## Secret Handling
+## Secret handling
 
 Config files should contain names, not secret values.
 
@@ -185,7 +194,7 @@ For local development, the binary accepts `--env-file`. For shared
 environments, prefer the platform secret store and avoid checking dotenv files
 into the repository.
 
-## Governed Config Apply
+## Governed config apply
 
 Most deployments can skip this section. `config_trust` is optional; it governs
 signed, threshold-approved config changes for high-assurance deployments. Simple
@@ -305,7 +314,7 @@ request, the rolling-window policy comes from local
 `config_trust.break_glass_rate_limit`, and the audit record stores no raw reason
 text.
 
-## Minimal Machine Config
+## Minimal machine config
 
 This is the smallest useful shape for a backend caller that evaluates one claim
 from one DCI source and can later issue a credential from that claim.
@@ -486,7 +495,7 @@ replicas behind a load balancer, a single caller can spend up to N times
 replica count in mind, or front the fleet with a shared limiter if you need a
 global ceiling.
 
-## Source Connections
+## Source connections
 
 Every source binding references one `source_connections` entry. A source
 connection defines the upstream base URL, the authentication method used to
@@ -542,7 +551,7 @@ For production, leave `allow_insecure_localhost` and
 accepts the private network source. Local demos may use them for loopback or
 Docker Compose style setups.
 
-### Source Adapter Sidecar Source Connections
+### Source adapter sidecar source connections
 
 Use `connector: source_adapter_sidecar` when a target system needs governed HTTP JSON
 mapping, a short dependent HTTP JSON flow, FHIR mapping, target credential
@@ -551,7 +560,7 @@ handling, or output normalization outside Notary. The sidecar source chooses
 `engine: script_rhai` (a sandboxed, orchestration-only Rhai script for sources
 that need a little branching across a few governed source calls, such as a JSON
 POST search followed by a GET, or a visible-404 fallback; see the
-[Script (Rhai) Source Adapter Guide](script-rhai-source-adapter-guide.md))
+[Script (Rhai) source adapter guide](script-rhai-source-adapter-guide.md))
 in its own signed manifest. The source connection must use static sidecar bearer auth through
 `token_env`. Do not configure target-service credentials in Notary; keep them
 in the sidecar environment or secret store. Configure performance and
@@ -732,7 +741,7 @@ See the [deployment hardening runbook](deployment-hardening-runbook.md) for
 network isolation requirements, responsibility boundaries between Notary and
 the sidecar, and deployment security expectations.
 
-## CEL Runtime
+## CEL runtime
 
 CEL rules are evaluated out of process when the binary is built with
 `registry-notary-cel`. The default posture is production-oriented: worker mode,
@@ -814,7 +823,7 @@ Avoid broad source bindings. A claim should read only the fields needed to
 evaluate that claim. If two credentials need different fields, prefer two claims
 or a small dependency graph over one over-broad claim.
 
-### Dependent Source Lookups
+### Dependent source lookups
 
 When one source row contains the identifier needed to read another source, set
 the later binding's `lookup.input` or `query_fields[].input` to
@@ -863,7 +872,7 @@ Multiple prior rows are treated as source ambiguous. The referenced value must b
 a string, number, or boolean; arrays and objects are rejected as invalid request
 input. Cycles between source bindings fail claim evaluation.
 
-## Matching Policy
+## Matching policy
 
 Each source binding has an optional `matching` block that gates and shapes how the
 request is resolved to a source record before the read runs. The block is the
@@ -912,6 +921,18 @@ Fields:
 | `target_type` | If set, the request `target.type` must equal this value | unenforced |
 | `requester_type` | If set, the request `requester.type` must equal this value | unenforced |
 | `allowed_purposes` | Purposes this binding may be used for; empty means no purpose restriction here | empty |
+| `allowed_assurance` | Allow-list of asserted requester assurance labels (for example `substantial`); the read is denied if the request's assurance is absent or not in this list | empty |
+| `minimum_assurance` | Minimum required assurance rank the request's asserted assurance must meet or exceed; enforced alongside `allowed_assurance` when both are set | none |
+| `permitted_jurisdictions` | Allow-list of jurisdictions permitted to read this binding; the read is denied if the request's jurisdiction is absent or not listed | empty |
+| `max_source_age_seconds` | Maximum age, in seconds, of the source record's observed-at timestamp before the read is treated as stale evidence; requires `source_observed_at_field` to be set | none |
+| `source_observed_at_field` | Path into the source row holding an RFC 3339 timestamp used for the freshness check; required when `max_source_age_seconds` is set | none |
+| `require_legal_basis` | Reject the request unless a legal basis reference is present in context | `false` |
+| `require_consent` | Reject the request unless a consent reference is present in context | `false` |
+| `allowed_legal_basis_refs` | Allow-list of accepted legal basis references; a request with a legal basis outside the list is rejected | empty |
+| `allowed_consent_refs` | Allow-list of accepted consent references; a request with a consent reference outside the list is rejected | empty |
+| `redaction_fields` | Field paths redacted from the evaluation result on an otherwise-permitted read | empty |
+| `ecosystem_binding` | Selects an evidence-pack policy (`policy_id` and `policy_hash`, optionally `id`, `profile`, `pack_id`, `pack_version`) that supplies this binding's audited policy identity in place of the binding's own `policy_id` | none |
+| `context_constraints` | Nested alternate syntax for `legal_basis`, `consent`, `jurisdiction`, `assurance`, and `source_freshness`; merges into the corresponding flattened fields at config load and fails validation if the two forms disagree | none |
 | `allowed_relationships` | Relationship types this binding accepts | empty |
 | `relationship_purpose_scopes` | Per-relationship purpose allow-list; a scoped relationship used for any other purpose is rejected with granular code `relationship.purpose_not_allowed` | empty |
 | `sufficient_target_inputs` | OR-of-AND groups of target paths; the request must satisfy at least one full group | empty |
@@ -943,11 +964,32 @@ Notes:
   oracle.
 - `confidence` is a fixed label for the source and method. It is returned verbatim
   on every successful match and does not measure how strong an individual match was.
+- `allowed_assurance`, `minimum_assurance`, `permitted_jurisdictions`,
+  `max_source_age_seconds`, `require_legal_basis`, `require_consent`,
+  `allowed_legal_basis_refs`, `allowed_consent_refs`, and `redaction_fields` are
+  enforced by the same policy decision point (PDP) that evaluates target,
+  requester, and relationship gates. A request that fails any configured
+  constraint is denied before the source read runs; `redaction_fields` instead
+  redacts the listed paths from an otherwise-permitted result.
+- `context_constraints` is a nested, source-adjacent way to write
+  `require_legal_basis`/`allowed_legal_basis_refs`, `require_consent`/
+  `allowed_consent_refs`, `permitted_jurisdictions`, `allowed_assurance`/
+  `minimum_assurance`, and `max_source_age_seconds`. Use either the flattened
+  fields or `context_constraints`, not conflicting values in both; config
+  loading rejects a nested value that disagrees with its flattened counterpart.
+- `ecosystem_binding` points a binding at an evidence-pack policy's `policy_id`
+  and `policy_hash` for audit identity. Supplying `policy_id` and `policy_hash`
+  directly on the selector requires a supported `profile` and a well-formed
+  policy hash; see the ecosystem binding entries under `evidence` for how packs
+  are declared.
 - Config validation rejects blank values: `policy_id`, `method`, `target_type`, and
-  `requester_type` must be non-empty when present, and the purpose, relationship,
-  relationship purpose scope, and input-path lists must not contain blank entries.
+  `requester_type` must be non-empty when present, and the purpose, assurance,
+  jurisdiction, legal-basis, consent, redaction, relationship, relationship
+  purpose scope, and input-path lists must not contain blank entries.
+  `source_observed_at_field` is required whenever `max_source_age_seconds` is
+  set, and both must be non-empty when present.
 
-## Credential Profiles
+## Credential profiles
 
 Credential profiles control SD-JWT VC issuance.
 
@@ -973,7 +1015,7 @@ lifecycle surface.
 Signing keys are covered in detail in
 [`signing-key-provider.md`](signing-key-provider.md).
 
-## Replay Store
+## Replay store
 
 `replay.storage: in_memory` is acceptable for a single process in local
 development. It is not acceptable for active-active serving because two
@@ -1005,7 +1047,7 @@ See [deployment-hardening-runbook.md](deployment-hardening-runbook.md) for
 operational expectations, alerting guidance, and when to prefer Redis over
 in-memory.
 
-## Credential Status
+## Credential status
 
 Credential status tracks the lifecycle of individual issued credentials so
 verifiers can check suspension or revocation after issuance. It is disabled by
@@ -1020,7 +1062,7 @@ status semantics, the full config block with all Redis fields, the status
 payload shape, lifecycle state transitions, privacy boundary, and rollout
 checklist.
 
-## Self-Attestation
+## Self-attestation
 
 Self-attestation lets a citizen use their own OIDC token to evaluate or issue
 only the claims that policy allows for the subject bound to that token. It
@@ -1096,7 +1138,7 @@ See the [self-attestation operator guide](self-attestation-operator-guide.md)
 for the full config blocks, identity-provider requirements, scope policy,
 wallet origin controls, rate-limit fields, and rollout checklist.
 
-## OID4VCI Wallet Facade
+## OID4VCI wallet facade
 
 OID4VCI depends on self-attestation. Enable it when a wallet should retrieve
 Notary-issued credentials through OpenID4VCI-style metadata, offers, nonces,
@@ -1184,7 +1226,7 @@ See the [OID4VCI wallet interop guide](oid4vci-wallet-interop.md) for the wallet
 flow sequence, authenticated pre-authorized-code flow details, nonce policy,
 Type Metadata serving, compatibility checklist, and troubleshooting.
 
-## Validation Workflow
+## Validation workflow
 
 Run config checks before exposing the service:
 
@@ -1207,7 +1249,7 @@ registry-notary doctor \
   --issue-demo-vc
 ```
 
-## Rollout Checklist
+## Rollout checklist
 
 - Each caller has only the scopes required for its claims and operations.
 - Every source connection has exactly one auth method.

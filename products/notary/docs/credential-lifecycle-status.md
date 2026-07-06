@@ -1,12 +1,12 @@
-# Credential Lifecycle And Status
+# Credential lifecycle and status
 
 > **Page type:** How-to · **Product:** Registry Notary · **Layer:** credential · **Audience:** operator
 
 Registry Notary issues SD-JWT VC credentials with explicit expiry. Live
 credential status is optional. This guide explains the default lifecycle, when
-to enable status, what status means, and how operators should run it.
+to enable status, what status means, and how to run it.
 
-## Default Lifecycle
+## Default lifecycle
 
 By default, issued credentials are status-free:
 
@@ -14,8 +14,8 @@ By default, issued credentials are status-free:
 - No revocation list or status-list profile is published.
 - Verifiers rely on issuer trust, holder binding, and credential expiry.
 - Credential profiles default to 600 seconds of validity when
-  `validity_seconds` is omitted; wallet-facing profiles should set an explicit
-  validity period that matches the use case.
+  `validity_seconds` is omitted; set an explicit validity period that matches
+  the use case for wallet-facing profiles.
 
 The top-level `evidence.max_credential_validity_seconds` sets the issuing
 agency's local ceiling, and profile validity must be between 1 second and that
@@ -24,10 +24,10 @@ maximum. Self-attestation profiles are also bounded by
 
 This lets operators keep offer codes, access tokens, proofs, and evidence
 freshness short while issuing wallet-held credentials with a practical validity
-window. Deployments that need longer-lived credentials should enable live status
-or another revocation/lifecycle surface.
+window. Enable live status or another revocation/lifecycle surface for
+deployments that need longer-lived credentials.
 
-## When To Enable Status
+## When to enable status
 
 Enable credential status when verifiers need to check a live lifecycle state
 after issuance, for example:
@@ -72,7 +72,7 @@ Use `in_memory` only for local or lab flows. It is process-local and disappears
 on restart. Use Redis when more than one process can issue credentials, when
 rolling deploys overlap traffic, or when status must survive restart.
 
-## Credential Payload
+## Credential payload
 
 When status is enabled, issued SD-JWT VC payloads include the IETF Token Status
 List `status.status_list` claim. The status-list URI is anchored at the public
@@ -94,7 +94,7 @@ same URL returns a signed `application/statuslist+jwt` token when requested with
 `Accept: application/statuslist+jwt`, and retains the JSON lifecycle response
 for operational compatibility.
 
-## Status Values
+## Status values
 
 The public status response can report:
 
@@ -133,7 +133,7 @@ stateDiagram-v2
 `suspended`, and `revoked`; `expired` is derived from the stored expiry rather
 than set by an operator.*
 
-## Privacy Boundary
+## Privacy boundary
 
 Status records intentionally contain lifecycle metadata only:
 
@@ -156,7 +156,7 @@ Status records must not contain:
 This lets a verifier check lifecycle state without turning the status store into
 a second registry of personal data.
 
-## Status Operations
+## Status operations
 
 Status operations are exposed as:
 
@@ -174,19 +174,19 @@ names directly:
 Admin mutation accepts a new status value of `valid`, `suspended`, or
 `revoked`.
 
-## Operational Model
+## Operational model
 
 Credential issuance creates the status record after the credential id and
-expiry are known. If the status store cannot write the record, issuance should
-fail closed rather than issuing a credential that references a missing live
-status URL.
+expiry are known. If the status store cannot write the record, issuance fails
+closed: Notary returns an issuance error instead of a credential that
+references a missing live status URL.
 
-Status retrieval should be treated as public verifier traffic. Status mutation
-is an admin operation and should be limited to trusted operator tooling.
+Treat status retrieval as public verifier traffic. Status mutation is an
+admin operation; limit it to trusted operator tooling.
 
-Readiness should fail when a configured Redis status backend is unavailable.
-That is preferable to issuing status-bearing credentials that cannot be checked
-or updated reliably.
+Readiness fails when a configured Redis status backend is unavailable. That is
+preferable to issuing status-bearing credentials that cannot be checked or
+updated reliably.
 
 ## Retention
 
@@ -205,9 +205,9 @@ Do not shorten retention while outstanding credentials still reference status
 URLs unless verifiers have agreed to treat missing status records as expired or
 invalid.
 
-## Verifier Policy
+## Verifier policy
 
-Verifier policy should be explicit:
+Make verifier policy explicit:
 
 - Accept status-free credentials only from profiles that are expected to be
   status-free.
@@ -216,14 +216,14 @@ Verifier policy should be explicit:
   be `0x00` (`VALID`).
 - Treat `0x01` (`INVALID`), `0x02` (`SUSPENDED`), missing status, malformed
   status, or network failure according to the relying party's risk policy.
-  High-assurance flows should fail closed.
+  Fail closed for high-assurance flows.
 - Apply credential expiry even when status returns `valid`.
 
 Registry Notary does not currently publish aggregated status lists or external
 revocation-list profiles. The supported status profile is documented in
 [`sd-jwt-vc-conformance-profile.md`](sd-jwt-vc-conformance-profile.md).
 
-## Rollout Checklist
+## Rollout checklist
 
 - Confirm every credential profile that needs status is issued by a deployment
   with `credential_status.enabled: true`.

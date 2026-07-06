@@ -1,4 +1,4 @@
-# Registry Notary Capability Matrix
+# Registry Notary capability matrix
 
 > **Page type:** Concept · **Product:** Registry Notary · **Layer:** all · **Audience:** integrator, operator
 
@@ -22,7 +22,8 @@ The scenarios use five status labels:
 
 ## Personas
 
-Scenario stories use the same small cast so examples stay easy to follow:
+Scenario stories use the same small cast so readers can follow examples
+without re-learning who each actor is:
 Alice is usually the citizen, resident, farmer, household representative, or
 holder; Bob is the case worker or service operator; Carol is the registry
 steward; Dave is the auditor or security operator; Erin is the program
@@ -52,7 +53,7 @@ to represent; the Rivera household is a collective subject Alice may represent.
 | Trust bundle or trust registry | Later-stage signed trust metadata. It is not an MVP allowlist |
 | Audit store | Local audit trail for evaluations, issuance, denials, and federation exchanges |
 
-## Scenario Matrix
+## Scenario matrix
 
 | # | Scenario | Pattern | Status | Main Gap |
 | --- | --- | --- | --- | --- |

@@ -1,4 +1,4 @@
-# Federated Evaluation Operator Guide
+# Federated evaluation operator guide
 
 > **Page type:** How-to · **Product:** Registry Notary · **Layer:** federation · **Audience:** operator
 
@@ -8,7 +8,7 @@ documented limits of the current implementation: no outbound Notary connector,
 no dynamic trust registration, and in-memory replay suitable for single-process
 pilots only.
 
-## What This Enables
+## What this enables
 
 One trusted Notary can call another trusted Notary:
 
@@ -38,7 +38,7 @@ sequenceDiagram
 *The delegated evaluation exchange. Every check runs before any source read, and
 an audit write failure prevents a successful signed response.*
 
-## Required Environment
+## Required environment
 
 Set these before starting the serving Notary:
 
@@ -55,7 +55,7 @@ response signing references a named key from `evidence.signing_keys`, so the
 same local JWK and PKCS#11 providers are used for evidence and federation
 signatures.
 
-## Minimal Config Shape
+## Minimal config shape
 
 ```yaml
 evidence:
@@ -117,7 +117,7 @@ private Compose networks. It allows HTTP peer JWKS fetches through the shared
 bounded-fetch policy while still blocking cloud metadata targets. Do not enable
 it for production federation.
 
-## Request Requirements
+## Request requirements
 
 Send `POST /federation/v1/evaluations` with:
 
@@ -133,7 +133,7 @@ The serving Notary rejects the request before source reads when signature,
 audience, time window, profile, purpose, replay, emergency denylist, or body
 limit checks fail.
 
-## Response Requirements
+## Response requirements
 
 Successful responses are compact signed JWTs with:
 
@@ -147,7 +147,7 @@ Stale source observations return HTTP 200 with a signed top-level `error`
 object. Transport denials use RFC 9457 Problem Details JSON and do not prove whether the
 subject exists.
 
-## Replay Store
+## Replay store
 
 Replay protection is selected by the top-level `replay` block. The default
 `in_memory` store is acceptable for local development, single-process pilots,
@@ -167,7 +167,7 @@ enabled. For the full Redis replay configuration block, see the
 it is set to `redis`, startup validation requires top-level
 `replay.storage = redis` so the configured backend is unambiguous.
 
-## Verification Checklist
+## Verification checklist
 
 To run the test suite, see [Verification in the workspace README](../README.md#verification).
 
