@@ -94,14 +94,14 @@ cargo check --locked --workspace --all-targets
 cargo test --locked -p registryctl
 ```
 
-Release and lab source checks:
+Release source checks:
 
 ```bash
 python3 -m unittest release/scripts/test_registry_release.py
 release/scripts/registry-release validate release/manifests/registry-stack-beta-6.yaml
 release/scripts/registry-release audit release/manifests/import-map-2026-06-24.yaml
-REGISTRY_LAB_RELEASE_SOURCE_MODE=monorepo lab/scripts/check-release-source-model.sh
-python3 -m unittest lab/scripts/test_check_release_source_model.py
+REGISTRY_RELEASE_SOURCE_MODE=monorepo release/scripts/check-release-source-model.sh
+python3 -m unittest release/scripts/test_check_release_source_model.py
 ```
 
 Docs checks:

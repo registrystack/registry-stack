@@ -114,8 +114,8 @@ jobs:
       - name: Cargo metadata
         run: cargo metadata --locked --format-version 1 >/tmp/registry-stack-cargo-metadata.json
 
-      - name: Lab source model
-        run: REGISTRY_LAB_RELEASE_SOURCE_MODE=monorepo lab/scripts/check-release-source-model.sh
+      - name: Release source model
+        run: REGISTRY_RELEASE_SOURCE_MODE=monorepo release/scripts/check-release-source-model.sh
 
   binaries:
     name: Build release binaries

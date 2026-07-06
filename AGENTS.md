@@ -25,8 +25,8 @@ are shared primitives. `registryctl` is adopter tooling.
 | `crates/registryctl` | Adopter tooling |
 | `products/` | Product-owned specs, examples, fixtures, docs (not crates) |
 | `docs/site/` | Public docs site (Astro). Has its own `AGENTS.md`; read it before touching this subtree |
-| `lab/` | Local demo topology, tutorials, source proof scripts. The justfile auto-detects the monorepo layout, so plain `cd lab && just quick` works; `just release-fast` wraps the release source proof (`lab/scripts/release-check.sh`) |
-| `release/` | Release manifests, schemas, notes, validation tooling |
+| `lab/` | Local demo topology, tutorials, smoke checks. The justfile auto-detects the monorepo layout, so plain `cd lab && just quick` works; `just release-fast` wraps the demo/smoke release check (`lab/scripts/release-check.sh`). `lab/scripts/check-release-source-model.sh` is now a thin wrapper around the real script in `release/scripts/` |
+| `release/` | Release manifests, schemas, notes, validation tooling, and the release source-model proof |
 | `external/` | Notes on inputs that intentionally stay out of this tree (e.g. Crosswalk stays a pinned git dependency) |
 
 ## Verify your change
@@ -51,12 +51,13 @@ products (`just openapi-check` from `products/notary`, `just openapi-contract`
 from `crates/registry-relay`). cargo-deny needs v0.19+ to parse this
 `deny.toml`; CI pins 0.19.8.
 
-Release and lab tooling:
+Release source checks:
 
 ```bash
 python3 -m unittest release/scripts/test_registry_release.py
 release/scripts/registry-release validate release/manifests/<current>.yaml
-REGISTRY_LAB_RELEASE_SOURCE_MODE=monorepo lab/scripts/check-release-source-model.sh
+REGISTRY_RELEASE_SOURCE_MODE=monorepo release/scripts/check-release-source-model.sh
+python3 -m unittest release/scripts/test_check_release_source_model.py
 ```
 
 Docs site (from `docs/site/`): `npm test` and `npm run check`.
