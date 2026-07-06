@@ -4,22 +4,22 @@ description: Generate a local Registry Notary project from OpenCRVS credentials,
 status: current
 owner: registry-docs
 source_repos:
-  - registry-registryctl
+  - registry-stack
   - registry-notary
 last_reviewed: "2026-06-26"
-doc_type: tutorial
+doc_type: how-to
 locale: en
 standards_referenced:
   - openapi
 ---
 
-Use this tutorial when you have OpenCRVS client credentials and want the shortest local
+Use this guide when you have OpenCRVS client credentials and want the shortest local
 Registry Notary path to a live claim check.
 `registryctl` generates the Notary project, stores your OpenCRVS client credentials in
 `secrets/local.env`, and writes local Notary demo credentials under `secrets/`.
 The generated project evaluates the starter `opencrvs-birth-record-exists` claim.
 
-This tutorial validates delegated claim evaluation only.
+This guide validates delegated claim evaluation only.
 It does not configure governed policy, production signing, or credential issuance.
 OpenCRVS remains the evidence source, and Registry Notary evaluates the claim locally.
 
@@ -88,6 +88,7 @@ opencrvs-notary/
     local.env
   output/
   bruno/
+    registry-api/
 ```
 
 `secrets/local.env` contains local Notary API, audit, replay, demo issuer, and OpenCRVS
@@ -105,7 +106,7 @@ registryctl doctor --profile local --format json | jq '{ok, result}'
 `doctor` checks the generated project and delegates Registry Notary config validation when a
 compatible `registry-notary` binary is available.
 If the report says the `registry-notary` doctor binary is not installed, continue with the Docker
-smoke test below.
+smoke test in [Run the first live claim](#run-the-first-live-claim).
 The report must not print your OpenCRVS client secret.
 
 Start the generated stack:
@@ -214,6 +215,19 @@ Expected result:
 
 Do not paste the full evaluation response into support channels unless you have reviewed it.
 
+## Stop the notary project
+
+When you are done:
+
+```sh
+registryctl stop
+```
+
+`registryctl stop` runs `docker compose down`, which stops and removes the containers. The
+generated project defines no named Docker volumes, so there is nothing else for `down` to
+remove. `registryctl.yaml`, `compose.yaml`, `notary/config.yaml`, `secrets/local.env`, `output/`,
+and `bruno/registry-api/` all stay on disk.
+
 ## What the generated config does
 
 The generated `notary/config.yaml` configures:
@@ -229,6 +243,15 @@ The generated `notary/config.yaml` configures:
 
 For the mental model behind these blocks, see the Registry Notary
 [OpenCRVS onboarding model](../../products/registry-notary/opencrvs-dci-onboarding/).
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| `registryctl start` reports `missing required local env value DCI_CLIENT_ID` (or `DCI_CLIENT_SECRET`) | `secrets/local.env` still has the generated placeholder values. | Replace `DCI_CLIENT_ID` and `DCI_CLIENT_SECRET` in `secrets/local.env` with your OpenCRVS OAuth client credentials. |
+| `registryctl notary smoke` or the explicit evaluation returns a source auth error | Registry Notary could not authenticate to OpenCRVS with the configured OAuth client credentials. | Confirm `DCI_CLIENT_ID` and `DCI_CLIENT_SECRET` in `secrets/local.env` match a valid OpenCRVS OAuth client for the target environment. |
+| Docker reports no `linux/arm64` manifest for a v0.8.4 image | v0.8.4 images publish for `linux/amd64` only. | Start with `DOCKER_DEFAULT_PLATFORM=linux/amd64 registryctl start`, as shown in [Validate and start](#validate-and-start). |
+| `registryctl init notary` fails with `--source-token-from-env is not used with --source-kind opencrvs-dci` | `--source-token-from-env` was passed alongside `--source-kind opencrvs-dci`. | Configure `DCI_CLIENT_ID` and `DCI_CLIENT_SECRET` directly in `secrets/local.env` instead. |
 
 ## Next
 

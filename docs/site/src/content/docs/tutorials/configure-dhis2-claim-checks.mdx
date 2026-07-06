@@ -337,6 +337,13 @@ docker compose -f compose.yaml --profile dhis2 down
 | A claim is unsatisfied | The Tracker record does not contain the projected field or programme state. | Inspect the JSON artifact in `output/dhis2-openfn/`, then compare the field with `config/source-adapter/dhis2-health-sidecar.yaml` and `config/notary/dhis2-health-notary.yaml`. |
 | `child_age_band` looks coarse | The public child programme demo does not expose date of birth for the tracked entity. | Treat `5_to_17` as lab-derived programme context, not a clinical age calculation. |
 
+## What you built
+
+You ran Registry Notary against the public DHIS2 Tracker API through a private source adapter,
+evaluated programme-status claims from the projected DHIS2 fields, and issued a holder-bound
+SD-JWT VC from the evaluated results. Only Registry Notary was exposed to the caller; the DHIS2
+sidecar and the DHIS2 credentials stayed private to the Compose network.
+
 ## Next
 
 - [OpenCRVS claims](../verify-opencrvs-claims/)

@@ -20,7 +20,7 @@ import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 import { Steps } from '@astrojs/starlight/components';
 
 Registry Lab is the compose-based local demo for the registry stack.
-It wires [Registry Platform](../../reference/glossary/#registry-platform) source crates, three [Registry Relay](../../products/registry-relay/)
+It wires [Registry Platform](../../reference/glossary/) source crates, three [Registry Relay](../../products/registry-relay/)
 instances, the [Registry Notary](../../products/registry-notary/) instances, live Postgres and
 Zitadel services, a source adapter sidecar (using built-in `http_json`/`http_flow`/`fhir` engines),
 a static metadata publisher, and narrated demo
@@ -48,7 +48,7 @@ you want the full multi-service demo topology rather than a generated project.
 
 - Docker with Compose v2.20 or later (required for the `additional_contexts` build feature the
   Dockerfiles use).
-- The [`just`](https://github.com/casey/just) command runner. Every step below is a `just` recipe.
+- The [`just`](https://github.com/casey/just) command runner. Every step in this tutorial is a `just` recipe.
 - `uv`, `python3`, and `openssl` on your PATH. `just generate` runs a `uv`-managed fixture script
   (PEP 723 inline dependencies), a stdlib Python secrets script, and an `openssl`-based TLS step.
 - `git` with GitHub SSH access. The repository and its `vendor/*` submodules clone over SSH.
