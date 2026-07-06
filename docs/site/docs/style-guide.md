@@ -172,7 +172,8 @@ Preferred terms.
 
 ## Status and review
 
-- A page's `status` is enforced. `draft` is invisible from main navigation. `current` is the default. `historical` is visibly marked. `deprecated` is linked from the index of replacements only.
+- A page's `status` is an editorial state: `current` is the default, `historical` is visibly marked, `deprecated` is linked from the index of replacements only. `status: draft` does not hide a page by itself.
+- Starlight's `draft: true` frontmatter key is what removes a page from the built site, and it applies to every docset including archives. Treat it as load-bearing: removing it is a publish decision, not a frontmatter cleanup (verified 2026-07-07, when removing it from one page broke four archived docsets' link check).
 - Bump `last_reviewed` only when a human reads the page against source and confirms the claims.
 - A `current` page with `last_reviewed` more than 180 days old appears in the stale-pages report.
 
