@@ -10,3 +10,5 @@ __pycache__/
 
 # Local agent tooling (private skills are symlinked here; never commit)
 /.claude/
+/.playwright-mcp/
+/worktrees/
