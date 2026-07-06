@@ -16,73 +16,177 @@ standards_referenced:
   - odrl
 ---
 
-You already know what Registry Stack is for: answer a question about a record without sharing the underlying record. This page answers a different question (*what does Registry Stack not yet do or guarantee?*) by giving you, in one place, the honest list of where the boundaries are.
+You already know what Registry Stack is for: answer a question about a record without sharing the
+underlying record.
+This page answers a different question (*what does Registry Stack not yet do or guarantee?*) by
+giving you, in one place, the honest list of where the boundaries are.
 
 ## What this page is and how to use it
 
-This is the canonical inventory of current limitations and non-guarantees across the whole stack. Each entry states the boundary plainly and links to where it is discussed in depth, so the rest of the documentation can point here whenever it says "this is not X."
+This is the canonical inventory of current limitations and non-guarantees across the whole stack.
+Each entry states the boundary plainly and links to where it is discussed in depth, so the rest of
+the documentation can point here whenever it says "this is not X."
 
-The limitations are not invented for this page. Each protocol and data-model specification carries its own limitations section; this hub collects those and links to them so you can read any one in full context.
+The limitations are not invented for this page.
+Each protocol and data-model specification carries its own limitations section; this hub collects
+those and links to them so you can read any one in full context.
 
 Three things are out of scope here, and each is a link instead:
 
 - Why a given limit exists: read the relevant specification.
-- Whether it will change: see the project roadmap (`ROADMAP.md` in the repository root). This page describes current behavior only.
-- How to work around a limit: mitigations are not covered here. Follow the linked specification for each boundary, and see `release/VERIFY.md` in the repository for release verification.
+- Whether it will change: see the project roadmap (`ROADMAP.md` in the repository root).
+  This page describes current behavior only.
+- How to work around a limit: mitigations are not covered here.
+  Follow the linked specification for each boundary, and see `release/VERIFY.md` in the repository
+  for release verification.
 
-Use this page as a checklist before you commit. If one of these limits is a dealbreaker for your deployment, better to find that out before integrating than after.
+Use this page as a checklist before you commit.
+If one of these limits is a dealbreaker for your deployment, better to find that out before
+integrating than after.
 
 ## Everything here is draft
 
-Every governing specification (architecture, security, protocol, and data-model) is currently at lifecycle status `draft`: under development or review, not `current` (in force). The contracts these limitations are stated against are themselves not yet finalized.
+Every governing specification (architecture, security, protocol, and data-model) is currently at
+lifecycle status `draft`: under development or review, not `current` (in force).
+The contracts these limitations are stated against are themselves not yet finalized.
 
-Registry Stack is a pre-1.0 technical release for evaluation, integration pilots, and public review. It is not a production support commitment and carries no hosted service-level agreement.
+Registry Stack is a pre-1.0 technical release for evaluation, integration pilots, and public
+review.
+It is not a production support commitment and carries no hosted service-level agreement.
 
-Two things follow, and both matter as you read the rest of the page. First, the behaviors and boundaries here may change as the specifications move toward `current`. Second, aligning with an external standard is not the same as conforming to it: speaking the shape of OIDC, OAuth 2.0, SD-JWT VC, OID4VCI, CCCEV, or the rest does not certify conformance to any of them. The [standards register](../../reference/standards/) records how each one is actually adopted.
+Two things follow, and both matter as you read the rest of the page.
+First, the behaviors and boundaries here may change as the specifications move toward `current`.
+Second, aligning with an external standard is not the same as conforming to it: speaking the shape
+of OIDC, OAuth 2.0, SD-JWT VC, OID4VCI, CCCEV, or the rest does not certify conformance to any of
+them.
+The [standards register](../../reference/standards/) records how each one is actually adopted.
 
 ## Stack-wide boundaries at a glance
 
 These boundaries cut across components. Read them first.
 
-- No source mutation, no event stream: Registry Relay does not write back to or otherwise mutate source registry data, and it has no event-stream backend; sources are read as batch snapshots or table scans only. Registry Notary likewise has no file-based or database connector; a source connector reaches its target over HTTP, so the connector-to-target hop is HTTP-only.
-- Aggregate routes are not a privacy budget: Relay aggregate routes return the configured statistical observations, but provide no built-in longitudinal privacy budget and do not track cumulative disclosure across repeated or overlapping queries. Do not describe an aggregate route as privacy-budgeted unless a separate deployed control provides that protection.
-- A published manifest grants nothing: Publishing a dataset, policy, evidence offering, or federation relationship in a discovery artifact grants no access, enforces nothing, and asserts no fact about a live record. Federation discovery metadata is not a trust anchor: a published manifest does not bind a consumer to trust a JWKS endpoint, federation API host, or peer identity. Trust bootstrap stays in the consumer's local policy and Notary peer configuration.
-- Registry Lab and its hosted instance are demonstrations, not infrastructure: The local Registry Lab is a compose-based runnable demonstration that uses fixture credentials and demo-grade configuration and ships no production deployment guidance. Any hosted instance of the lab is likewise a demonstration, not production infrastructure: it carries no uptime or data-retention commitment.
+- No source mutation, no event stream: Registry Relay does not write back to or otherwise mutate
+  source registry data, and it has no event-stream backend; sources are read as batch snapshots or
+  table scans only.
+  Registry Notary likewise has no file-based or database connector; a source connector reaches its
+  target over HTTP, so the connector-to-target hop is HTTP-only.
+- Aggregate routes are not a privacy budget: Relay aggregate routes return the configured
+  statistical observations, but provide no built-in longitudinal privacy budget and do not track
+  cumulative disclosure across repeated or overlapping queries.
+  Do not describe an aggregate route as privacy-budgeted unless a separate deployed control
+  provides that protection.
+- A published manifest grants nothing: Publishing a dataset, policy, evidence offering, or
+  federation relationship in a discovery artifact grants no access, enforces nothing, and asserts
+  no fact about a live record.
+  Federation discovery metadata is not a trust anchor: a published manifest does not bind a
+  consumer to trust a JWKS endpoint, federation API host, or peer identity.
+  Trust bootstrap stays in the consumer's local policy and Notary peer configuration.
+- Registry Lab and its hosted instance are demonstrations, not infrastructure: The local Registry
+  Lab is a compose-based runnable demonstration that uses fixture credentials and demo-grade
+  configuration and ships no production deployment guidance.
+  Any hosted instance of the lab is likewise a demonstration, not production infrastructure: it
+  carries no uptime or data-retention commitment.
 
 For the rationale behind each of these, follow the linked specifications in each section.
 
 ## Credential issuance and lifecycle limits (Notary)
 
-Registry Notary issues credentials, but the issuance surface is deliberately narrow. Read the full context in the [Registry Notary protocol](../../spec/rs-pr-notary/).
+Registry Notary issues credentials, but the issuance surface is deliberately narrow.
+Read the full context in the [Registry Notary protocol](../../spec/rs-pr-notary/).
 
-- One credential format, one binding method: Issued Registry Notary credentials are [SD-JWT VC](../../reference/standards/) only. Holder binding is a per-credential-profile setting that defaults to `mode: did` with `did:jwk` as the supported holder DID method. Direct issuance requires a holder DID by default; it verifies a fresh holder proof only when `proof_of_possession: required` is configured. An operator can explicitly set `holder_binding.mode: none` for a bearer-style credential profile, in which case `registry-notary doctor` reports a warning and the issued credential is unbound. The self-attestation (wallet) issuance path requires binding, so a credential issued down that path is always `did:jwk`-bound with proof-of-possession.
-- A profiled issuance subset, not a full issuer: The [OID4VCI](../../reference/standards/) surface is a scoped self-attestation issuance profile (a profiled subset of Draft 13 using the `dc+sd-jwt` format), not a full OID4VCI issuer and not a claim of general external-wallet interoperability. The capability-discovery document (`/.well-known/evidence-service`) declares `openid4vci.support: not_full_issuer` (announcing it is not a full issuer); this flag lives there rather than in the OID4VCI credential-issuer metadata.
-- Delegated-attestation issuance is limited to the direct path: The OID4VCI transaction-token path for delegated attestation is rejected at the credential endpoint. Direct credential issuance via `/v1/credentials` is supported when the stored evaluation's access mode is delegated-attestation and the relationship allow-lists the credential profile.
-- No revocation flow, no issuer-metadata discovery endpoint, no erasure workflow: The RS-* specs define no revocation flow. The credential-status surface is optional and off by default; when an operator enables it, the public status endpoint reads a credential's status, and only the admin status endpoint (which requires the `registry:notary:admin` scope) can mark a credential `revoked`. There is no `/.well-known/jwt-vc-issuer` endpoint and no built-in data-subject erasure workflow. A rotated-out signing key may remain published for verification, which is not revocation. These are documented pilot limitations, recorded in `SECURITY.md`.
-- CCCEV output is a profiled shape, not conformant: [CCCEV](../../reference/standards/)-shaped output is a profiled subset and is not conformant to CCCEV 2.00. It is consumed by parsing the `@graph` for `cccev:Evidence` nodes.
-- Two signed artifacts, not one: Notary issues SD-JWT VC credentials (`dc+sd-jwt`, signed with EdDSA/Ed25519 by default; ES256/P-256 is also supported per credential profile; with no W3C [Verifiable Credentials Data Model](../../reference/standards/) JSON-LD envelope). Relay's optional signed response credentials are VCDM 2.0 VC-JWT. These are different artifacts: don't describe one as the other.
-- Standalone admin reload is not implemented: The standalone Notary `/admin/v1/reload` route returns HTTP 501 with code `registry.admin.capability.not_supported` and performs no reload, and non-swappable changes require a service restart. Governed config apply and the file-watch signer do hot-apply some changes without one (signing-key rotation reports `restart_required: false`, client and OpenAPI auth-policy changes are swapped in, and a same-public-key signer replacement reloads), so not every key or configuration change needs a restart.
+- One credential format, one binding method: Issued Registry Notary credentials are [SD-JWT
+  VC](../../reference/standards/) only.
+  Holder binding is a per-credential-profile setting that defaults to `mode: did` with `did:jwk`
+  as the supported holder DID method.
+  Direct issuance requires a holder DID by default; it verifies a fresh holder proof only when
+  `proof_of_possession: required` is configured.
+  An operator can explicitly set `holder_binding.mode: none` for a bearer-style credential
+  profile, in which case `registry-notary doctor` reports a warning and the issued credential is
+  unbound.
+  The self-attestation (wallet) issuance path requires binding, so a credential issued down that
+  path is always `did:jwk`-bound with proof-of-possession.
+- A profiled issuance subset, not a full issuer: The [OID4VCI](../../reference/standards/) surface
+  is a scoped self-attestation issuance profile (a profiled subset of Draft 13 using the
+  `dc+sd-jwt` format), not a full OID4VCI issuer and not a claim of general external-wallet
+  interoperability.
+  The capability-discovery document (`/.well-known/evidence-service`) declares
+  `openid4vci.support: not_full_issuer` (announcing it is not a full issuer); this flag lives
+  there rather than in the OID4VCI credential-issuer metadata.
+- Delegated-attestation issuance is limited to the direct path: The OID4VCI transaction-token path
+  for delegated attestation is rejected at the credential endpoint.
+  Direct credential issuance via `/v1/credentials` is supported when the stored evaluation's
+  access mode is delegated-attestation and the relationship allow-lists the credential profile.
+- No revocation flow, no issuer-metadata discovery endpoint, no erasure workflow: The RS-* specs
+  define no revocation flow.
+  The credential-status surface is optional and off by default; when an operator enables it, the
+  public status endpoint reads a credential's status, and only the admin status endpoint (which
+  requires the `registry:notary:admin` scope) can mark a credential `revoked`.
+  There is no `/.well-known/jwt-vc-issuer` endpoint and no built-in data-subject erasure workflow.
+  A rotated-out signing key may remain published for verification, which is not revocation.
+  These are documented pilot limitations, recorded in `SECURITY.md`.
+- CCCEV output is a profiled shape, not conformant: [CCCEV](../../reference/standards/)-shaped
+  output is a profiled subset and is not conformant to CCCEV 2.00.
+  It is consumed by parsing the `@graph` for `cccev:Evidence` nodes.
+- Two signed artifacts, not one: Notary issues SD-JWT VC credentials (`dc+sd-jwt`, signed with
+  EdDSA/Ed25519 by default; ES256/P-256 is also supported per credential profile; with no W3C
+  [Verifiable Credentials Data Model](../../reference/standards/) JSON-LD envelope).
+  Relay's optional signed response credentials are VCDM 2.0 VC-JWT.
+  These are different artifacts: don't describe one as the other.
+- Standalone admin reload is not implemented: The standalone Notary `/admin/v1/reload` route
+  returns HTTP 501 with code `registry.admin.capability.not_supported` and performs no reload, and
+  non-swappable changes require a service restart.
+  Governed config apply and the file-watch signer do hot-apply some changes without one
+  (signing-key rotation reports `restart_required: false`, client and OpenAPI auth-policy changes
+  are swapped in, and a same-public-key signer replacement reloads), so not every key or
+  configuration change needs a restart.
 
 ## Federation limits
 
-Federation across institutions is static-peer only. Read the full context in the [Registry Notary protocol](../../spec/rs-pr-notary/) and the [security model](../../spec/rs-sec-g/).
+Federation across institutions is static-peer only.
+Read the full context in the [Registry Notary protocol](../../spec/rs-pr-notary/) and the
+[security model](../../spec/rs-sec-g/).
 
-- Static peers only: Replay protection defaults to in-process, in-memory state, but a Redis-backed shared replay store is available for multi-instance deployments (`replay.storage = redis`, with `federation.replay.storage = redis` when the top-level store is Redis), and federation uses it for request replay and `jti` checks. There is still no dynamic trust-chain discovery and no federated credential issuance; both are out of scope for this version.
-- Delegated evaluation returns a result, never a credential: Across a federation boundary, what crosses is a scoped evaluation result, never an issued credential.
+- Static peers only: Replay protection defaults to in-process, in-memory state, but a Redis-backed
+  shared replay store is available for multi-instance deployments (`replay.storage = redis`, with
+  `federation.replay.storage = redis` when the top-level store is Redis), and federation uses it
+  for request replay and `jti` checks.
+  There is still no dynamic trust-chain discovery and no federated credential issuance; both are
+  out of scope for this version.
+- Delegated evaluation returns a result, never a credential: Across a federation boundary, what
+  crosses is a scoped evaluation result, never an issued credential.
 
 ## Registry Relay limits
 
-Registry Relay exposes protected, read-only registry routes. Its boundaries are covered in depth in the [Registry Relay protocol](../../spec/rs-pr-relay/).
+Registry Relay exposes protected, read-only registry routes.
+Its boundaries are covered in depth in the [Registry Relay protocol](../../spec/rs-pr-relay/).
 
-- Read-only, batch or scan: Relay does not mutate source data in v1 and has no event-stream backend; it reads sources as batch snapshots or table scans only.
-- Feature-gated surfaces: Several Relay surfaces (the OGC API Features, Records, and EDR adapters and the SP DCI sync adapter) are feature-gated and present only in builds configured with the matching Cargo feature. Do not infer their presence in one build from another build's route catalog. (Signed response credentials are not Cargo-gated; they are config-gated through `provenance`.)
-- Aggregates are not privacy-budgeted: As noted stack-wide, Relay aggregate routes provide no longitudinal privacy-budget or cumulative-differencing protection.
-- Relay does not evaluate or own the manifest: Relay does not evaluate claims or issue Notary's SD-JWT VC credentials (that is Notary's role), though with `provenance` enabled and a caller requesting `Accept: application/vc+jwt` it can attach its own VC-JWT signed response credential. It also does not own or version the metadata manifest format, which belongs to Registry Manifest. Relay only serves and scopes compiled artifacts.
-- Governed enforcement is one PDP profile, not full interoperability: Governed runtime policy enforcement covers only the supported Evidence Gateway PDP profile (`registry-evidence-gateway-pdp/v1`, the single PDP profile this build recognizes). It is not full Evidence Gateway interoperability, not full OID4VCI issuer behavior, not dynamic external policy discovery, and not enforcement of [ODRL](../../reference/standards/) terms outside the supported set.
+- Read-only, batch or scan: Relay does not mutate source data in v1 and has no event-stream
+  backend; it reads sources as batch snapshots or table scans only.
+- Feature-gated surfaces: Several Relay surfaces (the OGC API Features, Records, and EDR adapters
+  and the SP DCI sync adapter) are feature-gated and present only in builds configured with the
+  matching Cargo feature.
+  Do not infer their presence in one build from another build's route catalog.
+  (Signed response credentials are not Cargo-gated; they are config-gated through `provenance`.)
+- Aggregates are not privacy-budgeted: As noted stack-wide, Relay aggregate routes provide no
+  longitudinal privacy-budget or cumulative-differencing protection.
+- Relay does not evaluate or own the manifest: Relay does not evaluate claims or issue Notary's
+  SD-JWT VC credentials (that is Notary's role), though with `provenance` enabled and a caller
+  requesting `Accept: application/vc+jwt` it can attach its own VC-JWT signed response credential.
+  It also does not own or version the metadata manifest format, which belongs to Registry
+  Manifest.
+  Relay only serves and scopes compiled artifacts.
+- Governed enforcement is one PDP profile, not full interoperability: Governed runtime policy
+  enforcement covers only the supported Evidence Gateway PDP profile
+  (`registry-evidence-gateway-pdp/v1`, the single PDP profile this build recognizes).
+  It is not full Evidence Gateway interoperability, not full OID4VCI issuer behavior, not dynamic
+  external policy discovery, and not enforcement of [ODRL](../../reference/standards/) terms
+  outside the supported set.
 
 ## Data-model limits (Claim and Manifest)
 
-These limits concern what the claim and manifest configuration loaders do and do not enforce. Read them in full in the [Claim data model](../../spec/rs-dm-claim/) and [Manifest data model](../../spec/rs-dm-manifest/).
+These limits concern what the claim and manifest configuration loaders do and do not enforce.
+Read them in full in the [Claim data model](../../spec/rs-dm-claim/) and [Manifest data
+model](../../spec/rs-dm-manifest/).
 
 - The `plugin` rule type is unimplemented: The `plugin` rule type is declared in configuration but has no evaluation implementation; a conforming claim must not depend on it.
 - Load-time invariants are not all enforced: The claim configuration loader does not reject duplicate claim ids, does not verify that the disclosure default is within the allowed set, and does not verify that a rule's source names a declared binding. A disclosure default outside the allowed set and a dangling rule source surface as request or evaluation errors at runtime, not as startup failures. Duplicate claim ids are different: they are never reported, because the runtime lookup returns the first match by id, so a later duplicate is silently shadowed.
@@ -93,25 +197,57 @@ These limits concern what the claim and manifest configuration loaders do and do
 
 ## Security-model operator boundary
 
-A healthy, reachable, internally consistent deployment is not the same as a production-secure one. Read the full security boundary in the [security model](../../spec/rs-sec-g/).
+A healthy, reachable, internally consistent deployment is not the same as a production-secure one.
+Read the full security boundary in the [security model](../../spec/rs-sec-g/).
 
-- Health checks do not certify key custody: Readiness, liveness, and protocol-conformance checks do not certify production-grade private-key custody. A deployment using software keys, local JWK files, or demo-generated keys can be reachable and internally consistent yet not production-secure. Custody, rotation, and key-provider approval remain operator responsibilities.
-- Many guarantees are the operator's to provide: Secret and key provisioning, key custody and rotation schedule, audit retention and storage, tenant isolation, transport termination, edge rate limiting, deployment configuration, and incident response are operator responsibilities, not behaviors the stack guarantees.
-- Audit fail-closed is a capability, not a guarantee about every build: A deployment can run audit fail-closed, so that a request whose audit record cannot be written does not return success. That is a switch a deployment is able to turn on, not a promise that every route in a given build has been individually audited, nor that every build ships with it on.
-- The source-adapter sidecar is an internal connector, not a public API: The source adapter sidecar is an internal connector surface, not a public subject-facing API. Its static bearer token is not by itself a tenant or subject authorization boundary, and it relies on deployment-network egress controls for outbound source traffic. Direct public access, broad reuse of one sidecar token across unrelated sources, or shared cache or backoff state across authorization contexts is outside the security model.
-- Demo and template code is not a production profile: Demo helper code and generated workflow snippets are integration examples, not a production freshness or replay-protection profile, and must not be relied on for freshness, expiry, or replay protection.
+- Health checks do not certify key custody: Readiness, liveness, and protocol-conformance checks
+  do not certify production-grade private-key custody.
+  A deployment using software keys, local JWK files, or demo-generated keys can be reachable and
+  internally consistent yet not production-secure.
+  Custody, rotation, and key-provider approval remain operator responsibilities.
+- Many guarantees are the operator's to provide: Secret and key provisioning, key custody and
+  rotation schedule, audit retention and storage, tenant isolation, transport termination, edge
+  rate limiting, deployment configuration, and incident response are operator responsibilities,
+  not behaviors the stack guarantees.
+- Audit fail-closed is a capability, not a guarantee about every build: A deployment can run audit
+  fail-closed, so that a request whose audit record cannot be written does not return success.
+  That is a switch a deployment is able to turn on, not a promise that every route in a given
+  build has been individually audited, nor that every build ships with it on.
+- The source-adapter sidecar is an internal connector, not a public API: The source adapter
+  sidecar is an internal connector surface, not a public subject-facing API.
+  Its static bearer token is not by itself a tenant or subject authorization boundary, and it
+  relies on deployment-network egress controls for outbound source traffic.
+  Direct public access, broad reuse of one sidecar token across unrelated sources, or shared cache
+  or backoff state across authorization contexts is outside the security model.
+- Demo and template code is not a production profile: Demo helper code and generated workflow
+  snippets are integration examples, not a production freshness or replay-protection profile, and
+  must not be relied on for freshness, expiry, or replay protection.
 
 ## Supply-chain and release limits
 
 These concern how releases are signed and what that signing currently covers.
 
-- Partial release signing: GitHub Release assets are signed with keyless cosign and, when tag-triggered, carry SLSA provenance. However, OCI image signatures are not yet published, and Git version tags are not yet cryptographically signed (GPG, SSH, or Sigstore). The `v0.8.0` prerelease was published before release-asset signing and does not currently include cosign signatures.
+- Partial release signing: GitHub Release assets are signed with keyless cosign and, when
+  tag-triggered, carry SLSA provenance.
+  However, OCI image signatures are not yet published, and Git version tags are not yet
+  cryptographically signed (GPG, SSH, or Sigstore).
+  The `v0.8.0` prerelease was published before release-asset signing and does not currently
+  include cosign signatures.
 
-For how to verify what *is* signed, see the release verification guidance in `release/VERIFY.md` in the repository.
+For how to verify what *is* signed, see the release verification guidance in `release/VERIFY.md`
+in the repository.
 
 ## Where to go next
 
-- Why a given limit exists: the rationale and trade-offs live in each specification's own limitations section: [RS-PR-NOTARY](../../spec/rs-pr-notary/), [RS-PR-RELAY](../../spec/rs-pr-relay/), [RS-DM-CLAIM](../../spec/rs-dm-claim/), and [RS-DM-MANIFEST](../../spec/rs-dm-manifest/). For the security and architecture boundaries, read [RS-SEC-G](../../spec/rs-sec-g/) and [RS-ARC-G](../../spec/rs-arc-g/).
-- How each external standard is actually adopted: the [standards register](../../reference/standards/) records the adoption mode for every standard named across the stack.
-- What might change: the project roadmap (`ROADMAP.md` in the repository root). This page does not track it.
+- Why a given limit exists: the rationale and trade-offs live in each specification's own
+  limitations section: [RS-PR-NOTARY](../../spec/rs-pr-notary/),
+  [RS-PR-RELAY](../../spec/rs-pr-relay/), [RS-DM-CLAIM](../../spec/rs-dm-claim/), and
+  [RS-DM-MANIFEST](../../spec/rs-dm-manifest/).
+  For the security and architecture boundaries, read [RS-SEC-G](../../spec/rs-sec-g/) and
+  [RS-ARC-G](../../spec/rs-arc-g/).
+- How each external standard is actually adopted: the [standards
+  register](../../reference/standards/) records the adoption mode for every standard named across
+  the stack.
+- What might change: the project roadmap (`ROADMAP.md` in the repository root).
+  This page does not track it.
 - How to verify what is signed: release verification lives in `release/VERIFY.md` in the repository.

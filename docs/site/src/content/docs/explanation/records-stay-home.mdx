@@ -217,18 +217,10 @@ mistake, so the limits are stated plainly here.
 - This is not zero-knowledge: A `predicate` answer is a policy-enforced boolean computed
   inside the service; SD-JWT selective disclosure is digest omission. Neither is a
   zero-knowledge proof, and the documentation should not imply one.
-- No revocation flow is specified, and no erasure flow: This version specifies issuance,
-  disclosure, presentation, and verification, but no credential-revocation flow and no
-  data-subject erasure. An optional, off-by-default credential-status surface can be enabled
-  to mark a credential `revoked`, but that is an operator-enabled capability rather than a
-  specified flow. A key rotated out may remain published so existing results stay
-  verifiable: that is not a revocation mechanism.
-- Several guarantees are the operator's to provide: Network egress limits, key custody,
-  tenant isolation, audit retention, and transport security are supplied by the deployment,
-  not guaranteed by the stack.
-- The model is specified in draft: The behaviour described in this section is defined in
-  the `RS-*` specifications, which are still drafts and may change. Alignment with an
-  external standard is not a claim of conformance to it or of legal compliance.
+This page's promise also sits inside the wider set of stack-wide limits: revocation and
+erasure gaps, which guarantees are left to the operator to provide, and the draft status of
+the underlying specifications. Weigh those alongside the six points above; see the
+[known limitations hub](../known-limitations/) for the full inventory.
 
 ## Related
 

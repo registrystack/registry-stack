@@ -75,7 +75,7 @@ to a named file in the target directory, plus an `index.json` discovery entry po
 (schema version `registry-manifest-index/v1`).
 
 A working example lives at
-`registry-manifest/profiles/example-civil-registration/fixtures/metadata.yaml`.
+`products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml`.
 The file's catalog section looks like this:
 
 ```yaml
@@ -129,13 +129,13 @@ evidence offerings), see the [Relay API guide](../../products/registry-relay/api
 
 Beyond scoped filtering, Relay adds:
 
-- **Per-caller views under `/metadata/*`.** Every metadata format from the renderer table
+- Per-caller views under `/metadata/*`: every metadata format from the renderer table
   is available as an authenticated route. The same caller that can read rows with a `rows`
   scope can separately hold a `metadata` scope to fetch catalog artifacts.
-- **Audit records for every metadata request.** The same JSONL audit trail that covers row
+- Audit records for every metadata request: the same JSONL audit trail that covers row
   reads covers metadata reads. The caller's `principal_id`, the `scopes_used`, and the
   `request_id` all appear in the record.
-- **Scope-aware filtering.** A key or token that carries `social_registry:metadata` but not
+- Scope-aware filtering: a key or token that carries `social_registry:metadata` but not
   `vital-events:metadata` receives a catalog that lists only the social registry dataset,
   even if the manifest declares both.
 
