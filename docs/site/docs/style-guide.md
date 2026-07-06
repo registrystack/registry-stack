@@ -118,7 +118,7 @@ Preferred terms.
 - One blank line above and below a fenced block.
 - Use `<placeholder>` for values the reader replaces, in code blocks too: `curl https://<host>/evidence/...`.
 - Do not paste real secrets, tokens, or production hostnames. Use `example.com` and the fake-token convention.
-- For keyboard shortcuts, use `<kbd>` tags. Example: `<kbd>Cmd</kbd>+<kbd>K</kbd>`.
+- For keyboard shortcuts, use backticks: `Ctrl+C`. Inline HTML, including `<kbd>`, fails the markdownlint gate (MD033).
 
 ## Links
 

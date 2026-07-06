@@ -13,7 +13,7 @@ Render and validate the example manifest without calling external services:
 scripts/itb-semic-smoke.sh
 ```
 
-This validates the manifest with the `registry-manifest` CLI, publishes the static
+This validates the manifest with the `registry-manifest` CLI (the script invokes it as `cargo run -p registry-manifest-cli --`), publishes the static
 metadata bundle under `target/itb-semic-smoke/example-civil-registration`, and
 prints the output path. It does not call the public ITB/SEMIC validators.
 

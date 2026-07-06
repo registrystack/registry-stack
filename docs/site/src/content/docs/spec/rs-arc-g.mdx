@@ -62,7 +62,7 @@ For a narrative explanation with worked examples, see the [architecture overview
 This specification covers:
 
 - The two-layer design principle that governs the separation between portable metadata and runtime services.
-- The five components that make up the registry stack, their responsibilities, and their boundaries.
+- The five projects that make up the registry stack, their responsibilities, and their boundaries.
 - The ordered data and contract flow from metadata authoring through claim evaluation.
 - The binding invariants that hold across all conforming deployments.
 
@@ -80,7 +80,7 @@ The **runtime services layer** is responsible for enforcing what the registry de
 
 This split separates two distinct obligations: the obligation to describe (what a registry declares it can expose and under what policy) from the obligation to enforce (what a running service will actually return to an authorized caller). The separation enables offline audit of metadata, offline validation of schemas and claim shapes, and governance updates to policy documents without touching deployment configuration.
 
-The diagram in this section shows the five components and how they relate to the two layers.
+The diagram in this section shows the five projects and how they relate to the two layers.
 
 ```mermaid
 flowchart TD

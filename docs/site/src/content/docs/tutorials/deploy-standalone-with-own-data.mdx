@@ -183,7 +183,7 @@ datasets:
         access:
           metadata_scope: social_registry:metadata
           read_scope: social_registry:rows
-          aggregate_scope: social_registry:aggregates
+          aggregate_scope: social_registry:aggregate
         api:
           default_limit: 50
           max_limit: 100
@@ -408,8 +408,7 @@ docker pull ghcr.io/registrystack/registry-notary:v0.8.4
 
 The container listens on port 8080. Unlike Relay, the Notary entrypoint does not
 load a default config path, so every `docker run` passes `--config` explicitly.
-The image is distroless: there is no shell, and you run CLI subcommands by appending them to
-`docker run`, as the following commands do.
+Run CLI subcommands by appending them to `docker run`, as the following commands do.
 
 ### Register a Relay key for Notary
 
@@ -640,7 +639,7 @@ caller key, and `_env` secret indirection on both sides so raw tokens stay out o
 ## Tear down
 
 Both containers run in the foreground with `--rm`, so stopping them removes them: press
-<kbd>Ctrl</kbd>+<kbd>C</kbd> in each terminal, or run `docker stop relay` for the named Relay
+`Ctrl+C` in each terminal, or run `docker stop relay` for the named Relay
 container. Then remove the shared network:
 
 ```sh

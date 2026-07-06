@@ -15,8 +15,9 @@
   cross-registry attribute-release scenarios.
 - Added a config-schema command and shared config-report output, aligned with the
   beta-3 Platform config contracts.
-- Advanced the Crosswalk input, Registry Platform, and Registry Manifest to the
-  versions used by the beta-3 train.
+- Advanced the Crosswalk input to 0.2.0, Registry Platform to 0.3.1, and Registry
+  Manifest to 0.2.1, the versions used by the beta-3 train.
+- Updated Relay operational docs and API description text alongside the release.
 - BREAKING: Audit write failures now default to fail-closed. `availability_first` is
   an explicit best-effort opt-out.
 - Fail closed when source size is unknown.

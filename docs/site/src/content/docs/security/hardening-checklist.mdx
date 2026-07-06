@@ -134,7 +134,7 @@ for your service.
 - Know your private disclosure channel before you need it: see
   [Report a vulnerability](../report-a-vulnerability/).
 - If credential-status is enabled, use the admin status endpoint (requires the
-  `registry:notary:admin` scope) to mark a compromised credential `revoked`. Registry Notary
+  `registry_notary:admin` scope) to mark a compromised credential `revoked`. Registry Notary
   defines no other revocation flow; a credential issued with credential-status disabled cannot be
   revoked through the API. See [Known limitations and non-guarantees](../../explanation/known-limitations/).
 - Rotate a compromised signing key using the documented rotation procedure (new `kid`, old key to

@@ -120,7 +120,7 @@ Read the full context in the [Registry Notary protocol](../../spec/rs-pr-notary/
   define no revocation flow.
   The credential-status surface is optional and off by default; when an operator enables it, the
   public status endpoint reads a credential's status, and only the admin status endpoint (which
-  requires the `registry:notary:admin` scope) can mark a credential `revoked`.
+  requires the `registry_notary:admin` scope) can mark a credential `revoked`.
   There is no `/.well-known/jwt-vc-issuer` endpoint and no built-in data-subject erasure workflow.
   A rotated-out signing key may remain published for verification, which is not revocation.
   These are documented pilot limitations, recorded in `SECURITY.md`.

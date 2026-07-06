@@ -931,7 +931,7 @@ Fields:
 | `allowed_legal_basis_refs` | Allow-list of accepted legal basis references; a request with a legal basis outside the list is rejected | empty |
 | `allowed_consent_refs` | Allow-list of accepted consent references; a request with a consent reference outside the list is rejected | empty |
 | `redaction_fields` | Field paths redacted from the evaluation result on an otherwise-permitted read | empty |
-| `ecosystem_binding` | Selects an evidence-pack policy (`policy_id` and `policy_hash`, optionally `id`, `profile`, `pack_id`, `pack_version`) that supplies this binding's audited policy identity in place of the binding's own `policy_id` | none |
+| `ecosystem_binding` | Selects an evidence-pack policy (`policy_id` and `policy_hash`, optionally `id`, `profile`, `pack_id`, `pack_version`, `unsupported_odrl_terms`) that supplies this binding's audited policy identity in place of the binding's own `policy_id` | none |
 | `context_constraints` | Nested alternate syntax for `legal_basis`, `consent`, `jurisdiction`, `assurance`, and `source_freshness`; merges into the corresponding flattened fields at config load and fails validation if the two forms disagree | none |
 | `allowed_relationships` | Relationship types this binding accepts | empty |
 | `relationship_purpose_scopes` | Per-relationship purpose allow-list; a scoped relationship used for any other purpose is rejected with granular code `relationship.purpose_not_allowed` | empty |

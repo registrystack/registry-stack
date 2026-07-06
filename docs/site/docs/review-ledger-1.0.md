@@ -137,8 +137,12 @@ No page was deleted or merged. Considered and declined:
 
 ## TODO[evidence] register (final count must be <= 2)
 
+Final count: 1 (baseline was 2; the rename-decision marker was resolved by
+verifying all three Phase-4 rename facts in code).
+
 | Page | Marker | Justification |
 |---|---|---|
+| accessibility.mdx | WCAG contrast values calculated, not audited (axe-core run pending) | Honest gap: no automated contrast check has run against the built site; the claim is already demoted to "calculated values" in prose. Closing it requires running an audit tool, out of docs scope. |
 
 ## Reader verification runs (verifying-tutorials-as-reader)
 
@@ -154,6 +158,24 @@ No page was deleted or merged. Considered and declined:
 | tutorials/verify-opencrvs-claims.mdx | fail at start (GH#278), partial by design | Fixed on page: source URL now an explicit placeholder + base-URL prerequisite named; source.unavailable vs auth-error troubleshooting split; GH#278 row with pin syntax; jq field names (passed/actual_status); two broken onboarding links; platform-override wording matches actual registryctl behavior. |
 | tutorials/configure-dhis2-claim-checks.mdx | environment-blocked | Ports 4311-4331 held by the running Solmara stack; stopping it was declined (volume/audit-chain risk). No execution coverage anywhere: residual gap, run after the Solmara stack can be paused or on another machine. Claims statically verified against lab/ compose+configs. |
 | tutorials/first-run-with-registry-lab.mdx | environment-blocked (reader mode) | Same port conflict. Executable truth covered by CI: check-tutorial.sh executes this page end to end in the root lab job; reader-persona findings remain uncollected. |
+
+## Deliberate deviations
+
+- verify-opencrvs-claims.mdx links the OpenCRVS onboarding model with an absolute
+  docs.registrystack.org URL instead of a relative path. The target page is
+  excluded from archived docsets (exclude_docsets), so a relative link fails the
+  archive link check; the absolute URL points every docset at the canonical
+  current page. Same rationale family as keeping publishing-pipeline.mdx draft.
+
+## Fresh-eyes review outcome
+
+Three independent reviewers (trust path, reader path, contract path) ran
+reviewing-docs-pages on the full branch diff. Contract path: zero P1. Trust
+path: 3 P1s (cargo-deny path-filter overclaim introduced by the security batch;
+"since v0.8.0" continuity; wrong admin scope string on two pages, pre-existing).
+Reader path: 3 P1s (kbd vs MD033, already fixed; false distroless claim for
+Notary; impossible DCI-env troubleshooting row). All six fixed on the branch and
+re-verified; P2/P3 findings fixed or recorded above.
 
 ## Issues filed from divergence findings
 
