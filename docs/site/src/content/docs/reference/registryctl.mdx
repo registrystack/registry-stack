@@ -13,7 +13,7 @@ standards_referenced: []
 
 `registryctl` is the local adopter command-line tool for Registry Stack. It creates a local project, starts and stops the generated services, and runs validation and smoke checks against them.
 
-This page lists the commands, subcommands, and flags defined in the source command tree. Run `registryctl <command> --help` for the built-in usage text. Most human-facing commands also perform a once-per-day update check; see [Update check](#update-check).
+This page lists the commands, subcommands, and flags released in registryctl `v0.8.4`. Run `registryctl <command> --help` for the built-in usage text. Most human-facing commands also perform a once-per-day update check; see [Update check](#update-check).
 
 ## Project setup
 
@@ -64,13 +64,6 @@ Inspect commands report on a running or generated project.
 | `doctor` | Run product doctor validation and print a JSON report. |
 | `doctor --profile <profile>` | Deployment profile override passed through to product doctor commands. |
 | `doctor --format <format>` | Output format. Defaults to `json`. |
-| `config explain --product <product>` | Delegate to the product explain-config command for a generated config. `<product>` is `relay` or `notary`. |
-| `config explain --format <format>` | Output format. Defaults to `json`. |
-| `config diff --product <product>` | Compare committed product config with the generated validation view. `<product>` is `relay` or `notary`. |
-| `config diff --format <format>` | Output format. Defaults to `json`. |
-| `config package` | Package inspectable generated config files without local secrets or outputs. |
-| `config package --output <path>` | Zip file to write. Defaults to `output/registry-config-package.zip`. |
-| `config package --force` | Replace an existing package file. |
 
 ## Testing
 
@@ -105,7 +98,7 @@ unless noted.
 | `--output <path>` | Sidecar manifest path to write. Defaults to `openfn/openfn-sidecar.yaml` for import and `openfn-sidecar.yaml` for convert. |
 | `--jobs-dir <dir>` | Local directory for OpenFn job expression files. Defaults to `openfn/jobs`. |
 | `--expression-prefix <path>` | Path prefix written into the manifest for expression files. Defaults to `/opt/openfn/jobs` for import. |
-| `--source <id>` | Sidecar source id to create. |
+| `--source-id <id>` (`openfn import` also accepts `--source`) | Sidecar source id to create. |
 | `--dataset <name>` | Registry Data API dataset served by this source. |
 | `--entity <name>` | Registry Data API entity served by this source. |
 | `--credential-env <var>` | Environment variable holding the sidecar credential JSON for this source. |
@@ -136,15 +129,6 @@ unless noted.
 | `--allow-latest-adaptors` | Permit `@latest` adaptor specs in the generated sidecar manifest. |
 | `--allow-empty-job-bodies` | Permit empty OpenFn job bodies. |
 
-## Lab
-
-`lab` works with public hosted-lab quickstart helpers.
-
-| Subcommand or flag | Purpose |
-| --- | --- |
-| `lab env --credential <id>` | Emit SDK-ready environment values for a hosted lab credential id. |
-| `lab env --format <format>` | Output format: `shell` (default) or `json`. |
-
 ## Bruno
 
 `bruno` works with the optional generated Bruno API collection.
@@ -158,7 +142,7 @@ unless noted.
 
 ## Update check
 
-`registryctl` checks GitHub releases at most once per day for normal human-facing commands and prints an upgrade notice to standard error when a newer release is available. It skips the automatic check in continuous integration and while running `doctor`, `config`, `lab`, and the explicit update-check commands, so JSON output stays quiet.
+`registryctl` checks GitHub releases at most once per day for normal human-facing commands and prints an upgrade notice to standard error when a newer release is available. It skips the automatic check in continuous integration and while running `doctor` and the explicit update-check commands, so JSON output stays quiet.
 
 | Subcommand | Purpose |
 | --- | --- |
@@ -168,4 +152,4 @@ Related environment variables are listed in the [environment variable reference]
 
 ## Source
 
-The command tree, subcommands, and flags above come from the registryctl source. For the canonical definitions, read the [registryctl command tree in `src/main.rs`](https://github.com/registrystack/registry-stack/blob/v0.8.1/crates/registryctl/src/main.rs).
+The command tree, subcommands, and flags above come from the registryctl source. For the canonical definitions, read the [registryctl command tree in `src/main.rs`](https://github.com/registrystack/registry-stack/blob/v0.8.4/crates/registryctl/src/main.rs).
