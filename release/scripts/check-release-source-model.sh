@@ -33,28 +33,14 @@ dirty_count() {
 	git -C "$1" status --short | wc -l | tr -d ' '
 }
 
-relative_to_release_dir() {
-	local path="$1"
-	local resolved_release_dir
-	resolved_release_dir="$(resolve_dir "${release_dir}")"
-	case "${path}" in
-	"${resolved_release_dir}"/*)
-		printf '%s\n' "${path#"${resolved_release_dir}/"}"
-		;;
-	*)
-		echo "release source model failed: ${path} is outside ${resolved_release_dir}" >&2
-		exit 2
-		;;
-	esac
-}
-
 gitlink_head() {
 	local name="$1"
-	local rel_path="$2"
+	local superproject="$2"
+	local rel_path="$3"
 	local entry
 	local mode
 	local object
-	entry="$(git -C "${release_dir}" ls-files -s -- "${rel_path}")"
+	entry="$(git -C "${superproject}" ls-files -s -- "${rel_path}")"
 	if [[ -z "${entry}" ]]; then
 		echo "release source model failed: ${name} has no committed gitlink at ${rel_path}" >&2
 		exit 2
@@ -70,15 +56,32 @@ gitlink_head() {
 require_clean_committed_submodule() {
 	local name="$1"
 	local path="$2"
+	local superproject
 	local rel_path
 	local status_line
 	local status_prefix
 	local expected_head
 	local actual_head
 	local dirty_paths
-	rel_path="$(relative_to_release_dir "${path}")"
-	expected_head="$(gitlink_head "${name}" "${rel_path}")"
-	status_line="$(git -C "${release_dir}" submodule status -- "${rel_path}")"
+	# Anchor gitlink lookups at whichever repository actually holds the vendor
+	# path: the monorepo root for legacy lab/vendor pins, or the checkout that
+	# contains this script for standalone layouts.
+	if [[ ! -d "$(dirname "${path}")" ]]; then
+		echo "release source model failed: ${name} has no committed gitlink at ${path}" >&2
+		exit 2
+	fi
+	superproject="$(git -C "$(dirname "${path}")" rev-parse --show-toplevel)"
+	case "${path}" in
+	"${superproject}"/*)
+		rel_path="${path#"${superproject}/"}"
+		;;
+	*)
+		echo "release source model failed: ${path} is outside ${superproject}" >&2
+		exit 2
+		;;
+	esac
+	expected_head="$(gitlink_head "${name}" "${superproject}" "${rel_path}")"
+	status_line="$(git -C "${superproject}" submodule status -- "${rel_path}")"
 	if [[ -z "${status_line}" ]]; then
 		echo "release source model failed: ${name} has no submodule status at ${rel_path}" >&2
 		exit 2
@@ -192,24 +195,25 @@ has_custom_cel_mapping_source_dir() {
 	[[ -d "${CEL_MAPPING_SOURCE_DIR}" ]]
 }
 
-# Legacy Lab checkouts still keep the Crosswalk submodule at lab/vendor/crosswalk;
-# a fresh release/ checkout has no vendor/ directory of its own. Prefer the Lab
-# checkout while it exists so in-place upgrades keep working, and fall back to
-# a release/-relative default once lab/ is gone.
-default_crosswalk_dir() {
-	local legacy_lab_crosswalk="${repo_root}/lab/vendor/crosswalk"
-	if [[ -d "${legacy_lab_crosswalk}" ]]; then
-		printf '%s\n' "${legacy_lab_crosswalk}"
+# Legacy Lab checkouts keep the committed vendor pins under lab/vendor/ (per
+# .gitmodules); a release/ checkout has no vendor/ tree of its own. Prefer the
+# Lab location while it exists so the wrapper-era transition path keeps
+# working, and fall back to a release/-relative default once lab/ is gone.
+default_vendor_dir() {
+	local name="$1"
+	local legacy_lab_dir="${repo_root}/lab/vendor/${name}"
+	if [[ -d "${legacy_lab_dir}" ]]; then
+		printf '%s\n' "${legacy_lab_dir}"
 	else
-		printf '%s\n' "${release_dir}/vendor/crosswalk"
+		printf '%s\n' "${release_dir}/vendor/${name}"
 	fi
 }
 
-vendor_platform="${release_dir}/vendor/registry-platform"
-vendor_relay="${release_dir}/vendor/registry-relay"
-vendor_notary="${release_dir}/vendor/registry-notary"
-vendor_manifest="${release_dir}/vendor/registry-manifest"
-vendor_crosswalk="${release_dir}/vendor/crosswalk"
+vendor_platform="$(default_vendor_dir registry-platform)"
+vendor_relay="$(default_vendor_dir registry-relay)"
+vendor_notary="$(default_vendor_dir registry-notary)"
+vendor_manifest="$(default_vendor_dir registry-manifest)"
+vendor_crosswalk="$(default_vendor_dir crosswalk)"
 # CEL_MAPPING_SOURCE_DIR is the deprecated name for CROSSWALK_SOURCE_DIR; the
 # fallback keeps old operator environments working until they migrate.
 if [[ -n "${CROSSWALK_SOURCE_DIR:-}" ]]; then
@@ -239,11 +243,7 @@ source)
 	notary_platform_dir="$(resolve_dir "${REGISTRY_NOTARY_PLATFORM_SOURCE_DIR:-${platform_dir}}")"
 	openfn_notary_dir="$(resolve_dir "${REGISTRY_OPENFN_NOTARY_SOURCE_DIR:-${notary_dir}}")"
 	manifest_dir="$(resolve_dir "${REGISTRY_MANIFEST_REPO:-${vendor_manifest}}")"
-	if [[ -n "${CROSSWALK_SOURCE_DIR:-}" ]]; then
-		crosswalk_dir="$(resolve_dir "${crosswalk_source_dir}")"
-	else
-		crosswalk_dir="$(resolve_dir "$(default_crosswalk_dir)")"
-	fi
+	crosswalk_dir="$(resolve_dir "${crosswalk_source_dir}")"
 
 	require_cargo_repo "registry-platform" "${platform_dir}"
 	require_cargo_repo "registry-relay" "${relay_dir}"
@@ -283,8 +283,45 @@ monorepo)
 	fi
 	printf 'release-source registry-stack %s %s dirty=%s\n' "${stack_root}" "${stack_head}" "${stack_dirty}"
 	# Crosswalk, registry-atlas, and the eSignet Relay authenticator pins are
-	# release provenance, not proven here: release/manifests/registry-stack-*.yaml
-	# records them and `registry-release validate`/`validate-source` checks them.
+	# release provenance carried by release/manifests/registry-stack-*.yaml.
+	# `registry-release validate` only asserts external.crosswalk, so prove the
+	# rest here: every external entry must record a repo and a 40-hex ref.
+	python3 - "${release_dir}"/manifests/registry-stack-*.yaml <<'PY'
+import re
+import sys
+from pathlib import Path
+
+import yaml
+
+HEX40 = re.compile(r"^[0-9a-f]{40}$")
+failed = False
+for arg in sys.argv[1:]:
+    path = Path(arg)
+    if not path.is_file():
+        print(f"release source model failed: no release manifest at {arg}", file=sys.stderr)
+        failed = True
+        continue
+    manifest = yaml.safe_load(path.read_text(encoding="utf-8"))
+    external = manifest.get("external") if isinstance(manifest, dict) else None
+    if not isinstance(external, dict) or not external:
+        print(f"release source model failed: {path.name} has no external section", file=sys.stderr)
+        failed = True
+        continue
+    for name in sorted(external):
+        entry = external[name]
+        repo = entry.get("repo") if isinstance(entry, dict) else None
+        ref = str(entry.get("ref", "")) if isinstance(entry, dict) else ""
+        if not repo or not HEX40.fullmatch(ref):
+            print(
+                f"release source model failed: {path.name} external.{name} must record a repo and a 40-hex ref",
+                file=sys.stderr,
+            )
+            failed = True
+            continue
+        print(f"release-source-external {path.name} {name} {repo} {ref}")
+if failed:
+    sys.exit(1)
+PY
 	;;
 *)
 	echo "usage: REGISTRY_RELEASE_SOURCE_MODE=vendor|source|monorepo scripts/check-release-source-model.sh [vendor|source|monorepo]" >&2

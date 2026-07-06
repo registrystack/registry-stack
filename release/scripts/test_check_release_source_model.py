@@ -14,6 +14,20 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 VALIDATOR_PATH = SCRIPT_DIR / "check-release-source-model.sh"
 
+MANIFEST_YAML = """\
+stack:
+  release: test
+  version: 0.0.1
+
+external:
+  crosswalk:
+    repo: PublicSchema/crosswalk
+    ref: 1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a
+  registry-atlas:
+    repo: example/registry-atlas
+    ref: 2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b
+"""
+
 
 class ReleaseSourceModelTest(unittest.TestCase):
     def test_vendor_mode_accepts_clean_committed_submodules(self) -> None:
@@ -76,6 +90,43 @@ class ReleaseSourceModelTest(unittest.TestCase):
         self.assertIn("release-source crosswalk", result.stdout)
         self.assertNotIn("vendor/cel-mapping", result.stdout)
 
+    def test_vendor_mode_prefers_legacy_lab_vendor_gitlinks(self) -> None:
+        """The script must default to lab/vendor/ pins while lab/ still exists."""
+        with ReleaseSourceFixture(
+            script_rel_dir="release/scripts",
+            vendor_rel_dir="lab/vendor",
+        ) as checkout_root:
+            result = _run(
+                checkout_root,
+                "release/scripts/check-release-source-model.sh",
+                "vendor",
+                None,
+            )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("lab/vendor/crosswalk", result.stdout)
+        self.assertIn("lab/vendor/registry-relay", result.stdout)
+
+    def test_source_mode_honors_deprecated_cel_mapping_source_dir(self) -> None:
+        with ReleaseSourceFixture() as checkout_root:
+            sources = checkout_root.parent / "sources"
+            crosswalk_source = (sources / "crosswalk").resolve()
+
+            result = _run(
+                checkout_root,
+                "scripts/check-release-source-model.sh",
+                "source",
+                {
+                    "REGISTRY_PLATFORM_SOURCE_DIR": str(sources / "registry-platform"),
+                    "REGISTRY_RELAY_SOURCE_DIR": str(sources / "registry-relay"),
+                    "REGISTRY_NOTARY_SOURCE_DIR": str(sources / "registry-notary"),
+                    "CEL_MAPPING_SOURCE_DIR": str(sources / "crosswalk"),
+                },
+            )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn(f"release-source crosswalk {crosswalk_source}", result.stdout)
+
 
 class MonorepoSourceModelTest(unittest.TestCase):
     """Monorepo mode must pass with no lab/ checkout present.
@@ -101,8 +152,56 @@ class MonorepoSourceModelTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("registry-relay crate", result.stderr)
 
+    def test_monorepo_mode_records_external_release_refs(self) -> None:
+        with MonorepoFixture() as stack_root:
+            result = run_monorepo_validator(stack_root)
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn(
+            "release-source-external registry-stack-test.yaml crosswalk",
+            result.stdout,
+        )
+        self.assertIn(
+            "release-source-external registry-stack-test.yaml registry-atlas",
+            result.stdout,
+        )
+
+    def test_monorepo_mode_rejects_malformed_external_ref(self) -> None:
+        with MonorepoFixture() as stack_root:
+            manifest = stack_root / "release" / "manifests" / "registry-stack-test.yaml"
+            manifest.write_text(
+                manifest.read_text(encoding="utf-8").replace(
+                    "2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b",
+                    "not-a-commit",
+                ),
+                encoding="utf-8",
+            )
+
+            result = run_monorepo_validator(stack_root)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("external.registry-atlas", result.stderr)
+
+    def test_monorepo_mode_rejects_missing_manifests(self) -> None:
+        with MonorepoFixture() as stack_root:
+            shutil.rmtree(stack_root / "release" / "manifests")
+
+            result = run_monorepo_validator(stack_root)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("no release manifest", result.stderr)
+
 
 class ReleaseSourceFixture:
+    def __init__(
+        self,
+        *,
+        script_rel_dir: str = "scripts",
+        vendor_rel_dir: str = "vendor",
+    ) -> None:
+        self.script_rel_dir = script_rel_dir
+        self.vendor_rel_dir = vendor_rel_dir
+
     def __enter__(self) -> Path:
         self.tmp = tempfile.TemporaryDirectory()
         root = Path(self.tmp.name)
@@ -112,8 +211,9 @@ class ReleaseSourceFixture:
         self.checkout_root.mkdir()
         git(self.checkout_root, "init")
         configure_identity(self.checkout_root)
-        (self.checkout_root / "scripts").mkdir()
-        shutil.copy2(VALIDATOR_PATH, self.checkout_root / "scripts" / VALIDATOR_PATH.name)
+        script_dir = self.checkout_root / self.script_rel_dir
+        script_dir.mkdir(parents=True)
+        shutil.copy2(VALIDATOR_PATH, script_dir / VALIDATOR_PATH.name)
 
         for name in (
             "registry-platform",
@@ -139,10 +239,10 @@ class ReleaseSourceFixture:
                 "submodule",
                 "add",
                 str(source),
-                f"vendor/{name}",
+                f"{self.vendor_rel_dir}/{name}",
             )
 
-        git(self.checkout_root, "add", ".gitmodules", "vendor")
+        git(self.checkout_root, "add", ".gitmodules", self.vendor_rel_dir)
         git(self.checkout_root, "commit", "-m", "Seed vendor submodules")
         return self.checkout_root
 
@@ -175,6 +275,12 @@ class MonorepoFixture:
         release_scripts = stack_root / "release" / "scripts"
         release_scripts.mkdir(parents=True)
         shutil.copy2(VALIDATOR_PATH, release_scripts / VALIDATOR_PATH.name)
+        manifests = stack_root / "release" / "manifests"
+        manifests.mkdir()
+        (manifests / "registry-stack-test.yaml").write_text(
+            MANIFEST_YAML,
+            encoding="utf-8",
+        )
         git(stack_root, "add", "-A")
         git(stack_root, "commit", "-m", "Seed monorepo checkout")
         self.stack_root = stack_root
