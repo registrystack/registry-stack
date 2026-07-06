@@ -1,11 +1,11 @@
 ---
 title: "RS-DM-MANIFEST: Registry Manifest portable metadata data model"
-description: "The data model for a Registry Manifest portable metadata manifest: its schema version and identity, the runtime-binding boundary that keeps it portable, the catalog and top-level collections that describe a registry, reference integrity and identifier constraints, grouped evidence, governed evidence gateway metadata, federation discovery metadata, the standards-shaped render set, the publication bundle and its digests, and the strict unknown-key rejection rule a conforming producer and reader follow."
+description: "The data model for a Registry Manifest portable metadata manifest: its schema version and identity, the runtime-binding boundary that keeps it portable, the catalog and top-level collections that describe a registry, reference integrity and identifier constraints, grouped evidence, governed evidence gateway metadata, federation discovery metadata, the standards-shaped render set, the discovery bundle and its digests, and the strict unknown-key rejection rule a conforming producer and reader follow."
 status: draft
 owner: registry-docs
 source_repos:
   - registry-manifest
-last_reviewed: "2026-06-21"
+last_reviewed: "2026-07-07"
 doc_type: specification
 doc_id: RS-DM-MANIFEST
 category: normative
@@ -42,7 +42,7 @@ The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 
 | 0.1.0 | 2026-06-13 | draft | Initial portable metadata data model, distilled from the Registry Manifest overview, the validate-and-render guide, and the reference, and graded against the schema types and the load-time validator the Registry Manifest core enforces. |
 | 0.2.0 | 2026-06-20 | draft | Added governed evidence gateway metadata, policy id/hash binding, ODRL enforcement profile validation, and the runtime PDP boundary. |
 | 0.2.1 | 2026-06-21 | draft | Clarified federation discovery trust boundaries, manifest validation limits, and static publication provenance. |
-| 0.3.0 | 2026-07-07 | draft | Rewrote REQ-DM-MANIFEST-013 from the additive-evolution rule to strict unknown-key rejection at parse time, and updated the runtime-binding-exclusion limitation and conformance statement to match (issue #249, issue #285). |
+| 0.3.0 | 2026-07-07 | draft | Corrected REQ-DM-MANIFEST-007 to require a unique `(id, version)` pair rather than independently unique `id` and `version` values, corrected the REQ-DM-MANIFEST-002 runtime-only-key example, renamed the static discovery bundle consistently, and rewrote REQ-DM-MANIFEST-013 from the additive-evolution rule to strict unknown-key rejection at parse time (issue #249, issue #285). |
 
 ## 1. Scope and references
 
@@ -55,7 +55,7 @@ This specification covers the structure and invariants of a portable metadata ma
 - Requirements and grouped evidence.
 - Governed evidence pack metadata and the Evidence Gateway PDP binding surface.
 - Federation discovery metadata.
-- The standards-shaped render set and the static publication bundle.
+- The standards-shaped render set and the static discovery bundle.
 - Compatibility and evolution.
 
 This specification does not define:
@@ -96,7 +96,7 @@ REQ-DM-MANIFEST-001: A metadata manifest MUST declare `schema_version: registry-
 
 The manifest is portable: it carries the static description of a registry and nothing about a particular deployment. This boundary is what lets a manifest be authored, reviewed, hosted, and pinned without access to any production system, and what keeps Registry Manifest a pure library with no data dependencies (REQ-ARC-G-001).
 
-REQ-DM-MANIFEST-002: A metadata manifest MUST be runtime-independent: it MUST NOT carry runtime bindings such as source paths, table identifiers, caller scopes, backend credentials, peer allow-lists, federation signing keys, replay stores, or pairwise subject-hash secrets. Registry Manifest MUST reject a manifest that contains any of the runtime-only keys it enumerates. This is the data-model form of REQ-ARC-G-002, and the boundary [RS-PR-RELAY](../rs-pr-relay/) keeps on the Relay side as REQ-PR-RELAY-011: runtime bindings belong in Registry Relay or Registry Notary configuration, never in the manifest.
+REQ-DM-MANIFEST-002: A metadata manifest MUST be runtime-independent: it MUST NOT carry runtime bindings such as source paths, table identifiers, caller scopes, backend credentials, peer allow-lists, federation signing keys, replay stores, or token URLs. Registry Manifest MUST reject a manifest that contains any of the runtime-only keys it enumerates. This is the data-model form of REQ-ARC-G-002, and the boundary [RS-PR-RELAY](../rs-pr-relay/) keeps on the Relay side as REQ-PR-RELAY-011: runtime bindings belong in Registry Relay or Registry Notary configuration, never in the manifest.
 
 ## 4. Catalog and top-level structure
 
@@ -118,7 +118,7 @@ REQ-DM-MANIFEST-006: An evidence type MUST prove at least one requirement define
 
 A manifest can publish governed evidence metadata for an Evidence Gateway runtime to select a policy decision point (PDP) policy. This is still metadata: Registry Manifest validates the pack shape, policy identity, hash binding, supported ODRL enforcement terms, and required evidence-pack declarations, while runtime enforcement remains with Registry Relay's governed PDP path.
 
-REQ-DM-MANIFEST-007: Where an `ecosystem_bindings` entry declares `type: governed-evidence`, it MUST carry unique `id` and `version` values, a non-empty `profile`, and `evidence_pack` metadata. The evidence pack MUST declare `pack_id`, `pack_version`, `source_basis`, `semantic_profile`, `evidence_envelope`, `required_gates`, `allowed_outputs`, `policy_id`, `policy_hash`, and `odrl_enforcement`. `source_basis`, `semantic_profile`, `evidence_envelope`, `source_mapping`, `policy`, fixtures, and synthetic data remain JSON metadata values where the manifest validates presence and object shape where implemented; this requirement MUST NOT be read as a fully typed evidence-pack metadata model.
+REQ-DM-MANIFEST-007: Where an `ecosystem_bindings` entry declares `type: governed-evidence`, it MUST carry `id` and `version` values whose `(id, version)` pair is unique among the manifest's ecosystem bindings, a non-empty `profile`, and `evidence_pack` metadata. The evidence pack MUST declare `pack_id`, `pack_version`, `source_basis`, `semantic_profile`, `evidence_envelope`, `required_gates`, `allowed_outputs`, `policy_id`, `policy_hash`, and `odrl_enforcement`. `source_basis`, `semantic_profile`, `evidence_envelope`, `source_mapping`, `policy`, fixtures, and synthetic data remain JSON metadata values where the manifest validates presence and object shape where implemented; this requirement MUST NOT be read as a fully typed evidence-pack metadata model.
 
 REQ-DM-MANIFEST-008: A governed evidence pack MUST bind runtime policy selection to a policy identity and digest: `policy_id` MUST be non-empty, `policy_hash` MUST be a lowercase `sha256:` digest, and, when an inline `policy` object is present, Registry Manifest MUST verify `policy_hash` against the canonical JSON form of that inline policy. `required_gates` MUST include the gateway gates Registry Manifest requires for governed evidence, including source freshness, source binding, route scope, requester and subject identity, assurance, legal basis, consent, jurisdiction, requested disclosure, credential format, authority basis, and subject relationship. `allowed_outputs` MUST include `minimized_json`.
 
@@ -138,7 +138,7 @@ From a valid manifest, Registry Manifest renders a set of standards-shaped artif
 
 REQ-DM-MANIFEST-011: Registry Manifest MUST render its discovery artifacts as a pure, deterministic function of the manifest, with no network access and no data-source access (the data-model form of REQ-ARC-G-001). The rendered set is standards-shaped: a catalog, Data Catalog Vocabulary (DCAT) and BRegDCAT-AP JSON-LD, Core Public Service Vocabulary Application Profile (CPSV-AP) JSON-LD, Shapes Constraint Language (SHACL) node shapes, JSON Schema (Draft 2020-12), Open Geospatial Consortium (OGC) API Records item collection, Open Digital Rights Language (ODRL) policies, CCCEV evidence metadata, and embedded SKOS-shaped codelist concept-scheme nodes inside linked-data outputs. Rendering an artifact in a standard's shape is not a claim of conformance to that standard's specification.
 
-## 9. Publication bundle and digests
+## 9. Discovery bundle and digests
 
 The `publish` operation writes the rendered artifacts as a static bundle that can be hosted as files and pinned by digest, with no runtime service in the loop. The bundle describes itself through an index.
 

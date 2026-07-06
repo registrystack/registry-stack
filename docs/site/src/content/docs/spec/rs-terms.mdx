@@ -9,7 +9,7 @@ source_repos:
   - registry-platform
   - registry-manifest
   - registry-lab
-last_reviewed: "2026-06-20"
+last_reviewed: "2026-07-07"
 doc_type: specification
 doc_id: RS-TERMS
 category: normative
@@ -24,12 +24,17 @@ standards_referenced:
   - json-schema
   - json-ld
   - odrl
+  - ogc-api-records
+  - ogc-api-features
+  - ogc-api-edr
   - openapi
   - sd-jwt-vc
   - oid4vci
   - w3c-did
+  - verifiable-credentials
   - sp-dci
   - sdmx
+  - prov-o
 audience:
   - integrator
   - maintainer
@@ -40,6 +45,8 @@ This document establishes the shared vocabulary for the registry stack formal sp
 
 REQ-TERMS-001: The definitions in this document apply wherever a registry stack specification uses the term. A specification SHOULD cite RS-TERMS when importing vocabulary defined here.
 
+The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 2.
+
 ## Version history
 
 | Version | Date | Status | Change |
@@ -49,10 +56,11 @@ REQ-TERMS-001: The definitions in this document apply wherever a registry stack 
 | 0.3.0 | 2026-06-20 | draft | Added governed Evidence Gateway and PDP enforcement terms. |
 | 0.3.1 | 2026-06-20 | draft | Added PDP, PEP, trust context, source binding, route identity, checked scope, ecosystem binding, ODRL enforcement profile, audit provenance, and fail-closed definitions. |
 | 0.3.2 | 2026-06-22 | draft | Added delegated self-attestation and clarified direct self-attestation. |
+| 0.4.0 | 2026-07-07 | draft | Renamed the static discovery bundle consistently, added the DID issuer-mode security qualifier, corrected signed response credential gating and disclosure profile casing, added SDMX and eight vocabulary entries (matching policy, claim definition, credential profile, source connector, source adapter sidecar, static-peer federation, issuer mode, JWKS), extended `standards_referenced`, and aligned self-attestation terminology with RS-PR-NOTARY. |
 
 ## 1. Products
 
-The five related projects that form the registry stack are listed below. Product names are Title Case. Repository slugs appear in `monospace` and are always lowercase. The phrase "registry stack" (lowercase) refers to the five-project ensemble.
+The registry stack comprises five related projects. Product names are Title Case. Repository slugs appear in `monospace` and are always lowercase. The phrase "registry stack" (lowercase) refers to the five-project ensemble.
 
 **Registry Platform** (`registry-platform`): Shared Rust workspace for registry security and operational primitives, including auth helpers, OIDC verification, audit envelopes, HTTP security, outbound HTTP policy, crypto, Selective Disclosure JWT Verifiable Credential (SD-JWT VC) helpers, and test fixtures. Consumed by both runtime services.
 
@@ -70,23 +78,23 @@ The five related projects that form the registry stack are listed below. Product
 
 **evidence claim**: A verifiable claim, attestation, credential claim, or status assertion that Registry Notary evaluates from configured sources. Registry Stack product term.
 
-**disclosure profile**: Registry Notary control over what the caller receives from a claim evaluation result: `Value` (full value disclosed), `Predicate` (only true/false satisfaction), or `Redacted` (value fully hidden). Registry Stack product term.
+**disclosure profile**: Registry Notary control over what the caller receives from a claim evaluation result: `value` (full value disclosed), `predicate` (only true/false satisfaction), or `redacted` (value fully hidden). Registry Stack product term.
 
 **holder**: The party that holds a credential in a wallet and presents it to a verifier. Registry Notary binds each credential to a holder key (`did:jwk`) in the `cnf` claim, so only the holder can present it.
 
 **wallet**: A holder-owned application that stores credentials and presents them to verifiers. Registry Notary issues credentials; the wallet that stores, unlocks, and presents them is a separate component owned by the holder.
 
-**self-attestation**: Registry Notary access pattern where an authenticated OIDC principal is the protected requester for configured claim evaluation or credential issuance. In direct self-attestation, the subject is the authenticated requester. In delegated self-attestation, the authenticated requester acts for a configured dependent target only when the relationship proof passes. Registry Stack product term.
+**self-attestation**: Registry Notary access pattern where an authenticated OIDC principal is the protected requester for configured claim evaluation or credential issuance. Registry Notary has two self-attestation access modes: `self_attestation` (direct self-attestation), where the authenticated principal is the credential subject, and `delegated_attestation` (delegated self-attestation), where the authenticated principal is the requester and a configured dependent target can be evaluated only when scoped authorization details name the same target, relationship, and proof claim. Registry Stack product term.
 
 **delegated self-attestation**: Registry Notary self-attestation access mode `delegated_attestation`. The requester is derived from the authenticated principal, the request target and scoped authorization details identify the same configured dependent subject, the relationship is derived from scoped authorization details, and the dependent claim can read sources only after the configured proof claim evaluates to boolean `true`. This is distinct from static-peer delegated evaluation under Notary federation. Registry Stack product term.
 
-**signed response credentials**: Opt-in Registry Relay feature that attaches a W3C Verifiable Credentials Data Model (VCDM) 2.0 VC-JWT signed credential to entity record and aggregate responses when the caller requests `Accept: application/vc+jwt`. The config key is `provenance` for backward compatibility. The Decentralized Identifier (DID) document is served at `/.well-known/did.json` in gateway issuer mode, JSON Schemas are served under `/schemas/...`, and JSON-LD contexts are served under `/contexts/...`. Enabled by the `crosswalk-runtime` Cargo feature group.
+**signed response credentials**: Opt-in Registry Relay feature that attaches a W3C Verifiable Credentials Data Model (VCDM) 2.0 VC-JWT signed credential to entity record and aggregate responses when the caller requests `Accept: application/vc+jwt`. The config key is `provenance` for backward compatibility. The Decentralized Identifier (DID) document is served at `/.well-known/did.json` in gateway issuer mode, JSON Schemas are served under `/schemas/...`, and JSON-LD contexts are served under `/contexts/...`. Gated by runtime provenance configuration, not a Cargo feature.
 
 **SD-JWT VC**: Selective Disclosure JWT Verifiable Credential (IETF draft). Registry Notary issues SD-JWT VC credentials signed with EdDSA. Media type: `application/dc+sd-jwt`.
 
 **OID4VCI**: OpenID for Verifiable Credential Issuance. The protocol a wallet uses to obtain a credential from an issuer. Registry Notary implements an OID4VCI issuance flow: a credential offer, issuer metadata at `/.well-known/openid-credential-issuer`, a nonce endpoint, and a holder proof. The surface is a profiled subset of OID4VCI Draft 13 advertising the `dc+sd-jwt` format; full issuer conformance is not asserted (`openid4vci.support: not_full_issuer`).
 
-**DID**: Decentralized Identifier. W3C DID Core 1.0. Registry Relay publishes a `did:web` document at `/.well-known/did.json` when signed response credentials are enabled (config key: `provenance`). Registry Notary parses `did:jwk` values for credential subjects.
+**DID**: Decentralized Identifier. W3C DID Core 1.0. Registry Relay publishes its DID document (`did.json`) only in gateway issuer mode; in delegated issuer mode Relay MUST NOT publish `did.json` and the runtime refuses to serve it (REQ-PR-RELAY-013). Registry Notary parses `did:jwk` values for credential subjects.
 
 **eSignet**: Open-source identity and authentication service (part of MOSIP). The hosted lab uses eSignet as the authorization server a citizen signs in to before Registry Notary issues a self-attestation credential. Not a Registry Stack product term; included here because it appears in hosted lab documentation.
 
@@ -96,7 +104,7 @@ The five related projects that form the registry stack are listed below. Product
 
 **runtime binding**: Registry Relay configuration that connects logical manifest concepts to actual files, database tables, scopes, and backend credentials. Lives in Relay config, not in the manifest. Registry Stack product term.
 
-**static publication bundle**: Manifest-generated directory containing `catalog.json`, `dcat.jsonld`, `cpsv-ap.jsonld`, `shacl.jsonld`, entity and form JSON Schemas, OGC Records item collections, evidence offering JSON, policy JSON-LD, and embedded SKOS-shaped codelist metadata in linked-data outputs. Can be hosted as static files without running Registry Relay. Registry Stack product term.
+**static discovery bundle**: Manifest-generated directory containing `catalog.json`, `dcat.jsonld`, `cpsv-ap.jsonld`, `shacl.jsonld`, entity and form JSON Schemas, OGC Records item collections, evidence offering JSON, policy JSON-LD, and embedded SKOS-shaped codelist metadata in linked-data outputs. Can be hosted as static files without running Registry Relay. Registry Stack product term.
 
 **standards-shaped metadata**: Machine-readable metadata emitted through formats such as Data Catalog Vocabulary (DCAT), Core Public Service Vocabulary Application Profile (CPSV-AP), Core Criterion and Core Evidence Vocabulary (CCCEV), Shapes Constraint Language (SHACL), JSON Schema, Open Digital Rights Language (ODRL), OpenAPI, OGC API Records, and SKOS-shaped codelist metadata. Registry Stack product term.
 
@@ -111,6 +119,22 @@ The five related projects that form the registry stack are listed below. Product
 **evidence offering**: Metadata entry that describes a verification capability and the access path a client uses to reach it. In the current stack it points a client from Registry Relay metadata to Registry Notary or another evidence service; Relay describes the offering but does not evaluate the claim. Registry Stack product term.
 
 **evidence type list**: A Core Criterion and Core Evidence Vocabulary (CCCEV) list of evidence types that satisfy a requirement. In Registry Manifest, one list is one grouped option; multiple lists on the same requirement are alternatives. The CCCEV term is adopted directly.
+
+**claim definition**: The Registry Notary configuration artifact that declares a named claim capability: its identity, the inputs and source bindings it reads, the single rule that decides its value, and the disclosure, format, and credential rules that shape what leaves the service. Registry Stack product term.
+
+**credential profile**: Registry Notary configuration that names which claims may be issued as a credential. A claim is issuable only when both sides agree: the claim lists the profile in its `credential_profiles`, and the profile lists the claim in its `allowed_claims`. Registry Stack product term.
+
+**issuer mode**: Registry Relay signed response credentials configuration axis with two values: gateway mode, where Relay hosts its own DID document and signs under its own DID, and delegated mode, where a delegating ministry hosts the DID document for its own domain and Relay MUST NOT publish `did.json`. Registry Stack product term.
+
+**JWKS**: JSON Web Key Set. Registry Notary publishes its issuer's public verification keys at `GET /.well-known/evidence/jwks.json`, served without authentication so a verifier can obtain the public key without holding a Notary credential.
+
+**matching policy**: Registry Notary source-binding configuration that gates and shapes how a request resolves to a source record before the read runs, constraining the read by declared purpose, relationship context, and which inputs may identify the subject. A source binding with no matching policy falls back to unrestricted, identifier-only resolution. Registry Stack product term.
+
+**source adapter sidecar**: A Registry Notary source connector kind that reaches external sources such as DHIS2 or FHIR servers through the built-in `http_json`, `http_flow`, or `fhir` engines. It is a private deployment surface behind Registry Notary, not a public subject-facing API; a static bearer token authenticates only the internal Notary-to-sidecar hop. Registry Stack product term.
+
+**source connector**: The Registry Notary mechanism a source binding uses to reach its source data over HTTP. The supported connector kinds are `registry_data_api` (a Registry Relay instance), `dci` (an SP DCI search source), and the source adapter sidecar. There is no file-based or database connector. Registry Stack product term.
+
+**static-peer federation**: Registry Notary delegated evaluation between peers loaded from configuration at startup; a request from an unconfigured peer is rejected. A configured peer posts a compact signed JWT request through `POST /federation/v1/evaluations` and receives a compact signed JWT response carrying a scoped evaluation result. Dynamic trust-chain discovery and federated credential issuance are out of scope. Registry Stack product term.
 
 **DCAT**: Data Catalog Vocabulary. W3C recommendation. Registry Relay and Registry Manifest emit DCAT-shaped JSON-LD catalogs. Spell out on first use per document.
 
@@ -135,6 +159,8 @@ The five related projects that form the registry stack are listed below. Product
 **SKOS**: Simple Knowledge Organization System. Registry Manifest currently emits flat SKOS-shaped `skos:ConceptScheme` and `skos:Concept` nodes for codelists inside SHACL and BRegDCAT/DCAT-shaped outputs. It does not yet publish a standalone SKOS artifact.
 
 **SP DCI**: Social Protection Digital Convergence Initiative. Registry Relay exposes an SP DCI adapter behind the `spdci-api-standards` feature flag. Registry Notary ships an HTTP source connector that maps SP DCI search responses into claim evaluation inputs.
+
+**SDMX**: Statistical Data and Metadata eXchange. Registry Relay serves configured aggregates as SDMX-JSON 2.1 data messages (media type `application/vnd.sdmx.data+json;version=2.1`) through content negotiation or `?f=sdmx-json`. Scope is limited to data messages: structure messages and the SDMX REST API are not implemented.
 
 **PROV-O**: W3C Provenance Ontology. Currently listed as design influence (`inspired_by`). Provenance-shaped concepts appear in audit fields and the claim provenance struct, but no PROV-O vocabulary terms are emitted as JSON-LD at reviewed commits.
 
@@ -194,7 +220,7 @@ The five related projects that form the registry stack are listed below. Product
 
 ## 5. Abbreviations
 
-The table below maps each acronym used in registry stack documentation to its expansion. The first occurrence of each acronym in any document SHOULD be followed by its expansion in parentheses.
+This table maps each acronym used in registry stack documentation to its expansion. The first occurrence of each acronym in any document SHOULD be followed by its expansion in parentheses.
 
 | Acronym | Expansion |
 | --- | --- |
@@ -205,11 +231,12 @@ The table below maps each acronym used in registry stack documentation to its ex
 | DID | Decentralized Identifier |
 | DPI | Digital Public Infrastructure |
 | JSON-LD | JSON Linked Data |
+| JWKS | JSON Web Key Set |
 | ODRL | Open Digital Rights Language |
 | OID4VCI | OpenID for Verifiable Credential Issuance |
 | OGC API EDR | OGC API Environmental Data Retrieval |
-| OGC API Features | OGC API Features |
-| OGC API Records | OGC API Records |
+| OGC API Features | Open Geospatial Consortium API - Features |
+| OGC API Records | Open Geospatial Consortium API - Records |
 | PDP | Policy Decision Point |
 | PEP | Policy Enforcement Point |
 | PROV-O | W3C Provenance Ontology |

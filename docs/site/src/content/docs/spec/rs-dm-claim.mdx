@@ -6,7 +6,7 @@ owner: registry-docs
 source_repos:
   - registry-notary
   - registry-platform
-last_reviewed: "2026-06-20"
+last_reviewed: "2026-07-07"
 doc_type: specification
 doc_id: RS-DM-CLAIM
 category: normative
@@ -36,6 +36,7 @@ The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 
 | Version | Date | Status | Change |
 | --- | --- | --- | --- |
 | 0.1.0 | 2026-06-13 | draft | Initial claim-definition data model, distilled from the Registry Notary source-and-claim modeling guide, the operator configuration reference, and the two-way credential-eligibility and matching-policy validations the configuration loader enforces. |
+| 0.2.0 | 2026-07-07 | draft | Reworded REQ-DM-CLAIM-005 so the controlled-environment restriction on disabling matching-failure collapse reads as operational guidance rather than a runtime-enforced constraint, and documented the extract/exists value-type-checking gap and the empty-`formats`-list evaluation gap in Limitations. |
 
 ## 1. Scope and references
 
@@ -96,7 +97,7 @@ A source binding MAY carry a matching policy that gates and shapes how a request
 
 REQ-DM-CLAIM-004: Where a source binding declares a matching policy, Registry Notary MUST enforce the policy's purpose, relationship, and sufficient-input constraints before it reads the source: a request whose purpose, relationship, or supplied inputs the policy does not admit MUST be refused before source access.
 
-REQ-DM-CLAIM-005: By default, a matching failure MUST collapse to a single public reason (`evidence.not_available`), with the granular reason retained only in the audit record, so the matching surface cannot be used as an existence oracle. A deployment MAY disable this collapse only in a controlled environment where exposing not-found, ambiguous, and rejected outcomes to the caller is acceptable.
+REQ-DM-CLAIM-005: By default, a matching failure MUST collapse to a single public reason (`evidence.not_available`), with the granular reason retained only in the audit record, so the matching surface cannot be used as an existence oracle. A deployment MAY disable this collapse. Operators are expected to disable it only in a controlled environment where exposing not-found, ambiguous, and rejected outcomes to the caller is acceptable; that restriction is operational guidance, and Registry Notary enforces no runtime gate that confines the setting to such an environment.
 
 ## 5. Rule and dependencies
 
@@ -139,6 +140,8 @@ These constraints are stated so a reader does not infer an invariant the reviewe
 - **Disclosure default.** The loader does not verify that `default` is a member of `allowed`; a `default` outside `allowed` surfaces as a request error when the result is rendered, not as a startup failure (REQ-DM-CLAIM-008).
 - **Rule source reference.** The loader does not verify that a rule's `source` names a declared source binding; a dangling reference surfaces when the source is read at evaluation, not at configuration load (REQ-DM-CLAIM-006).
 - **Matching fallback.** A source binding with no matching policy resolves on identifiers alone, with no purpose, relationship, or input-minimization gating (Section 4).
+- **Value-type conformance.** Registry Notary checks that an evaluated value conforms to its declared `value.type` only for a `cel` rule; the `extract` and `exists` rule paths return their result without checking it against `value.type` (REQ-DM-CLAIM-009). Tracked in [GH#232](https://github.com/registrystack/registry-stack/issues/232).
+- **Empty formats list.** A claim definition whose `formats` list is empty (the default) can never be evaluated, because format checking rejects any format not listed, including the default-requested claim-result JSON format (REQ-DM-CLAIM-009). This is not rejected at configuration load. Tracked in [GH#170](https://github.com/registrystack/registry-stack/issues/170).
 
 ## Conformance
 
