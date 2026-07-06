@@ -247,10 +247,12 @@ aggregate, and raise `min_group_size` from 2 to 3:
           suppression: omit
 ```
 
-The containers read the config once at startup, so apply the edit with:
+The containers read the config once at startup, so apply the edit by stopping and
+starting the stack:
 
 ```sh
-registryctl restart
+registryctl stop
+registryctl start
 ```
 
 Run the aggregate request from the previous section again:
@@ -269,10 +271,11 @@ Now try to weaken the rule instead.
 Set `min_group_size` to 1 and restart again:
 
 ```sh
-registryctl restart
+registryctl stop
+registryctl start
 ```
 
-This time Relay refuses to start, and after about a minute the restart fails with
+This time Relay refuses to start, and after about a minute `registryctl start` fails with
 `Error: Relay did not become healthy and ready before timeout`.
 Ask the logs why:
 
@@ -295,7 +298,8 @@ config key; the aggregate response uses the API name too.
 Restore `min_group_size` to 2 and restart once more:
 
 ```sh
-registryctl restart
+registryctl stop
+registryctl start
 ```
 
 The two-district response from the previous section is back.
@@ -338,6 +342,6 @@ Relay refused to start when the floor dropped under 2 on personal data.
 | The installer reports an unsupported platform | No binary is published for that OS or CPU. | Install Rust with [`rustup`](https://rustup.rs), then run `cargo install --git https://github.com/registrystack/registry-stack --tag v0.8.4 registryctl --locked`. |
 | `registryctl start` cannot find Docker | Docker or another Compose provider is not installed or running. | Start Docker Desktop, OrbStack, Colima, Podman, or your supported provider, then run `registryctl start` again. |
 | `registryctl start` fails and the container log shows `failed to parse config YAML ... unknown field` | The locally cached container image does not match the digest-pinned image in the generated `compose.yaml`. | Run `docker compose pull` in the project directory, then `registryctl start` again. |
-| `registryctl restart` fails with `Relay did not become healthy and ready before timeout` | The edited `relay/config.yaml` fails validation, so the container exits at startup. | Run `registryctl logs`, fix the field named in the `ERROR` line, and run `registryctl restart` again. |
+| `registryctl start` fails with `Relay did not become healthy and ready before timeout` after a config edit | The edited `relay/config.yaml` fails validation, so the container exits at startup. | Run `registryctl logs`, fix the field named in the `ERROR` line, then run `registryctl stop` and `registryctl start` again. |
 | A row read returns `403 Forbidden` | The key is valid but lacks the row-read scope. | Use `ROW_READER_RAW` for row reads. |
 | A row read returns `400 auth.purpose_required` | The entity requires a `Data-Purpose` header. | Send `Data-Purpose: https://example.local/purpose/tutorial` or another purpose URI. |
