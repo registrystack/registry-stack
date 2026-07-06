@@ -54,7 +54,7 @@ always in a newer release.
 - Release notes identify security-relevant changes. When a fix required tightening covered
   surface, the notes say so explicitly, per the security exception in the
   [deprecation policy](../../reference/deprecation-policy/).
-- Dependency advisories are enforced in CI on every push through `cargo deny check`.
+- Dependency advisories are enforced through `cargo deny check` in the CI `rust` job, which runs on every push that touches Rust code (the job is path-filtered).
   An advisory without an upstream fix carries a scoped, documented ignore in `deny.toml`
   with a review trigger; a newly published advisory fails CI until it is fixed or receives
   its own documented ignore.

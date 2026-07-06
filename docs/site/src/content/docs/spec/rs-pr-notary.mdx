@@ -61,9 +61,9 @@ This specification covers Registry Notary's externally observable protocol behav
 
 This specification does not define:
 
-- **Exact routes and schemas.** The generated OpenAPI document, rendered as the [Registry Notary API reference](../../reference/apis/registry-notary/), is the authoritative route and schema reference. This document states behavior a schema cannot, and does not restate request and response shapes that would drift from the generated source.
-- **The claim definition data model.** How a `ClaimDefinition` declares its source bindings, rule, disclosure policy, formats, and credential eligibility belongs to [RS-DM-CLAIM](../rs-dm-claim/). This document refers to those fields only where they govern protocol behavior.
-- **Security model internals.** Key management, token fingerprinting, and the OIDC trust configuration belong to [RS-SEC-G](../rs-sec-g/) and deeper security specifications. This document states the authorization behavior a caller observes.
+- Exact routes and schemas: The generated OpenAPI document, rendered as the [Registry Notary API reference](../../reference/apis/registry-notary/), is the authoritative route and schema reference. This document states behavior a schema cannot, and does not restate request and response shapes that would drift from the generated source.
+- The claim definition data model: How a `ClaimDefinition` declares its source bindings, rule, disclosure policy, formats, and credential eligibility belongs to [RS-DM-CLAIM](../rs-dm-claim/). This document refers to those fields only where they govern protocol behavior.
+- Security model internals: Key management, token fingerprinting, and the OIDC trust configuration belong to [RS-SEC-G](../rs-sec-g/) and deeper security specifications. This document states the authorization behavior a caller observes.
 - Registry Relay's protocol: Relay's own consultation API is a separate surface, specified in [RS-PR-RELAY](../rs-pr-relay/). This document treats Relay only as a source a Notary connector reads over HTTP.
 
 For the motivation and worked examples behind this contract, see [Evidence issuance, end to end](../../explanation/evidence-issuance/). For the architecture this protocol sits in, see [RS-ARC-G](../rs-arc-g/). Media types are named per [RS-TERMS](../rs-terms/) Section 2.
@@ -82,8 +82,8 @@ REQ-PR-NOTARY-002: The capability-discovery route (`GET /.well-known/evidence-se
 
 Registry Notary runs in one of two authentication modes, selected by configuration.
 
-- **Static credentials.** The caller presents an `x-api-key` token or an `Authorization: Bearer` token. Notary fingerprints the presented token and compares it, in constant time, against `sha256:<...>` values loaded at startup. Each credential carries a `scopes` list.
-- **OIDC.** Notary delegates token verification to Registry Platform OIDC primitives (issuer, JWKS URI, audiences, algorithms, scope mapping) and still owns the scopes its claim routes require.
+- Static credentials: The caller presents an `x-api-key` token or an `Authorization: Bearer` token. Notary fingerprints the presented token and compares it, in constant time, against `sha256:<...>` values loaded at startup. Each credential carries a `scopes` list.
+- OIDC: Notary delegates token verification to Registry Platform OIDC primitives (issuer, JWKS URI, audiences, algorithms, scope mapping) and still owns the scopes its claim routes require.
 
 REQ-PR-NOTARY-003: Every claim-bearing route MUST authenticate the caller, in static-credential mode (constant-time fingerprint comparison of an `x-api-key` or `Authorization: Bearer` token) or in OIDC mode (token verification delegated to Registry Platform primitives).
 
@@ -232,15 +232,15 @@ REQ-PR-NOTARY-033: Self-attestation policy denials MUST use the public problem c
 
 These constraints are stated so a reader does not infer a capability from the route list that the reviewed implementation does not provide.
 
-- **Plugin rule type.** Declared in configuration, unimplemented (REQ-PR-NOTARY-007).
-- **Holder binding.** `did:jwk` is the only supported proof-of-possession binding method (REQ-PR-NOTARY-015).
-- **OID4VCI profile.** The OID4VCI surface is a scoped self-attestation issuance profile, not a full issuer or general external-wallet interoperability claim (REQ-PR-NOTARY-016, REQ-PR-NOTARY-027).
-- **Delegated OID4VCI.** Delegated-attestation transaction tokens are rejected by the OID4VCI credential endpoint (REQ-PR-NOTARY-032).
-- **Notary transaction details.** Notary-issued transaction and credential access tokens are bound to the configured Notary issuer before the transaction-details requirement applies. Externally issued OIDC tokens are not treated as Notary tokens by `typ` alone (REQ-PR-NOTARY-035, REQ-PR-NOTARY-036).
-- **Federation.** Static-peer delegated evaluation only; no dynamic discovery, shared replay storage, or federated credential issuance (REQ-PR-NOTARY-019).
-- **Source adapter sidecar.** The sidecar is an internal source connector surface. Direct public access, broad reuse of one sidecar token across unrelated sources, or shared cache/backoff state across authorization contexts is outside the security model (REQ-PR-NOTARY-006).
-- **Demo and template integrations.** Demo helper code and generated workflow snippets are integration examples, not a production freshness or replay-protection profile. Teams that copy them into production must add request freshness, expiry, or nonce checks appropriate to their workflow.
-- **Admin reload.** The admin reload route returns HTTP 501 with code `registry.admin.capability.not_supported` in the standalone router; it performs no reload, and key and configuration changes require a service restart.
+- Plugin rule type: Declared in configuration, unimplemented (REQ-PR-NOTARY-007).
+- Holder binding: `did:jwk` is the only supported proof-of-possession binding method (REQ-PR-NOTARY-015).
+- OID4VCI profile: The OID4VCI surface is a scoped self-attestation issuance profile, not a full issuer or general external-wallet interoperability claim (REQ-PR-NOTARY-016, REQ-PR-NOTARY-027).
+- Delegated OID4VCI: Delegated-attestation transaction tokens are rejected by the OID4VCI credential endpoint (REQ-PR-NOTARY-032).
+- Notary transaction details: Notary-issued transaction and credential access tokens are bound to the configured Notary issuer before the transaction-details requirement applies. Externally issued OIDC tokens are not treated as Notary tokens by `typ` alone (REQ-PR-NOTARY-035, REQ-PR-NOTARY-036).
+- Federation: Static-peer delegated evaluation only; no dynamic discovery, shared replay storage, or federated credential issuance (REQ-PR-NOTARY-019).
+- Source adapter sidecar: The sidecar is an internal source connector surface. Direct public access, broad reuse of one sidecar token across unrelated sources, or shared cache/backoff state across authorization contexts is outside the security model (REQ-PR-NOTARY-006).
+- Demo and template integrations: Demo helper code and generated workflow snippets are integration examples, not a production freshness or replay-protection profile. Teams that copy them into production must add request freshness, expiry, or nonce checks appropriate to their workflow.
+- Admin reload: The admin reload route returns HTTP 501 with code `registry.admin.capability.not_supported` in the standalone router; it performs no reload; configuration changes generally require a service restart, with the narrow hot-apply exceptions listed in the [known limitations hub](../../explanation/known-limitations/).
 
 ## Conformance
 

@@ -53,10 +53,10 @@ This specification covers the structure and invariants of a claim definition:
 
 This specification does not define:
 
-- **The exact configuration schema.** Every field, its YAML key, and its default belong to the [Registry Notary operator configuration reference](../../products/registry-notary/operator-config-reference/) and to the generated OpenAPI document rendered as the [Registry Notary API reference](../../reference/apis/registry-notary/). This document states the model's structure and the invariants a deployment enforces, and does not restate field schemas that would drift from the source.
-- **Protocol and wire behavior.** How a caller submits an evaluation, negotiates a format, or receives an error belongs to [RS-PR-NOTARY](../rs-pr-notary/).
-- **The security model.** How scopes, authentication, and key material are configured and enforced belongs to [RS-SEC-G](../rs-sec-g/). This document names a binding's required scope only as part of the model.
-- **The other data models of the stack.** The Registry Relay dataset surface and the portable metadata manifest are separate data models, reserved for their own RS-DM-\* specifications.
+- The exact configuration schema: Every field, its YAML key, and its default belong to the [Registry Notary operator configuration reference](../../products/registry-notary/operator-config-reference/) and to the generated OpenAPI document rendered as the [Registry Notary API reference](../../reference/apis/registry-notary/). This document states the model's structure and the invariants a deployment enforces, and does not restate field schemas that would drift from the source.
+- Protocol and wire behavior: How a caller submits an evaluation, negotiates a format, or receives an error belongs to [RS-PR-NOTARY](../rs-pr-notary/).
+- The security model: How scopes, authentication, and key material are configured and enforced belongs to [RS-SEC-G](../rs-sec-g/). This document names a binding's required scope only as part of the model.
+- The other data models of the stack: The Registry Relay dataset surface and the portable metadata manifest are separate data models, reserved for their own RS-DM-\* specifications.
 
 For the modeling guidance behind this model, see the [source and claim modeling guide](../../products/registry-notary/source-claim-modeling-guide/); for the matching outcome model, see [identity and record matching](../../products/registry-notary/identity-and-record-matching/); for the worked claim pipeline, see [Evidence issuance, end to end](../../explanation/evidence-issuance/).
 
@@ -135,11 +135,11 @@ REQ-DM-CLAIM-011: Batch evaluation MUST be semantically equivalent to evaluating
 
 These constraints are stated so a reader does not infer an invariant the reviewed implementation does not enforce at configuration load.
 
-- **Plugin rule.** Declared in configuration, unimplemented; an evaluation that reaches a `plugin` rule is refused at evaluation time, not at configuration load (REQ-DM-CLAIM-006).
-- **Identifier uniqueness.** The configuration loader does not reject two claims that share an `id`; uniqueness is an operator responsibility (REQ-DM-CLAIM-001).
-- **Disclosure default.** The loader does not verify that `default` is a member of `allowed`; a `default` outside `allowed` surfaces as a request error when the result is rendered, not as a startup failure (REQ-DM-CLAIM-008).
-- **Rule source reference.** The loader does not verify that a rule's `source` names a declared source binding; a dangling reference surfaces when the source is read at evaluation, not at configuration load (REQ-DM-CLAIM-006).
-- **Matching fallback.** A source binding with no matching policy resolves on identifiers alone, with no purpose, relationship, or input-minimization gating (Section 4).
+- Plugin rule: Declared in configuration, unimplemented; an evaluation that reaches a `plugin` rule is refused at evaluation time, not at configuration load (REQ-DM-CLAIM-006).
+- Identifier uniqueness: The configuration loader does not reject two claims that share an `id`; uniqueness is an operator responsibility (REQ-DM-CLAIM-001).
+- Disclosure default: The loader does not verify that `default` is a member of `allowed`; a `default` outside `allowed` surfaces as a request error when the result is rendered, not as a startup failure (REQ-DM-CLAIM-008).
+- Rule source reference: The loader does not verify that a rule's `source` names a declared source binding; a dangling reference surfaces when the source is read at evaluation, not at configuration load (REQ-DM-CLAIM-006).
+- Matching fallback: A source binding with no matching policy resolves on identifiers alone, with no purpose, relationship, or input-minimization gating (Section 4).
 - Value-type conformance: Registry Notary checks that an evaluated value conforms to its declared `value.type` only for a `cel` rule; the `extract` and `exists` rule paths return their result without checking it against `value.type` (REQ-DM-CLAIM-009). Tracked in [GH#232](https://github.com/registrystack/registry-stack/issues/232).
 - Empty formats list: A claim definition whose `formats` list is empty (the default) can never be evaluated, because format checking rejects any format not listed, including the default-requested claim-result JSON format (REQ-DM-CLAIM-009). This is not rejected at configuration load. Tracked in [GH#170](https://github.com/registrystack/registry-stack/issues/170).
 

@@ -23,8 +23,6 @@ This guide validates delegated claim evaluation only.
 It does not configure governed policy, production signing, or credential issuance.
 OpenCRVS remains the evidence source, and Registry Notary evaluates the claim locally.
 
-Estimated time: about 10 minutes after you have credentials and a test UIN.
-
 ## Before you start
 
 You need:
@@ -244,21 +242,20 @@ The generated `notary/config.yaml` configures:
 - Local signing material for later demo issuance configuration, not production trust.
 
 For the mental model behind these blocks, see the Registry Notary
-[OpenCRVS onboarding model](../../products/registry-notary/opencrvs-onboarding/).
+[OpenCRVS onboarding model](https://docs.registrystack.org/products/registry-notary/opencrvs-onboarding/).
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| `registryctl start` reports `missing required local env value DCI_CLIENT_ID` (or `DCI_CLIENT_SECRET`) | `secrets/local.env` still has the generated placeholder values. | Replace `DCI_CLIENT_ID` and `DCI_CLIENT_SECRET` in `secrets/local.env` with your OpenCRVS OAuth client credentials. |
 | `registryctl notary smoke` or the explicit evaluation returns a source auth error | Registry Notary could not authenticate to OpenCRVS with the configured OAuth client credentials. | Confirm `DCI_CLIENT_ID` and `DCI_CLIENT_SECRET` in `secrets/local.env` match a valid OpenCRVS OAuth client for the target environment. |
 | The smoke or evaluation returns `source.unavailable` (HTTP 503) and the logs show a DNS lookup failure | The `--source-url` host does not resolve; the placeholder was left in, or the URL is wrong. | Rerun `registryctl init notary` with your real OpenCRVS base URL, or fix `source.url` in `notary/config.yaml`. |
 | `registryctl start` times out and the container log shows `missing field \`commitment\`` | registryctl v0.8.4 pins a service image older than its own generated config format ([GH#278](https://github.com/registrystack/registry-stack/issues/278)). | Replace `ghcr.io/registrystack/registry-notary@sha256:<digest>` with `ghcr.io/registrystack/registry-notary:v0.8.4` in `compose.yaml`, run `docker compose pull`, and start again; reapply after any command that regenerates `compose.yaml`. |
 | Docker reports no `linux/arm64` manifest for a v0.8.4 image | v0.8.4 images publish for `linux/amd64` only. | Start with `DOCKER_DEFAULT_PLATFORM=linux/amd64 registryctl start`, as shown in [Validate and start](#validate-and-start). |
-| `registryctl init notary` fails with `--source-token-from-env is not used with --source-kind opencrvs-dci` | `--source-token-from-env` was passed alongside `--source-kind opencrvs-dci`. | Configure `DCI_CLIENT_ID` and `DCI_CLIENT_SECRET` directly in `secrets/local.env` instead. |
+| `registryctl init notary` fails with `--source-token-from-env is not used with --source-kind opencrvs_dci` | `--source-token-from-env` was passed alongside `--source-kind opencrvs-dci`. | Configure `DCI_CLIENT_ID` and `DCI_CLIENT_SECRET` directly in `secrets/local.env` instead. |
 
 ## Next
 
-- [OpenCRVS onboarding model](../../products/registry-notary/opencrvs-onboarding/)
+- [OpenCRVS onboarding model](https://docs.registrystack.org/products/registry-notary/opencrvs-onboarding/)
 - [Registry Notary overview](../../products/registry-notary/)
 - [Signing key providers](../../products/registry-notary/signing-key-provider/)
