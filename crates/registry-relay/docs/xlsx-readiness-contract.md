@@ -1,14 +1,11 @@
-# XLSX Readiness Contract
+# XLSX readiness contract
 
-A government office, agricultural authority, or other registry owner keeps its
-records in an Excel workbook. You want callers to read those records through a
-protected HTTPS API, without anyone touching the file directly or seeing raw
-sheet names and columns. That is what Registry Relay does over an XLSX source.
-
-It works only if the workbook behaves like a small read-only database: stable
-columns, real keys, parseable types, no formulas pretending to be data. This
-document lists the conditions a workbook has to meet before Relay can serve
-it.
+Registry Relay can publish an Excel workbook as a protected, read-only HTTPS
+API: callers read records without touching the file directly or seeing raw
+sheet names and columns. This holds only when the workbook behaves like a
+small read-only database: stable columns, real keys, parseable types, no
+formulas standing in for data. This document lists the conditions a workbook
+must meet before Relay can serve it.
 
 The contract does not make a spreadsheet trustworthy on its own.
 Authorization, purpose limitation, audit, and legal basis stay on the
@@ -16,7 +13,7 @@ deployment. See [configuration.md](configuration.md) and [ops.md](ops.md) for
 how the items below map to runtime config and the steps to publish a new
 version.
 
-## When To Use XLSX
+## When to use XLSX
 
 Good fit:
 
@@ -32,7 +29,7 @@ Bad fit:
 
 For those, use a database source instead.
 
-## Workbook Contract
+## Workbook contract
 
 A workbook is ready to use as a Relay source only when every item below is
 true.
@@ -55,7 +52,7 @@ ingest; anything inside it has to parse cleanly.
 
 Relay uses the primary key to address rows in URLs, audit records, and foreign
 keys from other sheets. A key that changes between exports, duplicates within
-a sheet, or is just a row number breaks all of that.
+a sheet, or is only a row number breaks all of that.
 
 - Every exposed entity has one configured primary key column.
 - Primary key values are non-empty after trimming, unique within the range,
@@ -129,7 +126,7 @@ old audit log no longer matches what callers now see.
   Relay is reading it.
 - Same workbook plus same config produces the same entity records.
 
-## Anti-Patterns
+## Anti-patterns
 
 - Worksheet row numbers as public identifiers.
 - Color coding, comments, hidden columns, or filters carrying data meaning.
@@ -142,7 +139,7 @@ old audit log no longer matches what callers now see.
 - Storing API keys or secrets in workbook cells.
 - Editing source files in place while Relay is reading them.
 
-## Example Workbook Contract
+## Example workbook contract
 
 Illustrative. Relay does not require this file; deployments can use one to
 make preflight validation concrete.
@@ -168,7 +165,7 @@ tables:
         references: { sheet: Farmers, column: farmer_id }
 ```
 
-## Promotion Check
+## Promotion check
 
 A workbook version is ready when:
 

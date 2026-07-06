@@ -1,4 +1,4 @@
-# Registry Relay Scenario Catalog
+# Registry Relay scenario catalog
 
 This catalog describes where Registry Relay fits in registry programs. It is a
 product and demo guide, not a REST specification.
@@ -36,9 +36,9 @@ Status labels:
 | Audit sink | Receives chained platform audit records |
 | Standards consumer | Reads OGC, DCAT, SP DCI, PublicSchema, or OpenAPI views |
 
-## Reusable Patterns
+## Reusable patterns
 
-### Protected Registry Consultation
+### Protected registry consultation
 
 ```mermaid
 sequenceDiagram
@@ -55,7 +55,7 @@ sequenceDiagram
   Relay-->>App: Filtered entity response
 ```
 
-### Aggregate-Only Planning
+### Aggregate-only planning
 
 ```mermaid
 sequenceDiagram
@@ -70,7 +70,7 @@ sequenceDiagram
   Relay-->>Analyst: JSON or CSV aggregate result
 ```
 
-### Metadata Publication
+### Metadata publication
 
 ```mermaid
 sequenceDiagram
@@ -85,7 +85,7 @@ sequenceDiagram
   Consumer->>Relay: Authenticated scoped metadata discovery
 ```
 
-### Relay To Registry Notary Handoff
+### Relay to Registry Notary handoff
 
 ```mermaid
 sequenceDiagram
@@ -99,7 +99,7 @@ sequenceDiagram
   Notary-->>Client: Verification result or credential
 ```
 
-## Scenario Matrix
+## Scenario matrix
 
 | # | Scenario | Pattern | Status | Main Gap |
 | --- | --- | --- | --- | --- |
@@ -120,7 +120,7 @@ sequenceDiagram
 | 15 | Relay performs local evidence verification | Evidence verification | Out of scope | Registry Notary owns verification execution |
 | 16 | Relay enforces row-level authorization expressions | Fine-grained auth | Planned | V1 uses scopes, filters, purpose headers, and projection |
 
-## Demo Coverage
+## Demo coverage
 
 The demo configs cover benefits casework, clinic capacity, education, public
 works, subject linkage, disability registry sync, and cross-demo workflows. Use

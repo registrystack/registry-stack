@@ -1,4 +1,4 @@
-# Portable Metadata
+# Portable metadata
 
 Registry Relay separates portable metadata from runtime configuration.
 The standards assumptions behind this publication model are documented in
@@ -57,7 +57,7 @@ table ids, physical columns, auth scopes, Relay runtime backend URLs, or SQL.
 Evidence offerings may still declare standards-facing `endpoint_url` and
 `discovery_url` values when the offering points to Registry Notary.
 
-## Minimal Manifest
+## Minimal manifest
 
 ```yaml
 schema_version: registry-manifest/v1
@@ -175,16 +175,16 @@ and codelists are top-level. Each dataset owns an optional ODRL policy and its
 entities; each entity owns its identifiers, fields, and relationships; fields
 reference codelists by id.*
 
-## ODRL Policy Metadata
+## ODRL policy metadata
 
 Datasets may include an optional `policy` block. Registry Relay publishes this
 as descriptive ODRL metadata for catalog discovery and governance review.
 Policies are dataset-scoped; the manifest hierarchy diagram above shows the
 `Policy` relationship. For the full field contract, vocabulary, JSON-LD
 rendering rules, and validation requirements, see the
-[ODRL Policy Metadata Contract](#odrl-policy-metadata-contract) section below.
+[ODRL policy metadata contract](#odrl-policy-metadata-contract) section below.
 
-## CLI Reference
+## CLI reference
 
 The `just` recipes delegate to the `registry-manifest` CLI via
 `scripts/run_registry_manifest_cli.sh`. The script resolves the binary in this
@@ -303,7 +303,7 @@ Do not use a custom well-known path as the main discovery surface for this
 project. The portable route is ordinary static web publishing plus standard
 links.
 
-## Validating Published Catalogs
+## Validating published catalogs
 
 The generated `/metadata/dcat/bregdcat-ap` document is JSON-LD with embedded
 entity SHACL node shapes. Use the following recipes to validate a saved catalog
@@ -376,7 +376,7 @@ just validate-catalog-semic-local catalog=target/metadata.bregdcat-ap.jsonld
 just validate-catalog-semic-local catalog=target/metadata.bregdcat-ap.jsonld profile=bregdcatap.2_1_0
 ```
 
-## ODRL Policy Metadata Contract
+## ODRL policy metadata contract
 
 This section is the canonical reference for how Registry Relay publishes ODRL
 policy metadata. Registry Relay publishes descriptive ODRL Offers for dataset
@@ -385,7 +385,7 @@ the supported PDP subset declared by `registry-evidence-gateway-pdp/v1` before
 serving data. Registry Relay does not create ODRL Agreements, negotiate
 Dataspace Protocol contracts, or grant access from metadata alone.
 
-### Dataset-scoped Offers
+### Dataset-scoped offers
 
 Each dataset may include an optional `policy` block. When present, Registry
 Relay renders a configured `odrl:Offer` from the manifest. When absent, Relay
@@ -602,7 +602,7 @@ Downstream systems may use published ODRL Offers as catalog evidence. They
 still require separate authorization, governance, and contract processes before
 production data use.
 
-## Relay Endpoints
+## Relay endpoints
 
 Authenticated callers can access scoped metadata through these routes. When the
 runtime config loads a split manifest, Relay renders from that compiled portable
@@ -654,7 +654,7 @@ not OpenCRVS, OpenSPP, or other upstream conformance claims:
 Profiles are data first, not Rust crates. Promote one only when there are
 multiple generators or validators that need shared code.
 
-## Boundary Rules
+## Boundary rules
 
 - Keep metadata portable and standards-oriented.
 - Keep runtime config operational and deployment-specific.
