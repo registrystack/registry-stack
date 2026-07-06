@@ -24,7 +24,7 @@ results produced from a local FHIR R4 fixture server.
   outcome="Registry Notary evaluating health-navigation claims from local FHIR R4 fixture data, with the claim results inspected."
   time="About 10 minutes after the container images build"
   level="Local lab topology"
-  prerequisites={['Docker Compose 2.20+', 'just', 'A Registry Lab checkout with submodules']}
+  prerequisites={['Docker Compose 2.20+', 'just', 'uv', 'A Registry Lab checkout with submodules']}
 />
 
 This is a lab topology walkthrough, not the shortest adopter quickstart. For a
@@ -92,7 +92,7 @@ Do not use generated demo credentials outside the local lab.
 
 ## Build and start the FHIR profile
 
-Build the three FHIR profile images:
+Build the two FHIR profile images (the fixture server runs a stock Python image):
 
 ```sh
 just fhir-build
@@ -116,6 +116,11 @@ Registry Notary does not mount the FHIR data directly. It calls the source
 adapter over the private Compose network, and the source adapter queries the
 FHIR fixture server.
 
+Give the Notary two to three minutes after `just fhir-up` before running the
+smoke: the fixture server and sidecar are health-gated, but the Notary is not,
+and an early run fails with HTTP 500 `claim.rule_evaluation_failed` until it
+finishes warming up ([GH#279](https://github.com/registrystack/registry-stack/issues/279)).
+
 ## Run the smoke
 
 Run the scripted smoke:
@@ -127,8 +132,10 @@ just fhir-smoke
 Expected ending:
 
 ```text
-FHIR smoke passed; artifacts written to output/fhir-smoke
+FHIR smoke passed; artifacts written to <checkout>/lab/output/fhir-smoke
 ```
+
+The artifact path prints as an absolute path for your checkout.
 
 The smoke evaluates three claim groups:
 
@@ -232,6 +239,9 @@ just fhir-down
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | `missing FHIR_EVIDENCE_CLIENT_BEARER` | `.env` was generated before the FHIR profile existed. | Run `just generate`, then rerun `just fhir-smoke`. |
+| `just setup` fails with `fatal: cannot change to '<pid>(git rev-parse ...)'` | Escaping bug in the setup recipe on fresh clones ([GH#279](https://github.com/registrystack/registry-stack/issues/279)). | Run the submodule command directly: `git -C "$(git rev-parse --show-toplevel)" submodule update --init --recursive -- lab/vendor/crosswalk lab/vendor/registry-atlas lab/vendor/esignet-relay-authenticator`. |
+| `just fhir-smoke` returns HTTP 500 `claim.rule_evaluation_failed` shortly after startup | The Notary is still warming up; it is not health-gated by Compose. | Wait two to three minutes after `just fhir-up`, then rerun the smoke. |
+| `. .env` reports `no such file or directory` under zsh | zsh does not search the current directory for `.` targets. | Use `. ./.env` (works in both `sh` and `zsh`). |
 | The source adapter is not ready | The sidecar config did not load, or the image was built from incompatible sibling checkouts. | Run `docker compose -f compose.yaml --profile fhir logs fhir-source-adapter-sidecar`, then rebuild with compatible source directories. |
 | Notary discovery returns `401` | The request is missing the local bearer token. | Add `Authorization: Bearer ${FHIR_EVIDENCE_CLIENT_BEARER}`. |
 | A claim is unsatisfied | The source projection or claim rule did not produce the expected predicate. | Inspect the JSON artifact in `output/fhir-smoke/`, then compare the claim id with `config/notary/fhir-health-notary.yaml`. |

@@ -127,15 +127,37 @@ oid4vci-wallet-interop: reference to how-to).
 
 ## Deletions and merges
 
+No page was deleted or merged. Considered and declined:
+
 | Page | Action | Rationale |
 |---|---|---|
+| tutorials/run-notary-standalone-for-api.mdx | keep (merge candidate with deploy-standalone) | Overlapping "Notary against a Relay-shaped source" scope, but one is registryctl-generated and one hand-rolled; merging would break the IA's first-run journey. Maintainer conversation flagged in final report. |
+| tutorials/configure-dhis2-claim-checks.mdx + getting-started-fhir-evidence.mdx | keep (deletion candidates at lab/ removal) | Fully lab/-dependent with no Solmara equivalent; accurate against current main. Their fate belongs to the lab-deletion PR (#257), not this overhaul. |
+| map/boundaries-and-map.mdx | keep, doc_type reference -> explanation | Narrative boundary prose plus a generated table; IA places it under Concepts, and two independent reviews judged the content explanation-shaped. File stays at map/ (directory follows URL). |
 
 ## TODO[evidence] register (final count must be <= 2)
 
 | Page | Marker | Justification |
 |---|---|---|
 
+## Reader verification runs (verifying-tutorials-as-reader)
+
+| Page | Verdict | Key findings |
+|---|---|---|
+| start/quickstart.mdx | pass-with-findings (clean run) | Both findings fixed on the page: expected-output block missing observed_at; curl-only token path moved inline |
+| start/credential-tour.mdx | fail at eSignet sign-in | LIVE INFRA: hosted lab denies documented demo identity (relay_auth_subject_denied); fallback PIN fails client+server validation. Internal finding: registry-internal/docs/hosted-lab-esignet-signin-denial-2026-07-07.md. Page instructions match lab fixtures; honest troubleshooting row added. |
+| tutorials/publish-spreadsheet-secured-registry-api.mdx | fail at "Start the local stack" | Product bug GH#278 (stale image digest pins in registryctl v0.8.4); troubleshooting rows added; page text otherwise accurate |
+| tutorials/deploy-standalone-with-own-data.mdx | pass-with-findings | All fixed on the page: example config missing required aggregate_scope; false Notary default-config claim; amd64 platform note; doctor warning expectation; teardown section added |
+| tutorials/getting-started-fhir-evidence.mdx | fail at just setup, then verified end-to-end post-deviation | Product bug GH#279 (justfile escaping); doc fixes applied: uv prerequisite, two-images fix, readiness wait, zsh env sourcing, troubleshooting rows |
+| tutorials/verify-claim-registry-api.mdx | pass-with-findings (post-GH#278 deviation) | Fixed on page: smoke PASS line text, request_id variability note, GH#278 re-bake warning + literal pin syntax, compose project-name collision row. All JSON bodies and disclosure scenarios matched exactly. |
+| tutorials/run-notary-standalone-for-api.mdx | pass-with-findings (post-GH#278 deviation) | Central promise concretely verified (predicate-only disclosure, no source-row fields). Fixed on page: literal pin syntax in the GH#278 row, cleanup reassurance. |
+| tutorials/verify-opencrvs-claims.mdx | fail at start (GH#278), partial by design | Fixed on page: source URL now an explicit placeholder + base-URL prerequisite named; source.unavailable vs auth-error troubleshooting split; GH#278 row with pin syntax; jq field names (passed/actual_status); two broken onboarding links; platform-override wording matches actual registryctl behavior. |
+| tutorials/configure-dhis2-claim-checks.mdx | environment-blocked | Ports 4311-4331 held by the running Solmara stack; stopping it was declined (volume/audit-chain risk). No execution coverage anywhere: residual gap, run after the Solmara stack can be paused or on another machine. Claims statically verified against lab/ compose+configs. |
+| tutorials/first-run-with-registry-lab.mdx | environment-blocked (reader mode) | Same port conflict. Executable truth covered by CI: check-tutorial.sh executes this page end to end in the root lab job; reader-persona findings remain uncollected. |
+
 ## Issues filed from divergence findings
 
 | Issue | Page(s) | Finding |
 |---|---|---|
+| [GH#278](https://github.com/registrystack/registry-stack/issues/278) | publish-spreadsheet, verify-claim, run-notary-standalone | registryctl v0.8.4 pins pre-0.8.4 service image digests; generated Relay project cannot start |
+| [GH#279](https://github.com/registrystack/registry-stack/issues/279) | first-run, getting-started-fhir, configure-dhis2 | lab `just setup` broken on fresh clones ($$ escaping); Notary warm-up 500s; zsh env sourcing; undeclared uv prerequisite |

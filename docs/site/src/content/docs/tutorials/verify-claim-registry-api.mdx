@@ -97,7 +97,7 @@ PASS anonymous claims request is denied
 PASS anonymous caller can open Notary API docs
 PASS anonymous caller can fetch Notary OpenAPI
 PASS notary evaluator can list claims
-PASS notary evaluator can verify benefits person exists
+PASS notary evaluator can verify starter claim
 ```
 
 `registryctl` writes the detailed report to:
@@ -212,6 +212,9 @@ It returns a `409` problem document, because there is no evidence to evaluate:
   "type": "https://id.registrystack.org/problems/registry-notary/evidence/not_available"
 }
 ```
+
+The `request_id` is a server-minted ULID that differs on every request; match the other
+fields exactly.
 
 This distinction matters to integrators: a claim result answers the configured question about a
 known subject, while a missing subject is an evidence error, not a negative answer.
@@ -379,3 +382,5 @@ It does not delete your workbook, generated configs, local keys, or smoke result
 | Claim evaluation returns a source auth error | Notary cannot authenticate to Relay with `EVIDENCE_SOURCE_REGISTRY_RELAY_TOKEN`. | Confirm `secrets/local.env` has the source token and Relay is running. |
 | Claim evaluation returns `409 Evidence not available` | The target id is not in the sample workbook or the Relay entity lookup changed. | Use `per-2001` for the tutorial target, or inspect the Relay `person` entity. |
 | `registryctl doctor` reports `not_run` and asks you to install `registry-relay` | `doctor` validates configs with native product binaries, which this Docker-based tutorial does not install. | Use `registryctl notary smoke` and `registryctl logs` to check a config edit, or install the `registry-relay` and `registry-notary` binaries. |
+| `registryctl start` times out and the container log shows `missing field \`commitment\`` | registryctl v0.8.4 pins a service image older than its own generated config format ([GH#278](https://github.com/registrystack/registry-stack/issues/278)). | No local workaround reconstructs the value; track [GH#278](https://github.com/registrystack/registry-stack/issues/278) for the re-pinned image, or pin the project's `compose.yaml` images to the matching release tag: replace `ghcr.io/registrystack/registry-relay@sha256:<digest>` with `ghcr.io/registrystack/registry-relay:v0.8.4` (same pattern for `registry-notary`), then run `docker compose pull`. `registryctl add notary` regenerates `compose.yaml`, so reapply the pin after it runs. |
+| `registryctl start` replaces containers you did not expect | Docker Compose derives the project name from the directory basename only, so two differently located `my-first-api` directories share one Compose project. | Give each project directory a unique name, or stop the other project first. |

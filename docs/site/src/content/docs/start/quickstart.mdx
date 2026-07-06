@@ -55,10 +55,12 @@ unauthenticated as JSON at
 The civil Relay authenticates callers with `Authorization: Bearer <token>`. Each token carries a
 scope, so the same API answers some requests and refuses others.
 
-Open [lab.registrystack.org](https://lab.registrystack.org), scroll to the **For developers**
-section near the bottom, and copy two bearer tokens from the demo credential cards: a
-metadata-scope token and a row-reader token. Set them in your shell. The following placeholders
-stand in for the live tokens.
+In a browser, open [lab.registrystack.org](https://lab.registrystack.org), scroll to the
+**For developers** section near the bottom, and copy two bearer tokens from the demo credential
+cards: a metadata-scope token and a row-reader token. Working without a browser? The same tokens
+are served unauthenticated as JSON at
+[lab.registrystack.org/api/lab.json](https://lab.registrystack.org/api/lab.json).
+Set them in your shell. The following placeholders stand in for the live tokens.
 
 ```sh
 export CIVIL_METADATA_TOKEN="<metadata token from lab.registrystack.org>"
@@ -106,12 +108,16 @@ The Relay returns `200 OK` with one record and pagination metadata (synthetic de
       "birth_date": "2016-01-15",
       "life_stage": "child",
       "deceased": false,
-      "district": "north"
+      "district": "north",
+      "observed_at": "2026-07-01T00:00:00Z"
     }
   ],
   "pagination": { "has_more": true, "next_cursor": "..." }
 }
 ```
+
+The `observed_at` timestamp and cursor values vary between runs; the other fields match the
+record exactly.
 
 ## See access control hold
 

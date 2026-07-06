@@ -32,7 +32,8 @@ You need:
 - Docker with Compose v2.20 or later.
 - `registryctl` 0.8.4 or newer, with `init notary --source-kind opencrvs-dci` support.
 - `curl` and `jq` for the explicit evaluation check.
-- OpenCRVS OAuth client credentials for a test environment.
+- The HTTPS base URL of your OpenCRVS test environment.
+- OpenCRVS OAuth client credentials for that environment.
 - A known test UIN for the live smoke test.
 
 Install `registryctl` if you have not already:
@@ -49,7 +50,7 @@ Generate the project with the OpenCRVS DCI source kind and the known test UIN:
 ```sh
 registryctl init notary opencrvs-notary \
   --source-kind opencrvs-dci \
-  --source-url https://opencrvs.example.gov \
+  --source-url https://<your-opencrvs-host> \
   --smoke-target-id <test-uin>
 
 cd opencrvs-notary
@@ -115,8 +116,9 @@ Start the generated stack:
 registryctl start
 ```
 
-On Apple silicon, v0.8.4 images are published for linux/amd64.
-If Docker reports that no linux/arm64 manifest exists, start with the amd64 platform override:
+On Apple silicon, v0.8.4 images are published for linux/amd64 only. `registryctl start`
+applies the amd64 platform override automatically and prints a notice; you can also set it
+explicitly:
 
 ```sh
 DOCKER_DEFAULT_PLATFORM=linux/amd64 registryctl start
@@ -158,7 +160,7 @@ To test a different UIN, edit `notary.smoke_target_id` in `registryctl.yaml` and
 Inspect the redacted smoke report:
 
 ```sh
-jq '.checks[] | {name, status}' output/notary-smoke-results.json
+jq '.checks[] | {name, passed, actual_status}' output/notary-smoke-results.json
 ```
 
 Do not paste the full report into support channels unless you have reviewed it.
@@ -242,7 +244,7 @@ The generated `notary/config.yaml` configures:
 - Local signing material for later demo issuance configuration, not production trust.
 
 For the mental model behind these blocks, see the Registry Notary
-[OpenCRVS onboarding model](../../products/registry-notary/opencrvs-dci-onboarding/).
+[OpenCRVS onboarding model](../../products/registry-notary/opencrvs-onboarding/).
 
 ## Troubleshooting
 
@@ -250,11 +252,13 @@ For the mental model behind these blocks, see the Registry Notary
 | --- | --- | --- |
 | `registryctl start` reports `missing required local env value DCI_CLIENT_ID` (or `DCI_CLIENT_SECRET`) | `secrets/local.env` still has the generated placeholder values. | Replace `DCI_CLIENT_ID` and `DCI_CLIENT_SECRET` in `secrets/local.env` with your OpenCRVS OAuth client credentials. |
 | `registryctl notary smoke` or the explicit evaluation returns a source auth error | Registry Notary could not authenticate to OpenCRVS with the configured OAuth client credentials. | Confirm `DCI_CLIENT_ID` and `DCI_CLIENT_SECRET` in `secrets/local.env` match a valid OpenCRVS OAuth client for the target environment. |
+| The smoke or evaluation returns `source.unavailable` (HTTP 503) and the logs show a DNS lookup failure | The `--source-url` host does not resolve; the placeholder was left in, or the URL is wrong. | Rerun `registryctl init notary` with your real OpenCRVS base URL, or fix `source.url` in `notary/config.yaml`. |
+| `registryctl start` times out and the container log shows `missing field \`commitment\`` | registryctl v0.8.4 pins a service image older than its own generated config format ([GH#278](https://github.com/registrystack/registry-stack/issues/278)). | Replace `ghcr.io/registrystack/registry-notary@sha256:<digest>` with `ghcr.io/registrystack/registry-notary:v0.8.4` in `compose.yaml`, run `docker compose pull`, and start again; reapply after any command that regenerates `compose.yaml`. |
 | Docker reports no `linux/arm64` manifest for a v0.8.4 image | v0.8.4 images publish for `linux/amd64` only. | Start with `DOCKER_DEFAULT_PLATFORM=linux/amd64 registryctl start`, as shown in [Validate and start](#validate-and-start). |
 | `registryctl init notary` fails with `--source-token-from-env is not used with --source-kind opencrvs-dci` | `--source-token-from-env` was passed alongside `--source-kind opencrvs-dci`. | Configure `DCI_CLIENT_ID` and `DCI_CLIENT_SECRET` directly in `secrets/local.env` instead. |
 
 ## Next
 
-- [OpenCRVS onboarding model](../../products/registry-notary/opencrvs-dci-onboarding/)
+- [OpenCRVS onboarding model](../../products/registry-notary/opencrvs-onboarding/)
 - [Registry Notary overview](../../products/registry-notary/)
 - [Signing key providers](../../products/registry-notary/signing-key-provider/)
