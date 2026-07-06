@@ -7,7 +7,7 @@ source_repos:
   - registry-platform
   - registry-relay
   - registry-notary
-last_reviewed: "2026-06-21"
+last_reviewed: "2026-07-07"
 doc_type: specification
 doc_id: RS-SEC-G
 category: normative
@@ -36,6 +36,7 @@ The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 
 | --- | --- | --- | --- |
 | 0.1.0 | 2026-06-13 | draft | Initial security model, distilled from the boundary map, the architecture overview, the Registry Relay and Registry Notary API references, the Registry Notary signing-key reference, and the two protocol specifications. |
 | 0.1.1 | 2026-06-21 | draft | Clarified key custody, readiness, public error detail, and principal-scoped cache boundaries. |
+| 0.2.0 | 2026-07-07 | draft | Enumerated the full unauthenticated surface in REQ-SEC-G-006 and anchored the evidence section to the enforcing code. |
 
 ## 1. Scope and references
 
@@ -67,7 +68,7 @@ REQ-SEC-G-001: A security-critical primitive that must behave identically across
 
 ## 3. Authentication
 
-A runtime service authenticates in exactly one mode, fixed by configuration. The security pipeline every request follows, and the trust inputs that feed it, are shown below.
+A runtime service authenticates in exactly one mode, fixed by configuration. The following diagram shows the security pipeline every request follows and the trust inputs that feed it.
 
 ```mermaid
 flowchart LR
@@ -87,7 +88,7 @@ REQ-SEC-G-002: A runtime service MUST run exactly one authentication mode, eithe
 
 REQ-SEC-G-003: In static-credential mode, the configured trust material MUST be a credential fingerprint (`sha256:<...>`), not the raw secret, and the service MUST compare the presented token against the configured fingerprints in constant time, so neither the stored configuration nor the comparison timing discloses the secret.
 
-REQ-SEC-G-004: In OIDC mode, the service MUST delegate token verification to the Registry Platform OIDC primitive. A token MUST be trusted only after its signature is verified against the configured issuer's JWKS and its issuer, an accepted audience, and a permitted signing algorithm are checked. The service still owns the scopes its routes require (Section 4).
+REQ-SEC-G-004: In OIDC mode, the service MUST delegate token verification to the Registry Platform OIDC primitive. A token MUST be trusted only after its signature is verified against the configured issuer's JSON Web Key Set (JWKS) and its issuer, an accepted audience, and a permitted signing algorithm are checked. The service still owns the scopes its routes require (Section 4).
 
 ## 4. Authorization
 
@@ -95,7 +96,15 @@ Authorization is scope-based and deny-by-default: a caller reaches only what its
 
 REQ-SEC-G-005: Authorization MUST be scope-based and deny-by-default. A caller MUST hold the scope a route requires, and the service MUST enforce that scope before it reads any source or evaluates any claim (scope-before-source), so a caller that lacks a required scope is refused before source access, not after.
 
-REQ-SEC-G-006: A service MUST NOT widen a caller's reach at request time beyond what configuration grants. Only liveness and readiness probes and public verification-key discovery (the issuer JWKS and, where published, the `did:web` document) are served without authentication; every claim-bearing and record-bearing route requires authentication.
+REQ-SEC-G-006: A service MUST NOT widen a caller's reach at request time beyond what configuration grants. Every route that returns person-level records or claim results MUST require authentication, and the unauthenticated surface MUST be limited to routes that carry no person-level data:
+
+- liveness and readiness probes;
+- public verification-key discovery (the issuer JWKS and, where published, the `did:web` document);
+- served documentation and discovery metadata: documentation routes, well-known discovery documents, published JSON Schemas and JSON-LD contexts, and public credential-type metadata;
+- the OID4VCI issuance routes that run before an access token is bound, which carry that protocol's own security controls (their surface-specific form lives in [RS-PR-NOTARY](../rs-pr-notary/));
+- where a deployment enables credential status, the credential status route, which discloses only issuer, credential profile, status, and timestamps for an unguessable credential identifier.
+
+The OpenAPI document requires authentication unless the deployment opts out. A route exempt from bearer authentication MAY still enforce a stronger check of its own: the federated evaluation route accepts no anonymous request; it requires the peer-signed request that Section 7 verifies.
 
 ## 5. Verification-key publication
 
@@ -164,6 +173,7 @@ This specification is `verified`: every requirement describes shipped behavior a
 - [RS-PR-NOTARY](../rs-pr-notary/) and [RS-PR-RELAY](../rs-pr-relay/) carry the surface-level form of the authentication, authorization, key-publication, audit, federation, and error requirements this document generalizes.
 - [RS-ARC-G](../rs-arc-g/) Section 5 holds the architectural invariants (REQ-ARC-G-004, REQ-ARC-G-005) that Sections 2 and 6 refine.
 - The [standards register](../../reference/standards/) records the adoption mode for SD-JWT VC, OID4VCI, and the W3C DID method listed in `standards_referenced`.
+- The enforcing code is inspectable in the workspace: the constant-time fingerprint comparison in `crates/registry-platform-authcommon` (REQ-SEC-G-003); OIDC verification in `crates/registry-platform-oidc` (REQ-SEC-G-004); scope-before-source enforcement in `crates/registry-notary-server/src/runtime.rs` (`require_claim_access`) and the Registry Relay route handlers (REQ-SEC-G-005); the unauthenticated-surface allow-lists in Registry Relay's router assembly (`crates/registry-relay/src/server.rs`) and Registry Notary's auth-exemption check (`is_auth_exempt_path` in `crates/registry-notary-server/src/standalone.rs`) (REQ-SEC-G-006); the audit envelope in `crates/registry-platform-audit` and the services' fail-closed audit paths, exercised by tests such as Registry Notary's federation audit-write-failure test (REQ-SEC-G-008, REQ-SEC-G-009); and the secret-material rejection lists in `crates/registry-manifest-core` (REQ-SEC-G-013).
 
 ## Next
 
