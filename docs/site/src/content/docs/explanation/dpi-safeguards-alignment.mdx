@@ -30,7 +30,8 @@ standards_referenced:
   - verifiable-credentials
 ---
 
-If you are a DPI implementer or reviewer trying to place the registry stack inside a safeguards program,
+If you are a DPI implementer or reviewer trying to place the registry stack inside a
+safeguards program,
 use this page to see which safeguards claims the stack can support with software evidence, and which
 claims still belong to the institution that governs, deploys, and operates the DPI.
 
@@ -41,14 +42,16 @@ The registry stack is compared against version 2.0 of the
 as implementation evidence, not as certification.
 The principle IDs on this page follow that version, as recorded in the
 [standards register](../../reference/standards/).
-The framework spans 18 principles, 13 risks, responsible authorities, five DPI life-cycle stages, and
-adoption pathways across law, institutions, technical foundations, capacity, and whole-of-society
-participation.
+Per the framework's own version 2.0 materials, it spans 18 principles, 13 risks, responsible
+authorities, five DPI life-cycle stages, and adoption pathways across law, institutions, technical
+foundations, capacity, and whole-of-society participation; this page cites those counts from the
+framework itself rather than asserting them, since no vendored copy of the framework text lives in
+this repository to check them against.
 
 The stack maps mainly to technical foundations.
 It can make a registry surface inspectable, scoped, auditable, and easier to integrate.
-It does not create lawful basis, public mandate, inclusion practice, grievance handling, or independent
-oversight.
+It does not create lawful basis, public mandate, inclusion practice, grievance handling, or
+independent oversight.
 
 ## Where it fits
 
@@ -56,8 +59,10 @@ Use the registry stack when a program needs controlled registry facts instead of
 
 - A ministry needs a read-only consultation API over an existing registry.
 - A program needs eligibility evidence without copying the source record.
-- An integrator needs to inspect schemas, policies, services, and evidence offerings before connecting.
-- A reviewer needs audit events, stable denial codes, package and configuration-bundle digests, or signed evidence artifacts.
+- An integrator needs to inspect schemas, policies, services, and evidence offerings before
+  connecting.
+- A reviewer needs audit events, stable denial codes, package and configuration-bundle digests, or
+  signed evidence artifacts.
 - A known peer needs delegated evaluation through a configured Registry Notary relationship.
 
 Do not use the stack as an unrestricted data portal, data warehouse, ad-hoc SQL service, consent
@@ -86,7 +91,8 @@ framework.
 
 ## Principle alignment
 
-Each cluster groups one or more of the framework's 18 principles. The IDs in parentheses
+Each cluster groups one or more of the principles the framework's own materials enumerate (18 in
+version 2.0). The IDs in parentheses
 (foundational `F1`-`F9`, operational `O1`-`O9`) point back to the named principles so a reviewer
 holding the framework can check the mapping directly. The stack speaks to technical-foundations
 principles; the remaining principles are governance and institutional work outside the software.
@@ -105,8 +111,8 @@ principles; the remaining principles are governance and institutional work outsi
 ## Fit boundaries
 
 The stack fits best at the implementation-evidence layer.
-It helps reviewers answer what is exposed, who may call it, what policy gates exist, what evidence can
-be returned, and which project owns the behavior.
+It helps reviewers answer what is exposed, who may call it, what policy gates exist, what evidence
+can be returned, and which project owns the behavior.
 
 The stack does not hide governance decisions inside software.
 Manifest metadata and Relay metadata do not grant access.

@@ -40,9 +40,9 @@ Registry Relay, Registry Notary, and Registry Lab.
 
 At runtime, Registry Stack exposes source data through two patterns:
 
-- **Protected Registry APIs** are controlled read-only interfaces over existing registry sources.
+- Protected Registry APIs: controlled read-only interfaces over existing registry sources.
   Registry Relay implements this runtime surface.
-- **Evidence Gateway** is the governed evidence path. A runtime service evaluates request context,
+- Evidence Gateway: the governed evidence path. A runtime service evaluates request context,
   source context, supported policy terms, freshness, redaction, and audit provenance before it
   returns a result or denial. Registry Notary implements claim evaluation and credential issuance.
   Registry Relay implements governed read routes when evidence is returned from a protected API.

@@ -112,13 +112,15 @@ The full route inventory is in the [Registry Relay API reference](../../referenc
 
 ## Scope model
 
-Data-plane scopes follow the pattern `<dataset_id>:<suffix>`, where the five suffix values
-are `metadata`, `rows`, `aggregate`, `verify`, and `evidence_verification`.
+Data-plane scopes follow the pattern `<dataset_id>:<suffix>`, where the six suffix values
+are `metadata`, `rows`, `aggregate`, `verify`, `evidence_verification`, and `identity_release`.
 A data-plane scope is always bound to a specific dataset; a principal holding
 `social_registry:metadata` cannot access `vital_events:metadata` unless that scope is
 also assigned.
-One scope sits outside the pattern: `registry_relay:admin` is service-level, grants the
-administrative surface rather than any dataset, and is never implied by a dataset scope.
+Three scopes sit outside the pattern and are service-level rather than dataset-scoped:
+`registry_relay:admin` grants the administrative surface, `registry_relay:ops_read` grants
+read-only operational endpoints, and `registry_relay:metrics_read` grants the metrics
+endpoint; none of the three is ever implied by a dataset scope.
 Full scope configuration, API-key provisioning, and example principal assignments are in
 [Client integration](../../products/registry-relay/client-integration/).
 
@@ -126,15 +128,15 @@ Full scope configuration, API-key provisioning, and example principal assignment
 
 Five constraints a reviewer can verify against the code:
 
-- **Read-only in v1.** Entity paths expose only `GET`. No `POST`, `PUT`, `PATCH`, or
+- Read-only in v1: entity paths expose only `GET`. No `POST`, `PUT`, `PATCH`, or
   `DELETE` route is registered; provisioning is out of scope.
-- **Closed filter set.** Callers cannot submit arbitrary query expressions. Relay accepts
+- Closed filter set: callers cannot submit arbitrary query expressions. Relay accepts
   only the operators declared in `entities[].api.allowed_filters` and builds queries from
   its own plan.
-- **Storage details stay private.** Table names, column names, and connection strings
+- Storage details stay private: table names, column names, and connection strings
   never appear in responses or error messages.
-- **Raw lookup values stay out of audit.** Records capture operators for ordinary filters
+- Raw lookup values stay out of audit: records capture operators for ordinary filters
   and keyed hashes for configured sensitive lookups, record identifiers, and table
   identifiers; they do not write raw submitted values.
-- **No token minting.** In OIDC mode, Relay is a resource server: it verifies tokens
+- No token minting: in OIDC mode, Relay is a resource server: it verifies tokens
   issued by an external identity provider and never mints or refreshes them.
