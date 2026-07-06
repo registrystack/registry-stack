@@ -236,6 +236,16 @@ just fhir-down
 | Notary discovery returns `401` | The request is missing the local bearer token. | Add `Authorization: Bearer ${FHIR_EVIDENCE_CLIENT_BEARER}`. |
 | A claim is unsatisfied | The source projection or claim rule did not produce the expected predicate. | Inspect the JSON artifact in `output/fhir-smoke/`, then compare the claim id with `config/notary/fhir-health-notary.yaml`. |
 
+## What you built
+
+You ran Registry Notary against local FHIR R4 fixture data through a private source adapter,
+without exposing FHIR resources directly to a caller. The scripted smoke evaluated three claim
+groups, person health-navigation, provider affiliation, and facility service availability, and
+every claim returned `satisfied: true`. You then called Registry Notary manually and received a
+Notary claim result, not a FHIR `Evidence` resource: the source adapter performed the
+FHIR-specific lookup, and Notary evaluated its configured claim rules against the projected
+fields.
+
 ## Next
 
 - [Run a protected registry API locally](../publish-spreadsheet-secured-registry-api/)
