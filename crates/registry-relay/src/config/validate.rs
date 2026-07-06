@@ -140,6 +140,7 @@ fn validate_deployment(config: &Config, source: ConfigSource) -> Result<(), Conf
         &waivers,
         &crate::deployment::today_utc(),
     );
+    log_deployment_boot_findings(&evaluation);
     if evaluation.has_startup_failure() {
         tracing::error!(
             code = "config.validation_error",
@@ -149,6 +150,44 @@ fn validate_deployment(config: &Config, source: ConfigSource) -> Result<(), Conf
         return Err(ConfigError::ValidationError);
     }
     Ok(())
+}
+
+/// Boot-time visibility for gate outcomes that pass validation. A waiver
+/// actively suppressing a finding, an expired waiver, and an undeclared
+/// profile each get a warn line, so a boot that runs with reduced posture is
+/// loud in the log instead of visible only on the posture surface.
+fn log_deployment_boot_findings(evaluation: &crate::deployment::GateEvaluation) {
+    fn waiver_fields(finding: &registry_platform_ops::DeploymentFinding) -> (&str, &str) {
+        finding.waiver.as_ref().map_or(("", ""), |waiver| {
+            (waiver.reason.as_str(), waiver.expires.as_str())
+        })
+    }
+
+    for finding in &evaluation.findings {
+        if finding.status == registry_platform_ops::DeploymentFindingStatus::Waived {
+            let (reason, expires) = waiver_fields(finding);
+            tracing::warn!(
+                code = "deployment.gate_waived",
+                finding = %finding.id,
+                reason = %reason,
+                expires = %expires,
+                "deployment gate finding is suppressed by an active waiver"
+            );
+        } else if finding.id == crate::deployment::WAIVER_EXPIRED {
+            let (reason, expires) = waiver_fields(finding);
+            tracing::warn!(
+                code = "deployment.waiver_expired",
+                reason = %reason,
+                expires = %expires,
+                "deployment waiver is expired; its gate binds again"
+            );
+        } else if finding.id == crate::deployment::PROFILE_UNDECLARED {
+            tracing::warn!(
+                code = "deployment.profile_undeclared",
+                "deployment profile is undeclared; no profile gates bind"
+            );
+        }
+    }
 }
 
 /// Lenient `YYYY-MM-DD` shape check: four digits, dash, two digits, dash, two
@@ -4549,6 +4588,120 @@ datasets: []
 
     fn parse_deployment_config(extra: &str) -> Config {
         serde_saphyr::from_str(&deployment_config_yaml(extra)).expect("config parses")
+    }
+
+    #[derive(Clone, Default)]
+    struct SharedLog(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    struct SharedLogWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SharedLog {
+        type Writer = SharedLogWriter;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            SharedLogWriter(std::sync::Arc::clone(&self.0))
+        }
+    }
+
+    impl std::io::Write for SharedLogWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .expect("log buffer lock")
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Runs `run(config)` with a capturing subscriber and returns the
+    /// rendered log output alongside the validation result.
+    fn run_with_captured_logs(config: &Config) -> (Result<(), Error>, String) {
+        let logs = SharedLog::default();
+        let subscriber = tracing_subscriber::fmt()
+            .compact()
+            .with_ansi(false)
+            .with_target(false)
+            .with_max_level(tracing::Level::WARN)
+            .with_writer(logs.clone())
+            .finish();
+        let guard = tracing::subscriber::set_default(subscriber);
+        let result = run(config);
+        drop(guard);
+        let rendered = String::from_utf8(logs.0.lock().expect("log buffer lock").clone())
+            .expect("logs are utf-8");
+        (result, rendered)
+    }
+
+    #[test]
+    fn active_waiver_is_loud_in_the_boot_log() {
+        let config = parse_deployment_config(
+            "deployment:\n  profile: hosted_lab\n  waivers:\n    - finding: relay.config.unsigned\n      reason: \"synthetic-waiver-not-a-secret\"\n      expires: \"2999-01-01\"",
+        );
+        let (result, rendered) = run_with_captured_logs(&config);
+        result.expect("a waived hosted_lab gate must pass validation");
+        assert!(
+            rendered.contains("deployment.gate_waived"),
+            "expected deployment.gate_waived in boot log: {rendered}"
+        );
+        assert!(
+            rendered.contains("relay.config.unsigned"),
+            "expected the waived finding id in boot log: {rendered}"
+        );
+        assert!(
+            rendered.contains("synthetic-waiver-not-a-secret"),
+            "expected the waiver reason in boot log: {rendered}"
+        );
+        assert!(
+            rendered.contains("2999-01-01"),
+            "expected the waiver expiry in boot log: {rendered}"
+        );
+    }
+
+    #[test]
+    fn expired_waiver_is_loud_in_the_boot_log() {
+        let config = parse_deployment_config(
+            "deployment:\n  profile: hosted_lab\n  waivers:\n    - finding: relay.config.unsigned\n      reason: \"synthetic-waiver-not-a-secret\"\n      expires: \"2000-01-01\"",
+        );
+        let (result, rendered) = run_with_captured_logs(&config);
+        result.expect("an expired hosted_lab waiver must still pass validation");
+        assert!(
+            rendered.contains("deployment.waiver_expired"),
+            "expected deployment.waiver_expired in boot log: {rendered}"
+        );
+        assert!(
+            rendered.contains("2000-01-01"),
+            "expected the expired waiver expiry in boot log: {rendered}"
+        );
+    }
+
+    #[test]
+    fn undeclared_profile_is_loud_in_the_boot_log() {
+        let config = parse_deployment_config("");
+        let (result, rendered) = run_with_captured_logs(&config);
+        result.expect("an undeclared profile must pass validation");
+        assert!(
+            rendered.contains("deployment.profile_undeclared"),
+            "expected deployment.profile_undeclared in boot log: {rendered}"
+        );
+    }
+
+    #[test]
+    fn declared_profile_without_waivers_keeps_the_boot_log_quiet() {
+        let config = parse_deployment_config("deployment:\n  profile: local");
+        let (result, rendered) = run_with_captured_logs(&config);
+        result.expect("a local profile must pass validation");
+        assert!(
+            !rendered.contains("deployment.gate_waived"),
+            "no waiver line expected: {rendered}"
+        );
+        assert!(
+            !rendered.contains("deployment.profile_undeclared"),
+            "no undeclared-profile line expected: {rendered}"
+        );
     }
 
     #[test]

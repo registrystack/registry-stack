@@ -224,6 +224,63 @@ fn governed_candidate_apply_accepts_evidence_grade_with_signed_provenance() {
     );
 }
 
+// --- boot audit records for waived gates ------------------------------------
+
+#[tokio::test]
+async fn boot_audit_records_waived_gate() {
+    let yaml = format!(
+        "{}\ndeployment:\n  profile: hosted_lab\n  waivers:\n    - finding: relay.config.unsigned\n      reason: \"synthetic-waiver-not-a-secret\"\n      expires: \"2999-01-01\"\n",
+        minimal_config_yaml()
+    );
+    let config = parse_config(&yaml).expect("config parses");
+    let sink = InMemorySink::new();
+    let pipeline = AuditPipeline::from_sink(sink.clone());
+
+    registry_relay::server::audit_waived_deployment_gates(
+        &config,
+        &pipeline,
+        registry_platform_ops::ConfigSource::LocalFile,
+    )
+    .await;
+
+    let lines = sink.snapshot();
+    assert_eq!(
+        lines.len(),
+        1,
+        "expected exactly one operational audit record: {lines:?}"
+    );
+    assert!(
+        lines[0].contains("/__events/deployment.gate_waived"),
+        "expected the waived-gate audit path: {}",
+        lines[0]
+    );
+    assert!(
+        lines[0].contains("relay.config.unsigned"),
+        "expected the waived gate id in the audit record: {}",
+        lines[0]
+    );
+}
+
+#[tokio::test]
+async fn boot_audit_writes_nothing_without_waivers() {
+    let yaml = format!("{}\ndeployment:\n  profile: local\n", minimal_config_yaml());
+    let config = parse_config(&yaml).expect("config parses");
+    let sink = InMemorySink::new();
+    let pipeline = AuditPipeline::from_sink(sink.clone());
+
+    registry_relay::server::audit_waived_deployment_gates(
+        &config,
+        &pipeline,
+        registry_platform_ops::ConfigSource::LocalFile,
+    )
+    .await;
+
+    assert!(
+        sink.snapshot().is_empty(),
+        "expected no audit records without waived gates"
+    );
+}
+
 // --- audit write policy (end to end) ----------------------------------------
 
 /// Under explicit `availability_first` an audit write failure is swallowed:

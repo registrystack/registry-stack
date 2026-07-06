@@ -303,6 +303,16 @@ pub fn evaluate(
     evaluation
 }
 
+/// Returns the catalog's `&'static str` id for `id` when it names a catalog
+/// gate. Framework finding ids (`deployment.profile_undeclared`,
+/// `deployment.waiver_expired`) are not catalog gates and return `None`.
+pub fn catalog_gate_id(id: &str) -> Option<&'static str> {
+    GATES
+        .iter()
+        .map(|gate| gate.id)
+        .find(|gate_id| *gate_id == id)
+}
+
 /// A waiver is expired once `today` is strictly past its `expires` date. The
 /// expiry day itself is still covered. ISO 8601 dates compare correctly with
 /// lexical string ordering.
@@ -415,6 +425,17 @@ mod tests {
             .iter()
             .find(|f| f.id == id)
             .unwrap_or_else(|| panic!("missing finding {id}"))
+    }
+
+    #[test]
+    fn catalog_gate_id_resolves_catalog_gates_only() {
+        assert_eq!(
+            catalog_gate_id("relay.config.unsigned"),
+            Some("relay.config.unsigned")
+        );
+        assert_eq!(catalog_gate_id(PROFILE_UNDECLARED), None);
+        assert_eq!(catalog_gate_id(WAIVER_EXPIRED), None);
+        assert_eq!(catalog_gate_id("not.a.gate"), None);
     }
 
     #[test]

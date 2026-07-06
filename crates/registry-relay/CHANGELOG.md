@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Added
+
+- Boot is now loud about reduced posture: warn logs for waiver-suppressed
+  deployment gate findings, expired waivers, and an undeclared deployment
+  profile, plus a boot-time operational audit record (`deployment.gate_waived`)
+  per waived gate.
+
 ## 0.8.4 - 2026-07-04
 
 ### Added

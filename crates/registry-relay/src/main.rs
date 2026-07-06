@@ -1237,6 +1237,15 @@ async fn compile_relay_runtime(
 
     let auth = build_auth(&config).await?;
     let audit_sink = build_audit_sink(&config)?;
+    // Boot-time validation already logged waived gates; now that the audit
+    // pipeline exists, record them durably. The startup path loads config
+    // from a local file, matching the source `validate::run` evaluated.
+    registry_relay::server::audit_waived_deployment_gates(
+        &config,
+        &audit_sink,
+        ConfigSource::LocalFile,
+    )
+    .await;
     let bind: SocketAddr = bind_override.unwrap_or(config.server.bind);
     let admin_bind: Option<SocketAddr> = config.server.admin_bind;
     let audit_kind = audit_sink_kind(&config);
