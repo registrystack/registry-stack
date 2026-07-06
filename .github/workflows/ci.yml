@@ -21,7 +21,7 @@ jobs:
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
       release_tool: ${{ steps.filter.outputs.release_tool }}
-      lab: ${{ steps.filter.outputs.lab }}
+      release_source_proof: ${{ steps.filter.outputs.release_source_proof }}
       docs: ${{ steps.filter.outputs.docs }}
     steps:
       - name: Checkout
@@ -37,7 +37,7 @@ jobs:
           set -euo pipefail
           rust=false
           release_tool=false
-          lab=false
+          release_source_proof=false
           docs=false
           all=false
 
@@ -55,7 +55,7 @@ jobs:
           mark_all() {
             rust=true
             release_tool=true
-            lab=true
+            release_source_proof=true
             docs=true
           }
 
@@ -88,8 +88,8 @@ jobs:
                   ;;
               esac
               case "${path}" in
-                release/manifests/*|lab/*|vendor/*|.gitmodules)
-                  lab=true
+                release/scripts/check-release-source-model.sh|release/scripts/test_check_release_source_model.py|release/manifests/*)
+                  release_source_proof=true
                   ;;
               esac
               case "${path}" in
@@ -103,7 +103,7 @@ jobs:
           {
             echo "rust=${rust}"
             echo "release_tool=${release_tool}"
-            echo "lab=${lab}"
+            echo "release_source_proof=${release_source_proof}"
             echo "docs=${docs}"
           } >> "${GITHUB_OUTPUT}"
 
@@ -179,10 +179,10 @@ jobs:
       - name: Audit import map
         run: release/scripts/registry-release audit release/manifests/import-map-2026-06-24.yaml
 
-  lab:
-    name: Lab source proof
+  release-source-proof:
+    name: Release source proof
     needs: changes
-    if: needs.changes.outputs.lab == 'true'
+    if: needs.changes.outputs.release_source_proof == 'true'
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -192,10 +192,10 @@ jobs:
           submodules: false
 
       - name: Check monorepo source model
-        run: REGISTRY_LAB_RELEASE_SOURCE_MODE=monorepo lab/scripts/check-release-source-model.sh
+        run: REGISTRY_RELEASE_SOURCE_MODE=monorepo release/scripts/check-release-source-model.sh
 
       - name: Test source model checker
-        run: python3 -m unittest lab/scripts/test_check_release_source_model.py
+        run: python3 -m unittest release/scripts/test_check_release_source_model.py
 
   docs:
     name: Docs
