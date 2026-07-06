@@ -1169,6 +1169,9 @@ fn config(
     };
     let raw = format!(
         r#"
+deployment:
+  profile: local
+
 server:
   bind: 127.0.0.1:0
 auth:
@@ -1620,6 +1623,9 @@ fn self_attestation_oidc_config(
     set_audit_secret();
     let raw = format!(
         r#"
+deployment:
+  profile: local
+
 server:
   bind: 127.0.0.1:0
 auth:
@@ -1917,6 +1923,9 @@ fn civil_demographic_dci_config(
     set_audit_secret();
     let raw = format!(
         r#"
+deployment:
+  profile: local
+
 server:
   bind: 127.0.0.1:0
 auth:
@@ -2028,6 +2037,9 @@ fn no_cel_config(base_url: &str, audit_path: &str) -> StandaloneRegistryNotaryCo
     set_audit_secret();
     let raw = format!(
         r#"
+deployment:
+  profile: local
+
 server:
   bind: 127.0.0.1:0
 auth:

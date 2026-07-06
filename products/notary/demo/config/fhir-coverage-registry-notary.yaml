@@ -4,6 +4,9 @@
 # Point fhir_sidecar.base_url at registry-notary-source-adapter-sidecar with FHIR
 # source profiles for the datasets and entities referenced below.
 
+deployment:
+  profile: local
+
 server:
   bind: 127.0.0.1:4256
 

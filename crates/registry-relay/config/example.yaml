@@ -8,6 +8,9 @@ instance:
   owner: Ministry of Digital Government
   jurisdiction: example-country
 
+deployment:
+  profile: local
+
 server:
   bind: 0.0.0.0:8080
 

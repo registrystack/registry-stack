@@ -7,6 +7,9 @@
 # production or wallet-bound credentials without adding real DCI signing and
 # holder proof-of-possession.
 
+deployment:
+  profile: local
+
 server:
   bind: 127.0.0.1:4255
 

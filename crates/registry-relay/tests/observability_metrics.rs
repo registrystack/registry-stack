@@ -74,6 +74,9 @@ catalog:
   base_url: https://data.example.test
   publisher: Test Ministry
 
+deployment:
+  profile: local
+
 vocabularies: {{}}
 
 auth:

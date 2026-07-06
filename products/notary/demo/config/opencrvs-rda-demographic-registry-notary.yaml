@@ -4,6 +4,9 @@
 # Point base_url at a registry-relay instance that exposes civil_registry
 # civil_person records and allows filters on given_name, surname, and birth_date.
 
+deployment:
+  profile: local
+
 server:
   bind: 127.0.0.1:4255
 

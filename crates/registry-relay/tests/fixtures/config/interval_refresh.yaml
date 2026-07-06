@@ -5,6 +5,8 @@ catalog:
   title: t
   base_url: https://example.test
   publisher: p
+deployment:
+  profile: local
 vocabularies: {}
 auth:
   mode: api_key

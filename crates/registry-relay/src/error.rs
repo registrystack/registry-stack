@@ -279,6 +279,10 @@ pub enum ConfigError {
     ParseError,
     #[error("config validation error")]
     ValidationError,
+    #[error(
+        "set deployment.profile: local for development, or production/evidence_grade for deployment"
+    )]
+    DeploymentProfileRequired,
     #[error("missing secret")]
     MissingSecret,
     #[error("duplicate identifier in config")]
@@ -1135,7 +1139,9 @@ impl ConfigError {
     fn code(&self) -> &'static str {
         match self {
             ConfigError::ParseError => "config.parse_error",
-            ConfigError::ValidationError => "config.validation_error",
+            ConfigError::ValidationError | ConfigError::DeploymentProfileRequired => {
+                "config.validation_error"
+            }
             ConfigError::MissingSecret => "config.missing_secret",
             ConfigError::DuplicateId => "config.duplicate_id",
             ConfigError::ProvenanceMissingIssuer => "provenance.config.missing_issuer",
@@ -1174,7 +1180,9 @@ impl ConfigError {
     fn title(&self) -> &'static str {
         match self {
             ConfigError::ParseError => "Config parse error",
-            ConfigError::ValidationError => "Config validation error",
+            ConfigError::ValidationError | ConfigError::DeploymentProfileRequired => {
+                "Config validation error"
+            }
             // Avoid the literal word "secret" in operator-facing
             // strings; the stable taxonomy code retains it.
             ConfigError::MissingSecret => "Missing credential hash",
@@ -1204,7 +1212,9 @@ impl ConfigError {
         // line numbers belong on stderr, not in any response body.
         match self {
             ConfigError::ParseError => "configuration document did not deserialize",
-            ConfigError::ValidationError => "configuration failed cross-field validation",
+            ConfigError::ValidationError | ConfigError::DeploymentProfileRequired => {
+                "configuration failed cross-field validation"
+            }
             ConfigError::MissingSecret => "a required hash environment variable is unset",
             ConfigError::DuplicateId => "two configured ids collide",
             ConfigError::ProvenanceMissingIssuer => {

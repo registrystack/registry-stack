@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # Reference config used to generate openapi/registry-relay.openapi.json.
 
+deployment:
+  profile: local
+
 server:
   bind: 127.0.0.1:0
   openapi_requires_auth: false

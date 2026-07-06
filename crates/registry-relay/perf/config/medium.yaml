@@ -2,6 +2,9 @@
 # Perf config: medium profile (100k rows). Standard developer run.
 # Source: perf/fixtures/generated/clinic_capacity_100k.parquet
 
+deployment:
+  profile: local
+
 server:
   bind: 127.0.0.1:18080
 

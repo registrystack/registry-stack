@@ -1196,6 +1196,25 @@ fn tail_hash_from_files(
     max_files: u32,
     hasher: &AuditChainHasher,
 ) -> Result<Option<[u8; 32]>, AuditError> {
+    tail_hash_from_files_with_warning(path, max_size_bytes, max_files, hasher, || {
+        tracing::warn!(
+            code = "audit.chain.aged_out_anchor",
+            "audit chain verification is anchored on an aged-out predecessor (oldest retained \
+             record has a non-None prev_hash): a middle-of-set gap would be caught as a boundary \
+             mismatch, but deletion of the oldest rotated file cannot be ruled out from local disk \
+             alone; rely on off-host audit shipping / external anchoring to detect loss of the \
+             leading records"
+        );
+    })
+}
+
+fn tail_hash_from_files_with_warning(
+    path: &Path,
+    max_size_bytes: u64,
+    max_files: u32,
+    hasher: &AuditChainHasher,
+    warn_retained_suffix: impl FnOnce(),
+) -> Result<Option<[u8; 32]>, AuditError> {
     let paths = existing_audit_paths(path, max_files);
     if paths.is_empty() {
         return Ok(None);
@@ -1238,14 +1257,7 @@ fn tail_hash_from_files(
         // rotation, so it cannot be distinguished from local disk alone.
         // Off-host audit shipping / external anchoring is the structural
         // mitigation; surface the residual so operators can correlate.
-        tracing::warn!(
-            code = "audit.chain.aged_out_anchor",
-            "audit chain verification is anchored on an aged-out predecessor (oldest retained \
-             record has a non-None prev_hash): a middle-of-set gap would be caught as a boundary \
-             mismatch, but deletion of the oldest rotated file cannot be ruled out from local disk \
-             alone; rely on off-host audit shipping / external anchoring to detect loss of the \
-             leading records"
-        );
+        warn_retained_suffix();
         verify_chain_expected_prev_hash(&envelopes, envelopes[0].prev_hash, hasher)
     } else {
         verify_chain(&envelopes, hasher)
@@ -1638,52 +1650,6 @@ mod option_hash_hex {
 mod tests {
     use super::{redact::QueryRedactor, *};
 
-    #[derive(Clone, Default)]
-    struct SharedLog(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
-
-    struct SharedLogWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
-
-    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SharedLog {
-        type Writer = SharedLogWriter;
-
-        fn make_writer(&'a self) -> Self::Writer {
-            SharedLogWriter(std::sync::Arc::clone(&self.0))
-        }
-    }
-
-    impl std::io::Write for SharedLogWriter {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0
-                .lock()
-                .expect("log buffer lock")
-                .extend_from_slice(buf);
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    /// Runs `body` under a thread-local capturing subscriber and returns the
-    /// rendered log output. Callers must invoke the code under test on the same
-    /// thread (e.g. `tail_hash_from_files` directly, not via `spawn_blocking`).
-    fn capture_logs<T>(body: impl FnOnce() -> T) -> (T, String) {
-        let logs = SharedLog::default();
-        let subscriber = tracing_subscriber::fmt()
-            .compact()
-            .with_ansi(false)
-            .with_target(false)
-            .with_max_level(tracing::Level::WARN)
-            .with_writer(logs.clone())
-            .finish();
-        let guard = tracing::subscriber::set_default(subscriber);
-        let out = body();
-        drop(guard);
-        let rendered = logs.0.lock().expect("log buffer lock").clone();
-        (out, String::from_utf8(rendered).expect("logs are utf-8"))
-    }
-
     #[test]
     fn default_rotation_retains_fifty_files() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -2026,16 +1992,20 @@ mod tests {
             third_hash = Some(envelope.record_hash);
         }
 
-        // Call `tail_hash_from_files` directly on this thread: the sink runs it
-        // inside `spawn_blocking`, where a thread-local subscriber would not see
-        // the warning. The arguments mirror the sink's own rotation settings.
-        let (result, rendered) = capture_logs(|| {
-            tail_hash_from_files(&path, 1, 2, &AuditChainHasher::unkeyed_dev_only())
-        });
+        let mut warned = false;
+        let result = tail_hash_from_files_with_warning(
+            &path,
+            1,
+            2,
+            &AuditChainHasher::unkeyed_dev_only(),
+            || {
+                warned = true;
+            },
+        );
         assert_eq!(result.expect("compat path bootstraps"), third_hash);
         assert!(
-            rendered.contains("audit.chain.aged_out_anchor"),
-            "expected the aged-out-anchor warning: {rendered}"
+            warned,
+            "expected the aged-out-anchor warning path to be invoked"
         );
     }
 

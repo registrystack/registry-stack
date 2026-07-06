@@ -3,6 +3,9 @@
 # This process exposes CRVS and farmer registry rows through the normal
 # registry-relay API. Evidence computation runs in a separate process.
 
+deployment:
+  profile: local
+
 server:
   bind: 127.0.0.1:4256
 
