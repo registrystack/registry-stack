@@ -65,7 +65,8 @@ Relay uses Registry Manifest's renderers internally.
 ## A minimal manifest
 
 A manifest must declare `schema_version: registry-manifest/v1` at its root.
-The following skeleton shows the required top-level keys:
+The following skeleton shows the required top-level keys, `schema_version` and `catalog`,
+plus the most common collection, `datasets`:
 
 ```yaml
 schema_version: registry-manifest/v1
