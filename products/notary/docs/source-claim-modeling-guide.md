@@ -7,7 +7,7 @@ Registry Notary will evaluate. It complements the config reference by focusing
 on modeling choices: what belongs in an upstream source, what belongs in a
 Notary claim, and how to avoid accidental over-collection.
 
-## Mental Model
+## Mental model
 
 Registry Notary does four separate jobs:
 
@@ -20,7 +20,7 @@ The source registry remains the system of record. Notary should not become a
 copy of the registry, and a sidecar should not decide whether a claim is true.
 Keep source connectors narrow and keep claim semantics in Notary config.
 
-## Pick The Source Connector
+## Pick the source connector
 
 | Connector | Use when | Config value |
 | --- | --- | --- |
@@ -32,7 +32,7 @@ Prefer the simplest direct source. Add a sidecar when the target system needs
 private credentials, governed request shaping, or output normalization outside
 Notary.
 
-## Source Connection Design
+## Source connection design
 
 A source connection is a reusable upstream target:
 
@@ -72,7 +72,7 @@ Design rules:
   after the sidecar contract and per-item cardinality have been tested.
 - Keep `field_paths` and claim-level `fields` limited to what claims need.
 
-## DCI Sources
+## DCI sources
 
 DCI sources use a search endpoint and an envelope shape. Check these fields with
 the source owner:
@@ -93,7 +93,7 @@ For OpenCRVS-style DCI, confirm whether the token endpoint expects JSON or form
 encoding. The config default is form; the OpenCRVS demo uses
 `request_format: json`.
 
-## Registry Data API Sources
+## Registry data API sources
 
 Registry Data API sources expose lookup-style reads:
 
@@ -112,7 +112,7 @@ Successful responses use:
 Use this connector when an upstream already has the shape or when an internal
 sidecar normalizes a target system into that shape.
 
-## Source Adapter Sidecar Sources
+## Source adapter sidecar sources
 
 The source adapter sidecar is a separate private process that normalizes a target
 system into Notary's source-read contracts. The Notary connector value remains
@@ -204,7 +204,7 @@ See
 [`../../../crates/registry-notary-source-adapter-sidecar/README.md`](../../../crates/registry-notary-source-adapter-sidecar/README.md)
 for sidecar manifest and worker details.
 
-### Sidecar Batch Matching Contract
+### Sidecar batch matching contract
 
 Sidecar batch matching uses a dedicated POST contract. Notary calls this
 route when `bulk_mode: source_adapter_sidecar_batch` is set on a source connection and
@@ -212,9 +212,9 @@ the request contains multiple subjects. The contract is semantically equivalent
 to running the same source binding as single reads for each item. For the full
 request and response shapes, field rules, cardinality semantics, and HTTP error
 codes, see the
-[Source Adapter Sidecar API section of the API reference](api-reference.md#source-adapter-sidecar-api).
+[source adapter sidecar API section of the API reference](api-reference.md#source-adapter-sidecar-api).
 
-### Sidecar Batch Config
+### Sidecar batch config
 
 Use `bulk_mode: source_adapter_sidecar_batch` on the source connection and
 `connector: source_adapter_sidecar` on every binding that points to that connection.
@@ -299,7 +299,7 @@ evidence:
         source: crvs
 ```
 
-## Claim Boundaries
+## Claim boundaries
 
 A claim should express one decision or one extracted value. Good examples:
 
@@ -322,7 +322,7 @@ Every claim should answer:
 - Is the output a value, a predicate, or a redacted assertion?
 - Can this claim be issued as a credential?
 
-## Semantic Bindings
+## Semantic bindings
 
 Use `semantics` when a claim should advertise the external meaning of its
 output. This is useful for PublicSchema alignment, wallet display, verifier
@@ -353,7 +353,7 @@ Do not claim that a boolean predicate is the raw PublicSchema property. For
 example, `age-at-least-18` may be derived from `date_of_birth`, but it is not the
 same claim as `date_of_birth`.
 
-## Source Bindings
+## Source bindings
 
 A source binding connects a claim to one source read:
 
@@ -401,7 +401,7 @@ Use separate bindings when a claim needs data from multiple registries. Use
 claim dependencies when a rule can reuse previous claim outputs instead of
 reading the same source again.
 
-## Rule Types
+## Rule types
 
 Use `exists` when the fact is the presence of exactly one source record:
 
@@ -437,9 +437,9 @@ rule:
 
 CEL-enabled builds evaluate expressions in a hardened worker process and apply
 Notary-owned limits to expressions, root bindings, and worker frames. Prefer
-`exists` or `extract` when they express the claim clearly.
+`exists` or `extract` when either one expresses the claim directly.
 
-## Disclosure And Formats
+## Disclosure and formats
 
 Disclosure config controls what the caller can ask Notary to reveal:
 
@@ -459,7 +459,7 @@ For privacy-sensitive claims, prefer redacted or predicate outputs. Allow
 results. Add SD-JWT VC issuance through a credential profile rather than by
 adding broad render formats.
 
-## Credential Eligibility
+## Credential eligibility
 
 A claim can be issued as a credential only when both sides agree:
 
@@ -479,7 +479,7 @@ This two-way relationship prevents a profile from accidentally issuing from a
 claim that was not designed for that credential, and prevents a claim from being
 issued by an unrelated profile.
 
-## Batch And Bulk Reads
+## Batch and bulk reads
 
 Batch evaluation lets one request evaluate many target items for a claim. It
 should be enabled only when the source and caller are ready for that access
@@ -517,7 +517,7 @@ Do not enable bulk modes until contract tests prove response shape,
 cardinality, and source limits. Notary does not retry sidecar adapter execution
 failures; keep `retry_on_5xx: false` on sidecar connections.
 
-## Purpose Propagation
+## Purpose propagation
 
 Claims and source bindings carry purpose through the request path. Use stable,
 human-reviewable purpose values such as:
@@ -529,7 +529,7 @@ human-reviewable purpose values such as:
 Avoid using free-form user text as purpose. Purpose values should be part of the
 deployment's policy review, source-owner agreement, and audit review.
 
-## Modeling Checklist
+## Modeling checklist
 
 - The claim id is stable and specific.
 - The claim reads the fewest possible source fields.
@@ -545,7 +545,7 @@ deployment's policy review, source-owner agreement, and audit review.
   endpoint.
 - `doctor --live` passes against a controlled test target.
 
-## Testing With Doctor
+## Testing with doctor
 
 Run non-live checks first:
 

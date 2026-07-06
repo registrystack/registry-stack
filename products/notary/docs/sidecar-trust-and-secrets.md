@@ -1,4 +1,4 @@
-# Sidecar Trust And Secret Handling
+# Sidecar trust and secret handling
 
 > **Page type:** Explanation · **Product:** Registry Notary · **Layer:** evaluation · **Audience:** operator, integrator, security reviewer
 
@@ -40,8 +40,8 @@ is the Notary- and sidecar-specific layer on top of that model.
 
 Key custody and trust-root distribution are part of the
 [shared governed-configuration model](../../platform/docs/governed-configuration.md#trust-roots-roles-and-change-classes)
-and matter just as much here: the guarantees above are only as strong as your
-protection of the signing keys. Specific to the sidecar path:
+and matter equally here: the guarantees in "What you can rely on" are only as
+strong as your protection of the signing keys. Specific to the sidecar path:
 
 - **Credential injection.** Supply credential values at deploy time through the
   environment variables the bundle names. The platform distributes the binding,
@@ -126,7 +126,8 @@ for them with deployment controls.
 
 Local development can run the sidecar from an unsigned manifest using an explicit
 opt-in flag. This mode exists only for local iteration and demos; it disables the
-guarantees above and must never be used in production. Production startup requires
+guarantees described in [What you can rely on](#what-you-can-rely-on) and must
+never be used in production. Production startup requires
 a configured trust anchor and refuses unsigned configuration. For rehearsing the
 signed flow locally, the sidecar's release tooling can build and verify a signed
 bundle against a local trust root, which exercises the real verification path

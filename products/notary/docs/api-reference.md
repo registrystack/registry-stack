@@ -1,4 +1,4 @@
-# Registry Notary API Reference
+# Registry Notary API reference
 
 > **Page type:** Reference · **Product:** Registry Notary · **Layer:** consultation, evaluation, credential, administration · **Audience:** integrator
 
@@ -7,13 +7,13 @@ sidecar API, and the stable problem-code registry. For the complete OpenAPI
 specification, fetch `GET /openapi.json` from any running Notary, or read the
 [Registry Notary API reference](https://docs.registrystack.org/api/registry-notary.html).
 
-The problem-code registry below is a curated, stable subset for policy mapping;
+The Problem code registry section is a curated, stable subset for policy mapping;
 it does not list every code the server can emit. Match an unrecognized `code`
 value on its category prefix. The server emits categories beyond those tabled
 here, such as `credential.*` (issuance and holder-proof errors) and
 `evaluation.*` (lookup and binding errors).
 
-## Route To Client Method Matrix
+## Route to client method matrix
 
 This matrix maps each server route to the client methods that call it, per
 runtime. "not exposed" means the runtime does not surface a public helper for
@@ -62,7 +62,7 @@ OIDC credential. The unauthenticated well-known exceptions are the public issuer
 JWKS, OID4VCI issuer metadata, and SD-JWT VC type-metadata routes documented in
 the security allowlist.
 
-## Claim Discovery Target Inputs
+## Claim discovery target inputs
 
 `GET /v1/claims` and `GET /v1/claims/{claim_id}` may include `target_inputs`
 when a claim has configured target matching. This block is request-contract
@@ -82,7 +82,7 @@ The block is intentionally minimized. It can expose target-side paths and
 friendly labels, but it does not expose connector names, connection ids,
 dataset/entity names, source field names, or raw source binding configuration.
 
-## Source Adapter Sidecar API
+## Source adapter sidecar API
 
 This section documents the private sidecar API that Registry Notary calls when a
 source binding uses the source-adapter connector value
@@ -164,8 +164,11 @@ Contract rules:
   the same cardinality rule used for single reads.
 - Returned records are projected to the requested `fields`; extra worker output
   fields are not returned to Notary.
-- Documented per-item sidecar error codes are `target_auth` and
-  `target_rate_limit`; unknown per-item error codes map to source unavailable.
+- Documented per-item sidecar error codes are `source.target_auth` and
+  `source.target_rate_limit`. The sidecar's classifier also accepts the
+  unprefixed `target_auth`/`target_rate_limit` forms from custom worker code
+  and treats them the same as their `source.`-prefixed counterparts. Unknown
+  per-item error codes map to source unavailable.
 - Adapter execution failures, invalid output, oversized output, worker crashes,
   and timeouts are not retried for the same batch request.
 
@@ -176,7 +179,7 @@ operations with `400`, sidecar capacity saturation with `503` plus
 `Retry-After`, timeout with `504`, and invalid adapter execution/output with
 `502`.
 
-## Problem Code Registry
+## Problem code registry
 
 These application problem `code` values are part of the stable client contract
 for policy mapping. Map on `code`, not on prose. Safe fields for logs are

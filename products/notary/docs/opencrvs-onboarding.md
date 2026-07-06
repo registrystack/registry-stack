@@ -47,9 +47,13 @@ callers receive the truth of the claim rather than a copied source record.
 
 ## Signing literacy
 
-Registry Notary signs credentials when a configured credential flow is used. The
-OpenCRVS recipe generates a local demo issuer key and one demo credential
-profile named `opencrvs_birth_record_sd_jwt`.
+Registry Notary signs credentials when a configured credential flow is used.
+The `registryctl` OpenCRVS recipe generates a local demo issuer signing key
+(id `registryctl-demo-issuer`, `kid: did:web:localhost#registryctl-demo`) in
+every generated project, but it does not wire that key to a credential
+profile: the generated `notary/config.yaml` has no `credential_profiles`
+block, so `opencrvs-birth-record-exists` is returned as an evaluated claim
+result, not an SD-JWT VC.
 
 That local key is not a production trust root. It is generated for one local
 project, stored in `secrets/notary.local.env`, and referenced from
@@ -57,10 +61,14 @@ project, stored in `secrets/notary.local.env`, and referenced from
 deployments. For production signing posture, use the signing key provider
 reference and a deployment-specific hardening process.
 
-The demo profile can issue only the `opencrvs-birth-record-exists` claim from a
-stored evaluation result. OpenCRVS supplies evidence; Registry Notary signs the
-demo SD-JWT VC. That credential is not an OpenCRVS-issued credential and should
-not be treated as production trust material.
+To issue an SD-JWT VC for the generated claim, add a `credential_profiles`
+entry that references the generated signing key and lists the claim id under
+`allowed_claims`; see the [source claim modeling
+guide](source-claim-modeling-guide.md). A separate tool path,
+`registry-notary init dci --demo-issuer` (not the `registryctl` recipe this
+page describes), generates its own demo credential profile named
+`dci_record_sd_jwt` for a generic DCI source; see the [OpenCRVS
+tutorial](opencrvs-dci-standalone-tutorial.md) for that flow.
 
 ## PDP literacy
 
@@ -89,7 +97,7 @@ After generation, inspect these files:
   and demo issuer key.
 - `registryctl.yaml`: manifest, recipe, env files, and output directory.
 - `notary/config.yaml`: source connector, claim id, lookup field, disclosure
-  policy, signing key reference, and demo credential profile.
+  policy, and the generated (unwired) signing key.
 - `output/notary-smoke-results.json`: redacted smoke evidence.
 
 The generated config may contain the OpenCRVS base URL because Notary needs a

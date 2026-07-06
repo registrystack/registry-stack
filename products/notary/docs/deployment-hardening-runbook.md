@@ -1,4 +1,4 @@
-# Deployment Hardening Runbook
+# Deployment hardening runbook
 
 > **Page type:** Runbook · **Product:** Registry Notary · **Layer:** operations · **Audience:** operator
 
@@ -6,7 +6,7 @@ This runbook is for teams moving Registry Notary from a demo into a shared test,
 pilot, or production-like environment. It focuses on implemented operational
 controls and deployment choices.
 
-## Baseline Assumptions
+## Baseline assumptions
 
 Registry Notary may handle personal-data lookups, credential issuance, holder
 proofs, OIDC tokens, and audit evidence. Treat it as a security-sensitive
@@ -23,7 +23,7 @@ The hardened posture is:
   same traffic.
 - Audit logs are redacted and retained outside the Notary host.
 
-## Network Boundary
+## Network boundary
 
 Put Registry Notary behind a platform ingress, reverse proxy, or service mesh
 that provides TLS, request-size controls, access logs, and rate limits. The
@@ -59,7 +59,7 @@ The private-network escape hatch is useful for Docker Compose or lab
 topologies, but production source fetches should use HTTPS and a reviewed
 network path.
 
-## Authentication And Authorization
+## Authentication and authorization
 
 Choose one caller-auth mode per deployment:
 
@@ -104,7 +104,7 @@ horizontal scale-out of a single issuing authority's workload (multiple
 processes sharing Redis-backed replay and audit state); it is not a tenancy
 boundary and has no effect on how `registry_notary:admin` is scoped.
 
-## Secret Inventory
+## Secret inventory
 
 Every deployable environment should document where these are stored and how
 they rotate:
@@ -122,7 +122,7 @@ Do not print full environment dumps in diagnostics or incident notes. `doctor`
 and `explain-config` are designed to avoid secret output, but shell history,
 process managers, and support tickets still need care.
 
-## Replay Store
+## Replay store
 
 Replay protection applies to:
 
@@ -141,7 +141,7 @@ Operational gates:
   high-risk mode (federation, OID4VCI pre-authorized code, holder proof,
   wallet-facing traffic, or declared multi-instance) is gated by
   `notary.replay.in_memory_high_risk`. See
-  [Deployment Profile and Gates](operator-config-reference.md#deployment-profile-and-gates).
+  [Deployment profile and gates](operator-config-reference.md#deployment-profile-and-gates).
 - The service fails readiness when Redis is unavailable.
 - Redis keys are scoped and hashed, but the Redis database is still operational
   security material.
@@ -149,7 +149,7 @@ Operational gates:
   Redis cluster.
 - Alert on Redis connection failures and increased replay denials.
 
-## Credential Status Store
+## Credential status store
 
 If status is disabled, verifiers rely on credential expiry and issuer trust.
 That is the default posture.
@@ -225,7 +225,7 @@ Useful alerts:
 - Credential issuance errors.
 - Credential status store failures when status is enabled.
 
-## Source Connections
+## Source connections
 
 Source registries are often the highest-risk integration point because Notary
 uses them to make real eligibility or identity assertions.
@@ -260,7 +260,7 @@ Runbook gates for source adapter sidecar source connections:
 For full sidecar config fields and examples, see the
 [Source Adapter Sidecar Source Connections section of the configuration reference](operator-config-reference.md#source-adapter-sidecar-source-connections).
 
-## Signing Keys
+## Signing keys
 
 Use local JWK environment keys for development, tests, and simple mounted-secret
 deployments. Use PKCS#11 where the deployment requires HSM-backed signing.
@@ -276,7 +276,7 @@ Operational gates:
 See [`signing-key-provider.md`](signing-key-provider.md) for key status values,
 rotation procedure, PKCS#11 setup, and worked examples.
 
-## Self-Attestation And Wallet Flows
+## Self-attestation and wallet flows
 
 Public citizen and wallet flows need identity-provider, gateway, and Notary
 controls to line up. See [`self-attestation-operator-guide.md`](self-attestation-operator-guide.md)
@@ -299,7 +299,7 @@ Deployment hardening checklist:
 - Use Redis replay storage when multiple processes can serve OID4VCI traffic.
 - Enable OID4VCI nonces for wallets that support them.
 
-## Readiness And Rollout
+## Readiness and rollout
 
 Before first shared deployment:
 
@@ -331,9 +331,9 @@ Rollback plan:
   that reference status URLs have expired or verifiers have been told to stop
   expecting live status.
 
-## Incident Notes
+## Incident notes
 
-### Auth or Token Incident
+### Auth or token incident
 
 **Symptom:** Unauthorized requests succeed, an API key or bearer token is
 suspected compromised, or an OIDC client secret is known or believed leaked.
@@ -366,7 +366,7 @@ credential is valid and in active misuse.
 
 ---
 
-### Signing-Key Incident
+### Signing-key incident
 
 **Symptom:** A signing key private material is known or suspected leaked, a
 PKCS#11 PIN is compromised, or an HSM slot is suspected tampered. Credentials
@@ -403,7 +403,7 @@ attacker with a copy of the key.
 
 ---
 
-### Source-Data Incident
+### Source-data incident
 
 **Symptom:** A source registry returns incorrect, stale, or corrupted data;
 a source credential (token or OAuth client secret) is suspected leaked; or

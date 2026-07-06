@@ -1,4 +1,4 @@
-# FHIR Source Adapter Guide
+# FHIR source adapter guide
 
 Registry Notary can read source data from FHIR R4 APIs to support configured
 Notary claims. It does not become a FHIR server and it does not use the FHIR
@@ -9,7 +9,7 @@ adapter runtime. Notary configs still use `connector: source_adapter_sidecar`; F
 request construction, Bundle parsing, graph traversal, and projection stay
 inside that governed runtime bundle.
 
-## Supported Prototype
+## Supported prototype
 
 The current prototype supports a bounded FHIR R4 GET graph:
 
@@ -66,7 +66,7 @@ with a `query_signature` and ordered item values. The adapter maps those values
 back to named FHIR query inputs and returns per-item `data` arrays or sanitized
 per-item errors.
 
-## Coverage Active Shape
+## Coverage active shape
 
 The first governed prototype is `coverage-active`:
 
@@ -82,7 +82,7 @@ Inactive coverage returns a projected row with `coverage_status: inactive`, so
 the claim evaluates to `false`. Missing or ambiguous patient or coverage graph
 matches continue to use existing Notary matching errors.
 
-## Relationship Graph Shape
+## Relationship graph shape
 
 Profiles can use named query fields for requester or relationship-derived
 inputs. Notary still owns the requester, relationship, and purpose policy; the
@@ -107,7 +107,7 @@ search:
     value_from_query: requester_id
 ```
 
-## FHIR Source Profile
+## FHIR source profile
 
 ```yaml
 sources:
@@ -164,7 +164,7 @@ deceased:
   default: false
 ```
 
-## Notary Binding
+## Notary binding
 
 ```yaml
 source_connections:
@@ -207,13 +207,13 @@ claims:
       expression: source.coverage.coverage_status == 'active'
 ```
 
-The `config_hash` above is illustrative. Governed deployments must pin the
-hash produced for the signed source adapter runtime bundle.
+The `config_hash` in this example is illustrative. Governed deployments must
+pin the hash produced for the signed source adapter runtime bundle.
 
 The repository also includes a parse-checked demo Notary config at
 `demo/config/fhir-coverage-registry-notary.yaml`.
 
-## Local Verification
+## Local verification
 
 Run the deterministic FHIR adapter fixture tests:
 
@@ -240,7 +240,7 @@ cargo test -p registry-notary-server --test demo_config \
   --locked
 ```
 
-## Optional Live FHIR Exploration
+## Optional live FHIR exploration
 
 Public FHIR test servers are useful for exploring real resource shapes before
 turning them into local fixtures. They are not suitable for deterministic CI
@@ -276,7 +276,7 @@ Live smoke observed on 2026-06-16:
   returning HTTP 410. Treat SMART as useful exploration data, not a guaranteed
   clean graph.
 
-## Current Limits
+## Current limits
 
 - FHIR support currently runs through the source adapter runtime; there is no
   `connector: fhir`.

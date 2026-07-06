@@ -13,7 +13,7 @@ This profile is intentionally narrow. It documents the credential contract that
 Registry Notary can test and support today, and it names adjacent ecosystem
 features that are not yet part of the product surface.
 
-## Supported Credential Format
+## Supported credential format
 
 | Field | Value |
 | --- | --- |
@@ -28,7 +28,7 @@ Registry Notary rejects credential profile format aliases such as
 `sd_jwt_vc` and `application/vc+sd-jwt`. Operator configuration must use the
 wire media type `application/dc+sd-jwt`.
 
-## Issuer-Signed JWT Header
+## Issuer-signed JWT header
 
 Issued credentials use a compact issuer-signed JWT as the first component of
 the SD-JWT value. The protected header has these Registry Notary invariants:
@@ -44,7 +44,7 @@ feature.
 Signing key configuration examples are documented in
 [signing-key-provider.md](signing-key-provider.md).
 
-## Issuer-Signed JWT Payload
+## Issuer-signed JWT payload
 
 Registry Notary sets these payload claims:
 
@@ -63,7 +63,7 @@ For citizen-facing holder-bound credentials, `sub` is the holder DID. Registry
 Notary does not claim that the holder DID is the same identifier as the civil
 or registry subject.
 
-## Holder Binding
+## Holder binding
 
 When a credential profile requires holder proof of possession:
 
@@ -175,7 +175,7 @@ missing `cnf` when holder binding is required, malformed disclosure, expired
 credential, and holder proof mismatch. Each negative fixture is asserted against
 its exact error code from the verifier API.
 
-## Explicit Non-Support
+## Explicit non-support
 
 The following features are out of scope for the current profile:
 

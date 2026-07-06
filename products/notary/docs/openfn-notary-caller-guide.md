@@ -122,10 +122,14 @@ https://lab.registrystack.org/api/lab.json
 Use the `agri-evidence` credential for the agriculture Notary examples. The
 lab UI at `https://lab.registrystack.org` shows the same public demo
 credentials.
-For SDK-style environment variables, run
-`registryctl lab env --credential agri-evidence`; it reads the same manifest
-entry and emits `REGISTRY_NOTARY_BASE_URL`, `REGISTRY_NOTARY_BEARER_TOKEN`,
-and `REGISTRY_NOTARY_PURPOSE`.
+For SDK-style environment variables, read the `agri-evidence` entry from
+`lab.json` and export the values manually:
+
+```sh
+export REGISTRY_NOTARY_BASE_URL="<service_url from the agri-evidence entry>"
+export REGISTRY_NOTARY_BEARER_TOKEN="<token from the agri-evidence entry>"
+export REGISTRY_NOTARY_PURPOSE="<default_purpose from the agri-evidence entry>"
+```
 
 ## Value Claims
 

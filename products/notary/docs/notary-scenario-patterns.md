@@ -1,4 +1,4 @@
-# Registry Notary Scenario Patterns
+# Registry Notary scenario patterns
 
 > **Page type:** Concept · **Product:** Registry Notary · **Layer:** consultation, evaluation, credential, federation · **Audience:** integrator
 
@@ -7,9 +7,9 @@ stories, each with its sequence or flow diagram and what is supported today. The
 status-labeled scenario matrix lives in `notary-capability-matrix.md`; the
 per-scenario gap bullets and the rollup live in `../specs/notary-capability-gaps.md`.
 
-## Reusable Patterns
+## Reusable patterns
 
-### Local Evaluation
+### Local evaluation
 
 ```mermaid
 sequenceDiagram
@@ -27,7 +27,7 @@ sequenceDiagram
   Notary-->>Portal: Evaluation result
 ```
 
-### Delegated Evaluation
+### Delegated evaluation
 
 ```mermaid
 sequenceDiagram
@@ -42,7 +42,7 @@ sequenceDiagram
   Peer-->>Consumer: Signed evaluation response
 ```
 
-### Outbound Composition
+### Outbound composition
 
 ```mermaid
 sequenceDiagram
@@ -60,7 +60,7 @@ sequenceDiagram
   Shared->>Shared: Verify and compose final claim
 ```
 
-### User-Presented Proof
+### User-presented proof
 
 ```mermaid
 sequenceDiagram
@@ -78,7 +78,7 @@ sequenceDiagram
   W-->>P: Evaluation result
 ```
 
-### Credential Issuance
+### Credential issuance
 
 ```mermaid
 sequenceDiagram
@@ -95,7 +95,7 @@ sequenceDiagram
 
 ## Scenarios
 
-### 1. Civil Alive Predicate
+### 1. Civil alive predicate
 
 Pattern: Local evaluation  
 Status: Supported  
@@ -126,7 +126,7 @@ Supported today:
 - Predicate disclosure.
 - Redacted audit event.
 
-### 2. Age Or Date-Of-Birth Evidence
+### 2. Age or date-of-birth evidence
 
 Pattern: Local evaluation  
 Status: Supported  
@@ -157,7 +157,7 @@ Supported today:
 - Value and predicate disclosure modes.
 - SD-JWT VC issuance for configured credential profiles.
 
-### 3. Program Enrollment Active
+### 3. Program enrollment active
 
 Pattern: Local evaluation  
 Status: Supported  
@@ -187,7 +187,7 @@ Supported today:
 - Local claim dependencies and CEL rules.
 - Predicate or value result formats.
 
-### 4. Health Facility Service Available
+### 4. Health facility service available
 
 Pattern: Local evaluation  
 Status: Supported  
@@ -217,7 +217,7 @@ Supported today:
 - Multi-field source bindings.
 - CEL rules over filtered source facts.
 
-### 5. Agriculture Voucher Eligibility
+### 5. Agriculture voucher eligibility
 
 Pattern: Local evaluation  
 Status: Supported  
@@ -248,7 +248,7 @@ Supported today:
 - Reason-code style companion claims can explain denials.
 - Local SD-JWT VC issuance can represent successful eligibility.
 
-### 6. Livestock Movement Permit Eligibility
+### 6. Livestock movement permit eligibility
 
 Pattern: Local evaluation  
 Status: Supported  
@@ -277,7 +277,7 @@ Supported today:
 - Local multi-claim evaluation.
 - Predicate results and reason-code claims.
 
-### 7. Benefits Agency Asks Civil Notary For Alive Predicate
+### 7. Benefits agency asks civil Notary for alive predicate
 
 Pattern: Delegated evaluation  
 Status: Partial  
@@ -308,7 +308,7 @@ Supported today:
 - Inbound `POST /federation/v1/evaluations`.
 - Static peer policy, request verification, replay rejection, signed response.
 
-### 8. Benefits Agency Asks Social Notary For Active Beneficiary
+### 8. Benefits agency asks social Notary for active beneficiary
 
 Pattern: Delegated evaluation  
 Status: Partial  
@@ -339,7 +339,7 @@ Supported today:
 - Serving Notary side of delegated evaluation.
 - Purpose and profile policy checks.
 
-### 9. Health-Linked Child Support Across Three Authorities
+### 9. Health-linked child support across three authorities
 
 Pattern: Outbound composition  
 Status: Planned  
@@ -373,7 +373,7 @@ Supported today:
 - Each domain claim can be evaluated locally.
 - Inbound delegated evaluation exists.
 
-### 10. Municipality Verifies Residency With A National Steward
+### 10. Municipality verifies residency with a national steward
 
 Pattern: Delegated evaluation  
 Status: Partial  
@@ -401,7 +401,7 @@ Supported today:
 - Inbound serving pattern is supported.
 - Static peer policy can restrict profile and purpose.
 
-### 11. Citizen Presents Civil-Status Proof To Benefits Service
+### 11. Citizen presents civil-status proof to benefits service
 
 Pattern: User-presented proof  
 Status: Planned  
@@ -433,7 +433,7 @@ Supported today:
 
 - SD-JWT VC issuance primitives exist.
 
-### 12. Farmer Presents Landholding Or Registration Proof
+### 12. Farmer presents landholding or registration proof
 
 Pattern: User-presented proof  
 Status: Planned  
@@ -463,7 +463,7 @@ Supported today:
 
 - Local agriculture eligibility can be evaluated against Relay sources.
 
-### 13. Health Worker Presents Professional Credential
+### 13. Health worker presents professional credential
 
 Pattern: User-presented proof  
 Status: Planned  
@@ -494,7 +494,7 @@ Supported today:
 - Credential issuance and verification primitives exist in platform-adjacent
   crates.
 
-### 14. Parent Or Guardian Requests A Service For A Child Or Dependent
+### 14. Parent or guardian requests a service for a child or dependent
 
 Pattern: Representation plus proof  
 Status: Planned  
@@ -531,7 +531,7 @@ Supported today:
 - Local and delegated claim evaluation can represent some child-related facts.
 - User-presented proof is planned as the mechanism for representation evidence.
 
-### 15. Household Or Group Representative Requests A Service
+### 15. Household or group representative requests a service
 
 Pattern: Representation plus proof  
 Status: Planned  
@@ -568,7 +568,7 @@ Supported today:
 - Local claim evaluation can target non-person entities when configured.
 - Delegated evaluation can request predicates about configured subject types.
 
-### 16. Civil Notary Issues Date-Of-Birth Or Alive Credential
+### 16. Civil Notary issues date-of-birth or alive credential
 
 Pattern: Credential issuance  
 Status: Supported  
@@ -598,7 +598,7 @@ Supported today:
 - Local SD-JWT VC issuance for configured credential profiles.
 - Holder binding with `did:jwk`.
 
-### 17. Agriculture Notary Issues Voucher Eligibility Credential
+### 17. Agriculture Notary issues voucher eligibility credential
 
 Pattern: Credential issuance  
 Status: Supported  
@@ -628,7 +628,7 @@ Supported today:
 - Lab agriculture flow can produce a demo credential after successful evaluation.
 - Runtime credential profiles support SD-JWT VC issuance.
 
-### 18. Shared Eligibility Notary Issues Combined-Support Credential
+### 18. Shared eligibility Notary issues combined-support credential
 
 Pattern: Credential issuance plus composition  
 Status: Partial  
@@ -661,7 +661,7 @@ Supported today:
 - Local credential issuance exists.
 - Local composed claims can depend on local claim results.
 
-### 19. Service Helps Holder Obtain Credential From Remote Notary
+### 19. Service helps holder obtain credential from remote Notary
 
 Pattern: Federated credential issuance  
 Status: Planned  
@@ -692,7 +692,7 @@ Supported today:
 - Local issuance exists.
 - Broader spec defines discovery/handoff and transparent byte relay constraints.
 
-### 20. Replay And Emergency Peer Or Key Denial
+### 20. Replay and emergency peer or key denial
 
 Pattern: Governance  
 Status: Supported  
@@ -728,7 +728,7 @@ Supported today:
 - Replay protection for request ids.
 - Emergency denylist configuration for peers and keys.
 
-### 21. Auditor Verifies Minimized Decision Evidence
+### 21. Auditor verifies minimized decision evidence
 
 Pattern: Governance  
 Status: Partial  
@@ -761,7 +761,7 @@ Supported today:
 - Redacted local audit events.
 - Predicate disclosure avoids raw source rows by default.
 
-### 22. Peer Audit Checkpoint Monitoring
+### 22. Peer audit checkpoint monitoring
 
 Pattern: Governance  
 Status: Planned  

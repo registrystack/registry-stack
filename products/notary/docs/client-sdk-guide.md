@@ -12,7 +12,7 @@ for one target, read the result, and handle errors safely. Later sections cover
 batch evaluation, rendering, credential issuance, OID4VCI, federation, and
 Rust-only verifier helpers.
 
-## Start Here
+## Start here
 
 Before the first SDK call, collect these values from the deployment operator or
 from your own application workflow.
@@ -34,17 +34,19 @@ as written. The lab publishes current demo service URLs and caller credentials
 at `https://lab.registrystack.org/api/lab.json`. These are public demo
 credentials, not production secret-handling guidance.
 
+Read the `agri-evidence` entry from `lab.json` and export the values manually:
+
 ```bash
-eval "$(registryctl lab env --credential agri-evidence)"
+export REGISTRY_NOTARY_BASE_URL="<service_url from the agri-evidence entry>"
+export REGISTRY_NOTARY_BEARER_TOKEN="<token from the agri-evidence entry>"
+export REGISTRY_NOTARY_PURPOSE="<default_purpose from the agri-evidence entry>"
 ```
 
-The helper emits only the requested credential from the hosted lab manifest:
-`REGISTRY_NOTARY_BASE_URL`, `REGISTRY_NOTARY_BEARER_TOKEN`, and
-`REGISTRY_NOTARY_PURPOSE`.
-If you are not using `registryctl`, copy the same values from the lab UI or
-from the `agri-evidence` entry in `lab.json`.
+The lab UI at `https://lab.registrystack.org` shows the same public demo
+credentials if you would rather copy the values from there than from
+`lab.json` directly.
 
-### Key Terms
+### Key terms
 
 - **Claim:** A named question Notary can evaluate, such as
   `eligible-for-climate-smart-input-voucher`.
@@ -108,7 +110,7 @@ python -m pip install -e /path/to/registry-notary/bindings/python
 pnpm add /path/to/registry-notary/bindings/node
 ```
 
-## First Evaluation
+## First evaluation
 
 This quickstart checks whether the lab farmer `FARMER-1001` satisfies the
 `eligible-for-climate-smart-input-voucher` claim. Use it when your application
@@ -284,12 +286,12 @@ println!("status: {}", response.status);
 println!("request id: {:?}", response.request_id);
 ```
 
-## Understanding The Request
+## Understanding the request
 
 The SDKs protect the same wire model. Most integration confusion comes from the
 request fields, not from the language syntax.
 
-### Target, Requester, Relationship
+### Target, requester, relationship
 
 The target is the entity being evaluated. Most application calls include a
 target with one or more identifiers:
@@ -325,7 +327,7 @@ result = client.evaluate_request({
 })
 ```
 
-### Claims And Scopes
+### Claims and scopes
 
 Claim references may be plain strings or pinned objects with `id` and
 `version`. The same versioned claim reference shape is supported for single
@@ -360,14 +362,14 @@ The client rejects mismatches before sending the request.
 Set a client default purpose when most calls share one purpose. Override per
 call through request options when needed.
 
-### Disclosure And Format
+### Disclosure and format
 
 Use `disclosure` to request the amount of detail your workflow is allowed to
 receive. `predicate` is the common minimized answer for policy gates. Other
 disclosure modes and formats are deployment-specific and should be selected
 from operator guidance or claim metadata.
 
-## Understanding The Response
+## Understanding the response
 
 Successful Python and Node helpers return the decoded response body directly.
 Rust returns `NotaryResponse<T>` with the decoded body plus metadata.
@@ -410,7 +412,7 @@ Inspect these fields first:
   allow it.
 - `provenance`: evidence metadata. Do not log it blindly.
 
-## Which Method Should I Use?
+## Which method should I use?
 
 | Task | Rust | Python | Node.js |
 | --- | --- | --- | --- |
@@ -428,9 +430,9 @@ Use the high-level helpers when your app is doing the common thing. Use the raw
 or request-shaped helpers when you need exact wire JSON, versioned claim
 references, route-shaped request bodies, or language binding code.
 
-## Common Recipes
+## Common recipes
 
-### Create A Client
+### Create a client
 
 Configure exactly one auth mode:
 
@@ -467,7 +469,7 @@ const client = new RegistryNotaryClient({
 });
 ```
 
-### Send A Full Canonical Evaluation
+### Send a full canonical evaluation
 
 Use the canonical request shape when the high-level helper hides fields your
 workflow cares about. The Python and Node raw helpers preserve canonical
@@ -558,12 +560,14 @@ let options = RequestOptions::builder()
 let response = client.evaluate_request(request, options).await?;
 ```
 
-### Batch With Retry
+### Batch with retry
 
 Use batch evaluation when several targets share the same claim set. Batch
 evaluation is the only POST route that accepts `Idempotency-Key` through the
 client. Retries are allowed for this route only when an idempotency key is
-supplied.
+supplied. `POST /v1/evaluations`, `POST /v1/evaluations/{evaluation_id}/render`,
+and `POST /v1/credentials` reject a request that carries `Idempotency-Key`
+with `400 Bad Request`; do not send that header outside batch evaluation.
 
 ```python
 from registry_notary import RetryPolicy
@@ -693,7 +697,7 @@ let response = client.batch_evaluate_request(request, options).await?;
 println!("succeeded: {}", response.body.summary.succeeded);
 ```
 
-### Render An Evaluation
+### Render an evaluation
 
 Render when you already have an `evaluation_id` and need a configured evidence
 format for display, export, or downstream exchange.
@@ -736,7 +740,7 @@ let rendered = client
     .await?;
 ```
 
-### Issue A Credential
+### Issue a credential
 
 Issue a credential when a successful evaluation should become a credential
 artifact, such as an SD-JWT VC. Credential bodies are sensitive. Do not log
@@ -776,7 +780,7 @@ let credential = client
     .await?;
 ```
 
-### Discovery And JWKS
+### Discovery and JWKS
 
 Use discovery for claim catalogs, service metadata, and issuer keys. The JWKS
 helpers use a short in-process cache when called without request options.
@@ -808,7 +812,7 @@ let jwks = client.issuer_jwks(RequestOptions::default()).await?;
 let refreshed = client.refresh_jwks(RequestOptions::default()).await?;
 ```
 
-### Credential Status
+### Credential status
 
 ```python
 status = client.credential_status("credential-1")
@@ -902,7 +906,7 @@ let compact_response_jws = client
     .await?;
 ```
 
-## Production Checklist
+## Production checklist
 
 ### Base URL
 
@@ -928,7 +932,7 @@ Use `allow_insecure_internal_http=True` only when transport is already
 protected by the deployment boundary or a local development network. Production
 service URLs should remain HTTPS.
 
-### Request Metadata
+### Request metadata
 
 Request options support:
 
@@ -940,7 +944,7 @@ Request options support:
 - `accept`, for Rust, JSON facade, and selected Python request helpers that
   need an explicit `Accept`. Node does not expose a public accept override.
 
-### Retry Contract
+### Retry contract
 
 Retries are disabled by default. When enabled, they are route-aware:
 
@@ -955,7 +959,7 @@ Retries are disabled by default. When enabled, they are route-aware:
 `Retry-After` by using the response `Date` header as the reference clock when it
 is present.
 
-### Response Metadata
+### Response metadata
 
 All typed Rust methods return `NotaryResponse<T>` with:
 
@@ -967,7 +971,7 @@ All typed Rust methods return `NotaryResponse<T>` with:
 Python and Node expose equivalent fields on errors. Successful Python and Node
 helpers return the response body directly.
 
-### Error Handling And Redaction
+### Error handling and redaction
 
 Rust returns `NotaryClientError`. Python and Node expose:
 
@@ -998,9 +1002,9 @@ The stable application problem `code` values for policy mapping live in the
 | Render request fails | `evaluation_id` missing or empty | Use an id from a previous evaluation result |
 | Unknown signing key | JWKS cache does not have the `kid` | `refresh_jwks`/`refreshJwks` or Rust verifier refresh path |
 
-## Runtime Reference
+## Runtime reference
 
-### Rust Features
+### Rust features
 
 Enable optional routes only when needed:
 
@@ -1021,7 +1025,7 @@ registry-notary-client = {
 }
 ```
 
-### Rust JSON Facade
+### Rust JSON facade
 
 Enable `json-facade` when building language wrappers. The facade accepts and
 returns canonical wire JSON with snake_case fields.
@@ -1050,7 +1054,7 @@ let response = handle
     .await?;
 ```
 
-### Rust Credential Verification
+### Rust credential verification
 
 Enable the Rust `verifier` feature when relying-party or wallet code needs to
 verify SD-JWT VC credential material. Verification is explicit and opt-in:
@@ -1100,7 +1104,7 @@ Python and Node do not expose verifier wrappers in this first phase. Callers in
 those runtimes should use the Rust verifier through their application boundary
 or perform verification in wallet-specific code.
 
-### Python Async Helpers
+### Python async helpers
 
 Async evaluation helpers are prefixed with `a`, for example `aevaluate` and
 `aevaluate_request`. The package also exposes async forms for batch evaluation,
@@ -1113,7 +1117,7 @@ result = await client.aevaluate_request({
 })
 ```
 
-### Node Abort Signals
+### Node abort signals
 
 Node request helpers accept `signal` in request options. The high-level
 `evaluate` and `batchEvaluate` helpers also accept `signal` on the request
@@ -1159,7 +1163,7 @@ const result = await client.batchEvaluate(
 );
 ```
 
-### Discovery, Status, OID4VCI, Federation
+### Discovery, status, OID4VCI, federation
 
 ```js
 const claims = await client.listClaims();
@@ -1176,7 +1180,7 @@ const nonce = await client.oid4vciNonce();
 const responseJws = await client.federationEvaluateJws("eyJ...");
 ```
 
-### Node Errors
+### Node errors
 
 ```js
 import { NotaryProblemError, NotaryTransportError } from "@registry-notary/client";
@@ -1196,12 +1200,12 @@ try {
 }
 ```
 
-## API Method Matrix
+## API method matrix
 
 The route to client method mapping for each runtime lives in the
 [route to client method matrix in the API reference](api-reference.md#route-to-client-method-matrix).
 
-## Verification Commands
+## Verification commands
 
 ```bash
 cargo test -p registry-notary-client

@@ -1,4 +1,4 @@
-# OID4VCI Wallet Interop Guide
+# OID4VCI wallet interop guide
 
 > **Page type:** How-to · **Product:** Registry Notary · **Layer:** credential · **Audience:** operator, integrator
 
@@ -6,7 +6,7 @@ This guide describes the implemented OpenID4VCI wallet facade for Registry
 Notary adopters. It focuses on what wallet and platform teams need to configure
 and test. It does not try to freeze the broader REST API design.
 
-## Use Case
+## Use case
 
 Use the OID4VCI facade when a citizen wallet should request a Registry Notary
 SD-JWT VC directly. The wallet holds an access token from an authorization
@@ -42,7 +42,7 @@ For the full configuration, including the `auth.oidc`, `self_attestation`, and
 gate that binds a request to the token subject, see the
 [self-attestation operator guide](self-attestation-operator-guide.md).
 
-## Integration Quick Check
+## Integration quick check
 
 For a public holder wallet, the normal human-facing entry point is:
 
@@ -98,7 +98,7 @@ sequenceDiagram
     Notary-->>Wallet: Holder-bound dc+sd-jwt credential
 ```
 
-## Wallet Flow
+## Wallet flow
 
 The current wallet-facing flow is:
 
@@ -117,7 +117,7 @@ If the access token's scoped authorization details select
 `access_mode: delegated_attestation`, the credential endpoint rejects the
 request rather than issuing for a dependent target.
 
-## Authenticated Pre-Authorized-Code Flow
+## Authenticated pre-authorized-code flow
 
 A public holder wallet (for example walt.id `wallet-api`) is a PKCE client and
 cannot authenticate to a confidential authorization server such as eSignet. For
@@ -126,10 +126,11 @@ pre-authorized-code flow. The citizen still authenticates at eSignet; the wallet
 never authenticates to eSignet and only ever talks to the Notary.
 
 This flow is disabled by default. When `oid4vci.pre_authorized_code.enabled` is
-false (or unset), the three endpoints below return `404`, issuer metadata
+false (or unset), this flow's three endpoints (`/oid4vci/offer/start`,
+`/oid4vci/offer/callback`, and `/oid4vci/token`) return `404`, issuer metadata
 advertises no `token_endpoint`, and credential offers stay
-`authorization_code`. The confidential-client `authorization_code` path above is
-unchanged regardless of this setting.
+`authorization_code`. The confidential-client `authorization_code` path
+described in Wallet flow is unchanged regardless of this setting.
 
 When enabled, the flow is:
 
@@ -167,9 +168,10 @@ When enabled, the flow is:
    The response carries a short-TTL Notary-signed `access_token`, `token_type`,
    `expires_in`, and a `c_nonce`.
 5. The wallet calls `POST /oid4vci/credential` with the Notary-issued
-   `access_token` and a `did:jwk` holder proof, exactly as in the flow above. The
-   issued SD-JWT VC is bound to the eSignet-authenticated subject (the civil id
-   determines whose claim is evaluated) and to the holder's `did:jwk` key.
+   `access_token` and a `did:jwk` holder proof, exactly as in the Wallet flow
+   credential request step. The issued SD-JWT VC is bound to the
+   eSignet-authenticated subject (the civil id determines whose claim is
+   evaluated) and to the holder's `did:jwk` key.
 
 The browser callback URL itself is not the wallet input. The callback renders an
 HTML offer page after identity-provider authentication succeeds; the wallet
@@ -208,7 +210,7 @@ until existing Notary access tokens and pre-authorized codes have expired. The
 active `signing_key_id` signs new codes and access tokens; `verification_key_ids`
 only accepts older public keys for verification.
 
-## Metadata And Offers
+## Metadata and offers
 
 Issuer metadata is derived from `oid4vci` and the configured credential
 configurations. Wallets should verify that metadata advertises:
@@ -265,7 +267,7 @@ credential configuration to request and which issuer metadata to use. If more
 than one credential configuration is enabled, wallet tests should explicitly
 select the intended configuration.
 
-## Nonce Policy
+## Nonce policy
 
 Enable nonce support for real wallet interop:
 
@@ -287,7 +289,7 @@ different credential configuration.
 Use Redis replay storage for nonce-backed wallet traffic when more than one
 process can receive requests.
 
-## Credential Request
+## Credential request
 
 The wallet credential request can use the legacy single-proof shape:
 
@@ -324,7 +326,7 @@ Notary rejects unsupported formats, unsupported proof algorithms, stale proofs,
 replayed nonces, subject-binding mismatches, claims outside the allow-list, and
 credential profiles outside the allow-list.
 
-## Credential Response
+## Credential response
 
 Successful responses contain the issued SD-JWT VC:
 
@@ -351,9 +353,9 @@ Wallets should store the credential as SD-JWT VC and verify:
 - Optional status URL is handled according to verifier policy.
 
 The response does not need to echo every request field. Wallet tests should
-assert the credential content, not just the response envelope.
+assert the credential content, not only the response envelope.
 
-## Compatibility Checklist
+## Compatibility checklist
 
 For each wallet product or SDK:
 
@@ -368,13 +370,13 @@ For each wallet product or SDK:
 - Does it accept short-lived credentials?
 - Does it preserve SD-JWT disclosures without logging them?
 - Can it display status-free credentials and status-bearing credentials?
-- Does it fail clearly on `invalid_token`, proof failure, nonce replay, and
-  subject mismatch?
+- Does it surface a distinct, actionable error for `invalid_token`, proof
+  failure, nonce replay, and subject mismatch?
 
 Record the wallet name, version, supported draft/profile behavior, and any
 configuration overrides in your deployment notes.
 
-## Security And Privacy Notes
+## Security and privacy notes
 
 - Notary validates token and policy before source reads.
 - Subject binding is exact; do not use normalization that could join different
