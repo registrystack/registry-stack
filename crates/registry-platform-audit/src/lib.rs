@@ -25,7 +25,7 @@ use ulid::Ulid;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 const DEFAULT_MAX_SIZE_BYTES: u64 = 10 * 1024 * 1024;
-const DEFAULT_MAX_FILES: u32 = 5;
+const DEFAULT_MAX_FILES: u32 = 50;
 const MIN_AUDIT_SECRET_BYTES: usize = 32;
 const KEYED_HASH_PREFIX: &str = "hmac-sha256:";
 const UNKEYED_HASH_PREFIX: &str = "sha256:";
@@ -391,7 +391,7 @@ struct JsonlFileSinkInner {
 }
 
 impl JsonlFileSink {
-    /// Construct a file sink with a 10 MiB active file and 5 retained files.
+    /// Construct a file sink with a 10 MiB active file and 50 retained files.
     #[must_use]
     pub fn new(path: impl Into<PathBuf>) -> Self {
         Self::with_rotation(path, DEFAULT_MAX_SIZE_BYTES, DEFAULT_MAX_FILES)
@@ -1609,6 +1609,18 @@ mod option_hash_hex {
 #[cfg(test)]
 mod tests {
     use super::{redact::QueryRedactor, *};
+
+    #[test]
+    fn default_rotation_retains_fifty_files() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        let sink = JsonlFileSink::new(&path);
+
+        // The default retention cap is ~500 MiB (50 files x 10 MiB) so audit
+        // history is not silently discarded after ~50 MiB.
+        assert_eq!(sink.inner.max_size_bytes, 10 * 1024 * 1024);
+        assert_eq!(sink.inner.max_files, 50);
+    }
 
     #[tokio::test]
     async fn audit_chain_bootstraps_from_sink_tail() {
