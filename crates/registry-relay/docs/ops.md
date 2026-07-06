@@ -1,8 +1,8 @@
-# registry-relay Operations Runbook
+# registry-relay operations runbook
 
 This runbook describes the V1 operating model for running Registry Relay in development, staging, and production-like deployments.
 
-## Deployment Model
+## Deployment model
 
 Recommended production topology:
 
@@ -51,31 +51,31 @@ reload operations and is reachable only from the private admin and monitoring
 networks. Source files are read-only; the cache is writable; the public
 data-plane listener does not mount `/metrics`.*
 
-## Production Hardening Checklist
+## Production hardening checklist
 
 Run this gate before promoting any deployment beyond local demo use. Items that
 are fully covered by an existing section link to it; items unique to this
 checklist carry a one-line note.
 
-### Network Boundaries
+### Network boundaries
 
 - [ ] Public data-plane listener is behind TLS at the ingress or service mesh
-  layer. See [Deployment Model](#deployment-model).
+  layer. See [Deployment model](#deployment-model).
 - [ ] `server.admin_bind` is bound only to a private interface or loopback; it
   is not reachable through the public ingress. See [Deployment
-  Model](#deployment-model) and [Metrics](#metrics).
+  model](#deployment-model) and [Metrics](#metrics).
 - [ ] `/metrics`, `/admin/v1/posture`, and reload routes are not accessible from
-  `server.bind`. See [Admin Posture And Config Apply](#admin-posture-and-config-apply).
+  `server.bind`. See [Admin posture and config apply](#admin-posture-and-config-apply).
 - [ ] Rate-limiting is configured at the ingress for broad metadata discovery
   and aggregate endpoints.
 - [ ] `server.trust_proxy` is disabled unless the gateway sits behind documented
   trusted proxy CIDRs. See [Configure](#configure).
 
-### Auth And Key Rotation
+### Auth and key rotation
 
 - [ ] OIDC is preferred for multi-service deployments; API keys are acceptable
-  only when a rotation and storage workflow is in place. See [API-Key
-  Provisioning And Rotation](#api-key-provisioning-and-rotation).
+  only when a rotation and storage workflow is in place. See [API-key
+  provisioning and rotation](#api-key-provisioning-and-rotation).
 - [ ] Dataset scopes are granted narrowly: metadata, aggregate, rows,
   evidence-verification, and admin scopes are separate and not implied by one
   another. Verified in `config/example.yaml` (`scopes` entries).
@@ -83,39 +83,38 @@ checklist carry a one-line note.
 - [ ] Denied callers are tested for every exposed dataset and adapter before
   go-live.
 
-### Secrets Handling
+### Secrets handling
 
 - [ ] API-key hashes, `audit.hash_secret_env` material, OIDC client secrets,
   database passwords, and provenance signing JWKs are stored in the platform
   secret manager, not in YAML, image layers, shell history, crash reports, or
-  issue trackers. See [API-Key Provisioning And Rotation](#api-key-provisioning-and-rotation)
-  and [Provenance Signer Rotation](#provenance-signer-rotation).
+  issue trackers. See [API-key provisioning and rotation](#api-key-provisioning-and-rotation)
+  and [Signed response credential signer rotation](#signed-response-credential-signer-rotation).
 - [ ] Full environment dumps are disabled in diagnostic tooling.
 - [ ] Provenance signing-key rotation includes a DID document overlap window
-  long enough for existing credentials to expire. See [Provenance Signer
-  Rotation](#provenance-signer-rotation).
+  long enough for existing credentials to expire. See [Signed response credential signer rotation](#signed-response-credential-signer-rotation).
 
-### Source Data Mounts
+### Source data mounts
 
-- [ ] File sources are mounted read-only. See [Deployment Model](#deployment-model).
+- [ ] File sources are mounted read-only. See [Deployment model](#deployment-model).
 - [ ] Database credentials have read-only privileges.
 - [ ] PostgreSQL sources are bounded by configured projections, filters, and
   limits; table ids, column names, source paths, and query text are not exposed
   through metadata unless explicitly published.
 - [ ] `server.cache_dir` is writable only by the Relay service account (UID/GID
-  `65532:65532` in the production container). See [Deployment Model](#deployment-model).
+  `65532:65532` in the production container). See [Deployment model](#deployment-model).
 
-### Audit Sink
+### Audit sink
 
-- [ ] An audit sink is configured before production use. See [Audit Sink And
-  Rotation](#audit-sink-and-rotation).
+- [ ] An audit sink is configured before production use. See [Audit sink and
+  rotation](#audit-sink-and-rotation).
 - [ ] `audit.hash_secret_env` is set to at least 32 bytes of deployment-specific
   random secret material; the relay fails closed if it is missing or weak.
   Field confirmed present in `src/config/mod.rs` and `config/example.yaml`.
 - [ ] Append-only external log storage (or independent tail-hash anchoring) is
   used where stronger integrity is required; the beta sinks do not protect
-  against a writer that can rewrite the sink. See [Audit Sink And
-  Rotation](#audit-sink-and-rotation).
+  against a writer that can rewrite the sink. See [Audit sink and
+  rotation](#audit-sink-and-rotation).
 - [ ] Identifier fields that need audit redaction carry `sensitive: true` in
   table or entity field config. Field confirmed in `src/config/mod.rs`. Note:
   `sensitive: true` is audit-only; it does not hide fields from authorized
@@ -123,20 +122,19 @@ checklist carry a one-line note.
 - [ ] Bearer tokens, raw API keys, raw query values, row bodies, VC-JWTs, and
   unreviewed `detail` text are not logged.
 
-### Metadata And Provenance Posture
+### Metadata and provenance posture
 
 - [ ] Portable metadata is validated before deployment (`just
-  metadata-validate-profiles`). See [Build And Release](#build-and-release).
+  metadata-validate-profiles`). See [Build and release](#build-and-release).
 - [ ] Runtime backend URLs, source paths, scope names, and table ids are absent
   from portable metadata manifests.
 - [ ] Scoped runtime metadata is not placed in shared public caches.
 - [ ] Provenance is enabled only when verifiers can resolve the configured
-  schemas, contexts, and DID documents. See [Provenance Signer
-  Rotation](#provenance-signer-rotation).
+  schemas, contexts, and DID documents. See [Signed response credential signer rotation](#signed-response-credential-signer-rotation).
 - [ ] Registry Notary evidence verification is kept separate from Relay response
   provenance.
 
-### Container Runtime Policy
+### Container runtime policy
 
 - [ ] Production images use the `Dockerfile` (distroless `cc-debian12:nonroot`,
   UID/GID `65532:65532`). `Dockerfile.demo` is not used as production runtime
@@ -144,16 +142,16 @@ checklist carry a one-line note.
 - [ ] No shell, package manager, `curl`, or `wget` dependencies are present in
   the production runtime stage; healthcheck uses `registry-relay healthcheck`.
 - [ ] Writable mounts (`server.cache_dir`, `audit.sink: file` path) are owned
-  by UID/GID `65532:65532`. See [Deployment Model](#deployment-model).
+  by UID/GID `65532:65532`. See [Deployment model](#deployment-model).
 - [ ] TLS client behavior is verified after any base-image change by exercising
   an HTTPS OIDC JWKS/discovery path or a PostgreSQL TLS connection.
 
-### Readiness Gates
+### Readiness gates
 
 - [ ] Liveness (`/healthz`) and readiness (`/ready`) probes are configured in
-  the orchestrator. See [Readiness And Probes](#readiness-and-probes).
+  the orchestrator. See [Readiness and probes](#readiness-and-probes).
 - [ ] Startup time allows for the largest XLSX/Parquet ingest before readiness
-  is declared. See [Readiness And Probes](#readiness-and-probes).
+  is declared. See [Readiness and probes](#readiness-and-probes).
 - [ ] Alerts are set on startup validation failures, source ingest failures,
   audit sink failures, auth provider failures, and provenance signer failures.
   See [Metrics](#metrics).
@@ -162,7 +160,7 @@ checklist carry a one-line note.
 - [ ] The exact config, binary version, feature flags, and metadata manifest are
   recorded for each deployment.
 
-### Pre-Promotion Test Gate
+### Pre-promotion test gate
 
 Run the closest practical checks for the enabled feature set before promoting
 any image:
@@ -179,7 +177,7 @@ just metadata-validate-profiles
 When optional adapters are enabled, run focused all-feature integration tests
 for those adapters before exposing them to consumers.
 
-## Build And Release
+## Build and release
 
 Build a local release binary:
 
@@ -267,7 +265,7 @@ Important configuration blocks:
 
 Local-file startup config changes remain a rolling restart operation. Governed signed config apply is available on the private admin listener when the runtime handle and `config_trust` are installed. It can live-apply compatible public metadata changes, compatible provenance signing-key rotations, and locally approved root transitions that only change `config_trust.accepted_roots`; route-affecting, listener, auth, audit, dataset, standards, and most provenance shape changes still report `restart_required` and must be rolled through deployment. Dataset reload does not reload startup `config.yaml`.
 
-## Operating With Registry Notary
+## Operating with Registry Notary
 
 Registry Relay is the protected registry consultation API. Registry Notary is
 the claim evaluation, credential issuance, and attestation service. Relay can
@@ -295,7 +293,7 @@ host `18081` mapped to its container listener. Native local runs usually use
 Relay `127.0.0.1:8080` and Notary `127.0.0.1:8081`; align source `base_url`
 values with the network where Notary runs.
 
-## API-Key Provisioning And Rotation
+## API-key provisioning and rotation
 
 API-key config stores only:
 
@@ -317,7 +315,7 @@ Live keyring reload is not wired in V1. Treat key rotation as a rolling restart 
 
 Never log raw keys, fingerprints, or full environment dumps. In issue reports, include only key ids and scope names.
 
-## Signed Response Credential Signer Rotation
+## Signed response credential signer rotation
 
 The signed response credential feature (W3C VCDM 2.0 VC-JWT; config key `provenance`, see [provenance.md](provenance.md)) introduces a signing key. The runtime contract is identical in shape to API-key rotation, but the recovery model is different: existing VCs signed under a retired key must still verify until they expire, so the DID Document keeps publishing those keys for a controlled window.
 
@@ -340,7 +338,7 @@ Production smoke for local software Ed25519 deployments:
    Remove the retired public key only after the longest configured
    `claim_validity` window has elapsed and repeat the DID fetch.
 
-See [Production Smoke Checklist](provenance.md#production-smoke-checklist) for exact commands.
+See [Production smoke checklist](provenance.md#production-smoke-checklist) for exact commands.
 
 Rotation procedure (gateway mode):
 
@@ -358,7 +356,7 @@ Remote signing (`signer.kind: kms`) is reserved for a future backend and is reje
 
 Never log the JWK, the env var value, or any full environment dump. The provenance audit block intentionally records only `iss`, `kid`, `jti`, `claim_type`, `subject`, and the `iat`/`nbf`/`exp` triple, not the signed body or any signing material.
 
-## Audit Sink And Rotation
+## Audit sink and rotation
 
 Audit records are JSON Lines and are separate from operational logs. Operational logs go to stderr as readable text by default. Set `REGISTRY_RELAY_LOG_FORMAT=json` or `REGISTRY_RELAY_LOG_FORMAT=jsonl` when operational logs should be emitted as JSON Lines for collection or redirected files.
 
@@ -393,7 +391,7 @@ Audit records must not contain raw secrets or raw API keys. Mark identifier fiel
 
 **Data-Purpose audit semantics** (frozen, 2026-06-11 evidence-contracts decision record, D5): when the `Data-Purpose` header is present on a request, its value is always recorded verbatim in the audit trail (`purpose` field). Header presence can be required per entity via `require_purpose_header: true`; a missing header returns `400 auth.purpose_required`. Without an entity `governed_policy`, purpose values are not enforced or compared at the consultation layer; Registry Notary is the purpose-certification layer. With an entity `governed_policy`, governed evidence-gateway routes evaluate the configured PDP purpose allowlist and return stable `pdp.*` denials. Value-level allowlists remain additive opt-in configuration.
 
-## Dataset Refresh And Reload
+## Dataset refresh and reload
 
 Refresh modes:
 
@@ -419,7 +417,7 @@ curl -X POST -H "Authorization: Bearer $ADMIN_API_KEY" \
 
 The reload-all response includes `status` and aggregate `counts` for total, succeeded, and failed resources. Reload-all prepares every configured source resource before publishing any of them; if any resource cannot prepare, Relay keeps the previous coherent generation active and returns HTTP 500 with `status: "failed"`. Inspect the audit and operational logs for the resource-level failure context. This route reloads configured source resources, not startup runtime config.
 
-## Admin Posture And Config Apply
+## Admin posture and config apply
 
 Admin capabilities and operations posture are read-only admin-listener routes with their own scope:
 
@@ -525,9 +523,9 @@ Break-glass requests are apply-only and must include all current fields:
 Break-glass can waive only the previous-config-hash rollback check. It does not waive monotonic sequence, TUF signature and local trust-root authorization, expiry, emergency change-class authorization, or local rolling-window rate limits. The rolling-window policy comes from local `config_trust.break_glass_rate_limit`; requests that include `break_glass_rate_limit` are rejected. The audit record stores the approval reference, emergency change class, expiry, rate-limit identity, and hashes of approver identity and reason text; it does not store raw approver identity or raw reason text.
 Inline `break_glass_approval` remains the single-approver path. For multi-approver policies, write a verifier-owned approval record to `local_approval_state_path` and send only `break_glass_approval_reference` in the request.
 
-## Governed Config CLI
+## Governed config CLI
 
-The `registry-relay config` command group operates governed signed config bundles from the command line. The two subcommands mirror the HTTP routes in [Admin Posture And Config Apply](#admin-posture-and-config-apply): `verify-bundle` validates a signed target in-process and `apply-bundle` posts an apply request to a running admin listener.
+The `registry-relay config` command group operates governed signed config bundles from the command line. The two subcommands mirror the HTTP routes in [Admin posture and config apply](#admin-posture-and-config-apply): `verify-bundle` validates a signed target in-process and `apply-bundle` posts an apply request to a running admin listener.
 
 ```text
 registry-relay config verify-bundle <flags>
@@ -597,7 +595,7 @@ registry-relay config apply-bundle \
   --target-name registry-relay.yaml
 ```
 
-## Readiness And Probes
+## Readiness and probes
 
 Use:
 

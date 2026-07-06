@@ -1,4 +1,4 @@
-# registry-relay API Guide
+# registry-relay API guide
 
 This guide describes the V1 HTTP contract from a client and operator point of view. It is the practical reference for calling a running gateway.
 
@@ -6,7 +6,7 @@ The V1 route shape is dataset-scoped and entity-oriented. Storage table ids stay
 out of public URLs; callers use dataset ids, entity names, record ids,
 relationships, aggregate ids, and standards adapter roots.
 
-## Listeners And Surfaces
+## Listeners and surfaces
 
 The data-plane listener is `server.bind`. It serves health probes, docs, catalog metadata, dataset metadata, entity reads, evidence-offering discovery, aggregates, OpenAPI, optional standards adapters, and optional provenance resources.
 
@@ -15,6 +15,7 @@ The admin listener is optional and only exists when `server.admin_bind` is confi
 The public URL space is structured as follows:
 
 - `/v1/datasets/{dataset_id}/entities/{entity}/...` and related aggregate, measure, and dimension routes are the entity-oriented data-plane surface.
+- `/v1/attribute-releases` and `/v1/attribute-releases/{profile_id}/versions/{version}/resolve` (feature: `attribute-release`, enabled by default) resolve governed identity attribute-release profiles to minimized claim bundles.
 - `/metadata/*` is the standards-facing metadata surface: catalog, DCAT, SHACL, policies, evidence offerings, and dataset/entity descriptors.
 - `/.well-known/api-catalog` is the public well-known discovery entry point.
 - `/ogc/v1/*` (feature: `ogcapi-features`) exposes spatial entities as OGC API Features collections.
@@ -186,7 +187,7 @@ Scopes are independent. Grant the narrowest scope that lets the caller do its jo
 
 Global admin-listener scopes are independent of dataset scopes: `registry_relay:admin` for reload and configuration mutation, `registry_relay:metrics_read` for metrics, and `registry_relay:ops_read` for read-only posture and capability discovery.
 
-## Entity Reads
+## Entity reads
 
 Entity routes use configured entity names, not storage table ids. For example:
 
@@ -218,13 +219,13 @@ Some entities declare `required_filters`. Protected reads for those entities mus
 
 Collection reads accept at most 20 filter parameters. The cap applies before query planning so overly broad or machine-generated requests fail predictably.
 
-## Pagination And Conditional Requests
+## Pagination and conditional requests
 
 Collection routes support `limit` up to the entity's configured `max_limit`. Responses may include an opaque cursor for the next page. Treat cursors as server-owned tokens and pass them back unchanged. A cursor is bound to the query shape and the current snapshot generation; malformed, tampered, or stale cursors fail with `query.cursor_invalid`.
 
 Entity collection and record responses include validators where supported. Clients can use `If-None-Match` to avoid re-downloading unchanged content. A matching validator returns `304 Not Modified`.
 
-## Purpose Headers
+## Purpose headers
 
 Entities can require a `Data-Purpose` header for row reads and OGC feature reads.
 
@@ -243,7 +244,7 @@ Data-Purpose: https://data.example.gov/purposes/service-intake-check
 
 Use stable, reviewable purpose IRIs. Do not put secrets, bearer tokens, or personal data in this header; it is recorded in audit logs.
 
-## Metadata, Catalog, And OpenAPI
+## Metadata, catalog, and OpenAPI
 
 `GET /metadata/catalog` and `GET /metadata/dcat/bregdcat-ap` return only datasets visible to the authenticated principal's metadata scopes.
 
@@ -334,7 +335,7 @@ The initial Records surface has one collection, `datasets`, where each item is a
 
 Dataset Records do not currently support `bbox` or `datetime` filtering because the catalog metadata only carries `spatial_coverage` IRIs and no temporal coverage field. The endpoint rejects unsupported spatial/search parameters instead of pretending those fields are filterable.
 
-## Evidence Verification And Aggregates
+## Evidence verification and aggregates
 
 Evidence offerings are declared metadata resources that describe what kind of evidence a registry can check and the authority, assurance, purpose, and request shape for that check:
 
@@ -368,7 +369,89 @@ Measure and dimension discovery is dataset-scoped and generated from aggregate d
 
 Aggregate JSON results use `observations` for rows and `structure` for dimensions/measures. Query bodies should use `measures`; `indicators` is accepted only as a deprecated compatibility alias. Disclosure control is configured per aggregate. Suppressed or masked groups are normal results, not errors. Temporal query bounds are supported for aggregates that declare a `temporal_field`; requests with temporal bounds against aggregates without one are rejected instead of guessing. POST queries may set `max_rows`; truncated results are marked with `completeness.complete: false` and `completeness.truncated: true` so a partial cube is not confused with a complete one. CSV output is available with `?f=csv`, request `"format": "csv"`, or `Accept: text/csv` and carries `X-Registry-Relay-*` and `X-SPDCI-*` disclosure/freshness headers plus a `Link: rel="describedby"` header to aggregate structure. SDMX JSON 2.1 is available with `?f=sdmx-json`, request `"format": "sdmx-json"`, or `Accept: application/vnd.sdmx.data+json;version=2.1`; messages declare the official schema at `https://json.sdmx.org/2.1/sdmx-json-data-schema.json`. When built with `ogcapi-edr`, configured `admin_area` spatial aggregates are also exposed as OGC EDR `/area` collections under `/ogc/edr/v1`.
 
-## Problem Details
+## Attribute release
+
+`registry-relay` can resolve a governed identity attribute-release profile: an
+exactly-one-subject lookup that maps configured source fields (or CEL
+expressions) into a minimized, OIDC/UserInfo-style claim bundle for a named
+profile (feature: `attribute-release`, enabled by default).
+
+```text
+GET  /v1/attribute-releases
+POST /v1/attribute-releases/{profile_id}/versions/{version}/resolve
+```
+
+`GET /v1/attribute-releases` lists the release profiles visible to the
+authenticated caller: a profile appears only when the caller holds that
+profile's `release_scope`. The response never includes source internals
+(table ids, source field names); it is `private, no-store` and
+`Vary: Authorization`.
+
+`POST /v1/attribute-releases/{profile_id}/versions/{version}/resolve` resolves
+one subject against the named `(profile_id, version)` pair, which is globally
+unique and has no "latest" alias. Each profile declares its own
+`release_scope`, a dataset-bound scope that must differ from the entity's
+`read_scope`; the scope suffix convention for this capability is
+`<dataset_id>:identity_release`, one of the scope levels an API key can be
+granted alongside `metadata`, `aggregate`, `rows`, `verify`, and
+`evidence_verification`. A profile may also declare a `purpose`: when it does,
+the request's `Data-Purpose` header must equal it, or the gateway returns
+`400 auth.purpose_required` (header absent) or `403 auth.purpose_denied`
+(header present but mismatched), before any source read. A profile that omits
+`purpose` carries no such gate.
+
+Request body:
+
+```json
+{
+  "subject": { "id_type": "NATIONAL_ID", "value": "NID-1" },
+  "claims": ["given_name"]
+}
+```
+
+`claims` is optional: absent resolves the profile's full default claim set; an
+explicit empty list is rejected with `400 filter.invalid_value`; a name
+outside the profile's configured claims is denied. `subject.value` accepts
+only a non-blank scalar (string, number, or boolean); `subject.id_type` must
+match the profile's configured type when one is set. Either failure returns
+`400 release.subject_invalid`.
+
+Successful response (`200`):
+
+```json
+{
+  "profile_id": "civil_identity",
+  "profile_version": "v1",
+  "claims": {
+    "given_name": "Ada",
+    "full_name": "Ada Lovelace"
+  }
+}
+```
+
+`claims` carries only the released, minimized claim bundle: never the raw
+registry row, never a raw or hashed subject value. A `source` block
+(`dataset`, `entity`, `subject_id_type`, `cardinality`, `checked_at`) is added
+only when the profile sets `response.include_source_metadata: true`; it is
+absent by default.
+
+Every denial after profile resolution collapses to one public code, so a
+caller cannot distinguish "no such subject" from "subject exists but was
+denied":
+
+| Condition | Code | Status |
+| --- | --- | --- |
+| Unknown `(profile_id, version)` | `release.profile_not_found` | 404 |
+| Invalid subject id_type or value | `release.subject_invalid` | 400 |
+| No matching row, more than one matching row, a false release-condition predicate, a required claim unavailable, or a requested claim name outside the profile's configured set | `release.subject_denied` | 403 |
+| Backing source unavailable | `release.source_unavailable` | 503 |
+
+A successful release is cacheable only when the profile sets
+`response.max_age_seconds`, which yields `private, max-age=N`; the default is
+`private, no-store`. Every response carries `Vary: Authorization`. Denials are
+always `private, no-store`, regardless of the profile's caching setting.
+
+## Problem details
 
 Errors use RFC 9457 Problem Details with a stable `code` field:
 
@@ -386,6 +469,6 @@ The exact text in `detail` is operator-facing but intentionally scrubbed. Do not
 
 Startup-only split metadata failures use stable `metadata.manifest.*` and `runtime.binding.*` codes logged to stderr; see [metadata.md](metadata.md) for the full table.
 
-## Provenance Opt-In
+## Provenance opt-in
 
 When `provenance.enabled: true`, callers can request signed Verifiable Credentials for entity record and aggregate result responses by sending `Accept: application/vc+jwt`; plain JSON remains the default when the caller does not opt in. See [provenance.md](provenance.md) for signer config, DID Web behavior, VC-JWT shape, and verification steps.

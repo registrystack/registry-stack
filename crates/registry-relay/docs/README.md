@@ -1,4 +1,4 @@
-# Registry Relay Documentation
+# Registry Relay documentation
 
 Registry Relay turns registry data you already hold, in spreadsheets or PostgreSQL, into protected, scoped, read-only HTTP APIs. Authorized callers read records over purpose-bound routes, and the gateway never widens reach at request time. Relay also publishes discovery metadata that points callers to a Registry Notary for claim and evidence verification.
 

@@ -1,4 +1,4 @@
-# Call Registry Relay From An OpenFn Workflow
+# Call Registry Relay from an OpenFn workflow
 
 > **Page type:** How-to · **Product:** Registry Relay · **Layer:** client integration · **Audience:** integrator
 
@@ -34,7 +34,7 @@ Configure an OpenFn credential with:
 The adaptor sends credentials as `Authorization: Bearer <token>`. It does not
 send `x-api-key`.
 
-## Lab Credentials
+## Lab credentials
 
 The public Registry Stack lab publishes current demo service URLs, scopes, and
 tokens at:
@@ -53,7 +53,7 @@ For the agriculture Relay examples below:
 The lab UI at `https://lab.registrystack.org` shows the same public demo
 credentials.
 
-## Read One Record
+## Read one record
 
 ```js
 execute(
@@ -85,7 +85,7 @@ execute(
 );
 ```
 
-## List Records
+## List records
 
 Collection reads require an explicit `limit` and at least one filter unless
 `allowUnfiltered: true` is set.
@@ -107,7 +107,7 @@ execute(
 );
 ```
 
-## Query An Aggregate
+## Query an aggregate
 
 ```js
 execute(

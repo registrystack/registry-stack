@@ -1,4 +1,4 @@
-# Registry Relay Configuration Guide
+# Registry Relay configuration guide
 
 `registry-relay` is configured by one YAML document. The binary chooses the first available source:
 

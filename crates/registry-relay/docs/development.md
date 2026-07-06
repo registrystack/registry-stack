@@ -1,8 +1,8 @@
-# registry-relay Development Guide
+# registry-relay development guide
 
 This guide is for contributors working on the gateway codebase. Operator docs live in [ops.md](ops.md), [configuration.md](configuration.md), [api.md](api.md), [metadata.md](metadata.md), [client-integration.md](client-integration.md), and [provenance.md](provenance.md).
 
-## Local Setup
+## Local setup
 
 Install the pinned toolchain and fetch dependencies:
 
@@ -65,7 +65,7 @@ cargo test --test oidc_zitadel -- --ignored --nocapture
 
 The integration test verifies the auth wiring (signature, issuer, audience, principal extraction, granular `auth.*` codes) using a token minted by the bootstrap. Asserting RBAC against specific resource scopes requires either roles in the token that match `oidc.scope_map`'s keys, or aligning `oidc.scope_claim` with the IdP's role-bearing claim; the example `config/example.oidc.yaml` ships with the values the bootstrap emits.
 
-## Verification Commands
+## Verification commands
 
 Use the project recipes when possible:
 
@@ -138,7 +138,7 @@ just validate-catalog-semic-local catalog=target/dcat-ap/metadata.bregdcat-ap.js
 The local recipe defaults to `bregdcatap.2_1_0` and is a compatibility/gap
 check only. Keep the external SEMIC recipe as the release validation signal.
 
-## Coverage Metrics
+## Coverage metrics
 
 Use `cargo-llvm-cov` when you need quantitative coverage metrics to complement the qualitative test review:
 
@@ -165,7 +165,7 @@ cargo llvm-cov --all-features --json --summary-only --output-path target/llvm-co
 
 External-service tests remain ignored unless their required environment is configured, such as `DATA_GATE_POSTGRES_TEST_URL` for PostgreSQL and the Zitadel OIDC variables documented in [configuration.md](configuration.md#oidc-oauth2).
 
-## Project Layout
+## Project layout
 
 ```text
 src/api/          HTTP handlers and route-local helpers
@@ -191,7 +191,7 @@ publication helper recipes.
 
 Storage tables are private. Public routes must go through entity config, scope checks, audit, and query planning.
 
-## Change Guidelines
+## Change guidelines
 
 - Keep the public URL space entity-shaped. Do not expose table ids in data-plane paths.
 - Add config fields through `src/config/mod.rs` and validation in `src/config/validate.rs`.
@@ -204,7 +204,7 @@ Storage tables are private. Public routes must go through entity config, scope c
 - For operator-visible config behavior, update [configuration.md](configuration.md), [ops.md](ops.md), and config-loader tests.
 - For portable metadata behavior, update [metadata.md](metadata.md), metadata-core tests, and split config binding tests.
 
-## Adding An Endpoint
+## Adding an endpoint
 
 1. Add the route handler under `src/api/`.
 2. Mount it in `src/api/mod.rs` and `src/server.rs` on the correct public, protected, or admin surface.
@@ -214,7 +214,7 @@ Storage tables are private. Public routes must go through entity config, scope c
 6. Add focused tests for success, missing auth, wrong scope, and malformed input.
 7. Update [api.md](api.md) if clients need to know about the behavior.
 
-## Adding Config
+## Adding config
 
 1. Add the serde model to `src/config/mod.rs` or `src/config/provenance.rs`.
 2. Add validation in `src/config/validate.rs`.
@@ -222,17 +222,17 @@ Storage tables are private. Public routes must go through entity config, scope c
 4. Add positive and negative loader tests under `tests/config_loader.rs` or a focused test file.
 5. Update [configuration.md](configuration.md) and [ops.md](ops.md) when operators must set or rotate it.
 
-## Pull Requests
+## Pull requests
 
 Keep pull requests focused. Include tests for any code change, or explain why the change is documentation, configuration, or tooling only. Do not commit secrets, production data, private operator notes, or internal planning documents.
 
-## Documentation Style
+## Documentation style
 
 Docs should describe the current supported behavior first, then any reserved or deferred surfaces. Keep `README.md`, `docs/api.md`, `docs/configuration.md`, `docs/client-integration.md`, and `docs/ops.md` operationally current.
 
-Inline Rust docs should explain invariants and boundaries that are easy to break while editing. Avoid comments that repeat obvious field names or preserve obsolete implementation scaffolding after the code has matured.
+Inline Rust docs should explain invariants and boundaries that break readily while editing. Avoid comments that repeat obvious field names or preserve obsolete implementation scaffolding after the code has matured.
 
-## OpenAPI Release Policy
+## OpenAPI release policy
 
 Registry Relay has two OpenAPI surfaces:
 
@@ -241,7 +241,7 @@ Registry Relay has two OpenAPI surfaces:
 
 The runtime document is the source of truth for a deployed instance. The static artifact is a release artifact, not a replacement for deployment discovery. Fetch runtime `/openapi.json` from a deployment for concrete dataset and entity operations.
 
-### When to Refresh the Static Artifact
+### When to refresh the static artifact
 
 Refresh the static OpenAPI artifact when any of these change:
 
@@ -256,7 +256,7 @@ Refresh the static OpenAPI artifact when any of these change:
 
 Do not refresh it for implementation-only refactors that leave the public contract unchanged.
 
-### Refresh Procedure
+### Refresh procedure
 
 1. Update [api.md](api.md) for any public contract change.
 2. Start Relay with a representative release config.
@@ -273,7 +273,7 @@ python -m json.tool openapi/registry-relay.openapi.json >/dev/null
 cargo test --test api_docs
 ```
 
-### Review Rules
+### Review rules
 
 Review the static artifact for:
 
@@ -286,7 +286,7 @@ Review the static artifact for:
 - tags and summaries that match the docs;
 - route families that match the API guide.
 
-### Release Note Requirement
+### Release note requirement
 
 Every static OpenAPI refresh should mention one of:
 
@@ -297,7 +297,7 @@ Every static OpenAPI refresh should mention one of:
 
 Release notes should call the artifact abstract when it uses placeholder dataset/entity names and should direct deployments to fetch the runtime `/openapi.json` document for concrete route and dataset shape.
 
-## Platform Compatibility Gate
+## Platform compatibility gate
 
 Relay consumes `registry-platform` from a sibling checkout during local commons
 release work. Run the compatibility gate before merging Platform-facing

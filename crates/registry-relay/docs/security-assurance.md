@@ -1,4 +1,4 @@
-# Security Assurance
+# Security assurance
 
 Registry Relay's container workflow publishes release images from stable
 `vX.Y.Z` tags and `registry-stack-technical-preview-<date-or-version>` tags to

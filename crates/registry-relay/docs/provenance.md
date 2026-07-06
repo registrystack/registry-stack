@@ -1,4 +1,4 @@
-# Signed Response Credentials
+# Signed response credentials
 
 `registry-relay` can return W3C Verifiable Credentials (VCs), signed as
 compact JWS, for two response families:
@@ -14,7 +14,7 @@ The feature is opt-in twice over: by the operator (config flag) and by
 the caller (Accept header). When either says no, responses remain plain
 JSON.
 
-## Standards Posture
+## Standards posture
 
 These credentials are **W3C VCDM 2.0 VC-JWT** with a Registry Relay
 JSON-LD context. They are **not** W3C PROV-O: no PROV graph is embedded
@@ -32,7 +32,7 @@ breaking change.
 This document describes the runtime contract: configuration, wire
 shapes, endpoints, audit events, and key management.
 
-## Why Verifiable Credentials
+## Why verifiable credentials
 
 Consumers of `registry-relay` increasingly need to relay government data to
 downstream parties (cross-ministry workflows, EU-level dataspaces,
@@ -46,7 +46,7 @@ The current encoding is W3C VCDM 2.0 + JWT binding rather than COSE or
 SD-JWT-VC. The runtime contract here is stable regardless of future
 encoding evolution.
 
-## Enabling Signed Response Credentials
+## Enabling signed response credentials
 
 Add a `provenance:` block to your config (see
 [`config/example.yaml`](../config/example.yaml) for the canonical
@@ -113,7 +113,7 @@ writing private material to disk.
 When `enabled: false` (or the block is omitted entirely), the gateway
 behaves as a plain JSON service.
 
-## Production Hardening Checklist
+## Production hardening checklist
 
 Treat the signing key as a production credential with the same handling
 standard as an API root key:
@@ -141,7 +141,7 @@ standard as an API root key:
    downstream verifiers cannot resolve the contract named in
    `credentialSchema.id` and `@context`.
 
-## Issuer Modes
+## Issuer modes
 
 `gateway` mode: the gateway holds the signing key, publishes its DID
 Document at `/.well-known/did.json`, and self-issues VCs under that
@@ -182,7 +182,7 @@ the gateway signs under its own DID and serves the document; in delegated mode
 the gateway signs under the ministry DID and the ministry serves the document.
 The gateway serves schemas and contexts in both modes.*
 
-## Caller Opt-In: Accept Negotiation
+## Caller opt-in: Accept negotiation
 
 The handler returns a signed VC only when the caller asks for one:
 
@@ -210,7 +210,7 @@ accepted_media_types:
 The response carries `Content-Type: application/vc+jwt` regardless of
 which alias the caller used.
 
-## Wire Shape: VC-JWT Compact Serialization
+## Wire shape: VC-JWT compact serialization
 
 The response body is a compact JWS: `base64url(header).base64url(payload).base64url(signature)`.
 
@@ -257,7 +257,7 @@ for entity claims and
 `<catalog.base_url>/v1/datasets/<dataset>/aggregates/<aggregate_id>`
 for aggregates.
 
-## PublicSchema.org Entity Credentials
+## PublicSchema.org entity credentials
 
 When the binary is built with the optional `publicschema-cel` Cargo
 feature, an entity can declare a PublicSchema.org mapping for its
@@ -332,7 +332,7 @@ A binary built without `publicschema-cel` rejects configs that declare
 fallback to the native `EntityRecord` VC when the operator expected a
 PublicSchema credential.
 
-## Supporting Endpoints
+## Supporting endpoints
 
 When provenance is enabled in `gateway` mode, the data plane serves
 three additional endpoints, all unauthenticated and content-cacheable:
@@ -351,7 +351,7 @@ the ministry hosts it. The `/schemas` and `/contexts` routes still
 serve from the gateway because the schema URIs in issued VCs point at
 the gateway base URL.
 
-## Audit Trail
+## Audit trail
 
 When a VC is issued, the audit envelope for the request grows a
 `provenance` block alongside the regular fields:
@@ -367,7 +367,7 @@ record never contains the private JWK or the compact JWS body.
 Plain-JSON responses (no Accept opt-in, or `provenance.enabled: false`)
 omit the `provenance` block entirely.
 
-## Key Rotation
+## Key rotation
 
 The signing key is referenced indirectly: the config names either an env
 var (`software`) or a local JWK file (`file_watch`). To rotate:
@@ -433,7 +433,7 @@ public JWK. If an operator accidentally supplies a full keypair, the
 gateway strips `d` before publishing the DID Document, but secret-store
 policy should still keep retired private keys out of public config.
 
-## Delegated Mode Runbook
+## Delegated mode runbook
 
 Delegated mode signs under the ministry DID while the gateway continues
 to host schemas and contexts. The ministry, not the gateway, must host
@@ -469,7 +469,7 @@ Before enabling delegated mode in production:
 4. Issue a VC from the gateway and verify it with the ministry-hosted
    DID Document plus the gateway-hosted schema.
 
-## Future Signer Backends
+## Future signer backends
 
 V1 production deployments support only the local software Ed25519 path:
 
@@ -508,7 +508,7 @@ The production acceptance bar for any future remote signer backend is:
 - Integration tests verify issued VCs with a third-party JOSE library
   using only the DID-published public JWK.
 
-## Verifying a VC Externally
+## Verifying a VC externally
 
 Any standard JOSE library plus a DID Web resolver can verify these
 VCs. Minimum verification recipe:
@@ -547,7 +547,7 @@ The verifier accepts local paths, `file://` URLs, and `http(s)` URLs
 for DID Documents and schemas. For deterministic fixture checks, pass
 `--now <unix-or-rfc3339>`.
 
-### Production Smoke Checklist
+### Production smoke checklist
 
 Use this checklist after every production deployment that uses the local
 software Ed25519 signer:
@@ -625,7 +625,7 @@ node scripts/verify_vc_jwt.mjs \
    remove the retired key and repeat the DID fetch to confirm the old
    `kid` is no longer published.
 
-### Fixture Corpus
+### Fixture corpus
 
 `tests/fixtures/vc/entity-record-v1/` and
 `tests/fixtures/vc/aggregate-result-v1/` contain static VC-JWTs, decoded

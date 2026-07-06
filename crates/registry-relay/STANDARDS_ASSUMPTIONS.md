@@ -1,4 +1,4 @@
-# Standards Assumptions
+# Standards assumptions
 
 Registry Relay publishes metadata that other systems can inspect. This document
 keeps the line clear between standards evidence that Registry Relay emits and
@@ -17,7 +17,7 @@ Registry Relay may publish:
 
 Registry Relay does not publish a proprietary source-of-truth flag.
 
-## Facts, Publication Choices, And Downstream Hypotheses
+## Facts, publication choices, and downstream hypotheses
 
 Registry Relay publishes machine-readable metadata facts and descriptors. It
 does not publish downstream conclusions.
@@ -35,7 +35,7 @@ does not publish downstream conclusions.
 Downstream hypotheses must not be written back into Registry Relay metadata as
 if they were original source facts.
 
-## Standard Evidence We Emit
+## Standard evidence we emit
 
 The following predicates are treated as standard-facing evidence:
 
@@ -71,7 +71,7 @@ mean the target IRI is a data resource to harvest as part of the registry.
 They do not mean a caller is authorized, that a specific identifier lookup is
 supported, or that production integration has been reviewed.
 
-## Our Interpretation Boundary
+## Our interpretation boundary
 
 Registry Relay does not decide:
 
@@ -91,7 +91,7 @@ hypothesis, but Registry Relay itself only claims what is in the metadata:
 publisher, rights holder, applicable legislation, public service relation,
 policy offer, access service, and schema evidence.
 
-## ODRL Policy Assumptions
+## ODRL policy assumptions
 
 Registry Relay may publish ODRL policy metadata as discovery and governance
 evidence. Governed evidence-gateway routes may evaluate the supported PDP subset
@@ -121,7 +121,7 @@ more specific configured policy evidence is present.
 See the [ODRL policy metadata contract](docs/metadata.md#odrl-policy-metadata-contract)
 for the implemented shape.
 
-## DSP Alignment
+## DSP alignment
 
 Registry Relay is not a Dataspace Protocol connector. It may publish
 DSP-relevant DCAT and ODRL evidence, such as `dspace:participantId`,
@@ -143,7 +143,7 @@ metadata useful to DSP-aware catalogues without pretending to be a DSP control
 plane. Implementing DSP catalog request, contract negotiation, and transfer
 processes would be a separate product surface.
 
-## Demo Assumptions
+## Demo assumptions
 
 The demo metadata intentionally gives stronger standard evidence to:
 
@@ -166,7 +166,7 @@ The demo datasets are hypothetical. They are not official OpenCRVS, OpenSPP,
 SP DCI, SEMIC, or PublicSchema profiles. Real project-specific profiles should
 be created only from reviewed artifacts and maintainer input.
 
-## Endpoint Publication Assumptions
+## Endpoint publication assumptions
 
 `/metadata` is the canonical discovery entry point for live Registry Relay
 instances. It links to scoped metadata artifacts such as:
@@ -185,7 +185,7 @@ collections, and downstream fixtures should use `/metadata/*`.
 `/metadata/policies` is a collection of dataset-scoped policy documents. It is
 not one global policy for the whole deployment.
 
-## Version Assumptions
+## Version assumptions
 
 The current metadata model is aligned with the DCAT-AP and BRegDCAT-AP profile
 family, and it uses CPSV evidence where that profile family already models
@@ -197,7 +197,7 @@ BRegDCAT-AP 2.x shapes, while some Registry Relay demo manifests currently claim
 validation should be treated as an advisory conformance check rather than the
 only release gate.
 
-## Validation Assumptions
+## Validation assumptions
 
 Registry Relay tests verify that configured metadata is rendered consistently and
 that the demo configs load. They do not replace external profile conformance

@@ -1,4 +1,4 @@
-# Standards Adapter Operator Guide
+# Standards adapter operator guide
 
 Registry Relay's standards adapters are optional views over the same protected
 dataset and entity model. They do not create new authorization bypasses, source
@@ -8,7 +8,7 @@ Use this guide as the adapter checklist. The detailed configuration fields live
 in [configuration.md](configuration.md), and the HTTP behavior lives in
 [api.md](api.md).
 
-## Common Rules
+## Common rules
 
 For every adapter:
 
@@ -88,7 +88,7 @@ Operator checklist:
 EDR responses are aggregate views. They must not become a way to enumerate
 individual entity records.
 
-## SP DCI Sync
+## SP DCI sync
 
 Purpose: expose configured entities through SP DCI sync-search style APIs.
 
@@ -115,7 +115,7 @@ Operator checklist:
 The async search, subscribe, callback, and transaction-status APIs are out of
 scope for the current sync adapter.
 
-## PublicSchema VC Mapping
+## PublicSchema VC mapping
 
 Purpose: map Relay entity-record provenance credentials to PublicSchema-shaped
 credential subjects.
@@ -137,7 +137,7 @@ Operator checklist:
 PublicSchema mapping changes are contract changes for credential consumers.
 Version and test them like API changes.
 
-## Verification Commands
+## Verification commands
 
 Focused adapter checks:
 

@@ -1,4 +1,4 @@
-# Registry Relay Client Integration Guide
+# Registry Relay client integration guide
 
 This guide is for application teams calling Registry Relay. It describes client
 behavior for the V1 dataset-scoped REST API.
@@ -81,7 +81,7 @@ Before a client is allowed to consume Relay data, confirm:
 - Logs redact bearer tokens, API keys, query values for sensitive fields, raw
   row bodies, VC-JWT bodies, and Problem Details `detail`.
 
-## OpenFn Workflows
+## OpenFn workflows
 
 OpenFn workflows can use the Registry Stack OpenFn Relay adaptor instead of a
 generic HTTP step. The adaptor provides helpers for protected record reads,
