@@ -210,7 +210,7 @@
     - registry-manifest
   surfaces:
     - entity schema documents
-    - static publication bundle
+    - static discovery bundle
   evidence_docs:
     - label: Registry Relay README
       url: https://github.com/registrystack/registry-stack/blob/v0.8.4/crates/registry-relay/README.md

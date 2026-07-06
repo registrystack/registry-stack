@@ -8,7 +8,7 @@ source_repos:
   - registry-notary
   - registry-platform
   - registry-manifest
-last_reviewed: "2026-06-13"
+last_reviewed: "2026-07-07"
 doc_type: specification
 doc_id: RS-DOC
 category: normative
@@ -22,13 +22,14 @@ audience:
 
 This document defines how the formal layer of the registry stack documentation is written. It sets the document identifier scheme, the metadata every specification carries, the structure a specification follows, and the conventions for normative language. It is itself a specification, and it follows its own rules so that the layer explains its method by being an example of it.
 
-It is the anchor the other specifications cite. Where another document says "the key words are interpreted per RS-DOC," it means Section 2 below.
+It is the anchor the other specifications cite. Where another document says "the key words are interpreted per RS-DOC," it means Section 2 (Conventions).
 
 ## Version history
 
 | Version | Date | Status | Change |
 | --- | --- | --- | --- |
 | 0.1.0 | 2026-06-13 | draft | Initial framework: layers, identifiers, metadata axes, document structure, register, cross-link rule, lifecycle. |
+| 0.2.0 | 2026-07-07 | draft | Corrected REQ-DOC-012 to order version-history tables oldest first with the current version last, added layer and audience frontmatter definitions, documented the -G suffix convention, and replaced positional references with named sections. |
 
 ## 1. Scope and layers
 
@@ -70,6 +71,8 @@ An identifier is `RS-` followed by a prefix that names the subject area, optiona
 | `RS-TEST-*` | Conformance and testing |
 | `RS-DEC-*` | Decisions |
 
+A prefix's trailing `-G` segment, as in `RS-ARC-G` or `RS-SEC-G`, marks the general specification for that subject area: the whole-family document, as opposed to a more specific sub-spec that would carry a different suffix.
+
 REQ-DOC-004: A `doc_id` MUST match the pattern `RS-` followed by uppercase letters or digits in one or more `-` separated segments. It MUST be unique across the register. The frontmatter check enforces both.
 
 REQ-DOC-005: A published `doc_id` MUST NOT be renumbered or reused. When a document is replaced, the superseding document takes a new identifier, and the superseded document keeps its identifier and points forward (Section 8).
@@ -101,6 +104,8 @@ REQ-DOC-007: A document whose `evidence` is `aspirational` or `partial` MUST say
 
 REQ-DOC-014: A specification whose `evidence` is `verified` MUST carry evidence references: an Evidence section, or per-requirement references, that link the inspectable artifacts substantiating its claims. Acceptable artifacts include published site pages, generated API references, the standards register, and repository sources a reader can open. This holds the formal layer to at least the evidence bar the standards register already meets with its per-entry evidence links.
 
+Two optional frontmatter keys declare further facets outside the three axes. **Layer** names the stack layer or layers a page documents: `metadata`, `consultation`, `evaluation`, `credential`, `federation`, `administration`, or `operations`. **Audience** names the reader role or roles a page serves: `integrator`, `operator`, `maintainer`, `specification editor`, or `tooling`. Both take a list, because a specification is frequently cross-cutting; a specification that spans every layer omits `layer` rather than list all of them.
+
 ## 5. Document structure
 
 A normative specification follows this structure. An informative document in the layer MAY use a lighter structure.
@@ -108,7 +113,7 @@ A normative specification follows this structure. An informative document in the
 1. A short opening that states what the document defines and who it is for.
 2. A **version history** table (Section 8).
 3. Numbered sections. The first SHOULD introduce scope, references to other specifications, and any local conventions beyond Section 2.
-4. Normative statements carried by tagged requirements (below).
+4. Normative statements carried by tagged requirements (REQ-DOC-008 defines the identifier format).
 5. A **conformance** section that summarizes what an implementation MUST do to conform, where the document defines an external surface.
 
 Diagrams use Mermaid so they render in light and dark themes and remain in version control. Per the site's accessibility rule, anything a reader needs from a diagram MUST also appear in text.
@@ -139,7 +144,7 @@ Each substantive change is recorded in the version-history table using semantic 
 - **MINOR** for a normative addition that does not break existing conformance.
 - **PATCH** for clarifications and editorial changes that do not change requirements.
 
-REQ-DOC-012: Every change to a normative requirement MUST add a row to the version-history table. The top row is the current version.
+REQ-DOC-012: Every change to a normative requirement MUST add a row to the version-history table. The table is ordered oldest first; the last row is the current version.
 
 REQ-DOC-013: When a specification is superseded, its `status` becomes `historical`, it keeps its `doc_id`, and its opening links to the document that replaces it. The replacement takes a new `doc_id` (Section 3).
 

@@ -9,7 +9,7 @@ source_repos:
   - registry-relay
   - registry-notary
   - registry-lab
-last_reviewed: "2026-06-20"
+last_reviewed: "2026-07-07"
 doc_type: specification
 doc_id: RS-ARC-G
 category: normative
@@ -54,6 +54,7 @@ For a narrative explanation with worked examples, see the [architecture overview
 | 0.2.0 | 2026-06-13 | draft | Added REQ-ARC-G-010: the portable metadata layer describes but does not authorize, enforce, or assert facts about live data. |
 | 0.3.0 | 2026-06-20 | draft | Clarified governed runtime PDP enforcement for the supported Evidence Gateway profile while preserving the descriptive metadata boundary. |
 | 0.3.1 | 2026-06-22 | draft | Clarified static-peer delegated evaluation as distinct from delegated self-attestation. |
+| 0.4.0 | 2026-07-07 | draft | Clarified REQ-ARC-G-009's replay storage scope: shared within a deployment's own replicas, never across a federation trust boundary. Reframed Registry Lab as a non-normative demonstration topology. |
 
 ## 1. Scope and audience
 
@@ -78,7 +79,7 @@ The **runtime services layer** is responsible for enforcing what the registry de
 
 This split separates two distinct obligations: the obligation to describe (what a registry declares it can expose and under what policy) from the obligation to enforce (what a running service will actually return to an authorized caller). The separation enables offline audit of metadata, offline validation of schemas and claim shapes, and governance updates to policy documents without touching deployment configuration.
 
-The diagram below shows the five components and how they relate to the two layers.
+The diagram in this section shows the five components and how they relate to the two layers.
 
 ```mermaid
 flowchart TD
@@ -104,7 +105,7 @@ flowchart TD
     relay & notary --> lab
 ```
 
-The diagram captures five components. The text below restates the essential relationships: Registry Manifest produces a static discovery bundle consumed by Registry Relay and Registry Notary. Registry Platform supplies shared primitives to both runtime services. Registry Notary calls Registry Relay over HTTP as a data source. Registry Lab assembles all runtime services into a runnable local demo.
+The diagram captures five components. This section restates the essential relationships as text: Registry Manifest produces a static discovery bundle consumed by Registry Relay and Registry Notary. Registry Platform supplies shared primitives to both runtime services. Registry Notary calls Registry Relay over HTTP as a data source. Registry Lab assembles all runtime services into a runnable local demo.
 
 ## 3. Components
 
@@ -124,11 +125,11 @@ Registry Relay is not an open-data portal; it serves restricted consultation API
 
 ### Registry Notary
 
-Registry Notary (`registry-notary`) is a standalone Rust service for claim evaluation, disclosure policy, credential issuance, and audit. It is decoupled from Registry Relay application code by design; it calls Registry Relay over HTTP using a `registry_data_api` or `dci` source connector and does not import or link Registry Relay libraries. Registry Notary evaluates configured evidence rules against data from one or more source services and returns evaluation results as `application/vnd.registry-notary.claim-result+json` or CCCEV-shaped JSON-LD (`application/ld+json; profile="cccev"`). It materializes SD-JWT VC credentials (`application/dc+sd-jwt`) through its credential issuance surfaces, including an OpenID for Verifiable Credential Issuance (OID4VCI) flow as a profiled subset of OID4VCI Draft 13. It supports static-peer delegated evaluation through `POST /federation/v1/evaluations`. Static-peer delegated evaluation is separate from delegated self-attestation, the local citizen/OIDC access mode defined in [RS-PR-NOTARY](../rs-pr-notary/). Registry Notary does not produce DCAT, BRegDCAT-AP, SHACL, or OGC Records artifacts. The current federation implementation is static-peer only; dynamic trust-chain discovery, shared replay storage, and federated credential issuance are not part of this version.
+Registry Notary (`registry-notary`) is a standalone Rust service for claim evaluation, disclosure policy, credential issuance, and audit. It is decoupled from Registry Relay application code by design; it calls Registry Relay over HTTP using a `registry_data_api` or `dci` source connector and does not import or link Registry Relay libraries. Registry Notary evaluates configured evidence rules against data from one or more source services and returns evaluation results as `application/vnd.registry-notary.claim-result+json` or CCCEV-shaped JSON-LD (`application/ld+json; profile="cccev"`). It materializes SD-JWT VC credentials (`application/dc+sd-jwt`) through its credential issuance surfaces, including an OpenID for Verifiable Credential Issuance (OID4VCI) flow as a profiled subset of OID4VCI Draft 13. It supports static-peer delegated evaluation through `POST /federation/v1/evaluations`. Static-peer delegated evaluation is separate from delegated self-attestation, the local citizen/OIDC access mode defined in [RS-PR-NOTARY](../rs-pr-notary/). Registry Notary does not produce DCAT, BRegDCAT-AP, SHACL, or OGC Records artifacts. The current federation implementation is static-peer only; dynamic trust-chain discovery, replay storage shared across federation peers, and federated credential issuance are not part of this version. Each federation peer maintains its own replay scope; a peer does not share replay storage with the peers it federates with.
 
 ### Registry Lab
 
-Registry Lab (`registry-lab`) is a compose-based local demo. It starts Registry Relay instances, Registry Notary instances, Postgres, Zitadel, a static metadata publisher, and narrated clients together in a single compose topology. It is the authoritative reference for how the services connect to each other at runtime. Registry Lab does not own any normative API or metadata contract; those belong to the runtime service and manifest repositories. It does not provide production deployment guidance; it uses fixture credentials and demo-grade configuration.
+Registry Lab (`registry-lab`) is a compose-based local demo. It starts Registry Relay instances, Registry Notary instances, Postgres, Zitadel, a static metadata publisher, and narrated clients together in a single compose topology. It is a non-normative demonstration topology that illustrates how the services connect to each other at runtime; it is not itself a specified component, and it carries no conformance weight against this specification. Registry Lab does not own any normative API or metadata contract; those belong to the runtime service and manifest repositories. It does not provide production deployment guidance; it uses fixture credentials and demo-grade configuration.
 
 ## 4. Data and contract flow
 
@@ -166,7 +167,7 @@ REQ-ARC-G-007: Registry Notary MUST own claim evaluation, disclosure policy, and
 
 REQ-ARC-G-008: Registry Notary credentials MUST use SD-JWT VC format (`application/dc+sd-jwt`). No W3C Verifiable Credentials Data Model JSON-LD envelope or namespace is present in the issued credential.
 
-REQ-ARC-G-009: Registry Notary's federation implementation is static-peer delegated evaluation. Peer lists are loaded from configuration at startup. Dynamic trust-chain discovery, shared replay storage, audit checkpoint exchange, and federated credential issuance are not part of this version and MUST NOT be implied by conformance claims against this specification.
+REQ-ARC-G-009: Registry Notary's federation implementation is static-peer delegated evaluation. Peer lists are loaded from configuration at startup. Within a single deployment, replay storage MAY be shared across that deployment's own replicas through a durable shared backend, for example the Redis-backed replay store in Registry Platform; that sharing does not extend across a federation trust boundary. Each federation peer MUST maintain its own replay scope and MUST NOT share replay storage with the peers it federates with. Dynamic trust-chain discovery, replay storage shared across federation peers, audit checkpoint exchange, and federated credential issuance are not part of this version and MUST NOT be implied by conformance claims against this specification.
 
 REQ-ARC-G-010: The portable metadata layer describes; it does not authorize and it does not assert facts about live data. Publishing a dataset, schema, policy, evidence offering, ecosystem binding, or federation relationship in a discovery artifact MUST NOT be construed as granting access to it, as enforcing it, or as asserting that any particular record exists or satisfies it. Access control, governed PDP enforcement, and the existence or value of a record are determined only by an authorized runtime read under runtime configuration and trusted request or source context. A published ODRL policy is descriptive until a runtime service explicitly binds it into an enforced, supported profile. A conformance claim against a metadata artifact MUST NOT imply a runtime guarantee that the runtime layer has not made.
 
