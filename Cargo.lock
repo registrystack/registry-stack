@@ -5298,6 +5298,7 @@ dependencies = [
  "registry-platform-audit",
  "registry-platform-authcommon",
  "registry-platform-config",
+ "registry-platform-httputil",
  "registry-platform-ops",
  "reqwest",
  "serde",

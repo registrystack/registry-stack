@@ -716,7 +716,15 @@ fn host_is_allowed_localhost(host: ::url::Host<&str>, resolved: &[IpAddr]) -> bo
     }
 }
 
-fn is_cloud_metadata_ip(ip: IpAddr) -> bool {
+/// Canonical set of cloud instance-metadata addresses denied by SSRF policy.
+///
+/// This is the single source of truth for the metadata blocklist; other crates
+/// that enforce their own outbound-fetch guards (e.g. the Notary source-adapter
+/// sidecar) call this rather than keeping a private copy that can drift. IPv4
+/// covers the AWS/GCP/Azure endpoint and the Alibaba Cloud endpoint; IPv6
+/// covers the AWS link-local metadata address. IPv4-mapped IPv6 forms are
+/// normalized before comparison.
+pub fn is_cloud_metadata_ip(ip: IpAddr) -> bool {
     match normalize_ipv4_mapped(ip) {
         IpAddr::V4(ip) => {
             ip == Ipv4Addr::new(169, 254, 169, 254) || ip == Ipv4Addr::new(100, 100, 100, 200)
