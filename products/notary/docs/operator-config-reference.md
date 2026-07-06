@@ -437,6 +437,37 @@ naming the replacement field.
 For citizen self-attestation, the OIDC token must also carry a binding claim
 that Registry Notary uses to derive the requester and target context.
 
+### Machine Evaluation Quota
+
+`evidence.machine_quota` is a per-principal quota for `evaluate` and
+`batch_evaluate` calls from machine credentials (API keys, bearer tokens, and
+OIDC principals that are not classified as self-attestation). It is separate
+from, and does not affect, the self-attestation rate limiters or the
+per-request `max_subjects` batch-size cap: it bounds work over time, not the
+shape of a single request.
+
+```yaml
+evidence:
+  machine_quota:
+    enabled: true
+    subjects_per_minute: 6000
+```
+
+| Field | Purpose | Default |
+| --- | --- | --- |
+| `enabled` | Turns the quota on. | `false` |
+| `subjects_per_minute` | Budget per principal, in subjects, over a fixed one-minute window. A single `evaluate` call costs 1; a `batch_evaluate` call costs `items.len()`. Must be greater than 0 when `enabled: true`. | `6000` |
+
+The budget is a fixed window keyed by `principal_id`: for `auth.mode: api_key`
+this is the configured key `id`; for `auth.mode: oidc` it is the JWT `sub` (or
+whichever claim `principal_claim` names). A request whose cost would exceed
+the remaining budget is rejected in full, so a rejected batch never partially
+consumes the window. Exhaustion returns `429` with the stable error code
+`evaluation.quota_exceeded` and a `Retry-After` header giving the number of
+seconds until the window rolls over. The quota is disabled by default; enable
+it and size `subjects_per_minute` to the traffic pattern of your machine
+callers before relying on it in production.
+
 ## Source Connections
 
 Every source binding references one `source_connections` entry. A source

@@ -102,9 +102,9 @@ use crate::{
         pre_auth_audit_event, AuthAuditState, PreAuthAuditFields, PreAuthRuntime,
         PreparedAuthenticator, SignerReadiness,
     },
-    BatchEvaluateOptions, EvidenceStore, RegistryNotaryRuntime, SelfAttestationRateLimitBucket,
-    SelfAttestationRateLimitError, SelfAttestationRateLimitKeys, SelfAttestationRateLimiter,
-    SourceReader,
+    BatchEvaluateOptions, EvidenceStore, MachineQuotaLimiter, RegistryNotaryRuntime,
+    SelfAttestationRateLimitBucket, SelfAttestationRateLimitError, SelfAttestationRateLimitKeys,
+    SelfAttestationRateLimiter, SourceReader,
 };
 
 const DATA_PURPOSE_HEADER: &str = "data-purpose";
@@ -3561,6 +3561,7 @@ pub struct RegistryNotaryApiState {
     pub(crate) federation: Arc<FederationConfig>,
     self_attestation_rate_limiter: Arc<SelfAttestationRateLimiter>,
     pub(crate) self_attestation_rate_keys: Arc<SelfAttestationRateLimitKeys>,
+    machine_quota_limiter: Arc<MachineQuotaLimiter>,
     pub(crate) replay: ReplayStores,
     pub(crate) credential_status: CredentialStatusStore,
     status_list_jwt_cache: Arc<StatusListJwtCache>,
@@ -3773,6 +3774,7 @@ impl RegistryNotaryApiState {
             self_attestation.rate_limits.clone(),
         ));
         let self_attestation_rate_keys = Arc::new(SelfAttestationRateLimitKeys::new(audit_hasher));
+        let machine_quota_limiter = Arc::new(MachineQuotaLimiter::new(evidence.machine_quota));
         let issuer_runtime = Arc::new(IssuerRuntimeBundle {
             issuers,
             signer_readiness,
@@ -3791,6 +3793,7 @@ impl RegistryNotaryApiState {
             federation,
             self_attestation_rate_limiter,
             self_attestation_rate_keys,
+            machine_quota_limiter,
             replay,
             credential_status,
             status_list_jwt_cache: Arc::new(StatusListJwtCache::default()),
@@ -6084,6 +6087,13 @@ async fn evaluate(
                 return response;
             }
         }
+    } else if let Err(error) = state
+        .machine_quota_limiter
+        .check_and_consume(&principal.principal_id, 1)
+    {
+        return evidence_error_response(EvidenceError::MachineQuotaExceeded {
+            retry_after_seconds: error.retry_after_seconds,
+        });
     }
     let runtime = state.runtime();
     let requested_claims = request_claim_ids;
@@ -6265,6 +6275,15 @@ async fn batch_evaluate(
             Some(state.self_attestation.subject_binding.token_claim.as_str()),
         );
         return response;
+    }
+    let batch_cost = u32::try_from(request.items.len()).unwrap_or(u32::MAX);
+    if let Err(error) = state
+        .machine_quota_limiter
+        .check_and_consume(&principal.principal_id, batch_cost)
+    {
+        return evidence_error_response(EvidenceError::MachineQuotaExceeded {
+            retry_after_seconds: error.retry_after_seconds,
+        });
     }
     let runtime = state.runtime();
     let requested_claims = request_claim_ids;
@@ -10107,6 +10126,14 @@ pub(crate) fn evidence_error_response_with_request_id(
         header::CONTENT_TYPE,
         HeaderValue::from_static("application/problem+json"),
     );
+    if let EvidenceError::MachineQuotaExceeded {
+        retry_after_seconds,
+    } = &error
+    {
+        if let Ok(value) = HeaderValue::from_str(&retry_after_seconds.to_string()) {
+            response.headers_mut().insert(header::RETRY_AFTER, value);
+        }
+    }
     if let Some(request_id) = request_id {
         if let Ok(value) = HeaderValue::from_str(request_id.as_str()) {
             response.headers_mut().insert("x-request-id", value);
@@ -10161,7 +10188,9 @@ pub(crate) fn evidence_status(error: &EvidenceError) -> StatusCode {
         | EvidenceError::IdempotencyConflict
         | EvidenceError::HolderProofReplay => StatusCode::CONFLICT,
         EvidenceError::SourceUnavailable => StatusCode::SERVICE_UNAVAILABLE,
-        EvidenceError::SelfAttestationRateLimited => StatusCode::TOO_MANY_REQUESTS,
+        EvidenceError::SelfAttestationRateLimited | EvidenceError::MachineQuotaExceeded { .. } => {
+            StatusCode::TOO_MANY_REQUESTS
+        }
         EvidenceError::BatchTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
         EvidenceError::CredentialIssuanceFailed | EvidenceError::RuleEvaluationFailed => {
             StatusCode::INTERNAL_SERVER_ERROR
@@ -10220,6 +10249,7 @@ pub(crate) fn evidence_title(error: &EvidenceError) -> &'static str {
         EvidenceError::SelfAttestationRateLimited => "Self-attestation rate limited",
         EvidenceError::SelfAttestationInvalidToken
         | EvidenceError::SelfAttestationAssuranceDenied => "Self-attestation denied",
+        EvidenceError::MachineQuotaExceeded { .. } => "Machine quota exceeded",
         _ => "Evidence error",
     }
 }
@@ -10306,6 +10336,9 @@ pub(crate) fn evidence_detail(error: &EvidenceError) -> &'static str {
         EvidenceError::SelfAttestationRateLimited => "self-attestation request was rate limited",
         EvidenceError::SelfAttestationInvalidToken
         | EvidenceError::SelfAttestationAssuranceDenied => "self-attestation request was denied",
+        EvidenceError::MachineQuotaExceeded { .. } => {
+            "the machine evaluation quota was exceeded for this principal"
+        }
         _ => "evidence request failed",
     }
 }

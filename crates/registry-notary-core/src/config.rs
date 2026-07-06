@@ -272,6 +272,7 @@ impl StandaloneRegistryNotaryConfig {
             }
         }
         self.evidence.concurrency.validate()?;
+        self.evidence.machine_quota.validate()?;
         self.cel.validate()?;
         if self.evidence.max_credential_validity_seconds == 0 {
             return Err(EvidenceConfigError::InvalidCredentialProfileValidity {
@@ -4583,6 +4584,8 @@ pub enum EvidenceConfigError {
          must all be >= 1"
     )]
     InvalidConcurrency,
+    #[error("invalid evidence.machine_quota config: {reason}")]
+    InvalidMachineQuotaConfig { reason: String },
     /// Credential holder binding only works with did:jwk because holder_jwk()
     /// only implements did:jwk resolution. Restrict allowed_did_methods to
     /// ["did:jwk"] or leave it empty when holder binding is disabled.
@@ -4757,6 +4760,11 @@ pub struct EvidenceConfig {
     /// reproduces today's strictly-sequential behavior (Stage 1 kill switch).
     #[serde(default)]
     pub concurrency: ConcurrencyConfig,
+    /// Per-principal budget for machine `evaluate`/`batch_evaluate` traffic,
+    /// counted in subjects (a single evaluate consumes 1; a batch consumes
+    /// `items.len()`) over a fixed one-minute window. Disabled by default.
+    #[serde(default)]
+    pub machine_quota: MachineQuotaConfig,
 }
 
 const fn default_max_credential_validity_seconds() -> u64 {
@@ -6091,6 +6099,43 @@ const fn default_concurrency_subjects() -> usize {
 
 const fn default_concurrency_bindings() -> usize {
     8
+}
+
+/// Per-principal quota for machine `evaluate`/`batch_evaluate` traffic.
+/// Budget is counted in subjects per principal over a fixed one-minute
+/// window: a single `/v1/evaluations` call consumes 1, a batch consumes
+/// `items.len()`. Disabled by default so existing deployments are unaffected.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct MachineQuotaConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_machine_quota_subjects_per_minute")]
+    pub subjects_per_minute: u32,
+}
+
+impl Default for MachineQuotaConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            subjects_per_minute: default_machine_quota_subjects_per_minute(),
+        }
+    }
+}
+
+impl MachineQuotaConfig {
+    pub fn validate(&self) -> Result<(), EvidenceConfigError> {
+        if self.enabled && self.subjects_per_minute == 0 {
+            return Err(EvidenceConfigError::InvalidMachineQuotaConfig {
+                reason: "subjects_per_minute must be greater than zero when enabled".to_string(),
+            });
+        }
+        Ok(())
+    }
+}
+
+const fn default_machine_quota_subjects_per_minute() -> u32 {
+    6000
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -9452,6 +9497,58 @@ vct: https://vct.example/test
         config.evidence.concurrency = ConcurrencyConfig {
             subjects: 1,
             bindings: 1,
+        };
+        assert!(config.validate().is_ok());
+    }
+
+    // -----------------------------------------------------------------------
+    // Machine quota config
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn machine_quota_defaults_to_disabled_with_documented_limit() {
+        let cfg = MachineQuotaConfig::default();
+        assert!(!cfg.enabled);
+        assert_eq!(cfg.subjects_per_minute, 6000);
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn machine_quota_disabled_zero_limit_still_validates() {
+        // A zero subjects_per_minute is only invalid once the quota is
+        // enabled; an operator-provided but unused value must not block
+        // deployments that leave the quota off.
+        let cfg = MachineQuotaConfig {
+            enabled: false,
+            subjects_per_minute: 0,
+        };
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn machine_quota_enabled_zero_limit_is_rejected() {
+        let mut config = minimal_config();
+        config.evidence.machine_quota = MachineQuotaConfig {
+            enabled: true,
+            subjects_per_minute: 0,
+        };
+        let err = config
+            .validate()
+            .expect_err("enabled machine_quota with subjects_per_minute=0 must fail validation");
+        match &err {
+            EvidenceConfigError::InvalidMachineQuotaConfig { reason } => {
+                assert!(reason.contains("subjects_per_minute"));
+            }
+            other => panic!("unexpected error variant: {other}"),
+        }
+    }
+
+    #[test]
+    fn machine_quota_enabled_with_positive_limit_validates() {
+        let mut config = minimal_config();
+        config.evidence.machine_quota = MachineQuotaConfig {
+            enabled: true,
+            subjects_per_minute: 1,
         };
         assert!(config.validate().is_ok());
     }
