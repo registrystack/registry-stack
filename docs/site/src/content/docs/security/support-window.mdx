@@ -1,0 +1,80 @@
+---
+title: Security support window
+description: Which Registry Stack versions receive security fixes, how fixes are delivered, and what operators must do to stay covered.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-07-07"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+This page states which Registry Stack versions receive security fixes and how those fixes
+reach a deployment. It complements the
+[vulnerability reporting process](../report-a-vulnerability/), which covers how to report,
+what is in scope, and how reports are acknowledged.
+
+{/* TODO[review]: draft policy proposal for GH#203. The roll-forward posture on this page is the
+     recommendation; the alternative (backporting critical fixes to the previous minor line
+     for 90 days after a new minor ships) is a maintainer decision with real ongoing cost.
+     Pick one before status: current. */}
+
+## Supported versions
+
+| Version line | Security fixes |
+| --- | --- |
+| Latest release line (highest released minor of the highest major) | All security fixes |
+| Earlier releases | None |
+
+Registry Stack follows a roll-forward model: security fixes land on `main` and ship in the
+next release of the latest line. There are no long-term support branches and no backports to
+earlier minor lines.
+
+This model is honest about project capacity, and the rest of the lifecycle policy is designed
+to make rolling forward cheap:
+
+- Within a major line, upgrades are backward compatible per the
+  [compatibility promise](../../reference/api-stability/), so moving to the fixed release
+  does not require migration work beyond reading the release notes.
+- Patch releases contain fixes only, so a security patch is a minimal, low-risk step.
+- The [upgrade procedure](../../operate/upgrade-and-rollback/) is documented and exercised,
+  including the revert path if a fixed release misbehaves in your environment.
+
+What this means for an institution: plan to apply patch releases of your deployed line
+promptly. A deployment pinned to an old minor does not receive fixes in place; the fix is
+always in a newer release.
+
+## How fixes are delivered
+
+- A security fix ships as a release with signed artifacts and provenance, verifiable as
+  documented in
+  [SECURITY.md](https://github.com/registrystack/registry-stack/blob/v0.8.4/SECURITY.md).
+- Release notes identify security-relevant changes. When a fix required tightening covered
+  surface, the notes say so explicitly, per the security exception in the
+  [deprecation policy](../../reference/deprecation-policy/).
+- Dependency advisories are enforced in CI on every push through `cargo deny check`.
+  An advisory without an upstream fix carries a scoped, documented ignore in `deny.toml`
+  with a review trigger; a newly published advisory fails CI until it is fixed or receives
+  its own documented ignore.
+
+## Reporting and acknowledgment
+
+Report suspected vulnerabilities privately through GitHub Security Advisories, as described
+in [Report a vulnerability](../report-a-vulnerability/). Private reports are acknowledged
+within 5 business days.
+
+## Scope notes
+
+- This policy is stack-wide. It supersedes the narrower statement in
+  `products/manifest/SECURITY.md` that security fixes target the current `main` branch;
+  that statement described the same roll-forward posture before this page existed.
+- Pre-1.0 releases (`v0.x`) are technical releases for evaluation and pilots. They receive
+  fixes only in the latest `v0.x` release, under the same roll-forward model.
+
+## Next
+
+- [Report a vulnerability](../report-a-vulnerability/)
+- [API stability and versioning](../../reference/api-stability/)
+- [Upgrade and roll back a deployment](../../operate/upgrade-and-rollback/)

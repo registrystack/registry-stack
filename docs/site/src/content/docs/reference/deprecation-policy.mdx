@@ -1,0 +1,83 @@
+---
+title: Deprecation policy
+description: How Registry Stack retires covered surface, the notice operators get, and the migration notes every removal carries.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-07-07"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+This page defines how Registry Stack retires surface covered by the
+[compatibility promise](../api-stability/): the notice a deprecation gives, where it is
+announced, and what a removal must ship with. It takes effect at `v1.0.0`; before that,
+breaking changes follow the pre-1.0 rule and are announced with `BREAKING:` CHANGELOG
+entries.
+
+{/* TODO[review]: draft policy proposal for GH#203. The notice period in this page (next major, and
+     no earlier than 6 months after announcement) is a proposal; confirm or change it. */}
+
+## The lifecycle of a covered element
+
+A covered element (route, field, error code, config key, CLI flag, artifact name) moves
+through three states:
+
+1. Active. The element is documented and supported.
+2. Deprecated. The element still works exactly as before, and its replacement is available
+   and documented. Deprecation happens in a minor release.
+3. Removed. The element is gone. Removal happens in a major release, and no earlier than
+   6 months after the release that announced the deprecation.
+
+Nothing skips the deprecated state. A covered element that exists in `v1.0.0` or is added
+later is never removed without a deprecation release first.
+
+## How a deprecation is announced
+
+A deprecation is announced in every channel a consumer of that element reads:
+
+- The CHANGELOG of the affected product gains a `Deprecated` entry naming the element, the
+  replacement, and the earliest release that may remove it.
+- An HTTP route or field is marked `deprecated: true` in the committed OpenAPI document.
+  Precedent: `GET /v1/datasets/{dataset_id}/aggregates/{aggregate_id}/metadata` is marked
+  deprecated as an alias of the `/structure` route.
+- A config key that is renamed keeps working through the deprecation window; after removal,
+  the loader rejects it with a message naming the replacement, through the deprecated-field
+  guard in `registry-platform-config`, instead of silently ignoring it.
+- A Rust-level `#[deprecated]` attribute marks internal APIs where relevant. Precedent:
+  `verify_jsonl_lines` and `CorsPolicy::layer()` in the platform CHANGELOG.
+- The docs page that documents the element gains a note with the `since vX.Y` convention,
+  naming the replacement.
+
+## Migration notes are mandatory
+
+Every deprecation and every removal ships with concrete migration steps in the CHANGELOG
+entry: old key to new key, old route to new route, old metric name to new metric name, with
+copyable examples. "Removed X" without a migration path does not meet this policy. The
+existing `BREAKING:` entries in `products/notary/CHANGELOG.md` and
+`crates/registry-relay/CHANGELOG.md` are the template.
+
+## Security exceptions
+
+A fix for a vulnerability may tighten or remove surface without the full notice period when
+keeping the surface functional would keep deployments exploitable. Such a change is announced
+in the release notes as a security fix with migration steps, and the release notes state
+explicitly that the deprecation window was shortened and why.
+
+## What this policy does not govern
+
+- Documentation pages have their own lifecycle. A docs page with frontmatter
+  `status: deprecated` is a superseded page, not a scheduled API removal. The two uses of the
+  word are unrelated.
+- Pre-1.0 history is not retroactively bound. Renames executed before `v1.0.0` (for example
+  the 2026-05-23 product rename, a clean break with no aliases) predate this policy.
+- Exempt surfaces listed in the [compatibility promise](../api-stability/) can change without
+  deprecation notice.
+
+## Next
+
+- [API stability and versioning](../api-stability/)
+- [Security support window](../../security/support-window/)
+- [Errors and status codes](../errors/)
