@@ -545,6 +545,9 @@ catalog:
   base_url: https://data.example.test
   publisher: Test
 
+deployment:
+  profile: local
+
 vocabularies:
   ex: https://example.test/vocab/
   psc: https://publicschema.org/
@@ -806,6 +809,8 @@ catalog:
   title: Test
   base_url: https://data.example.test
   publisher: Test
+deployment:
+  profile: local
 vocabularies: {}
 auth:
   mode: api_key
@@ -1341,6 +1346,8 @@ catalog:
   title: Test
   base_url: https://data.example.test
   publisher: Test
+deployment:
+  profile: local
 auth:
   mode: api_key
   api_keys: []
@@ -1836,6 +1843,8 @@ catalog:
   title: Test
   base_url: https://data.example.test
   publisher: Test
+deployment:
+  profile: local
 vocabularies: {}
 auth:
   mode: api_key
@@ -2159,6 +2168,8 @@ catalog:
   title: Test
   base_url: https://data.example.test
   publisher: Test
+deployment:
+  profile: local
 vocabularies: {}
 auth:
   mode: api_key

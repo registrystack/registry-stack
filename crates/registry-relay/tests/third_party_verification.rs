@@ -158,6 +158,9 @@ fn write_config(tmp: &TempDir) -> Config {
     std::fs::write(
         &path,
         r#"
+deployment:
+  profile: local
+
 server:
   bind: 127.0.0.1:0
 

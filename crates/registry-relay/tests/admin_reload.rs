@@ -531,6 +531,9 @@ config_trust:
     let yaml = format!(
         r#"
 {instance_block}
+deployment:
+  profile: local
+
 server:
   bind: 127.0.0.1:0
 {admin_bind_line}

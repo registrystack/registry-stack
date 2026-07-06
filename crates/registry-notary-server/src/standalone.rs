@@ -91,6 +91,8 @@ const SELF_ATTESTATION_CORS_METHODS: &str = "GET,POST,OPTIONS";
 const OIDC_ID_TOKEN_HEADER: &str = "x-registry-notary-oidc-id-token";
 const SELF_ATTESTATION_CORS_DEFAULT_HEADERS: &str =
     "authorization,content-type,x-registry-notary-oidc-id-token";
+const DEPLOYMENT_PROFILE_REQUIRED_ACTION: &str =
+    "set deployment.profile: local for development, or production/evidence_grade for deployment";
 
 tokio::task_local! {
     static REQUEST_CORRELATION_ID: BoundedCorrelationId;
@@ -645,7 +647,9 @@ pub enum StandaloneServerError {
     #[cfg(feature = "registry-notary-cel")]
     #[error("invalid CEL worker configuration: {0}")]
     InvalidCelConfig(String),
-    #[error("deployment profile '{profile}' refuses startup; failing gates: {findings}")]
+    #[error(
+        "deployment profile '{profile}' refuses startup; failing gates: {findings}; {DEPLOYMENT_PROFILE_REQUIRED_ACTION}"
+    )]
     DeploymentGateStartupFailure { profile: String, findings: String },
 }
 
@@ -698,8 +702,7 @@ impl DeploymentGateState {
     }
 
     /// True when a profile is declared, so its gates participate in readiness.
-    ///
-    /// An undeclared profile binds no gates and contributes no readiness check.
+    /// Runtime compilation refuses undeclared profiles before readiness is served.
     pub(crate) fn is_bound(&self) -> bool {
         self.profile.is_some()
     }

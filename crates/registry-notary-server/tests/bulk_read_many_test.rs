@@ -330,6 +330,9 @@ fn rda_bulk_config(
     );
     let raw = format!(
         r#"
+deployment:
+  profile: local
+
 server:
   bind: 127.0.0.1:0
 auth:
@@ -415,6 +418,9 @@ fn dci_bulk_config(
     );
     let raw = format!(
         r#"
+deployment:
+  profile: local
+
 server:
   bind: 127.0.0.1:0
 auth:
@@ -499,6 +505,9 @@ fn source_adapter_sidecar_bulk_config(
     );
     let raw = format!(
         r#"
+deployment:
+  profile: local
+
 server:
   bind: 127.0.0.1:0
 auth:
@@ -589,6 +598,9 @@ fn source_adapter_sidecar_identifier_bulk_config(
     );
     let raw = format!(
         r#"
+deployment:
+  profile: local
+
 server:
   bind: 127.0.0.1:0
 auth:
@@ -669,6 +681,9 @@ fn source_adapter_sidecar_relationship_bulk_config(
     );
     let raw = format!(
         r#"
+deployment:
+  profile: local
+
 server:
   bind: 127.0.0.1:0
 auth:
@@ -753,6 +768,9 @@ fn source_adapter_sidecar_requester_bulk_config(
     );
     let raw = format!(
         r#"
+deployment:
+  profile: local
+
 server:
   bind: 127.0.0.1:0
 auth:

@@ -218,6 +218,8 @@ fn root_transition_config_yaml(
 instance:
   id: notary-cli
   environment: development
+deployment:
+  profile: local
 server:
   bind: {bind}
   admin_listener:

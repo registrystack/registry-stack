@@ -99,6 +99,9 @@ catalog:
   base_url: https://gw.example
   publisher: Test
 
+deployment:
+  profile: local
+
 vocabularies: {{}}
 
 auth:

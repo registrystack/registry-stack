@@ -1,5 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
+deployment:
+  profile: local
+
 server:
   bind: 0.0.0.0:8080
   admin_bind: 0.0.0.0:8081

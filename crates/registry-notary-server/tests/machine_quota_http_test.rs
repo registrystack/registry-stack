@@ -90,6 +90,8 @@ audit:
   sink: file
   path: "{audit_path}"
   hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
+deployment:
+  profile: local
 evidence:
   enabled: true
   service_id: evidence.test
@@ -499,6 +501,8 @@ audit:
   sink: file
   path: "{audit_path}"
   hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
+deployment:
+  profile: local
 evidence:
   enabled: true
   service_id: evidence.test

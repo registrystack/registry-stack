@@ -3,6 +3,9 @@
 # Provide OpenCRVS OAuth client credentials through env vars. Client secrets
 # and live access tokens must stay out of this file.
 
+deployment:
+  profile: local
+
 server:
   bind: 127.0.0.1:4255
 

@@ -44,6 +44,9 @@ fn principal_with_id(scopes: &[&str], principal_id: &str) -> Principal {
 }
 
 const AGGREGATE_CONFIG: &str = r#"
+deployment:
+  profile: local
+
 server:
   bind: 127.0.0.1:0
 

@@ -3,6 +3,9 @@
 # Disability Registry sync adapter example.
 # Build with: cargo run --features spdci-api-standards -- --config this-file.yaml
 
+deployment:
+  profile: local
+
 server:
   bind: 0.0.0.0:8080
 

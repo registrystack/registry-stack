@@ -3302,10 +3302,11 @@ datasets: []
     }
 
     /// An undeclared profile (the minimal config default) omits `profile`,
-    /// reports the single `deployment.profile_undeclared` warn finding, and
-    /// carries no waivers.
+    /// reports the single `deployment.profile_undeclared` startup finding, and
+    /// carries no waivers. The server startup path rejects this before posture is
+    /// served; this unit test pins the serializer for diagnostic callers.
     #[test]
-    fn deployment_summary_undeclared_profile_nags_only() {
+    fn deployment_summary_undeclared_profile_reports_startup_failure() {
         let config = parse_minimal_config(&minimal_config_yaml());
         assert!(config.deployment.profile.is_none());
         let summary = deployment_summary(&config, ConfigSource::LocalFile);
@@ -3316,7 +3317,7 @@ datasets: []
         let findings = summary["findings"].as_array().expect("findings array");
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0]["id"], crate::deployment::PROFILE_UNDECLARED);
-        assert_eq!(findings[0]["severity"], "finding_warn");
+        assert_eq!(findings[0]["severity"], "startup_fail");
         assert_eq!(findings[0]["status"], "active");
         assert!(summary["waivers"].as_array().expect("waivers").is_empty());
     }
@@ -3441,9 +3442,9 @@ datasets: []
     /// Default-config posture regression: the gate train adds exactly the
     /// `deployment` and `audit` top-level blocks and nothing else. The default
     /// config declares no profile, so `deployment` is exactly the single
-    /// `profile_undeclared` finding, and `audit` is the eight assurance facts at
-    /// their default values. This pins that the additions did not perturb the
-    /// rest of the posture document for an unchanged config.
+    /// `profile_undeclared` startup finding, and `audit` is the eight assurance
+    /// facts at their default values. This pins the serializer for diagnostic
+    /// callers; server startup rejects the same config before posture is served.
     #[test]
     fn default_config_posture_regression() {
         let config = parse_minimal_config(&minimal_config_yaml());
@@ -3478,14 +3479,14 @@ datasets: []
             "default-config posture top-level keys changed"
         );
 
-        // `deployment`: undeclared profile, single nag finding, no waivers.
+        // `deployment`: undeclared profile, single startup finding, no waivers.
         assert_eq!(
             posture["deployment"],
             json!({
                 "findings": [
                     {
                         "id": crate::deployment::PROFILE_UNDECLARED,
-                        "severity": "finding_warn",
+                        "severity": "startup_fail",
                         "status": "active",
                     }
                 ],

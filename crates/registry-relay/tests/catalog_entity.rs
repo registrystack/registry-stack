@@ -30,6 +30,9 @@ catalog:
   publisher: Ministry of Delivery
   participant_id: did:web:data.example.test
 
+deployment:
+  profile: local
+
 vocabularies:
   psc: https://publicschema.org/
   ex: https://example.test/vocab/

@@ -230,6 +230,9 @@ fn config_with_max_in_flight(
     );
     let raw = format!(
         r#"
+deployment:
+  profile: local
+
 server:
   bind: 127.0.0.1:0
 auth:
@@ -323,6 +326,9 @@ fn config_with_oauth_source_options(
     );
     let raw = format!(
         r#"
+deployment:
+  profile: local
+
 server:
   bind: 127.0.0.1:0
 auth:

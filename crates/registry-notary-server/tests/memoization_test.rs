@@ -149,6 +149,9 @@ fn rda_config(
     );
     let raw = format!(
         r#"
+deployment:
+  profile: local
+
 server:
   bind: 127.0.0.1:0
 auth:
@@ -234,6 +237,9 @@ fn two_claims_shared_binding_config(
     );
     let raw = format!(
         r#"
+deployment:
+  profile: local
+
 server:
   bind: 127.0.0.1:0
 auth:
@@ -352,6 +358,9 @@ fn three_claims_shared_binding_config(
     );
     let raw = format!(
         r#"
+deployment:
+  profile: local
+
 server:
   bind: 127.0.0.1:0
 auth:
@@ -508,6 +517,9 @@ fn two_claims_different_fields_config(
     );
     let raw = format!(
         r#"
+deployment:
+  profile: local
+
 server:
   bind: 127.0.0.1:0
 auth:
@@ -616,6 +628,9 @@ fn two_dci_claims_different_query_type_config(
     );
     let raw = format!(
         r#"
+deployment:
+  profile: local
+
 server:
   bind: 127.0.0.1:0
 auth:

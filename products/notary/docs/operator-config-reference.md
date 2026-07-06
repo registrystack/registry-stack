@@ -39,7 +39,7 @@ the basic path passes `doctor`.
 | --- | --- | --- |
 | `server` | Bind address and process HTTP settings | No, defaults are present |
 | `auth` | Caller authentication and scope mapping | Yes |
-| `deployment` | Operator-declared deployment profile and gate waivers | No, an undeclared profile binds no gates |
+| `deployment` | Operator-declared deployment profile and gate waivers | Yes, `deployment.profile` is required |
 | `audit` | Redacted audit envelope sink and HMAC secret | Recommended for every deployable environment |
 | `config_trust` | Durable local state for governed config apply | No, only for signed governed config |
 | `evidence` | Claims, sources, rules, formats, signing keys, and credential profiles | Yes |
@@ -73,7 +73,7 @@ deployment:
 
 | Field | Purpose |
 | --- | --- |
-| `profile` | The declared assurance shape. Absent means undeclared. |
+| `profile` | The declared assurance shape. Absent means startup refuses to boot. |
 | `multi_instance` | Operator declaration that this instance runs active-active with peers, which makes shared, durable replay storage mandatory. |
 | `waivers` | Per-finding suppressions, each with a mandatory reason and expiry. |
 | `evidence` | Operator-asserted assurance evidence for conditions the runtime cannot observe for itself. Each flag defaults to `false`. |
@@ -93,10 +93,10 @@ Profiles:
 | `production` | Real integrations handling sensitive or operational data. |
 | `evidence_grade` | Deployments where the evidence trail is itself part of the assurance claim. |
 
-An **undeclared** profile binds no gates and keeps current behavior. The posture
-report then carries a single `deployment.profile_undeclared` warning so the gap
-is visible without breaking the deployment. An **invalid** profile value fails
-startup, so a typo cannot silently disable enforcement.
+An **undeclared** profile fails startup. Use `local` as the explicit development
+opt-out, or declare `hosted_lab`, `production`, or `evidence_grade` for deployed
+environments. An **invalid** profile value fails startup, so a typo cannot
+silently disable enforcement.
 
 Each gate evaluates to one of four severities under the declared profile:
 

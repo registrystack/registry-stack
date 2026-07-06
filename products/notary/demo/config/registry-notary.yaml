@@ -3,6 +3,9 @@
 # It computes evidence by calling the separate registry-relay process declared
 # in registry-relay/demo/config/evidence_registries.yaml.
 
+deployment:
+  profile: local
+
 server:
   bind: 127.0.0.1:4255
 

@@ -722,9 +722,9 @@ fn deployment_findings(
         if deployment_profile.value.is_none() {
             return vec![DoctorFinding {
                 id: "deployment.profile_undeclared".to_string(),
-                severity: "finding_warn",
+                severity: "startup_fail",
                 status: "active",
-                message: "deployment profile is undeclared; no profile gates bind",
+                message: "set deployment.profile: local for development, or production/evidence_grade for deployment",
             }];
         }
         return Vec::new();
@@ -2304,6 +2304,8 @@ audit:
     fn runtime_config_yaml(hash_secret_env: &str) -> String {
         format!(
             r#"
+deployment:
+  profile: local
 server:
   bind: 127.0.0.1:0
 catalog:
@@ -2626,6 +2628,10 @@ audit:
 
     #[test]
     fn serve_cli_preserves_config_flag_parsing() {
+        let _guard = env_lock();
+        let previous_env_file = std::env::var_os("REGISTRY_RELAY_ENV_FILE");
+        std::env::remove_var("REGISTRY_RELAY_ENV_FILE");
+
         let command = parse_cli_command_from(command_args(&[
             "registry-relay",
             "--config",
@@ -2647,6 +2653,10 @@ audit:
         );
         assert!(env_file.is_none());
         assert!(bind_override.is_none());
+
+        if let Some(value) = previous_env_file {
+            std::env::set_var("REGISTRY_RELAY_ENV_FILE", value);
+        }
     }
 
     #[test]
@@ -3324,6 +3334,31 @@ audit:
             err.to_string().contains("missing")
                 || err.to_string().contains("Missing")
                 || err.to_string().contains("validation"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn compile_relay_runtime_refuses_undeclared_deployment_profile() {
+        let dir = tempdir().expect("tempdir");
+        let config_path = dir.path().join("relay.yaml");
+        let yaml = runtime_config_yaml("REGISTRY_RELAY_TEST_COMPILE_PROFILE_AUDIT_HASH")
+            .replacen("deployment:\n  profile: local\n", "", 1)
+            .replacen(
+                "  hash_secret_env: REGISTRY_RELAY_TEST_COMPILE_PROFILE_AUDIT_HASH\n",
+                "",
+                1,
+            );
+        std::fs::write(&config_path, yaml).expect("config writes");
+
+        let err = match compile_relay_runtime(config_path, None).await {
+            Ok(_) => panic!("undeclared deployment profile should fail compile"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("set deployment.profile: local for development"),
             "unexpected error: {err}"
         );
     }

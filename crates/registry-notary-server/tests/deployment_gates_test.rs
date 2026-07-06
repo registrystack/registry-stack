@@ -349,14 +349,28 @@ fn local_profile_binds_no_gates_even_when_high_risk() {
 }
 
 #[test]
-fn undeclared_profile_starts_and_preserves_behaviour() {
+fn undeclared_profile_refuses_startup_with_actionable_error() {
     let tmp = tempfile::TempDir::new().expect("tempdir");
     let config = ConfigBuilder::new(&audit_path(&tmp))
         .durable_audit(false)
         .build();
 
-    // No deployment block: zero gates bound, startup unaffected.
-    compile_notary_runtime(config).expect("undeclared profile preserves startup");
+    let error = expect_compile_rejected(config, "undeclared profile must refuse startup");
+    let rendered = error.to_string();
+    match error {
+        StandaloneServerError::DeploymentGateStartupFailure { profile, findings } => {
+            assert_eq!(profile, "undeclared");
+            assert!(
+                findings.contains("deployment.profile_undeclared"),
+                "expected the undeclared-profile gate in: {findings}"
+            );
+        }
+        other => panic!("expected a deployment gate startup failure, got: {other:?}"),
+    }
+    assert!(
+        rendered.contains("set deployment.profile: local for development"),
+        "startup error must be actionable: {rendered}"
+    );
 }
 
 #[test]
@@ -444,25 +458,22 @@ async fn posture_renders_deployment_and_audit_assurance() {
 }
 
 #[tokio::test]
-async fn posture_reports_undeclared_profile_finding() {
+async fn posture_reports_local_profile_without_findings() {
     let tmp = tempfile::TempDir::new().expect("tempdir");
-    let config = ConfigBuilder::new(&audit_path(&tmp)).build();
+    let config = ConfigBuilder::new(&audit_path(&tmp))
+        .deployment("deployment:\n  profile: local\n")
+        .build();
 
     let posture = fetch_posture(config).await;
     assert_matches_posture_schema(&posture);
 
-    assert!(
-        posture["deployment"].get("profile").is_none(),
-        "an undeclared profile must not render a profile value"
-    );
+    assert_eq!(posture["deployment"]["profile"], "local");
     let findings = posture["deployment"]["findings"]
         .as_array()
         .expect("deployment findings is an array");
     assert!(
-        findings
-            .iter()
-            .any(|finding| finding["id"] == "deployment.profile_undeclared"),
-        "expected deployment.profile_undeclared in: {findings:#?}"
+        findings.is_empty(),
+        "local profile should not bind findings"
     );
 }
 

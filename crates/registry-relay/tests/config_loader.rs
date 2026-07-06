@@ -80,6 +80,8 @@ catalog:
   title: Test
   base_url: https://data.example.test
   publisher: Test
+deployment:
+  profile: local
 vocabularies: {{}}
 auth:
   mode: api_key
@@ -356,6 +358,8 @@ catalog:
   title: Test
   base_url: https://data.example.test
   publisher: Test
+deployment:
+  profile: local
 vocabularies: {}
 auth:
   mode: api_key
@@ -399,6 +403,8 @@ catalog:
   title: Test
   base_url: https://data.example.test
   publisher: Test
+deployment:
+  profile: local
 vocabularies: {}
 auth:
   mode: api_key
@@ -425,6 +431,8 @@ catalog:
   title: Test
   base_url: https://data.example.test
   publisher: Test
+deployment:
+  profile: local
 vocabularies: {}
 auth:
   mode: api_key
@@ -479,6 +487,8 @@ catalog:
   title: Test
   base_url: https://data.example.test
   publisher: Test
+deployment:
+  profile: local
 vocabularies: {}
 auth:
   mode: api_key
@@ -1523,6 +1533,8 @@ catalog:
   title: Test
   base_url: https://data.example.test
   publisher: Test
+deployment:
+  profile: local
 vocabularies: {}
 auth:
   mode: api_key
@@ -1574,6 +1586,8 @@ catalog:
   title: Test
   base_url: https://data.example.test
   publisher: Test
+deployment:
+  profile: local
 vocabularies: {}
 auth:
   mode: api_key
@@ -1619,6 +1633,8 @@ catalog:
   title: Test
   base_url: https://data.example.test
   publisher: Test
+deployment:
+  profile: local
 vocabularies: {{}}
 auth:
   mode: oidc
@@ -1646,6 +1662,8 @@ catalog:
   title: Test
   base_url: https://data.example.test
   publisher: Test
+deployment:
+  profile: local
 vocabularies: {}
 auth:
   mode: oidc
@@ -1812,6 +1830,8 @@ catalog:
   title: Test
   base_url: https://data.example.test
   publisher: Test
+deployment:
+  profile: local
 vocabularies: {}
 auth:
   mode: oidc
@@ -1896,6 +1916,8 @@ catalog:
   title: Test
   base_url: https://data.example.test
   publisher: Test
+deployment:
+  profile: local
 vocabularies: {}
 auth:
   mode: oidc
@@ -1928,6 +1950,8 @@ catalog:
   title: Test
   base_url: https://data.example.test
   publisher: Test
+deployment:
+  profile: local
 vocabularies: {}
 auth:
   mode: oidc
@@ -2081,6 +2105,8 @@ catalog:
   title: Test
   base_url: https://data.example.test
   publisher: Test
+deployment:
+  profile: local
 vocabularies: {}
 auth:
   mode: oidc

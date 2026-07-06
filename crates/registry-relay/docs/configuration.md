@@ -18,7 +18,8 @@ catalog: {}
 vocabularies: {}
 auth: {}
 audit: {}
-deployment: {}   # optional declared assurance profile, waivers, and evidence
+deployment:
+  profile: local # required; use local only for development
 config_trust: {} # optional governed config apply state
 datasets: []
 provenance: {} # optional
@@ -618,7 +619,7 @@ deployment:
       expires: 2026-12-31
 ```
 
-The `deployment` block is optional. When it is omitted, no gates bind and the deployment keeps its existing behavior exactly; the posture reports a single `deployment.profile_undeclared` warning so the choice is visible. An unknown profile value is rejected at startup.
+`deployment.profile` is required at startup. Use `local` as the explicit development opt-out, or declare `hosted_lab`, `production`, or `evidence_grade` for deployed environments. When the profile is omitted, startup fails with `deployment.profile_undeclared`. An unknown profile value is rejected at startup.
 
 ### Profiles and severities
 

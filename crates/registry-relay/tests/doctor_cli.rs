@@ -16,6 +16,8 @@ fn write_minimal_config(tmp: &TempDir) -> std::path::PathBuf {
     std::fs::write(
         &path,
         r#"
+deployment:
+  profile: local
 server:
   bind: 127.0.0.1:0
 catalog:
@@ -285,12 +287,10 @@ fn doctor_json_reports_success_and_redacts_env_file_values() {
     );
     let report = parse_stdout_json(&output.stdout);
     assert_diagnostic_report(&report);
-    assert_eq!(report["status"], "warning");
+    assert_eq!(report["status"], "ok");
     assert!(diagnostic_with_code(&report, "relay.config.loaded").is_some());
     assert!(diagnostic_with_code(&report, "relay.entity_registry.verified").is_some());
-    let diagnostic = diagnostic_with_code(&report, "deployment.profile_undeclared")
-        .expect("undeclared profile diagnostic");
-    assert_eq!(diagnostic["severity"], "warning");
+    assert!(diagnostic_with_code(&report, "deployment.profile_undeclared").is_none());
 }
 
 #[test]

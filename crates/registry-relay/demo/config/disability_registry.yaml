@@ -4,6 +4,9 @@
 # Run with:
 #   cargo run --features spdci-api-standards,standards-cel-mapping -- --config demo/config/disability_registry.yaml
 
+deployment:
+  profile: local
+
 server:
   bind: 0.0.0.0:4242
 

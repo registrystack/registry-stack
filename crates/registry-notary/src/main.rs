@@ -4019,6 +4019,8 @@ ESCAPED="client \"quoted\" value" # comment with "quote"
         fs::write(
             &config_path,
             r#"
+deployment:
+  profile: local
 server:
   bind: 127.0.0.1:0
 auth:
@@ -4517,6 +4519,8 @@ evidence:
     fn doctor_live_test_config(base_url: &str) -> StandaloneRegistryNotaryConfig {
         let raw = format!(
             r#"
+deployment:
+  profile: local
 server:
   bind: 127.0.0.1:0
 auth:

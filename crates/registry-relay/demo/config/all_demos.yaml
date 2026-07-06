@@ -10,6 +10,9 @@
 # stdout so the scholarship and emergency flows' multi-persona audit trail
 # is durable and inspectable after the fact (spec line 740).
 
+deployment:
+  profile: local
+
 server:
   bind: 0.0.0.0:4242
 metadata:

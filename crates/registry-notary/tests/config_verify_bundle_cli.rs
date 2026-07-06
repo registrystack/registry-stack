@@ -64,6 +64,8 @@ fn config_yaml(tmp: &TempDir, signer_kid: &str) -> String {
 instance:
   id: notary-cli
   environment: development
+deployment:
+  profile: local
 server:
   bind: 127.0.0.1:0
   admin_listener:

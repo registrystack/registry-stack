@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # Single-dataset config for local startup: cargo run -- --config demo/config/education_registry.yaml
 
+deployment:
+  profile: local
+
 server:
   bind: 0.0.0.0:4242
 

@@ -123,6 +123,8 @@ fn set_env() {
 fn registry_data_api_config(base_url: &str, audit_path: &str) -> StandaloneRegistryNotaryConfig {
     let raw = format!(
         r#"
+deployment:
+  profile: local
 server:
   bind: 127.0.0.1:0
 auth:

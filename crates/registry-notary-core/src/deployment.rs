@@ -5,8 +5,8 @@
 //! instance is deployed. It is never inferred from the environment label, the
 //! hostname, or the network position. The profile binds a set of gates; each
 //! gate inspects the running configuration and reports an effect at a defined
-//! severity. Undeclared deployments bind no gates and keep their existing
-//! behavior unchanged.
+//! severity. An undeclared deployment is a startup failure; `local` is the
+//! explicit opt-out for development.
 
 use serde::{Deserialize, Serialize};
 
@@ -85,7 +85,7 @@ impl DeploymentFindingStatus {
 
 /// The operator-declared `deployment` config block.
 ///
-/// An absent block means an undeclared profile, which binds no gates. The
+/// An absent profile means an undeclared deployment, which refuses startup. The
 /// `multi_instance` flag is an operator declaration that the instance is one of
 /// several sharing the same workload; it is never inferred.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -159,7 +159,8 @@ impl DeploymentConfig {
     /// This checks waiver shape (non-empty fields, parseable expiry) and the
     /// hard rule that `startup_fail` and `readiness_fail` gates can never be
     /// waived under the declared profile. An undeclared profile still validates
-    /// waiver shape so typos are caught early.
+    /// waiver shape here so typos are caught early; startup refusal is handled by
+    /// gate evaluation.
     pub fn validate(&self) -> Result<(), DeploymentConfigError> {
         for (index, waiver) in self.waivers.iter().enumerate() {
             if waiver.finding.trim().is_empty() {
@@ -438,7 +439,7 @@ pub struct GateEvaluation {
 ///
 /// `today` is the date used to decide whether a waiver has expired, passed in
 /// so callers and tests can be deterministic. An undeclared profile (`None`)
-/// binds no gates and emits the `deployment.profile_undeclared` warn finding.
+/// emits `deployment.profile_undeclared` as a startup failure.
 pub fn evaluate_gates(
     profile: Option<DeploymentProfile>,
     input: &GateInput,
@@ -447,11 +448,11 @@ pub fn evaluate_gates(
 ) -> GateEvaluation {
     let Some(profile) = profile else {
         return GateEvaluation {
-            startup_failures: Vec::new(),
+            startup_failures: vec![FINDING_PROFILE_UNDECLARED.to_string()],
             readiness_failures: Vec::new(),
             findings: vec![EvaluatedFinding {
                 id: FINDING_PROFILE_UNDECLARED.to_string(),
-                severity: GateSeverity::FindingWarn,
+                severity: GateSeverity::StartupFail,
                 status: DeploymentFindingStatus::Active,
                 waiver: None,
             }],
@@ -596,14 +597,17 @@ mod tests {
     }
 
     #[test]
-    fn undeclared_profile_binds_no_gates_and_emits_diagnostic() {
+    fn undeclared_profile_is_startup_failure() {
         let input = high_risk_in_memory_input();
         let evaluation = evaluate_gates(None, &input, &[], "2026-06-13");
-        assert!(evaluation.startup_failures.is_empty());
+        assert_eq!(
+            evaluation.startup_failures,
+            vec![FINDING_PROFILE_UNDECLARED.to_string()]
+        );
         assert!(evaluation.readiness_failures.is_empty());
         assert_eq!(evaluation.findings.len(), 1);
         assert_eq!(evaluation.findings[0].id, FINDING_PROFILE_UNDECLARED);
-        assert_eq!(evaluation.findings[0].severity, GateSeverity::FindingWarn);
+        assert_eq!(evaluation.findings[0].severity, GateSeverity::StartupFail);
     }
 
     #[test]

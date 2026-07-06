@@ -21,6 +21,7 @@ struct TestConfigOptions<'a> {
     source_allows_private_network: bool,
     source_adapter_batch_without_expected_sidecar: bool,
     config_trust: bool,
+    omit_deployment_profile: bool,
     multi_instance: bool,
     durable_audit: Option<bool>,
     unbound_credential_profile: bool,
@@ -70,10 +71,16 @@ fn write_config_with_options(tmp: &TempDir, options: TestConfigOptions<'_>) -> P
     } else {
         String::new()
     };
-    let deployment = if options.multi_instance {
-        "deployment:\n  multi_instance: true\n"
+    let deployment = if options.omit_deployment_profile {
+        if options.multi_instance {
+            "deployment:\n  multi_instance: true\n"
+        } else {
+            ""
+        }
+    } else if options.multi_instance {
+        "deployment:\n  profile: local\n  multi_instance: true\n"
     } else {
-        ""
+        "deployment:\n  profile: local\n"
     };
     let durable_audit = options.durable_audit.unwrap_or(options.config_trust);
     let audit = if durable_audit {
@@ -237,6 +244,8 @@ fn write_opencrvs_dci_config(tmp: &TempDir) -> PathBuf {
     std::fs::write(
         &path,
         r#"
+deployment:
+  profile: local
 server:
   bind: 127.0.0.1:0
 auth:
@@ -556,7 +565,13 @@ fn doctor_defaults_to_text_output() {
 #[test]
 fn doctor_json_reports_undeclared_deployment_profile() {
     let tmp = TempDir::new().expect("tempdir");
-    let config = write_config(&tmp);
+    let config = write_config_with_options(
+        &tmp,
+        TestConfigOptions {
+            omit_deployment_profile: true,
+            ..TestConfigOptions::default()
+        },
+    );
     let env_file = write_env_file(&tmp);
 
     let output = doctor_command(&config, Some(&env_file))
@@ -565,26 +580,32 @@ fn doctor_json_reports_undeclared_deployment_profile() {
         .expect("doctor runs");
 
     assert!(
-        output.status.success(),
-        "doctor failed\nstdout:\n{}\nstderr:\n{}",
+        !output.status.success(),
+        "undeclared profile should fail doctor\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).expect("stdout is utf8");
     let report: Value = serde_json::from_str(&stdout).expect("doctor emits JSON");
     assert_product_diagnostic_report(&report);
-    assert_eq!(report["status"], "warning");
+    assert_eq!(report["status"], "error");
 
     let diagnostic = diagnostic_with_code(&report, "deployment.profile_undeclared")
         .expect("undeclared profile finding");
-    assert_eq!(diagnostic["severity"], "warning");
+    assert_eq!(diagnostic["severity"], "error");
     assert_no_documentation_key(diagnostic);
 }
 
 #[test]
 fn doctor_json_profile_override_suppresses_undeclared_finding() {
     let tmp = TempDir::new().expect("tempdir");
-    let config = write_config(&tmp);
+    let config = write_config_with_options(
+        &tmp,
+        TestConfigOptions {
+            omit_deployment_profile: true,
+            ..TestConfigOptions::default()
+        },
+    );
     let env_file = write_env_file(&tmp);
 
     let output = doctor_command(&config, Some(&env_file))
@@ -1195,7 +1216,7 @@ fn doctor_json_reports_success_as_single_redacted_document() {
     let report: Value = serde_json::from_str(&stdout).expect("doctor emits one JSON document");
 
     assert_product_diagnostic_report(&report);
-    assert_eq!(report["status"], "warning");
+    assert_eq!(report["status"], "ok");
     assert!(report["diagnostics"]
         .as_array()
         .expect("diagnostics array")

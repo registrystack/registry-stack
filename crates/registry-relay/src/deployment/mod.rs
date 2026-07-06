@@ -20,9 +20,8 @@
 //! waiver stops suppressing the finding and additionally raises
 //! `deployment.waiver_expired`. `startup_fail` gates are never waivable.
 //!
-//! When no profile is declared, no gates bind and the deployment keeps its
-//! existing behavior exactly; a single `deployment.profile_undeclared` warn
-//! finding is emitted so operators are nagged, not broken.
+//! When no profile is declared, `deployment.profile_undeclared` is a startup
+//! failure. `local` is the explicit opt-out for development.
 
 use registry_platform_ops::{
     AuditWritePolicy, ConfigSource, DeploymentFinding, DeploymentFindingStatus,
@@ -224,17 +223,17 @@ pub fn evaluate(
     today: &str,
 ) -> GateEvaluation {
     let Some(profile) = profile else {
-        // Undeclared profile binds no gates. Existing behavior is preserved
-        // exactly; the operator is nagged with a single warn finding.
+        // An undeclared profile is not a valid boot profile. `local` is the
+        // explicit development opt-out.
         return GateEvaluation {
             findings: vec![DeploymentFinding {
                 id: PROFILE_UNDECLARED.to_string(),
-                severity: FindingWarn,
+                severity: StartupFail,
                 status: DeploymentFindingStatus::Active,
                 waiver: None,
             }],
             active_waivers: Vec::new(),
-            startup_failures: Vec::new(),
+            startup_failures: vec![PROFILE_UNDECLARED.to_string()],
             readiness_failures: Vec::new(),
         };
     };
@@ -457,9 +456,9 @@ mod tests {
     }
 
     #[test]
-    fn undeclared_profile_binds_zero_gates_and_nags() {
-        // Even with every risky fact set, an undeclared profile binds nothing
-        // and emits exactly the one warn finding.
+    fn undeclared_profile_is_startup_failure() {
+        // Even with every risky fact set, the framework finding is the startup
+        // blocker. Operators must choose `local` to opt out in development.
         let facts = DeploymentFacts {
             admin_public_exposure: true,
             openapi_public: true,
@@ -477,9 +476,13 @@ mod tests {
         assert_eq!(finding_ids(&evaluation), vec![PROFILE_UNDECLARED]);
         assert_eq!(
             finding(&evaluation, PROFILE_UNDECLARED).severity,
-            FindingWarn
+            StartupFail
         );
-        assert!(!evaluation.has_startup_failure());
+        assert_eq!(
+            evaluation.startup_failures,
+            vec![PROFILE_UNDECLARED.to_string()]
+        );
+        assert!(evaluation.has_startup_failure());
         assert!(!evaluation.has_readiness_failure());
         assert!(evaluation.active_waivers.is_empty());
     }

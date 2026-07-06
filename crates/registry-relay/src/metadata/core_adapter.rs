@@ -451,6 +451,8 @@ mod tests {
             r#"
 server:
   bind: 127.0.0.1:0
+deployment:
+  profile: local
 catalog:
   title: Program Data Catalog
   base_url: https://data.example.test/

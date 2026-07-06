@@ -34,6 +34,8 @@ const ADMIN_SCOPE: &str = "registry_relay:admin";
 const METRICS_SCOPE: &str = crate::observability::METRICS_SCOPE;
 const OPS_READ_SCOPE: &str = "registry_relay:ops_read";
 const RESERVED_SCOPE_DATASET_IDS: &[&str] = &["registry_relay"];
+const DEPLOYMENT_PROFILE_REQUIRED_ACTION: &str =
+    "set deployment.profile: local for development, or production/evidence_grade for deployment";
 
 /// Run every cross-field check on a freshly deserialised [`Config`] loaded
 /// from a local YAML file.
@@ -89,10 +91,10 @@ pub fn run_with_source(config: &Config, source: ConfigSource) -> Result<(), Erro
 ///
 /// Waiver finding ids must match the finding id pattern, waiver dates must be
 /// well-formed `YYYY-MM-DD`, reasons must be non-empty, and the deployment must
-/// not declare a profile under which any unwaived `startup_fail` gate triggers.
-/// An invalid profile value is rejected earlier by `serde` (the parse error
-/// path); this check covers the conditions that only hold once the whole config
-/// is deserialised.
+/// not omit `deployment.profile` or declare a profile under which any unwaived
+/// `startup_fail` gate triggers. An invalid profile value is rejected earlier by
+/// `serde` (the parse error path); this check covers the conditions that only
+/// hold once the whole config is deserialised.
 ///
 /// `source` is the config's real provenance source. The startup path passes
 /// [`ConfigSource::LocalFile`]; the signed governed apply path threads the
@@ -146,8 +148,16 @@ fn validate_deployment(config: &Config, source: ConfigSource) -> Result<(), Conf
         tracing::error!(
             code = "config.validation_error",
             gates = ?evaluation.startup_failures,
+            action = DEPLOYMENT_PROFILE_REQUIRED_ACTION,
             "deployment profile gates refuse startup"
         );
+        if evaluation
+            .startup_failures
+            .iter()
+            .any(|finding| finding == crate::deployment::PROFILE_UNDECLARED)
+        {
+            return Err(ConfigError::DeploymentProfileRequired);
+        }
         return Err(ConfigError::ValidationError);
     }
     Ok(())
@@ -4730,7 +4740,10 @@ datasets: []
     fn undeclared_profile_is_loud_in_the_boot_log() {
         let config = parse_deployment_config("");
         let (result, rendered) = run_with_captured_logs(&config);
-        result.expect("an undeclared profile must pass validation");
+        assert!(matches!(
+            result,
+            Err(Error::Config(ConfigError::DeploymentProfileRequired))
+        ));
         assert!(
             rendered.contains("deployment.profile_undeclared"),
             "expected deployment.profile_undeclared in boot log: {rendered}"

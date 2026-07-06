@@ -166,13 +166,15 @@ fn evidence_grade_from_local_file_refuses_startup() {
 }
 
 #[test]
-fn undeclared_profile_validates_like_before() {
-    // The default config declares no profile; validation must pass exactly as
-    // it did before the gate train (zero gates bound).
+fn undeclared_profile_refuses_startup_with_actionable_error() {
     let config = parse_config(&minimal_config_yaml()).expect("config parses");
+    let error =
+        config::validate::run(&config).expect_err("an undeclared profile must refuse startup");
     assert!(
-        config::validate::run(&config).is_ok(),
-        "an undeclared profile must not change validation behavior"
+        error
+            .to_string()
+            .contains("set deployment.profile: local for development"),
+        "startup error must be actionable: {error}"
     );
 }
 

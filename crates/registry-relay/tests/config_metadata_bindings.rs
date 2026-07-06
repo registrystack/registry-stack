@@ -30,6 +30,9 @@ catalog:
   base_url: https://runtime.example.test/
   publisher: Runtime Ministry
 
+deployment:
+  profile: local
+
 auth:
   mode: api_key
   api_keys: []
@@ -600,6 +603,9 @@ catalog:
   title: Runtime Catalog
   base_url: https://runtime.example.test/
   publisher: Runtime Ministry
+
+deployment:
+  profile: local
 
 auth:
   mode: api_key

@@ -74,8 +74,8 @@ pub struct Config {
     #[serde(default)]
     pub standards: StandardsConfig,
     /// Operator-declared deployment profile, gate waivers, and assurance
-    /// evidence. Omitting the block leaves the deployment undeclared: no
-    /// profile gates bind and existing behavior is preserved exactly.
+    /// evidence. Omitting the profile leaves the deployment undeclared, which
+    /// refuses startup. Use `profile: local` as the explicit development opt-out.
     #[serde(default)]
     pub deployment: DeploymentConfig,
 }
@@ -84,9 +84,8 @@ pub struct Config {
 ///
 /// The profile is an explicit assurance claim, never inferred from
 /// environment or network position. When `profile` is absent the deployment
-/// is undeclared: no gates bind, and posture reports a single
-/// `deployment.profile_undeclared` warn finding. A profile value that is not
-/// one of the known variants fails startup (fail closed on typos).
+/// is undeclared and refuses startup. A profile value that is not one of the
+/// known variants fails startup (fail closed on typos).
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct DeploymentConfig {

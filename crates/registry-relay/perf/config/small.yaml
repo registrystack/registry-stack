@@ -2,6 +2,9 @@
 # Perf config: small profile (1k rows). CI smoke check and quick iteration.
 # Source: perf/fixtures/generated/clinic_capacity_1k.parquet
 
+deployment:
+  profile: local
+
 server:
   bind: 127.0.0.1:18080
 
