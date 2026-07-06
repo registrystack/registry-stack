@@ -16,7 +16,8 @@ standards_referenced: []
 draft: true
 ---
 
-This is a maintenance record. If you're an integrator using the current project names (Registry Relay, Registry Notary, and the rest of the stack), you can ignore the legacy column.
+This is a maintenance record. If you're an integrator using the current project names
+(Registry Relay, Registry Notary, and the rest of the stack), you can ignore the legacy column.
 
 Five registry projects were renamed on 2026-05-23 from a mix of snake_case, kebab-case,
 and three competing root metaphors (registry, evidence, dataspace) to a single Docker-style
@@ -100,15 +101,12 @@ old worktrees under `registry_relay-*` remain for historical evidence."
 updating the Cargo dependency on `registry-manifest-core`, swapping notary contract strings
 (`evidence-server` to `registry-notary` in `access.kind`, `conforms_to`, and OpenAPI enum),
 and regenerating snapshot files.
-The evidence packet confirms the current binary and Cargo package name are correct
-but does not confirm Phase 4 cross-repo absorption is complete.
-
-{/* TODO[evidence]: Confirm whether registry-relay has absorbed Phase 4 contract changes:
-     (1) Cargo dep updated from registry-metadata-core to registry-manifest-core at tag v0.1.2,
-     (2) access.kind "evidence-server" replaced with "registry-notary" in openapi.rs and validate.rs,
-     (3) snapshot files in tests/snapshots/ regenerated.
-     The relay evidence packet reports the binary name is correct but does not enumerate schema version
-     or kind strings present in the working tree at commit aec4394. */}
+Phase 4 cross-repo absorption is confirmed complete in the working tree: the Cargo dependency
+reads `registry-manifest-core` (`crates/registry-relay/Cargo.toml:87`), the `access.kind` enum
+and validator both use `"registry-notary"` with no `evidence-server` string remaining
+(`crates/registry-relay/src/api/openapi.rs:2244-2247,2875,4979`,
+`crates/registry-relay/src/config/validate.rs:412`), and no legacy string appears in the
+snapshot fixtures (`crates/registry-relay/tests/snapshots/`, 14 files, checked 2026-07-07).
 
 ### Registry Notary
 
