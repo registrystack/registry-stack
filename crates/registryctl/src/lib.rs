@@ -732,6 +732,13 @@ pub fn stop_project(project_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Stops and starts the project so edits to the bind-mounted config files
+/// take effect; a plain `start` leaves an already-running container as is.
+pub fn restart_project(project_dir: &Path) -> Result<()> {
+    stop_project(project_dir)?;
+    start_project(project_dir)
+}
+
 pub fn status_project(project_dir: &Path) -> Result<()> {
     let project = Project::load(project_dir)?;
     run_compose_for_project(project_dir, &project, &["ps"])?;
@@ -5751,6 +5758,15 @@ workflows:
             run_compose_command_with_platform(temp.path(), "false", &["ps"], None).unwrap_err();
 
         assert!(error.to_string().contains("false compose exited"));
+    }
+
+    #[test]
+    fn restart_project_requires_a_project_manifest() {
+        let temp = TempDir::new().unwrap();
+
+        let error = restart_project(temp.path()).unwrap_err();
+
+        assert!(error.to_string().contains("registryctl.yaml"));
     }
 
     #[test]
