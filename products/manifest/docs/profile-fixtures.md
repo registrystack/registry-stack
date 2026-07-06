@@ -30,11 +30,11 @@ against official artifacts.
 Build the CLI before running commands:
 
 ```sh
-cargo build -p registry-manifest-cli
+cargo build --bin registry-manifest
 ```
 
-The commands in this page use `cargo run -p registry-manifest-cli --` as a prefix.
-If you have installed the binary directly, replace that prefix with `registry-manifest-cli`.
+The commands in this page use `cargo run --bin registry-manifest --` as a prefix.
+If you have installed the binary directly, replace that prefix with `registry-manifest`.
 
 ## Steps
 
@@ -69,7 +69,7 @@ Each subdirectory that contains a `profile.yaml` is a profile entry.
 ### 2. Run validate-profiles on the full directory
 
 ```sh
-cargo run -p registry-manifest-cli -- validate-profiles profiles
+cargo run --bin registry-manifest -- validate-profiles profiles
 ```
 
 The validator scans every subdirectory for `profile.yaml`, validates the descriptor schema,
@@ -89,7 +89,7 @@ place it under a scratch directory and pass that directory:
 ```sh
 mkdir -p /tmp/profile-check
 cp -r profiles/example-civil-registration /tmp/profile-check/
-cargo run -p registry-manifest-cli -- validate-profiles /tmp/profile-check
+cargo run --bin registry-manifest -- validate-profiles /tmp/profile-check
 ```
 
 This validates only the profiles in `/tmp/profile-check` rather than the full suite.
@@ -116,7 +116,7 @@ Common failure types:
   bindings). Examples: `source`, `table`, `scope`, `url_env`.
   Remove the key; it belongs in Relay configuration, not in a portable fixture.
 
-The authoritative list of disallowed runtime keys is in [Registry Manifest reference](./reference.md#runtime-only-keys).
+The authoritative list of disallowed runtime keys is in [Registry Manifest reference](./reference.md).
 
 ### 5. Add a new profile
 
@@ -140,7 +140,7 @@ for a complete example.
 After running `validate-profiles`, confirm the exit code:
 
 ```sh
-cargo run -p registry-manifest-cli -- validate-profiles profiles
+cargo run --bin registry-manifest -- validate-profiles profiles
 echo "exit code: $?"
 ```
 

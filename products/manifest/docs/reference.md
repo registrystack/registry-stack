@@ -30,8 +30,12 @@ render <metadata.yaml> --format <format> [--profile <id>] [--dataset <id>] [--en
 Compiles the manifest, runs all renderers, writes the full artifact tree to `<dir>`, and writes `index.json`.
 
 ```text
-publish <metadata.yaml> --out <dir>
+publish <metadata.yaml> --out <dir> [--site-root <dir>]
 ```
+
+`--site-root` is optional. When set, the two `.well-known/*` discovery documents are written
+under `--site-root` instead of `--out`; every other artifact still writes under `--out`. See
+[Publish output artifacts](#publish-output-artifacts).
 
 ### `validate-profiles`
 
@@ -89,6 +93,7 @@ Source:
 | `codelists` | list of `CodelistManifest` | No | Enumerated value schemes with concept URIs. |
 | `federation` | `FederationManifest` | No | Public Registry Notary federation metadata for delegated evaluation. |
 | `evaluation_profiles` | list of `EvaluationProfileManifest` | No | Public profile-to-ruleset bindings for Registry Notary delegated evaluation. |
+| `ecosystem_bindings` | list of `EcosystemBindingManifest` | No | Ecosystem-specific integration bindings, such as governed-evidence gateway metadata. See [Ecosystem binding keys](#ecosystem-binding-keys). |
 
 ### CatalogManifest keys
 
@@ -96,8 +101,11 @@ Source:
 | --- | --- | --- | --- |
 | `id` | string | Yes | Catalog identifier string. |
 | `title` | `LocalizedText` | Yes | Human-readable catalog title. Plain string or `{en: "...", fr: "..."}` locale map. |
+| `description` | `LocalizedText` | No | Human-readable catalog description. Same shape as `title`. |
 | `publisher` | `PublisherManifest` | Yes | Publisher record with `name` (string, required), `iri` (optional), and `authority_type` (optional). |
 | `base_url` | string | Yes | HTTP URL used as the base for all relative artifact references. |
+| `participant_id` | string | No | Federation participant identifier. Defaults to `base_url` when omitted. Rendered in catalog JSON. |
+| `conforms_to` | list of string | No | Conformance URIs, expanded through `vocabularies`. Rendered as `dcterms:conformsTo` in DCAT output and as `conforms_to` in catalog JSON. |
 | `application_profiles` | list of `ApplicationProfile` | No | Profile IDs and versions the catalog declares support for (for example, `[{id: "bregdcat-ap", version: "3.0.0"}]`). |
 | `standards` | `StandardsManifest` | No | Declares DCAT, SHACL, and JSON Schema versions in use. |
 
@@ -161,6 +169,7 @@ Fields of `EvaluationProfileManifest`.
 | `claim_id` | Yes | Notary claim id evaluated for the profile. |
 | `subject_id_type` | Yes | Subject id type the profile accepts. |
 | `max_source_observed_age_seconds` | No | Optional public freshness hint. Runtime enforcement is in Registry Notary config. |
+| `evidence_pack` | No | Optional `EvidencePackMetadata` object. Shares its shape with `ecosystem_bindings[].evidence_pack`. See [Ecosystem binding keys](#ecosystem-binding-keys). |
 
 For `EvidenceOfferingAccessManifest` with `kind: registry-notary`:
 
@@ -169,6 +178,73 @@ For `EvidenceOfferingAccessManifest` with `kind: registry-notary`:
 - `discovery_url` must be HTTPS.
 - `ruleset` must reference an existing `evaluation_profiles[].ruleset`.
 - A top-level `federation` block is required.
+
+### Ecosystem binding keys
+
+Ecosystem bindings declare ecosystem-specific integration metadata. The only binding type
+currently valid is `governed-evidence`, which carries evidence-pack and ODRL enforcement
+metadata for a governed evidence gateway. A complete worked example is the
+`baseline-dpi/v1` binding in
+[`ecosystem_binding_parses_validates_compiles_and_renders_catalog`](../../../crates/registry-manifest-core/tests/metadata_core.rs).
+
+Fields of `EcosystemBindingManifest`.
+
+| Key | Required | Description |
+| --- | --- | --- |
+| `id` | Yes | Binding identifier. The `id`/`version` pair must be unique among ecosystem bindings. |
+| `version` | Yes | Binding version string. |
+| `profile` | Yes | Profile identifier the binding applies to. |
+| `type` | Yes | Binding type. Only `governed-evidence` is currently valid. |
+| `title` | No | `LocalizedText`. Must be non-empty when present. |
+| `description` | No | `LocalizedText`. Must be non-empty when present. |
+| `vocabulary` | No | Opaque object. Not structurally validated. |
+| `request_envelope` | No | Opaque object. Not structurally validated. |
+| `response_envelope` | No | Opaque object. Not structurally validated. |
+| `transport` | No | Opaque object. Not structurally validated. |
+| `trust_framework` | No | Opaque object. Not structurally validated. |
+| `credential_format` | No | Opaque object. Not structurally validated. |
+| `assurance_model` | No | Opaque object. Not structurally validated. |
+| `conformance` | No | Opaque object. Not structurally validated. |
+| `evidence_pack` | Conditional | `EvidencePackMetadata` object. Required, with the fields marked Yes in the `EvidencePackMetadata` table, when `type` is `governed-evidence`. Optional otherwise, though any fields present are still validated. |
+| `profiles` | No | List of `ProfileClaim` (`id`, `version`). Each `id` must be unique within the binding. |
+
+Fields of `EvidencePackMetadata`. This type is shared by `ecosystem_bindings[].evidence_pack`
+and `evaluation_profiles[].evidence_pack`. Whenever an `evidence_pack` is present, every field
+in this table is validated for shape (object fields must be objects, string lists must use only
+supported values and be unique, `policy_hash` must match the `sha256:<64 lowercase hex>`
+pattern, `odrl_policy_url` must be HTTPS). The "Required" column applies only when the
+`evidence_pack` belongs to a `governed-evidence` ecosystem binding; outside that case, every
+field is optional.
+
+| Key | Required (governed-evidence) | Description |
+| --- | --- | --- |
+| `pack_id` | Yes | Evidence pack identifier. |
+| `pack_version` | Yes | Evidence pack version string. |
+| `source_basis` | Yes | Object describing the evidence pack's source basis. |
+| `semantic_profile` | Yes | Object describing the evidence pack's semantic profile. |
+| `evidence_envelope` | Yes | Object describing the evidence pack's evidence envelope shape. |
+| `required_gates` | Yes | Must include all of: `purpose`, `jurisdiction`, `legal_basis`, `consent`, `authority_basis`, `requester_identity`, `subject_identity`, `subject_relationship`, `assurance`, `source_binding`, `source_freshness`, `requested_disclosure`, `credential_format`, `route_scope`. |
+| `allowed_outputs` | Yes | Must include `minimized_json`, currently the only supported output value. |
+| `policy_id` | Yes | Policy identifier. |
+| `policy_version` | No | Policy version string. |
+| `policy_hash` | Yes | Digest of the canonical inline policy, formatted `sha256:<64 lowercase hex>`. Must match the digest of `policy` when `policy` is present. |
+| `source_mapping` | No | Opaque object. Not structurally validated. |
+| `policy` | No | Canonical inline policy object. When present, its digest must match `policy_hash`. |
+| `fixtures` | No | Opaque list. Not structurally validated. |
+| `synthetic_data` | No | Opaque list. Not structurally validated. |
+| `odrl_policy_url` | No | Must be an HTTPS URL when present. |
+| `odrl_enforcement` | Yes | `OdrlEnforcementProfile` object; see the `OdrlEnforcementProfile` table that follows. |
+
+Fields of `OdrlEnforcementProfile`.
+
+| Key | Required | Description |
+| --- | --- | --- |
+| `profile` | Yes | Must equal `registry-evidence-gateway-pdp/v1`. |
+| `constraint_terms` | Yes | At least one term. Each must be `odrl:purpose` or `odrl:spatial`. Terms must be unique. |
+
+Source:
+[`crates/registry-manifest-core/src/lib.rs`](../../../crates/registry-manifest-core/src/lib.rs)
+(`EcosystemBindingManifest`, `EvidencePackMetadata`, `OdrlEnforcementProfile`).
 
 ### Runtime-only keys
 
@@ -180,7 +256,7 @@ They belong in Registry Relay or Registry Notary runtime configuration, not in a
 `column`, `config_trust`, `file_path`, `listener`, `listeners`, `peer_allowlist`,
 `peers`, `private_jwk`, `private_jwk_env`, `query`, `replay`, `required_filters`,
 `rows_scope`, `scope`, `secret_provider`, `secret_providers`, `signing_keys`,
-`source`, `source_id`, `table`, `token_url`, `url`, `url_env`, `visibility`
+`source`, `source_connections`, `source_id`, `table`, `token_url`, `url`, `url_env`, `visibility`
 
 Source:
 [`crates/registry-manifest-core/src/lib.rs`](../../../crates/registry-manifest-core/src/lib.rs)
@@ -254,7 +330,8 @@ Source:
 [`crates/registry-manifest-cli/src/main.rs`](../../../crates/registry-manifest-cli/src/main.rs)
 (`publish_command`).
 
-All paths are relative to the `--out` directory.
+All paths are relative to the `--out` directory, except the two `.well-known/*` discovery
+documents, which are relative to `--site-root` when that flag is set.
 
 | Artifact path | Format | Source renderer | Version marker |
 | --- | --- | --- | --- |
@@ -274,6 +351,8 @@ All paths are relative to the `--out` directory.
 | `ogc-records/items.json` | GeoJSON FeatureCollection | `render_ogc_records_items()` | `schema_version: registry-manifest-ogc-records/v1` |
 | `profiles/<profile-id>.json` | JSON | Compiled profile structure | Profile descriptor `schema_version` |
 | `index.json` | JSON | Bundle manifest index | `schema_version: registry-manifest-index/v1` |
+| `.well-known/api-catalog` | JSON | `write_api_catalog()`, always written | n/a; a linkset object with no `schema_version` field |
+| `.well-known/registry-manifest.json` | JSON | `write_legacy_registry_manifest_discovery()`, always written | `schema_version: registry-manifest-discovery/v1` |
 
 The `index.json` structure contains the schema version, digest metadata, top-level
 artifact URLs, and arrays for per-profile, per-schema, per-policy, and per-offering

@@ -1,11 +1,11 @@
-# ITB/SEMIC Validation Smoke Checks
+# ITB/SEMIC validation smoke checks
 
 Registry Manifest includes an optional smoke script for checking generated DCAT
 and BRegDCAT-AP JSON-LD against the public ITB/SEMIC SHACL validator endpoints.
 The script is not a certification gate. It is a reproducible compatibility check
 for selected generated artifacts.
 
-## Run Locally
+## Run locally
 
 Render and validate the example manifest without calling external services:
 
@@ -13,7 +13,7 @@ Render and validate the example manifest without calling external services:
 scripts/itb-semic-smoke.sh
 ```
 
-This validates the manifest with `registry-manifest-cli`, publishes the static
+This validates the manifest with the `registry-manifest` CLI, publishes the static
 metadata bundle under `target/itb-semic-smoke/example-civil-registration`, and
 prints the output path. It does not call the public ITB/SEMIC validators.
 
@@ -50,7 +50,7 @@ and retained in the saved reports because the public BRegDCAT-AP validator
 profiles can emit advisory warnings for profile-specific controlled-vocabulary
 preferences.
 
-## Known BRegDCAT-AP Warnings
+## Known BRegDCAT-AP warnings
 
 The example civil-registration manifest uses a local publisher IRI:
 `https://civil-registration.example.gov/authority`. Public BRegDCAT-AP 2.x
@@ -70,7 +70,7 @@ These warning classes are intentionally documented rather than hidden: the
 smoke script retains the validator reports, and public release notes should
 carry the profile and warning count when BRegDCAT-AP evidence is cited.
 
-## Public Claim Boundary
+## Public claim boundary
 
 Use this wording in public release notes or operator docs:
 
