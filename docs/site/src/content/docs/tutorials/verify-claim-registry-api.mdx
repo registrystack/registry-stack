@@ -296,10 +296,12 @@ Replace the tutorial purpose with a different URI:
               - https://example.local/purpose/casework-review
 ```
 
-The containers read the config once at startup, so apply the edit with:
+The containers read the config once at startup, so apply the edit by stopping and
+starting the stack:
 
 ```sh
-registryctl restart
+registryctl stop
+registryctl start
 ```
 
 Repeat the evaluation exactly as before, still declaring the tutorial purpose:
@@ -341,7 +343,8 @@ Restore the tutorial purpose in `notary/config.yaml`, then restart and confirm t
 checks still pass:
 
 ```sh
-registryctl restart
+registryctl stop
+registryctl start
 registryctl notary smoke
 ```
 
