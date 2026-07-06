@@ -1185,6 +1185,140 @@ async fn middleware_records_jwks_unavailable_auth_failure() {
     assert_eq!(parsed["principal_id"], Value::Null);
 }
 
+// ---------------------------------------------------------------------------
+// Auth-failure throttle (issue #78 relay backstop)
+// ---------------------------------------------------------------------------
+
+/// (e) With trust-proxy enabled and a trusted peer, the throttle must key
+/// on the resolved X-Forwarded-For client address, not the proxy's socket
+/// peer address: this mirrors the audit middleware's own resolution
+/// (`crate::net::resolve_remote_addr`) so the two subsystems agree on
+/// "who is this request from."
+#[tokio::test]
+async fn throttle_keys_on_x_forwarded_for_client_not_the_proxy() {
+    use registry_relay::auth::api_key::ApiKeyAuth;
+    use registry_relay::auth::failure_throttle::AuthFailureThrottle;
+    use registry_relay::auth::middleware::auth_layer_with_failure_throttle;
+    use registry_relay::config::AuthFailureThrottleConfig;
+
+    let provider = Arc::new(ApiKeyAuth::new(Vec::new()));
+    let throttle_config = AuthFailureThrottleConfig {
+        enabled: true,
+        max_failures: 1,
+        window_seconds: 60,
+    };
+    let throttle = AuthFailureThrottle::new(&throttle_config).map(Arc::new);
+    let app = auth_layer_with_failure_throttle(
+        Router::new().route("/probe", get(|| async { StatusCode::OK })),
+        provider,
+        throttle,
+        true,
+        vec!["10.0.0.0/8".to_string()],
+    );
+
+    let request = |peer: &'static str, x_forwarded_for: &'static str| {
+        let mut req = Request::builder()
+            .method(Method::GET)
+            .uri("/probe")
+            .header("x-forwarded-for", x_forwarded_for)
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut().insert(axum::extract::ConnectInfo(
+            peer.parse::<SocketAddr>().unwrap(),
+        ));
+        req
+    };
+
+    // First failure from client 203.0.113.10, forwarded through proxy A.
+    let resp = app
+        .clone()
+        .oneshot(request("10.1.2.3:1", "203.0.113.10"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    // Same client, forwarded through a *different* trusted proxy peer: the
+    // throttle must still recognize it as the same key and return 429,
+    // proving it keys on the resolved client rather than the proxy peer.
+    let resp = app
+        .clone()
+        .oneshot(request("10.9.9.9:1", "203.0.113.10"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+
+    // A different client behind the same proxy peer is unaffected.
+    let resp = app
+        .clone()
+        .oneshot(request("10.1.2.3:1", "203.0.113.20"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// (f) When the throttle short-circuits with 429, the outer audit layer
+/// still observes the `auth.rate_limited` error code and 429 status,
+/// exactly as it does for other auth short-circuits (see
+/// `middleware_captures_error_code_from_auth_short_circuit`).
+#[tokio::test]
+async fn audit_record_captures_rate_limited_error_code() {
+    use registry_relay::auth::api_key::ApiKeyAuth;
+    use registry_relay::auth::failure_throttle::AuthFailureThrottle;
+    use registry_relay::auth::middleware::auth_layer_with_failure_throttle;
+    use registry_relay::config::AuthFailureThrottleConfig;
+
+    let provider = Arc::new(ApiKeyAuth::new(Vec::new()));
+    let throttle_config = AuthFailureThrottleConfig {
+        enabled: true,
+        max_failures: 1,
+        window_seconds: 60,
+    };
+    let throttle = AuthFailureThrottle::new(&throttle_config).map(Arc::new);
+    let (sink, pipeline) = in_memory_pipeline();
+
+    let protected = auth_layer_with_failure_throttle(
+        Router::new().route("/probe", get(|| async { StatusCode::OK })),
+        provider,
+        throttle,
+        false,
+        Vec::new(),
+    );
+    let app = Router::new()
+        .merge(protected)
+        .layer(from_fn(audit_layer))
+        .layer(Extension(pipeline.clone()));
+
+    let peer = "203.0.113.30:1".parse::<SocketAddr>().unwrap();
+    let build_request = || {
+        let mut req = Request::builder()
+            .method(Method::GET)
+            .uri("/probe")
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut()
+            .insert(axum::extract::ConnectInfo(peer));
+        req
+    };
+
+    // First request: no Authorization header => MissingCredential (401),
+    // recorded as a failure.
+    let resp = app.clone().oneshot(build_request()).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    // Second request from the same address: throttled (429).
+    let resp = app.clone().oneshot(build_request()).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+
+    let records = sink.snapshot();
+    assert_eq!(records.len(), 2);
+    let first = captured_record(&records[0]);
+    assert_eq!(first["error_code"], "auth.missing_credential");
+    let second = captured_record(&records[1]);
+    assert_eq!(second["error_code"], "auth.rate_limited");
+    assert_eq!(second["status_code"], 429);
+    assert_eq!(second["principal_id"], Value::Null);
+}
+
 async fn remote_addr_from_x_forwarded_for(
     x_forwarded_for: Option<&str>,
     peer: &str,

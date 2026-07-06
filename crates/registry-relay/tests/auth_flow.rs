@@ -18,15 +18,17 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 
 use axum::body::Body;
-use axum::extract::Extension;
-use axum::http::{Request, StatusCode};
+use axum::extract::{ConnectInfo, Extension};
+use axum::http::{Request, Response, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
 use registry_relay::auth::api_key::{ApiKeyAuth, ApiKeyEntry};
-use registry_relay::auth::middleware::auth_layer;
+use registry_relay::auth::failure_throttle::AuthFailureThrottle;
+use registry_relay::auth::middleware::{auth_layer, auth_layer_with_failure_throttle};
 use registry_relay::auth::scopes::{require_scope, ScopeSet};
 use registry_relay::auth::{AuthMode, AuthProvider, Principal};
+use registry_relay::config::AuthFailureThrottleConfig;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tower::ServiceExt;
@@ -367,4 +369,206 @@ async fn provider_rejects_unknown_bearer() {
         registry_relay::error::Error::from(err).code(),
         "auth.invalid_credential"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Auth-failure throttle (issue #78 relay backstop)
+// ---------------------------------------------------------------------------
+
+/// Build a router wired the same way as `router_with_provider`, but through
+/// `auth_layer_with_failure_throttle` so tests can supply a throttle
+/// (or `None`, which must behave identically to plain `auth_layer`).
+fn router_with_provider_and_throttle(
+    provider: Arc<ApiKeyAuth>,
+    throttle: Option<Arc<AuthFailureThrottle>>,
+) -> Router {
+    auth_layer_with_failure_throttle(
+        Router::new()
+            .route("/whoami", get(whoami_handler))
+            .route("/needs-admin", get(needs_admin_handler)),
+        provider,
+        throttle,
+        false,
+        Vec::new(),
+    )
+}
+
+fn throttle_config(max_failures: u32, window_seconds: u64) -> AuthFailureThrottleConfig {
+    AuthFailureThrottleConfig {
+        enabled: true,
+        max_failures,
+        window_seconds,
+    }
+}
+
+async fn request_with_peer(
+    app: &Router,
+    uri: &str,
+    header: Option<&str>,
+    peer: &str,
+) -> Response<Body> {
+    let mut builder = Request::builder().uri(uri);
+    if let Some(header) = header {
+        builder = builder.header("Authorization", header);
+    }
+    let mut req = builder.body(Body::empty()).expect("request builds");
+    req.extensions_mut().insert(ConnectInfo(
+        peer.parse::<std::net::SocketAddr>().expect("peer parses"),
+    ));
+    app.clone().oneshot(req).await.expect("service responds")
+}
+
+/// (a) A disabled throttle config yields `AuthFailureThrottle::new(..) ==
+/// None`; repeated failures from the same address must never trip a 429.
+/// This pins default-off behavior byte-for-byte against the pre-throttle
+/// auth flow.
+#[tokio::test]
+async fn disabled_throttle_never_returns_rate_limited() {
+    let mut config = throttle_config(2, 60);
+    config.enabled = false;
+    assert!(AuthFailureThrottle::new(&config).is_none());
+    let throttle = AuthFailureThrottle::new(&config).map(Arc::new);
+    let app = router_with_provider_and_throttle(build_provider(), throttle);
+
+    for _ in 0..10 {
+        let response = request_with_peer(
+            &app,
+            "/whoami",
+            Some(&format!("Bearer {OTHER_KEY}")),
+            "203.0.113.5:1",
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+}
+
+/// (b) With the throttle enabled, failures under the limit still pass
+/// through as ordinary 401s; the failure that reaches (not just exceeds)
+/// `max_failures` returns 429 with the stable `auth.rate_limited` code.
+#[tokio::test]
+async fn enabled_throttle_returns_401_under_limit_then_429_at_limit() {
+    let throttle = AuthFailureThrottle::new(&throttle_config(2, 60)).map(Arc::new);
+    let app = router_with_provider_and_throttle(build_provider(), throttle);
+
+    for _ in 0..2 {
+        let response = request_with_peer(
+            &app,
+            "/whoami",
+            Some(&format!("Bearer {OTHER_KEY}")),
+            "203.0.113.6:1",
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    let response = request_with_peer(
+        &app,
+        "/whoami",
+        Some(&format!("Bearer {OTHER_KEY}")),
+        "203.0.113.6:1",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    let retry_after = response
+        .headers()
+        .get(axum::http::header::RETRY_AFTER)
+        .expect("Retry-After header present")
+        .to_str()
+        .expect("Retry-After is ASCII")
+        .to_string();
+    assert!(
+        retry_after.parse::<u64>().is_ok(),
+        "Retry-After is a number"
+    );
+    assert_problem_response(
+        response,
+        StatusCode::TOO_MANY_REQUESTS,
+        "auth.rate_limited",
+        "",
+    )
+    .await;
+}
+
+/// (c) Once an address is over the limit, even a request presenting a
+/// *valid* credential is short-circuited with 429 before `authenticate`
+/// runs.
+#[tokio::test]
+async fn enabled_throttle_blocks_valid_credential_once_over_limit() {
+    let throttle = AuthFailureThrottle::new(&throttle_config(1, 60)).map(Arc::new);
+    let app = router_with_provider_and_throttle(build_provider(), throttle);
+
+    let response = request_with_peer(
+        &app,
+        "/whoami",
+        Some(&format!("Bearer {OTHER_KEY}")),
+        "203.0.113.7:1",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    let response = request_with_peer(
+        &app,
+        "/whoami",
+        Some(&format!("Bearer {VALID_KEY}")),
+        "203.0.113.7:1",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+}
+
+/// (d) A different client address is unaffected by another address's
+/// throttled state.
+#[tokio::test]
+async fn enabled_throttle_does_not_affect_other_addresses() {
+    let throttle = AuthFailureThrottle::new(&throttle_config(1, 60)).map(Arc::new);
+    let app = router_with_provider_and_throttle(build_provider(), throttle);
+
+    let response = request_with_peer(
+        &app,
+        "/whoami",
+        Some(&format!("Bearer {OTHER_KEY}")),
+        "203.0.113.8:1",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    // Same throttled address again: 429.
+    let response = request_with_peer(
+        &app,
+        "/whoami",
+        Some(&format!("Bearer {OTHER_KEY}")),
+        "203.0.113.8:1",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+
+    // A different address with a valid credential still succeeds.
+    let response = request_with_peer(
+        &app,
+        "/whoami",
+        Some(&format!("Bearer {VALID_KEY}")),
+        "203.0.113.9:1",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+/// Successful auth neither counts against nor resets the failure window:
+/// a burst of successes from an address does not itself trip the
+/// throttle.
+#[tokio::test]
+async fn successful_auth_does_not_count_toward_the_throttle() {
+    let throttle = AuthFailureThrottle::new(&throttle_config(1, 60)).map(Arc::new);
+    let app = router_with_provider_and_throttle(build_provider(), throttle);
+
+    for _ in 0..5 {
+        let response = request_with_peer(
+            &app,
+            "/whoami",
+            Some(&format!("Bearer {VALID_KEY}")),
+            "203.0.113.10:1",
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+    }
 }

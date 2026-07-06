@@ -17,7 +17,6 @@
 //!   responses via the `ErrorCodeExt` response extension defined in
 //!   this module; the audit middleware reads it and records it.
 
-use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -844,12 +843,13 @@ pub async fn audit_layer(
     // is trusted, audit records the rightmost `X-Forwarded-For` hop that is
     // not itself a trusted proxy, falling back to the socket peer when every
     // hop in the chain is trusted.
-    let remote_addr = resolve_remote_addr(
+    let remote_addr = crate::net::resolve_remote_addr(
         &headers,
         request
             .extensions()
             .get::<ConnectInfo<std::net::SocketAddr>>(),
-        &settings,
+        settings.trust_proxy_enabled,
+        &settings.trusted_proxies,
     )
     .to_string();
 
@@ -1232,96 +1232,6 @@ fn extract_purpose(headers: &HeaderMap) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-fn resolve_remote_addr(
-    headers: &HeaderMap,
-    connect_info: Option<&ConnectInfo<std::net::SocketAddr>>,
-    settings: &AuditSettings,
-) -> IpAddr {
-    let peer = connect_info
-        .map(|ConnectInfo(addr)| addr.ip())
-        .unwrap_or(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
-
-    if !settings.trust_proxy_enabled || !trusted_proxy_contains(peer, &settings.trusted_proxies) {
-        return peer;
-    }
-
-    x_forwarded_for_chain(headers)
-        .map(|mut chain| {
-            chain.push(peer);
-            chain
-                .iter()
-                .rev()
-                .find(|hop| !trusted_proxy_contains(**hop, &settings.trusted_proxies))
-                .copied()
-                .unwrap_or(peer)
-        })
-        .unwrap_or(peer)
-}
-
-fn x_forwarded_for_chain(headers: &HeaderMap) -> Option<Vec<IpAddr>> {
-    let mut chain = Vec::new();
-    for value in headers.get_all("x-forwarded-for") {
-        let value = value.to_str().ok()?;
-        for hop in value.split(',') {
-            let hop = hop.trim();
-            if hop.is_empty() {
-                return None;
-            }
-            chain.push(hop.parse::<IpAddr>().ok()?);
-        }
-    }
-    if chain.is_empty() {
-        None
-    } else {
-        Some(chain)
-    }
-}
-
-fn trusted_proxy_contains(peer: IpAddr, trusted_proxies: &[String]) -> bool {
-    trusted_proxies
-        .iter()
-        .any(|spec| trusted_proxy_spec_matches(peer, spec))
-}
-
-fn trusted_proxy_spec_matches(peer: IpAddr, spec: &str) -> bool {
-    let trimmed = spec.trim();
-    if let Ok(ip) = trimmed.parse::<IpAddr>() {
-        return ip == peer;
-    }
-    let Some((addr, prefix)) = trimmed.split_once('/') else {
-        return false;
-    };
-    let Ok(network) = addr.parse::<IpAddr>() else {
-        return false;
-    };
-    let Ok(prefix) = prefix.parse::<u8>() else {
-        return false;
-    };
-    match (peer, network) {
-        (IpAddr::V4(peer), IpAddr::V4(network)) if prefix <= 32 => {
-            let peer = u32::from(peer);
-            let network = u32::from(network);
-            let mask = if prefix == 0 {
-                0
-            } else {
-                u32::MAX << (32 - prefix)
-            };
-            (peer & mask) == (network & mask)
-        }
-        (IpAddr::V6(peer), IpAddr::V6(network)) if prefix <= 128 => {
-            let peer = u128::from(peer);
-            let network = u128::from(network);
-            let mask = if prefix == 0 {
-                0
-            } else {
-                u128::MAX << (128 - prefix)
-            };
-            (peer & mask) == (network & mask)
-        }
-        _ => false,
-    }
-}
-
 fn auth_mode_label(mode: crate::auth::AuthMode) -> &'static str {
     match mode {
         crate::auth::AuthMode::ApiKey => "api_key",
@@ -1544,21 +1454,5 @@ mod tests {
             classify_endpoint("/v1/datasets/hdx/dimensions/region"),
             EndpointKind::Dataset
         );
-    }
-
-    #[test]
-    fn trusted_proxy_cidr_matching_supports_v4_and_v6() {
-        assert!(trusted_proxy_spec_matches(
-            "10.1.2.3".parse().unwrap(),
-            "10.0.0.0/8"
-        ));
-        assert!(!trusted_proxy_spec_matches(
-            "11.1.2.3".parse().unwrap(),
-            "10.0.0.0/8"
-        ));
-        assert!(trusted_proxy_spec_matches(
-            "2001:db8::1".parse().unwrap(),
-            "2001:db8::/32"
-        ));
     }
 }

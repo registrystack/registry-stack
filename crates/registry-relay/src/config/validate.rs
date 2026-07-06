@@ -69,6 +69,7 @@ pub fn run_with_source(config: &Config, source: ConfigSource) -> Result<(), Erro
     validate_server(config).map_err(Error::from)?;
     validate_config_trust(config).map_err(Error::from)?;
     validate_auth_mode(config).map_err(Error::from)?;
+    validate_auth_failure_throttle(config).map_err(Error::from)?;
     validate_ids_and_uniqueness(config).map_err(Error::from)?;
     validate_scopes(config).map_err(Error::from)?;
     validate_env_vars_and_hashes(config).map_err(Error::from)?;
@@ -1687,6 +1688,31 @@ fn validate_auth_mode(config: &Config) -> Result<(), ConfigError> {
             })?;
             validate_oidc(oidc)?;
         }
+    }
+    Ok(())
+}
+
+/// Validate the local auth-failure throttle block. No constraints apply
+/// when the throttle is disabled (the default), since an unused block's
+/// field values cannot affect runtime behavior.
+fn validate_auth_failure_throttle(config: &Config) -> Result<(), ConfigError> {
+    let throttle = &config.auth.failure_throttle;
+    if !throttle.enabled {
+        return Ok(());
+    }
+    if throttle.max_failures == 0 {
+        tracing::error!(
+            code = "config.validation_error",
+            "auth.failure_throttle.max_failures must be greater than zero"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+    if throttle.window_seconds == 0 {
+        tracing::error!(
+            code = "config.validation_error",
+            "auth.failure_throttle.window_seconds must be greater than zero"
+        );
+        return Err(ConfigError::ValidationError);
     }
     Ok(())
 }
@@ -4683,5 +4709,48 @@ datasets: []
         assert!(!release_claim_has_exactly_one_source(&release_claim(
             None, None
         )));
+    }
+
+    #[test]
+    fn auth_failure_throttle_disabled_ignores_zero_fields() {
+        let mut config = crate::config::test_support::load_example_config_for_tests(
+            "validate-test-auth-failure-throttle-disabled-secret",
+        );
+        config.auth.failure_throttle.max_failures = 0;
+        config.auth.failure_throttle.window_seconds = 0;
+        assert!(super::run(&config).is_ok());
+    }
+
+    #[test]
+    fn auth_failure_throttle_enabled_rejects_zero_max_failures() {
+        let mut config = crate::config::test_support::load_example_config_for_tests(
+            "validate-test-auth-failure-throttle-zero-max-secret",
+        );
+        config.auth.failure_throttle.enabled = true;
+        config.auth.failure_throttle.max_failures = 0;
+        let err = super::run(&config).expect_err("zero max_failures rejected");
+        assert_eq!(err.code(), "config.validation_error");
+    }
+
+    #[test]
+    fn auth_failure_throttle_enabled_rejects_zero_window_seconds() {
+        let mut config = crate::config::test_support::load_example_config_for_tests(
+            "validate-test-auth-failure-throttle-zero-window-secret",
+        );
+        config.auth.failure_throttle.enabled = true;
+        config.auth.failure_throttle.window_seconds = 0;
+        let err = super::run(&config).expect_err("zero window_seconds rejected");
+        assert_eq!(err.code(), "config.validation_error");
+    }
+
+    #[test]
+    fn auth_failure_throttle_enabled_accepts_positive_values() {
+        let mut config = crate::config::test_support::load_example_config_for_tests(
+            "validate-test-auth-failure-throttle-valid-secret",
+        );
+        config.auth.failure_throttle.enabled = true;
+        config.auth.failure_throttle.max_failures = 5;
+        config.auth.failure_throttle.window_seconds = 30;
+        assert!(super::run(&config).is_ok());
     }
 }

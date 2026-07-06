@@ -25,7 +25,7 @@
 //! stripped and the result is truncated to a safe length so that an
 //! attacker cannot smuggle newlines into the audit JSONL stream.
 
-use axum::http::StatusCode;
+use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use registry_platform_httpsec::Problem;
 use serde_json::json;
@@ -159,6 +159,13 @@ pub enum AuthError {
     /// outages from bad tokens.
     #[error("jwks unavailable")]
     JwksUnavailable,
+    /// The client address has exceeded `auth.failure_throttle.max_failures`
+    /// authentication failures within the configured window. A local
+    /// backstop behind ingress rate limiting; only reachable when
+    /// `auth.failure_throttle.enabled` is true. `retry_after_seconds` is
+    /// surfaced as the `Retry-After` response header.
+    #[error("authentication rate limited")]
+    RateLimited { retry_after_seconds: u64 },
 }
 
 /// `pdp.*` policy decision codes from the shared Registry PDP.
@@ -710,6 +717,7 @@ impl AuthError {
             AuthError::AlgorithmNotAllowed => "auth.algorithm_not_allowed",
             AuthError::ClientNotAllowed => "auth.client_not_allowed",
             AuthError::JwksUnavailable => "auth.jwks_unavailable",
+            AuthError::RateLimited { .. } => "auth.rate_limited",
         }
     }
 
@@ -731,6 +739,7 @@ impl AuthError {
             | AuthError::ClientNotAllowed => StatusCode::FORBIDDEN,
             AuthError::PurposeRequired => StatusCode::BAD_REQUEST,
             AuthError::JwksUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+            AuthError::RateLimited { .. } => StatusCode::TOO_MANY_REQUESTS,
         }
     }
 
@@ -752,6 +761,7 @@ impl AuthError {
             AuthError::AlgorithmNotAllowed => "Algorithm not allowed",
             AuthError::ClientNotAllowed => "Client not allowed",
             AuthError::JwksUnavailable => "JWKS unavailable",
+            AuthError::RateLimited { .. } => "Too many authentication failures",
         }
     }
 
@@ -794,6 +804,9 @@ impl AuthError {
             AuthError::JwksUnavailable => {
                 "the JWKS endpoint is unreachable and no cached keys are available".to_string()
             }
+            AuthError::RateLimited { retry_after_seconds } => format!(
+                "too many authentication failures from this client; retry after {retry_after_seconds}s"
+            ),
         }
     }
 }
@@ -1700,9 +1713,22 @@ impl QueryError {
 
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
+        let retry_after_seconds = match &self {
+            Error::Auth(AuthError::RateLimited {
+                retry_after_seconds,
+            }) => Some(*retry_after_seconds),
+            _ => None,
+        };
         let problem = self.to_problem();
         let code = self.code().to_string();
         let mut response = problem.into_response();
+        if let Some(retry_after_seconds) = retry_after_seconds {
+            let retry_after = HeaderValue::from_str(&retry_after_seconds.max(1).to_string())
+                .unwrap_or_else(|_| HeaderValue::from_static("1"));
+            response
+                .headers_mut()
+                .insert(header::RETRY_AFTER, retry_after);
+        }
         // Attach the stable taxonomy code to the response so the audit
         // middleware can record `error_code` on every 4xx/5xx, including
         // the auth-failure short-circuit path that routes through this

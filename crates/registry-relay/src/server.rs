@@ -77,7 +77,7 @@ use ulid::Ulid;
 use crate::api;
 use crate::attribute_release::AttributeReleaseEvaluator;
 use crate::audit::{self, AuditPipeline, AuditSettings, OperationalAuditEvent};
-use crate::auth::middleware::{auth_layer, AuthProviderRef};
+use crate::auth::middleware::{auth_layer_with_failure_throttle, AuthProviderRef};
 use crate::config::{Config, CorsConfig};
 use crate::entity::EntityRegistry;
 use crate::error::{ConfigError, Error, InternalError};
@@ -239,7 +239,16 @@ fn build_app_with_provenance_metadata_and_metrics(
     let protected = protected.merge(api::records_router());
     let protected = merge_spdci_routes(protected);
     let protected = merge_attribute_release_routes(protected);
-    let protected = auth_layer(protected, auth);
+    let failure_throttle =
+        crate::auth::failure_throttle::AuthFailureThrottle::new(&config.auth.failure_throttle)
+            .map(Arc::new);
+    let protected = auth_layer_with_failure_throttle(
+        protected,
+        auth,
+        failure_throttle,
+        config.server.trust_proxy.enabled,
+        config.server.trust_proxy.trusted_proxies.clone(),
+    );
 
     // Merge public + protected; everything above this point is inside
     // the audit, tracing, request-id, CORS, body-limit, and timeout
@@ -456,12 +465,24 @@ pub fn build_admin_app_with_metadata_and_metrics(
     metrics: Arc<RequestMetrics>,
 ) -> Result<Router, ConfigError> {
     let public = api::health_router().layer(Extension(metrics.clone()));
-    let metrics_router = auth_layer(
+    let failure_throttle =
+        crate::auth::failure_throttle::AuthFailureThrottle::new(&config.auth.failure_throttle)
+            .map(Arc::new);
+    let metrics_router = auth_layer_with_failure_throttle(
         crate::observability::router().layer(Extension(metrics.clone())),
         Arc::clone(&auth),
+        failure_throttle.clone(),
+        config.server.trust_proxy.enabled,
+        config.server.trust_proxy.trusted_proxies.clone(),
     );
     let protected = api::admin_router().layer(Extension(ingest));
-    let protected = auth_layer(protected, auth);
+    let protected = auth_layer_with_failure_throttle(
+        protected,
+        auth,
+        failure_throttle,
+        config.server.trust_proxy.enabled,
+        config.server.trust_proxy.trusted_proxies.clone(),
+    );
     let merged: Router<()> = Router::new()
         .merge(public)
         .merge(metrics_router)
