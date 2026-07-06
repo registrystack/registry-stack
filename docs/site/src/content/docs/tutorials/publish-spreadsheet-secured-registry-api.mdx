@@ -1,6 +1,6 @@
 ---
 title: Run a protected registry API locally
-description: Start a local Registry Relay over a tiny benefits workbook, make denied and allowed requests, and inspect the generated contract.
+description: Start a local Registry Relay over a tiny benefits workbook, make denied and allowed requests, inspect the generated contract, and change a disclosure rule.
 status: current
 owner: registry-docs
 source_repos:
@@ -22,8 +22,8 @@ You will create a local project from a tiny benefits workbook, make one denied r
 allowed request, and inspect the contract Registry Stack generated.
 
 <QuickstartMeta
-  outcome="A protected local API over a benefits workbook, with anonymous access denied and an authorized record read succeeding."
-  time="About 10 minutes after Docker is installed"
+  outcome="A protected local API over a benefits workbook, with anonymous access denied, an authorized record read succeeding, and an edited disclosure rule enforced."
+  time="About 15 minutes after Docker is installed"
   level="Local single-node"
   prerequisites={['registryctl 0.8.4+', 'A Docker Compose provider', 'curl']}
 />
@@ -138,6 +138,10 @@ curl -i \
 ```
 
 Relay returns `200 OK` and lists the dataset visible to that principal.
+The API docs page printed by `registryctl start` documents the same operations these curl
+commands call:
+[list datasets in the running API docs](http://127.0.0.1:4242/docs#tag/catalog/GET/v1/datasets)
+opens this one.
 
 ## Read one protected record
 
@@ -157,6 +161,8 @@ curl -sS -G \
 The response includes synthetic people from household `hh-1001`.
 Sensitive source columns such as full names, national identifiers, and addresses are not exposed as
 public entity fields in this sample.
+[The person records operation in the running API docs](http://127.0.0.1:4242/docs#tag/benefits-casework-person/GET/v1/datasets/benefits_casework/entities/person/records)
+documents the `household_id` filter and the required `Data-Purpose` header.
 
 Try the same route with the metadata-only key:
 
@@ -206,8 +212,93 @@ curl -sS \
   http://127.0.0.1:4242/v1/datasets/benefits_casework/aggregates/by_district
 ```
 
+The response is `200 OK`, and the workbook has four districts, but only two appear.
+The important fields look like this; other fields are omitted, and the order of
+observations can vary:
+
+```json
+{
+  "disclosure_control": { "min_cell_size": 2, "suppression": "omit" },
+  "observations": [
+    { "district": "north", "household_count": 2 },
+    { "district": "south", "household_count": 2 }
+  ]
+}
+```
+
+East and west hold one household each, under the aggregate's disclosure floor of two,
+so Relay omits those groups from the response.
+The `disclosure_control` object in the response reports the active rule.
+
 The generated Bruno collection includes more examples, including application counts grouped by
 program and status.
+[The aggregate run operation in the running API docs](http://127.0.0.1:4242/docs#tag/benefits-casework-aggregates/GET/v1/datasets/benefits_casework/aggregates/{aggregate_id})
+covers every configured aggregate through its `aggregate_id` parameter, including `by_district`.
+
+## Change the disclosure rule
+
+The floor that hid east and west is configuration you own.
+Open `relay/config.yaml`, find the `disclosure_control` block under the `by_district`
+aggregate, and raise `min_group_size` from 2 to 3:
+
+```yaml
+        disclosure_control:
+          min_group_size: 3
+          suppression: omit
+```
+
+The containers read the config once at startup, so apply the edit with:
+
+```sh
+registryctl restart
+```
+
+Run the aggregate request from the previous section again:
+
+```sh
+curl -sS \
+  -H "Authorization: Bearer $AGGREGATE_READER_RAW" \
+  http://127.0.0.1:4242/v1/datasets/benefits_casework/aggregates/by_district
+```
+
+The response is still `200 OK`, but `observations` is now an empty array: no district
+holds three households, so the rule suppresses every group.
+An empty result is the only signal; suppressed groups are omitted, not marked.
+
+Now try to weaken the rule instead.
+Set `min_group_size` to 1 and restart again:
+
+```sh
+registryctl restart
+```
+
+This time Relay refuses to start, and after about a minute the restart fails with
+`Error: Relay did not become healthy and ready before timeout`.
+Ask the logs why:
+
+```sh
+registryctl logs
+```
+
+The Relay container exited during config validation:
+
+```text
+ERROR aggregate_only_execution on personal, confidential, or secret datasets requires disclosure_control.min_cell_size >= 2 code="config.validation_error" dataset_id=benefits_casework aggregate_id=by_district
+```
+
+The dataset is marked `sensitivity: personal` in the same file, and Relay refuses to run
+an aggregate-only definition over personal data with a disclosure floor under 2.
+You can raise the rule; you cannot weaken it past the floor.
+The error names `min_cell_size`, the API field that corresponds to the `min_group_size`
+config key; the aggregate response uses the API name too.
+
+Restore `min_group_size` to 2 and restart once more:
+
+```sh
+registryctl restart
+```
+
+The two-district response from the previous section is back.
 
 ## Stop the stack
 
@@ -227,6 +318,8 @@ anonymous read was refused with `401` (`auth.missing_credential`), an authorized
 only the rows you asked for, and a key that lacked the row-read scope was refused with `403`
 (`auth.scope_denied`). Relay read the workbook in place and never wrote back to it: the data
 stayed where it started, and only an authorized, scoped request got an answer out.
+You then raised the aggregate disclosure floor and watched every group disappear, and
+Relay refused to start when the floor dropped under 2 on personal data.
 
 ## Next
 
@@ -245,5 +338,6 @@ stayed where it started, and only an authorized, scoped request got an answer ou
 | The installer reports an unsupported platform | No binary is published for that OS or CPU. | Install Rust with [`rustup`](https://rustup.rs), then run `cargo install --git https://github.com/registrystack/registry-stack --tag v0.8.4 registryctl --locked`. |
 | `registryctl start` cannot find Docker | Docker or another Compose provider is not installed or running. | Start Docker Desktop, OrbStack, Colima, Podman, or your supported provider, then run `registryctl start` again. |
 | `registryctl start` fails and the container log shows `failed to parse config YAML ... unknown field` | The locally cached container image does not match the digest-pinned image in the generated `compose.yaml`. | Run `docker compose pull` in the project directory, then `registryctl start` again. |
+| `registryctl restart` fails with `Relay did not become healthy and ready before timeout` | The edited `relay/config.yaml` fails validation, so the container exits at startup. | Run `registryctl logs`, fix the field named in the `ERROR` line, and run `registryctl restart` again. |
 | A row read returns `403 Forbidden` | The key is valid but lacks the row-read scope. | Use `ROW_READER_RAW` for row reads. |
 | A row read returns `400 auth.purpose_required` | The entity requires a `Data-Purpose` header. | Send `Data-Purpose: https://example.local/purpose/tutorial` or another purpose URI. |

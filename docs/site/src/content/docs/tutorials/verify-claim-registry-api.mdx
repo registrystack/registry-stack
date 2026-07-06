@@ -1,6 +1,6 @@
 ---
 title: Evaluate a claim with Registry Notary
-description: Add Registry Notary to the local registry API project, evaluate one claim, and compare the claim result with a protected row read.
+description: Add Registry Notary to the local registry API project, evaluate one claim, compare the claim result with a protected row read, and change the claim's purpose policy.
 status: current
 owner: registry-docs
 source_repos:
@@ -20,8 +20,8 @@ You will add Registry Notary to the same project, evaluate one claim, and see th
 between a source row read and a minimized claim result.
 
 <QuickstartMeta
-  outcome="One claim evaluated against your local Relay, with the claim result compared to the source-facing row read."
-  time="About 10 minutes after the first tutorial passes"
+  outcome="One claim evaluated against your local Relay, with the claim result compared to the source-facing row read and the claim's purpose policy edited and enforced."
+  time="About 15 minutes after the first tutorial passes"
   level="Local single-node"
   prerequisites={['Completed: Run a protected registry API locally', 'registryctl', 'A Docker Compose provider']}
 />
@@ -272,6 +272,79 @@ Notary API docs: http://127.0.0.1:4255/docs
 OpenAPI JSON: http://127.0.0.1:4255/openapi.json
 ```
 
+## Change the purpose the claim accepts
+
+Every evaluation in this tutorial declared the purpose
+`https://example.local/purpose/tutorial`, and the starter claim accepts it because the
+generated source binding says so.
+In `notary/config.yaml`, find the `matching` block under the starter claim:
+
+```yaml
+          matching:
+            # Purposes this binding accepts. Requests carrying any other
+            # purpose are denied with pdp.purpose_not_permitted before any
+            # evidence is looked up; an empty list denies everything.
+            # Replace or extend this list with your own purpose URIs.
+            allowed_purposes:
+              - https://example.local/purpose/tutorial
+```
+
+Replace the tutorial purpose with a different URI:
+
+```yaml
+            allowed_purposes:
+              - https://example.local/purpose/casework-review
+```
+
+The containers read the config once at startup, so apply the edit with:
+
+```sh
+registryctl restart
+```
+
+Repeat the evaluation exactly as before, still declaring the tutorial purpose:
+
+```sh
+curl -sS -X POST \
+  -H "x-api-key: $REGISTRY_NOTARY_TUTORIAL_EVALUATOR_RAW" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/vnd.registry-notary.claim-result+json" \
+  -d '{
+    "target": { "type": "person", "id": "per-2001" },
+    "claims": ["benefits-person-exists"],
+    "disclosure": "predicate",
+    "purpose": "https://example.local/purpose/tutorial"
+  }' \
+  http://127.0.0.1:4255/v1/evaluations
+```
+
+Notary refuses it with `403 Forbidden` before it looks at any evidence:
+
+```json
+{
+  "code": "pdp.purpose_not_permitted",
+  "detail": "the configured policy denied the evidence request",
+  "request_id": "01KWP278GAFT3KAH5Z3WMJ7W8M",
+  "status": 403,
+  "title": "Policy decision denied",
+  "type": "https://id.registrystack.org/problems/registry-notary/pdp/purpose_not_permitted"
+}
+```
+
+Change the request's `purpose` value to `https://example.local/purpose/casework-review`
+and send it again: the evaluation succeeds with `satisfied: true`.
+The claim, the caller, and the key did not change; the declared purpose did.
+Purpose policy is part of the claim's source binding, and the stable code to script
+against is `pdp.purpose_not_permitted`.
+
+Restore the tutorial purpose in `notary/config.yaml`, then restart and confirm the smoke
+checks still pass:
+
+```sh
+registryctl restart
+registryctl notary smoke
+```
+
 ## Stop the stack
 
 When you are done:
@@ -285,7 +358,7 @@ It does not delete your workbook, generated configs, local keys, or smoke result
 
 ## Next
 
-- Define policy for this claim: purpose binding, context constraints, denial reasons, and audit
+- Define more policy for this claim: context constraints, denial reasons, and audit
   inspection are the next local rung.
 - [Connect Notary to a Registry Data API source](../run-notary-standalone-for-api/): run Notary in
   a separate project against a Registry Data API-shaped source.
@@ -302,3 +375,4 @@ It does not delete your workbook, generated configs, local keys, or smoke result
 | `registryctl notary smoke` returns `401` for authorized calls | The Notary evaluator key was not loaded or does not match the generated Notary fingerprint. | Run `. secrets/local.env`, then retry. |
 | Claim evaluation returns a source auth error | Notary cannot authenticate to Relay with `EVIDENCE_SOURCE_REGISTRY_RELAY_TOKEN`. | Confirm `secrets/local.env` has the source token and Relay is running. |
 | Claim evaluation returns `409 Evidence not available` | The target id is not in the sample workbook or the Relay entity lookup changed. | Use `per-2001` for the tutorial target, or inspect the Relay `person` entity. |
+| `registryctl doctor` reports `not_run` and asks you to install `registry-relay` | `doctor` validates configs with native product binaries, which this Docker-based tutorial does not install. | Use `registryctl notary smoke` and `registryctl logs` to check a config edit, or install the `registry-relay` and `registry-notary` binaries. |
