@@ -24,6 +24,7 @@ use registry_platform_config::{
     ConfigTargetMetadata, LocalTufRepositoryInput, RegistryAcceptedTrustRoots, RegistryTrustRoot,
     TufConfigVerifier, TufVerifiedTarget, VerificationContext,
 };
+use registry_platform_httputil::is_cloud_metadata_ip;
 use registry_platform_ops::{AntiRollbackKey, AntiRollbackProposal, FileAntiRollbackStore};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -5723,19 +5724,6 @@ fn is_localhost_host(host: &str) -> bool {
     matches!(host, "localhost" | "127.0.0.1" | "::1")
 }
 
-fn is_cloud_metadata_ip(ip: IpAddr) -> bool {
-    let ip = canonical_ip(ip);
-    match ip {
-        IpAddr::V4(ip) => ip.octets() == [169, 254, 169, 254],
-        IpAddr::V6(ip) => {
-            ip.octets()
-                == [
-                    0xfd, 0x00, 0x0e, 0xc2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x02, 0x54,
-                ]
-        }
-    }
-}
-
 fn is_private_or_link_local_ip(ip: IpAddr) -> bool {
     let ip = canonical_ip(ip);
     match ip {
@@ -7435,6 +7423,11 @@ mod tests {
         assert!(ensure_ip_allowed("169.254.169.254".parse().unwrap(), &source).is_err());
         assert!(ensure_ip_allowed("fd00:ec2::254".parse().unwrap(), &source).is_err());
         assert!(ensure_ip_allowed("::ffff:169.254.169.254".parse().unwrap(), &source).is_err());
+        // Alibaba Cloud metadata endpoint: not in any private/link-local range,
+        // so the cloud-metadata check is the only thing blocking it. Must stay
+        // rejected even with the private-network escape hatch enabled.
+        assert!(ensure_ip_allowed("100.100.100.200".parse().unwrap(), &source).is_err());
+        assert!(ensure_ip_allowed("::ffff:100.100.100.200".parse().unwrap(), &source).is_err());
 
         source.allow_insecure_private_network = false;
         assert!(ensure_ip_allowed("::ffff:10.0.0.1".parse().unwrap(), &source).is_err());
