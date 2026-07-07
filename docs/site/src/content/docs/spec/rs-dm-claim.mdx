@@ -140,8 +140,8 @@ These constraints are stated so a reader does not infer an invariant the reviewe
 - **Disclosure default.** The loader does not verify that `default` is a member of `allowed`; a `default` outside `allowed` surfaces as a request error when the result is rendered, not as a startup failure (REQ-DM-CLAIM-008).
 - **Rule source reference.** The loader does not verify that a rule's `source` names a declared source binding; a dangling reference surfaces when the source is read at evaluation, not at configuration load (REQ-DM-CLAIM-006).
 - **Matching fallback.** A source binding with no matching policy resolves on identifiers alone, with no purpose, relationship, or input-minimization gating (Section 4).
-- **Value-type conformance.** Registry Notary checks that an evaluated value conforms to its declared `value.type` only for a `cel` rule; the `extract` and `exists` rule paths return their result without checking it against `value.type` (REQ-DM-CLAIM-009). Tracked in [GH#232](https://github.com/registrystack/registry-stack/issues/232).
-- **Empty formats list.** A claim definition whose `formats` list is empty (the default) can never be evaluated, because format checking rejects any format not listed, including the default-requested claim-result JSON format (REQ-DM-CLAIM-009). This is not rejected at configuration load. Tracked in [GH#170](https://github.com/registrystack/registry-stack/issues/170).
+- Value-type conformance: Registry Notary checks that an evaluated value conforms to its declared `value.type` only for a `cel` rule; the `extract` and `exists` rule paths return their result without checking it against `value.type` (REQ-DM-CLAIM-009). Tracked in [GH#232](https://github.com/registrystack/registry-stack/issues/232).
+- Empty formats list: A claim definition whose `formats` list is empty (the default) can never be evaluated, because format checking rejects any format not listed, including the default-requested claim-result JSON format (REQ-DM-CLAIM-009). This is not rejected at configuration load. Tracked in [GH#170](https://github.com/registrystack/registry-stack/issues/170).
 
 ## Conformance
 
