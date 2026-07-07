@@ -36,6 +36,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   does not affect the existing self-attestation rate limiters or the
   per-request `max_subjects` cap.
 
+### Changed
+
+- **BREAKING: claim configuration is now validated at load time (#170).**
+  Startup rejects a duplicate claim `id` (REQ-DM-CLAIM-001), a
+  `disclosure.default` outside the claim's allowed disclosure set
+  (REQ-DM-CLAIM-008), and an `extract`/`exists` rule whose `source` does not
+  name a declared source binding (REQ-DM-CLAIM-006), with an error naming the
+  offending claim and field. Configurations that previously loaded with one
+  of these inconsistencies fail to load until corrected; behavior for
+  consistent configurations is unchanged.
+- `extract` and `exists` rule results are now checked against the claim's
+  declared `value.type` at evaluation time (REQ-DM-CLAIM-009), the same
+  enforcement CEL rules already had. A source value that does not conform
+  fails that claim's evaluation instead of flowing into disclosure and
+  credential issuance; claims with `value.type: unknown` (or no declared
+  type) are exempt.
+- The `file` audit sink now takes a process-lifetime advisory single-writer
+  lock on `<path>.lock`, and each append verifies the on-disk tail before
+  writing. A second Notary process pointed at the same audit file fails at
+  startup instead of silently interleaving writes and forking the hash
+  chain, and a write that would extend a diverged chain fails closed.
+
 ## [0.8.4] - 2026-07-04
 
 ### Fixed
