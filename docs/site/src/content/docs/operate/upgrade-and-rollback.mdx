@@ -23,8 +23,11 @@ The two interact: rolling back the software does not permit rolling back the app
 sequence. The [revert section](#roll-back-to-the-previous-release) covers this.
 
 {/* TODO[review]: GH#203 requires this procedure to be exercised at least once against a
-     real topology, with the run recorded under release/. That record does not exist yet;
-     keep status: draft until it does and link it from the verification section. */}
+     real topology. A partial exercise record now exists at
+     release/exercises/upgrade-v0.8.3-to-v0.8.4.md and is linked from the verification
+     step below. Keep status: draft until the remaining gaps are exercised:
+     release-artifact verification, credential issuance, metrics, Redis replay/nonce
+     survival, and anti-rollback monotonicity. */}
 
 ## Prerequisites
 
@@ -78,6 +81,12 @@ sequence. The [revert section](#roll-back-to-the-previous-release) covers this.
    - A canary request per critical path: one governed read on Registry Relay, one claim
      evaluation and, if you issue credentials, one issuance on Registry Notary.
    - Metrics are flowing to your monitoring.
+
+   This procedure has been partially exercised against a real topology: the
+   [v0.8.3 -> v0.8.4 exercise record](https://github.com/registrystack/registry-stack/blob/main/release/exercises/upgrade-v0.8.3-to-v0.8.4.md)
+   covers the upgrade and roll-back steps above; release-artifact verification, credential
+   issuance, metrics, Redis replay/nonce survival, and anti-rollback monotonicity were not
+   exercised by that run.
 
 7. Keep the previous release's artifacts and config until the new release has run through
    your soak period. Only then remove them.
