@@ -255,6 +255,22 @@ pub const FINDING_SOURCE_BINDING_NO_MATCHING_POLICY: &str =
 pub const FINDING_PROFILE_UNDECLARED: &str = "deployment.profile_undeclared";
 pub const FINDING_WAIVER_EXPIRED: &str = "deployment.waiver_expired";
 
+/// The severity `gate_id` binds under `profile`, or `None` if the gate is
+/// unbound at that profile (including an undeclared profile) or `gate_id` is
+/// unknown. Lets callers outside the gate-evaluation path (e.g. doctor
+/// diagnostics) check whether a gate already covers a finding before also
+/// reporting it explicitly.
+pub fn gate_severity_for_profile(
+    gate_id: &str,
+    profile: Option<DeploymentProfile>,
+) -> Option<GateSeverity> {
+    let profile = profile?;
+    gate_catalog()
+        .iter()
+        .find(|gate| gate.id == gate_id)
+        .and_then(|gate| gate.severity_for(profile))
+}
+
 fn gate_catalog() -> &'static [Gate] {
     use GateSeverity::{FindingError, FindingWarn, ReadinessFail, StartupFail};
     &[

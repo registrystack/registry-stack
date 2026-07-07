@@ -25,7 +25,8 @@ use registry_config_report::{
     PLATFORM_CONTEXT_CONSTRAINTS_HASH_MATERIAL_CONTRACT_V1,
 };
 use registry_notary_core::deployment::{
-    evaluate_gates, DeploymentFindingStatus, DeploymentProfile, EvaluatedFinding,
+    evaluate_gates, gate_severity_for_profile, DeploymentFindingStatus, DeploymentProfile,
+    EvaluatedFinding, FINDING_SOURCE_BINDING_NO_MATCHING_POLICY,
 };
 use registry_notary_core::{
     deprecated_config_fields, EvidenceAuthMode, Oauth2ClientCredentialsSourceAuthConfig,
@@ -1276,10 +1277,14 @@ async fn doctor(
                 };
             }
         }
-        diagnostics.extend(deployment_profile_diagnostics(config, &deployment_profile));
+        let profile_value = deployment_profile
+            .value
+            .as_deref()
+            .and_then(deployment_profile_from_str);
+        diagnostics.extend(deployment_profile_diagnostics(config, profile_value));
         diagnostics.extend(local_env_diagnostics(config, env_report));
         diagnostics.extend(holder_binding_diagnostics(config));
-        diagnostics.extend(matching_policy_diagnostics(config));
+        diagnostics.extend(matching_policy_diagnostics(config, profile_value));
         if let Some(diagnostic) = pkcs11_preflight_diagnostic(config) {
             diagnostics.push(diagnostic);
         }
@@ -1313,12 +1318,8 @@ async fn doctor(
 
 fn deployment_profile_diagnostics(
     config: &StandaloneRegistryNotaryConfig,
-    profile: &DeploymentProfileReport,
+    profile_value: Option<DeploymentProfile>,
 ) -> Vec<Diagnostic> {
-    let profile_value = profile
-        .value
-        .as_deref()
-        .and_then(deployment_profile_from_str);
     let input = config.gate_input();
     let evaluation = evaluate_gates(
         profile_value,
@@ -1409,7 +1410,19 @@ fn holder_binding_diagnostics(config: &StandaloneRegistryNotaryConfig) -> Vec<Di
     )]
 }
 
-fn matching_policy_diagnostics(config: &StandaloneRegistryNotaryConfig) -> Vec<Diagnostic> {
+fn matching_policy_diagnostics(
+    config: &StandaloneRegistryNotaryConfig,
+    profile_value: Option<DeploymentProfile>,
+) -> Vec<Diagnostic> {
+    // The deployment gate catalog already covers this finding under any
+    // profile that binds it (currently production and evidence_grade); skip
+    // the explicit diagnostic there so doctor doesn't double-report the same
+    // code. Profiles that leave the gate unbound (local, hosted_lab,
+    // undeclared) still need this explicit diagnostic for visibility.
+    if gate_severity_for_profile(FINDING_SOURCE_BINDING_NO_MATCHING_POLICY, profile_value).is_some()
+    {
+        return Vec::new();
+    }
     let unconstrained_bindings = config
         .evidence
         .claims

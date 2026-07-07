@@ -394,6 +394,15 @@ fn diagnostic_with_code<'a>(report: &'a Value, code: &str) -> Option<&'a Value> 
         .find(|diagnostic| diagnostic["code"] == code)
 }
 
+fn diagnostics_with_code<'a>(report: &'a Value, code: &str) -> Vec<&'a Value> {
+    report["diagnostics"]
+        .as_array()
+        .expect("diagnostics array")
+        .iter()
+        .filter(|diagnostic| diagnostic["code"] == code)
+        .collect()
+}
+
 fn assert_no_documentation_key(diagnostic: &Value) {
     assert!(
         diagnostic.get("documentation_key").is_none(),
@@ -1089,6 +1098,80 @@ fn doctor_json_warns_on_source_binding_without_matching_policy() {
         .as_str()
         .expect("message string")
         .contains("residency-lookup/registry"));
+}
+
+#[test]
+fn doctor_json_production_source_binding_without_matching_policy_reports_once() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config = write_config_with_options(
+        &tmp,
+        TestConfigOptions {
+            unconstrained_source_binding: true,
+            config_trust: true,
+            ..TestConfigOptions::default()
+        },
+    );
+    let env_file = write_env_file(&tmp);
+
+    let output = doctor_command(&config, Some(&env_file))
+        .args(["--profile", "production", "--format", "json"])
+        .output()
+        .expect("doctor runs");
+
+    assert!(
+        output.status.success(),
+        "production binding without a matching policy should warn, not fail\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout is utf8");
+    let report: Value = serde_json::from_str(&stdout).expect("doctor emits JSON");
+    assert_product_diagnostic_report(&report);
+
+    let diagnostics = diagnostics_with_code(&report, "notary.source_binding.no_matching_policy");
+    assert_eq!(
+        diagnostics.len(),
+        1,
+        "the bound production gate should be the only source of this finding code: {diagnostics:?}"
+    );
+    assert_eq!(diagnostics[0]["severity"], "warning");
+}
+
+#[test]
+fn doctor_json_evidence_grade_source_binding_without_matching_policy_reports_once() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config = write_config_with_options(
+        &tmp,
+        TestConfigOptions {
+            unconstrained_source_binding: true,
+            config_trust: true,
+            ..TestConfigOptions::default()
+        },
+    );
+    let env_file = write_env_file(&tmp);
+
+    let output = doctor_command(&config, Some(&env_file))
+        .args(["--profile", "evidence_grade", "--format", "json"])
+        .output()
+        .expect("doctor runs");
+
+    assert!(
+        output.status.success(),
+        "evidence_grade binding without a matching policy is a finding_error, not startup_fail\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout is utf8");
+    let report: Value = serde_json::from_str(&stdout).expect("doctor emits JSON");
+    assert_product_diagnostic_report(&report);
+
+    let diagnostics = diagnostics_with_code(&report, "notary.source_binding.no_matching_policy");
+    assert_eq!(
+        diagnostics.len(),
+        1,
+        "the bound evidence_grade gate should be the only source of this finding code: {diagnostics:?}"
+    );
+    assert_eq!(diagnostics[0]["severity"], "error");
 }
 
 #[test]
