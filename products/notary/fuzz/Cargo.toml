@@ -16,9 +16,29 @@ serde_json = "1"
 [dependencies.registry-notary-core]
 path = "../../../crates/registry-notary-core"
 
+[dependencies.registry-notary-source-adapter-rhai]
+path = "../../../crates/registry-notary-source-adapter-rhai"
+
+[dependencies.registry-notary-source-adapter-sidecar]
+path = "../../../crates/registry-notary-source-adapter-sidecar"
+
 [[bin]]
 name = "core_request_bodies"
 path = "fuzz_targets/core_request_bodies.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "rhai_source_adapter"
+path = "fuzz_targets/rhai_source_adapter.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sidecar_config_manifest"
+path = "fuzz_targets/sidecar_config_manifest.rs"
 test = false
 doc = false
 bench = false
