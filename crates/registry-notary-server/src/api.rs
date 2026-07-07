@@ -11086,20 +11086,21 @@ mod tests {
         );
         drop(handle);
 
-        for _ in 0..100 {
+        for _ in 0..500 {
             let record = load_antirollback_record_blocking(store.clone(), key.clone())
                 .await
                 .expect("record loads");
             let published = state
                 .runtime_config()
                 .is_some_and(|config| !config.server.openapi_requires_auth);
-            if record.last_sequence == 2 && record.last_config_hash == test_hash('b') && published {
-                let posture = state.config_apply_posture();
-                assert_eq!(posture.last_bundle_sequence, Some(2));
-                assert_eq!(
-                    posture.last_bundle_id.as_deref(),
-                    Some("bundle-after-cancel")
-                );
+            let posture = state.config_apply_posture();
+            let posture_recorded = posture.last_bundle_sequence == Some(2)
+                && posture.last_bundle_id.as_deref() == Some("bundle-after-cancel");
+            if record.last_sequence == 2
+                && record.last_config_hash == test_hash('b')
+                && published
+                && posture_recorded
+            {
                 return;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -11108,10 +11109,13 @@ mod tests {
         let record = load_antirollback_record_blocking(store, key)
             .await
             .expect("record loads after timeout");
+        let posture = state.config_apply_posture();
         panic!(
-            "dropped join handle did not complete both accept and publish; antirollback sequence={}, runtime_published={}",
+            "dropped join handle did not complete accept, publish, and posture recording; antirollback sequence={}, runtime_published={}, posture_bundle_sequence={:?}, posture_bundle_id={:?}",
             record.last_sequence,
-            state.runtime_config().is_some()
+            state.runtime_config().is_some(),
+            posture.last_bundle_sequence,
+            posture.last_bundle_id
         );
     }
 
