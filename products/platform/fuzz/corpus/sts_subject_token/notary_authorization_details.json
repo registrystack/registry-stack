@@ -1,0 +1,1 @@
+{"type":"registry_notary_evidence_transaction","schema_version":"registry-notary-authorization-details/v1","actions":["read"],"locations":["https://notary.example/evaluations/eval-1"],"claims":[{"id":"person-is-alive","version":"2026-05"}],"disclosure":"predicate","format":"application/json","purpose":"https://purpose.example/social-protection"}
