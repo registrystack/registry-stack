@@ -8056,6 +8056,47 @@ mod tests {
         assert_eq!(source.read_count.load(Ordering::SeqCst), 1);
     }
 
+    /// REQ-SEC-G-005: the direct `evaluate` path must refuse a principal that
+    /// lacks a claim's required scope, and must do so before any source read
+    /// happens (`require_claim_access` runs ahead of `load_sources`). This
+    /// mirrors the scope-denial coverage that already exists for federation
+    /// and Relay call sites, using a counting fake source as the read probe.
+    #[tokio::test]
+    async fn evaluate_denies_missing_scope_before_reading_source() {
+        let source = Arc::new(VersionScopedSource::default());
+        let claim = test_claim("selected", Vec::new(), true);
+        let mut evidence_config = (*test_evidence(vec![claim])).clone();
+        evidence_config.allowed_purposes = vec!["test".to_string()];
+        let evidence = Arc::new(evidence_config);
+        let store = EvidenceStore::default();
+        let request = test_request("selected");
+        let principal = EvidencePrincipal {
+            principal_id: "machine".to_string(),
+            scopes: Vec::new(),
+            access_mode: AccessMode::MachineClient,
+            verified_claims: None,
+            authorization_details: None,
+        };
+
+        let err = RegistryNotaryRuntime::new()
+            .evaluate(
+                evidence,
+                source.clone() as Arc<dyn SourceReader>,
+                &store,
+                &principal,
+                request,
+                None,
+            )
+            .await
+            .expect_err("principal without the claim's required scope must be denied");
+
+        assert!(matches!(
+            err,
+            EvidenceError::ScopeDenied { required } if required == "selected:1.0"
+        ));
+        assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
+    }
+
     #[tokio::test]
     async fn evaluate_authorizes_required_scope_from_requested_claim_version() {
         let source = Arc::new(VersionScopedSource::default());
