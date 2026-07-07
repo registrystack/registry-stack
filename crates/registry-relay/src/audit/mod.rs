@@ -611,11 +611,21 @@ impl OperationalAuditEvent {
 /// pipeline owns the per-sink chain state, bootstraps it from the sink
 /// tail on first write, and serializes relay's typed `AuditRecord` into
 /// the platform envelope record body.
+/// Stable readiness code reported by `/ready` when the retained audit chain
+/// failed startup verification and needs operator recovery (#196). Documented
+/// alongside [`AUDIT_WRITE_FAILED_CODE`].
+pub const AUDIT_CHAIN_INCONSISTENT_CODE: &str = "audit.chain.inconsistent";
+
 #[derive(Clone)]
 pub struct AuditPipeline {
     sink: Arc<dyn registry_platform_audit::AuditSink>,
     chain: Arc<OnceCell<registry_platform_audit::ChainState>>,
     profile: registry_platform_audit::AuditChainProfile,
+    /// Startup chain-verification health, reflected in `/ready` (#196). Starts
+    /// healthy and flips to `false` only when eager startup verification finds
+    /// the retained chain inconsistent, so the brick surfaces as an actionable
+    /// readiness signal instead of a confusing per-request 503.
+    chain_healthy: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl std::fmt::Debug for AuditPipeline {
@@ -642,6 +652,7 @@ impl AuditPipeline {
             sink,
             chain: Arc::new(OnceCell::new()),
             profile,
+            chain_healthy: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         }
     }
 
@@ -664,6 +675,37 @@ impl AuditPipeline {
             .await?;
         chain.append(self.sink.as_ref(), record).await?;
         Ok(())
+    }
+
+    /// Eagerly bootstrap and verify the retained chain at startup (#196).
+    ///
+    /// On a chain-verification failure the pipeline is marked unhealthy so
+    /// `/ready` reports not-ready ([`AUDIT_CHAIN_INCONSISTENT_CODE`]); startup
+    /// is intentionally NOT aborted, so a bricked chain becomes an actionable
+    /// readiness signal (recover with `registry-relay audit quarantine`) rather
+    /// than a boot crash-loop. Transient non-verification errors (e.g. I/O) do
+    /// not flip readiness. Returns the bootstrap result for the caller to log.
+    pub async fn verify_chain_eager(&self) -> Result<(), AuditError> {
+        let result = self
+            .chain
+            .get_or_try_init(|| async {
+                self.profile
+                    .bootstrap_or_start_empty(self.sink.as_ref())
+                    .await
+            })
+            .await
+            .map(|_| ());
+        let healthy = !matches!(result, Err(AuditError::ChainVerification(_)));
+        self.chain_healthy
+            .store(healthy, std::sync::atomic::Ordering::SeqCst);
+        result
+    }
+
+    /// Whether the retained chain passed startup verification (#196). `/ready`
+    /// reports not-ready when this is `false`.
+    #[must_use]
+    pub fn chain_healthy(&self) -> bool {
+        self.chain_healthy.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     pub async fn write_operational_event(
@@ -1453,6 +1495,65 @@ mod tests {
         assert_eq!(
             classify_endpoint("/v1/datasets/hdx/dimensions/region"),
             EndpointKind::Dataset
+        );
+    }
+
+    #[tokio::test]
+    async fn verify_chain_eager_accepts_a_valid_chain() {
+        // #196: a healthy retained chain leaves the pipeline ready.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        {
+            let pipeline = AuditPipeline::from_sink(FileSink::new(&path, 10, 50).expect("sink"));
+            pipeline
+                .write_operational_event(OperationalAuditEvent::success("test.one"))
+                .await
+                .expect("write one");
+            pipeline
+                .write_operational_event(OperationalAuditEvent::success("test.two"))
+                .await
+                .expect("write two");
+        }
+
+        let pipeline =
+            AuditPipeline::from_sink(FileSink::new(&path, 10, 50).expect("restart sink"));
+        pipeline
+            .verify_chain_eager()
+            .await
+            .expect("valid chain verifies at startup");
+        assert!(pipeline.chain_healthy());
+    }
+
+    #[tokio::test]
+    async fn verify_chain_eager_flags_a_tampered_chain_as_not_ready() {
+        // #196: a retained chain that no longer verifies flips readiness to
+        // not-ready so the brick is visible on /ready.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        {
+            let pipeline = AuditPipeline::from_sink(FileSink::new(&path, 10, 50).expect("sink"));
+            pipeline
+                .write_operational_event(OperationalAuditEvent::success("test.one"))
+                .await
+                .expect("write one");
+            pipeline
+                .write_operational_event(OperationalAuditEvent::success("test.two"))
+                .await
+                .expect("write two");
+        }
+
+        // Tamper the second record's body so its record_hash no longer matches.
+        let contents = std::fs::read_to_string(&path).expect("audit file");
+        std::fs::write(&path, contents.replace("test.two", "tampered")).expect("tamper");
+
+        let pipeline =
+            AuditPipeline::from_sink(FileSink::new(&path, 10, 50).expect("restart sink"));
+        assert!(pipeline.chain_healthy(), "pipeline starts healthy");
+        let result = pipeline.verify_chain_eager().await;
+        assert!(result.is_err(), "tampered chain fails verification");
+        assert!(
+            !pipeline.chain_healthy(),
+            "readiness must flip to not-ready on an inconsistent chain"
         );
     }
 }

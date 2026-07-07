@@ -66,6 +66,16 @@ async fn ready(runtime: RuntimeSnapshot) -> Response {
         }
     }
 
+    // A retained audit chain that failed startup verification means every
+    // audited request fails closed; report not-ready so the brick is visible on
+    // /ready rather than only as per-request 503s behind a green healthcheck
+    // (#196). Recover with `registry-relay audit quarantine`.
+    if let Some(audit) = runtime.audit_sink() {
+        if !audit.chain_healthy() {
+            return audit_chain_not_ready_response();
+        }
+    }
+
     let Some(readiness) = runtime.readiness_rx() else {
         return Json(ok_health_body(1, 1, 0)).into_response();
     };
@@ -89,6 +99,27 @@ async fn ready(runtime: RuntimeSnapshot) -> Response {
         "failed_count": failed_count,
         "not_ready_count": not_ready_count,
         "unresolved_count": unresolved_count,
+    }));
+    let mut response = (StatusCode::SERVICE_UNAVAILABLE, body).into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        "application/problem+json"
+            .parse()
+            .expect("static content type is valid"),
+    );
+    response
+}
+
+/// 503 problem response raised when the retained audit chain failed startup
+/// verification and requires operator recovery (#196). The recovery path is
+/// `registry-relay audit quarantine`.
+fn audit_chain_not_ready_response() -> Response {
+    let body = Json(json!({
+        "type": format!("{}audit/chain_inconsistent", crate::error::PROBLEM_TYPE_BASE),
+        "title": "Audit chain inconsistent",
+        "status": 503,
+        "detail": "the retained audit chain failed startup verification and requires operator recovery",
+        "code": crate::audit::AUDIT_CHAIN_INCONSISTENT_CODE,
     }));
     let mut response = (StatusCode::SERVICE_UNAVAILABLE, body).into_response();
     response.headers_mut().insert(

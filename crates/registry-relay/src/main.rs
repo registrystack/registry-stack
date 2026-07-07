@@ -107,6 +107,12 @@ const SCHEMA_COMMAND: &str = "schema";
 /// Top-level namespace for operator configuration commands.
 const CONFIG_COMMAND: &str = "config";
 
+/// Audit operator tooling command and its offline chain-recovery subcommand.
+const AUDIT_COMMAND: &str = "audit";
+const QUARANTINE_SUBCOMMAND: &str = "quarantine";
+const REASON_FLAG: &str = "--reason";
+const OPERATOR_FLAG: &str = "--operator";
+
 /// Verifies a signed governed-config target without applying it.
 const VERIFY_BUNDLE_COMMAND: &str = "verify-bundle";
 const APPLY_BUNDLE_COMMAND: &str = "apply-bundle";
@@ -174,6 +180,12 @@ enum CliCommand {
     },
     ConfigVerifyBundle(ConfigVerifyBundleCommand),
     ConfigApplyBundle(ConfigApplyBundleCommand),
+    AuditQuarantine {
+        config_path: PathBuf,
+        env_file: Option<PathBuf>,
+        reason: String,
+        operator: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -305,6 +317,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         CliCommand::Schema { format } => run_schema(format).await,
         CliCommand::ConfigVerifyBundle(command) => run_config_verify_bundle(command).await,
         CliCommand::ConfigApplyBundle(command) => run_config_apply_bundle(command).await,
+        CliCommand::AuditQuarantine {
+            config_path,
+            env_file,
+            reason,
+            operator,
+        } => run_audit_quarantine(config_path, env_file, reason, operator).await,
     }
 }
 
@@ -1163,6 +1181,64 @@ async fn run_config_apply_bundle(
     Ok(())
 }
 
+/// Offline audit-chain recovery (#196). Quarantines a retained chain that no
+/// longer verifies under the configured keyed hasher and starts a fresh,
+/// anchored segment. Refuses to run while a relay holds the single-writer lock.
+async fn run_audit_quarantine(
+    config_path: PathBuf,
+    env_file: Option<PathBuf>,
+    reason: String,
+    operator: Option<String>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    load_env_file_arg(env_file.as_deref())?;
+    let config = config::load(&config_path)?;
+    let (path, max_size_bytes, max_files) = match &config.audit.sink {
+        AuditSinkConfig::File { path, rotate } => (
+            path.clone(),
+            rotate.max_size_mb.saturating_mul(1024 * 1024),
+            rotate.max_files,
+        ),
+        _ => {
+            return Err(io::Error::other(
+                "audit quarantine requires a file audit sink (audit.sink: file)",
+            )
+            .into());
+        }
+    };
+    let hash_secret_env = config.audit.hash_secret_env.as_deref().ok_or_else(|| {
+        io::Error::other("audit.hash_secret_env is required to verify the audit chain")
+    })?;
+    let profile = AuditChainProfile::registry_relay_from_env(hash_secret_env)?;
+    let now_unix_ms = i64::try_from(OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000)
+        .unwrap_or(i64::MAX);
+    let outcome = registry_platform_audit::quarantine_and_recover_chain(
+        &path,
+        max_size_bytes,
+        max_files,
+        &profile.hasher(),
+        &reason,
+        operator.as_deref(),
+        now_unix_ms,
+    )?;
+    let report = json!({
+        "schema_version": "registry.audit.recovery.v1",
+        "product": "registry-relay",
+        "audit_path": path_for_json(&path),
+        "already_consistent": outcome.already_consistent,
+        "first_bad_line": outcome.first_bad_line,
+        "last_good_hash": outcome
+            .last_good_hash
+            .map(|hash| registry_platform_audit::OptionalHashHex(Some(hash)).to_string()),
+        "break_event_hash": outcome
+            .break_event_hash
+            .map(|hash| registry_platform_audit::OptionalHashHex(Some(hash)).to_string()),
+        "records_before_break": outcome.records_before_break,
+        "quarantine_suffix": outcome.quarantine_suffix,
+    });
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    Ok(())
+}
+
 fn config_apply_bundle_request_body(command: &ConfigApplyBundleCommand) -> serde_json::Value {
     let tuf = match &command.source {
         ConfigVerifyBundleSource::Local {
@@ -1237,6 +1313,18 @@ async fn compile_relay_runtime(
 
     let auth = build_auth(&config).await?;
     let audit_sink = build_audit_sink(&config)?;
+    // Eagerly verify the retained audit chain so a chain bricked by an earlier
+    // fork surfaces as an actionable /ready signal instead of a per-request 503
+    // behind a green healthcheck (#196). Startup is not aborted: readiness
+    // reports not-ready until the operator recovers with `registry-relay audit
+    // quarantine`.
+    if let Err(err) = audit_sink.verify_chain_eager().await {
+        error!(
+            code = registry_relay::audit::AUDIT_CHAIN_INCONSISTENT_CODE,
+            error = %err,
+            "audit chain failed startup verification; /ready will report not-ready until it is recovered"
+        );
+    }
     // Boot-time validation already logged waived gates; now that the audit
     // pipeline exists, record them durably. The startup path loads config
     // from a local file, matching the source `validate::run` evaluated.
@@ -1374,9 +1462,74 @@ fn parse_cli_command_from(args: Vec<String>) -> Result<CliCommand, CliError> {
         parse_schema_command(&rest[1..])
     } else if rest.first().is_some_and(|arg| arg == CONFIG_COMMAND) {
         parse_config_command(&rest[1..])
+    } else if rest.first().is_some_and(|arg| arg == AUDIT_COMMAND) {
+        parse_audit_command(&rest[1..])
     } else {
         parse_serve_command(&rest)
     }
+}
+
+fn parse_audit_command(args: &[String]) -> Result<CliCommand, CliError> {
+    match args.first().map(String::as_str) {
+        Some(sub) if sub == QUARANTINE_SUBCOMMAND => parse_audit_quarantine_command(&args[1..]),
+        Some(other) => Err(CliError(format!(
+            "unknown {AUDIT_COMMAND} subcommand: {other} (expected {QUARANTINE_SUBCOMMAND})"
+        ))),
+        None => Err(CliError(format!(
+            "{AUDIT_COMMAND} requires a subcommand (expected {QUARANTINE_SUBCOMMAND})"
+        ))),
+    }
+}
+
+fn parse_audit_quarantine_command(args: &[String]) -> Result<CliCommand, CliError> {
+    let mut config_path: Option<PathBuf> = None;
+    let mut env_file: Option<PathBuf> = None;
+    let mut reason: Option<String> = None;
+    let mut operator: Option<String> = None;
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        if let Some(value) = flag_value(arg, CONFIG_FLAG) {
+            config_path = Some(required_path_value(CONFIG_FLAG, value)?);
+        } else if arg == CONFIG_FLAG {
+            index += 1;
+            config_path = Some(required_path_arg(args, index, CONFIG_FLAG)?);
+        } else if let Some(value) = flag_value(arg, ENV_FILE_FLAG) {
+            env_file = Some(required_path_value(ENV_FILE_FLAG, value)?);
+        } else if arg == ENV_FILE_FLAG {
+            index += 1;
+            env_file = Some(required_path_arg(args, index, ENV_FILE_FLAG)?);
+        } else if let Some(value) = flag_value(arg, REASON_FLAG) {
+            reason = Some(required_string_value(REASON_FLAG, value)?);
+        } else if arg == REASON_FLAG {
+            index += 1;
+            reason = Some(required_string_arg(args, index, REASON_FLAG)?);
+        } else if let Some(value) = flag_value(arg, OPERATOR_FLAG) {
+            operator = Some(required_string_value(OPERATOR_FLAG, value)?);
+        } else if arg == OPERATOR_FLAG {
+            index += 1;
+            operator = Some(required_string_arg(args, index, OPERATOR_FLAG)?);
+        } else {
+            return Err(CliError(format!(
+                "unknown {AUDIT_COMMAND} {QUARANTINE_SUBCOMMAND} argument: {arg}"
+            )));
+        }
+        index += 1;
+    }
+    if env_file.is_none() {
+        env_file = default_env_file_from_env();
+    }
+    let reason = reason.ok_or_else(|| {
+        CliError(format!(
+            "{AUDIT_COMMAND} {QUARANTINE_SUBCOMMAND} requires {REASON_FLAG}"
+        ))
+    })?;
+    Ok(CliCommand::AuditQuarantine {
+        config_path: config_path.unwrap_or_else(default_config_path_from_env),
+        env_file,
+        reason,
+        operator,
+    })
 }
 
 fn parse_openapi_command(args: &[String]) -> Result<CliCommand, CliError> {
@@ -2189,10 +2342,10 @@ mod tests {
     use super::{
         build_audit_sink, compile_relay_runtime, config_apply_bundle_request_body,
         load_env_file_arg, parse_cli_command_from, parse_env_file_value,
-        relay_config_value_classification, render_generated_api_key, run_config_apply_bundle,
-        run_healthcheck, url_contains_userinfo, CliCommand, ConfigApplyBundleCommand,
-        ConfigValueClassification, ConfigVerifyBundleSource, GenerateApiKeyCommand,
-        OperationalLogFormat, OutputFormat, DEFAULT_HEALTHCHECK_TIMEOUT_MS,
+        relay_config_value_classification, render_generated_api_key, run_audit_quarantine,
+        run_config_apply_bundle, run_healthcheck, url_contains_userinfo, CliCommand,
+        ConfigApplyBundleCommand, ConfigValueClassification, ConfigVerifyBundleSource,
+        GenerateApiKeyCommand, OperationalLogFormat, OutputFormat, DEFAULT_HEALTHCHECK_TIMEOUT_MS,
         DEFAULT_HEALTHCHECK_URL,
     };
     use axum::extract::State;
@@ -3435,5 +3588,146 @@ audit:
             AuditChainHasher::from_env_derived(env_name).expect("audit chain secret loads");
         verify_jsonl_lines_with_hasher(contents.lines(), &hasher)
             .expect("audit chain verifies with configured secret");
+    }
+
+    fn file_audit_config_yaml(path: &std::path::Path, hash_secret_env: &str) -> String {
+        format!(
+            r#"
+deployment:
+  profile: local
+server:
+  bind: 127.0.0.1:0
+catalog:
+  title: Test
+  base_url: https://data.example.test
+  publisher: Test
+vocabularies: {{}}
+auth:
+  mode: api_key
+  api_keys: []
+datasets: []
+audit:
+  sink: file
+  path: '{}'
+  hash_secret_env: {}
+"#,
+            path.display(),
+            hash_secret_env
+        )
+    }
+
+    #[test]
+    fn parses_audit_quarantine_command() {
+        let command = parse_cli_command_from(command_args(&[
+            "registry-relay",
+            "audit",
+            "quarantine",
+            "--config",
+            "/etc/relay.yaml",
+            "--reason",
+            "unclean stop",
+            "--operator",
+            "jeremi",
+        ]))
+        .expect("audit quarantine parses");
+        match command {
+            CliCommand::AuditQuarantine {
+                config_path,
+                reason,
+                operator,
+                ..
+            } => {
+                assert_eq!(config_path, std::path::PathBuf::from("/etc/relay.yaml"));
+                assert_eq!(reason, "unclean stop");
+                assert_eq!(operator.as_deref(), Some("jeremi"));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn audit_quarantine_requires_a_reason() {
+        let error = parse_cli_command_from(command_args(&[
+            "registry-relay",
+            "audit",
+            "quarantine",
+            "--config",
+            "/etc/relay.yaml",
+        ]))
+        .expect_err("missing reason is rejected");
+        assert!(
+            error.to_string().contains("--reason"),
+            "error should name the missing flag: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn audit_quarantine_recovers_a_tampered_chain_end_to_end() {
+        let dir = tempdir().expect("tempdir");
+        let audit_path = dir.path().join("audit.jsonl");
+        let env_name = "REGISTRY_RELAY_TEST_QUARANTINE_E2E_SECRET";
+        std::env::set_var(env_name, "0123456789abcdef0123456789abcdef");
+        let config = config_with_file_audit(&audit_path, env_name);
+
+        // Write a valid keyed chain, then release the single-writer lock (the
+        // relay has exited) and tamper the second record so the chain no longer
+        // verifies under the configured secret.
+        let sink = build_audit_sink(&config).expect("audit sink builds");
+        sink.write_record(sample_audit_record())
+            .await
+            .expect("first write");
+        sink.write_record(sample_audit_record())
+            .await
+            .expect("second write");
+        drop(sink);
+
+        let original = std::fs::read_to_string(&audit_path).expect("audit file");
+        let mut lines: Vec<String> = original.lines().map(String::from).collect();
+        assert_eq!(lines.len(), 2);
+        lines[1] = lines[1].replace("statistics_office", "tampered_office");
+        std::fs::write(&audit_path, format!("{}\n", lines.join("\n"))).expect("tamper write");
+
+        let config_path = dir.path().join("relay.yaml");
+        std::fs::write(&config_path, file_audit_config_yaml(&audit_path, env_name))
+            .expect("write config file");
+        run_audit_quarantine(
+            config_path,
+            None,
+            "unit tamper recovery".to_string(),
+            Some("ci".to_string()),
+        )
+        .await
+        .expect("quarantine runs");
+
+        let archive_count = std::fs::read_dir(dir.path())
+            .expect("readdir")
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("audit.jsonl.corrupt-")
+            })
+            .count();
+        assert_eq!(archive_count, 1, "the corrupt chain must be quarantined");
+
+        let recovered = std::fs::read_to_string(&audit_path).expect("recovered active file");
+        let recovered_lines: Vec<&str> = recovered.lines().collect();
+        assert_eq!(recovered_lines.len(), 1);
+        let break_envelope: Value =
+            serde_json::from_str(recovered_lines[0]).expect("break envelope parses");
+        assert_eq!(break_envelope["record"]["event"], "audit.chain.break");
+
+        // The anchor pins the recovered segment's start to the break event's
+        // predecessor (the last good tail).
+        let anchor: Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.path().join("audit.jsonl.anchor.json"))
+                .expect("anchor file"),
+        )
+        .expect("anchor json");
+        assert_eq!(
+            anchor["trusted_start_prev_hash"],
+            break_envelope["prev_hash"]
+        );
     }
 }
