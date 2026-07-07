@@ -16,6 +16,11 @@ pub struct FileSink {
 impl FileSink {
     /// Construct a file sink and create the parent directory when one
     /// is configured in the path.
+    ///
+    /// Takes the process-lifetime single-writer advisory lock on the sink
+    /// (#211): a second relay process (or an overlapping container during a
+    /// restart/recreate) sharing the same audit volume fails loudly here with
+    /// [`AuditError::SinkLocked`] instead of silently forking the audit chain.
     pub fn new(
         path: impl Into<PathBuf>,
         max_size_mb: u64,
@@ -24,11 +29,11 @@ impl FileSink {
         let path = path.into();
         ensure_parent_dir(&path)?;
         Ok(Self {
-            inner: JsonlFileSink::with_rotation(
+            inner: JsonlFileSink::with_rotation_single_writer(
                 path,
                 max_size_mb.saturating_mul(1024 * 1024),
                 max_files,
-            ),
+            )?,
         })
     }
 }
@@ -64,4 +69,24 @@ fn ensure_parent_dir(path: &Path) -> Result<(), AuditError> {
         std::fs::create_dir_all(parent).map_err(AuditError::Io)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_sink_new_is_single_writer() {
+        // #211: the production relay file sink takes the single-writer advisory
+        // lock, so a second sink on the same audit path fails loudly instead of
+        // forking the chain.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        let _first = FileSink::new(&path, 10, 50).expect("first file sink locks");
+        let second = FileSink::new(&path, 10, 50);
+        assert!(
+            matches!(second, Err(AuditError::SinkLocked { .. })),
+            "second file sink must be rejected, got {second:?}"
+        );
+    }
 }
