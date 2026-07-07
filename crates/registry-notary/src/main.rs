@@ -4587,4 +4587,86 @@ evidence:
         );
         serde_norway::from_str::<StandaloneRegistryNotaryConfig>(&raw).expect("config parses")
     }
+
+    #[test]
+    fn doctor_parse_expanded_config_surfaces_disclosure_default_violation() {
+        // GH#170 / RS-DM-CLAIM Section 10: `registry-notary doctor` calls
+        // parse_expanded_config (see the `doctor` function above), which now
+        // rejects a disclosure default that isn't a member of the claim's
+        // allowed set (REQ-DM-CLAIM-008) at load instead of loading cleanly
+        // and surfacing the inconsistency only when a result is rendered.
+        let raw = r#"
+deployment:
+  profile: local
+server:
+  bind: 127.0.0.1:0
+auth:
+  mode: api_key
+  api_keys:
+    - id: local
+      fingerprint:
+        provider: env
+        name: TEST_DOCTOR_API_HASH
+      scopes: [dci:evidence_verification]
+audit:
+  sink: stdout
+evidence:
+  enabled: true
+  service_id: doctor-disclosure-test
+  source_connections:
+    dci_registry:
+      base_url: "https://dci.example.test"
+      source_auth:
+        type: oauth2_client_credentials
+        token_url: "https://dci.example.test/oauth/token"
+        client_id_env: TEST_DOCTOR_OAUTH_CLIENT_ID
+        client_secret_env: TEST_DOCTOR_OAUTH_CLIENT_SECRET
+        request_format: json
+      dci:
+        search_path: /registry/sync/search
+        sender_id: registry-notary
+        query_type: idtype-value
+        records_path: /message/search_response/0/data/reg_records
+  claims:
+    - id: dci-record-exists
+      title: DCI record exists
+      version: 2026-05
+      subject_type: person
+      value:
+        type: boolean
+      source_bindings:
+        record:
+          connector: dci
+          connection: dci_registry
+          required_scope: dci:evidence_verification
+          dataset: registry_records
+          entity: record
+          lookup:
+            input: target.id
+            field: SUBJECT_ID
+            op: eq
+            cardinality: one
+          fields:
+            id:
+              field: id
+              type: string
+              required: false
+      rule:
+        type: exists
+        source: record
+      disclosure:
+        default: value
+        allowed: [redacted]
+      formats:
+        - application/vnd.registry-notary.claim-result+json
+"#;
+
+        let err = parse_expanded_config(raw)
+            .expect_err("disclosure default outside allowed must fail at the doctor entrypoint");
+        let message = err.to_string();
+        assert!(
+            message.contains("dci-record-exists") && message.contains("disclosure"),
+            "doctor-facing error must name the offending claim id and field: {message}"
+        );
+    }
 }

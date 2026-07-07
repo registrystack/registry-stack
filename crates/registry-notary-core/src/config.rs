@@ -391,11 +391,53 @@ impl StandaloneRegistryNotaryConfig {
                 }
             }
         }
+        let mut seen_claim_ids: HashSet<&str> = HashSet::new();
         for claim in &self.evidence.claims {
             if claim.id.trim().is_empty() {
                 return Err(EvidenceConfigError::InvalidClaim);
             }
+            // REQ-DM-CLAIM-001: reject a duplicate claim id at load rather
+            // than letting a later claim silently shadow an earlier one.
+            if !seen_claim_ids.insert(claim.id.as_str()) {
+                return Err(EvidenceConfigError::DuplicateClaimId {
+                    claim: claim.id.clone(),
+                });
+            }
             validate_claim_semantics(claim)?;
+            // REQ-DM-CLAIM-008: reject a disclosure default outside the
+            // allowed set at load; this is the most consequential of the
+            // three RS-DM-CLAIM Section 10 gaps because a privacy-sensitive
+            // claim could otherwise load with an internally inconsistent
+            // disclosure policy that only fails on first render.
+            if !claim
+                .disclosure
+                .allowed
+                .iter()
+                .any(|mode| mode == &claim.disclosure.default)
+            {
+                return Err(EvidenceConfigError::ClaimDisclosureDefaultNotAllowed {
+                    claim: claim.id.clone(),
+                    default: claim.disclosure.default.clone(),
+                    allowed: claim.disclosure.allowed.clone(),
+                });
+            }
+            // REQ-DM-CLAIM-006: reject an extract/exists rule whose `source`
+            // does not name a binding declared under this claim's
+            // source_bindings. A `cel` or `plugin` rule has no single named
+            // source to check here.
+            let rule_source = match &claim.rule {
+                RuleConfig::Extract { source, .. } => Some(source.as_str()),
+                RuleConfig::Exists { source } => Some(source.as_str()),
+                RuleConfig::Cel { .. } | RuleConfig::Plugin { .. } => None,
+            };
+            if let Some(source) = rule_source {
+                if !claim.source_bindings.contains_key(source) {
+                    return Err(EvidenceConfigError::UnknownRuleSourceBinding {
+                        claim: claim.id.clone(),
+                        rule_source: source.to_string(),
+                    });
+                }
+            }
             let mut source_lookup_dependencies_by_binding = BTreeMap::new();
             for (binding_id, binding) in &claim.source_bindings {
                 if binding.connection.is_none() {
@@ -4561,8 +4603,28 @@ pub enum EvidenceConfigError {
     InvalidExpectedSidecarConfig { connection: String, reason: String },
     #[error("claim id must not be empty")]
     InvalidClaim,
+    /// REQ-DM-CLAIM-001 requires a claim's `id` to be unique across the
+    /// configuration; RS-DM-CLAIM Section 10 previously documented this as an
+    /// operator responsibility the loader did not enforce.
+    #[error("claim id '{claim}' is used by more than one claim; claim ids must be unique")]
+    DuplicateClaimId { claim: String },
     #[error("claim '{claim}' has invalid semantics config: {reason}")]
     InvalidClaimSemantics { claim: String, reason: String },
+    /// REQ-DM-CLAIM-008 requires a claim's `disclosure.default` to be a
+    /// member of `disclosure.allowed`; RS-DM-CLAIM Section 10 previously
+    /// documented this as unchecked at load, surfacing only when a result
+    /// was rendered.
+    #[error(
+        "claim '{claim}' disclosure.default '{default}' is not a member of \
+         disclosure.allowed ({allowed}); a claim's default disclosure mode must be one \
+         it is permitted to render",
+        allowed = allowed.join(", ")
+    )]
+    ClaimDisclosureDefaultNotAllowed {
+        claim: String,
+        default: String,
+        allowed: Vec<String>,
+    },
     #[error("allowed purpose must not be empty")]
     InvalidPurpose,
     #[error("claim '{claim}' binding '{binding}' has invalid matching config: {reason}")]
@@ -4580,6 +4642,15 @@ pub enum EvidenceConfigError {
         input: String,
         unknown: String,
     },
+    /// REQ-DM-CLAIM-006 requires an `extract`/`exists` rule's `source` to name
+    /// a binding declared under the claim's `source_bindings`; RS-DM-CLAIM
+    /// Section 10 previously documented this as unchecked at load, surfacing
+    /// only when the source was read at evaluation.
+    #[error(
+        "claim '{claim}' rule.source '{rule_source}' does not name a declared source binding; \
+         declare it under source_bindings or fix the rule's source"
+    )]
+    UnknownRuleSourceBinding { claim: String, rule_source: String },
     #[error(
         "claim '{claim}' source lookup dependencies contain a cycle: {bindings}",
         bindings = bindings.join(", ")
@@ -7323,8 +7394,8 @@ title: Test Claim
 version: "1.0"
 subject_type: person
 rule:
-  type: exists
-  source: src
+  type: cel
+  expression: "true"
 "#
         ))
         .expect("minimal claim is valid YAML")
@@ -9591,6 +9662,137 @@ allowed_claims:
             }
             other => panic!("unexpected error variant: {other}"),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // GH#170 / RS-DM-CLAIM Section 10: load-time validation for invariants
+    // the loader previously deferred to request/evaluation time.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn duplicate_claim_id_is_rejected() {
+        // REQ-DM-CLAIM-001: two claims sharing an id previously loaded
+        // cleanly; the loader must now reject it.
+        let mut config = minimal_config();
+        let claim_a = minimal_claim("repeated-id");
+        let claim_b = minimal_claim("repeated-id");
+        config.evidence.claims = vec![claim_a, claim_b];
+
+        let err = config
+            .validate()
+            .expect_err("duplicate claim id must fail validation");
+        match &err {
+            EvidenceConfigError::DuplicateClaimId { claim } => {
+                assert_eq!(claim, "repeated-id");
+            }
+            other => panic!("unexpected error variant: {other}"),
+        }
+        assert!(
+            err.to_string().contains("repeated-id"),
+            "error must name the offending claim id: {err}"
+        );
+    }
+
+    #[test]
+    fn disclosure_default_outside_allowed_is_rejected() {
+        // REQ-DM-CLAIM-008: a disclosure default outside the allowed set
+        // previously surfaced only when a result was rendered. This is the
+        // most consequential of the three Section 10 gaps: a
+        // privacy-sensitive claim could otherwise ship an internally
+        // inconsistent disclosure policy that only fails on first render.
+        let mut config = minimal_config();
+        let mut claim = minimal_claim("residency-status");
+        claim.disclosure = DisclosureConfig {
+            default: "value".to_string(),
+            allowed: vec!["redacted".to_string()],
+            downgrade: "deny".to_string(),
+        };
+        config.evidence.claims = vec![claim];
+
+        let err = config
+            .validate()
+            .expect_err("disclosure default outside allowed must fail validation");
+        match &err {
+            EvidenceConfigError::ClaimDisclosureDefaultNotAllowed {
+                claim,
+                default,
+                allowed,
+            } => {
+                assert_eq!(claim, "residency-status");
+                assert_eq!(default, "value");
+                assert_eq!(allowed, &vec!["redacted".to_string()]);
+            }
+            other => panic!("unexpected error variant: {other}"),
+        }
+        let message = err.to_string();
+        assert!(
+            message.contains("residency-status") && message.contains("disclosure"),
+            "error must name the offending claim id and field: {message}"
+        );
+    }
+
+    #[test]
+    fn rule_source_referencing_unknown_binding_is_rejected() {
+        // REQ-DM-CLAIM-006: a rule whose source doesn't name a declared
+        // source binding previously surfaced only when the source was read
+        // at evaluation; the loader must now reject it.
+        let mut config = minimal_config();
+        let mut claim = minimal_claim("farmer-registered");
+        claim.rule = RuleConfig::Exists {
+            source: "nonexistent".to_string(),
+        };
+        config.evidence.claims = vec![claim];
+
+        let err = config
+            .validate()
+            .expect_err("rule source naming an undeclared binding must fail validation");
+        match &err {
+            EvidenceConfigError::UnknownRuleSourceBinding { claim, rule_source } => {
+                assert_eq!(claim, "farmer-registered");
+                assert_eq!(rule_source, "nonexistent");
+            }
+            other => panic!("unexpected error variant: {other}"),
+        }
+        let message = err.to_string();
+        assert!(
+            message.contains("farmer-registered") && message.contains("nonexistent"),
+            "error must name the offending claim id and field: {message}"
+        );
+    }
+
+    #[test]
+    fn claim_config_with_consistent_id_disclosure_and_rule_source_still_loads() {
+        // Sanity check: a claim configuration that satisfies all three
+        // Section 10 invariants (unique id, disclosure default in allowed,
+        // rule source naming a declared binding) still loads.
+        let mut config = minimal_config();
+        config.evidence.source_connections.insert(
+            "registry".to_string(),
+            serde_norway::from_str(
+                r#"
+base_url: https://registry.example
+token_env: SOURCE_TOKEN
+"#,
+            )
+            .expect("source connection parses"),
+        );
+        let mut claim = minimal_claim("residency-status");
+        claim.rule = RuleConfig::Exists {
+            source: "registry".to_string(),
+        };
+        claim.disclosure = DisclosureConfig {
+            default: "redacted".to_string(),
+            allowed: vec!["redacted".to_string(), "value".to_string()],
+            downgrade: "deny".to_string(),
+        };
+        claim
+            .source_bindings
+            .insert("registry".to_string(), rda_binding("registry", "one"));
+        config.evidence.claims = vec![claim];
+
+        config
+            .validate()
+            .expect("consistent claim configuration must still load");
     }
 
     #[test]
