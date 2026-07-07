@@ -256,13 +256,45 @@ class MonorepoSourceModelTest(unittest.TestCase):
             result.stderr,
         )
 
+    def test_monorepo_mode_rejects_missing_required_external_gitlink(self) -> None:
+        """If legacy lab gitlinks still exist, each current required external must have one."""
+        with MonorepoFixture() as stack_root:
+            add_gitlink(
+                stack_root,
+                "lab/vendor/crosswalk",
+                "1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+            )
+            add_gitlink(
+                stack_root,
+                "lab/vendor/esignet-relay-authenticator",
+                "3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c",
+            )
+
+            result = run_monorepo_validator(stack_root)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn(
+            "external.registry-atlas has no committed lab/vendor/registry-atlas gitlink",
+            result.stderr,
+        )
+
     def test_monorepo_mode_cross_checks_only_the_current_manifest(self) -> None:
         """Historical manifests keep their release-day refs and are not cross-checked."""
         with MonorepoFixture() as stack_root:
             add_gitlink(
                 stack_root,
+                "lab/vendor/crosswalk",
+                "1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+            )
+            add_gitlink(
+                stack_root,
                 "lab/vendor/registry-atlas",
                 "2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b",
+            )
+            add_gitlink(
+                stack_root,
+                "lab/vendor/esignet-relay-authenticator",
+                "3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c",
             )
             old = stack_root / "release" / "manifests" / "registry-stack-old.yaml"
             old.write_text(

@@ -374,6 +374,15 @@ for arg in sys.argv[1:]:
 # RELEASE_EXTERNAL_GITLINKS is empty and the cross-check disappears.
 if gitlinks and manifests:
     _, current_path, current_external = max(manifests, key=lambda item: item[0])
+    for name in REQUIRED_EXTERNALS:
+        entry = current_external.get(name)
+        if isinstance(entry, dict) and name not in gitlinks:
+            print(
+                f"release source model failed: {current_path.name} external.{name} "
+                f"has no committed lab/vendor/{name} gitlink",
+                file=sys.stderr,
+            )
+            failed = True
     for name in sorted(gitlinks):
         entry = current_external.get(name)
         if not isinstance(entry, dict):
