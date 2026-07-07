@@ -1350,6 +1350,207 @@ where
     Ok(envelopes)
 }
 
+/// Outcome of [`quarantine_and_recover_chain`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChainRecoveryOutcome {
+    /// The retained chain already verified; nothing was changed.
+    pub already_consistent: bool,
+    /// 1-indexed line (retained-set order) of the first inconsistent record.
+    pub first_bad_line: Option<usize>,
+    /// Last verified record hash before the break (the anchor the recovered
+    /// segment chains onto), or `None` when the first record was already bad.
+    pub last_good_hash: Option<[u8; 32]>,
+    /// Record hash of the emitted `audit.chain.break` event.
+    pub break_event_hash: Option<[u8; 32]>,
+    /// Count of good records preserved in the quarantine archive before the break.
+    pub records_before_break: usize,
+    /// Filename suffix applied to the quarantined files (`corrupt-<ts>`).
+    pub quarantine_suffix: Option<String>,
+}
+
+/// `event` discriminator of the tamper-evident chain-break record.
+pub const CHAIN_BREAK_EVENT: &str = "audit.chain.break";
+
+/// Record body of the tamper-evident chain-break event that opens a recovered
+/// segment. It is the `record` of the first envelope of the fresh chain, so it
+/// is itself hashed and chained onto `last_good_hash`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ChainBreakRecord {
+    /// Always [`CHAIN_BREAK_EVENT`].
+    pub event: String,
+    /// Operator-supplied reason for the recovery.
+    pub reason: String,
+    /// When the recovery ran (UTC Unix ms).
+    pub recovered_at_unix_ms: i64,
+    /// 1-indexed line of the first inconsistent record in the quarantined set.
+    pub first_bad_line: usize,
+    /// Last verified record hash before the break (hex), or `None`.
+    pub last_good_hash: Option<String>,
+    /// Count of good records preserved before the break.
+    pub records_before_break: usize,
+    /// Filename suffix applied to the quarantined files.
+    pub quarantine_suffix: String,
+    /// Optional operator identity recorded for accountability.
+    pub operator: Option<String>,
+}
+
+/// Quarantine a retained audit chain that no longer verifies and start a fresh,
+/// anchored segment (#196). This is the offline operator recovery path: it takes
+/// the single-writer lock, so it refuses to run while the server holds it
+/// (returns [`AuditError::SinkLocked`]).
+///
+/// Verification anchors on the first retained record's `prev_hash`
+/// (retained-suffix semantics), so a legitimately aged-out genesis is not
+/// treated as corruption. Any first-failing-line divergence is handled
+/// uniformly — a mid-file fork (`PrevHashMismatch`), a rewrite or wrong-key
+/// tail (`RecordHashMismatch`), or a torn line (`InvalidJson`): every retained
+/// data file is moved aside to `<name>.corrupt-<ts>` (retained, never deleted),
+/// and a fresh active file is started whose first record is a hash-linked
+/// `audit.chain.break` event chained onto the last good tail. A local anchor
+/// file `<path>.anchor.json` records the trusted start hash so the next startup
+/// can prove where the recovered segment begins.
+///
+/// `now_unix_ms` is supplied by the caller so the archive suffix is
+/// deterministic and testable.
+///
+/// Security note (audit integrity, per CONTRIBUTING): the break event is itself
+/// chained and hashed, and the corrupt segment is retained, so the discontinuity
+/// is tamper-evident and an operator cannot silently erase records after the
+/// break. The anchor is local-only (D3): a local attacker who can rewrite the
+/// audit directory can also rewrite the anchor; off-host shipping / external
+/// anchoring is the structural mitigation and stays the stronger guarantee.
+pub fn quarantine_and_recover_chain(
+    path: &Path,
+    max_size_bytes: u64,
+    max_files: u32,
+    hasher: &AuditChainHasher,
+    reason: &str,
+    operator: Option<&str>,
+    now_unix_ms: i64,
+) -> Result<ChainRecoveryOutcome, AuditError> {
+    let _lock = acquire_writer_lock(path)?;
+    let _ = max_size_bytes;
+    let max_files = max_files.max(1);
+
+    let paths = existing_audit_paths(path, max_files);
+    let mut contents = String::new();
+    for source in &paths {
+        contents.push_str(&read_audit_file(source)?);
+        if !contents.ends_with('\n') {
+            contents.push('\n');
+        }
+    }
+    let envelopes = parse_jsonl_lines(contents.lines()).map_err(AuditError::ChainVerification)?;
+
+    let (first_bad, last_good, good_count) = scan_first_inconsistency(&envelopes, hasher);
+    if first_bad == 0 {
+        return Ok(ChainRecoveryOutcome {
+            already_consistent: true,
+            first_bad_line: None,
+            last_good_hash: last_good,
+            break_event_hash: None,
+            records_before_break: good_count,
+            quarantine_suffix: None,
+        });
+    }
+
+    let suffix = format!("corrupt-{now_unix_ms}");
+    for source in &paths {
+        let dest = PathBuf::from(format!("{}.{suffix}", source.display()));
+        fs::rename(source, &dest).map_err(AuditError::Io)?;
+    }
+
+    let break_record = ChainBreakRecord {
+        event: CHAIN_BREAK_EVENT.to_string(),
+        reason: reason.to_string(),
+        recovered_at_unix_ms: now_unix_ms,
+        first_bad_line: first_bad,
+        last_good_hash: last_good.map(|hash| hex_lower(&hash)),
+        records_before_break: good_count,
+        quarantine_suffix: suffix.clone(),
+        operator: operator.map(str::to_string),
+    };
+    let break_value = serde_json::to_value(&break_record).map_err(AuditError::Json)?;
+    let break_envelope = AuditEnvelope::new_with_hasher(break_value, last_good, hasher)?;
+
+    // Write the break event directly as line 1 of the fresh active file. The
+    // sink's tail self-check is bypassed on purpose: the break event's prev_hash
+    // points at a record now in the archive, not in the (empty) active set.
+    ensure_parent_dir(path)?;
+    let line = break_envelope.to_jsonl()?;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .audit_file_mode()
+        .open(path)
+        .map_err(AuditError::Io)?;
+    file.write_all(line.as_bytes()).map_err(AuditError::Io)?;
+    file.flush().map_err(AuditError::Io)?;
+
+    let anchor_path = PathBuf::from(format!("{}.anchor.json", path.display()));
+    let anchor = json!({
+        "schema": "registry.audit.anchor.v1",
+        "trusted_start_prev_hash": last_good.map(|hash| hex_lower(&hash)),
+        "break_event_hash": hex_lower(&break_envelope.record_hash),
+        "recovered_at_unix_ms": now_unix_ms,
+        "quarantine_suffix": suffix,
+    });
+    let mut anchor_file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .audit_file_mode()
+        .open(&anchor_path)
+        .map_err(AuditError::Io)?;
+    anchor_file
+        .write_all(
+            serde_json::to_string_pretty(&anchor)
+                .map_err(AuditError::Json)?
+                .as_bytes(),
+        )
+        .map_err(AuditError::Io)?;
+    anchor_file.flush().map_err(AuditError::Io)?;
+
+    Ok(ChainRecoveryOutcome {
+        already_consistent: false,
+        first_bad_line: Some(first_bad),
+        last_good_hash: last_good,
+        break_event_hash: Some(break_envelope.record_hash),
+        records_before_break: good_count,
+        quarantine_suffix: Some(suffix),
+    })
+}
+
+/// Scan for the first record that breaks chain continuity, anchoring on the
+/// first retained record's `prev_hash`. Returns `(first_bad_line_1indexed,
+/// last_good_hash, good_count)`; `first_bad_line == 0` means fully consistent.
+fn scan_first_inconsistency(
+    envelopes: &[AuditEnvelope],
+    hasher: &AuditChainHasher,
+) -> (usize, Option<[u8; 32]>, usize) {
+    let mut previous = envelopes.first().and_then(|env| env.prev_hash);
+    let mut last_good = None;
+    for (index, env) in envelopes.iter().enumerate() {
+        if env.prev_hash != previous {
+            return (index + 1, last_good, index);
+        }
+        let expected = record_hash(
+            &env.envelope_id,
+            env.timestamp_unix_ms,
+            env.prev_hash.as_ref(),
+            &env.record,
+            hasher,
+        )
+        .ok();
+        if expected != Some(env.record_hash) {
+            return (index + 1, last_good, index);
+        }
+        previous = Some(env.record_hash);
+        last_good = Some(env.record_hash);
+    }
+    (0, last_good, envelopes.len())
+}
+
 fn tail_hash_from_files(
     path: &Path,
     max_size_bytes: u64,
@@ -2882,6 +3083,147 @@ mod tests {
         assert!(
             matches!(err, AuditError::ChainForkDetected { .. }),
             "expected ChainForkDetected, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn recovery_is_a_no_op_on_a_consistent_chain() {
+        // #196: a healthy chain must not be quarantined or rewritten.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        let sink = JsonlFileSink::new(&path);
+        let chain = ChainState::unkeyed_dev_only();
+        chain
+            .append(&sink, json!({ "event": "one" }))
+            .await
+            .expect("append one");
+        chain
+            .append(&sink, json!({ "event": "two" }))
+            .await
+            .expect("append two");
+        let before = fs::read_to_string(&path).expect("audit file");
+
+        let outcome = quarantine_and_recover_chain(
+            &path,
+            0,
+            50,
+            &AuditChainHasher::unkeyed_dev_only(),
+            "unit no-op",
+            None,
+            999,
+        )
+        .expect("recovery runs");
+
+        assert!(outcome.already_consistent);
+        assert_eq!(outcome.first_bad_line, None);
+        assert_eq!(outcome.quarantine_suffix, None);
+        assert_eq!(fs::read_to_string(&path).expect("audit file"), before);
+        assert!(
+            !dir.path().join("audit.jsonl.corrupt-999").exists(),
+            "a consistent chain must not be quarantined"
+        );
+    }
+
+    #[tokio::test]
+    async fn recovery_quarantines_a_fork_and_starts_an_anchored_segment() {
+        // #196: build a forked file by hand (the write-time self-check now
+        // refuses to create one), then recover it.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        let genesis = AuditEnvelope::new(json!({ "event": "genesis" }), None).expect("genesis");
+        let good = AuditEnvelope::new(json!({ "event": "good" }), Some(genesis.record_hash))
+            .expect("good");
+        // Fork: `forked` shares `good`'s predecessor instead of chaining onto it.
+        let forked = AuditEnvelope::new(json!({ "event": "forked" }), Some(genesis.record_hash))
+            .expect("forked");
+        let original = format!(
+            "{}{}{}",
+            genesis.to_jsonl().expect("genesis jsonl"),
+            good.to_jsonl().expect("good jsonl"),
+            forked.to_jsonl().expect("forked jsonl"),
+        );
+        fs::write(&path, &original).expect("write forked chain");
+
+        let outcome = quarantine_and_recover_chain(
+            &path,
+            0,
+            1,
+            &AuditChainHasher::unkeyed_dev_only(),
+            "fork recovery",
+            Some("operator-1"),
+            1234,
+        )
+        .expect("recovery runs");
+
+        assert!(!outcome.already_consistent);
+        assert_eq!(outcome.first_bad_line, Some(3));
+        assert_eq!(outcome.last_good_hash, Some(good.record_hash));
+        assert_eq!(outcome.records_before_break, 2);
+        assert_eq!(outcome.quarantine_suffix.as_deref(), Some("corrupt-1234"));
+
+        // The corrupt set is retained verbatim.
+        let archived = fs::read_to_string(dir.path().join("audit.jsonl.corrupt-1234"))
+            .expect("archive exists");
+        assert_eq!(archived, original);
+
+        // The fresh active file holds exactly the break event, chained onto the
+        // last good tail.
+        let active = fs::read_to_string(&path).expect("active file");
+        let lines: Vec<&str> = active.lines().collect();
+        assert_eq!(lines.len(), 1);
+        let break_envelope: AuditEnvelope =
+            serde_json::from_str(lines[0]).expect("break envelope parses");
+        assert_eq!(break_envelope.prev_hash, Some(good.record_hash));
+        assert_eq!(
+            break_envelope.record_hash,
+            outcome.break_event_hash.unwrap()
+        );
+        let break_record: ChainBreakRecord =
+            serde_json::from_value(break_envelope.record.clone()).expect("break record parses");
+        assert_eq!(break_record.event, CHAIN_BREAK_EVENT);
+        assert_eq!(break_record.first_bad_line, 3);
+        assert_eq!(break_record.operator.as_deref(), Some("operator-1"));
+
+        // The recovered segment verifies as a retained suffix anchored on the
+        // last good hash.
+        verify_chain_with_anchors(
+            &[break_envelope],
+            ChainVerificationAnchors::from_trusted_start_prev_hash(Some(good.record_hash)),
+            &AuditChainHasher::unkeyed_dev_only(),
+        )
+        .expect("recovered segment verifies from the anchor");
+
+        // The local anchor records where the recovered segment starts.
+        let anchor: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(dir.path().join("audit.jsonl.anchor.json")).expect("anchor exists"),
+        )
+        .expect("anchor json");
+        assert_eq!(
+            anchor["trusted_start_prev_hash"].as_str().unwrap(),
+            hex_lower(&good.record_hash)
+        );
+    }
+
+    #[tokio::test]
+    async fn recovery_refuses_while_the_single_writer_lock_is_held() {
+        // #196: recovery is offline-only; a running server holding the lock must
+        // block it.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        let _server =
+            JsonlFileSink::with_rotation_single_writer(&path, 0, 1).expect("server holds the lock");
+        let result = quarantine_and_recover_chain(
+            &path,
+            0,
+            1,
+            &AuditChainHasher::unkeyed_dev_only(),
+            "should refuse",
+            None,
+            1,
+        );
+        assert!(
+            matches!(result, Err(AuditError::SinkLocked { .. })),
+            "recovery must refuse while the server holds the lock, got {result:?}"
         );
     }
 
