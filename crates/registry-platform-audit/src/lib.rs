@@ -1202,8 +1202,12 @@ fn tail_hash_from_files(
     }
 
     let mut contents = String::new();
-    for path in &paths {
-        let file_contents = read_audit_file(path)?;
+    let mut oldest_file_has_records = false;
+    for (index, source) in paths.iter().enumerate() {
+        let file_contents = read_audit_file(source)?;
+        if index == 0 {
+            oldest_file_has_records = file_contents.lines().any(|line| !line.trim().is_empty());
+        }
         contents.push_str(&file_contents);
         if !contents.ends_with('\n') {
             contents.push('\n');
@@ -1214,9 +1218,16 @@ fn tail_hash_from_files(
     if envelopes.is_empty() {
         return Ok(None);
     }
+    // The retained-suffix compatibility path trusts the first envelope's
+    // prev_hash as the anchor, so it is only sound when that envelope is the
+    // start of the oldest retained file. If the oldest rotated file is empty
+    // (truncated), the first parsed envelope comes from a newer file and would
+    // silently hide missing leading records, so require the oldest rotated file
+    // to actually supply the anchor record.
     let starts_with_rotated_file = paths.first().is_some_and(|candidate| candidate != path);
+    let oldest_rotated_anchor = starts_with_rotated_file && oldest_file_has_records;
     let retained_suffix = max_size_bytes != 0
-        && (starts_with_rotated_file || max_files == 1)
+        && (oldest_rotated_anchor || max_files == 1)
         && envelopes[0].prev_hash.is_some();
     let verification = if retained_suffix {
         verify_chain_expected_prev_hash(&envelopes, envelopes[0].prev_hash, hasher)
@@ -1986,6 +1997,48 @@ mod tests {
                 .await,
             Err(AuditError::ChainVerification(
                 ChainVerificationError::RecordHashMismatch { line: 2 }
+            ))
+        ));
+    }
+
+    #[tokio::test]
+    async fn file_sink_bootstrap_rejects_truncated_oldest_rotated_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        // max_size 1 rotates on every append and max_files 50 retains
+        // everything, so two appends leave the genesis record in
+        // `audit.jsonl.1` and the second record live: a set complete from
+        // genesis.
+        let sink = JsonlFileSink::with_rotation(&path, 1, 50);
+        let chain = ChainState::unkeyed_dev_only();
+        for event in ["genesis", "second"] {
+            chain
+                .append(&sink, json!({ "event": event }))
+                .await
+                .expect("append");
+        }
+
+        // Healthy set bootstraps cleanly: the oldest rotated file carries the
+        // genesis record, so verification starts from prev_hash = None.
+        sink.tail_hash_with_hasher(&AuditChainHasher::unkeyed_dev_only())
+            .await
+            .expect("healthy tail");
+
+        // Truncate the oldest rotated file, dropping the genesis record. The
+        // first retained record now has a non-None prev_hash pointing at the
+        // lost record; bootstrapping must detect the gap, not anchor on it.
+        let rotated = rotated_path(&path, 1);
+        fs::write(&rotated, "").expect("truncate rotated file");
+
+        assert!(matches!(
+            sink.tail_hash_with_hasher(&AuditChainHasher::unkeyed_dev_only())
+                .await,
+            Err(AuditError::ChainVerification(
+                ChainVerificationError::PrevHashMismatch {
+                    line: 1,
+                    expected: None,
+                    actual: Some(_),
+                }
             ))
         ));
     }
