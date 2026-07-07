@@ -7,7 +7,7 @@
 # touching it. It is applied together with `-p registry-upgrade-ex` and
 # compose.yaml via:
 #
-#   docker compose -f compose.yaml -f compose.upgrade-ex.yaml <cmd>
+#   docker compose -p registry-upgrade-ex -f compose.yaml -f compose.upgrade-ex.yaml <cmd>
 #
 # `ports:` lists merge by concatenation across compose files by default (the
 # override does NOT replace the base list), so every entry below uses the

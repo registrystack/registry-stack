@@ -64,6 +64,7 @@ Build (relay + sidecar via `docker compose ... build`, notary via the patched
 Dockerfile), then:
 
 ```
+export REGISTRY_LAB_POSTGRES_PORT=64329 REGISTRY_LAB_REDIS_PORT=16379 REGISTRY_LAB_ZITADEL_PORT=14380
 docker compose -p registry-upgrade-ex -f compose.yaml -f compose.upgrade-ex.yaml up -d
 ```
 
@@ -141,6 +142,18 @@ known breaking item); the actually-breaking change for this lab pair is the
 `fingerprint.commitment` removal (F1, F2). No holder-binding warnings were
 raised because the lab profiles set `holder_binding` explicitly.
 
+**Gap: not every default-profile Notary config went through this gate.** The
+pre-check above ran `registry-notary doctor` only against `civil-notary.yaml`
+and `registry-relay doctor` only against `civil-registry-relay.yaml`. The
+default profile also starts `openfn-civil-notary.yaml` (see Environment), and
+v0.8.4 makes a breaking source-adapter connector rename
+(`connector: openfn_sidecar` -> `connector: source_adapter_sidecar`; see
+`products/notary/CHANGELOG.md`). This run never ran `registry-notary doctor`
+against `openfn-civil-notary.yaml`, so whether that config needed the
+connector rename, and whether doctor would have caught a missed rename the
+way it caught the `fingerprint.commitment` removal, was **not validated**
+here (F13).
+
 **Config migration:** restored the v0.8.4-era lab configs (same env var
 names, `commitment:` lines gone). Same `.env`, same tokens — no credential
 rotation across the upgrade. Doctor re-run:
@@ -160,7 +173,9 @@ registry-relay  doctor -> exit 0; 5 diagnostics: 4 info, 1 warning
 - config + `.env` as deployed: tarball kept outside the repo (this backup is
   what later made the roll back possible).
 
-**Deploy:** `up -d` (no `down`, no `-v`). Compose recreated exactly the 10
+**Deploy:** `docker compose -p registry-upgrade-ex -f compose.yaml -f compose.upgrade-ex.yaml up -d`
+(same exported `REGISTRY_LAB_POSTGRES_PORT`/`REGISTRY_LAB_REDIS_PORT`/`REGISTRY_LAB_ZITADEL_PORT`
+as Phase A; no `down`, no `-v`). Compose recreated exactly the 10
 relay/notary/sidecar/mock containers whose image changed; postgres, redis,
 zitadel and the static publisher kept running untouched.
 
@@ -194,7 +209,9 @@ running before the upgrade.
 - Repointed the compose image tags at the kept `ex-v0.8.3` images
   (`docker tag registry-relay:ex-v0.8.3 registry-relay:demo`, etc.) — no
   rebuild.
-- `up -d` again (no `down`); the same 10 containers were recreated.
+- `docker compose -p registry-upgrade-ex -f compose.yaml -f compose.upgrade-ex.yaml up -d`
+  again (same exported port vars as Phase A; no `down`); the same 10 containers
+  were recreated.
 
 Verification: all Phase A checks pass again —
 
@@ -222,6 +239,7 @@ Revert constraints from the doc, as observed in practice:
 ## Phase D: cleanup
 
 ```
+export REGISTRY_LAB_POSTGRES_PORT=64329 REGISTRY_LAB_REDIS_PORT=16379 REGISTRY_LAB_ZITADEL_PORT=14380
 docker compose -p registry-upgrade-ex -f compose.yaml -f compose.upgrade-ex.yaml down -v
 ```
 
@@ -292,6 +310,15 @@ Numbered; F-references above point here.
     not block.
 12. Exercise-spec nit: the suggested `REGISTRY_LAB_REDIS_PORT=73799` is not
     a valid TCP port (> 65535); 16379 was used instead.
+13. **The doctor gate did not cover every default-profile Notary config.**
+    `registry-notary doctor` and `registry-relay doctor` were only run against
+    `civil-notary.yaml` and `civil-registry-relay.yaml`. The default profile
+    also starts `openfn-civil-notary.yaml`, and v0.8.4 renames the
+    source-adapter connector (`connector: openfn_sidecar` ->
+    `connector: source_adapter_sidecar`; `products/notary/CHANGELOG.md`).
+    This run never doctor-checked `openfn-civil-notary.yaml`, so it does not
+    show whether that config needed migration for the rename or whether
+    doctor would have caught it.
 
 ## Not covered by this run
 
@@ -303,12 +330,17 @@ Numbered; F-references above point here.
   the metrics-flowing check (no monitoring stack in the lab).
 - Anti-rollback monotonic rejection (finding 5) and multi-release skip
   upgrades.
+- Doctor-gate coverage of non-civil default-profile Notary configs, in
+  particular `openfn-civil-notary.yaml` and the v0.8.4 source-adapter
+  connector rename (finding 13).
 
 ## Result
 
 The draft procedure was partially exercised end to end against a real topology:
 v0.8.3 baseline verified; v0.8.4 doctor pre-check correctly caught the
-breaking config change before deployment; after config migration the
+breaking config change on the civil relay/notary path before deployment
+(`openfn-civil-notary.yaml` was not doctor-checked in this run, see
+finding 13); after config migration the
 upgrade deployed via `up -d` with state volumes intact and services verified
 healthy on v0.8.4; the roll back to the kept v0.8.3 images plus backed-up
 config restored a fully verified v0.8.3 deployment without touching
@@ -317,5 +349,7 @@ close release-artifact verification, credential issuance, metrics, Redis
 replay/nonce state survival, anti-rollback monotonic rejection, or multi-release
 skip upgrades. The procedure works within that scoped run, with the documented
 findings — chiefly the stdout-audit-sink mismatch (finding 3), the absent
-anti-rollback file in this topology (finding 4), and the need to state
-explicitly that config backup enables config roll back (finding 1).
+anti-rollback file in this topology (finding 4), the need to state
+explicitly that config backup enables config roll back (finding 1), and the
+incomplete doctor-gate coverage of default-profile Notary configs
+(finding 13).
