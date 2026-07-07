@@ -1427,10 +1427,10 @@ fn matching_policy_diagnostics(config: &StandaloneRegistryNotaryConfig) -> Vec<D
     }
     vec![Diagnostic::warn_with_code(
         format!(
-            "claim source binding(s) declare no matching policy, so resolution falls back to unrestricted, identifier-only matching: {}",
+            "claim source binding(s) declare no matching policy or matching gates, so resolution falls back to unrestricted, identifier-only matching: {}",
             unconstrained_bindings.join(", ")
         ),
-        "declare a matching: block (policy_id or explicit gates such as context_constraints) on each binding, or accept unrestricted identifier-only resolution knowingly",
+        "declare a matching: block (policy_id, purpose, relationship, input, requester type, ecosystem binding, or context_constraints gates) on each binding, or accept unrestricted identifier-only resolution knowingly",
         "notary.source_binding.no_matching_policy",
     )]
 }
