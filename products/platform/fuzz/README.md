@@ -39,9 +39,9 @@ this crate's dependencies independently of the main workspace lockfile.
 ## Corpus
 
 `fuzz/corpus/<target>/` holds hand-written seeds (valid and near-valid inputs),
-committed to git under descriptive filenames. Files libFuzzer generates during
-a run are excluded via `.gitignore` (`artifacts/`, `target/`) and should not be
-committed; if a generated input is worth keeping permanently, copy it into the
+committed to git under descriptive filenames. The `.gitignore` here excludes
+`artifacts/`, `target/`, and libFuzzer's generated 40-hex-character corpus
+entries; if a generated input is worth keeping permanently, copy it into the
 seed corpus under a descriptive name instead of committing the raw generated
 filename.
 
