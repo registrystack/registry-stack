@@ -51,6 +51,7 @@ use tower_http::timeout::{RequestBodyTimeoutLayer, TimeoutLayer};
 use tracing::{info, warn};
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SidecarConfig {
     pub server: ServerConfig,
     pub auth: AuthConfig,
@@ -67,6 +68,7 @@ pub struct SidecarConfig {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ServerConfig {
     pub bind: SocketAddr,
     #[serde(default = "default_request_timeout_ms")]
@@ -85,6 +87,7 @@ pub struct ServerConfig {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AuthConfig {
     pub bearer_tokens: Vec<BearerTokenConfig>,
 }
@@ -151,6 +154,7 @@ pub struct SidecarConfigTrustConfig {
 }
 
 #[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BearerTokenConfig {
     pub id: String,
     #[serde(default)]
@@ -170,6 +174,7 @@ impl fmt::Debug for BearerTokenConfig {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct LimitConfig {
     pub max_workers: usize,
     pub worker_timeout_ms: u64,
@@ -188,6 +193,7 @@ pub struct LimitConfig {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct SourceConfig {
     pub dataset: String,
     pub entity: String,
@@ -485,6 +491,7 @@ fn rhai_union_visible_statuses(rhai: &RhaiScriptConfig) -> BTreeSet<u16> {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct SourceBatchConfig {
     #[serde(default)]
     pub mode: SourceBatchMode,
@@ -509,6 +516,7 @@ impl SourceBatchConfig {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct SourceRuntimeLimitConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_in_flight: Option<usize>,
@@ -525,6 +533,7 @@ impl SourceRuntimeLimitConfig {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct HttpJsonSourceConfig {
     #[serde(default)]
     pub method: HttpJsonMethod,
@@ -542,6 +551,7 @@ pub struct HttpJsonSourceConfig {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct SourceCacheConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exact_match_ttl_ms: Option<u64>,
@@ -560,11 +570,13 @@ pub enum HttpJsonMethod {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct HttpJsonCelExpression {
     pub cel: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct HttpJsonAuthConfig {
     #[serde(rename = "type")]
     pub kind: HttpJsonAuthKind,
@@ -622,16 +634,19 @@ pub enum HttpJsonAuthKind {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct HttpJsonSecretRef {
     pub secret: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct HttpJsonResponseConfig {
     pub records: HttpJsonCelExpression,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct HttpJsonBatchConfig {
     #[serde(default)]
     pub method: HttpJsonMethod,
@@ -644,6 +659,7 @@ pub struct HttpJsonBatchConfig {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct HttpJsonBatchResponseConfig {
     pub records: HttpJsonCelExpression,
     pub record_key: HttpJsonCelExpression,
@@ -651,6 +667,7 @@ pub struct HttpJsonBatchResponseConfig {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct HttpFlowSourceConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
@@ -661,6 +678,7 @@ pub struct HttpFlowSourceConfig {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct HttpFlowStepConfig {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -673,6 +691,7 @@ pub struct HttpFlowStepConfig {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct HttpFlowRequestConfig {
     #[serde(default)]
     pub method: HttpJsonMethod,
@@ -687,12 +706,14 @@ pub struct HttpFlowRequestConfig {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct HttpFlowResponseConfig {
     #[serde(default)]
     pub bind: BTreeMap<String, HttpJsonCelExpression>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct HttpFlowOutputConfig {
     pub records: HttpJsonCelExpression,
 }
@@ -746,6 +767,7 @@ struct GovernedRuntimeTarget {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct SmokeLookupConfig {
     pub field: String,
     pub value: String,
