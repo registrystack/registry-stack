@@ -605,17 +605,17 @@ impl OperationalAuditEvent {
     }
 }
 
+/// Stable readiness code reported by `/ready` when the retained audit chain
+/// failed startup verification and needs operator recovery (#196). Documented
+/// alongside [`AUDIT_WRITE_FAILED_CODE`].
+pub const AUDIT_CHAIN_INCONSISTENT_CODE: &str = "audit.chain.inconsistent";
+
 /// Chained writer for relay audit records.
 ///
 /// Concrete sinks implement `registry-platform-audit::AuditSink`; this
 /// pipeline owns the per-sink chain state, bootstraps it from the sink
 /// tail on first write, and serializes relay's typed `AuditRecord` into
 /// the platform envelope record body.
-/// Stable readiness code reported by `/ready` when the retained audit chain
-/// failed startup verification and needs operator recovery (#196). Documented
-/// alongside [`AUDIT_WRITE_FAILED_CODE`].
-pub const AUDIT_CHAIN_INCONSISTENT_CODE: &str = "audit.chain.inconsistent";
-
 #[derive(Clone)]
 pub struct AuditPipeline {
     sink: Arc<dyn registry_platform_audit::AuditSink>,
