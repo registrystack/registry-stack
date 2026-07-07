@@ -15,17 +15,6 @@
   ],
   "reviewed_findings": [
     {
-      "tool": "zizmor",
-      "fingerprint": "zizmor|cache-poisoning|.github/workflows/dcat-ap-external-validation.yml|k:jobs/k:semic-dcat-ap/k:steps/i:8/k:uses|enables caching by default",
-      "rule_id": "cache-poisoning",
-      "severity": "high",
-      "status": "accepted_risk",
-      "owner": "@PublicSchema/maintainers",
-      "reason": "dcat-ap-external-validation runs only on workflow_dispatch and release:published (no fork/PR trigger), and no privileged job restores this cache key (container.yml builds via docker build and never uses rust-cache). The rust-cache step is now restore-only (save-if: false), so this workflow cannot write a poisonable cache. zizmor still flags the presence of a caching action in a release-triggered workflow regardless of save-if; accepted as a mitigated, non-exploitable residual. Re-review if a privileged consumer of this cache key is introduced, or drop the rust-cache step to clear it entirely.",
-      "reviewed_at": "2026-06-04",
-      "expires_at": "2026-12-01"
-    },
-    {
       "tool": "grype",
       "fingerprint": "grype|registry-relay-image|CVE-2023-45853|zlib1g|1:1.2.13.dfsg-1|deb",
       "rule_id": "CVE-2023-45853",

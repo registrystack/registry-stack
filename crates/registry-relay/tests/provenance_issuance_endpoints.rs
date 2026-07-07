@@ -277,12 +277,10 @@ audit:
 "#
     );
     std::fs::write(&path, body).expect("write config");
-    unsafe {
-        env::set_var(
-            "REGISTRY_RELAY_TEST_AUDIT_HASH_SECRET",
-            "relay-provenance-issuance-audit-secret-32-bytes",
-        );
-    }
+    env::set_var(
+        "REGISTRY_RELAY_TEST_AUDIT_HASH_SECRET",
+        "relay-provenance-issuance-audit-secret-32-bytes",
+    );
     config::load(&path).expect("config loads")
 }
 

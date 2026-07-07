@@ -174,13 +174,10 @@ fn ready_snapshot() -> ReadinessSnapshot {
 fn build_fixture() -> MetricsFixture {
     let tmp = TempDir::new().expect("tempdir");
     let config_path = write_config(&tmp);
-    #[allow(unused_unsafe)]
-    unsafe {
-        std::env::set_var(
-            "REGISTRY_RELAY_TEST_AUDIT_HASH_SECRET",
-            "relay-observability-audit-secret-32-bytes",
-        );
-    }
+    std::env::set_var(
+        "REGISTRY_RELAY_TEST_AUDIT_HASH_SECRET",
+        "relay-observability-audit-secret-32-bytes",
+    );
     let config: Arc<Config> = Arc::new(config::load(&config_path).expect("config loads"));
     let df_ctx = Arc::new(SessionContext::new());
     let ingest = Arc::new(
@@ -393,13 +390,10 @@ async fn metrics_do_not_expose_sensitive_or_high_cardinality_values() {
 async fn bare_public_app_does_not_mount_metrics() {
     let tmp = TempDir::new().expect("tempdir");
     let config_path = write_config(&tmp);
-    #[allow(unused_unsafe)]
-    unsafe {
-        std::env::set_var(
-            "REGISTRY_RELAY_TEST_AUDIT_HASH_SECRET",
-            "relay-observability-audit-secret-32-bytes",
-        );
-    }
+    std::env::set_var(
+        "REGISTRY_RELAY_TEST_AUDIT_HASH_SECRET",
+        "relay-observability-audit-secret-32-bytes",
+    );
     let config: Arc<Config> = Arc::new(config::load(&config_path).expect("config loads"));
     let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(InMemorySink::new());
     let public = TestServer::new(build_app(config, build_auth(), sink).unwrap());

@@ -15,7 +15,7 @@
 //!    query state, then compose the public data-plane router.
 //! 6. Bind on `config.server.bind`, optionally bind the admin router on
 //!    `config.server.admin_bind`, serve, and shut down cleanly on
-//!    `SIGINT`/`Ctrl-C`.
+//!    `SIGINT`/`Ctrl-C` or `SIGTERM`.
 //!
 //! ## Error handling
 //!
@@ -2322,14 +2322,38 @@ fn init_tracing() {
     }
 }
 
-/// Wait for `Ctrl-C` so axum can drain in-flight requests cleanly.
+/// Wait for a process shutdown signal so axum can drain in-flight requests cleanly.
 async fn shutdown_signal() {
-    match tokio::signal::ctrl_c().await {
-        Ok(()) => info!("received shutdown signal; draining"),
-        Err(err) => {
-            error!(error = %err, "failed to install ctrl-c handler");
+    let ctrl_c = async {
+        match tokio::signal::ctrl_c().await {
+            Ok(()) => info!(signal = "ctrl-c", "received shutdown signal; draining"),
+            Err(err) => error!(error = %err, "failed to install ctrl-c handler"),
         }
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        match install_sigterm_listener() {
+            Ok(mut signal) => {
+                signal.recv().await;
+                info!(signal = "sigterm", "received shutdown signal; draining");
+            }
+            Err(err) => error!(error = %err, "failed to install SIGTERM handler"),
+        }
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        () = ctrl_c => {},
+        () = terminate => {},
     }
+}
+
+#[cfg(unix)]
+fn install_sigterm_listener() -> io::Result<tokio::signal::unix::Signal> {
+    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
 }
 
 #[cfg(test)]
@@ -2357,6 +2381,12 @@ mod tests {
     use tempfile::tempdir;
     use tokio::net::TcpListener;
     use tokio::sync::Mutex;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn sigterm_listener_can_be_installed() {
+        let _signal = super::install_sigterm_listener().expect("SIGTERM listener installs");
+    }
 
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         static ENV_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();

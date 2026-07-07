@@ -1,6 +1,6 @@
 # Security Assurance
 
-Registry Notary's container workflow publishes release images from stable
+The root monorepo release workflow publishes Registry Notary images from stable
 `vX.Y.Z` tags and `registry-stack-technical-preview-<date-or-version>` tags to
 `ghcr.io/registrystack/registry-notary` and
 `ghcr.io/registrystack/registry-notary-source-adapter-sidecar`. Every release publishes
@@ -189,6 +189,6 @@ just security
 ```
 
 This validates exposure contracts, Dockerfile secret-copy guardrails, the
-OpenAPI baseline, workflow syntax/security tooling when installed, the reviewed
-`zizmor` high-severity ratchet, gitleaks current-tree scanning, and Semgrep
-rules when installed.
+OpenAPI baseline, optional GitHub Actions tooling when installed for workflow
+files in scope, the reviewed `zizmor` high-severity ratchet, gitleaks
+current-tree scanning, and Semgrep rules when installed.

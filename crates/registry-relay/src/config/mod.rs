@@ -32,7 +32,7 @@ pub mod capabilities;
 pub mod governed;
 pub mod loader;
 pub mod provenance;
-#[cfg(any(test, debug_assertions))]
+#[cfg(test)]
 #[doc(hidden)]
 pub mod test_support;
 pub mod validate;

@@ -79,10 +79,12 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn("audited 7 imports", result.stdout)
 
-    def test_classify_known_warning(self) -> None:
-        result = run_tool("classify-warning", "artifact-publication-held")
-        self.assertEqual(0, result.returncode, result.stderr)
-        self.assertEqual("artifact-gate-held", result.stdout.strip())
+    def test_removed_stub_commands_are_not_registered(self) -> None:
+        for command in ("classify-warning", "generate-docset", "collect-artifacts"):
+            with self.subTest(command=command):
+                result = run_tool(command)
+                self.assertEqual(2, result.returncode)
+                self.assertIn("invalid choice", result.stderr)
 
     def test_validate_rejects_mismatched_source_tag(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

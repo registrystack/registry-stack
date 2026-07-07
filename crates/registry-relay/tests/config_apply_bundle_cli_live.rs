@@ -463,12 +463,9 @@ async fn mount_directory_files(server: &MockServer, url_prefix: &str, dir: &Path
 
 #[tokio::test]
 async fn config_apply_bundle_cli_drives_live_admin_root_transition_with_local_approval() {
-    #[allow(unused_unsafe)]
-    unsafe {
-        std::env::set_var(ADMIN_TOKEN_HASH_ENV, fingerprint_api_key(ADMIN_TOKEN));
-        std::env::set_var(OPS_TOKEN_HASH_ENV, fingerprint_api_key(OPS_TOKEN));
-        std::env::set_var(AUDIT_HASH_SECRET_ENV, AUDIT_HASH_SECRET);
-    }
+    std::env::set_var(ADMIN_TOKEN_HASH_ENV, fingerprint_api_key(ADMIN_TOKEN));
+    std::env::set_var(OPS_TOKEN_HASH_ENV, fingerprint_api_key(OPS_TOKEN));
+    std::env::set_var(AUDIT_HASH_SECRET_ENV, AUDIT_HASH_SECRET);
     let tmp = TempDir::new().expect("tempdir");
     let public_bind = allocate_loopback_addr();
     let admin_bind = allocate_loopback_addr();
@@ -556,12 +553,9 @@ async fn config_apply_bundle_cli_drives_live_admin_root_transition_with_local_ap
 
 #[tokio::test]
 async fn config_apply_bundle_cli_drives_live_admin_remote_root_transition_with_local_approval() {
-    #[allow(unused_unsafe)]
-    unsafe {
-        std::env::set_var(ADMIN_TOKEN_HASH_ENV, fingerprint_api_key(ADMIN_TOKEN));
-        std::env::set_var(OPS_TOKEN_HASH_ENV, fingerprint_api_key(OPS_TOKEN));
-        std::env::set_var(AUDIT_HASH_SECRET_ENV, AUDIT_HASH_SECRET);
-    }
+    std::env::set_var(ADMIN_TOKEN_HASH_ENV, fingerprint_api_key(ADMIN_TOKEN));
+    std::env::set_var(OPS_TOKEN_HASH_ENV, fingerprint_api_key(OPS_TOKEN));
+    std::env::set_var(AUDIT_HASH_SECRET_ENV, AUDIT_HASH_SECRET);
     let tmp = TempDir::new().expect("tempdir");
     let public_bind = allocate_loopback_addr();
     let admin_bind = allocate_loopback_addr();

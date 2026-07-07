@@ -9,7 +9,6 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 FILES = [
-    ROOT / ".github" / "workflows" / "perf-smoke.yml",
     ROOT / "perf" / "README.md",
 ]
 

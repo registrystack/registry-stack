@@ -12,6 +12,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use base64::Engine as _;
 use clap::ValueEnum;
 use ed25519_dalek::SigningKey;
+use registry_config_report::REGISTRYCTL_VALIDATION_REPORT_SCHEMA_VERSION_V1;
 use registry_platform_authcommon::{fingerprint_api_key, validate_api_key_entropy};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -986,7 +987,7 @@ enum DoctorCheckStatus {
 
 #[derive(Debug, Serialize)]
 struct DoctorReport {
-    schema: &'static str,
+    schema_version: &'static str,
     product: &'static str,
     command: &'static str,
     ok: bool,
@@ -1056,7 +1057,7 @@ fn run_doctor_report_with_path(
         .iter()
         .all(|check| check.status == DoctorProductStatus::Passed);
     Ok(DoctorReport {
-        schema: "registry.validation.report.v1",
+        schema_version: REGISTRYCTL_VALIDATION_REPORT_SCHEMA_VERSION_V1,
         product: "registryctl",
         command: "doctor",
         ok,
@@ -6363,7 +6364,7 @@ workflows:
             .find(|value| !value.is_empty())
             .unwrap();
         let product_json = serde_json::json!({
-            "schema": "registry.validation.report.v1",
+            "schema_version": "registry.config.diagnostic_report.v1",
             "product": "registry-relay",
             "ok": false,
             "findings": [
@@ -6411,7 +6412,7 @@ workflows:
         let project_dir = temp.path().join("notary-only");
         init_notary_project(&project_dir, default_notary_options()).unwrap();
         let product_json = serde_json::json!({
-            "schema": "registry.validation.report.v1",
+            "schema_version": "registry.config.diagnostic_report.v1",
             "product": "registry-notary",
             "ok": true,
             "diagnostics": [
@@ -6460,7 +6461,10 @@ workflows:
                 .unwrap();
         let json = serde_json::to_value(&report).unwrap();
 
-        assert_eq!(json["schema"], "registry.validation.report.v1");
+        assert_eq!(
+            json["schema_version"],
+            REGISTRYCTL_VALIDATION_REPORT_SCHEMA_VERSION_V1
+        );
         assert_eq!(json["product"], "registryctl");
         assert_eq!(json["command"], "doctor");
         assert_eq!(json["result"], "passed");

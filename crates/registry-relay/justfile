@@ -116,15 +116,11 @@ openapi-contract base_ref="":
 container-security:
     python3 scripts/check_security_assurance.py dockerfile-secrets
 
-# Check locked Cargo resolution against the workflow-pinned companion repos.
+# Run the monorepo CI preflight for Registry Relay.
 ci-preflight:
     scripts/ci-preflight.sh
 
-# Check locked Cargo resolution against the current sibling working trees.
-ci-preflight-worktree:
-    CI_PREFLIGHT_USE_WORKTREE=1 scripts/ci-preflight.sh
-
-# Run the full CI gate locally: pinned-ref preflight, Docker build contract,
+# Run the full CI gate locally: monorepo preflight, Docker build contract,
 # fmt-check, default/all-feature lint, default/all-feature tests, and cargo-deny.
 ci: ci-preflight docker-build-contract fmt-check lint-default lint test-default test deny openapi-contract
 

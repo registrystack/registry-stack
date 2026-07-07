@@ -10,7 +10,8 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-pub use registry_platform_pdp::{ODRL_ENFORCEMENT_PROFILE, SUPPORTED_ODRL_ENFORCEMENT_TERMS};
+pub const ODRL_ENFORCEMENT_PROFILE: &str = "registry-evidence-gateway-pdp/v1";
+pub const SUPPORTED_ODRL_ENFORCEMENT_TERMS: &[&str] = &["odrl:purpose", "odrl:spatial"];
 
 #[allow(dead_code)]
 const DATASETS_COLLECTION_ID: &str = "datasets";

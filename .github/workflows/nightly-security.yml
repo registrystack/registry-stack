@@ -126,13 +126,11 @@ jobs:
           python3 scripts/check_security_assurance.py dockerfile-secrets
           python3 scripts/check_security_assurance.py openapi-strategy
 
-      - name: Notary container, workflow, and OpenAPI checks
+      - name: Notary container and OpenAPI checks
         working-directory: products/notary
         run: |
           python3 scripts/check_security_assurance.py manifest
           python3 scripts/check_security_assurance.py dockerfile-secrets
-          python3 scripts/check_security_assurance.py workflow-external-refs
-          python3 scripts/check_security_assurance.py workflow-pull-request-hardening
           python3 scripts/check_security_assurance.py openapi-baseline
 
       - name: Release image Dockerfile checks

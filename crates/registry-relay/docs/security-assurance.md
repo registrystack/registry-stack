@@ -1,6 +1,6 @@
 # Security assurance
 
-Registry Relay's container workflow publishes release images from stable
+The root monorepo release workflow publishes Registry Relay images from stable
 `vX.Y.Z` tags and `registry-stack-technical-preview-<date-or-version>` tags to
 `ghcr.io/registrystack/registry-relay`. Every release publishes
 `sha-<commit-sha>` as the immutable image tag. Stable releases also update
@@ -117,9 +117,10 @@ Run the practical local subset:
 just security
 ```
 
-This validates exposure contracts, Dockerfile secret-copy guardrails, workflow
-syntax/security tooling when installed, the reviewed `zizmor` high-severity
-ratchet, gitleaks current-tree scanning, and Semgrep rules when installed.
+This validates exposure contracts, Dockerfile secret-copy guardrails, optional
+GitHub Actions tooling when installed for workflow files in scope, the reviewed
+`zizmor` high-severity ratchet, gitleaks current-tree scanning, and Semgrep
+rules when installed.
 
 Endpoint exposure is checked in three directions: route inventory to
 manifest, manifest to route inventory, and Rust Axum route declarations to

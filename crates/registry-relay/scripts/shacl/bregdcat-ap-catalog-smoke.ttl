@@ -17,9 +17,7 @@
 # Recommended/Optional, not Mandatory. The shapes below assert what this
 # emitter ALWAYS or CONDITIONALLY produces, not what the BRegDCAT-AP
 # specification mandates. Full mandatoriness gap analysis against SEMIC's
-# active BRegDCAT-AP profile is delegated to the SEMIC ITB validator job in
-# .github/workflows/dcat-ap-external-validation.yml (continue-on-error, gap
-# report).
+# active BRegDCAT-AP profile is delegated to `just validate-catalog-semic`.
 #
 # ---------------------------------------------------------------------------
 # dcat:Dataset -- emitter-produced shape constraints

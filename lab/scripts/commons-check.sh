@@ -2,16 +2,34 @@
 set -euo pipefail
 
 lab_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-platform_dir="${REGISTRY_PLATFORM_SOURCE_DIR:-${lab_root}/../registry-platform}"
-manifest_dir="${REGISTRY_MANIFEST_REPO:-${lab_root}/vendor/registry-manifest}"
-relay_dir="${REGISTRY_RELAY_SOURCE_DIR:-${lab_root}/../registry-relay}"
-notary_dir="${REGISTRY_NOTARY_SOURCE_DIR:-${lab_root}/../registry-notary}"
+stack_root="${REGISTRY_STACK_SOURCE_DIR:-${lab_root}/..}"
+platform_dir="${REGISTRY_PLATFORM_SOURCE_DIR:-${stack_root}}"
+manifest_dir="${REGISTRY_MANIFEST_REPO:-${stack_root}}"
+relay_dir="${REGISTRY_RELAY_SOURCE_DIR:-${stack_root}/crates/registry-relay}"
+notary_dir="${REGISTRY_NOTARY_SOURCE_DIR:-${stack_root}}"
+notary_ci_dir="${REGISTRY_NOTARY_CI_DIR:-}"
+if [[ -z "${notary_ci_dir}" ]]; then
+  if [[ -f "${notary_dir}/products/notary/justfile" ]]; then
+    notary_ci_dir="${notary_dir}/products/notary"
+  else
+    notary_ci_dir="${notary_dir}"
+  fi
+fi
 
 require_repo() {
   local name="$1"
   local dir="$2"
   if [[ ! -f "${dir}/Cargo.toml" ]]; then
     echo "commons-check failed: ${name} checkout not found at ${dir}" >&2
+    exit 2
+  fi
+}
+
+require_path() {
+  local name="$1"
+  local path="$2"
+  if [[ ! -e "${path}" ]]; then
+    echo "commons-check failed: ${name} not found at ${path}" >&2
     exit 2
   fi
 }
@@ -23,15 +41,64 @@ run_in_dir() {
   (cd "${dir}" && "$@")
 }
 
+slug() {
+  printf '%s' "$1" | tr '/ :' '---' | tr -cd '[:alnum:]_.-'
+}
+
+run_platform_checks() {
+  if [[ -f "${platform_dir}/crates/registry-platform-authcommon/Cargo.toml" ]]; then
+    run_in_dir "${platform_dir}" cargo test --locked --all-features \
+      -p registry-platform-audit \
+      -p registry-platform-authcommon \
+      -p registry-platform-cache \
+      -p registry-platform-config \
+      -p registry-platform-crypto \
+      -p registry-platform-httpsec \
+      -p registry-platform-httputil \
+      -p registry-platform-oid4vci \
+      -p registry-platform-oidc \
+      -p registry-platform-ops \
+      -p registry-platform-pdp \
+      -p registry-platform-replay \
+      -p registry-platform-sdjwt \
+      -p registry-platform-sts \
+      -p registry-platform-testing
+  else
+    run_in_dir "${platform_dir}" cargo test --workspace --all-features
+  fi
+}
+
+run_manifest_checks() {
+  if [[ -f "${manifest_dir}/crates/registry-manifest-cli/Cargo.toml" ]]; then
+    local out_root="${manifest_dir}/target/commons-check/contract-kernel"
+    local profiles_dir="products/manifest/profiles"
+    if [[ ! -d "${manifest_dir}/${profiles_dir}" ]]; then
+      profiles_dir="profiles"
+    fi
+    run_in_dir "${manifest_dir}" cargo test --locked -p registry-manifest-core -p registry-manifest-cli
+    run_in_dir "${manifest_dir}" cargo run --locked -p registry-manifest-cli -- validate-profiles "${profiles_dir}"
+    mkdir -p "${out_root}"
+    for manifest in "${lab_root}/config/static-metadata/metadata.yaml" "${lab_root}"/config/relay/*.metadata.yaml; do
+      local name
+      name="$(slug "${manifest}")"
+      run_in_dir "${manifest_dir}" cargo run --locked -p registry-manifest-cli -- validate "${manifest}"
+      run_in_dir "${manifest_dir}" cargo run --locked -p registry-manifest-cli -- publish "${manifest}" --out "${out_root}/${name}"
+    done
+  else
+    run_in_dir "${manifest_dir}" scripts/check-contract-kernel.sh "${lab_root}/config/static-metadata/metadata.yaml" "${lab_root}"/config/relay/*.metadata.yaml
+  fi
+}
+
 require_repo "registry-platform" "${platform_dir}"
 require_repo "registry-manifest" "${manifest_dir}"
 require_repo "registry-relay" "${relay_dir}"
 require_repo "registry-notary" "${notary_dir}"
+require_path "registry-notary ci justfile" "${notary_ci_dir}/justfile"
 
-run_in_dir "${platform_dir}" cargo test --workspace --all-features
-run_in_dir "${manifest_dir}" scripts/check-contract-kernel.sh "${lab_root}/config/static-metadata/metadata.yaml" "${lab_root}"/config/relay/*.metadata.yaml
-run_in_dir "${relay_dir}" env REGISTRY_PLATFORM_SOURCE_DIR="${platform_dir}" scripts/check-platform-compat.sh
-run_in_dir "${notary_dir}" env REGISTRY_PLATFORM_SOURCE_DIR="${platform_dir}" scripts/check-platform-compat.sh
+run_platform_checks
+run_manifest_checks
+run_in_dir "${relay_dir}" just ci-preflight
+run_in_dir "${notary_ci_dir}" just ci-preflight
 
 tmp_dir="$(mktemp -d)"
 created_env_file=0

@@ -21,7 +21,7 @@ pkcs11 = ["dep:cryptoki", "dep:hex"]
 registry-notary-core.workspace = true
 registry-platform-audit.workspace = true
 registry-platform-authcommon.workspace = true
-registry-platform-cache.workspace = true
+registry-platform-cache = { workspace = true, features = ["redis"] }
 registry-platform-config.workspace = true
 registry-platform-crypto.workspace = true
 registry-platform-httpsec.workspace = true
@@ -30,7 +30,7 @@ registry-platform-oid4vci.workspace = true
 registry-platform-oidc.workspace = true
 registry-platform-ops.workspace = true
 registry-platform-pdp.workspace = true
-registry-platform-replay.workspace = true
+registry-platform-replay = { workspace = true, features = ["redis"] }
 registry-platform-sdjwt.workspace = true
 axum.workspace = true
 async-trait.workspace = true

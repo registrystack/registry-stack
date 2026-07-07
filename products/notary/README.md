@@ -139,36 +139,16 @@ Use the wrapper for dependency policy checks. It installs and runs the pinned
 `cargo-deny` version expected by `deny.toml`, so older global installs do not
 break local or CI verification.
 
-Run the first-push preflight before opening or updating PRs that touch Rust,
-Cargo features, Dockerfiles, workflows, perf config, or companion repository
-refs:
+Run the monorepo preflight before opening or updating PRs that touch Rust,
+Cargo features, Dockerfiles, root workflows, or perf config:
 
 ```bash
 just ci-preflight
 ```
 
-The preflight stages a temporary workspace, checks out Platform and Crosswalk at
-the workflow-pinned refs, then runs locked Cargo metadata and check commands.
-It catches `Cargo.lock` drift and companion-ref skew before the heavyweight CI
-jobs reach Docker, perf, or security scans. During coordinated local multi-repo
-work, run `just ci-preflight-worktree` to check the current sibling working
-trees before those dependency refs are committed and repinned.
-
-Registry Notary depends on sibling `../registry-platform` path crates. CI checks
-out `registry-platform` at `REGISTRY_PLATFORM_REF` beside this repository before
-running Cargo jobs. Private platform checkouts require a repository secret named
-`REGISTRY_PLATFORM_TOKEN`.
-
-Run the focused Platform compatibility gate before merging Platform-facing
-changes:
-
-```bash
-REGISTRY_PLATFORM_SOURCE_DIR=../registry-platform scripts/check-platform-compat.sh
-```
-
-The script validates the all-feature server build and the Platform security API
-integration tests. Set `CROSSWALK_SOURCE_DIR` when Crosswalk is not at
-`../crosswalk`. CEL is disabled by default; enable with `registry-notary-cel`.
+The preflight runs from the registry-stack root, uses the root workspace
+lockfile, and catches `Cargo.lock` drift before the heavyweight CI jobs reach
+Docker, perf, or security scans.
 
 ## Docker
 

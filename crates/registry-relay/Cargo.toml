@@ -7,9 +7,8 @@ license = "Apache-2.0"
 description = "Registry Relay: config-driven, read-only APIs over sensitive registry and tabular files."
 publish = false
 
-# not opted into [workspace.lints]: unsafe std::env::set_var in
-# src/config/test_support.rs (compiled into the lib, not just #[cfg(test)])
-# and in tests/
+[lints]
+workspace = true
 
 [package.metadata.cargo-machete]
 ignored = ["humantime-serde"]

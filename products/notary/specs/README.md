@@ -17,16 +17,9 @@ that still tracks open work.
   **[archived: reconciled design record]**
 - [`federated-evaluation-mvp-spec.md`](federated-evaluation-mvp-spec.md):
   static-peer delegated evaluation MVP. **[implemented]**
-- [`federated-notary-manifest-spec.md`](federated-notary-manifest-spec.md):
-  manifest-backed federation, trust, delegated evaluation, credential issuance,
-  and audit checkpoint design. **[archived: diverges from code]**
 - [`gitb-conformance-suite.md`](gitb-conformance-suite.md):
   target GITB runtime scenario suite and first runnable slice for Notary
   interoperability evidence. **[active: suite design]**
-- [`evidence-request-subject-model-spec.md`](evidence-request-subject-model-spec.md):
-  breaking evaluation request model for requester, target, relationship,
-  provider-side matching, and non-person evidence subjects.
-  **[archived: diverges from code]**
 - [`notary-api-v1-route-cleanup-proposal.md`](notary-api-v1-route-cleanup-proposal.md):
   implemented route cleanup design record for the stable `/v1` REST API
   surface. **[implemented]**
@@ -40,3 +33,8 @@ that still tracks open work.
 - [`notary-capability-gaps.md`](notary-capability-gaps.md):
   maintainer roadmap of the per-scenario gaps and the rollup of capability gaps
   surfaced by the Notary scenario catalog. **[active: gap register]**
+
+Archived specs that diverge from the current code moved to `../archive/specs/`:
+
+- [`federated-notary-manifest-spec.md`](../archive/specs/federated-notary-manifest-spec.md)
+- [`evidence-request-subject-model-spec.md`](../archive/specs/evidence-request-subject-model-spec.md)
