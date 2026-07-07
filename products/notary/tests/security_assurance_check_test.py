@@ -35,12 +35,15 @@ class SecurityAssuranceCheckTest(unittest.TestCase):
             "paths": {"/x": {"get": {}}},
         }))
         self.old_root = self.module.ROOT
+        self.old_monorepo_root = self.module.MONOREPO_ROOT
         self.old_security = self.module.SECURITY_DIR
         self.module.ROOT = self.root
+        self.module.MONOREPO_ROOT = self.root
         self.module.SECURITY_DIR = self.root / "security"
 
     def tearDown(self):
         self.module.ROOT = self.old_root
+        self.module.MONOREPO_ROOT = self.old_monorepo_root
         self.module.SECURITY_DIR = self.old_security
         self.tmp.cleanup()
 
