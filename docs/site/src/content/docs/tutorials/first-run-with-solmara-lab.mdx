@@ -1,7 +1,7 @@
 ---
 title: First run with Solmara Lab
 description: Bring up the Solmara Lab compose demo on a laptop, verify it with the smoke suite, and call a Notary evaluation route directly.
-status: draft
+status: current
 owner: registry-docs
 source_repos:
   - solmara-lab
@@ -18,31 +18,29 @@ standards_referenced:
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 import { Steps } from '@astrojs/starlight/components';
 
-Solmara Lab is a standalone Registry Stack adopter demo for the fictional Republic of Solmara. It
-wires six [Registry Relay](../../products/registry-relay/) instances and four
-[Registry Notary](../../products/registry-notary/) instances over generated synthetic data into one
-topology, alongside a citizen portal and a public Visitor's Center, and it replaces the monorepo's
-former `lab` directory.
-
-This tutorial brings the topology up with the `just` recipes the lab provides, verifies it with the
-smoke suite, and calls a Notary evaluation route directly so you touch the protected API surface,
-not only the portal. If you only want the shortest hosted path before running anything locally,
-start with the [Quickstart](../../start/quickstart/) instead. This page is the full local tour.
-
-For a standalone local project generated from your own data, use the `registryctl` tutorials
-instead: [run a protected registry API](../publish-spreadsheet-secured-registry-api/) or
-[evaluate a claim with Registry Notary](../verify-claim-registry-api/). Clone Solmara Lab only when
-you want the full multi-service country demo rather than a generated project.
+Solmara Lab is a standalone Registry Stack adopter demo for the fictional Republic of Solmara: six
+[Registry Relay](../../products/registry-relay/) instances and four
+[Registry Notary](../../products/registry-notary/) instances wired over generated synthetic data
+into one topology, alongside a citizen portal and a public Visitor's Center. This tutorial brings
+the topology up with the lab's `just` recipes, verifies it with the smoke suite, and calls a Notary
+evaluation route directly so you touch the protected API surface, not only the portal.
 
 <QuickstartMeta
   outcome="The full Solmara Lab topology running on your laptop, verified by the smoke suite, with a Notary evaluation call made directly against the running stack."
   time="About 20 minutes, most of it the first startup (image pulls plus three local image builds)"
   level="Local multi-service demo"
-  prerequisites={['Docker Compose', 'just', 'uv', 'python3 and openssl', 'pnpm 11.3.0 via corepack', 'git']}
+  prerequisites={['Docker Compose', 'just', 'uv', 'python3 and openssl', 'pnpm 11.3.0 via corepack', 'git', 'curl']}
 />
 
 This tutorial uses synthetic data and local demo credentials.
 Do not use the generated local keys in production.
+
+If you only want the shortest hosted path before running anything locally, start with the
+[Quickstart](../../start/quickstart/) instead. For a standalone local project generated from your
+own data, use the `registryctl` tutorials:
+[run a protected registry API](../publish-spreadsheet-secured-registry-api/) or
+[evaluate a claim with Registry Notary](../verify-claim-registry-api/). Clone Solmara Lab when you
+want the full multi-service country demo.
 
 ## Prerequisites
 
@@ -56,6 +54,7 @@ Do not use the generated local keys in production.
 - `pnpm` `11.3.0`, matching the `packageManager` field the portal and Visitor's Center pin. Run
   `corepack enable` first if `pnpm` is not already on your PATH.
 - `git`.
+- `curl`, for the direct Notary evaluation call and the verify commands.
 
 ## Get the repository
 
@@ -126,9 +125,9 @@ The remaining Relay instances run on `cra-civil-relay` (`4311`), `nia-population
 Redis on `63799`. This tutorial does not call any of these directly; they back the pension and
 farmer-voucher journeys and the portal's own evidence calls.
 
-Every Relay and Notary configuration in this lab sets `openapi_requires_auth: false`, so each
-instance publishes its OpenAPI reference at `/docs` and `/openapi.json` without a credential, the
-same route pattern documented in
+Each instance publishes its rendered API reference at `/docs`, a route that is always public, and
+its raw `/openapi.json`, public here because every Relay and Notary configuration in this lab sets
+`openapi_requires_auth: false`. This is the same route pattern documented in
 [Evaluate a claim with Registry Notary](../verify-claim-registry-api/).
 
 ## See it: the citizen portal and the Visitor's Center
@@ -199,8 +198,9 @@ holder-bound issuance flow is out of scope for this tutorial. See
 ## Verify
 
 `just smoke` (step 3) is the authoritative check. These commands confirm its artifacts are on
-disk, and reproduce the Notary evaluation call above in a single command so it can run without a
-shell variable.
+disk, and reproduce the call from
+[Call a Notary evaluation route directly](#call-a-notary-evaluation-route-directly) in a single
+command so it can run without a shell variable.
 
 ```sh
 ls output/smoke/story-previews.json
@@ -246,6 +246,7 @@ confirm what you ran by hand against what the lab publishes.
 | `just up` fails immediately with `required variable ... is missing a value: .env not loaded; run just gen-secrets once, then just up` | `just generate` (or `just gen-secrets`) never ran, so `.env` does not exist. | Run `just generate`, then `just up` again. |
 | `docker compose` reports a port already allocated | Another process on your machine already holds one of the lab's ports: `4300`, `4301`, `4311` through `4316`, `4321` through `4324`, `4331`, `54329`, or `63799`. | Stop the conflicting process, or set the matching `SOLMARA_*_PORT` environment variable (for example `SOLMARA_PORTAL_PORT=4400`) before `just up`. |
 | `command not found: uv` or `command not found: pnpm` | A required tool is not on your PATH. | Install [`uv`](https://docs.astral.sh/uv/), or run `corepack enable` for `pnpm`, then run `just setup` again. |
+| `docker compose ps -a` lists containers you did not start, or `just up` reports recreating unfamiliar containers | Docker Compose names the project after the directory basename (`solmara-lab`), so a second checkout or an older lab project on the same machine shares the project name. The Cleanup step's `down -v` would remove that project's volumes, not only yours. | Set a unique project name for your checkout before any compose command: `export COMPOSE_PROJECT_NAME=solmara-lab-$(whoami)`, or clone into a differently named directory. |
 | The Relay and Notary containers start slowly or show high CPU on Apple Silicon | The pinned Relay and Notary images publish `linux/amd64` only, so Compose runs them under emulation. | Expected. Allow extra time on the first `just up`; later runs are faster once the images are cached. |
 | The first `just up` appears to hang | The first run pulls the pinned Relay and Notary images and builds the `portal`, `home`, and `scenario-runner` images locally. | Let it finish; do not interrupt it. |
 
