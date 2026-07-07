@@ -1214,8 +1214,9 @@ fn tail_hash_from_files(
     if envelopes.is_empty() {
         return Ok(None);
     }
+    let starts_with_rotated_file = paths.first().is_some_and(|candidate| candidate != path);
     let retained_suffix = max_size_bytes != 0
-        && paths.len() == max_files as usize
+        && (starts_with_rotated_file || max_files == 1)
         && envelopes[0].prev_hash.is_some();
     let verification = if retained_suffix {
         verify_chain_expected_prev_hash(&envelopes, envelopes[0].prev_hash, hasher)
@@ -1928,6 +1929,39 @@ mod tests {
             .await
             .expect("fourth append");
         assert_eq!(fourth.prev_hash, third_hash);
+    }
+
+    #[tokio::test]
+    async fn file_sink_bootstrap_accepts_legacy_smaller_retained_suffix() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        let legacy_sink = JsonlFileSink::with_rotation(&path, 1, 5);
+        let chain = ChainState::unkeyed_dev_only();
+        let mut last_hash = None;
+        for index in 0..8 {
+            let envelope = chain
+                .append(&legacy_sink, json!({ "event": index }))
+                .await
+                .expect("append");
+            last_hash = Some(envelope.record_hash);
+        }
+
+        let upgraded_sink = JsonlFileSink::with_rotation(&path, 1, 50);
+        assert_eq!(
+            upgraded_sink
+                .tail_hash_with_hasher(&AuditChainHasher::unkeyed_dev_only())
+                .await
+                .expect("tail"),
+            last_hash
+        );
+        let bootstrapped = ChainState::bootstrap_unkeyed_dev_only(&upgraded_sink)
+            .await
+            .expect("bootstrap");
+        let next = bootstrapped
+            .append(&upgraded_sink, json!({ "event": "after-upgrade" }))
+            .await
+            .expect("append after upgrade");
+        assert_eq!(next.prev_hash, last_hash);
     }
 
     #[tokio::test]
