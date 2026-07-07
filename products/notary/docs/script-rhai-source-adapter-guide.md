@@ -56,7 +56,8 @@ so a buggy script or a hostile *upstream response* cannot escalate:
   concurrency are all bounded. The script is **compiled and smoke-tested at
   startup**; a compile, policy, or smoke failure blocks readiness.
 - **Governed provenance.** The script is embedded inline in the signed runtime
-  target, so it is covered by the target's `config_hash`, the same TUF-verified
+  target, so it is covered by the target's `config_hash`, the same
+  [TUF (The Update Framework)](https://theupdateframework.io/)-verified
   content anchor used for inline CEL today.
 
 ## The script contract
@@ -119,8 +120,9 @@ fn lookup(ctx) {
 
 ### Pure `xw` helpers
 
-The script may call pure helpers from the Crosswalk function library for
-normalization, registered under `xw.*`: `xw.text.*`, `xw.date.*`, `xw.ids.*`,
+The script may call pure helpers from the Crosswalk function library (the
+registry family's shared normalization helpers), registered under `xw.*`:
+`xw.text.*`, `xw.date.*`, `xw.ids.*`,
 `xw.json.*`, `xw.email.*`, and `xw.redaction.*` (for example
 `xw.text.upper_ascii`, `xw.date.parse_date`, `xw.ids.clean_id`). Context- or
 registry-dependent helpers (regex, code systems, phone, clock-dependent dates)
@@ -195,7 +197,7 @@ the script.
 | `api_key_query` | `query_param`, `token.secret` | appends `?<query_param>=<secret>` |
 | `oauth2_client_credentials` | `token_url`, `client_id.secret`, `client_secret.secret` | fetches and caches a host-owned bearer token |
 
-`api_key_query` is for messy upstreams that expect the key in the URL; the value
+`api_key_query` is for upstream APIs that require the key in the URL; the value
 is a secret, so the host keeps it out of logs and cache keys (the cache key is
 built from request fields, not the resolved URL).
 

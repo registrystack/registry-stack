@@ -21,7 +21,7 @@ optionally, Registry Notary) as self-hosted services against that data, rather t
 The sample-based tutorial,
 [Run a protected registry API locally](../publish-spreadsheet-secured-registry-api/),
 generates a project from the built-in `benefits` sample.
-There is no `registryctl` initializer for your own dataset today: `registryctl init relay`
+There is no `registryctl` initializer for your own dataset: `registryctl init relay`
 accepts only `--sample benefits`.
 For your own CSV or XLSX data you hand-write the Relay configuration, starting from the
 canonical example, and run the published container directly.
@@ -34,8 +34,8 @@ canonical example, and run the published container directly.
 
 This guide targets a single-node, self-hosted deployment for evaluation and pilot use.
 It is not a formal production deployment profile.
-Deployment-profile formalization (Compose and Kubernetes shapes, sizing, and a hardening
-baseline) is tracked separately and is not part of this guide.
+A formal production deployment profile (Compose and Kubernetes shapes, sizing, and a hardening
+baseline) is not yet published.
 Before exposing any deployment beyond local evaluation, work through the
 [Relay operations runbook](https://github.com/registrystack/registry-stack/blob/v0.8.4/crates/registry-relay/docs/ops.md)
 production hardening checklist.
@@ -60,7 +60,7 @@ Consume a version tag or an image digest, not `latest`, so your deployment is re
 you can roll back.
 The published versions are listed on the
 [Relay releases page](https://github.com/registrystack/registry-stack/releases).
-The current RegistryStack release is `v0.8.4`, so the following examples use that tag.
+The current Registry Stack release is `v0.8.4`, so the following examples use that tag.
 Replace it with a newer release tag when you intentionally upgrade.
 For the image signing policy, see the Relay
 [security assurance notes](https://github.com/registrystack/registry-stack/blob/v0.8.4/crates/registry-relay/docs/security-assurance.md)
@@ -399,7 +399,7 @@ release tags such as `v0.8.4`.
 As with Relay, consume a version tag or an image digest, not `latest`.
 The published versions are listed on the
 [Notary releases page](https://github.com/registrystack/registry-stack/releases).
-The current RegistryStack release is `v0.8.4`, so the following examples use that tag.
+The current Registry Stack release is `v0.8.4`, so the following examples use that tag.
 Replace it with a newer release tag when you intentionally upgrade.
 
 ```sh
@@ -607,11 +607,11 @@ docker run --rm \
 ```
 
 `doctor --format json` emits `schema_version: registry.config.diagnostic_report.v1` with a
-`status` of `ok`, `warning`, or `error`. With this guide's minimal config the expected result is
-`status: warning` with a single `deployment.profile_undeclared` finding, because the config
-declares no deployment profile; declare `deployment.profile: local` to silence it. It reports
-missing environment variables, malformed fingerprints, and broken source references. `explain-config --format json` prints the resolved
-configuration and the env vars it requires.
+`status` of `ok`, `warning`, or `error`, and reports missing environment variables, malformed
+fingerprints, and broken source references. With this guide's minimal config the expected result
+is `status: warning` with a single `deployment.profile_undeclared` finding, because the config
+declares no deployment profile; declare `deployment.profile: local` to silence it.
+`explain-config --format json` prints the resolved configuration and the env vars it requires.
 For exercising the claim end to end (request shapes, outcomes, and credential issuance on top),
 work through [Evaluate a claim with Registry Notary](../verify-claim-registry-api/), which runs
 the same claim lifecycle against a `registryctl` sample project.

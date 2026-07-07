@@ -32,16 +32,16 @@ normal local project generated without cloning product repositories, use the
 [`registryctl` protected API tutorial](../publish-spreadsheet-secured-registry-api/)
 or the [`registryctl` claim evaluation tutorial](../verify-claim-registry-api/).
 `registryctl` can scaffold a standalone Notary project for an existing FHIR
-source-adapter sidecar, but this tutorial uses `registry-lab` directly because
-it also starts deterministic FHIR fixture data and the source adapter.
+source-adapter sidecar (a small service that runs next to Notary and translates the source's own
+routes, auth, and response shape into the Registry Data API-shaped lookup route Notary expects),
+but this tutorial uses `registry-lab` directly because it also starts deterministic FHIR fixture
+data and the source adapter.
 
 The FHIR path is useful when a health system already exposes FHIR resources and
 a delivery system needs a narrow answer, such as "coverage is active" or "this
 facility offers this service", instead of a full clinical record.
 The demo is deterministic local fixture data. It is not a production FHIR
 server conformance test.
-
-Estimated time: about 10 minutes after the container images build.
 
 ## Before you start
 
@@ -52,7 +52,7 @@ You need:
 - A Registry Lab checkout (the `lab` directory of the `registry-stack` monorepo) with its external submodules.
 - Local demo credentials generated with the lab's fixture command.
 
-Clone the RegistryStack monorepo if you do not already have it; the lab lives in
+Clone the Registry Stack monorepo if you do not already have it; the lab lives in
 the `lab` directory. This is only needed for this full FHIR lab profile:
 
 ```sh
@@ -214,6 +214,21 @@ The Registry Lab FHIR profile is configured in two files:
   searches, resource relations, and JSON Pointer projections.
 - `config/notary/fhir-health-notary.yaml`: defines the claim rules that read
   the projected fields.
+
+```mermaid
+flowchart LR
+    caller["Caller (you)<br/>FHIR_EVIDENCE_CLIENT_BEARER"]
+    notary["Registry Notary<br/>config/notary/fhir-health-notary.yaml"]
+    sidecar["FHIR source adapter sidecar<br/>config/fhir/fhir-source-adapter-sidecar.yaml.template"]
+    fhir["FHIR fixture server<br/>FHIR R4 API"]
+    caller -- "bearer token" --> notary
+    notary -- "sidecar token" --> sidecar
+    sidecar -- "fhir engine" --> fhir
+```
+
+The diagram restates the chain: your call carries `FHIR_EVIDENCE_CLIENT_BEARER` to Registry
+Notary, Notary authenticates to the private source adapter with the `FHIR_SIDECAR_TOKEN_RAW`
+sidecar token, and the adapter's built-in `fhir` engine queries the FHIR fixture server.
 
 The adapter starts from an anchor resource, usually `Patient`, then follows
 configured relations to resources such as `Coverage`,

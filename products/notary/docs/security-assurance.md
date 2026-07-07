@@ -27,10 +27,9 @@ shell-free, package-manager-free, and compatible with a binary healthcheck and
 JSON-array entrypoint. The container CI guard enforces the runtime base,
 `registry-notary healthcheck`, and `ENTRYPOINT ["/usr/local/bin/registry-notary"]`.
 
-`Dockerfile.source-adapter-sidecar` is a distroless Rust image now that the
-worker execution engine is retired; sources run through the built-in http_json,
-http_flow, and fhir engines, so the image no longer ships Node or npm. Its
-runtime stage stays `gcr.io/distroless/cc-debian12:nonroot` pinned by digest,
+`Dockerfile.source-adapter-sidecar` is a distroless Rust image; sources run
+through the built-in http_json, http_flow, and fhir engines. Its runtime
+stage stays `gcr.io/distroless/cc-debian12:nonroot` pinned by digest,
 shell-free, package-manager-free, and uses a JSON-array entrypoint. Liveness and
 readiness are served over HTTP at `/healthz` and `/ready`, so orchestrator
 probes replace a bundled container healthcheck binary.
@@ -99,40 +98,10 @@ less release/VERIFY.md
 ```
 
 Legacy product-local cosign verification for old `ghcr.io/jeremi` image tags
-used the triggering Git release tag:
-
-```sh
-cosign verify \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity "https://github.com/jeremi/registry-notary/.github/workflows/container.yml@refs/tags/<git-tag>" \
-  ghcr.io/jeremi/registry-notary:<tag>
-
-cosign verify \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity "https://github.com/jeremi/registry-notary/.github/workflows/container.yml@refs/tags/<git-tag>" \
-  ghcr.io/jeremi/registry-notary-source-adapter-sidecar:<tag>
-```
-
-For those legacy image tags, the certificate identity is the Git tag that
-triggered the workflow, not
-necessarily the GHCR tag being verified. When verifying moving aliases such as
-`latest`, `vX`, `vX.Y`, or either image's immutable `sha-<commit-sha>` tag, set
-`<git-tag>` to the stable `vX.Y.Z` tag or
-`registry-stack-technical-preview-<date-or-version>` tag that produced the
-alias. To verify a moving alias without preselecting one release tag, constrain
-the signing workflow with a release-tag regexp:
-
-```sh
-cosign verify \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity-regexp '^https://github.com/jeremi/registry-notary/\.github/workflows/container\.yml@refs/tags/(v[0-9]+\.[0-9]+\.[0-9]+|registry-stack-technical-preview-[0-9A-Za-z][0-9A-Za-z._-]*)$' \
-  ghcr.io/jeremi/registry-notary:<moving-tag>
-
-cosign verify \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity-regexp '^https://github.com/jeremi/registry-notary/\.github/workflows/container\.yml@refs/tags/(v[0-9]+\.[0-9]+\.[0-9]+|registry-stack-technical-preview-[0-9A-Za-z][0-9A-Za-z._-]*)$' \
-  ghcr.io/jeremi/registry-notary-source-adapter-sidecar:<moving-tag>
-```
+used the triggering Git release tag as the certificate identity, since that
+identity is not necessarily the same as the GHCR tag being verified. That
+verification approach is historical and is not part of the current release
+process; see `release/VERIFY.md` for the current one.
 
 ## Deliberate route posture exceptions
 
@@ -211,7 +180,7 @@ for the full gate catalog and severities.
 
 ## Local security command
 
-Run the practical local subset:
+For contributors working in the repository, run the practical local subset:
 
 ```sh
 just security

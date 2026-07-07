@@ -197,8 +197,7 @@ config_trust:
             - public_metadata
 ```
 
-`config_trust` is optional. Simple local deployments omit it and keep using the
-local YAML loaded at startup. Governed config apply requires
+Governed config apply requires
 `antirollback_state_path` and `local_approval_state_path`, which must point to
 durable local state such as a mounted volume. `break_glass_rate_limit` is the
 trusted local rolling-window policy used for break-glass apply requests; when
@@ -429,8 +428,7 @@ Do not reuse the example raw key in a real deployment.
 Set `auth.mode: oidc` to verify bearer JWTs against an external OpenID Connect / OAuth2 IdP. Registry Relay is a resource server: it validates inbound tokens against the IdP's JWKS but never mints, refreshes, or stores tokens. A given deployment runs in exactly one auth mode at a time; mixed-mode operation is not supported.
 
 OIDC field names follow the shared Registry service runtime configuration conventions.
-Removed pre-convention names are rejected before deserialization with an error
-naming the replacement field.
+Field names from earlier releases are rejected with an error naming the replacement field.
 
 ```yaml
 auth:
@@ -455,7 +453,7 @@ auth:
       - at+jwt
 ```
 
-A full drop-in alternative to `config/example.yaml` lives at `config/example.oidc.yaml`. It targets a local Zitadel instance and is what the integration test consumes.
+A full drop-in alternative to `config/example.yaml` lives at `config/example.oidc.yaml`. It targets a local Zitadel instance.
 
 | Field             | Purpose                                                                                                                                                       |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -539,13 +537,6 @@ audit:
 ```
 
 Supported sinks:
-
-```yaml
-audit:
-  sink: stdout
-  format: jsonl
-  hash_secret_env: REGISTRY_RELAY_AUDIT_HASH_SECRET
-```
 
 ```yaml
 audit:
@@ -697,7 +688,7 @@ datasets:
     entities: []
 ```
 
-`sensitivity`, `access_rights`, and `update_frequency` are catalog metadata. They also make review conversations concrete; do not leave them vague in production configs. Allowed values:
+`sensitivity`, `access_rights`, and `update_frequency` are catalog metadata. Set them precisely in production configs; governance reviews depend on them. Allowed values:
 
 - `sensitivity`: `public`, `internal`, `personal`, `confidential`, or `secret`.
 - `access_rights`: `public`, `restricted`, or `non_public`.
@@ -877,7 +868,7 @@ string, number, integer, boolean, date, timestamp
 Use `sensitive: true` on source or entity fields whose query values need audit
 correlation without raw value storage. With `audit.hash_secret_env` configured,
 Registry Relay writes a deterministic `hmac-sha256:<digest>` audit handle for
-those lookup values. This flag is audit-only in beta: it does not hide a field
+those lookup values. As of v0.8, this flag is audit-only: it does not hide a field
 from API responses and does not grant or deny read access. Choose it for
 identifiers, names, dates of birth, addresses, consent references, and other
 values you may need to investigate later without retaining the raw value in
@@ -954,7 +945,7 @@ spatial:
   max_geometry_vertices: 10000
 ```
 
-Phase 1 supports `kind: point` and `kind: geojson`. Point longitude, point latitude, datetime, and bbox helper fields must be exposed entity fields with compatible types. `kind: geojson` may use optional precomputed bbox fields:
+V1 supports `kind: point` and `kind: geojson`. Point longitude, point latitude, datetime, and bbox helper fields must be exposed entity fields with compatible types. `kind: geojson` may use optional precomputed bbox fields:
 
 ```yaml
 spatial:

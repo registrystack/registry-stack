@@ -17,20 +17,15 @@ The scenarios use five status labels:
 | Supported | Works in Registry Notary runtime and has focused tests or existing product coverage |
 | Lab-supported | Can be shown with demo scripts or config, but is not a complete runtime feature |
 | Partial | Important pieces exist, but named product gaps remain |
-| Planned | Captured in design records, not yet implemented |
+| Planned | Not yet implemented |
 | Out of scope | Not a Registry Notary responsibility |
 
 ## Personas
 
-Scenario stories use the same small cast so readers can follow examples
-without re-learning who each actor is:
-Alice is usually the citizen, resident, farmer, household representative, or
-holder; Bob is the case worker or service operator; Carol is the registry
-steward; Dave is the auditor or security operator; Erin is the program
-administrator; Charlie is a child or dependent person Alice may be authorized
-to represent; the Rivera household is a collective subject Alice may represent.
+The worked scenarios and their recurring example cast live in [Notary
+scenario patterns](notary-scenario-patterns.md).
 
-| Persona | What They Need | Examples |
+| Persona | What they need | Examples |
 | --- | --- | --- |
 | Citizen or resident | Share only the proof needed to access a service | Parent applying for child support, farmer applying for a voucher |
 | Case worker | Make an evidence-backed decision without seeing unnecessary registry data | Benefits officer, enrollment officer |
@@ -50,12 +45,12 @@ to represent; the Rivera household is a collective subject Alice may represent.
 | Registry Platform | Shared crypto, HTTP, OIDC, SD-JWT, DID/JWK, replay, and audit primitives |
 | Service portal or case system | Starts a service workflow and consumes evidence or decisions |
 | Holder wallet or client app | Stores credentials, presents proofs, and receives issued credentials |
-| Trust bundle or trust registry | Later-stage signed trust metadata. It is not an MVP allowlist |
+| Trust bundle or trust registry | Signed trust metadata; not yet supported. Peer trust today is a static allowlist |
 | Audit store | Local audit trail for evaluations, issuance, denials, and federation exchanges |
 
 ## Scenario matrix
 
-| # | Scenario | Pattern | Status | Main Gap |
+| # | Scenario | Pattern | Status | Main gap |
 | --- | --- | --- | --- | --- |
 | 1 | Civil alive predicate | Local evaluation | Supported | None for configured local sources |
 | 2 | Age or date-of-birth evidence | Local evaluation | Supported | None for configured local sources |
@@ -65,17 +60,17 @@ to represent; the Rivera household is a collective subject Alice may represent.
 | 6 | Livestock movement permit eligibility | Local evaluation | Supported | None for configured local sources |
 | 7 | Benefits agency asks Civil Notary for alive predicate | Delegated evaluation | Partial | Product can serve inbound, but has no outbound Notary connector |
 | 8 | Benefits agency asks Social Notary for active beneficiary predicate | Delegated evaluation | Partial | Product can serve inbound, but has no outbound Notary connector |
-| 9 | Health-linked child support across civil, social, and health | Outbound composition | Planned | Needs outbound connector and runtime composition |
-| 10 | Municipality verifies residency with a national registry steward | Delegated evaluation | Partial | Needs demo/client wiring and metadata publication |
-| 11 | Citizen presents civil-status proof to a benefits service | User-presented proof | Planned | Needs proof profiles and verifier runtime |
-| 12 | Farmer presents landholding or farmer-registration proof | User-presented proof | Planned | Needs proof profiles and status/freshness policy |
-| 13 | Health worker presents professional credential for service eligibility | User-presented proof | Planned | Needs proof profiles and issuer trust policy |
-| 14 | Parent or guardian requests a service for a child or dependent | Representation plus proof | Planned | Needs actor/subject separation and representation authority policy |
-| 15 | Household or group representative requests a service | Representation plus proof | Planned | Needs collective subject model and representative authority policy |
+| 9 | Health-linked child support across civil, social, and health | Outbound composition | Planned | No outbound Notary connector or composition runtime ships yet; you cannot chain evidence across civil, social, and health sources in one flow |
+| 10 | Municipality verifies residency with a national registry steward | Delegated evaluation | Partial | No demo/client wiring or metadata publication ships yet; you cannot run this delegated residency check end-to-end |
+| 11 | Citizen presents civil-status proof to a benefits service | User-presented proof | Planned | No proof profiles or verifier runtime ship yet; you cannot accept this user-presented civil-status proof |
+| 12 | Farmer presents landholding or farmer-registration proof | User-presented proof | Planned | No proof profiles or status/freshness policy ship yet; you cannot accept a user-presented landholding or farmer-registration proof |
+| 13 | Health worker presents professional credential for service eligibility | User-presented proof | Planned | No proof profiles or issuer trust policy ship yet; you cannot accept a presented professional credential for this eligibility check |
+| 14 | Parent or guardian requests a service for a child or dependent | Representation plus proof | Planned | No actor/subject separation or representation authority policy ships yet; you cannot let a parent or guardian request this service on a child's behalf |
+| 15 | Household or group representative requests a service | Representation plus proof | Planned | No collective subject model or representative authority policy ships yet; you cannot let a household or group representative request this service |
 | 16 | Civil Notary issues date-of-birth or alive credential | Credential issuance | Supported | Local wallet ceremony is still demo-grade |
 | 17 | Agriculture Notary issues voucher eligibility credential | Credential issuance | Supported | Local wallet ceremony is still demo-grade |
 | 18 | Shared Eligibility Notary issues combined-support credential | Credential issuance plus composition | Partial | Credential issuance exists, but peer-result composition is missing |
-| 19 | Consuming service helps holder obtain credential from remote Notary | Federated credential issuance | Planned | Needs holder-binding ceremony, nonce ownership, and relay rules |
+| 19 | Consuming service helps holder obtain credential from remote Notary | Federated credential issuance | Planned | No holder-binding ceremony, nonce ownership, or relay rules ship yet; you cannot help a holder obtain a credential from a remote Notary through this service |
 | 20 | Replay and emergency peer/key denial | Governance | Supported | Shared replay store is still needed for active-active production |
 | 21 | Auditor verifies minimized decision evidence | Governance | Partial | Signed results and audit exist, checkpoints are planned |
-| 22 | Peer audit checkpoint monitoring | Governance | Planned | Needs checkpoint publisher, Merkle builder, and peer monitor |
+| 22 | Peer audit checkpoint monitoring | Governance | Planned | No checkpoint publisher, Merkle builder, or peer monitor ships yet; you cannot independently verify peer audit checkpoints |

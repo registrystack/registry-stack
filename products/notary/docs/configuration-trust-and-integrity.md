@@ -1,4 +1,4 @@
-# Configuration Trust And Integrity
+# Configuration trust and integrity
 
 > **Page type:** Explanation · **Product:** Registry Notary · **Layer:** all · **Audience:** operator, integrator, security reviewer
 
@@ -161,10 +161,8 @@ controls.
   and caches it for a short interval. Revoked keys or newly expired metadata are
   recognized on the next verification (a restart or the next readiness refresh),
   not instantaneously.
-- **Root release images are not signed yet.** Pin images by digest and review
-  the root release capsule, SBOM, and vulnerability scan artifacts. Legacy
-  product-local `cosign` evidence is historical; see
-  [Security assurance](security-assurance.md).
+- **Release images are not signed.** Pin images by digest and review the root
+  release capsule, SBOM, and vulnerability scan artifacts.
 
 ## Development mode
 

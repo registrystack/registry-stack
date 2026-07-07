@@ -19,20 +19,19 @@ This page answers one question about Registry Stack: how does its architecture s
 minimization and purpose limitation by design, where are those supports conditional on how an
 operator configures a deployment, and which data-protection obligations does the architecture not
 address at all?
-Two things this page does not do.
-It makes no compliance claim: conformance to the underlying specifications does not imply
-conformance to any external standard, nor to GDPR or any data-protection regulation.
-And it gives no legal advice and no jurisdiction-specific reading: that judgement remains yours.
+This page makes no compliance claim and gives no legal advice.
+Conformance to the underlying specifications does not imply conformance to any external
+standard, nor to GDPR or any data-protection regulation, and no jurisdiction-specific reading is
+offered: that judgement remains yours.
 The specifications here are all draft, pre-1.0 documents and may change, so treat the design as a
 posture under development rather than a finished or warranted product.
-A note on terms, since you do not need Registry Stack internals to follow this.
+Four terms are enough to follow this page.
 A *claim* is one pre-modelled question (one decision or one extracted value) that a system can ask
 about a person against a registry the institution already holds.
 A *source binding* is the configured rule that connects a claim to the specific source fields it
 reads.
 *Minimized evidence* means a response shaped by data minimization or selective disclosure; a
 *purpose-bound request* is a request that carries or is evaluated against a stated purpose.
-Those last two are the principles you already know, expressed in the system's own vocabulary.
 
 ## How the claim model limits collection at the source
 
@@ -67,8 +66,8 @@ touched.
 The effect a reviewer should take away is that purpose, when configured, acts as a precondition
 for access rather than an after-the-fact annotation.
 
-The phrase "when configured" is load-bearing, and the section on operator responsibilities returns
-to it.
+Several of these protections apply only when configured; the operator-responsibilities section
+lists them.
 
 ## Minimization at the output: disclosure modes and selective credentials
 
@@ -122,7 +121,8 @@ For a reviewer this has a direct consequence.
 Because the architecture cannot alter or delete source records, it is also why no erasure flow
 exists at the source layer: the design has no mechanism to reach into and change the registry it
 reads from.
-That is described more fully in the next section as a limit, not a feature.
+The [What the architecture does not provide](#what-the-architecture-does-not-provide) section
+describes this as a limit, not a feature.
 
 One related boundary is positive rather than cautionary.
 The portable metadata the stack publishes must not carry person-level data or runtime secrets and
@@ -140,7 +140,6 @@ the caller principal, the scopes exercised, a request identifier, and the purpos
 was supplied, and a deployment can run audit fail-closed so that a request whose audit record
 cannot be written does not succeed.
 
-One precise reading matters here.
 Audit fail-closed is a capability a deployment can turn on, not a guarantee that every route in
 any given build has been individually audited against it.
 Whether a particular deployment meets it is something a reviewer verifies in that deployment, not
@@ -149,7 +148,6 @@ something the design asserts on its behalf.
 ## What the architecture does not provide
 
 Some of the most important things for a DPO to know are the absences.
-Stating them plainly prevents the design from being read as more than it is.
 The full, canonical inventory is in [Known limitations and non-guarantees](../known-limitations/).
 
 - No data-subject erasure or right-to-be-forgotten workflow: There is no built-in erasure or
@@ -180,10 +178,6 @@ deployment's allowed-purposes list are enforced before the source is read, so a 
 mismatch is refused with no source reads.
 Purpose limitation is therefore not entirely absent without a matching policy; what is missing is
 the binding-level gating.
-Equivalently, purpose limitation is supported but partial: a purpose is recorded in audit only
-where the caller supplies one, and is enforced as a binding-level hard gate only where a claim or
-source binding configures a matching policy.
-The enforced gate described earlier exists only when someone has configured it.
 
 The existence-oracle protection is also defeasible.
 The matching surface collapses failures to a single public reason by default, but a deployment may
@@ -195,7 +189,7 @@ data-protection-relevant controls to the operator.
 Secret and key provisioning, audit retention and storage, tenant isolation, transport security,
 edge rate limiting, deployment configuration, and incident response are not defined by the design;
 they are responsibilities you provision and verify in a deployment.
-The clear-eyed view, then, is this: Registry Stack offers minimization, purpose limitation, and
+Registry Stack offers minimization, purpose limitation, and
 accountability as enforceable design primitives, but whether a given deployment realizes them (and
 whether it meets any legal obligation) depends on how the operator configures and runs it.
 

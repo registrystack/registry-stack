@@ -1,7 +1,5 @@
 # Call Registry Relay from an OpenFn workflow
 
-> **Page type:** How-to · **Product:** Registry Relay · **Layer:** client integration · **Audience:** integrator
-
 This guide shows the caller-side OpenFn pattern for Registry Relay: an OpenFn
 workflow reads protected registry records, metadata, relationships, or
 aggregate outputs through a scoped Relay credential.
@@ -52,6 +50,8 @@ For the agriculture Relay examples below:
 
 The lab UI at `https://lab.registrystack.org` shows the same public demo
 credentials.
+
+The examples use NAGDI, a fictional agriculture ministry from the demo lab.
 
 ## Read one record
 

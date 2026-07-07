@@ -17,7 +17,7 @@ Rust-only verifier helpers.
 Before the first SDK call, collect these values from the deployment operator or
 from your own application workflow.
 
-| Need | Example | Where It Comes From |
+| Need | Example | Where it comes from |
 | --- | --- | --- |
 | Service base URL | `https://agriculture-notary.lab.registrystack.org` | Hosted lab manifest or Registry Notary operator |
 | Auth credential | `AGRI_EVIDENCE_CLIENT_BEARER` | Hosted lab manifest or Registry Notary operator |
@@ -42,9 +42,7 @@ export REGISTRY_NOTARY_BEARER_TOKEN="<token from the agri-evidence entry>"
 export REGISTRY_NOTARY_PURPOSE="<default_purpose from the agri-evidence entry>"
 ```
 
-The lab UI at `https://lab.registrystack.org` shows the same public demo
-credentials if you would rather copy the values from there than from
-`lab.json` directly.
+The lab UI at `https://lab.registrystack.org` shows the same values.
 
 ### Key terms
 
@@ -108,6 +106,17 @@ registry-notary-core = { path = "/path/to/registry-notary/crates/registry-notary
 ```bash
 python -m pip install -e /path/to/registry-notary/bindings/python
 pnpm add /path/to/registry-notary/bindings/node
+```
+
+### Verifying a workspace checkout
+
+```bash
+cargo test -p registry-notary-client
+cargo test -p registry-notary-client --features json-facade,oid4vci,federation
+cargo doc -p registry-notary-client --no-deps --all-features
+python3 -m unittest discover -s bindings/python/tests
+npm test --prefix bindings/node
+npm run check:types --prefix bindings/node
 ```
 
 ## First evaluation
@@ -993,7 +1002,7 @@ The stable application problem `code` values for policy mapping live in the
 
 ### Troubleshooting
 
-| Symptom | Likely Cause | Check |
+| Symptom | Likely cause | Check |
 | --- | --- | --- |
 | `401` | Missing, expired, or wrong auth credential | Token/API key source and configured auth mode |
 | `403` | Credential lacks a claim's `required_scope` | `list_claims`, operator scope mapping |
@@ -1100,7 +1109,7 @@ include `signature.invalid`, `key.unknown`, `algorithm.disallowed`,
 `disclosure.digest_mismatch`, `holder_binding.required`,
 `holder_binding.kid_mismatch`, and `holder_binding.proof_invalid`.
 
-Python and Node do not expose verifier wrappers in this first phase. Callers in
+Python and Node do not expose verifier wrappers. Callers in
 those runtimes should use the Rust verifier through their application boundary
 or perform verification in wallet-specific code.
 
@@ -1131,36 +1140,6 @@ const result = await client.evaluate({
   claims: ["person-is-alive"],
   signal: controller.signal,
 });
-
-const client = new RegistryNotaryClient({
-  baseUrl: "https://notary.example.gov",
-  retryPolicy: {
-    maxAttempts: 3,
-    baseDelayMs: 100,
-    maxDelayMs: 2000,
-    retryTransportErrors: true,
-    retryRateLimited: true,
-    retryUnavailable: true,
-  },
-});
-
-const result = await client.batchEvaluate(
-  {
-    items: [{
-      target: {
-        type: "Person",
-        identifiers: [{ scheme: "national_id", value: "person-1", issuer: "civil_registry" }],
-      },
-      relationship: { type: "self" },
-    }],
-    claims: ["person-is-alive"],
-    purpose: "benefits_eligibility",
-  },
-  {
-    idempotencyKey: "batch-2026-05-29-001",
-    signal: controller.signal,
-  },
-);
 ```
 
 ### Discovery, status, OID4VCI, federation
@@ -1204,14 +1183,3 @@ try {
 
 The route to client method mapping for each runtime lives in the
 [route to client method matrix in the API reference](api-reference.md#route-to-client-method-matrix).
-
-## Verification commands
-
-```bash
-cargo test -p registry-notary-client
-cargo test -p registry-notary-client --features json-facade,oid4vci,federation
-cargo doc -p registry-notary-client --no-deps --all-features
-python3 -m unittest discover -s bindings/python/tests
-npm test --prefix bindings/node
-npm run check:types --prefix bindings/node
-```

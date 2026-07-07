@@ -1,0 +1,191 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 608" role="img" aria-labelledby="rtb-title rtb-desc"
+     font-family="'Public Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
+     text-rendering="geometricPrecision">
+  <title id="rtb-title">Registry Stack trust boundaries</title>
+  <desc id="rtb-desc">Two layers separated by the primary trust boundary. The portable metadata layer (Registry Manifest) only describes: no production data, no authentication, no secrets; it authorizes nothing, enforces nothing, and publishing grants no access. The runtime services layer enforces authentication, authorization, and disclosure. A caller crosses the service edge, where each service runs exactly one authentication mode, static-credential fingerprint or OIDC, and every claim- or record-bearing route is authenticated before responding. Inside the runtime layer, Registry Notary reads sources over HTTP connectors only: Registry Relay via registry_data_api, an SP DCI source via dci, and the source adapter sidecar; there is no file or database connector, and Notary does not link Relay code. The sidecar is an internal boundary: its bearer token authenticates only the Notary-to-sidecar hop and is not an end-user, tenant, or subject authorization boundary. Federation with a peer Notary is static-peer only, not a dynamic trust mesh; it is not anonymous (a verified peer-signed JWS is required), and peer identity, signature, freshness, single use, purpose, profile, and audience are verified before any source read. Delegated self-attestation is a distinct trust context from peer federation: it does not delegate trust to a peer Notary and stays inside the citizen or OIDC trust context. Unauthenticated surfaces at the service edge are the operational, discovery, and protocol-bootstrap routes listed in the footnote.</desc>
+
+  <style>
+    .k    { font: 700 11px 'Public Sans', system-ui, sans-serif; fill: #6a6a6a; letter-spacing: 0.08em; }
+    .pk   { font: 700 9px 'Public Sans', system-ui, sans-serif; fill: #6a6a6a; letter-spacing: 0.08em; }
+    .h    { font: 700 12.5px 'Public Sans', system-ui, sans-serif; fill: #161616; }
+    .hs   { font: 700 12px 'Public Sans', system-ui, sans-serif; fill: #161616; }
+    .hx   { font: 700 11.5px 'Public Sans', system-ui, sans-serif; fill: #161616; }
+    .b    { font: 400 9.5px 'Public Sans', system-ui, sans-serif; fill: #3a3a3a; }
+    .bm   { font: 400 9px 'Public Sans', system-ui, sans-serif; fill: #6a6a6a; }
+    .bxs  { font: 400 8.5px 'Public Sans', system-ui, sans-serif; fill: #6a6a6a; }
+    .bl   { font: 700 10px 'Public Sans', system-ui, sans-serif; fill: #000091; letter-spacing: 0.02em; }
+    .bls  { font: 700 9px 'Public Sans', system-ui, sans-serif; fill: #000091; letter-spacing: 0.04em; }
+    .m    { font: 400 9.5px 'IBM Plex Mono', ui-monospace, monospace; fill: #6a6a6a; }
+    .rot  { font: 700 9px 'Public Sans', system-ui, sans-serif; fill: #6a6a6a; letter-spacing: 0.08em; }
+    .foot { font: 400 9.5px 'IBM Plex Mono', ui-monospace, monospace; fill: #6a6a6a; }
+  </style>
+
+  <!-- Header -->
+  <text x="16" y="22" class="k">TRUST BOUNDARIES</text>
+  <rect x="16" y="30" width="32" height="2" fill="#000091"/>
+
+  <!-- Caller and the service edge -->
+  <rect x="325" y="44" width="120" height="34" fill="#ffffff" stroke="#161616" stroke-width="1"/>
+  <text x="337" y="65" class="h">Caller</text>
+
+  <text x="466" y="58" class="bl">SERVICE EDGE · AUTHENTICATION</text>
+  <text x="466" y="72" class="b">One authentication mode per service:</text>
+  <text x="466" y="84" class="b">static-credential fingerprint or OIDC.</text>
+  <text x="466" y="96" class="b">Every claim- or record-bearing route is</text>
+  <text x="466" y="108" class="b">authenticated before responding.</text>
+  <line x1="462" y1="90" x2="398" y2="112" stroke="#6a6a6a" stroke-width="0.7"/>
+
+  <!-- Portable metadata layer -->
+  <rect x="16" y="118" width="168" height="416" fill="#ffffff" stroke="#161616" stroke-width="1"/>
+  <text x="28" y="138" class="pk">PORTABLE METADATA LAYER</text>
+  <text x="28" y="154" class="b">Describes: no production data,</text>
+  <text x="28" y="166" class="b">no authentication, no secrets.</text>
+
+  <rect x="28" y="182" width="140" height="58" fill="#ffffff" stroke="#161616" stroke-width="1"/>
+  <text x="38" y="202" class="hs">Registry Manifest</text>
+  <text x="38" y="216" class="bm">offline metadata</text>
+  <text x="38" y="228" class="bm">producer</text>
+
+  <text x="28" y="262" class="b">Authorizes nothing,</text>
+  <text x="28" y="274" class="b">enforces nothing; asserts</text>
+  <text x="28" y="286" class="b">no record exists or</text>
+  <text x="28" y="298" class="b">satisfies a claim.</text>
+
+  <text x="28" y="318" class="b">Publishing a dataset,</text>
+  <text x="28" y="330" class="b">policy, offering, or</text>
+  <text x="28" y="342" class="b">federation relationship</text>
+  <text x="28" y="354" class="b">grants no access.</text>
+
+  <text x="28" y="374" class="b">Secrets are never</text>
+  <text x="28" y="386" class="b">embedded; the operator</text>
+  <text x="28" y="398" class="b">injects them at</text>
+  <text x="28" y="410" class="b">deployment.</text>
+
+  <text x="28" y="430" class="b">A published ODRL policy</text>
+  <text x="28" y="442" class="b">only describes intent</text>
+  <text x="28" y="454" class="b">until a runtime service</text>
+  <text x="28" y="466" class="b">binds it into an enforced</text>
+  <text x="28" y="478" class="b">profile it supports.</text>
+
+  <!-- Primary trust boundary: describe / enforce split -->
+  <line x1="203" y1="118" x2="203" y2="534" stroke="#161616" stroke-width="1.2" stroke-dasharray="6 4"/>
+  <text class="rot" transform="rotate(-90 195 326)" x="195" y="326" text-anchor="middle">PRIMARY TRUST BOUNDARY · DESCRIBES / ENFORCES</text>
+
+  <!-- Runtime services layer -->
+  <rect x="222" y="118" width="322" height="416" fill="#ffffff" stroke="#161616" stroke-width="1"/>
+  <rect x="222" y="118" width="4" height="416" fill="#000091"/>
+  <text x="238" y="138" class="pk">RUNTIME SERVICES LAYER</text>
+  <text x="238" y="152" class="b">Enforces: authentication,</text>
+  <text x="238" y="164" class="b">authorization, disclosure.</text>
+
+  <rect x="238" y="190" width="132" height="70" fill="#ffffff" stroke="#161616" stroke-width="1"/>
+  <text x="248" y="210" class="h">Registry Relay</text>
+  <text x="248" y="226" class="bm">read-only</text>
+  <text x="248" y="238" class="bm">consultation gateway</text>
+  <text x="248" y="250" class="bm">over sources</text>
+
+  <rect x="400" y="190" width="132" height="70" fill="#ffffff" stroke="#161616" stroke-width="1"/>
+  <text x="410" y="210" class="h">Registry Notary</text>
+  <text x="410" y="226" class="bm">claim evaluation,</text>
+  <text x="410" y="238" class="bm">credential issuance,</text>
+  <text x="410" y="250" class="bm">federation</text>
+
+  <!-- Caller flow into the runtime layer (crossing = service edge) -->
+  <g stroke="#000091" stroke-width="1.2" fill="none">
+    <line x1="385" y1="78" x2="385" y2="172"/>
+    <line x1="304" y1="172" x2="466" y2="172"/>
+    <line x1="304" y1="172" x2="304" y2="186"/>
+    <line x1="466" y1="172" x2="466" y2="186"/>
+    <polyline points="300,181 304,187 308,181"/>
+    <polyline points="462,181 466,187 470,181"/>
+  </g>
+  <!-- boundary-crossing ticks on the panel edge -->
+  <g stroke="#000091" stroke-width="0.9">
+    <line x1="377" y1="123" x2="387" y2="113"/>
+    <line x1="383" y1="123" x2="393" y2="113"/>
+  </g>
+
+  <!-- Notary reads Relay over HTTP as a data source -->
+  <g stroke="#000091" stroke-width="1.2" fill="none">
+    <polyline points="420,260 420,284 308,284 308,266"/>
+    <polyline points="304,270 308,264 312,270"/>
+  </g>
+  <text x="364" y="298" class="m" text-anchor="middle">HTTP · registry_data_api</text>
+
+  <!-- Relay reads its sources in place -->
+  <g stroke="#000091" stroke-width="1.2" fill="none">
+    <line x1="270" y1="260" x2="270" y2="306"/>
+    <polyline points="266,306 270,312 274,306"/>
+  </g>
+  <rect x="238" y="316" width="132" height="54" fill="#ffffff" stroke="#161616" stroke-width="1"/>
+  <text x="248" y="336" class="hs">Sources</text>
+  <text x="248" y="351" class="bm">rows read in place</text>
+
+  <!-- Notary to an SP DCI source -->
+  <g stroke="#000091" stroke-width="1.2" fill="none">
+    <line x1="466" y1="260" x2="466" y2="306"/>
+    <polyline points="462,306 466,312 470,306"/>
+  </g>
+  <rect x="406" y="316" width="104" height="54" fill="#ffffff" stroke="#161616" stroke-width="1"/>
+  <text x="414" y="336" class="hx">SP DCI source</text>
+  <text x="414" y="351" class="m">HTTP · dci</text>
+
+  <!-- Notary to the source adapter sidecar (internal boundary) -->
+  <g stroke="#000091" stroke-width="1.2" fill="none">
+    <line x1="520" y1="260" x2="520" y2="386"/>
+    <polyline points="516,380 520,386 524,380"/>
+  </g>
+  <text x="280" y="386" class="bls">INTERNAL BOUNDARY</text>
+  <rect x="280" y="392" width="252" height="84" fill="#ffffff" stroke="#161616" stroke-width="1" stroke-dasharray="5 4"/>
+  <text x="292" y="412" class="hs">Source adapter sidecar</text>
+  <text x="292" y="427" class="b">A private deployment surface behind</text>
+  <text x="292" y="439" class="b">Notary. Its bearer token authenticates only</text>
+  <text x="292" y="451" class="b">the Notary-to-sidecar hop; not an end-user,</text>
+  <text x="292" y="463" class="b">tenant, or subject authorization boundary.</text>
+
+  <text x="238" y="494" class="bl">NOTARY → ITS SOURCES · HTTP CONNECTORS ONLY</text>
+  <text x="238" y="508" class="b">Notary calls Relay over HTTP as a data source; it does</text>
+  <text x="238" y="520" class="b">not link Relay code. No file or database connector.</text>
+
+  <!-- Federation with a peer Notary (crossing the panel edge) -->
+  <rect x="572" y="190" width="132" height="50" fill="#ffffff" stroke="#161616" stroke-width="1"/>
+  <text x="582" y="210" class="hs">Peer Notary</text>
+  <text x="582" y="225" class="bxs">configured static peer</text>
+
+  <g stroke="#000091" stroke-width="1.2" fill="none">
+    <line x1="572" y1="215" x2="538" y2="215"/>
+    <polyline points="544,211 538,215 544,219"/>
+  </g>
+  <g stroke="#000091" stroke-width="0.9">
+    <line x1="540" y1="222" x2="550" y2="208"/>
+    <line x1="546" y1="222" x2="556" y2="208"/>
+  </g>
+
+  <text x="572" y="266" class="bl">FEDERATION</text>
+  <text x="572" y="281" class="b">Static peers only; not a</text>
+  <text x="572" y="293" class="b">dynamic trust mesh.</text>
+  <text x="572" y="305" class="b">Not anonymous: requires a</text>
+  <text x="572" y="317" class="b">verified peer-signed JWS.</text>
+  <text x="572" y="331" class="b">Before any source read:</text>
+  <text x="572" y="343" class="b">peer identity, signature,</text>
+  <text x="572" y="355" class="b">freshness, single use,</text>
+  <text x="572" y="367" class="b">purpose, profile, and</text>
+  <text x="572" y="379" class="b">audience are verified.</text>
+
+  <line x1="572" y1="394" x2="704" y2="394" stroke="#e5e5e5" stroke-width="1"/>
+
+  <text x="572" y="412" class="bls">DELEGATED</text>
+  <text x="572" y="424" class="bls">SELF-ATTESTATION</text>
+  <text x="572" y="440" class="b">A distinct trust context</text>
+  <text x="572" y="452" class="b">from peer federation: it</text>
+  <text x="572" y="464" class="b">does not delegate trust</text>
+  <text x="572" y="476" class="b">to a peer Notary; it stays</text>
+  <text x="572" y="488" class="b">inside the citizen / OIDC</text>
+  <text x="572" y="500" class="b">trust context.</text>
+
+  <!-- Footnote: the unauthenticated surface at the service edge -->
+  <line x1="0" y1="548" x2="720" y2="548" stroke="#e5e5e5" stroke-width="1"/>
+  <text x="16" y="566" class="foot">Unauthenticated at the service edge: liveness and readiness probes · public verification keys (JWKS /</text>
+  <text x="16" y="580" class="foot">did:web) · credential-issuer discovery · OID4VCI wallet-flow endpoints · docs · public credential-status</text>
+  <text x="16" y="594" class="foot">reads · credential type metadata.</text>
+</svg>

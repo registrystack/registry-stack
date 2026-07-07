@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 880" role="img" aria-labelledby="t d" font-family="'Public Sans', system-ui, -apple-system, sans-serif" text-rendering="geometricPrecision">
 <title id="t">Country evidence mesh</title>
-<desc id="d">A country's authoritative registries and health systems (Civil/CRVS, Clinical Health, Public Health, Social Protection, Agriculture, Education) each carry a small Notary add-on, which shares facts as signed, minimized attestations: cross-domain consumers pull them from it. A Social Protection MIS (OpenSPP) consumes attestations from Civil, Clinical Health over FHIR API, and DHIS2 via the built-in http_json or http_flow source adapter, and reads the social registry it owns directly. A federated Citizen Chat (Program Navigator) reuses Clinical Health and Public Health attestations, then adds Agriculture and Education. There is no central broker and no boundary bar.</desc>
+<desc id="d">A country's authoritative registries and health systems (Civil/CRVS, Clinical Health, Public Health, Social Protection, Agriculture, Education) each carry a small Notary add-on, which shares facts as signed, minimized attestations: cross-domain consumers pull them from it. A Social Protection MIS (OpenSPP) consumes attestations from Civil, Clinical Health over FHIR API, DHIS2 via the built-in http_json or http_flow source adapter, and the Agriculture and Education registries, and reads the social registry it owns directly. There is no central broker and no boundary bar.</desc>
 <style>
   .eyebrow { font: 700 11px 'Public Sans', system-ui, sans-serif; fill: #6a6a6a; letter-spacing: 0.08em; }
   .title { font: 700 25px 'Public Sans', system-ui, sans-serif; fill: #161616; letter-spacing: -0.01em; }
@@ -47,20 +47,16 @@
 <line x1="1331.9" y1="68.1" x2="1335.4" y2="64.6" stroke="#9d2c1d" stroke-width="0.8"/>
 <path d="M1322.0 72.0 L1323.9 76.1 L1328.0 78.0 L1323.9 79.9 L1322.0 84.0 L1320.1 79.9 L1316.0 78.0 L1320.1 76.1 Z" fill="#9d2c1d"/>
 <text x="1322" y="112" class="sealcap" text-anchor="middle">EVIDENCE</text>
-<line x1="223" y1="542" x2="640.2402409868578" y2="325.0741604236946" stroke="#000091" stroke-width="1.4"/>
-<polygon points="650.0,320.0 637.9,320.6 642.5,329.5" fill="#000091"/>
-<line x1="446" y1="542" x2="691.7176177407994" y2="327.23893252575806" stroke="#000091" stroke-width="1.4"/>
-<polygon points="700.0,320.0 688.4,323.5 695.0,331.0" fill="#000091"/>
-<line x1="677" y1="542" x2="746.5638862819483" y2="330.4495513069517" stroke="#000091" stroke-width="1.4"/>
-<polygon points="750.0,320.0 741.8,328.9 751.3,332.0" fill="#000091"/>
-<line x1="462" y1="542" x2="1019.7547334789202" y2="324.0043119149291" stroke="#000091" stroke-width="1.3"/>
-<polygon points="1030.0,320.0 1017.9,319.3 1021.6,328.7" fill="#000091"/>
-<line x1="685" y1="542" x2="1080.3540919314685" y2="325.28738664497286" stroke="#000091" stroke-width="1.3"/>
-<polygon points="1090.0,320.0 1078.0,320.9 1082.8,329.7" fill="#000091"/>
-<line x1="1123" y1="542" x2="1191.6064483215882" y2="330.4634510084364" stroke="#000091" stroke-width="1.3"/>
-<polygon points="1195.0,320.0 1186.9,328.9 1196.4,332.0" fill="#000091"/>
-<line x1="1346" y1="542" x2="1273.5627731763527" y2="330.4070479625041" stroke="#000091" stroke-width="1.3"/>
-<polygon points="1270.0,320.0 1268.8,332.0 1278.3,328.8" fill="#000091"/>
+<line x1="223" y1="542" x2="734.8774073" y2="324.3050107" stroke="#000091" stroke-width="1.4"/>
+<polygon points="745.0,320.0 736.8,328.9 732.9,319.7" fill="#000091"/>
+<line x1="446" y1="542" x2="760.9257439" y2="326.2175458" stroke="#000091" stroke-width="1.4"/>
+<polygon points="770.0,320.0 763.8,330.3 758.1,322.1" fill="#000091"/>
+<line x1="677" y1="542" x2="787.9057715" y2="329.7492993" stroke="#000091" stroke-width="1.4"/>
+<polygon points="793.0,320.0 792.3,332.1 783.5,327.4" fill="#000091"/>
+<line x1="1123" y1="542" x2="907.795634" y2="327.760676" stroke="#000091" stroke-width="1.4"/>
+<polygon points="900.0,320.0 911.3,324.2 904.3,331.3" fill="#000091"/>
+<line x1="1346" y1="542" x2="964.5656934" y2="325.431161" stroke="#000091" stroke-width="1.4"/>
+<polygon points="955.0,320.0 967.0,321.1 962.1,329.8" fill="#000091"/>
 <line x1="799.5" y1="320" x2="799.5" y2="549.0" stroke="#161616" stroke-width="1.4" stroke-dasharray="6 4"/>
 <polygon points="799.5,560.0 804.5,549.0 794.5,549.0" fill="#161616"/>
 <rect x="40" y="560" width="205" height="160" fill="#ffffff" stroke="#161616" stroke-width="1"/>
@@ -207,24 +203,15 @@
 <line x1="1349.3" y1="552.7" x2="1350.3" y2="551.7" stroke="#9d2c1d" stroke-width="0.8"/>
 <path d="M1345.0 554.5 L1345.8 556.2 L1347.5 557.0 L1345.8 557.8 L1345.0 559.5 L1344.2 557.8 L1342.5 557.0 L1344.2 556.2 Z" fill="#9d2c1d"/>
 <text x="1345" y="579" class="badgelbl" text-anchor="middle">NOTARY</text>
-<rect x="610" y="180" width="300" height="140" fill="#ffffff" stroke="#161616" stroke-width="1"/>
-<rect x="610" y="180" width="4" height="140" fill="#000091"/>
-<text x="626" y="208" class="cardtitle">Social Protection MIS</text>
-<text x="626" y="226" class="mono">OpenSPP</text>
-<text x="898" y="226" class="role" text-anchor="end">RELYING PARTY</text>
-<line x1="626" y1="238" x2="894" y2="238" stroke="#e5e5e5" stroke-width="1"/>
-<text x="626" y="260" class="b">Assembles the benefit case file.</text>
-<text x="626" y="278" class="b">Combines attestations with its own data.</text>
-<text x="626" y="302" class="bblue">Owns the eligibility decision.</text>
-<rect x="990" y="180" width="320" height="140" fill="#ffffff" stroke="#161616" stroke-width="1"/>
-<rect x="990" y="180" width="4" height="140" fill="#000091"/>
-<text x="1006" y="208" class="cardtitle">Citizen Chat</text>
-<text x="1006" y="226" class="mono">Program Navigator</text>
-<text x="1298" y="226" class="role" text-anchor="end">RELYING PARTY</text>
-<line x1="1006" y1="238" x2="1294" y2="238" stroke="#e5e5e5" stroke-width="1"/>
-<text x="1006" y="260" class="b">Need → programme → evidence step → receipt.</text>
-<text x="1006" y="278" class="b">Zero-trust AI: guides, never decides.</text>
-<text x="1006" y="302" class="bblue">Secure sign-in · federated across notaries.</text>
+<rect x="730" y="180" width="300" height="140" fill="#ffffff" stroke="#161616" stroke-width="1"/>
+<rect x="730" y="180" width="4" height="140" fill="#000091"/>
+<text x="746" y="208" class="cardtitle">Social Protection MIS</text>
+<text x="746" y="226" class="mono">OpenSPP</text>
+<text x="1018" y="226" class="role" text-anchor="end">RELYING PARTY</text>
+<line x1="746" y1="238" x2="1014" y2="238" stroke="#e5e5e5" stroke-width="1"/>
+<text x="746" y="260" class="b">Assembles the benefit case file.</text>
+<text x="746" y="278" class="b">Combines attestations with its own data.</text>
+<text x="746" y="302" class="bblue">Owns the eligibility decision.</text>
 <text x="56" y="186" class="eyebrow">HOW TO READ IT</text>
 <text x="56" y="216" class="minihead">Each registry keeps a Notary.</text>
 <text x="56" y="236" class="b">It shares the claim, not the row.</text>
@@ -234,7 +221,7 @@
 <text x="56" y="314" class="minihead">Its own data</text>
 <text x="164" y="314" class="b">a system reads the</text>
 <text x="164" y="332" class="b">registry it owns directly.</text>
-<text x="56" y="368" class="bmut">Shared Notaries can serve both MIS and Chat.</text>
+<text x="56" y="368" class="bmut">A shared Notary can serve many relying parties.</text>
 <text x="56" y="384" class="bmut">Federated: no central broker.</text>
 <text x="40" y="760" class="eyebrow">LEGEND</text>
 <rect x="40" y="778" width="30" height="16" fill="#000091"/>

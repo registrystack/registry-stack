@@ -9,8 +9,8 @@ Notary project that can validate configuration and evaluate a starter
 birth-record claim without asking the user to hand-write Notary YAML before the
 first success.
 
-For commands, use the Registry Docs tutorial, "Verify OpenCRVS claims with
-registryctl."
+For commands, use the Registry Docs tutorial,
+["Verify OpenCRVS claims with registryctl"](https://docs.registrystack.org/tutorials/verify-opencrvs-claims/).
 
 ## Project boundary
 
@@ -45,7 +45,7 @@ The generated Notary config uses the `dci` source connector, the
 `target.identifiers.UIN`. The default disclosure is `value`, which means
 callers receive the truth of the claim rather than a copied source record.
 
-## Signing literacy
+## Signing model
 
 Registry Notary signs credentials when a configured credential flow is used.
 The `registryctl` OpenCRVS recipe generates a local demo issuer signing key
@@ -70,7 +70,7 @@ page describes), generates its own demo credential profile named
 `dci_record_sd_jwt` for a generic DCI source; see the [OpenCRVS
 tutorial](opencrvs-dci-standalone-tutorial.md) for that flow.
 
-## PDP literacy
+## Policy decision point model
 
 A policy decision point (PDP) is the component that decides whether a request is
 permitted under a policy. A policy enforcement point (PEP) is the component that
@@ -84,9 +84,9 @@ denied the request.
 
 The OpenCRVS starter project introduces this model but does not configure a
 governed PDP. The shipped local path checks API credentials, claim scopes,
-source lookup configuration, and the claim rule. Do not describe the smoke test
-as a governed policy decision unless the runtime config includes a governed PDP
-integration and the audit output records that provenance.
+source lookup configuration, and the claim rule. The smoke test is not a
+governed policy decision unless the runtime config includes a governed PDP
+integration.
 
 ## What to inspect first
 

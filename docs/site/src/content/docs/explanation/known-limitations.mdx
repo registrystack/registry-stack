@@ -19,7 +19,7 @@ standards_referenced:
 You already know what Registry Stack is for: answer a question about a record without sharing the
 underlying record.
 This page answers a different question (*what does Registry Stack not yet do or guarantee?*) by
-giving you, in one place, the honest list of where the boundaries are.
+giving you, in one place, the list of boundaries.
 
 ## What this page is and how to use it
 
@@ -27,7 +27,6 @@ This is the canonical inventory of current limitations and non-guarantees across
 Each entry states the boundary plainly and links to where it is discussed in depth, so the rest of
 the documentation can point here whenever it says "this is not X."
 
-The limitations are not invented for this page.
 Each protocol and data-model specification carries its own limitations section; this hub collects
 those and links to them so you can read any one in full context.
 
@@ -41,8 +40,6 @@ Three things are out of scope here, and each is a link instead:
   for release verification.
 
 Use this page as a checklist before you commit.
-If one of these limits is a dealbreaker for your deployment, better to find that out before
-integrating than after.
 
 ## Everything here is draft
 
@@ -54,7 +51,7 @@ Registry Stack is a pre-1.0 technical release for evaluation, integration pilots
 review.
 It is not a production support commitment and carries no hosted service-level agreement.
 
-Two things follow, and both matter as you read the rest of the page.
+Two things follow.
 First, the behaviors and boundaries here may change as the specifications move toward `current`.
 Second, aligning with an external standard is not the same as conforming to it: speaking the shape
 of OIDC, OAuth 2.0, SD-JWT VC, OID4VCI, CCCEV, or the rest does not certify conformance to any of
@@ -131,7 +128,7 @@ Read the full context in the [Registry Notary protocol](../../spec/rs-pr-notary/
   EdDSA/Ed25519 by default; ES256/P-256 is also supported per credential profile; with no W3C
   [Verifiable Credentials Data Model](../../reference/standards/) JSON-LD envelope).
   Relay's optional signed response credentials are VCDM 2.0 VC-JWT.
-  These are different artifacts: don't describe one as the other.
+  These are different artifacts; verify each against its own format.
 - Standalone admin reload is not implemented: The standalone Notary `/admin/v1/reload` route
   returns HTTP 501 with code `registry.admin.capability.not_supported` and performs no reload, and
   non-swappable changes require a service restart.

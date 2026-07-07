@@ -45,10 +45,10 @@ result with a protected row read.
 ## Security
 
 Registry Stack authorization is scope-based and deny-by-default.
-Every request writes to a hash-chained audit envelope, except health and readiness probes,
-which are excluded by default.
-These docs are evidence-anchored: every claim about product behavior points to code, a fixture, a
-test, or a specification requirement ID.
+Every request writes to a hash-chained audit envelope. Health and readiness probes are excluded
+by default.
+These docs are evidence-anchored: every claim points to code, a fixture, a test, or a
+specification requirement ID.
 
 Read the [security overview](security/) for the threat model and the public evidence a reviewer can
 check.

@@ -122,7 +122,7 @@ Consultation, credential, and federation read the source registry, which stays
 the system of record; every layer emits a redacted audit record to operations.*
 
 Credentials use `application/dc+sd-jwt`, EdDSA over named Ed25519 keys, and
-`did:jwk` holder binding. The OID4VCI surface is a profiled subset of Draft 13;
+`did:jwk` holder binding. The OID4VCI surface is a profiled subset of OpenID4VCI Draft 13;
 the server capabilities advertise it as a partial issuer
 (`openid4vci.support: not_full_issuer`). Federation is a delegated-evaluation
 slice only: it does not implement open federation, dynamic trust chains, or

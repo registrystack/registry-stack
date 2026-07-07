@@ -1,12 +1,13 @@
-# Call Registry Notary From An OpenFn Workflow
+# Call Registry Notary from an OpenFn workflow
 
 > **Page type:** How-to · **Product:** Registry Notary · **Layer:** evaluation · **Audience:** integrator
 
 This guide shows the caller-side OpenFn pattern: an OpenFn workflow calls
 Registry Notary to evaluate a configured claim, then branches on the Notary
-result. This is separate from the source adapter sidecar source path, where
-Registry Notary calls a private OpenFn-powered sidecar to read upstream source
-data.
+result. This is separate from the source adapter sidecar (a private adapter
+process that Notary calls over localhost or a private pod network) source
+path, where Registry Notary calls a private OpenFn-powered sidecar to read
+upstream source data.
 
 Use this pattern when a workflow needs a governed claim answer before it takes
 an action, and the workflow should not receive or copy source registry rows.
@@ -33,7 +34,7 @@ Registry Notary owns the evidence decision:
 The workflow should treat Notary as a trust decision service, not as a raw data
 source.
 
-## OpenFn Adaptor
+## OpenFn adaptor
 
 The current OpenFn language adaptor lives in:
 
@@ -42,7 +43,7 @@ https://github.com/jeremi/openfn-language-registry-stack
 ```
 
 When that repository is configured as an OpenFn local adaptor repository,
-Lightning and the worker load the Notary package as:
+OpenFn Lightning (the web platform) and the worker load the Notary package as:
 
 ```text
 @openfn/language-registry-notary@local
@@ -57,12 +58,8 @@ Configure an OpenFn credential with:
 - `openfn_target_fingerprint_key`: optional separate HMAC key for the
   `target_fingerprint` audit value.
 
-For local development in this repository, the older runnable helper and
-workflow template still live in:
-
-```text
-demo/openfn-notary-caller/
-```
+A runnable helper and workflow template for local development are in
+`demo/openfn-notary-caller/` in the `registry-notary` repository.
 
 The adaptor and local template use a safe helper rather than `@openfn/language-http`
 for the Notary request. In `@openfn/language-http@7.3.1`, non-2xx responses can
@@ -78,7 +75,7 @@ The helper prepares a minimized `POST /v1/evaluations` request. It:
 - maps 2xx result bodies separately from non-2xx Problem Details;
 - strips request material and secret-backed configuration from final state.
 
-## Minimal Workflow
+## Minimal workflow
 
 The first workflow should read like a claim gate, not like a raw HTTP call:
 
@@ -131,7 +128,7 @@ export REGISTRY_NOTARY_BEARER_TOKEN="<token from the agri-evidence entry>"
 export REGISTRY_NOTARY_PURPOSE="<default_purpose from the agri-evidence entry>"
 ```
 
-## Value Claims
+## Value claims
 
 When a workflow needs a fact such as farmed land size, model that fact as a
 Registry Notary value claim instead of querying the source Relay from OpenFn.
@@ -182,7 +179,7 @@ Composite value claims like this must be configured in the Notary deployment.
 Do not replace them with direct Relay reads when the workflow needs a certified
 trust decision.
 
-## Auditability And Verification Boundary
+## Auditability and verification boundary
 
 The OpenFn caller helper preserves correlation data that operators need for
 audit review:
@@ -206,7 +203,7 @@ through `registry_notary_client::verifier::verify_sd_jwt_vc`, which verifies the
 compact credential against caller-supplied trusted JWKS and policy options.
 That verifier is not wrapped by this JavaScript OpenFn demo.
 
-Run the focused checks:
+From a repository checkout, run the focused checks:
 
 ```sh
 npm ci --ignore-scripts --no-audit --no-fund --prefix demo/openfn-notary-caller
@@ -233,14 +230,15 @@ The helper maps these branches:
 | `invalid_request` | Problem Details | Malformed or unsupported request |
 
 Deployment profiles may collapse granular matching outcomes to
-`evidence.not_available` to avoid oracle behavior. Workflow logic must not
+`evidence.not_available` to avoid acting as an existence oracle (revealing
+whether a record exists). Workflow logic must not
 assume that granular `target.not_found` or `target.match_ambiguous` codes are
 visible in production.
 
 The demo assumes matching-error collapse is enabled and treats
 `evidence.not_available` as the default production-safe failure branch.
 
-## Replay Safety
+## Replay safety
 
 OpenFn platform retries can replay an entire job. The template avoids duplicate
 Notary evaluations by skipping `POST /v1/evaluations` when workflow state

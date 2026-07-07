@@ -109,16 +109,18 @@ path cannot affect another.
 - **Plugin rule type.** The `Plugin` rule variant is declared in config but has no implementation at
   the pinned commit.
 - **Holder binding.** `did:jwk` is the only supported proof-of-possession binding method.
-- **Audit events.** Every evaluated request emits an `EvidenceAuditEvent` in a Registry Platform
-  audit envelope to a configured sink (stdout, file, or JSONL).
 - **Demo helpers.** Generated workflow helpers are examples, not production replay-protection
   profiles. Add freshness, expiry, or nonce checks before copying a helper into a production
   workflow.
+- **Admin reload.** The admin reload route returns a no-op in the standalone router; key and
+  configuration changes still require a service restart.
+
+## Behavior the schema cannot express
+
+- **Audit events.** Every evaluated request emits an `EvidenceAuditEvent` in a Registry Platform
+  audit envelope to a configured sink (stdout, file, or JSONL).
 
 :::caution
 Audit write failures surface as request errors, not as silent log entries. If the audit sink is
 unavailable, callers receive errors. Monitor the audit sink as part of your operational runbook.
 :::
-
-- **Admin reload.** The admin reload route returns a no-op in the standalone router; key and
-  configuration changes still require a service restart.

@@ -103,7 +103,7 @@ Product names are always in English, including on future translated pages.
   <dd>Evidence metadata and runtime behavior bound to a `governed-evidence` ecosystem binding. Manifest validation requires pack identity, evidence metadata, required PDP gates, allowed outputs, policy id/hash binding, and the `registry-evidence-gateway-pdp/v1` ODRL enforcement profile, while some evidence metadata fields remain opaque JSON.</dd>
 
   <dt>historical docs</dt>
-  <dd>Older specs, implementation reviews, or pre-rename documents that remain useful evidence but are not current user guidance. Current public docs link to them only when they explain a current product boundary or decision.</dd>
+  <dd>Older specs, implementation reviews, or pre-rename documents that remain useful evidence but are not current user guidance.</dd>
 
   <dt>holder</dt>
   <dd>The party that holds a credential in a wallet and presents it to a verifier. Registry Notary binds each credential to a holder key (`did:jwk`) in the `cnf` claim, so only the holder can present it.</dd>
@@ -251,5 +251,8 @@ Product names are always in English, including on future translated pages.
 
 - Product names (Registry Platform, Registry Relay, Registry Manifest, Registry Notary, Registry Lab) are always title case.
 - Repo slugs (`registry-platform`, `registry-relay`, `registry-manifest`, `registry-notary`, `registry-lab`) are always lowercase and monospace.
-- Legacy underscore forms (`registry_relay`) and old repo names (`decentralized-evidence-demo`) appear only in historical pages or `rename_status` fields. Do not use them in prose on current pages.
-- Spell out standards acronyms on first use per page. The glossary provides a reference but does not replace per-page first-use expansion.
+- Legacy underscore forms (`registry_relay`) and old repo names (`decentralized-evidence-demo`) appear only in historical pages or `rename_status` fields.
+- The glossary provides a reference for standards acronyms but does not replace per-page first-use expansion.
+
+{/* Contributor rules: do not use legacy underscore forms or old repo names in prose on
+    current pages; spell out standards acronyms on first use per page. */}

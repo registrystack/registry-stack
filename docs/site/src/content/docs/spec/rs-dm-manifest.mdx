@@ -1,6 +1,6 @@
 ---
 title: "RS-DM-MANIFEST: Registry Manifest portable metadata data model"
-description: "The data model for a Registry Manifest portable metadata manifest: its schema version and identity, the runtime-binding boundary that keeps it portable, the catalog and top-level collections that describe a registry, reference integrity and identifier constraints, grouped evidence, governed evidence gateway metadata, federation discovery metadata, the standards-shaped render set, the discovery bundle and its digests, and the strict unknown-key rejection rule a conforming producer and reader follow."
+description: "The data model for a Registry Manifest portable metadata manifest: schema version, runtime-binding boundary, catalog collections, reference integrity, governed evidence metadata, federation discovery, discovery-bundle digests, and strict unknown-key rejection."
 status: draft
 owner: registry-docs
 source_repos:
@@ -29,7 +29,7 @@ audience:
   - specification editor
 ---
 
-This document defines the data model of the Registry Manifest portable metadata manifest: the `metadata.yaml` document (schema version `registry-manifest/v1`) that describes a registry's catalog, datasets, services, requirements, evidence, and policies, and from which Registry Manifest renders a static, standards-shaped discovery bundle. It is the structural counterpart to the [Registry Relay protocol](../rs-pr-relay/): it closes the metadata-manifest ownership boundary that specification names in its Section 1 and REQ-PR-RELAY-011.
+This document defines the data model of the Registry Manifest portable metadata manifest: the `metadata.yaml` document (schema version `registry-manifest/v1`) that describes a registry's catalog, datasets, services, requirements, evidence, and policies, and from which Registry Manifest renders a static, standards-shaped discovery bundle. It is the structural counterpart to the [Registry Relay protocol](../rs-pr-relay/): RS-PR-RELAY Section 1 and REQ-PR-RELAY-011 defer the metadata-manifest format to this document.
 
 The manifest format is owned by Registry Manifest, a pure library and command-line interface with no runtime data dependencies; Registry Relay serves and scopes the compiled artifacts but does not define or version the format. This document and [RS-ARC-G](../rs-arc-g/) state that boundary at different altitudes: RS-ARC-G fixes it as an architectural invariant (REQ-ARC-G-001, REQ-ARC-G-002, REQ-ARC-G-006), and this document refines the Registry Manifest component of RS-ARC-G Section 3 one level down, into the structure the manifest takes and the invariants its validator enforces at load. As [RS-DM-CLAIM](../rs-dm-claim/) is the data-model form of the Registry Notary protocol, this document is the data-model form of the portable metadata layer.
 

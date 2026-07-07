@@ -10,7 +10,7 @@ Status labels:
 | Supported | Works in the current Relay runtime with focused tests or demo coverage |
 | Lab-supported | Can be shown with demo config or scripts, but still needs operator hardening |
 | Partial | Important runtime pieces exist, with named gaps |
-| Planned | Captured as docs or roadmap only |
+| Planned | Not yet supported |
 | Out of scope | Not a Relay responsibility |
 
 ## Personas
@@ -105,8 +105,8 @@ sequenceDiagram
 | --- | --- | --- | --- | --- |
 | 1 | Case system reads a household record with required filters | Protected consultation | Supported | Clients must use the dataset-scoped V1 route shape |
 | 2 | Case system follows a dataset-local relationship | Protected consultation | Supported | Cross-dataset relationships remain client-composed |
-| 3 | Planning analyst runs district-level eligibility aggregates | Aggregate-only planning | Supported | Query budget persistence is not a V1 feature |
-| 4 | Operator publishes portable metadata separately from Relay runtime | Metadata publication | Supported | Static publication release process needs a policy |
+| 3 | Planning analyst runs district-level eligibility aggregates | Aggregate-only planning | Supported | Per-caller query budgets are not a V1 feature |
+| 4 | Operator publishes portable metadata separately from Relay runtime | Metadata publication | Supported | Static publication is manual; no managed release process yet. |
 | 5 | Metadata consumer reads DCAT and SHACL views | Metadata publication | Supported | Profile coverage depends on manifest quality |
 | 6 | Auditor traces row access through platform audit records | Governance | Supported | External audit storage is deployment-owned |
 | 7 | Client requests signed response credentials (VC-JWT) | Signed credentials | Supported | Remote signer mode is not implemented |
@@ -125,12 +125,3 @@ sequenceDiagram
 The demo configs cover benefits casework, clinic capacity, education, public
 works, subject linkage, disability registry sync, and cross-demo workflows. Use
 them as scenario fixtures rather than as production policy.
-
-When adding a scenario, include:
-
-- the persona and system boundary;
-- the least-privilege scopes required;
-- the source type and metadata profile;
-- whether the flow exposes rows, aggregates, metadata, signed response credentials, or Notary
-  handoff;
-- the unsupported behaviors that must stay out of scope.

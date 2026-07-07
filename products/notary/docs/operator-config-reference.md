@@ -43,7 +43,7 @@ the basic path passes `doctor`.
 | `audit` | Redacted audit envelope sink and HMAC secret | Recommended for every deployable environment |
 | `config_trust` | Durable local state for governed config apply | No, only for signed governed config |
 | `evidence` | Claims, sources, rules, formats, signing keys, and credential profiles | Yes |
-| `cel` | Optional CEL worker policy, limits, and regex posture | Defaults are present |
+| `cel` | Optional CEL (Common Expression Language) worker policy, limits, and regex posture | Defaults are present |
 | `replay` | One-time-use store for federation request JWTs, OID4VCI nonces, and holder proof JWTs | Defaults to in-process memory |
 | `credential_status` | Optional storage-backed lifecycle status URL for issued credentials | No |
 | `self_attestation` | OIDC-bound citizen request policy | Only for citizen or wallet flows |
@@ -93,10 +93,10 @@ Profiles:
 | `production` | Real integrations handling sensitive or operational data. |
 | `evidence_grade` | Deployments where the evidence trail is itself part of the assurance claim. |
 
-An **undeclared** profile fails startup. Use `local` as the explicit development
+An undeclared profile fails startup. Use `local` as the explicit development
 opt-out, or declare `hosted_lab`, `production`, or `evidence_grade` for deployed
-environments. An **invalid** profile value fails startup, so a typo cannot
-silently disable enforcement.
+environments. An invalid profile value fails startup, so a typo cannot silently
+disable enforcement.
 
 Each gate evaluates to one of four severities under the declared profile:
 
@@ -146,9 +146,8 @@ finding's status to `waived` in posture instead of applying its severity effect.
   secret in a reason.
 
 Active waivers and gate findings appear in the admin posture document under the
-`deployment` object, and the eight-field audit assurance vocabulary appears under
-the top-level `audit` object. See `docs/security-assurance.md` for the assurance
-vocabulary.
+`deployment` object, and audit assurance fields appear under the top-level
+`audit` object; see [security assurance](security-assurance.md).
 
 ## Secret handling
 
@@ -201,8 +200,9 @@ signed, threshold-approved config changes for high-assurance deployments. Simple
 local deployments omit it and keep using the local YAML loaded at startup.
 
 This governed example is syntactically valid but illustrative. Generate the
-`tuf_root_sha256` and targets-role signer key IDs from your own trusted TUF
-repository before using governed apply in an environment.
+`tuf_root_sha256` and targets-role signer key IDs from your own trusted
+[TUF (The Update Framework)](https://theupdateframework.io/) repository
+before using governed apply in an environment.
 
 ```yaml
 config_trust:
@@ -234,23 +234,24 @@ config_trust:
           allowed_change_classes: [public_metadata, root_transition]
 ```
 
-`config_trust` is optional. Simple local deployments omit it and keep using the
-local YAML loaded at startup. Governed config apply requires
-`antirollback_state_path` and `local_approval_state_path`, which must point to
-durable local state such as a mounted volume. `break_glass_rate_limit` is the
-trusted local rolling-window policy for break-glass apply requests; when omitted
-it defaults to one accepted request per rate-limit identity per hour.
-`accepted_roots` uses the shared Registry trust-root shape.
+Governed config apply requires `antirollback_state_path` and
+`local_approval_state_path`, which must point to durable local state such as a
+mounted volume. `break_glass_rate_limit` is the trusted local rolling-window
+policy for break-glass apply requests; when omitted it defaults to one
+accepted request per rate-limit identity per hour. `accepted_roots` uses the
+shared Registry trust-root shape.
+
 Standalone Registry Notary verifies local or remote signed TUF config targets
 against `accepted_roots` when the admin request provides a `tuf` source.
 Verified TUF targets-role signature key IDs, not target-declared custom
 metadata, satisfy the role threshold. Inline YAML remains available for
-verify/dry-run diagnostics. Local TUF sources use `root_path`, `metadata_dir`,
-`targets_dir`, `datastore_dir`, and `target_name`. Remote TUF sources keep the
-same `root_path`, `datastore_dir`, and `target_name`, and replace local
-repository directories with `metadata_base_url` and `targets_base_url`. Remote
-sources are recorded as `signed_bundle_endpoint`; local repository sources are
-recorded as `signed_bundle_file`.
+verify/dry-run diagnostics.
+
+| | Local TUF source | Remote TUF source |
+| --- | --- | --- |
+| Shared fields | `root_path`, `datastore_dir`, `target_name` | `root_path`, `datastore_dir`, `target_name` |
+| Distinct fields | `metadata_dir`, `targets_dir` | `metadata_base_url`, `targets_base_url` |
+| Recorded as | `signed_bundle_file` | `signed_bundle_endpoint` |
 
 `remote_tuf_repositories` is an operator-controlled allowlist of remote TUF
 sources that may be submitted in admin apply requests. An apply request whose
@@ -317,7 +318,8 @@ text.
 ## Minimal machine config
 
 This is the smallest useful shape for a backend caller that evaluates one claim
-from one DCI source and can later issue a credential from that claim.
+from one DCI (Social Protection Digital Convergence Initiative) source and can
+later issue a credential from that claim.
 
 ```yaml
 server:
@@ -944,10 +946,8 @@ Fields:
 
 Notes:
 
-- `sufficient_target_inputs` is an OR of ANDs. Each inner list is a complete set of
-  paths that, when all present, is enough to match; the request needs to satisfy any
-  one group. For example, `[[national_id], [given_name, family_name, birthdate]]`
-  accepts either a national id alone or the full name-and-birthdate triple.
+- For example, `[[national_id], [given_name, family_name, birthdate]]` accepts
+  either a national id alone or the full name-and-birthdate triple.
 - `allowed_target_inputs` and `allowed_requester_inputs` are minimization controls.
   A request that supplies a path outside the allow-list is rejected, so a binding
   cannot over-collect by accident. Leave them empty only for identifier-only
@@ -962,8 +962,6 @@ Notes:
   environment where exposing not-found versus ambiguous versus rejected to the
   caller is acceptable, because those differences can be used as an existence
   oracle.
-- `confidence` is a fixed label for the source and method. It is returned verbatim
-  on every successful match and does not measure how strong an individual match was.
 - `allowed_assurance`, `minimum_assurance`, `permitted_jurisdictions`,
   `max_source_age_seconds`, `require_legal_basis`, `require_consent`,
   `allowed_legal_basis_refs`, `allowed_consent_refs`, and `redaction_fields` are
@@ -1074,7 +1072,7 @@ supported. Credential profiles must use DID holder binding with proof of
 possession and `did:jwk`. In-process rate limits are guardrails; public
 deployments need gateway and identity-provider controls as well.
 
-The config keys unique to this page are: `subject_binding.token_claim`,
+The `self_attestation` block's keys are: `subject_binding.token_claim`,
 `subject_binding.normalize` (must be `exact`),
 `subject_binding.allow_sub_as_civil_id`, `citizen_clients`,
 `token_policy` ceilings, `allowed_operations`, `allowed_purposes`,

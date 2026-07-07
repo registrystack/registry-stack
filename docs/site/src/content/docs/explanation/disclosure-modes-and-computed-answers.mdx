@@ -26,13 +26,13 @@ be hard to authorize, which is exactly the outcome this design avoids.
 
 Registry Notary is the component that evaluates a claim and decides what the caller receives back.
 It controls the answer through three **disclosure modes**: `value`, `predicate`, and `redacted`.
-There are exactly three; there is no fourth mode.
+There are exactly three.
 `value` is not always all-or-nothing, though: when a claim returns an object, `value` mode can
 have specific fields redacted (configured through `redaction_fields`), and the result carries the
 object minus those fields plus a list of what was withheld.
 
 Per-claim disclosure control is enforced at runtime by the service.
-It is not left to a caller's good behaviour.
+It is not left to a caller's good behavior.
 
 ## The evaluation pipeline: computed answers, not record handoffs
 
@@ -71,16 +71,13 @@ The disclosure mode fixes how much of the computed answer the caller receives:
 
 `value` returns the computed result, minus configured object-field redactions, so this mode is the
 least private of the three and is appropriate only where the use case calls for the actual value.
-`predicate` returns only the boolean satisfaction.
-`redacted` returns neither the underlying value nor the yes/no outcome in the standard
-claim-result body.
 
 Every evaluation result records which disclosure mode was applied, so a downstream system can tell
 how much was revealed.
 
 ## Why predicate and redacted avoid sharing the underlying record
 
-This is the core of the privacy story.
+This is the central privacy property.
 Because Notary computes the answer from its own sources, a `predicate` result can satisfy a
 question while disclosing only a boolean.
 A question of whether someone has a registered record is modelled as an `exists` rule disclosed as
@@ -102,18 +99,14 @@ result instead of omitting it.
 A deployment that allows both redacted disclosure and CCCEV output should be aware that the
 outcome is not fully withheld in that render.
 
-The difference between the two matters.
-`predicate` is not "zero disclosure"; it still tells the caller a true-or-false fact about the
-subject.
-`redacted` goes one step further: it does not leak even a yes/no.
-They are not interchangeable.
+`predicate` still discloses a true-or-false fact; `redacted` does not.
 
 ## How disclosure policy is configured per claim
 
 The caller does not freely pick from all three modes.
 Each claim configures a **disclosure policy**: a `default` mode, an `allowed` set drawn from the
 three modes, and a `downgrade` policy.
-A caller may request a mode: Notary honours it when it is in that claim's allowed set.
+A caller may request a mode: Notary honors it when it is in that claim's allowed set.
 Under the default `deny` downgrade, a disallowed request is refused
 (`claim.disclosure_not_allowed`); a `default` or `redacted` downgrade substitutes that fallback
 mode when the fallback is itself allowed.
@@ -151,7 +144,7 @@ They are not the whole privacy guarantee.
 A few protections are not the software's to make at all: secret and key custody, audit retention,
 tenant isolation, transport, and rate limiting are your deployment's job, not built-in guarantees.
 
-## Honest limits
+## Limits
 
 A few boundaries matter when you evaluate this design:
 
@@ -174,7 +167,7 @@ A few boundaries matter when you evaluate this design:
 These modes also sit inside boundaries that are not specific to disclosure design: how much
 source-binding governance is actually configured, what a source-adapter sidecar token does and
 does not authorize, and what "aligned with a standard" does and does not mean.
-Weigh those alongside the modes above; see the [known limitations hub](../known-limitations/) for
+Weigh those alongside the disclosure modes; see the [known limitations hub](../known-limitations/) for
 the full inventory.
 
 ## Related

@@ -13,9 +13,10 @@ standards_referenced:
 ---
 
 Trusted context constraints describe the cross-cutting policy checks that Registry Relay and
-Registry Notary evaluate with the platform policy layer. The product still owns source identity,
-route identity, lookup semantics, and adapter contracts. The shared report shape makes the
-constraints visible without pretending every product reads the same source in the same way.
+Registry Notary evaluate with the shared policy layer provided by Registry Platform. The product
+still owns source identity, route identity, lookup semantics, and adapter contracts. The shared
+report shape makes the constraints visible without pretending every product reads the same source
+in the same way.
 
 ## What the platform owns
 
@@ -56,8 +57,8 @@ date, or a spreadsheet-maintained update column. Those dates describe the regist
 do not prove when Notary observed the source unless the source adapter or DCI response contract
 declares that field as an observation timestamp.
 
-For OpenCRVS DCI starter projects, Registryctl maps the freshness field from the DCI response
-envelope:
+For OpenCRVS DCI (Digital Convergence Initiative) starter projects, `registryctl` maps the
+freshness field from the DCI response envelope:
 
 ```yaml
 dci:

@@ -31,8 +31,8 @@ standards_referenced:
 Registry Stack is the registry-facing surface that sits behind systems already in a delivery
 stack. This page describes the technical wiring for each neighbor: what the neighbor owns, what
 Registry Stack adds, and the conditions under which a Registry Stack surface belongs in the path.
-For where the registry family sits relative to the wider ecosystem as a product positioning, see
-the marketing [ecosystem page](https://registrystack.org/ecosystem/).
+For how the registry family relates to the wider ecosystem, see the
+[ecosystem page](https://registrystack.org/ecosystem/).
 
 ## Country evidence mesh
 
@@ -41,8 +41,8 @@ Clinical health systems can expose bounded facts through a FHIR API, public-heal
 such as DHIS2 are reached through the built-in source-adapter engines (`http_json` or `http_flow`),
 and social protection, agriculture, education, and civil
 registration systems can keep their own authoritative stores.
-Registry Notary instances return configured claims to a social protection management information
-system and citizen-facing service channels without turning those consumers into raw-record readers.
+Registry Notary instances return configured claims to consuming systems such as a social
+protection management information system without turning those consumers into raw-record readers.
 
 {/* SVG diagram. Essential labels are restated in the paragraph before the figure. */}
 <figure>
@@ -50,8 +50,9 @@ system and citizen-facing service channels without turning those consumers into 
        alt="Country evidence mesh: civil registration, clinical health over FHIR API,
             public health through DHIS2 via built-in http_json or http_flow source adapter, social protection, agriculture, and
             education registries each keep their source systems. Registry Notary add-ons
-            return signed minimized attestations to a social protection MIS and citizen
-            service channels. The consuming systems receive claims, not full source rows." />
+            return signed minimized attestations to a social protection MIS, which owns the
+            eligibility decision and reads the social registry it owns directly.
+            The consuming system receives claims, not full source rows." />
 </figure>
 
 ## Domain registry platforms

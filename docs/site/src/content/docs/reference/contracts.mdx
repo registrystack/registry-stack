@@ -52,7 +52,7 @@ The table is generated from `src/data/contracts.yaml`.
 
 **What the status values mean for you:**
 `hand-authored-abstract-contract` artifacts document the full HTTP surface but leave runtime-shaped fields (such as `{dataset_id}` and `{entity}`) as path parameters. For instance-specific shapes, fetch the runtime OpenAPI route on a configured gateway. Runtime deployments gate that route by default unless `openapi_requires_auth` is disabled for demos or controlled tooling.
-`pinned-generated-snapshot` artifacts are stable for integration: they were produced from the owning repo's pinned source and will not change without an explicit re-pin. A pinned snapshot should be generated from a clean working tree at the pinned ref, with no local output residue or dirty sibling checkout influencing the artifact.
+`pinned-generated-snapshot` artifacts are stable for integration: they were produced from the owning repo's pinned source and will not change without an explicit re-pin.
 `pinned-demo-snapshot` artifacts are preview quality: generated from a demo run and may not cover all configurations. Use them to explore the API shape, but regenerate from a running instance before building a production client.
 
 <ContractsTable />
@@ -96,4 +96,4 @@ Their canonical home is `id.registrystack.org/ns/registry-relay/...` and `id.reg
 
 - The Registry Relay OpenAPI artifact is a `hand-authored-abstract-contract`; see [API references provenance and freshness](../apis/) for detail on what that means and how to get an instance-specific shape.
 - Contract freshness checks are data-backed in v0 but are not yet generated from owning-repo release metadata.
-- Pinned artifact provenance is enforced by review discipline in v0; an automated dirty-worktree and clean-output gate is still future release tooling.
+- Pinned artifacts are regenerated and reviewed manually; there is no automated provenance check.

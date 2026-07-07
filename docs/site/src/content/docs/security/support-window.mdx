@@ -28,15 +28,14 @@ what is in scope, and how reports are acknowledged.
 | Latest release line (highest released minor of the highest major) | All security fixes |
 | Earlier releases | None |
 
-Registry Stack's roll-forward model is the current draft policy pending a maintainer decision
-for [GH#203](https://github.com/registrystack/registry-stack/issues/203): security fixes land on `main` and ship in the next release of the latest line, with
+Registry Stack's roll-forward model is a draft policy
+([GH#203](https://github.com/registrystack/registry-stack/issues/203)): security fixes land on `main` and ship in the next release of the latest line, with
 no long-term support branches and no backports to earlier minor lines.
 
-This model is honest about project capacity, and the rest of the lifecycle policy is designed
-to make rolling forward cheap:
+The rest of the lifecycle policy is designed to make rolling forward cheap:
 
 - Within a major line, upgrades are backward compatible per the draft
-  [compatibility promise](../../reference/api-stability/) proposed for GH#203, so moving to
+  [compatibility promise](../../reference/api-stability/), so moving to
   the fixed release does not require migration work beyond reading the release notes.
 - Patch releases contain fixes only, so a security patch is a minimal, low-risk step.
 - The [upgrade procedure](../../operate/upgrade-and-rollback/) is documented and exercised,
@@ -67,9 +66,8 @@ within 5 business days.
 
 ## Scope notes
 
-- This policy is stack-wide. It supersedes the narrower statement in
-  `products/manifest/SECURITY.md` that security fixes target the current `main` branch;
-  that statement described the same roll-forward posture before this page existed.
+- This policy is stack-wide. This page supersedes the narrower statement in
+  `products/manifest/SECURITY.md` that security fixes target the current `main` branch.
 - Pre-1.0 releases (`v0.x`) are technical releases for evaluation and pilots. They receive
   fixes only in the latest `v0.x` release, under the same roll-forward model.
 

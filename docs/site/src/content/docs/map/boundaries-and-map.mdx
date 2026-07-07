@@ -25,7 +25,7 @@ standards_referenced:
 
 import ProjectMap from '../../../components/ProjectMap.astro';
 
-The current formal registry stack has five repositories with distinct responsibilities.
+The current registry stack has five repositories with distinct responsibilities.
 Use this page to decide which repository owns a question before opening implementation docs,
 and to understand how the five repositories connect at runtime.
 
@@ -151,9 +151,8 @@ Registry Notary evaluates claims and issues SD-JWT VC credentials. It does not o
   {/* Evidence: FederationRuntimeState::from_config iterates config.peers with no dynamic
        discovery path, crates/registry-notary-server/src/federation/runtime.rs:32-50 at
        tag v0.8.4. */}
-- Browser inspection workflows are outside the current formal v1 stack scope. Registry Notary
-  does not inspect published discovery artifacts, parse DCAT catalogs, or run capability
-  queries.
+- Registry Notary does not inspect published discovery artifacts, parse DCAT catalogs, or run
+  capability queries.
 
 Registry Notary credentials are SD-JWT VC format (`application/dc+sd-jwt`), not W3C Verifiable
 Credentials Data Model JSON-LD envelopes. No W3C VC Data Model namespace or `@context` is present
@@ -179,10 +178,10 @@ Registry Lab is a compose-based local demo. It does not own:
   MOSIP, or other systems.
   {/* Evidence: registry-lab README, explicit non-goals section. */}
 
-## Documentation rule
+## Where to look
 
-Put detailed setup, configuration, and command references in the owning repo. Put cross-project
-orientation, standards evidence, and contract indexes in these docs.
+Detailed setup, configuration, and command references live in the owning repo; cross-project
+orientation, standards evidence, and contract indexes live in these docs.
 
 When a page needs both, these docs summarize the decision and link to the owning source.
 

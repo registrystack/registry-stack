@@ -5,8 +5,17 @@ const imageDir = 'public/images';
 const expected = new Set([
   'registry-family-map.svg',
   'registry-architecture-flow.svg',
+  'registry-claim-model.svg',
+  'registry-country-evidence-mesh.svg',
+  'registry-evidence-transports.svg',
+  'registry-notary-three-parties.svg',
+  'registry-publishing-pipeline.svg',
+  'registry-relay-or-notary.svg',
+  'registry-relay-request-lifecycle.svg',
+  'registry-relay-two-rooms.svg',
+  'registry-trust-boundaries.svg',
+  'solmara-lab-topology.svg',
   'standards-claim-levels.svg',
-  'registry-lab-topology.svg',
 ]);
 
 const entries = await readdir(imageDir, { withFileTypes: true });

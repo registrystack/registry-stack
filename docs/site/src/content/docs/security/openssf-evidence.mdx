@@ -37,7 +37,7 @@ Current public evidence:
 - [Latest public Scorecard viewer](https://scorecard.dev/viewer/?uri=github.com/registrystack/registry-stack)
 - [Scorecard workflow run history](https://github.com/registrystack/registry-stack/actions/workflows/scorecard.yml)
 
-Use the check-level results as hygiene telemetry. The aggregate score can hide
+Read the check-level results, not the aggregate score. The aggregate score can hide
 important details, so release-integrity findings such as missing signed Git
 tags or provenance are tracked as explicit caveats until they are fixed.
 
@@ -59,10 +59,15 @@ Current user-visible status:
 | Vulnerability reporting | Private reporting policy is published. | [`SECURITY.md`](https://github.com/registrystack/registry-stack/blob/main/SECURITY.md) |
 | CI and tests | CI runs on the public repository. | [CI workflow](https://github.com/registrystack/registry-stack/blob/main/.github/workflows/ci.yml) |
 | Release process | Releases are built by the tag-driven release workflow and checked against release manifests. | [Release workflow](https://github.com/registrystack/registry-stack/blob/main/.github/workflows/release.yml) and [release manifests](https://github.com/registrystack/registry-stack/tree/main/release/manifests) |
-| Signed releases | Newly produced release assets are signed with keyless cosign and include `.sig` and `.pem` files. Tag-triggered releases produced by the current workflow also include release-level SLSA provenance. `v0.8.0` is not signed unless it is backfilled later, and `v0.8.2` does not include tag-bound SLSA provenance unless a separate backfill decision is made. `v0.8.3` and `v0.8.4` both exercised the provenance path through the same tag-triggered workflow. | [`release/VERIFY.md`](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md) and [GitHub Releases](https://github.com/registrystack/registry-stack/releases) |
+| Signed releases | `v0.8.0` is unsigned; `v0.8.2` has no tag-bound SLSA provenance. | [`release/VERIFY.md`](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md) and [GitHub Releases](https://github.com/registrystack/registry-stack/releases) |
 | Signed version tags | Not implemented. Git tag objects are not yet cryptographically signed. | [Release workflow](https://github.com/registrystack/registry-stack/blob/main/.github/workflows/release.yml) |
 | Dependency policy | Dependency advisories are enforced through `cargo deny check` in the CI `rust` job, which runs on every push that touches Rust code (the job is path-filtered). An advisory without an upstream fix carries a scoped, documented ignore in `deny.toml` with a review trigger. | [`deny.toml`](https://github.com/registrystack/registry-stack/blob/main/deny.toml) and [CI workflow](https://github.com/registrystack/registry-stack/blob/main/.github/workflows/ci.yml) |
 | Source release evidence | Releases include release assets and generated release capsules. Later signed releases add signature assets, and tag-triggered releases produced after the provenance workflow change add `.intoto.jsonl` provenance. | [GitHub Releases](https://github.com/registrystack/registry-stack/releases) |
+
+Newly produced release assets are signed with keyless cosign and include `.sig` and `.pem` files.
+Tag-triggered releases produced by the current workflow also include release-level SLSA
+provenance; `v0.8.3` and `v0.8.4` both exercised the provenance path through the same
+tag-triggered workflow.
 
 ## OSPS baseline
 

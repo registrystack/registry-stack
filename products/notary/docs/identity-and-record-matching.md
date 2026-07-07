@@ -229,9 +229,7 @@ source binding and matching method, and it is returned verbatim for successful
 matches against that binding. A match on a full national identifier and a match
 on name plus birthdate against the same binding report the same `confidence`,
 and `score` is usually absent. Treat `confidence` as a policy assertion about
-the method, not a measured quality of the individual match. Future measured
-match-quality fields can be added alongside it without changing this field's
-meaning.
+the method, not a measured quality of the individual match.
 
 The full result envelope is documented in the
 [API reference](api-reference.md) and the

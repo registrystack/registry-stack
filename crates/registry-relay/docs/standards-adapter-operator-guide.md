@@ -109,8 +109,8 @@ Operator checklist:
 - Confirm generic search uses the entity read scope.
 - Confirm disability status checks use the entity evidence-verification scope.
 - Document which SP DCI APIs are intentionally unsupported.
-- Test with the Bruno or demo fixtures before exposing the adapter to another
-  system.
+- Test with the Bruno API-client collections or demo fixtures before exposing
+  the adapter to another system.
 
 The async search, subscribe, callback, and transaction-status APIs are out of
 scope for the current sync adapter.

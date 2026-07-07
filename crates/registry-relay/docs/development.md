@@ -36,7 +36,7 @@ The steps below are a worked example for contributors, using the project's own l
 
 The publicschema.com dev compose stack provisions a Zitadel organisation, project, OIDC application, test user, machine service account, and the relay-facing project roles on first boot. See `apps/publicschema.com/compose/seed/zitadel-bootstrap.md` for the resources created, the env-file shape, and the claim that carries roles in minted access tokens.
 
-**Prerequisites.** The bootstrap must have completed against a current Zitadel volume so the `publicschema-api` machine user has `accessTokenType: JWT` and a generated client secret (Section 7b of `compose/seed/zitadel-init.sh`). Token minting uses the SA's `client_credentials` grant rather than the `workbench-dev` OIDC app's, because Zitadel WEB-typed OIDC applications silently drop the `client_credentials` grant at write time. If you are pointing at an older snapshot of the stack that predates the SA hardening, re-run `docker compose -f compose/dev.compose.yaml up zitadel-init` against the publicschema.com stack to regenerate the SA credentials and refresh `compose/seed/zitadel.env`; otherwise the token mint will fail with `invalid_grant` or produce an opaque bearer that the relay cannot verify.
+**Prerequisites.** The bootstrap must have completed against a current Zitadel volume so the `publicschema-api` machine user has `accessTokenType: JWT` and a generated client secret (Section 7b of `compose/seed/zitadel-init.sh`). Token minting uses the SA's `client_credentials` grant rather than the `workbench-dev` OIDC app's, because Zitadel WEB-typed OIDC applications silently drop the `client_credentials` grant at write time. If the `publicschema-api` machine user lacks `accessTokenType: JWT`, re-run `docker compose -f compose/dev.compose.yaml up zitadel-init` against the publicschema.com stack to regenerate the SA credentials and refresh `compose/seed/zitadel.env`; otherwise the token mint will fail with `invalid_grant` or produce an opaque bearer that the relay cannot verify.
 
 To exercise the relay end-to-end:
 
@@ -137,6 +137,15 @@ just validate-catalog-semic-local catalog=target/dcat-ap/metadata.bregdcat-ap.js
 
 The local recipe defaults to `bregdcatap.2_1_0` and is a compatibility/gap
 check only. Keep the external SEMIC recipe as the release validation signal.
+
+### Fixture corpus
+
+`tests/fixtures/vc/entity-record-v1/` and
+`tests/fixtures/vc/aggregate-result-v1/` contain static VC-JWTs, decoded
+payloads, DID Documents, and JSON Schemas. They are signed outside
+`registry-relay` and verified by `tests/vc_external_verifier.rs` through
+the Node verifier. Add a new fixture directory whenever the public VC wire
+contract changes or a new claim type/version is introduced.
 
 ## Coverage metrics
 
@@ -299,9 +308,9 @@ Release notes should call the artifact abstract when it uses placeholder dataset
 
 ## Platform compatibility gate
 
-Relay consumes `registry-platform` from a sibling checkout during local commons
-release work. Run the compatibility gate before merging Platform-facing
-changes:
+Relay consumes `registry-platform` from a sibling checkout during local release
+work across the sibling repos. Run the compatibility gate before merging
+Platform-facing changes:
 
 ```sh
 REGISTRY_PLATFORM_SOURCE_DIR=../registry-platform scripts/check-platform-compat.sh
@@ -313,3 +322,7 @@ that exercise the shared Platform security APIs. When
 script builds in a temporary sibling-layout copy so Cargo resolves the same
 Platform checkout the script validated. Set `CROSSWALK_SOURCE_DIR` as well
 when the Crosswalk checkout is not available at `../crosswalk`.
+
+The mapper dependency uses the local Crosswalk crate at
+`../crosswalk/crates/crosswalk-core` in `Cargo.toml`, matching the
+workspace checkout used for release builds.

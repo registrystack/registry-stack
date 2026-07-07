@@ -97,6 +97,25 @@ Storage table identifiers never appear in responses.
 
 Storage tables are an implementation detail.
 Public routes reference datasets and entity names, never table ids.
+Relay reads private CSV, XLSX, Parquet, or PostgreSQL sources and serves them only as declared
+entities: the caller must hold the dataset's `rows` scope, only declared fields are projected,
+and every request writes one audit JSONL record.
+Callers reach the entities over the native Registry Data API; optional feature-gated adapters
+can also expose them over SP-DCI sync and OGC API Records.
+
+{/* SVG diagram. Essential labels are restated in the paragraph above. */}
+<figure>
+  <img src="../../images/registry-relay-two-rooms.svg"
+       alt="Registry Relay between private storage and a public API. Private storage holds
+            csv, xlsx, parquet, and postgres sources with their own file and table names.
+            Registry Relay applies a scope check (the caller must hold the dataset rows
+            scope), projects the entity shape (only declared fields, no arbitrary SQL), and
+            offers adapters: the Registry Data API, plus optional SP-DCI sync and OGC API
+            Records. The public API exposes entity cards such as household and individual
+            with declared fields and relationship links. Every request writes one audit
+            JSONL record carrying timestamp, principal, scopes, status, and duration." />
+</figure>
+
 The four primary route shapes for row access are:
 
 - `GET /v1/datasets/{dataset_id}/entities/{entity}/records` : paginated list of entity records.

@@ -59,6 +59,18 @@ Six levels in descending strength:
 - `inspired_by`: the standard influenced design without any compatibility claim.
 - `compares_against`: the standard is discussed to explain boundaries or alternatives.
 
+{/* SVG diagram. Essential labels are restated in the list above. */}
+<figure>
+  <img src="../../images/standards-claim-levels.svg"
+       alt="Claim levels, strongest to weakest: implements (a normative requirement or API
+            shape from the standard), emits (artifacts shaped like the standard, such as
+            JSON-LD, SHACL, or OpenAPI), maps_to (local concepts or fields mapped to the
+            standard), aligns_with (follows the model or intent without claiming formal
+            conformance), inspired_by (the standard influenced design but no compatibility
+            is claimed), and compares_against (the standard is discussed to explain
+            boundaries or alternatives)." />
+</figure>
+
 What these levels mean for integrators:
 
 - `emits`: you can parse that project's output as the standard expects. Fixtures or generated artifacts back the claim.
@@ -85,8 +97,7 @@ What these levels mean for integrators:
 - The Verifiable Credentials Data Model (W3C VC) is listed as `aligns_with` (`referenced`).
   [Registry Relay](../../products/registry-relay/) has VC-oriented provenance fixtures and [Registry Notary](../../products/registry-notary/) issues SD-JWT VC credentials,
   but neither project emits a full W3C VC Data Model envelope.
-  Promote when a reviewed VC profile and validation fixtures are pinned.
-  {/* Notary evidence packet explicitly states "W3C Verifiable Credentials Data Model: NOT PRESENT" (.research/registry-notary.md). This is a confirmed absence, not an evidence gap; keep at aligns_with until a reviewed VC profile and validation fixtures are pinned. */}
+  {/* Notary evidence packet explicitly states "W3C Verifiable Credentials Data Model: NOT PRESENT" (.research/registry-notary.md). This is a confirmed absence, not an evidence gap; keep at aligns_with until a reviewed VC profile and validation fixtures are pinned. Promote when a reviewed VC profile and validation fixtures are pinned. */}
 - PROV-O is listed as `inspired_by` (`referenced`).
   The code uses provenance-shaped concepts (audit fields, claim provenance struct) but no PROV-O
   vocabulary terms are emitted as JSON-LD.

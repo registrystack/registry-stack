@@ -2,16 +2,11 @@
 
 > **Page type:** Standards conformance · **Product:** Registry Notary · **Layer:** credential · **Audience:** integrator
 
-Adoption mode: profiled. Registry Notary issues a constrained SD-JWT VC profile
-(`application/dc+sd-jwt`, EdDSA over Ed25519, `did:jwk` holder binding); it does
-not claim full SD-JWT VC or OpenID4VCI conformance.
-
-Registry Notary currently issues one credential format: SD-JWT VC using the
-current digital credential media type.
-
-This profile is intentionally narrow. It documents the credential contract that
-Registry Notary can test and support today, and it names adjacent ecosystem
-features that are not yet part of the product surface.
+Registry Notary issues one constrained SD-JWT VC credential format
+(`application/dc+sd-jwt`, EdDSA over Ed25519, `did:jwk` holder binding); it
+does not claim full SD-JWT VC or OpenID4VCI conformance. This page documents
+that credential contract and names adjacent ecosystem features that are not
+yet part of the product surface.
 
 ## Supported credential format
 

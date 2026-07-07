@@ -26,7 +26,7 @@ The public URL space is structured as follows:
 - `/healthz`, `/ready`, `/docs`, and `/docs/scalar.js` are unauthenticated.
 - `/openapi.json` and `/docs` serve the machine-readable and human-readable API surface respectively.
 
-The curated public OpenAPI surface, including documented request methods, path parameters, and security requirements, is in [`openapi/registry-relay.openapi.json`](../openapi/registry-relay.openapi.json) and is served at runtime from `/openapi.json` and browsable at `/docs`. The security assurance route inventory remains the source for mounted public and admin exposure checks.
+The curated public OpenAPI surface, including documented request methods, path parameters, and security requirements, is in [`openapi/registry-relay.openapi.json`](../openapi/registry-relay.openapi.json) and is served at runtime from `/openapi.json` and browsable at `/docs`. Admin-route exposure is verified by the project's security test suite.
 
 For SP DCI, `sync/search` is the generic path for any configured
 `standards.spdci.registries` entry. The disability-status, details, and support
@@ -233,7 +233,7 @@ Entities can require a `Data-Purpose` header for row reads and OGC feature reads
 Data-Purpose: https://data.example.gov/purposes/service-intake-check
 ```
 
-**Frozen semantics** (2026-06-11 evidence-contracts decision record, D5):
+**Frozen semantics:**
 
 - Header **presence** can be required per entity via `require_purpose_header: true`. A missing header when required returns `400 auth.purpose_required`.
 - When the header is present, the value is **always recorded verbatim** in the audit trail.
@@ -312,7 +312,7 @@ Pagination on item routes uses `limit` (capped by the entity's `max_limit`) and 
 
 Spatial query parameter behavior: `bbox` is parsed as `minx,miny,maxx,maxy` in CRS84 longitude-latitude order; six-value 3D bbox values are rejected. `bbox-crs` accepts `http://www.opengis.net/def/crs/OGC/1.3/CRS84` only. `datetime` requires a configured `datetime_field`; open-open intervals (`../..`) are rejected. Broad `bbox` queries that exceed `max_bbox_degrees` are rejected before data access.
 
-Conformance boundaries for Phase 1: the OGC Features surface claims `http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/core`, `http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/geojson`, and `http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/oas30`. Phase 1 supports point fields and existing GeoJSON geometry fields; WKT and WKB are deferred. Antimeridian bboxes, reprojection, and formal Queryables are deferred. For operator rollout details and configuration of the `spatial` entity block, see [standards-adapter-operator-guide.md](standards-adapter-operator-guide.md).
+Conformance boundaries for the current OGC Features surface: it claims `http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/core`, `http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/geojson`, and `http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/oas30`. It supports point fields and existing GeoJSON geometry fields; WKT and WKB are not yet supported. Antimeridian bboxes, reprojection, and formal Queryables are not yet supported. For operator rollout details and configuration of the `spatial` entity block, see [standards-adapter-operator-guide.md](standards-adapter-operator-guide.md).
 
 When built with `ogcapi-records`, OGC API Records exposes a metadata-only catalog view:
 
@@ -367,7 +367,27 @@ POST /v1/datasets/social_registry/aggregates/by_municipality/query
 
 Measure and dimension discovery is dataset-scoped and generated from aggregate declarations. Reused measure or dimension ids are merged into one discovery record with `queryable_via`, `valid_dimensions` for measures, and links back to the aggregate routes. `GET /v1/datasets/{dataset_id}/aggregates/{aggregate_id}/metadata` remains a deprecated compatibility alias for `/structure` while the runtime still mounts it.
 
-Aggregate JSON results use `observations` for rows and `structure` for dimensions/measures. Query bodies should use `measures`; `indicators` is accepted only as a deprecated compatibility alias. Disclosure control is configured per aggregate. Suppressed or masked groups are normal results, not errors. Temporal query bounds are supported for aggregates that declare a `temporal_field`; requests with temporal bounds against aggregates without one are rejected instead of guessing. POST queries may set `max_rows`; truncated results are marked with `completeness.complete: false` and `completeness.truncated: true` so a partial cube is not confused with a complete one. CSV output is available with `?f=csv`, request `"format": "csv"`, or `Accept: text/csv` and carries `X-Registry-Relay-*` and `X-SPDCI-*` disclosure/freshness headers plus a `Link: rel="describedby"` header to aggregate structure. SDMX JSON 2.1 is available with `?f=sdmx-json`, request `"format": "sdmx-json"`, or `Accept: application/vnd.sdmx.data+json;version=2.1`; messages declare the official schema at `https://json.sdmx.org/2.1/sdmx-json-data-schema.json`. When built with `ogcapi-edr`, configured `admin_area` spatial aggregates are also exposed as OGC EDR `/area` collections under `/ogc/edr/v1`.
+Aggregate JSON results use `observations` for rows and `structure` for dimensions/measures.
+
+**JSON**
+
+- Query bodies should use `measures`; `indicators` is accepted only as a deprecated compatibility alias.
+- Disclosure control is configured per aggregate.
+- Suppressed or masked groups are normal results, not errors.
+- Temporal query bounds are supported for aggregates that declare a `temporal_field`; requests with temporal bounds against aggregates without one are rejected instead of guessing.
+- POST queries may set `max_rows`; truncated results are marked with `completeness.complete: false` and `completeness.truncated: true` so a partial cube is not confused with a complete one.
+
+**CSV**
+
+- Available with `?f=csv`, request `"format": "csv"`, or `Accept: text/csv` and carries `X-Registry-Relay-*` and `X-SPDCI-*` disclosure/freshness headers plus a `Link: rel="describedby"` header to aggregate structure.
+
+**SDMX JSON 2.1**
+
+- Available with `?f=sdmx-json`, request `"format": "sdmx-json"`, or `Accept: application/vnd.sdmx.data+json;version=2.1`; messages declare the official schema at `https://json.sdmx.org/2.1/sdmx-json-data-schema.json`.
+
+**OGC EDR**
+
+- When built with `ogcapi-edr`, configured `admin_area` spatial aggregates are also exposed as OGC EDR `/area` collections under `/ogc/edr/v1`.
 
 ## Attribute release
 
