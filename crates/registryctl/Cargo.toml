@@ -20,9 +20,11 @@ registry-platform-authcommon = { workspace = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
+time = { workspace = true }
 ureq = "2"
 url = "2"
 
 [dev-dependencies]
 registry-notary-core.workspace = true
+jsonschema = { workspace = true }
 tempfile = "3"
