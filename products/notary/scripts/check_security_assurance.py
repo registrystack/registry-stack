@@ -13,6 +13,12 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+WORKSPACE_ROOT = (
+    ROOT.parents[1]
+    if (ROOT.parents[1] / "products" / "notary").resolve() == ROOT
+    and (ROOT.parents[1] / "crates").is_dir()
+    else ROOT
+)
 SECURITY_DIR = ROOT / "security"
 
 REQUIRED_ENTRY_FIELDS = {
@@ -182,7 +188,7 @@ def ensure_test_ref_exists(ref: str) -> None:
     file_part, _, symbol = ref.partition("::")
     if not symbol:
         fail(f"enforcement test reference must include ::test_name: {ref}")
-    path = ROOT / file_part
+    path = WORKSPACE_ROOT / file_part
     if not path.exists():
         fail(f"referenced enforcement test file does not exist: {file_part}")
     text = path.read_text(encoding="utf-8")
@@ -198,8 +204,8 @@ def validate_route_sources(inventory: object | None = None) -> None:
 
     inventory_by_source: dict[str, set[tuple[str, str]]] = {}
     source_files = sorted(
-        str(path.relative_to(ROOT))
-        for crate in (ROOT / "crates").glob("*")
+        str(path.relative_to(WORKSPACE_ROOT))
+        for crate in (WORKSPACE_ROOT / "crates").glob("registry-notary*")
         for path in (crate / "src").rglob("*.rs")
         if path.is_file()
     )
@@ -210,12 +216,12 @@ def validate_route_sources(inventory: object | None = None) -> None:
             for method in route["methods"]:
                 inventory_by_source[source].add((route["path"], method))
     for source in inventory_by_source:
-        if source not in source_files and (ROOT / source).exists():
+        if source not in source_files and (WORKSPACE_ROOT / source).exists():
             source_files.append(source)
 
     extracted_by_source: dict[str, set[tuple[str, str]]] = {}
     for source in sorted(set(source_files)):
-        path = ROOT / source
+        path = WORKSPACE_ROOT / source
         if not path.exists():
             fail(f"route inventory references missing source file: {source}")
         routes = extract_axum_routes(path.read_text(encoding="utf-8"))

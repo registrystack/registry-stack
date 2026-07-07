@@ -62,7 +62,7 @@ jobs:
               crates/registry-platform-authcommon/*|crates/registry-platform-crypto/*)
                 return 0
                 ;;
-              crates/registry-platform-oid4vci/*|crates/registry-platform-sdjwt/*)
+              crates/registry-platform-oid4vci/*|crates/registry-platform-replay/*|crates/registry-platform-sdjwt/*)
                 return 0
                 ;;
               products/notary/*|products/platform/*|release/docker/*)
@@ -128,8 +128,34 @@ jobs:
       - name: Notary container and OpenAPI checks
         working-directory: products/notary
         run: |
+          python3 scripts/check_security_assurance.py manifest
           python3 scripts/check_security_assurance.py dockerfile-secrets
           python3 scripts/check_security_assurance.py openapi-baseline
+
+      - name: Release image Dockerfile checks
+        run: |
+          python3 - <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+
+          secret_copy_re = re.compile(
+              r"\b(?:COPY|ADD)\b(?=.*(?:\.env|\.pem|\.key|\.p12|jwk|secret|credential))|\"d\"\s*:",
+              re.IGNORECASE,
+          )
+          paths = sorted(Path("release/docker").glob("Dockerfile.registry-*"))
+          if not paths:
+              print("security assurance check failed: no release Dockerfiles found", file=sys.stderr)
+              sys.exit(1)
+          for path in paths:
+              for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                  if secret_copy_re.search(line):
+                      print(
+                          f"security assurance check failed: {path}:{lineno} may copy secret or private JWK material",
+                          file=sys.stderr,
+                      )
+                      sys.exit(1)
+          PY
 
   notary-fuzz:
     name: Notary fuzz smoke
