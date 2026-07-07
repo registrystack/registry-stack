@@ -607,6 +607,12 @@ impl StandaloneRegistryNotaryConfig {
             wallet_facing: self.self_attestation.enabled,
             multi_instance: self.deployment.multi_instance,
             audit_sink_class_durable: audit_sink_is_durable(&self.audit),
+            // A local file sink caps retention to whatever the host disk
+            // holds; an attacker with host access can destroy it. stdout and
+            // syslog are exempt: their retention is owned by the orchestrator
+            // log pipeline or the syslog daemon's own forwarding surface.
+            audit_retention_local_only: matches!(self.audit.sink.as_str(), "file" | "jsonl")
+                && !self.deployment.evidence.audit_offhost_shipping,
             source_insecure_url: self
                 .evidence
                 .source_connections
@@ -6801,6 +6807,42 @@ auth:
     }
 
     #[test]
+    fn gate_input_reports_audit_retention_local_only_for_file_sink_without_attestation() {
+        let mut config = minimal_config();
+        config.audit.sink = "file".to_string();
+        assert!(config.gate_input().audit_retention_local_only);
+    }
+
+    #[test]
+    fn gate_input_reports_audit_retention_local_only_for_jsonl_sink_without_attestation() {
+        let mut config = minimal_config();
+        config.audit.sink = "jsonl".to_string();
+        assert!(config.gate_input().audit_retention_local_only);
+    }
+
+    #[test]
+    fn gate_input_clears_audit_retention_local_only_when_attested() {
+        let mut config = minimal_config();
+        config.audit.sink = "file".to_string();
+        config.deployment.evidence.audit_offhost_shipping = true;
+        assert!(!config.gate_input().audit_retention_local_only);
+    }
+
+    #[test]
+    fn gate_input_clears_audit_retention_local_only_for_stdout_sink() {
+        // Minimal config defaults to the stdout sink.
+        let config = minimal_config();
+        assert!(!config.gate_input().audit_retention_local_only);
+    }
+
+    #[test]
+    fn gate_input_clears_audit_retention_local_only_for_syslog_sink() {
+        let mut config = minimal_config();
+        config.audit.sink = "syslog".to_string();
+        assert!(!config.gate_input().audit_retention_local_only);
+    }
+
+    #[test]
     fn gate_input_reports_insecure_source_url() {
         let mut config = minimal_config();
         config.evidence.source_connections.insert(
@@ -7072,6 +7114,36 @@ waivers:
         config
             .validate()
             .expect("production config with waivable waiver validates");
+    }
+
+    #[test]
+    fn deployment_evidence_block_round_trips_through_yaml() {
+        let mut config = minimal_config();
+        config.deployment = serde_norway::from_str(
+            r#"
+profile: production
+evidence:
+  audit_offhost_shipping: true
+"#,
+        )
+        .expect("deployment evidence block parses");
+        assert!(config.deployment.evidence.audit_offhost_shipping);
+    }
+
+    #[test]
+    fn deployment_evidence_rejects_unknown_field_through_yaml() {
+        let result: Result<crate::deployment::DeploymentConfig, _> = serde_norway::from_str(
+            r#"
+profile: production
+evidence:
+  audit_offhost_shipping: true
+  made_up_field: true
+"#,
+        );
+        assert!(
+            result.is_err(),
+            "unknown field inside deployment.evidence must fail deserialization"
+        );
     }
 
     #[test]

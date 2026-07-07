@@ -67,6 +67,8 @@ deployment:
     - finding: notary.source.private_network_escape
       reason: "approved internal source for partner pilot, ticket OPS-123"
       expires: 2026-09-30
+  evidence:
+    audit_offhost_shipping: true   # declares audit events are shipped off-host
 ```
 
 | Field | Purpose |
@@ -74,6 +76,13 @@ deployment:
 | `profile` | The declared assurance shape. Absent means undeclared. |
 | `multi_instance` | Operator declaration that this instance runs active-active with peers, which makes shared, durable replay storage mandatory. |
 | `waivers` | Per-finding suppressions, each with a mandatory reason and expiry. |
+| `evidence` | Operator-asserted assurance evidence for conditions the runtime cannot observe for itself. Each flag defaults to `false`. |
+
+`evidence` fields:
+
+| Field | Purpose |
+| --- | --- |
+| `audit_offhost_shipping` | Operator asserts audit log events are shipped off-host (for example to a log aggregator or SIEM), so a local file sink does not cap retention. |
 
 Profiles:
 
@@ -104,6 +113,7 @@ The gates bound for Registry Notary:
 | --- | --- | --- | --- | --- |
 | `notary.replay.in_memory_high_risk` | In-memory replay while federation, OID4VCI pre-authorized code, holder proof, wallet traffic, or `multi_instance` is declared | error | readiness_fail | startup_fail |
 | `notary.audit.sink_missing` | No durable, retained audit sink | error | startup_fail | startup_fail |
+| `notary.audit.retention_local_only` | Audit sink is `file` or `jsonl` and `deployment.evidence.audit_offhost_shipping` is not declared. `stdout` and `syslog` are exempt. | n/a | warn | error |
 | `notary.source.insecure_url` | Source connection over a plain `http://` URL with no localhost or private-network allowance | error | readiness_fail | startup_fail |
 | `notary.source.private_network_escape` | A source enables the private-network escape hatch | warn | error | error |
 | `notary.sidecar.expected_sidecar_missing` | A source-adapter source omits `expected_sidecar` | warn | error | readiness_fail |

@@ -38,6 +38,10 @@ fn set_env() {
 /// the fixture small and avoids standing up a full federation config.
 struct ConfigBuilder {
     durable_audit: bool,
+    /// Overrides `durable_audit` with a specific sink kind ("jsonl" or
+    /// "syslog") for the retention-local-only gate tests, which need sink
+    /// kinds beyond the plain durable/stdout split.
+    audit_sink_kind: Option<&'static str>,
     audit_path: String,
     deployment_block: String,
     /// Add a second source connection that sets allow_insecure_private_network.
@@ -53,6 +57,7 @@ impl ConfigBuilder {
     fn new(audit_path: &str) -> Self {
         Self {
             durable_audit: true,
+            audit_sink_kind: None,
             audit_path: audit_path.to_string(),
             deployment_block: String::new(),
             private_network_source: false,
@@ -63,6 +68,11 @@ impl ConfigBuilder {
 
     fn durable_audit(mut self, durable: bool) -> Self {
         self.durable_audit = durable;
+        self
+    }
+
+    fn audit_sink_kind(mut self, kind: &'static str) -> Self {
+        self.audit_sink_kind = Some(kind);
         self
     }
 
@@ -87,14 +97,24 @@ impl ConfigBuilder {
     }
 
     fn audit_section(&self) -> String {
-        if self.durable_audit {
-            format!(
+        match self.audit_sink_kind {
+            Some("jsonl") => format!(
+                "audit:\n  sink: jsonl\n  path: \"{}\"\n  hash_secret_env: REGISTRY_NOTARY_GATES_AUDIT_HASH_SECRET\n",
+                self.audit_path
+            ),
+            Some("syslog") => format!(
+                "audit:\n  sink: syslog\n  syslog_socket_path: \"{}\"\n  hash_secret_env: REGISTRY_NOTARY_GATES_AUDIT_HASH_SECRET\n",
+                self.audit_path
+            ),
+            Some(other) => panic!("unsupported audit_sink_kind in test builder: {other}"),
+            None if self.durable_audit => format!(
                 "audit:\n  sink: file\n  path: \"{}\"\n  hash_secret_env: REGISTRY_NOTARY_GATES_AUDIT_HASH_SECRET\n",
                 self.audit_path
-            )
-        } else {
-            "audit:\n  sink: stdout\n  hash_secret_env: REGISTRY_NOTARY_GATES_AUDIT_HASH_SECRET\n"
-                .to_string()
+            ),
+            None => {
+                "audit:\n  sink: stdout\n  hash_secret_env: REGISTRY_NOTARY_GATES_AUDIT_HASH_SECRET\n"
+                    .to_string()
+            }
         }
     }
 
@@ -898,4 +918,172 @@ fn admin_dedicated_or_disabled_clears_shared_exposure_gate() {
         }
         other => panic!("expected a deployment gate startup failure, got: {other:?}"),
     }
+}
+
+// Integration tests for notary.audit.retention_local_only: a local file sink
+// caps retention and an attacker with host access can destroy it, unless the
+// operator attests logs are shipped off-host. stdout and syslog are exempt.
+
+#[tokio::test]
+async fn production_file_sink_without_attestation_reports_finding_warn() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let config = ConfigBuilder::new(&audit_path(&tmp))
+        .deployment("deployment:\n  profile: production\n")
+        .build();
+
+    // Startup is unaffected: finding_warn is not a hard gate.
+    let posture = fetch_posture(config).await;
+    assert_matches_posture_schema(&posture);
+
+    let findings = posture["deployment"]["findings"]
+        .as_array()
+        .expect("deployment findings is an array");
+    let found = findings
+        .iter()
+        .find(|f| f["id"] == "notary.audit.retention_local_only")
+        .expect("notary.audit.retention_local_only finding present under production");
+    assert_eq!(found["severity"], "finding_warn");
+    assert_eq!(found["status"], "active");
+}
+
+#[tokio::test]
+async fn production_file_sink_with_offhost_attestation_is_clean() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let config = ConfigBuilder::new(&audit_path(&tmp))
+        .deployment(
+            "deployment:\n  profile: production\n  evidence:\n    audit_offhost_shipping: true\n",
+        )
+        .build();
+
+    let posture = fetch_posture(config).await;
+    assert_matches_posture_schema(&posture);
+
+    let findings = posture["deployment"]["findings"]
+        .as_array()
+        .expect("deployment findings is an array");
+    assert!(
+        !findings
+            .iter()
+            .any(|f| f["id"] == "notary.audit.retention_local_only"),
+        "attested off-host shipping must clear the gate: {findings:#?}"
+    );
+}
+
+#[tokio::test]
+async fn production_stdout_sink_is_exempt_from_retention_local_only() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let config = ConfigBuilder::new(&audit_path(&tmp))
+        .durable_audit(false)
+        .deployment("deployment:\n  profile: production\n")
+        .build();
+
+    // A stdout sink also triggers notary.audit.sink_missing (not durable),
+    // so this exercises compile directly rather than the posture route.
+    let error = expect_compile_rejected(config, "stdout sink is not durable under production");
+    match error {
+        StandaloneServerError::DeploymentGateStartupFailure { findings, .. } => {
+            assert!(
+                !findings.contains("notary.audit.retention_local_only"),
+                "stdout sink must be exempt from retention_local_only: {findings}"
+            );
+        }
+        other => panic!("expected a deployment gate startup failure, got: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn production_syslog_sink_is_exempt_from_retention_local_only() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let socket_path = tmp.path().join("audit.sock");
+    // Fetching posture emits an audit event through the syslog sink, so a
+    // real datagram socket must be listening or the write fails closed.
+    let _socket = tokio::net::UnixDatagram::bind(&socket_path).expect("bind syslog socket");
+    let config = ConfigBuilder::new(&socket_path.to_string_lossy())
+        .audit_sink_kind("syslog")
+        .deployment("deployment:\n  profile: production\n")
+        .build();
+
+    let posture = fetch_posture(config).await;
+    assert_matches_posture_schema(&posture);
+
+    let findings = posture["deployment"]["findings"]
+        .as_array()
+        .expect("deployment findings is an array");
+    assert!(
+        !findings
+            .iter()
+            .any(|f| f["id"] == "notary.audit.retention_local_only"),
+        "syslog sink must be exempt from retention_local_only: {findings:#?}"
+    );
+}
+
+#[test]
+fn jsonl_sink_without_attestation_is_finding_error_gate_binding_under_evidence_grade() {
+    // evidence_grade + jsonl sink without attestation = finding_error (not
+    // startup_fail). The minimal config also triggers notary.config.unsigned
+    // (startup_fail) under evidence_grade, so we verify the gate binding
+    // directly rather than via posture, matching the pattern used for the
+    // other #208 finding_error gates above.
+    use registry_notary_core::deployment::{
+        evaluate_gates, DeploymentProfile, GateInput, GateSeverity,
+        FINDING_AUDIT_RETENTION_LOCAL_ONLY,
+    };
+    let input = GateInput {
+        audit_sink_class_durable: true,
+        audit_retention_local_only: true,
+        ..GateInput::default()
+    };
+    let evaluation = evaluate_gates(
+        Some(DeploymentProfile::EvidenceGrade),
+        &input,
+        &[],
+        "2026-06-13",
+    );
+    let found = evaluation
+        .findings
+        .iter()
+        .find(|f| f.id == FINDING_AUDIT_RETENTION_LOCAL_ONLY)
+        .expect("notary.audit.retention_local_only present under evidence_grade");
+    assert_eq!(
+        found.severity,
+        GateSeverity::FindingError,
+        "evidence_grade retention_local_only must be finding_error"
+    );
+    assert!(!evaluation
+        .startup_failures
+        .contains(&FINDING_AUDIT_RETENTION_LOCAL_ONLY.to_string()));
+    assert!(!evaluation
+        .readiness_failures
+        .contains(&FINDING_AUDIT_RETENTION_LOCAL_ONLY.to_string()));
+}
+
+#[test]
+fn retention_local_only_waiver_is_honored_under_evidence_grade() {
+    use registry_notary_core::deployment::{
+        evaluate_gates, DeploymentFindingStatus, DeploymentProfile, DeploymentWaiverConfig,
+        GateInput, FINDING_AUDIT_RETENTION_LOCAL_ONLY,
+    };
+    let input = GateInput {
+        audit_sink_class_durable: true,
+        audit_retention_local_only: true,
+        ..GateInput::default()
+    };
+    let waiver = DeploymentWaiverConfig {
+        finding: FINDING_AUDIT_RETENTION_LOCAL_ONLY.to_string(),
+        reason: "synthetic test waiver, ticket TEST-1".to_string(),
+        expires: "2999-01-01".to_string(),
+    };
+    let evaluation = evaluate_gates(
+        Some(DeploymentProfile::EvidenceGrade),
+        &input,
+        &[waiver],
+        "2026-06-13",
+    );
+    let found = evaluation
+        .findings
+        .iter()
+        .find(|f| f.id == FINDING_AUDIT_RETENTION_LOCAL_ONLY)
+        .expect("waived retention_local_only finding present");
+    assert_eq!(found.status, DeploymentFindingStatus::Waived);
+    assert!(found.waiver.is_some());
 }

@@ -97,12 +97,29 @@ pub struct DeploymentConfig {
     pub multi_instance: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub waivers: Vec<DeploymentWaiverConfig>,
+    /// Operator declarations of assurance evidence the runtime cannot observe
+    /// for itself. Absent declarations leave the corresponding gates active.
+    #[serde(default)]
+    pub evidence: DeploymentEvidenceConfig,
 }
 
 impl DeploymentConfig {
     pub fn is_default(&self) -> bool {
         self == &Self::default()
     }
+}
+
+/// Operator-asserted assurance evidence for conditions the runtime cannot
+/// observe directly. Each flag defaults to `false`, meaning "no evidence
+/// declared", which keeps the corresponding gate active until the operator
+/// asserts the control is in place out of band.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeploymentEvidenceConfig {
+    /// Operator asserts audit log events are shipped off-host (for example to
+    /// a log aggregator or SIEM) so a local file sink does not cap retention.
+    #[serde(default)]
+    pub audit_offhost_shipping: bool,
 }
 
 /// One operator-configured waiver.
@@ -188,6 +205,7 @@ pub struct GateInput {
     pub wallet_facing: bool,
     pub multi_instance: bool,
     pub audit_sink_class_durable: bool,
+    pub audit_retention_local_only: bool,
     pub source_insecure_url: bool,
     pub source_private_network_escape: bool,
     pub source_adapter_sidecar_without_expected_sidecar: bool,
@@ -237,6 +255,7 @@ impl Gate {
 // Finding ids. Stable once shipped; consumers treat unknown ids as opaque.
 pub const FINDING_REPLAY_IN_MEMORY_HIGH_RISK: &str = "notary.replay.in_memory_high_risk";
 pub const FINDING_AUDIT_SINK_MISSING: &str = "notary.audit.sink_missing";
+pub const FINDING_AUDIT_RETENTION_LOCAL_ONLY: &str = "notary.audit.retention_local_only";
 pub const FINDING_SOURCE_INSECURE_URL: &str = "notary.source.insecure_url";
 pub const FINDING_SOURCE_PRIVATE_NETWORK_ESCAPE: &str = "notary.source.private_network_escape";
 pub const FINDING_SIDECAR_EXPECTED_MISSING: &str = "notary.sidecar.expected_sidecar_missing";
@@ -271,6 +290,18 @@ fn gate_catalog() -> &'static [Gate] {
             production: Some(StartupFail),
             evidence_grade: Some(StartupFail),
             condition: |input| !input.audit_sink_class_durable,
+        },
+        // notary.audit.retention_local_only: a local file sink caps retention
+        // and an attacker with host access can destroy audit evidence, unless
+        // the operator attests logs are shipped off-host. stdout and syslog
+        // are exempt: their retention is owned by the orchestrator log
+        // pipeline or the syslog daemon's own forwarding surface.
+        Gate {
+            id: FINDING_AUDIT_RETENTION_LOCAL_ONLY,
+            hosted_lab: None,
+            production: Some(FindingWarn),
+            evidence_grade: Some(FindingError),
+            condition: |input| input.audit_retention_local_only,
         },
         // Risky-but-legal defaults, surfaced as profile-bound findings. (#208)
         Gate {
@@ -679,6 +710,7 @@ mod tests {
             profile: Some(DeploymentProfile::EvidenceGrade),
             multi_instance: false,
             waivers: vec![waiver(FINDING_AUDIT_SINK_MISSING, "2099-01-01")],
+            evidence: DeploymentEvidenceConfig::default(),
         };
         let error = config.validate().expect_err("startup_fail waiver rejected");
         assert!(matches!(
@@ -693,6 +725,7 @@ mod tests {
             profile: Some(DeploymentProfile::Production),
             multi_instance: false,
             waivers: vec![waiver(FINDING_REPLAY_IN_MEMORY_HIGH_RISK, "2099-01-01")],
+            evidence: DeploymentEvidenceConfig::default(),
         };
         let error = config
             .validate()
@@ -709,6 +742,7 @@ mod tests {
             profile: Some(DeploymentProfile::Production),
             multi_instance: false,
             waivers: vec![waiver("notary.made.up", "2099-01-01")],
+            evidence: DeploymentEvidenceConfig::default(),
         };
         let error = config.validate().expect_err("unknown finding rejected");
         assert!(matches!(
@@ -723,6 +757,7 @@ mod tests {
             profile: Some(DeploymentProfile::Production),
             multi_instance: false,
             waivers: vec![waiver(FINDING_OPENAPI_PUBLIC, "not-a-date")],
+            evidence: DeploymentEvidenceConfig::default(),
         };
         let error = config.validate().expect_err("malformed expiry rejected");
         assert!(matches!(
@@ -762,6 +797,126 @@ mod tests {
         );
         assert!(evaluation.startup_failures.is_empty());
         assert!(evaluation.findings.is_empty());
+    }
+
+    #[test]
+    fn audit_retention_local_only_binds_finding_warn_under_production() {
+        let input = GateInput {
+            audit_sink_class_durable: true,
+            audit_retention_local_only: true,
+            ..GateInput::default()
+        };
+        let evaluation = evaluate_gates(
+            Some(DeploymentProfile::Production),
+            &input,
+            &[],
+            "2026-06-13",
+        );
+        let finding = evaluation
+            .findings
+            .iter()
+            .find(|f| f.id == FINDING_AUDIT_RETENTION_LOCAL_ONLY)
+            .expect("retention finding present under production");
+        assert_eq!(finding.severity, GateSeverity::FindingWarn);
+        assert_eq!(finding.status, DeploymentFindingStatus::Active);
+        assert!(evaluation.startup_failures.is_empty());
+        assert!(evaluation.readiness_failures.is_empty());
+    }
+
+    #[test]
+    fn audit_retention_local_only_binds_finding_error_under_evidence_grade() {
+        let input = GateInput {
+            audit_sink_class_durable: true,
+            audit_retention_local_only: true,
+            ..GateInput::default()
+        };
+        let evaluation = evaluate_gates(
+            Some(DeploymentProfile::EvidenceGrade),
+            &input,
+            &[],
+            "2026-06-13",
+        );
+        let finding = evaluation
+            .findings
+            .iter()
+            .find(|f| f.id == FINDING_AUDIT_RETENTION_LOCAL_ONLY)
+            .expect("retention finding present under evidence_grade");
+        assert_eq!(finding.severity, GateSeverity::FindingError);
+        assert!(evaluation.startup_failures.is_empty());
+        assert!(evaluation.readiness_failures.is_empty());
+    }
+
+    #[test]
+    fn audit_retention_local_only_is_unbound_under_local_and_hosted_lab() {
+        let input = GateInput {
+            audit_sink_class_durable: true,
+            audit_retention_local_only: true,
+            ..GateInput::default()
+        };
+        for profile in [DeploymentProfile::Local, DeploymentProfile::HostedLab] {
+            let evaluation = evaluate_gates(Some(profile), &input, &[], "2026-06-13");
+            assert!(
+                !evaluation
+                    .findings
+                    .iter()
+                    .any(|f| f.id == FINDING_AUDIT_RETENTION_LOCAL_ONLY),
+                "retention finding must be unbound under profile '{}'",
+                profile.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn audit_retention_local_only_absent_when_condition_not_met() {
+        let input = GateInput {
+            audit_sink_class_durable: true,
+            audit_retention_local_only: false,
+            ..GateInput::default()
+        };
+        for profile in [
+            DeploymentProfile::Production,
+            DeploymentProfile::EvidenceGrade,
+        ] {
+            let evaluation = evaluate_gates(Some(profile), &input, &[], "2026-06-13");
+            assert!(
+                !evaluation
+                    .findings
+                    .iter()
+                    .any(|f| f.id == FINDING_AUDIT_RETENTION_LOCAL_ONLY),
+                "retention finding must be absent under profile '{}' when unattested sink is not local-only",
+                profile.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn audit_retention_local_only_waiver_suppresses_the_finding() {
+        let input = GateInput {
+            audit_sink_class_durable: true,
+            audit_retention_local_only: true,
+            ..GateInput::default()
+        };
+        let evaluation = evaluate_gates(
+            Some(DeploymentProfile::Production),
+            &input,
+            &[waiver(FINDING_AUDIT_RETENTION_LOCAL_ONLY, "2099-01-01")],
+            "2026-06-13",
+        );
+        let finding = evaluation
+            .findings
+            .iter()
+            .find(|f| f.id == FINDING_AUDIT_RETENTION_LOCAL_ONLY)
+            .expect("waived retention finding present");
+        assert_eq!(finding.status, DeploymentFindingStatus::Waived);
+        assert!(finding.waiver.is_some());
+    }
+
+    #[test]
+    fn deployment_evidence_rejects_unknown_field() {
+        let result: Result<DeploymentConfig, _> = serde_json::from_str(
+            r#"{ "evidence": { "audit_offhost_shipping": true, "made_up": true } }"#,
+        );
+        assert!(result.is_err());
     }
 
     // Gate-binding tests for the #208 risky-but-legal findings.
