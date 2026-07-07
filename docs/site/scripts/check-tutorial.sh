@@ -2,10 +2,10 @@
 #
 # check-tutorial.sh
 #
-# Verify that src/content/docs/tutorials/first-run-with-registry-lab.mdx still
+# Verify that src/content/docs/tutorials/first-run-with-solmara-lab.mdx still
 # matches reality by extracting its shell commands from the "## Steps" and
-# "## Verify" sections and executing them, in order, against a sibling
-# registry-lab checkout.
+# "## Verify" sections and executing them, in order, against a Solmara Lab
+# checkout.
 #
 # Also drift-checks the registryctl tutorials (publish-spreadsheet,
 # verify-claim-registry-api) by extracting every `sh`
@@ -18,8 +18,13 @@
 #   scripts/check-tutorial.sh --dry-run    extract + print only (no Docker)
 #
 # Configuration:
-#   REGISTRY_LAB_PATH   path to the registry-lab checkout.
-#                       Default: <repo-root>/../registry-lab
+#   SOLMARA_LAB_PATH   path to an existing Solmara Lab checkout.
+#                      Default: clone https://github.com/registrystack/solmara-lab
+#                      at SOLMARA_LAB_REF into a temporary directory.
+#                      REGISTRY_LAB_PATH is accepted as a deprecated alias.
+#   SOLMARA_LAB_REF    commit to clone when SOLMARA_LAB_PATH is unset.
+#                      This pins the check's own reproducibility; the
+#                      tutorial itself tells readers to clone `main`.
 #
 # Exit codes:
 #   0   success
@@ -39,23 +44,27 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TUTORIAL="$REPO_ROOT/src/content/docs/tutorials/first-run-with-registry-lab.mdx"
-EXPECTED_STEP_COUNT=5
+TUTORIAL="$REPO_ROOT/src/content/docs/tutorials/first-run-with-solmara-lab.mdx"
+EXPECTED_STEP_COUNT=3
 EXPECTED_VERIFY_COUNT=4
 EXPECTED_DEMO_ARTIFACTS=3
 EXPECTED_SERVICES=(
-	civil-registry-relay
-	social-protection-registry-relay
-	health-registry-relay
+	cra-civil-relay
+	nia-population-relay
+	sro-social-relay
+	programme-mis-relay
+	sipf-pensions-relay
+	nagdi-agriculture-relay
+	child-benefit-notary
+	pension-notary
+	nagdi-notary
+	citizen-notary
+	static-metadata
+	portal
+	home
+	scenario-runner
 	postgres
-	zitadel
-	civil-notary
-	social-protection-notary
-	shared-eligibility-notary
-	openfn-mock-registry
-	openfn-civil-sidecar
-	openfn-civil-notary
-	static-metadata-publisher
+	redis
 )
 
 DRY_RUN=0
@@ -63,7 +72,7 @@ for arg in "$@"; do
 	case "$arg" in
 	--dry-run) DRY_RUN=1 ;;
 	-h | --help)
-		sed -n '3,31p' "$0"
+		sed -n '3,32p' "$0"
 		exit 0
 		;;
 	*)
@@ -191,16 +200,28 @@ if ((DRY_RUN)); then
 	exit 0
 fi
 
-LAB_DIR="${REGISTRY_LAB_PATH:-$REPO_ROOT/../registry-lab}"
+SOLMARA_LAB_REF="${SOLMARA_LAB_REF:-1af06c8e610cf890c7e1e4de7ce4235919b69502}"
+# REGISTRY_LAB_PATH is a deprecated alias kept for callers that have not
+# migrated their environment yet; SOLMARA_LAB_PATH takes precedence.
+SOLMARA_LAB_PATH="${SOLMARA_LAB_PATH:-${REGISTRY_LAB_PATH:-}}"
 
-if [[ ! -d "$LAB_DIR" ]]; then
-	printf 'registry-lab checkout not found at: %s\n' "$LAB_DIR" >&2
-	printf 'set REGISTRY_LAB_PATH or check out the repo at the expected path\n' >&2
-	exit 1
+CLONE_DIR=""
+if [[ -n "$SOLMARA_LAB_PATH" ]]; then
+	if [[ ! -d "$SOLMARA_LAB_PATH" ]]; then
+		printf 'solmara-lab checkout not found at: %s\n' "$SOLMARA_LAB_PATH" >&2
+		exit 1
+	fi
+	LAB_DIR="$(cd "$SOLMARA_LAB_PATH" && pwd)"
+else
+	CLONE_DIR="$(mktemp -d)"
+	printf 'SOLMARA_LAB_PATH not set; cloning solmara-lab@%s into %s\n' \
+		"$SOLMARA_LAB_REF" "$CLONE_DIR"
+	git clone --quiet https://github.com/registrystack/solmara-lab "$CLONE_DIR"
+	git -C "$CLONE_DIR" checkout --quiet "$SOLMARA_LAB_REF"
+	LAB_DIR="$CLONE_DIR"
 fi
-LAB_DIR="$(cd "$LAB_DIR" && pwd)"
 
-for tool in just docker uv python3 openssl; do
+for tool in just docker uv pnpm python3 openssl git; do
 	if ! command -v "$tool" >/dev/null 2>&1; then
 		printf 'required tool not on PATH: %s\n' "$tool" >&2
 		exit 1
@@ -215,8 +236,11 @@ printf 'log: %s\n' "$LOG_FILE"
 
 cleanup() {
 	local exit_code=$?
-	printf '\n--- cleanup: docker compose down -v ---\n' | tee -a "$LOG_FILE"
-	(cd "$LAB_DIR" && docker compose -f compose.yaml down -v) >>"$LOG_FILE" 2>&1 || true
+	printf '\n--- cleanup: just down ---\n' | tee -a "$LOG_FILE"
+	(cd "$LAB_DIR" && just down) >>"$LOG_FILE" 2>&1 || true
+	if [[ -n "$CLONE_DIR" ]]; then
+		rm -rf "$CLONE_DIR"
+	fi
 	if ((exit_code == 0)); then
 		printf 'tutorial check: PASS (log: %s)\n' "$LOG_FILE"
 	else
@@ -243,10 +267,11 @@ for i in "${!STEPS[@]}"; do
 	run_command "step $((i + 1))" "${STEPS[$i]}"
 done
 
-# After all Steps, the topology should be up. Assert every long-running service
-# (everything except the profile-gated demo-client) is in `running` state.
+# After all Steps, the topology should be up. Assert every long-running
+# service (everything except the one-shot volume-permissions init job) is in
+# `running` state.
 printf '\n--- assert services running ---\n' | tee -a "$LOG_FILE"
-running_services="$(docker compose -f compose.yaml ps --services --filter status=running)"
+running_services="$(docker compose --env-file versions.env --env-file .env -f compose.yaml ps --services --filter status=running)"
 printf 'running services:\n%s\n' "$running_services" >>"$LOG_FILE"
 missing=()
 for svc in "${EXPECTED_SERVICES[@]}"; do
@@ -260,7 +285,7 @@ if ((${#missing[@]} > 0)); then
 		printf '  %s\n' "$svc" >&2
 	done
 	printf 'docker compose ps:\n' >&2
-	docker compose -f compose.yaml ps >&2 || true
+	docker compose --env-file versions.env --env-file .env -f compose.yaml ps >&2 || true
 	exit 1
 fi
 printf 'all %d expected services running\n' "${#EXPECTED_SERVICES[@]}"
@@ -269,16 +294,16 @@ for i in "${!VERIFY[@]}"; do
 	run_command "verify $((i + 1))" "${VERIFY[$i]}"
 done
 
-# Step 7 (demo-client) writes artifacts under output/. Assert at least
+# Step 3 (just smoke) writes artifacts under output/smoke/. Assert at least
 # EXPECTED_DEMO_ARTIFACTS files are present.
 artifact_count=0
-if [[ -d "$LAB_DIR/output" ]]; then
-	artifact_count="$(find "$LAB_DIR/output" -mindepth 1 -type f | wc -l | tr -d ' ')"
+if [[ -d "$LAB_DIR/output/smoke" ]]; then
+	artifact_count="$(find "$LAB_DIR/output/smoke" -mindepth 1 -type f | wc -l | tr -d ' ')"
 fi
 if ((artifact_count < EXPECTED_DEMO_ARTIFACTS)); then
-	printf 'expected at least %d artifacts under %s/output/, found %d\n' \
+	printf 'expected at least %d artifacts under %s/output/smoke/, found %d\n' \
 		"$EXPECTED_DEMO_ARTIFACTS" "$LAB_DIR" "$artifact_count" >&2
 	exit 1
 fi
-printf '\ndemo-client artifacts present under %s/output/ (%d files)\n' \
+printf '\nsmoke artifacts present under %s/output/smoke/ (%d files)\n' \
 	"$LAB_DIR" "$artifact_count"

@@ -1,0 +1,262 @@
+---
+title: First run with Solmara Lab
+description: Bring up the Solmara Lab compose demo on a laptop, verify it with the smoke suite, and call a Notary evaluation route directly.
+status: draft
+owner: registry-docs
+source_repos:
+  - solmara-lab
+  - registry-relay
+  - registry-notary
+last_reviewed: "2026-07-07"
+doc_type: tutorial
+locale: en
+standards_referenced:
+  - openapi
+  - sd-jwt-vc
+---
+
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+import { Steps } from '@astrojs/starlight/components';
+
+Solmara Lab is a standalone Registry Stack adopter demo for the fictional Republic of Solmara. It
+wires six [Registry Relay](../../products/registry-relay/) instances and four
+[Registry Notary](../../products/registry-notary/) instances over generated synthetic data into one
+topology, alongside a citizen portal and a public Visitor's Center, and it replaces the monorepo's
+former `lab` directory.
+
+This tutorial brings the topology up with the `just` recipes the lab provides, verifies it with the
+smoke suite, and calls a Notary evaluation route directly so you touch the protected API surface,
+not only the portal. If you only want the shortest hosted path before running anything locally,
+start with the [Quickstart](../../start/quickstart/) instead. This page is the full local tour.
+
+For a standalone local project generated from your own data, use the `registryctl` tutorials
+instead: [run a protected registry API](../publish-spreadsheet-secured-registry-api/) or
+[evaluate a claim with Registry Notary](../verify-claim-registry-api/). Clone Solmara Lab only when
+you want the full multi-service country demo rather than a generated project.
+
+<QuickstartMeta
+  outcome="The full Solmara Lab topology running on your laptop, verified by the smoke suite, with a Notary evaluation call made directly against the running stack."
+  time="About 20 minutes, most of it the first startup (image pulls plus three local image builds)"
+  level="Local multi-service demo"
+  prerequisites={['Docker Compose', 'just', 'uv', 'python3 and openssl', 'pnpm 11.3.0 via corepack', 'git']}
+/>
+
+This tutorial uses synthetic data and local demo credentials.
+Do not use the generated local keys in production.
+
+## Prerequisites
+
+- Docker with Compose v2. `just up` and `just down` run `docker compose ... up -d --build` and
+  `docker compose ... down -v`.
+- The [`just`](https://github.com/casey/just) command runner. Every step in this tutorial is a
+  `just` recipe.
+- `uv`. `just generate` runs the fixture generator with `uv run python -m solmara_lab.generate`.
+- `python3` and `openssl` on your PATH. `just generate` also runs `scripts/gen-secrets.py` directly,
+  a plain Python script that shells out to `openssl` for local TLS and signing key material.
+- `pnpm` `11.3.0`, matching the `packageManager` field the portal and Visitor's Center pin. Run
+  `corepack enable` first if `pnpm` is not already on your PATH.
+- `git`.
+
+## Get the repository
+
+Solmara Lab is a standalone repository, not a directory inside the Registry Stack monorepo. Clone
+it and install its dependencies:
+
+```sh
+git clone https://github.com/registrystack/solmara-lab
+cd solmara-lab
+just setup
+```
+
+`just setup` installs the root and `generator` Python environments with `uv sync`, and installs the
+`portal` and `home` (Visitor's Center) Node dependencies with `pnpm install --frozen-lockfile`.
+
+## Steps
+
+Run these from your Solmara Lab checkout, in order.
+
+<Steps>
+
+1. Generate the deterministic fixtures, local demo secrets, and Postgres TLS material:
+
+    ```sh
+    just generate
+    ```
+
+2. Build the local images and start the topology in the background:
+
+    ```sh
+    just up
+    ```
+
+3. Run the smoke suite, the primary verification:
+
+    ```sh
+    just smoke
+    ```
+
+</Steps>
+
+`just generate` also writes `.env`, a Compose-required file of local demo credentials. Skipping it
+is the most common first failure; see the troubleshooting table. `just up` builds the `portal`,
+`home`, and `scenario-runner` images locally and pulls the digest-pinned Relay and Notary images;
+expect the first run to take most of this tutorial's time. `just smoke` runs story-preview checks
+plus, by default, live checks against the running Relay, Notary, and portal services.
+
+## What is running
+
+`just up` starts 16 long-running services: six purpose-scoped Relay instances, one per Solmara
+ministry authority, four purpose-scoped Notary instances, the citizen portal, the public Visitor's
+Center, a static metadata publisher, a scenario-runner service that backs the portal's guided
+demos, Postgres, and Redis.
+
+The services this tutorial calls directly:
+
+| Service | Host port | Role |
+| --- | --- | --- |
+| `portal` | `4300` | Citizen portal: a SvelteKit application wired to the citizen Notary. |
+| `home` | `4301` | Visitor's Center: the lab's public tour, including an Engineer door. |
+| `child-benefit-notary` | `4321` | Notary for the birth-to-child-benefit journey; you call its evaluation route directly. |
+| `static-metadata` | `4331` | Unauthenticated multi-authority metadata bundle. |
+
+The remaining Relay instances run on `cra-civil-relay` (`4311`), `nia-population-relay` (`4312`),
+`sro-social-relay` (`4313`), `programme-mis-relay` (`4314`), `sipf-pensions-relay` (`4315`), and
+`nagdi-agriculture-relay` (`4316`). The remaining Notary instances run on `pension-notary`
+(`4322`), `nagdi-notary` (`4323`), and `citizen-notary` (`4324`). Postgres listens on `54329` and
+Redis on `63799`. This tutorial does not call any of these directly; they back the pension and
+farmer-voucher journeys and the portal's own evidence calls.
+
+Every Relay and Notary configuration in this lab sets `openapi_requires_auth: false`, so each
+instance publishes its OpenAPI reference at `/docs` and `/openapi.json` without a credential, the
+same route pattern documented in
+[Evaluate a claim with Registry Notary](../verify-claim-registry-api/).
+
+## See it: the citizen portal and the Visitor's Center
+
+Open the citizen portal at [http://127.0.0.1:4300](http://127.0.0.1:4300). It is a SvelteKit
+application backed by the citizen Notary and the civil, social, and agriculture Relay instances.
+Sign in with one of the portal's fixed demo personas to see a resident's own view of the evidence
+flows this tutorial calls directly.
+
+Open the Visitor's Center at [http://127.0.0.1:4301](http://127.0.0.1:4301). It is Solmara Lab's
+public tour, organized as three doors: visit as a citizen, as a relying agency running a guided
+story, or as an engineer. Scroll to the Engineer door section. It republishes the same four
+synthetic Notary tokens this tutorial's `.env` generates, `child-benefit-notary`, `pension-notary`,
+`nagdi-notary`, and `citizen-notary`, as ready-made copy-as-curl examples, including the same kind
+of evaluation call you make by hand in the next section.
+
+## Call a Notary evaluation route directly
+
+The birth-to-child-benefit journey is the lab's first wave-1 story. Its positive fixture is Mateo
+Santos, Solmara UIN `2300010248`: a child whose birth is registered, who is under five, whose
+household falls below the poverty threshold, and who is not already enrolled.
+
+Load the generated Notary token for this journey from `.env`, then evaluate the same four claims
+the birth-to-child-benefit story checks:
+
+```sh
+export CHILD_BENEFIT_NOTARY_TOKEN="$(grep -m1 '^CHILD_BENEFIT_NOTARY_TOKEN=' .env | cut -d= -f2-)"
+```
+
+```sh
+curl -sS -X POST \
+  -H "x-api-key: $CHILD_BENEFIT_NOTARY_TOKEN" \
+  -H "Data-Purpose: https://id.registrystack.org/solmara/purpose/child-benefit-review" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/vnd.registry-notary.claim-result+json" \
+  -d '{
+    "target": {"type": "Person", "identifiers": [{"scheme": "solmara_uin", "value": "2300010248"}]},
+    "claims": ["birth-is-registered", "child-age-under-5", "household-below-poverty-threshold", "not-already-enrolled"],
+    "disclosure": "predicate",
+    "format": "application/vnd.registry-notary.claim-result+json"
+  }' \
+  http://127.0.0.1:4321/v1/evaluations
+```
+
+The Notary returns `200 OK` with all four claims `satisfied`. The important fields look like this;
+other fields are omitted:
+
+```json
+{
+  "results": [
+    { "claim_id": "birth-is-registered", "satisfied": true, "value": true },
+    { "claim_id": "child-age-under-5", "satisfied": true, "value": true },
+    { "claim_id": "household-below-poverty-threshold", "satisfied": true, "value": true },
+    { "claim_id": "not-already-enrolled", "satisfied": true, "value": true }
+  ]
+}
+```
+
+The `x-api-key` header carries the caller's credential. `Data-Purpose` declares why the caller is
+asking, and the Notary's configuration allows this token to ask only under the
+`child-benefit-review` purpose. The `disclosure: predicate` request means the response discloses a
+true or false satisfaction per claim, never the underlying civil, population, social, or programme
+registry row the Notary read to answer it. The Notary can also issue a signed
+[SD-JWT VC](../../reference/glossary/) credential for this same eligibility claim set; that
+holder-bound issuance flow is out of scope for this tutorial. See
+[Registry Notary](../../products/registry-notary/) for the credential issuance contract.
+
+## Verify
+
+`just smoke` (step 3) is the authoritative check. These commands confirm its artifacts are on
+disk, and reproduce the Notary evaluation call above in a single command so it can run without a
+shell variable.
+
+```sh
+ls output/smoke/story-previews.json
+```
+
+```sh
+ls output/smoke/relay-sources.json
+```
+
+```sh
+ls output/smoke/portal-compose.json
+```
+
+```sh
+curl -sS -X POST -H "x-api-key: $(grep -m1 '^CHILD_BENEFIT_NOTARY_TOKEN=' .env | cut -d= -f2-)" -H "Data-Purpose: https://id.registrystack.org/solmara/purpose/child-benefit-review" -H "Content-Type: application/json" -H "Accept: application/vnd.registry-notary.claim-result+json" -d '{"target":{"type":"Person","identifiers":[{"scheme":"solmara_uin","value":"2300010248"}]},"claims":["birth-is-registered","child-age-under-5","household-below-poverty-threshold","not-already-enrolled"],"disclosure":"predicate","format":"application/vnd.registry-notary.claim-result+json"}' http://127.0.0.1:4321/v1/evaluations | python3 -c "import json, sys; data = json.load(sys.stdin); raise SystemExit(0 if all(r['satisfied'] for r in data['results']) else 1)"
+```
+
+## What you built
+
+You brought up 16 Relay, Notary, portal, and supporting services on your laptop from a single
+`just up`, and the smoke suite verified the topology. You then called the child benefit Notary
+directly and watched it return four satisfied predicates for Mateo Santos without exposing the
+civil, population, social, or programme registry rows it read to answer. The same synthetic token
+and evaluation call are also visible through the Visitor's Center's Engineer door, so you can
+confirm what you ran by hand against what the lab publishes.
+
+## Next
+
+- [Quickstart](../../start/quickstart/): the shortest hosted path, no install needed.
+- [Get a verifiable credential from the hosted lab](../../start/credential-tour/): watch Registry
+  Notary issue a signed credential in the browser.
+- [When to use Registry Stack](../../start/when-to-use/): decide whether Relay, Notary, or both fit
+  your integration.
+- [Registry Relay](../../products/registry-relay/): route reference, auth scopes, and configuration
+  guide.
+- [Registry Notary](../../products/registry-notary/): claim configuration, disclosure modes, and
+  credential issuance.
+
+## Troubleshooting
+
+| Symptom | Cause | Resolution |
+| --- | --- | --- |
+| `just up` fails immediately with `required variable ... is missing a value: .env not loaded; run just gen-secrets once, then just up` | `just generate` (or `just gen-secrets`) never ran, so `.env` does not exist. | Run `just generate`, then `just up` again. |
+| `docker compose` reports a port already allocated | Another process on your machine already holds one of the lab's ports: `4300`, `4301`, `4311` through `4316`, `4321` through `4324`, `4331`, `54329`, or `63799`. | Stop the conflicting process, or set the matching `SOLMARA_*_PORT` environment variable (for example `SOLMARA_PORTAL_PORT=4400`) before `just up`. |
+| `command not found: uv` or `command not found: pnpm` | A required tool is not on your PATH. | Install [`uv`](https://docs.astral.sh/uv/), or run `corepack enable` for `pnpm`, then run `just setup` again. |
+| The Relay and Notary containers start slowly or show high CPU on Apple Silicon | The pinned Relay and Notary images publish `linux/amd64` only, so Compose runs them under emulation. | Expected. Allow extra time on the first `just up`; later runs are faster once the images are cached. |
+| The first `just up` appears to hang | The first run pulls the pinned Relay and Notary images and builds the `portal`, `home`, and `scenario-runner` images locally. | Let it finish; do not interrupt it. |
+
+## Cleanup
+
+Stop the containers and remove the local volumes:
+
+```sh
+just down
+```
+
+`just down` runs `docker compose ... down -v`, removing the Postgres data volume and every Relay
+cache, Relay audit, and Notary state volume. This is the lab's documented reset: rerun
+`just generate` and `just up` for a clean topology.
