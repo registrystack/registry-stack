@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Added
+
+- `registry-platform-audit`: `JsonlFileSink::with_rotation_single_writer`, a
+  constructor that takes a process-lifetime advisory lock on `<path>.lock`
+  (refusing to start if another process holds it) and verifies the on-disk
+  tail before each append, failing with `ChainForkDetected` instead of
+  extending a diverged chain. Registry Relay and Registry Notary file sinks
+  use it; `new` and `with_rotation` are unchanged.
+- `registry-platform-audit`: `quarantine_and_recover_chain`, the offline
+  recovery primitive behind `registry-relay audit quarantine` (#196). It
+  archives the corrupt file set to `<name>.corrupt-<ts>`, starts a fresh
+  chain whose first record is a hash-linked `audit.chain.break` event chained
+  onto the last verifiable tail (torn trailing lines from an unclean stop are
+  treated as a break, not an abort), and records the trusted start hash in
+  `<path>.anchor.json` as operator evidence.
+
 ### Changed
 
 - `registry-platform-audit`'s `JsonlFileSink::new` default rotation retention
