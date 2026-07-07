@@ -4,8 +4,8 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     env, fmt,
-    fs::{self, OpenOptions},
-    io::{ErrorKind, Write},
+    fs::{self, File, OpenOptions, TryLockError},
+    io::{ErrorKind, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -365,6 +365,37 @@ pub enum AuditError {
     HashMismatch,
     #[error("audit chain verification failed: {0}")]
     ChainVerification(#[source] ChainVerificationError),
+    /// The single-writer advisory lock on the audit sink is already held by
+    /// another writer (typically a second process sharing the audit volume, or
+    /// an overlapping container during a restart/recreate). Failing loudly here
+    /// is what prevents a silently forked chain (#211).
+    #[error("audit sink single-writer lock is already held by another writer: {path}")]
+    SinkLocked { path: String },
+    /// A write-time tail self-check found the on-disk chain tail advanced past
+    /// the writer's in-memory predecessor: a foreign writer has appended to the
+    /// same file since this writer's last append (a chain fork in progress).
+    /// The append is refused so the fork window is seconds, not until the next
+    /// restart (#211).
+    #[error("audit chain fork detected at write time: on-disk tail {found} does not match expected predecessor {expected}")]
+    ChainForkDetected {
+        expected: OptionalHashHex,
+        found: OptionalHashHex,
+    },
+}
+
+/// Display helper for an optional 32-byte hash rendered as lowercase hex (or
+/// `none`), used in [`AuditError::ChainForkDetected`] so operators see the
+/// diverging tail hashes without a `Debug` array dump.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OptionalHashHex(pub Option<[u8; 32]>);
+
+impl fmt::Display for OptionalHashHex {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            Some(hash) => f.write_str(&hex_lower(&hash)),
+            None => f.write_str("none"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -388,19 +419,31 @@ struct JsonlFileSinkInner {
     max_size_bytes: u64,
     max_files: u32,
     lock: tokio::sync::Mutex<()>,
+    /// Process-lifetime advisory lock on the sentinel `<path>.lock` file, held
+    /// for single-writer sinks (`with_rotation_single_writer`) and `None` for
+    /// the unlocked dev/test constructors. Dropping the sink releases the OS
+    /// lock. Never read after construction: its sole job is to keep the
+    /// `flock` held (#211).
+    _writer_lock: Option<File>,
 }
 
 impl JsonlFileSink {
-    /// Construct a file sink with a 10 MiB active file and 50 retained files.
+    /// Construct an unlocked file sink with a 10 MiB active file and 50 retained
+    /// files. Dev/test convenience; production uses
+    /// [`Self::with_rotation_single_writer`].
     #[must_use]
     pub fn new(path: impl Into<PathBuf>) -> Self {
         Self::with_rotation(path, DEFAULT_MAX_SIZE_BYTES, DEFAULT_MAX_FILES)
     }
 
-    /// Construct a file sink with byte-based rotation.
+    /// Construct an unlocked file sink with byte-based rotation.
     ///
     /// `max_size_bytes = 0` disables rotation. `max_files` counts the active file;
     /// values below 1 are treated as 1.
+    ///
+    /// This does NOT take the single-writer advisory lock; two of these on the
+    /// same path can fork the chain. Production callers use
+    /// [`Self::with_rotation_single_writer`].
     #[must_use]
     pub fn with_rotation(path: impl Into<PathBuf>, max_size_bytes: u64, max_files: u32) -> Self {
         Self {
@@ -409,8 +452,41 @@ impl JsonlFileSink {
                 max_size_bytes,
                 max_files: max_files.max(1),
                 lock: tokio::sync::Mutex::new(()),
+                _writer_lock: None,
             }),
         }
+    }
+
+    /// Construct a single-writer file sink: acquire a process-lifetime advisory
+    /// lock (`flock`) on a stable sentinel file `<path>.lock` next to the JSONL,
+    /// so a second writer sharing the same volume fails loudly at construction
+    /// instead of silently forking the chain (#211).
+    ///
+    /// The sentinel is a fixed, never-rotated path; the active JSONL rotates
+    /// (`audit.jsonl` -> `audit.jsonl.1`), and an `flock` follows the inode, so
+    /// locking the sentinel rather than the active file keeps the lock stable
+    /// across rotations.
+    ///
+    /// Returns [`AuditError::SinkLocked`] when another writer already holds the
+    /// lock. On network filesystems `flock` semantics can be unreliable; the
+    /// write-time tail self-check (see [`AuditSink::write`]) is the backstop for
+    /// that case.
+    pub fn with_rotation_single_writer(
+        path: impl Into<PathBuf>,
+        max_size_bytes: u64,
+        max_files: u32,
+    ) -> Result<Self, AuditError> {
+        let path = path.into();
+        let writer_lock = acquire_writer_lock(&path)?;
+        Ok(Self {
+            inner: Arc::new(JsonlFileSinkInner {
+                path,
+                max_size_bytes,
+                max_files: max_files.max(1),
+                lock: tokio::sync::Mutex::new(()),
+                _writer_lock: Some(writer_lock),
+            }),
+        })
     }
 
     #[must_use]
@@ -419,13 +495,44 @@ impl JsonlFileSink {
     }
 }
 
+/// Path of the never-rotated sentinel lock file for `path`.
+fn sentinel_lock_path(path: &Path) -> PathBuf {
+    let mut raw = path.as_os_str().to_os_string();
+    raw.push(".lock");
+    PathBuf::from(raw)
+}
+
+/// Acquire the process-lifetime advisory lock on `path`'s sentinel file.
+fn acquire_writer_lock(path: &Path) -> Result<File, AuditError> {
+    let lock_path = sentinel_lock_path(path);
+    ensure_parent_dir(&lock_path)?;
+    let file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .audit_file_mode()
+        .open(&lock_path)
+        .map_err(AuditError::Io)?;
+    match file.try_lock() {
+        Ok(()) => Ok(file),
+        Err(TryLockError::WouldBlock) => Err(AuditError::SinkLocked {
+            path: lock_path.display().to_string(),
+        }),
+        Err(TryLockError::Error(error)) => Err(AuditError::Io(error)),
+    }
+}
+
 #[async_trait]
 impl AuditSink for JsonlFileSink {
     async fn write(&self, envelope: &AuditEnvelope) -> Result<(), AuditError> {
         let line = envelope.to_jsonl()?;
+        // The envelope's `prev_hash` is the writer's in-memory chain tail. The
+        // blocking write self-checks it against the on-disk tail before
+        // appending, so a foreign append (a second writer that got past or
+        // around the advisory lock) is caught at write time (#211).
+        let expected_prev = envelope.prev_hash;
         let _guard = self.inner.lock.lock().await;
         let inner = Arc::clone(&self.inner);
-        tokio::task::spawn_blocking(move || inner.write_line_blocking(&line))
+        tokio::task::spawn_blocking(move || inner.write_line_blocking(&line, expected_prev))
             .await
             .map_err(join_error_to_io)?
     }
@@ -467,8 +574,18 @@ impl JsonlFileSink {
 }
 
 impl JsonlFileSinkInner {
-    fn write_line_blocking(&self, line: &str) -> Result<(), AuditError> {
+    fn write_line_blocking(
+        &self,
+        line: &str,
+        expected_prev: Option<[u8; 32]>,
+    ) -> Result<(), AuditError> {
         ensure_parent_dir(&self.path)?;
+        // Self-check the on-disk tail against our in-memory predecessor BEFORE
+        // rotation, so the comparison sees the retained set as it stood when the
+        // envelope was chained. Rotation (which we perform below, under the same
+        // async `lock`) then moves the checked tail into `.1` and we append to a
+        // fresh active file.
+        self.verify_tail_matches(expected_prev)?;
         self.rotate_if_needed(line.len() as u64)?;
         let mut file = OpenOptions::new()
             .create(true)
@@ -478,6 +595,49 @@ impl JsonlFileSinkInner {
             .map_err(AuditError::Io)?;
         file.write_all(line.as_bytes()).map_err(AuditError::Io)?;
         file.flush().map_err(AuditError::Io)
+    }
+
+    /// Refuse the append if the on-disk chain tail no longer matches the
+    /// writer's in-memory predecessor. A match (including the genesis case where
+    /// both are `None`) proceeds; any divergence means a foreign writer appended
+    /// since this writer's last append (#211).
+    fn verify_tail_matches(&self, expected_prev: Option<[u8; 32]>) -> Result<(), AuditError> {
+        let found = self.current_tail_record_hash()?;
+        if found != expected_prev {
+            return Err(AuditError::ChainForkDetected {
+                expected: OptionalHashHex(expected_prev),
+                found: OptionalHashHex(found),
+            });
+        }
+        Ok(())
+    }
+
+    /// `record_hash` of the newest retained on-disk record, or `None` when the
+    /// retained set is empty (genesis). Reads only the tail of the newest
+    /// non-empty file, so the cost is independent of file size. A last line that
+    /// fails to parse surfaces as a verification error (fail closed).
+    fn current_tail_record_hash(&self) -> Result<Option<[u8; 32]>, AuditError> {
+        // Active file first; only when it is empty (e.g. immediately after a
+        // process that rotated but had no subsequent write) fall back to the
+        // newest rotated file, so the check stays correct without a false
+        // positive on a legitimately just-rotated set.
+        let mut candidates = vec![self.path.clone()];
+        for index in 1..self.max_files {
+            candidates.push(rotated_path(&self.path, index));
+        }
+        for candidate in candidates {
+            let Some(last_line) = read_last_line(&candidate)? else {
+                continue;
+            };
+            let envelope = serde_json::from_str::<AuditEnvelope>(&last_line).map_err(|source| {
+                AuditError::ChainVerification(ChainVerificationError::InvalidJson {
+                    line: 0,
+                    message: source.to_string(),
+                })
+            })?;
+            return Ok(Some(envelope.record_hash));
+        }
+        Ok(None)
     }
 
     fn rotate_if_needed(&self, incoming_bytes: u64) -> Result<(), AuditError> {
@@ -1273,6 +1433,59 @@ fn read_audit_file(path: &Path) -> Result<String, AuditError> {
         Err(error) => return Err(AuditError::Io(error)),
     };
     Ok(contents)
+}
+
+/// Initial tail window for [`read_last_line`]; audit envelopes are well under
+/// this, so a single read almost always captures the final line.
+const TAIL_READ_WINDOW_BYTES: u64 = 8192;
+
+/// Read the last non-empty line of `path` by seeking from the end, without
+/// loading the whole file. Returns `None` for a missing or empty file. Grows
+/// the read window until a complete final line is captured (or the whole file
+/// has been read, for a single line larger than the window).
+fn read_last_line(path: &Path) -> Result<Option<String>, AuditError> {
+    let mut file = match File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(AuditError::Io(error)),
+    };
+    let len = file.metadata().map_err(AuditError::Io)?.len();
+    if len == 0 {
+        return Ok(None);
+    }
+
+    let mut window = TAIL_READ_WINDOW_BYTES;
+    loop {
+        let start = len.saturating_sub(window);
+        file.seek(SeekFrom::Start(start)).map_err(AuditError::Io)?;
+        let mut buf = Vec::with_capacity((len - start) as usize);
+        Read::by_ref(&mut file)
+            .take(len - start)
+            .read_to_end(&mut buf)
+            .map_err(AuditError::Io)?;
+
+        let text = String::from_utf8(buf).map_err(|_| {
+            AuditError::ChainVerification(ChainVerificationError::InvalidJson {
+                line: 0,
+                message: "audit tail is not valid UTF-8".to_string(),
+            })
+        })?;
+        let trimmed = text.trim_end_matches(['\n', '\r']);
+        match trimmed.rfind('\n') {
+            Some(idx) => {
+                let last = trimmed[idx + 1..].trim();
+                return Ok((!last.is_empty()).then(|| last.to_string()));
+            }
+            None if start == 0 => {
+                let last = trimmed.trim();
+                return Ok((!last.is_empty()).then(|| last.to_string()));
+            }
+            None => {
+                // The window did not reach a line boundary; widen and retry.
+                window = window.saturating_mul(2);
+            }
+        }
+    }
 }
 
 fn existing_audit_paths(path: &Path, max_files: u32) -> Vec<PathBuf> {
@@ -2571,6 +2784,105 @@ mod tests {
         ] {
             assert_eq!(redacted[name]["op"], "redacted", "{name} must be redacted");
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn single_writer_concurrent_hammer_then_full_chain_verifies() {
+        // #211 regression: one single-writer sink driven by many concurrent
+        // audited appends must produce a chain that verifies end to end (no
+        // fork), because `ChainState::append` serializes tail advancement.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        let sink = JsonlFileSink::with_rotation_single_writer(&path, 0, 1)
+            .expect("single-writer sink acquires the lock");
+        let secret =
+            AuditHashSecret::new(b"this-is-a-32-byte-chain-secret-ok".to_vec()).expect("secret");
+        let hasher = AuditChainHasher::keyed(secret);
+        let chain = Arc::new(ChainState::new(hasher.clone()));
+
+        let mut set = tokio::task::JoinSet::new();
+        for index in 0..200 {
+            let chain = Arc::clone(&chain);
+            let sink = sink.clone();
+            set.spawn(async move {
+                chain
+                    .append(&sink, json!({ "event": "rows", "i": index }))
+                    .await
+                    .expect("concurrent append succeeds");
+            });
+        }
+        while let Some(joined) = set.join_next().await {
+            joined.expect("append task joins");
+        }
+
+        let contents = fs::read_to_string(&path).expect("audit file");
+        let verification =
+            verify_jsonl_lines_with_hasher(contents.lines(), &hasher).expect("chain verifies");
+        assert_eq!(verification.records, 200);
+    }
+
+    #[tokio::test]
+    async fn second_writer_is_rejected_by_flock() {
+        // #211: a second single-writer sink on the same path must fail loudly at
+        // construction instead of silently forking the chain. `flock` is scoped
+        // to the open file description on Unix, so two opens contend even within
+        // one process, making this a faithful stand-in for two containers.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        let _first = JsonlFileSink::with_rotation_single_writer(&path, 0, 1)
+            .expect("first writer takes the lock");
+        let second = JsonlFileSink::with_rotation_single_writer(&path, 0, 1);
+        assert!(
+            matches!(second, Err(AuditError::SinkLocked { .. })),
+            "second writer must be rejected, got {second:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn sentinel_lock_is_released_when_sink_dropped() {
+        // The lock is process-lifetime, not permanent: once the holder drops
+        // (clean shutdown), a fresh writer can acquire it.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        let first = JsonlFileSink::with_rotation_single_writer(&path, 0, 1).expect("first locks");
+        drop(first);
+        JsonlFileSink::with_rotation_single_writer(&path, 0, 1)
+            .expect("lock is re-acquirable after the holder drops");
+    }
+
+    #[tokio::test]
+    async fn tail_self_check_detects_foreign_append() {
+        // #211 write-time detection: two `ChainState`s over one file reproduce
+        // the exact fork mechanism (both chain from the same tail). The second
+        // writer's append advances the on-disk tail; the first writer's next
+        // append then diverges and must be refused at write time rather than
+        // producing the fork that bricks the relay on the next restart.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        let sink = JsonlFileSink::new(&path);
+
+        let writer_a = ChainState::unkeyed_dev_only();
+        writer_a
+            .append(&sink, json!({ "event": "a1" }))
+            .await
+            .expect("a1 append");
+
+        let writer_b = ChainState::bootstrap_unkeyed_dev_only(&sink)
+            .await
+            .expect("foreign writer bootstraps from the same tail");
+        writer_b
+            .append(&sink, json!({ "event": "b1" }))
+            .await
+            .expect("b1 append advances the on-disk tail");
+
+        let err = writer_a
+            .append(&sink, json!({ "event": "a2" }))
+            .await
+            .expect_err("A's stale predecessor must be caught");
+        assert!(
+            matches!(err, AuditError::ChainForkDetected { .. }),
+            "expected ChainForkDetected, got {err:?}"
+        );
     }
 
     #[derive(Default)]
