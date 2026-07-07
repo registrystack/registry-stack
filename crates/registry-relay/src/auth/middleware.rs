@@ -28,6 +28,7 @@ use axum::middleware::{from_fn_with_state, Next};
 use axum::response::{IntoResponse, Response};
 use axum::Router;
 
+use crate::auth::failure_throttle::{AuthFailureThrottle, Decision};
 use crate::auth::Principal;
 use crate::error::AuthError;
 use crate::error::Error;
@@ -97,12 +98,64 @@ pub fn auth_layer<S>(router: Router<S>, provider: AuthProviderRef) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
 {
-    router.layer(from_fn_with_state(provider, run))
+    auth_layer_with_failure_throttle(router, provider, None, false, Vec::new())
 }
 
-/// Middleware body. Reads the bearer token, calls the provider, and
-/// either short-circuits with a Problem Details response or
-/// forwards with [`super::Principal`] in request extensions.
+/// State threaded through the auth middleware. `throttle` is `None`
+/// unless `auth.failure_throttle.enabled` is set, in which case
+/// [`run`] is a strict no-op addition to the disabled path: every
+/// branch that reads `throttle`/`trust_proxy_enabled`/`trusted_proxies`
+/// is gated on `throttle.is_some()`.
+#[derive(Clone)]
+struct AuthMiddlewareState {
+    provider: AuthProviderRef,
+    throttle: Option<Arc<AuthFailureThrottle>>,
+    trust_proxy_enabled: bool,
+    trusted_proxies: Vec<String>,
+}
+
+/// Attach an authentication layer to `router` with an optional local
+/// auth-failure throttle.
+///
+/// `throttle` is built from `auth.failure_throttle` (see
+/// [`crate::auth::failure_throttle`]); passing `None` reproduces
+/// [`auth_layer`]'s behavior exactly. `trust_proxy_enabled` and
+/// `trusted_proxies` mirror `ServerConfig::trust_proxy` and are used
+/// only to resolve the throttle's keying address the same way the
+/// audit middleware resolves its `remote_addr` (see
+/// [`crate::net::resolve_remote_addr`]); they have no effect when
+/// `throttle` is `None`.
+pub fn auth_layer_with_failure_throttle<S>(
+    router: Router<S>,
+    provider: AuthProviderRef,
+    throttle: Option<Arc<AuthFailureThrottle>>,
+    trust_proxy_enabled: bool,
+    trusted_proxies: Vec<String>,
+) -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    let state = AuthMiddlewareState {
+        provider,
+        throttle,
+        trust_proxy_enabled,
+        trusted_proxies,
+    };
+    router.layer(from_fn_with_state(state, run))
+}
+
+/// Middleware body. When a failure throttle is configured, resolves the
+/// trust-proxy-aware client address once and checks it before calling
+/// the provider; an over-limit address short-circuits with
+/// `auth.rate_limited` / 429 without running authentication. Client-
+/// attributable `Err` outcomes from the provider record a failure for
+/// that address; infrastructure errors such as JWKS outages do not.
+/// The throttle short-circuit itself does not record a failure, since
+/// it did not run authentication.
+///
+/// Otherwise reads the bearer token, calls the provider, and either
+/// short-circuits with a Problem Details response or forwards with
+/// [`super::Principal`] in request extensions.
 ///
 /// On success the principal is also cloned onto the response
 /// extensions after the inner handler runs. The audit middleware sits
@@ -112,11 +165,41 @@ where
 /// audit layer reads `principal_id`, `auth_mode`, and `scopes_used` for
 /// the `AuditRecord`. Mirrors the `ErrorCodeExt` pattern in
 /// `crate::error::Error::into_response`.
-async fn run(State(provider): State<AuthProviderRef>, mut req: Request, next: Next) -> Response {
+async fn run(State(state): State<AuthMiddlewareState>, mut req: Request, next: Next) -> Response {
     let remote = remote_addr(&req);
-    let principal = match provider.authenticate(req.headers(), remote).await {
+
+    let throttle_key = state.throttle.as_ref().map(|_| {
+        crate::net::resolve_remote_addr(
+            req.headers(),
+            req.extensions().get::<ConnectInfo<std::net::SocketAddr>>(),
+            state.trust_proxy_enabled,
+            &state.trusted_proxies,
+        )
+        .to_string()
+    });
+
+    if let (Some(throttle), Some(key)) = (&state.throttle, &throttle_key) {
+        if let Decision::Throttled {
+            retry_after_seconds,
+        } = throttle.check(key)
+        {
+            return Error::from(AuthError::RateLimited {
+                retry_after_seconds,
+            })
+            .into_response();
+        }
+    }
+
+    let principal = match state.provider.authenticate(req.headers(), remote).await {
         Ok(p) => p,
-        Err(e) => return Error::from(e).into_response(),
+        Err(e) => {
+            if e.counts_toward_failure_throttle() {
+                if let (Some(throttle), Some(key)) = (&state.throttle, &throttle_key) {
+                    throttle.record_failure(key);
+                }
+            }
+            return Error::from(e).into_response();
+        }
     };
     let principal_for_audit = principal.clone();
     req.extensions_mut().insert(principal);

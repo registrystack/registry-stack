@@ -19,8 +19,8 @@ use chrono::Utc;
 #[cfg(feature = "registry-notary-cel")]
 use registry_notary_core::FEDERATION_RESPONSE_JWT_TYP;
 use registry_notary_core::{
-    BulkMode, ConfigTrustConfig, ConfigTrustRateLimit, EvidenceAuthMode, EvidenceCredentialConfig,
-    EvidenceOidcAuthConfig, Oid4vciConfig, Oid4vciCredentialClaimConfig,
+    BulkMode, ConfigTrustConfig, ConfigTrustRateLimit, CredentialProfileConfig, EvidenceAuthMode,
+    EvidenceCredentialConfig, EvidenceOidcAuthConfig, Oid4vciConfig, Oid4vciCredentialClaimConfig,
     RegistryNotaryAdminListenerMode, RemoteTufRepositoryConfig, RuleConfig,
     SelfAttestationClaimSource, SigningKeyConfig, SigningKeyProviderConfig, SigningKeyStatus,
     SourceFieldConfig, StandaloneRegistryNotaryConfig, SD_JWT_VC_SIGNING_ALG,
@@ -9466,6 +9466,124 @@ async fn credential_status_admin_edges_return_expected_http_statuses() {
         .get("/v1/credentials/urn:ulid:01HX0000000000000000000000/status")
         .await;
     disabled_public.assert_status(StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn admin_scope_is_instance_global_across_credential_profiles() {
+    // Pins the documented instance-global admin model (issue #58): the same
+    // registry_notary:admin-scoped credential authorizes admin operations
+    // against every credential profile hosted by this instance. Registry
+    // Notary does not partition admin authority per credential profile /
+    // issuer; the supported isolation boundary for separate administrative
+    // domains is one Registry Notary instance per issuing authority.
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var(
+        "TEST_EVIDENCE_ADMIN_KEY_HASH",
+        "sha256:10a4c7c9fc5206d6f36dc6944a81bb6f4a3cb0e25014ae3b12e6c3e52712292a",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK_2", TEST_HOLDER_JWK);
+
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = registry_data_api_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+    );
+    enable_shared_admin_listener(&mut config);
+    enable_credential_status(&mut config);
+    config.auth.api_keys.push(EvidenceCredentialConfig {
+        id: "admin".to_string(),
+        fingerprint: env_fingerprint_ref("TEST_EVIDENCE_ADMIN_KEY_HASH"),
+        scopes: vec!["registry_notary:admin".to_string()],
+        authorization_details: None,
+    });
+
+    // Two credential profiles standing in for two distinct issuing
+    // authorities hosted by this single instance.
+    config.evidence.signing_keys.insert(
+        "issuer-one-key".to_string(),
+        local_jwk_signing_key(
+            "TEST_SELF_ATTESTATION_ISSUER_JWK",
+            "did:web:issuer-one.example#key-1",
+        ),
+    );
+    config.evidence.signing_keys.insert(
+        "issuer-two-key".to_string(),
+        local_jwk_signing_key(
+            "TEST_SELF_ATTESTATION_ISSUER_JWK_2",
+            "did:web:issuer-two.example#key-1",
+        ),
+    );
+    config.evidence.credential_profiles.insert(
+        "issuer_one_sd_jwt".to_string(),
+        CredentialProfileConfig {
+            format: "application/dc+sd-jwt".to_string(),
+            issuer: "did:web:issuer-one.example".to_string(),
+            signing_key: "issuer-one-key".to_string(),
+            vct: "http://127.0.0.1:4325/credentials/issuer-one".to_string(),
+            validity_seconds: 600,
+            holder_binding: Default::default(),
+            allowed_claims: vec!["farmed-land-size".to_string()],
+            disclosure: Default::default(),
+        },
+    );
+    config.evidence.credential_profiles.insert(
+        "issuer_two_sd_jwt".to_string(),
+        CredentialProfileConfig {
+            format: "application/dc+sd-jwt".to_string(),
+            issuer: "did:web:issuer-two.example".to_string(),
+            signing_key: "issuer-two-key".to_string(),
+            vct: "http://127.0.0.1:4325/credentials/issuer-two".to_string(),
+            validity_seconds: 600,
+            holder_binding: Default::default(),
+            allowed_claims: vec!["farmed-land-size".to_string()],
+            disclosure: Default::default(),
+        },
+    );
+
+    let server = TestServer::builder()
+        .http_transport()
+        .build(standalone_router(config).expect("standalone router builds"));
+
+    // Credential ids standing in for credentials issued under each profile.
+    // The admin credential-status route takes no profile parameter, so this
+    // exercises the same route and token pair against resources nominally
+    // tied to two different issuers hosted by the instance.
+    let issuer_one_credential_id = "urn:ulid:01HX0000000000000000000AA1";
+    let issuer_two_credential_id = "urn:ulid:01HX0000000000000000000AA2";
+
+    for credential_id in [issuer_one_credential_id, issuer_two_credential_id] {
+        let path = format!("/admin/v1/credentials/{credential_id}/status");
+
+        // The non-admin caseworker key is denied for both profiles' credentials.
+        let missing_admin_scope = server
+            .post(&path)
+            .add_header("x-api-key", "api-token")
+            .json(&json!({ "status": "revoked" }))
+            .await;
+        missing_admin_scope.assert_status(StatusCode::FORBIDDEN);
+
+        // The single admin-scoped key clears the scope check for both
+        // profiles' credentials; the deliberately invalid status value below
+        // proves the request reached past authorization (400, not 403).
+        let admin_authorized = server
+            .post(&path)
+            .add_header("x-api-key", "admin-token")
+            .json(&json!({ "status": "deleted" }))
+            .await;
+        admin_authorized.assert_status(StatusCode::BAD_REQUEST);
+        let admin_authorized_body: Value = admin_authorized.json();
+        assert_eq!(
+            admin_authorized_body["code"],
+            json!("credential_status.invalid_status")
+        );
+    }
 }
 
 #[tokio::test]

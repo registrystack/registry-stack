@@ -498,8 +498,33 @@ Token verification failures map to specific `auth.*` codes so audit pipelines ca
 | `auth.client_not_allowed`       | 403  | `azp` / `client_id` is not in the configured `allowed_clients`|
 | `auth.invalid_credential`       | 401  | JWT decode failure not covered by a more specific variant      |
 | `auth.jwks_unavailable`         | 503  | JWKS fetch failed; Registry Relay cannot verify any token     |
+| `auth.rate_limited`             | 429  | Local auth-failure throttle tripped for this client address (see below) |
 
 For a worked example of running Registry Relay against a local OIDC provider (using the project's dev Zitadel stack), see [development.md](development.md).
+
+## Auth-failure throttle
+
+```yaml
+auth:
+  failure_throttle:
+    enabled: false
+    max_failures: 20
+    window_seconds: 60
+```
+
+| Field             | Purpose                                                                                                             |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `enabled`         | Off by default. When `false`, the throttle is never constructed and every request behaves exactly as it did before this feature existed. |
+| `max_failures`    | Number of authentication failures allowed from one client address within `window_seconds` before further requests from that address are throttled. Must be greater than 0 when `enabled: true`. |
+| `window_seconds`  | Fixed-window length in seconds. Must be greater than 0 when `enabled: true`.                                       |
+
+This is a local, in-process, coarse throttle applied in front of the auth provider (API-key or OIDC), keyed on the same trust-proxy-aware client address the audit record's `remote_addr` field reports (`server.trust_proxy`). Once an address has reached `max_failures` failed authentication attempts within the window, every further request from that address (including ones presenting a valid credential) is short-circuited with a 429 and the stable code `auth.rate_limited`, plus a `Retry-After` header giving the remaining window in seconds, without invoking the auth provider. Successful authentication neither counts toward the limit nor resets it. The counter is process-local and bounded (a capped map with eviction of the oldest entry), so it recovers automatically on restart and cannot grow without bound under a flood of spoofed source addresses. The throttled short-circuit itself is audited like any other auth failure, with `error_code: auth.rate_limited` and `status_code: 429`.
+
+Because the throttle key is the resolved client address, deploying behind a proxy or load balancer without effective trust-proxy support makes every request resolve to the proxy's own socket address, so all clients share one bucket. Combined authentication failures from any client then reach `max_failures` and 429 everyone, including callers presenting valid credentials, until the window rolls. Trust-proxy support is only effective when `server.trust_proxy.enabled` is true *and* `server.trust_proxy.trusted_proxies` names at least one proxy: an empty `trusted_proxies` list matches no peer, so `X-Forwarded-For` is ignored and the shared-bucket collapse still applies even with `enabled` set. Startup validation emits a `config.validation_warning` finding for both cases (trust_proxy disabled, or enabled with an empty `trusted_proxies` list); enable `server.trust_proxy` and populate `trusted_proxies` with the proxy address when the relay sits behind one.
+
+### Denial-of-service posture
+
+Ingress rate limiting (a load balancer, API gateway, or reverse proxy in front of Registry Relay) is the primary control for absorbing high-volume or distributed abuse; deployment profiles that lack one surface the `relay.ingress.rate_limit_missing` finding (see `deployment.evidence.ingress_rate_limit` below). `auth.failure_throttle` is a local backstop scoped narrowly to repeated authentication failures from a single address, useful for deployments without a gateway in front of them, or as defense in depth behind one. It does not protect other expensive routes (aggregation, large collection scans) from abuse by *authenticated* callers; throttling those routes is deliberately deferred to a future iteration and is not addressed by this feature.
 
 ## Audit
 
@@ -586,6 +611,7 @@ deployment:
   evidence:
     ingress_rate_limit: true # operator asserts a gateway enforces rate limiting
     api_key_rotation: true   # operator asserts an API-key rotation process exists
+    audit_offhost_shipping: true # operator asserts audit records are shipped off-host
   waivers:
     - finding: relay.openapi.public
       reason: public API catalog is intentional for this deployment
@@ -606,7 +632,7 @@ The four profiles escalate from `local` (binds no hard gates) through `hosted_la
 
 ### Evidence declarations
 
-Some controls live outside the relay and cannot be observed by the process (for example ingress rate limiting enforced by a gateway, or an API-key rotation process). The `evidence` flags let the operator assert those controls are in place. Each flag defaults to `false`, which leaves the corresponding gate active until the operator declares the control.
+Some controls live outside the relay and cannot be observed by the process (for example ingress rate limiting enforced by a gateway, an API-key rotation process, or audit records shipped off-host to a log collector or SIEM). The `evidence` flags let the operator assert those controls are in place. Each flag defaults to `false`, which leaves the corresponding gate active until the operator declares the control.
 
 ### Waivers
 
@@ -637,8 +663,17 @@ Waiver reasons are only visible in the restricted posture tier; the default tier
 | `relay.config.unsigned` | warn | error | startup_fail |
 | `relay.audit.best_effort` | (not bound) | warn | readiness_fail |
 | `relay.audit.sink_missing` | error | readiness_fail | startup_fail |
+| `relay.audit.retention_local_only` | (not bound) | warn | error |
+
+`relay.audit.retention_local_only` fires when the audit sink is a local rotating `file` sink and `evidence.audit_offhost_shipping` is not declared: a local rotating file caps retention, and an attacker with host access can destroy the audit trail. `stdout` sinks are exempt (retention is the orchestrator's log pipeline's concern) and `syslog` sinks are exempt (forwarding is the syslog daemon's own surface).
 
 The current deployment profile, its findings, and active waivers are reported under `deployment` in the operations posture (`GET /admin/v1/posture`).
+
+### Boot-time visibility
+
+Reduced posture is loud at boot, not only visible on the posture surface. Every config load warns once per waiver-suppressed finding (`deployment.gate_waived`, with the finding id, reason, and expiry), once per expired waiver (`deployment.waiver_expired`), and once when the profile is undeclared (`deployment.profile_undeclared`). The serve path additionally writes one operational audit record per waived gate at boot, once the audit pipeline exists: event `deployment.gate_waived` at audit path `/__events/deployment.gate_waived`, with `error_code` set to the gate id.
+
+This boot-time audit write inherits `audit.write_policy` (see below). Under `fail_closed` (the default), a failed write aborts startup. Under `availability_first`, the failure is logged (`audit.operational_event_write_failed`) and startup continues, so the durable record is best-effort; the per-gate boot log warnings above remain the guaranteed floor.
 
 ## Datasets
 

@@ -1,0 +1,138 @@
+---
+title: Upgrade and roll back a deployment
+description: How to move a self-hosted Registry Relay or Registry Notary deployment to a new release, verify it, and revert if needed.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-07-07"
+doc_type: how-to
+locale: en
+standards_referenced: []
+---
+
+Use this procedure to move a self-hosted Registry Relay or Registry Notary deployment from
+one release to another, and to revert to the previous release if the new one misbehaves.
+It applies to deployments that consume release artifacts (binaries or the
+`ghcr.io/registrystack/*` container images) pinned to a version tag or image digest.
+
+One term needs disambiguating up front. This page uses "roll back" for redeploying the
+previous release of the software. The governed-configuration feature has a separate control
+called anti-rollback, which rejects config bundles older than the last applied sequence.
+The two interact: rolling back the software does not permit rolling back the applied config
+sequence. The [revert section](#roll-back-to-the-previous-release) covers this.
+
+{/* TODO[review]: GH#203 requires this procedure to be exercised at least once against a
+     real topology. A partial exercise record now exists at
+     release/exercises/upgrade-v0.8.3-to-v0.8.4.md and is linked from the verification
+     step below. Keep status: draft until the remaining gaps are exercised:
+     release-artifact verification, credential issuance, metrics, Redis replay/nonce
+     survival, and anti-rollback monotonicity. */}
+
+## Prerequisites
+
+- Your deployment pins a version tag (`v0.8.4`) or an image digest, never `latest`.
+- You know where your deployment keeps its persistent state. At minimum: the audit log
+  directory of each product, the anti-rollback state file if `config_trust` is enabled
+  (`antirollback_state_path`), the Redis instance backing replay and nonce state for
+  Registry Notary, and your config files and secrets.
+- You can run the release-verification steps in
+  [SECURITY.md](https://github.com/registrystack/registry-stack/blob/v0.8.4/SECURITY.md)
+  (cosign, and slsa-verifier for releases with provenance).
+
+## Upgrade
+
+1. Read the release notes and CHANGELOGs for every release between your current version and
+   the target, in order. Collect every `BREAKING:` and `Deprecated` entry that names a config
+   key, route, metric, or environment variable you use. Within a major line there are no
+   breaking changes once the stack is at `v1.0.0`; before that, minors may contain them.
+
+2. Download and verify the target release artifacts (cosign signature and, where present,
+   SLSA provenance) before anything else touches them.
+
+3. Validate your current config against the new binary offline, before deploying it:
+
+   ```sh
+   registry-relay doctor --config <your-config.yaml> --format json
+   registry-notary doctor --config <your-config.yaml> --format json
+   ```
+
+   Run the new binary's `doctor`, not the old one's. It applies the new release's validation,
+   including rejection of config keys the new release removed, and evaluates the deployment
+   profile gates. Resolve every startup-failure finding before proceeding. Use
+   `explain-config` to confirm the resolved configuration and required environment variables
+   match your expectation.
+
+4. Back up state that a failed upgrade must not lose: the audit log directory (copy, never
+   truncate or edit; the hash chain makes hand-edited files unverifiable), the anti-rollback
+   state file, and your config and secrets as currently deployed.
+
+5. Deploy the new release alongside or in place of the old one, per your orchestration.
+   Keep the old release's binary or image reference and config available until the soak
+   period ends.
+
+6. Verify the new deployment:
+
+   - `/healthz` returns 200 and `/ready` returns 200. A 503 from `/ready` with a
+     `deployment/not_ready` problem body means a profile gate is failing; check the admin
+     posture surface for the finding.
+   - The audit sink is writing: confirm new records appear in the audit log after a probe
+     request.
+   - A canary request per critical path: one governed read on Registry Relay, one claim
+     evaluation and, if you issue credentials, one issuance on Registry Notary.
+   - Metrics are flowing to your monitoring.
+
+   This procedure has been partially exercised against a real topology: the
+   [v0.8.3 -> v0.8.4 exercise record](https://github.com/registrystack/registry-stack/blob/main/release/exercises/upgrade-v0.8.3-to-v0.8.4.md)
+   covers the upgrade and roll-back steps above; release-artifact verification, credential
+   issuance, metrics, Redis replay/nonce survival, and anti-rollback monotonicity were not
+   exercised by that run.
+
+7. Keep the previous release's artifacts and config until the new release has run through
+   your soak period. Only then remove them.
+
+## Roll back to the previous release
+
+If the new release misbehaves and the cause is not a config error you can fix forward:
+
+1. Redeploy the previous release's binary or image (the one you kept in the upgrade
+   procedure) with the config that was running before the upgrade.
+
+2. Respect the constraints that survive a software roll-back:
+
+   - Anti-rollback state is monotonic. If you applied a new signed config bundle after
+     upgrading, the previous software with the previous config still loads, but you cannot
+     re-apply an older bundle over a newer sequence number. Roll back the software, not the
+     applied config sequence.
+   - The audit chain must stay continuous. Never truncate or rewrite audit files to "match"
+     the previous state; the chain verifies across the retained files, and the record of the
+     failed upgrade is evidence, not noise.
+   - If the upgrade rotated or introduced signing keys and credentials were issued with
+     them, keep the new public keys published until those credentials expire; removing them
+     breaks verification for holders. This mirrors the rollback plan in the Registry Notary
+     deployment hardening runbook.
+   - Do not rotate the audit hash secret as part of a roll-back; rotating it breaks
+     correlation of records written before the rotation.
+
+3. Re-run the verification list from the upgrade procedure against the reverted deployment.
+
+4. Before retrying the upgrade, capture what failed: the problem responses, the posture
+   findings, and the audit records from the failed window.
+
+## Troubleshooting
+
+- The new binary refuses to start with a config validation error naming a key you use: the
+  key was removed or renamed. The error message and the release's migration notes name the
+  replacement. Fix the config; do not downgrade to avoid the message.
+- `/ready` stays 503 after upgrade: read the problem body. `deployment/not_ready` is a
+  profile gate, inspect the admin posture surface; `schema/resource_unavailable` on Registry
+  Relay means a configured resource failed ingest.
+- Config bundle apply rejected with a rollback outcome after reverting: expected. The
+  anti-rollback store saw a newer sequence. Issue a new bundle with a higher sequence
+  instead of re-applying the old one.
+
+## Next
+
+- [API stability and versioning](../../reference/api-stability/)
+- [Security support window](../../security/support-window/)
+- [Report a vulnerability](../../security/report-a-vulnerability/)

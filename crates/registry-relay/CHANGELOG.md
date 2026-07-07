@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Added
+
+- Boot is now loud about reduced posture: warn logs for waiver-suppressed
+  deployment gate findings, expired waivers, and an undeclared deployment
+  profile, plus a boot-time operational audit record (`deployment.gate_waived`)
+  per waived gate.
+- Local, in-process auth-failure throttle (`auth.failure_throttle`), disabled
+  by default. When enabled, repeated authentication failures from one client
+  address within a configured window return a stable 429
+  (`auth.rate_limited`) with a `Retry-After` header before the auth provider
+  runs. This is a backstop behind ingress rate limiting, not a replacement
+  for it; see `docs/configuration.md` for the deployment posture.
+- `deployment.evidence.audit_offhost_shipping` attestation and the
+  `relay.audit.retention_local_only` deployment gate: a local rotating `file`
+  audit sink without a declared off-host shipping attestation now raises a
+  posture finding (warn under `production`, error under `evidence_grade`) so
+  an attacker with host access cannot silently destroy audit evidence.
+  `stdout` and `syslog` sinks are exempt. The gate is waivable.
+
 ## 0.8.4 - 2026-07-04
 
 ### Added

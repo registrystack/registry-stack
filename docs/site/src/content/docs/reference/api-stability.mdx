@@ -1,0 +1,165 @@
+---
+title: API stability and versioning
+description: The compatibility promise Registry Stack makes at v1.0.0, the surfaces it covers, and what counts as a breaking change.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-07-07"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+This page defines the compatibility promise for Registry Stack releases: which surfaces are
+covered, what counts as a breaking change, and which surfaces stay exempt. The promise takes
+effect at `v1.0.0`. Until then, Registry Stack is a pre-1.0 technical release and the
+[pre-1.0 rule](#versioning-scheme) applies.
+
+{/* TODO[review]: this page is a draft policy proposal for GH#203. Open decisions for the
+     maintainer are marked with TODO[review] comments; resolve them before status: current. */}
+
+## Versioning scheme
+
+Registry Stack releases carry one stack-wide version, tagged `vMAJOR.MINOR.PATCH`. Every
+released artifact of a release (binaries, container images, the docs snapshot, the release
+manifest under `release/manifests/`) shares that version.
+
+Before `v1.0.0`:
+
+- A minor release may contain breaking changes. Each one is announced in the affected
+  CHANGELOG with a `BREAKING:` entry and concrete migration steps.
+- A patch release is backward compatible with the latest minor line.
+
+From `v1.0.0`:
+
+- A major release is the only release that may break a covered surface.
+- A minor release may add surface (new routes, new optional config keys, new CLI flags,
+  new error codes) and may deprecate surface, but not remove or change it incompatibly.
+- A patch release contains fixes only.
+
+{/* TODO[review]: products/platform/docs/versioning.md carries a narrower pre-1.0 policy for
+     the platform export tree, and products/{manifest,notary,platform} keep independent
+     CHANGELOG versions (0.2.1 / 0.6.2 / 0.3.1). Decide whether the stack version becomes the
+     single promise unit at 1.0 and the product trees pin to it, or the product versions stay
+     independently promised. This draft assumes the stack version is the promise unit. */}
+
+## Covered surfaces
+
+The promise covers the surfaces in this table. For each, the contract artifact is the source
+of truth: if this page and the artifact disagree, the artifact wins and this page must be
+corrected.
+
+| Surface | Contract artifact | Enforcement today |
+| --- | --- | --- |
+| Registry Relay HTTP API (public and admin listeners) | Committed OpenAPI document `crates/registry-relay/openapi/registry-relay.openapi.json` | `just openapi-contract` byte-for-byte check plus `oasdiff breaking` against the base ref |
+| Registry Notary HTTP API (public and admin listeners) | Committed OpenAPI document `products/notary/openapi/registry-notary.openapi.json` plus the route inventory `products/notary/security/exposure-manifest.json` | `just openapi-check` and `just exposure-check` |
+| Error contract and stable identifiers | RFC 9457 problem shape with the stable `code` member, the [error registry](../errors/), the `pdp.*` denial codes, and the `https://id.registrystack.org/` identifier space | Compatibility test `crates/registry-relay/tests/error_taxonomy.rs`; codes are additive-only |
+| Configuration formats and documented environment variables | The YAML config schemas of both products (`registry-relay schema`, `registry-notary schema`) and the [environment variable reference](../environment-variables/) | `deny_unknown_fields` parsing plus the deprecated-field rejection guard in `registry-platform-config` |
+| Registry Manifest schema and rendered artifacts | `registry-manifest/v1` and the rendered artifact schema versions, governed by [RS-DM-MANIFEST](../../spec/rs-dm-manifest/) | `validate_manifest` accepts only `registry-manifest/v1`; REQ-DM-MANIFEST-013 requires strict unknown-key rejection at parse time |
+| Source-adapter integration surfaces | The sidecar Registry Data API HTTP contract (`crates/registry-notary-source-adapter-sidecar/README.md`) and the Rhai `lookup(ctx)` scripting API | Contract described in the sidecar README; exposure manifest lists the sidecar routes |
+| Command-line interfaces | Documented commands and flags of `registryctl`, `registry-relay`, `registry-notary`, and `registry-manifest`, and their machine-readable output modes (`--format json`, `openapi`, `schema`) | CLI reference pages; `registryctl` version test |
+| Release artifacts and verification interface | Released binary and image names (`ghcr.io/registrystack/registry-relay`, `ghcr.io/registrystack/registry-notary`, `ghcr.io/registrystack/registry-notary-source-adapter-sidecar`), signature and provenance layout per `release/VERIFY.md` | Release workflow; signed assets verified as documented in [SECURITY.md](https://github.com/registrystack/registry-stack/blob/v0.8.4/SECURITY.md) |
+
+{/* TODO[review]: Prometheus metric names are not in this table. Operators build dashboards
+     on them and both products have renamed metrics pre-1.0. Decide the tier: covered like an
+     API (rename only at major), or announced-in-release-notes best effort. */}
+
+A route that only exists when a feature or config block enables it (for example the OGC
+namespaces, the SP DCI adapter, or attribute release) is covered in shape, not in presence:
+when the deployment enables it, it behaves as documented, but its availability depends on the
+deployment's configuration.
+
+## What counts as a breaking change
+
+For HTTP APIs:
+
+- Removing or renaming a route, parameter, request field, or response field
+- Changing the type, meaning, or optionality of an existing field
+- Removing or renaming a stable error `code`, or changing the HTTP status a code maps to
+- Tightening authentication or scope requirements on an existing route, except as a security
+  fix announced in the release notes
+
+For configuration:
+
+- Removing or renaming a config key or documented environment variable
+- Narrowing the accepted values of an existing key
+- Changing the semantics or the default of an existing key (see
+  [Defaults are part of the contract](#defaults-are-part-of-the-contract))
+
+For CLIs:
+
+- Removing or renaming a documented command or flag
+- Changing the schema of a machine-readable output mode incompatibly
+
+Additive changes (new routes, new optional fields, new optional config keys, new error codes,
+new commands and flags) are minor-release material and are not breaking.
+
+## Compatibility direction
+
+The promise is backward compatibility: a new binary within a major line reads the config
+files, manifests, and persisted state written for any earlier release of that line.
+
+The reverse is not promised. Both products parse config with `deny_unknown_fields`, so a
+config file that uses keys introduced in a newer release fails to load on an older binary.
+Pin your config to the release you deploy.
+
+## Defaults are part of the contract
+
+A default value is behavior an operator relies on without writing it down. Within a major
+line, a default changes only in a minor release, with a migration note, and only when the
+change hardens security posture. The migration note must document how to keep the previous
+behavior explicitly.
+
+## Exempt surfaces
+
+The following are not covered by the compatibility promise, at any version:
+
+- Rust crate APIs. Every workspace crate is `publish = false`; nothing is published to
+  crates.io. Consumers who pin the repository by tag or commit get exactly what they pinned,
+  and crate-level APIs may change in any release.
+- Human-readable CLI output, log message text, and problem `detail` strings. Machine
+  consumers must use the JSON output modes, the structured log format, and the `code` member.
+- Hidden commands and internal protocols, including `registryctl __update-check-refresh`,
+  `registry-notary cel-worker`, and the worker-harness line protocols.
+- The layout of the repository, the `products/` export trees, the docs site internals, and
+  the lab tooling.
+- Descriptions, summaries, and ordering inside generated OpenAPI documents. The contract is
+  the paths, operations, schemas, and status codes, not the prose.
+
+## Route version namespaces
+
+The HTTP surface carries several independent version prefixes: `/v1` (data plane),
+`/admin/v1` (admin plane, separate listener on Registry Relay), `/ogc/v1` and `/ogc/edr/v1`
+(standards adapters), and `/federation/v1` (Registry Notary federation). Each namespace
+versions independently; a `/v2` in one namespace does not imply a `/v2` in another.
+
+Two Registry Notary routes are permanently unversioned by protocol necessity:
+`/credentials/{vct_path}` and `/.well-known/vct/{vct_path}` must exactly match the `vct`
+dereference URL of issued credentials, per SD-JWT VC and RFC 8615 semantics. Discovery and
+operational routes (`/.well-known/*`, `/oid4vci/*`, `/healthz`, `/ready`, `/metrics`,
+`/docs`) follow their upstream protocol or operational conventions and are also unversioned.
+
+## Enforcement
+
+The promise is machine-checked where a checker exists:
+
+- Relay: `crates/registry-relay/scripts/check-openapi-contract.sh` regenerates the OpenAPI
+  document from the reference config, requires a byte-for-byte match with the committed file,
+  and runs `oasdiff breaking` against the base ref.
+- Notary: `just openapi-check` and `just exposure-check` from `products/notary` keep the
+  OpenAPI document and the exposure manifest in lockstep with the code.
+- Errors: `crates/registry-relay/tests/error_taxonomy.rs` pins the error taxonomy.
+- Config: `registry-platform-config` rejects removed or renamed keys with a pointer to the
+  migration note instead of silently ignoring them.
+
+A change that a gate flags as breaking lands only in a release whose version number permits
+it, together with the deprecation and migration steps required by the
+[deprecation policy](../deprecation-policy/).
+
+## Next
+
+- [Deprecation policy](../deprecation-policy/)
+- [Security support window](../../security/support-window/)
+- [Upgrade and roll back a deployment](../../operate/upgrade-and-rollback/)
+- [Contracts](../contracts/)

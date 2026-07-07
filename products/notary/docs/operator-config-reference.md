@@ -67,6 +67,8 @@ deployment:
     - finding: notary.source.private_network_escape
       reason: "approved internal source for partner pilot, ticket OPS-123"
       expires: 2026-09-30
+  evidence:
+    audit_offhost_shipping: true   # declares audit events are shipped off-host
 ```
 
 | Field | Purpose |
@@ -74,6 +76,13 @@ deployment:
 | `profile` | The declared assurance shape. Absent means undeclared. |
 | `multi_instance` | Operator declaration that this instance runs active-active with peers, which makes shared, durable replay storage mandatory. |
 | `waivers` | Per-finding suppressions, each with a mandatory reason and expiry. |
+| `evidence` | Operator-asserted assurance evidence for conditions the runtime cannot observe for itself. Each flag defaults to `false`. |
+
+`evidence` fields:
+
+| Field | Purpose |
+| --- | --- |
+| `audit_offhost_shipping` | Operator asserts audit log events are shipped off-host (for example to a log aggregator or SIEM), so a local file sink does not cap retention. |
 
 Profiles:
 
@@ -104,12 +113,14 @@ The gates bound for Registry Notary:
 | --- | --- | --- | --- | --- |
 | `notary.replay.in_memory_high_risk` | In-memory replay while federation, OID4VCI pre-authorized code, holder proof, wallet traffic, or `multi_instance` is declared | error | readiness_fail | startup_fail |
 | `notary.audit.sink_missing` | No durable, retained audit sink | error | startup_fail | startup_fail |
+| `notary.audit.retention_local_only` | Audit sink is `file` or `jsonl` and `deployment.evidence.audit_offhost_shipping` is not declared. `stdout` and `syslog` are exempt. | n/a | warn | error |
 | `notary.source.insecure_url` | Source connection over a plain `http://` URL with no localhost or private-network allowance | error | readiness_fail | startup_fail |
 | `notary.source.private_network_escape` | A source enables the private-network escape hatch | warn | error | error |
 | `notary.sidecar.expected_sidecar_missing` | A source-adapter source omits `expected_sidecar` | warn | error | readiness_fail |
 | `notary.admin.shared_exposure` | The admin surface shares the public listener | error | readiness_fail | startup_fail |
 | `notary.openapi.public` | OpenAPI is served without authentication | warn | error | error |
 | `notary.config.unsigned` | Local YAML config rather than signed governed config | warn | error | startup_fail |
+| `notary.source_binding.no_matching_policy` | A claim source binding declares no matching policy (no `policy_id`, no context constraints), so resolution falls back to unrestricted, identifier-only matching | - | warn | error |
 
 ### Waivers
 
@@ -436,6 +447,44 @@ naming the replacement field.
 
 For citizen self-attestation, the OIDC token must also carry a binding claim
 that Registry Notary uses to derive the requester and target context.
+
+### Machine Evaluation Quota
+
+`evidence.machine_quota` is a per-principal quota for `evaluate` and
+`batch_evaluate` calls from machine credentials (API keys, bearer tokens, and
+OIDC principals that are not classified as self-attestation). It is separate
+from, and does not affect, the self-attestation rate limiters or the
+per-request `max_subjects` batch-size cap: it bounds work over time, not the
+shape of a single request.
+
+```yaml
+evidence:
+  machine_quota:
+    enabled: true
+    subjects_per_minute: 6000
+```
+
+| Field | Purpose | Default |
+| --- | --- | --- |
+| `enabled` | Turns the quota on. | `false` |
+| `subjects_per_minute` | Budget per principal, in subjects, over a fixed one-minute window. A single `evaluate` call costs 1; a `batch_evaluate` call costs `items.len()`. Must be greater than 0 when `enabled: true`. | `6000` |
+
+The budget is a fixed window keyed by `principal_id`: for `auth.mode: api_key`
+this is the configured key `id`; for `auth.mode: oidc` it is the JWT `sub` (or
+whichever claim `principal_claim` names). A request whose cost would exceed
+the remaining budget is rejected in full, so a rejected batch never partially
+consumes the window. Exhaustion returns `429` with the stable error code
+`evaluation.quota_exceeded` and a `Retry-After` header giving the number of
+seconds until the window rolls over. The quota is disabled by default; enable
+it and size `subjects_per_minute` to the traffic pattern of your machine
+callers before relying on it in production.
+
+The counters are held in an in-memory map, and each Notary process builds its
+own limiter, so this quota is enforced per instance, not cluster-wide. With N
+replicas behind a load balancer, a single caller can spend up to N times
+`subjects_per_minute` across the deployment. Size the per-instance value with
+replica count in mind, or front the fleet with a shared limiter if you need a
+global ceiling.
 
 ## Source Connections
 

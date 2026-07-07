@@ -69,6 +69,7 @@ pub fn run_with_source(config: &Config, source: ConfigSource) -> Result<(), Erro
     validate_server(config).map_err(Error::from)?;
     validate_config_trust(config).map_err(Error::from)?;
     validate_auth_mode(config).map_err(Error::from)?;
+    validate_auth_failure_throttle(config).map_err(Error::from)?;
     validate_ids_and_uniqueness(config).map_err(Error::from)?;
     validate_scopes(config).map_err(Error::from)?;
     validate_env_vars_and_hashes(config).map_err(Error::from)?;
@@ -140,6 +141,7 @@ fn validate_deployment(config: &Config, source: ConfigSource) -> Result<(), Conf
         &waivers,
         &crate::deployment::today_utc(),
     );
+    log_deployment_boot_findings(&evaluation);
     if evaluation.has_startup_failure() {
         tracing::error!(
             code = "config.validation_error",
@@ -149,6 +151,44 @@ fn validate_deployment(config: &Config, source: ConfigSource) -> Result<(), Conf
         return Err(ConfigError::ValidationError);
     }
     Ok(())
+}
+
+/// Boot-time visibility for gate outcomes that pass validation. A waiver
+/// actively suppressing a finding, an expired waiver, and an undeclared
+/// profile each get a warn line, so a boot that runs with reduced posture is
+/// loud in the log instead of visible only on the posture surface.
+fn log_deployment_boot_findings(evaluation: &crate::deployment::GateEvaluation) {
+    fn waiver_fields(finding: &registry_platform_ops::DeploymentFinding) -> (&str, &str) {
+        finding.waiver.as_ref().map_or(("", ""), |waiver| {
+            (waiver.reason.as_str(), waiver.expires.as_str())
+        })
+    }
+
+    for finding in &evaluation.findings {
+        if finding.status == registry_platform_ops::DeploymentFindingStatus::Waived {
+            let (reason, expires) = waiver_fields(finding);
+            tracing::warn!(
+                code = "deployment.gate_waived",
+                finding = %finding.id,
+                reason = %reason,
+                expires = %expires,
+                "deployment gate finding is suppressed by an active waiver"
+            );
+        } else if finding.id == crate::deployment::WAIVER_EXPIRED {
+            let (reason, expires) = waiver_fields(finding);
+            tracing::warn!(
+                code = "deployment.waiver_expired",
+                reason = %reason,
+                expires = %expires,
+                "deployment waiver is expired; its gate binds again"
+            );
+        } else if finding.id == crate::deployment::PROFILE_UNDECLARED {
+            tracing::warn!(
+                code = "deployment.profile_undeclared",
+                "deployment profile is undeclared; no profile gates bind"
+            );
+        }
+    }
 }
 
 /// Lenient `YYYY-MM-DD` shape check: four digits, dash, two digits, dash, two
@@ -1687,6 +1727,53 @@ fn validate_auth_mode(config: &Config) -> Result<(), ConfigError> {
             })?;
             validate_oidc(oidc)?;
         }
+    }
+    Ok(())
+}
+
+/// Validate the local auth-failure throttle block. No constraints apply
+/// when the throttle is disabled (the default), since an unused block's
+/// field values cannot affect runtime behavior.
+fn validate_auth_failure_throttle(config: &Config) -> Result<(), ConfigError> {
+    let throttle = &config.auth.failure_throttle;
+    if !throttle.enabled {
+        return Ok(());
+    }
+    if throttle.max_failures == 0 {
+        tracing::error!(
+            code = "config.validation_error",
+            "auth.failure_throttle.max_failures must be greater than zero"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+    if throttle.window_seconds == 0 {
+        tracing::error!(
+            code = "config.validation_error",
+            "auth.failure_throttle.window_seconds must be greater than zero"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+    let trust_proxy = &config.server.trust_proxy;
+    // The throttle keys on the address resolved by `crate::net`, which only
+    // honors `X-Forwarded-For` when trust_proxy is enabled AND at least one
+    // trusted proxy is configured: an empty `trusted_proxies` list matches no
+    // peer, so every forwarded request still collapses onto the proxy's own
+    // socket address, the same shared-bucket self-DoS as trust_proxy disabled.
+    if !trust_proxy.enabled || trust_proxy.trusted_proxies.is_empty() {
+        let reason = if !trust_proxy.enabled {
+            "server.trust_proxy is disabled"
+        } else {
+            "server.trust_proxy is enabled but server.trust_proxy.trusted_proxies is empty, so no \
+             peer is trusted and X-Forwarded-For is ignored"
+        };
+        tracing::warn!(
+            code = "config.validation_warning",
+            "auth.failure_throttle is enabled but {reason}: the client address then resolves to the \
+             socket peer, so all requests arriving via a proxy or load balancer share one throttle \
+             bucket keyed by the proxy address, and the throttle can 429 every client after \
+             max_failures combined failures; enable server.trust_proxy and populate \
+             server.trust_proxy.trusted_proxies when the relay sits behind a proxy"
+        );
     }
     Ok(())
 }
@@ -4551,6 +4638,120 @@ datasets: []
         serde_saphyr::from_str(&deployment_config_yaml(extra)).expect("config parses")
     }
 
+    #[derive(Clone, Default)]
+    struct SharedLog(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    struct SharedLogWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SharedLog {
+        type Writer = SharedLogWriter;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            SharedLogWriter(std::sync::Arc::clone(&self.0))
+        }
+    }
+
+    impl std::io::Write for SharedLogWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .expect("log buffer lock")
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Runs `run(config)` with a capturing subscriber and returns the
+    /// rendered log output alongside the validation result.
+    fn run_with_captured_logs(config: &Config) -> (Result<(), Error>, String) {
+        let logs = SharedLog::default();
+        let subscriber = tracing_subscriber::fmt()
+            .compact()
+            .with_ansi(false)
+            .with_target(false)
+            .with_max_level(tracing::Level::WARN)
+            .with_writer(logs.clone())
+            .finish();
+        let guard = tracing::subscriber::set_default(subscriber);
+        let result = run(config);
+        drop(guard);
+        let rendered = String::from_utf8(logs.0.lock().expect("log buffer lock").clone())
+            .expect("logs are utf-8");
+        (result, rendered)
+    }
+
+    #[test]
+    fn active_waiver_is_loud_in_the_boot_log() {
+        let config = parse_deployment_config(
+            "deployment:\n  profile: hosted_lab\n  waivers:\n    - finding: relay.config.unsigned\n      reason: \"synthetic-waiver-not-a-secret\"\n      expires: \"2999-01-01\"",
+        );
+        let (result, rendered) = run_with_captured_logs(&config);
+        result.expect("a waived hosted_lab gate must pass validation");
+        assert!(
+            rendered.contains("deployment.gate_waived"),
+            "expected deployment.gate_waived in boot log: {rendered}"
+        );
+        assert!(
+            rendered.contains("relay.config.unsigned"),
+            "expected the waived finding id in boot log: {rendered}"
+        );
+        assert!(
+            rendered.contains("synthetic-waiver-not-a-secret"),
+            "expected the waiver reason in boot log: {rendered}"
+        );
+        assert!(
+            rendered.contains("2999-01-01"),
+            "expected the waiver expiry in boot log: {rendered}"
+        );
+    }
+
+    #[test]
+    fn expired_waiver_is_loud_in_the_boot_log() {
+        let config = parse_deployment_config(
+            "deployment:\n  profile: hosted_lab\n  waivers:\n    - finding: relay.config.unsigned\n      reason: \"synthetic-waiver-not-a-secret\"\n      expires: \"2000-01-01\"",
+        );
+        let (result, rendered) = run_with_captured_logs(&config);
+        result.expect("an expired hosted_lab waiver must still pass validation");
+        assert!(
+            rendered.contains("deployment.waiver_expired"),
+            "expected deployment.waiver_expired in boot log: {rendered}"
+        );
+        assert!(
+            rendered.contains("2000-01-01"),
+            "expected the expired waiver expiry in boot log: {rendered}"
+        );
+    }
+
+    #[test]
+    fn undeclared_profile_is_loud_in_the_boot_log() {
+        let config = parse_deployment_config("");
+        let (result, rendered) = run_with_captured_logs(&config);
+        result.expect("an undeclared profile must pass validation");
+        assert!(
+            rendered.contains("deployment.profile_undeclared"),
+            "expected deployment.profile_undeclared in boot log: {rendered}"
+        );
+    }
+
+    #[test]
+    fn declared_profile_without_waivers_keeps_the_boot_log_quiet() {
+        let config = parse_deployment_config("deployment:\n  profile: local");
+        let (result, rendered) = run_with_captured_logs(&config);
+        result.expect("a local profile must pass validation");
+        assert!(
+            !rendered.contains("deployment.gate_waived"),
+            "no waiver line expected: {rendered}"
+        );
+        assert!(
+            !rendered.contains("deployment.profile_undeclared"),
+            "no undeclared-profile line expected: {rendered}"
+        );
+    }
+
     #[test]
     fn evidence_grade_via_signed_bundle_source_boots() {
         // The same evidence_grade config that a local file rejects must validate
@@ -4683,5 +4884,135 @@ datasets: []
         assert!(!release_claim_has_exactly_one_source(&release_claim(
             None, None
         )));
+    }
+
+    #[test]
+    fn auth_failure_throttle_disabled_ignores_zero_fields() {
+        let mut config = crate::config::test_support::load_example_config_for_tests(
+            "validate-test-auth-failure-throttle-disabled-secret",
+        );
+        config.auth.failure_throttle.max_failures = 0;
+        config.auth.failure_throttle.window_seconds = 0;
+        assert!(super::run(&config).is_ok());
+    }
+
+    #[test]
+    fn auth_failure_throttle_enabled_rejects_zero_max_failures() {
+        let mut config = crate::config::test_support::load_example_config_for_tests(
+            "validate-test-auth-failure-throttle-zero-max-secret",
+        );
+        config.auth.failure_throttle.enabled = true;
+        config.auth.failure_throttle.max_failures = 0;
+        let err = super::run(&config).expect_err("zero max_failures rejected");
+        assert_eq!(err.code(), "config.validation_error");
+    }
+
+    #[test]
+    fn auth_failure_throttle_enabled_rejects_zero_window_seconds() {
+        let mut config = crate::config::test_support::load_example_config_for_tests(
+            "validate-test-auth-failure-throttle-zero-window-secret",
+        );
+        config.auth.failure_throttle.enabled = true;
+        config.auth.failure_throttle.window_seconds = 0;
+        let err = super::run(&config).expect_err("zero window_seconds rejected");
+        assert_eq!(err.code(), "config.validation_error");
+    }
+
+    #[test]
+    fn auth_failure_throttle_enabled_accepts_positive_values() {
+        let mut config = crate::config::test_support::load_example_config_for_tests(
+            "validate-test-auth-failure-throttle-valid-secret",
+        );
+        config.auth.failure_throttle.enabled = true;
+        config.auth.failure_throttle.max_failures = 5;
+        config.auth.failure_throttle.window_seconds = 30;
+        assert!(super::run(&config).is_ok());
+    }
+
+    /// Runs `validate_auth_failure_throttle` under a captured tracing
+    /// subscriber and returns the rendered log output.
+    fn captured_throttle_validation_logs(config: &Config) -> String {
+        let logs = SharedLog::default();
+        let subscriber = tracing_subscriber::fmt()
+            .compact()
+            .with_ansi(false)
+            .with_target(false)
+            .with_max_level(tracing::Level::WARN)
+            .with_writer(logs.clone())
+            .finish();
+
+        let guard = tracing::subscriber::set_default(subscriber);
+        let result = validate_auth_failure_throttle(config);
+        drop(guard);
+
+        result.expect("throttle validation succeeds");
+        let rendered = logs.0.lock().expect("log buffer lock").clone();
+        String::from_utf8(rendered).expect("logs are utf-8")
+    }
+
+    #[test]
+    fn auth_failure_throttle_without_trust_proxy_warns() {
+        let mut config = crate::config::test_support::load_example_config_for_tests(
+            "validate-test-auth-failure-throttle-no-trust-proxy-secret",
+        );
+        config.auth.failure_throttle.enabled = true;
+        config.server.trust_proxy.enabled = false;
+        let rendered = captured_throttle_validation_logs(&config);
+        assert!(
+            rendered.contains("config.validation_warning"),
+            "expected a validation warning: {rendered}"
+        );
+        assert!(
+            rendered.contains("trust_proxy"),
+            "expected the warning to mention trust_proxy: {rendered}"
+        );
+    }
+
+    #[test]
+    fn auth_failure_throttle_with_trust_proxy_is_silent() {
+        let mut config = crate::config::test_support::load_example_config_for_tests(
+            "validate-test-auth-failure-throttle-with-trust-proxy-secret",
+        );
+        config.auth.failure_throttle.enabled = true;
+        config.server.trust_proxy.enabled = true;
+        config.server.trust_proxy.trusted_proxies = vec!["10.0.0.0/8".to_string()];
+        let rendered = captured_throttle_validation_logs(&config);
+        assert!(
+            !rendered.contains("config.validation_warning"),
+            "did not expect a validation warning: {rendered}"
+        );
+    }
+
+    #[test]
+    fn auth_failure_throttle_with_trust_proxy_but_empty_trusted_proxies_warns() {
+        let mut config = crate::config::test_support::load_example_config_for_tests(
+            "validate-test-auth-failure-throttle-trust-proxy-empty-list-secret",
+        );
+        config.auth.failure_throttle.enabled = true;
+        config.server.trust_proxy.enabled = true;
+        config.server.trust_proxy.trusted_proxies = Vec::new();
+        let rendered = captured_throttle_validation_logs(&config);
+        assert!(
+            rendered.contains("config.validation_warning"),
+            "expected a validation warning: {rendered}"
+        );
+        assert!(
+            rendered.contains("trusted_proxies"),
+            "expected the warning to mention the empty trusted_proxies list: {rendered}"
+        );
+    }
+
+    #[test]
+    fn auth_failure_throttle_disabled_is_silent_regardless_of_trust_proxy() {
+        let mut config = crate::config::test_support::load_example_config_for_tests(
+            "validate-test-auth-failure-throttle-disabled-silent-secret",
+        );
+        config.auth.failure_throttle.enabled = false;
+        config.server.trust_proxy.enabled = false;
+        let rendered = captured_throttle_validation_logs(&config);
+        assert!(
+            !rendered.contains("config.validation_warning"),
+            "did not expect a validation warning: {rendered}"
+        );
     }
 }

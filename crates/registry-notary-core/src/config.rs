@@ -272,6 +272,7 @@ impl StandaloneRegistryNotaryConfig {
             }
         }
         self.evidence.concurrency.validate()?;
+        self.evidence.machine_quota.validate()?;
         self.cel.validate()?;
         if self.evidence.max_credential_validity_seconds == 0 {
             return Err(EvidenceConfigError::InvalidCredentialProfileValidity {
@@ -607,6 +608,12 @@ impl StandaloneRegistryNotaryConfig {
             wallet_facing: self.self_attestation.enabled,
             multi_instance: self.deployment.multi_instance,
             audit_sink_class_durable: audit_sink_is_durable(&self.audit),
+            // A local file sink caps retention to whatever the host disk
+            // holds; an attacker with host access can destroy it. stdout and
+            // syslog are exempt: their retention is owned by the orchestrator
+            // log pipeline or the syslog daemon's own forwarding surface.
+            audit_retention_local_only: matches!(self.audit.sink.as_str(), "file" | "jsonl")
+                && !self.deployment.evidence.audit_offhost_shipping,
             source_insecure_url: self
                 .evidence
                 .source_connections
@@ -638,6 +645,12 @@ impl StandaloneRegistryNotaryConfig {
             // implemented. Keep this explicit so production/evidence profiles
             // surface the missing sender-constraint assurance.
             transaction_token_sender_constrained: false,
+            source_binding_without_matching_policy: self.evidence.claims.iter().any(|claim| {
+                claim
+                    .source_bindings
+                    .values()
+                    .any(|binding| binding.matching.lacks_matching_policy())
+            }),
         }
     }
 
@@ -4583,6 +4596,8 @@ pub enum EvidenceConfigError {
          must all be >= 1"
     )]
     InvalidConcurrency,
+    #[error("invalid evidence.machine_quota config: {reason}")]
+    InvalidMachineQuotaConfig { reason: String },
     /// Credential holder binding only works with did:jwk because holder_jwk()
     /// only implements did:jwk resolution. Restrict allowed_did_methods to
     /// ["did:jwk"] or leave it empty when holder binding is disabled.
@@ -4757,6 +4772,11 @@ pub struct EvidenceConfig {
     /// reproduces today's strictly-sequential behavior (Stage 1 kill switch).
     #[serde(default)]
     pub concurrency: ConcurrencyConfig,
+    /// Per-principal budget for machine `evaluate`/`batch_evaluate` traffic,
+    /// counted in subjects (a single evaluate consumes 1; a batch consumes
+    /// `items.len()`) over a fixed one-minute window. Disabled by default.
+    #[serde(default)]
+    pub machine_quota: MachineQuotaConfig,
 }
 
 const fn default_max_credential_validity_seconds() -> u64 {
@@ -5724,6 +5744,49 @@ impl SourceMatchingConfig {
         Ok(matching)
     }
 
+    /// True when this matching config declares any context-constraint gate:
+    /// legal basis, consent, jurisdiction, assurance, or source freshness.
+    pub fn has_context_constraints(&self) -> bool {
+        self.require_legal_basis
+            || self.require_consent
+            || !self.allowed_legal_basis_refs.is_empty()
+            || !self.allowed_consent_refs.is_empty()
+            || !self.permitted_jurisdictions.is_empty()
+            || !self.allowed_assurance.is_empty()
+            || self.minimum_assurance.is_some()
+            || self.max_source_age_seconds.is_some()
+    }
+
+    /// True when the binding declares neither a `policy_id` nor any matching
+    /// gate. Per spec RS-DM-CLAIM, such a binding falls back to unrestricted,
+    /// identifier-only resolution: resolution behavior is unchanged, but
+    /// operators should see it so they can accept it knowingly or declare a
+    /// matching policy.
+    pub fn lacks_matching_policy(&self) -> bool {
+        self.policy_id.is_none() && !self.has_matching_gates()
+    }
+
+    fn has_matching_gates(&self) -> bool {
+        self.has_context_constraints()
+            || self.target_type.is_some()
+            || self.requester_type.is_some()
+            || !self.allowed_purposes.is_empty()
+            || self.ecosystem_binding.as_ref().is_some_and(|binding| {
+                binding.id.is_some()
+                    || binding.profile.is_some()
+                    || binding.pack_id.is_some()
+                    || binding.pack_version.is_some()
+                    || binding.policy_id.is_some()
+                    || binding.policy_hash.is_some()
+            })
+            || !self.allowed_relationships.is_empty()
+            || !self.relationship_purpose_scopes.is_empty()
+            || !self.sufficient_target_inputs.is_empty()
+            || !self.allowed_target_inputs.is_empty()
+            || !self.allowed_requester_inputs.is_empty()
+            || self.require_requester_reauthentication
+    }
+
     fn apply_context_constraints(
         &mut self,
         constraints: SourceContextConstraintsConfig,
@@ -6091,6 +6154,43 @@ const fn default_concurrency_subjects() -> usize {
 
 const fn default_concurrency_bindings() -> usize {
     8
+}
+
+/// Per-principal quota for machine `evaluate`/`batch_evaluate` traffic.
+/// Budget is counted in subjects per principal over a fixed one-minute
+/// window: a single `/v1/evaluations` call consumes 1, a batch consumes
+/// `items.len()`. Disabled by default so existing deployments are unaffected.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct MachineQuotaConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_machine_quota_subjects_per_minute")]
+    pub subjects_per_minute: u32,
+}
+
+impl Default for MachineQuotaConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            subjects_per_minute: default_machine_quota_subjects_per_minute(),
+        }
+    }
+}
+
+impl MachineQuotaConfig {
+    pub fn validate(&self) -> Result<(), EvidenceConfigError> {
+        if self.enabled && self.subjects_per_minute == 0 {
+            return Err(EvidenceConfigError::InvalidMachineQuotaConfig {
+                reason: "subjects_per_minute must be greater than zero when enabled".to_string(),
+            });
+        }
+        Ok(())
+    }
+}
+
+const fn default_machine_quota_subjects_per_minute() -> u32 {
+    6000
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -6801,6 +6901,42 @@ auth:
     }
 
     #[test]
+    fn gate_input_reports_audit_retention_local_only_for_file_sink_without_attestation() {
+        let mut config = minimal_config();
+        config.audit.sink = "file".to_string();
+        assert!(config.gate_input().audit_retention_local_only);
+    }
+
+    #[test]
+    fn gate_input_reports_audit_retention_local_only_for_jsonl_sink_without_attestation() {
+        let mut config = minimal_config();
+        config.audit.sink = "jsonl".to_string();
+        assert!(config.gate_input().audit_retention_local_only);
+    }
+
+    #[test]
+    fn gate_input_clears_audit_retention_local_only_when_attested() {
+        let mut config = minimal_config();
+        config.audit.sink = "file".to_string();
+        config.deployment.evidence.audit_offhost_shipping = true;
+        assert!(!config.gate_input().audit_retention_local_only);
+    }
+
+    #[test]
+    fn gate_input_clears_audit_retention_local_only_for_stdout_sink() {
+        // Minimal config defaults to the stdout sink.
+        let config = minimal_config();
+        assert!(!config.gate_input().audit_retention_local_only);
+    }
+
+    #[test]
+    fn gate_input_clears_audit_retention_local_only_for_syslog_sink() {
+        let mut config = minimal_config();
+        config.audit.sink = "syslog".to_string();
+        assert!(!config.gate_input().audit_retention_local_only);
+    }
+
+    #[test]
     fn gate_input_reports_insecure_source_url() {
         let mut config = minimal_config();
         config.evidence.source_connections.insert(
@@ -7053,6 +7189,59 @@ token_env: SRC_TOKEN
     }
 
     #[test]
+    fn gate_input_reports_source_binding_without_matching_policy() {
+        let mut config = minimal_config();
+        let mut claim = minimal_claim("residency");
+        claim
+            .source_bindings
+            .insert("registry".to_string(), rda_binding("registry_src", "one"));
+        config.evidence.claims = vec![claim];
+        assert!(config.gate_input().source_binding_without_matching_policy);
+    }
+
+    #[test]
+    fn gate_input_clears_source_binding_without_matching_policy_with_policy_id() {
+        let mut config = minimal_config();
+        let mut claim = minimal_claim("residency");
+        let mut binding = rda_binding("registry_src", "one");
+        binding.matching.policy_id = Some("registry.residency.lookup.v1".to_string());
+        claim
+            .source_bindings
+            .insert("registry".to_string(), binding);
+        config.evidence.claims = vec![claim];
+        assert!(!config.gate_input().source_binding_without_matching_policy);
+    }
+
+    #[test]
+    fn gate_input_clears_source_binding_without_matching_policy_with_purpose_gate() {
+        let mut config = minimal_config();
+        let mut claim = minimal_claim("residency");
+        let mut binding = rda_binding("registry_src", "one");
+        binding.matching.allowed_purposes = vec!["benefits_screening".to_string()];
+        claim
+            .source_bindings
+            .insert("registry".to_string(), binding);
+        config.evidence.claims = vec![claim];
+        assert!(!config.gate_input().source_binding_without_matching_policy);
+    }
+
+    #[test]
+    fn gate_input_clears_source_binding_without_matching_policy_with_ecosystem_binding() {
+        let mut config = minimal_config();
+        let mut claim = minimal_claim("residency");
+        let mut binding = rda_binding("registry_src", "one");
+        binding.matching.ecosystem_binding = Some(EcosystemBindingSelectorConfig {
+            policy_id: Some("policy:residency".to_string()),
+            ..EcosystemBindingSelectorConfig::default()
+        });
+        claim
+            .source_bindings
+            .insert("registry".to_string(), binding);
+        config.evidence.claims = vec![claim];
+        assert!(!config.gate_input().source_binding_without_matching_policy);
+    }
+
+    #[test]
     fn deployment_block_round_trips_through_yaml() {
         let mut config = minimal_config();
         config.deployment = serde_norway::from_str(
@@ -7072,6 +7261,36 @@ waivers:
         config
             .validate()
             .expect("production config with waivable waiver validates");
+    }
+
+    #[test]
+    fn deployment_evidence_block_round_trips_through_yaml() {
+        let mut config = minimal_config();
+        config.deployment = serde_norway::from_str(
+            r#"
+profile: production
+evidence:
+  audit_offhost_shipping: true
+"#,
+        )
+        .expect("deployment evidence block parses");
+        assert!(config.deployment.evidence.audit_offhost_shipping);
+    }
+
+    #[test]
+    fn deployment_evidence_rejects_unknown_field_through_yaml() {
+        let result: Result<crate::deployment::DeploymentConfig, _> = serde_norway::from_str(
+            r#"
+profile: production
+evidence:
+  audit_offhost_shipping: true
+  made_up_field: true
+"#,
+        );
+        assert!(
+            result.is_err(),
+            "unknown field inside deployment.evidence must fail deserialization"
+        );
     }
 
     #[test]
@@ -9452,6 +9671,58 @@ vct: https://vct.example/test
         config.evidence.concurrency = ConcurrencyConfig {
             subjects: 1,
             bindings: 1,
+        };
+        assert!(config.validate().is_ok());
+    }
+
+    // -----------------------------------------------------------------------
+    // Machine quota config
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn machine_quota_defaults_to_disabled_with_documented_limit() {
+        let cfg = MachineQuotaConfig::default();
+        assert!(!cfg.enabled);
+        assert_eq!(cfg.subjects_per_minute, 6000);
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn machine_quota_disabled_zero_limit_still_validates() {
+        // A zero subjects_per_minute is only invalid once the quota is
+        // enabled; an operator-provided but unused value must not block
+        // deployments that leave the quota off.
+        let cfg = MachineQuotaConfig {
+            enabled: false,
+            subjects_per_minute: 0,
+        };
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn machine_quota_enabled_zero_limit_is_rejected() {
+        let mut config = minimal_config();
+        config.evidence.machine_quota = MachineQuotaConfig {
+            enabled: true,
+            subjects_per_minute: 0,
+        };
+        let err = config
+            .validate()
+            .expect_err("enabled machine_quota with subjects_per_minute=0 must fail validation");
+        match &err {
+            EvidenceConfigError::InvalidMachineQuotaConfig { reason } => {
+                assert!(reason.contains("subjects_per_minute"));
+            }
+            other => panic!("unexpected error variant: {other}"),
+        }
+    }
+
+    #[test]
+    fn machine_quota_enabled_with_positive_limit_validates() {
+        let mut config = minimal_config();
+        config.evidence.machine_quota = MachineQuotaConfig {
+            enabled: true,
+            subjects_per_minute: 1,
         };
         assert!(config.validate().is_ok());
     }

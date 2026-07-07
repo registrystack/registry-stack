@@ -13,6 +13,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `registryctl init notary <dir> --source-kind fhir-sidecar` - scaffold a standalone Notary
   project pointing at an existing FHIR source-adapter sidecar, with a starter
   `patient-record-exists` claim and generated smoke request target.
+- `registryctl restart` - stop and start the local Compose project in one command so
+  edits to `relay/config.yaml` or `notary/config.yaml` take effect; a plain `start`
+  leaves an already-running container unchanged.
 
 ### Changed
 

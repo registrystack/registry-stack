@@ -1,6 +1,6 @@
 ---
 title: "RS-DM-MANIFEST: Registry Manifest portable metadata data model"
-description: "The data model for a Registry Manifest portable metadata manifest: its schema version and identity, the runtime-binding boundary that keeps it portable, the catalog and top-level collections that describe a registry, reference integrity and identifier constraints, grouped evidence, governed evidence gateway metadata, federation discovery metadata, the standards-shaped render set, the publication bundle and its digests, and the additive-evolution rule a conforming producer and reader follow."
+description: "The data model for a Registry Manifest portable metadata manifest: its schema version and identity, the runtime-binding boundary that keeps it portable, the catalog and top-level collections that describe a registry, reference integrity and identifier constraints, grouped evidence, governed evidence gateway metadata, federation discovery metadata, the standards-shaped render set, the publication bundle and its digests, and the strict unknown-key rejection rule a conforming producer and reader follow."
 status: draft
 owner: registry-docs
 source_repos:
@@ -42,6 +42,7 @@ The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 
 | 0.1.0 | 2026-06-13 | draft | Initial portable metadata data model, distilled from the Registry Manifest overview, the validate-and-render guide, and the reference, and graded against the schema types and the load-time validator the Registry Manifest core enforces. |
 | 0.2.0 | 2026-06-20 | draft | Added governed evidence gateway metadata, policy id/hash binding, ODRL enforcement profile validation, and the runtime PDP boundary. |
 | 0.2.1 | 2026-06-21 | draft | Clarified federation discovery trust boundaries, manifest validation limits, and static publication provenance. |
+| 0.3.0 | 2026-07-07 | draft | Rewrote REQ-DM-MANIFEST-013 from the additive-evolution rule to strict unknown-key rejection at parse time, and updated the runtime-binding-exclusion limitation and conformance statement to match (issue #249, issue #285). |
 
 ## 1. Scope and references
 
@@ -147,15 +148,15 @@ The digest inventory describes the bundle that was published, not the history of
 
 ## 10. Compatibility and evolution
 
-The manifest and its generated formats carry a versioned compatibility promise so that producers and readers can evolve without lock-step coordination.
+The manifest and its generated formats carry a versioned compatibility promise: a schema version names the exact field set a reader accepts, and the schema evolves through Registry Manifest releases, not through keys an individual producer adds on its own.
 
-REQ-DM-MANIFEST-013: The `registry-manifest/v1` manifest and its generated `*/v1` formats follow an additive-evolution rule. A producer MAY add optional fields to existing objects without a new major schema version. A reader MUST ignore fields it does not recognize while continuing to require and validate the fields it does. An unrecognized field MUST NOT relax existing validation: required fields, identifier and URI syntax, reference integrity, collection limits, runtime-only-key rejection, and governed evidence pack validation still apply. A breaking change, including removing or renaming a required field or changing the meaning or type of an existing field, MUST carry a new schema version.
+REQ-DM-MANIFEST-013: The `registry-manifest/v1` manifest and its generated `*/v1` formats MUST reject a key that is not modeled at its nesting depth, at parse time, and MUST name the offending key by its dotted field path in the resulting error. A reader MUST NOT silently drop or ignore a field it does not recognize. Extending the schema, including adding an optional field to an existing object, requires a Registry Manifest code change; a producer MUST NOT rely on an unmodeled key being tolerated. Fields modeled to carry arbitrary JSON, such as the governed evidence pack's `source_basis`, `semantic_profile`, and `evidence_envelope`, or an ecosystem binding's `vocabulary` and related envelope fields, remain the modeled surface for producer-specific content. A breaking change, including removing or renaming a required field or changing the meaning or type of an existing field, MUST still carry a new schema version.
 
 ## 11. Limitations
 
 These constraints are stated so a reader does not infer an invariant the reviewed implementation does not enforce.
 
-- **Runtime-binding exclusion is an enumerated list.** Registry Manifest rejects the runtime-only keys it enumerates, not every conceivable runtime key. The manifest schema does not reject unknown keys in general (it carries no `deny_unknown_fields`), so an unrecognized key whose name is outside the runtime-only list is ignored rather than rejected. This is the same additive-evolution behavior REQ-DM-MANIFEST-013 relies on (REQ-DM-MANIFEST-002).
+- **Runtime-binding exclusion is an enumerated list.** Registry Manifest rejects the runtime-only keys it enumerates, not every conceivable runtime key. This check and the general unknown-key rejection REQ-DM-MANIFEST-013 requires both operate over an intermediate JSON value, so a rejection error carries the offending key's dotted field path but not its YAML line or column (REQ-DM-MANIFEST-002).
 - **Standards conformance is not validated.** The renderers emit standards-shaped artifacts but do not validate them against the external standard bodies. A rendered CPSV-AP, DCAT, or SHACL document is well-formed by construction, not certified against the standard (REQ-DM-MANIFEST-011).
 - **URI checks are shallow.** A field required to be a URI is checked for an HTTP or HTTPS scheme or for the identifier pattern, not for full RFC 3987 IRI validity (REQ-DM-MANIFEST-004, REQ-DM-MANIFEST-005).
 - **Federation metadata is not a trust anchor.** Registry Manifest validates required federation fields and selected URL shapes, but a published manifest does not bind an external consumer to trust a JWKS endpoint, a federation API host, or a peer identity. Host pinning and trust bootstrap belong to the consumer's local policy and Registry Notary peer configuration (REQ-DM-MANIFEST-010).
@@ -179,7 +180,7 @@ A metadata manifest, and the Registry Manifest tooling that validates and render
 - advertises federation metadata as discovery only, with the required HTTPS, `did:web`, protocol-version, and ruleset bindings, and never as an access grant (REQ-DM-MANIFEST-010);
 - renders its artifacts as a pure, deterministic, standards-shaped set without asserting external-standard conformance (REQ-DM-MANIFEST-011);
 - publishes a self-describing bundle digested for pinning and comparison without a runtime service (REQ-DM-MANIFEST-012);
-- evolves additively, ignoring unrecognized fields without relaxing validation, and versions every breaking change (REQ-DM-MANIFEST-013).
+- rejects an unmodeled key at parse time, naming its dotted field path, without relaxing other validation, and versions every breaking change (REQ-DM-MANIFEST-013).
 
 Conformance to this specification does not imply conformance to any external standard cited in the `standards_referenced` frontmatter field. Each standard's adoption mode and scope are documented in the [standards register](../../reference/standards/).
 

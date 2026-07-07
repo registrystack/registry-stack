@@ -89,7 +89,6 @@ These limits concern what the claim and manifest configuration loaders do and do
 - Identifier-only matching has no further gating: A source binding with no matching policy resolves on identifiers alone, with no purpose, relationship, or input-minimization gating.
 - Manifests describe; they do not enforce: The portable metadata layer only describes: publishing in a discovery artifact grants no access and asserts no fact about a live record. Trust bootstrap stays in the consumer's local policy and Notary peer configuration.
 - Rendered standards artifacts are well-formed, not certified: Manifest rendering emits standards-shaped artifacts but does not validate them against external standard bodies: a rendered CPSV-AP, DCAT, or SHACL document is well-formed by construction, not certified against the standard.
-- Unknown manifest keys are ignored, not rejected: Manifest runtime-binding exclusion is an enumerated list, not a deny-unknown-fields schema: an unrecognized key outside the runtime-only list is ignored rather than rejected.
 - Vocabulary influence is not vocabulary emission: PROV-O is a design influence only: provenance-shaped concepts appear in audit fields and the claim provenance struct, but no PROV-O vocabulary terms are emitted as JSON-LD. No standalone SKOS artifact is published yet (only embedded SKOS-shaped nodes), and CPSV-AP has no Relay runtime metadata route.
 
 ## Security-model operator boundary

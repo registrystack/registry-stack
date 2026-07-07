@@ -13,13 +13,11 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-WORKSPACE_ROOT = (
-    ROOT.parents[1]
-    if (ROOT.parents[1] / "products" / "notary").resolve() == ROOT
-    and (ROOT.parents[1] / "crates").is_dir()
-    else ROOT
-)
 SECURITY_DIR = ROOT / "security"
+# Enforcement test and route-source refs predate (or postdate) the monorepo
+# migration and may be written relative to the product tree (ROOT) or to the
+# monorepo root; MONOREPO_ROOT is the fallback base for the latter.
+MONOREPO_ROOT = ROOT.parents[1]
 
 REQUIRED_ENTRY_FIELDS = {
     "service",
@@ -184,16 +182,32 @@ def check_value(entry: dict, field: str, allowed: set[str]) -> None:
         fail(f"{entry['path']} has invalid {field}: {entry[field]}")
 
 
+def resolve_repo_path(rel_part: str) -> Path:
+    """Resolve a manifest-relative path against the product tree, falling
+    back to the monorepo root for refs written relative to it."""
+    path = ROOT / rel_part
+    if path.exists():
+        return path
+    return MONOREPO_ROOT / rel_part
+
+
 def ensure_test_ref_exists(ref: str) -> None:
     file_part, _, symbol = ref.partition("::")
     if not symbol:
         fail(f"enforcement test reference must include ::test_name: {ref}")
-    path = WORKSPACE_ROOT / file_part
+    path = resolve_repo_path(file_part)
     if not path.exists():
         fail(f"referenced enforcement test file does not exist: {file_part}")
     text = path.read_text(encoding="utf-8")
     if not re.search(rf"\b(?:async\s+)?fn\s+{re.escape(symbol)}\s*\(", text):
         fail(f"referenced enforcement test symbol {symbol} not found in {file_part}")
+
+
+def crates_tree_root() -> Path:
+    """The crates/ tree lives at the monorepo root today, but may live under
+    the product tree (ROOT) in a future or historical layout; prefer
+    whichever actually exists."""
+    return ROOT if (ROOT / "crates").is_dir() else MONOREPO_ROOT
 
 
 def validate_route_sources(inventory: object | None = None) -> None:
@@ -203,9 +217,14 @@ def validate_route_sources(inventory: object | None = None) -> None:
         fail("route-inventory.json must contain a routes list")
 
     inventory_by_source: dict[str, set[tuple[str, str]]] = {}
+    crates_base = crates_tree_root()
+    # Only scan registry-notary* crates: the monorepo's crates/ directory also
+    # holds other products' and shared platform crates (e.g. the
+    # registry-platform-testing mock server), which are out of scope for this
+    # product's route inventory.
     source_files = sorted(
-        str(path.relative_to(WORKSPACE_ROOT))
-        for crate in (WORKSPACE_ROOT / "crates").glob("registry-notary*")
+        str(path.relative_to(crates_base))
+        for crate in (crates_base / "crates").glob("registry-notary*")
         for path in (crate / "src").rglob("*.rs")
         if path.is_file()
     )
@@ -216,12 +235,12 @@ def validate_route_sources(inventory: object | None = None) -> None:
             for method in route["methods"]:
                 inventory_by_source[source].add((route["path"], method))
     for source in inventory_by_source:
-        if source not in source_files and (WORKSPACE_ROOT / source).exists():
+        if source not in source_files and resolve_repo_path(source).exists():
             source_files.append(source)
 
     extracted_by_source: dict[str, set[tuple[str, str]]] = {}
     for source in sorted(set(source_files)):
-        path = WORKSPACE_ROOT / source
+        path = resolve_repo_path(source)
         if not path.exists():
             fail(f"route inventory references missing source file: {source}")
         routes = extract_axum_routes(path.read_text(encoding="utf-8"))

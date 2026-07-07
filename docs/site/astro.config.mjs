@@ -228,8 +228,8 @@ export default defineConfig({
             { label: 'Overview', link: '/' },
             { label: 'Quickstart', slug: 'start/quickstart' },
             { label: 'Credential tour', slug: 'start/credential-tour' },
-            { label: 'Your first Relay', slug: 'tutorials/publish-spreadsheet-secured-registry-api' },
-            { label: 'Your first Notary', slug: 'tutorials/verify-claim-registry-api' },
+            { label: 'Your first registry API', slug: 'tutorials/publish-spreadsheet-secured-registry-api' },
+            { label: 'Your first claim check', slug: 'tutorials/verify-claim-registry-api' },
             { label: 'When to use', slug: 'start/when-to-use' },
             { label: 'Run the lab', slug: 'tutorials/first-run-with-registry-lab' },
           ],
@@ -291,8 +291,18 @@ export default defineConfig({
             { label: 'Known limitations', slug: 'explanation/known-limitations' },
             { label: 'Harden a deployment', slug: 'security/hardening-checklist' },
             { label: 'Report a vulnerability', slug: 'security/report-a-vulnerability' },
+            { label: 'Security support window', slug: 'security/support-window' },
             { label: 'Self-assessment', slug: 'security/self-assessment' },
             { label: 'OpenSSF evidence', slug: 'security/openssf-evidence' },
+          ],
+        },
+        {
+          // Stack-wide operator procedures that span both products. Product-
+          // specific ops pages stay inside each product's generated group.
+          label: 'Operate',
+          collapsed: true,
+          items: [
+            { label: 'Upgrade and roll back', slug: 'operate/upgrade-and-rollback' },
           ],
         },
         {
@@ -314,6 +324,8 @@ export default defineConfig({
             { label: 'Errors and status codes', slug: 'reference/errors' },
             { label: 'Environment variables', slug: 'reference/environment-variables' },
             { label: 'Contracts', slug: 'reference/contracts' },
+            { label: 'API stability and versioning', slug: 'reference/api-stability' },
+            { label: 'Deprecation policy', slug: 'reference/deprecation-policy' },
             { label: 'Standards', slug: 'reference/standards' },
             { label: 'ITB and SEMIC evidence', slug: 'reference/itb-semic-evidence' },
             { label: 'Glossary', slug: 'reference/glossary' },

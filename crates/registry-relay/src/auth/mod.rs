@@ -24,6 +24,7 @@ use std::net::IpAddr;
 use crate::error::AuthError;
 
 pub mod api_key;
+pub mod failure_throttle;
 pub mod middleware;
 pub mod oidc;
 pub mod runtime;

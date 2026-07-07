@@ -85,6 +85,25 @@ Hardening checklist:
   `auth.oidc.leeway` to stay within the self-attestation clock-leeway
   ceiling.
 
+### Admin Scope Is Instance-Global
+
+`registry_notary:admin` authorizes every admin operation for every credential
+profile hosted by the instance. There is no per-issuer partitioning of admin
+authority: a caller holding this scope can mutate credential status, apply
+config, and drive the other `registry_notary:admin`-gated routes for any
+credential profile the instance serves, not just one.
+
+Deployments that need separate administrative domains, for example two
+issuing authorities that must not be able to administer each other's
+credentials, run one Registry Notary instance per issuing authority, each
+with its own admin credentials, rather than relying on one instance to keep
+admin authority partitioned between profiles.
+
+Do not confuse this with `deployment.multi_instance`. That flag declares
+horizontal scale-out of a single issuing authority's workload (multiple
+processes sharing Redis-backed replay and audit state); it is not a tenancy
+boundary and has no effect on how `registry_notary:admin` is scoped.
+
 ## Secret Inventory
 
 Every deployable environment should document where these are stored and how

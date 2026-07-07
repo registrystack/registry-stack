@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Changed
+
+- `registry-platform-audit`'s `JsonlFileSink::new` default rotation retention
+  is raised from 5 files to 50 files (~500 MiB at the 10 MiB default file
+  size), so the crate default no longer silently discards audit history after
+  ~50 MiB. Consumers that pass explicit rotation settings via
+  `JsonlFileSink::with_rotation` (Registry Relay and Registry Notary both
+  configure 100 MB x 14 files) are unaffected; this change primarily protects
+  the `registry-platform-sts` bridge binary, which uses the crate default.
+
 ## v0.3.1 - 2026-06-21
 
 ### Security

@@ -27,6 +27,7 @@ registry-notary-source-adapter-rhai = { workspace = true }
 registry-platform-authcommon.workspace = true
 registry-platform-audit.workspace = true
 registry-platform-config.workspace = true
+registry-platform-httputil.workspace = true
 registry-platform-ops.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["io-util", "process"] }
