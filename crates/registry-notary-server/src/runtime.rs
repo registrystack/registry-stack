@@ -2225,11 +2225,17 @@ async fn evaluate_claim_task(
             let record = sources
                 .get(source)
                 .ok_or(EvidenceError::SourceUnavailable)?;
-            Ok(crate::standalone::get_json_path(record, field)
+            let value = crate::standalone::get_json_path(record, field)
                 .cloned()
-                .ok_or(EvidenceError::SourceNotFound)?)
+                .ok_or(EvidenceError::SourceNotFound)?;
+            validate_claim_value_type(&value, &claim.value.value_type)?;
+            Ok(value)
         }
-        RuleConfig::Exists { source } => Ok(Value::Bool(sources.contains_key(source))),
+        RuleConfig::Exists { source } => {
+            let value = Value::Bool(sources.contains_key(source));
+            validate_claim_value_type(&value, &claim.value.value_type)?;
+            Ok(value)
+        }
         RuleConfig::Cel {
             expression,
             bindings,
@@ -5901,6 +5907,36 @@ mod tests {
         }
     }
 
+    /// Returns a `value` field of the wrong JSON shape (a string) so tests
+    /// can exercise `validate_claim_value_type` refusing an extract result
+    /// that does not conform to the claim's declared `value.type`.
+    #[derive(Debug, Default)]
+    struct WrongTypeSource;
+
+    impl SourceReader for WrongTypeSource {
+        fn read_one<'a>(
+            &'a self,
+            _binding: &'a SourceBindingConfig,
+            subject: &'a SubjectRequest,
+            _purpose: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<Value, EvidenceError>> + Send + 'a>> {
+            Box::pin(async move {
+                Ok(json!({
+                    "id": subject.id.clone(),
+                    "value": "not-a-boolean",
+                }))
+            })
+        }
+
+        fn required_scopes(
+            &self,
+            _evidence: &EvidenceConfig,
+            _claim_id: &str,
+        ) -> Result<Vec<String>, EvidenceError> {
+            Ok(Vec::new())
+        }
+    }
+
     #[derive(Debug)]
     struct DependentLookupSource {
         first_row: Value,
@@ -7103,6 +7139,63 @@ mod tests {
         assert!(document["self_attestation"]["allowed_wallet_origins"].is_null());
         assert!(document["self_attestation"]["citizen_clients"].is_null());
         assert!(document["self_attestation"]["token_policy"].is_null());
+    }
+
+    #[tokio::test]
+    async fn evaluate_refuses_extract_result_that_violates_declared_value_type() {
+        let source = Arc::new(WrongTypeSource);
+        let mut evidence_config =
+            (*test_evidence(vec![test_claim("selected", Vec::new(), true)])).clone();
+        evidence_config.allowed_purposes = vec!["test".to_string()];
+        let evidence = Arc::new(evidence_config);
+        let store = EvidenceStore::default();
+        let request = test_request("selected");
+
+        let err = RegistryNotaryRuntime::new()
+            .evaluate(
+                evidence,
+                source as Arc<dyn SourceReader>,
+                &store,
+                &machine_principal(),
+                request,
+                None,
+            )
+            .await
+            .expect_err("extract result of the wrong JSON shape must be refused");
+
+        assert!(matches!(err, EvidenceError::RuleEvaluationFailed));
+    }
+
+    #[tokio::test]
+    async fn evaluate_refuses_exists_result_that_violates_declared_value_type() {
+        let source = Arc::new(CountingSource::default());
+        let mut claim = test_claim("selected", Vec::new(), true);
+        claim.rule = RuleConfig::Exists {
+            source: "src".to_string(),
+        };
+        claim.value.value_type = "string".to_string();
+        let mut evidence_config = (*test_evidence(vec![claim])).clone();
+        evidence_config.allowed_purposes = vec!["test".to_string()];
+        let evidence = Arc::new(evidence_config);
+        let store = EvidenceStore::default();
+        let request = test_request("selected");
+
+        let err = RegistryNotaryRuntime::new()
+            .evaluate(
+                evidence,
+                source.clone() as Arc<dyn SourceReader>,
+                &store,
+                &machine_principal(),
+                request,
+                None,
+            )
+            .await
+            .expect_err(
+                "exists result of boolean shape must be refused against a declared string type",
+            );
+
+        assert!(matches!(err, EvidenceError::RuleEvaluationFailed));
+        assert_eq!(source.read_count.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
