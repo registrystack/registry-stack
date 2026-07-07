@@ -5660,6 +5660,7 @@ dependencies = [
  "crc32fast",
  "ed25519-dalek",
  "getrandom 0.4.3",
+ "jsonschema 0.18.3",
  "registry-config-report",
  "registry-notary-core",
  "registry-platform-authcommon",
@@ -5667,6 +5668,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "tempfile",
+ "time",
  "ureq",
  "url",
 ]

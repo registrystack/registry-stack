@@ -12,10 +12,15 @@ use anyhow::{anyhow, bail, Context, Result};
 use base64::Engine as _;
 use clap::ValueEnum;
 use ed25519_dalek::SigningKey;
-use registry_config_report::REGISTRYCTL_VALIDATION_REPORT_SCHEMA_VERSION_V1;
+use registry_config_report::{
+    ConfigDiagnostic, ConfigDiagnosticReport, ConfigSourceKind, ConfigSourceRef,
+    DiagnosticSeverity, DiagnosticSummary, RegistryctlProductReport, RegistryctlProjectRef,
+    RegistryctlValidationReport, ReportStatus, REGISTRYCTL_VALIDATION_REPORT_SCHEMA_VERSION_V1,
+};
 use registry_platform_authcommon::{fingerprint_api_key, validate_api_key_entropy};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
 pub use crate::sample::Sample;
 
@@ -962,77 +967,11 @@ pub fn doctor_project(
     ensure_doctor_report_ok(&report)
 }
 
-#[derive(Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum DoctorResult {
-    Passed,
-    Failed,
-}
-
-#[derive(Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum DoctorProductStatus {
-    Passed,
-    Failed,
-    NotRun,
-}
-
-#[derive(Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum DoctorCheckStatus {
-    Passed,
-    Failed,
-    NotRun,
-}
-
-#[derive(Debug, Serialize)]
-struct DoctorReport {
-    schema_version: &'static str,
-    product: &'static str,
-    command: &'static str,
-    ok: bool,
-    result: DoctorResult,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    deployment_profile: Option<DoctorDeploymentProfileReport>,
-    checks: Vec<DoctorProductReport>,
-}
-
-#[derive(Debug, Serialize)]
-struct DoctorDeploymentProfileReport {
-    value: &'static str,
-    source: &'static str,
-}
-
-#[derive(Debug, Serialize)]
-struct DoctorProductReport {
-    product: &'static str,
-    status: DoctorProductStatus,
-    checks: Vec<DoctorCheck>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    product_report: Option<Value>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    findings: Vec<Value>,
-}
-
-#[derive(Debug, Serialize)]
-struct DoctorCheck {
-    name: &'static str,
-    status: DoctorCheckStatus,
-    command: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    exit_code: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    stdout: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    stderr: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    message: Option<String>,
-}
-
 struct ProductDoctorInvocation {
     product: &'static str,
     binary: &'static str,
     cwd: PathBuf,
+    config_path: PathBuf,
     args: Vec<String>,
 }
 
@@ -1049,37 +988,67 @@ fn run_doctor_report_with_path(
     let secrets_path = project_dir.join(&project.local.secrets_env);
     let secrets = LocalEnv::load(&secrets_path)?;
     let redactor = SecretRedactor::new(&secrets);
-    let checks = product_doctor_invocations(project_dir, &project, deployment_profile)?
+    let generated_at = rfc3339_now();
+    let products = product_doctor_invocations(project_dir, &project, deployment_profile)?
         .into_iter()
-        .map(|invocation| run_product_doctor(invocation, path.map(Path::as_os_str), &redactor))
+        .map(|invocation| {
+            run_product_doctor(
+                invocation,
+                path.map(Path::as_os_str),
+                &redactor,
+                &generated_at,
+            )
+        })
         .collect::<Vec<_>>();
-    let ok = checks
-        .iter()
-        .all(|check| check.status == DoctorProductStatus::Passed);
-    Ok(DoctorReport {
-        schema_version: REGISTRYCTL_VALIDATION_REPORT_SCHEMA_VERSION_V1,
-        product: "registryctl",
-        command: "doctor",
-        ok,
-        result: if ok {
-            DoctorResult::Passed
-        } else {
-            DoctorResult::Failed
+    Ok(RegistryctlValidationReport {
+        schema_version: REGISTRYCTL_VALIDATION_REPORT_SCHEMA_VERSION_V1.to_string(),
+        project: RegistryctlProjectRef {
+            path: project_dir.display().to_string(),
+            profile: deployment_profile
+                .map_or("project", DeploymentProfile::as_str)
+                .to_string(),
         },
-        deployment_profile: deployment_profile.map(|profile| DoctorDeploymentProfileReport {
-            value: profile.as_str(),
-            source: "override",
-        }),
-        checks,
+        status: registryctl_report_status(&products),
+        products,
+        cross_product_diagnostics: Vec::new(),
+        generated_at,
     })
 }
 
+type DoctorReport = RegistryctlValidationReport;
+
 fn ensure_doctor_report_ok(report: &DoctorReport) -> Result<()> {
-    if report.ok {
+    if report
+        .products
+        .iter()
+        .all(|product| matches!(product.status, ReportStatus::Ok | ReportStatus::Warning))
+    {
         Ok(())
     } else {
         bail!("one or more product doctor checks failed")
     }
+}
+
+fn registryctl_report_status(products: &[RegistryctlProductReport]) -> ReportStatus {
+    if products
+        .iter()
+        .any(|product| matches!(product.status, ReportStatus::Error | ReportStatus::NotRun))
+    {
+        ReportStatus::Error
+    } else if products
+        .iter()
+        .any(|product| product.status == ReportStatus::Warning)
+    {
+        ReportStatus::Warning
+    } else {
+        ReportStatus::Ok
+    }
+}
+
+fn rfc3339_now() -> String {
+    OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
 }
 
 fn product_doctor_invocations(
@@ -1095,19 +1064,18 @@ fn product_doctor_invocations(
             product: "registry-relay",
             binary: "registry-relay",
             cwd: project_dir.to_path_buf(),
+            config_path: config.clone(),
             args: product_doctor_args(config, &env_file, deployment_profile),
         });
     }
     if let Some(notary) = &project.notary {
+        let config = project_dir.join(&notary.config);
         invocations.push(ProductDoctorInvocation {
             product: "registry-notary",
             binary: "registry-notary",
             cwd: project_dir.to_path_buf(),
-            args: product_doctor_args(
-                project_dir.join(&notary.config),
-                &env_file,
-                deployment_profile,
-            ),
+            config_path: config.clone(),
+            args: product_doctor_args(config, &env_file, deployment_profile),
         });
     }
     Ok(invocations)
@@ -1226,111 +1194,161 @@ fn run_product_doctor(
     invocation: ProductDoctorInvocation,
     path: Option<&OsStr>,
     redactor: &SecretRedactor,
-) -> DoctorProductReport {
+    generated_at: &str,
+) -> RegistryctlProductReport {
     let mut command = Command::new(invocation.binary);
     command.args(&invocation.args);
     command.current_dir(&invocation.cwd);
     if let Some(path) = path {
         command.env("PATH", path);
     }
-    let command_line = std::iter::once(invocation.binary.to_string())
-        .chain(invocation.args.iter().cloned())
-        .collect::<Vec<_>>();
-
     match command.output() {
-        Ok(output) => product_report_from_output(invocation.product, command_line, output, redactor),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => DoctorProductReport {
-            product: invocation.product,
-            status: DoctorProductStatus::NotRun,
-            checks: vec![DoctorCheck {
-                name: "product doctor binary is available",
-                status: DoctorCheckStatus::NotRun,
-                command: command_line,
-                exit_code: None,
-                stdout: None,
-                stderr: None,
-                message: Some(format!(
+        Ok(output) => product_report_from_output(invocation, output, redactor, generated_at),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => RegistryctlProductReport {
+            product: invocation.product.to_string(),
+            status: ReportStatus::NotRun,
+            report: fallback_product_report(
+                invocation.product,
+                &invocation.config_path,
+                ReportStatus::NotRun,
+                "registryctl.product_doctor.binary_missing",
+                DiagnosticSeverity::Error,
+                format!(
                     "Install {} and ensure it is on PATH, then rerun `registryctl doctor --format json`.",
                     invocation.binary
-                )),
-            }],
-            product_report: None,
-            findings: Vec::new(),
+                ),
+                generated_at,
+            ),
         },
-        Err(err) => DoctorProductReport {
-            product: invocation.product,
-            status: DoctorProductStatus::Failed,
-            checks: vec![DoctorCheck {
-                name: "product doctor process starts",
-                status: DoctorCheckStatus::Failed,
-                command: command_line,
-                exit_code: None,
-                stdout: None,
-                stderr: None,
-                message: Some(format!("failed to run {}: {err}", invocation.binary)),
-            }],
-            product_report: None,
-            findings: Vec::new(),
+        Err(err) => RegistryctlProductReport {
+            product: invocation.product.to_string(),
+            status: ReportStatus::Error,
+            report: fallback_product_report(
+                invocation.product,
+                &invocation.config_path,
+                ReportStatus::Error,
+                "registryctl.product_doctor.start_failed",
+                DiagnosticSeverity::Error,
+                format!("failed to run {}: {err}", invocation.binary),
+                generated_at,
+            ),
         },
     }
 }
 
 fn product_report_from_output(
-    product: &'static str,
-    command: Vec<String>,
+    invocation: ProductDoctorInvocation,
     output: Output,
     redactor: &SecretRedactor,
-) -> DoctorProductReport {
+    generated_at: &str,
+) -> RegistryctlProductReport {
     let stdout = redactor.redact_output(&output.stdout);
     let stderr = redactor.redact_output(&output.stderr);
     let passed = output.status.success();
-    let product_report = stdout.as_deref().and_then(parse_product_report);
-    let findings = product_findings(product_report.as_ref());
-    DoctorProductReport {
-        product,
-        status: if passed {
-            DoctorProductStatus::Passed
+    if let Some(report) = stdout.as_deref().and_then(parse_product_report) {
+        let status = if passed {
+            report.status
         } else {
-            DoctorProductStatus::Failed
-        },
-        checks: vec![DoctorCheck {
-            name: "product doctor completed",
-            status: if passed {
-                DoctorCheckStatus::Passed
-            } else {
-                DoctorCheckStatus::Failed
-            },
-            command,
-            exit_code: output.status.code(),
-            stdout,
-            stderr,
-            message: if passed {
-                None
-            } else {
-                Some(
-                    "product doctor exited nonzero; inspect redacted stdout and stderr".to_string(),
-                )
-            },
-        }],
-        product_report,
-        findings,
+            ReportStatus::Error
+        };
+        return RegistryctlProductReport {
+            product: invocation.product.to_string(),
+            status,
+            report,
+        };
+    }
+
+    let (code, message) = if passed {
+        (
+            "registryctl.product_doctor.report_missing",
+            "product doctor exited successfully but did not emit a JSON diagnostic report"
+                .to_string(),
+        )
+    } else {
+        (
+            "registryctl.product_doctor.report_missing_after_failure",
+            format!(
+                "product doctor exited nonzero without a JSON diagnostic report; exit_code={:?}; stdout_present={}; stderr_present={}",
+                output.status.code(),
+                stdout.is_some(),
+                stderr.is_some()
+            ),
+        )
+    };
+    RegistryctlProductReport {
+        product: invocation.product.to_string(),
+        status: ReportStatus::Error,
+        report: fallback_product_report(
+            invocation.product,
+            &invocation.config_path,
+            ReportStatus::Error,
+            code,
+            DiagnosticSeverity::Error,
+            message,
+            generated_at,
+        ),
     }
 }
 
-fn parse_product_report(stdout: &str) -> Option<Value> {
+fn parse_product_report(stdout: &str) -> Option<ConfigDiagnosticReport> {
     serde_json::from_str(stdout).ok()
 }
 
-fn product_findings(report: Option<&Value>) -> Vec<Value> {
-    let Some(report) = report else {
-        return Vec::new();
-    };
-    for key in ["findings", "diagnostics"] {
-        if let Some(items) = report.get(key).and_then(Value::as_array) {
-            return items.clone();
-        }
+fn fallback_product_report(
+    product: &str,
+    config_path: &Path,
+    status: ReportStatus,
+    code: &str,
+    severity: DiagnosticSeverity,
+    message: String,
+    generated_at: &str,
+) -> ConfigDiagnosticReport {
+    let diagnostics = vec![ConfigDiagnostic {
+        code: code.to_string(),
+        severity,
+        path: None,
+        message,
+        replacement: None,
+        documentation_key: None,
+    }];
+    ConfigDiagnosticReport {
+        schema_version: "registry.config.diagnostic_report.v1".to_string(),
+        product: product.to_string(),
+        config_schema_version: product_config_schema_version(product).to_string(),
+        source: ConfigSourceRef {
+            kind: ConfigSourceKind::GeneratedFile,
+            path: Some(config_path.display().to_string()),
+            uri: None,
+        },
+        status,
+        summary: diagnostic_summary(&diagnostics),
+        diagnostics,
+        required_env: Vec::new(),
+        context_constraints: Vec::new(),
+        hashes: None,
+        generated_at: generated_at.to_string(),
     }
-    Vec::new()
+}
+
+fn product_config_schema_version(product: &str) -> &'static str {
+    match product {
+        "registry-relay" => "registry.relay.config.v1",
+        "registry-notary" => "registry.notary.config.v1",
+        _ => "registry.config.unknown.v1",
+    }
+}
+
+fn diagnostic_summary(diagnostics: &[ConfigDiagnostic]) -> DiagnosticSummary {
+    DiagnosticSummary {
+        error_count: diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
+            .count() as u64,
+        warning_count: diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == DiagnosticSeverity::Warning)
+            .count() as u64,
+    }
 }
 
 struct SecretRedactor {
@@ -4303,6 +4321,8 @@ impl ParsedHttpUrl {
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
+    use registry_config_report::REGISTRYCTL_VALIDATION_REPORT_SCHEMA_V1;
+    use serde_json::Value as JsonValue;
     use serde_yaml::Value;
     use tempfile::TempDir;
 
@@ -6106,8 +6126,9 @@ workflows:
         write_fake_product(
             &fake_bin.join("registry-relay"),
             &format!(
-                "printf '%s\\n' \"$@\" > {}\nprintf '{{\"ok\":true}}\\n'\nexit 0\n",
-                shell_single_quoted(&temp.path().join("relay.args").display().to_string())
+                "printf '%s\\n' \"$@\" > {}\nprintf '%s\\n' {}\nexit 0\n",
+                shell_single_quoted(&temp.path().join("relay.args").display().to_string()),
+                shell_single_quoted(&fake_product_report("registry-relay", "ok", vec![]))
             ),
         );
 
@@ -6115,12 +6136,12 @@ workflows:
             run_doctor_report_with_path(&project_dir, DoctorFormat::Json, None, Some(&fake_bin))
                 .unwrap();
 
-        assert!(report.ok);
-        assert_eq!(report.checks.len(), 1);
-        assert_eq!(report.checks[0].product, "registry-relay");
-        assert_eq!(report.checks[0].status, DoctorProductStatus::Passed);
+        assert_eq!(report.status, ReportStatus::Ok);
+        assert_eq!(report.products.len(), 1);
+        assert_eq!(report.products[0].product, "registry-relay");
+        assert_eq!(report.products[0].status, ReportStatus::Ok);
         let json = serde_json::to_value(&report).unwrap();
-        assert!(json.get("deployment_profile").is_none());
+        assert_eq!(json["project"]["profile"], "project");
         let args = fs::read_to_string(temp.path().join("relay.args")).unwrap();
         let doctor_config = project_dir.join("output/doctor/relay.config.yaml");
         assert_eq!(
@@ -6151,8 +6172,9 @@ workflows:
         write_fake_product(
             &fake_bin.join("registry-relay"),
             &format!(
-                "printf '%s\\n' \"$@\" > {}\nexit 0\n",
-                shell_single_quoted(&temp.path().join("relay.args").display().to_string())
+                "printf '%s\\n' \"$@\" > {}\nprintf '%s\\n' {}\nexit 0\n",
+                shell_single_quoted(&temp.path().join("relay.args").display().to_string()),
+                shell_single_quoted(&fake_product_report("registry-relay", "ok", vec![]))
             ),
         );
 
@@ -6164,10 +6186,9 @@ workflows:
         )
         .unwrap();
 
-        assert!(report.ok);
+        assert_eq!(report.status, ReportStatus::Ok);
         let json = serde_json::to_value(&report).unwrap();
-        assert_eq!(json["deployment_profile"]["value"], "local");
-        assert_eq!(json["deployment_profile"]["source"], "override");
+        assert_eq!(json["project"]["profile"], "local");
         let args = fs::read_to_string(temp.path().join("relay.args")).unwrap();
         assert_eq!(
             args,
@@ -6192,15 +6213,17 @@ workflows:
         write_fake_product(
             &fake_bin.join("registry-relay"),
             &format!(
-                "printf '%s\\n' \"$@\" > {}\nexit 0\n",
-                shell_single_quoted(&temp.path().join("relay.args").display().to_string())
+                "printf '%s\\n' \"$@\" > {}\nprintf '%s\\n' {}\nexit 0\n",
+                shell_single_quoted(&temp.path().join("relay.args").display().to_string()),
+                shell_single_quoted(&fake_product_report("registry-relay", "ok", vec![]))
             ),
         );
         write_fake_product(
             &fake_bin.join("registry-notary"),
             &format!(
-                "printf '%s\\n' \"$@\" > {}\nexit 0\n",
-                shell_single_quoted(&temp.path().join("notary.args").display().to_string())
+                "printf '%s\\n' \"$@\" > {}\nprintf '%s\\n' {}\nexit 0\n",
+                shell_single_quoted(&temp.path().join("notary.args").display().to_string()),
+                shell_single_quoted(&fake_product_report("registry-notary", "ok", vec![]))
             ),
         );
 
@@ -6212,18 +6235,17 @@ workflows:
         )
         .unwrap();
 
-        assert!(report.ok);
+        assert_eq!(report.status, ReportStatus::Ok);
         assert_eq!(
             report
-                .checks
+                .products
                 .iter()
-                .map(|check| check.product)
+                .map(|check| check.product.as_str())
                 .collect::<Vec<_>>(),
             ["registry-relay", "registry-notary"]
         );
         let json = serde_json::to_value(&report).unwrap();
-        assert_eq!(json["deployment_profile"]["value"], "local");
-        assert_eq!(json["deployment_profile"]["source"], "override");
+        assert_eq!(json["project"]["profile"], "local");
         let relay_args = fs::read_to_string(temp.path().join("relay.args")).unwrap();
         let notary_args = fs::read_to_string(temp.path().join("notary.args")).unwrap();
         assert!(relay_args.contains("output/doctor/relay.config.yaml"));
@@ -6242,8 +6264,9 @@ workflows:
         write_fake_product(
             &fake_bin.join("registry-notary"),
             &format!(
-                "printf '%s\\n' \"$@\" > {}\nexit 0\n",
-                shell_single_quoted(&temp.path().join("notary.args").display().to_string())
+                "printf '%s\\n' \"$@\" > {}\nprintf '%s\\n' {}\nexit 0\n",
+                shell_single_quoted(&temp.path().join("notary.args").display().to_string()),
+                shell_single_quoted(&fake_product_report("registry-notary", "ok", vec![]))
             ),
         );
 
@@ -6251,10 +6274,10 @@ workflows:
             run_doctor_report_with_path(&project_dir, DoctorFormat::Json, None, Some(&fake_bin))
                 .unwrap();
 
-        assert!(report.ok);
-        assert_eq!(report.checks.len(), 1);
-        assert_eq!(report.checks[0].product, "registry-notary");
-        assert_eq!(report.checks[0].status, DoctorProductStatus::Passed);
+        assert_eq!(report.status, ReportStatus::Ok);
+        assert_eq!(report.products.len(), 1);
+        assert_eq!(report.products[0].product, "registry-notary");
+        assert_eq!(report.products[0].status, ReportStatus::Ok);
         assert!(!temp.path().join("relay.args").exists());
     }
 
@@ -6270,14 +6293,10 @@ workflows:
             run_doctor_report_with_path(&project_dir, DoctorFormat::Json, None, Some(&empty_path))
                 .unwrap();
 
-        assert!(!report.ok);
-        assert_eq!(report.result, DoctorResult::Failed);
-        assert_eq!(report.checks[0].status, DoctorProductStatus::NotRun);
-        assert_eq!(report.checks[0].checks[0].status, DoctorCheckStatus::NotRun);
-        assert!(report.checks[0].checks[0]
+        assert_eq!(report.status, ReportStatus::Error);
+        assert_eq!(report.products[0].status, ReportStatus::NotRun);
+        assert!(report.products[0].report.diagnostics[0]
             .message
-            .as_deref()
-            .unwrap()
             .contains("Install registry-relay"));
     }
 
@@ -6315,9 +6334,12 @@ workflows:
                 .unwrap();
         let json = serde_json::to_string(&report).unwrap();
 
-        assert!(!report.ok);
-        assert_eq!(report.checks[0].status, DoctorProductStatus::Failed);
-        assert_eq!(report.checks[0].checks[0].exit_code, Some(17));
+        assert_eq!(report.status, ReportStatus::Error);
+        assert_eq!(report.products[0].status, ReportStatus::Error);
+        assert_eq!(
+            report.products[0].report.diagnostics[0].code,
+            "registryctl.product_doctor.report_missing_after_failure"
+        );
         let error = ensure_doctor_report_ok(&report).unwrap_err();
         assert!(error
             .to_string()
@@ -6325,7 +6347,6 @@ workflows:
         for secret in &secrets {
             assert!(!json.contains(secret));
         }
-        assert!(json.contains("[REDACTED]"));
     }
 
     #[test]
@@ -6366,14 +6387,19 @@ workflows:
         let product_json = serde_json::json!({
             "schema_version": "registry.config.diagnostic_report.v1",
             "product": "registry-relay",
-            "ok": false,
-            "findings": [
+            "config_schema_version": "registry.relay.config.v1",
+            "source": {"kind": "generated_file", "path": "relay/config.yaml"},
+            "status": "error",
+            "summary": {"error_count": 1, "warning_count": 0},
+            "diagnostics": [
                 {
-                    "id": "relay.config.unsigned",
-                    "severity": "startup_fail",
+                    "code": "relay.config.unsigned",
+                    "severity": "error",
                     "message": format!("do not leak {secret}")
                 }
-            ]
+            ],
+            "context_constraints": [],
+            "generated_at": "2026-06-20T00:00:00Z"
         })
         .to_string();
         let fake_bin = temp.path().join("bin");
@@ -6391,14 +6417,10 @@ workflows:
                 .unwrap();
         let json = serde_json::to_value(&report).unwrap();
 
-        assert!(!report.ok);
-        assert_eq!(json["checks"][0]["product"], "registry-relay");
+        assert_eq!(report.status, ReportStatus::Error);
+        assert_eq!(json["products"][0]["product"], "registry-relay");
         assert_eq!(
-            json["checks"][0]["product_report"]["findings"][0]["id"],
-            "relay.config.unsigned"
-        );
-        assert_eq!(
-            json["checks"][0]["findings"][0]["id"],
+            json["products"][0]["report"]["diagnostics"][0]["code"],
             "relay.config.unsigned"
         );
         let rendered = serde_json::to_string(&json).unwrap();
@@ -6414,14 +6436,19 @@ workflows:
         let product_json = serde_json::json!({
             "schema_version": "registry.config.diagnostic_report.v1",
             "product": "registry-notary",
-            "ok": true,
+            "config_schema_version": "registry.notary.config.v1",
+            "source": {"kind": "generated_file", "path": "notary/config.yaml"},
+            "status": "warning",
+            "summary": {"error_count": 0, "warning_count": 1},
             "diagnostics": [
                 {
                     "code": "deployment.profile_undeclared",
-                    "level": "warning",
+                    "severity": "warning",
                     "message": "deployment profile is not declared"
                 }
-            ]
+            ],
+            "context_constraints": [],
+            "generated_at": "2026-06-20T00:00:00Z"
         })
         .to_string();
         let fake_bin = temp.path().join("bin");
@@ -6439,10 +6466,11 @@ workflows:
                 .unwrap();
         let json = serde_json::to_value(&report).unwrap();
 
-        assert!(report.ok);
-        assert_eq!(json["checks"][0]["product"], "registry-notary");
+        assert_eq!(report.status, ReportStatus::Warning);
+        ensure_doctor_report_ok(&report).unwrap();
+        assert_eq!(json["products"][0]["product"], "registry-notary");
         assert_eq!(
-            json["checks"][0]["findings"][0]["code"],
+            json["products"][0]["report"]["diagnostics"][0]["code"],
             "deployment.profile_undeclared"
         );
     }
@@ -6454,7 +6482,13 @@ workflows:
         init_spreadsheet_api(&project_dir, Sample::Benefits).unwrap();
         let fake_bin = temp.path().join("bin");
         fs::create_dir_all(&fake_bin).unwrap();
-        write_fake_product(&fake_bin.join("registry-relay"), "exit 0\n");
+        write_fake_product(
+            &fake_bin.join("registry-relay"),
+            &format!(
+                "printf '%s\\n' {}\nexit 0\n",
+                shell_single_quoted(&fake_product_report("registry-relay", "ok", vec![]))
+            ),
+        );
 
         let report =
             run_doctor_report_with_path(&project_dir, DoctorFormat::Json, None, Some(&fake_bin))
@@ -6465,11 +6499,20 @@ workflows:
             json["schema_version"],
             REGISTRYCTL_VALIDATION_REPORT_SCHEMA_VERSION_V1
         );
-        assert_eq!(json["product"], "registryctl");
-        assert_eq!(json["command"], "doctor");
-        assert_eq!(json["result"], "passed");
-        assert!(json.get("deployment_profile").is_none());
-        assert_eq!(json["checks"][0]["status"], "passed");
+        assert_eq!(json["status"], "ok");
+        assert_eq!(json["project"]["profile"], "project");
+        assert_eq!(json["products"][0]["status"], "ok");
+        let schema: JsonValue =
+            serde_json::from_str(REGISTRYCTL_VALIDATION_REPORT_SCHEMA_V1).unwrap();
+        let compiled = jsonschema::JSONSchema::compile(&schema).expect("schema compiles");
+        let validation_errors = match compiled.validate(&json) {
+            Ok(()) => Vec::new(),
+            Err(errors) => errors.map(|error| error.to_string()).collect::<Vec<_>>(),
+        };
+        assert!(
+            validation_errors.is_empty(),
+            "registryctl doctor report must satisfy its schema: {validation_errors:?}"
+        );
     }
 
     fn write_fake_product(path: &Path, body: &str) {
@@ -6481,6 +6524,29 @@ workflows:
             permissions.set_mode(0o755);
         }
         fs::set_permissions(path, permissions).unwrap();
+    }
+
+    fn fake_product_report(product: &str, status: &str, diagnostics: Vec<JsonValue>) -> String {
+        let error_count = diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic["severity"] == "error")
+            .count();
+        let warning_count = diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic["severity"] == "warning")
+            .count();
+        serde_json::json!({
+            "schema_version": "registry.config.diagnostic_report.v1",
+            "product": product,
+            "config_schema_version": product_config_schema_version(product),
+            "source": {"kind": "generated_file", "path": format!("{product}.yaml")},
+            "status": status,
+            "summary": {"error_count": error_count, "warning_count": warning_count},
+            "diagnostics": diagnostics,
+            "context_constraints": [],
+            "generated_at": "2026-06-20T00:00:00Z"
+        })
+        .to_string()
     }
 
     fn shell_single_quoted(value: &str) -> String {
