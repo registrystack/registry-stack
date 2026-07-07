@@ -84,6 +84,34 @@ codelists: []
     .expect("minimal manifest parses")
 }
 
+#[test]
+fn validate_manifest_rejects_unsupported_core_schema_version() {
+    let raw = r#"
+schema_version: registry-manifest/v0
+catalog:
+  id: validation-regression
+  base_url: https://registry.example.test
+  title: Validation Regression
+  publisher:
+    name: Publisher
+datasets: []
+codelists: []
+"#;
+    let manifest: MetadataManifest = serde_yaml_ng::from_str(raw).expect("manifest parses");
+
+    let error = validate_manifest(&manifest).expect_err("unsupported core schema_version rejected");
+
+    assert!(
+        matches!(error, MetadataError::VersionUnsupported),
+        "expected VersionUnsupported, got {error:?}"
+    );
+    assert_eq!(
+        error.to_string(),
+        "metadata.manifest.version_unsupported",
+        "unexpected rejection message: {error}"
+    );
+}
+
 /// Unrecognized keys are rejected everywhere in a metadata manifest, not
 /// silently ignored: see ticket #249. Each case below carries exactly one
 /// unknown `x_post_beta_*` key at a different nesting depth, and each must
