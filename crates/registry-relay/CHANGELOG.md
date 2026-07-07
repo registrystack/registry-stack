@@ -20,6 +20,26 @@
   posture finding (warn under `production`, error under `evidence_grade`) so
   an attacker with host access cannot silently destroy audit evidence.
   `stdout` and `syslog` sinks are exempt. The gate is waivable.
+- `registry-relay audit quarantine --config <path> --reason <text>
+  --operator <id>`: offline recovery for a corrupt or forked audit chain
+  (#196). The corrupt file set is archived to `<name>.corrupt-<ts>` (never
+  deleted), a fresh chain starts whose first record is a hash-linked
+  `audit.chain.break` event chained onto the last verifiable tail, and a
+  local `<path>.anchor.json` records the trusted start hash as operator
+  evidence. Recovery refuses to run while a live server holds the audit
+  writer lock.
+- Startup now eagerly verifies the retained audit chain when the `file` sink
+  is configured. On an inconsistent chain the process stays up but `/ready`
+  returns `503` with the stable code `audit.chain.inconsistent` until an
+  operator runs `registry-relay audit quarantine`.
+
+### Changed
+
+- The rotating `file` audit sink now takes a process-lifetime advisory
+  single-writer lock on `<path>.lock`, and each append verifies the on-disk
+  tail before writing. A second Relay process pointed at the same audit file
+  fails at startup instead of silently interleaving writes and forking the
+  hash chain, and a write that would extend a diverged chain fails closed.
 
 ## 0.8.4 - 2026-07-04
 
