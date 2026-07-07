@@ -56,7 +56,7 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::extract::MatchedPath;
-use axum::http::{header, HeaderName, Method, Request, StatusCode};
+use axum::http::{header, HeaderName, HeaderValue, Method, Request, StatusCode};
 use axum::middleware::{from_fn, Next};
 use axum::response::{IntoResponse, Response};
 use axum::Extension;
@@ -69,6 +69,7 @@ use tower_http::cors::CorsLayer;
 use tower_http::request_id::{
     MakeRequestId, PropagateRequestIdLayer, RequestId, SetRequestIdLayer,
 };
+use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::timeout::{RequestBodyTimeoutLayer, TimeoutLayer};
 use tower_http::trace::{DefaultOnResponse, TraceLayer};
 use tracing::Level;
@@ -249,6 +250,18 @@ fn build_app_with_provenance_metadata_and_metrics(
         config.server.trust_proxy.enabled,
         config.server.trust_proxy.trusted_proxies.clone(),
     );
+
+    // Invariant: every response leaving the protected surface (a route
+    // handler's or the auth layer's own denial) carries
+    // `Cache-Control: private, no-store`, so this covers every current and
+    // future authenticated route without each handler having to opt in.
+    // `if_not_present` means a handler that already sets its own
+    // Cache-Control (attribute_release, metadata) wins and does not get a
+    // duplicate header.
+    let protected = protected.layer(SetResponseHeaderLayer::if_not_present(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-store"),
+    ));
 
     // Merge public + protected; everything above this point is inside
     // the audit, tracing, request-id, CORS, body-limit, and timeout
