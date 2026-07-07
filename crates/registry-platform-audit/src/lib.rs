@@ -25,7 +25,7 @@ use ulid::Ulid;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 const DEFAULT_MAX_SIZE_BYTES: u64 = 10 * 1024 * 1024;
-const DEFAULT_MAX_FILES: u32 = 5;
+const DEFAULT_MAX_FILES: u32 = 50;
 const MIN_AUDIT_SECRET_BYTES: usize = 32;
 const KEYED_HASH_PREFIX: &str = "hmac-sha256:";
 const UNKEYED_HASH_PREFIX: &str = "sha256:";
@@ -391,7 +391,7 @@ struct JsonlFileSinkInner {
 }
 
 impl JsonlFileSink {
-    /// Construct a file sink with a 10 MiB active file and 5 retained files.
+    /// Construct a file sink with a 10 MiB active file and 50 retained files.
     #[must_use]
     pub fn new(path: impl Into<PathBuf>) -> Self {
         Self::with_rotation(path, DEFAULT_MAX_SIZE_BYTES, DEFAULT_MAX_FILES)
@@ -1202,8 +1202,12 @@ fn tail_hash_from_files(
     }
 
     let mut contents = String::new();
-    for path in &paths {
-        let file_contents = read_audit_file(path)?;
+    let mut oldest_file_has_records = false;
+    for (index, source) in paths.iter().enumerate() {
+        let file_contents = read_audit_file(source)?;
+        if index == 0 {
+            oldest_file_has_records = file_contents.lines().any(|line| !line.trim().is_empty());
+        }
         contents.push_str(&file_contents);
         if !contents.ends_with('\n') {
             contents.push('\n');
@@ -1214,10 +1218,34 @@ fn tail_hash_from_files(
     if envelopes.is_empty() {
         return Ok(None);
     }
+    // The retained-suffix compatibility path trusts the first envelope's
+    // prev_hash as the anchor, so it is only sound when that envelope is the
+    // start of the oldest retained file. If the oldest rotated file is empty
+    // (truncated), the first parsed envelope comes from a newer file and would
+    // silently hide missing leading records, so require the oldest rotated file
+    // to actually supply the anchor record.
+    let starts_with_rotated_file = paths.first().is_some_and(|candidate| candidate != path);
+    let oldest_rotated_anchor = starts_with_rotated_file && oldest_file_has_records;
     let retained_suffix = max_size_bytes != 0
-        && paths.len() == max_files as usize
+        && (oldest_rotated_anchor || max_files == 1)
         && envelopes[0].prev_hash.is_some();
     let verification = if retained_suffix {
+        // The oldest retained record has a non-None prev_hash, so the chain is
+        // anchored on a predecessor that has already aged out of the retained
+        // set. A middle-of-set gap would surface as a boundary PrevHashMismatch
+        // during concatenated verification, but deleting the true oldest
+        // on-disk file leaves a state byte-identical to a legitimate aged-out
+        // rotation, so it cannot be distinguished from local disk alone.
+        // Off-host audit shipping / external anchoring is the structural
+        // mitigation; surface the residual so operators can correlate.
+        tracing::warn!(
+            code = "audit.chain.aged_out_anchor",
+            "audit chain verification is anchored on an aged-out predecessor (oldest retained \
+             record has a non-None prev_hash): a middle-of-set gap would be caught as a boundary \
+             mismatch, but deletion of the oldest rotated file cannot be ruled out from local disk \
+             alone; rely on off-host audit shipping / external anchoring to detect loss of the \
+             leading records"
+        );
         verify_chain_expected_prev_hash(&envelopes, envelopes[0].prev_hash, hasher)
     } else {
         verify_chain(&envelopes, hasher)
@@ -1610,6 +1638,64 @@ mod option_hash_hex {
 mod tests {
     use super::{redact::QueryRedactor, *};
 
+    #[derive(Clone, Default)]
+    struct SharedLog(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    struct SharedLogWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SharedLog {
+        type Writer = SharedLogWriter;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            SharedLogWriter(std::sync::Arc::clone(&self.0))
+        }
+    }
+
+    impl std::io::Write for SharedLogWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .expect("log buffer lock")
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Runs `body` under a thread-local capturing subscriber and returns the
+    /// rendered log output. Callers must invoke the code under test on the same
+    /// thread (e.g. `tail_hash_from_files` directly, not via `spawn_blocking`).
+    fn capture_logs<T>(body: impl FnOnce() -> T) -> (T, String) {
+        let logs = SharedLog::default();
+        let subscriber = tracing_subscriber::fmt()
+            .compact()
+            .with_ansi(false)
+            .with_target(false)
+            .with_max_level(tracing::Level::WARN)
+            .with_writer(logs.clone())
+            .finish();
+        let guard = tracing::subscriber::set_default(subscriber);
+        let out = body();
+        drop(guard);
+        let rendered = logs.0.lock().expect("log buffer lock").clone();
+        (out, String::from_utf8(rendered).expect("logs are utf-8"))
+    }
+
+    #[test]
+    fn default_rotation_retains_fifty_files() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        let sink = JsonlFileSink::new(&path);
+
+        // The default retention cap is ~500 MiB (50 files x 10 MiB) so audit
+        // history is not silently discarded after ~50 MiB.
+        assert_eq!(sink.inner.max_size_bytes, 10 * 1024 * 1024);
+        assert_eq!(sink.inner.max_files, 50);
+    }
+
     #[tokio::test]
     async fn audit_chain_bootstraps_from_sink_tail() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1919,6 +2005,74 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn file_sink_retained_suffix_compat_path_warns_and_bootstraps() {
+        // max_size 1 rotates every append and max_files 2 retains only the
+        // active file plus one rotated file. After three appends the genesis
+        // record has aged out, so the oldest retained record carries a non-None
+        // prev_hash: the retained-suffix compatibility path. On disk this is
+        // byte-identical to a set whose true oldest rotated file was deleted, so
+        // verification anchors on the aged-out predecessor and must emit an
+        // operator-visible warning while still bootstrapping cleanly.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        let sink = JsonlFileSink::with_rotation(&path, 1, 2);
+        let chain = ChainState::unkeyed_dev_only();
+        let mut third_hash = None;
+        for event in ["first", "second", "third"] {
+            let envelope = chain
+                .append(&sink, json!({ "event": event }))
+                .await
+                .expect("append");
+            third_hash = Some(envelope.record_hash);
+        }
+
+        // Call `tail_hash_from_files` directly on this thread: the sink runs it
+        // inside `spawn_blocking`, where a thread-local subscriber would not see
+        // the warning. The arguments mirror the sink's own rotation settings.
+        let (result, rendered) = capture_logs(|| {
+            tail_hash_from_files(&path, 1, 2, &AuditChainHasher::unkeyed_dev_only())
+        });
+        assert_eq!(result.expect("compat path bootstraps"), third_hash);
+        assert!(
+            rendered.contains("audit.chain.aged_out_anchor"),
+            "expected the aged-out-anchor warning: {rendered}"
+        );
+    }
+
+    #[tokio::test]
+    async fn file_sink_bootstrap_accepts_legacy_smaller_retained_suffix() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        let legacy_sink = JsonlFileSink::with_rotation(&path, 1, 5);
+        let chain = ChainState::unkeyed_dev_only();
+        let mut last_hash = None;
+        for index in 0..8 {
+            let envelope = chain
+                .append(&legacy_sink, json!({ "event": index }))
+                .await
+                .expect("append");
+            last_hash = Some(envelope.record_hash);
+        }
+
+        let upgraded_sink = JsonlFileSink::with_rotation(&path, 1, 50);
+        assert_eq!(
+            upgraded_sink
+                .tail_hash_with_hasher(&AuditChainHasher::unkeyed_dev_only())
+                .await
+                .expect("tail"),
+            last_hash
+        );
+        let bootstrapped = ChainState::bootstrap_unkeyed_dev_only(&upgraded_sink)
+            .await
+            .expect("bootstrap");
+        let next = bootstrapped
+            .append(&upgraded_sink, json!({ "event": "after-upgrade" }))
+            .await
+            .expect("append after upgrade");
+        assert_eq!(next.prev_hash, last_hash);
+    }
+
+    #[tokio::test]
     async fn file_sink_retained_suffix_detects_tampered_record() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("audit.jsonl");
@@ -1940,6 +2094,48 @@ mod tests {
                 .await,
             Err(AuditError::ChainVerification(
                 ChainVerificationError::RecordHashMismatch { line: 2 }
+            ))
+        ));
+    }
+
+    #[tokio::test]
+    async fn file_sink_bootstrap_rejects_truncated_oldest_rotated_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        // max_size 1 rotates on every append and max_files 50 retains
+        // everything, so two appends leave the genesis record in
+        // `audit.jsonl.1` and the second record live: a set complete from
+        // genesis.
+        let sink = JsonlFileSink::with_rotation(&path, 1, 50);
+        let chain = ChainState::unkeyed_dev_only();
+        for event in ["genesis", "second"] {
+            chain
+                .append(&sink, json!({ "event": event }))
+                .await
+                .expect("append");
+        }
+
+        // Healthy set bootstraps cleanly: the oldest rotated file carries the
+        // genesis record, so verification starts from prev_hash = None.
+        sink.tail_hash_with_hasher(&AuditChainHasher::unkeyed_dev_only())
+            .await
+            .expect("healthy tail");
+
+        // Truncate the oldest rotated file, dropping the genesis record. The
+        // first retained record now has a non-None prev_hash pointing at the
+        // lost record; bootstrapping must detect the gap, not anchor on it.
+        let rotated = rotated_path(&path, 1);
+        fs::write(&rotated, "").expect("truncate rotated file");
+
+        assert!(matches!(
+            sink.tail_hash_with_hasher(&AuditChainHasher::unkeyed_dev_only())
+                .await,
+            Err(AuditError::ChainVerification(
+                ChainVerificationError::PrevHashMismatch {
+                    line: 1,
+                    expected: None,
+                    actual: Some(_),
+                }
             ))
         ));
     }

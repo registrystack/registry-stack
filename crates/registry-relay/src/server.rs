@@ -77,7 +77,7 @@ use ulid::Ulid;
 use crate::api;
 use crate::attribute_release::AttributeReleaseEvaluator;
 use crate::audit::{self, AuditPipeline, AuditSettings, OperationalAuditEvent};
-use crate::auth::middleware::{auth_layer, AuthProviderRef};
+use crate::auth::middleware::{auth_layer_with_failure_throttle, AuthProviderRef};
 use crate::config::{Config, CorsConfig};
 use crate::entity::EntityRegistry;
 use crate::error::{ConfigError, Error, InternalError};
@@ -239,7 +239,16 @@ fn build_app_with_provenance_metadata_and_metrics(
     let protected = protected.merge(api::records_router());
     let protected = merge_spdci_routes(protected);
     let protected = merge_attribute_release_routes(protected);
-    let protected = auth_layer(protected, auth);
+    let failure_throttle =
+        crate::auth::failure_throttle::AuthFailureThrottle::new(&config.auth.failure_throttle)
+            .map(Arc::new);
+    let protected = auth_layer_with_failure_throttle(
+        protected,
+        auth,
+        failure_throttle,
+        config.server.trust_proxy.enabled,
+        config.server.trust_proxy.trusted_proxies.clone(),
+    );
 
     // Merge public + protected; everything above this point is inside
     // the audit, tracing, request-id, CORS, body-limit, and timeout
@@ -456,12 +465,24 @@ pub fn build_admin_app_with_metadata_and_metrics(
     metrics: Arc<RequestMetrics>,
 ) -> Result<Router, ConfigError> {
     let public = api::health_router().layer(Extension(metrics.clone()));
-    let metrics_router = auth_layer(
+    let failure_throttle =
+        crate::auth::failure_throttle::AuthFailureThrottle::new(&config.auth.failure_throttle)
+            .map(Arc::new);
+    let metrics_router = auth_layer_with_failure_throttle(
         crate::observability::router().layer(Extension(metrics.clone())),
         Arc::clone(&auth),
+        failure_throttle.clone(),
+        config.server.trust_proxy.enabled,
+        config.server.trust_proxy.trusted_proxies.clone(),
     );
     let protected = api::admin_router().layer(Extension(ingest));
-    let protected = auth_layer(protected, auth);
+    let protected = auth_layer_with_failure_throttle(
+        protected,
+        auth,
+        failure_throttle,
+        config.server.trust_proxy.enabled,
+        config.server.trust_proxy.trusted_proxies.clone(),
+    );
     let merged: Router<()> = Router::new()
         .merge(public)
         .merge(metrics_router)
@@ -723,6 +744,56 @@ fn build_cors_layer_with_status(cors: &CorsConfig) -> (CorsLayer, bool) {
             (CorsLayer::new(), true)
         }
     }
+}
+
+/// Writes one operational audit record per deployment gate finding that an
+/// active waiver suppresses, so the audit stream carries durable evidence of
+/// every startup attempt that evaluated waived posture.
+///
+/// The serve path calls this once per boot, right after the audit pipeline is
+/// built: config loading itself cannot write these records because the sink
+/// is constructed from the already-validated config. `source` must be the
+/// same provenance the boot-time validation used (the local-file startup path
+/// passes [`registry_platform_ops::ConfigSource::LocalFile`]).
+pub async fn audit_waived_deployment_gates(
+    config: &Config,
+    audit_sink: &AuditPipeline,
+    source: registry_platform_ops::ConfigSource,
+) -> Result<(), registry_platform_audit::AuditError> {
+    let facts = crate::deployment::facts_from_config(config, source);
+    let waivers = crate::deployment::waivers_from_config(config);
+    let evaluation = crate::deployment::evaluate(
+        config.deployment.profile,
+        &facts,
+        &waivers,
+        &crate::deployment::today_utc(),
+    );
+    for finding in evaluation.findings {
+        if finding.status != registry_platform_ops::DeploymentFindingStatus::Waived {
+            continue;
+        }
+        // Waived findings always name catalog gates; framework findings are
+        // never waivable. The lookup recovers the catalog's `&'static str` id
+        // that the operational audit record shape requires.
+        let Some(gate_id) = crate::deployment::catalog_gate_id(&finding.id) else {
+            continue;
+        };
+        let event = OperationalAuditEvent {
+            event: "deployment.gate_waived",
+            error_code: Some(gate_id),
+            status_code: 200,
+            dataset_id: None,
+            table_id_hash: None,
+            config: None,
+        };
+        if let Err(err) = audit_sink.write_operational_event(event).await {
+            tracing::error!(error = %err, "audit.operational_event_write_failed");
+            if config.audit.write_policy == registry_platform_ops::AuditWritePolicy::FailClosed {
+                return Err(err);
+            }
+        }
+    }
+    Ok(())
 }
 
 fn spawn_operational_audit_event(audit_sink: Arc<AuditPipeline>, event: OperationalAuditEvent) {

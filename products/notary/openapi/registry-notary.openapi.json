@@ -3964,7 +3964,7 @@
                 }
               }
             },
-            "description": "Self-attestation request is rate limited"
+            "description": "Self-attestation request is rate limited, or the machine evaluation quota was exceeded"
           },
           "503": {
             "content": {
@@ -4686,7 +4686,7 @@
                 }
               }
             },
-            "description": "Self-attestation request is rate limited"
+            "description": "Self-attestation request is rate limited, or the machine evaluation quota was exceeded"
           },
           "503": {
             "content": {

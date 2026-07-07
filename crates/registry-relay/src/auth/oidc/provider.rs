@@ -398,6 +398,7 @@ fn auth_error_code(err: &AuthError) -> &'static str {
         AuthError::AlgorithmNotAllowed => "auth.algorithm_not_allowed",
         AuthError::ClientNotAllowed => "auth.client_not_allowed",
         AuthError::JwksUnavailable => "auth.jwks_unavailable",
+        AuthError::RateLimited { .. } => "auth.rate_limited",
     }
 }
 

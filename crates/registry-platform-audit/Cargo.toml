@@ -20,8 +20,10 @@ subtle.workspace = true
 thiserror.workspace = true
 time.workspace = true
 tokio.workspace = true
+tracing.workspace = true
 ulid.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
 tempfile = { version = "3" }
+tracing-subscriber.workspace = true

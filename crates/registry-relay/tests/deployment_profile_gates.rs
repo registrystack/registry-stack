@@ -224,6 +224,262 @@ fn governed_candidate_apply_accepts_evidence_grade_with_signed_provenance() {
     );
 }
 
+// --- boot audit records for waived gates ------------------------------------
+
+#[tokio::test]
+async fn boot_audit_records_waived_gate() {
+    let yaml = format!(
+        "{}\ndeployment:\n  profile: hosted_lab\n  waivers:\n    - finding: relay.config.unsigned\n      reason: \"synthetic-waiver-not-a-secret\"\n      expires: \"2999-01-01\"\n",
+        minimal_config_yaml()
+    );
+    let config = parse_config(&yaml).expect("config parses");
+    let sink = InMemorySink::new();
+    let pipeline = AuditPipeline::from_sink(sink.clone());
+
+    registry_relay::server::audit_waived_deployment_gates(
+        &config,
+        &pipeline,
+        registry_platform_ops::ConfigSource::LocalFile,
+    )
+    .await
+    .expect("waived gate audit writes");
+
+    let lines = sink.snapshot();
+    assert_eq!(
+        lines.len(),
+        1,
+        "expected exactly one operational audit record: {lines:?}"
+    );
+    assert!(
+        lines[0].contains("/__events/deployment.gate_waived"),
+        "expected the waived-gate audit path: {}",
+        lines[0]
+    );
+    assert!(
+        lines[0].contains("relay.config.unsigned"),
+        "expected the waived gate id in the audit record: {}",
+        lines[0]
+    );
+}
+
+#[tokio::test]
+async fn boot_audit_writes_nothing_without_waivers() {
+    let yaml = format!("{}\ndeployment:\n  profile: local\n", minimal_config_yaml());
+    let config = parse_config(&yaml).expect("config parses");
+    let sink = InMemorySink::new();
+    let pipeline = AuditPipeline::from_sink(sink.clone());
+
+    registry_relay::server::audit_waived_deployment_gates(
+        &config,
+        &pipeline,
+        registry_platform_ops::ConfigSource::LocalFile,
+    )
+    .await
+    .expect("no waived gates means no audit write failure");
+
+    assert!(
+        sink.snapshot().is_empty(),
+        "expected no audit records without waived gates"
+    );
+}
+
+#[tokio::test]
+async fn boot_audit_failure_fails_closed_for_waived_gate() {
+    let yaml = format!(
+        "{}\ndeployment:\n  profile: hosted_lab\n  waivers:\n    - finding: relay.config.unsigned\n      reason: \"synthetic-waiver-not-a-secret\"\n      expires: \"2999-01-01\"\n",
+        minimal_config_yaml()
+    );
+    let config = parse_config(&yaml).expect("config parses");
+    assert_eq!(config.audit.write_policy, AuditWritePolicy::FailClosed);
+    let pipeline = AuditPipeline::from_sink(AlwaysFailWriteSink);
+
+    let err = registry_relay::server::audit_waived_deployment_gates(
+        &config,
+        &pipeline,
+        registry_platform_ops::ConfigSource::LocalFile,
+    )
+    .await
+    .expect_err("fail_closed must surface waived-gate audit write failure");
+
+    assert!(
+        matches!(err, AuditError::Io(_)),
+        "expected injected audit write failure, got {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn boot_audit_failure_is_best_effort_when_availability_first() {
+    let yaml = format!(
+        "{}\ndeployment:\n  profile: hosted_lab\n  waivers:\n    - finding: relay.config.unsigned\n      reason: \"synthetic-waiver-not-a-secret\"\n      expires: \"2999-01-01\"\n",
+        minimal_config_yaml()
+    );
+    let mut config = parse_config(&yaml).expect("config parses");
+    config.audit.write_policy = AuditWritePolicy::AvailabilityFirst;
+    assert_eq!(
+        config.audit.write_policy,
+        AuditWritePolicy::AvailabilityFirst
+    );
+    let pipeline = AuditPipeline::from_sink(AlwaysFailWriteSink);
+
+    registry_relay::server::audit_waived_deployment_gates(
+        &config,
+        &pipeline,
+        registry_platform_ops::ConfigSource::LocalFile,
+    )
+    .await
+    .expect("availability_first keeps waived-gate audit best effort");
+}
+
+// --- audit off-host retention gate -------------------------------------------
+
+/// A minimal config, parameterized on the `audit:` and `deployment:` blocks so
+/// each test can vary the sink and the off-host shipping attestation.
+fn config_yaml_with_audit(audit_block: &str, deployment_block: &str) -> String {
+    format!(
+        r#"
+server:
+  bind: "127.0.0.1:8080"
+catalog:
+  title: "Test Registry"
+  base_url: "https://data.example.test"
+  publisher: "Test Ministry"
+auth:
+  mode: api_key
+  api_keys: []
+{audit_block}
+datasets: []
+{deployment_block}
+"#
+    )
+}
+
+const RETENTION_GATE_ID: &str = "relay.audit.retention_local_only";
+
+fn retention_gate_finding(
+    evaluation: &registry_relay::deployment::GateEvaluation,
+) -> Option<&registry_platform_ops::DeploymentFinding> {
+    evaluation
+        .findings
+        .iter()
+        .find(|f| f.id == RETENTION_GATE_ID)
+}
+
+#[test]
+fn file_sink_without_attestation_warns_under_production() {
+    let yaml = config_yaml_with_audit(
+        "audit:\n  sink: file\n  path: \"/tmp/relay-audit-offhost-test.jsonl\"",
+        "deployment:\n  profile: production\n",
+    );
+    let config = parse_config(&yaml).expect("config parses");
+    let facts = registry_relay::deployment::facts_from_config(
+        &config,
+        registry_platform_ops::ConfigSource::LocalFile,
+    );
+    let evaluation = registry_relay::deployment::evaluate(
+        config.deployment.profile,
+        &facts,
+        &[],
+        &registry_relay::deployment::today_utc(),
+    );
+    let finding = retention_gate_finding(&evaluation)
+        .unwrap_or_else(|| panic!("expected {RETENTION_GATE_ID} finding"));
+    assert_eq!(
+        finding.severity,
+        registry_platform_ops::GateSeverity::FindingWarn
+    );
+}
+
+#[test]
+fn file_sink_with_attestation_is_clean_under_production() {
+    let yaml = config_yaml_with_audit(
+        "audit:\n  sink: file\n  path: \"/tmp/relay-audit-offhost-test.jsonl\"",
+        "deployment:\n  profile: production\n  evidence:\n    audit_offhost_shipping: true\n",
+    );
+    let config = parse_config(&yaml).expect("config parses");
+    let facts = registry_relay::deployment::facts_from_config(
+        &config,
+        registry_platform_ops::ConfigSource::LocalFile,
+    );
+    let evaluation = registry_relay::deployment::evaluate(
+        config.deployment.profile,
+        &facts,
+        &[],
+        &registry_relay::deployment::today_utc(),
+    );
+    assert!(
+        retention_gate_finding(&evaluation).is_none(),
+        "attested off-host shipping must clear the retention gate"
+    );
+}
+
+#[test]
+fn stdout_and_syslog_sinks_are_exempt_without_attestation() {
+    for sink_block in ["audit:\n  sink: stdout", "audit:\n  sink: syslog"] {
+        let yaml = config_yaml_with_audit(sink_block, "deployment:\n  profile: production\n");
+        let config = parse_config(&yaml).expect("config parses");
+        let facts = registry_relay::deployment::facts_from_config(
+            &config,
+            registry_platform_ops::ConfigSource::LocalFile,
+        );
+        let evaluation = registry_relay::deployment::evaluate(
+            config.deployment.profile,
+            &facts,
+            &[],
+            &registry_relay::deployment::today_utc(),
+        );
+        assert!(
+            retention_gate_finding(&evaluation).is_none(),
+            "sink block `{sink_block}` must be exempt from the retention gate"
+        );
+    }
+}
+
+#[test]
+fn file_sink_without_attestation_errors_under_evidence_grade_and_is_waivable() {
+    let yaml = config_yaml_with_audit(
+        "audit:\n  sink: file\n  path: \"/tmp/relay-audit-offhost-test.jsonl\"",
+        "deployment:\n  profile: evidence_grade\n",
+    );
+    let config = parse_config(&yaml).expect("config parses");
+    // A signed-bundle source isolates this check to the audit gate: it clears
+    // `relay.config.unsigned`, which would otherwise also fire (and refuse
+    // startup) for an evidence_grade profile.
+    let facts = registry_relay::deployment::facts_from_config(
+        &config,
+        registry_platform_ops::ConfigSource::SignedBundleFile,
+    );
+    let evaluation = registry_relay::deployment::evaluate(
+        config.deployment.profile,
+        &facts,
+        &[],
+        &registry_relay::deployment::today_utc(),
+    );
+    let finding = retention_gate_finding(&evaluation)
+        .unwrap_or_else(|| panic!("expected {RETENTION_GATE_ID} finding"));
+    assert_eq!(
+        finding.severity,
+        registry_platform_ops::GateSeverity::FindingError
+    );
+
+    let waivers = [registry_relay::deployment::WaiverInput {
+        finding: RETENTION_GATE_ID.to_string(),
+        reason: "synthetic-waiver-not-a-secret".to_string(),
+        expires: "2999-01-01".to_string(),
+    }];
+    let waived_evaluation = registry_relay::deployment::evaluate(
+        config.deployment.profile,
+        &facts,
+        &waivers,
+        &registry_relay::deployment::today_utc(),
+    );
+    let waived_finding = retention_gate_finding(&waived_evaluation)
+        .unwrap_or_else(|| panic!("expected {RETENTION_GATE_ID} finding"));
+    assert_eq!(
+        waived_finding.status,
+        registry_platform_ops::DeploymentFindingStatus::Waived
+    );
+}
+
 // --- audit write policy (end to end) ----------------------------------------
 
 /// Under explicit `availability_first` an audit write failure is swallowed:

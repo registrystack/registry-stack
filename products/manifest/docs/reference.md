@@ -77,7 +77,7 @@ Source:
 | --- | --- | --- | --- |
 | `schema_version` | string | Yes | Must equal `"registry-manifest/v1"`. |
 | `catalog` | `CatalogManifest` | Yes | Catalog title, publisher, base URL, application profiles list, standards versions. |
-| `datasets` | list of `DatasetManifest` | Yes | One entry per dataset. |
+| `datasets` | list of `DatasetManifest` | No | One entry per dataset. |
 | `vocabularies` | map | No | Prefix expansions used by concept, requirement, form, and evidence references. |
 | `profiles` | list of `ProfileClaim` | No | Local profile claims included in catalog output. |
 | `requirements` | list of `RequirementManifest` | No | CCCEV-aligned requirement definitions. |

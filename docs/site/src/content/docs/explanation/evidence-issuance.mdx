@@ -6,7 +6,7 @@ owner: registry-notary
 source_repos:
   - registry-notary
   - registry-platform
-last_reviewed: "2026-06-20"
+last_reviewed: "2026-07-07"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -121,7 +121,14 @@ Three mechanics make selective disclosure work.
 - Holder binding via `did:jwk`. The credential's `cnf` claim names the holder's public key as a
   `did:jwk`. To present the credential, the holder must produce a fresh signed proof from that
   key, audience-bound to the verifier. A stolen credential without the matching private key is
-  not presentable.
+  not presentable. Holder binding is the default: a credential profile that omits `holder_binding`
+  binds with `did:jwk`, and issuing an unbound, bearer-style credential requires an explicit
+  `holder_binding.mode: none`. This has been the default since v0.8.4, and `registry-notary doctor`
+  warns on a profile that opts out (`notary.credential_profile.unbound_holder_binding`).
+
+Evidence: the [v0.8.4 Notary changelog](https://github.com/registrystack/registry-stack/blob/v0.8.4/products/notary/CHANGELOG.md#084---2026-07-04) records the default, and the [configuration loader](https://github.com/registrystack/registry-stack/blob/v0.8.4/crates/registry-notary-core/src/config.rs) applies it.
+
+The [doctor diagnostic](https://github.com/registrystack/registry-stack/blob/v0.8.4/crates/registry-notary/src/main.rs) is covered by the [doctor CLI test](https://github.com/registrystack/registry-stack/blob/v0.8.4/crates/registry-notary/tests/doctor_cli.rs).
 
 ## Where this fits with Relay
 

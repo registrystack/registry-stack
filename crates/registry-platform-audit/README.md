@@ -47,7 +47,7 @@ async fn write_audit_event() -> Result<(), registry_platform_audit::AuditError> 
 
 ## Operational Notes
 
-- `JsonlFileSink::new` rotates at 10 MiB and retains 5 files by default.
+- `JsonlFileSink::new` rotates at 10 MiB and retains 50 files by default.
 - `JsonlFileSink::with_rotation(path, 0, max_files)` disables size rotation.
 - `AuditProfile::bootstrap_or_start_empty` and
   `AuditChainProfile::bootstrap_or_start_empty` read the sink tail hash before

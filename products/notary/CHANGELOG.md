@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `registry-notary doctor` now warns (`notary.source_binding.no_matching_policy`)
+  when a claim source binding declares no matching policy (no `policy_id`, no
+  context constraints), naming each affected binding. A matching new
+  deployment gate surfaces the same condition as a `finding_warn` under
+  `production` and a `finding_error` under `evidence_grade`; `hosted_lab` and
+  `local` stay quiet. Claim resolution behavior is unchanged: such bindings
+  already fell back to unrestricted, identifier-only resolution per spec
+  RS-DM-CLAIM; this only adds visibility so operators can accept that
+  knowingly or declare a matching policy.
+- New deployment gate `notary.audit.retention_local_only`: fires when the
+  audit sink is `file` or `jsonl` and `deployment.evidence.audit_offhost_shipping`
+  is not declared, because a local file sink caps retention and an attacker
+  with host access can destroy the evidence. `stdout` and `syslog` sinks are
+  exempt. Bound `finding_warn` under `production` and `finding_error` under
+  `evidence_grade`; unbound under `local` and `hosted_lab`. Operators can
+  clear the finding by declaring `deployment.evidence.audit_offhost_shipping:
+  true` once audit events are shipped off-host, or by waiving the finding.
+- Added `evidence.machine_quota`, a per-principal quota for machine
+  `evaluate` and `batch_evaluate` traffic. The budget is counted in subjects
+  (a single evaluate costs 1, a batch costs `items.len()`) over a fixed
+  one-minute window per `principal_id`, so request rate and batch fan-out
+  share one limit instead of being controlled independently. Exhaustion
+  returns `429` with the stable code `evaluation.quota_exceeded` and a
+  `Retry-After` header. Disabled by default (`enabled: false`); enabling it
+  does not affect the existing self-attestation rate limiters or the
+  per-request `max_subjects` cap.
+
 ## [0.8.4] - 2026-07-04
 
 ### Fixed

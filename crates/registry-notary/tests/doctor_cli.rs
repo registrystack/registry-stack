@@ -24,6 +24,7 @@ struct TestConfigOptions<'a> {
     multi_instance: bool,
     durable_audit: Option<bool>,
     unbound_credential_profile: bool,
+    unconstrained_source_binding: bool,
 }
 
 fn write_config(tmp: &TempDir) -> PathBuf {
@@ -91,9 +92,14 @@ fn write_config_with_options(tmp: &TempDir, options: TestConfigOptions<'_>) -> P
 "#
         .to_string()
     };
-    let source_base_url = options.source_base_url.or(options
-        .source_adapter_batch_without_expected_sidecar
-        .then_some("https://source-adapter.example.test"));
+    let source_base_url = options
+        .source_base_url
+        .or(options
+            .source_adapter_batch_without_expected_sidecar
+            .then_some("https://source-adapter.example.test"))
+        .or(options
+            .unconstrained_source_binding
+            .then_some("https://registry-source.example.test"));
     let source_private_network = if options.source_allows_private_network {
         "      allow_insecure_private_network: true\n"
     } else {
@@ -132,9 +138,10 @@ fn write_config_with_options(tmp: &TempDir, options: TestConfigOptions<'_>) -> P
     } else {
         String::new()
     };
-    let credential_profile_claims = if options.unbound_credential_profile {
-        r#"  claims:
-    - id: person-is-alive
+    let mut claim_entries = String::new();
+    if options.unbound_credential_profile {
+        claim_entries.push_str(
+            r#"    - id: person-is-alive
       title: Person is alive
       version: "1.0"
       subject_type: person
@@ -145,10 +152,36 @@ fn write_config_with_options(tmp: &TempDir, options: TestConfigOptions<'_>) -> P
         - application/dc+sd-jwt
       credential_profiles:
         - unbound_sd_jwt
-"#
-        .to_string()
-    } else {
+"#,
+        );
+    }
+    if options.unconstrained_source_binding {
+        claim_entries.push_str(
+            r#"    - id: residency-lookup
+      title: Residency lookup
+      version: "1.0"
+      subject_type: person
+      source_bindings:
+        registry:
+          connector: registry_data_api
+          connection: profile_gate_test
+          dataset: registry
+          entity: resident
+          lookup:
+            input: target.id
+            field: id
+            op: eq
+            cardinality: one
+      rule:
+        type: exists
+        source: registry
+"#,
+        );
+    }
+    let credential_profile_claims = if claim_entries.is_empty() {
         String::new()
+    } else {
+        format!("  claims:\n{claim_entries}")
     };
     std::fs::write(
         &path,
@@ -359,6 +392,15 @@ fn diagnostic_with_code<'a>(report: &'a Value, code: &str) -> Option<&'a Value> 
         .expect("diagnostics array")
         .iter()
         .find(|diagnostic| diagnostic["code"] == code)
+}
+
+fn diagnostics_with_code<'a>(report: &'a Value, code: &str) -> Vec<&'a Value> {
+    report["diagnostics"]
+        .as_array()
+        .expect("diagnostics array")
+        .iter()
+        .filter(|diagnostic| diagnostic["code"] == code)
+        .collect()
 }
 
 fn assert_no_documentation_key(diagnostic: &Value) {
@@ -1022,6 +1064,117 @@ fn doctor_json_warns_on_explicit_unbound_credential_profile() {
 }
 
 #[test]
+fn doctor_json_warns_on_source_binding_without_matching_policy() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config = write_config_with_options(
+        &tmp,
+        TestConfigOptions {
+            unconstrained_source_binding: true,
+            ..TestConfigOptions::default()
+        },
+    );
+    let env_file = write_env_file(&tmp);
+
+    let output = doctor_command(&config, Some(&env_file))
+        .args(["--profile", "local", "--format", "json"])
+        .output()
+        .expect("doctor runs");
+
+    assert!(
+        output.status.success(),
+        "a binding without a matching policy should warn, not fail\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout is utf8");
+    let report: Value = serde_json::from_str(&stdout).expect("doctor emits JSON");
+    assert_product_diagnostic_report(&report);
+    assert_eq!(report["status"], "warning");
+
+    let diagnostic = diagnostic_with_code(&report, "notary.source_binding.no_matching_policy")
+        .expect("no-matching-policy warning");
+    assert_eq!(diagnostic["severity"], "warning");
+    assert!(diagnostic["message"]
+        .as_str()
+        .expect("message string")
+        .contains("residency-lookup/registry"));
+}
+
+#[test]
+fn doctor_json_production_source_binding_without_matching_policy_reports_once() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config = write_config_with_options(
+        &tmp,
+        TestConfigOptions {
+            unconstrained_source_binding: true,
+            config_trust: true,
+            ..TestConfigOptions::default()
+        },
+    );
+    let env_file = write_env_file(&tmp);
+
+    let output = doctor_command(&config, Some(&env_file))
+        .args(["--profile", "production", "--format", "json"])
+        .output()
+        .expect("doctor runs");
+
+    assert!(
+        output.status.success(),
+        "production binding without a matching policy should warn, not fail\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout is utf8");
+    let report: Value = serde_json::from_str(&stdout).expect("doctor emits JSON");
+    assert_product_diagnostic_report(&report);
+
+    let diagnostics = diagnostics_with_code(&report, "notary.source_binding.no_matching_policy");
+    assert_eq!(
+        diagnostics.len(),
+        1,
+        "the bound production gate should be the only source of this finding code: {diagnostics:?}"
+    );
+    assert_eq!(diagnostics[0]["severity"], "warning");
+}
+
+#[test]
+fn doctor_json_evidence_grade_source_binding_without_matching_policy_reports_once() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config = write_config_with_options(
+        &tmp,
+        TestConfigOptions {
+            unconstrained_source_binding: true,
+            config_trust: true,
+            ..TestConfigOptions::default()
+        },
+    );
+    let env_file = write_env_file(&tmp);
+
+    let output = doctor_command(&config, Some(&env_file))
+        .args(["--profile", "evidence_grade", "--format", "json"])
+        .output()
+        .expect("doctor runs");
+
+    assert!(
+        output.status.success(),
+        "evidence_grade binding without a matching policy is a finding_error, not startup_fail\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout is utf8");
+    let report: Value = serde_json::from_str(&stdout).expect("doctor emits JSON");
+    assert_product_diagnostic_report(&report);
+
+    let diagnostics = diagnostics_with_code(&report, "notary.source_binding.no_matching_policy");
+    assert_eq!(
+        diagnostics.len(),
+        1,
+        "the bound evidence_grade gate should be the only source of this finding code: {diagnostics:?}"
+    );
+    assert_eq!(diagnostics[0]["severity"], "error");
+}
+
+#[test]
 fn doctor_json_reports_success_as_single_redacted_document() {
     let tmp = TempDir::new().expect("tempdir");
     let config = write_config(&tmp);
@@ -1158,6 +1311,10 @@ fn doctor_and_explain_json_report_opencrvs_dci_context_constraints() {
         serde_json::from_str(&doctor_stdout).expect("doctor emits one JSON document");
     assert_product_diagnostic_report(&doctor_report);
     assert_opencrvs_context_constraint(&doctor_report);
+    assert!(
+        diagnostic_with_code(&doctor_report, "notary.source_binding.no_matching_policy").is_none(),
+        "a binding with policy_id and context constraints must not warn about a missing matching policy"
+    );
 
     let explain_output = explain_command(&config, Some(&env_file))
         .args(["--format", "json"])

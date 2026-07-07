@@ -68,6 +68,7 @@ Registry Notary returns the codes in the table below from its evidence taxonomy.
 | `batch.too_large` | batch request is too large | The batch request exceeds the configured item limit. |
 | `evaluation.not_found` | evaluation was not found | The referenced evaluation id does not exist. |
 | `evaluation.binding_mismatch` | evaluation binding mismatch | The referenced evaluation does not match the requested binding. |
+| `evaluation.quota_exceeded` | machine evaluation quota was exceeded | The authenticated machine principal exceeded the configured evaluation subject budget. |
 | `claim.format_not_supported` | format is unsupported | The requested response format is not supported. |
 | `credential.issuer_not_configured` | credential issuer is not configured | Credential issuance was requested but no issuer is configured. |
 | `credential.holder_proof_required` | holder proof is required | Credential issuance requires a holder proof that was not supplied. |
@@ -172,6 +173,7 @@ Registry Relay returns namespaced codes from its error taxonomy. Codes in the co
 | `auth.algorithm_not_allowed` | algorithm not allowed | The bearer token `alg` is not in the configured allowlist. |
 | `auth.client_not_allowed` | client not allowed | The bearer token client is not in the configured `allowed_clients` list. |
 | `auth.jwks_unavailable` | jwks unavailable | The JWKS endpoint is unreachable and no cached keys are available. |
+| `auth.rate_limited` | rate limited | Too many failed authentication attempts from the same client address within the configured `auth.failure_throttle` window. |
 
 ### Policy
 
