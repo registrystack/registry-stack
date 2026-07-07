@@ -663,7 +663,7 @@ fn build_openapi_document() -> Value {
                         "403": { "description": "Not authorized for requested claim, purpose, disclosure, or format" },
                         "406": { "description": "Requested format is not acceptable" },
                         "413": { "description": "Request body or batch is too large" },
-                        "429": { "description": "Self-attestation request is rate limited" },
+                        "429": { "description": "Self-attestation request is rate limited, or the machine evaluation quota was exceeded" },
                         "503": { "description": "Source service is unavailable" }
                     }
                 }
@@ -735,7 +735,7 @@ fn build_openapi_document() -> Value {
                         "406": { "description": "Requested format is not acceptable" },
                         "409": { "description": "Idempotency key conflicts with another request body" },
                         "413": { "description": "Request body or batch is too large" },
-                        "429": { "description": "Self-attestation request is rate limited" },
+                        "429": { "description": "Self-attestation request is rate limited, or the machine evaluation quota was exceeded" },
                         "503": { "description": "Source service is unavailable" }
                     }
                 }

@@ -26,6 +26,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `evidence_grade`; unbound under `local` and `hosted_lab`. Operators can
   clear the finding by declaring `deployment.evidence.audit_offhost_shipping:
   true` once audit events are shipped off-host, or by waiving the finding.
+- Added `evidence.machine_quota`, a per-principal quota for machine
+  `evaluate` and `batch_evaluate` traffic. The budget is counted in subjects
+  (a single evaluate costs 1, a batch costs `items.len()`) over a fixed
+  one-minute window per `principal_id`, so request rate and batch fan-out
+  share one limit instead of being controlled independently. Exhaustion
+  returns `429` with the stable code `evaluation.quota_exceeded` and a
+  `Retry-After` header. Disabled by default (`enabled: false`); enabling it
+  does not affect the existing self-attestation rate limiters or the
+  per-request `max_subjects` cap.
 
 ## [0.8.4] - 2026-07-04
 

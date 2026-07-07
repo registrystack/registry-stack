@@ -109,6 +109,8 @@ pub enum EvidenceError {
     SelfAttestationInvalidToken,
     #[error("self-attestation assurance policy denied the request")]
     SelfAttestationAssuranceDenied,
+    #[error("machine evaluation quota was exceeded")]
+    MachineQuotaExceeded { retry_after_seconds: u64 },
 }
 
 impl EvidenceError {
@@ -165,6 +167,7 @@ impl EvidenceError {
             Self::SelfAttestationInvalidToken | Self::SelfAttestationAssuranceDenied => {
                 "self_attestation.denied"
             }
+            Self::MachineQuotaExceeded { .. } => "evaluation.quota_exceeded",
         }
     }
 
@@ -276,6 +279,16 @@ mod tests {
         };
         assert_eq!(collapsed.code(), "evidence.not_available");
         assert_eq!(collapsed.audit_code(), "target.match_ambiguous");
+    }
+
+    #[test]
+    fn machine_quota_exceeded_has_stable_code() {
+        let error = EvidenceError::MachineQuotaExceeded {
+            retry_after_seconds: 42,
+        };
+
+        assert_eq!(error.code(), "evaluation.quota_exceeded");
+        assert_eq!(error.audit_code(), "evaluation.quota_exceeded");
     }
 
     #[test]

@@ -148,6 +148,21 @@ fn requested_claim_versions(claims: &[ClaimRef]) -> Result<ClaimVersionSelection
     Ok(versions)
 }
 
+pub(crate) fn validate_batch_subject_limit(
+    config: &EvidenceConfig,
+    request: &BatchEvaluateRequest,
+) -> Result<(), EvidenceError> {
+    if request.claims.is_empty() || request.items.is_empty() {
+        return Err(EvidenceError::InvalidRequest);
+    }
+    let claim_versions = requested_claim_versions(&request.claims)?;
+    let max_subjects = max_batch_subjects(config, &request.claims, &claim_versions)?;
+    if request.items.len() > max_subjects {
+        return Err(EvidenceError::BatchTooLarge);
+    }
+    Ok(())
+}
+
 fn selected_claim_refs(
     evidence: &EvidenceConfig,
     claims: &[ClaimRef],
@@ -1113,7 +1128,7 @@ impl EvidenceStore {
         Some(evaluation)
     }
 
-    fn idempotent_batch(
+    pub(crate) fn idempotent_batch(
         &self,
         key: &str,
         request_hash: &str,
@@ -1597,8 +1612,17 @@ impl RegistryNotaryRuntime {
         if request.claims.is_empty() || request.items.is_empty() {
             return Err(EvidenceError::InvalidRequest);
         }
-        let claim_versions = requested_claim_versions(&request.claims)?;
         let request_claim_ids = claim_ids(&request.claims);
+        let request_hash = batch_request_hash(&request)?;
+        let scoped_key = options
+            .idempotency_key
+            .map(|key| batch_idempotency_key(&principal.principal_id, key));
+        if let Some(key) = scoped_key.as_deref() {
+            if let Some(response) = store.idempotent_batch(key, &request_hash)? {
+                return Ok(response);
+            }
+        }
+        let claim_versions = requested_claim_versions(&request.claims)?;
         let source_capability = source_capability_for_principal(
             &self.self_attestation_rate_keys,
             principal,
@@ -1607,19 +1631,6 @@ impl RegistryNotaryRuntime {
         let max_subjects = max_batch_subjects(&evidence, &request.claims, &claim_versions)?;
         if request.items.len() > max_subjects {
             return Err(EvidenceError::BatchTooLarge);
-        }
-        let request_hash = hash_json(&request)?;
-        let scoped_key = options.idempotency_key.map(|key| {
-            format!(
-                "{}:/v1/batch-evaluations:{}",
-                principal.principal_id,
-                sha256_hex(key.as_bytes())
-            )
-        });
-        if let Some(key) = scoped_key.as_deref() {
-            if let Some(response) = store.idempotent_batch(key, &request_hash)? {
-                return Ok(response);
-            }
         }
         let batch_purpose =
             resolve_batch_default_purpose(options.header_purpose, request.purpose.as_deref())?;
@@ -5828,6 +5839,18 @@ fn stored_disclosure(results: &[ClaimResultView]) -> String {
 fn hash_json<T: serde::Serialize>(value: &T) -> Result<String, EvidenceError> {
     let bytes = serde_json::to_vec(value).map_err(|_| EvidenceError::InvalidRequest)?;
     Ok(sha256_hex(&bytes))
+}
+
+pub(crate) fn batch_request_hash(request: &BatchEvaluateRequest) -> Result<String, EvidenceError> {
+    hash_json(request)
+}
+
+pub(crate) fn batch_idempotency_key(principal_id: &str, key: &str) -> String {
+    format!(
+        "{}:/v1/batch-evaluations:{}",
+        principal_id,
+        sha256_hex(key.as_bytes())
+    )
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
