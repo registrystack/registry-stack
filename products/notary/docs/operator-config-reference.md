@@ -468,6 +468,13 @@ seconds until the window rolls over. The quota is disabled by default; enable
 it and size `subjects_per_minute` to the traffic pattern of your machine
 callers before relying on it in production.
 
+The counters are held in an in-memory map, and each Notary process builds its
+own limiter, so this quota is enforced per instance, not cluster-wide. With N
+replicas behind a load balancer, a single caller can spend up to N times
+`subjects_per_minute` across the deployment. Size the per-instance value with
+replica count in mind, or front the fleet with a shared limiter if you need a
+global ceiling.
+
 ## Source Connections
 
 Every source binding references one `source_connections` entry. A source
