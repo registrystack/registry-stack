@@ -217,29 +217,36 @@ Manifest-owned JSON-LD maps these bare keys to stable Registry Manifest RDF term
 
 ### Extension policy
 
-`registry-manifest/v1` and the manifest-owned `*/v1` generated formats make a
-compatibility promise for additive evolution. A post-beta producer may add optional
-fields to existing mapping objects without requiring a new major schema version.
-Beta-era readers must ignore unrecognized fields while continuing to require and
-validate the fields they understand. Unknown fields do not relax existing validation:
-required fields, identifier syntax, URI syntax, reference integrity, collection limits,
-runtime-only key rejection, and secret-bearing key rejection still apply.
+`registry-manifest/v1` and the manifest-owned `*/v1` generated formats reject an
+unknown key at parse time (issue #249). `MetadataManifestFields` and its nested
+manifest structs carry `deny_unknown_fields`, and the manifest's hand-written
+`Deserialize` impl reports the offending key by its full dotted path, for example
+`catalog.publisher.x_post_beta_publisher_hint: unknown field`. A manifest that
+carries a misspelled or ad-hoc key fails `validate`, `render`, and `publish` instead
+of parsing with the key silently dropped.
 
-Readers must reject unrecognized or extension keys that look credential-bearing,
-including keys such as `client_secret`, `password`, `credential`, `credentials`,
-`api_key`, `private_key`, `token`, or `secret`, plus compound variants such as
-`secret_key`, `credential_env`, `password_env`, and `client_secret_env`.
+The runtime-only and secret-bearing key checks run first, over the raw parsed value,
+before the strict key check runs. Readers must reject unrecognized or extension keys
+that look credential-bearing, including keys such as `client_secret`, `password`,
+`credential`, `credentials`, `api_key`, `private_key`, `token`, or `secret`, plus
+compound variants such as `secret_key`, `credential_env`, `password_env`, and
+`client_secret_env`.
 
-Readers must treat unrecognized fields as advisory extension data. A reader may expose
-or preserve extension data when it has a typed extension model, but it must not fail
-only because an otherwise valid manifest includes an unknown optional key such as a
-future evidence offering `supported_modes`, `required_subject_binding`, `result_format`,
-`disclosure_profile`, or `risk_tier`.
+Extensions belong in the manifest's modeled extension points, not in ad-hoc keys.
+`EvidencePackMetadata` (`source_basis`, `semantic_profile`, `evidence_envelope`,
+`source_mapping`, `policy`, `fixtures`, `synthetic_data`) and
+`EcosystemBindingManifest` (`vocabulary`, `request_envelope`, `response_envelope`,
+`transport`, `trust_framework`, `credential_format`, `assurance_model`,
+`conformance`) hold arbitrary JSON under a named, already-modeled field, and the
+top-level `vocabularies` map holds an open set of prefix expansions. A field that is
+not one of these must be added to the struct in `registry-manifest-core` before a
+producer can send it; the schema no longer tolerates a key it does not model.
 
 Breaking changes require a new schema version. Breaking changes include removing or
 renaming required fields, changing the meaning of an existing field, changing an existing
 field to an incompatible type, or making previously valid V1 manifests invalid except
-for validation bugs, security fixes, or explicitly forbidden runtime-only keys.
+for validation bugs, security fixes, or the unknown-key rejection this section
+describes.
 
 ## Publish output artifacts
 
