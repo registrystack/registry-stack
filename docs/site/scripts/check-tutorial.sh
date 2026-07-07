@@ -200,7 +200,7 @@ if ((DRY_RUN)); then
 	exit 0
 fi
 
-SOLMARA_LAB_REF="${SOLMARA_LAB_REF:-1af06c8e610cf890c7e1e4de7ce4235919b69502}"
+SOLMARA_LAB_REF="${SOLMARA_LAB_REF:-3698ea8690b3a170cb72fd1a27780d85b91b1583}"
 # REGISTRY_LAB_PATH is a deprecated alias kept for callers that have not
 # migrated their environment yet; SOLMARA_LAB_PATH takes precedence.
 SOLMARA_LAB_PATH="${SOLMARA_LAB_PATH:-${REGISTRY_LAB_PATH:-}}"
@@ -219,6 +219,14 @@ else
 	git clone --quiet https://github.com/registrystack/solmara-lab "$CLONE_DIR"
 	git -C "$CLONE_DIR" checkout --quiet "$SOLMARA_LAB_REF"
 	LAB_DIR="$CLONE_DIR"
+	# The lab derives a per-checkout Compose project name, but pin one anyway
+	# so a temporary clone can never join another checkout's project.
+	COMPOSE_PROJECT_NAME="solmara-tutorial-check-$$"
+	export COMPOSE_PROJECT_NAME
+	# The tutorial's "Get the repository" section requires just setup before
+	# the Steps; a fresh clone must exercise that documented path too.
+	printf 'running just setup in the fresh clone\n'
+	(cd "$CLONE_DIR" && just setup)
 fi
 
 for tool in just docker uv pnpm python3 openssl git; do
@@ -236,8 +244,15 @@ printf 'log: %s\n' "$LOG_FILE"
 
 cleanup() {
 	local exit_code=$?
-	printf '\n--- cleanup: just down ---\n' | tee -a "$LOG_FILE"
-	(cd "$LAB_DIR" && just down) >>"$LOG_FILE" 2>&1 || true
+	# Clone mode owns its stack outright, so remove the volumes too; for a
+	# caller-supplied checkout, stop containers but never touch its volumes.
+	if [[ -n "$CLONE_DIR" ]]; then
+		printf '\n--- cleanup: just reset ---\n' | tee -a "$LOG_FILE"
+		(cd "$LAB_DIR" && just reset) >>"$LOG_FILE" 2>&1 || true
+	else
+		printf '\n--- cleanup: just down ---\n' | tee -a "$LOG_FILE"
+		(cd "$LAB_DIR" && just down) >>"$LOG_FILE" 2>&1 || true
+	fi
 	if [[ -n "$CLONE_DIR" ]]; then
 		rm -rf "$CLONE_DIR"
 	fi
