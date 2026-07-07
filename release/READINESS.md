@@ -91,7 +91,10 @@ What 1.0 promises the institutions that run this.
 - [ ] API stability and semver policy published.
 - [ ] Deprecation policy published.
 - [ ] Security support window published.
-- [ ] Upgrade and rollback documented and exercised.
+- [x] Upgrade and rollback documented and exercised. Evidence:
+      [exercised run v0.8.3 -> v0.8.4 -> v0.8.3](exercises/upgrade-v0.8.3-to-v0.8.4.md)
+      (#203; exercises the draft operate/upgrade-and-rollback page, findings
+      recorded there).
 - [ ] Security-relevant configuration defaults inventoried and reviewed for
       secure-by-default (#172 and #171 are known open questions).
 - [ ] DoS posture decided: rate-limit backstops (#78, #51) triaged as
