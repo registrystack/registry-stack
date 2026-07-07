@@ -92,7 +92,12 @@ impl AuthFailureThrottle {
             // instead of taking down the auth path.
             poisoned.into_inner()
         });
-        prune_expired(&mut counters, now, self.window);
+        if counters
+            .get(key)
+            .is_some_and(|counter| !counter.in_window(now, self.window))
+        {
+            counters.remove(key);
+        }
         match counters.get(key) {
             Some(counter) if counter.failures >= self.max_failures => {
                 let elapsed = now.duration_since(counter.window_start);
@@ -117,18 +122,24 @@ impl AuthFailureThrottle {
             .counters
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        prune_expired(&mut counters, now, self.window);
-        if !counters.contains_key(key) && counters.len() >= MAX_TRACKED_ADDRESSES {
+        if let Some(counter) = counters.get_mut(key) {
+            if !counter.in_window(now, self.window) {
+                counter.window_start = now;
+                counter.failures = 0;
+            }
+            counter.failures = counter.failures.saturating_add(1);
+            return;
+        }
+        if counters.len() >= MAX_TRACKED_ADDRESSES {
+            prune_expired(&mut counters, now, self.window);
+        }
+        if counters.len() >= MAX_TRACKED_ADDRESSES {
             evict_oldest(&mut counters);
         }
         let counter = counters.entry(key.to_string()).or_insert(Counter {
             window_start: now,
             failures: 0,
         });
-        if !counter.in_window(now, self.window) {
-            counter.window_start = now;
-            counter.failures = 0;
-        }
         counter.failures = counter.failures.saturating_add(1);
     }
 

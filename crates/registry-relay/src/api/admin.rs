@@ -1792,6 +1792,7 @@ fn api_key_auth_changed(current: &Config, candidate: &Config) -> bool {
     current.auth.mode == AuthMode::ApiKey
         && candidate.auth.mode == AuthMode::ApiKey
         && current.auth.oidc == candidate.auth.oidc
+        && current.auth.failure_throttle == candidate.auth.failure_throttle
         && current.auth.api_keys != candidate.auth.api_keys
 }
 
@@ -3120,6 +3121,23 @@ datasets: []
             Some(&oidc_a),
             Some(&oidc_b),
             "OidcConfig with different issuers must not compare equal"
+        );
+    }
+
+    #[test]
+    fn api_key_auth_changed_requires_same_failure_throttle_config() {
+        let current = api_key_classifier_config();
+        let mut candidate = current.clone();
+        candidate.auth.api_keys[0].id = "rotated-client".to_string();
+        assert!(
+            api_key_auth_changed(&current, &candidate),
+            "api-key access changes with unchanged throttle may be live-applied"
+        );
+
+        candidate.auth.failure_throttle.enabled = true;
+        assert!(
+            !api_key_auth_changed(&current, &candidate),
+            "auth.failure_throttle changes are captured by the router and require restart"
         );
     }
 

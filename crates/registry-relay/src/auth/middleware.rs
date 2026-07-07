@@ -147,10 +147,11 @@ where
 /// Middleware body. When a failure throttle is configured, resolves the
 /// trust-proxy-aware client address once and checks it before calling
 /// the provider; an over-limit address short-circuits with
-/// `auth.rate_limited` / 429 without running authentication. Every
-/// `Err` outcome from the provider (throttled or not) records a
-/// failure for that address; the throttle short-circuit itself does
-/// not, since it did not run authentication.
+/// `auth.rate_limited` / 429 without running authentication. Client-
+/// attributable `Err` outcomes from the provider record a failure for
+/// that address; infrastructure errors such as JWKS outages do not.
+/// The throttle short-circuit itself does not record a failure, since
+/// it did not run authentication.
 ///
 /// Otherwise reads the bearer token, calls the provider, and either
 /// short-circuits with a Problem Details response or forwards with
@@ -192,8 +193,10 @@ async fn run(State(state): State<AuthMiddlewareState>, mut req: Request, next: N
     let principal = match state.provider.authenticate(req.headers(), remote).await {
         Ok(p) => p,
         Err(e) => {
-            if let (Some(throttle), Some(key)) = (&state.throttle, &throttle_key) {
-                throttle.record_failure(key);
+            if e.counts_toward_failure_throttle() {
+                if let (Some(throttle), Some(key)) = (&state.throttle, &throttle_key) {
+                    throttle.record_failure(key);
+                }
             }
             return Error::from(e).into_response();
         }

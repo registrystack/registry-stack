@@ -699,6 +699,18 @@ impl EntityError {
 }
 
 impl AuthError {
+    /// Whether this auth error should consume the local auth-failure
+    /// throttle budget for the client address. Client-attributable
+    /// authentication and authorization failures count; infrastructure
+    /// outages such as JWKS unavailability do not.
+    #[must_use]
+    pub(crate) fn counts_toward_failure_throttle(&self) -> bool {
+        !matches!(
+            self,
+            AuthError::JwksUnavailable | AuthError::RateLimited { .. }
+        )
+    }
+
     fn code(&self) -> &'static str {
         match self {
             AuthError::MissingCredential => "auth.missing_credential",

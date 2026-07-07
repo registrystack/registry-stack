@@ -382,6 +382,13 @@ fn router_with_provider_and_throttle(
     provider: Arc<ApiKeyAuth>,
     throttle: Option<Arc<AuthFailureThrottle>>,
 ) -> Router {
+    router_with_auth_provider_and_throttle(provider, throttle)
+}
+
+fn router_with_auth_provider_and_throttle(
+    provider: Arc<dyn AuthProvider>,
+    throttle: Option<Arc<AuthFailureThrottle>>,
+) -> Router {
     auth_layer_with_failure_throttle(
         Router::new()
             .route("/whoami", get(whoami_handler))
@@ -399,6 +406,60 @@ fn throttle_config(max_failures: u32, window_seconds: u64) -> AuthFailureThrottl
         max_failures,
         window_seconds,
     }
+}
+
+struct JwksUnavailableAuth;
+
+impl AuthProvider for JwksUnavailableAuth {
+    fn authenticate<'a>(
+        &'a self,
+        _headers: &'a axum::http::HeaderMap,
+        _remote_addr: IpAddr,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<Principal, registry_relay::error::AuthError>>
+                + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async { Err(registry_relay::error::AuthError::JwksUnavailable) })
+    }
+}
+
+#[tokio::test]
+async fn jwks_unavailable_does_not_count_toward_the_throttle() {
+    let throttle = AuthFailureThrottle::new(&throttle_config(1, 60))
+        .map(Arc::new)
+        .expect("throttle enabled");
+    let outage_app = router_with_auth_provider_and_throttle(
+        Arc::new(JwksUnavailableAuth),
+        Some(throttle.clone()),
+    );
+
+    for _ in 0..3 {
+        let response = request_with_peer(
+            &outage_app,
+            "/whoami",
+            Some(&format!("Bearer {VALID_KEY}")),
+            "203.0.113.11:1",
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    let recovered_app = router_with_provider_and_throttle(build_provider(), Some(throttle));
+    let response = request_with_peer(
+        &recovered_app,
+        "/whoami",
+        Some(&format!("Bearer {VALID_KEY}")),
+        "203.0.113.11:1",
+    )
+    .await;
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "JWKS outage responses must not consume the client's local failure budget"
+    );
 }
 
 async fn request_with_peer(
