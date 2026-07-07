@@ -94,8 +94,9 @@ use crate::{
     preauth_state::{LoginState, SingleUseReserveError},
     replay::{require_replay_insert, ReplayReadiness, ReplayStores},
     runtime::{
-        claim_ids, claim_semantics_metadata, find_claim, find_claim_version,
-        matching_policy_audit_identity, MatchingPolicyAuditIdentity,
+        batch_idempotency_key, batch_request_hash, claim_ids, claim_semantics_metadata, find_claim,
+        find_claim_version, matching_policy_audit_identity, validate_batch_subject_limit,
+        MatchingPolicyAuditIdentity,
     },
     standalone::{
         constant_time_eq, generate_numeric_tx_code, generate_opaque_token, pkce_s256_challenge,
@@ -6091,9 +6092,31 @@ async fn evaluate(
         .machine_quota_limiter
         .check_and_consume(&principal.principal_id, 1)
     {
-        return evidence_error_response(EvidenceError::MachineQuotaExceeded {
+        let quota_error = EvidenceError::MachineQuotaExceeded {
             retry_after_seconds: error.retry_after_seconds,
-        });
+        };
+        let audit_code = quota_error.audit_code();
+        let mut response = evidence_error_response(quota_error);
+        attach_evidence_audit_with_purposes(
+            &mut response,
+            "evaluate_denied",
+            None,
+            &request_claim_ids,
+            None,
+            resolved_evaluate_audit_purposes(purpose_header(&headers), request.purpose.as_deref()),
+        );
+        attach_zero_source_no_forward_audit(&mut response);
+        if let Err(error) = attach_evaluate_request_audit(
+            &mut response,
+            &state.self_attestation_rate_keys,
+            &request,
+            None,
+            Some(audit_code),
+            None,
+        ) {
+            return evidence_error_response(error);
+        }
+        return response;
     }
     let runtime = state.runtime();
     let requested_claims = request_claim_ids;
@@ -6276,16 +6299,6 @@ async fn batch_evaluate(
         );
         return response;
     }
-    let batch_cost = u32::try_from(request.items.len()).unwrap_or(u32::MAX);
-    if let Err(error) = state
-        .machine_quota_limiter
-        .check_and_consume(&principal.principal_id, batch_cost)
-    {
-        return evidence_error_response(EvidenceError::MachineQuotaExceeded {
-            retry_after_seconds: error.retry_after_seconds,
-        });
-    }
-    let runtime = state.runtime();
     let requested_claims = request_claim_ids;
     let requested_subject_count = request.items.len();
     let audit_purposes = resolved_batch_audit_purposes(
@@ -6294,6 +6307,69 @@ async fn batch_evaluate(
         &request.items,
     );
     let audit_request = request.clone();
+    if let Some(key) = idempotency_key(&headers) {
+        let request_hash = match batch_request_hash(&request) {
+            Ok(hash) => hash,
+            Err(error) => return evidence_error_response(error),
+        };
+        let scoped_key = batch_idempotency_key(&principal.principal_id, key);
+        match state.store.idempotent_batch(&scoped_key, &request_hash) {
+            Ok(Some(result)) => {
+                let mut response = Json(result.clone()).into_response();
+                let batch_audit_purposes = audit_purposes.clone();
+                attach_evidence_audit_with_purposes(
+                    &mut response,
+                    "batch_evaluate",
+                    None,
+                    &requested_claims,
+                    Some(requested_subject_count as u64),
+                    audit_purposes,
+                );
+                if let Err(error) = attach_batch_evaluate_response_audit(
+                    &mut response,
+                    &state.self_attestation_rate_keys,
+                    evidence,
+                    &audit_request,
+                    &result,
+                    batch_audit_purposes.as_deref(),
+                ) {
+                    return evidence_error_response(error);
+                }
+                let sidecar_config_hashes = state
+                    .source
+                    .observed_sidecar_config_hashes(evidence, &requested_claims)
+                    .await;
+                attach_source_sidecar_config_hashes(&mut response, sidecar_config_hashes);
+                return response;
+            }
+            Ok(None) => {}
+            Err(error) => return evidence_error_response(error),
+        }
+    }
+    if let Err(error) = validate_batch_subject_limit(evidence, &request) {
+        return evidence_error_response(error);
+    }
+    let batch_cost = u32::try_from(request.items.len()).unwrap_or(u32::MAX);
+    if let Err(error) = state
+        .machine_quota_limiter
+        .check_and_consume(&principal.principal_id, batch_cost)
+    {
+        let quota_error = EvidenceError::MachineQuotaExceeded {
+            retry_after_seconds: error.retry_after_seconds,
+        };
+        let mut response = evidence_error_response(quota_error);
+        attach_evidence_audit_with_purposes(
+            &mut response,
+            "batch_evaluate_denied",
+            None,
+            &requested_claims,
+            None,
+            audit_purposes,
+        );
+        attach_zero_source_no_forward_audit(&mut response);
+        return response;
+    }
+    let runtime = state.runtime();
     let evaluation_future = runtime.batch_evaluate(
         Arc::clone(&state.evidence),
         Arc::clone(&state.source),
@@ -10554,6 +10630,18 @@ fn parse_json_body<T>(request: Result<Json<T>, JsonRejection>) -> Result<T, Evid
     request
         .map(|Json(request)| request)
         .map_err(|_| EvidenceError::InvalidRequest)
+}
+
+fn resolved_evaluate_audit_purposes(
+    header_purpose: Option<&str>,
+    body_purpose: Option<&str>,
+) -> Option<Vec<String>> {
+    match (header_purpose, body_purpose) {
+        (Some(header), Some(body)) if header != body => None,
+        (Some(header), _) if !header.trim().is_empty() => Some(vec![header.to_string()]),
+        (_, Some(body)) if !body.trim().is_empty() => Some(vec![body.to_string()]),
+        _ => None,
+    }
 }
 
 fn resolved_batch_audit_purposes(

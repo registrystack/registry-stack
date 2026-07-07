@@ -200,6 +200,15 @@ fn evaluate_body(id: &str) -> Value {
     })
 }
 
+fn audit_records(tmp: &TempDir) -> Vec<Value> {
+    std::fs::read_to_string(tmp.path().join("audit.jsonl"))
+        .expect("audit jsonl was written")
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("audit line is JSON"))
+        .map(|envelope| envelope["record"].clone())
+        .collect()
+}
+
 #[tokio::test]
 async fn disabled_by_default_allows_repeated_max_size_batches() {
     let (server, _upstream, _tmp) = start_server("", 10).await;
@@ -223,7 +232,7 @@ async fn disabled_by_default_allows_repeated_max_size_batches() {
 
 #[tokio::test]
 async fn enabled_quota_returns_429_deterministically_with_stable_code() {
-    let (server, _upstream, _tmp) = start_server(
+    let (server, _upstream, tmp) = start_server(
         "  machine_quota:\n    enabled: true\n    subjects_per_minute: 25\n",
         10,
     )
@@ -261,6 +270,96 @@ async fn enabled_quota_returns_429_deterministically_with_stable_code() {
         .parse::<u64>()
         .expect("retry-after is a positive integer");
     assert!(retry_after > 0 && retry_after <= 60);
+
+    let quota_audit = audit_records(&tmp)
+        .into_iter()
+        .find(|record| record["decision"] == json!("batch_evaluate_denied"))
+        .expect("machine quota denial audit record exists");
+    assert_eq!(
+        quota_audit["error_code"],
+        json!("evaluation.quota_exceeded")
+    );
+    assert_eq!(quota_audit["claim_hash"].is_string(), true);
+    let purposes = quota_audit["purposes"]
+        .as_array()
+        .expect("batch quota audit carries purpose per requested subject");
+    assert_eq!(purposes.len(), 10);
+    assert!(purposes
+        .iter()
+        .all(|purpose| purpose == "https://purpose.example.test/eligibility"));
+    assert_eq!(quota_audit["source_read_count"], json!(0));
+    assert_eq!(quota_audit["forwarded"], json!(false));
+}
+
+#[tokio::test]
+async fn idempotent_batch_replay_does_not_consume_machine_quota() {
+    let (server, _upstream, _tmp) = start_server(
+        "  machine_quota:\n    enabled: true\n    subjects_per_minute: 2\n",
+        2,
+    )
+    .await;
+    let request = batch_body("retry", 2);
+
+    let response = server
+        .post("/v1/batch-evaluations")
+        .add_header("x-api-key", "api-token")
+        .add_header("data-purpose", "https://purpose.example.test/eligibility")
+        .add_header("idempotency-key", "same-batch")
+        .json(&request)
+        .await;
+    response.assert_status_ok();
+    let first: Value = response.json();
+    assert_eq!(first["summary"]["succeeded"], json!(2));
+
+    let replay = server
+        .post("/v1/batch-evaluations")
+        .add_header("x-api-key", "api-token")
+        .add_header("data-purpose", "https://purpose.example.test/eligibility")
+        .add_header("idempotency-key", "same-batch")
+        .json(&request)
+        .await;
+    replay.assert_status_ok();
+    let second: Value = replay.json();
+    assert_eq!(second, first);
+
+    let exhausted = server
+        .post("/v1/batch-evaluations")
+        .add_header("x-api-key", "api-token")
+        .add_header("data-purpose", "https://purpose.example.test/eligibility")
+        .json(&batch_body("new-work", 1))
+        .await;
+    exhausted.assert_status(StatusCode::TOO_MANY_REQUESTS);
+    let body: Value = exhausted.json();
+    assert_eq!(body["code"], json!("evaluation.quota_exceeded"));
+}
+
+#[tokio::test]
+async fn oversized_batch_does_not_consume_machine_quota() {
+    let (server, _upstream, _tmp) = start_server(
+        "  machine_quota:\n    enabled: true\n    subjects_per_minute: 1\n",
+        1,
+    )
+    .await;
+
+    let oversized = server
+        .post("/v1/batch-evaluations")
+        .add_header("x-api-key", "api-token")
+        .add_header("data-purpose", "https://purpose.example.test/eligibility")
+        .json(&batch_body("oversized", 2))
+        .await;
+    oversized.assert_status(StatusCode::PAYLOAD_TOO_LARGE);
+    let body: Value = oversized.json();
+    assert_eq!(body["code"], json!("batch.too_large"));
+
+    let response = server
+        .post("/v1/evaluations")
+        .add_header("x-api-key", "api-token")
+        .add_header("data-purpose", "https://purpose.example.test/eligibility")
+        .json(&evaluate_body("still-has-budget"))
+        .await;
+    response.assert_status_ok();
+    let body: Value = response.json();
+    assert_eq!(body["results"][0]["value"], json!(1.0));
 }
 
 #[tokio::test]
@@ -305,7 +404,7 @@ async fn second_machine_credential_has_independent_budget() {
 
 #[tokio::test]
 async fn single_evaluate_calls_share_budget_with_batch_calls() {
-    let (server, _upstream, _tmp) = start_server(
+    let (server, _upstream, tmp) = start_server(
         "  machine_quota:\n    enabled: true\n    subjects_per_minute: 3\n",
         10,
     )
@@ -344,6 +443,22 @@ async fn single_evaluate_calls_share_budget_with_batch_calls() {
         .json(&evaluate_body("single-3"))
         .await;
     exhausted.assert_status(StatusCode::TOO_MANY_REQUESTS);
+
+    let quota_audit = audit_records(&tmp)
+        .into_iter()
+        .find(|record| record["decision"] == json!("evaluate_denied"))
+        .expect("machine quota denial audit record exists");
+    assert_eq!(
+        quota_audit["error_code"],
+        json!("evaluation.quota_exceeded")
+    );
+    assert_eq!(quota_audit["claim_hash"].is_string(), true);
+    assert_eq!(
+        quota_audit["purposes"],
+        json!(["https://purpose.example.test/eligibility"])
+    );
+    assert_eq!(quota_audit["source_read_count"], json!(0));
+    assert_eq!(quota_audit["forwarded"], json!(false));
 }
 
 fn self_attestation_and_machine_oidc_config(
