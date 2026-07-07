@@ -3291,9 +3291,11 @@ async fn federation_audit_write_failure_replaces_signed_success() {
         .respond_json(200, jwks_from_private_jwk(&peer_private))
         .await;
     let tmp = TempDir::new().expect("tempdir");
-    let blocked_parent = tmp.path().join("blocked");
-    std::fs::write(&blocked_parent, b"not a directory").expect("blocked parent is file");
-    let audit_path = blocked_parent.join("audit.jsonl");
+    // Make the audit target itself a directory: the single-writer sink still
+    // constructs (its `.lock` sentinel is a sibling in the real tmp dir), but
+    // every audit WRITE fails, which is exactly what this test exercises (#211).
+    let audit_path = tmp.path().join("audit.jsonl");
+    std::fs::create_dir(&audit_path).expect("audit target is a directory");
     let app = standalone_router(federation_config(
         base_url.trim_end_matches('/'),
         audit_path.to_str().expect("audit path is UTF-8"),
@@ -4120,9 +4122,11 @@ async fn fail_closed_audit_failure_blocks_config_apply_before_state_mutation() {
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
 
     let tmp = TempDir::new().expect("tempdir");
-    let blocked_parent = tmp.path().join("blocked-audit-parent");
-    fs::write(&blocked_parent, b"not a directory").expect("blocked parent writes");
-    let audit_path = blocked_parent.join("audit.jsonl");
+    // Make the audit target itself a directory so the single-writer sink
+    // constructs (its `.lock` sentinel is a sibling in the real tmp dir) but
+    // every audit WRITE fails, exercising the fail-closed path (#211).
+    let audit_path = tmp.path().join("audit.jsonl");
+    fs::create_dir(&audit_path).expect("audit target is a directory");
     let antirollback_path = tmp.path().join("config-antirollback.json");
     let mut config = registry_data_api_config(
         "http://127.0.0.1:1",
@@ -4190,8 +4194,10 @@ async fn fail_closed_audit_failure_blocks_config_apply_before_state_mutation() {
     assert_eq!(antirollback.last_sequence, 1);
     assert_eq!(antirollback.last_config_hash, current_config_hash);
 
-    fs::remove_file(&blocked_parent).expect("blocked parent removes");
-    fs::create_dir(&blocked_parent).expect("audit parent dir creates");
+    // Unblock audit writes (remove the empty directory standing in for the
+    // audit file) so the follow-up request's audit record can be written and
+    // the response reflects the unmutated runtime policy.
+    fs::remove_dir(&audit_path).expect("audit target directory removes");
     server
         .get("/openapi.json")
         .await
@@ -11428,6 +11434,11 @@ async fn audit_chain_bootstraps_from_sink_tail() {
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
 
+    // A restart releases the single-writer audit lock: the first instance must
+    // be fully torn down before the replacement acquires the lock (#211).
+    drop(first);
+    tokio::task::yield_now().await;
+
     let second = TestServer::builder()
         .http_transport()
         .build(standalone_router(config).expect("second router builds"));
@@ -11476,6 +11487,11 @@ async fn audit_chain_detects_inserted_envelope() {
         .get("/v1/claims")
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
+
+    // A restart releases the single-writer audit lock before the replacement
+    // instance acquires it (#211).
+    drop(first);
+    tokio::task::yield_now().await;
 
     let contents = std::fs::read_to_string(&audit_path).expect("audit was written");
     let mut lines = contents.lines().collect::<Vec<_>>();
