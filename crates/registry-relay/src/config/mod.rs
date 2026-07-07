@@ -452,6 +452,45 @@ pub struct AuthConfig {
     pub api_keys: Vec<ApiKeyConfig>,
     #[serde(default)]
     pub oidc: Option<OidcConfig>,
+    /// Local, coarse, in-process throttle on repeated authentication
+    /// failures from one client address. Disabled by default.
+    #[serde(default)]
+    pub failure_throttle: AuthFailureThrottleConfig,
+}
+
+/// Local backstop against repeated authentication failures from a single
+/// client address. This is not the primary defense: ingress rate limiting
+/// in front of the relay (declared via `deployment.evidence.ingress_rate_limit`)
+/// is expected to absorb abusive traffic before it reaches this process.
+/// Disabled by default so deployments that never set this block observe no
+/// behavior change.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct AuthFailureThrottleConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_auth_failure_throttle_max_failures")]
+    pub max_failures: u32,
+    #[serde(default = "default_auth_failure_throttle_window_seconds")]
+    pub window_seconds: u64,
+}
+
+impl Default for AuthFailureThrottleConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_failures: default_auth_failure_throttle_max_failures(),
+            window_seconds: default_auth_failure_throttle_window_seconds(),
+        }
+    }
+}
+
+fn default_auth_failure_throttle_max_failures() -> u32 {
+    20
+}
+
+fn default_auth_failure_throttle_window_seconds() -> u64 {
+    60
 }
 
 /// Authentication mode tag. Drives the provider built at startup in
@@ -1802,5 +1841,13 @@ mod tests {
         let response = ReleaseResponseConfig::default();
         assert!(!response.include_source_metadata);
         assert_eq!(response.max_age_seconds, None);
+    }
+
+    #[test]
+    fn auth_failure_throttle_config_defaults_to_disabled() {
+        let throttle = AuthFailureThrottleConfig::default();
+        assert!(!throttle.enabled);
+        assert_eq!(throttle.max_failures, 20);
+        assert_eq!(throttle.window_seconds, 60);
     }
 }

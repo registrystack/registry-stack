@@ -78,6 +78,7 @@ Registry Notary returns the codes in the table below from its evidence taxonomy.
 | `auth.purpose_required` | purpose is required | The request omits a required purpose. |
 | `auth.missing_credential` | credential is missing | No authentication credential was provided. |
 | `auth.multiple_credentials` | multiple authentication credentials were provided | More than one authentication credential was provided. |
+| `auth.rate_limited` | authentication is rate limited | Too many failed authentication attempts came from the same client address in the configured window. |
 | `auth.scope_denied` | required scope is missing | The caller's scopes do not include the required scope. |
 | `self_attestation.denied` | self-attestation request is denied | A self-attestation request was denied; also the public code for invalid-token and assurance-denied conditions. The audit record carries the specific reason. |
 | `self_attestation.rate_limited` | self-attestation request is rate limited | Too many self-attestation requests in the configured window. |

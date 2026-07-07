@@ -42,6 +42,9 @@ fn all_variants() -> Vec<Error> {
         Error::Auth(AuthError::AlgorithmNotAllowed),
         Error::Auth(AuthError::ClientNotAllowed),
         Error::Auth(AuthError::JwksUnavailable),
+        Error::Auth(AuthError::RateLimited {
+            retry_after_seconds: 30,
+        }),
         // pdp.*
         Error::Pdp(PdpError::PurposeNotPermitted),
         Error::Pdp(PdpError::AssuranceInsufficient),
@@ -155,6 +158,7 @@ fn expected_table() -> Vec<(&'static str, StatusCode)> {
         ("auth.algorithm_not_allowed", StatusCode::UNAUTHORIZED),
         ("auth.client_not_allowed", StatusCode::FORBIDDEN),
         ("auth.jwks_unavailable", StatusCode::SERVICE_UNAVAILABLE),
+        ("auth.rate_limited", StatusCode::TOO_MANY_REQUESTS),
         ("pdp.purpose_not_permitted", StatusCode::FORBIDDEN),
         ("pdp.assurance_insufficient", StatusCode::FORBIDDEN),
         ("pdp.evidence_stale", StatusCode::FORBIDDEN),
@@ -399,6 +403,36 @@ async fn every_variant_renders_as_problem_details() {
                 "forbidden field {forbidden} present for {expected_code}"
             );
         }
+    }
+}
+
+/// `auth.rate_limited` carries a `Retry-After` header so well-behaved
+/// clients back off instead of retrying immediately; no other variant
+/// sets it.
+#[tokio::test]
+async fn rate_limited_sets_retry_after_header_and_no_other_variant_does() {
+    let response = Error::Auth(AuthError::RateLimited {
+        retry_after_seconds: 42,
+    })
+    .into_response();
+    assert_eq!(
+        response
+            .headers()
+            .get(http::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok()),
+        Some("42"),
+        "Retry-After should carry the configured retry delay"
+    );
+
+    for variant in all_variants() {
+        if matches!(variant, Error::Auth(AuthError::RateLimited { .. })) {
+            continue;
+        }
+        let response = variant.into_response();
+        assert!(
+            response.headers().get(http::header::RETRY_AFTER).is_none(),
+            "unexpected Retry-After header on a non-rate-limited variant"
+        );
     }
 }
 

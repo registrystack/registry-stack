@@ -8,6 +8,12 @@
   deployment gate findings, expired waivers, and an undeclared deployment
   profile, plus a boot-time operational audit record (`deployment.gate_waived`)
   per waived gate.
+- Local, in-process auth-failure throttle (`auth.failure_throttle`), disabled
+  by default. When enabled, repeated authentication failures from one client
+  address within a configured window return a stable 429
+  (`auth.rate_limited`) with a `Retry-After` header before the auth provider
+  runs. This is a backstop behind ingress rate limiting, not a replacement
+  for it; see `docs/configuration.md` for the deployment posture.
 
 ## 0.8.4 - 2026-07-04
 
