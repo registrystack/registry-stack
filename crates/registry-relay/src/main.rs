@@ -1192,12 +1192,8 @@ async fn run_audit_quarantine(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     load_env_file_arg(env_file.as_deref())?;
     let config = config::load(&config_path)?;
-    let (path, max_size_bytes, max_files) = match &config.audit.sink {
-        AuditSinkConfig::File { path, rotate } => (
-            path.clone(),
-            rotate.max_size_mb.saturating_mul(1024 * 1024),
-            rotate.max_files,
-        ),
+    let (path, max_files) = match &config.audit.sink {
+        AuditSinkConfig::File { path, rotate } => (path.clone(), rotate.max_files),
         _ => {
             return Err(io::Error::other(
                 "audit quarantine requires a file audit sink (audit.sink: file)",
@@ -1213,7 +1209,6 @@ async fn run_audit_quarantine(
         .unwrap_or(i64::MAX);
     let outcome = registry_platform_audit::quarantine_and_recover_chain(
         &path,
-        max_size_bytes,
         max_files,
         &profile.hasher(),
         &reason,
