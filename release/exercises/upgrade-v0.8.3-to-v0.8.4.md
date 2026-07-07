@@ -4,12 +4,14 @@ Run date: 2026-07-07 (local lab host, Apple Silicon macOS, Docker Compose v5.1.2
 
 ## Purpose
 
-Evidence for the READINESS gate "Upgrade and rollback documented and exercised"
-(issue #203). This run exercises the draft how-to page
+Partial evidence for the READINESS gate "Upgrade and rollback documented and
+exercised" (issue #203). This run exercises the draft how-to page
 `docs/site/src/content/docs/operate/upgrade-and-rollback.mdx` against a real
 topology: baseline at v0.8.3, upgrade to v0.8.4, verified roll back to v0.8.3.
-Every place the draft procedure did not match lab reality is recorded under
-[Findings](#findings).
+It uses source-built release-tag images and does not close the release-artifact,
+credential-issuance, metrics, Redis replay/nonce, anti-rollback monotonicity, or
+multi-release skip branches. Every place the draft procedure did not match lab
+reality is recorded under [Findings](#findings).
 
 ## Environment
 
@@ -26,8 +28,8 @@ Every place the draft procedure did not match lab reality is recorded under
   port remapped (prefix `1`: 4311->14311 ... 4331->14331, zitadel 4380->14380
   via `REGISTRY_LAB_ZITADEL_PORT`, postgres 54329->64329, redis 63799->16379)
   so the run coexisted with the live labs on this host. All remapped ports
-  were verified free with `lsof` before start. The port override lives in
-  `lab/compose.upgrade-ex.yaml` in this branch's working tree; its `ports:`
+  were verified free with `lsof` before start. The port override is committed as
+  `lab/compose.upgrade-ex.yaml` in this branch; its `ports:`
   entries use the compose `!override` merge tag because `ports:` lists merge
   by concatenation across compose files.
 - Image builds per version (IDs at run time):
@@ -104,8 +106,8 @@ across records within the container lifetime:
 Anti-rollback state: `config_trust.antirollback_state_path` is configured
 (`/var/lib/registry-notary/config-state/civil-notary-config-antirollback.json`)
 but the file **does not exist** — the `notary-config-state` volume is empty.
-The file is only created when a governed config bundle is applied, and the
-lab never applies one (F4, F5).
+This run did not exercise the governed config-bundle apply flow that would
+prove monotonic anti-rollback behavior (F4, F5).
 
 Version self-report from inside the containers:
 
@@ -251,9 +253,9 @@ Numbered; F-references above point here.
    stay continuous" constraint cannot be verified from the live stream
    across an upgrade — only from captured logs. The doc should state the
    stdout-sink variant of both the backup step and the continuity check.
-4. **The anti-rollback state file is created lazily.** With `config_trust`
-   enabled but no governed bundle ever applied, the file named by
-   `antirollback_state_path` does not exist; the doc's backup step reads as
+4. **The anti-rollback state file was absent in this topology.** With
+   `config_trust` enabled but no governed bundle ever applied, the file named
+   by `antirollback_state_path` does not exist; the doc's backup step reads as
    if it always exists. "Byte-identical survival" across the upgrade was
    therefore vacuous (empty volume before, empty after, volume itself
    persisted).
@@ -304,13 +306,16 @@ Numbered; F-references above point here.
 
 ## Result
 
-The draft procedure was executed end to end against a real topology:
+The draft procedure was partially exercised end to end against a real topology:
 v0.8.3 baseline verified; v0.8.4 doctor pre-check correctly caught the
 breaking config change before deployment; after config migration the
 upgrade deployed via `up -d` with state volumes intact and services verified
 healthy on v0.8.4; the roll back to the kept v0.8.3 images plus backed-up
 config restored a fully verified v0.8.3 deployment without touching
-persistent volumes. The procedure works, with the documented findings —
-chiefly the stdout-audit-sink mismatch (finding 3), the lazily created
-anti-rollback file (finding 4), and the need to state explicitly that
-config backup enables config roll back (finding 1).
+persistent volumes. This closes the source-built tag exercise only; it does not
+close release-artifact verification, credential issuance, metrics, Redis
+replay/nonce state survival, anti-rollback monotonic rejection, or multi-release
+skip upgrades. The procedure works within that scoped run, with the documented
+findings — chiefly the stdout-audit-sink mismatch (finding 3), the absent
+anti-rollback file in this topology (finding 4), and the need to state
+explicitly that config backup enables config roll back (finding 1).

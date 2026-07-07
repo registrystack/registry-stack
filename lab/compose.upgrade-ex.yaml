@@ -1,0 +1,70 @@
+# Port-isolation override for the GH#203 upgrade/rollback exercise.
+#
+# The maintainer's Solmara lab already occupies host ports 4311-4331, 4380,
+# 54329, and 63799 under the default `registry-lab` compose project. This
+# file remaps every host-published port in compose.yaml by prefixing a `1`
+# (4311 -> 14311, etc.) so this exercise can run alongside that lab without
+# touching it. It is applied together with `-p registry-upgrade-ex` and
+# compose.yaml via:
+#
+#   docker compose -f compose.yaml -f compose.upgrade-ex.yaml <cmd>
+#
+# `ports:` lists merge by concatenation across compose files by default (the
+# override does NOT replace the base list), so every entry below uses the
+# `!override` merge tag to fully replace the base service's `ports:` list
+# instead of adding to it. Without `!override` both the original (occupied)
+# host port and the remapped one would be requested and `up` would fail (or
+# worse, silently bind the maintainer's port).
+#
+# postgres, redis, and zitadel are not remapped here: compose.yaml already
+# parameterizes their host ports via REGISTRY_LAB_POSTGRES_PORT,
+# REGISTRY_LAB_REDIS_PORT, and REGISTRY_LAB_ZITADEL_PORT (zitadel's
+# ZITADEL_EXTERNALPORT/PUBLIC_URL follow REGISTRY_LAB_ZITADEL_PORT already),
+# so those are remapped by exporting the env vars instead:
+#   REGISTRY_LAB_POSTGRES_PORT=64329
+#   REGISTRY_LAB_REDIS_PORT=16379
+#   REGISTRY_LAB_ZITADEL_PORT=14380
+#
+# Only services that start under the default profile (no `profiles:` entry
+# in compose.yaml) are remapped below; the dhis2/fhir/opencrvs/agri/client
+# profile services are never brought up by this exercise's `up -d` and do
+# not need remapping.
+
+services:
+  civil-registry-relay:
+    ports: !override
+      - "14311:8080"
+      - "14319:8081"
+
+  population-registry-relay:
+    ports: !override
+      - "14315:8080"
+
+  social-protection-registry-relay:
+    ports: !override
+      - "14312:8080"
+
+  health-registry-relay:
+    ports: !override
+      - "14313:8080"
+
+  civil-notary:
+    ports: !override
+      - "14321:8080"
+      - "14329:8081"
+
+  social-protection-notary:
+    ports: !override
+      - "14322:8080"
+
+  shared-eligibility-notary:
+    ports: !override
+      - "14323:8080"
+
+  openfn-civil-notary:
+    ports: !override
+      - "14324:8080"
+
+  static-metadata-publisher:
+    ports: !override
+      - "14331:8080"
