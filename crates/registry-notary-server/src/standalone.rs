@@ -142,14 +142,18 @@ pub(crate) fn credential_issuer_runtime_from_config(
 
 pub(crate) fn preauth_runtime_from_config_preserving_stores(
     config: &StandaloneRegistryNotaryConfig,
+    audit: AuditPipeline,
     previous: Option<&PreAuthRuntime>,
 ) -> Result<Option<Arc<PreAuthRuntime>>, StandaloneServerError> {
+    // The audit pipeline is the single process-wide writer, passed in by the
+    // caller (the running server's shared pipeline). This helper must never
+    // build its own `AuditPipeline::from_config`: a second pipeline over the
+    // same audit file is exactly the two-writer fork the single-writer lock
+    // (#211) forbids, and would now fail closed with `SinkLocked`. The
+    // `previous`-owned pipeline and this argument are the same shared instance;
+    // preserving `previous`'s login/tx-code stores stays independent of it.
     let reuse_scoped_key_ids = config.reuse_scoped_signing_key_ids();
     let signing_keys = SigningKeyRegistry::from_config(&config.evidence, &reuse_scoped_key_ids)?;
-    let audit = previous
-        .map(|runtime| runtime.audit.clone())
-        .map(Ok)
-        .unwrap_or_else(|| AuditPipeline::from_config(&config.audit))?;
     PreAuthRuntime::from_config_preserving_stores(config, &signing_keys, audit, previous)
         .map(|runtime| runtime.map(Arc::new))
 }
@@ -4217,11 +4221,15 @@ impl AuditPipeline {
                     .path
                     .as_deref()
                     .ok_or(StandaloneServerError::MissingAuditPath)?;
-                Arc::new(JsonlFileSink::with_rotation(
+                // Single-writer advisory lock (#211): a second notary process
+                // sharing this audit volume (or an overlapping container during
+                // a restart/recreate) fails loudly with AuditError::SinkLocked
+                // instead of silently forking the audit chain.
+                Arc::new(JsonlFileSink::with_rotation_single_writer(
                     path,
                     config.max_size_bytes(),
                     config.max_files(),
-                ))
+                )?)
             }
             "syslog" => {
                 validate_no_file_audit_fields(config, "syslog")?;
@@ -9557,6 +9565,27 @@ config_trust:
         assert!(
             !tmp.path().join("audit.jsonl.2").exists(),
             "rotation should retain only the configured number of files"
+        );
+    }
+
+    #[test]
+    fn audit_pipeline_file_sink_is_single_writer() {
+        // #211: a second notary audit pipeline over the same file path must fail
+        // loudly at construction (the single-writer advisory lock) rather than
+        // silently forking the audit chain.
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let path = tmp.path().join("audit.jsonl");
+        let mut config = test_audit_config("file");
+        config.path = Some(path.display().to_string());
+
+        let _first = AuditPipeline::from_config(&config).expect("first audit pipeline builds");
+        let second = AuditPipeline::from_config(&config);
+        assert!(
+            matches!(
+                second,
+                Err(StandaloneServerError::Audit(AuditError::SinkLocked { .. }))
+            ),
+            "second writer must be rejected, got {second:?}"
         );
     }
 

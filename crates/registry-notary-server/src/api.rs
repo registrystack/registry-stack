@@ -1912,18 +1912,25 @@ fn classify_credential_issuer_rotation(
     let (issuers, signer_readiness) =
         crate::standalone::credential_issuer_runtime_from_config(candidate)
             .map_err(|_| CredentialIssuerRotationError::Readiness)?;
+    // Reuse the single process-wide audit pipeline for both the rebuilt preauth
+    // and federation runtimes; neither may construct its own pipeline over the
+    // same audit file (single-writer, #211).
+    let audit = state
+        .auth_state
+        .as_ref()
+        .map(|auth_state| auth_state.audit_pipeline());
     let previous_preauth = preauth_runtime(state);
     let preauth = crate::standalone::preauth_runtime_from_config_preserving_stores(
         candidate,
+        audit
+            .clone()
+            .ok_or(CredentialIssuerRotationError::Readiness)?,
         previous_preauth.as_deref(),
     )
     .map_err(|_| CredentialIssuerRotationError::Readiness)?;
     let federation = crate::standalone::federation_runtime_from_config(
         candidate,
-        state
-            .auth_state
-            .as_ref()
-            .map(|auth_state| auth_state.audit_pipeline()),
+        audit,
         state.replay.store(),
         Arc::clone(&state.metrics),
     )
