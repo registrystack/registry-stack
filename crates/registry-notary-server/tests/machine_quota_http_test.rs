@@ -279,7 +279,7 @@ async fn enabled_quota_returns_429_deterministically_with_stable_code() {
         quota_audit["error_code"],
         json!("evaluation.quota_exceeded")
     );
-    assert_eq!(quota_audit["claim_hash"].is_string(), true);
+    assert!(quota_audit["claim_hash"].is_string());
     let purposes = quota_audit["purposes"]
         .as_array()
         .expect("batch quota audit carries purpose per requested subject");
@@ -452,7 +452,7 @@ async fn single_evaluate_calls_share_budget_with_batch_calls() {
         quota_audit["error_code"],
         json!("evaluation.quota_exceeded")
     );
-    assert_eq!(quota_audit["claim_hash"].is_string(), true);
+    assert!(quota_audit["claim_hash"].is_string());
     assert_eq!(
         quota_audit["purposes"],
         json!(["https://purpose.example.test/eligibility"])
