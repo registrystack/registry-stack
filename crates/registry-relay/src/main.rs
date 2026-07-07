@@ -1245,7 +1245,7 @@ async fn compile_relay_runtime(
         &audit_sink,
         ConfigSource::LocalFile,
     )
-    .await;
+    .await?;
     let bind: SocketAddr = bind_override.unwrap_or(config.server.bind);
     let admin_bind: Option<SocketAddr> = config.server.admin_bind;
     let audit_kind = audit_sink_kind(&config);

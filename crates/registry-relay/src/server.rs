@@ -727,7 +727,7 @@ fn build_cors_layer_with_status(cors: &CorsConfig) -> (CorsLayer, bool) {
 
 /// Writes one operational audit record per deployment gate finding that an
 /// active waiver suppresses, so the audit stream carries durable evidence of
-/// every boot that ran with waived posture.
+/// every startup attempt that evaluated waived posture.
 ///
 /// The serve path calls this once per boot, right after the audit pipeline is
 /// built: config loading itself cannot write these records because the sink
@@ -738,7 +738,7 @@ pub async fn audit_waived_deployment_gates(
     config: &Config,
     audit_sink: &AuditPipeline,
     source: registry_platform_ops::ConfigSource,
-) {
+) -> Result<(), registry_platform_audit::AuditError> {
     let facts = crate::deployment::facts_from_config(config, source);
     let waivers = crate::deployment::waivers_from_config(config);
     let evaluation = crate::deployment::evaluate(
@@ -767,8 +767,12 @@ pub async fn audit_waived_deployment_gates(
         };
         if let Err(err) = audit_sink.write_operational_event(event).await {
             tracing::error!(error = %err, "audit.operational_event_write_failed");
+            if config.audit.write_policy == registry_platform_ops::AuditWritePolicy::FailClosed {
+                return Err(err);
+            }
         }
     }
+    Ok(())
 }
 
 fn spawn_operational_audit_event(audit_sink: Arc<AuditPipeline>, event: OperationalAuditEvent) {

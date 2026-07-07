@@ -241,7 +241,8 @@ async fn boot_audit_records_waived_gate() {
         &pipeline,
         registry_platform_ops::ConfigSource::LocalFile,
     )
-    .await;
+    .await
+    .expect("waived gate audit writes");
 
     let lines = sink.snapshot();
     assert_eq!(
@@ -273,12 +274,60 @@ async fn boot_audit_writes_nothing_without_waivers() {
         &pipeline,
         registry_platform_ops::ConfigSource::LocalFile,
     )
-    .await;
+    .await
+    .expect("no waived gates means no audit write failure");
 
     assert!(
         sink.snapshot().is_empty(),
         "expected no audit records without waived gates"
     );
+}
+
+#[tokio::test]
+async fn boot_audit_failure_fails_closed_for_waived_gate() {
+    let yaml = format!(
+        "{}\ndeployment:\n  profile: hosted_lab\n  waivers:\n    - finding: relay.config.unsigned\n      reason: \"synthetic-waiver-not-a-secret\"\n      expires: \"2999-01-01\"\n",
+        minimal_config_yaml()
+    );
+    let config = parse_config(&yaml).expect("config parses");
+    assert_eq!(config.audit.write_policy, AuditWritePolicy::FailClosed);
+    let pipeline = AuditPipeline::from_sink(AlwaysFailWriteSink);
+
+    let err = registry_relay::server::audit_waived_deployment_gates(
+        &config,
+        &pipeline,
+        registry_platform_ops::ConfigSource::LocalFile,
+    )
+    .await
+    .expect_err("fail_closed must surface waived-gate audit write failure");
+
+    assert!(
+        matches!(err, AuditError::Io(_)),
+        "expected injected audit write failure, got {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn boot_audit_failure_is_best_effort_when_availability_first() {
+    let yaml = format!(
+        "{}\ndeployment:\n  profile: hosted_lab\n  waivers:\n    - finding: relay.config.unsigned\n      reason: \"synthetic-waiver-not-a-secret\"\n      expires: \"2999-01-01\"\n",
+        minimal_config_yaml()
+    );
+    let mut config = parse_config(&yaml).expect("config parses");
+    config.audit.write_policy = AuditWritePolicy::AvailabilityFirst;
+    assert_eq!(
+        config.audit.write_policy,
+        AuditWritePolicy::AvailabilityFirst
+    );
+    let pipeline = AuditPipeline::from_sink(AlwaysFailWriteSink);
+
+    registry_relay::server::audit_waived_deployment_gates(
+        &config,
+        &pipeline,
+        registry_platform_ops::ConfigSource::LocalFile,
+    )
+    .await
+    .expect("availability_first keeps waived-gate audit best effort");
 }
 
 // --- audit write policy (end to end) ----------------------------------------
