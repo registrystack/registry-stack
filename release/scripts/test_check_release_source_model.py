@@ -110,6 +110,48 @@ class ReleaseSourceModelTest(unittest.TestCase):
         self.assertIn("lab/vendor/crosswalk", result.stdout)
         self.assertIn("lab/vendor/registry-relay", result.stdout)
 
+    def test_vendor_mode_ignores_stale_lab_cel_mapping_default(self) -> None:
+        """The lab-root absolute deprecated default must stay ignored."""
+        with ReleaseSourceFixture(
+            script_rel_dir="release/scripts",
+            vendor_rel_dir="lab/vendor",
+        ) as checkout_root:
+            stale = checkout_root / "lab" / "vendor" / "cel-mapping"
+            stale.mkdir()
+            (stale / "Cargo.toml").write_text(
+                "[package]\nname = \"cel-mapping\"\nversion = \"0.1.0\"\n",
+                encoding="utf-8",
+            )
+
+            result = _run(
+                checkout_root,
+                "release/scripts/check-release-source-model.sh",
+                "vendor",
+                # resolve() matches the script's physical repo-root spelling,
+                # the same exact-string form the old lab script ignored.
+                {"CEL_MAPPING_SOURCE_DIR": str(stale.resolve())},
+            )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("lab/vendor/crosswalk", result.stdout)
+        self.assertNotIn("cel-mapping", result.stdout)
+
+    def test_vendor_mode_resolves_lab_relative_crosswalk_override(self) -> None:
+        """lab/justfile exports CROSSWALK_SOURCE_DIR=./vendor/crosswalk relative to lab/."""
+        with ReleaseSourceFixture(
+            script_rel_dir="release/scripts",
+            vendor_rel_dir="lab/vendor",
+        ) as checkout_root:
+            result = _run(
+                checkout_root,
+                "release/scripts/check-release-source-model.sh",
+                "vendor",
+                {"CROSSWALK_SOURCE_DIR": "./vendor/crosswalk"},
+            )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("lab/vendor/crosswalk", result.stdout)
+
     def test_source_mode_honors_deprecated_cel_mapping_source_dir(self) -> None:
         with ReleaseSourceFixture() as checkout_root:
             sources = checkout_root.parent / "sources"
@@ -200,6 +242,44 @@ class MonorepoSourceModelTest(unittest.TestCase):
 
         self.assertNotEqual(0, result.returncode)
         self.assertIn("missing required external.registry-atlas", result.stderr)
+
+    def test_monorepo_mode_rejects_gitlink_manifest_ref_drift(self) -> None:
+        """While lab/vendor gitlinks are committed, the current manifest must match them."""
+        with MonorepoFixture() as stack_root:
+            add_gitlink(stack_root, "lab/vendor/registry-atlas", "a" * 40)
+
+            result = run_monorepo_validator(stack_root)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn(
+            "does not match committed lab/vendor/registry-atlas gitlink",
+            result.stderr,
+        )
+
+    def test_monorepo_mode_cross_checks_only_the_current_manifest(self) -> None:
+        """Historical manifests keep their release-day refs and are not cross-checked."""
+        with MonorepoFixture() as stack_root:
+            add_gitlink(
+                stack_root,
+                "lab/vendor/registry-atlas",
+                "2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b",
+            )
+            old = stack_root / "release" / "manifests" / "registry-stack-old.yaml"
+            old.write_text(
+                MANIFEST_YAML.replace("version: 0.0.1", "version: 0.0.0").replace(
+                    "2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b",
+                    "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+                ),
+                encoding="utf-8",
+            )
+
+            result = run_monorepo_validator(stack_root)
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn(
+            "release-source-external-pin registry-stack-test.yaml registry-atlas",
+            result.stdout,
+        )
 
     def test_monorepo_mode_rejects_missing_manifests(self) -> None:
         with MonorepoFixture() as stack_root:
@@ -347,6 +427,12 @@ def _run(
         capture_output=True,
         check=False,
     )
+
+
+def add_gitlink(repo: Path, rel_path: str, sha: str) -> None:
+    """Record a committed submodule gitlink without materializing a checkout."""
+    git(repo, "update-index", "--add", "--cacheinfo", f"160000,{sha},{rel_path}")
+    git(repo, "commit", "-m", f"Pin {rel_path}")
 
 
 def configure_identity(repo: Path) -> None:
