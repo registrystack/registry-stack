@@ -176,7 +176,7 @@ REQ-PR-RELAY-018: Admin routes MUST be served on a separate, optional admin list
 These constraints are stated so a reader does not infer a capability from the route list that the reviewed implementation does not provide.
 
 - **No source mutation, no streaming.** Registry Relay does not mutate source registry data in v1 and reads sources as batch snapshots or table scans; there is no event-stream backend (REQ-PR-RELAY-001).
-- **Feature-gated and config-gated surfaces.** OGC adapters and SP DCI sync are present only in builds compiled with the matching Cargo feature; signed response credentials are present only when runtime configuration enables the `provenance` key, not via a Cargo feature (REQ-PR-RELAY-017).
+- Feature-gated and config-gated surfaces: OGC adapters and SP DCI sync are present only in builds compiled with the matching Cargo feature; signed response credentials are present only when runtime configuration enables the `provenance` key, not via a Cargo feature (REQ-PR-RELAY-017).
 - **No claim evaluation.** Relay describes evidence offerings but never evaluates a claim or issues a credential; that is Registry Notary's role (REQ-PR-RELAY-012).
 - **Manifest format not owned here.** The metadata schema and renderers belong to Registry Manifest; Relay serves and scopes the artifacts only (REQ-PR-RELAY-011).
 - **PDP enforcement boundary.** Governed PDP enforcement applies to configured runtime reads; scoped metadata publication remains a separate publication and discovery surface (REQ-PR-RELAY-019, REQ-PR-RELAY-023).
