@@ -26,7 +26,7 @@ each remaining marker justified here.
 | tutorials/configure-dhis2-claim-checks.mdx | batched | rewritten | P1: fully lab/-dependent, no Solmara equivalent; fate decision needed |
 | tutorials/deploy-standalone-with-own-data.mdx | batched | rewritten | P2: claims solid; missing troubleshooting section, heavy style debt |
 | tutorials/first-run-with-registry-lab.mdx | done | rewritten (replaced) | Replaced 2026-07-07 by tutorials/first-run-with-solmara-lab.mdx after registrystack/solmara-lab went public; redirect in astro.config.mjs; check-tutorial.sh contract ported (3 steps / 4 verify / 16 services, solmara-lab pinned at 1af06c8) |
-| tutorials/first-run-with-solmara-lab.mdx | batched | rewritten (new) | Targets public solmara-lab; status draft pending reader run; every claim anchored in the solmara-lab checkout |
+| tutorials/first-run-with-solmara-lab.mdx | done | rewritten (new) | Reader run passed verbatim twice (findings folded back); single-page fresh-eyes review passed post-fix; status current |
 | tutorials/getting-started-fhir-evidence.mdx | batched | rewritten | P1: fully lab/-dependent, no Solmara equivalent; fate decision needed |
 | tutorials/publish-spreadsheet-secured-registry-api.mdx | batched | rewritten | P3: best-anchored page; fix source_repos slug |
 | tutorials/run-notary-standalone-for-api.mdx | batched | rewritten | P2: CLI claims verified; overlap with deploy-standalone noted |
@@ -158,7 +158,7 @@ verifying all three Phase-4 rename facts in code).
 | tutorials/run-notary-standalone-for-api.mdx | pass-with-findings (post-GH#278 deviation) | Central promise concretely verified (predicate-only disclosure, no source-row fields). Fixed on page: literal pin syntax in the GH#278 row, cleanup reassurance. |
 | tutorials/verify-opencrvs-claims.mdx | fail at start (GH#278), partial by design | Fixed on page: source URL now an explicit placeholder + base-URL prerequisite named; source.unavailable vs auth-error troubleshooting split; GH#278 row with pin syntax; jq field names (passed/actual_status); two broken onboarding links; platform-override wording matches actual registryctl behavior. |
 | tutorials/configure-dhis2-claim-checks.mdx | environment-blocked | Ports 4311-4331 held by the running Solmara stack; stopping it was declined (volume/audit-chain risk). No execution coverage anywhere: residual gap, run after the Solmara stack can be paused or on another machine. Claims statically verified against lab/ compose+configs. |
-| tutorials/first-run-with-solmara-lab.mdx | reader run pending (authorized: Solmara stack stop/restart approved 2026-07-07) | Replaces the registry-lab page; CI note: check:tutorial execute mode is NOT wired into any workflow (only dry-run runs in CI), flagged for a follow-up decision. |
+| tutorials/first-run-with-solmara-lab.mdx | pass-with-findings (harness-isolation entries only; every step passed verbatim, twice) | Fixed on page: curl prerequisite, compose project-name collision row, lead restructure, lab-replacement overclaim dropped, /docs-vs-openapi causal tightening. Product issues filed: solmara-lab#1 (stale Bruno example), #2 (project-name collision, down -v destroys colliding volumes), #3 (stale committed checksums). Owner's stack stopped/restarted around the run, health-checked (16 up, portal/home/relay 200). CI note: check:tutorial execute mode is not wired into any workflow (only dry-run); follow-up decision. |
 
 ## Deliberate deviations
 
