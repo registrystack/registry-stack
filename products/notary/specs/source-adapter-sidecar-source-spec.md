@@ -1,8 +1,12 @@
 # Synchronous Adaptor Source Sidecar Spec
 
-> **Status: Archived (2026-05-31).** The source-adapter sidecar source described here has shipped; the sidecar crate is fully built and tested. This file is kept as a
-> design record and is not the source of truth. For current behavior see the code
-> and crates/registry-notary-source-adapter-sidecar/README.md.
+> **Status: Archived (2026-05-31).** The source-adapter sidecar source has
+> shipped, but this file is a historical design record and is not the source of
+> truth. The shipped sidecar uses built-in `http_json`, `http_flow`, `fhir`, and
+> `rhai` engines governed by a TUF-verified whole-target `config_hash`; do not
+> read the older OpenFn runtime/adaptor pinning language below as current
+> behavior. For current behavior see the code and
+> crates/registry-notary-source-adapter-sidecar/README.md.
 
 ## Goal
 
@@ -66,7 +70,7 @@ The sidecar owns concurrency:
 - Liveness restarts the sidecar if requests are arriving and no worker has
   completed a request within the configured liveness window.
 
-## Credential And Job Loading
+## Historical Credential And Job Loading
 
 Target-service credentials are injected into the per-request OpenFn state as
 `state.configuration` over the private worker channel. They must not be written
@@ -74,8 +78,9 @@ to per-request disk files. If a disk-backed fallback is ever added, it must use
 mode `0600`, a per-request directory, and best-effort cleanup on timeout and
 crash.
 
-OpenFn workflow expression files, adaptor versions, and credential schemas are
-declared in a sidecar manifest bundled into the sidecar image:
+In the original OpenFn design, workflow expression files, adaptor versions, and
+credential schemas were declared in a sidecar manifest bundled into the sidecar
+image:
 
 ```yaml
 openfn:
@@ -111,23 +116,22 @@ sources:
     credential_env: OPENCRVS_READER_CREDENTIAL_JSON
 ```
 
-At startup, the sidecar verifies the installed OpenFn compiler/build tool,
-runtime, and adaptor versions against the manifest. Each source uses
-`workflow.steps` so the worker runs an actual OpenFn execution plan. The `next`
-field is the OpenFn runtime edge map, including boolean and conditional edges.
-Linear flows and mutually exclusive branches are supported when each lookup
-produces exactly one final leaf state. Join/merge aggregation is not automatic:
-Lightning-style merge runs the target once per incoming path, so aggregation
-must be encoded in a normal OpenFn step. The pinned runtime does not support
-merge nodes, and the sidecar response contract still requires a single final
-state that normalizes to one RDA `data` array. Readiness fails on any mismatch,
-missing expression file, missing credential, missing smoke lookup, or failed
-smoke lookup. Runtime execution must not fetch packages from the network.
+The historical OpenFn design expected startup to verify installed OpenFn
+compiler/build tool, runtime, and adaptor versions against the manifest. The
+shipped sidecar does not enforce installed OpenFn runtime or adaptor version
+pins as part of startup. Current governed startup verifies the TUF target and
+whole-target `config_hash`, validates and compiles the configured runtime
+material, requires credentials, and runs smoke lookups before readiness.
 
-## Requirements
+## Historical Requirements
+
+These requirements are the original design record. Current shipped behavior is
+documented in the sidecar README and tests.
 
 - The sidecar must answer synchronously within a configured timeout.
-- OpenFn build tooling, runtime, jobs, and adaptors must be version-pinned.
+- Current governed runtime material must be anchored by the TUF-verified
+  whole-target `config_hash`; this archived OpenFn design's runtime/adaptor
+  version-pinning requirement is not a current shipped guarantee.
 - Adaptors must be preinstalled or warmed before readiness succeeds.
 - The sidecar must enforce `limit <= 2`, one lookup predicate, max output bytes,
   and max execution duration.
@@ -178,16 +182,17 @@ smoke lookup. Runtime execution must not fetch packages from the network.
 - Do not retry OpenFn execution failures in v1; target reads may not be
   idempotent.
 
-## Definition Of Done
+## Historical Definition Of Done
 
-Done means all items below are satisfied in one reviewed change set:
+The original implementation plan used the checklist below. It is retained as
+history, not as the current assurance checklist; current behavior is documented
+in crates/registry-notary-source-adapter-sidecar/README.md and the sidecar tests.
 
-- A runnable sidecar exposes one RDA-shaped source endpoint backed by a pinned
-  OpenFn workflow and returns only the documented `{ "data": [...] }` success shape.
-- A manifest pins the OpenFn build tool, runtime, expression files, adaptor versions,
-  source-route bindings, timeout, worker memory limit, output byte limit,
-  request byte limit, query-parameter length limit, and `max_workers`; startup
-  rejects missing or mismatched entries.
+- A runnable sidecar exposes one RDA-shaped source endpoint and returns only the
+  documented `{ "data": [...] }` success shape.
+- Governed runtime material is anchored by the TUF-verified whole-target
+  `config_hash`; startup rejects missing credentials, invalid configuration,
+  unavailable workers, and failed smoke lookups.
 - Startup/readiness fails until required adaptors are installed, credentials are
   present, the worker pool is available, and every configured source can execute
   a smoke lookup.

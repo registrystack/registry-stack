@@ -16,16 +16,19 @@ development snapshots publish `snapshot`, `snapshot-YYYYMMDD`, and
 
 A release is gated on zero unreviewed `zizmor` findings at severity `high` or
 above, zero unreviewed Grype image findings at severity `critical` or above,
-and no expired security waiver or advisory-baseline entry; GitHub Actions use
-major-version pins for well-known maintained actions, with `zizmor`, the
-reviewed advisory baseline, and code review enforcing least-privilege
-permissions and safe event handling instead of a blanket SHA-only pin policy.
+and no expired reviewed advisory-baseline entry. Route exposure waivers, when
+present, live on the affected `security/exposure-manifest.json` entry so the
+review context stays with the route. GitHub Actions use major-version pins for
+well-known maintained actions, with `zizmor`, the reviewed advisory baseline,
+and code review enforcing least-privilege permissions and safe event handling
+instead of a blanket SHA-only pin policy.
 
 ## Repository controls you can audit
 
-- Security waivers: `security/waivers.yml`. Each waiver names an owner,
-  rationale, review trigger, and expiration. The default owner is
-  `@PublicSchema/maintainers`.
+- Route exposure waivers: [`security/exposure-manifest.json`](../security/exposure-manifest.json).
+  Each endpoint carries enforcement tests or a narrow per-route waiver. There is
+  no separate `security/waivers.yml` in this repository; deployment-gate waivers
+  are runtime configuration and surface through the admin posture document.
 - Reviewed advisory ratchets: [`security/advisory-baseline.json`](../security/advisory-baseline.json).
   Each reviewed entry names a fingerprint, owner, reason, review date, and
   expiration date. Stale reviewed entries are reported so the baseline can

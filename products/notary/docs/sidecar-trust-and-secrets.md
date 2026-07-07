@@ -22,9 +22,9 @@ is the Notary- and sidecar-specific layer on top of that model.
 ## What you can rely on
 
 - **The sidecar fails closed at startup.** In production the sidecar starts only
-  from a signed configuration bundle. If the signature, signer authorization,
-  content and per-file expression hashes, pinned runtime and adaptor versions, or
-  the startup smoke lookup fail, it refuses to serve. It does not start in a
+  from a governed TUF target. If target verification, signer authorization,
+  identity binding, anti-rollback, runtime configuration validation and compile,
+  or the startup smoke lookup fail, it refuses to serve. It does not start in a
   partial or best-effort state.
 - **Notary can pin the sidecar it trusts.** A source connection can record the
   exact sidecar identity and configuration hash it expects. Notary refuses to
@@ -101,13 +101,12 @@ for them with deployment controls.
   the sidecar as a trusted component behind a private boundary, and rely on
   network controls and the bearer token for that boundary.
 - **Configuration integrity is not runtime-code integrity.** The signature proves
-  the configuration bundle is authentic, including source mapping expressions
-  when they are used. Those files are content-hashed. The sidecar runtime and
-  adapters are pinned by version and verified against the
-  installed versions, but their contents are not hashed by the configuration
-  signature. A compromised dependency published at a pinned version is outside
-  what the config signature covers; manage that with your image build and
-  supply-chain controls.
+  the governed runtime target is authentic and current. The whole-target
+  `config_hash` covers the inline governed content, including CEL expressions,
+  Rhai scripts, and runtime policy. The sidecar does not maintain a separate
+  per-file expression hash ledger, and the assurance booleans do not attest to
+  installed runtime or adapter package versions. Manage the sidecar binary and
+  dependencies with your image build and supply-chain controls.
 - **The base-URL allow-list is not an egress sandbox.** `allowed_base_urls`
   validates the configured credential targets at startup. It is not a general
   JavaScript egress firewall for workflow code. Constrain outbound traffic with

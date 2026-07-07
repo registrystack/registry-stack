@@ -199,7 +199,8 @@ deviation for the archive link check); (2) self-assessment "publicly inferable" 
 unchanged because the prescribed rewrite would have dropped the security-reviewer-approval
 carve-out (policy change, routed to Tier-C); (3) the github.com/jeremi OpenFn adaptor pointer
 flagged for maintainer decision, not changed. New factual finds routed out: relay
-security-assurance.md cites security/waivers.yml which does not exist (flagged to maintainer);
+security-assurance.md cited security/waivers.yml, corrected during PR follow-up
+to point at exposure-manifest route waivers and the advisory baseline;
 products/manifest/docs/repository-split.md deleted (internal split history).
 
 **Diagram pass**: 13 of 20 site SVGs were orphans; 4 audited and re-wired (standards-claim-levels,

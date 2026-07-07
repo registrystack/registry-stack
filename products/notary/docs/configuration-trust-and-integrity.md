@@ -21,8 +21,10 @@ The strength of these guarantees rests on how you protect your signing keys.
   bundle that is not signed by a key you authorized, has been tampered with, has
   expired, or is older than what is already accepted is refused.
 - **Fail closed, not degraded.** If the signature, signer authorization, file
-  hashes, pinned runtime versions, or startup readiness checks fail, the sidecar
-  refuses to serve. It does not start in a partial or best-effort state.
+  target verification, signer authorization, identity binding, anti-rollback,
+  runtime configuration validation and compile, or startup readiness checks fail,
+  the sidecar refuses to serve. It does not start in a partial or best-effort
+  state.
 - **No silent rollback.** A previously valid but superseded bundle cannot be
   replayed to move you back to an older configuration.
 - **Notary can pin the sidecar it trusts.** Registry Notary can record the exact
@@ -62,10 +64,10 @@ These guarantees are only as strong as the operational practices behind them.
 
 ## How configuration integrity works
 
-A configuration bundle is the runtime material (limits, pinned runtime and
-adaptor versions, worker definition, and source workflows) plus signed metadata
-that binds it to a specific product, instance, environment, and stream, gives it
-a sequence number, and records its content hash.
+A configuration bundle is the runtime material (limits, source definitions,
+mapping expressions or scripts, and runtime policy) plus signed metadata that
+binds it to a specific product, instance, environment, and stream, gives it a
+sequence number, and records its whole-target content hash.
 
 Before a bundle takes effect, the component checks, in order and failing closed
 on the first failure:
@@ -75,11 +77,11 @@ on the first failure:
 3. the signers are authorized for the change classes in the bundle, meeting the
    required signature threshold;
 4. the sequence is not older than what was last accepted (anti-rollback);
-5. the runtime material matches the recorded content hash, and every workflow
-   expression file matches its recorded SHA-256 hash;
-6. the pinned sidecar runtime and adapter versions match what is installed, when
-   the bundle contains source-adapter sources;
-7. startup readiness (including a smoke lookup against the source) succeeds.
+5. the TUF-verified target matches the recorded whole-target `config_hash`;
+6. the runtime material deserializes and compiles or validates successfully,
+   including configured CEL expressions and scripts;
+7. startup readiness, including smoke lookups against configured sources,
+   succeeds.
 
 Only after all readiness-critical checks pass is the bundle recorded as accepted
 and the listener started. The accepted configuration is summarized by a stable
@@ -144,13 +146,12 @@ controls.
   the sidecar as a trusted component behind a private boundary, and rely on
   network controls and the bearer token for that boundary.
 - **Configuration integrity is not runtime-code integrity.** The signature
-  proves the configuration bundle is authentic, including source mapping
-  expressions when they are used. Those files are content-hashed. The sidecar
-  runtime and adapters are pinned by version and verified
-  against the installed versions, but their contents are not hashed by the
-  configuration signature. A compromised dependency published at a pinned version
-  is outside what the config signature covers; manage that with your image build
-  and supply-chain controls.
+  proves the governed runtime target is authentic and current. The whole-target
+  `config_hash` covers the inline governed content, including CEL expressions,
+  Rhai scripts, and runtime policy. The sidecar does not maintain a separate
+  per-file expression hash ledger, and the assurance booleans do not attest to
+  installed runtime or adapter package versions. Manage the sidecar binary and
+  dependencies with your image build and supply-chain controls.
 - **The base-URL allow-list is not an egress sandbox.** `allowed_base_urls`
   validates the configured credential targets at startup. It is not a general
   JavaScript egress firewall for workflow code. Constrain outbound traffic with
