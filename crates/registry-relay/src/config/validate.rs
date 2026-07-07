@@ -1714,6 +1714,15 @@ fn validate_auth_failure_throttle(config: &Config) -> Result<(), ConfigError> {
         );
         return Err(ConfigError::ValidationError);
     }
+    if !config.server.trust_proxy.enabled {
+        tracing::warn!(
+            code = "config.validation_warning",
+            "auth.failure_throttle is enabled but server.trust_proxy is disabled: with trust_proxy \
+             disabled, all requests arriving via a proxy or load balancer share one throttle bucket \
+             keyed by the proxy address, and the throttle can 429 every client after max_failures \
+             combined failures; enable server.trust_proxy when the relay sits behind a proxy"
+        );
+    }
     Ok(())
 }
 
@@ -4752,5 +4761,99 @@ datasets: []
         config.auth.failure_throttle.max_failures = 5;
         config.auth.failure_throttle.window_seconds = 30;
         assert!(super::run(&config).is_ok());
+    }
+
+    #[derive(Clone, Default)]
+    struct SharedLog(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    struct SharedLogWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SharedLog {
+        type Writer = SharedLogWriter;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            SharedLogWriter(std::sync::Arc::clone(&self.0))
+        }
+    }
+
+    impl std::io::Write for SharedLogWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .expect("log buffer lock")
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Runs `validate_auth_failure_throttle` under a captured tracing
+    /// subscriber and returns the rendered log output.
+    fn captured_throttle_validation_logs(config: &Config) -> String {
+        let logs = SharedLog::default();
+        let subscriber = tracing_subscriber::fmt()
+            .compact()
+            .with_ansi(false)
+            .with_target(false)
+            .with_max_level(tracing::Level::WARN)
+            .with_writer(logs.clone())
+            .finish();
+
+        let guard = tracing::subscriber::set_default(subscriber);
+        let result = validate_auth_failure_throttle(config);
+        drop(guard);
+
+        result.expect("throttle validation succeeds");
+        let rendered = logs.0.lock().expect("log buffer lock").clone();
+        String::from_utf8(rendered).expect("logs are utf-8")
+    }
+
+    #[test]
+    fn auth_failure_throttle_without_trust_proxy_warns() {
+        let mut config = crate::config::test_support::load_example_config_for_tests(
+            "validate-test-auth-failure-throttle-no-trust-proxy-secret",
+        );
+        config.auth.failure_throttle.enabled = true;
+        config.server.trust_proxy.enabled = false;
+        let rendered = captured_throttle_validation_logs(&config);
+        assert!(
+            rendered.contains("config.validation_warning"),
+            "expected a validation warning: {rendered}"
+        );
+        assert!(
+            rendered.contains("trust_proxy"),
+            "expected the warning to mention trust_proxy: {rendered}"
+        );
+    }
+
+    #[test]
+    fn auth_failure_throttle_with_trust_proxy_is_silent() {
+        let mut config = crate::config::test_support::load_example_config_for_tests(
+            "validate-test-auth-failure-throttle-with-trust-proxy-secret",
+        );
+        config.auth.failure_throttle.enabled = true;
+        config.server.trust_proxy.enabled = true;
+        let rendered = captured_throttle_validation_logs(&config);
+        assert!(
+            !rendered.contains("config.validation_warning"),
+            "did not expect a validation warning: {rendered}"
+        );
+    }
+
+    #[test]
+    fn auth_failure_throttle_disabled_is_silent_regardless_of_trust_proxy() {
+        let mut config = crate::config::test_support::load_example_config_for_tests(
+            "validate-test-auth-failure-throttle-disabled-silent-secret",
+        );
+        config.auth.failure_throttle.enabled = false;
+        config.server.trust_proxy.enabled = false;
+        let rendered = captured_throttle_validation_logs(&config);
+        assert!(
+            !rendered.contains("config.validation_warning"),
+            "did not expect a validation warning: {rendered}"
+        );
     }
 }
