@@ -125,6 +125,7 @@ Three mechanics make selective disclosure work.
   binds with `did:jwk`, and issuing an unbound, bearer-style credential requires an explicit
   `holder_binding.mode: none`. This has been the default since v0.8.4, and `registry-notary doctor`
   warns on a profile that opts out (`notary.credential_profile.unbound_holder_binding`).
+  Evidence: the [v0.8.4 Notary changelog](https://github.com/registrystack/registry-stack/blob/v0.8.4/products/notary/CHANGELOG.md#084---2026-07-04) records the default, the [configuration loader](https://github.com/registrystack/registry-stack/blob/v0.8.4/crates/registry-notary-core/src/config.rs) applies it, and the [doctor diagnostic](https://github.com/registrystack/registry-stack/blob/v0.8.4/crates/registry-notary/src/main.rs) is covered by the [doctor CLI test](https://github.com/registrystack/registry-stack/blob/v0.8.4/crates/registry-notary/tests/doctor_cli.rs).
 
 ## Where this fits with Relay
 
