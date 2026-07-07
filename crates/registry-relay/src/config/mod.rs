@@ -128,6 +128,10 @@ pub struct DeploymentEvidenceConfig {
     /// Operator asserts an API-key rotation process is in place.
     #[serde(default)]
     pub api_key_rotation: bool,
+    /// Operator asserts audit records are shipped off-host (for example to a
+    /// log collector or SIEM) rather than relying solely on local retention.
+    #[serde(default)]
+    pub audit_offhost_shipping: bool,
 }
 
 /// Stable deployment identity surfaced in redacted operations posture.

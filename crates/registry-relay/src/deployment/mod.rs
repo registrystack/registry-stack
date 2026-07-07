@@ -29,7 +29,7 @@ use registry_platform_ops::{
     DeploymentFindingWaiver, DeploymentProfile, DeploymentWaiver, GateSeverity,
 };
 
-use crate::config::{AuthMode, Config};
+use crate::config::{AuditSinkConfig, AuthMode, Config};
 
 /// Finding id emitted when no deployment profile is declared.
 pub const PROFILE_UNDECLARED: &str = "deployment.profile_undeclared";
@@ -72,6 +72,10 @@ pub struct DeploymentFacts {
     pub audit_sink_missing: bool,
     /// The audit write policy is availability-first (best effort).
     pub audit_best_effort: bool,
+    /// The audit sink is a local rotating file with no off-host shipping
+    /// evidence declared: retention is capped by local rotation, and an
+    /// attacker with host access can destroy the audit trail.
+    pub audit_retention_local_only: bool,
 }
 
 /// One gate in the relay catalog.
@@ -167,6 +171,17 @@ const GATES: &[Gate] = &[
         hosted_lab: None,
         production: Some(FindingWarn),
         evidence_grade: Some(ReadinessFail),
+    },
+    Gate {
+        id: "relay.audit.retention_local_only",
+        condition: |facts| facts.audit_retention_local_only,
+        // Stdout and syslog sinks are exempt: stdout retention is the
+        // orchestrator's log pipeline's concern, and syslog forwarding is the
+        // syslog daemon's own surface. Only a local rotating file sink caps
+        // retention in a way this gate can observe.
+        hosted_lab: None,
+        production: Some(FindingWarn),
+        evidence_grade: Some(FindingError),
     },
 ];
 
@@ -351,6 +366,8 @@ pub fn facts_from_config(config: &Config, config_source: ConfigSource) -> Deploy
         ),
         audit_sink_missing: false,
         audit_best_effort: config.audit.write_policy == AuditWritePolicy::AvailabilityFirst,
+        audit_retention_local_only: matches!(config.audit.sink, AuditSinkConfig::File { .. })
+            && !config.deployment.evidence.audit_offhost_shipping,
     }
 }
 
@@ -412,6 +429,7 @@ mod tests {
             config_unsigned: false,
             audit_sink_missing: false,
             audit_best_effort: false,
+            audit_retention_local_only: false,
         }
     }
 
@@ -453,6 +471,7 @@ mod tests {
             config_unsigned: true,
             audit_sink_missing: true,
             audit_best_effort: true,
+            audit_retention_local_only: true,
         };
         let evaluation = evaluate(None, &facts, &[], TODAY);
         assert_eq!(finding_ids(&evaluation), vec![PROFILE_UNDECLARED]);
@@ -745,6 +764,58 @@ mod tests {
         let evidence = evaluate(Some(DeploymentProfile::EvidenceGrade), &facts, &[], TODAY);
         assert_eq!(finding(&evidence, id).severity, ReadinessFail);
         assert_eq!(evidence.readiness_failures, vec![id.to_string()]);
+    }
+
+    #[test]
+    fn audit_retention_local_only_binds_production_and_evidence_only() {
+        let facts = DeploymentFacts {
+            audit_retention_local_only: true,
+            ..clean_facts()
+        };
+        let id = "relay.audit.retention_local_only";
+        let local = evaluate(Some(DeploymentProfile::Local), &facts, &[], TODAY);
+        assert!(!finding_ids(&local).contains(&id.to_string()));
+        let hosted = evaluate(Some(DeploymentProfile::HostedLab), &facts, &[], TODAY);
+        assert!(!finding_ids(&hosted).contains(&id.to_string()));
+        assert_eq!(
+            finding(
+                &evaluate(Some(DeploymentProfile::Production), &facts, &[], TODAY),
+                id
+            )
+            .severity,
+            FindingWarn
+        );
+        let evidence = evaluate(Some(DeploymentProfile::EvidenceGrade), &facts, &[], TODAY);
+        assert_eq!(finding(&evidence, id).severity, FindingError);
+        // Non-triggering: clean facts never surface the finding.
+        let clean = evaluate(
+            Some(DeploymentProfile::Production),
+            &clean_facts(),
+            &[],
+            TODAY,
+        );
+        assert!(!finding_ids(&clean).contains(&id.to_string()));
+    }
+
+    #[test]
+    fn audit_retention_local_only_is_waivable() {
+        let facts = DeploymentFacts {
+            audit_retention_local_only: true,
+            ..clean_facts()
+        };
+        let id = "relay.audit.retention_local_only";
+        let waivers = [WaiverInput {
+            finding: id.to_string(),
+            reason: "synthetic test waiver".to_string(),
+            expires: FUTURE.to_string(),
+        }];
+        let evaluation = evaluate(Some(DeploymentProfile::Production), &facts, &waivers, TODAY);
+        assert_eq!(
+            finding(&evaluation, id).status,
+            DeploymentFindingStatus::Waived
+        );
+        assert_eq!(evaluation.active_waivers.len(), 1);
+        assert_eq!(evaluation.active_waivers[0].finding, id);
     }
 
     #[test]

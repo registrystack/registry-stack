@@ -14,6 +14,12 @@
   (`auth.rate_limited`) with a `Retry-After` header before the auth provider
   runs. This is a backstop behind ingress rate limiting, not a replacement
   for it; see `docs/configuration.md` for the deployment posture.
+- `deployment.evidence.audit_offhost_shipping` attestation and the
+  `relay.audit.retention_local_only` deployment gate: a local rotating `file`
+  audit sink without a declared off-host shipping attestation now raises a
+  posture finding (warn under `production`, error under `evidence_grade`) so
+  an attacker with host access cannot silently destroy audit evidence.
+  `stdout` and `syslog` sinks are exempt. The gate is waivable.
 
 ## 0.8.4 - 2026-07-04
 

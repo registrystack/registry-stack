@@ -611,6 +611,7 @@ deployment:
   evidence:
     ingress_rate_limit: true # operator asserts a gateway enforces rate limiting
     api_key_rotation: true   # operator asserts an API-key rotation process exists
+    audit_offhost_shipping: true # operator asserts audit records are shipped off-host
   waivers:
     - finding: relay.openapi.public
       reason: public API catalog is intentional for this deployment
@@ -631,7 +632,7 @@ The four profiles escalate from `local` (binds no hard gates) through `hosted_la
 
 ### Evidence declarations
 
-Some controls live outside the relay and cannot be observed by the process (for example ingress rate limiting enforced by a gateway, or an API-key rotation process). The `evidence` flags let the operator assert those controls are in place. Each flag defaults to `false`, which leaves the corresponding gate active until the operator declares the control.
+Some controls live outside the relay and cannot be observed by the process (for example ingress rate limiting enforced by a gateway, an API-key rotation process, or audit records shipped off-host to a log collector or SIEM). The `evidence` flags let the operator assert those controls are in place. Each flag defaults to `false`, which leaves the corresponding gate active until the operator declares the control.
 
 ### Waivers
 
@@ -662,6 +663,9 @@ Waiver reasons are only visible in the restricted posture tier; the default tier
 | `relay.config.unsigned` | warn | error | startup_fail |
 | `relay.audit.best_effort` | (not bound) | warn | readiness_fail |
 | `relay.audit.sink_missing` | error | readiness_fail | startup_fail |
+| `relay.audit.retention_local_only` | (not bound) | warn | error |
+
+`relay.audit.retention_local_only` fires when the audit sink is a local rotating `file` sink and `evidence.audit_offhost_shipping` is not declared: a local rotating file caps retention, and an attacker with host access can destroy the audit trail. `stdout` sinks are exempt (retention is the orchestrator's log pipeline's concern) and `syslog` sinks are exempt (forwarding is the syslog daemon's own surface).
 
 The current deployment profile, its findings, and active waivers are reported under `deployment` in the operations posture (`GET /admin/v1/posture`).
 
