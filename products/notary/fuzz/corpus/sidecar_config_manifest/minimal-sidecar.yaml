@@ -1,0 +1,17 @@
+server:
+  bind: "127.0.0.1:9191"
+auth:
+  bearer_tokens:
+    - id: notary
+limits:
+  max_workers: 1
+  worker_timeout_ms: 5000
+  max_worker_memory_mb: 256
+  max_output_bytes: 65536
+  max_request_bytes: 4096
+  max_query_parameter_bytes: 512
+sources:
+  civil_person:
+    engine: http_json
+    dataset: civil_registry
+    entity: civil_person

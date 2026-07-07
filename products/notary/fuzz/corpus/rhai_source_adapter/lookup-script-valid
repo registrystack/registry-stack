@@ -1,0 +1,1 @@
+fn lookup(ctx) { [#{ ok: true, id: 1 }] }

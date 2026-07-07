@@ -1,0 +1,67 @@
+# Local development unsigned manifest.
+# Production startup requires config_trust and a governed TUF target; run this
+# file only with --allow-unsigned-dev-config.
+#
+# Built-in CIVIL person source using the http_json engine. This is the built-in
+# reference replacing the simple single-GET OpenFn `civil_openfn` source that
+# ran examples/jobs/http-person-lookup.js. That job did a single
+# GET /people/{id} with bearer auth and returned the response `data`/`records`
+# array; http_json uses LITERAL paths, so the id is passed as a query parameter
+# instead and the response array is projected directly as the RDA records.
+#
+# Notary still connects with the `source_adapter_sidecar` source connector name (kept
+# stable this round); only the engine behind the source changed.
+server:
+  bind: "127.0.0.1:9191"
+  request_timeout_ms: 30000
+  request_body_timeout_ms: 10000
+  http1_header_read_timeout_ms: 10000
+  max_connections: 1024
+auth:
+  bearer_tokens:
+    - id: notary
+      hash_env: DEV_SIDECAR_TOKEN_HASH
+limits:
+  max_workers: 2
+  worker_timeout_ms: 10000
+  max_worker_memory_mb: 512
+  max_output_bytes: 1048576
+  max_request_bytes: 16384
+  max_query_parameter_bytes: 1024
+  max_batch_items: 100
+  liveness_window_ms: 30000
+  retry_after_seconds: 1
+sources:
+  civil_person:
+    engine: http_json
+    dataset: civil_registry
+    entity: civil_person
+    credential_env: CIVIL_PERSON_CREDENTIAL_JSON
+    credential_public_fields:
+      - baseUrl
+    allowed_base_urls:
+      - https://registry.example.test
+    http_json:
+      method: GET
+      base_url:
+        cel: credential_public.baseUrl
+      path: "/people"
+      query:
+        id:
+          cel: lookup.value
+      auth:
+        type: bearer
+        token:
+          secret: apiToken
+      response:
+        # The legacy job accepted the person array under data or records; the
+        # built-in reference expects a top-level `data` array (the registry's
+        # native list shape). Adjust the CEL to body.records for registries that
+        # return that key instead.
+        records:
+          cel: body.data
+    smoke_lookup:
+      field: national_id
+      value: smoke-person
+      fields: ["national_id", "birth_date"]
+      purpose: startup-readiness-smoke
