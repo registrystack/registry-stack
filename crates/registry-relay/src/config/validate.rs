@@ -1753,13 +1753,26 @@ fn validate_auth_failure_throttle(config: &Config) -> Result<(), ConfigError> {
         );
         return Err(ConfigError::ValidationError);
     }
-    if !config.server.trust_proxy.enabled {
+    let trust_proxy = &config.server.trust_proxy;
+    // The throttle keys on the address resolved by `crate::net`, which only
+    // honors `X-Forwarded-For` when trust_proxy is enabled AND at least one
+    // trusted proxy is configured: an empty `trusted_proxies` list matches no
+    // peer, so every forwarded request still collapses onto the proxy's own
+    // socket address, the same shared-bucket self-DoS as trust_proxy disabled.
+    if !trust_proxy.enabled || trust_proxy.trusted_proxies.is_empty() {
+        let reason = if !trust_proxy.enabled {
+            "server.trust_proxy is disabled"
+        } else {
+            "server.trust_proxy is enabled but server.trust_proxy.trusted_proxies is empty, so no \
+             peer is trusted and X-Forwarded-For is ignored"
+        };
         tracing::warn!(
             code = "config.validation_warning",
-            "auth.failure_throttle is enabled but server.trust_proxy is disabled: with trust_proxy \
-             disabled, all requests arriving via a proxy or load balancer share one throttle bucket \
-             keyed by the proxy address, and the throttle can 429 every client after max_failures \
-             combined failures; enable server.trust_proxy when the relay sits behind a proxy"
+            "auth.failure_throttle is enabled but {reason}: the client address then resolves to the \
+             socket peer, so all requests arriving via a proxy or load balancer share one throttle \
+             bucket keyed by the proxy address, and the throttle can 429 every client after \
+             max_failures combined failures; enable server.trust_proxy and populate \
+             server.trust_proxy.trusted_proxies when the relay sits behind a proxy"
         );
     }
     Ok(())
@@ -4962,10 +4975,30 @@ datasets: []
         );
         config.auth.failure_throttle.enabled = true;
         config.server.trust_proxy.enabled = true;
+        config.server.trust_proxy.trusted_proxies = vec!["10.0.0.0/8".to_string()];
         let rendered = captured_throttle_validation_logs(&config);
         assert!(
             !rendered.contains("config.validation_warning"),
             "did not expect a validation warning: {rendered}"
+        );
+    }
+
+    #[test]
+    fn auth_failure_throttle_with_trust_proxy_but_empty_trusted_proxies_warns() {
+        let mut config = crate::config::test_support::load_example_config_for_tests(
+            "validate-test-auth-failure-throttle-trust-proxy-empty-list-secret",
+        );
+        config.auth.failure_throttle.enabled = true;
+        config.server.trust_proxy.enabled = true;
+        config.server.trust_proxy.trusted_proxies = Vec::new();
+        let rendered = captured_throttle_validation_logs(&config);
+        assert!(
+            rendered.contains("config.validation_warning"),
+            "expected a validation warning: {rendered}"
+        );
+        assert!(
+            rendered.contains("trusted_proxies"),
+            "expected the warning to mention the empty trusted_proxies list: {rendered}"
         );
     }
 
