@@ -14,6 +14,14 @@ resolve_dir() {
 	local candidate
 	if [[ "${raw}" = /* ]]; then
 		candidate="${raw}"
+	elif [[ -e "${repo_root}/lab/${raw}" ]]; then
+		# Legacy Lab callers (lab/justfile, lab/scripts/release-check.sh) pass
+		# vendor paths like ./vendor/crosswalk relative to lab/. Keep that
+		# anchor while the target still exists there; once lab/ is deleted this
+		# falls through to the release/-relative anchor below. ../<sibling>
+		# paths resolve identically under either anchor because lab/ and
+		# release/ are both direct children of the repo root.
+		candidate="${repo_root}/lab/${raw}"
 	else
 		candidate="${release_dir}/${raw}"
 	fi
@@ -187,8 +195,11 @@ compare_pin() {
 }
 
 has_custom_cel_mapping_source_dir() {
+	# The lab-root absolute form was the old lab script's spelling of the
+	# deprecated default; keep ignoring it so a stale lab/vendor/cel-mapping
+	# directory cannot hijack the Crosswalk source.
 	case "${CEL_MAPPING_SOURCE_DIR:-}" in
-	"" | "./vendor/cel-mapping" | "vendor/cel-mapping" | "${release_dir}/vendor/cel-mapping")
+	"" | "./vendor/cel-mapping" | "vendor/cel-mapping" | "${release_dir}/vendor/cel-mapping" | "${repo_root}/lab/vendor/cel-mapping")
 		return 1
 		;;
 	esac
@@ -285,8 +296,12 @@ monorepo)
 	# Crosswalk, registry-atlas, and the eSignet Relay authenticator pins are
 	# release provenance carried by release/manifests/registry-stack-*.yaml.
 	# `registry-release validate` only asserts external.crosswalk, so prove the
-	# rest here: every external entry must record a repo and a 40-hex ref.
-	python3 - "${release_dir}"/manifests/registry-stack-*.yaml <<'PY'
+	# rest here: every external entry must record a repo and a 40-hex ref, and
+	# while the legacy lab/vendor gitlinks are still committed, the current
+	# release manifest's refs must match them.
+	external_gitlinks="$(git -C "${stack_root}" ls-files -s -- lab/vendor | awk '$1 == "160000" {n = split($NF, parts, "/"); print parts[n] "=" $2}')"
+	RELEASE_EXTERNAL_GITLINKS="${external_gitlinks}" python3 - "${release_dir}"/manifests/registry-stack-*.yaml <<'PY'
+import os
 import re
 import sys
 from pathlib import Path
@@ -302,6 +317,23 @@ REQUIRED_EXTERNALS = (
     "esignet-relay-authenticator",
     "registry-atlas",
 )
+
+gitlinks = {}
+for gitlink_line in os.environ.get("RELEASE_EXTERNAL_GITLINKS", "").splitlines():
+    gitlink_name, _, gitlink_sha = gitlink_line.partition("=")
+    if gitlink_name and gitlink_sha:
+        gitlinks[gitlink_name] = gitlink_sha
+
+
+def version_key(manifest):
+    stack = manifest.get("stack", {}) if isinstance(manifest, dict) else {}
+    parts = str(stack.get("version", "")).split(".")
+    if parts != [""] and all(part.isdigit() for part in parts):
+        return tuple(int(part) for part in parts)
+    return ()
+
+
+manifests = []
 failed = False
 for arg in sys.argv[1:]:
     path = Path(arg)
@@ -315,6 +347,7 @@ for arg in sys.argv[1:]:
         print(f"release source model failed: {path.name} has no external section", file=sys.stderr)
         failed = True
         continue
+    manifests.append((version_key(manifest), path, external))
     for name in REQUIRED_EXTERNALS:
         if name not in external:
             print(
@@ -334,6 +367,27 @@ for arg in sys.argv[1:]:
             failed = True
             continue
         print(f"release-source-external {path.name} {name} {repo} {ref}")
+
+# Historical manifests keep the refs of their own release day, so only the
+# current (highest stack.version) manifest is cross-checked against the
+# committed lab/vendor gitlinks. Once lab/ and its gitlinks are deleted,
+# RELEASE_EXTERNAL_GITLINKS is empty and the cross-check disappears.
+if gitlinks and manifests:
+    _, current_path, current_external = max(manifests, key=lambda item: item[0])
+    for name in sorted(gitlinks):
+        entry = current_external.get(name)
+        if not isinstance(entry, dict):
+            continue
+        ref = str(entry.get("ref", ""))
+        if ref != gitlinks[name]:
+            print(
+                f"release source model failed: {current_path.name} external.{name} ref {ref} "
+                f"does not match committed lab/vendor/{name} gitlink {gitlinks[name]}",
+                file=sys.stderr,
+            )
+            failed = True
+        else:
+            print(f"release-source-external-pin {current_path.name} {name} gitlink={ref}")
 if failed:
     sys.exit(1)
 PY
