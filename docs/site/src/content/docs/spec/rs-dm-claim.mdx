@@ -1,6 +1,6 @@
 ---
 title: "RS-DM-CLAIM: Registry Notary claim definition data model"
-description: "The data model for a Registry Notary claim definition: its identity, inputs, source bindings and matching policy, rule, disclosure policy, evaluation render formats, credential eligibility, and batch behavior, and the invariants a conforming deployment enforces."
+description: "The data model for a Registry Notary claim definition: identity, inputs, source bindings, matching policy, rule, disclosure policy, render formats, and credential eligibility."
 status: draft
 owner: registry-docs
 source_repos:
@@ -25,7 +25,7 @@ audience:
   - specification editor
 ---
 
-This document defines the target data model of a Registry Notary claim definition: the configuration artifact that declares what Notary can evaluate, what it reads to evaluate it, what it discloses, and what it can issue. It is the structural counterpart to the [Registry Notary protocol](../rs-pr-notary/): it closes the claim-definition carve-out that specification makes in its Section 1, where the model's source bindings, rule, disclosure policy, and formats are deferred here. The Evidence section distinguishes shipped behavior from the implementation gaps tracked in Section 10.
+This document defines the target data model of a Registry Notary claim definition: the configuration artifact that declares what Notary can evaluate, what it reads to evaluate it, what it discloses, and what it can issue. It is the structural counterpart to the [Registry Notary protocol](../rs-pr-notary/): RS-PR-NOTARY Section 1 defers the claim-definition structure (source bindings, rule, disclosure policy, and formats) to this document. The Evidence section distinguishes shipped behavior from the implementation gaps tracked in Section 10.
 
 Where this document and [RS-PR-NOTARY](../rs-pr-notary/) state the same constraint, RS-PR-NOTARY is the protocol-level (wire) form and this document is the data-model form. Both refine the Registry Notary component of [RS-ARC-G](../rs-arc-g/) Section 3 (REQ-ARC-G-007) one level of detail down, from architectural boundary to the structure a claim takes in configuration. Security-model concerns (the scope and authentication machinery a claim relies on) belong to [RS-SEC-G](../rs-sec-g/); this document refers to them only where they shape the model.
 

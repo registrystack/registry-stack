@@ -21,8 +21,7 @@ JSON-LD context. They are **not** W3C PROV-O: no PROV graph is embedded
 in issued VC-JWTs, and no PROV-O terms appear in the payload. The
 feature is named `provenance` in configuration for compatibility; the
 correct public description is "signed response credentials" or "response
-credentials". The 2026-06-11 evidence-contracts decision record (D8)
-records this posture.
+credentials".
 
 The `provenance` config key is retained for compatibility; it governs
 response-credential issuer configuration (DID, signing key, claim
@@ -34,7 +33,7 @@ shapes, endpoints, audit events, and key management.
 
 ## Why verifiable credentials
 
-Consumers of `registry-relay` increasingly need to relay government data to
+Consumers of `registry-relay` may need to relay government data to
 downstream parties (cross-ministry workflows, EU-level dataspaces,
 audit reviewers). Plain JSON gives them no cryptographic way to prove
 "this came from registry-relay at time T under DID D". A VC-JWT does:
@@ -313,9 +312,6 @@ By default the issued VC uses:
 Operators may override those defaults with `context_url`, `schema_url`,
 and `credential_type` under the same `publicschema:` block.
 
-The mapper dependency uses the local Crosswalk crate at
-`../crosswalk/crates/crosswalk-core` in `Cargo.toml`, matching the
-workspace checkout used for release builds.
 Profile overrides do not bypass provenance audit: PublicSchema issuance
 still attaches the `provenance.vc.issued` block, with `claim_type`
 recording the overridden VC type such as `Person`.
@@ -624,12 +620,3 @@ node scripts/verify_vc_jwt.mjs \
    configured `claim_validity` window has elapsed. After that window,
    remove the retired key and repeat the DID fetch to confirm the old
    `kid` is no longer published.
-
-### Fixture corpus
-
-`tests/fixtures/vc/entity-record-v1/` and
-`tests/fixtures/vc/aggregate-result-v1/` contain static VC-JWTs, decoded
-payloads, DID Documents, and JSON Schemas. They are signed outside
-`registry-relay` and verified by `tests/vc_external_verifier.rs` through
-the Node verifier. Add a new fixture directory whenever the public VC wire
-contract changes or a new claim type/version is introduced.

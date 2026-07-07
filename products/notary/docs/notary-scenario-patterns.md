@@ -3,9 +3,8 @@
 > **Page type:** Concept · **Product:** Registry Notary · **Layer:** consultation, evaluation, credential, federation · **Audience:** integrator
 
 This page collects the reusable interaction patterns and the full set of scenario
-stories, each with its sequence or flow diagram and what is supported today. The
-status-labeled scenario matrix lives in `notary-capability-matrix.md`; the
-per-scenario gap bullets and the rollup live in `../specs/notary-capability-gaps.md`.
+stories, each with its sequence or flow diagram and what is supported today.
+Scenario support status is summarized in [the capability matrix](notary-capability-matrix.md).
 
 ## Reusable patterns
 
@@ -224,7 +223,7 @@ Status: Supported
 
 Story: Alice is a farmer applying for a climate-smart input voucher. The
 Agriculture Notary checks the farmer, parcel, and redemption facts needed for
-Erin's program rules, then returns an eligibility result and reason without
+the program administrator's rules, then returns an eligibility result and reason without
 handing the portal all of Alice's registry records.
 
 Personas: farmer, case worker, agriculture program administrator  
@@ -244,7 +243,7 @@ sequenceDiagram
 
 Supported today:
 
-- Demo configuration can evaluate voucher eligibility.
+- The demo lab's agriculture Notary configuration evaluates voucher eligibility.
 - Reason-code style companion claims can explain denials.
 - Local SD-JWT VC issuance can represent successful eligibility.
 
@@ -491,8 +490,8 @@ sequenceDiagram
 
 Supported today:
 
-- Credential issuance and verification primitives exist in platform-adjacent
-  crates.
+- Credential issuance and verification primitives are already implemented;
+  this presentation flow is not yet wired to them.
 
 ### 14. Parent or guardian requests a service for a child or dependent
 
@@ -625,7 +624,7 @@ sequenceDiagram
 
 Supported today:
 
-- Lab agriculture flow can produce a demo credential after successful evaluation.
+- The public demo lab's agriculture flow can produce a demo credential after successful evaluation.
 - Runtime credential profiles support SD-JWT VC issuance.
 
 ### 18. Shared eligibility Notary issues combined-support credential
@@ -634,7 +633,7 @@ Pattern: Credential issuance plus composition
 Status: Partial  
 
 Story: Alice's combined-support eligibility depends on facts held by multiple
-authorities. The future Shared Eligibility Notary would verify peer-signed
+authorities. A shared eligibility Notary (not yet supported) would verify peer-signed
 predicates, compose a final claim, and issue Alice a credential that points
 back to the remote evidence decisions without exposing raw source data.
 
@@ -690,7 +689,6 @@ sequenceDiagram
 Supported today:
 
 - Local issuance exists.
-- Broader spec defines discovery/handoff and transparent byte relay constraints.
 
 ### 20. Replay and emergency peer or key denial
 
@@ -788,4 +786,5 @@ sequenceDiagram
 
 Supported today:
 
-- Audit fields and spec direction exist.
+- Local audit events already carry the fields checkpointing would build on;
+  checkpoint publishing is not yet supported.

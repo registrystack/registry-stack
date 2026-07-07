@@ -28,14 +28,15 @@ does not publish downstream conclusions.
 - **Publication choice**: Registry Relay chooses a practical standards-shaped
   representation for a registry concept, such as describing entity routes as
   `dcat:Distribution` plus `dcat:DataService`.
-- **Downstream hypothesis**: another tool, such as Dataspace Atlas, derives a
+- **Downstream hypothesis**: another tool, such as Registry Atlas (the registry
+  family's dataspace catalogue project), derives a
   candidate route, candidate source, confidence level, or governance gap from
   those published facts.
 
 Downstream hypotheses must not be written back into Registry Relay metadata as
 if they were original source facts.
 
-## Standard evidence we emit
+## Standard evidence Registry Relay emits
 
 The following predicates are treated as standard-facing evidence:
 
@@ -71,7 +72,7 @@ mean the target IRI is a data resource to harvest as part of the registry.
 They do not mean a caller is authorized, that a specific identifier lookup is
 supported, or that production integration has been reviewed.
 
-## Our interpretation boundary
+## Interpretation boundary
 
 Registry Relay does not decide:
 
@@ -82,7 +83,7 @@ Registry Relay does not decide:
 - whether a discovered access route is fit for production integration.
 
 Those decisions belong to downstream governance, review, and discovery layers.
-For example, Dataspace Atlas may derive a `candidate_source` route from
+For example, Registry Atlas may derive a `candidate_source` route from
 `dcterms:publisher`, `dcatap:applicableLegislation`, and `cpsv:produces`, but
 that role is an Atlas interpretation, not a Registry Relay predicate.
 
@@ -138,10 +139,10 @@ services should be described through:
 `dcat:endpointURL`, `dcat:endpointDescription`, `dcterms:conformsTo`, and
 `dcterms:format`.
 
-The current hypothesis is that these DCAT and ODRL signals make Registry Relay
-metadata useful to DSP-aware catalogues without pretending to be a DSP control
-plane. Implementing DSP catalog request, contract negotiation, and transfer
-processes would be a separate product surface.
+These signals are intended to make Registry Relay metadata useful to DSP-aware
+catalogues without acting as a DSP control plane. Implementing DSP catalog
+request, contract negotiation, and transfer processes would be a separate
+product surface.
 
 ## Demo assumptions
 
@@ -164,7 +165,7 @@ source for disability registration.
 
 The demo datasets are hypothetical. They are not official OpenCRVS, OpenSPP,
 SP DCI, SEMIC, or PublicSchema profiles. Real project-specific profiles should
-be created only from reviewed artifacts and maintainer input.
+be created from reviewed artifacts, not from the demo fixtures.
 
 ## Endpoint publication assumptions
 
@@ -179,8 +180,7 @@ instances. It links to scoped metadata artifacts such as:
 - `/metadata/datasets/{dataset_id}/policy`;
 - `/metadata/schema/{dataset_id}/{entity}/schema.json`.
 
-The removed `/catalog` aliases are intentionally legacy. Documentation, Bruno
-collections, and downstream fixtures should use `/metadata/*`.
+Use `/metadata/*`; the former `/catalog` aliases were removed.
 
 `/metadata/policies` is a collection of dataset-scoped policy documents. It is
 not one global policy for the whole deployment.
@@ -191,11 +191,10 @@ The current metadata model is aligned with the DCAT-AP and BRegDCAT-AP profile
 family, and it uses CPSV evidence where that profile family already models
 public services.
 
-Known caveat: the local `third_party/semic-shacl-validator` bundle includes
-BRegDCAT-AP 2.x shapes, while some Registry Relay demo manifests currently claim
-`bregdcat-ap` 3.0. Until the exact BRegDCAT-AP 3.0 SHACL shapes are pinned, SEMIC
-validation should be treated as an advisory conformance check rather than the
-only release gate.
+SEMIC SHACL validation currently runs against BRegDCAT-AP 2.x shapes, while
+some Registry Relay demo manifests claim `bregdcat-ap` 3.0. Until BRegDCAT-AP
+3.0 SHACL shapes are pinned, SEMIC validation should be treated as an advisory
+conformance check rather than the only release gate.
 
 ## Validation assumptions
 

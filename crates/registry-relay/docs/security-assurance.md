@@ -14,31 +14,27 @@ development snapshots publish `snapshot`, `snapshot-YYYYMMDD`, and
 `org.opencontainers.image.revision` label does not already match the current
 `main` revision. Final deployments should pin the selected image by digest.
 
-Security waivers live in `security/waivers.yml` when needed. Each waiver must
-name an owner, rationale, review trigger, and expiration. The default owner is
-`@PublicSchema/maintainers`.
+A release is gated on zero unreviewed `zizmor` findings at severity `high` or
+above, zero unreviewed Grype image findings at severity `critical` or above,
+and no expired security waiver or advisory-baseline entry; GitHub Actions use
+major-version pins for well-known maintained actions, with `zizmor`, the
+reviewed advisory baseline, and code review enforcing least-privilege
+permissions and safe event handling instead of a blanket SHA-only pin policy.
 
-Reviewed advisory ratchets live in `security/advisory-baseline.json`. The
-initial blocking gates are:
+## Repository controls you can audit
 
-- `zizmor` findings with severity `high` or above.
-- Grype image findings with severity `critical` or above.
-
-Every reviewed entry must include a fingerprint, owner, reason, review date,
-and expiration date. New unreviewed findings at or above the threshold fail CI.
-Expired reviewed entries fail CI while the finding is still active. Stale
-reviewed entries are reported so the baseline can shrink after the underlying
-issue is fixed.
-
-The unauthenticated endpoint allowlist lives in
-`security/auth-none-allowlist.yml`. Additions require maintainer review through
-CODEOWNERS.
-
-GitHub Actions in this repo intentionally use major-version pins for
-well-known maintained actions unless a workflow documents a stronger SHA pin.
-`zizmor`, the reviewed advisory baseline, and code review enforce
-least-privilege permissions and unsafe event handling, not a blanket SHA-only
-policy.
+- Security waivers: `security/waivers.yml`. Each waiver names an owner,
+  rationale, review trigger, and expiration. The default owner is
+  `@PublicSchema/maintainers`.
+- Reviewed advisory ratchets: [`security/advisory-baseline.json`](../security/advisory-baseline.json).
+  Each reviewed entry names a fingerprint, owner, reason, review date, and
+  expiration date. Stale reviewed entries are reported so the baseline can
+  shrink after the underlying issue is fixed.
+- Unauthenticated endpoint allowlist: [`security/auth-none-allowlist.yml`](../security/auth-none-allowlist.yml).
+  Additions require maintainer review through [CODEOWNERS](../CODEOWNERS).
+- GitHub Actions pinning: most workflows pin well-known maintained actions to
+  a major version; individual workflows document a stronger SHA pin where one
+  is required.
 
 ## OpenAPI comparison strategy
 
@@ -53,6 +49,11 @@ curated artifact across revisions and keeps the runtime generator covered by
 existing Rust tests. A future normalizer may replace this with
 generated-vs-normalized comparison once both shapes can be canonicalized without
 losing security scheme or route semantics.
+
+Manifest entries marked `openapi: true` are compared against the curated
+OpenAPI artifact with path-parameter normalization. `/.well-known/api-catalog`
+is intentionally marked `openapi: false` because it is not in the curated
+artifact.
 
 ## Image release evidence
 
@@ -117,31 +118,12 @@ This validates exposure contracts, Dockerfile secret-copy guardrails, workflow
 syntax/security tooling when installed, the reviewed `zizmor` high-severity
 ratchet, gitleaks current-tree scanning, and Semgrep rules when installed.
 
-## Implementation review log
+Endpoint exposure is checked in three directions: route inventory to
+manifest, manifest to route inventory, and Rust Axum route declarations to
+route inventory. Protected public routes with non-optional features are also
+covered by `tests/security_assurance_surface.rs`, which builds the production
+public app and verifies the manifest routes are actually mounted behind auth.
 
-- Endpoint exposure is checked in three directions: route inventory to
-  manifest, manifest to route inventory, and Rust Axum route declarations to
-  route inventory. This caught and corrected the aggregate query route method,
-  which was `POST` in Rust but `GET` in the initial inventory.
-- Protected public routes with non-optional features are also covered by
-  `tests/security_assurance_surface.rs`, which builds the production public app
-  and verifies the manifest routes are actually mounted behind auth.
-- Manifest entries marked `openapi: true` are now compared against the curated
-  OpenAPI artifact with path-parameter normalization. `/.well-known/api-catalog`
-  is intentionally marked `openapi: false` because it is not in the curated
-  artifact.
-- Enforcement evidence must reference concrete test functions using
-  `path::test_name`; file-only references are rejected.
-- `zizmor` still runs with `--no-exit-codes` so the tool can emit a complete
-  JSON report, but `scripts/check_advisory_baselines.py` blocks unreviewed
-  high-severity findings and expired reviewed entries.
-- Container image SBOM generation is enforced in CI. Grype image vulnerability
-  reports are emitted as JSON and `scripts/check_advisory_baselines.py` blocks
-  unreviewed critical image findings. High-severity image findings remain the
-  next ratchet target once critical baselines are stable.
-- Hadolint ignores `DL3022` because the Dockerfile intentionally copies from
-  named external build contexts. It also ignores `DL3008` for the apt package
-  installation style already used in the relay container.
-- Relay keeps the release OpenAPI artifact curated, so endpoint exposure drift
-  is guarded by the exposure manifest plus baseline-vs-baseline OpenAPI review
-  rather than a raw generated-vs-curated diff.
+Hadolint ignores `DL3022` because the Dockerfile intentionally copies from
+named external build contexts. It also ignores `DL3008` for the apt package
+installation style already used in the relay container.

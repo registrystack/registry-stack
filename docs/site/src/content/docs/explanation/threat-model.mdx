@@ -27,7 +27,7 @@ the high-level posture summary to the [security overview](../../security/), and 
 obligations to [Data minimization and purpose
 limitation](../data-minimization-and-purpose-limitation/).
 Here the goal is a defensible threat model: the boundaries the design draws, the threats it
-places in and out of scope, and the residual risks stated honestly.
+places in and out of scope, and the residual risks.
 
 ## The two-layer architecture and its primary trust boundary
 
@@ -68,6 +68,28 @@ auditing separately.
 
 ## Trust boundaries in detail
 
+{/* SVG diagram. Every boundary label is restated in the paragraphs that follow. */}
+<figure>
+  <img src="../../images/registry-trust-boundaries.svg"
+       alt="The Registry Stack trust boundaries in one map. The portable metadata layer
+            (Registry Manifest) only describes: no production data, no authentication, no
+            secrets; it authorizes nothing, and publishing grants no access. Across the
+            primary trust boundary, the runtime services layer enforces authentication,
+            authorization, and disclosure. A caller crosses the service edge, where each
+            service runs exactly one authentication mode, static-credential fingerprint or
+            OIDC, and every claim- or record-bearing route is authenticated before
+            responding. Registry Notary reads sources over HTTP connectors only: Registry
+            Relay via registry_data_api, an SP DCI source via dci, and the source adapter
+            sidecar, an internal boundary whose bearer token authenticates only the
+            Notary-to-sidecar hop and is not an end-user, tenant, or subject authorization
+            boundary. Federation with a peer Notary is static-peer only, not a dynamic trust
+            mesh; it requires a verified peer-signed JWS, and peer identity, signature,
+            freshness, single use, purpose, profile, and audience are verified before any
+            source read. Delegated self-attestation is a distinct trust context from peer
+            federation: it delegates no trust to a peer Notary and stays inside the citizen
+            or OIDC trust context." />
+</figure>
+
 **The service edge (authentication).** Authentication is the trust boundary at the service
 edge. Each service runs exactly one authentication mode (either static-credential
 fingerprint or OIDC) and authenticates every claim- or record-bearing route before
@@ -97,7 +119,7 @@ between two Notary services, and it is **static-peer only**: only configured sta
 admitted. It is not a dynamic trust mesh.
 
 **Delegated self-attestation.** Delegated self-attestation is a distinct trust context from
-peer federation; don't confuse the two. It does not delegate trust to a peer
+peer federation; the two are distinct trust contexts. It does not delegate trust to a peer
 Notary; it stays inside the citizen / OIDC trust context.
 
 ## Assets protected by the design
@@ -115,8 +137,7 @@ The assets the design sets out to protect are:
 - Secret material: Bearer tokens, raw credentials, and key material are kept out of both
   the portable layer and client-facing surfaces.
 
-The project itself treats a specific set of threat classes as security-relevant, which is a
-useful framing for "threats considered": authentication bypass, credential disclosure,
+The design treats these threat classes as security-relevant: authentication bypass, credential disclosure,
 audit redaction or integrity failure, signing-key handling bugs, source-connector data
 leakage, and privacy regressions that expose raw subject identifiers.
 
@@ -188,7 +209,7 @@ secret and request context.
 
 The canonical inventory of every current limit is [Known limitations and non-guarantees](../known-limitations/); the residual risks in this section are the subset a threat model must weigh.
 
-These are the risks the design does *not* close and states honestly:
+These are the risks the design does *not* close:
 
 - Key custody is not certified by health checks: Readiness, liveness, and conformance
   checks do not certify production-grade private-key custody. A deployment using software

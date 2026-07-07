@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 248" role="img"
+     font-family="'Public Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
+     text-rendering="geometricPrecision">
+  <title>Registry Relay or Registry Notary</title>
+  <desc>Decision strip. A caller that needs the records themselves uses Registry Relay: protected, scoped, read-only HTTP routes over existing source data, without giving callers database access. A caller that needs an answer, evidence, or a credential uses Registry Notary: a status, predicate, selected value, or signed credential (SD-JWT VC), instead of the full source record. Both fit together: Registry Notary can call Registry Relay as an HTTP source.</desc>
+
+  <line x1="360" y1="16" x2="360" y2="204" stroke="#e5e5e5" stroke-width="1"/>
+
+  <g fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">
+    <text x="16" y="30">CALLER NEEDS</text>
+    <text x="376" y="30">CALLER NEEDS</text>
+  </g>
+  <g fill="#000091">
+    <rect x="16" y="38" width="32" height="2"/>
+    <rect x="376" y="38" width="32" height="2"/>
+  </g>
+
+  <g fill="#161616" font-size="13" font-weight="700">
+    <text x="16" y="64">The records themselves</text>
+    <text x="376" y="64">An answer, evidence,</text>
+    <text x="376" y="82">or a credential</text>
+  </g>
+
+  <g fill="#000091" font-size="13" font-weight="700">
+    <text x="16" y="110">&#8594; Registry Relay</text>
+    <text x="376" y="110">&#8594; Registry Notary</text>
+  </g>
+
+  <g fill="#6a6a6a" font-size="11.5"
+     font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">
+    <text x="16" y="128">registry-relay</text>
+    <text x="376" y="128">registry-notary</text>
+  </g>
+
+  <g fill="#3a3a3a" font-size="12.5">
+    <text x="16" y="154">Protected, scoped, read-only HTTP</text>
+    <text x="16" y="172">routes over existing source data,</text>
+    <text x="16" y="190">without giving callers database access.</text>
+
+    <text x="376" y="154">Returns a status, predicate, selected</text>
+    <text x="376" y="172">value, or signed credential (SD-JWT VC),</text>
+    <text x="376" y="190">instead of the full source record.</text>
+  </g>
+
+  <text x="16" y="232" fill="#6a6a6a" font-size="12">Both fit together: Registry Notary can call Registry Relay as an HTTP source.</text>
+</svg>

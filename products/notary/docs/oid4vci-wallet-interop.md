@@ -4,7 +4,7 @@
 
 This guide describes the implemented OpenID4VCI wallet facade for Registry
 Notary adopters. It focuses on what wallet and platform teams need to configure
-and test. It does not try to freeze the broader REST API design.
+and test.
 
 ## Use case
 
@@ -58,7 +58,7 @@ login, then use the rendered offer page:
 - let the wallet redeem the offer at the Notary `token_endpoint`;
 - confirm the wallet stores a `dc+sd-jwt` credential.
 
-A successful wallet run should leave these externally visible facts:
+A successful wallet run leaves these externally visible facts:
 
 - issuer metadata is reachable at `/.well-known/openid-credential-issuer`;
 - the configured Type Metadata is reachable at
@@ -120,7 +120,8 @@ request rather than issuing for a dependent target.
 ## Authenticated pre-authorized-code flow
 
 A public holder wallet (for example walt.id `wallet-api`) is a PKCE client and
-cannot authenticate to a confidential authorization server such as eSignet. For
+cannot authenticate to a confidential authorization server such as eSignet (an
+OpenID Connect identity service). For
 those wallets the Notary additionally supports an authenticated
 pre-authorized-code flow. The citizen still authenticates at eSignet; the wallet
 never authenticates to eSignet and only ever talks to the Notary.
@@ -200,9 +201,8 @@ Notary access tokens short-lived.
 
 The Notary mints its access token with a dedicated signing key separate from the
 SD-JWT VC credential key, with its own issuer, audience, and a distinct header
-`typ`. It is verified by a second, separately-keyed trust anchor; the existing
-eSignet single-issuer path is unchanged, so an eSignet token and a Notary token
-each pass only their own verifier.
+`typ`. It is verified by a second, separately-keyed trust anchor: an eSignet token
+and a Notary token each pass only their own verifier.
 
 During governed key rotation, keep the outgoing access-token key as
 `publish_only` and list it in `auth.access_token_signing.verification_key_ids`
@@ -242,7 +242,7 @@ without authentication. The route uses a trailing-wildcard capture, so nested
 configured paths such as `/.well-known/vct/credentials/dhis2/health-status/v1`
 resolve. The bare `GET /credentials/{vct_path}` route is also served for
 spec-compliant consumers that dereference the `vct` directly, but it is not the
-path walt fetches. The response is `application/json`, returns `404` when OID4VCI
+path walt.id fetches. The response is `application/json`, returns `404` when OID4VCI
 is disabled or no configured `vct` matches, and includes:
 
 - `vct`: the configured `vct` identifier (`https://{host}/{vct_path}`), not the

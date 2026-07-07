@@ -29,9 +29,8 @@ For application and wallet developers calling the API or the SDKs.
 - [OpenCRVS tutorial](opencrvs-dci-standalone-tutorial.md): issue local demo SD-JWT VCs from OpenCRVS birth-record evidence.
 - [OpenCRVS onboarding model](opencrvs-onboarding.md): understand the
   registryctl-generated project boundary, evidence question, demo signing
-  posture, and lightweight PDP model.
+  posture, and lightweight policy decision point (PDP) model.
 - [Scenario patterns](notary-scenario-patterns.md): reusable evaluation, federation, and issuance flows with sequence diagrams.
-- [GITB conformance suite design](../specs/gitb-conformance-suite.md): target runtime scenarios and claim boundary for ITB/GITB interoperability evidence.
 
 ## Operate
 
@@ -57,6 +56,7 @@ For maintainers changing the code or reviewing design history.
 - [Command-line interface](../../../crates/registry-notary/README.md): the server binary and its subcommands.
 - [Design records](../specs/README.md): specifications and implementation traces, kept as design history.
 - [Security assurance](security-assurance.md): CI security gates, image publication and signing policy.
+- [GITB conformance suite design](../specs/gitb-conformance-suite.md): target runtime scenarios and claim boundary for ITB/GITB (the EU Global Interoperability Test Bed) interoperability evidence.
 
 ## Related
 

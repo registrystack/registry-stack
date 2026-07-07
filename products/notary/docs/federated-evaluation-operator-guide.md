@@ -169,8 +169,6 @@ it is set to `redis`, startup validation requires top-level
 
 ## Verification checklist
 
-To run the test suite, see [Verification in the workspace README](../README.md#verification).
-
 Also confirm:
 
 - federation routes are absent when `federation.enabled` is false;

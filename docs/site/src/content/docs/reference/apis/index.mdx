@@ -18,7 +18,6 @@ import OpenApiSourcesTable from '../../../../components/OpenApiSourcesTable.astr
 
 Use this section to browse the HTTP API for Registry Relay or Registry Notary. Each page is built from a pinned OpenAPI artifact owned by the project it describes.
 
-Generated API reference pages are rendered as native documentation pages, so they follow the light and dark theme and are covered by site search.
 {/* Do not duplicate endpoint reference content in narrative pages. */}
 
 ## Pinned sources
@@ -41,7 +40,7 @@ The table is generated from `src/data/openapi-sources.yaml`.
 It documents the full route surface using templated paths
 (`/v1/datasets/{dataset_id}/entities/{entity}/records/...`) and capability tags, rather than
 enumerating one deployment's datasets and entities.
-The contract lives in `registry-relay/openapi/registry-relay.openapi.json` and is cross-checked against `registry-relay/docs/api.md` and the runtime route table.
+The contract lives in `registry-relay/openapi/registry-relay.openapi.json`.
 Feature-gated surfaces (OGC API Features, OGC API Records, OGC API EDR, SP DCI, signed response credentials (VC-JWT)) are included with notes in each tag description explaining the build feature that mounts them.
 For the instance-specific shape of `{dataset_id}` and `{entity}` in a given deployment, fetch `GET /openapi.json` from that gateway. Runtime deployments gate that route by default unless `openapi_requires_auth` is disabled for demos or controlled tooling.
 

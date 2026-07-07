@@ -41,19 +41,11 @@ the stack, see the [architecture overview](../../explanation/architecture/). For
 live demo credentials, identities, and ready-made requests, open the lab homepage at
 [lab.registrystack.org](https://lab.registrystack.org).
 
-:::note
-Lab tokens are public demo-only values that rotate, so this page shows placeholders, never live
-tokens. Get the current tokens and identities from the **For developers** section near the bottom
-of the lab homepage, which shows every demo credential with a copy button and a prebuilt curl
-example. The same data is available
-unauthenticated as JSON at
-[lab.registrystack.org/api/lab.json](https://lab.registrystack.org/api/lab.json).
-:::
-
 ## Get your bearer tokens
 
 The civil Relay authenticates callers with `Authorization: Bearer <token>`. Each token carries a
-scope, so the same API answers some requests and refuses others.
+scope, so the same API answers some requests and refuses others. Lab tokens are public demo-only
+values that rotate, so this page shows placeholders, never live tokens.
 
 In a browser, open [lab.registrystack.org](https://lab.registrystack.org), scroll to the
 **For developers** section near the bottom, and copy two bearer tokens from the demo credential
@@ -121,7 +113,7 @@ record exactly.
 
 ## See access control hold
 
-The point of the gateway is that it never widens reach at request time. Send the metadata-scope token
+The point of the Relay is that it never widens reach at request time. Send the metadata-scope token
 to the rows endpoint and the Relay refuses it:
 
 ```sh

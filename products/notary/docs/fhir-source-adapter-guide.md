@@ -1,11 +1,15 @@
 # FHIR source adapter guide
 
+> **Page type:** How-to · **Product:** Registry Notary · **Layer:** evaluation · **Audience:** integrator
+
 Registry Notary can read source data from FHIR R4 APIs to support configured
 Notary claims. It does not become a FHIR server and it does not use the FHIR
 `Evidence` resource as its claim model.
 
-In the current implementation, FHIR access runs through the governed source
-adapter runtime. Notary configs still use `connector: source_adapter_sidecar`; FHIR
+In the current implementation, FHIR access runs through the governed (signed,
+verified configuration bundle) source adapter runtime; see [Configuration
+trust and integrity](configuration-trust-and-integrity.md). Notary configs
+still use `connector: source_adapter_sidecar`; FHIR
 request construction, Bundle parsing, graph traversal, and projection stay
 inside that governed runtime bundle.
 
@@ -262,19 +266,9 @@ curl 'https://r4.smarthealthit.org/Coverage?_count=5'
 curl 'https://r4.smarthealthit.org/RelatedPerson?_count=5'
 ```
 
-For review, record the endpoint, date, exact query path, observed resource
-links, and whether the shape was captured as a synthetic local fixture. Do not
-record real patient data, bearer tokens, or production identifiers.
-
-Live smoke observed on 2026-06-16:
-
-- HAPI public R4 exposed `Coverage/125144909 -> Patient/125144908`; direct
-  patient read returned HTTP 200, and reverse
-  `Coverage?beneficiary=Patient/125144908` returned one match.
-- SMART public R4 count probes succeeded for the relevant resource families,
-  but sampled `Coverage` and `RelatedPerson` references pointed to patients
-  returning HTTP 410. Treat SMART as useful exploration data, not a guaranteed
-  clean graph.
+If you capture a public-server shape as a local fixture, record the endpoint,
+date, and query path alongside it. Do not record real patient data, bearer
+tokens, or production identifiers.
 
 ## Current limits
 

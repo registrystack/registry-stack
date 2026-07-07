@@ -32,7 +32,7 @@ You need:
 - `curl` and `jq` for the explicit evaluation check.
 - The HTTPS base URL of your OpenCRVS test environment.
 - OpenCRVS OAuth client credentials for that environment.
-- A known test UIN for the live smoke test.
+- A known test UIN (unique identification number) for the live smoke test.
 
 Install `registryctl` if you have not already:
 
@@ -43,7 +43,7 @@ registryctl --version
 
 ## Generate the Notary project
 
-Generate the project with the OpenCRVS DCI source kind and the known test UIN:
+Generate the project with the OpenCRVS DCI (Digital Convergence Initiative) source kind and the known test UIN:
 
 ```sh
 registryctl init notary opencrvs-notary \
@@ -69,7 +69,6 @@ DCI_CLIENT_SECRET=<opencrvs-client-secret>
 
 Keep `secrets/local.env` private.
 Use the exact `DCI_CLIENT_ID` and `DCI_CLIENT_SECRET` names.
-The 0.8.4 generator does not read `OPENCRVS_DCI_*` aliases or a DCI SHA secret.
 Do not paste bearer tokens into the file.
 Registry Notary uses the OAuth client-credentials settings to fetch a source token.
 

@@ -78,7 +78,7 @@ checklist carry a one-line note.
   provisioning and rotation](#api-key-provisioning-and-rotation).
 - [ ] Dataset scopes are granted narrowly: metadata, aggregate, rows,
   evidence-verification, and admin scopes are separate and not implied by one
-  another. Verified in `config/example.yaml` (`scopes` entries).
+  another.
 - [ ] `scope_map` is reviewed whenever IdP role names change (OIDC deployments).
 - [ ] Denied callers are tested for every exposed dataset and adapter before
   go-live.
@@ -110,13 +110,12 @@ checklist carry a one-line note.
   rotation](#audit-sink-and-rotation).
 - [ ] `audit.hash_secret_env` is set to at least 32 bytes of deployment-specific
   random secret material; the relay fails closed if it is missing or weak.
-  Field confirmed present in `src/config/mod.rs` and `config/example.yaml`.
 - [ ] Append-only external log storage (or independent tail-hash anchoring) is
-  used where stronger integrity is required; the beta sinks do not protect
+  used where stronger integrity is required; as of v0.8, the built-in sinks do not protect
   against a writer that can rewrite the sink. See [Audit sink and
   rotation](#audit-sink-and-rotation).
 - [ ] Identifier fields that need audit redaction carry `sensitive: true` in
-  table or entity field config. Field confirmed in `src/config/mod.rs`. Note:
+  table or entity field config. Note:
   `sensitive: true` is audit-only; it does not hide fields from authorized
   responses.
 - [ ] Bearer tokens, raw API keys, raw query values, row bodies, VC-JWTs, and
@@ -366,7 +365,7 @@ Current runtime behavior:
 - `audit.sink: stdout` writes audit JSONL to stdout.
 - `audit.sink: file` writes audit JSONL to the configured path and rotates in-process by `rotate.max_size_mb` and `rotate.max_files`.
 - `audit.sink: syslog` ships audit JSONL to the local syslog Unix datagram socket.
-- Audit output is always wrapped in `registry-platform-audit` envelopes with `prev_hash` and `record_hash` fields. These fields detect ordering gaps and accidental corruption in retained logs, but the beta file/stdout/syslog sinks do not protect against a writer that can rewrite the sink. Use an append-only external log store or independent tail-hash anchoring when stronger integrity is required. `audit.chain` is retained for config compatibility.
+- Audit output is always wrapped in `registry-platform-audit` envelopes with `prev_hash` and `record_hash` fields. These fields detect ordering gaps and accidental corruption in retained logs, but, as of v0.8, the file/stdout/syslog sinks do not protect against a writer that can rewrite the sink. Use an append-only external log store or independent tail-hash anchoring when stronger integrity is required. `audit.chain` is retained for config compatibility.
 - HTTP request completion is logged at `info` with method, matched route template, request id, status, and latency. It does not log raw query strings, request bodies, auth headers, or row values.
 - `REGISTRY_RELAY_LOG_FORMAT=json` switches stderr operational logs from text to JSONL.
 
@@ -387,9 +386,9 @@ For container deployments, `stdout` is still the simplest default because the pl
 
 `audit.hash_secret_env` is required for runtime startup and must point to at least 32 bytes of deployment-specific random secret material. The relay fails closed when the setting is missing, empty, unset, or weak, so sensitive audit lookup hashes never silently downgrade to unkeyed SHA-256.
 
-Audit records must not contain raw secrets or raw API keys. Mark identifier fields as `sensitive: true` in table or entity field config when query values should be deterministically hashed in audit rather than omitted entirely. The flag is audit-only in beta; it does not remove fields from authorized API responses.
+Audit records must not contain raw secrets or raw API keys. Mark identifier fields as `sensitive: true` in table or entity field config when query values should be deterministically hashed in audit rather than omitted entirely. As of v0.8, the flag is audit-only; it does not remove fields from authorized API responses.
 
-**Data-Purpose audit semantics** (frozen, 2026-06-11 evidence-contracts decision record, D5): when the `Data-Purpose` header is present on a request, its value is always recorded verbatim in the audit trail (`purpose` field). Header presence can be required per entity via `require_purpose_header: true`; a missing header returns `400 auth.purpose_required`. Without an entity `governed_policy`, purpose values are not enforced or compared at the consultation layer; Registry Notary is the purpose-certification layer. With an entity `governed_policy`, governed evidence-gateway routes evaluate the configured PDP purpose allowlist and return stable `pdp.*` denials. Value-level allowlists remain additive opt-in configuration.
+**Data-Purpose audit semantics** (frozen): when the `Data-Purpose` header is present on a request, its value is always recorded verbatim in the audit trail (`purpose` field). Header presence can be required per entity via `require_purpose_header: true`; a missing header returns `400 auth.purpose_required`. Without an entity `governed_policy`, purpose values are not enforced or compared at the consultation layer; Registry Notary is the purpose-certification layer. With an entity `governed_policy`, governed evidence-gateway routes evaluate the configured PDP purpose allowlist and return stable `pdp.*` denials. Value-level allowlists remain additive opt-in configuration.
 
 ## Dataset refresh and reload
 
@@ -399,7 +398,7 @@ Refresh modes:
 - `interval`: reload unconditionally on the configured interval.
 - `manual`: reload only through an admin request.
 
-The original source file is never modified. On single-resource ingest failure, the intended behavior is to keep serving the previously loaded table and mark readiness degraded when no prior generation is ready.
+The original source file is never modified. On single-resource ingest failure, the service keeps serving the previously loaded table and marks readiness degraded when no prior generation is ready.
 
 Manual table reload:
 

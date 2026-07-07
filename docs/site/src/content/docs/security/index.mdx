@@ -89,8 +89,8 @@ Two behaviors are recommended rather than required, so confirm them rather than 
   audit envelopes, HTTP security, outbound HTTP policy, cryptography, and SD-JWT VC helpers) are
   meant to come from Registry Platform rather than be reimplemented per service, so they behave
   the same everywhere and can be reviewed in one place. RS-SEC-G recommends this rather than
-  forcing it (REQ-SEC-G-001), so confirm a given service actually does it rather than
-  reimplementing its own.
+  forcing it (REQ-SEC-G-001), so confirm the service you deploy sources them from
+  Registry Platform rather than reimplementing its own.
 - HTTP hardening: security response headers and limits on outbound source-fetch traffic are
   recommended posture (REQ-SEC-G-012). Check that your build applies them rather than assuming
   it.
@@ -150,7 +150,7 @@ See [Report a vulnerability](report-a-vulnerability/).
 ## Next
 
 - [Harden a production deployment](hardening-checklist/)
-- [Threat model](../explanation/threat-model/): the boundaries, assets, and threats behind this posture
+- [Threat model](../explanation/threat-model/): the boundaries, assets, and threats behind this posture, with a one-figure map of the trust boundaries
 - [Known limitations and non-guarantees](../explanation/known-limitations/): the full list of edges
 - [RS-SEC-G: Registry family security model](../spec/rs-sec-g/)
 - [Security self-assessment](self-assessment/)

@@ -8,7 +8,7 @@ New here? Start with the hosted walkthrough, then the first-run tutorials in Reg
 - [Publish a spreadsheet as a secured registry API](https://docs.registrystack.org/tutorials/publish-spreadsheet-secured-registry-api/)
 - [Verify a claim from your registry API](https://docs.registrystack.org/tutorials/verify-claim-registry-api/)
 
-The references describe supported behavior. Each fact has one home; pages link to the owning reference instead of restating it. Some links open the source repository on GitHub.
+The references describe supported behavior. Some links open the source repository on GitHub.
 
 ## Integrate
 
@@ -36,6 +36,3 @@ The references describe supported behavior. Each fact has one home; pages link t
 - [Development guide](development.md): local setup, verification commands, local IdP setup, project layout, OpenAPI release policy, platform compatibility gate, and contribution rules.
 - [Security assurance](security-assurance.md): CI security gates, image publication and signing policy, and advisory baselines.
 - [perf/README.md](../perf/README.md): local k6 and Criterion performance workflow.
-
-Historical design records and implementation plans are archived in private
-planning materials and are not part of this documentation set.

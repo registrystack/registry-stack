@@ -88,7 +88,7 @@ Run the Notary smoke checks:
 registryctl notary smoke
 ```
 
-You should see the core checks pass:
+The core checks pass:
 
 ```text
 PASS notary healthz is public
@@ -216,7 +216,7 @@ It returns a `409` problem document, because there is no evidence to evaluate:
 The `request_id` is a server-minted ULID that differs on every request; match the other
 fields exactly.
 
-This distinction matters to integrators: a claim result answers the configured question about a
+This distinction matters when you integrate: a claim result answers the configured question about a
 known subject, while a missing subject is an evidence error, not a negative answer.
 
 ## Compare a row read and a claim result
@@ -364,8 +364,9 @@ It does not delete your workbook, generated configs, local keys, or smoke result
 
 ## Next
 
-- Define more policy for this claim: context constraints, denial reasons, and audit
-  inspection are the next local rung.
+- [Registry Notary operator configuration reference](../../products/registry-notary/operator-config-reference/):
+  define more policy for this claim, including context constraints, denial reasons, and audit
+  inspection.
 - [Connect Notary to a Registry Data API source](../run-notary-standalone-for-api/): run Notary in
   a separate project against a Registry Data API-shaped source.
 - [Credential tour](../../start/credential-tour/): explore the hosted demo to see credential issuance and

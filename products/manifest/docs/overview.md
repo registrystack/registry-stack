@@ -8,8 +8,6 @@ It does not serve HTTP, does not talk to databases, and does not handle credenti
 You can run it on a laptop, in a CI pipeline, or in a static hosting workflow with no
 server required.
 
-**Stack commitments:** interoperability, reviewability.
-
 ## What Registry Manifest emits
 
 Registry Manifest ships pure renderer functions.
@@ -35,7 +33,9 @@ Federation metadata appears inside the catalog and evidence-offering JSON output
 separate render format. Codelists are emitted as embedded SKOS-shaped nodes inside the SHACL
 and DCAT/BRegDCAT-shaped linked-data outputs; there is not yet a standalone SKOS artifact.
 
-Not yet implemented: GovStack DR BB, SP DCI, standalone SKOS, and standalone PROV-O.
+Not yet implemented: GovStack Digital Registries Building Block (DR BB), Social
+Protection Digital Convergence Initiative (SP DCI) formats, standalone SKOS,
+and standalone PROV-O.
 
 The `dcat` format dispatches based on an optional `--profile` flag: `--profile dcat` or
 `--profile dcat-ap` renders base Data Catalog Vocabulary (DCAT); `--profile bregdcat-ap`
@@ -61,6 +61,9 @@ Registry Relay.
 If you need runtime metadata served over HTTP with per-caller scoping and authorization,
 that is Registry Relay's job.
 Relay uses Registry Manifest's renderers internally.
+Metadata manifests and pure renderers live in this workspace; HTTP publication, runtime
+source binding, authentication, authorization, and audit behavior live in Registry Relay
+or Registry Notary.
 
 ## A minimal manifest
 
@@ -208,9 +211,6 @@ publication bundle format.
 Profile fixtures in `profiles/` are non-normative examples.
 The static publication bundle format includes `index.json` schema version
 `registry-manifest-index/v1`.
-
-The test suite includes golden-fixture assertions for the older example profiles and the
-standards-shaped renderer outputs, including CPSV-AP and OGC Records fixtures.
 
 ## See also
 

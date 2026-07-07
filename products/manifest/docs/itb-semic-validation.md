@@ -1,7 +1,9 @@
 # ITB/SEMIC validation smoke checks
 
 Registry Manifest includes an optional smoke script for checking generated DCAT
-and BRegDCAT-AP JSON-LD against the public ITB/SEMIC SHACL validator endpoints.
+and BRegDCAT-AP JSON-LD against the public SHACL validator endpoints of the EU
+Interoperability Test Bed (ITB), operated by the Semantic Interoperability
+Community (SEMIC).
 The script is not a certification gate. It is a reproducible compatibility check
 for selected generated artifacts.
 
@@ -72,7 +74,8 @@ carry the profile and warning count when BRegDCAT-AP evidence is cited.
 
 ## Public claim boundary
 
-Use this wording in public release notes or operator docs:
+If you cite this smoke evidence in your own documentation, keep the claim
+within these bounds:
 
 - The selected Registry Manifest JSON Schema artifacts passed ITB JSON validator
   checks against JSON Schema Draft 2020-12 with zero errors.

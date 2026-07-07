@@ -193,8 +193,7 @@ Security material:
 
 ## What this guarantees, and what it does not
 
-"Records stay home" is a precise, narrow promise. Reading it as more than it is would be a
-mistake, so the limits are stated plainly here.
+"Records stay home" is a precise, narrow promise.
 
 - It is not "data never moves" and not "air-gapped": The promise is *read-in-place, no
   write-back, retained custody*. Authorized, minimized answers do leave the boundary by
@@ -216,11 +215,11 @@ mistake, so the limits are stated plainly here.
   can still tell a resolved record from a not-available response.
 - This is not zero-knowledge: A `predicate` answer is a policy-enforced boolean computed
   inside the service; SD-JWT selective disclosure is digest omission. Neither is a
-  zero-knowledge proof, and the documentation should not imply one.
+  zero-knowledge proof.
 
 This page's promise also sits inside the wider set of stack-wide limits: revocation and
 erasure gaps, which guarantees are left to the operator to provide, and the draft status of
-the underlying specifications. Weigh those alongside the six points above; see the
+the underlying specifications. Weigh those alongside the limits in this section; see the
 [known limitations hub](../known-limitations/) for the full inventory.
 
 ## Related

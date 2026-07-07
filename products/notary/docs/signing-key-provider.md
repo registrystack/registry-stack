@@ -186,7 +186,7 @@ evidence:
   signing_keys:
     issuer-hsm:
       provider: pkcs11
-      module_path: /opt/homebrew/lib/softhsm/libsofthsm2.so
+      module_path: <path-to-vendor-pkcs11-module>.so
       token_label: registry-notary
       pin_env: REGISTRY_NOTARY_PKCS11_PIN
       key_label: issuer-signing-key
@@ -241,6 +241,9 @@ softhsm2-util --import issuer-ed25519.pem \
   --label issuer-signing-key --id 01ab23cd --force
 ```
 
+On a Homebrew-installed macOS setup, `module_path` is typically
+`/opt/homebrew/lib/softhsm/libsofthsm2.so`.
+
 The public JWK in `public_jwk_env` must match the public half of the imported
 key and must contain the configured `kid` and `alg`.
 
@@ -281,7 +284,9 @@ only to reserve the provider name until a real, tested implementation exists.
 
 ## Verification checklist
 
-After changing signing configuration or provider code, run the test suite as described in
+After changing signing configuration, re-run startup and confirm the self-test
+signs and verifies successfully. Contributors changing provider code should
+also run the test suite as described in
 [Verification in the workspace README](../README.md#verification).
 
 Note: some server tests bind local sockets and may need to run outside strict network sandboxes.

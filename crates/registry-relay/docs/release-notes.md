@@ -16,7 +16,7 @@
 - Added a config-schema command and shared config-report output, aligned with the
   beta-3 Platform config contracts.
 - Advanced the Crosswalk input to 0.2.0, Registry Platform to 0.3.1, and Registry
-  Manifest to 0.2.1, the versions used by the beta-3 train.
+  Manifest to 0.2.1, the versions used by the 0.4.0 release.
 - Updated Relay operational docs and API description text alongside the release.
 - BREAKING: Audit write failures now default to fail-closed. `availability_first` is
   an explicit best-effort opt-out.
@@ -100,7 +100,7 @@
   detection and a `redocly lint` gate.
 - Added a performance gate: CI enforces relay perf thresholds and runs a k6 perf
   smoke test.
-- Added governed runtime configuration apply, a Trust Ops posture endpoint, and
+- Added governed runtime configuration apply, an operations posture endpoint, and
   listener topology capability reporting.
 - Image supply-chain hardening: distroless release image, signed and verified
   release publishing, SHA-pinned workflow actions, and reviewed advisory ratchet
@@ -136,9 +136,6 @@ publishing protected, entity-shaped APIs over local CSV, XLSX, and Parquet sourc
 - Added container build support, operations documentation, demo
   configuration/data, Bruno demo requests, and focused integration/security
   regression tests.
-
-Deferred: remaining hardening work is tracked through normal issues and release
-planning, not shipped release notes.
 
 Known limits:
 

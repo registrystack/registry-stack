@@ -17,7 +17,9 @@ standards_referenced:
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
 This tutorial runs Registry Notary against the public DHIS2 play sandbox.
-A private source-adapter sidecar calls the DHIS2 Tracker API, Registry Notary evaluates
+A private source-adapter sidecar (a small service that runs next to Notary and translates the
+source's own routes, auth, and response shape into the Registry Data API-shaped lookup route
+Notary expects) calls the DHIS2 Tracker API, Registry Notary evaluates
 programme-status claims from the projected fields, and Notary issues a holder-bound SD-JWT VC
 (Selective Disclosure JWT Verifiable Credential) from the evaluated results, with only the Notary
 API exposed to the caller.
@@ -68,9 +70,10 @@ just setup
 
 ## Set DHIS2 source access
 
-The local demo defaults to the public DHIS2 play credentials. The current lab profile still uses
-legacy `OPENFN_*` variable names for this DHIS2 sidecar. To point the profile at another DHIS2
-environment, set these values before you run the profile:
+The local demo defaults to the public DHIS2 play credentials. The variable names carry an
+`OPENFN_` prefix, and the DHIS2 sidecar's service name keeps a lowercase `openfn` prefix, for
+historical reasons. To point the profile at another DHIS2 environment, set these values before you
+run the profile:
 
 ```sh
 export OPENFN_DHIS2_HOST_URL="https://play.im.dhis2.org/stable-2-43-0-1"
@@ -102,9 +105,9 @@ just generate
 This writes `.env`, including:
 
 - `DHIS2_EVIDENCE_CLIENT_BEARER`, used by callers when they call Registry Notary.
-- `OPENFN_SIDECAR_TOKEN_RAW`, the legacy variable name Registry Notary uses when it calls the
+- `OPENFN_SIDECAR_TOKEN_RAW`, the variable name Registry Notary uses when it calls the
   private DHIS2 sidecar.
-- `OPENFN_SIDECAR_TOKEN_HASH`, the legacy variable name the sidecar uses to authenticate Notary.
+- `OPENFN_SIDECAR_TOKEN_HASH`, the variable name the sidecar uses to authenticate Notary.
 
 Do not use generated demo credentials outside the local lab.
 
@@ -128,9 +131,6 @@ The profile starts:
 | --- | --- | --- |
 | `openfn-dhis2-sidecar` | private Compose network only | DHIS2 source adapter that calls DHIS2 Tracker through `http_json` |
 | `dhis2-health-notary` | `http://127.0.0.1:4326` | Registry Notary claim evaluator and SD-JWT VC issuer |
-
-The service name keeps the legacy `openfn` prefix, but this path uses the built-in `http_json`
-engine. There is no Node worker pool or OpenFn workflow runtime in the DHIS2 lookup path.
 
 Expected ending:
 
@@ -278,12 +278,28 @@ public key directly, with no separate registry lookup) and uses the
 
 The DHIS2 source adapter is configured in `config/source-adapter/dhis2-health-sidecar.yaml`.
 
+```mermaid
+flowchart LR
+    caller["Caller<br/>DHIS2_EVIDENCE_CLIENT_BEARER"]
+    notary["Registry Notary<br/>config/notary/dhis2-health-notary.yaml"]
+    sidecar["DHIS2 source adapter sidecar<br/>config/source-adapter/dhis2-health-sidecar.yaml"]
+    dhis2["DHIS2 Tracker"]
+    caller -- "bearer token" --> notary
+    notary -- "sidecar token" --> sidecar
+    sidecar -- "http_json engine" --> dhis2
+```
+
+The diagram restates the chain: a caller authenticates to Registry Notary with
+`DHIS2_EVIDENCE_CLIENT_BEARER`, Notary calls the private sidecar with the shared sidecar token
+(the `OPENFN_SIDECAR_TOKEN_RAW` variable), and the sidecar's built-in `http_json` engine
+queries DHIS2 Tracker.
+
 Key settings:
 
 | Setting | What it does |
 | --- | --- |
 | `sources.dhis2_health.engine` | Uses the built-in `http_json` engine. |
-| `sources.dhis2_health.credential_env` | Reads DHIS2 `baseUrl`, `username`, and `password` from the legacy `OPENFN_DHIS2_DEMO_CREDENTIAL_JSON` variable. |
+| `sources.dhis2_health.credential_env` | Reads DHIS2 `baseUrl`, `username`, and `password` from the `OPENFN_DHIS2_DEMO_CREDENTIAL_JSON` variable. |
 | `sources.dhis2_health.allowed_base_urls` | Pins which DHIS2 base URLs the sidecar may call. |
 | `sources.dhis2_health.http_json.path` | Calls `/api/tracker/trackedEntities`. |
 | `sources.dhis2_health.http_json.query` | Maps the Notary lookup value into DHIS2 Tracker query parameters. |
@@ -301,7 +317,7 @@ Key settings:
 | Setting | What it does |
 | --- | --- |
 | `evidence.source_connections.dhis2_openfn.base_url` | Points Notary at the private sidecar. |
-| `evidence.source_connections.dhis2_openfn.token_env` | Sends the shared sidecar token from the legacy `OPENFN_SIDECAR_TOKEN_RAW` variable. |
+| `evidence.source_connections.dhis2_openfn.token_env` | Sends the shared sidecar token from the `OPENFN_SIDECAR_TOKEN_RAW` variable. |
 | `evidence.allowed_purposes` | Restricts which `Data-Purpose` values may be used. |
 | `evidence.claims[].source_bindings` | Binds each claim to the projected DHIS2 fields. |
 | `evidence.claims[].rule` | Extracts a value or evaluates a predicate from the projected fields. |
@@ -327,16 +343,6 @@ docker compose -f compose.yaml --profile dhis2 down
   reader account scoped to your DHIS2 instance instead of the public sandbox credentials.
 - Keep the DHIS2 sidecar private and expose only Registry Notary to callers, as this demo does.
 
-## Troubleshooting
-
-| Symptom | Cause | Fix |
-| --- | --- | --- |
-| `missing .env` | Local credentials have not been generated. | Run `just generate`. |
-| Notary discovery returns `401` | The request is missing the local bearer token. | Add `Authorization: Bearer ${DHIS2_EVIDENCE_CLIENT_BEARER}`. |
-| The sidecar cannot reach DHIS2 | The source URL, credentials, or network path is wrong, or the public sandbox reset. | Check `OPENFN_DHIS2_HOST_URL`, `OPENFN_DHIS2_USERNAME`, `OPENFN_DHIS2_PASSWORD`, then rerun `just dhis2`. |
-| A claim is unsatisfied | The Tracker record does not contain the projected field or programme state. | Inspect the JSON artifact in `output/dhis2-openfn/`, then compare the field with `config/source-adapter/dhis2-health-sidecar.yaml` and `config/notary/dhis2-health-notary.yaml`. |
-| `child_age_band` looks coarse | The public child programme demo does not expose date of birth for the tracked entity. | Treat `5_to_17` as lab-derived programme context, not a clinical age calculation. |
-
 ## What you built
 
 You ran Registry Notary against the public DHIS2 Tracker API through a private source adapter,
@@ -349,3 +355,13 @@ sidecar and the DHIS2 credentials stayed private to the Compose network.
 - [OpenCRVS claims](../verify-opencrvs-claims/)
 - [Getting started with FHIR evidence](../getting-started-fhir-evidence/)
 - [Integration patterns](../../explanation/integration-patterns/)
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| `missing .env` | Local credentials have not been generated. | Run `just generate`. |
+| Notary discovery returns `401` | The request is missing the local bearer token. | Add `Authorization: Bearer ${DHIS2_EVIDENCE_CLIENT_BEARER}`. |
+| The sidecar cannot reach DHIS2 | The source URL, credentials, or network path is wrong, or the public sandbox reset. | Check `OPENFN_DHIS2_HOST_URL`, `OPENFN_DHIS2_USERNAME`, `OPENFN_DHIS2_PASSWORD`, then rerun `just dhis2`. |
+| A claim is unsatisfied | The Tracker record does not contain the projected field or programme state. | Inspect the JSON artifact in `output/dhis2-openfn/`, then compare the field with `config/source-adapter/dhis2-health-sidecar.yaml` and `config/notary/dhis2-health-notary.yaml`. |
+| `child_age_band` looks coarse | The public child programme demo does not expose date of birth for the tracked entity. | Treat `5_to_17` as lab-derived programme context, not a clinical age calculation. |

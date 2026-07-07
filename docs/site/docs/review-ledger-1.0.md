@@ -184,3 +184,30 @@ re-verified; P2/P3 findings fixed or recorded above.
 |---|---|---|
 | [GH#278](https://github.com/registrystack/registry-stack/issues/278) | publish-spreadsheet, verify-claim, run-notary-standalone | registryctl v0.8.4 pins pre-0.8.4 service image digests; generated Relay project cannot start |
 | [GH#279](https://github.com/registrystack/registry-stack/issues/279) | first-run, getting-started-fhir, configure-dhis2 | lab `just setup` broken on fresh clones ($$ escaping); Notary warm-up 500s; zsh env sourcing; undeclared uv prerequisite |
+
+## Editorial and visual review passes (2026-07-07, post-PR-open)
+
+Two independent full-coverage review passes ran after PR #284 opened, at the maintainer's request.
+
+**Implementer-tone pass** (audience fit, tone, economy; facts out of scope as already verified):
+all 57 hand-authored site pages + 47 product doc sources + STANDARDS_ASSUMPTIONS.md read end to
+end. Verdict: implementer-first overall; residue was the project's own quality process leaking
+into prose (published reviewer annotations, decision-record citations, roadmap vocabulary,
+self-narrated honesty, unglossed insider terms). 16 P1 + ~170 P2/P3 findings; all applied across
+six fix batches except: (1) verify-opencrvs absolute onboarding URLs kept (recorded deliberate
+deviation for the archive link check); (2) self-assessment "publicly inferable" sentence kept
+unchanged because the prescribed rewrite would have dropped the security-reviewer-approval
+carve-out (policy change, routed to Tier-C); (3) the github.com/jeremi OpenFn adaptor pointer
+flagged for maintainer decision, not changed. New factual finds routed out: relay
+security-assurance.md cites security/waivers.yml which does not exist (flagged to maintainer);
+products/manifest/docs/repository-split.md deleted (internal split history).
+
+**Diagram pass**: 13 of 20 site SVGs were orphans; 4 audited and re-wired (standards-claim-levels,
+notary-three-parties [stale WITNESS name fixed], relay-two-rooms [feature-gate labels fixed]),
+1 REJECTED with evidence (notary-disclosure-lens drew a fourth disclosure mode the docs deny),
+9 retired. In-use fixes: evidence-transports pre-rename routes, claim-model connector/rule kinds
+(+ page alt), country-evidence-mesh unanchored AI panel removed. New diagrams: solmara-lab-topology
+(first-run tutorial), registry-relay-or-notary (when-to-use), registry-trust-boundaries
+(threat-model, Tier-C deltas recorded), mermaid adapter chains on the FHIR and DHIS2 tutorials.
+check-svg-a11y.mjs expected list realigned (13 in-use files). Dark-mode contrast issue filed as
+registry-stack#291. Spec-page mermaid deliberately left as mermaid (drift-resistant).

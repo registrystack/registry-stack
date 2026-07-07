@@ -26,9 +26,8 @@ production-ready.
 
 Use this checklist before a `production` or `evidence_grade` deployment goes live, and again after
 any change to signing keys, audit sinks, network placement, or the declared deployment profile. It
-assumes you have already completed the [Registry Relay configuration reference](../../products/registry-relay/configuration/)
-or the [Registry Notary operator configuration reference](../../products/registry-notary/operator-config-reference/)
-for your service.
+assumes you have already configured your service per the [Registry Relay configuration reference](../../products/registry-relay/configuration/)
+or the [Registry Notary operator configuration reference](../../products/registry-notary/operator-config-reference/).
 
 ## Before you start
 
@@ -52,7 +51,7 @@ for your service.
 - Rotate a signing key by adding a new `kid`, moving credential profiles to it, then moving the old
   key to `publish_only` until its configured publication window ends or verifiers no longer need
   it. Do not delete a key verifiers may still need.
-- Keep RS256 scoped to the eSignet RP client assertion key (eSignet, the MOSIP-project identity
+- Keep RS256 scoped to the eSignet relying-party (RP) client assertion key (eSignet, the MOSIP-project identity
   provider, is the one integration that needs RS256). Credential profile, access token, and
   federation response signing use Ed25519 EdDSA or ES256/P-256; RS256 is rejected there.
 - If a signing key uses `provider: pkcs11`, confirm the deployed binary was built with the

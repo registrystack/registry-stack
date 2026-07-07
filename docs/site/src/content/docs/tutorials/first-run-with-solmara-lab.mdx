@@ -109,6 +109,20 @@ ministry authority, four purpose-scoped Notary instances, the citizen portal, th
 Center, a static metadata publisher, a scenario-runner service that backs the portal's guided
 demos, Postgres, and Redis.
 
+{/* SVG diagram. Every service name and host port in the diagram is restated in the
+    table and paragraphs that follow. */}
+<figure>
+  <img src="../../images/solmara-lab-topology.svg"
+       alt="Solmara Lab compose topology, 16 services. Six authority Relay instances
+            (cra-civil-relay :4311, nia-population-relay :4312, sro-social-relay :4313,
+            programme-mis-relay :4314, sipf-pensions-relay :4315, nagdi-agriculture-relay :4316)
+            provide evidence reads to four Notary instances (child-benefit-notary :4321, which
+            you call directly in this tutorial; pension-notary :4322; nagdi-notary :4323;
+            citizen-notary :4324). The citizen portal :4300 is wired to the citizen Notary;
+            the Visitor's Center runs on :4301. A support strip holds static-metadata :4331,
+            scenario-runner, Postgres :54329, and Redis :63799." />
+</figure>
+
 The services this tutorial calls directly:
 
 | Service | Host port | Role |
@@ -118,12 +132,9 @@ The services this tutorial calls directly:
 | `child-benefit-notary` | `4321` | Notary for the birth-to-child-benefit journey; you call its evaluation route directly. |
 | `static-metadata` | `4331` | Unauthenticated multi-authority metadata bundle. |
 
-The remaining Relay instances run on `cra-civil-relay` (`4311`), `nia-population-relay` (`4312`),
-`sro-social-relay` (`4313`), `programme-mis-relay` (`4314`), `sipf-pensions-relay` (`4315`), and
-`nagdi-agriculture-relay` (`4316`). The remaining Notary instances run on `pension-notary`
-(`4322`), `nagdi-notary` (`4323`), and `citizen-notary` (`4324`). Postgres listens on `54329` and
-Redis on `63799`. This tutorial does not call any of these directly; they back the pension and
-farmer-voucher journeys and the portal's own evidence calls.
+The other six Relay instances, three Notary instances, Postgres, and Redis back the pension and
+farmer-voucher journeys and the portal's own evidence calls; this tutorial does not call them
+directly. The topology figure shows the full port map.
 
 Each instance publishes its rendered API reference at `/docs`, a route that is always public, and
 its raw `/openapi.json`, public here because every Relay and Notary configuration in this lab sets
@@ -140,13 +151,13 @@ flows this tutorial calls directly.
 Open the Visitor's Center at [http://127.0.0.1:4301](http://127.0.0.1:4301). It is Solmara Lab's
 public tour, organized as three doors: visit as a citizen, as a relying agency running a guided
 story, or as an engineer. Scroll to the Engineer door section. It republishes the same four
-synthetic Notary tokens this tutorial's `.env` generates, `child-benefit-notary`, `pension-notary`,
-`nagdi-notary`, and `citizen-notary`, as ready-made copy-as-curl examples, including the same kind
-of evaluation call you make by hand in the next section.
+synthetic Notary tokens this tutorial's `.env` generates: `child-benefit-notary`, `pension-notary`,
+`nagdi-notary`, and `citizen-notary`. They appear as ready-made copy-as-curl examples, including
+the evaluation call you make by hand next.
 
 ## Call a Notary evaluation route directly
 
-The birth-to-child-benefit journey is the lab's first wave-1 story. Its positive fixture is Mateo
+The birth-to-child-benefit journey is one of the lab's guided stories. Its positive fixture is Mateo
 Santos, Solmara UIN `2300010248`: a child whose birth is registered, who is under five, whose
 household falls below the poverty threshold, and who is not already enrolled.
 
@@ -191,8 +202,8 @@ asking, and the Notary's configuration allows this token to ask only under the
 `child-benefit-review` purpose. The `disclosure: predicate` request means the response discloses a
 true or false satisfaction per claim, never the underlying civil, population, social, or programme
 registry row the Notary read to answer it. The Notary can also issue a signed
-[SD-JWT VC](../../reference/glossary/) credential for this same eligibility claim set; that
-holder-bound issuance flow is out of scope for this tutorial. See
+[SD-JWT verifiable credential (SD-JWT VC)](../../reference/glossary/) for this same eligibility
+claim set; that holder-bound issuance flow is out of scope for this tutorial. See
 [Registry Notary](../../products/registry-notary/) for the credential issuance contract.
 
 ## Verify

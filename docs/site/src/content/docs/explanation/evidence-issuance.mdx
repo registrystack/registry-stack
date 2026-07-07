@@ -33,6 +33,26 @@ credential lets a registry answer one question (does this subject satisfy this r
 shipping the records that justify the answer. Registry Notary is the component that produces
 those credentials.
 
+In the three-party credential model, Registry Notary is the issuer: it reads source data,
+evaluates the configured claim, applies the disclosure policy, and signs an SD-JWT VC.
+A wallet is the holder: it stores the credential, presents fields selectively, and proves key
+possession. A verifier is the relying party: it checks the issuer signature, reads the presented
+fields, and applies its own program policy. What Notary produces is evidence, a signed receipt
+that a claim was evaluated; the decision (whether the subject qualifies for a benefit) belongs
+to the program, not to Notary.
+
+{/* SVG diagram. Essential labels are restated in the paragraph above. */}
+<figure>
+  <img src="../../images/registry-notary-three-parties.svg"
+       alt="Registry Notary as issuer in the three-party credential model. Registry Notary
+            reads source data, evaluates claims, applies disclosure policy, and signs an
+            SD-JWT VC. A wallet, the holder, stores the credential, presents selectively,
+            and proves key possession. A verifier, the relying party, checks the issuer
+            signature, reads presented fields, and applies program policy. Notary produces
+            evidence, a signed receipt that a claim was evaluated; the program produces the
+            decision, whether the subject qualifies for a benefit." />
+</figure>
+
 ## The claim model in one diagram
 
 A single claim evaluation moves through five stages.
@@ -42,9 +62,10 @@ A single claim evaluation moves through five stages.
   <img src="../../images/registry-claim-model.svg"
        alt="Claim model: five configured stages in order. (1) Subject identifier: input
             from the caller, typed by the source connector. (2) Source connector:
-            registry_data_api or dci, configured per binding. (3) Rule evaluation: one of
-            extract, exists, cel, or plugin. (4) Disclosure mode: value, predicate, or
-            redacted. (5) Evaluation render format: claim-result JSON or CCCEV JSON-LD.
+            registry_data_api, dci, or source_adapter_sidecar, configured per binding.
+            (3) Rule evaluation: one of extract, exists, or cel. (4) Disclosure mode:
+            value, predicate, or redacted. (5) Evaluation render format: claim-result
+            JSON or CCCEV JSON-LD.
             Eligible stored evaluations can later be materialized as SD-JWT VC credentials." />
 </figure>
 
@@ -85,8 +106,8 @@ evaluation, or receipt.
    choreography is implemented in the Notary server's API module at
    [`crates/registry-notary-server/src/api.rs`](https://github.com/registrystack/registry-stack/blob/v0.8.1/crates/registry-notary-server/src/api.rs).
    The offer can carry an authorization-code grant (the user authenticates at the authorization
-   server, as above) or a pre-authorized-code grant; the hosted lab uses pre-authorized-code with
-   eSignet as the authorization server.
+   server, as in the authorization-code grant) or a pre-authorized-code grant; the hosted lab uses pre-authorized-code with
+   eSignet (an open-source identity and e-signature platform) as the authorization server.
 3. Verifiable receipt only. The caller does not need a credential at all. It calls
    `POST /v1/evaluations`, accepts the disclosure mode the claim allows (often `predicate` or
    `redacted`), and stores the audit-stamped result. Every evaluation, credential or not, is

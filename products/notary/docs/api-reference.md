@@ -66,8 +66,9 @@ the security allowlist.
 
 `GET /v1/claims` and `GET /v1/claims/{claim_id}` may include `target_inputs`
 when a claim has configured target matching. This block is request-contract
-metadata for clients that build evaluation forms. It is separate from CCCEV and OOTS:
-those describe evidence semantics and interoperability context, while
+metadata for clients that build evaluation forms. It is separate from the Core
+Criterion and Core Evidence Vocabulary (CCCEV) and the EU Once-Only Technical
+System (OOTS): those describe evidence semantics and interoperability context, while
 `target_inputs` describes the target-side request paths a Notary evaluation can
 accept.
 
@@ -269,8 +270,7 @@ type is valid but not for the declared purpose. A successful match returns
 `matching.confidence` is a policy-asserted label configured for the source
 binding and matching method. It is returned verbatim for successful matches
 against that binding, so it does not measure the quality of an individual match.
-Future measured match-quality fields can be added alongside it without changing
-this field's meaning.
+Additional fields may appear alongside it; its meaning will not change.
 
 ### Self-attestation denial reasons
 

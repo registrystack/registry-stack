@@ -19,7 +19,7 @@ It does not store records or run a domain registry. It adds controlled service s
 you already operate: a published metadata contract, protected registry APIs, governed evidence
 responses, and hash-chained audit records.
 
-This is the one "why" page these docs keep. For broader problem framing, who benefits, and where
+For broader problem framing, who benefits, and where
 the stack fits in a wider ecosystem, see [registrystack.org](https://registrystack.org/).
 
 ## What it is
@@ -38,6 +38,20 @@ These docs cover the two products you build against directly:
   protected, scoped, read-only HTTP routes, without giving callers database access.
 - Registry Notary evaluates configured claims and returns a status, predicate, selected value, or
   signed credential, instead of the full source record.
+
+{/* SVG diagram. Essential labels are restated in the bullets above and the sentence below. */}
+<figure>
+  <img src="../../images/registry-relay-or-notary.svg"
+       alt="Decision strip. A caller that needs the records themselves uses Registry Relay:
+            protected, scoped, read-only HTTP routes over existing source data, without giving
+            callers database access. A caller that needs an answer, evidence, or a credential
+            uses Registry Notary: a status, predicate, selected value, or signed credential
+            (SD-JWT VC), instead of the full source record. Both fit together: Registry Notary
+            can call Registry Relay as an HTTP source." />
+</figure>
+
+The two patterns also compose: Registry Notary can call a Registry Relay instance as one of its
+HTTP sources when a claim reads a registry that Relay already protects.
 
 The wider current stack (Registry Manifest for portable metadata, Registry Platform for shared
 primitives, and Registry Lab for a local compose demo) is described at

@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 460" role="img" aria-labelledby="r-title r-desc" fill="none">
   <title id="r-title">Registry Relay: from private storage to scoped public entities</title>
-  <desc id="r-desc">Registry Relay reads from private CSV, XLSX, Parquet, and PostgreSQL sources and serves them as public, entity-shaped APIs such as household and individual. For each request it performs a scope check, projects only declared fields, and writes one audit JSONL record. Inside the Relay, adapters expose the same entities over the native Registry Data API, the SP DCI sync protocol used by the GovStack Registry Building Block, and OGC API Records.</desc>
+  <desc id="r-desc">Registry Relay reads from private CSV, XLSX, Parquet, and PostgreSQL sources and serves them as public, entity-shaped APIs such as household and individual. For each request it performs a scope check, projects only declared fields, and writes one audit JSONL record. Callers reach the entities over the native Registry Data API; optional feature-gated adapters can also expose them over SP-DCI sync and OGC API Records.</desc>
 
   <style>
     .h { font: 600 13px 'Public Sans', system-ui, sans-serif; fill: #161616; }
@@ -51,7 +51,7 @@
 
   <text x="276" y="278" class="h">adapters</text>
   <text x="276" y="298" class="c">Registry Data API</text>
-  <text x="276" y="314" class="c">DCI sync · GovStack BB</text>
+  <text x="276" y="314" class="c">SP-DCI sync (opt)</text>
   <text x="276" y="330" class="c">OGC API Records (opt)</text>
 
   <!-- Column 3: Public API entity cards -->

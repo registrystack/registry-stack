@@ -41,7 +41,7 @@ opencrvs-birth-record-exists
 
 You need:
 
-- A `registry-notary` binary built from this repository.
+- A `registry-notary` binary built from the `registry-notary` repository.
 - `curl`.
 - `jq`.
 - An OpenCRVS OAuth client ID and client secret.
@@ -261,7 +261,7 @@ cp "$REGISTRY_NOTARY_REPO/demo/config/opencrvs-dci-birth-attributes-registry-not
   ./opencrvs-birth-attributes-notary.yaml
 ```
 
-The config uses these live-tested OpenCRVS record paths:
+The config uses these OpenCRVS record paths:
 
 ```yaml
 field_paths:
@@ -426,7 +426,8 @@ Registry Relay endpoint instead of a DCI endpoint. Relay must allow filters on
   `/birth_place`.
 - The demographic demo config uses DCI `expression` query fields for OpenCRVS
   deployments that expose first-name, last-name, and date-of-birth search. The
-  Farajaland integration endpoint does not narrow expression searches (this is
+  Farajaland (the OpenCRVS demo environment) integration endpoint does not
+  narrow expression searches (this is
   an external endpoint limitation), so the UIN path is the supported credential
   path for that environment.
 - The supported event filter is `registry_event_type: birth`.
