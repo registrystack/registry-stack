@@ -9,16 +9,19 @@ cargo-fuzz = true
 
 [dependencies]
 base64 = "0.22"
+jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs"] }
 libfuzzer-sys = "0.4"
 registry-platform-authcommon = { path = "../../../crates/registry-platform-authcommon" }
 registry-platform-crypto = { path = "../../../crates/registry-platform-crypto" }
 registry-platform-oid4vci = { path = "../../../crates/registry-platform-oid4vci" }
+registry-platform-oidc = { path = "../../../crates/registry-platform-oidc" }
 registry-platform-sdjwt = { path = "../../../crates/registry-platform-sdjwt" }
+registry-platform-sts = { path = "../../../crates/registry-platform-sts" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_urlencoded = "0.7"
 sha2 = "0.11"
-tokio = { version = "1", features = ["rt"] }
+tokio = { version = "1", features = ["rt", "time"] }
 
 [[bin]]
 name = "authcommon_parsers"
@@ -44,6 +47,13 @@ bench = false
 [[bin]]
 name = "sdjwt_issuance"
 path = "fuzz_targets/sdjwt_issuance.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sts_subject_token"
+path = "fuzz_targets/sts_subject_token.rs"
 test = false
 doc = false
 bench = false
