@@ -211,3 +211,19 @@ notary-three-parties [stale WITNESS name fixed], relay-two-rooms [feature-gate l
 (threat-model, Tier-C deltas recorded), mermaid adapter chains on the FHIR and DHIS2 tutorials.
 check-svg-a11y.mjs expected list realigned (13 in-use files). Dark-mode contrast issue filed as
 registry-stack#291. Spec-page mermaid deliberately left as mermaid (drift-resistant).
+
+## Codex PR-review follow-up (2026-07-07)
+
+All four Codex P2 comments on PR #284 verified and confirmed valid. Root cause of two:
+the pinned solmara-lab ref 1af06c8 declared top-level `name: solmara-lab` (shared Compose
+project regardless of clone directory) and its `just down` ran `down -v`; solmara-lab
+3698ea8 (fixes #1-#3) removes both hazards (per-checkout hashed project name; `down`
+non-destructive; `reset` owns `down -v`). Fixes applied: SOLMARA_LAB_REF bumped to 3698ea8;
+check-tutorial.sh clone mode now exports a unique COMPOSE_PROJECT_NAME, runs `just setup`,
+and cleans up with `just reset` (caller-supplied checkouts get non-destructive `just down`);
+tutorial Verify curl now requires exactly the four expected claim_ids satisfied (was
+vacuously true on empty results); troubleshooting collision row and Cleanup section
+rewritten for the new semantics (my original row misattributed the collision to directory
+basenames). Execute mode re-run at the new pin from a fresh clone: PASS end to end
+(log dist-check/tutorial-20260707T080930Z.log), reader stack stopped/restarted gracefully
+around the run, no leftover containers/volumes.

@@ -45,7 +45,7 @@ want the full multi-service country demo.
 ## Prerequisites
 
 - Docker with Compose v2. `just up` and `just down` run `docker compose ... up -d --build` and
-  `docker compose ... down -v`.
+  `docker compose ... down`.
 - The [`just`](https://github.com/casey/just) command runner. Every step in this tutorial is a
   `just` recipe.
 - `uv`. `just generate` runs the fixture generator with `uv run python -m solmara_lab.generate`.
@@ -226,7 +226,7 @@ ls output/smoke/portal-compose.json
 ```
 
 ```sh
-curl -sS -X POST -H "x-api-key: $(grep -m1 '^CHILD_BENEFIT_NOTARY_TOKEN=' .env | cut -d= -f2-)" -H "Data-Purpose: https://id.registrystack.org/solmara/purpose/child-benefit-review" -H "Content-Type: application/json" -H "Accept: application/vnd.registry-notary.claim-result+json" -d '{"target":{"type":"Person","identifiers":[{"scheme":"solmara_uin","value":"2300010248"}]},"claims":["birth-is-registered","child-age-under-5","household-below-poverty-threshold","not-already-enrolled"],"disclosure":"predicate","format":"application/vnd.registry-notary.claim-result+json"}' http://127.0.0.1:4321/v1/evaluations | python3 -c "import json, sys; data = json.load(sys.stdin); raise SystemExit(0 if all(r['satisfied'] for r in data['results']) else 1)"
+curl -sS -X POST -H "x-api-key: $(grep -m1 '^CHILD_BENEFIT_NOTARY_TOKEN=' .env | cut -d= -f2-)" -H "Data-Purpose: https://id.registrystack.org/solmara/purpose/child-benefit-review" -H "Content-Type: application/json" -H "Accept: application/vnd.registry-notary.claim-result+json" -d '{"target":{"type":"Person","identifiers":[{"scheme":"solmara_uin","value":"2300010248"}]},"claims":["birth-is-registered","child-age-under-5","household-below-poverty-threshold","not-already-enrolled"],"disclosure":"predicate","format":"application/vnd.registry-notary.claim-result+json"}' http://127.0.0.1:4321/v1/evaluations | python3 -c "import json, sys; data = json.load(sys.stdin); got = {r['claim_id']: r['satisfied'] for r in data['results']}; expected = ['birth-is-registered', 'child-age-under-5', 'household-below-poverty-threshold', 'not-already-enrolled']; raise SystemExit(0 if len(data['results']) == 4 and all(got.get(c) is True for c in expected) else 1)"
 ```
 
 ## What you built
@@ -257,18 +257,19 @@ confirm what you ran by hand against what the lab publishes.
 | `just up` fails immediately with `required variable ... is missing a value: .env not loaded; run just gen-secrets once, then just up` | `just generate` (or `just gen-secrets`) never ran, so `.env` does not exist. | Run `just generate`, then `just up` again. |
 | `docker compose` reports a port already allocated | Another process on your machine already holds one of the lab's ports: `4300`, `4301`, `4311` through `4316`, `4321` through `4324`, `4331`, `54329`, or `63799`. | Stop the conflicting process, or set the matching `SOLMARA_*_PORT` environment variable (for example `SOLMARA_PORTAL_PORT=4400`) before `just up`. |
 | `command not found: uv` or `command not found: pnpm` | A required tool is not on your PATH. | Install [`uv`](https://docs.astral.sh/uv/), or run `corepack enable` for `pnpm`, then run `just setup` again. |
-| `docker compose ps -a` lists containers you did not start, or `just up` reports recreating unfamiliar containers | Docker Compose names the project after the directory basename (`solmara-lab`), so a second checkout or an older lab project on the same machine shares the project name. The Cleanup step's `down -v` would remove that project's volumes, not only yours. | Set a unique project name for your checkout before any compose command: `export COMPOSE_PROJECT_NAME=solmara-lab-$(whoami)`, or clone into a differently named directory. |
+| `docker compose ps -a` lists lab containers you did not start | The lab derives a per-checkout Compose project name (`solmara-lab-` plus a hash of the checkout path), so two checkouts never share a project. Leftover containers come from a lab version that used the shared project name `solmara-lab`. | Inspect the old project with `docker compose -p solmara-lab ps`, then remove it with `docker compose -p solmara-lab down` (add `-v` only if you also want its volumes deleted). |
 | The Relay and Notary containers start slowly or show high CPU on Apple Silicon | The pinned Relay and Notary images publish `linux/amd64` only, so Compose runs them under emulation. | Expected. Allow extra time on the first `just up`; later runs are faster once the images are cached. |
 | The first `just up` appears to hang | The first run pulls the pinned Relay and Notary images and builds the `portal`, `home`, and `scenario-runner` images locally. | Let it finish; do not interrupt it. |
 
 ## Cleanup
 
-Stop the containers and remove the local volumes:
+Stop the containers:
 
 ```sh
 just down
 ```
 
-`just down` runs `docker compose ... down -v`, removing the Postgres data volume and every Relay
-cache, Relay audit, and Notary state volume. This is the lab's documented reset: rerun
-`just generate` and `just up` for a clean topology.
+`just down` runs `docker compose ... down`, keeping the Postgres data volume and the Relay and
+Notary state volumes, so a later `just up` resumes with the same data. To also remove the
+volumes, run `just reset` instead; that is the lab's documented clean slate: rerun
+`just generate` and `just up` for a fresh topology.
