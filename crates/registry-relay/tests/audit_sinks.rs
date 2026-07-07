@@ -139,6 +139,9 @@ async fn file_sink_bootstraps_chain_from_existing_tail() {
         .expect("first record hash")
         .to_owned();
 
+    // A restart releases the single-writer lock: the old process (and its file
+    // sink) must be gone before the replacement acquires the lock (#211).
+    drop(first_sink);
     let restarted_sink =
         AuditPipeline::from_sink(FileSink::new(&path, 100, 14).expect("restarted sink"));
     restarted_sink
@@ -171,6 +174,9 @@ async fn file_sink_bootstraps_keyed_chain_from_existing_tail() {
         .await
         .expect("first write");
 
+    // A restart releases the single-writer lock before the replacement acquires
+    // it (#211).
+    drop(first_sink);
     let restarted_sink = AuditPipeline::new_with_chain_profile(
         std::sync::Arc::new(FileSink::new(&path, 100, 14).expect("restarted sink")),
         profile.clone(),
@@ -205,6 +211,9 @@ async fn file_sink_rejects_tampered_existing_jsonl_before_append() {
         .replace("/first", "/tampered");
     fs::write(&path, tampered).expect("tamper audit file");
 
+    // A restart releases the single-writer lock before the replacement acquires
+    // it (#211).
+    drop(first_sink);
     let restarted_sink =
         AuditPipeline::from_sink(FileSink::new(&path, 100, 14).expect("restarted sink"));
     let error = restarted_sink
