@@ -5121,7 +5121,6 @@ version = "0.8.4"
 dependencies = [
  "oxiri",
  "oxjsonld",
- "registry-platform-pdp",
  "serde",
  "serde_json",
  "serde_path_to_error",
@@ -5661,6 +5660,7 @@ dependencies = [
  "crc32fast",
  "ed25519-dalek",
  "getrandom 0.4.3",
+ "registry-config-report",
  "registry-notary-core",
  "registry-platform-authcommon",
  "serde",

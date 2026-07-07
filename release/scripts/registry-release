@@ -630,18 +630,6 @@ def audit(import_map_path: Path) -> int:
     return 0
 
 
-def classify_warning(code: str) -> int:
-    known = {
-        "draft-source-ref": "expected-draft-only",
-        "held-lab-external": "documented-external-input",
-        "root-release-workflows-missing": "artifact-gate-held",
-        "artifact-publication-held": "artifact-gate-held",
-        "hosted-publication-held": "hosted-gate-held",
-    }
-    print(known.get(code, "unknown-warning"))
-    return 0
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(prog="registry-release")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -654,10 +642,6 @@ def main() -> int:
     source_parser.add_argument("--default-branch", default="origin/main")
     audit_parser = subparsers.add_parser("audit")
     audit_parser.add_argument("import_map", type=Path)
-    subparsers.add_parser("generate-docset")
-    subparsers.add_parser("collect-artifacts")
-    warning_parser = subparsers.add_parser("classify-warning")
-    warning_parser.add_argument("code")
     stage_parser = subparsers.add_parser("stage-capsule-backfill-assets")
     stage_parser.add_argument("asset_dir", type=Path)
     stage_parser.add_argument("--tag", required=True)
@@ -689,8 +673,6 @@ def main() -> int:
         return validate_source(args.manifest, args.tag, args.repo, args.default_branch)
     if args.command == "audit":
         return audit(args.import_map)
-    if args.command == "classify-warning":
-        return classify_warning(args.code)
     if args.command == "stage-capsule-backfill-assets":
         return stage_capsule_backfill_assets(args.asset_dir, args.tag, args.binary_dir, args.image_evidence_dir)
     if args.command == "bind-spdx-subject":
@@ -711,9 +693,6 @@ def main() -> int:
             args.repo,
             args.default_branch,
         )
-    if args.command in {"generate-docset", "collect-artifacts"}:
-        print(f"{args.command} is reserved for the release packaging step")
-        return 0
     raise AssertionError(args.command)
 
 

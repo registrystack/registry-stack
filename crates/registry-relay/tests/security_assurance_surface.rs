@@ -12,6 +12,8 @@ use registry_relay::config::Config;
 use registry_relay::server::build_app;
 use serde::Deserialize;
 
+mod support;
+
 #[derive(Debug, Deserialize)]
 struct ExposureManifest {
     endpoints: Vec<Endpoint>,
@@ -27,9 +29,7 @@ struct Endpoint {
 }
 
 fn load_example_config() -> Config {
-    registry_relay::config::test_support::load_example_config_for_tests(
-        "relay-security-assurance-secret-32-bytes",
-    )
+    support::load_example_config_for_tests("relay-security-assurance-secret-32-bytes")
 }
 
 fn sample_path(path: &str) -> String {

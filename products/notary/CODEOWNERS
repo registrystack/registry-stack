@@ -1,6 +1,5 @@
 * @PublicSchema/maintainers
 /security/auth-none-allowlist.yml @PublicSchema/maintainers
 /security/exposure-manifest.json @PublicSchema/maintainers
-/.github/workflows/ @PublicSchema/maintainers
 /Dockerfile @PublicSchema/maintainers
 /Dockerfile.source-adapter-sidecar @PublicSchema/maintainers

@@ -3,63 +3,16 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 demo_dir="$(cd "${script_dir}/.." && pwd)"
-source_mode="${REGISTRY_LAB_RELEASE_SOURCE_MODE:-monorepo}"
 
-has_custom_cel_mapping_source_dir() {
-  case "${CEL_MAPPING_SOURCE_DIR:-}" in
-    ""|"./vendor/cel-mapping"|"vendor/cel-mapping"|"${demo_dir}/vendor/cel-mapping")
-      return 1
-      ;;
-  esac
-  [[ -d "${CEL_MAPPING_SOURCE_DIR}" ]]
-}
-
-case "${source_mode}" in
-  vendor)
-    export REGISTRY_RELAY_SOURCE_DIR="${demo_dir}/vendor/registry-relay"
-    export REGISTRY_NOTARY_SOURCE_DIR="${demo_dir}/vendor/registry-notary"
-    export REGISTRY_PLATFORM_SOURCE_DIR="${demo_dir}/vendor/registry-platform"
-    export REGISTRY_MANIFEST_REPO="${demo_dir}/vendor/registry-manifest"
-    export CROSSWALK_SOURCE_DIR="${demo_dir}/vendor/crosswalk"
-    export REGISTRY_OPENFN_NOTARY_SOURCE_DIR="${REGISTRY_NOTARY_SOURCE_DIR}"
-    export REGISTRY_RELAY_PLATFORM_SOURCE_DIR="${REGISTRY_PLATFORM_SOURCE_DIR}"
-    export REGISTRY_NOTARY_PLATFORM_SOURCE_DIR="${REGISTRY_PLATFORM_SOURCE_DIR}"
-    ;;
-  source)
-    export REGISTRY_RELAY_SOURCE_DIR="${REGISTRY_RELAY_SOURCE_DIR:-"${demo_dir}/../registry-relay"}"
-    export REGISTRY_NOTARY_SOURCE_DIR="${REGISTRY_NOTARY_SOURCE_DIR:-"${demo_dir}/../registry-notary"}"
-    export REGISTRY_PLATFORM_SOURCE_DIR="${REGISTRY_PLATFORM_SOURCE_DIR:-"${demo_dir}/../registry-platform"}"
-    export REGISTRY_MANIFEST_REPO="${REGISTRY_MANIFEST_REPO:-"${demo_dir}/vendor/registry-manifest"}"
-    # CEL_MAPPING_SOURCE_DIR is the deprecated name for CROSSWALK_SOURCE_DIR.
-    if [[ -z "${CROSSWALK_SOURCE_DIR:-}" ]]; then
-      if has_custom_cel_mapping_source_dir; then
-        export CROSSWALK_SOURCE_DIR="${CEL_MAPPING_SOURCE_DIR}"
-      else
-        export CROSSWALK_SOURCE_DIR="${demo_dir}/vendor/crosswalk"
-      fi
-    fi
-    export REGISTRY_OPENFN_NOTARY_SOURCE_DIR="${REGISTRY_OPENFN_NOTARY_SOURCE_DIR:-"${REGISTRY_NOTARY_SOURCE_DIR}"}"
-    export REGISTRY_RELAY_PLATFORM_SOURCE_DIR="${REGISTRY_RELAY_PLATFORM_SOURCE_DIR:-"${REGISTRY_PLATFORM_SOURCE_DIR}"}"
-    export REGISTRY_NOTARY_PLATFORM_SOURCE_DIR="${REGISTRY_NOTARY_PLATFORM_SOURCE_DIR:-"${REGISTRY_PLATFORM_SOURCE_DIR}"}"
-    ;;
-  monorepo)
-    export REGISTRY_STACK_SOURCE_DIR="${REGISTRY_STACK_SOURCE_DIR:-"${demo_dir}/.."}"
-    export REGISTRY_RELAY_SOURCE_DIR="${REGISTRY_RELAY_SOURCE_DIR:-"${REGISTRY_STACK_SOURCE_DIR}/crates/registry-relay"}"
-    export REGISTRY_NOTARY_SOURCE_DIR="${REGISTRY_NOTARY_SOURCE_DIR:-"${REGISTRY_STACK_SOURCE_DIR}"}"
-    export REGISTRY_PLATFORM_SOURCE_DIR="${REGISTRY_PLATFORM_SOURCE_DIR:-"${REGISTRY_STACK_SOURCE_DIR}"}"
-    export REGISTRY_MANIFEST_REPO="${REGISTRY_MANIFEST_REPO:-"${REGISTRY_STACK_SOURCE_DIR}"}"
-    export CROSSWALK_SOURCE_DIR="${CROSSWALK_SOURCE_DIR:-"${demo_dir}/vendor/crosswalk"}"
-    export REGISTRY_OPENFN_NOTARY_SOURCE_DIR="${REGISTRY_OPENFN_NOTARY_SOURCE_DIR:-"${REGISTRY_NOTARY_SOURCE_DIR}"}"
-    export REGISTRY_RELAY_PLATFORM_SOURCE_DIR="${REGISTRY_RELAY_PLATFORM_SOURCE_DIR:-"${REGISTRY_PLATFORM_SOURCE_DIR}"}"
-    export REGISTRY_NOTARY_PLATFORM_SOURCE_DIR="${REGISTRY_NOTARY_PLATFORM_SOURCE_DIR:-"${REGISTRY_PLATFORM_SOURCE_DIR}"}"
-    ;;
-  *)
-    echo "REGISTRY_LAB_RELEASE_SOURCE_MODE must be vendor, source, or monorepo, got ${source_mode}" >&2
-    exit 2
-    ;;
-esac
-
-export REGISTRY_LAB_RELEASE_SOURCE_MODE="${source_mode}"
+export REGISTRY_STACK_SOURCE_DIR="${REGISTRY_STACK_SOURCE_DIR:-"${demo_dir}/.."}"
+export REGISTRY_RELAY_SOURCE_DIR="${REGISTRY_RELAY_SOURCE_DIR:-"${REGISTRY_STACK_SOURCE_DIR}/crates/registry-relay"}"
+export REGISTRY_NOTARY_SOURCE_DIR="${REGISTRY_NOTARY_SOURCE_DIR:-"${REGISTRY_STACK_SOURCE_DIR}"}"
+export REGISTRY_PLATFORM_SOURCE_DIR="${REGISTRY_PLATFORM_SOURCE_DIR:-"${REGISTRY_STACK_SOURCE_DIR}"}"
+export REGISTRY_MANIFEST_REPO="${REGISTRY_MANIFEST_REPO:-"${REGISTRY_STACK_SOURCE_DIR}"}"
+export CROSSWALK_SOURCE_DIR="${CROSSWALK_SOURCE_DIR:-"${demo_dir}/vendor/crosswalk"}"
+export REGISTRY_OPENFN_NOTARY_SOURCE_DIR="${REGISTRY_OPENFN_NOTARY_SOURCE_DIR:-"${REGISTRY_NOTARY_SOURCE_DIR}"}"
+export REGISTRY_RELAY_PLATFORM_SOURCE_DIR="${REGISTRY_RELAY_PLATFORM_SOURCE_DIR:-"${REGISTRY_PLATFORM_SOURCE_DIR}"}"
+export REGISTRY_NOTARY_PLATFORM_SOURCE_DIR="${REGISTRY_NOTARY_PLATFORM_SOURCE_DIR:-"${REGISTRY_PLATFORM_SOURCE_DIR}"}"
 
 cleanup() {
   docker compose -f "${demo_dir}/compose.yaml" down -v >/dev/null 2>&1 || true
@@ -96,7 +49,7 @@ run_opencrvs_dci_check() {
 
 cd "${demo_dir}"
 
-scripts/check-release-source-model.sh "${source_mode}"
+scripts/check-release-source-model.sh monorepo
 scripts/check-service-first-deps.sh manifest
 scripts/check-evidence-gateway-fixtures.py
 uv run scripts/generate-fixtures.py

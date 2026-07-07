@@ -72,12 +72,9 @@ just build
 ```
 
 The release binary is written to `target/release/registry-relay`. The full local CI gate is `just ci`.
-Before opening a PR that changes Rust, Cargo, Docker, workflow, perf, or
-companion-repo references, run `just ci-preflight` to check the workflow-pinned
-`registry-platform`, `registry-manifest`, and `crosswalk` commits with locked
-Cargo resolution. During coordinated local multi-repo work, run
-`just ci-preflight-worktree` to check the current sibling working trees before
-those dependency refs are committed and repinned.
+Before opening a PR that changes Rust, Cargo, Docker, root workflow, or perf
+surfaces, run `just ci-preflight` to check locked Cargo resolution from the
+registry-stack root.
 
 ## Container Image
 

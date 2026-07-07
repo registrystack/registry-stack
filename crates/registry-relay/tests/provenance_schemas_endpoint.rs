@@ -29,10 +29,10 @@ use registry_relay::provenance::{
 use registry_relay::server::build_app_with_provenance;
 use serde_json::{json, Value};
 
+mod support;
+
 fn load_example_config() -> Config {
-    registry_relay::config::test_support::load_example_config_for_tests(
-        "relay-provenance-schemas-audit-secret-32-bytes",
-    )
+    support::load_example_config_for_tests("relay-provenance-schemas-audit-secret-32-bytes")
 }
 
 fn export_jwk(env_name: &str) {

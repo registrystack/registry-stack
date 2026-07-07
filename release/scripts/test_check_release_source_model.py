@@ -32,154 +32,7 @@ external:
 """
 
 
-class ReleaseSourceModelTest(unittest.TestCase):
-    def test_vendor_mode_accepts_clean_committed_submodules(self) -> None:
-        with ReleaseSourceFixture() as checkout_root:
-            result = run_validator(checkout_root)
-
-        self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn("release-source registry-relay", result.stdout)
-        self.assertIn("dirty=0", result.stdout)
-
-    def test_vendor_mode_rejects_submodule_head_past_gitlink(self) -> None:
-        with ReleaseSourceFixture() as checkout_root:
-            relay = checkout_root / "vendor" / "registry-relay"
-            configure_identity(relay)
-            (relay / "src.txt").write_text("advanced\n", encoding="utf-8")
-            git(relay, "add", "src.txt")
-            git(relay, "commit", "-m", "Advance relay")
-
-            result = run_validator(checkout_root)
-
-        self.assertNotEqual(0, result.returncode)
-        self.assertIn("does not match committed gitlink", result.stderr)
-
-    def test_vendor_mode_rejects_dirty_submodule(self) -> None:
-        with ReleaseSourceFixture() as checkout_root:
-            (checkout_root / "vendor" / "registry-notary" / "dirty.txt").write_text(
-                "dirty\n",
-                encoding="utf-8",
-            )
-
-            result = run_validator(checkout_root)
-
-        self.assertNotEqual(0, result.returncode)
-        self.assertIn("vendor checkout has 1 dirty path(s)", result.stderr)
-
-    def test_vendor_mode_rejects_uninitialized_submodule(self) -> None:
-        with ReleaseSourceFixture() as checkout_root:
-            git(checkout_root, "submodule", "deinit", "-f", "vendor/registry-manifest")
-
-            result = run_validator(checkout_root)
-
-        self.assertNotEqual(0, result.returncode)
-        self.assertIn("submodule is not initialized", result.stderr)
-
-    def test_vendor_mode_ignores_deprecated_in_repo_cel_mapping_default(self) -> None:
-        with ReleaseSourceFixture() as checkout_root:
-            stale = checkout_root / "vendor" / "cel-mapping"
-            stale.mkdir()
-            (stale / "Cargo.toml").write_text(
-                "[package]\nname = \"cel-mapping\"\nversion = \"0.1.0\"\n",
-                encoding="utf-8",
-            )
-
-            result = run_validator(
-                checkout_root,
-                extra_env={"CEL_MAPPING_SOURCE_DIR": "./vendor/cel-mapping"},
-            )
-
-        self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn("release-source crosswalk", result.stdout)
-        self.assertNotIn("vendor/cel-mapping", result.stdout)
-
-    def test_vendor_mode_prefers_legacy_lab_vendor_gitlinks(self) -> None:
-        """The script must default to lab/vendor/ pins while lab/ still exists."""
-        with ReleaseSourceFixture(
-            script_rel_dir="release/scripts",
-            vendor_rel_dir="lab/vendor",
-        ) as checkout_root:
-            result = _run(
-                checkout_root,
-                "release/scripts/check-release-source-model.sh",
-                "vendor",
-                None,
-            )
-
-        self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn("lab/vendor/crosswalk", result.stdout)
-        self.assertIn("lab/vendor/registry-relay", result.stdout)
-
-    def test_vendor_mode_ignores_stale_lab_cel_mapping_default(self) -> None:
-        """The lab-root absolute deprecated default must stay ignored."""
-        with ReleaseSourceFixture(
-            script_rel_dir="release/scripts",
-            vendor_rel_dir="lab/vendor",
-        ) as checkout_root:
-            stale = checkout_root / "lab" / "vendor" / "cel-mapping"
-            stale.mkdir()
-            (stale / "Cargo.toml").write_text(
-                "[package]\nname = \"cel-mapping\"\nversion = \"0.1.0\"\n",
-                encoding="utf-8",
-            )
-
-            result = _run(
-                checkout_root,
-                "release/scripts/check-release-source-model.sh",
-                "vendor",
-                # resolve() matches the script's physical repo-root spelling,
-                # the same exact-string form the old lab script ignored.
-                {"CEL_MAPPING_SOURCE_DIR": str(stale.resolve())},
-            )
-
-        self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn("lab/vendor/crosswalk", result.stdout)
-        self.assertNotIn("cel-mapping", result.stdout)
-
-    def test_vendor_mode_resolves_lab_relative_crosswalk_override(self) -> None:
-        """lab/justfile exports CROSSWALK_SOURCE_DIR=./vendor/crosswalk relative to lab/."""
-        with ReleaseSourceFixture(
-            script_rel_dir="release/scripts",
-            vendor_rel_dir="lab/vendor",
-        ) as checkout_root:
-            result = _run(
-                checkout_root,
-                "release/scripts/check-release-source-model.sh",
-                "vendor",
-                {"CROSSWALK_SOURCE_DIR": "./vendor/crosswalk"},
-            )
-
-        self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn("lab/vendor/crosswalk", result.stdout)
-
-    def test_source_mode_honors_deprecated_cel_mapping_source_dir(self) -> None:
-        with ReleaseSourceFixture() as checkout_root:
-            sources = checkout_root.parent / "sources"
-            crosswalk_source = (sources / "crosswalk").resolve()
-
-            result = _run(
-                checkout_root,
-                "scripts/check-release-source-model.sh",
-                "source",
-                {
-                    "REGISTRY_PLATFORM_SOURCE_DIR": str(sources / "registry-platform"),
-                    "REGISTRY_RELAY_SOURCE_DIR": str(sources / "registry-relay"),
-                    "REGISTRY_NOTARY_SOURCE_DIR": str(sources / "registry-notary"),
-                    "CEL_MAPPING_SOURCE_DIR": str(sources / "crosswalk"),
-                },
-            )
-
-        self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn(f"release-source crosswalk {crosswalk_source}", result.stdout)
-
-
 class MonorepoSourceModelTest(unittest.TestCase):
-    """Monorepo mode must pass with no lab/ checkout present.
-
-    lab/ is planned for deletion; the release source proof must not depend on
-    it, in-tree or otherwise (registry-stack#224).
-    """
-
     def test_monorepo_mode_passes_without_lab_directory(self) -> None:
         with MonorepoFixture() as stack_root:
             result = run_monorepo_validator(stack_root)
@@ -187,6 +40,23 @@ class MonorepoSourceModelTest(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn("release-source registry-stack", result.stdout)
         self.assertNotIn("lab", result.stdout)
+
+    def test_monorepo_mode_rejects_legacy_vendor_mode(self) -> None:
+        with MonorepoFixture() as stack_root:
+            result = run_validator(stack_root, "vendor")
+
+        self.assertEqual(2, result.returncode)
+        self.assertIn("REGISTRY_RELEASE_SOURCE_MODE=monorepo", result.stderr)
+
+    def test_monorepo_mode_rejects_deprecated_source_mode_env(self) -> None:
+        with MonorepoFixture() as stack_root:
+            result = run_validator_with_env_default(
+                stack_root,
+                extra_env={"REGISTRY_RELEASE_SOURCE_MODE": "source"},
+            )
+
+        self.assertEqual(2, result.returncode)
+        self.assertIn("REGISTRY_RELEASE_SOURCE_MODE=monorepo", result.stderr)
 
     def test_monorepo_mode_rejects_missing_relay_crate(self) -> None:
         with MonorepoFixture() as stack_root:
@@ -244,7 +114,6 @@ class MonorepoSourceModelTest(unittest.TestCase):
         self.assertIn("missing required external.registry-atlas", result.stderr)
 
     def test_monorepo_mode_rejects_gitlink_manifest_ref_drift(self) -> None:
-        """While lab/vendor gitlinks are committed, the current manifest must match them."""
         with MonorepoFixture() as stack_root:
             add_gitlink(stack_root, "lab/vendor/registry-atlas", "a" * 40)
 
@@ -257,7 +126,6 @@ class MonorepoSourceModelTest(unittest.TestCase):
         )
 
     def test_monorepo_mode_cross_checks_only_the_current_manifest(self) -> None:
-        """Historical manifests keep their release-day refs and are not cross-checked."""
         with MonorepoFixture() as stack_root:
             add_gitlink(
                 stack_root,
@@ -289,64 +157,6 @@ class MonorepoSourceModelTest(unittest.TestCase):
 
         self.assertNotEqual(0, result.returncode)
         self.assertIn("no release manifest", result.stderr)
-
-
-class ReleaseSourceFixture:
-    def __init__(
-        self,
-        *,
-        script_rel_dir: str = "scripts",
-        vendor_rel_dir: str = "vendor",
-    ) -> None:
-        self.script_rel_dir = script_rel_dir
-        self.vendor_rel_dir = vendor_rel_dir
-
-    def __enter__(self) -> Path:
-        self.tmp = tempfile.TemporaryDirectory()
-        root = Path(self.tmp.name)
-        self.sources = root / "sources"
-        self.checkout_root = root / "release-source-checkout"
-        self.sources.mkdir()
-        self.checkout_root.mkdir()
-        git(self.checkout_root, "init")
-        configure_identity(self.checkout_root)
-        script_dir = self.checkout_root / self.script_rel_dir
-        script_dir.mkdir(parents=True)
-        shutil.copy2(VALIDATOR_PATH, script_dir / VALIDATOR_PATH.name)
-
-        for name in (
-            "registry-platform",
-            "registry-relay",
-            "registry-notary",
-            "registry-manifest",
-            "crosswalk",
-        ):
-            source = self.sources / name
-            source.mkdir()
-            git(source, "init")
-            configure_identity(source)
-            (source / "Cargo.toml").write_text(
-                f"[package]\nname = \"{name}\"\nversion = \"0.1.0\"\n",
-                encoding="utf-8",
-            )
-            git(source, "add", "Cargo.toml")
-            git(source, "commit", "-m", f"Seed {name}")
-            git(
-                self.checkout_root,
-                "-c",
-                "protocol.file.allow=always",
-                "submodule",
-                "add",
-                str(source),
-                f"{self.vendor_rel_dir}/{name}",
-            )
-
-        git(self.checkout_root, "add", ".gitmodules", self.vendor_rel_dir)
-        git(self.checkout_root, "commit", "-m", "Seed vendor submodules")
-        return self.checkout_root
-
-    def __exit__(self, exc_type, exc, tb) -> None:  # noqa: ANN001
-        self.tmp.cleanup()
 
 
 class MonorepoFixture:
@@ -389,39 +199,26 @@ class MonorepoFixture:
         self.tmp.cleanup()
 
 
-def run_validator(
-    checkout_root: Path,
-    *,
-    extra_env: dict[str, str] | None = None,
-) -> subprocess.CompletedProcess[str]:
-    return _run(checkout_root, "scripts/check-release-source-model.sh", "vendor", extra_env)
-
-
 def run_monorepo_validator(
     stack_root: Path,
     *,
     extra_env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    return _run(
-        stack_root,
-        "release/scripts/check-release-source-model.sh",
-        "monorepo",
-        extra_env,
-    )
+    return run_validator(stack_root, "monorepo", extra_env=extra_env)
 
 
-def _run(
-    cwd: Path,
-    script_rel_path: str,
+def run_validator(
+    stack_root: Path,
     mode: str,
-    extra_env: dict[str, str] | None,
+    *,
+    extra_env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     if extra_env:
         env.update(extra_env)
     return subprocess.run(
-        ["bash", script_rel_path, mode],
-        cwd=cwd,
+        ["bash", "release/scripts/check-release-source-model.sh", mode],
+        cwd=stack_root,
         env=env,
         text=True,
         capture_output=True,
@@ -429,24 +226,41 @@ def _run(
     )
 
 
-def add_gitlink(repo: Path, rel_path: str, sha: str) -> None:
-    """Record a committed submodule gitlink without materializing a checkout."""
-    git(repo, "update-index", "--add", "--cacheinfo", f"160000,{sha},{rel_path}")
-    git(repo, "commit", "-m", f"Pin {rel_path}")
+def run_validator_with_env_default(
+    stack_root: Path,
+    *,
+    extra_env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    if extra_env:
+        env.update(extra_env)
+    return subprocess.run(
+        ["bash", "release/scripts/check-release-source-model.sh"],
+        cwd=stack_root,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def add_gitlink(root: Path, rel_path: str, object_id: str) -> None:
+    (root / rel_path).parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["git", "update-index", "--add", "--cacheinfo", "160000", object_id, rel_path],
+        cwd=root,
+        check=True,
+    )
+    git(root, "commit", "-m", f"Pin {rel_path}")
 
 
 def configure_identity(repo: Path) -> None:
+    git(repo, "config", "user.email", "test@example.invalid")
     git(repo, "config", "user.name", "Registry Stack Test")
-    git(repo, "config", "user.email", "registry-stack-test@example.invalid")
 
 
-def git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["git", "-C", str(repo), *args],
-        text=True,
-        capture_output=True,
-        check=True,
-    )
+def git(repo: Path, *args: str) -> str:
+    return subprocess.check_output(["git", *args], cwd=repo, text=True)
 
 
 if __name__ == "__main__":

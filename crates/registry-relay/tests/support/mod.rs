@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Shared test fixtures for loading the governed example config.
 
 use std::fs;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use super::{validate, Config};
 use registry_platform_authcommon::CredentialFingerprintProvider;
+use registry_relay::config::{validate, Config};
 
 static NEXT_CONFIG_ID: AtomicUsize = AtomicUsize::new(0);
 
@@ -23,12 +22,6 @@ fn test_fingerprint(index: usize) -> String {
     format!("sha256:{:064x}", index + 1)
 }
 
-/// Load the repository example config for tests.
-///
-/// Test fixtures do not know the corresponding real secrets, so this helper
-/// assigns stable, distinct fingerprints to test-only env vars before running
-/// the normal validator.
-#[must_use]
 pub fn load_example_config_for_tests(audit_hash_secret: &str) -> Config {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("config/example.yaml");
     let raw = fs::read_to_string(path).expect("example config reads");
@@ -46,6 +39,7 @@ pub fn load_example_config_for_tests(audit_hash_secret: &str) -> Config {
         key.fingerprint.name = Some(env_name);
         key.fingerprint.path = None;
     }
+
     validate::run(&config).expect("adjusted example config validates");
     config
 }

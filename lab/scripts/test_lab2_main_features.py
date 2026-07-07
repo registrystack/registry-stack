@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Focused regression checks for Lab 2 source mode and profile demos."""
+"""Focused regression checks for Lab 2 source-dir and profile demos."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ DOCTOR_SUMMARY = ROOT / "scripts/lab2_doctor_summary.py"
 LAB2_GENERATE = ROOT / "scripts/lab2-generate-governed-config.sh"
 LAB2_GENERATOR = ROOT / "tools/lab2-governed-config/src/main.rs"
 DEMO_STORY = ROOT / "scripts/lab2-demo-story.sh"
+COMMONS_CHECK = ROOT / "scripts/commons-check.sh"
 WORKFLOW = ROOT / ".github/workflows/release-source-model.yml"
 
 
@@ -53,6 +54,17 @@ class Lab2MainFeatureTest(unittest.TestCase):
         self.assertIn("registry-platform-ops", body)
         self.assertIn("mktemp -d", body)
         self.assertIn("cargo run --quiet --manifest-path", body)
+
+    def test_commons_check_defaults_to_monorepo_source_dirs(self) -> None:
+        body = read(COMMONS_CHECK)
+        self.assertIn('stack_root="${REGISTRY_STACK_SOURCE_DIR:-${lab_root}/..}"', body)
+        self.assertIn('platform_dir="${REGISTRY_PLATFORM_SOURCE_DIR:-${stack_root}}"', body)
+        self.assertIn('manifest_dir="${REGISTRY_MANIFEST_REPO:-${stack_root}}"', body)
+        self.assertIn('relay_dir="${REGISTRY_RELAY_SOURCE_DIR:-${stack_root}/crates/registry-relay}"', body)
+        self.assertIn('notary_ci_dir="${notary_dir}/products/notary"', body)
+        self.assertNotIn('${lab_root}/../registry-platform', body)
+        self.assertNotIn('${lab_root}/../registry-relay', body)
+        self.assertNotIn('${lab_root}/../registry-notary', body)
 
     def test_lab2_notary_rotation_uses_signing_key_not_stale_profile_id(self) -> None:
         body = read(LAB2_GENERATOR)

@@ -126,7 +126,6 @@ European Commission SEMIC validator, run:
 just validate-catalog-semic catalog=target/dcat-ap/metadata.bregdcat-ap.jsonld
 ```
 
-or trigger the `dcat-ap-external-validation` GitHub Actions workflow.
 The default external profile is `dcatap.3_0_1_base`.
 
 For offline diagnostics against the vendored SEMIC SHACL resources, run:
@@ -306,22 +305,18 @@ Every static OpenAPI refresh should mention one of:
 
 Release notes should call the artifact abstract when it uses placeholder dataset/entity names and should direct deployments to fetch the runtime `/openapi.json` document for concrete route and dataset shape.
 
-## Platform compatibility gate
+## Monorepo preflight
 
-Relay consumes `registry-platform` from a sibling checkout during local release
-work across the sibling repos. Run the compatibility gate before merging
+Relay consumes `registry-platform` and `registry-manifest` from the
+registry-stack workspace. Run the local preflight before merging
 Platform-facing changes:
 
 ```sh
-REGISTRY_PLATFORM_SOURCE_DIR=../registry-platform scripts/check-platform-compat.sh
+just ci-preflight
 ```
 
-The command checks the all-feature build plus the focused OIDC and audit tests
-that exercise the shared Platform security APIs. When
-`REGISTRY_PLATFORM_SOURCE_DIR` is not the sibling path encoded in Cargo, the
-script builds in a temporary sibling-layout copy so Cargo resolves the same
-Platform checkout the script validated. Set `CROSSWALK_SOURCE_DIR` as well
-when the Crosswalk checkout is not available at `../crosswalk`.
+The command runs locked Cargo metadata and a Relay package check from the
+monorepo root so Cargo resolves the same workspace graph used by root CI.
 
 The mapper dependency uses the local Crosswalk crate at
 `../crosswalk/crates/crosswalk-core` in `Cargo.toml`, matching the

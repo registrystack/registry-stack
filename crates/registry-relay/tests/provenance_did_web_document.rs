@@ -34,13 +34,13 @@ use registry_relay::server::build_app_with_provenance;
 use serde_json::{json, Value};
 use time::OffsetDateTime;
 
+mod support;
+
 const VM_ID: &str = "did:web:gw.example#key-1";
 const ISSUER_DID: &str = "did:web:gw.example";
 
 fn load_example_config() -> Config {
-    registry_relay::config::test_support::load_example_config_for_tests(
-        "relay-provenance-did-audit-secret-32-bytes",
-    )
+    support::load_example_config_for_tests("relay-provenance-did-audit-secret-32-bytes")
 }
 
 fn export_jwk(env_name: &str) -> VerifyingKey {

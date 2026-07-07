@@ -27,6 +27,8 @@ use registry_relay::auth::AuthProvider;
 use registry_relay::config::{self, Config};
 use registry_relay::server::build_app;
 
+mod support;
+
 /// A sink whose `write` always fails, modelling a durable audit write failure
 /// (disk full, sink unreachable). `tail_hash` succeeds with an empty chain so
 /// the pipeline reaches the `write` call before failing.
@@ -54,7 +56,7 @@ impl AuditSink for AlwaysFailWriteSink {
 }
 
 fn load_example_config() -> Config {
-    config::test_support::load_example_config_for_tests("relay-deployment-gates-secret-32-bytes")
+    support::load_example_config_for_tests("relay-deployment-gates-secret-32-bytes")
 }
 
 /// Minimal config used by the parse/validate tests. The admin module's own

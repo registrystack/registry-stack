@@ -205,12 +205,10 @@ fn id<T: serde::de::DeserializeOwned>(value: &str) -> T {
 /// hand-wired test harness.
 fn build_server() -> TestServer {
     let _ = tracing_subscriber::fmt::try_init();
-    unsafe {
-        env::set_var(
-            AUDIT_SECRET_ENV,
-            "relay-cache-control-test-audit-secret-32-bytes-minimum",
-        );
-    }
+    env::set_var(
+        AUDIT_SECRET_ENV,
+        "relay-cache-control-test-audit-secret-32-bytes-minimum",
+    );
     let tmp = TempDir::new().expect("tempdir");
     let config_path = tmp.path().join("protected_cache_control.yaml");
     std::fs::write(&config_path, CONFIG).expect("write config");

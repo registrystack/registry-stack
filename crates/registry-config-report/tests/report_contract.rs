@@ -5,7 +5,8 @@ use registry_config_report::{
     NOTARY_DIAGNOSTIC_ERROR_FIXTURE_V1, NOTARY_DIAGNOSTIC_OK_FIXTURE_V1,
     PRODUCT_DIAGNOSTIC_REPORT_SCHEMA_V1, REDACTED_VALUE, REDACTION_INPUT_FIXTURE_V1,
     REGISTRYCTL_VALIDATION_FIXTURE_V1, REGISTRYCTL_VALIDATION_REPORT_SCHEMA_V1,
-    RELAY_DIAGNOSTIC_ERROR_FIXTURE_V1, RELAY_DIAGNOSTIC_OK_FIXTURE_V1,
+    REGISTRYCTL_VALIDATION_REPORT_SCHEMA_VERSION_V1, RELAY_DIAGNOSTIC_ERROR_FIXTURE_V1,
+    RELAY_DIAGNOSTIC_OK_FIXTURE_V1,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
@@ -122,10 +123,12 @@ fn explanation_schema_rejects_unknown_live_apply_class() {
 
 #[test]
 fn registryctl_schema_validates_embedded_product_diagnostics() {
-    assert_valid(
-        REGISTRYCTL_VALIDATION_REPORT_SCHEMA_V1,
-        &parse(REGISTRYCTL_VALIDATION_FIXTURE_V1),
+    let document = parse(REGISTRYCTL_VALIDATION_FIXTURE_V1);
+    assert_eq!(
+        document["schema_version"],
+        REGISTRYCTL_VALIDATION_REPORT_SCHEMA_VERSION_V1
     );
+    assert_valid(REGISTRYCTL_VALIDATION_REPORT_SCHEMA_V1, &document);
 }
 
 #[test]

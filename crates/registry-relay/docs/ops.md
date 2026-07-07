@@ -227,9 +227,8 @@ For standalone metadata publication, use `just metadata-publish` and publish the
 generated `index.json` as the discovery entry point. See [metadata.md](metadata.md)
 for the bundle layout.
 
-For releases that claim DCAT-AP interoperability, run the
-`dcat-ap-external-validation` GitHub Actions workflow or validate an
-exported `/metadata/dcat/bregdcat-ap` with the SEMIC validator:
+For releases that claim DCAT-AP interoperability, validate an exported
+`/metadata/dcat/bregdcat-ap` with the SEMIC validator:
 
 ```sh
 just validate-catalog-semic catalog=target/metadata.bregdcat-ap.jsonld

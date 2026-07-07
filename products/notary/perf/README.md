@@ -173,8 +173,8 @@ Or source the env file and call `k6 run` directly. Each scenario writes its
 result to `target/perf/results/<scenario>.json` so baselines can be diffed.
 Set `REGISTRY_NOTARY_NO_THRESHOLD=1` only for manual smoke or wiring checks
 where the goal is to verify that the scenario runs, not to enforce capacity
-targets. The perf CI workflow leaves this unset so k6 latency thresholds are
-regression gates.
+targets. The local `just perf-smoke` gate leaves this unset so k6 latency
+thresholds remain regression gates.
 
 ---
 

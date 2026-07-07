@@ -57,7 +57,7 @@ registry-notary-source-adapter-sidecar = { path = "crates/registry-notary-source
 registry-notary-worker-harness = { path = "crates/registry-notary-worker-harness", version = "0.8.4" }
 registry-platform-audit = { path = "crates/registry-platform-audit", version = "0.8.4" }
 registry-platform-authcommon = { path = "crates/registry-platform-authcommon", version = "0.8.4" }
-registry-platform-cache = { path = "crates/registry-platform-cache", version = "0.8.4", features = ["redis"] }
+registry-platform-cache = { path = "crates/registry-platform-cache", version = "0.8.4" }
 registry-platform-config = { path = "crates/registry-platform-config", version = "0.8.4" }
 registry-platform-crypto = { path = "crates/registry-platform-crypto", version = "0.8.4" }
 registry-platform-httpsec = { path = "crates/registry-platform-httpsec", version = "0.8.4" }
@@ -66,7 +66,7 @@ registry-platform-oid4vci = { path = "crates/registry-platform-oid4vci", version
 registry-platform-oidc = { path = "crates/registry-platform-oidc", version = "0.8.4" }
 registry-platform-ops = { path = "crates/registry-platform-ops", version = "0.8.4" }
 registry-platform-pdp = { path = "crates/registry-platform-pdp", version = "0.8.4" }
-registry-platform-replay = { path = "crates/registry-platform-replay", version = "0.8.4", features = ["redis"] }
+registry-platform-replay = { path = "crates/registry-platform-replay", version = "0.8.4" }
 registry-platform-sdjwt = { path = "crates/registry-platform-sdjwt", version = "0.8.4" }
 registry-platform-testing = { path = "crates/registry-platform-testing", version = "0.8.4" }
 

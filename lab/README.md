@@ -93,35 +93,22 @@ just release-fast
 
 Plain `just quick` runs the same monorepo defaults for generate, build, smoke,
 OpenFn, and client checks. `just release-fast` runs `scripts/release-check.sh`,
-which defaults to `REGISTRY_LAB_RELEASE_SOURCE_MODE=monorepo` and also gates
-the release source model. The live OpenCRVS DCI smoke runs during release
-checks only when `.env.local` or exported `OPENCRVS_DCI_CLIENT_ID` and
+which gates the monorepo release source model. The live OpenCRVS DCI smoke runs
+during release checks only when `.env.local` or exported `OPENCRVS_DCI_CLIENT_ID` and
 `OPENCRVS_DCI_CLIENT_SECRET` values are available.
 
-If you still have sibling Platform, Relay, and Notary checkouts and want to
-validate against them directly, `commons-check` remains available:
+`commons-check` uses the same monorepo defaults for Platform, Manifest, Relay,
+and Notary. Override the source variables only when you want to validate against
+other local checkouts:
 
 ```bash
-REGISTRY_PLATFORM_SOURCE_DIR=../registry-platform \
-REGISTRY_MANIFEST_REPO=../registry-manifest \
-REGISTRY_RELAY_SOURCE_DIR=../registry-relay \
-REGISTRY_NOTARY_SOURCE_DIR=../registry-notary \
 just commons-check
 ```
 
-For the first release, keep the two proof paths separate:
-
-- Source proof: run against sibling Platform, Relay, and Notary checkouts with
-  `REGISTRY_LAB_RELEASE_SOURCE_MODE=source`. If the sibling commits are not yet
-  reflected in Lab `vendor/` pins, also set
-  `REGISTRY_LAB_ALLOW_PENDING_PINS=1`; the release source model check will print
-  each pending pin or dirty source checkout. This is a pre-tag proof only.
-- Monorepo proof: run `scripts/release-check.sh` with the default
-  `REGISTRY_LAB_RELEASE_SOURCE_MODE=monorepo` (or explicitly). The script
-  resolves Platform, Relay, Notary, and Manifest against this monorepo
-  checkout and Crosswalk, registry-atlas, and the eSignet Relay authenticator
-  against the committed `vendor/` submodules. This is the primary release
-  proof for this monorepo.
+The release source proof is monorepo-only: `scripts/release-check.sh` resolves
+Platform, Relay, Notary, and Manifest against this checkout and Crosswalk,
+registry-atlas, and the eSignet Relay authenticator against the committed
+`vendor/` submodules.
 
 ## Demo commands
 
@@ -335,8 +322,8 @@ just notary-redis
 ```
 
 That recipe starts the `redis` Compose service, waits for `redis-cli ping`, and
-runs the focused live Redis tests from sibling `registry-platform` and
-`registry-notary` checkouts with
+runs the focused live Redis tests from the selected Platform and Notary source
+dirs with
 `REGISTRY_PLATFORM_REDIS_TEST_URL=redis://127.0.0.1:63799/`. Override
 `REGISTRY_LAB_REDIS_PORT`, `REGISTRY_PLATFORM_SOURCE_DIR`, or
 `REGISTRY_NOTARY_SOURCE_DIR` if your local layout differs. Inside Compose,
@@ -670,14 +657,9 @@ OpenFn image builds can use `REGISTRY_OPENFN_NOTARY_SOURCE_DIR` separately from
 the core Notary image. The lab default points OpenFn at the selected Notary
 source.
 
-`scripts/check-release-source-model.sh source` compares sibling Platform,
-Relay, and Notary SHAs with the Lab `vendor/` pins (Crosswalk, registry-atlas,
-and the eSignet Relay authenticator) and fails on mismatches or dirty source
-checkouts. Use `REGISTRY_LAB_ALLOW_PENDING_PINS=1` only while the final source
-commits are still waiting for the Lab submodule pin update.
-`scripts/check-release-source-model.sh monorepo` (the default) proves that the
-selected release paths resolve to this monorepo checkout and the committed
-`vendor/` pins.
+`scripts/check-release-source-model.sh monorepo` proves that the selected
+release paths resolve to this monorepo checkout and the committed `vendor/`
+pins.
 
 `just notary-client` imports the Registry Notary Python client directly from a
 source checkout and runs it against the default lab Notary services. It looks at

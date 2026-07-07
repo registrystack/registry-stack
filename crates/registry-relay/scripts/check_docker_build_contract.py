@@ -74,8 +74,6 @@ def forbid_documented_unpinned_build_context(path: Path) -> list[str]:
 def main() -> int:
     dockerfile = ROOT / "Dockerfile"
     build_script = ROOT / "scripts" / "build-image.sh"
-    ci_workflow = ROOT / ".github" / "workflows" / "ci.yml"
-    container_workflow = ROOT / ".github" / "workflows" / "container.yml"
     docs = [ROOT / "README.md", ROOT / "docs" / "ops.md"]
 
     failures: list[str] = []
@@ -170,63 +168,6 @@ def main() -> int:
             "optional feature build arg forwarding",
         )
     )
-    release_features = "spdci-api-standards,standards-cel-mapping,attribute-release,ogcapi-features,ogcapi-edr,ogcapi-records"
-    failures.extend(
-        require(
-            container_workflow,
-            "REGISTRY_RELAY_RELEASE_FEATURES",
-            "official image release feature variable",
-        )
-    )
-    failures.extend(
-        require(
-            container_workflow,
-            release_features,
-            "official image release feature list",
-        )
-    )
-    failures.extend(
-        require(
-            container_workflow,
-            '--build-arg "REGISTRY_RELAY_FEATURES=$REGISTRY_RELAY_RELEASE_FEATURES"',
-            "official image feature build arg forwarding",
-        )
-    )
-    failures.extend(
-        require(
-            container_workflow,
-            "Verify registry-relay image can run hosted feature surfaces",
-            "official image hosted feature verification step",
-        )
-    )
-    failures.extend(
-        require(
-            container_workflow,
-            'docker exec "$cid" /usr/local/bin/registry-relay healthcheck',
-            "official image shell-free healthcheck verification",
-        )
-    )
-    failures.extend(
-        require(
-            ci_workflow,
-            "REGISTRY_RELAY_FEATURES",
-            "CI container build release feature variable",
-        )
-    )
-    failures.extend(
-        require(
-            ci_workflow,
-            release_features,
-            "CI container build release feature list",
-        )
-    )
-    failures.extend(
-        require(
-            ROOT / "scripts" / "check-platform-compat.sh",
-            "warning: CEL_MAPPING_SOURCE_DIR is deprecated, please use CROSSWALK_SOURCE_DIR instead",
-            "deprecated CEL_MAPPING_SOURCE_DIR fallback warning",
-        )
-    )
     failures.extend(
         require_runtime(
             dockerfile,
@@ -272,13 +213,6 @@ def main() -> int:
         ("wget", "wget dependency in runtime"),
     ]:
         failures.extend(forbid_runtime(dockerfile, needle, detail))
-    failures.extend(
-        forbid(
-            container_workflow,
-            "--entrypoint curl",
-            "curl-based official image verification",
-        )
-    )
     for path in docs:
         failures.extend(forbid_documented_unpinned_build_context(path))
         failures.extend(

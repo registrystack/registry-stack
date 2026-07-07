@@ -746,11 +746,8 @@ fn build_fixture_from_config_path_with_audit_pipeline(
     sink: Arc<AuditPipeline>,
     audit_sink: InMemorySink,
 ) -> AdminFixture {
-    #[allow(unused_unsafe)]
-    unsafe {
-        std::env::set_var("REGISTRY_RELAY_TEST_AUDIT_HASH_SECRET", AUDIT_SECRET_VALUE);
-        std::env::set_var("REGISTRY_RELAY_TEST_PRIVATE_JWK", NON_KEY_PLACEHOLDER_VALUE);
-    }
+    std::env::set_var("REGISTRY_RELAY_TEST_AUDIT_HASH_SECRET", AUDIT_SECRET_VALUE);
+    std::env::set_var("REGISTRY_RELAY_TEST_PRIVATE_JWK", NON_KEY_PLACEHOLDER_VALUE);
     let config: Arc<Config> = Arc::new(config::load(&config_path).expect("config loads"));
     let provenance_state = if include_provenance_state {
         build_resolved_provenance_config(config.provenance.as_ref())
@@ -3796,12 +3793,10 @@ async fn config_apply_signed_provenance_rotation_swaps_runtime_snapshot() {
     let new_key_path = fixture._tmp.path().join("provenance-new.jwk");
     let new_kid = "did:web:data.example.test#relay-public-key-2";
     write_ed25519_jwk(&new_key_path, new_kid);
-    unsafe {
-        std::env::set_var(
-            "REGISTRY_RELAY_RETIRED_PROVENANCE_JWK",
-            serde_json::to_string(&old_public_jwk).expect("old public jwk serializes"),
-        );
-    }
+    std::env::set_var(
+        "REGISTRY_RELAY_RETIRED_PROVENANCE_JWK",
+        serde_json::to_string(&old_public_jwk).expect("old public jwk serializes"),
+    );
     let candidate = std::fs::read_to_string(&fixture.config_path)
         .expect("config reads")
         .replace(
@@ -3951,12 +3946,10 @@ async fn config_apply_signed_provenance_rotation_rejects_non_ready_candidate_bef
     let new_key_path = fixture._tmp.path().join("provenance-new.jwk");
     let new_kid = "did:web:data.example.test#relay-public-key-2";
     write_ed25519_jwk(&new_key_path, new_kid);
-    unsafe {
-        std::env::set_var(
-            "REGISTRY_RELAY_RETIRED_PROVENANCE_JWK",
-            serde_json::to_string(&old_public_jwk).expect("old public jwk serializes"),
-        );
-    }
+    std::env::set_var(
+        "REGISTRY_RELAY_RETIRED_PROVENANCE_JWK",
+        serde_json::to_string(&old_public_jwk).expect("old public jwk serializes"),
+    );
     let candidate = std::fs::read_to_string(&fixture.config_path)
         .expect("config reads")
         .replace(
@@ -4029,12 +4022,10 @@ async fn config_apply_signed_provenance_cleanup_removes_expired_retired_key() {
     let retired_key_path = tmp.path().join("provenance-retired.jwk");
     let retired_public_jwk = write_ed25519_jwk(&retired_key_path, retired_kid);
     let retired_after = (Utc::now() - chrono::Duration::days(2)).to_rfc3339();
-    unsafe {
-        std::env::set_var(
-            "REGISTRY_RELAY_RETIRED_PROVENANCE_JWK",
-            serde_json::to_string(&retired_public_jwk).expect("retired public jwk serializes"),
-        );
-    }
+    std::env::set_var(
+        "REGISTRY_RELAY_RETIRED_PROVENANCE_JWK",
+        serde_json::to_string(&retired_public_jwk).expect("retired public jwk serializes"),
+    );
     let retired_block = format!(
         "signing_algorithm: EdDSA\n    retired_keys:\n      - verification_method_id: {retired_kid}\n        jwk_env: REGISTRY_RELAY_RETIRED_PROVENANCE_JWK\n        retired_after: {retired_after}\n"
     );
@@ -4099,12 +4090,10 @@ async fn config_apply_signed_provenance_cleanup_rejects_unexpired_retired_key() 
     let retired_key_path = tmp.path().join("provenance-retired.jwk");
     let retired_public_jwk = write_ed25519_jwk(&retired_key_path, retired_kid);
     let retired_after = Utc::now().to_rfc3339();
-    unsafe {
-        std::env::set_var(
-            "REGISTRY_RELAY_RETIRED_PROVENANCE_JWK",
-            serde_json::to_string(&retired_public_jwk).expect("retired public jwk serializes"),
-        );
-    }
+    std::env::set_var(
+        "REGISTRY_RELAY_RETIRED_PROVENANCE_JWK",
+        serde_json::to_string(&retired_public_jwk).expect("retired public jwk serializes"),
+    );
     let retired_block = format!(
         "signing_algorithm: EdDSA\n    retired_keys:\n      - verification_method_id: {retired_kid}\n        jwk_env: REGISTRY_RELAY_RETIRED_PROVENANCE_JWK\n        retired_after: {retired_after}\n"
     );
@@ -4190,12 +4179,10 @@ async fn config_apply_signed_provenance_cleanup_class_cannot_rotate_active_key()
     let new_key_path = fixture._tmp.path().join("provenance-new.jwk");
     let new_kid = "did:web:data.example.test#relay-public-key-2";
     write_ed25519_jwk(&new_key_path, new_kid);
-    unsafe {
-        std::env::set_var(
-            "REGISTRY_RELAY_RETIRED_PROVENANCE_JWK",
-            serde_json::to_string(&old_public_jwk).expect("old public jwk serializes"),
-        );
-    }
+    std::env::set_var(
+        "REGISTRY_RELAY_RETIRED_PROVENANCE_JWK",
+        serde_json::to_string(&old_public_jwk).expect("old public jwk serializes"),
+    );
     let candidate = std::fs::read_to_string(&fixture.config_path)
         .expect("config reads")
         .replace(
@@ -4257,12 +4244,10 @@ async fn config_apply_signed_provenance_rotation_class_cannot_cleanup_retired_ke
     let retired_key_path = tmp.path().join("provenance-retired.jwk");
     let retired_public_jwk = write_ed25519_jwk(&retired_key_path, retired_kid);
     let retired_after = (Utc::now() - chrono::Duration::days(2)).to_rfc3339();
-    unsafe {
-        std::env::set_var(
-            "REGISTRY_RELAY_RETIRED_PROVENANCE_JWK",
-            serde_json::to_string(&retired_public_jwk).expect("retired public jwk serializes"),
-        );
-    }
+    std::env::set_var(
+        "REGISTRY_RELAY_RETIRED_PROVENANCE_JWK",
+        serde_json::to_string(&retired_public_jwk).expect("retired public jwk serializes"),
+    );
     let retired_block = format!(
         "signing_algorithm: EdDSA\n    retired_keys:\n      - verification_method_id: {retired_kid}\n        jwk_env: REGISTRY_RELAY_RETIRED_PROVENANCE_JWK\n        retired_after: {retired_after}\n"
     );
@@ -4691,12 +4676,10 @@ async fn config_apply_signed_provenance_non_signer_fields_are_restart_required_w
             &new_key_path,
             "did:web:data.example.test#relay-public-key-2",
         );
-        unsafe {
-            std::env::set_var(
-                "REGISTRY_RELAY_RETIRED_PROVENANCE_JWK",
-                serde_json::to_string(&old_public_jwk).expect("old public jwk serializes"),
-            );
-        }
+        std::env::set_var(
+            "REGISTRY_RELAY_RETIRED_PROVENANCE_JWK",
+            serde_json::to_string(&old_public_jwk).expect("old public jwk serializes"),
+        );
         let mut candidate = std::fs::read_to_string(&fixture.config_path)
             .expect("config reads")
             .replace(

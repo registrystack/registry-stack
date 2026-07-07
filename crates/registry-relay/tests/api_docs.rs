@@ -13,6 +13,8 @@ use registry_relay::entity::EntityRegistry;
 use registry_relay::server::build_app;
 use serde_json::Value;
 
+mod support;
+
 fn server() -> TestServer {
     TestServer::new(docs_router::<()>())
 }
@@ -25,11 +27,9 @@ fn full_app_server() -> TestServer {
 }
 
 fn full_app_config() -> Arc<registry_relay::config::Config> {
-    Arc::new(
-        registry_relay::config::test_support::load_example_config_for_tests(
-            "relay-api-docs-audit-secret-32-bytes",
-        ),
-    )
+    Arc::new(support::load_example_config_for_tests(
+        "relay-api-docs-audit-secret-32-bytes",
+    ))
 }
 
 #[tokio::test]

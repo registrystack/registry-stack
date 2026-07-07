@@ -130,6 +130,12 @@ jobs:
       - name: Cargo metadata
         run: cargo metadata --locked --format-version 1 >/tmp/registry-stack-cargo-metadata.json
 
+      - name: Gate inventory
+        run: python3 release/scripts/check-gates-inventory.py
+
+      - name: Test gate inventory
+        run: python3 -m unittest release/scripts/test_check_gates_inventory.py
+
       - name: Format
         run: cargo fmt --check
 
@@ -157,6 +163,10 @@ jobs:
         working-directory: crates/registry-relay
         run: just openapi-contract
 
+      - name: Relay exposure check
+        working-directory: crates/registry-relay
+        run: just exposure-check
+
   release-tool:
     name: Release tooling
     needs: changes
@@ -171,6 +181,12 @@ jobs:
 
       - name: Test release helper
         run: python3 -m unittest release/scripts/test_registry_release.py
+
+      - name: Gate inventory
+        run: python3 release/scripts/check-gates-inventory.py
+
+      - name: Test gate inventory
+        run: python3 -m unittest release/scripts/test_check_gates_inventory.py
 
       - name: Validate release manifest
         shell: bash

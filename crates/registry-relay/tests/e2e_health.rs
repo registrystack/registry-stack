@@ -49,14 +49,14 @@ use tokio::net::TcpListener;
 use tokio::sync::watch;
 use ulid::Ulid;
 
+mod support;
+
 /// Load the canonical example config from the repo. The config
 /// loader runs cross-field validation; we set the required fingerprint secret
 /// env vars to a known API key fingerprint so the loader does not
 /// fail with `config.missing_secret`.
 fn load_example_config() -> Config {
-    registry_relay::config::test_support::load_example_config_for_tests(
-        "relay-e2e-health-audit-secret-32-bytes",
-    )
+    support::load_example_config_for_tests("relay-e2e-health-audit-secret-32-bytes")
 }
 
 fn build_test_app(sink: Arc<AuditPipeline>) -> axum::Router {

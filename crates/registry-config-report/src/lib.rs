@@ -16,6 +16,9 @@ pub const CONFIG_EXPLANATION_SCHEMA_V1: &str =
 pub const REGISTRYCTL_VALIDATION_REPORT_SCHEMA_V1: &str =
     include_str!("../schemas/registryctl.validation.report.v1.schema.json");
 
+pub const REGISTRYCTL_VALIDATION_REPORT_SCHEMA_VERSION_V1: &str =
+    "registryctl.validation.report.v1";
+
 pub const RELAY_DIAGNOSTIC_OK_FIXTURE_V1: &str =
     include_str!("../fixtures/diagnostics/registry-relay.ok.json");
 
