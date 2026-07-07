@@ -46,6 +46,9 @@ const REGISTRYCTL_RELEASES_API: &str =
 const REGISTRYCTL_INSTALL_SCRIPT: &str =
     "https://raw.githubusercontent.com/registrystack/registry-stack/main/crates/registryctl/install.sh";
 const UPDATE_CHECK_CACHE_SECONDS: u64 = 60 * 60 * 24;
+/// The only `schema_version` `registryctl_manifest` generates today; `Project::load` rejects
+/// any other value so a future/incompatible schema file fails loudly instead of half-parsing.
+const PROJECT_SCHEMA_VERSION: &str = "registryctl/v1";
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub enum NotarySource {
@@ -3042,9 +3045,11 @@ fn bruno_env_value(secrets: &LocalEnv, name: &str, example: bool) -> String {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Project {
-    // Not read anywhere today; modeled so `deny_unknown_fields` doesn't reject
-    // registryctl's own generated files (see `registryctl_manifest`).
+    // Not read anywhere today beyond load-time validation (see `deserialize_schema_version`);
+    // modeled so `deny_unknown_fields` doesn't reject registryctl's own generated files
+    // (see `registryctl_manifest`).
     #[allow(dead_code)]
+    #[serde(deserialize_with = "deserialize_schema_version")]
     schema_version: String,
     #[allow(dead_code)]
     project: ProjectMeta,
@@ -3114,6 +3119,24 @@ struct ProjectNotary {
     claims: Vec<String>,
     #[serde(default)]
     smoke_target_id: Option<String>,
+}
+
+/// Validates `schema_version` against `PROJECT_SCHEMA_VERSION`, the only version
+/// `registryctl_manifest` generates today, so a future/incompatible schema file fails project
+/// load instead of half-parsing.
+fn deserialize_schema_version<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error as _;
+
+    let schema_version = String::deserialize(deserializer)?;
+    if schema_version != PROJECT_SCHEMA_VERSION {
+        return Err(D::Error::custom(format!(
+            "invalid schema_version {schema_version:?}; expected {PROJECT_SCHEMA_VERSION:?}"
+        )));
+    }
+    Ok(schema_version)
 }
 
 /// Validates `notary.source` against the labels `NotaryInitSourceKind::from_source_label`
@@ -3745,7 +3768,7 @@ fn registryctl_manifest(dir: &Path, kind: ProjectManifestKind<'_>) -> Result<Str
         ProjectManifestKind::Relay => None,
     };
     let manifest = ProjectManifest {
-        schema_version: "registryctl/v1",
+        schema_version: PROJECT_SCHEMA_VERSION,
         project: ProjectSection {
             name,
             kind: project_kind,
@@ -5464,6 +5487,48 @@ workflows:
                 "error should list valid value `{valid}`: {rendered}"
             );
         }
+    }
+
+    #[test]
+    fn invalid_schema_version_fails_to_load_naming_the_value() {
+        let temp = TempDir::new().unwrap();
+        write_project_yaml(
+            temp.path(),
+            &format!(
+                "schema_version: registryctl/v2\nproject:\n  name: my-first-api\n  kind: spreadsheet-api\n  products:\n    - registry-relay\n{MINIMAL_RUNTIME_BLOCK}{MINIMAL_LOCAL_BLOCK}"
+            ),
+        );
+
+        let error = Project::load(temp.path()).unwrap_err();
+        let rendered = format!("{error:#}");
+
+        assert!(
+            rendered.contains("registryctl/v2"),
+            "error should name the offending value `registryctl/v2`: {rendered}"
+        );
+        assert!(
+            rendered.contains("registryctl/v1"),
+            "error should name the expected value `registryctl/v1`: {rendered}"
+        );
+    }
+
+    #[test]
+    fn missing_schema_version_fails_to_load() {
+        let temp = TempDir::new().unwrap();
+        write_project_yaml(
+            temp.path(),
+            &format!(
+                "project:\n  name: my-first-api\n  kind: spreadsheet-api\n  products:\n    - registry-relay\n{MINIMAL_RUNTIME_BLOCK}{MINIMAL_LOCAL_BLOCK}"
+            ),
+        );
+
+        let error = Project::load(temp.path()).unwrap_err();
+        let rendered = format!("{error:#}");
+
+        assert!(
+            rendered.contains("schema_version"),
+            "error should name the missing field `schema_version`: {rendered}"
+        );
     }
 
     #[test]
