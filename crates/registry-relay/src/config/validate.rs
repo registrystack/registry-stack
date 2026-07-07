@@ -4916,33 +4916,6 @@ datasets: []
         assert!(super::run(&config).is_ok());
     }
 
-    #[derive(Clone, Default)]
-    struct SharedLog(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
-
-    struct SharedLogWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
-
-    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SharedLog {
-        type Writer = SharedLogWriter;
-
-        fn make_writer(&'a self) -> Self::Writer {
-            SharedLogWriter(std::sync::Arc::clone(&self.0))
-        }
-    }
-
-    impl std::io::Write for SharedLogWriter {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0
-                .lock()
-                .expect("log buffer lock")
-                .extend_from_slice(buf);
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
     /// Runs `validate_auth_failure_throttle` under a captured tracing
     /// subscriber and returns the rendered log output.
     fn captured_throttle_validation_logs(config: &Config) -> String {
