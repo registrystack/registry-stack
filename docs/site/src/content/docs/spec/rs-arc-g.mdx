@@ -98,14 +98,13 @@ flowchart TD
     end
 
     manifest -- "static discovery bundle" --> relay
-    manifest -- "evidence offering metadata" --> notary
     platform -- "shared primitives" --> relay
     platform -- "shared primitives" --> notary
     relay -- "HTTP source connector" --> notary
     relay & notary --> lab
 ```
 
-The diagram captures five components. This section restates the essential relationships as text: Registry Manifest produces a static discovery bundle consumed by Registry Relay and Registry Notary. Registry Platform supplies shared primitives to both runtime services. Registry Notary calls Registry Relay over HTTP as a data source. Registry Lab assembles all runtime services into a runnable local demo.
+The diagram captures five components. This section restates the essential relationships as text: Registry Manifest produces a static discovery bundle consumed by Registry Relay, static publishers, and clients that inspect the metadata offline. Registry Platform supplies shared primitives to both runtime services. Registry Notary is reached through its configured HTTP sources, evidence endpoints, and runtime configuration rather than by consuming the Registry Manifest output directly. Registry Lab assembles all runtime services into a runnable local demo.
 
 ## 3. Components
 
