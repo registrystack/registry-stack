@@ -10701,6 +10701,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Barrier};
     use std::thread;
+    use std::time::Instant;
 
     // Ed25519 keypair: `d` is the seed, `x` is the corresponding public key,
     // both base64url (no padding). Identical to the key in
@@ -11412,18 +11413,51 @@ mod tests {
         }
 
         start.wait();
-        for _ in 0..10_000 {
+        // The reader threads race a publisher that does nothing but atomic swaps, so on
+        // an oversubscribed runner every publish can complete before any reader executes
+        // its loop body even once. A fixed iteration count therefore isn't a reliable way
+        // to guarantee both generations get observed; keep alternating publishes until
+        // they actually have been, bounded by a generous wall-clock deadline so a genuine
+        // regression (e.g. readers never getting scheduled at all) still fails the test
+        // instead of hanging.
+        let coverage_deadline_duration = Duration::from_secs(15);
+        let coverage_deadline = Instant::now() + coverage_deadline_duration;
+        let mut publish_pairs: u64 = 0;
+        loop {
             state.publish_runtime_snapshot(Arc::clone(&new_snapshot));
             state.publish_runtime_snapshot(Arc::clone(&old_snapshot));
+            publish_pairs += 1;
+
+            if torn.load(Ordering::SeqCst) {
+                break;
+            }
+            if observed_old.load(Ordering::SeqCst) && observed_new.load(Ordering::SeqCst) {
+                break;
+            }
+            if Instant::now() >= coverage_deadline {
+                break;
+            }
         }
         done.store(true, Ordering::SeqCst);
         for worker in workers {
             worker.join().expect("observer thread joins");
         }
 
+        // The real correctness property: a reader must never see a snapshot with an old
+        // issuer paired with a new federation runtime (or vice versa).
         assert!(!torn.load(Ordering::SeqCst));
-        assert!(observed_old.load(Ordering::SeqCst));
-        assert!(observed_new.load(Ordering::SeqCst));
+        // Coverage is a test-harness concern, not a correctness one: it just confirms the
+        // race above actually exercised both generations before the deadline elapsed.
+        assert!(
+            observed_old.load(Ordering::SeqCst) && observed_new.load(Ordering::SeqCst),
+            "reader threads never observed both snapshot generations after {publish_pairs} \
+             publish pairs and a {:?} coverage deadline (observed_old={}, observed_new={}); \
+             this is a scheduling coverage failure, not a torn read (the torn invariant above \
+             already holds)",
+            coverage_deadline_duration,
+            observed_old.load(Ordering::SeqCst),
+            observed_new.load(Ordering::SeqCst),
+        );
     }
 
     fn holder_did_jwk() -> String {
