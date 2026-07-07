@@ -638,6 +638,12 @@ impl StandaloneRegistryNotaryConfig {
             // implemented. Keep this explicit so production/evidence profiles
             // surface the missing sender-constraint assurance.
             transaction_token_sender_constrained: false,
+            source_binding_without_matching_policy: self.evidence.claims.iter().any(|claim| {
+                claim
+                    .source_bindings
+                    .values()
+                    .any(|binding| binding.matching.lacks_matching_policy())
+            }),
         }
     }
 
@@ -5724,6 +5730,49 @@ impl SourceMatchingConfig {
         Ok(matching)
     }
 
+    /// True when this matching config declares any context-constraint gate:
+    /// legal basis, consent, jurisdiction, assurance, or source freshness.
+    pub fn has_context_constraints(&self) -> bool {
+        self.require_legal_basis
+            || self.require_consent
+            || !self.allowed_legal_basis_refs.is_empty()
+            || !self.allowed_consent_refs.is_empty()
+            || !self.permitted_jurisdictions.is_empty()
+            || !self.allowed_assurance.is_empty()
+            || self.minimum_assurance.is_some()
+            || self.max_source_age_seconds.is_some()
+    }
+
+    /// True when the binding declares neither a `policy_id` nor any matching
+    /// gate. Per spec RS-DM-CLAIM, such a binding falls back to unrestricted,
+    /// identifier-only resolution: resolution behavior is unchanged, but
+    /// operators should see it so they can accept it knowingly or declare a
+    /// matching policy.
+    pub fn lacks_matching_policy(&self) -> bool {
+        self.policy_id.is_none() && !self.has_matching_gates()
+    }
+
+    fn has_matching_gates(&self) -> bool {
+        self.has_context_constraints()
+            || self.target_type.is_some()
+            || self.requester_type.is_some()
+            || !self.allowed_purposes.is_empty()
+            || self.ecosystem_binding.as_ref().is_some_and(|binding| {
+                binding.id.is_some()
+                    || binding.profile.is_some()
+                    || binding.pack_id.is_some()
+                    || binding.pack_version.is_some()
+                    || binding.policy_id.is_some()
+                    || binding.policy_hash.is_some()
+            })
+            || !self.allowed_relationships.is_empty()
+            || !self.relationship_purpose_scopes.is_empty()
+            || !self.sufficient_target_inputs.is_empty()
+            || !self.allowed_target_inputs.is_empty()
+            || !self.allowed_requester_inputs.is_empty()
+            || self.require_requester_reauthentication
+    }
+
     fn apply_context_constraints(
         &mut self,
         constraints: SourceContextConstraintsConfig,
@@ -7050,6 +7099,59 @@ token_env: SRC_TOKEN
             .expect("source connection parses"),
         );
         assert!(!config.gate_input().source_insecure_url);
+    }
+
+    #[test]
+    fn gate_input_reports_source_binding_without_matching_policy() {
+        let mut config = minimal_config();
+        let mut claim = minimal_claim("residency");
+        claim
+            .source_bindings
+            .insert("registry".to_string(), rda_binding("registry_src", "one"));
+        config.evidence.claims = vec![claim];
+        assert!(config.gate_input().source_binding_without_matching_policy);
+    }
+
+    #[test]
+    fn gate_input_clears_source_binding_without_matching_policy_with_policy_id() {
+        let mut config = minimal_config();
+        let mut claim = minimal_claim("residency");
+        let mut binding = rda_binding("registry_src", "one");
+        binding.matching.policy_id = Some("registry.residency.lookup.v1".to_string());
+        claim
+            .source_bindings
+            .insert("registry".to_string(), binding);
+        config.evidence.claims = vec![claim];
+        assert!(!config.gate_input().source_binding_without_matching_policy);
+    }
+
+    #[test]
+    fn gate_input_clears_source_binding_without_matching_policy_with_purpose_gate() {
+        let mut config = minimal_config();
+        let mut claim = minimal_claim("residency");
+        let mut binding = rda_binding("registry_src", "one");
+        binding.matching.allowed_purposes = vec!["benefits_screening".to_string()];
+        claim
+            .source_bindings
+            .insert("registry".to_string(), binding);
+        config.evidence.claims = vec![claim];
+        assert!(!config.gate_input().source_binding_without_matching_policy);
+    }
+
+    #[test]
+    fn gate_input_clears_source_binding_without_matching_policy_with_ecosystem_binding() {
+        let mut config = minimal_config();
+        let mut claim = minimal_claim("residency");
+        let mut binding = rda_binding("registry_src", "one");
+        binding.matching.ecosystem_binding = Some(EcosystemBindingSelectorConfig {
+            policy_id: Some("policy:residency".to_string()),
+            ..EcosystemBindingSelectorConfig::default()
+        });
+        claim
+            .source_bindings
+            .insert("registry".to_string(), binding);
+        config.evidence.claims = vec![claim];
+        assert!(!config.gate_input().source_binding_without_matching_policy);
     }
 
     #[test]

@@ -110,6 +110,7 @@ The gates bound for Registry Notary:
 | `notary.admin.shared_exposure` | The admin surface shares the public listener | error | readiness_fail | startup_fail |
 | `notary.openapi.public` | OpenAPI is served without authentication | warn | error | error |
 | `notary.config.unsigned` | Local YAML config rather than signed governed config | warn | error | startup_fail |
+| `notary.source_binding.no_matching_policy` | A claim source binding declares no matching policy (no `policy_id`, no context constraints), so resolution falls back to unrestricted, identifier-only matching | - | warn | error |
 
 ### Waivers
 

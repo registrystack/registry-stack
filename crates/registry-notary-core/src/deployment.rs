@@ -197,6 +197,7 @@ pub struct GateInput {
     pub self_attestation_enabled: bool,
     pub transaction_token_anchor_configured: bool,
     pub transaction_token_sender_constrained: bool,
+    pub source_binding_without_matching_policy: bool,
 }
 
 impl GateInput {
@@ -247,10 +248,28 @@ pub const FINDING_ASSISTED_ACCESS_TRANSACTION_TOKEN_ANCHOR_MISSING: &str =
     "notary.assisted_access.transaction_token_anchor_missing";
 pub const FINDING_ASSISTED_ACCESS_SENDER_CONSTRAINT_MISSING: &str =
     "notary.assisted_access.sender_constraint_missing";
+pub const FINDING_SOURCE_BINDING_NO_MATCHING_POLICY: &str =
+    "notary.source_binding.no_matching_policy";
 
 // Diagnostic finding ids emitted by the framework itself.
 pub const FINDING_PROFILE_UNDECLARED: &str = "deployment.profile_undeclared";
 pub const FINDING_WAIVER_EXPIRED: &str = "deployment.waiver_expired";
+
+/// The severity `gate_id` binds under `profile`, or `None` if the gate is
+/// unbound at that profile (including an undeclared profile) or `gate_id` is
+/// unknown. Lets callers outside the gate-evaluation path (e.g. doctor
+/// diagnostics) check whether a gate already covers a finding before also
+/// reporting it explicitly.
+pub fn gate_severity_for_profile(
+    gate_id: &str,
+    profile: Option<DeploymentProfile>,
+) -> Option<GateSeverity> {
+    let profile = profile?;
+    gate_catalog()
+        .iter()
+        .find(|gate| gate.id == gate_id)
+        .and_then(|gate| gate.severity_for(profile))
+}
 
 fn gate_catalog() -> &'static [Gate] {
     use GateSeverity::{FindingError, FindingWarn, ReadinessFail, StartupFail};
@@ -333,6 +352,21 @@ fn gate_catalog() -> &'static [Gate] {
                 input.transaction_token_anchor_configured
                     && !input.transaction_token_sender_constrained
             },
+        },
+        // notary.source_binding.no_matching_policy: a claim source binding
+        // declares no matching policy_id and no context-constraint gates, so
+        // resolution falls back to unrestricted, identifier-only matching
+        // (spec RS-DM-CLAIM). Resolution behavior is unchanged and
+        // spec-conformant, so local/hosted_lab stay quiet; production nags,
+        // evidence_grade treats it as an error. Both bound tiers are
+        // waivable: a waiver is the sanctioned way to accept the fallback
+        // deliberately. (#171)
+        Gate {
+            id: FINDING_SOURCE_BINDING_NO_MATCHING_POLICY,
+            hosted_lab: None,
+            production: Some(FindingWarn),
+            evidence_grade: Some(FindingError),
+            condition: |input| input.source_binding_without_matching_policy,
         },
     ]
 }
@@ -991,6 +1025,70 @@ mod tests {
                     profile.as_str()
                 );
             }
+        }
+    }
+
+    // Gate-binding table for #171: a source binding without a matching
+    // policy is quiet under local/hosted_lab, a warn under production, and an
+    // error under evidence_grade.
+    #[test]
+    fn source_binding_no_matching_policy_binds_correct_severity_per_profile() {
+        let triggering = GateInput {
+            source_binding_without_matching_policy: true,
+            ..GateInput::default()
+        };
+        let non_triggering = GateInput {
+            source_binding_without_matching_policy: false,
+            ..GateInput::default()
+        };
+        let cases = [
+            (DeploymentProfile::Local, None),
+            (DeploymentProfile::HostedLab, None),
+            (
+                DeploymentProfile::Production,
+                Some(GateSeverity::FindingWarn),
+            ),
+            (
+                DeploymentProfile::EvidenceGrade,
+                Some(GateSeverity::FindingError),
+            ),
+        ];
+        for (profile, expected_severity) in cases {
+            let evaluation = evaluate_gates(Some(profile), &triggering, &[], "2026-06-13");
+            let found = evaluation
+                .findings
+                .iter()
+                .find(|finding| finding.id == FINDING_SOURCE_BINDING_NO_MATCHING_POLICY);
+            match expected_severity {
+                Some(severity) => {
+                    let finding = found.unwrap_or_else(|| {
+                        panic!(
+                            "expected finding '{}' under profile '{}'",
+                            FINDING_SOURCE_BINDING_NO_MATCHING_POLICY,
+                            profile.as_str()
+                        )
+                    });
+                    assert_eq!(finding.severity, severity);
+                }
+                None => assert!(
+                    found.is_none(),
+                    "finding '{}' must be unbound under profile '{}'",
+                    FINDING_SOURCE_BINDING_NO_MATCHING_POLICY,
+                    profile.as_str()
+                ),
+            }
+
+            let clear_evaluation =
+                evaluate_gates(Some(profile), &non_triggering, &[], "2026-06-13");
+            assert!(
+                !clear_evaluation
+                    .findings
+                    .iter()
+                    .any(|finding| finding.id == FINDING_SOURCE_BINDING_NO_MATCHING_POLICY),
+                "finding '{}' must be absent under profile '{}' with non-triggering input",
+                FINDING_SOURCE_BINDING_NO_MATCHING_POLICY,
+                profile.as_str()
+            );
         }
     }
 
