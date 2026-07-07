@@ -640,6 +640,12 @@ Waiver reasons are only visible in the restricted posture tier; the default tier
 
 The current deployment profile, its findings, and active waivers are reported under `deployment` in the operations posture (`GET /admin/v1/posture`).
 
+### Boot-time visibility
+
+Reduced posture is loud at boot, not only visible on the posture surface. Every config load warns once per waiver-suppressed finding (`deployment.gate_waived`, with the finding id, reason, and expiry), once per expired waiver (`deployment.waiver_expired`), and once when the profile is undeclared (`deployment.profile_undeclared`). The serve path additionally writes one operational audit record per waived gate at boot, once the audit pipeline exists: event `deployment.gate_waived` at audit path `/__events/deployment.gate_waived`, with `error_code` set to the gate id.
+
+This boot-time audit write inherits `audit.write_policy` (see below). Under `fail_closed` (the default), a failed write aborts startup. Under `availability_first`, the failure is logged (`audit.operational_event_write_failed`) and startup continues, so the durable record is best-effort; the per-gate boot log warnings above remain the guaranteed floor.
+
 ## Datasets
 
 Each dataset combines private storage tables with public entities:

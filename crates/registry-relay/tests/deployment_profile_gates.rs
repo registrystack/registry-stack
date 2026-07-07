@@ -224,6 +224,112 @@ fn governed_candidate_apply_accepts_evidence_grade_with_signed_provenance() {
     );
 }
 
+// --- boot audit records for waived gates ------------------------------------
+
+#[tokio::test]
+async fn boot_audit_records_waived_gate() {
+    let yaml = format!(
+        "{}\ndeployment:\n  profile: hosted_lab\n  waivers:\n    - finding: relay.config.unsigned\n      reason: \"synthetic-waiver-not-a-secret\"\n      expires: \"2999-01-01\"\n",
+        minimal_config_yaml()
+    );
+    let config = parse_config(&yaml).expect("config parses");
+    let sink = InMemorySink::new();
+    let pipeline = AuditPipeline::from_sink(sink.clone());
+
+    registry_relay::server::audit_waived_deployment_gates(
+        &config,
+        &pipeline,
+        registry_platform_ops::ConfigSource::LocalFile,
+    )
+    .await
+    .expect("waived gate audit writes");
+
+    let lines = sink.snapshot();
+    assert_eq!(
+        lines.len(),
+        1,
+        "expected exactly one operational audit record: {lines:?}"
+    );
+    assert!(
+        lines[0].contains("/__events/deployment.gate_waived"),
+        "expected the waived-gate audit path: {}",
+        lines[0]
+    );
+    assert!(
+        lines[0].contains("relay.config.unsigned"),
+        "expected the waived gate id in the audit record: {}",
+        lines[0]
+    );
+}
+
+#[tokio::test]
+async fn boot_audit_writes_nothing_without_waivers() {
+    let yaml = format!("{}\ndeployment:\n  profile: local\n", minimal_config_yaml());
+    let config = parse_config(&yaml).expect("config parses");
+    let sink = InMemorySink::new();
+    let pipeline = AuditPipeline::from_sink(sink.clone());
+
+    registry_relay::server::audit_waived_deployment_gates(
+        &config,
+        &pipeline,
+        registry_platform_ops::ConfigSource::LocalFile,
+    )
+    .await
+    .expect("no waived gates means no audit write failure");
+
+    assert!(
+        sink.snapshot().is_empty(),
+        "expected no audit records without waived gates"
+    );
+}
+
+#[tokio::test]
+async fn boot_audit_failure_fails_closed_for_waived_gate() {
+    let yaml = format!(
+        "{}\ndeployment:\n  profile: hosted_lab\n  waivers:\n    - finding: relay.config.unsigned\n      reason: \"synthetic-waiver-not-a-secret\"\n      expires: \"2999-01-01\"\n",
+        minimal_config_yaml()
+    );
+    let config = parse_config(&yaml).expect("config parses");
+    assert_eq!(config.audit.write_policy, AuditWritePolicy::FailClosed);
+    let pipeline = AuditPipeline::from_sink(AlwaysFailWriteSink);
+
+    let err = registry_relay::server::audit_waived_deployment_gates(
+        &config,
+        &pipeline,
+        registry_platform_ops::ConfigSource::LocalFile,
+    )
+    .await
+    .expect_err("fail_closed must surface waived-gate audit write failure");
+
+    assert!(
+        matches!(err, AuditError::Io(_)),
+        "expected injected audit write failure, got {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn boot_audit_failure_is_best_effort_when_availability_first() {
+    let yaml = format!(
+        "{}\ndeployment:\n  profile: hosted_lab\n  waivers:\n    - finding: relay.config.unsigned\n      reason: \"synthetic-waiver-not-a-secret\"\n      expires: \"2999-01-01\"\n",
+        minimal_config_yaml()
+    );
+    let mut config = parse_config(&yaml).expect("config parses");
+    config.audit.write_policy = AuditWritePolicy::AvailabilityFirst;
+    assert_eq!(
+        config.audit.write_policy,
+        AuditWritePolicy::AvailabilityFirst
+    );
+    let pipeline = AuditPipeline::from_sink(AlwaysFailWriteSink);
+
+    registry_relay::server::audit_waived_deployment_gates(
+        &config,
+        &pipeline,
+        registry_platform_ops::ConfigSource::LocalFile,
+    )
+    .await
+    .expect("availability_first keeps waived-gate audit best effort");
+}
+
 // --- audit write policy (end to end) ----------------------------------------
 
 /// Under explicit `availability_first` an audit write failure is swallowed:
