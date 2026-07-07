@@ -34,9 +34,11 @@ shell-free, package-manager-free, and uses a JSON-array entrypoint. Liveness and
 readiness are served over HTTP at `/healthz` and `/ready`, so orchestrator
 probes replace a bundled container healthcheck binary.
 
-Security waivers live in `security/waivers.yml` when needed. Each waiver must
-name an owner, rationale, review trigger, and expiration. The default owner is
-`@PublicSchema/maintainers`.
+Route exposure waivers, when needed, live on the affected entry in
+`security/exposure-manifest.json` so the review context stays with the route.
+There is no separate `security/waivers.yml` in this repository;
+deployment-gate waivers are runtime configuration and surface through the admin
+posture document.
 
 Reviewed advisory ratchets live in `security/advisory-baseline.json`. The
 initial blocking gates are:
