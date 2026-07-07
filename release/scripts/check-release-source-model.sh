@@ -294,6 +294,14 @@ from pathlib import Path
 import yaml
 
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
+# Every release still carries these external inputs. Dropping one from a
+# future release must be a deliberate, reviewable decision: remove it from
+# this list in the same PR that drops the manifest entry.
+REQUIRED_EXTERNALS = (
+    "crosswalk",
+    "esignet-relay-authenticator",
+    "registry-atlas",
+)
 failed = False
 for arg in sys.argv[1:]:
     path = Path(arg)
@@ -307,6 +315,13 @@ for arg in sys.argv[1:]:
         print(f"release source model failed: {path.name} has no external section", file=sys.stderr)
         failed = True
         continue
+    for name in REQUIRED_EXTERNALS:
+        if name not in external:
+            print(
+                f"release source model failed: {path.name} is missing required external.{name}",
+                file=sys.stderr,
+            )
+            failed = True
     for name in sorted(external):
         entry = external[name]
         repo = entry.get("repo") if isinstance(entry, dict) else None
