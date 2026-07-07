@@ -60,6 +60,15 @@ pub enum NotaryInitSourceKind {
 }
 
 impl NotaryInitSourceKind {
+    /// Every `notary.source` label `from_source_label` accepts, listed for error messages.
+    /// `"relay"` is an accepted alias for `RegistryDataApi`; `source_label` never emits it.
+    const VALID_SOURCE_LABELS: &'static [&'static str] = &[
+        "registry_data_api",
+        "relay",
+        "fhir_source_adapter_sidecar",
+        "opencrvs_dci",
+    ];
+
     fn from_source_label(source: &str) -> Option<Self> {
         match source {
             "registry_data_api" | "relay" => Some(Self::RegistryDataApi),
@@ -2885,9 +2894,7 @@ fn bruno_notary_evaluate_body(
     claim_id: &str,
     smoke_target_id: &str,
 ) -> Result<String> {
-    if NotaryInitSourceKind::from_source_label(&notary.source)
-        == Some(NotaryInitSourceKind::OpencrvsDci)
-    {
+    if notary.source_kind() == NotaryInitSourceKind::OpencrvsDci {
         return serde_json::to_string_pretty(&serde_json::json!({
             "target": notary_smoke_target_json(notary, smoke_target_id),
             "claims": [claim_id],
@@ -2911,21 +2918,16 @@ fn bruno_notary_evaluate_body(
 }
 
 fn notary_smoke_target_id(notary: &ProjectNotary) -> &str {
-    notary.smoke_target_id.as_deref().unwrap_or_else(|| {
-        if notary.source == "fhir_source_adapter_sidecar" {
-            "person-123"
-        } else if notary.source == "opencrvs_dci" {
-            "UIN-2001"
-        } else {
-            "per-2001"
-        }
-    })
+    notary
+        .smoke_target_id
+        .as_deref()
+        .unwrap_or_else(|| notary.source_kind().default_smoke_target_id())
 }
 
 fn notary_smoke_target_json(notary: &ProjectNotary, smoke_target_id: &str) -> Value {
     let source_entity = notary.source_entity.as_deref().unwrap_or("person");
-    NotaryInitSourceKind::from_source_label(&notary.source)
-        .unwrap_or(NotaryInitSourceKind::RegistryDataApi)
+    notary
+        .source_kind()
         .smoke_target_json(smoke_target_id, source_entity)
 }
 
@@ -3038,13 +3040,34 @@ fn bruno_env_value(secrets: &LocalEnv, name: &str, example: bool) -> String {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Project {
+    // Not read anywhere today; modeled so `deny_unknown_fields` doesn't reject
+    // registryctl's own generated files (see `registryctl_manifest`).
+    #[allow(dead_code)]
+    schema_version: String,
+    #[allow(dead_code)]
+    project: ProjectMeta,
     #[serde(default)]
     relay: Option<ProjectRelay>,
     #[serde(default)]
     notary: Option<ProjectNotary>,
     runtime: ProjectRuntime,
     local: ProjectLocal,
+}
+
+/// The `project:` metadata block `registryctl_manifest` writes into every generated
+/// `registryctl.yaml` (see `ProjectSection`); not consumed elsewhere today, but modeled here
+/// so `deny_unknown_fields` doesn't reject registryctl's own generated files.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProjectMeta {
+    #[allow(dead_code)]
+    name: String,
+    #[allow(dead_code)]
+    kind: String,
+    #[allow(dead_code)]
+    products: Vec<String>,
 }
 
 impl Project {
@@ -3058,6 +3081,7 @@ impl Project {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ProjectRelay {
     config: PathBuf,
     #[serde(default)]
@@ -3067,8 +3091,10 @@ struct ProjectRelay {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ProjectNotary {
     config: PathBuf,
+    #[serde(deserialize_with = "deserialize_notary_source")]
     source: String,
     #[serde(default)]
     source_relay_service_url: Option<String>,
@@ -3090,8 +3116,43 @@ struct ProjectNotary {
     smoke_target_id: Option<String>,
 }
 
+/// Validates `notary.source` against the labels `NotaryInitSourceKind::from_source_label`
+/// accepts, so an unrecognized value fails project load instead of silently behaving as
+/// `NotaryInitSourceKind::RegistryDataApi` later on.
+fn deserialize_notary_source<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error as _;
+
+    let source = String::deserialize(deserializer)?;
+    if NotaryInitSourceKind::from_source_label(&source).is_none() {
+        return Err(D::Error::custom(format!(
+            "invalid notary.source {source:?}; expected one of: {}",
+            NotaryInitSourceKind::VALID_SOURCE_LABELS.join(", ")
+        )));
+    }
+    Ok(source)
+}
+
+impl ProjectNotary {
+    /// The parsed source kind. `source` is validated against `NotaryInitSourceKind::from_source_label`
+    /// when the project is loaded, so this always succeeds.
+    fn source_kind(&self) -> NotaryInitSourceKind {
+        NotaryInitSourceKind::from_source_label(&self.source)
+            .expect("ProjectNotary.source is validated against known labels at load time")
+    }
+}
+
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ProjectRuntime {
+    // Not read anywhere today (the compose engine/file are hardcoded elsewhere); modeled so
+    // `deny_unknown_fields` doesn't reject registryctl's own generated files.
+    #[allow(dead_code)]
+    engine: String,
+    #[allow(dead_code)]
+    compose_file: PathBuf,
     #[serde(default)]
     relay_image: Option<String>,
     #[serde(default)]
@@ -3103,6 +3164,7 @@ struct ProjectRuntime {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ProjectLocal {
     secrets_env: PathBuf,
     output_dir: PathBuf,
@@ -5266,6 +5328,142 @@ workflows:
         assert!(manifest.get("notary").is_none());
         assert!(manifest["runtime"].get("notary_image").is_none());
         assert!(manifest["runtime"].get("notary_base_url").is_none());
+    }
+
+    fn write_project_yaml(dir: &Path, yaml: &str) {
+        fs::write(dir.join("registryctl.yaml"), yaml).unwrap();
+    }
+
+    const MINIMAL_LOCAL_BLOCK: &str =
+        "local:\n  secrets_env: secrets/local.env\n  output_dir: output\n";
+
+    // `schema_version` and `project` are required fields with no `#[serde(default)]`, so any
+    // fixture exercising `deny_unknown_fields` elsewhere in the document must still supply them
+    // (and a complete `runtime` block) to keep the unknown-key/invalid-value error the only
+    // possible parse failure.
+    const MINIMAL_SCHEMA_AND_PROJECT_BLOCK: &str = "schema_version: registryctl/v1\nproject:\n  name: my-first-api\n  kind: spreadsheet-api\n  products:\n    - registry-relay\n";
+
+    const MINIMAL_RUNTIME_BLOCK: &str =
+        "runtime:\n  engine: docker_compose\n  compose_file: compose.yaml\n";
+
+    #[test]
+    fn unknown_top_level_key_fails_to_load_naming_the_key() {
+        let temp = TempDir::new().unwrap();
+        write_project_yaml(
+            temp.path(),
+            &format!(
+                "{MINIMAL_SCHEMA_AND_PROJECT_BLOCK}noatry:\n  config: notary/config.yaml\n  source: registry_data_api\n{MINIMAL_RUNTIME_BLOCK}{MINIMAL_LOCAL_BLOCK}"
+            ),
+        );
+
+        let error = Project::load(temp.path()).unwrap_err();
+
+        assert!(
+            format!("{error:#}").contains("noatry"),
+            "error should name the offending key `noatry`: {error:#}"
+        );
+    }
+
+    #[test]
+    fn unknown_key_in_relay_section_fails_to_load() {
+        let temp = TempDir::new().unwrap();
+        write_project_yaml(
+            temp.path(),
+            &format!(
+                "{MINIMAL_SCHEMA_AND_PROJECT_BLOCK}relay:\n  config: relay/config.yaml\n  bogus_relay_key: nope\n{MINIMAL_RUNTIME_BLOCK}{MINIMAL_LOCAL_BLOCK}"
+            ),
+        );
+
+        let error = Project::load(temp.path()).unwrap_err();
+
+        assert!(
+            format!("{error:#}").contains("bogus_relay_key"),
+            "error should name the offending key `bogus_relay_key`: {error:#}"
+        );
+    }
+
+    #[test]
+    fn unknown_key_in_notary_section_fails_to_load() {
+        let temp = TempDir::new().unwrap();
+        write_project_yaml(
+            temp.path(),
+            &format!(
+                "{MINIMAL_SCHEMA_AND_PROJECT_BLOCK}notary:\n  config: notary/config.yaml\n  source: registry_data_api\n  bogus_notary_key: nope\n{MINIMAL_RUNTIME_BLOCK}{MINIMAL_LOCAL_BLOCK}"
+            ),
+        );
+
+        let error = Project::load(temp.path()).unwrap_err();
+
+        assert!(
+            format!("{error:#}").contains("bogus_notary_key"),
+            "error should name the offending key `bogus_notary_key`: {error:#}"
+        );
+    }
+
+    #[test]
+    fn unknown_key_in_runtime_section_fails_to_load() {
+        let temp = TempDir::new().unwrap();
+        write_project_yaml(
+            temp.path(),
+            &format!(
+                "{MINIMAL_SCHEMA_AND_PROJECT_BLOCK}runtime:\n  engine: docker_compose\n  compose_file: compose.yaml\n  bogus_runtime_key: nope\n{MINIMAL_LOCAL_BLOCK}"
+            ),
+        );
+
+        let error = Project::load(temp.path()).unwrap_err();
+
+        assert!(
+            format!("{error:#}").contains("bogus_runtime_key"),
+            "error should name the offending key `bogus_runtime_key`: {error:#}"
+        );
+    }
+
+    #[test]
+    fn unknown_key_in_local_section_fails_to_load() {
+        let temp = TempDir::new().unwrap();
+        write_project_yaml(
+            temp.path(),
+            &format!(
+                "{MINIMAL_SCHEMA_AND_PROJECT_BLOCK}runtime:\n  engine: docker_compose\n  compose_file: compose.yaml\nlocal:\n  secrets_env: secrets/local.env\n  output_dir: output\n  bogus_local_key: nope\n"
+            ),
+        );
+
+        let error = Project::load(temp.path()).unwrap_err();
+
+        assert!(
+            format!("{error:#}").contains("bogus_local_key"),
+            "error should name the offending key `bogus_local_key`: {error:#}"
+        );
+    }
+
+    #[test]
+    fn invalid_notary_source_fails_to_load_with_valid_values_listed() {
+        let temp = TempDir::new().unwrap();
+        write_project_yaml(
+            temp.path(),
+            &format!(
+                "{MINIMAL_SCHEMA_AND_PROJECT_BLOCK}notary:\n  config: notary/config.yaml\n  source: not_a_real_source\n{MINIMAL_RUNTIME_BLOCK}{MINIMAL_LOCAL_BLOCK}"
+            ),
+        );
+
+        let error = Project::load(temp.path()).unwrap_err();
+        let rendered = format!("{error:#}");
+
+        assert!(
+            rendered.contains("not_a_real_source"),
+            "error should name the offending value `not_a_real_source`: {rendered}"
+        );
+        for valid in [
+            "registry_data_api",
+            "relay",
+            "fhir_source_adapter_sidecar",
+            "opencrvs_dci",
+        ] {
+            assert!(
+                rendered.contains(valid),
+                "error should list valid value `{valid}`: {rendered}"
+            );
+        }
     }
 
     #[test]
