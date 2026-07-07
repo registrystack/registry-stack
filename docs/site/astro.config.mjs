@@ -79,7 +79,9 @@ export default defineConfig({
     '/reference/security-self-assessment/': internalRedirect('/security/self-assessment/'),
     '/reference/openssf-evidence/': internalRedirect('/security/openssf-evidence/'),
     // quickstart's "Choose by question" router merged into the homepage (2026-06).
-    '/start/your-first-call/': internalRedirect('/tutorials/first-run-with-registry-lab/'),
+    '/start/your-first-call/': internalRedirect('/tutorials/first-run-with-solmara-lab/'),
+    // The monorepo lab tutorial was replaced by the standalone Solmara Lab (2026-07).
+    '/tutorials/first-run-with-registry-lab/': internalRedirect('/tutorials/first-run-with-solmara-lab/'),
     // verify-claim-own-api moved into the Apply to your stack path (2026-06).
     '/tutorials/verify-claim-own-api/': internalRedirect('/tutorials/run-notary-standalone-for-api/'),
     '/tutorials/verify-opencrvs-dci-claims/': internalRedirect('/tutorials/verify-opencrvs-claims/'),
@@ -231,7 +233,7 @@ export default defineConfig({
             { label: 'Your first registry API', slug: 'tutorials/publish-spreadsheet-secured-registry-api' },
             { label: 'Your first claim check', slug: 'tutorials/verify-claim-registry-api' },
             { label: 'When to use', slug: 'start/when-to-use' },
-            { label: 'Run the lab', slug: 'tutorials/first-run-with-registry-lab' },
+            { label: 'Run Solmara Lab', slug: 'tutorials/first-run-with-solmara-lab' },
           ],
         },
         {
