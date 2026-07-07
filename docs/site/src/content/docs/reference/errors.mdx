@@ -79,7 +79,6 @@ Registry Notary returns the codes in the table below from its evidence taxonomy.
 | `auth.purpose_required` | purpose is required | The request omits a required purpose. |
 | `auth.missing_credential` | credential is missing | No authentication credential was provided. |
 | `auth.multiple_credentials` | multiple authentication credentials were provided | More than one authentication credential was provided. |
-| `auth.rate_limited` | authentication is rate limited | Too many failed authentication attempts came from the same client address in the configured window. |
 | `auth.scope_denied` | required scope is missing | The caller's scopes do not include the required scope. |
 | `self_attestation.denied` | self-attestation request is denied | A self-attestation request was denied; also the public code for invalid-token and assurance-denied conditions. The audit record carries the specific reason. |
 | `self_attestation.rate_limited` | self-attestation request is rate limited | Too many self-attestation requests in the configured window. |
@@ -174,6 +173,7 @@ Registry Relay returns namespaced codes from its error taxonomy. Codes in the co
 | `auth.algorithm_not_allowed` | algorithm not allowed | The bearer token `alg` is not in the configured allowlist. |
 | `auth.client_not_allowed` | client not allowed | The bearer token client is not in the configured `allowed_clients` list. |
 | `auth.jwks_unavailable` | jwks unavailable | The JWKS endpoint is unreachable and no cached keys are available. |
+| `auth.rate_limited` | rate limited | Too many failed authentication attempts from the same client address within the configured `auth.failure_throttle` window. |
 
 ### Policy
 
