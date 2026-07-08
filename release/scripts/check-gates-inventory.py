@@ -16,6 +16,10 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ("Workspace check", "run: cargo check --locked --workspace --all-targets"),
     ("Clippy", "run: cargo clippy --workspace --all-targets -- -D warnings"),
     ("Workspace tests", "run: cargo test --locked --workspace"),
+    (
+        "Relay all-features tests",
+        "run: cargo test --locked -p registry-relay --all-features",
+    ),
     ("Cargo deny", "run: cargo deny check"),
     ("Notary OpenAPI baseline", "run: just openapi-check"),
     ("Notary exposure check", "name: Notary exposure check"),

@@ -11,7 +11,7 @@ x-relay-common: &relay-common
       registry_manifest_src: ${REGISTRY_MANIFEST_REPO:-..}
       crosswalk_src: ${CROSSWALK_SOURCE_DIR:-${CEL_MAPPING_SOURCE_DIR:-./vendor/crosswalk}}
     args:
-      REGISTRY_RELAY_FEATURES: ${REGISTRY_RELAY_FEATURES:-spdci-api-standards,standards-cel-mapping,ogcapi-edr}
+      REGISTRY_RELAY_FEATURES: ${REGISTRY_RELAY_FEATURES:-attribute-release,spdci-api-standards,standards-cel-mapping,ogcapi-edr}
   env_file:
     - .env
   environment:
