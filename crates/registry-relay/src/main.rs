@@ -2615,6 +2615,63 @@ config_trust:
     }
 
     #[tokio::test]
+    async fn boot_break_glass_acceptance_emits_break_glass_used_audit() {
+        let dir = tempdir().expect("tempdir");
+        let signed_hash = test_hash('b');
+        let signed_acceptance = test_pending_bundle_acceptance(
+            dir.path().join("signed-state.json"),
+            registry_platform_ops::ConfigSource::SignedBundleFile,
+            BundleStateAction::PersistOverridePin,
+            signed_hash.clone(),
+            Some(test_override_pin(
+                ConfigOverrideMode::AcceptRollback,
+                signed_hash,
+            )),
+        );
+        assert!(signed_acceptance.emits_break_glass_used_audit());
+        let signed_sink = InMemorySink::new();
+        let signed_audit = AuditPipeline::from_sink(signed_sink.clone());
+
+        super::write_boot_config_audits(signed_audit.as_ref(), &signed_acceptance)
+            .await
+            .expect("signed break-glass audit writes");
+
+        assert_eq!(
+            audit_event_names(&signed_sink.snapshot()),
+            vec!["config.break_glass_used", "config.bundle_accepted"]
+        );
+
+        let unsigned_hash = test_hash('c');
+        let mut unsigned_pin =
+            test_override_pin(ConfigOverrideMode::AcceptUnsigned, unsigned_hash.clone());
+        unsigned_pin.config_path = Some(
+            dir.path()
+                .join("unsigned.yaml")
+                .to_string_lossy()
+                .into_owned(),
+        );
+        let unsigned_acceptance = test_pending_bundle_acceptance(
+            dir.path().join("unsigned-state.json"),
+            registry_platform_ops::ConfigSource::LocalFile,
+            BundleStateAction::PersistOverridePin,
+            unsigned_hash,
+            Some(unsigned_pin),
+        );
+        assert!(unsigned_acceptance.emits_break_glass_used_audit());
+        let unsigned_sink = InMemorySink::new();
+        let unsigned_audit = AuditPipeline::from_sink(unsigned_sink.clone());
+
+        super::write_boot_config_audits(unsigned_audit.as_ref(), &unsigned_acceptance)
+            .await
+            .expect("unsigned break-glass audit writes");
+
+        assert_eq!(
+            audit_event_names(&unsigned_sink.snapshot()),
+            vec!["config.break_glass_used"]
+        );
+    }
+
+    #[tokio::test]
     async fn boot_bundle_acceptance_audit_failure_aborts_before_antirollback_persist() {
         let dir = tempdir().expect("tempdir");
         let state_path = dir.path().join("antirollback.json");

@@ -132,7 +132,7 @@ fn config_verify_bundle_cli_reports_rejected_binding() {
 }
 
 #[test]
-fn config_verify_bundle_cli_reports_rejected_validation() {
+fn config_verify_bundle_cli_reports_rejected_signature_for_hash_mismatch() {
     let temp = TempDir::new().expect("tempdir");
     let fixture = write_bundle_fixture(&temp, "registry-notary", 0);
     std::fs::write(&fixture.config_path, b"changed config bytes").expect("config changes");
@@ -143,8 +143,70 @@ fn config_verify_bundle_cli_reports_rejected_validation() {
 
     assert!(!output.status.success());
     let report = stdout_json(&output);
-    assert_eq!(report["result"], "rejected_validation");
-    assert_eq!(report["errors"][0]["code"], "rejected_validation");
+    assert_eq!(report["result"], "rejected_signature");
+    assert_eq!(report["errors"][0]["code"], "rejected_signature");
+}
+
+#[test]
+fn config_verify_bundle_cli_shared_parity_matrix() {
+    let cases = [
+        (
+            "valid_signed_bundle",
+            "registry-notary",
+            0,
+            false,
+            true,
+            "verified",
+        ),
+        (
+            "rollback",
+            "registry-notary",
+            2,
+            false,
+            false,
+            "rejected_rollback",
+        ),
+        (
+            "binding_mismatch",
+            "registry-relay",
+            0,
+            false,
+            false,
+            "rejected_binding",
+        ),
+        (
+            "hash_mismatch",
+            "registry-notary",
+            0,
+            true,
+            false,
+            "rejected_signature",
+        ),
+    ];
+
+    for (name, manifest_product, last_sequence, change_config, should_succeed, expected) in cases {
+        let temp = TempDir::new().expect(name);
+        let fixture = write_bundle_fixture(&temp, manifest_product, last_sequence);
+        if change_config {
+            std::fs::write(&fixture.config_path, b"changed config bytes").expect(name);
+        }
+
+        let output = verify_bundle_command(&fixture).output().expect(name);
+
+        assert_eq!(
+            output.status.success(),
+            should_succeed,
+            "{name} stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report = stdout_json(&output);
+        assert_eq!(report["result"], expected, "{name}");
+        if should_succeed {
+            assert_eq!(report["component"], "registry-notary", "{name}");
+        } else {
+            assert_eq!(report["errors"][0]["code"], expected, "{name}");
+        }
+    }
 }
 
 #[test]
