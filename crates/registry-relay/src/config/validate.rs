@@ -3690,14 +3690,26 @@ fn release_claim_has_exactly_one_source(claim: &ReleaseClaimConfig) -> bool {
 /// `source_field`s must be members). Subject/claim membership reuses the
 /// `validate_entity_filters` membership discipline. CEL expressions are
 /// compile-checked through the Relay-owned adapter when the
-/// `attribute-release` feature is enabled (the default build); when it is
-/// disabled, any expression-bearing profile is rejected at load, mirroring the
-/// `SpdciMappingFeatureDisabled` negative path.
+/// `attribute-release` feature is enabled. When the feature is disabled, any
+/// configured profile is rejected at load so the default 1.0 build does not
+/// silently accept a beta config surface whose routes are not mounted.
 fn validate_entity_release_profiles(
     dataset: &DatasetConfig,
     entity: &EntityConfig,
     exposed_fields: &BTreeMap<String, String>,
 ) -> Result<(), ConfigError> {
+    #[cfg(not(feature = "attribute-release"))]
+    if let Some(profile) = entity.attribute_release_profiles.first() {
+        tracing::error!(
+            code = "config.validation_error",
+            dataset_id = %dataset.id,
+            entity = %entity.name,
+            profile_id = %profile.id,
+            "attribute_release_profiles require the attribute-release feature"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+
     for profile in &entity.attribute_release_profiles {
         validate_entity_release_profile(dataset, entity, exposed_fields, profile)?;
     }
@@ -3814,10 +3826,9 @@ fn validate_entity_release_profile(
 /// Collect every CEL expression a profile carries (release condition +
 /// computed claims) and compile-check it through the Relay-owned adapter.
 ///
-/// On the default build (`attribute-release` enabled) each expression is
-/// compiled at load so invalid CEL fails closed. When the feature is disabled,
-/// an expression-bearing profile is rejected with a feature-disabled error,
-/// mirroring `SpdciMappingFeatureDisabled`.
+/// When the `attribute-release` feature is enabled each expression is compiled
+/// at load so invalid CEL fails closed. Feature-disabled builds reject the
+/// enclosing profile before this expression-level check runs.
 fn validate_release_profile_expressions(
     dataset: &DatasetConfig,
     entity: &EntityConfig,

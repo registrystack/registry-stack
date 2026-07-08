@@ -56,6 +56,7 @@ fn feature_enabled(feature: Option<&str>) -> bool {
         Some("ogcapi-features") => cfg!(feature = "ogcapi-features"),
         Some("ogcapi-records") => cfg!(feature = "ogcapi-records"),
         Some("spdci-api-standards") => cfg!(feature = "spdci-api-standards"),
+        Some("attribute-release") => cfg!(feature = "attribute-release"),
         Some(_) => false,
     }
 }

@@ -2,10 +2,10 @@
 #![cfg(not(feature = "attribute-release"))]
 
 //! Guardrail for binaries built without the CEL-backed attribute-release adapter
-//! (`cargo build --no-default-features`). The `attribute_release_profiles` field
-//! is parsed in every build, but a profile that carries CEL expressions cannot be
-//! honoured without the feature, so it must be rejected at config load rather than
-//! silently degrade. Mirrors `spdci_feature_flag.rs`.
+//! (`cargo build`, the 1.0 default feature shape). The
+//! `attribute_release_profiles` field is parsed in every build, but profiles are
+//! rejected unless the `attribute-release` feature is explicitly enabled so the
+//! default binary cannot accept config for routes it does not mount.
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -21,10 +21,10 @@ fn write_yaml(body: &str) -> PathBuf {
 }
 
 #[test]
-fn attribute_release_cel_profile_requires_feature() {
+fn attribute_release_profile_requires_feature() {
     // The profile is otherwise valid (snake-case id, exposed subject/claim fields,
-    // one required claim) so the ONLY reason load fails is the feature-disabled
-    // rejection of its CEL expressions.
+    // one required claim) so the reason load fails is the feature-disabled
+    // rejection of the attribute-release config surface.
     let yaml = r#"
 server:
   bind: 127.0.0.1:0
@@ -33,6 +33,9 @@ catalog:
   title: Test
   base_url: https://gw.example
   publisher: Test
+
+deployment:
+  profile: local
 
 vocabularies: {}
 
@@ -110,20 +113,13 @@ datasets:
               input: subject_token
               source_field: national_id
               id_type: NATIONAL_ID
-            release_conditions:
-              expression:
-                cel: "source.deceased == 'false'"
             claims:
               - name: given_name
                 source_field: given_name
                 required: true
-              - name: full_name
-                expression:
-                  cel: "source.given_name + ' ' + source.surname"
-                required: false
 "#;
     let path = write_yaml(yaml);
     let err = config::load(&path)
-        .expect_err("feature-disabled binary must reject a CEL attribute-release profile");
+        .expect_err("feature-disabled binary must reject an attribute-release profile");
     assert_eq!(err.code(), "config.validation_error");
 }

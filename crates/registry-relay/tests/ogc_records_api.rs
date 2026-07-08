@@ -25,6 +25,9 @@ catalog:
   base_url: https://data.example.test/
   publisher: Ministry of Delivery
 
+deployment:
+  profile: local
+
 vocabularies:
   ex: https://example.test/vocab/
 

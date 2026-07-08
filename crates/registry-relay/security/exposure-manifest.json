@@ -1206,7 +1206,7 @@
       "openapi": false,
       "stability": "beta",
       "data_classification": "personal",
-      "notes": "Governed identity attribute release: purpose-bound, projection-limited, exactly-one-subject resolve returning only configured claims.",
+      "notes": "Off-by-default beta feature. Governed identity attribute release: purpose-bound, projection-limited, exactly-one-subject resolve returning only configured claims.",
       "source": "manual",
       "enforcement_tests": [
         "tests/attribute_release_api.rs::resolve_without_release_scope_is_denied_before_read",
@@ -1230,7 +1230,7 @@
       "openapi": false,
       "stability": "beta",
       "data_classification": "metadata",
-      "notes": "Attribute release profile discovery (authenticated); lists visible profiles without exposing source internals.",
+      "notes": "Off-by-default beta feature. Attribute release profile discovery (authenticated); lists visible profiles without exposing source internals.",
       "source": "manual",
       "enforcement_tests": [
         "tests/attribute_release_api.rs::discovery_hides_profiles_without_release_scope",
@@ -1861,7 +1861,7 @@
       ],
       "rate_limit": null,
       "audit": "required",
-      "openapi": false,
+      "openapi": true,
       "stability": "admin",
       "data_classification": "operational",
       "notes": "Admin listener route.",

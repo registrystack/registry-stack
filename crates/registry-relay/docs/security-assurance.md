@@ -43,7 +43,8 @@ instead of a blanket SHA-only pin policy.
 
 Relay has two OpenAPI shapes:
 
-- `openapi/registry-relay.openapi.json` is the curated release artifact.
+- `openapi/registry-relay.openapi.json` is the curated release artifact for the
+  default feature build.
 - Runtime OpenAPI is config-expanded, scope-filtered, and may inline parameters.
 
 Because generated-vs-curated comparison creates false positives, the Relay
@@ -53,10 +54,10 @@ existing Rust tests. A future normalizer may replace this with
 generated-vs-normalized comparison once both shapes can be canonicalized without
 losing security scheme or route semantics.
 
-Manifest entries marked `openapi: true` are compared against the curated
-OpenAPI artifact with path-parameter normalization. `/.well-known/api-catalog`
-is intentionally marked `openapi: false` because it is not in the curated
-artifact.
+Default-feature manifest entries marked `openapi: true` are compared against the
+curated OpenAPI artifact with path-parameter normalization. Feature-gated
+manifest entries remain in the exposure inventory, but they are not required in
+the default artifact unless the default feature set enables them.
 
 ## Image release evidence
 

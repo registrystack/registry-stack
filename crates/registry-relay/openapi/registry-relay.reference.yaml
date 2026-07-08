@@ -24,19 +24,6 @@ auth:
   mode: api_key
   api_keys: []
 
-standards:
-  spdci:
-    registries:
-      sr:
-        dataset: social_registry
-        entity: household
-        registry_type: ns:org:RegistryType:SR
-        record_type: spdci_social:Group
-        identifiers:
-          HOUSEHOLD_ID: id
-        expression_fields:
-          region: region
-
 datasets:
   - id: social_registry
     title: Social Registry
@@ -109,13 +96,6 @@ datasets:
         allowed_filters:
           - field: region
             ops: [in]
-        spatial:
-          mode: admin_area
-          collection_id: households_by_region_area
-          dimension: region
-          geometry_entity: household
-          geometry_id_field: region
-          geometry_field: area_geometry
         disclosure_control:
           min_group_size: 2
           suppression: omit

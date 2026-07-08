@@ -519,10 +519,11 @@ audit:
 
 Registry Relay uses this secret to pseudonymize sensitive audit handles. Values for
 configured sensitive fields, record primary keys, table identifiers, and
-attribute-release subject identifiers are written as stable audit hashes instead
-of raw strings. This gives an auditor a way to see that the same subject or
-source was accessed more than once without storing the underlying person
-identifier, address, date of birth, or table id in the audit sink.
+attribute-release subject identifiers, when the off-by-default feature is
+enabled, are written as stable audit hashes instead of raw strings. This gives
+an auditor a way to see that the same subject or source was accessed more than
+once without storing the underlying person identifier, address, date of birth,
+or table id in the audit sink.
 
 The handles are stable only for the same hash secret and audit hash domain. If
 you rotate the secret, retain the old secret under your audit retention controls

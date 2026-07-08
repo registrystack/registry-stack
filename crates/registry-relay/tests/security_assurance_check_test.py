@@ -172,6 +172,31 @@ class SecurityAssuranceCheckTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self.module.check_openapi_manifest_coverage(self.root / "openapi" / "registry-relay.openapi.json")
 
+    def test_openapi_true_feature_gated_operation_is_not_required_in_default_artifact(self):
+        (self.root / "security" / "exposure-manifest.json").write_text(json.dumps({
+            "version": 1,
+            "service": "registry-relay",
+            "endpoints": [self.entry(feature="ogcapi-features", openapi=True)],
+        }))
+        (self.root / "openapi" / "registry-relay.openapi.json").write_text(json.dumps({
+            "openapi": "3.0.3",
+            "paths": {},
+        }))
+        self.module.check_openapi_manifest_coverage(
+            self.root / "openapi" / "registry-relay.openapi.json"
+        )
+
+    def test_feature_gated_operation_present_in_default_openapi_fails(self):
+        (self.root / "security" / "exposure-manifest.json").write_text(json.dumps({
+            "version": 1,
+            "service": "registry-relay",
+            "endpoints": [self.entry(feature="ogcapi-features", openapi=True)],
+        }))
+        with self.assertRaises(SystemExit):
+            self.module.check_openapi_manifest_coverage(
+                self.root / "openapi" / "registry-relay.openapi.json"
+            )
+
     def test_openapi_extra_operation_without_manifest_entry_fails(self):
         self.write_contracts(self.entry(openapi=True))
         (self.root / "openapi" / "registry-relay.openapi.json").write_text(json.dumps({

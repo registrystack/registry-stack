@@ -399,13 +399,14 @@ def check_openapi_manifest_coverage(path: Path) -> None:
             fail("endpoint entries must be objects")
         op_key = (openapi_path_shape(str(entry.get("path"))), str(entry.get("method")))
         manifest_ops.setdefault(op_key, []).append(entry)
-        if entry.get("openapi") is True:
+        if entry.get("openapi") is True and is_default_openapi_entry(entry):
             manifest_openapi_ops.add(op_key)
 
     missing = sorted(
         (entry["method"], entry["path"])
         for entry in endpoints
         if entry.get("openapi")
+        and is_default_openapi_entry(entry)
         and (openapi_path_shape(entry["path"]), entry["method"]) not in openapi_op_keys
     )
     if missing:
@@ -442,6 +443,10 @@ def check_openapi_manifest_coverage(path: Path) -> None:
             "OpenAPI operations map to manifest endpoints not marked openapi:true: "
             f"{sorted(false_contradictions)}"
         )
+
+
+def is_default_openapi_entry(entry: dict) -> bool:
+    return entry.get("feature") is None
 
 
 def openapi_path_shape(path: str) -> str:

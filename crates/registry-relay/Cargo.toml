@@ -14,12 +14,10 @@ workspace = true
 ignored = ["humantime-serde"]
 
 [features]
-# CEL-backed attribute release ships in the default feature set: a bare
-# `cargo build` compiles crosswalk-runtime + the attribute-release CEL adapter.
-# The named feature is retained for `#[cfg(...)]` gating and so the runtime can
-# still be built without it (`--no-default-features`) for the feature-disabled
-# negative path.
-default = ["attribute-release"]
+# The 1.0 default build keeps the beta attribute-release surface out of the
+# shipped API. Opt in with `--features attribute-release` to compile the
+# CEL-backed adapter, routes, config surface, and observability buckets.
+default = []
 attribute-release = ["crosswalk-runtime"]
 crosswalk-runtime = ["dep:crosswalk-core"]
 standards-cel-mapping = ["crosswalk-runtime"]

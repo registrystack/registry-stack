@@ -220,6 +220,9 @@ catalog:
   base_url: https://gw.example
   publisher: Test
 
+deployment:
+  profile: local
+
 vocabularies: {{}}
 
 auth:
@@ -312,6 +315,9 @@ catalog:
   title: Test
   base_url: https://gw.example
   publisher: Test
+
+deployment:
+  profile: local
 
 vocabularies: {{}}
 
