@@ -35,6 +35,11 @@
 
 ### Changed
 
+- The beta `attribute-release` API and `attribute_release_profiles` config
+  surface are now behind the off-by-default `attribute-release` Cargo feature.
+  The 1.0 default build no longer serves or advertises those routes.
+- The committed OpenAPI artifact is generated from the default build shape and
+  now includes the admin listener's table-specific ingest reload route.
 - The rotating `file` audit sink now takes a process-lifetime advisory
   single-writer lock on `<path>.lock`, and each append verifies the on-disk
   tail before writing. A second Relay process pointed at the same audit file

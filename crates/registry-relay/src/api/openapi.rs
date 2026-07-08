@@ -29,6 +29,7 @@ const OPENAPI_UNAVAILABLE_CODE: &str = "openapi.generation_unavailable";
 
 const TAG_SERVICE: &str = "Service";
 const TAG_CATALOG: &str = "Catalog";
+const TAG_ADMIN: &str = "Admin";
 const TAG_PROVENANCE: &str = "Provenance";
 #[cfg(feature = "ogcapi-features")]
 const TAG_OGC: &str = "OGC API Features";
@@ -38,6 +39,7 @@ const TAG_OGC_RECORDS: &str = "OGC API Records";
 const TAG_OGC_EDR: &str = "OGC API EDR";
 #[cfg(feature = "spdci-api-standards")]
 const TAG_SPD_CI: &str = "SP DCI";
+#[cfg(any(feature = "attribute-release", test))]
 const TAG_ATTRIBUTE_RELEASE: &str = "Attribute Releases";
 const VC_JWT_MEDIA_TYPE: &str = "application/vc+jwt";
 
@@ -502,6 +504,7 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
     if spdci_configured(config) {
         insert_spdci_paths(&mut paths);
     }
+    #[cfg(feature = "attribute-release")]
     if attribute_releases_configured(config) {
         insert_attribute_release_paths(&mut paths);
     }
@@ -1019,6 +1022,8 @@ fn reduce_release_artifact_to_static_contract(document: &mut Value, config: &Con
         ensure_path_parameters_defined(paths);
     }
 
+    ensure_static_release_tags(document);
+
     if let Some(schemas) = document
         .get_mut("components")
         .and_then(Value::as_object_mut)
@@ -1034,6 +1039,21 @@ fn reduce_release_artifact_to_static_contract(document: &mut Value, config: &Con
         schemas
             .entry("JsonLdContext".to_string())
             .or_insert_with(|| generic_object_schema("Published JSON-LD context document."));
+        schemas
+            .entry("AdminTableReloadResponse".to_string())
+            .or_insert_with(admin_table_reload_response_schema);
+    }
+}
+
+fn ensure_static_release_tags(document: &mut Value) {
+    let Some(tags) = document.get_mut("tags").and_then(Value::as_array_mut) else {
+        return;
+    };
+    if !tags.iter().any(|tag| tag["name"] == TAG_ADMIN) {
+        tags.push(json!({
+            "name": TAG_ADMIN,
+            "description": "Operator-only routes served on the admin listener.",
+        }));
     }
 }
 
@@ -1149,6 +1169,7 @@ fn path_parameter_description(name: &str) -> &'static str {
         "entity" => "Entity name",
         "id" => "Record identifier",
         "aggregate_id" => "Aggregate identifier",
+        "table_id" => "Source table identifier",
         "item_id" => "Measure or dimension item identifier",
         "relationship" => "Relationship name",
         "profile" => "DCAT application profile identifier",
@@ -1328,7 +1349,44 @@ fn ensure_static_release_paths(paths: &mut Map<String, Value>) {
                 vec![path_parameter("record_id", "Record identifier")],
             )
         });
+    insert_admin_table_reload_path(paths);
     insert_provenance_paths(paths);
+}
+
+fn insert_admin_table_reload_path(paths: &mut Map<String, Value>) {
+    paths.insert(
+        "/admin/v1/datasets/{dataset_id}/tables/{table_id}/reload".to_string(),
+        json!({
+            "post": {
+                "operationId": "reload_dataset_table",
+                "summary": "Reload one source table",
+                "description": "Reloads one configured source table through the admin listener. \
+                                The route requires `registry_relay:admin`, writes the \
+                                fail-closed admin mutation audit preflight before reload, \
+                                and publishes readiness after the reload attempt.",
+                "tags": [TAG_ADMIN],
+                "parameters": [
+                    path_parameter("dataset_id", "Dataset identifier"),
+                    path_parameter("table_id", "Source table identifier")
+                ],
+                "responses": {
+                    "200": {
+                        "description": "The table was reloaded.",
+                        "content": {
+                            "application/json": {
+                                "schema": { "$ref": "#/components/schemas/AdminTableReloadResponse" }
+                            }
+                        }
+                    },
+                    "401": problem_response("Missing or invalid admin credential."),
+                    "403": problem_response("Authenticated principal lacks `registry_relay:admin`."),
+                    "404": problem_response("Reload target id was not found."),
+                    "503": problem_response("Ingest reload is unavailable or audit preflight failed closed."),
+                    "default": problem_response("Problem Details error response.")
+                }
+            }
+        }),
+    );
 }
 
 fn provenance_enabled(config: &Config) -> bool {
@@ -1343,6 +1401,7 @@ fn spdci_configured(config: &Config) -> bool {
     config.standards.spdci.is_some()
 }
 
+#[cfg(feature = "attribute-release")]
 fn attribute_releases_configured(config: &Config) -> bool {
     config.datasets.iter().any(|dataset| {
         dataset
@@ -1408,6 +1467,7 @@ fn tag_definitions(catalog: &CatalogDocument, config: &Config) -> Value {
             "description": "Social Protection Digital Convergence Initiative sync adapter routes.",
         }));
     }
+    #[cfg(feature = "attribute-release")]
     if attribute_releases_configured(config) {
         tags.push(json!({
             "name": TAG_ATTRIBUTE_RELEASE,
@@ -1475,6 +1535,7 @@ fn tag_groups(catalog: &CatalogDocument, config: &Config) -> Value {
     if spdci_configured(config) {
         groups.push(json!({ "name": "SP DCI", "tags": [TAG_SPD_CI] }));
     }
+    #[cfg(feature = "attribute-release")]
     if attribute_releases_configured(config) {
         groups.push(json!({ "name": "Attribute Releases", "tags": [TAG_ATTRIBUTE_RELEASE] }));
     }
@@ -2358,6 +2419,7 @@ fn schemas(catalog: &CatalogDocument, config: &Config) -> Value {
             generic_object_schema("SP DCI sync response envelope."),
         );
     }
+    #[cfg(feature = "attribute-release")]
     if attribute_releases_configured(config) {
         schemas.insert(
             "AttributeReleaseProfileList".to_string(),
@@ -3581,6 +3643,7 @@ fn insert_spdci_paths(paths: &mut Map<String, Value>) {
     }
 }
 
+#[cfg(feature = "attribute-release")]
 fn insert_attribute_release_paths(paths: &mut Map<String, Value>) {
     // GET /v1/attribute-releases — discovery
     paths.insert(
@@ -4380,6 +4443,34 @@ fn problem_response(description: &str) -> Value {
     })
 }
 
+fn admin_table_reload_response_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["status", "counts"],
+        "properties": {
+            "status": {
+                "type": "string",
+                "enum": ["ok"],
+                "description": "Reload status for the requested table."
+            },
+            "counts": {
+                "type": "object",
+                "required": ["reloaded"],
+                "properties": {
+                    "reloaded": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 1,
+                        "description": "Number of source tables reloaded by this request."
+                    }
+                },
+                "additionalProperties": false
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
 fn entity_collection_path_item(summary: &str, schema: &str, entity: &EntityConfig) -> Value {
     let mut parameters = pagination_parameters();
     parameters.push(query_parameter(
@@ -4654,6 +4745,7 @@ fn openapi_unavailable(detail: &'static str) -> Response {
     response
 }
 
+#[cfg(feature = "attribute-release")]
 fn attribute_release_profile_list_schema() -> Value {
     json!({
         "type": "object",
@@ -4669,6 +4761,7 @@ fn attribute_release_profile_list_schema() -> Value {
     })
 }
 
+#[cfg(feature = "attribute-release")]
 fn attribute_release_profile_schema() -> Value {
     json!({
         "type": "object",
@@ -4731,6 +4824,7 @@ fn attribute_release_profile_schema() -> Value {
     })
 }
 
+#[cfg(feature = "attribute-release")]
 fn attribute_release_resolve_request_schema() -> Value {
     json!({
         "type": "object",
@@ -4766,6 +4860,7 @@ fn attribute_release_resolve_request_schema() -> Value {
     })
 }
 
+#[cfg(feature = "attribute-release")]
 fn attribute_release_resolve_response_schema() -> Value {
     json!({
         "type": "object",
@@ -4846,6 +4941,11 @@ mod tests {
         AdmsStatus, AuthMode, ClaimValidity, GatewayIssuerConfig, IssuerConfig,
         ProvenanceAlgorithm, ProvenanceConfig, SignerConfig, SoftwareSignerConfig,
     };
+    #[cfg(feature = "attribute-release")]
+    use crate::config::{
+        AttributeReleaseProfile, ClaimSensitivity, ReleaseClaimConfig, ReleaseResponseConfig,
+        ReleaseSubjectConfig, SubjectCardinality,
+    };
     use crate::metadata::catalog::{CatalogLinks, DatasetLinks, EntityLinks};
 
     fn load_example_config() -> Config {
@@ -4877,6 +4977,48 @@ mod tests {
                 retired_keys: Vec::new(),
             }),
         });
+    }
+
+    #[cfg(feature = "attribute-release")]
+    fn enable_attribute_release_profile(config: &mut Config) {
+        let entity = config.datasets[0]
+            .entities
+            .iter_mut()
+            .find(|entity| entity.name == "individual")
+            .expect("individual entity");
+        entity
+            .attribute_release_profiles
+            .push(AttributeReleaseProfile {
+                id: "basic_identity".to_string(),
+                version: "1".to_string(),
+                title: Some("Basic identity attributes".to_string()),
+                description: Some(
+                    "Minimal identity claims for an authenticator plugin.".to_string(),
+                ),
+                purpose: None,
+                release_scope: "social_registry:identity_release".to_string(),
+                subject: ReleaseSubjectConfig {
+                    input: "individual_id".to_string(),
+                    source_field: "id".to_string(),
+                    id_type: Some("national_id".to_string()),
+                    cardinality: SubjectCardinality::One,
+                },
+                release_conditions: None,
+                claims: vec![ReleaseClaimConfig {
+                    name: "subject_identifier".to_string(),
+                    source_field: Some("id".to_string()),
+                    expression: None,
+                    required: true,
+                    sensitivity: Some(ClaimSensitivity::DirectIdentifier),
+                    format: None,
+                    locale: None,
+                    shareable: false,
+                }],
+                response: ReleaseResponseConfig {
+                    include_source_metadata: false,
+                    max_age_seconds: Some(300),
+                },
+            });
     }
 
     fn catalog_with_individual() -> CatalogDocument {
@@ -5244,6 +5386,33 @@ mod tests {
     }
 
     #[test]
+    fn release_artifact_documents_admin_table_reload_route() {
+        let config = load_example_config();
+        let mut doc = openapi_document(&catalog_with_individual(), &config);
+        reduce_release_artifact_to_static_contract(&mut doc, &config);
+
+        let op = &doc["paths"]["/admin/v1/datasets/{dataset_id}/tables/{table_id}/reload"]["post"];
+        assert!(
+            op.is_object(),
+            "admin table reload route must be documented"
+        );
+        assert_eq!(op["operationId"], "reload_dataset_table");
+        assert_eq!(op["tags"], json!([TAG_ADMIN]));
+        assert_eq!(
+            op["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/AdminTableReloadResponse"
+        );
+        assert!(op["responses"]["401"].is_object());
+        assert!(op["responses"]["403"].is_object());
+        assert!(op["responses"]["404"].is_object());
+        assert!(op["responses"]["503"].is_object());
+        assert!(
+            doc["components"]["schemas"]["AdminTableReloadResponse"].is_object(),
+            "release artifact must include the admin reload response schema"
+        );
+    }
+
+    #[test]
     fn docs_shell_routes_advertise_public_security() {
         let config = load_example_config();
         let mut doc = openapi_document(&catalog_with_individual(), &config);
@@ -5398,11 +5567,11 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "attribute-release")]
     #[test]
     fn attribute_release_paths_present_when_profiles_configured() {
-        // The example config already has attribute_release_profiles on the
-        // `individual` entity; load_example_config() is sufficient.
-        let config = load_example_config();
+        let mut config = load_example_config();
+        enable_attribute_release_profile(&mut config);
         let doc = openapi_document(&catalog_with_individual(), &config);
 
         // Path: GET /v1/attribute-releases

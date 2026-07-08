@@ -15,7 +15,7 @@ The admin listener is optional and only exists when `server.admin_bind` is confi
 The public URL space is structured as follows:
 
 - `/v1/datasets/{dataset_id}/entities/{entity}/...` and related aggregate, measure, and dimension routes are the entity-oriented data-plane surface.
-- `/v1/attribute-releases` and `/v1/attribute-releases/{profile_id}/versions/{version}/resolve` (feature: `attribute-release`, enabled by default) resolve governed identity attribute-release profiles to minimized claim bundles.
+- `/v1/attribute-releases` and `/v1/attribute-releases/{profile_id}/versions/{version}/resolve` (feature: `attribute-release`, off by default for 1.0) resolve governed identity attribute-release profiles to minimized claim bundles.
 - `/metadata/*` is the standards-facing metadata surface: catalog, DCAT, SHACL, policies, evidence offerings, and dataset/entity descriptors.
 - `/.well-known/api-catalog` is the public well-known discovery entry point.
 - `/ogc/v1/*` (feature: `ogcapi-features`) exposes spatial entities as OGC API Features collections.
@@ -26,7 +26,7 @@ The public URL space is structured as follows:
 - `/healthz`, `/ready`, `/docs`, and `/docs/scalar.js` are unauthenticated.
 - `/openapi.json` and `/docs` serve the machine-readable and human-readable API surface respectively.
 
-The curated public OpenAPI surface, including documented request methods, path parameters, and security requirements, is in [`openapi/registry-relay.openapi.json`](../openapi/registry-relay.openapi.json) and is served at runtime from `/openapi.json` and browsable at `/docs`. Admin-route exposure is verified by the project's security test suite.
+The curated OpenAPI artifact, including documented request methods, path parameters, and security requirements, is in [`openapi/registry-relay.openapi.json`](../openapi/registry-relay.openapi.json). Runtime OpenAPI is generated separately from the running data-plane config at `/openapi.json` and browsable at `/docs`. Admin-route exposure is verified by the project's security test suite.
 
 For SP DCI, `sync/search` is the generic path for any configured
 `standards.spdci.registries` entry. The disability-status, details, and support
@@ -36,7 +36,7 @@ the named `{registry}` points at the same dataset/entity as
 
 When `provenance.enabled: true`, public verifier-support routes are mounted for `/.well-known/did.json` in gateway issuer mode and for `/schemas/{claim_type}/{version}` plus `/contexts/{vocab}/{version}`.
 
-Admin routes are not present in the OpenAPI artifact because they are served on the separate `server.admin_bind` listener, not the public data-plane. Their canonical reference is this document.
+Most admin routes are documented only in this guide because they are served on the separate `server.admin_bind` listener, not the public data-plane. The committed OpenAPI artifact also includes the table-specific ingest reload route because it is part of the documented operator contract.
 
 Admin routes on `server.admin_bind`:
 
@@ -316,7 +316,8 @@ Aggregate JSON results use `observations` for rows and `structure` for dimension
 `registry-relay` can resolve a governed identity attribute-release profile: an
 exactly-one-subject lookup that maps configured source fields (or CEL
 expressions) into a minimized, OIDC/UserInfo-style claim bundle for a named
-profile (feature: `attribute-release`, enabled by default).
+profile. This beta surface is compiled only when Relay is built with the
+off-by-default `attribute-release` feature.
 
 ```text
 GET  /v1/attribute-releases

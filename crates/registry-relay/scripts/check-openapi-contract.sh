@@ -13,7 +13,7 @@ BASELINE="$WORK_DIR/base.openapi.json"
 
 mkdir -p "$WORK_DIR"
 
-cargo run -q --all-features -- openapi --config "$REFERENCE_CONFIG" > "$GENERATED"
+cargo run -q -- openapi --config "$REFERENCE_CONFIG" > "$GENERATED"
 
 python3 - "$SPEC_PATH" "$GENERATED" <<'PY'
 import json

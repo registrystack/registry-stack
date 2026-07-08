@@ -283,36 +283,6 @@ datasets:
             - field: municipality_code
               ops: [eq, in]
           allowed_expansions: [household]
-        # Governed identity attribute release. Resolves exactly one subject and
-        # returns only the configured claims under a dedicated release scope
-        # (distinct from `read_scope`), never a raw registry row.
-        attribute_release_profiles:
-          - id: basic_identity
-            version: "1"
-            title: Basic identity attributes
-            description: Minimal identity claims for an authenticator plugin.
-            purpose: identity_verification
-            release_scope: social_registry:identity_release
-            subject:
-              input: individual_id
-              source_field: id
-              id_type: national_id
-              cardinality: one
-            claims:
-              - name: subject_identifier
-                source_field: id
-                required: true
-                sensitivity: direct_identifier
-                shareable: false
-              - name: municipality
-                source_field: municipality_code
-                required: false
-                sensitivity: public
-            response:
-              include_source_metadata: false
-              max_age_seconds: 300
-
-
 audit:
   sink: stdout            # stdout | file | syslog
   format: jsonl

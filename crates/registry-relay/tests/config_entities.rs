@@ -483,6 +483,7 @@ fn relationship_foreign_key_type_mismatch_is_rejected() {
 /// Attach `attribute_release_profiles` (the block body, 8-space indented) to
 /// the `individual` entity in the valid dataset by inserting after the entity's
 /// `allowed_expansions` line.
+#[cfg(feature = "attribute-release")]
 fn dataset_with_release_profiles(profiles_yaml: &str) -> String {
     valid_dataset().replace(
         "          allowed_expansions: [household]\n",
@@ -495,6 +496,7 @@ fn dataset_with_release_profiles(profiles_yaml: &str) -> String {
 /// A self-contained, valid single profile on the `individual` entity. Subject
 /// and the required claim both project the exposed `id` field; the release
 /// scope is dataset-bound and distinct from `read_scope`.
+#[cfg(feature = "attribute-release")]
 fn valid_release_profile() -> String {
     r#"          - id: basic_identity
             version: "1"
@@ -512,6 +514,7 @@ fn valid_release_profile() -> String {
     .to_string()
 }
 
+#[cfg(feature = "attribute-release")]
 fn load_release_dataset(profiles_yaml: &str) -> Result<(), String> {
     let tmp = TempDir::new().expect("tempdir");
     let dataset = dataset_with_release_profiles(profiles_yaml);
@@ -521,6 +524,7 @@ fn load_release_dataset(profiles_yaml: &str) -> Result<(), String> {
         .map_err(|err| err.code().to_string())
 }
 
+#[cfg(feature = "attribute-release")]
 #[test]
 fn valid_release_profile_loads_cleanly() {
     let tmp = TempDir::new().expect("tempdir");
@@ -532,6 +536,7 @@ fn valid_release_profile_loads_cleanly() {
     let _ = dataset.entity("individual").expect("individual entity");
 }
 
+#[cfg(feature = "attribute-release")]
 #[test]
 fn release_profile_subject_source_field_must_be_exposed() {
     // Target the subject block's `source_field` (14-space indent) specifically.
@@ -543,6 +548,7 @@ fn release_profile_subject_source_field_must_be_exposed() {
     assert_eq!(err, "config.validation_error");
 }
 
+#[cfg(feature = "attribute-release")]
 #[test]
 fn release_profile_claim_source_field_must_be_exposed() {
     let profile = valid_release_profile().replace(
@@ -553,6 +559,7 @@ fn release_profile_claim_source_field_must_be_exposed() {
     assert_eq!(err, "config.validation_error");
 }
 
+#[cfg(feature = "attribute-release")]
 #[test]
 fn release_profile_empty_id_is_rejected() {
     let profile = valid_release_profile().replace("id: basic_identity", "id: \"\"");
@@ -560,6 +567,7 @@ fn release_profile_empty_id_is_rejected() {
     assert_eq!(err, "config.validation_error");
 }
 
+#[cfg(feature = "attribute-release")]
 #[test]
 fn release_profile_empty_version_is_rejected() {
     let profile = valid_release_profile().replace("version: \"1\"", "version: \"\"");
@@ -567,6 +575,7 @@ fn release_profile_empty_version_is_rejected() {
     assert_eq!(err, "config.validation_error");
 }
 
+#[cfg(feature = "attribute-release")]
 #[test]
 fn release_profile_requires_at_least_one_required_claim() {
     let profile = valid_release_profile().replace("                required: true\n", "");
@@ -574,6 +583,7 @@ fn release_profile_requires_at_least_one_required_claim() {
     assert_eq!(err, "config.validation_error");
 }
 
+#[cfg(feature = "attribute-release")]
 #[test]
 fn release_profile_rejects_claim_with_both_source_and_expression() {
     let profile = valid_release_profile().replace(
@@ -584,6 +594,7 @@ fn release_profile_rejects_claim_with_both_source_and_expression() {
     assert_eq!(err, "config.validation_error");
 }
 
+#[cfg(feature = "attribute-release")]
 #[test]
 fn release_profile_rejects_claim_with_neither_source_nor_expression() {
     let profile = valid_release_profile().replace(
@@ -594,6 +605,7 @@ fn release_profile_rejects_claim_with_neither_source_nor_expression() {
     assert_eq!(err, "config.validation_error");
 }
 
+#[cfg(feature = "attribute-release")]
 #[test]
 fn release_profile_rejects_duplicate_claim_names() {
     let profile = valid_release_profile().replace(
@@ -604,6 +616,7 @@ fn release_profile_rejects_duplicate_claim_names() {
     assert_eq!(err, "config.duplicate_id");
 }
 
+#[cfg(feature = "attribute-release")]
 #[test]
 fn release_profile_release_scope_must_be_dataset_bound() {
     let profile = valid_release_profile().replace(
@@ -614,6 +627,7 @@ fn release_profile_release_scope_must_be_dataset_bound() {
     assert_eq!(err, "config.validation_error");
 }
 
+#[cfg(feature = "attribute-release")]
 #[test]
 fn release_profile_release_scope_must_differ_from_read_scope() {
     let profile = valid_release_profile().replace(
@@ -625,6 +639,7 @@ fn release_profile_release_scope_must_differ_from_read_scope() {
     assert_eq!(err, "config.validation_error");
 }
 
+#[cfg(feature = "attribute-release")]
 #[test]
 fn release_profile_id_version_pair_must_be_globally_unique() {
     // Two profiles sharing the same (id, version) on the same entity.
@@ -633,6 +648,7 @@ fn release_profile_id_version_pair_must_be_globally_unique() {
     assert_eq!(err, "config.duplicate_id");
 }
 
+#[cfg(feature = "attribute-release")]
 #[test]
 fn release_profile_distinct_version_is_accepted() {
     let second = valid_release_profile().replace("version: \"1\"", "version: \"2\"");
@@ -640,6 +656,7 @@ fn release_profile_distinct_version_is_accepted() {
     load_release_dataset(&profiles).expect("distinct (id, version) profiles load");
 }
 
+#[cfg(feature = "attribute-release")]
 #[test]
 fn release_scope_is_grantable_to_api_keys() {
     // `<dataset>:identity_release` must be an accepted API-key scope level.

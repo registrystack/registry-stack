@@ -25,6 +25,9 @@ catalog:
   base_url: https://data.example.test
   publisher: Test
 
+deployment:
+  profile: local
+
 vocabularies: {{}}
 
 auth:

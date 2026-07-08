@@ -102,7 +102,7 @@ def main() -> int:
         require(
             dockerfile,
             "cargo build --release --locked",
-            "default cargo build path (CEL attribute-release is in the Cargo default feature set)",
+            "default cargo build path",
         )
     )
     failures.extend(
