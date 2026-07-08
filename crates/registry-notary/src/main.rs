@@ -49,8 +49,8 @@ use registry_platform_ops::{
     load_unsigned_break_glass_or_pin,
     persist_bundle_acceptance as persist_config_bundle_acceptance,
     posture_safe_runtime_config_hash, resolve_bundle_state_action, verify_bundle_state_read_only,
-    BundleStateAction, ConfigBootError, ConfigOverrideMode, ConfigProvenance, ConfigSource,
-    PendingBundleAcceptance, UnsignedConfigSelection,
+    BundleStateAction, BundleStateRequest, ConfigBootError, ConfigOverrideMode, ConfigProvenance,
+    ConfigSource, PendingBundleAcceptance, UnsignedConfigSelection,
 };
 use serde_json::{json, Value};
 use serve::{serve_listener, ServeLimits};
@@ -1075,16 +1075,16 @@ fn load_verified_bundle_server_config(
     verified: VerifiedConfigBundle,
 ) -> Result<LoadedServerConfig, Box<dyn std::error::Error>> {
     let key = antirollback_key_from_verified_bundle(&verified);
-    let state_decision = resolve_bundle_state_action(
-        &config_trust.antirollback_state_path,
-        &key,
-        verified.manifest.sequence,
-        &verified.manifest.config_hash,
-        &verified.manifest_hash,
-        verified.manifest.previous_config_hash.as_deref(),
-        config_trust.break_glass_override_path.as_deref(),
+    let state_decision = resolve_bundle_state_action(BundleStateRequest {
+        state_path: &config_trust.antirollback_state_path,
+        key: &key,
+        sequence: verified.manifest.sequence,
+        config_hash: &verified.manifest.config_hash,
+        bundle_manifest_hash: &verified.manifest_hash,
+        previous_config_hash: verified.manifest.previous_config_hash.as_deref(),
+        rollback_override_path: config_trust.break_glass_override_path.as_deref(),
         initialize_state,
-    )
+    })
     .map_err(map_config_boot_error)?;
     let config_text = std::str::from_utf8(&verified.config_bytes).map_err(|error| {
         tracing::error!(

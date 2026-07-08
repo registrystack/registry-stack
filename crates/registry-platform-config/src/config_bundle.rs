@@ -273,6 +273,8 @@ impl ConfigBundleManifest {
         if self.stream_id != anchor.stream_id {
             return Err(ConfigBundleError::BindingMismatch("stream_id"));
         }
+        // A missing manifest instance_id is intentionally fleet-wide. A present
+        // value pins the bundle to the anchor's runtime instance.
         if self
             .instance_id
             .as_deref()
@@ -937,6 +939,28 @@ mod tests {
             fixture.manifest.config_hash
         );
         assert!(fixture.tmp.path().exists());
+    }
+
+    #[test]
+    fn accepts_fleet_wide_bundle_for_instance_anchor() {
+        let fixture = fixture();
+
+        let verified =
+            verify_config_bundle(&fixture.bundle_dir, &fixture.anchor_path).expect("verified");
+
+        assert_eq!(verified.manifest.instance_id, None);
+    }
+
+    #[test]
+    fn rejects_instance_pinned_bundle_for_other_anchor_instance() {
+        let mut fixture = fixture();
+        fixture.manifest.instance_id = Some("notary-012".to_string());
+        write_manifest_and_signature(&fixture.bundle_dir, &fixture.manifest, &fixture.private);
+
+        let err = verify_config_bundle(&fixture.bundle_dir, &fixture.anchor_path)
+            .expect_err("instance binding rejected");
+
+        assert_eq!(err, ConfigBundleError::BindingMismatch("instance_id"));
     }
 
     #[test]

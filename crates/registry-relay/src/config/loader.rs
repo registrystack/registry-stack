@@ -21,8 +21,8 @@ use registry_platform_config::{
 use registry_platform_ops::{
     antirollback_key_from_verified_bundle, bundle_verify_rejection_result, internal_config_hash,
     is_sha256_config_hash, load_unsigned_break_glass_or_pin, posture_safe_runtime_config_hash,
-    resolve_bundle_state_action, ConfigBootError, ConfigProvenance, ConfigSource,
-    UnsignedConfigSelection,
+    resolve_bundle_state_action, BundleStateRequest, ConfigBootError, ConfigProvenance,
+    ConfigSource, UnsignedConfigSelection,
 };
 pub use registry_platform_ops::{BundleStateAction, PendingBundleAcceptance};
 use serde_json::Value;
@@ -182,16 +182,16 @@ fn load_verified_bundle_config_document(
     verified: VerifiedConfigBundle,
 ) -> Result<LoadedConfigDocument, Error> {
     let key = antirollback_key_from_verified_bundle(&verified);
-    let state_decision = resolve_bundle_state_action(
-        &config_trust.antirollback_state_path,
-        &key,
-        verified.manifest.sequence,
-        &verified.manifest.config_hash,
-        &verified.manifest_hash,
-        verified.manifest.previous_config_hash.as_deref(),
-        config_trust.break_glass_override_path.as_deref(),
-        options.initialize_state,
-    )
+    let state_decision = resolve_bundle_state_action(BundleStateRequest {
+        state_path: &config_trust.antirollback_state_path,
+        key: &key,
+        sequence: verified.manifest.sequence,
+        config_hash: &verified.manifest.config_hash,
+        bundle_manifest_hash: &verified.manifest_hash,
+        previous_config_hash: verified.manifest.previous_config_hash.as_deref(),
+        rollback_override_path: config_trust.break_glass_override_path.as_deref(),
+        initialize_state: options.initialize_state,
+    })
     .map_err(map_config_boot_error)?;
     let (config, config_value) =
         parse_config_bytes_for_bundle(&verified.config_bytes, ConfigSource::SignedBundleFile)?;
