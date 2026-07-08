@@ -148,6 +148,9 @@ jobs:
       - name: Workspace tests
         run: cargo test --locked --workspace
 
+      - name: Relay all-features tests
+        run: cargo test --locked -p registry-relay --all-features
+
       - name: Cargo deny
         run: cargo deny check
 

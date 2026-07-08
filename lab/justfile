@@ -22,7 +22,7 @@ deprecated_crosswalk_is_old_default := if deprecated_crosswalk_src == "./vendor/
 deprecated_crosswalk_is_usable := if deprecated_crosswalk_exists == "true" { if deprecated_crosswalk_is_old_default == "true" { "false" } else { "true" } } else { "false" }
 default_crosswalk_src := if path_exists("../crosswalk/Cargo.toml") == "true" { "../crosswalk" } else { if path_exists("../../crosswalk/Cargo.toml") == "true" { "../../crosswalk" } else { "./vendor/crosswalk" } }
 crosswalk_src := env_var_or_default("CROSSWALK_SOURCE_DIR", if deprecated_crosswalk_is_usable == "true" { deprecated_crosswalk_src } else { default_crosswalk_src })
-relay_features := env_var_or_default("REGISTRY_RELAY_FEATURES", "spdci-api-standards,standards-cel-mapping,ogcapi-edr")
+relay_features := env_var_or_default("REGISTRY_RELAY_FEATURES", "attribute-release,spdci-api-standards,standards-cel-mapping,ogcapi-edr")
 
 export REGISTRY_RELAY_SOURCE_DIR := relay_src
 export REGISTRY_NOTARY_SOURCE_DIR := notary_src
