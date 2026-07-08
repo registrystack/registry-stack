@@ -674,7 +674,7 @@ fn read_limited_from_file(
 fn open_read_only_no_follow(path: &Path) -> Result<File, ConfigBundleError> {
     let fd = rustix::fs::open(
         path,
-        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
         Mode::empty(),
     )
     .map_err(|error| ConfigBundleError::Io(error.to_string()))?;
@@ -1267,5 +1267,24 @@ mod tests {
         let err = load_break_glass_override(&path).expect_err("mode rejected");
 
         assert!(matches!(err, ConfigBundleError::InvalidPermissions(_)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_non_regular_break_glass_file_without_waiting() {
+        let tmp = TempDir::new().expect("tempdir");
+        let path = tmp.path().join("break_glass_override.json");
+        let status = std::process::Command::new("mkfifo")
+            .arg(&path)
+            .status()
+            .expect("mkfifo command runs");
+        assert!(status.success(), "mkfifo exits successfully");
+
+        let err = load_break_glass_override(&path).expect_err("non-regular override rejected");
+
+        assert!(matches!(
+            err,
+            ConfigBundleError::InvalidPermissions("path must be a regular file")
+        ));
     }
 }

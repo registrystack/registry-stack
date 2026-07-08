@@ -1343,10 +1343,7 @@ async fn write_boot_config_audits(
     audit_sink: &AuditPipeline,
     acceptance: &config::PendingBundleAcceptance,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    if matches!(
-        acceptance.state_action,
-        config::BundleStateAction::PersistOverridePin
-    ) {
+    if acceptance.emits_break_glass_used_audit() {
         write_break_glass_used_audit(audit_sink, acceptance).await?;
     }
     if acceptance.source == ConfigSource::SignedBundleFile {
@@ -2266,9 +2263,14 @@ mod tests {
     };
     use axum::routing::get;
     use axum::Router;
-    use registry_platform_audit::{verify_jsonl_lines_with_hasher, AuditChainHasher};
-    use registry_platform_ops::DeploymentProfile;
-    use registry_relay::audit::{AuditRecord, EndpointKind};
+    use registry_platform_audit::{
+        verify_jsonl_lines_with_hasher, AuditChainHasher, AuditEnvelope, AuditError,
+    };
+    use registry_platform_ops::{
+        AntiRollbackKey, AntiRollbackStoreError, BundleStateAction, ConfigOverrideMode,
+        ConfigOverridePin, DeploymentProfile, FileAntiRollbackStore, PendingBundleAcceptance,
+    };
+    use registry_relay::audit::{AuditPipeline, AuditRecord, EndpointKind, InMemorySink};
     use registry_relay::config::Config;
     use serde_json::{json, Value};
     use std::sync::{Mutex as StdMutex, OnceLock};
@@ -2346,6 +2348,180 @@ mod tests {
             provenance: None,
             config: None,
         }
+    }
+
+    #[derive(Debug)]
+    struct FailingAuditSink;
+
+    #[async_trait::async_trait]
+    impl registry_platform_audit::AuditSink for FailingAuditSink {
+        async fn write(&self, _envelope: &AuditEnvelope) -> Result<(), AuditError> {
+            Err(AuditError::Io(std::io::Error::other(
+                "boot audit write failed",
+            )))
+        }
+
+        async fn tail_hash(&self) -> Result<Option<[u8; 32]>, AuditError> {
+            Ok(None)
+        }
+
+        async fn tail_hash_with_hasher(
+            &self,
+            _hasher: &AuditChainHasher,
+        ) -> Result<Option<[u8; 32]>, AuditError> {
+            Ok(None)
+        }
+    }
+
+    fn test_hash(label: char) -> String {
+        format!("sha256:{}", label.to_string().repeat(64))
+    }
+
+    fn test_antirollback_key() -> AntiRollbackKey {
+        AntiRollbackKey {
+            product: "registry-relay".to_string(),
+            instance_id: "relay-lab".to_string(),
+            environment: "lab".to_string(),
+            stream_id: "relay-loader-test".to_string(),
+        }
+    }
+
+    fn test_override_pin(mode: ConfigOverrideMode, config_hash: String) -> ConfigOverridePin {
+        ConfigOverridePin {
+            active: true,
+            mode,
+            config_hash,
+            config_path: None,
+            expires_at: Some("2099-07-07T12:00:00Z".to_string()),
+            used_at: "2026-07-07T10:00:00Z".to_string(),
+            operator: "ops@example.test".to_string(),
+            reason: "recover interrupted config override consumption".to_string(),
+        }
+    }
+
+    fn test_pending_bundle_acceptance(
+        state_path: std::path::PathBuf,
+        source: registry_platform_ops::ConfigSource,
+        state_action: BundleStateAction,
+        config_hash: String,
+        override_pin: Option<ConfigOverridePin>,
+    ) -> PendingBundleAcceptance {
+        let signed_source = source == registry_platform_ops::ConfigSource::SignedBundleFile;
+        PendingBundleAcceptance {
+            state_path,
+            key: test_antirollback_key(),
+            source,
+            bundle_id: signed_source.then(|| "relay-loader-bundle".to_string()),
+            sequence: signed_source.then_some(1),
+            config_hash,
+            previous_config_hash: None,
+            previous_hash_matched: None,
+            signer_kids: if signed_source {
+                vec!["kid-1".to_string()]
+            } else {
+                Vec::new()
+            },
+            break_glass: matches!(state_action, BundleStateAction::PersistOverridePin),
+            state_action,
+            override_pin,
+            override_path: None,
+        }
+    }
+
+    fn audit_event_names(lines: &[String]) -> Vec<String> {
+        lines
+            .iter()
+            .map(|line| {
+                let envelope: Value = serde_json::from_str(line).expect("audit envelope json");
+                envelope["record"]["path"]
+                    .as_str()
+                    .and_then(|path| path.strip_prefix("/__events/"))
+                    .expect("audit event path")
+                    .to_string()
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn boot_already_pinned_recovery_does_not_emit_break_glass_used_audit() {
+        let dir = tempdir().expect("tempdir");
+        let signed_hash = test_hash('b');
+        let signed_acceptance = test_pending_bundle_acceptance(
+            dir.path().join("signed-state.json"),
+            registry_platform_ops::ConfigSource::SignedBundleFile,
+            BundleStateAction::AlreadyPinned,
+            signed_hash.clone(),
+            Some(test_override_pin(
+                ConfigOverrideMode::AcceptRollback,
+                signed_hash,
+            )),
+        );
+        assert!(!signed_acceptance.emits_break_glass_used_audit());
+        let signed_sink = InMemorySink::new();
+        let signed_audit = AuditPipeline::from_sink(signed_sink.clone());
+
+        super::write_boot_config_audits(signed_audit.as_ref(), &signed_acceptance)
+            .await
+            .expect("signed recovery audit writes");
+
+        let signed_events = audit_event_names(&signed_sink.snapshot());
+        assert_eq!(signed_events, vec!["config.bundle_accepted"]);
+        assert!(!signed_events
+            .iter()
+            .any(|event| event == "config.break_glass_used"));
+
+        let unsigned_hash = test_hash('c');
+        let mut unsigned_pin =
+            test_override_pin(ConfigOverrideMode::AcceptUnsigned, unsigned_hash.clone());
+        unsigned_pin.config_path = Some(
+            dir.path()
+                .join("unsigned.yaml")
+                .to_string_lossy()
+                .into_owned(),
+        );
+        let unsigned_acceptance = test_pending_bundle_acceptance(
+            dir.path().join("unsigned-state.json"),
+            registry_platform_ops::ConfigSource::LocalFile,
+            BundleStateAction::AlreadyPinned,
+            unsigned_hash,
+            Some(unsigned_pin),
+        );
+        assert!(!unsigned_acceptance.emits_break_glass_used_audit());
+        let unsigned_sink = InMemorySink::new();
+        let unsigned_audit = AuditPipeline::from_sink(unsigned_sink.clone());
+
+        super::write_boot_config_audits(unsigned_audit.as_ref(), &unsigned_acceptance)
+            .await
+            .expect("unsigned recovery audit writes");
+
+        assert!(audit_event_names(&unsigned_sink.snapshot()).is_empty());
+    }
+
+    #[tokio::test]
+    async fn boot_bundle_acceptance_audit_failure_aborts_before_antirollback_persist() {
+        let dir = tempdir().expect("tempdir");
+        let state_path = dir.path().join("antirollback.json");
+        let acceptance = test_pending_bundle_acceptance(
+            state_path.clone(),
+            registry_platform_ops::ConfigSource::SignedBundleFile,
+            BundleStateAction::Initialize,
+            test_hash('d'),
+            None,
+        );
+        let failing_audit = AuditPipeline::from_sink(FailingAuditSink);
+
+        let result = async {
+            super::write_boot_config_audits(failing_audit.as_ref(), &acceptance).await?;
+            super::persist_bundle_acceptance(&acceptance)?;
+            Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+        }
+        .await;
+
+        assert!(result.is_err());
+        let err = FileAntiRollbackStore::new(&state_path)
+            .load(&acceptance.key)
+            .expect_err("state remains absent");
+        assert_eq!(err, AntiRollbackStoreError::MissingState);
     }
 
     fn config_with_file_audit(path: &std::path::Path, hash_secret_env: &str) -> Config {

@@ -24,6 +24,7 @@ struct BundleFixture {
     bundle_dir: PathBuf,
     anchor_path: PathBuf,
     state_path: PathBuf,
+    config_path: PathBuf,
     config_hash: String,
 }
 
@@ -126,6 +127,22 @@ fn config_verify_bundle_cli_reports_rejected_binding() {
     assert_eq!(report["errors"][0]["code"], "rejected_binding");
 }
 
+#[test]
+fn config_verify_bundle_cli_reports_rejected_validation() {
+    let temp = TempDir::new().expect("tempdir");
+    let fixture = write_bundle_fixture(&temp, "registry-relay", 0);
+    std::fs::write(&fixture.config_path, b"changed config bytes").expect("config changes");
+
+    let output = verify_bundle_command(&fixture)
+        .output()
+        .expect("command runs");
+
+    assert!(!output.status.success());
+    let report = stdout_json(&output);
+    assert_eq!(report["result"], "rejected_validation");
+    assert_eq!(report["errors"][0]["code"], "rejected_validation");
+}
+
 fn verify_bundle_command(fixture: &BundleFixture) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_registry-relay"));
     command.args([
@@ -222,6 +239,7 @@ fn write_bundle_fixture(
         bundle_dir,
         anchor_path,
         state_path,
+        config_path,
         config_hash,
     }
 }
