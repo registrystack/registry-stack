@@ -1172,8 +1172,25 @@ pub fn verify_bundle_state_read_only(
     }
 }
 
+type BreakGlassOverrideLoader = fn(
+    &Path,
+) -> Result<
+    registry_platform_config::ConfigBreakGlassOverride,
+    registry_platform_config::ConfigBundleError,
+>;
+
 pub fn resolve_bundle_state_action(
     request: BundleStateRequest<'_>,
+) -> Result<BundleStateDecision, ConfigBootError> {
+    resolve_bundle_state_action_with_loader(
+        request,
+        registry_platform_config::load_break_glass_override,
+    )
+}
+
+fn resolve_bundle_state_action_with_loader(
+    request: BundleStateRequest<'_>,
+    override_loader: BreakGlassOverrideLoader,
 ) -> Result<BundleStateDecision, ConfigBootError> {
     let BundleStateRequest {
         state_path,
@@ -1218,9 +1235,13 @@ pub fn resolve_bundle_state_action(
         {
             let matched = previous_hash_matched(previous_config_hash, &record);
             let override_pin = record.override_pin;
-            let override_path = override_pin
-                .as_ref()
-                .and_then(|pin| matching_leftover_override_path(rollback_override_path, pin));
+            let override_path = override_pin.as_ref().and_then(|pin| {
+                matching_leftover_override_path_with_loader(
+                    rollback_override_path,
+                    pin,
+                    override_loader,
+                )
+            });
             Ok(BundleStateDecision {
                 state_action: BundleStateAction::AlreadyPinned,
                 override_pin,
@@ -1229,10 +1250,12 @@ pub fn resolve_bundle_state_action(
             })
         }
         Ok(record) => {
-            let Some((override_path, override_file)) = load_optional_break_glass_override(
-                rollback_override_path,
-                registry_platform_config::ConfigBreakGlassMode::AcceptRollback,
-            )?
+            let Some((override_path, override_file)) =
+                load_optional_break_glass_override_with_loader(
+                    rollback_override_path,
+                    registry_platform_config::ConfigBreakGlassMode::AcceptRollback,
+                    override_loader,
+                )?
             else {
                 return Err(ConfigBootError::NonMonotonicSequence);
             };
@@ -1261,6 +1284,20 @@ pub fn load_unsigned_break_glass_or_pin(
     state_path: &Path,
     override_path: Option<&Path>,
 ) -> Result<Option<UnsignedConfigSelection>, ConfigBootError> {
+    load_unsigned_break_glass_or_pin_with_loader(
+        trust_anchor_path,
+        state_path,
+        override_path,
+        registry_platform_config::load_break_glass_override,
+    )
+}
+
+fn load_unsigned_break_glass_or_pin_with_loader(
+    trust_anchor_path: &Path,
+    state_path: &Path,
+    override_path: Option<&Path>,
+    override_loader: BreakGlassOverrideLoader,
+) -> Result<Option<UnsignedConfigSelection>, ConfigBootError> {
     let anchor = registry_platform_config::load_trust_anchor(trust_anchor_path)?;
     let key = antirollback_key_from_trust_anchor(&anchor);
     let store = FileAntiRollbackStore::new(state_path);
@@ -1273,7 +1310,8 @@ pub fn load_unsigned_break_glass_or_pin(
         })
         .cloned()
     {
-        let recovery_override_path = matching_leftover_override_path(override_path, &pin);
+        let recovery_override_path =
+            matching_leftover_override_path_with_loader(override_path, &pin, override_loader);
         return load_unsigned_pin_selection(
             key,
             record,
@@ -1283,9 +1321,10 @@ pub fn load_unsigned_break_glass_or_pin(
         )
         .map(Some);
     }
-    let Some((override_path, override_file)) = load_optional_break_glass_override(
+    let Some((override_path, override_file)) = load_optional_break_glass_override_with_loader(
         override_path,
         registry_platform_config::ConfigBreakGlassMode::AcceptUnsigned,
+        override_loader,
     )?
     else {
         return Ok(None);
@@ -1306,13 +1345,26 @@ pub fn load_optional_break_glass_override(
     mode: registry_platform_config::ConfigBreakGlassMode,
 ) -> Result<Option<(PathBuf, registry_platform_config::ConfigBreakGlassOverride)>, ConfigBootError>
 {
+    load_optional_break_glass_override_with_loader(
+        path,
+        mode,
+        registry_platform_config::load_break_glass_override,
+    )
+}
+
+fn load_optional_break_glass_override_with_loader(
+    path: Option<&Path>,
+    mode: registry_platform_config::ConfigBreakGlassMode,
+    override_loader: BreakGlassOverrideLoader,
+) -> Result<Option<(PathBuf, registry_platform_config::ConfigBreakGlassOverride)>, ConfigBootError>
+{
     let Some(path) = path else {
         return Ok(None);
     };
     if !path.exists() {
         return Ok(None);
     }
-    let override_file = registry_platform_config::load_break_glass_override(path)?;
+    let override_file = override_loader(path)?;
     if override_file.mode != mode {
         return Ok(None);
     }
@@ -1323,11 +1375,23 @@ pub fn matching_leftover_override_path(
     path: Option<&Path>,
     pin: &ConfigOverridePin,
 ) -> Option<PathBuf> {
+    matching_leftover_override_path_with_loader(
+        path,
+        pin,
+        registry_platform_config::load_break_glass_override,
+    )
+}
+
+fn matching_leftover_override_path_with_loader(
+    path: Option<&Path>,
+    pin: &ConfigOverridePin,
+    override_loader: BreakGlassOverrideLoader,
+) -> Option<PathBuf> {
     let path = path?;
     if !path.exists() {
         return None;
     }
-    let override_file = registry_platform_config::load_break_glass_override(path).ok()?;
+    let override_file = override_loader(path).ok()?;
     if break_glass_matches_pin(&override_file, pin) {
         Some(path.to_path_buf())
     } else {
@@ -1505,15 +1569,15 @@ pub fn bundle_verify_rejection_result(
         registry_platform_config::ConfigBundleError::SignatureRejected
         | registry_platform_config::ConfigBundleError::InvalidSignatureEnvelope(_)
         | registry_platform_config::ConfigBundleError::InvalidTrustAnchor(_)
-        | registry_platform_config::ConfigBundleError::InvalidPermissions(_) => {
-            "rejected_signature"
-        }
+        | registry_platform_config::ConfigBundleError::InvalidPermissions(_)
+        | registry_platform_config::ConfigBundleError::FileClosure(_)
+        | registry_platform_config::ConfigBundleError::HashMismatch { .. } => "rejected_signature",
         registry_platform_config::ConfigBundleError::Io(_)
         | registry_platform_config::ConfigBundleError::Json(_)
         | registry_platform_config::ConfigBundleError::InvalidManifest(_)
-        | registry_platform_config::ConfigBundleError::InvalidBreakGlass(_)
-        | registry_platform_config::ConfigBundleError::FileClosure(_)
-        | registry_platform_config::ConfigBundleError::HashMismatch { .. } => "rejected_validation",
+        | registry_platform_config::ConfigBundleError::InvalidBreakGlass(_) => {
+            "rejected_validation"
+        }
     }
 }
 
@@ -2396,18 +2460,36 @@ mod tests {
         }
     }
 
-    fn break_glass_override_owner_allows_load(path: &Path) -> bool {
-        #[cfg(unix)]
+    fn load_break_glass_override_without_owner_check(
+        path: &Path,
+    ) -> Result<
+        registry_platform_config::ConfigBreakGlassOverride,
+        registry_platform_config::ConfigBundleError,
+    > {
+        if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.contains(".consumed-"))
         {
-            use std::os::unix::fs::MetadataExt as _;
+            return Err(registry_platform_config::ConfigBundleError::InvalidBreakGlass("consumed"));
+        }
+        let bytes = std::fs::read(path)
+            .map_err(|error| registry_platform_config::ConfigBundleError::Io(error.to_string()))?;
+        let override_file: registry_platform_config::ConfigBreakGlassOverride =
+            serde_json::from_slice(&bytes).map_err(|error| {
+                registry_platform_config::ConfigBundleError::Json(error.to_string())
+            })?;
+        override_file.validate_fields()?;
+        Ok(override_file)
+    }
 
-            std::fs::metadata(path).expect("override metadata").uid() == 0
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = path;
-            true
-        }
+    fn consumed_override_count(dir: &Path, original_name: &str) -> usize {
+        let prefix = format!("{original_name}.consumed-");
+        std::fs::read_dir(dir)
+            .expect("dir")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with(&prefix))
+            .count()
     }
 
     fn write_trust_anchor(path: &Path, key: &AntiRollbackKey) {
@@ -2531,6 +2613,28 @@ mod tests {
         assert!(!is_valid_approval_reference("with space"));
         assert!(!is_valid_approval_reference("nul\0byte"));
         assert!(!is_valid_approval_reference("ctrl\nchar"));
+    }
+
+    #[test]
+    fn bundle_verify_rejection_result_classifies_integrity_failures_as_signature() {
+        assert_eq!(
+            bundle_verify_rejection_result(
+                &registry_platform_config::ConfigBundleError::FileClosure(
+                    "unlisted file".to_string(),
+                )
+            ),
+            "rejected_signature"
+        );
+        assert_eq!(
+            bundle_verify_rejection_result(
+                &registry_platform_config::ConfigBundleError::HashMismatch {
+                    path: "config/relay.yaml".to_string(),
+                    expected: test_hash('a'),
+                    actual: test_hash('b'),
+                }
+            ),
+            "rejected_signature"
+        );
     }
 
     #[test]
@@ -2814,9 +2918,6 @@ mod tests {
                 None,
             ),
         );
-        if !break_glass_override_owner_allows_load(&override_path) {
-            return;
-        }
         FileAntiRollbackStore::new(&state_path)
             .initialize(antirollback_record(
                 key.clone(),
@@ -2826,16 +2927,19 @@ mod tests {
             ))
             .expect("state initializes");
 
-        let decision = resolve_bundle_state_action(BundleStateRequest {
-            state_path: &state_path,
-            key: &key,
-            sequence: 4,
-            config_hash: &config_hash,
-            bundle_manifest_hash: &test_hash('e'),
-            previous_config_hash: None,
-            rollback_override_path: Some(&override_path),
-            initialize_state: false,
-        })
+        let decision = resolve_bundle_state_action_with_loader(
+            BundleStateRequest {
+                state_path: &state_path,
+                key: &key,
+                sequence: 4,
+                config_hash: &config_hash,
+                bundle_manifest_hash: &test_hash('e'),
+                previous_config_hash: None,
+                rollback_override_path: Some(&override_path),
+                initialize_state: false,
+            },
+            load_break_glass_override_without_owner_check,
+        )
         .expect("leftover override resolves");
 
         assert_eq!(decision.state_action, BundleStateAction::AlreadyPinned);
@@ -2892,9 +2996,6 @@ mod tests {
                 Some(config_path.clone()),
             ),
         );
-        if !break_glass_override_owner_allows_load(&override_path) {
-            return;
-        }
         FileAntiRollbackStore::new(&state_path)
             .initialize(antirollback_record(
                 key.clone(),
@@ -2904,10 +3005,14 @@ mod tests {
             ))
             .expect("state initializes");
 
-        let selection =
-            load_unsigned_break_glass_or_pin(&anchor_path, &state_path, Some(&override_path))
-                .expect("unsigned recovery loads")
-                .expect("unsigned selection");
+        let selection = load_unsigned_break_glass_or_pin_with_loader(
+            &anchor_path,
+            &state_path,
+            Some(&override_path),
+            load_break_glass_override_without_owner_check,
+        )
+        .expect("unsigned recovery loads")
+        .expect("unsigned selection");
 
         assert_eq!(selection.state_action, BundleStateAction::AlreadyPinned);
         assert_eq!(selection.pin, pin);
@@ -2915,6 +3020,155 @@ mod tests {
             selection.override_path.as_deref(),
             Some(override_path.as_path())
         );
+    }
+
+    #[test]
+    fn first_break_glass_rollback_acceptance_persists_pin_and_consumes_override() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state_path = dir.path().join("antirollback.json");
+        let override_path = dir.path().join("override.json");
+        let key = test_key();
+        let config_hash = test_hash('b');
+        write_break_glass_override_file(
+            &override_path,
+            &break_glass_override(
+                registry_platform_config::ConfigBreakGlassMode::AcceptRollback,
+                config_hash.clone(),
+                None,
+            ),
+        );
+        FileAntiRollbackStore::new(&state_path)
+            .initialize(antirollback_record(key.clone(), 6, test_hash('a'), None))
+            .expect("state initializes");
+
+        let decision = resolve_bundle_state_action_with_loader(
+            BundleStateRequest {
+                state_path: &state_path,
+                key: &key,
+                sequence: 4,
+                config_hash: &config_hash,
+                bundle_manifest_hash: &test_hash('e'),
+                previous_config_hash: None,
+                rollback_override_path: Some(&override_path),
+                initialize_state: false,
+            },
+            load_break_glass_override_without_owner_check,
+        )
+        .expect("break-glass rollback resolves");
+
+        assert_eq!(decision.state_action, BundleStateAction::PersistOverridePin);
+        let pin = decision.override_pin.clone().expect("pin");
+        assert_eq!(pin.mode, ConfigOverrideMode::AcceptRollback);
+        assert_eq!(pin.config_hash, config_hash);
+        assert_eq!(
+            decision.override_path.as_deref(),
+            Some(override_path.as_path())
+        );
+
+        let acceptance = pending_acceptance(
+            state_path.clone(),
+            key.clone(),
+            ConfigSource::SignedBundleFile,
+            decision.state_action,
+            pin.config_hash.clone(),
+            decision.override_pin,
+            decision.override_path,
+        );
+        assert!(acceptance.break_glass);
+        assert!(acceptance.emits_break_glass_used_audit());
+
+        persist_bundle_acceptance(&acceptance).expect("pin persisted and override consumed");
+
+        let record = FileAntiRollbackStore::new(&state_path)
+            .load(&key)
+            .expect("state loads");
+        assert_eq!(record.last_sequence, 6);
+        assert_eq!(
+            record.override_pin.as_ref().map(|pin| pin.mode.clone()),
+            Some(ConfigOverrideMode::AcceptRollback)
+        );
+        assert_eq!(
+            record
+                .override_pin
+                .as_ref()
+                .map(|pin| pin.config_hash.as_str()),
+            Some(pin.config_hash.as_str())
+        );
+        assert!(!override_path.exists());
+        assert_eq!(consumed_override_count(dir.path(), "override.json"), 1);
+    }
+
+    #[test]
+    fn first_break_glass_unsigned_acceptance_persists_pin_and_consumes_override() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state_path = dir.path().join("antirollback.json");
+        let anchor_path = dir.path().join("trust_anchor.json");
+        let config_path = dir.path().join("unsigned.yaml");
+        let override_path = dir.path().join("override.json");
+        let key = test_key();
+        write_trust_anchor(&anchor_path, &key);
+        std::fs::write(&config_path, b"unsigned config").expect("unsigned config");
+        let config_hash = sha256_uri(b"unsigned config");
+        write_break_glass_override_file(
+            &override_path,
+            &break_glass_override(
+                registry_platform_config::ConfigBreakGlassMode::AcceptUnsigned,
+                config_hash.clone(),
+                Some(config_path.clone()),
+            ),
+        );
+        FileAntiRollbackStore::new(&state_path)
+            .initialize(antirollback_record(key.clone(), 6, test_hash('a'), None))
+            .expect("state initializes");
+
+        let selection = load_unsigned_break_glass_or_pin_with_loader(
+            &anchor_path,
+            &state_path,
+            Some(&override_path),
+            load_break_glass_override_without_owner_check,
+        )
+        .expect("unsigned override loads")
+        .expect("unsigned selection");
+
+        assert_eq!(
+            selection.state_action,
+            BundleStateAction::PersistOverridePin
+        );
+        assert_eq!(selection.pin.mode, ConfigOverrideMode::AcceptUnsigned);
+        assert_eq!(selection.pin.config_hash, config_hash);
+        assert_eq!(
+            selection.override_path.as_deref(),
+            Some(override_path.as_path())
+        );
+        assert_eq!(selection.config_bytes.as_slice(), b"unsigned config");
+
+        let acceptance = pending_acceptance(
+            state_path.clone(),
+            key.clone(),
+            ConfigSource::LocalFile,
+            selection.state_action,
+            selection.pin.config_hash.clone(),
+            Some(selection.pin.clone()),
+            selection.override_path,
+        );
+        assert!(acceptance.break_glass);
+        assert!(acceptance.emits_break_glass_used_audit());
+
+        persist_bundle_acceptance(&acceptance).expect("pin persisted and override consumed");
+
+        let record = FileAntiRollbackStore::new(&state_path)
+            .load(&key)
+            .expect("state loads");
+        assert_eq!(record.last_sequence, 6);
+        let pin = record.override_pin.expect("override pin persists");
+        assert_eq!(pin.mode, ConfigOverrideMode::AcceptUnsigned);
+        assert_eq!(pin.config_hash, config_hash);
+        assert_eq!(
+            pin.config_path.as_deref(),
+            Some(config_path.to_string_lossy().as_ref())
+        );
+        assert!(!override_path.exists());
+        assert_eq!(consumed_override_count(dir.path(), "override.json"), 1);
     }
 
     #[test]
@@ -2972,17 +3226,7 @@ mod tests {
         persist_bundle_acceptance(&acceptance).expect("leftover consumed");
 
         assert!(!override_path.exists());
-        let consumed = std::fs::read_dir(dir.path())
-            .expect("dir")
-            .filter_map(Result::ok)
-            .filter(|entry| {
-                entry
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with("override.json.consumed-")
-            })
-            .count();
-        assert_eq!(consumed, 1);
+        assert_eq!(consumed_override_count(dir.path(), "override.json"), 1);
         assert_eq!(
             FileAntiRollbackStore::new(&state_path)
                 .load(&key)
@@ -3026,17 +3270,7 @@ mod tests {
         persist_bundle_acceptance(&acceptance).expect("leftover consumed");
 
         assert!(!override_path.exists());
-        let consumed = std::fs::read_dir(dir.path())
-            .expect("dir")
-            .filter_map(Result::ok)
-            .filter(|entry| {
-                entry
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with("override.json.consumed-")
-            })
-            .count();
-        assert_eq!(consumed, 1);
+        assert_eq!(consumed_override_count(dir.path(), "override.json"), 1);
         assert_eq!(
             FileAntiRollbackStore::new(&acceptance.state_path)
                 .load(&acceptance.key)
