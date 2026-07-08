@@ -466,6 +466,17 @@ pub struct BundleStateDecision {
     pub override_path: Option<PathBuf>,
 }
 
+pub struct BundleStateRequest<'a> {
+    pub state_path: &'a Path,
+    pub key: &'a AntiRollbackKey,
+    pub sequence: u64,
+    pub config_hash: &'a str,
+    pub bundle_manifest_hash: &'a str,
+    pub previous_config_hash: Option<&'a str>,
+    pub rollback_override_path: Option<&'a Path>,
+    pub initialize_state: bool,
+}
+
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct UnsignedConfigSelection {
     pub key: AntiRollbackKey,
@@ -1162,15 +1173,18 @@ pub fn verify_bundle_state_read_only(
 }
 
 pub fn resolve_bundle_state_action(
-    state_path: &Path,
-    key: &AntiRollbackKey,
-    sequence: u64,
-    config_hash: &str,
-    bundle_manifest_hash: &str,
-    previous_config_hash: Option<&str>,
-    rollback_override_path: Option<&Path>,
-    initialize_state: bool,
+    request: BundleStateRequest<'_>,
 ) -> Result<BundleStateDecision, ConfigBootError> {
+    let BundleStateRequest {
+        state_path,
+        key,
+        sequence,
+        config_hash,
+        bundle_manifest_hash,
+        previous_config_hash,
+        rollback_override_path,
+        initialize_state,
+    } = request;
     let store = FileAntiRollbackStore::new(state_path);
     match store.load(key) {
         Ok(record) if sequence > record.last_sequence => Ok(BundleStateDecision {
@@ -2686,16 +2700,16 @@ mod tests {
             ))
             .expect("state initializes");
 
-        let err = resolve_bundle_state_action(
-            &state_path,
-            &key,
-            4,
-            &signed_hash,
-            &test_hash('e'),
-            None,
-            None,
-            false,
-        )
+        let err = resolve_bundle_state_action(BundleStateRequest {
+            state_path: &state_path,
+            key: &key,
+            sequence: 4,
+            config_hash: &signed_hash,
+            bundle_manifest_hash: &test_hash('e'),
+            previous_config_hash: None,
+            rollback_override_path: None,
+            initialize_state: false,
+        })
         .expect_err("unsigned override pin does not accept signed rollback");
 
         assert_eq!(err, ConfigBootError::NonMonotonicSequence);
@@ -2716,16 +2730,16 @@ mod tests {
             ))
             .expect("state initializes");
 
-        let err = resolve_bundle_state_action(
-            &state_path,
-            &key,
-            4,
-            &current_hash,
-            &test_hash('e'),
-            None,
-            None,
-            false,
-        )
+        let err = resolve_bundle_state_action(BundleStateRequest {
+            state_path: &state_path,
+            key: &key,
+            sequence: 4,
+            config_hash: &current_hash,
+            bundle_manifest_hash: &test_hash('e'),
+            previous_config_hash: None,
+            rollback_override_path: None,
+            initialize_state: false,
+        })
         .expect_err("same sequence with different manifest hash is rejected");
 
         assert_eq!(err, ConfigBootError::NonMonotonicSequence);
@@ -2812,16 +2826,16 @@ mod tests {
             ))
             .expect("state initializes");
 
-        let decision = resolve_bundle_state_action(
-            &state_path,
-            &key,
-            4,
-            &config_hash,
-            &test_hash('e'),
-            None,
-            Some(&override_path),
-            false,
-        )
+        let decision = resolve_bundle_state_action(BundleStateRequest {
+            state_path: &state_path,
+            key: &key,
+            sequence: 4,
+            config_hash: &config_hash,
+            bundle_manifest_hash: &test_hash('e'),
+            previous_config_hash: None,
+            rollback_override_path: Some(&override_path),
+            initialize_state: false,
+        })
         .expect("leftover override resolves");
 
         assert_eq!(decision.state_action, BundleStateAction::AlreadyPinned);
