@@ -14,8 +14,8 @@ use axum::{Extension, Router};
 use registry_manifest_core::CompiledMetadata;
 use registry_platform_crypto::{KeyProviderKind, KeyReadiness};
 use registry_platform_ops::{
-    filter_posture_for_tier, internal_config_hash, posture_safe_runtime_config_hash,
-    AuditWritePolicy, ConfigOverrideMode, ConfigOverridePin, ConfigProvenance, ConfigSource,
+    filter_posture_for_tier, internal_config_hash, override_pin_posture,
+    posture_safe_runtime_config_hash, AuditWritePolicy, ConfigProvenance, ConfigSource,
     PostureFilterError, PostureTier,
 };
 use serde::{Deserialize, Serialize};
@@ -397,7 +397,7 @@ fn build_posture(
         json!(provenance.restart_required),
     );
     if let Some(pin) = &provenance.override_pin {
-        configuration.insert("override".to_string(), override_posture(pin));
+        configuration.insert("override".to_string(), override_pin_posture(pin));
     }
     let posture = json!({
         "schema": "registry.ops.posture.v1",
@@ -442,19 +442,6 @@ fn build_posture(
         },
     });
     filter_posture_for_tier(posture, tier)
-}
-
-fn override_posture(pin: &ConfigOverridePin) -> Value {
-    json!({
-        "active": pin.active,
-        "mode": match pin.mode {
-            ConfigOverrideMode::AcceptRollback => "accept_rollback",
-            ConfigOverrideMode::AcceptUnsigned => "accept_unsigned",
-        },
-        "used_at": &pin.used_at,
-        "reason": &pin.reason,
-        "expires_at": pin.expires_at.as_deref(),
-    })
 }
 
 fn posture_warnings(config: &Config, readiness: Option<&ReadinessSnapshot>) -> Vec<String> {

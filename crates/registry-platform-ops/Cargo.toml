@@ -12,11 +12,13 @@ workspace = true
 
 [dependencies]
 fs2.workspace = true
+registry-platform-config = { workspace = true }
 registry-platform-crypto = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 time.workspace = true
+ulid.workspace = true
 
 [dev-dependencies]
 jsonschema = { version = "0.46.5", default-features = false }

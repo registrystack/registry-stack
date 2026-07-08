@@ -137,7 +137,6 @@ async fn governed_target_renders_http_json_runtime_and_verifies_locally() {
     assert_eq!(target["sources"][SOURCE_ID]["engine"], "http_json");
 
     let verify_report = verify_governed_bundle_report_json(&target_bytes)
-        .await
         .expect("plain http_json-only target verifies");
     assert_eq!(verify_report["verified"], true);
     assert_eq!(verify_report["target_name"], "<local-target-json>");
@@ -196,9 +195,7 @@ async fn release_helper_verify_rejects_wrong_runtime_target_schema() {
     }))
     .expect("target serializes");
 
-    let error = verify_governed_bundle_report_json(&target)
-        .await
-        .expect_err("wrong schema is rejected");
+    let error = verify_governed_bundle_report_json(&target).expect_err("wrong schema is rejected");
 
     assert!(error
         .to_string()

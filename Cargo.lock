@@ -5397,12 +5397,14 @@ version = "0.8.4"
 dependencies = [
  "fs2",
  "jsonschema 0.46.6",
+ "registry-platform-config",
  "registry-platform-crypto",
  "serde",
  "serde_json",
  "sha2 0.11.0",
  "tempfile",
  "time",
+ "ulid",
 ]
 
 [[package]]

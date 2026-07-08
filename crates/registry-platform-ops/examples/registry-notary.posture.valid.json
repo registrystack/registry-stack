@@ -38,6 +38,7 @@
     "last_config_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "last_bundle_id": null,
     "last_bundle_sequence": null,
+    "last_bundle_signer_kids": [],
     "last_apply_result": null,
     "last_apply_at": null,
     "restart_required": false

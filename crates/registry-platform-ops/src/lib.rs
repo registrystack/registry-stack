@@ -18,6 +18,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
+use ulid::Ulid;
 
 pub const POSTURE_SCHEMA_V1: &str = include_str!("../schemas/registry.ops.posture.v1.schema.json");
 
@@ -407,6 +408,67 @@ pub struct ConfigOverridePin {
     pub reason: String,
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum BundleStateAction {
+    Initialize,
+    Accept,
+    PersistOverridePin,
+    AlreadyPinned,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct PendingBundleAcceptance {
+    pub state_path: PathBuf,
+    pub key: AntiRollbackKey,
+    pub source: ConfigSource,
+    pub bundle_id: Option<String>,
+    pub sequence: Option<u64>,
+    pub config_hash: String,
+    pub previous_config_hash: Option<String>,
+    pub previous_hash_matched: Option<bool>,
+    pub signer_kids: Vec<String>,
+    pub break_glass: bool,
+    pub state_action: BundleStateAction,
+    pub override_pin: Option<ConfigOverridePin>,
+    pub override_path: Option<PathBuf>,
+}
+
+impl PendingBundleAcceptance {
+    pub fn initial_record(&self) -> AntiRollbackRecord {
+        AntiRollbackRecord {
+            key: self.key.clone(),
+            last_sequence: self
+                .sequence
+                .expect("initial state requires bundle sequence"),
+            last_config_hash: self.config_hash.clone(),
+            last_bundle_id: self.bundle_id.clone(),
+            root_version: None,
+            override_pin: None,
+            break_glass: BreakGlassState::default(),
+            local_approvals: LocalApprovalState::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct BundleStateDecision {
+    pub state_action: BundleStateAction,
+    pub override_pin: Option<ConfigOverridePin>,
+    pub previous_hash_matched: Option<bool>,
+    pub override_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct UnsignedConfigSelection {
+    pub key: AntiRollbackKey,
+    pub record: AntiRollbackRecord,
+    pub pin: ConfigOverridePin,
+    pub state_action: BundleStateAction,
+    pub override_path: Option<PathBuf>,
+    pub config_path: PathBuf,
+    pub config_bytes: Vec<u8>,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
 pub struct BreakGlassState {
     #[serde(default)]
@@ -578,6 +640,91 @@ impl Display for AntiRollbackStoreError {
 
 impl std::error::Error for AntiRollbackStoreError {}
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ConfigBootError {
+    Store(AntiRollbackStoreError),
+    Bundle(registry_platform_config::ConfigBundleError),
+    NonMonotonicSequence,
+    OverrideHashMismatch,
+    MissingUnsignedConfigPath,
+    UnsignedConfigHashMismatch { expected: String, actual: String },
+    MissingSignedBundleId,
+    MissingSignedBundleSequence,
+    MissingOverridePin,
+    InvalidOverridePath,
+}
+
+impl ConfigBootError {
+    pub fn bundle_rejection_result(&self) -> &'static str {
+        match self {
+            Self::Bundle(error) => bundle_verify_rejection_result(error),
+            Self::NonMonotonicSequence
+            | Self::OverrideHashMismatch
+            | Self::Store(_)
+            | Self::MissingUnsignedConfigPath
+            | Self::UnsignedConfigHashMismatch { .. } => "rejected_rollback",
+            Self::MissingSignedBundleId
+            | Self::MissingSignedBundleSequence
+            | Self::MissingOverridePin
+            | Self::InvalidOverridePath => "rejected_validation",
+        }
+    }
+
+    pub fn break_glass_invalid_reason(&self) -> Option<&'static str> {
+        match self {
+            Self::OverrideHashMismatch => Some("hash_mismatch"),
+            Self::Bundle(registry_platform_config::ConfigBundleError::InvalidBreakGlass(_))
+            | Self::Bundle(registry_platform_config::ConfigBundleError::InvalidPermissions(_))
+            | Self::Bundle(registry_platform_config::ConfigBundleError::HashMismatch { .. }) => {
+                Some("invalid")
+            }
+            _ => None,
+        }
+    }
+}
+
+impl Display for ConfigBootError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Store(error) => Display::fmt(error, f),
+            Self::Bundle(error) => Display::fmt(error, f),
+            Self::NonMonotonicSequence => {
+                write!(f, "signed config bundle sequence is not monotonic")
+            }
+            Self::OverrideHashMismatch => write!(f, "rollback break-glass override hash mismatch"),
+            Self::MissingUnsignedConfigPath => {
+                write!(f, "unsigned break-glass pin is missing config_path")
+            }
+            Self::UnsignedConfigHashMismatch { expected, actual } => write!(
+                f,
+                "unsigned break-glass config hash mismatch: expected {expected}, actual {actual}"
+            ),
+            Self::MissingSignedBundleId => {
+                write!(f, "signed bundle acceptance is missing bundle_id")
+            }
+            Self::MissingSignedBundleSequence => {
+                write!(f, "signed bundle acceptance is missing sequence")
+            }
+            Self::MissingOverridePin => write!(f, "break-glass acceptance is missing override pin"),
+            Self::InvalidOverridePath => write!(f, "break-glass override path has no file name"),
+        }
+    }
+}
+
+impl std::error::Error for ConfigBootError {}
+
+impl From<AntiRollbackStoreError> for ConfigBootError {
+    fn from(error: AntiRollbackStoreError) -> Self {
+        Self::Store(error)
+    }
+}
+
+impl From<registry_platform_config::ConfigBundleError> for ConfigBootError {
+    fn from(error: registry_platform_config::ConfigBundleError) -> Self {
+        Self::Bundle(error)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct FileAntiRollbackStore {
     path: PathBuf,
@@ -629,16 +776,11 @@ impl FileAntiRollbackStore {
         let _lock = self.acquire_lock()?;
         record.validate()?;
         let target_path = self.write_target_path()?;
-        match fs::read(&target_path) {
-            Ok(bytes) => {
-                if serde_json::from_slice::<AntiRollbackRecord>(&bytes)
-                    .ok()
-                    .is_some_and(|existing| existing.validate().is_ok())
-                {
-                    return Err(AntiRollbackStoreError::InvalidState(
-                        "anti-rollback state already exists".to_string(),
-                    ));
-                }
+        match fs::symlink_metadata(&target_path) {
+            Ok(_) => {
+                return Err(AntiRollbackStoreError::InvalidState(
+                    "anti-rollback state already exists".to_string(),
+                ));
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(AntiRollbackStoreError::Io(error.to_string())),
@@ -945,6 +1087,383 @@ impl AntiRollbackRecord {
         }
         Ok(())
     }
+}
+
+pub fn antirollback_key_from_verified_bundle(
+    verified: &registry_platform_config::VerifiedConfigBundle,
+) -> AntiRollbackKey {
+    AntiRollbackKey {
+        product: verified.manifest.product.clone(),
+        instance_id: verified.manifest.instance_id.clone().unwrap_or_default(),
+        environment: verified.manifest.environment.clone(),
+        stream_id: verified.manifest.stream_id.clone(),
+    }
+}
+
+pub fn antirollback_key_from_trust_anchor(
+    anchor: &registry_platform_config::ConfigTrustAnchor,
+) -> AntiRollbackKey {
+    AntiRollbackKey {
+        product: anchor.product.clone(),
+        instance_id: anchor.instance_id.clone(),
+        environment: anchor.environment.clone(),
+        stream_id: anchor.stream_id.clone(),
+    }
+}
+
+pub fn verify_bundle_state_read_only(
+    state_path: &Path,
+    key: &AntiRollbackKey,
+    sequence: u64,
+    config_hash: &str,
+) -> Result<(), ConfigBootError> {
+    let record = FileAntiRollbackStore::new(state_path).load(key)?;
+    if sequence > record.last_sequence
+        || (sequence == record.last_sequence && config_hash == record.last_config_hash)
+        || record.override_pin.as_ref().is_some_and(|pin| {
+            pin.mode == ConfigOverrideMode::AcceptRollback
+                && override_pin_active_and_unexpired(pin)
+                && pin.config_hash == config_hash
+        })
+    {
+        Ok(())
+    } else {
+        Err(ConfigBootError::NonMonotonicSequence)
+    }
+}
+
+pub fn resolve_bundle_state_action(
+    state_path: &Path,
+    key: &AntiRollbackKey,
+    sequence: u64,
+    config_hash: &str,
+    previous_config_hash: Option<&str>,
+    rollback_override_path: Option<&Path>,
+    initialize_state: bool,
+) -> Result<BundleStateDecision, ConfigBootError> {
+    let store = FileAntiRollbackStore::new(state_path);
+    match store.load(key) {
+        Ok(record) if sequence > record.last_sequence => Ok(BundleStateDecision {
+            state_action: BundleStateAction::Accept,
+            override_pin: None,
+            previous_hash_matched: previous_hash_matched(previous_config_hash, &record),
+            override_path: None,
+        }),
+        Ok(record)
+            if sequence == record.last_sequence && config_hash == record.last_config_hash =>
+        {
+            let matched = previous_hash_matched(previous_config_hash, &record);
+            let active_pin = record
+                .override_pin
+                .filter(override_pin_active_and_unexpired);
+            Ok(BundleStateDecision {
+                state_action: BundleStateAction::Accept,
+                override_pin: active_pin,
+                previous_hash_matched: matched,
+                override_path: None,
+            })
+        }
+        Ok(record)
+            if record.override_pin.as_ref().is_some_and(|pin| {
+                pin.mode == ConfigOverrideMode::AcceptRollback
+                    && override_pin_active_and_unexpired(pin)
+                    && pin.config_hash == config_hash
+            }) =>
+        {
+            let matched = previous_hash_matched(previous_config_hash, &record);
+            let override_pin = record.override_pin;
+            let override_path = override_pin
+                .as_ref()
+                .and_then(|pin| matching_leftover_override_path(rollback_override_path, pin));
+            Ok(BundleStateDecision {
+                state_action: BundleStateAction::AlreadyPinned,
+                override_pin,
+                previous_hash_matched: matched,
+                override_path,
+            })
+        }
+        Ok(record) => {
+            let Some((override_path, override_file)) = load_optional_break_glass_override(
+                rollback_override_path,
+                registry_platform_config::ConfigBreakGlassMode::AcceptRollback,
+            )?
+            else {
+                return Err(ConfigBootError::NonMonotonicSequence);
+            };
+            if override_file.config_hash != config_hash {
+                return Err(ConfigBootError::OverrideHashMismatch);
+            }
+            Ok(BundleStateDecision {
+                state_action: BundleStateAction::PersistOverridePin,
+                override_pin: Some(override_pin_from_break_glass(&override_file)),
+                previous_hash_matched: previous_hash_matched(previous_config_hash, &record),
+                override_path: Some(override_path),
+            })
+        }
+        Err(AntiRollbackStoreError::MissingState) if initialize_state => Ok(BundleStateDecision {
+            state_action: BundleStateAction::Initialize,
+            override_pin: None,
+            previous_hash_matched: previous_config_hash.map(|_| false),
+            override_path: None,
+        }),
+        Err(error) => Err(ConfigBootError::Store(error)),
+    }
+}
+
+pub fn load_unsigned_break_glass_or_pin(
+    trust_anchor_path: &Path,
+    state_path: &Path,
+    override_path: Option<&Path>,
+) -> Result<Option<UnsignedConfigSelection>, ConfigBootError> {
+    let anchor = registry_platform_config::load_trust_anchor(trust_anchor_path)?;
+    let key = antirollback_key_from_trust_anchor(&anchor);
+    let store = FileAntiRollbackStore::new(state_path);
+    let record = store.load(&key)?;
+    if let Some(pin) = record
+        .override_pin
+        .as_ref()
+        .filter(|pin| {
+            pin.mode == ConfigOverrideMode::AcceptUnsigned && override_pin_active_and_unexpired(pin)
+        })
+        .cloned()
+    {
+        let recovery_override_path = matching_leftover_override_path(override_path, &pin);
+        return load_unsigned_pin_selection(
+            key,
+            record,
+            pin,
+            BundleStateAction::AlreadyPinned,
+            recovery_override_path,
+        )
+        .map(Some);
+    }
+    let Some((override_path, override_file)) = load_optional_break_glass_override(
+        override_path,
+        registry_platform_config::ConfigBreakGlassMode::AcceptUnsigned,
+    )?
+    else {
+        return Ok(None);
+    };
+    let pin = override_pin_from_break_glass(&override_file);
+    load_unsigned_pin_selection(
+        key,
+        record,
+        pin,
+        BundleStateAction::PersistOverridePin,
+        Some(override_path),
+    )
+    .map(Some)
+}
+
+pub fn load_optional_break_glass_override(
+    path: Option<&Path>,
+    mode: registry_platform_config::ConfigBreakGlassMode,
+) -> Result<Option<(PathBuf, registry_platform_config::ConfigBreakGlassOverride)>, ConfigBootError>
+{
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    if !path.exists() {
+        return Ok(None);
+    }
+    let override_file = registry_platform_config::load_break_glass_override(path)?;
+    if override_file.mode != mode {
+        return Ok(None);
+    }
+    Ok(Some((path.to_path_buf(), override_file)))
+}
+
+pub fn matching_leftover_override_path(
+    path: Option<&Path>,
+    pin: &ConfigOverridePin,
+) -> Option<PathBuf> {
+    let path = path?;
+    if !path.exists() {
+        return None;
+    }
+    let override_file = registry_platform_config::load_break_glass_override(path).ok()?;
+    if break_glass_matches_pin(&override_file, pin) {
+        Some(path.to_path_buf())
+    } else {
+        None
+    }
+}
+
+fn break_glass_matches_pin(
+    override_file: &registry_platform_config::ConfigBreakGlassOverride,
+    pin: &ConfigOverridePin,
+) -> bool {
+    override_mode_from_break_glass(override_file.mode) == pin.mode
+        && override_file.config_hash == pin.config_hash
+}
+
+pub fn read_unsigned_config_bytes(path: &Path) -> Result<Vec<u8>, ConfigBootError> {
+    registry_platform_config::read_config_file_limited(
+        path,
+        registry_platform_config::MAX_BUNDLE_FILE_BYTES,
+    )
+    .map_err(ConfigBootError::Bundle)
+}
+
+fn load_unsigned_pin_selection(
+    key: AntiRollbackKey,
+    record: AntiRollbackRecord,
+    pin: ConfigOverridePin,
+    state_action: BundleStateAction,
+    override_path: Option<PathBuf>,
+) -> Result<UnsignedConfigSelection, ConfigBootError> {
+    let config_path = pin
+        .config_path
+        .as_deref()
+        .map(PathBuf::from)
+        .ok_or(ConfigBootError::MissingUnsignedConfigPath)?;
+    let config_bytes = read_unsigned_config_bytes(&config_path)?;
+    let actual = sha256_uri(&config_bytes);
+    if actual != pin.config_hash {
+        return Err(ConfigBootError::UnsignedConfigHashMismatch {
+            expected: pin.config_hash.clone(),
+            actual,
+        });
+    }
+    Ok(UnsignedConfigSelection {
+        key,
+        record,
+        pin,
+        state_action,
+        override_path,
+        config_path,
+        config_bytes,
+    })
+}
+
+pub fn override_pin_from_break_glass(
+    override_file: &registry_platform_config::ConfigBreakGlassOverride,
+) -> ConfigOverridePin {
+    ConfigOverridePin {
+        active: true,
+        mode: override_mode_from_break_glass(override_file.mode),
+        config_hash: override_file.config_hash.clone(),
+        config_path: override_file
+            .config_path
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned()),
+        expires_at: Some(override_file.expires_at.clone()),
+        used_at: OffsetDateTime::now_utc()
+            .format(&Rfc3339)
+            .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string()),
+        operator: override_file.operator.clone(),
+        reason: override_file.reason.clone(),
+    }
+}
+
+fn override_mode_from_break_glass(
+    mode: registry_platform_config::ConfigBreakGlassMode,
+) -> ConfigOverrideMode {
+    match mode {
+        registry_platform_config::ConfigBreakGlassMode::AcceptRollback => {
+            ConfigOverrideMode::AcceptRollback
+        }
+        registry_platform_config::ConfigBreakGlassMode::AcceptUnsigned => {
+            ConfigOverrideMode::AcceptUnsigned
+        }
+    }
+}
+
+pub fn persist_bundle_acceptance(
+    acceptance: &PendingBundleAcceptance,
+) -> Result<(), ConfigBootError> {
+    let store = FileAntiRollbackStore::new(&acceptance.state_path);
+    match acceptance.state_action {
+        BundleStateAction::Initialize => store.initialize(acceptance.initial_record())?,
+        BundleStateAction::Accept => {
+            store.accept_bundle(
+                &acceptance.key,
+                acceptance
+                    .bundle_id
+                    .clone()
+                    .ok_or(ConfigBootError::MissingSignedBundleId)?,
+                acceptance
+                    .sequence
+                    .ok_or(ConfigBootError::MissingSignedBundleSequence)?,
+                acceptance.config_hash.clone(),
+            )?;
+        }
+        BundleStateAction::PersistOverridePin => {
+            let pin = acceptance
+                .override_pin
+                .clone()
+                .ok_or(ConfigBootError::MissingOverridePin)?;
+            store.persist_override_pin(&acceptance.key, pin)?;
+            if let Some(path) = &acceptance.override_path {
+                consume_break_glass_override(path)?;
+            }
+        }
+        BundleStateAction::AlreadyPinned => {
+            if let Some(path) = &acceptance.override_path {
+                consume_break_glass_override(path)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn consume_break_glass_override(path: &Path) -> Result<(), ConfigBootError> {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or(ConfigBootError::InvalidOverridePath)?;
+    let consumed_name = format!("{file_name}.consumed-{}", Ulid::new());
+    let consumed_path = path.with_file_name(consumed_name);
+    fs::rename(path, consumed_path).map_err(|error| {
+        ConfigBootError::Bundle(registry_platform_config::ConfigBundleError::Io(
+            error.to_string(),
+        ))
+    })?;
+    Ok(())
+}
+
+pub fn override_pin_posture(pin: &ConfigOverridePin) -> Value {
+    serde_json::json!({
+        "active": pin.active,
+        "mode": match pin.mode {
+            ConfigOverrideMode::AcceptRollback => "accept_rollback",
+            ConfigOverrideMode::AcceptUnsigned => "accept_unsigned",
+        },
+        "used_at": &pin.used_at,
+        "reason": &pin.reason,
+        "expires_at": pin.expires_at.as_deref(),
+    })
+}
+
+pub fn bundle_verify_rejection_result(
+    error: &registry_platform_config::ConfigBundleError,
+) -> &'static str {
+    match error {
+        registry_platform_config::ConfigBundleError::BindingMismatch(_) => "rejected_binding",
+        registry_platform_config::ConfigBundleError::SignatureRejected
+        | registry_platform_config::ConfigBundleError::InvalidSignatureEnvelope(_)
+        | registry_platform_config::ConfigBundleError::InvalidTrustAnchor(_)
+        | registry_platform_config::ConfigBundleError::InvalidPermissions(_) => {
+            "rejected_signature"
+        }
+        registry_platform_config::ConfigBundleError::Io(_)
+        | registry_platform_config::ConfigBundleError::Json(_)
+        | registry_platform_config::ConfigBundleError::InvalidManifest(_)
+        | registry_platform_config::ConfigBundleError::InvalidBreakGlass(_)
+        | registry_platform_config::ConfigBundleError::FileClosure(_)
+        | registry_platform_config::ConfigBundleError::HashMismatch { .. } => "rejected_validation",
+    }
+}
+
+fn previous_hash_matched(
+    previous_config_hash: Option<&str>,
+    record: &AntiRollbackRecord,
+) -> Option<bool> {
+    previous_config_hash.map(|previous| previous == record.last_config_hash)
+}
+
+fn sha256_uri(bytes: &[u8]) -> String {
+    sha256_hex(bytes)
 }
 
 pub fn override_pin_active_and_unexpired(pin: &ConfigOverridePin) -> bool {
@@ -1718,10 +2237,138 @@ fn clone_allowed_leaf_value(value: &Value) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use registry_platform_crypto::PrivateJwk;
     use serde_json::json;
+
+    const ED25519_PRIVATE_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"registry-platform-testing-ed25519-1"}"#;
+    const TRUST_ANCHOR_SCHEMA: &str = "registry.platform.config_trust_anchor.v1";
+    const BREAK_GLASS_SCHEMA: &str = "registry.platform.config_break_glass.v1";
 
     fn test_hash(label: char) -> String {
         format!("sha256:{}", label.to_string().repeat(64))
+    }
+
+    fn test_key() -> AntiRollbackKey {
+        AntiRollbackKey {
+            product: "registry-relay".to_string(),
+            instance_id: "relay-001".to_string(),
+            environment: "production".to_string(),
+            stream_id: "civil-registry".to_string(),
+        }
+    }
+
+    fn antirollback_record(
+        key: AntiRollbackKey,
+        sequence: u64,
+        config_hash: String,
+        override_pin: Option<ConfigOverridePin>,
+    ) -> AntiRollbackRecord {
+        AntiRollbackRecord {
+            key,
+            last_sequence: sequence,
+            last_config_hash: config_hash,
+            last_bundle_id: Some("bundle-1".to_string()),
+            root_version: None,
+            override_pin,
+            break_glass: BreakGlassState::default(),
+            local_approvals: LocalApprovalState::default(),
+        }
+    }
+
+    fn override_pin(mode: ConfigOverrideMode, config_hash: String) -> ConfigOverridePin {
+        ConfigOverridePin {
+            active: true,
+            mode,
+            config_hash,
+            config_path: None,
+            expires_at: Some("2099-07-07T12:00:00Z".to_string()),
+            used_at: "2026-07-07T10:00:00Z".to_string(),
+            operator: "ops@example.test".to_string(),
+            reason: "recover interrupted config override consumption".to_string(),
+        }
+    }
+
+    fn unsigned_override_pin(config_hash: String, config_path: &Path) -> ConfigOverridePin {
+        ConfigOverridePin {
+            config_path: Some(config_path.to_string_lossy().into_owned()),
+            ..override_pin(ConfigOverrideMode::AcceptUnsigned, config_hash)
+        }
+    }
+
+    fn break_glass_override(
+        mode: registry_platform_config::ConfigBreakGlassMode,
+        config_hash: String,
+        config_path: Option<PathBuf>,
+    ) -> registry_platform_config::ConfigBreakGlassOverride {
+        registry_platform_config::ConfigBreakGlassOverride {
+            schema: BREAK_GLASS_SCHEMA.to_string(),
+            mode,
+            config_hash,
+            config_path,
+            reason: "recover interrupted config override consumption".to_string(),
+            operator: "ops@example.test".to_string(),
+            created_at: "2099-07-07T10:00:00Z".to_string(),
+            expires_at: "2099-07-07T12:00:00Z".to_string(),
+        }
+    }
+
+    fn write_trust_anchor(path: &Path, key: &AntiRollbackKey) {
+        let private = PrivateJwk::parse(ED25519_PRIVATE_JWK).expect("private jwk");
+        let public = private.public();
+        let kid = public.jkt().expect("jkt");
+        let anchor = registry_platform_config::ConfigTrustAnchor {
+            schema: TRUST_ANCHOR_SCHEMA.to_string(),
+            product: key.product.clone(),
+            environment: key.environment.clone(),
+            stream_id: key.stream_id.clone(),
+            instance_id: key.instance_id.clone(),
+            signers: vec![registry_platform_config::ConfigTrustAnchorSigner {
+                kid,
+                jwk: public,
+                enabled: true,
+            }],
+        };
+        std::fs::write(
+            path,
+            serde_json::to_vec_pretty(&anchor).expect("anchor json"),
+        )
+        .expect("trust anchor");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            let mut permissions = std::fs::metadata(path)
+                .expect("trust anchor metadata")
+                .permissions();
+            permissions.set_mode(0o600);
+            std::fs::set_permissions(path, permissions).expect("trust anchor permissions");
+        }
+    }
+
+    fn pending_acceptance(
+        state_path: PathBuf,
+        key: AntiRollbackKey,
+        source: ConfigSource,
+        state_action: BundleStateAction,
+        config_hash: String,
+        override_pin: Option<ConfigOverridePin>,
+        override_path: Option<PathBuf>,
+    ) -> PendingBundleAcceptance {
+        PendingBundleAcceptance {
+            state_path,
+            key,
+            source,
+            bundle_id: Some("bundle-2".to_string()),
+            sequence: Some(2),
+            config_hash,
+            previous_config_hash: Some(test_hash('a')),
+            previous_hash_matched: Some(true),
+            signer_kids: vec!["kid-1".to_string()],
+            break_glass: matches!(state_action, BundleStateAction::PersistOverridePin),
+            state_action,
+            override_pin,
+            override_path,
+        }
     }
 
     fn local_approval(expires_at_unix_seconds: u64, config_hash: &str) -> LocalOperatorApproval {
@@ -1785,6 +2432,299 @@ mod tests {
         assert!(!is_valid_approval_reference("with space"));
         assert!(!is_valid_approval_reference("nul\0byte"));
         assert!(!is_valid_approval_reference("ctrl\nchar"));
+    }
+
+    #[test]
+    fn initialize_rejects_any_existing_state_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state_path = dir.path().join("antirollback.json");
+        std::fs::write(&state_path, b"not json").expect("corrupt state");
+        let store = FileAntiRollbackStore::new(&state_path);
+
+        let err = store
+            .initialize(antirollback_record(test_key(), 1, test_hash('a'), None))
+            .expect_err("existing corrupt state is rejected");
+
+        assert!(matches!(
+            err,
+            AntiRollbackStoreError::InvalidState(message)
+                if message == "anti-rollback state already exists"
+        ));
+    }
+
+    #[test]
+    fn read_only_bundle_state_verifier_matches_acceptance_rules() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state_path = dir.path().join("antirollback.json");
+        let key = test_key();
+        let current_hash = test_hash('a');
+        FileAntiRollbackStore::new(&state_path)
+            .initialize(antirollback_record(
+                key.clone(),
+                4,
+                current_hash.clone(),
+                None,
+            ))
+            .expect("state initializes");
+
+        verify_bundle_state_read_only(&state_path, &key, 5, &test_hash('b'))
+            .expect("higher sequence verifies");
+        verify_bundle_state_read_only(&state_path, &key, 4, &current_hash)
+            .expect("same sequence and hash verifies");
+        let err = verify_bundle_state_read_only(&state_path, &key, 4, &test_hash('c'))
+            .expect_err("same sequence with different hash is rejected");
+
+        assert_eq!(err, ConfigBootError::NonMonotonicSequence);
+
+        let pinned_state_path = dir.path().join("pinned-antirollback.json");
+        let pinned_hash = test_hash('d');
+        FileAntiRollbackStore::new(&pinned_state_path)
+            .initialize(antirollback_record(
+                key.clone(),
+                6,
+                test_hash('e'),
+                Some(override_pin(
+                    ConfigOverrideMode::AcceptRollback,
+                    pinned_hash.clone(),
+                )),
+            ))
+            .expect("pinned state initializes");
+        verify_bundle_state_read_only(&pinned_state_path, &key, 4, &pinned_hash)
+            .expect("active override pin verifies matching hash");
+
+        let unsigned_pin_state_path = dir.path().join("unsigned-pin-antirollback.json");
+        FileAntiRollbackStore::new(&unsigned_pin_state_path)
+            .initialize(antirollback_record(
+                key.clone(),
+                6,
+                test_hash('e'),
+                Some(unsigned_override_pin(
+                    pinned_hash.clone(),
+                    &dir.path().join("unsigned.yaml"),
+                )),
+            ))
+            .expect("unsigned pin state initializes");
+        let err = verify_bundle_state_read_only(&unsigned_pin_state_path, &key, 4, &pinned_hash)
+            .expect_err("unsigned override pin does not verify signed rollback");
+
+        assert_eq!(err, ConfigBootError::NonMonotonicSequence);
+    }
+
+    #[test]
+    fn signed_bundle_state_resolver_ignores_unsigned_override_pin() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state_path = dir.path().join("antirollback.json");
+        let key = test_key();
+        let signed_hash = test_hash('f');
+        FileAntiRollbackStore::new(&state_path)
+            .initialize(antirollback_record(
+                key.clone(),
+                6,
+                test_hash('e'),
+                Some(unsigned_override_pin(
+                    signed_hash.clone(),
+                    &dir.path().join("unsigned.yaml"),
+                )),
+            ))
+            .expect("state initializes");
+
+        let err =
+            resolve_bundle_state_action(&state_path, &key, 4, &signed_hash, None, None, false)
+                .expect_err("unsigned override pin does not accept signed rollback");
+
+        assert_eq!(err, ConfigBootError::NonMonotonicSequence);
+    }
+
+    #[test]
+    fn leftover_override_matching_requires_same_mode_and_hash() {
+        let config_hash = test_hash('a');
+        let pin = override_pin(ConfigOverrideMode::AcceptRollback, config_hash.clone());
+        let matching = break_glass_override(
+            registry_platform_config::ConfigBreakGlassMode::AcceptRollback,
+            config_hash.clone(),
+            None,
+        );
+        let wrong_mode = break_glass_override(
+            registry_platform_config::ConfigBreakGlassMode::AcceptUnsigned,
+            config_hash.clone(),
+            Some(PathBuf::from("/tmp/unsigned.yaml")),
+        );
+        let wrong_hash = break_glass_override(
+            registry_platform_config::ConfigBreakGlassMode::AcceptRollback,
+            test_hash('b'),
+            None,
+        );
+
+        assert!(break_glass_matches_pin(&matching, &pin));
+        assert!(!break_glass_matches_pin(&wrong_mode, &pin));
+        assert!(!break_glass_matches_pin(&wrong_hash, &pin));
+    }
+
+    #[test]
+    fn unsigned_pin_rejects_changed_config_path_bytes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state_path = dir.path().join("antirollback.json");
+        let anchor_path = dir.path().join("trust_anchor.json");
+        let config_path = dir.path().join("unsigned.yaml");
+        let key = test_key();
+        write_trust_anchor(&anchor_path, &key);
+        std::fs::write(&config_path, b"original config").expect("unsigned config");
+        let pinned_hash = sha256_uri(b"original config");
+        let pin = unsigned_override_pin(pinned_hash.clone(), &config_path);
+        FileAntiRollbackStore::new(&state_path)
+            .initialize(antirollback_record(key, 6, test_hash('e'), Some(pin)))
+            .expect("state initializes");
+        std::fs::write(&config_path, b"changed config").expect("changed unsigned config");
+
+        let err = load_unsigned_break_glass_or_pin(&anchor_path, &state_path, None)
+            .expect_err("changed pinned bytes are rejected");
+
+        assert!(matches!(
+            err,
+            ConfigBootError::UnsignedConfigHashMismatch { expected, actual }
+                if expected == pinned_hash && actual == sha256_uri(b"changed config")
+        ));
+    }
+
+    #[test]
+    fn pending_acceptance_does_not_mutate_state_before_persist() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state_path = dir.path().join("antirollback.json");
+        let key = test_key();
+        let _acceptance = pending_acceptance(
+            state_path.clone(),
+            key.clone(),
+            ConfigSource::SignedBundleFile,
+            BundleStateAction::Initialize,
+            test_hash('b'),
+            None,
+            None,
+        );
+
+        let err = FileAntiRollbackStore::new(&state_path)
+            .load(&key)
+            .expect_err("state is untouched until persist");
+
+        assert_eq!(err, AntiRollbackStoreError::MissingState);
+    }
+
+    #[test]
+    fn already_pinned_rollback_recovery_consumes_leftover_override() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state_path = dir.path().join("antirollback.json");
+        let override_path = dir.path().join("override.json");
+        std::fs::write(&override_path, b"leftover").expect("leftover override");
+        let key = test_key();
+        let config_hash = test_hash('b');
+        let pin = override_pin(ConfigOverrideMode::AcceptRollback, config_hash.clone());
+        let store = FileAntiRollbackStore::new(&state_path);
+        store
+            .initialize(antirollback_record(
+                key.clone(),
+                1,
+                test_hash('a'),
+                Some(pin.clone()),
+            ))
+            .expect("state initializes");
+        let acceptance = pending_acceptance(
+            state_path.clone(),
+            key.clone(),
+            ConfigSource::SignedBundleFile,
+            BundleStateAction::AlreadyPinned,
+            config_hash,
+            Some(pin),
+            Some(override_path.clone()),
+        );
+
+        persist_bundle_acceptance(&acceptance).expect("leftover consumed");
+
+        assert!(!override_path.exists());
+        let consumed = std::fs::read_dir(dir.path())
+            .expect("dir")
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("override.json.consumed-")
+            })
+            .count();
+        assert_eq!(consumed, 1);
+        assert_eq!(
+            FileAntiRollbackStore::new(&state_path)
+                .load(&key)
+                .expect("state loads")
+                .last_sequence,
+            1
+        );
+    }
+
+    #[test]
+    fn already_pinned_unsigned_recovery_consumes_leftover_override() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state_path = dir.path().join("antirollback.json");
+        let config_path = dir.path().join("unsigned.yaml");
+        let override_path = dir.path().join("override.json");
+        std::fs::write(&config_path, b"config").expect("unsigned config");
+        std::fs::write(&override_path, b"leftover").expect("leftover override");
+        let key = test_key();
+        let config_hash = test_hash('c');
+        let pin = unsigned_override_pin(config_hash.clone(), &config_path);
+        FileAntiRollbackStore::new(&state_path)
+            .initialize(antirollback_record(
+                key.clone(),
+                1,
+                test_hash('a'),
+                Some(pin.clone()),
+            ))
+            .expect("state initializes");
+        let acceptance = pending_acceptance(
+            state_path,
+            key,
+            ConfigSource::LocalFile,
+            BundleStateAction::AlreadyPinned,
+            config_hash,
+            Some(pin),
+            Some(override_path.clone()),
+        );
+
+        persist_bundle_acceptance(&acceptance).expect("leftover consumed");
+
+        assert!(!override_path.exists());
+    }
+
+    #[test]
+    fn consume_rename_failure_aborts_boot() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state_path = dir.path().join("antirollback.json");
+        let missing_override = dir.path().join("missing-override.json");
+        let key = test_key();
+        let config_hash = test_hash('b');
+        let pin = override_pin(ConfigOverrideMode::AcceptRollback, config_hash.clone());
+        FileAntiRollbackStore::new(&state_path)
+            .initialize(antirollback_record(
+                key.clone(),
+                1,
+                test_hash('a'),
+                Some(pin.clone()),
+            ))
+            .expect("state initializes");
+        let acceptance = pending_acceptance(
+            state_path,
+            key,
+            ConfigSource::SignedBundleFile,
+            BundleStateAction::AlreadyPinned,
+            config_hash,
+            Some(pin),
+            Some(missing_override),
+        );
+
+        let err = persist_bundle_acceptance(&acceptance).expect_err("rename failure aborts");
+
+        assert!(matches!(
+            err,
+            ConfigBootError::Bundle(registry_platform_config::ConfigBundleError::Io(_))
+        ));
     }
 
     #[test]

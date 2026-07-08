@@ -533,7 +533,7 @@ fn normal_bundle_acceptance_clears_active_override_pin_even_on_same_bundle_resta
 
 #[cfg(unix)]
 #[test]
-fn antirollback_atomic_write_preserves_symlink_target() {
+fn antirollback_initialize_rejects_existing_symlink_path() {
     use std::os::unix::fs::symlink;
 
     let dir = tempfile::tempdir().expect("tempdir");
@@ -545,10 +545,15 @@ fn antirollback_atomic_write_preserves_symlink_target() {
     symlink(&target_path, &link_path).expect("state symlink creates");
 
     let store = FileAntiRollbackStore::new(&link_path);
-    store
+    let err = store
         .initialize(record(41, &hash("old")))
-        .expect("initial state writes through symlink");
+        .expect_err("existing symlink requires explicit operator deletion");
 
+    assert!(matches!(
+        err,
+        AntiRollbackStoreError::InvalidState(message)
+            if message == "anti-rollback state already exists"
+    ));
     assert!(
         std::fs::symlink_metadata(&link_path)
             .expect("link metadata reads")
@@ -557,10 +562,8 @@ fn antirollback_atomic_write_preserves_symlink_target() {
         "state path remains a symlink"
     );
     assert_eq!(
-        FileAntiRollbackStore::new(&target_path)
-            .load(&key())
-            .expect("target state loads"),
-        record(41, &hash("old"))
+        std::fs::read_to_string(&target_path).expect("target placeholder reads"),
+        "{}"
     );
 }
 

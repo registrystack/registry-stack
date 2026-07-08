@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::fs;
+use std::fs::{self, File};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -12,6 +13,8 @@ use time::OffsetDateTime;
 
 use crate::{sha256_uri, validate_sha256_uri};
 
+#[cfg(unix)]
+use rustix::fs::{Mode, OFlags};
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
@@ -211,8 +214,11 @@ pub fn verify_config_bundle(
 }
 
 pub fn load_trust_anchor(path: &Path) -> Result<ConfigTrustAnchor, ConfigBundleError> {
-    validate_anchor_file_permissions(path)?;
-    let bytes = read_limited(path, MAX_TRUST_ANCHOR_BYTES)?;
+    let bytes = read_limited_with_permissions(
+        path,
+        MAX_TRUST_ANCHOR_BYTES,
+        ArtifactPermissions::TrustAnchor,
+    )?;
     let anchor: ConfigTrustAnchor = serde_json::from_slice(&bytes)
         .map_err(|error| ConfigBundleError::Json(error.to_string()))?;
     anchor.validate()?;
@@ -375,7 +381,6 @@ impl ConfigBreakGlassOverride {
 pub fn load_break_glass_override(
     path: &Path,
 ) -> Result<ConfigBreakGlassOverride, ConfigBundleError> {
-    validate_break_glass_file_permissions(path)?;
     if path
         .file_name()
         .and_then(|name| name.to_str())
@@ -383,7 +388,11 @@ pub fn load_break_glass_override(
     {
         return Err(ConfigBundleError::InvalidBreakGlass("consumed"));
     }
-    let bytes = read_limited(path, MAX_SIGNATURE_ENVELOPE_BYTES)?;
+    let bytes = read_limited_with_permissions(
+        path,
+        MAX_SIGNATURE_ENVELOPE_BYTES,
+        ArtifactPermissions::BreakGlassOverride,
+    )?;
     let override_file: ConfigBreakGlassOverride = serde_json::from_slice(&bytes)
         .map_err(|error| ConfigBundleError::Json(error.to_string()))?;
     override_file.validate_fields()?;
@@ -403,6 +412,10 @@ pub fn load_break_glass_override(
         }
     }
     Ok(override_file)
+}
+
+pub fn read_config_file_limited(path: &Path, max_bytes: u64) -> Result<Vec<u8>, ConfigBundleError> {
+    read_limited(path, max_bytes)
 }
 
 fn verify_manifest_signatures(
@@ -566,6 +579,11 @@ fn collect_regular_bundle_files(
             collect_regular_bundle_files(root, &path, files)?;
         } else if metadata.is_file() {
             files.insert(display_relative(root, &path));
+        } else {
+            return Err(ConfigBundleError::FileClosure(format!(
+                "unsupported file type: {}",
+                display_relative(root, &path)
+            )));
         }
     }
     Ok(())
@@ -595,20 +613,55 @@ fn normalize_bundle_path(value: &str) -> Result<String, ConfigBundleError> {
 }
 
 fn read_limited(path: &Path, max_bytes: u64) -> Result<Vec<u8>, ConfigBundleError> {
-    let metadata =
-        fs::symlink_metadata(path).map_err(|error| ConfigBundleError::Io(error.to_string()))?;
-    if metadata.file_type().is_symlink() {
-        return Err(ConfigBundleError::Io("symlink path rejected".to_string()));
-    }
-    if !metadata.is_file() {
-        return Err(ConfigBundleError::Io(
-            "path is not a regular file".to_string(),
-        ));
+    read_limited_with_open_file(path, max_bytes, None)
+}
+
+#[derive(Clone, Copy)]
+enum ArtifactPermissions {
+    TrustAnchor,
+    BreakGlassOverride,
+}
+
+fn read_limited_with_permissions(
+    path: &Path,
+    max_bytes: u64,
+    permissions: ArtifactPermissions,
+) -> Result<Vec<u8>, ConfigBundleError> {
+    read_limited_with_open_file(path, max_bytes, Some(permissions))
+}
+
+fn read_limited_with_open_file(
+    path: &Path,
+    max_bytes: u64,
+    permissions: Option<ArtifactPermissions>,
+) -> Result<Vec<u8>, ConfigBundleError> {
+    let file = open_read_only_no_follow(path)?;
+    read_limited_from_file(file, max_bytes, permissions)
+}
+
+fn read_limited_from_file(
+    mut file: File,
+    max_bytes: u64,
+    permissions: Option<ArtifactPermissions>,
+) -> Result<Vec<u8>, ConfigBundleError> {
+    let metadata = file
+        .metadata()
+        .map_err(|error| ConfigBundleError::Io(error.to_string()))?;
+    match permissions {
+        Some(permissions) => validate_artifact_file_permissions(&metadata, permissions)?,
+        None => validate_readable_regular_file(&metadata)?,
     }
     if metadata.len() > max_bytes {
         return Err(ConfigBundleError::Io("file exceeds size cap".to_string()));
     }
-    let bytes = fs::read(path).map_err(|error| ConfigBundleError::Io(error.to_string()))?;
+    let mut bytes = Vec::new();
+    let read_cap = max_bytes
+        .checked_add(1)
+        .ok_or_else(|| ConfigBundleError::Io("file size cap overflow".to_string()))?;
+    file.by_ref()
+        .take(read_cap)
+        .read_to_end(&mut bytes)
+        .map_err(|error| ConfigBundleError::Io(error.to_string()))?;
     let len = u64::try_from(bytes.len())
         .map_err(|_| ConfigBundleError::Io("file length overflow".to_string()))?;
     if len > max_bytes {
@@ -618,56 +671,69 @@ fn read_limited(path: &Path, max_bytes: u64) -> Result<Vec<u8>, ConfigBundleErro
 }
 
 #[cfg(unix)]
-fn validate_anchor_file_permissions(path: &Path) -> Result<(), ConfigBundleError> {
-    let metadata =
-        fs::symlink_metadata(path).map_err(|error| ConfigBundleError::Io(error.to_string()))?;
-    validate_not_symlink_file(&metadata)?;
-    let mode = metadata.permissions().mode();
-    if mode & 0o022 != 0 {
-        return Err(ConfigBundleError::InvalidPermissions(
-            "trust anchor must not be group/world writable",
-        ));
-    }
-    let owner = metadata.uid();
-    if owner != 0 && owner != current_euid() {
-        return Err(ConfigBundleError::InvalidPermissions(
-            "trust anchor owner must be root or current service user",
-        ));
-    }
-    Ok(())
+fn open_read_only_no_follow(path: &Path) -> Result<File, ConfigBundleError> {
+    let fd = rustix::fs::open(
+        path,
+        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+        Mode::empty(),
+    )
+    .map_err(|error| ConfigBundleError::Io(error.to_string()))?;
+    Ok(File::from(fd))
 }
 
 #[cfg(not(unix))]
-fn validate_anchor_file_permissions(path: &Path) -> Result<(), ConfigBundleError> {
-    let metadata =
-        fs::symlink_metadata(path).map_err(|error| ConfigBundleError::Io(error.to_string()))?;
-    validate_not_symlink_file(&metadata)
+fn open_read_only_no_follow(path: &Path) -> Result<File, ConfigBundleError> {
+    File::open(path).map_err(|error| ConfigBundleError::Io(error.to_string()))
+}
+
+fn validate_readable_regular_file(metadata: &fs::Metadata) -> Result<(), ConfigBundleError> {
+    if !metadata.is_file() {
+        return Err(ConfigBundleError::Io(
+            "path is not a regular file".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
-fn validate_break_glass_file_permissions(path: &Path) -> Result<(), ConfigBundleError> {
-    let metadata =
-        fs::symlink_metadata(path).map_err(|error| ConfigBundleError::Io(error.to_string()))?;
-    validate_not_symlink_file(&metadata)?;
+fn validate_artifact_file_permissions(
+    metadata: &fs::Metadata,
+    permissions: ArtifactPermissions,
+) -> Result<(), ConfigBundleError> {
+    validate_not_symlink_file(metadata)?;
     let mode = metadata.permissions().mode();
     if mode & 0o022 != 0 {
-        return Err(ConfigBundleError::InvalidPermissions(
-            "break-glass override must not be group/world writable",
-        ));
+        let reason = match permissions {
+            ArtifactPermissions::TrustAnchor => "trust anchor must not be group/world writable",
+            ArtifactPermissions::BreakGlassOverride => {
+                "break-glass override must not be group/world writable"
+            }
+        };
+        return Err(ConfigBundleError::InvalidPermissions(reason));
     }
-    if metadata.uid() != 0 {
-        return Err(ConfigBundleError::InvalidPermissions(
-            "break-glass override owner must be root",
-        ));
+    let owner = metadata.uid();
+    match permissions {
+        ArtifactPermissions::TrustAnchor if owner != 0 && owner != current_euid() => {
+            return Err(ConfigBundleError::InvalidPermissions(
+                "trust anchor owner must be root or current service user",
+            ));
+        }
+        ArtifactPermissions::BreakGlassOverride if owner != 0 => {
+            return Err(ConfigBundleError::InvalidPermissions(
+                "break-glass override owner must be root",
+            ));
+        }
+        _ => {}
     }
     Ok(())
 }
 
 #[cfg(not(unix))]
-fn validate_break_glass_file_permissions(path: &Path) -> Result<(), ConfigBundleError> {
-    let metadata =
-        fs::symlink_metadata(path).map_err(|error| ConfigBundleError::Io(error.to_string()))?;
-    validate_not_symlink_file(&metadata)
+fn validate_artifact_file_permissions(
+    metadata: &fs::Metadata,
+    _permissions: ArtifactPermissions,
+) -> Result<(), ConfigBundleError> {
+    validate_not_symlink_file(metadata)
 }
 
 fn validate_not_symlink_file(metadata: &fs::Metadata) -> Result<(), ConfigBundleError> {
@@ -942,6 +1008,36 @@ mod tests {
     }
 
     #[test]
+    fn rejects_changed_bytes_at_manifest_config_path() {
+        let fixture = fixture();
+        fs::write(fixture.bundle_dir.join("config/notary.yaml"), b"changed").expect("rewrite");
+
+        let err = verify_config_bundle(&fixture.bundle_dir, &fixture.anchor_path)
+            .expect_err("changed config rejected");
+
+        assert!(
+            matches!(err, ConfigBundleError::HashMismatch { path, .. } if path == "config/notary.yaml")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_non_regular_bundle_entry() {
+        use std::os::unix::net::UnixListener;
+
+        let fixture = fixture();
+        let socket_path = fixture.bundle_dir.join("config/notary.sock");
+        let _listener = UnixListener::bind(&socket_path).expect("socket");
+
+        let err = verify_config_bundle(&fixture.bundle_dir, &fixture.anchor_path)
+            .expect_err("socket entry rejected");
+
+        assert!(
+            matches!(err, ConfigBundleError::FileClosure(reason) if reason.contains("unsupported file type"))
+        );
+    }
+
+    #[test]
     fn rejects_duplicate_paths_after_normalization() {
         let mut fixture = fixture();
         fixture.manifest.files.push(ConfigBundleFile {
@@ -986,6 +1082,82 @@ mod tests {
             .expect_err("group writable anchor rejected");
 
         assert!(matches!(err, ConfigBundleError::InvalidPermissions(_)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn artifact_permission_validation_observes_open_descriptor() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let fixture = fixture();
+        let mut permissions = fs::metadata(&fixture.anchor_path)
+            .expect("anchor metadata")
+            .permissions();
+        permissions.set_mode(0o664);
+        fs::set_permissions(&fixture.anchor_path, permissions).expect("permissions set");
+        let opened = open_read_only_no_follow(&fixture.anchor_path).expect("anchor opens");
+        let anchor: ConfigTrustAnchor =
+            serde_json::from_slice(&fs::read(&fixture.anchor_path).expect("anchor"))
+                .expect("anchor");
+        fs::remove_file(&fixture.anchor_path).expect("remove original path");
+        fs::write(
+            &fixture.anchor_path,
+            serde_json::to_vec_pretty(&anchor).expect("anchor json"),
+        )
+        .expect("replacement writes");
+        let mut replacement_permissions = fs::metadata(&fixture.anchor_path)
+            .expect("replacement metadata")
+            .permissions();
+        replacement_permissions.set_mode(0o600);
+        fs::set_permissions(&fixture.anchor_path, replacement_permissions)
+            .expect("replacement permissions set");
+
+        let err = read_limited_from_file(
+            opened,
+            MAX_TRUST_ANCHOR_BYTES,
+            Some(ArtifactPermissions::TrustAnchor),
+        )
+        .expect_err("opened descriptor permissions are enforced");
+
+        assert!(matches!(err, ConfigBundleError::InvalidPermissions(_)));
+        assert!(load_trust_anchor(&fixture.anchor_path).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn break_glass_permission_validation_observes_open_descriptor() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let tmp = TempDir::new().expect("tempdir");
+        let path = tmp.path().join("break_glass_override.json");
+        fs::write(&path, b"{}").expect("override");
+        let mut permissions = fs::metadata(&path)
+            .expect("override metadata")
+            .permissions();
+        permissions.set_mode(0o664);
+        fs::set_permissions(&path, permissions).expect("permissions set");
+        let opened = open_read_only_no_follow(&path).expect("override opens");
+        fs::remove_file(&path).expect("remove original path");
+        fs::write(&path, b"{}").expect("replacement writes");
+        let mut replacement_permissions = fs::metadata(&path)
+            .expect("replacement metadata")
+            .permissions();
+        replacement_permissions.set_mode(0o600);
+        fs::set_permissions(&path, replacement_permissions).expect("replacement permissions set");
+
+        let err = read_limited_from_file(
+            opened,
+            MAX_SIGNATURE_ENVELOPE_BYTES,
+            Some(ArtifactPermissions::BreakGlassOverride),
+        )
+        .expect_err("opened descriptor permissions are enforced");
+
+        assert!(matches!(
+            err,
+            ConfigBundleError::InvalidPermissions(
+                "break-glass override must not be group/world writable"
+            )
+        ));
     }
 
     #[test]

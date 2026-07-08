@@ -1052,15 +1052,13 @@ pub fn render_governed_runtime_target_json(raw_manifest: &str) -> Result<Vec<u8>
     Ok(bytes)
 }
 
-pub async fn verify_governed_bundle_report_json(
-    target_bytes: &[u8],
-) -> Result<Value, SidecarError> {
-    let target = governed_target_from_bytes(&target_bytes)?;
+pub fn verify_governed_bundle_report_json(target_bytes: &[u8]) -> Result<Value, SidecarError> {
+    let target = governed_target_from_bytes(target_bytes)?;
     validate_governed_runtime_target(&target)?;
     Ok(json!({
         "verified": true,
         "target_name": "<local-target-json>",
-        "config_hash": registry_platform_config::sha256_uri(&target_bytes),
+        "config_hash": registry_platform_config::sha256_uri(target_bytes),
     }))
 }
 

@@ -39,16 +39,18 @@ use registry_notary_server::{
     notary_routers_from_runtime, openapi_document, EvidenceIssuerRegistry,
 };
 use registry_platform_config::{
-    expand_config_env_vars, load_break_glass_override, load_trust_anchor,
-    reject_deprecated_config_fields, sha256_uri, verify_config_bundle, ConfigBreakGlassMode,
-    ConfigBreakGlassOverride, ConfigBundleError, VerifiedConfigBundle,
+    expand_config_env_vars, reject_deprecated_config_fields, verify_config_bundle,
+    ConfigBundleError, VerifiedConfigBundle,
 };
 use registry_platform_crypto::{LocalJwkSigner, PrivateJwk, PublicJwk};
 use registry_platform_httputil::{url as httputil_url, FetchUrlPolicy};
 use registry_platform_ops::{
-    override_pin_active_and_unexpired, posture_safe_runtime_config_hash, AntiRollbackKey,
-    AntiRollbackRecord, ConfigOverrideMode, ConfigOverridePin, ConfigProvenance, ConfigSource,
-    FileAntiRollbackStore,
+    antirollback_key_from_verified_bundle, bundle_verify_rejection_result,
+    load_unsigned_break_glass_or_pin,
+    persist_bundle_acceptance as persist_config_bundle_acceptance,
+    posture_safe_runtime_config_hash, resolve_bundle_state_action, verify_bundle_state_read_only,
+    BundleStateAction, ConfigBootError, ConfigOverrideMode, ConfigProvenance, ConfigSource,
+    PendingBundleAcceptance, UnsignedConfigSelection,
 };
 use serde_json::{json, Value};
 use serve::{serve_listener, ServeLimits};
@@ -608,48 +610,6 @@ struct ParsedConfigDocument {
     admin_listener_present: bool,
 }
 
-#[derive(Debug, Clone)]
-struct PendingBundleAcceptance {
-    state_path: PathBuf,
-    key: AntiRollbackKey,
-    source: ConfigSource,
-    bundle_id: Option<String>,
-    sequence: Option<u64>,
-    config_hash: String,
-    previous_config_hash: Option<String>,
-    previous_hash_matched: Option<bool>,
-    signer_kids: Vec<String>,
-    break_glass: bool,
-    state_action: BundleStateAction,
-    override_pin: Option<ConfigOverridePin>,
-    override_path: Option<PathBuf>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BundleStateAction {
-    Initialize,
-    Accept,
-    PersistOverridePin,
-    AlreadyPinned,
-}
-
-impl PendingBundleAcceptance {
-    fn initial_record(&self) -> AntiRollbackRecord {
-        AntiRollbackRecord {
-            key: self.key.clone(),
-            last_sequence: self
-                .sequence
-                .expect("initial state requires bundle sequence"),
-            last_config_hash: self.config_hash.clone(),
-            last_bundle_id: self.bundle_id.clone(),
-            root_version: None,
-            override_pin: None,
-            break_glass: Default::default(),
-            local_approvals: Default::default(),
-        }
-    }
-}
-
 fn bundle_acceptance_audit(acceptance: &PendingBundleAcceptance) -> ConfigAuditEvent {
     ConfigAuditEvent {
         action: "boot".to_string(),
@@ -696,19 +656,15 @@ async fn emit_boot_config_audits(
                 break_glass_used_audit(acceptance)?,
             )
             .await?;
-        if acceptance.source != ConfigSource::SignedBundleFile {
-            return Ok(());
-        }
     }
-    if acceptance.source != ConfigSource::SignedBundleFile {
-        return Ok(());
+    if acceptance.source == ConfigSource::SignedBundleFile {
+        runtime
+            .emit_config_boot_audit(
+                "config.bundle_accepted",
+                bundle_acceptance_audit(acceptance),
+            )
+            .await?;
     }
-    runtime
-        .emit_config_boot_audit(
-            "config.bundle_accepted",
-            bundle_acceptance_audit(acceptance),
-        )
-        .await?;
     Ok(())
 }
 
@@ -762,49 +718,7 @@ fn rfc3339_unix(value: &str) -> Option<u64> {
 fn persist_bundle_acceptance(
     acceptance: &PendingBundleAcceptance,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let store = FileAntiRollbackStore::new(&acceptance.state_path);
-    match acceptance.state_action {
-        BundleStateAction::Initialize => store.initialize(acceptance.initial_record())?,
-        BundleStateAction::Accept => {
-            store.accept_bundle(
-                &acceptance.key,
-                acceptance
-                    .bundle_id
-                    .clone()
-                    .ok_or("signed bundle acceptance is missing bundle_id")?,
-                acceptance
-                    .sequence
-                    .ok_or("signed bundle acceptance is missing sequence")?,
-                acceptance.config_hash.clone(),
-            )?;
-        }
-        BundleStateAction::PersistOverridePin => {
-            let pin = acceptance
-                .override_pin
-                .clone()
-                .ok_or("break-glass acceptance is missing override pin")?;
-            store.persist_override_pin(&acceptance.key, pin)?;
-            if let Some(path) = &acceptance.override_path {
-                consume_break_glass_override(path)?;
-            }
-        }
-        BundleStateAction::AlreadyPinned => {
-            if let Some(path) = &acceptance.override_path {
-                consume_break_glass_override(path)?;
-            }
-        }
-    }
-    Ok(())
-}
-
-fn consume_break_glass_override(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or("break-glass override path has no file name")?;
-    let consumed_name = format!("{file_name}.consumed-{}", Ulid::new());
-    let consumed_path = path.with_file_name(consumed_name);
-    fs::rename(path, consumed_path)?;
+    persist_config_bundle_acceptance(acceptance)?;
     Ok(())
 }
 
@@ -892,12 +806,7 @@ async fn config_verify_bundle(
             return Err(Box::new(error));
         }
     };
-    let key = AntiRollbackKey {
-        product: verified.manifest.product.clone(),
-        instance_id: verified.manifest.instance_id.clone().unwrap_or_default(),
-        environment: verified.manifest.environment.clone(),
-        stream_id: verified.manifest.stream_id.clone(),
-    };
+    let key = antirollback_key_from_verified_bundle(&verified);
     if let Err(error) = verify_bundle_state_read_only(
         &args.state_path,
         &key,
@@ -913,7 +822,7 @@ async fn config_verify_bundle(
             Some(verified.manifest.config_hash.clone()),
             Some(("rejected_rollback", error.to_string())),
         ))?;
-        return Err(error);
+        return Err(Box::new(error));
     }
     let config_text = std::str::from_utf8(&verified.config_bytes)?;
     let parsed = match parse_config_document(config_text).and_then(|parsed| {
@@ -945,25 +854,6 @@ async fn config_verify_bundle(
         None,
     ))?;
     Ok(())
-}
-
-fn verify_bundle_state_read_only(
-    state_path: &Path,
-    key: &AntiRollbackKey,
-    sequence: u64,
-    config_hash: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let record = FileAntiRollbackStore::new(state_path).load(key)?;
-    if sequence > record.last_sequence
-        || (sequence == record.last_sequence && config_hash == record.last_config_hash)
-        || record.override_pin.as_ref().is_some_and(|pin| {
-            override_pin_active_and_unexpired(pin) && pin.config_hash == config_hash
-        })
-    {
-        Ok(())
-    } else {
-        Err("signed config bundle sequence is not monotonic".into())
-    }
 }
 
 fn print_config_verify_bundle_report(report: Value) -> Result<(), Box<dyn std::error::Error>> {
@@ -1135,22 +1025,17 @@ fn load_verified_bundle_server_config(
     initialize_state: bool,
     verified: VerifiedConfigBundle,
 ) -> Result<LoadedServerConfig, Box<dyn std::error::Error>> {
-    let key = AntiRollbackKey {
-        product: verified.manifest.product.clone(),
-        instance_id: verified.manifest.instance_id.clone().unwrap_or_default(),
-        environment: verified.manifest.environment.clone(),
-        stream_id: verified.manifest.stream_id.clone(),
-    };
-    let (state_action, override_pin, previous_hash_matched, override_path) =
-        resolve_bundle_state_action(
-            &config_trust.antirollback_state_path,
-            &key,
-            verified.manifest.sequence,
-            &verified.manifest.config_hash,
-            verified.manifest.previous_config_hash.as_deref(),
-            config_trust.break_glass_override_path.as_deref(),
-            initialize_state,
-        )?;
+    let key = antirollback_key_from_verified_bundle(&verified);
+    let state_decision = resolve_bundle_state_action(
+        &config_trust.antirollback_state_path,
+        &key,
+        verified.manifest.sequence,
+        &verified.manifest.config_hash,
+        verified.manifest.previous_config_hash.as_deref(),
+        config_trust.break_glass_override_path.as_deref(),
+        initialize_state,
+    )
+    .map_err(map_config_boot_error)?;
     let config_text = std::str::from_utf8(&verified.config_bytes).map_err(|error| {
         tracing::error!(
             code = "config.bundle_rejected",
@@ -1189,7 +1074,7 @@ fn load_verified_bundle_server_config(
         last_bundle_id: Some(verified.manifest.bundle_id.clone()),
         last_bundle_sequence: Some(verified.manifest.sequence),
         last_bundle_signer_kids: verified.signer_kids.clone(),
-        override_pin: override_pin.clone(),
+        override_pin: state_decision.override_pin.clone(),
         last_apply_result: None,
         last_apply_at: None,
         restart_required: false,
@@ -1206,12 +1091,15 @@ fn load_verified_bundle_server_config(
             sequence: Some(verified.manifest.sequence),
             config_hash: verified.manifest.config_hash,
             previous_config_hash: verified.manifest.previous_config_hash,
-            previous_hash_matched,
+            previous_hash_matched: state_decision.previous_hash_matched,
             signer_kids: verified.signer_kids,
-            break_glass: matches!(state_action, BundleStateAction::PersistOverridePin),
-            state_action,
-            override_pin,
-            override_path,
+            break_glass: matches!(
+                state_decision.state_action,
+                BundleStateAction::PersistOverridePin
+            ),
+            state_action: state_decision.state_action,
+            override_pin: state_decision.override_pin,
+            override_path: state_decision.override_path,
         }),
     })
 }
@@ -1220,102 +1108,23 @@ fn load_unsigned_break_glass_or_pin_server_config(
     config_trust: &ConfigTrustConfig,
     override_path: Option<&Path>,
 ) -> Result<Option<LoadedServerConfig>, Box<dyn std::error::Error>> {
-    let anchor = match load_trust_anchor(&config_trust.trust_anchor_path) {
-        Ok(anchor) => anchor,
-        Err(error) => {
-            tracing::error!(
-                code = "config.bundle_rejected",
-                result = "rejected_signature",
-                error = %error,
-                "unsigned break-glass config trust anchor failed validation"
-            );
-            eprintln!("config.bundle_rejected result=rejected_signature error={error}");
-            return Err(Box::<dyn std::error::Error>::from(error));
-        }
-    };
-    let key = AntiRollbackKey {
-        product: anchor.product,
-        instance_id: anchor.instance_id,
-        environment: anchor.environment,
-        stream_id: anchor.stream_id,
-    };
-    let store = FileAntiRollbackStore::new(&config_trust.antirollback_state_path);
-    let record = match store.load(&key) {
-        Ok(record) => record,
-        Err(error) => {
-            tracing::error!(
-                code = "config.bundle_rejected",
-                result = "rejected_rollback",
-                error = %error,
-                "unsigned break-glass config requires existing anti-rollback state"
-            );
-            eprintln!("config.bundle_rejected result=rejected_rollback error={error}");
-            return Err(Box::<dyn std::error::Error>::from(error));
-        }
-    };
-    if let Some(pin) = record
-        .override_pin
-        .as_ref()
-        .filter(|pin| {
-            pin.mode == ConfigOverrideMode::AcceptUnsigned && override_pin_active_and_unexpired(pin)
-        })
-        .cloned()
-    {
-        let recovery_override_path = matching_leftover_override_path(override_path, &pin);
-        return load_unsigned_pin_server_config(
-            config_trust,
-            key,
-            record,
-            pin,
-            BundleStateAction::AlreadyPinned,
-            recovery_override_path,
-        )
-        .map(Some);
-    }
-    let Some((override_path, override_file)) =
-        load_optional_break_glass_override(override_path, ConfigBreakGlassMode::AcceptUnsigned)?
+    let Some(selection) = load_unsigned_break_glass_or_pin(
+        &config_trust.trust_anchor_path,
+        &config_trust.antirollback_state_path,
+        override_path,
+    )
+    .map_err(map_config_boot_error)?
     else {
         return Ok(None);
     };
-    let pin = override_pin_from_file(&override_file);
-    load_unsigned_pin_server_config(
-        config_trust,
-        key,
-        record,
-        pin,
-        BundleStateAction::PersistOverridePin,
-        Some(override_path),
-    )
-    .map(Some)
+    load_unsigned_pin_server_config(config_trust, selection).map(Some)
 }
 
 fn load_unsigned_pin_server_config(
     config_trust: &ConfigTrustConfig,
-    key: AntiRollbackKey,
-    record: AntiRollbackRecord,
-    pin: ConfigOverridePin,
-    state_action: BundleStateAction,
-    override_path: Option<PathBuf>,
+    selection: UnsignedConfigSelection,
 ) -> Result<LoadedServerConfig, Box<dyn std::error::Error>> {
-    let config_path = pin
-        .config_path
-        .as_deref()
-        .map(PathBuf::from)
-        .ok_or("unsigned break-glass pin is missing config_path")?;
-    let config_bytes = read_unsigned_config_bytes(&config_path)?;
-    let actual = sha256_uri(&config_bytes);
-    if actual != pin.config_hash {
-        tracing::error!(
-            code = "config.bundle_rejected",
-            result = "rejected_rollback",
-            expected = %pin.config_hash,
-            actual,
-            "unsigned break-glass pinned config hash mismatch"
-        );
-        eprintln!("config.bundle_rejected result=rejected_rollback error=hash_mismatch");
-        return Err("unsigned break-glass config hash mismatch".into());
-    }
-    let config_text = std::str::from_utf8(&config_bytes).map_err(|error| {
+    let config_text = std::str::from_utf8(&selection.config_bytes).map_err(|error| {
         tracing::error!(
             code = "config.bundle_rejected",
             result = "rejected_validation",
@@ -1345,17 +1154,17 @@ fn load_unsigned_pin_server_config(
         eprintln!("config.bundle_rejected result=rejected_validation error={error}");
         error
     })?;
-    let override_pin = Some(pin.clone());
+    let override_pin = Some(selection.pin.clone());
     Ok(LoadedServerConfig {
         config: parsed.config,
         config_source: ConfigSource::LocalFile,
         config_provenance: Some(ConfigProvenance {
             source: ConfigSource::LocalFile,
-            internal_config_hash: pin.config_hash.clone(),
+            internal_config_hash: selection.pin.config_hash.clone(),
             posture_config_hash: posture_safe_runtime_config_hash(&parsed.value),
             dynamic_reload_supported: false,
-            last_bundle_id: record.last_bundle_id,
-            last_bundle_sequence: Some(record.last_sequence),
+            last_bundle_id: selection.record.last_bundle_id,
+            last_bundle_sequence: Some(selection.record.last_sequence),
             last_bundle_signer_kids: Vec::new(),
             override_pin: override_pin.clone(),
             last_apply_result: None,
@@ -1364,248 +1173,23 @@ fn load_unsigned_pin_server_config(
         }),
         pending_bundle_acceptance: Some(PendingBundleAcceptance {
             state_path: config_trust.antirollback_state_path.clone(),
-            key,
+            key: selection.key,
             source: ConfigSource::LocalFile,
             bundle_id: None,
             sequence: None,
-            config_hash: pin.config_hash,
+            config_hash: selection.pin.config_hash,
             previous_config_hash: None,
             previous_hash_matched: None,
             signer_kids: Vec::new(),
-            break_glass: matches!(state_action, BundleStateAction::PersistOverridePin),
-            state_action,
+            break_glass: matches!(
+                selection.state_action,
+                BundleStateAction::PersistOverridePin
+            ),
+            state_action: selection.state_action,
             override_pin,
-            override_path,
+            override_path: selection.override_path,
         }),
     })
-}
-
-fn bundle_verify_rejection_result(error: &ConfigBundleError) -> &'static str {
-    match error {
-        ConfigBundleError::BindingMismatch(_) => "rejected_binding",
-        ConfigBundleError::SignatureRejected
-        | ConfigBundleError::InvalidSignatureEnvelope(_)
-        | ConfigBundleError::InvalidTrustAnchor(_)
-        | ConfigBundleError::InvalidPermissions(_) => "rejected_signature",
-        ConfigBundleError::Io(_)
-        | ConfigBundleError::Json(_)
-        | ConfigBundleError::InvalidManifest(_)
-        | ConfigBundleError::InvalidBreakGlass(_)
-        | ConfigBundleError::FileClosure(_)
-        | ConfigBundleError::HashMismatch { .. } => "rejected_validation",
-    }
-}
-
-fn resolve_bundle_state_action(
-    state_path: &Path,
-    key: &AntiRollbackKey,
-    sequence: u64,
-    config_hash: &str,
-    previous_config_hash: Option<&str>,
-    rollback_override_path: Option<&Path>,
-    initialize_state: bool,
-) -> Result<
-    (
-        BundleStateAction,
-        Option<ConfigOverridePin>,
-        Option<bool>,
-        Option<PathBuf>,
-    ),
-    Box<dyn std::error::Error>,
-> {
-    let store = FileAntiRollbackStore::new(state_path);
-    match store.load(key) {
-        Ok(record) if sequence > record.last_sequence => Ok((
-            BundleStateAction::Accept,
-            None,
-            previous_hash_matched(previous_config_hash, &record),
-            None,
-        )),
-        Ok(record)
-            if sequence == record.last_sequence && config_hash == record.last_config_hash =>
-        {
-            let matched = previous_hash_matched(previous_config_hash, &record);
-            let active_pin = record
-                .override_pin
-                .filter(override_pin_active_and_unexpired);
-            Ok((BundleStateAction::Accept, active_pin, matched, None))
-        }
-        Ok(record)
-            if record.override_pin.as_ref().is_some_and(|pin| {
-                override_pin_active_and_unexpired(pin) && pin.config_hash == config_hash
-            }) =>
-        {
-            let matched = previous_hash_matched(previous_config_hash, &record);
-            Ok((
-                BundleStateAction::AlreadyPinned,
-                record.override_pin,
-                matched,
-                None,
-            ))
-        }
-        Ok(record) => {
-            let Some((override_path, override_file)) = load_optional_break_glass_override(
-                rollback_override_path,
-                ConfigBreakGlassMode::AcceptRollback,
-            )?
-            else {
-                tracing::error!(
-                    code = "config.bundle_rejected",
-                    result = "rejected_rollback",
-                    "signed config bundle sequence is not monotonic"
-                );
-                eprintln!("config.bundle_rejected result=rejected_rollback");
-                return Err("signed config bundle sequence is not monotonic".into());
-            };
-            if override_file.config_hash != config_hash {
-                tracing::error!(
-                    code = "config.break_glass_invalid",
-                    error = "hash_mismatch",
-                    "rollback break-glass override hash does not match bundle config hash"
-                );
-                eprintln!("config.break_glass_invalid error=hash_mismatch");
-                tracing::error!(
-                    code = "config.bundle_rejected",
-                    result = "rejected_rollback",
-                    "signed config bundle sequence is not monotonic"
-                );
-                eprintln!("config.bundle_rejected result=rejected_rollback");
-                return Err("rollback break-glass override hash mismatch".into());
-            }
-            let matched = previous_hash_matched(previous_config_hash, &record);
-            Ok((
-                BundleStateAction::PersistOverridePin,
-                Some(override_pin_from_file(&override_file)),
-                matched,
-                Some(override_path),
-            ))
-        }
-        Err(registry_platform_ops::AntiRollbackStoreError::MissingState) if initialize_state => {
-            Ok((
-                BundleStateAction::Initialize,
-                None,
-                previous_config_hash.map(|_| false),
-                None,
-            ))
-        }
-        Err(error) => {
-            tracing::error!(
-                code = "config.bundle_rejected",
-                result = "rejected_rollback",
-                error = %error,
-                "signed config bundle anti-rollback state rejected startup"
-            );
-            eprintln!("config.bundle_rejected result=rejected_rollback error={error}");
-            Err(Box::new(error))
-        }
-    }
-}
-
-fn load_optional_break_glass_override(
-    path: Option<&Path>,
-    mode: ConfigBreakGlassMode,
-) -> Result<Option<(PathBuf, ConfigBreakGlassOverride)>, Box<dyn std::error::Error>> {
-    let Some(path) = path else {
-        return Ok(None);
-    };
-    if !path.exists() {
-        return Ok(None);
-    }
-    let override_file = load_break_glass_override(path).map_err(|error| {
-        tracing::error!(
-            code = "config.break_glass_invalid",
-            error = %error,
-            "config break-glass override rejected"
-        );
-        eprintln!("config.break_glass_invalid error={error}");
-        Box::<dyn std::error::Error>::from(error)
-    })?;
-    if override_file.mode != mode {
-        return Ok(None);
-    }
-    Ok(Some((path.to_path_buf(), override_file)))
-}
-
-fn matching_leftover_override_path(
-    path: Option<&Path>,
-    pin: &ConfigOverridePin,
-) -> Option<PathBuf> {
-    let path = path?;
-    if !path.exists() {
-        return None;
-    }
-    match load_break_glass_override(path) {
-        Ok(override_file)
-            if override_file.mode == ConfigBreakGlassMode::AcceptUnsigned
-                && override_file.config_hash == pin.config_hash =>
-        {
-            Some(path.to_path_buf())
-        }
-        Ok(_) => None,
-        Err(error) => {
-            tracing::error!(
-                code = "config.break_glass_invalid",
-                error = %error,
-                "config break-glass override rejected during pin recovery"
-            );
-            eprintln!("config.break_glass_invalid error={error}");
-            None
-        }
-    }
-}
-
-fn read_unsigned_config_bytes(path: &Path) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    let metadata = fs::symlink_metadata(path).map_err(|error| {
-        tracing::error!(
-            code = "config.bundle_rejected",
-            result = "rejected_validation",
-            error = %error,
-            "unsigned break-glass config failed to stat"
-        );
-        eprintln!("config.bundle_rejected result=rejected_validation error={error}");
-        error
-    })?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        tracing::error!(
-            code = "config.bundle_rejected",
-            result = "rejected_validation",
-            "unsigned break-glass config path is not a regular file"
-        );
-        eprintln!("config.bundle_rejected result=rejected_validation error=not_regular_file");
-        return Err("unsigned break-glass config path is not a regular file".into());
-    }
-    if metadata.len() > registry_platform_config::MAX_BUNDLE_FILE_BYTES {
-        tracing::error!(
-            code = "config.bundle_rejected",
-            result = "rejected_validation",
-            "unsigned break-glass config exceeds maximum size"
-        );
-        eprintln!("config.bundle_rejected result=rejected_validation error=max_size");
-        return Err("unsigned break-glass config exceeds maximum size".into());
-    }
-    let bytes = fs::read(path).map_err(|error| {
-        tracing::error!(
-            code = "config.bundle_rejected",
-            result = "rejected_validation",
-            error = %error,
-            "unsigned break-glass config failed to read"
-        );
-        eprintln!("config.bundle_rejected result=rejected_validation error={error}");
-        error
-    })?;
-    if u64::try_from(bytes.len())
-        .ok()
-        .is_none_or(|len| len > registry_platform_config::MAX_BUNDLE_FILE_BYTES)
-    {
-        tracing::error!(
-            code = "config.bundle_rejected",
-            result = "rejected_validation",
-            "unsigned break-glass config exceeds maximum size"
-        );
-        eprintln!("config.bundle_rejected result=rejected_validation error=max_size");
-        return Err("unsigned break-glass config exceeds maximum size".into());
-    }
-    Ok(bytes)
 }
 
 fn log_bundle_verification_error(error: &ConfigBundleError) {
@@ -1619,32 +1203,25 @@ fn log_bundle_verification_error(error: &ConfigBundleError) {
     eprintln!("config.bundle_rejected result={result} error={error}");
 }
 
-fn previous_hash_matched(
-    previous_config_hash: Option<&str>,
-    record: &AntiRollbackRecord,
-) -> Option<bool> {
-    previous_config_hash.map(|previous| previous == record.last_config_hash)
-}
-
-fn override_pin_from_file(override_file: &ConfigBreakGlassOverride) -> ConfigOverridePin {
-    ConfigOverridePin {
-        active: true,
-        mode: match override_file.mode {
-            ConfigBreakGlassMode::AcceptRollback => ConfigOverrideMode::AcceptRollback,
-            ConfigBreakGlassMode::AcceptUnsigned => ConfigOverrideMode::AcceptUnsigned,
-        },
-        config_hash: override_file.config_hash.clone(),
-        config_path: override_file
-            .config_path
-            .as_ref()
-            .map(|path| path.to_string_lossy().into_owned()),
-        expires_at: Some(override_file.expires_at.clone()),
-        used_at: OffsetDateTime::now_utc()
-            .format(&Rfc3339)
-            .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string()),
-        operator: override_file.operator.clone(),
-        reason: override_file.reason.clone(),
+fn map_config_boot_error(error: ConfigBootError) -> Box<dyn std::error::Error> {
+    if let Some(reason) = error.break_glass_invalid_reason() {
+        tracing::error!(
+            code = "config.break_glass_invalid",
+            error = %error,
+            reason,
+            "config break-glass override rejected"
+        );
+        eprintln!("config.break_glass_invalid error={error}");
     }
+    let result = error.bundle_rejection_result();
+    tracing::error!(
+        code = "config.bundle_rejected",
+        result,
+        error = %error,
+        "config bundle boot state rejected startup"
+    );
+    eprintln!("config.bundle_rejected result={result} error={error}");
+    Box::new(error)
 }
 
 #[derive(Debug)]
@@ -3741,13 +3318,155 @@ mod tests {
     use axum::routing::{get, post};
     use axum::{Json, Router};
     use axum_test::TestServer;
+    use registry_platform_config::{
+        sha256_uri, ConfigBundleFile, ConfigBundleManifest, ConfigBundleSignature,
+        ConfigBundleSignatureEnvelope, ConfigTrustAnchor, ConfigTrustAnchorSigner,
+    };
+    use registry_platform_crypto::{canonicalize_json, sign, PrivateJwk};
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+    const CONFIG_BUNDLE_PRIVATE_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}"#;
 
     #[derive(Clone, Default)]
     struct DoctorLiveState {
         token_called: Arc<AtomicBool>,
         dci_called: Arc<AtomicBool>,
+    }
+
+    struct SignedBundleFixture {
+        bundle_dir: PathBuf,
+        anchor_path: PathBuf,
+        state_path: PathBuf,
+        config_hash: String,
+    }
+
+    fn write_signed_notary_bundle(tmp: &tempfile::TempDir) -> SignedBundleFixture {
+        let bundle_dir = tmp.path().join("bundle");
+        let config_dir = bundle_dir.join("config");
+        std::fs::create_dir_all(&config_dir).expect("bundle config dir");
+        let config = notary_bundle_runtime_config();
+        std::fs::write(config_dir.join("notary.yaml"), config.as_bytes()).expect("config writes");
+        let config_hash = sha256_uri(config.as_bytes());
+        let private = PrivateJwk::parse(CONFIG_BUNDLE_PRIVATE_JWK).expect("private jwk");
+        let public = private.public();
+        let kid = public.jkt().expect("thumbprint");
+        let manifest = ConfigBundleManifest {
+            schema: "registry.platform.config_bundle.v1".to_string(),
+            product: "registry-notary".to_string(),
+            environment: "development".to_string(),
+            stream_id: "notary-loader-test".to_string(),
+            instance_id: None,
+            bundle_id: "notary-loader-bundle".to_string(),
+            sequence: 1,
+            previous_config_hash: None,
+            config_hash: config_hash.clone(),
+            files: vec![ConfigBundleFile {
+                path: "config/notary.yaml".to_string(),
+                sha256: config_hash.clone(),
+            }],
+            created_at: "2026-07-07T10:00:00Z".to_string(),
+        };
+        write_manifest_and_signature(&bundle_dir, &manifest, &private, &kid);
+        let anchor = ConfigTrustAnchor {
+            schema: "registry.platform.config_trust_anchor.v1".to_string(),
+            product: "registry-notary".to_string(),
+            environment: "development".to_string(),
+            stream_id: "notary-loader-test".to_string(),
+            instance_id: "notary-loader".to_string(),
+            signers: vec![ConfigTrustAnchorSigner {
+                kid,
+                jwk: public,
+                enabled: true,
+            }],
+        };
+        let anchor_path = tmp.path().join("trust_anchor.json");
+        std::fs::write(
+            &anchor_path,
+            serde_json::to_vec_pretty(&anchor).expect("anchor serializes"),
+        )
+        .expect("anchor writes");
+        SignedBundleFixture {
+            bundle_dir,
+            anchor_path,
+            state_path: tmp.path().join("antirollback.json"),
+            config_hash,
+        }
+    }
+
+    fn write_manifest_and_signature(
+        bundle_dir: &Path,
+        manifest: &ConfigBundleManifest,
+        private: &PrivateJwk,
+        kid: &str,
+    ) {
+        let manifest_value = serde_json::to_value(manifest).expect("manifest value");
+        let canonical = canonicalize_json(&manifest_value).expect("canonical manifest");
+        let signature = sign(&canonical, private).expect("manifest signs");
+        let envelope = ConfigBundleSignatureEnvelope {
+            schema: "registry.platform.config_bundle_signatures.v1".to_string(),
+            signatures: vec![ConfigBundleSignature {
+                kid: kid.to_string(),
+                alg: "EdDSA".to_string(),
+                sig: URL_SAFE_NO_PAD.encode(signature),
+            }],
+        };
+        std::fs::write(
+            bundle_dir.join("manifest.json"),
+            serde_json::to_vec_pretty(manifest).expect("manifest serializes"),
+        )
+        .expect("manifest writes");
+        std::fs::write(
+            bundle_dir.join("manifest.sig.json"),
+            serde_json::to_vec_pretty(&envelope).expect("signature serializes"),
+        )
+        .expect("signature writes");
+    }
+
+    fn notary_bundle_runtime_config() -> String {
+        r#"
+deployment:
+  profile: local
+server:
+  bind: 127.0.0.1:4255
+  admin_listener:
+    mode: dedicated
+    bind: 127.0.0.1:4256
+auth:
+  mode: api_key
+  api_keys:
+    - id: local
+      fingerprint:
+        provider: env
+        name: TEST_NOTARY_LOADER_API_HASH
+      scopes: [registry_notary:credential_issue]
+audit:
+  sink: stdout
+evidence:
+  enabled: true
+  signing_keys:
+    issuer:
+      provider: local_jwk_env
+      private_jwk_env: TEST_NOTARY_LOADER_ISSUER_JWK
+      alg: EdDSA
+      kid: did:web:issuer.example#key-1
+      status: active
+"#
+        .to_string()
+    }
+
+    fn notary_bootstrap_config(fixture: &SignedBundleFixture) -> String {
+        format!(
+            r#"{}
+config_trust:
+  trust_anchor_path: {}
+  bundle_path: {}
+  antirollback_state_path: {}
+"#,
+            notary_bundle_runtime_config(),
+            fixture.anchor_path.display(),
+            fixture.bundle_dir.display(),
+            fixture.state_path.display()
+        )
     }
 
     async fn test_oauth_token(
@@ -3860,6 +3579,35 @@ CLIENT_SECRET='secret value'
             expand_config_env_vars("${NOT-A-VALID-NAME:-fallback}").expect_err("invalid var fails");
 
         assert!(err.to_string().contains("invalid env var name"));
+    }
+
+    #[test]
+    fn signed_bundle_server_config_loads_with_pending_acceptance() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let fixture = write_signed_notary_bundle(&tmp);
+        let config_path = tmp.path().join("bootstrap.yaml");
+        std::fs::write(&config_path, notary_bootstrap_config(&fixture)).expect("bootstrap writes");
+
+        let loaded = load_server_config(&config_path, true).expect("signed bundle config loads");
+
+        assert_eq!(loaded.config_source, ConfigSource::SignedBundleFile);
+        let provenance = loaded.config_provenance.expect("provenance");
+        assert_eq!(provenance.source, ConfigSource::SignedBundleFile);
+        assert_eq!(provenance.internal_config_hash, fixture.config_hash);
+        let acceptance = loaded
+            .pending_bundle_acceptance
+            .expect("pending acceptance");
+        assert_eq!(acceptance.source, ConfigSource::SignedBundleFile);
+        assert_eq!(
+            acceptance.bundle_id.as_deref(),
+            Some("notary-loader-bundle")
+        );
+        assert_eq!(acceptance.sequence, Some(1));
+        assert_eq!(acceptance.config_hash, fixture.config_hash);
+        assert!(matches!(
+            acceptance.state_action,
+            BundleStateAction::Initialize
+        ));
     }
 
     #[test]

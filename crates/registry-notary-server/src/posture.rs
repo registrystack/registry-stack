@@ -10,8 +10,8 @@ use registry_notary_core::{
     REPLAY_STORAGE_IN_MEMORY, REPLAY_STORAGE_REDIS,
 };
 use registry_platform_ops::{
-    filter_posture_for_tier, posture_safe_runtime_config_hash, ConfigOverrideMode,
-    ConfigOverridePin, PostureFilterError, PostureTier,
+    filter_posture_for_tier, override_pin_posture, posture_safe_runtime_config_hash,
+    PostureFilterError, PostureTier,
 };
 use serde_json::{json, Map, Value};
 use time::OffsetDateTime;
@@ -359,22 +359,9 @@ fn configuration_object(config_apply: &ConfigApplyPosture, context: &PostureCont
         );
     }
     if let Some(pin) = &config_apply.override_pin {
-        configuration.insert("override".to_string(), override_object(pin));
+        configuration.insert("override".to_string(), override_pin_posture(pin));
     }
     Value::Object(configuration)
-}
-
-fn override_object(pin: &ConfigOverridePin) -> Value {
-    json!({
-        "active": pin.active,
-        "mode": match pin.mode {
-            ConfigOverrideMode::AcceptRollback => "accept_rollback",
-            ConfigOverrideMode::AcceptUnsigned => "accept_unsigned",
-        },
-        "used_at": &pin.used_at,
-        "reason": &pin.reason,
-        "expires_at": pin.expires_at.as_deref(),
-    })
 }
 
 fn emergency_object(

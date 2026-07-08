@@ -69,7 +69,7 @@ fn parse_resolved_config_candidate_with_provenance(
     } else {
         internal_config_hash(candidate.config_yaml.as_bytes())
     };
-    let mut provenance = ConfigProvenance {
+    let provenance = ConfigProvenance {
         source: candidate.source,
         internal_config_hash: internal_hash,
         posture_config_hash: posture_safe_runtime_config_hash(&config_value),
@@ -82,9 +82,6 @@ fn parse_resolved_config_candidate_with_provenance(
         last_apply_at: None,
         restart_required: false,
     };
-    if candidate.bundle_id.trim().is_empty() {
-        provenance.last_bundle_id = None;
-    }
     Ok(ParsedConfigCandidate {
         config,
         provenance,
