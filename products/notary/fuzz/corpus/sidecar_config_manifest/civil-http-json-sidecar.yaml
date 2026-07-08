@@ -1,6 +1,5 @@
 # Local development unsigned manifest.
-# Production startup requires config_trust and a governed TUF target; run this
-# file only with --allow-unsigned-dev-config.
+# This corpus fixture is not a production startup contract.
 #
 # Built-in CIVIL person source using the http_json engine. This is the built-in
 # reference replacing the simple single-GET OpenFn `civil_openfn` source that

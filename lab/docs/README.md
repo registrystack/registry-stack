@@ -13,7 +13,6 @@ available `just` commands. The tutorials below focus on one working path each.
 flowchart TD
     Root["Root README<br/>setup, ports, just commands"]
     Ops["Operations posture lab contract<br/>admin posture and credentials"]
-    Lab2["Lab 2 governed operations demo spec<br/>signed config verification and apply"]
     Tutorials["First credential tutorials<br/>OpenCRVS, DHIS2, OpenFn"]
     Citizen["Citizen and wallet flows<br/>OID4VCI and subject binding"]
     Agri["Agriculture demo specs<br/>registry and consumer demos"]
@@ -24,7 +23,6 @@ flowchart TD
     Root --> Citizen
     Root --> Agri
     Root --> API
-    Ops --> Lab2
     Tutorials --> API
 ```
 
@@ -62,8 +60,6 @@ flowchart TD
 
 - [Operations posture lab contract](ops-posture-lab-contract.md): admin posture
   endpoints and credentials exposed by the local lab.
-- [Lab 2 governed operations demo spec](lab2-governed-operations-demo-spec.md):
-  opt-in design for signed governed config verification and apply demos.
 
 ## Public API workspace
 

@@ -117,16 +117,12 @@ The codes above are the evidence-evaluation taxonomy. The Notary server also ret
 
 ### Administration and configuration
 
-`config.*`, `admin.*`, and `registry.admin.*` codes for the runtime configuration and admin surfaces. These are returned to admin callers, not to data-plane clients.
+`registry.admin.*` codes for admin surfaces. These are returned to admin callers, not to data-plane clients.
 
 | Code | Meaning | Usual cause |
 | --- | --- | --- |
-| `config.candidate_invalid` | config candidate is invalid | A submitted runtime configuration candidate failed validation. |
-| `admin.config_bundle_invalid` | config bundle is invalid | A submitted configuration bundle could not be validated. |
-| `config.apply_unavailable` | config apply is unavailable | Runtime configuration apply is not available for this deployment. |
 | `registry.admin.capability.not_supported` | registry admin capability is not supported | The requested registry administration capability is not supported. |
 | `registry.admin.posture.invalid_tier` | registry admin posture tier is invalid | The requested posture tier is not a recognized value. |
-| `registry.admin.config.inline_apply_rejected` | registry admin inline config apply was rejected | An inline configuration apply was rejected. |
 
 ### Readiness and posture
 

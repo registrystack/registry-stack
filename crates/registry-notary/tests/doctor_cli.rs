@@ -46,27 +46,15 @@ fn write_config_with_options(tmp: &TempDir, options: TestConfigOptions<'_>) -> P
     let config_trust = if options.config_trust {
         format!(
             r#"config_trust:
+  trust_anchor_path: {}
+  bundle_path: {}
   antirollback_state_path: {}
-  local_approval_state_path: {}
-  accepted_roots:
-    - root_id: doctor-test-root
-      production: false
-      tuf_root_sha256: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-      high_risk_change_classes: []
-      signers:
-        doctor-test-signer:
-          kid: doctor-test-signer
-          enabled: true
-      roles:
-        - name: config-admin
-          threshold: 1
-          signer_kids:
-            - doctor-test-signer
-          allowed_change_classes:
-            - public_metadata
+  break_glass_override_path: {}
 "#,
+            tmp.path().join("trust-anchor.json").display(),
+            tmp.path().join("bundle").display(),
             tmp.path().join("antirollback.json").display(),
-            tmp.path().join("local-approvals.json").display()
+            tmp.path().join("break-glass").display()
         )
     } else {
         String::new()

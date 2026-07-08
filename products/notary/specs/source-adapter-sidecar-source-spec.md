@@ -119,9 +119,9 @@ sources:
 The historical OpenFn design expected startup to verify installed OpenFn
 compiler/build tool, runtime, and adaptor versions against the manifest. The
 shipped sidecar does not enforce installed OpenFn runtime or adaptor version
-pins as part of startup. Current governed startup verifies the TUF target and
-whole-target `config_hash`, validates and compiles the configured runtime
-material, requires credentials, and runs smoke lookups before readiness.
+pins as part of startup. Current startup validates the local manifest, compiles
+the configured runtime material, requires credentials, runs smoke lookups before
+readiness, and can expose local sidecar assurance for Notary-side pins.
 
 ## Historical Requirements
 

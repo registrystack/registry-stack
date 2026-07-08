@@ -203,6 +203,8 @@ pub struct ConfigAuditExt {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub previous_config_hash: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_hash_matched: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub config_hash: Option<String>,
     pub product_validation_result: &'static str,
     pub apply_result: &'static str,

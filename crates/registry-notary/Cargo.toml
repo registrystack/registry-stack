@@ -34,6 +34,7 @@ registry-config-report.workspace = true
 registry-platform-config.workspace = true
 registry-platform-crypto.workspace = true
 registry-platform-httputil.workspace = true
+registry-platform-ops.workspace = true
 reqwest.workspace = true
 serde_json.workspace = true
 serde_norway.workspace = true
@@ -50,7 +51,5 @@ ulid.workspace = true
 axum-test = { version = "20" }
 chrono = { version = "0.4" }
 jsonschema.workspace = true
-registry-platform-ops.workspace = true
 tempfile = { version = "3" }
-tough = { version = "0.22.0" }
 wiremock = { version = "0.6" }

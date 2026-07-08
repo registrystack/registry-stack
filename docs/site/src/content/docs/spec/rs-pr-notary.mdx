@@ -240,7 +240,7 @@ These constraints are stated so a reader does not infer a capability from the ro
 - Federation: Static-peer delegated evaluation only; no dynamic discovery, shared replay storage, or federated credential issuance (REQ-PR-NOTARY-019).
 - Source adapter sidecar: The sidecar is an internal source connector surface. Direct public access, broad reuse of one sidecar token across unrelated sources, or shared cache/backoff state across authorization contexts is outside the security model (REQ-PR-NOTARY-006).
 - Demo and template integrations: Demo helper code and generated workflow snippets are integration examples, not a production freshness or replay-protection profile. Teams that copy them into production must add request freshness, expiry, or nonce checks appropriate to their workflow.
-- Admin reload: The admin reload route returns HTTP 501 with code `registry.admin.capability.not_supported` in the standalone router; it performs no reload; configuration changes generally require a service restart, with the narrow hot-apply exceptions listed in the [known limitations hub](../../explanation/known-limitations/).
+- Admin reload: The admin reload route returns HTTP 501 with code `registry.admin.capability.not_supported` in the standalone router; it performs no reload; runtime configuration changes require deploying a signed local bundle and restarting the service.
 
 ## Conformance
 

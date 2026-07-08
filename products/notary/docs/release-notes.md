@@ -9,8 +9,9 @@
   Remove that field from Notary YAML.
   Keep `fingerprint.provider` with `fingerprint.name` or `fingerprint.path`; the
   referenced value must contain `sha256:<64 lowercase hex chars>`.
-- Static credential rotation is now either a secret-plane update plus restart, or a
-  governed config change to a new immutable or versioned fingerprint reference.
+- Static credential rotation is now either a secret-plane update plus restart,
+  or a signed config bundle change to a new immutable or versioned fingerprint
+  reference, placed on the node and activated by restart.
   OIDC remains the preferred production model for citizen and wallet flows.
 
 ## 0.6.2
@@ -61,13 +62,14 @@
   local JWK signing, publish-only rotation keys with optional bounded
   publication windows, disabled keys, and optional PKCS#11-backed Ed25519
   signing.
-- Added governed config apply for signed TUF bundles, including
-  `config verify-bundle`, `config apply-bundle`, and the `config_trust`
-  operator block for trust roots, local approvals, and anti-rollback state.
-  Governed signed apply can hot-apply signing-key rotations for the credential
-  issuer, pre-authorized access-token, eSignet client-assertion, and federation
-  response signing paths, and can clean up expired publish-only keys with the
-  `signing_key_cleanup` change class; other changes remain restart-required.
+- Historical note: 0.3.0 introduced the first governed config prototype with
+  signed TUF bundles, `config verify-bundle`, `config apply-bundle`, and
+  `config_trust`.
+  Current releases use Registry Config Bundle v1 instead: a local directory with
+  `manifest.json`, `manifest.sig.json`, and `config/...`, verified by
+  `config verify-bundle` and activated by placing the bundle on the node and
+  restarting the service.
+  There is no current `apply-bundle` command and no hot apply.
 - Added `server.admin_listener` to split admin and public HTTP topology. The
   `dedicated` mode serves `/admin/v1/*` and `/metrics` on a separate admin bind,
   `shared_with_public` serves them on the public listener, and `disabled` drops
@@ -81,7 +83,8 @@
   limits with millisecond-suffixed config keys.
 - Changed `auth.api_keys[]` and `auth.bearer_tokens[]` to a committed
   `fingerprint` reference (`provider`, `name`, `commitment`) in place of
-  `hash_env`, so signed config apply can govern caller-credential rotation.
+  `hash_env`, so a signed config bundle can govern caller-credential rotation
+  after restart.
 - Renamed OIDC config fields to the shared Registry service convention:
   `auth.oidc.jwks_url`, `auth.oidc.leeway`, and
   `auth.oidc.allowed_token_types`. Legacy aliases fail config load with an error

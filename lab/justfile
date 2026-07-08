@@ -103,22 +103,6 @@ evidence-gateway-crvs-live:
     @mkdir -p output
     @python3 scripts/run-evidence-gateway-live-fixtures.py --profile birth-certificate-evidence/v1 --profile marriage-certificate-evidence/v1 --output output/evidence-gateway-live-crvs-certificates.json
 
-# Generate governed runtime configuration artifacts for the opt-in Lab 2 demo.
-lab2-generate:
-    @test -f .env || (echo "Run just generate before just lab2-generate." >&2; exit 1)
-    scripts/lab2-generate-governed-config.sh
-
-# Start the opt-in Lab 2 governed configuration topology.
-lab2-up:
-    @test -d output/lab2/runtime-config && test -n "$$(find output/lab2/runtime-config -maxdepth 1 -type f -print -quit)" || (echo "Run just lab2-generate first." >&2; exit 1)
-    docker compose -f compose.yaml -f compose.lab2.yaml build lab2-civil-registry-relay
-    docker compose -f compose.yaml -f compose.lab2.yaml build lab2-civil-notary
-    docker compose -f compose.yaml -f compose.lab2.yaml up -d --no-build lab2-civil-registry-relay lab2-civil-notary
-
-# Capture Relay and Notary deployment-profile doctor reports for the running Lab 2 topology.
-lab2-doctor:
-    scripts/lab2-doctor-profile.sh
-
 # Run product doctors against every active Relay and Notary config.
 config-doctor:
     scripts/doctor-active-configs.sh
@@ -126,27 +110,6 @@ config-doctor:
 # Fail if active configs or docs use removed config/report names.
 config-vocabulary-check:
     scripts/check-stale-config-vocabulary.sh
-
-# Run the governed configuration smoke for Lab 2.
-lab2-smoke:
-    scripts/lab2-smoke-governed-config.sh
-
-# Run a narrated Lab 2 governed configuration demo.
-lab2-demo:
-    scripts/lab2-demo-story.sh
-
-# Reset only the Lab 2 governed configuration demo containers and volumes.
-lab2-demo-reset:
-    just lab2-down
-
-# Open the latest narrated Lab 2 demo evidence story on macOS, or print its path elsewhere.
-lab2-demo-open-evidence:
-    @if command -v open >/dev/null 2>&1; then open output/lab2/evidence/demo/story.md; else printf '%s\n' output/lab2/evidence/demo/story.md; fi
-
-# Stop the opt-in Lab 2 topology and remove only Lab 2 volumes.
-lab2-down:
-    -docker compose -f compose.yaml -f compose.lab2.yaml rm -sf lab2-civil-registry-relay lab2-civil-notary lab2-config-state-init lab2-redis
-    -docker volume rm registry-lab_lab2-civil-registry-cache registry-lab_lab2-notary-config-state
 
 # Run the default signed Notary-to-Notary delegated-evaluation smoke.
 federation:

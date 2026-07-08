@@ -57,12 +57,6 @@ replay:
   redis:
     url_env: REGISTRY_NOTARY_REDIS_URL
 
-config_trust:
-  antirollback_state_path: /var/lib/registry-notary/config-state/civil-notary-config-antirollback.json
-  local_approval_state_path: /var/lib/registry-notary/config-state/civil-notary-config-local-approvals.json
-  break_glass_rate_limit:
-    max_accepted: 1
-    window_seconds: 3600
 
 federation:
   enabled: true

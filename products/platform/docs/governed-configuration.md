@@ -1,208 +1,149 @@
 # Governed Configuration
 
-`registry-platform-config` and the governed-configuration helpers in
-`registry-platform-ops` provide shared primitives for Registry services that
-accept signed runtime configuration. They are public integration contracts for
-Registry Relay, Registry Notary, and similar runtimes. They are not a hosted
-control plane, authoring service, or complete deployment workflow.
+`registry-platform-config` provides the shared Registry Config Bundle v1
+contracts for services that boot from signed runtime configuration. Registry
+Relay, Registry Notary, and similar runtimes use these primitives to verify a
+local bundle directory before startup. They are not a hosted control plane,
+remote update service, admin API, or complete deployment workflow.
 
 The consumer service still owns parsing the product config, compiling it into a
-runtime snapshot, exposing admin endpoints, authenticating operators, and
-emitting product-specific audit events. The platform crates own the verification
-and state contracts that should be consistent across services.
+runtime snapshot, validating readiness, and emitting product-specific audit
+events. The platform crate owns the local bundle verification and state
+contracts that should be consistent across services.
 
-## Verification Flow
+## Bundle layout
 
-A governed apply should follow this order:
+A Registry Config Bundle v1 is a local directory. The verifier reads:
 
-1. Verify the TUF repository with `TufConfigVerifier`.
-2. Parse `ConfigTargetMetadata` from the verified target custom metadata and
-   bind it to the local `VerificationContext`.
-3. Authorize the target against `RegistryAcceptedTrustRoots`.
-4. Compile the candidate product configuration and confirm the requested
-   `apply_policy` is safe for the current runtime boundary.
-5. Build an `AntiRollbackProposal` and accept it with `FileAntiRollbackStore`
-   immediately before applying runtime side effects.
-6. Apply the candidate or report the rejection with the shared result
-   vocabulary.
+- `manifest.json`, the strict bundle manifest.
+- `manifest.sig.json`, signatures over the canonical manifest.
+- `config/...`, the product configuration files named by the manifest.
 
-`verify_config_target` and `verify_remote_config_target` return
-`VerifiedConfigTarget`, which contains the raw verified TUF target plus
-Registry metadata projected from that verified target.
+The manifest binds the bundle to a product, environment, stream, optional
+instance, monotonic sequence, bundle id, creation time, whole-config hash, and
+the closed set of files allowed in the bundle. The verifier rejects unlisted
+files, missing files, symlinks, paths outside the bundle, and file hashes that do
+not match the manifest.
 
-## TUF Verification
+## Verification flow
 
-Use `LocalTufRepositoryInput` when metadata and targets are already on disk.
-Use `RemoteTufRepositoryInput` when fetching metadata and targets from URLs.
-Both modes require an explicit `datastore_dir`; this datastore is the TUF client
-state used to reject stale timestamp and snapshot metadata across applies.
+A bundle-aware runtime should follow this order at startup:
 
-Remote verification uses the shared outbound fetch policy. Strict mode should be
-the production default. `allow_dev_insecure_fetch_urls` exists only for local
-development and test repositories that cannot satisfy the strict URL policy.
-In strict mode, remote metadata and target URLs must use HTTPS and must not
-resolve to localhost, RFC1918 private networks, link-local ranges, unspecified
-addresses, IPv4-mapped forms of those addresses, or known cloud metadata
-endpoints. The guarded transport validates each metadata and target fetch URL
-immediately before sending it, builds the request from the returned
-DNS-pinned `ValidatedFetchUrl`, disables HTTP redirects, ignores proxy
-environment variables, and applies bounded connect/request timeouts. A redirect
-response is surfaced to TUF verification rather than followed to a new
-destination.
+1. Verify the local bundle directory against the configured trust anchor.
+2. Bind the manifest to the local product, environment, stream, and instance.
+3. Confirm at least one enabled trust-anchor signer produced a valid manifest
+   signature.
+4. Confirm the file closure and `config_hash`.
+5. Compile and validate the product configuration.
+6. Accept or initialize anti-rollback state immediately before the service
+   starts with the verified configuration.
+7. Report the acceptance or rejection with the shared result vocabulary.
 
-The verifier records:
+`verify_config_bundle` returns `VerifiedConfigBundle`, which contains the
+manifest, verified signer kids, primary config path, and config bytes.
 
-- `root_sha256`, the hash of the final verified TUF root.
-- TUF role versions for root, targets, snapshot, and timestamp.
-- `target_bytes` and the verified target custom metadata.
-- `signer_kids`, derived only from cryptographically valid signatures over the
-  verified TUF targets role.
+## Manifest metadata
 
-Do not trust `signer_kids` supplied inside target custom metadata as an
-authorization source. `verify_config_target` overwrites metadata signer kids
-with the verified TUF targets-role signer set before returning.
+`ConfigBundleManifest` is strict JSON and rejects unknown fields. Required
+fields include:
 
-## Target Metadata
-
-`ConfigTargetMetadata` is the Registry-specific metadata carried in TUF target
-custom metadata. It is strict JSON and rejects unknown fields. Required fields
-include:
-
-- `product`, `instance_id`, and `environment`, which must match the local
-  `VerificationContext`.
+- `product` and `environment`, which must match the local trust anchor.
+- `instance_id`, when the bundle is bound to a specific runtime instance.
 - `stream_id`, `bundle_id`, and monotonic `sequence`.
 - `config_hash`, as a `sha256:` URI over the target payload bytes.
 - `previous_config_hash`, when chaining from a prior accepted config.
-- `change_classes`, the named change categories this bundle performs.
-- `apply_policy`, such as a hot-apply or restart-required policy understood by
-  the consuming product.
+- `files`, the exact file paths and hashes allowed under the bundle directory.
+- `created_at`, the bundle creation timestamp.
 
-Change class names are product-defined vocabulary. Keep them stable enough for
-trust roots and audit/report consumers to reason about them.
+Config Bundle v1 does not carry change classes or hot-apply policy. Applying a
+bundle means placing the verified bundle directory where the service reads it
+and restarting the service.
 
-## Trust Roots, Roles, And Change Classes
+## Trust anchors
 
-`RegistryTrustRoot` binds a Registry trust policy to a specific verified TUF
-root hash. `RegistryAcceptedTrustRoots` lets a service accept more than one
-root during a bounded rotation window.
+`ConfigTrustAnchor` is a local JSON file. It binds the accepted signing keys to
+a specific product, environment, stream, and instance.
 
-A trust root contains:
+A trust anchor contains:
 
-- `root_id`, for audit and operator reference.
-- `production`, which enables extra validation for high-risk roles.
-- `tuf_root_sha256`, matching `VerifiedConfigTarget.tuf.root_sha256`.
-- Optional validity timestamps.
-- `signers`, keyed by signer kid with an enabled flag.
-- `roles`, each with a signer threshold and allowed change classes.
-- `high_risk_change_classes`, used to forbid single-signer production roles.
+- `product`, `environment`, `stream_id`, and `instance_id`.
+- `signers`, each with a key id, public JWK, and enabled flag.
 
-Authorization is per change class. For every class listed by the target
-metadata, at least one role must allow that class and have enough distinct
-verified signer kids present. Disabled signers are rejected if they appear in
-the verified signer set. In production, a role that covers a high-risk change
-class must require at least two signers.
-
-Signer kids are lowercase hex TUF keyids. To avoid mismatches, copy them from a
-verified TUF target result or from the TUF root metadata tooling used to publish
-the repository.
+The verifier derives signer kids from the trust-anchor JWKs and accepts only
+valid signatures from enabled signers. Rotate trust anchors through your
+deployment process and restart the runtime with the updated trust anchor.
 
 ## Anti-Rollback State
 
 `FileAntiRollbackStore` is the shared local state store for accepted governed
-configuration. Its key is `product`, `instance_id`, `environment`, and
-`stream_id`; a state file cannot be reused for a different runtime identity.
+configuration. Its key is `product`, `environment`, and `stream_id`; `instance_id`
+is a boot-time binding check only. A state file cannot be reused for a different
+product, environment, or stream.
 
 On accept, the store enforces:
 
 - Strictly increasing bundle `sequence`.
-- Non-decreasing TUF root version when a root version is known.
-- `previous_config_hash` matching the last accepted config hash.
+
+`previous_config_hash` is advisory. Runtimes record whether it matched the last
+accepted config hash, but a mismatch is not a rejection because nodes may
+legitimately skip sequences while offline.
 
 The store serializes writes through a sidecar lock file and writes state by
 temporary file plus rename. Keep the anti-rollback file on durable local storage
 that survives service restarts. Do not place it in a temporary directory for
 production deployments.
 
-## Break-Glass And Local Approval
+## Emergency local override
 
-Break-glass approval is an emergency path. A valid `BreakGlassApproval` can
-waive only the `previous_config_hash` chain check. It does not waive monotonic
-sequence, TUF root-version checks, TUF verification, trust-root authorization,
-product config validation, or runtime readiness checks. Break-glass proposals
-must include an approval, and runtimes must source the `BreakGlassRateLimit`
-from trusted local verifier configuration before calling `FileAntiRollbackStore`.
-Accepted approvals are recorded in the anti-rollback state.
+`ConfigBreakGlassOverride` is a local boot fallback file, not an HTTP admin
+break-glass mechanism. It is optional and intended for emergency startup when an
+operator needs to recover locally.
 
-`AntiRollbackProposal.break_glass_rate_limit` remains only as a compatibility
-field for older callers that have not yet moved policy into the verifier-owned
-store configuration. Production runtimes should configure
-`FileAntiRollbackStore::with_break_glass_rate_limit(...)` and leave the proposal
-field empty. A locally configured store rejects proposal policy that does not
-match its verifier-owned policy, and the compatibility field should be removed
-in the next breaking API revision once downstream products no longer construct
-break-glass proposals with request-controlled rate limits.
+`accept_rollback` can pin the exact signed bundle hash to accept during boot.
+`accept_unsigned` can pin an absolute local config file path and hash for
+emergency startup. In `accept_unsigned` mode, signature, binding, and sequence
+checks are skipped, but file permissions, hash pinning, and product config
+validation still run. The override file is consumed locally and must expire.
 
-Local operator approval is a separate controlled path for changes that require
-site-local acknowledgement. `FileLocalApprovalStore` loads a
-`LocalOperatorApproval` by approval reference, change class, config hash, and
-previous config hash. The anti-rollback store records accepted local approvals
-and enforces the rate limit loaded with the local approval record. Local approval does not waive
-`previous_config_hash`; it must match the proposal.
+## Acceptance results and posture vocabulary
 
-Both approval types require non-empty operator, reason, reference, and
-rate-limit identity fields, and both expire by Unix timestamp.
-
-## Apply Results And Posture Vocabulary
-
-Use `ApplyReportResult` for apply reports and audit-facing outcomes:
+Use `ApplyReportResult` for verification reports and audit-facing outcomes:
 
 - `verified`
-- `applied`
 - `rejected_signature`
-- `rejected_threshold`
-- `rejected_freshness`
+- `rejected_binding`
+- `rejected_validation`
 - `rejected_rollback`
-- `rejected_restart_required`
-- `rejected_readiness`
-- `rejected_break_glass`
-- `rejected_local_approval`
 - `internal_error`
 
 `ApplyReportResult::as_posture_result()` maps detailed report outcomes to the
 coarser posture vocabulary:
 
-- `applied` becomes `accepted`.
-- Signature, threshold, freshness, rollback, restart-required, readiness,
-  break-glass, and local-approval rejections become `rejected`.
+- Signature, binding, validation, and rollback rejections become `rejected`.
 - `internal_error` becomes `failed`.
 - `verified` becomes `not_applied`.
 
-Services should use the detailed result in apply responses and audit records,
-then expose the posture result through `ConfigProvenance.last_apply_result`.
+Services should use the detailed result in audit records, then expose the
+posture result through `ConfigProvenance.last_apply_result`.
 
 ## Local And Simple Deployment Path
 
 A small deployment does not need a remote control plane. The simplest governed
 path is:
 
-1. Publish a local TUF repository directory containing metadata and target
-   config files.
-2. Configure the service with `LocalTufRepositoryInput` paths for bootstrap
-   root, metadata, targets, durable TUF datastore, and target name.
-3. Store accepted Registry trust roots in the product's local operator config.
-4. Store anti-rollback state in a durable local path unique to the product,
-   instance, environment, and stream.
-5. Optionally store local approvals in a local JSON file consumed by
-   `FileLocalApprovalStore`.
+1. Build a local bundle directory containing `manifest.json`,
+   `manifest.sig.json`, and `config/...`.
+2. Configure the service with the local `bundle_path`, `trust_anchor_path`, and
+   durable `antirollback_state_path`.
+3. Run the node CLI `config verify-bundle` before promotion when you want an
+   offline check.
+4. Place the bundle directory on the node and restart the service.
 
-For this local mode, posture should report `ConfigSource::SignedBundleFile`
-when applying a signed bundle from disk, or `ConfigSource::LocalFile` when the
-service is running from an unsigned static config file. Use
-`ConfigSource::SignedBundleEndpoint` only when the service verifies and applies
-a signed bundle fetched from an endpoint.
+For this local mode, posture should report `ConfigSource::SignedBundleFile`.
+Use `ConfigSource::LocalFile` only when the service is running from an unsigned
+static config file.
 
 This path is appropriate for single-node or manually promoted environments as
-long as the TUF datastore and anti-rollback state are durable and backed up with
-the runtime. Multi-node deployments need product-level coordination so every
-node observes compatible trust roots, TUF client state, anti-rollback state, and
-runtime snapshots.
+long as the anti-rollback state is durable and backed up with the runtime.
+Multi-node deployments need product-level coordination so every node observes
+compatible trust anchors, anti-rollback state, and runtime snapshots.

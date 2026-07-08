@@ -21,7 +21,7 @@ and integration-test fixtures.
 | [`registry-platform-audit`](crates/registry-platform-audit/README.md) | Tamper-evident audit envelopes, async sinks, JSONL verification, and redaction helpers. |
 | [`registry-platform-authcommon`](crates/registry-platform-authcommon/README.md) | Provider-independent authentication helpers for Bearer tokens and API-key fingerprints. |
 | [`registry-platform-cache`](crates/registry-platform-cache/README.md) | Generic cache-store trait, redacted hashed keys, in-memory cache, and Redis backend for higher-level primitives. |
-| [`registry-platform-config`](crates/registry-platform-config/README.md) | Governed runtime configuration target metadata, trust-root, and per-change-class authorization contracts. |
+| [`registry-platform-config`](crates/registry-platform-config/README.md) | Config Bundle v1 manifests, trust anchors, file-closure verification, and local break-glass override contracts. |
 | [`registry-platform-crypto`](crates/registry-platform-crypto/README.md) | Ed25519 JWK parsing, provider-backed signing, verification, DID validation, and JSON canonicalization. |
 | [`registry-platform-httpsec`](crates/registry-platform-httpsec/README.md) | Axum/Tower HTTP security middleware, CORS policy validation, body limits, and RFC 9457 Problem Details responses. |
 | [`registry-platform-httputil`](crates/registry-platform-httputil/README.md) | Outbound HTTP clients, bounded response reads, URL construction, and SSRF-resistant fetch validation. |
@@ -120,9 +120,9 @@ boundary. Consumers remain responsible for service authorization, tenant
 isolation, audit retention, secret provisioning, and deployment configuration.
 
 Governed runtime configuration integrations should follow the public
-[`governed-configuration`](docs/governed-configuration.md) guide for TUF
-verification, Registry trust roots, anti-rollback state, approval semantics, and
-apply result vocabulary.
+[`governed-configuration`](docs/governed-configuration.md) guide for signed
+local bundle verification, trust anchors, anti-rollback state, emergency
+override files, and verification result vocabulary.
 
 Secret-provider integrations should follow the
 [`secret-provider-readiness`](docs/secret-provider-readiness.md) contract for

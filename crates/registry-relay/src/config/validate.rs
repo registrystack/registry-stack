@@ -214,6 +214,20 @@ fn validate_config_trust(config: &Config) -> Result<(), ConfigError> {
     let Some(config_trust) = &config.config_trust else {
         return Ok(());
     };
+    if config_trust.trust_anchor_path.as_os_str().is_empty() {
+        tracing::error!(
+            code = "config.validation_error",
+            "config_trust.trust_anchor_path must not be empty"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+    if config_trust.bundle_path.as_os_str().is_empty() {
+        tracing::error!(
+            code = "config.validation_error",
+            "config_trust.bundle_path must not be empty"
+        );
+        return Err(ConfigError::ValidationError);
+    }
     if config_trust.antirollback_state_path.as_os_str().is_empty() {
         tracing::error!(
             code = "config.validation_error",
@@ -222,71 +236,15 @@ fn validate_config_trust(config: &Config) -> Result<(), ConfigError> {
         return Err(ConfigError::ValidationError);
     }
     if config_trust
-        .local_approval_state_path
-        .as_os_str()
-        .is_empty()
+        .break_glass_override_path
+        .as_ref()
+        .is_some_and(|path| path.as_os_str().is_empty())
     {
         tracing::error!(
             code = "config.validation_error",
-            "config_trust.local_approval_state_path must not be empty"
+            "config_trust.break_glass_override_path must not be empty when set"
         );
         return Err(ConfigError::ValidationError);
-    }
-    if config_trust.break_glass_rate_limit.max_accepted == 0 {
-        tracing::error!(
-            code = "config.validation_error",
-            "config_trust.break_glass_rate_limit.max_accepted must be greater than zero"
-        );
-        return Err(ConfigError::ValidationError);
-    }
-    if config_trust.break_glass_rate_limit.window_seconds == 0 {
-        tracing::error!(
-            code = "config.validation_error",
-            "config_trust.break_glass_rate_limit.window_seconds must be greater than zero"
-        );
-        return Err(ConfigError::ValidationError);
-    }
-    if config_trust
-        .required_approver_count
-        .values()
-        .any(|count| *count == 0)
-    {
-        tracing::error!(
-            code = "config.validation_error",
-            "config_trust.required_approver_count values must be greater than zero"
-        );
-        return Err(ConfigError::ValidationError);
-    }
-    for root in &config_trust.accepted_roots {
-        if let Err(error) = root.validate() {
-            tracing::error!(
-                code = "config.validation_error",
-                error = %error,
-                "config_trust.accepted_roots contains an invalid trust root"
-            );
-            return Err(ConfigError::ValidationError);
-        }
-    }
-    for repo in &config_trust.remote_tuf_repositories {
-        if repo.root_path.as_os_str().is_empty() || repo.datastore_dir.as_os_str().is_empty() {
-            tracing::error!(
-                code = "config.validation_error",
-                "config_trust.remote_tuf_repositories paths must not be empty"
-            );
-            return Err(ConfigError::ValidationError);
-        }
-        if !is_allowed_remote_tuf_url(&repo.metadata_base_url, repo.allow_dev_insecure_fetch_urls)
-            || !is_allowed_remote_tuf_url(
-                &repo.targets_base_url,
-                repo.allow_dev_insecure_fetch_urls,
-            )
-        {
-            tracing::error!(
-                code = "config.validation_error",
-                "config_trust.remote_tuf_repositories URLs must be https:// unless allow_dev_insecure_fetch_urls is true for loopback dev"
-            );
-            return Err(ConfigError::ValidationError);
-        }
     }
     Ok(())
 }
@@ -1953,10 +1911,6 @@ fn validate_oidc(oidc: &OidcConfig) -> Result<(), ConfigError> {
 }
 
 fn is_allowed_oidc_url(url: &str, allow_dev_insecure_fetch_urls: bool) -> bool {
-    is_https_or_dev_loopback_url(url, allow_dev_insecure_fetch_urls)
-}
-
-fn is_allowed_remote_tuf_url(url: &str, allow_dev_insecure_fetch_urls: bool) -> bool {
     is_https_or_dev_loopback_url(url, allow_dev_insecure_fetch_urls)
 }
 

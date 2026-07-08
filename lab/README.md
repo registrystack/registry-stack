@@ -24,7 +24,6 @@ Use this README for setup, service ports, and command reference. Use
 - [Citizen self-attestation eSignet use case](docs/citizen-self-attestation-esignet-use-case.md)
 - [Wallet interop testing](docs/wallet-interop-testing.md)
 - [Social protection attestation demo refresh spec](docs/social-protection-attestation-demo-refresh-spec.md)
-- [Lab 2 governed operations demo spec](docs/lab2-governed-operations-demo-spec.md)
 
 ## Topology
 
@@ -579,40 +578,10 @@ and the SSE route disables proxy buffering with `X-Accel-Buffering: no`.
 
 ## Governed configuration baseline
 
-The committed Relay and Notary YAML files remain simple static configs. They
-include local `config_trust` state paths and a one-per-hour break-glass rate
-limit. They do not include `accepted_roots`; signed governed apply stays disabled
-until an opt-in Lab 2 flow renders demo configs with generated TUF roots under
-`output/lab2/`.
-
-Relay stores that local trust state in its existing per-service cache volumes.
-Notary stores it in the `notary-config-state` volume mounted at
-`/var/lib/registry-notary/config-state`.
-
-Use `just lab2-demo` for a narrated operator-facing walkthrough. It resets only
-Lab 2 containers and volumes, renders governed config, starts the overlay, shows
-before/after posture and credential issuance, applies a signed Relay metadata
-owner change that is visible through posture, rotates the Notary signing key,
-proves threshold guardrails, and writes the transcript to
-`output/lab2/evidence/demo/story.md`. Set `LAB2_DEMO_PAUSE=1` to pause between
-steps.
-
-Use `just lab2-smoke` for the exhaustive gate. Use `just lab2-demo-reset` to
-remove only Lab 2 containers and volumes, and `just lab2-demo-open-evidence` to
-open the latest story file.
-
-Use `just lab2-doctor` after `just lab2-up` to capture Registry Relay and
-Registry Notary deployment-profile doctor reports for the running Lab 2
-topology. It defaults to `LAB2_DOCTOR_PROFILE=hosted_lab` and writes redacted
-JSON under `output/lab2/evidence/doctor/`. Set `LAB2_DOCTOR_STRICT=1` when the
-selected profile should be treated as a gate instead of an operator review.
-
-The Bruno API workspace also includes a local-only `40 - Lab 2 Governed Config`
-folder for stepping through the governed apply story request by request. Open
-`requests/registry-lab/` in Bruno, select the `Local Lab 2` environment, and
-paste the Lab 2 tokens from `.env`. See `requests/registry-lab/README.md` for
-the full setup sequence, which starts with `just generate` before
-`just lab2-generate` and `just lab2-up`.
+The committed Relay and Notary YAML files remain simple static configs. The old
+Lab 2 governed-configuration demo used TUF repositories and admin config apply
+routes. That flow is removed by Config Bundle v1. A replacement lab should be
+built around signed local bundles, restart-to-apply, and local override files.
 
 ## Source repositories
 
@@ -640,13 +609,8 @@ CROSSWALK_SOURCE_DIR=../crosswalk \
 just build
 ```
 
-`just lab2-up` uses the same source selection model through `compose.lab2.yaml`,
-which makes Lab 2 useful as a regression pass against sibling Relay, Notary,
-and Platform checkouts as well as the monorepo default. `just lab2-generate`
-also rewrites a temporary tool manifest when `REGISTRY_PLATFORM_SOURCE_DIR`
-points outside this monorepo, so generated governed artifacts can be checked
-against a Platform source checkout. For release evidence, use
-`scripts/release-check.sh` (monorepo mode by default).
+For release evidence, use `scripts/release-check.sh` (monorepo mode by
+default).
 
 Use the same variables with `scripts/generate-demo-secrets.py` when you want
 that script to use a sibling Relay checkout instead of the monorepo default.

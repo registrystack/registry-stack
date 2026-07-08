@@ -246,6 +246,8 @@ fn local_provenance_uses_existing_posture_vocabulary() {
     assert!(!provenance.dynamic_reload_supported);
     assert_eq!(provenance.last_bundle_id, None);
     assert_eq!(provenance.last_bundle_sequence, None);
+    assert!(provenance.last_bundle_signer_kids.is_empty());
+    assert_eq!(provenance.override_pin, None);
     assert_eq!(provenance.last_apply_result, None);
     assert_eq!(provenance.last_apply_at, None);
     assert!(!provenance.restart_required);

@@ -15,7 +15,6 @@ current source_adapter_sidecar connector spelling.
 
 from __future__ import annotations
 
-import json
 import unittest
 from pathlib import Path
 
@@ -34,7 +33,6 @@ HOSTED_OPENFN_BOOTSTRAP = ROOT / "config/coolify/openfn/openfn-dhis2-sidecar.boo
 LOCAL_CIVIL_SMOKE = ROOT / "scripts/smoke-civil.sh"
 LOCAL_DHIS2_SMOKE = ROOT / "scripts/smoke-dhis2.sh"
 README = ROOT / "README.md"
-HOSTED_OPENFN_REPORT = ROOT / "config/coolify/openfn/governed/openfn-dhis2-sidecar-runtime.report.json"
 
 
 def read(path: Path) -> str:
@@ -70,12 +68,12 @@ class BuiltinSidecarLabConfigTest(unittest.TestCase):
         self.assertIn("config/source-adapter/civil-sidecar.yaml", body)
         self.assertIn("config/source-adapter/dhis2-health-sidecar.yaml", body)
 
-    def test_hosted_openfn_sidecar_uses_governed_bootstrap(self) -> None:
+    def test_hosted_openfn_sidecar_uses_pinned_bootstrap(self) -> None:
         body = read(HOSTED_COMPOSE)
         self.assertIn("/etc/registry-notary-openfn/openfn-dhis2-sidecar.bootstrap.yaml", body)
-        self.assertIn("openfn-sidecar-tuf-state:/var/lib/registry-notary-openfn-sidecar/tuf", body)
-        self.assertIn("openfn-sidecar-config-state:/var/lib/registry-notary-openfn-sidecar/config-trust", body)
         self.assertIn("openfn-sidecar-audit-state:/var/lib/registry-notary-openfn-sidecar/audit", body)
+        self.assertNotIn("openfn-sidecar-tuf-state", body)
+        self.assertNotIn("openfn-sidecar-config-state", body)
         self.assertNotIn("cfg-openfn-jobs:/tmp/registry-lab-openfn-jobs:ro", body)
         self.assertNotIn("/tmp/registry-lab-openfn-jobs", body)
         hosted_service = body.split("  openfn-dhis2-sidecar:", 1)[1].split("\n  dhis2-health-notary:", 1)[0]
@@ -89,6 +87,9 @@ class BuiltinSidecarLabConfigTest(unittest.TestCase):
             bootstrap,
         )
         self.assertIn("hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET", bootstrap)
+        self.assertIn("assurance:", bootstrap)
+        self.assertIn("product: registry-notary-openfn-sidecar", bootstrap)
+        self.assertIn("runtime_verified: true", bootstrap)
 
     def test_smoke_scripts_mirror_just_source_defaults(self) -> None:
         for path in (LOCAL_CIVIL_SMOKE, LOCAL_DHIS2_SMOKE):
@@ -128,10 +129,10 @@ class BuiltinSidecarLabConfigTest(unittest.TestCase):
             {binding["connector"] for binding in hosted_dhis2_bindings},
         )
 
-    def test_hosted_notary_pins_generated_sidecar_hash(self) -> None:
-        report = json.loads(read(HOSTED_OPENFN_REPORT))
+    def test_hosted_notary_pins_bootstrap_sidecar_hash(self) -> None:
+        bootstrap = yaml.safe_load(read(HOSTED_OPENFN_BOOTSTRAP))
         notary = read(HOSTED_DHIS2_NOTARY)
-        config_hash = report["config_hash"]
+        config_hash = bootstrap["assurance"]["config_hash"]
         self.assertIn("expected_sidecar:", notary)
         self.assertIn("instance_id: hosted-dhis2-openfn-sidecar", notary)
         self.assertIn("stream_id: dhis2-openfn-sidecar-runtime", notary)

@@ -384,16 +384,11 @@ var (`software`) or a local JWK file (`file_watch`). To rotate:
    A running file-watch signer accepts only same-public-key refreshes;
    same-id different-key replacements are rejected to preserve old VC
    verification.
-6. Roll the gateway when using local-file startup config. With governed signed
-   config apply, Relay can live-apply this change when provenance was already
-   enabled, the issuer identity and route-affecting settings are unchanged, the
-   new local signer material is ready, and the old key is published in
-   `retired_keys`.
+6. Roll the gateway after the signed bundle or local startup config change is
+   in place.
 7. Once the retirement cutoff has passed, drop the entry from
-   `retired_keys`. With governed signed config apply, use change class
-   `signing_key_cleanup`; Relay rejects cleanup before
-   `retired_after + max(claim_validity) + 5m`. With local-file startup config,
-   remove the entry on the next rolling deploy.
+   `retired_keys` and roll Relay again. Relay rejects cleanup before
+   `retired_after + max(claim_validity) + 5m`.
 
 Never check a private JWK into git, into config, or into a container
 image. Never log it, never include it in error messages, and never

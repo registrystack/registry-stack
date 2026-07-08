@@ -251,17 +251,21 @@ registry-relay --config /etc/registry-relay/config.yaml
 Important configuration blocks:
 
 - `server.bind`: public data-plane listener.
-- `server.admin_bind`: optional admin listener. Intended for metrics, posture, governed config operations, and reload on a restricted network.
+- `server.admin_bind`: optional admin listener. Intended for metrics, posture, capabilities, and reload on a restricted network.
 - `server.cache_dir`: writable cache for normalized Parquet files and ingest state.
 - `server.cors.allowed_origins`: default deny when empty.
 - `server.trust_proxy`: only enable when the gateway is behind trusted proxies and those proxy CIDRs are configured.
 - `auth.api_keys`: key ids, hash env var names, and scopes.
-- `config_trust`: optional local trust roots, anti-rollback state, and local approval state for governed signed config apply.
+- `config_trust`: optional signed bundle trust anchor, bundle path, anti-rollback state, and local break-glass override path.
 - `datasets[].source.path`: local file path inside the container or host.
 - `datasets[].refresh`: `mtime`, `interval`, or `manual`.
 - `audit`: audit sink and JSONL options.
 
-Local-file startup config changes remain a rolling restart operation. Governed signed config apply is available on the private admin listener when the runtime handle and `config_trust` are installed. It can live-apply compatible public metadata changes, compatible provenance signing-key rotations, and locally approved root transitions that only change `config_trust.accepted_roots`; route-affecting, listener, auth, audit, dataset, standards, and most provenance shape changes still report `restart_required` and must be rolled through deployment. Dataset reload does not reload startup `config.yaml`.
+Startup config changes remain a rolling restart operation. With
+`config_trust`, Relay verifies a signed local Config Bundle v1 directory at
+boot, validates anti-rollback state, and starts from the embedded config. There
+is no admin config apply route and no hot apply. Dataset reload does not reload
+startup `config.yaml`.
 
 ## Operating with Registry Notary
 
@@ -304,7 +308,7 @@ Recommended rotation procedure:
 1. Run `registry-relay generate-api-key --id <key_id>`.
 2. Store the emitted `fingerprint` in the deployment secret store.
 3. For a secret-plane rotation, keep the same `fingerprint.name` and restart or roll Relay after the secret changes.
-4. For a governed rotation, publish the fingerprint under a new immutable or versioned reference and apply a signed `client_credential_rotation` config bundle that changes only that reference.
+4. For a bundle-governed rotation, publish the fingerprint under a new immutable or versioned reference, ship a signed bundle that changes only that reference, and roll Relay.
 5. Confirm the new key can call the intended lowest-privilege endpoint.
 6. Update the consumer to use the emitted raw `api_key`.
 7. Remove the old key entry or old secret after callers move.
@@ -344,9 +348,13 @@ Rotation procedure (gateway mode):
 2. Add the new public JWK to the DID Document under a new `verificationMethod` id (e.g. `did:web:data.example.gov#issuance-2026q3`).
 3. Move the currently active verification method to `provenance.issuer.retired_keys[]`, recording the `retired_after` RFC 3339 timestamp and the public JWK in its own env var.
 4. Update `verification_method_id` to the new id and point the signer at the new material (`signer.jwk_env` for `software`, or the configured JWK file for `file_watch`).
-5. Roll the gateway for local-file startup config changes. With governed signed config apply, Relay can live-apply an active provenance key-id flip when provenance was already enabled, issuer identity and route-affecting settings are unchanged, new local signer material is ready, and the old key is published in `retired_keys`. With `file_watch`, replacing file contents without a config change is only a same-public-key refresh; a different public key under the same `verification_method_id` is rejected so older VCs remain verifiable through the retired-key flow.
+5. Roll the gateway after the signed bundle or local config change is in place.
+   With `file_watch`, replacing file contents without a config change is only a
+   same-public-key refresh; a different public key under the same
+   `verification_method_id` is rejected so older VCs remain verifiable through
+   the retired-key flow.
 6. Confirm the new VCs verify with the new public JWK and that previously issued VCs (still inside their validity window) verify against the retired entry.
-7. Once the longest applicable `claim_validity` window plus five minutes has elapsed since `retired_after`, drop the retired entry from config. Governed signed apply uses change class `signing_key_cleanup`; local-file startup config removes it on the next deploy.
+7. Once the longest applicable `claim_validity` window plus five minutes has elapsed since `retired_after`, drop the retired entry from config and roll Relay with a signed bundle or local startup config update.
 
 Delegated mode follows the same steps, except the DID Document edits land on the ministry's side. Coordinate the cutover so the ministry publishes the new `verificationMethod` before the gateway starts signing with the corresponding private key.
 
@@ -415,7 +423,7 @@ curl -X POST -H "Authorization: Bearer $ADMIN_API_KEY" \
 
 The reload-all response includes `status` and aggregate `counts` for total, succeeded, and failed resources. Reload-all prepares every configured source resource before publishing any of them; if any resource cannot prepare, Relay keeps the previous coherent generation active and returns HTTP 500 with `status: "failed"`. Inspect the audit and operational logs for the resource-level failure context. This route reloads configured source resources, not startup runtime config.
 
-## Admin posture and config apply
+## Admin posture and config bundles
 
 Admin capabilities and operations posture are read-only admin-listener routes with their own scope:
 
@@ -429,168 +437,57 @@ curl -H "Authorization: Bearer $OPS_READ_API_KEY" \
 
 Use `?tier=restricted` only for trusted operations users who need the restricted projection. The default projection is redacted for broader operational sharing.
 
-Governed config routes require a token with the independent `registry_relay:admin` scope:
+The independent `registry_relay:admin` scope still protects reload operations:
 
 ```text
 POST /admin/v1/reload
-POST /admin/v1/config/verify
-POST /admin/v1/config/dry-run
-POST /admin/v1/config/apply
+POST /admin/v1/datasets/{dataset_id}/tables/{table_id}/reload
 ```
 
-Treat `registry_relay:admin` as deployment authority. A holder can validate,
-dry-run, apply, or reload runtime configuration, which can replace active data
-sources, trust roots, scopes, and provenance settings.
+There are no Relay admin routes for config verify, dry-run, or apply. Signed
+config bundles are local boot artifacts. Verify a candidate bundle before
+promotion with `registry-relay config verify-bundle`, place the accepted bundle
+and trust anchor on the node, then restart Relay. Startup verification emits the
+acceptance audit event before anti-rollback state is advanced.
 
-`verify` and `dry-run` accept either inline `config_yaml` plus bundle metadata or a local signed TUF target reference. They validate the candidate and return:
-
-```json
-{
-  "bundle_id": "test-bundle",
-  "sequence": 5,
-  "result": "verified",
-  "posture_result": "not_applied",
-  "applied": false,
-  "restart_required": false
-}
-```
-
-`apply` requires a signed TUF target and rejects inline config with `registry.admin.config.inline_apply_rejected`. The local signed target request shape is:
-
-```json
-{
-  "tuf": {
-    "root_path": "/etc/registry-relay/trust/root.json",
-    "metadata_dir": "/etc/registry-relay/trust/metadata",
-    "targets_dir": "/etc/registry-relay/trust/targets",
-    "datastore_dir": "/var/lib/registry-relay/config-tuf",
-    "target_name": "registry-relay.yaml"
-  }
-}
-```
-
-The remote signed target request shape uses the same trusted root and durable
-datastore, but fetches TUF metadata and targets from guarded base URLs:
-
-```json
-{
-  "tuf": {
-    "root_path": "/etc/registry-relay/trust/root.json",
-    "metadata_base_url": "https://config.example.gov/registry-relay/metadata/",
-    "targets_base_url": "https://config.example.gov/registry-relay/targets/",
-    "datastore_dir": "/var/lib/registry-relay/config-tuf",
-    "target_name": "registry-relay.yaml"
-  }
-}
-```
-
-Remote sources are recorded as `signed_bundle_endpoint`; local repository
-sources are recorded as `signed_bundle_file`. Remote admin requests must match
-an operator-configured `config_trust.remote_tuf_repositories` entry before
-Relay contacts the repository. The configured entry owns `root_path`,
-`metadata_base_url`, `targets_base_url`, `datastore_dir`, and
-`allow_dev_insecure_fetch_urls`; request bodies cannot introduce a new remote
-repository or opt the server into insecure fetching. The default remote URL
-policy requires safe HTTPS endpoints. HTTP loopback is accepted only with
-`allow_dev_insecure_fetch_urls: true` in the configured allowlist entry for
-tests and local development.
-
-Break-glass requests are apply-only and must include all current fields:
-
-```json
-{
-  "tuf": {
-    "root_path": "/etc/registry-relay/trust/root.json",
-    "metadata_dir": "/etc/registry-relay/trust/metadata",
-    "targets_dir": "/etc/registry-relay/trust/targets",
-    "datastore_dir": "/var/lib/registry-relay/config-tuf",
-    "target_name": "registry-relay.yaml"
-  },
-  "break_glass": true,
-  "break_glass_approval": {
-    "approved_by": "ops@example.gov",
-    "reason": "recover from bad live config",
-    "approval_reference": "INC-4242",
-    "emergency_change_class": "emergency.break_glass",
-    "expires_at_unix_seconds": 1780000000,
-    "rate_limit_identity": "registry-relay/relay-prod/production/default"
-  }
-}
-```
-
-Break-glass can waive only the previous-config-hash rollback check. It does not waive monotonic sequence, TUF signature and local trust-root authorization, expiry, emergency change-class authorization, or local rolling-window rate limits. The rolling-window policy comes from local `config_trust.break_glass_rate_limit`; requests that include `break_glass_rate_limit` are rejected. The audit record stores the approval reference, emergency change class, expiry, rate-limit identity, and hashes of approver identity and reason text; it does not store raw approver identity or raw reason text.
-Inline `break_glass_approval` remains the single-approver path. For multi-approver policies, write a verifier-owned approval record to `local_approval_state_path` and send only `break_glass_approval_reference` in the request.
+Break-glass is file-based and evaluated only during boot. A rollback override
+may accept the exact signed bundle hash named by the root-owned override file.
+An `accept_unsigned` override may pin an absolute local config path and hash for
+emergency startup; it does not advance the signed bundle high-water mark.
 
 ## Governed config CLI
 
-The `registry-relay config` command group operates governed signed config bundles from the command line. The two subcommands mirror the HTTP routes in [Admin posture and config apply](#admin-posture-and-config-apply): `verify-bundle` validates a signed target in-process and `apply-bundle` posts an apply request to a running admin listener.
+The `registry-relay config` command group verifies boot-time signed config
+bundles from the command line.
 
 ```text
 registry-relay config verify-bundle <flags>
-registry-relay config apply-bundle <flags>
 ```
-
-Both subcommands accept either a local TUF repository (`--metadata-dir` plus `--targets-dir`) or a remote TUF repository (`--metadata-base-url` plus `--targets-base-url`). Local and remote flags cannot be mixed in one invocation. Flags accept both `--flag value` and `--flag=value` forms.
 
 ### config verify-bundle
 
-`verify-bundle` loads the current config, resolves and TUF-verifies the signed config target, authorizes it against the local `config_trust` roots, compiles the candidate, and prints a JSON report to stdout. It does not check anti-rollback, apply the candidate, or contact a running gateway.
+`verify-bundle` verifies the local bundle directory, checks anti-rollback state
+read-only, validates the embedded Relay config, and prints a
+`registry.platform.config_apply_report.v1` JSON report to stdout. It never
+persists state and never contacts a running gateway.
 
 Flags:
 
-- `--config`: path to the current config used as the verification baseline. Optional. Falls back to `REGISTRY_RELAY_CONFIG`, then `./config/example.yaml`.
-- `--root-path`: path to the trusted TUF root JSON. Required.
-- `--datastore-dir`: durable TUF client datastore directory. Required.
-- `--target-name`: TUF target name of the config payload. Required.
-- `--metadata-dir`: local TUF metadata directory. Required for a local source.
-- `--targets-dir`: local TUF targets directory. Required for a local source.
-- `--metadata-base-url`: remote TUF metadata base URL. Required for a remote source.
-- `--targets-base-url`: remote TUF targets base URL. Required for a remote source.
-- `--allow-dev-insecure-fetch-urls`: compatibility flag for HTTP loopback fetch URLs in local CLI verification. Admin HTTP remote fetches use the matching `config_trust.remote_tuf_repositories[].allow_dev_insecure_fetch_urls` value instead of the request value.
+- `--bundle-dir`: local config bundle directory. Required.
+- `--anchor-path`: local trust anchor JSON path. Required.
+- `--state-path`: anti-rollback state path. Required.
 
-The report includes the resolved `bundle_id`, `stream_id`, `sequence`, `previous_config_hash`, `config_hash`, `posture_config_hash`, TUF `root_version` and `tuf_root_sha256`, source posture (`signed_bundle_file` or `signed_bundle_endpoint`), `change_classes`, and `signer_kids`.
+The result vocabulary is `verified`, `rejected_signature`,
+`rejected_binding`, `rejected_validation`, `rejected_rollback`, and
+`internal_error`.
 
-Example with a local TUF repository:
+Example:
 
 ```sh
 registry-relay config verify-bundle \
-  --config /etc/registry-relay/config.yaml \
-  --root-path /etc/registry-relay/trust/root.json \
-  --metadata-dir /etc/registry-relay/trust/metadata \
-  --targets-dir /etc/registry-relay/trust/targets \
-  --datastore-dir /var/lib/registry-relay/config-tuf \
-  --target-name registry-relay.yaml
-```
-
-### config apply-bundle
-
-`apply-bundle` builds an apply request from the signed target reference and posts it to `/admin/v1/config/apply` on the admin listener with a bearer token, then prints the parsed JSON response. The gateway performs TUF verification, trust-root authorization, anti-rollback (monotonic sequence and previous-config-hash), and any required local operator approval. A non-success HTTP status exits non-zero.
-
-Flags:
-
-- `--admin-url`: base URL of the admin listener, for example `http://127.0.0.1:8081`. Required. Must use `http` or `https`.
-- `--admin-token-env`: name of the environment variable holding the `registry_relay:admin` bearer token. Required. The variable must be set and non-empty.
-- `--root-path`: path to the trusted TUF root JSON. Required.
-- `--datastore-dir`: durable TUF client datastore directory. Required.
-- `--target-name`: TUF target name of the config payload. Required.
-- `--metadata-dir`, `--targets-dir`: local TUF source pair (see verify-bundle).
-- `--metadata-base-url`, `--targets-base-url`, `--allow-dev-insecure-fetch-urls`: remote TUF source flags (see verify-bundle).
-- `--local-approval-reference`: local operator approval reference. Optional. Supply it when the change class requires a recorded local approval; the gateway resolves it server-side.
-
-The CLI reads the bearer token only from the named environment variable; it is never passed as a flag. The apply-bundle subcommand does not send break-glass fields. Break-glass remains an HTTP-only apply path as described above.
-
-Example posting a remote bundle to a running admin listener:
-
-```sh
-export RELAY_ADMIN_TOKEN=...  # registry_relay:admin bearer token
-registry-relay config apply-bundle \
-  --admin-url http://127.0.0.1:8081 \
-  --admin-token-env RELAY_ADMIN_TOKEN \
-  --root-path /etc/registry-relay/trust/root.json \
-  --metadata-base-url https://config.example.gov/registry-relay/metadata/ \
-  --targets-base-url https://config.example.gov/registry-relay/targets/ \
-  --datastore-dir /var/lib/registry-relay/config-tuf \
-  --target-name registry-relay.yaml
+  --bundle-dir /etc/registry-relay/config/bundle \
+  --anchor-path /etc/registry-relay/config/trust-anchor.json \
+  --state-path /var/lib/registry-relay/config-antirollback.json
 ```
 
 ## Readiness and probes

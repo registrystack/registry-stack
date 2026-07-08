@@ -1820,83 +1820,10 @@
       "openapi": false,
       "stability": "admin",
       "data_classification": "operational",
-      "notes": "Admin listener capabilities route for discovering supported reload and governed config operations.",
+      "notes": "Admin listener capabilities route for discovering supported reload and config trust posture operations.",
       "source": "manual",
       "enforcement_tests": [
-        "tests/admin_reload.rs::capabilities_requires_ops_read_and_reports_relay_admin_surface",
-        "tests/admin_reload.rs::config_apply_routes_are_admin_only_and_not_public"
-      ],
-      "waiver": null
-    },
-    {
-      "service": "registry-relay",
-      "listener": "admin",
-      "method": "POST",
-      "path": "/admin/v1/config/verify",
-      "feature": null,
-      "audience": "operator",
-      "auth": "api_key_or_oidc",
-      "scopes": [
-        "registry_relay:admin"
-      ],
-      "rate_limit": null,
-      "audit": "required",
-      "openapi": false,
-      "stability": "admin",
-      "data_classification": "operational",
-      "notes": "Admin listener governed config verification route. It validates a candidate config and reports whether a restart would be required; it does not apply break-glass requests.",
-      "source": "manual",
-      "enforcement_tests": [
-        "tests/admin_reload.rs::config_apply_routes_are_admin_only_and_not_public",
-        "tests/admin_reload.rs::config_dry_run_reports_restart_required_without_swapping"
-      ],
-      "waiver": null
-    },
-    {
-      "service": "registry-relay",
-      "listener": "admin",
-      "method": "POST",
-      "path": "/admin/v1/config/dry-run",
-      "feature": null,
-      "audience": "operator",
-      "auth": "api_key_or_oidc",
-      "scopes": [
-        "registry_relay:admin"
-      ],
-      "rate_limit": null,
-      "audit": "required",
-      "openapi": false,
-      "stability": "admin",
-      "data_classification": "operational",
-      "notes": "Admin listener governed config dry-run route. It validates a candidate config and reports apply compatibility without swapping runtime state; it does not apply break-glass requests.",
-      "source": "manual",
-      "enforcement_tests": [
-        "tests/admin_reload.rs::config_apply_routes_are_admin_only_and_not_public",
-        "tests/admin_reload.rs::config_dry_run_reports_restart_required_without_swapping"
-      ],
-      "waiver": null
-    },
-    {
-      "service": "registry-relay",
-      "listener": "admin",
-      "method": "POST",
-      "path": "/admin/v1/config/apply",
-      "feature": null,
-      "audience": "operator",
-      "auth": "api_key_or_oidc",
-      "scopes": [
-        "registry_relay:admin"
-      ],
-      "rate_limit": null,
-      "audit": "required",
-      "openapi": false,
-      "stability": "admin",
-      "data_classification": "operational",
-      "notes": "Admin listener governed signed config apply route. Inline candidates are rejected for apply; signed TUF targets can live-apply compatible changes and require explicit break-glass approval fields for emergency rollback bypass.",
-      "source": "manual",
-      "enforcement_tests": [
-        "tests/admin_reload.rs::config_apply_routes_are_admin_only_and_not_public",
-        "tests/admin_reload.rs::config_apply_signed_tuf_break_glass_with_approval_swaps_runtime_snapshot"
+        "tests/admin_reload.rs::capabilities_requires_ops_read_and_reports_relay_admin_surface"
       ],
       "waiver": null
     },

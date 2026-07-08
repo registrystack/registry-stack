@@ -28,9 +28,9 @@ use registry_notary_core::deployment::{
 };
 use registry_notary_core::sd_jwt::EvidenceIssuer;
 use registry_notary_core::{
-    AccessMode, BoundedCorrelationId, BoundedVerifiedClaims, BulkMode, DciSourceConnectionConfig,
-    EvidenceAuditEvent, EvidenceAuthMode, EvidenceAuthorizationDetails, EvidenceConfig,
-    EvidenceCredentialConfig, EvidenceEntity, EvidenceError, EvidencePrincipal,
+    AccessMode, BoundedCorrelationId, BoundedVerifiedClaims, BulkMode, ConfigAuditEvent,
+    DciSourceConnectionConfig, EvidenceAuditEvent, EvidenceAuthMode, EvidenceAuthorizationDetails,
+    EvidenceConfig, EvidenceCredentialConfig, EvidenceEntity, EvidenceError, EvidencePrincipal,
     EvidenceRequestContext, ExpectedSidecarConfig, Hashed, Oauth2ClientCredentialsSourceAuthConfig,
     PrincipalIdentifier, RateLimitBucket, RegistryNotaryAdminListenerMode, RequestIdentifier,
     SelfAttestationAssuranceClaimSource, SelfAttestationClaimSource, SelfAttestationDenialCode,
@@ -56,6 +56,7 @@ use registry_platform_oidc::{
     fetch_userinfo_jwt_with_policy, Audience, JwksFetcher, JwksFetcherConfig, OidcError,
     TokenVerifier, TokenVerifierConfig, VerifiedToken,
 };
+use registry_platform_ops::{ConfigProvenance, ConfigSource};
 use registry_platform_replay::{ReplayKey, ReplayScope};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
@@ -127,67 +128,6 @@ pub fn standalone_router(
     })
 }
 
-pub(crate) fn credential_issuer_runtime_from_config(
-    config: &StandaloneRegistryNotaryConfig,
-) -> Result<(Arc<dyn crate::api::EvidenceIssuerResolver>, SignerReadiness), StandaloneServerError> {
-    let reuse_scoped_key_ids = config.reuse_scoped_signing_key_ids();
-    let signing_keys = SigningKeyRegistry::from_config(&config.evidence, &reuse_scoped_key_ids)?;
-    let signer_readiness = signing_keys.signer_readiness();
-    let issuers = Arc::new(EvidenceIssuerRegistry::from_signing_keys(
-        &config.evidence,
-        &signing_keys,
-    )?);
-    Ok((issuers, signer_readiness))
-}
-
-pub(crate) fn preauth_runtime_from_config_preserving_stores(
-    config: &StandaloneRegistryNotaryConfig,
-    audit: AuditPipeline,
-    previous: Option<&PreAuthRuntime>,
-) -> Result<Option<Arc<PreAuthRuntime>>, StandaloneServerError> {
-    // The audit pipeline is the single process-wide writer, passed in by the
-    // caller (the running server's shared pipeline). This helper must never
-    // build its own `AuditPipeline::from_config`: a second pipeline over the
-    // same audit file is exactly the two-writer fork the single-writer lock
-    // (#211) forbids, and would now fail closed with `SinkLocked`. The
-    // `previous`-owned pipeline and this argument are the same shared instance;
-    // preserving `previous`'s login/tx-code stores stays independent of it.
-    let reuse_scoped_key_ids = config.reuse_scoped_signing_key_ids();
-    let signing_keys = SigningKeyRegistry::from_config(&config.evidence, &reuse_scoped_key_ids)?;
-    PreAuthRuntime::from_config_preserving_stores(config, &signing_keys, audit, previous)
-        .map(|runtime| runtime.map(Arc::new))
-}
-
-pub(crate) fn federation_runtime_from_config(
-    config: &StandaloneRegistryNotaryConfig,
-    audit: Option<AuditPipeline>,
-    replay: Arc<dyn registry_platform_replay::ReplayStore>,
-    metrics: Arc<AppMetrics>,
-) -> Result<Option<Arc<crate::federation::FederationRuntimeState>>, StandaloneServerError> {
-    if !config.federation.enabled {
-        return Ok(None);
-    }
-    let reuse_scoped_key_ids = config.reuse_scoped_signing_key_ids();
-    let signing_keys = SigningKeyRegistry::from_config(&config.evidence, &reuse_scoped_key_ids)?;
-    let signing_provider = signing_keys
-        .signing_provider(config.federation.signing.signing_key.as_str())
-        .ok_or_else(|| {
-            invalid_signing_key(
-                config.federation.signing.signing_key.as_str(),
-                "active federation signing key was not built",
-            )
-        })?;
-    crate::federation::FederationRuntimeState::from_config(
-        &config.federation,
-        signing_provider,
-        audit,
-        replay,
-        metrics,
-    )
-    .map(Arc::new)
-    .map(Some)
-}
-
 pub struct NotaryRuntimeSnapshot {
     metrics: Arc<AppMetrics>,
     auth_state: Arc<AuthAuditState>,
@@ -196,6 +136,77 @@ pub struct NotaryRuntimeSnapshot {
     wallet_cors_policy: SelfAttestationWalletCorsPolicy,
     http_limits: NotaryHttpLimits,
     federation_enabled: bool,
+}
+
+impl NotaryRuntimeSnapshot {
+    pub async fn emit_config_boot_audit(
+        &self,
+        event: &'static str,
+        audit: ConfigAuditEvent,
+    ) -> Result<(), AuditError> {
+        self.auth_state
+            .audit
+            .emit(&config_boot_audit_event(event, audit))
+            .await
+    }
+}
+
+fn config_boot_audit_event(event: &'static str, audit: ConfigAuditEvent) -> EvidenceAuditEvent {
+    let occurred_at = OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string());
+    EvidenceAuditEvent {
+        event_id: Ulid::new().to_string(),
+        occurred_at,
+        principal_id_hash: None,
+        scopes_used: Vec::new(),
+        decision: "accepted".to_string(),
+        method: "BACKGROUND".to_string(),
+        path: format!("/__events/{event}"),
+        status: 200,
+        verification_id: None,
+        claim_hash: None,
+        purposes: None,
+        row_count: None,
+        source_read_count: None,
+        forwarded: None,
+        error_code: None,
+        access_mode: None,
+        federation_peer_id_hash: None,
+        federation_issuer: None,
+        federation_profile: None,
+        federation_purpose: None,
+        federation_request_jti_hash: None,
+        federation_subject_ref_hash: None,
+        denial_code: None,
+        token_claim_name: None,
+        correlation_id_hash: None,
+        credential_profile: None,
+        protocol: None,
+        credential_configuration_id: None,
+        holder_binding_mode: None,
+        rate_limit_bucket: None,
+        policy_version: None,
+        policy_hash: None,
+        target_type: None,
+        target_ref_hash: None,
+        requester_type: None,
+        requester_ref_hash: None,
+        matching_policy_id: None,
+        matching_policy_hash: None,
+        matching_evaluated_rule_ids: None,
+        ecosystem_binding_id: None,
+        ecosystem_binding_version: None,
+        pack_id: None,
+        pack_version: None,
+        matching_method: None,
+        matching_outcome: None,
+        matching_error_code: None,
+        redacted_fields: None,
+        batch_items: None,
+        source_sidecar_config_hashes: None,
+        config: Some(audit),
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -212,8 +223,16 @@ pub struct NotaryRouters {
 pub fn compile_notary_runtime(
     config: StandaloneRegistryNotaryConfig,
 ) -> Result<NotaryRuntimeSnapshot, StandaloneServerError> {
+    compile_notary_runtime_with_provenance(config, ConfigSource::LocalFile, None)
+}
+
+pub fn compile_notary_runtime_with_provenance(
+    config: StandaloneRegistryNotaryConfig,
+    config_source: ConfigSource,
+    config_provenance: Option<ConfigProvenance>,
+) -> Result<NotaryRuntimeSnapshot, StandaloneServerError> {
     config.validate()?;
-    let deployment_gates = DeploymentGateState::evaluate(&config);
+    let deployment_gates = DeploymentGateState::evaluate_with_config_source(&config, config_source);
     deployment_gates.fail_startup_if_blocked()?;
     let federation_enabled = config.federation.enabled;
     let http_limits = NotaryHttpLimits {
@@ -314,6 +333,9 @@ pub fn compile_notary_runtime(
     .with_deployment_gates(deployment_gates)
     .with_config_governance(ConfigGovernanceContext::from_config(&config))
     .with_runtime_config(Arc::new(config.clone()));
+    if let Some(provenance) = config_provenance {
+        api_state.record_config_apply(crate::api::ConfigApplyPosture::from_provenance(provenance));
+    }
     #[cfg(feature = "registry-notary-cel")]
     let api_state = api_state
         .with_cel_worker(cel_worker)
@@ -672,8 +694,15 @@ pub(crate) struct DeploymentGateState {
 }
 
 impl DeploymentGateState {
-    pub(crate) fn evaluate(config: &StandaloneRegistryNotaryConfig) -> Self {
-        let input = config.gate_input();
+    pub(crate) fn evaluate_with_config_source(
+        config: &StandaloneRegistryNotaryConfig,
+        config_source: ConfigSource,
+    ) -> Self {
+        let mut input = config.gate_input();
+        input.config_unsigned = !matches!(
+            config_source,
+            ConfigSource::SignedBundleFile | ConfigSource::SignedBundleEndpoint
+        );
         let evaluation = evaluate_gates(
             config.deployment.profile,
             &input,
@@ -3814,8 +3843,6 @@ pub(crate) struct AuthAuditState {
     self_attestation_rate_keys: Option<Arc<SelfAttestationRateLimitKeys>>,
 }
 
-pub(crate) struct PreparedAuthenticator(Authenticator);
-
 #[derive(Debug, Clone, Default)]
 struct RequestCredentials {
     api_key: Option<String>,
@@ -3925,74 +3952,8 @@ impl AuthAuditState {
         authenticator.authenticate(credentials, &self.replay).await
     }
 
-    pub(crate) fn notary_anchor_for_config(
-        &self,
-        config: &StandaloneRegistryNotaryConfig,
-    ) -> Result<Option<NotaryTokenAnchor>, StandaloneServerError> {
-        let authenticator = self
-            .authenticator
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let Authenticator::Oidc {
-            principal_claim,
-            subject_binding_claim,
-            notary_anchor: Some(_),
-            ..
-        } = &**authenticator
-        else {
-            return Ok(None);
-        };
-        Authenticator::build_notary_anchor_value(
-            config,
-            principal_claim.clone(),
-            subject_binding_claim.clone(),
-        )
-    }
-
-    pub(crate) fn swap_notary_anchor(&self, updated: NotaryTokenAnchor) {
-        let authenticator = self
-            .authenticator
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let Authenticator::Oidc {
-            notary_anchor: Some(anchor),
-            ..
-        } = &**authenticator
-        else {
-            return;
-        };
-        *anchor
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = updated;
-    }
-
-    fn swap_authenticator(&self, updated: Authenticator) {
-        *self
-            .authenticator
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Arc::new(updated);
-    }
-
-    pub(crate) fn prepare_authenticator(
-        config: &StandaloneRegistryNotaryConfig,
-    ) -> Result<PreparedAuthenticator, StandaloneServerError> {
-        Authenticator::from_config(config).map(PreparedAuthenticator)
-    }
-
-    pub(crate) fn swap_prepared_authenticator(&self, updated: PreparedAuthenticator) {
-        self.swap_authenticator(updated.0);
-    }
-
-    pub(crate) fn swap_openapi_requires_auth(&self, value: bool) {
-        self.openapi_requires_auth.store(value, Ordering::Relaxed);
-    }
-
     pub(crate) fn openapi_requires_auth(&self) -> bool {
         self.openapi_requires_auth.load(Ordering::Relaxed)
-    }
-
-    pub(crate) fn audit_pipeline(&self) -> AuditPipeline {
-        self.audit.clone()
     }
 }
 
@@ -7234,7 +7195,6 @@ fn projected_source_fields_with_query_values(
 mod tests {
     use super::*;
     use std::collections::HashMap;
-    use std::num::NonZeroU64;
     use std::sync::atomic::AtomicUsize;
 
     use axum::body::Body;
@@ -7246,7 +7206,6 @@ mod tests {
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     #[cfg(feature = "pkcs11")]
     use base64::Engine;
-    use chrono::{TimeDelta, Utc};
     use registry_notary_core::{
         tokens::{
             mint_access_token, AccessTokenClaims, BoundSubject,
@@ -7259,21 +7218,7 @@ mod tests {
     };
     #[cfg(feature = "pkcs11")]
     use registry_notary_core::{ClaimProvenance, ClaimResultView, TargetRefView};
-    use registry_notary_source_adapter_sidecar::{
-        load_startup_config as load_source_adapter_sidecar_startup_config,
-        render_governed_runtime_target_json, sidecar_router, SidecarConfig,
-    };
-    use registry_platform_config::{
-        sha256_uri, LocalTufRepositoryInput, TufConfigVerifier, VerificationContext,
-    };
-    use registry_platform_ops::{
-        AntiRollbackKey, AntiRollbackRecord, BreakGlassState, FileAntiRollbackStore,
-        LocalApprovalState,
-    };
-    use tough::editor::signed::PathExists;
-    use tough::editor::RepositoryEditor;
-    use tough::key_source::{KeySource, LocalKeySource};
-    use tough::schema::Target;
+    use registry_notary_source_adapter_sidecar::{sidecar_router, SidecarConfig};
 
     const SOURCE_ADAPTER_SIDECAR_TOKEN_ENV: &str = "TEST_SOURCE_ADAPTER_SIDECAR_TOKEN";
     const SOURCE_ADAPTER_SIDECAR_TOKEN_HASH_ENV: &str = "TEST_SOURCE_ADAPTER_SIDECAR_TOKEN_HASH";
@@ -7285,7 +7230,6 @@ mod tests {
     const SOURCE_ADAPTER_INSTANCE_ID: &str = "demo";
     const SOURCE_ADAPTER_ENVIRONMENT: &str = "staging";
     const SOURCE_ADAPTER_STREAM_ID: &str = "source-adapter-sidecar-runtime";
-    const SOURCE_ADAPTER_TARGET_NAME: &str = "source-adapter-sidecar-runtime.json";
     const HTTP_JSON_CREDENTIAL_ENV: &str = "TEST_HTTP_JSON_READER_CREDENTIAL_JSON";
     const TEST_AUDIT_HASH_SECRET_ENV: &str = "REGISTRY_NOTARY_TEST_AUDIT_HASH_SECRET";
     static HTTP_JSON_SIDECAR_ENV_LOCK: Mutex<()> = Mutex::const_new(());
@@ -8998,17 +8942,10 @@ sources:
             "bundle_id": "opencrvs-sidecar-test",
             "sequence": 12,
             "config_hash": fixture.config_hash,
-            "tuf_root_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "root_version": 1,
-            "targets_version": 12,
-            "snapshot_version": 12,
-            "timestamp_version": 12,
-            "change_classes": ["source_adapter_sidecar_workflow_bundle"],
             "signer_kids": ["kid"],
             "expression_hashes_verified": true,
             "runtime_verified": true,
-            "smoke_verified": true,
-            "apply_policy": "restart_required"
+            "smoke_verified": true
         }))
         .into_response()
     }
@@ -9038,233 +8975,6 @@ sources:
             require_smoke_verified: true,
             assurance_ttl_ms: 60_000,
         }
-    }
-
-    struct SignedSourceAdapterRuntimeRepo {
-        root_path: std::path::PathBuf,
-        metadata_dir: std::path::PathBuf,
-        targets_dir: std::path::PathBuf,
-        datastore_dir: std::path::PathBuf,
-        tuf_root_sha256: String,
-        signer_kids: Vec<String>,
-        config_hash: String,
-    }
-
-    async fn signed_source_adapter_runtime_repo(
-        target_bytes: &[u8],
-        sequence: u64,
-        previous_config_hash: &str,
-    ) -> SignedSourceAdapterRuntimeRepo {
-        let repo = tempfile::TempDir::new().expect("repo temp dir");
-        let datastore = tempfile::TempDir::new().expect("datastore temp dir");
-        let source_targets = repo.path().join("source-targets");
-        std::fs::create_dir_all(&source_targets).expect("source targets dir");
-        let target_path = source_targets.join(SOURCE_ADAPTER_TARGET_NAME);
-        std::fs::write(&target_path, target_bytes).expect("target writes");
-        let config_hash = sha256_uri(target_bytes);
-        let custom = json!({
-            "product": SOURCE_ADAPTER_PRODUCT,
-            "instance_id": SOURCE_ADAPTER_INSTANCE_ID,
-            "environment": SOURCE_ADAPTER_ENVIRONMENT,
-            "stream_id": SOURCE_ADAPTER_STREAM_ID,
-            "bundle_id": "source-adapter-sidecar-e2e",
-            "sequence": sequence,
-            "previous_config_hash": previous_config_hash,
-            "config_hash": config_hash,
-            "change_classes": ["source_adapter_sidecar_workflow_bundle"],
-            "signer_kids": ["declared-non-authoritative"],
-            "apply_policy": "restart_required"
-        });
-
-        let root_path = tough_fixture_dir("").join("simple-rsa").join("root.json");
-        let key_path = tough_fixture_dir("").join("snakeoil.pem");
-        let metadata_dir = repo.path().join("metadata");
-        let targets_dir = repo.path().join("targets");
-        let expiry = Utc::now()
-            .checked_add_signed(TimeDelta::try_days(30).expect("duration"))
-            .expect("future expiration");
-        let version = NonZeroU64::new(sequence.max(1)).expect("non-zero version");
-        let mut editor = RepositoryEditor::new(&root_path)
-            .await
-            .expect("editor loads root");
-        editor.targets_expires(expiry).expect("targets expiration");
-        editor.targets_version(version).expect("targets version");
-        editor.snapshot_expires(expiry);
-        editor.snapshot_version(version);
-        editor.timestamp_expires(expiry);
-        editor.timestamp_version(version);
-
-        let mut target = Target::from_path(&target_path)
-            .await
-            .expect("target metadata builds");
-        let Value::Object(custom) = custom else {
-            panic!("custom metadata object");
-        };
-        target.custom = custom.into_iter().collect::<HashMap<_, _>>();
-        editor
-            .add_target(SOURCE_ADAPTER_TARGET_NAME.to_string(), target)
-            .expect("target metadata added");
-        let keys: Vec<Box<dyn KeySource>> = vec![Box::new(LocalKeySource { path: key_path })];
-        let signed = editor.sign(&keys).await.expect("repository signs");
-        signed.write(&metadata_dir).await.expect("metadata writes");
-        signed
-            .link_targets(&source_targets, &targets_dir, PathExists::Skip)
-            .await
-            .expect("targets link");
-
-        let input = LocalTufRepositoryInput {
-            root_path: root_path.clone(),
-            metadata_dir: metadata_dir.clone(),
-            targets_dir: targets_dir.clone(),
-            datastore_dir: datastore.path().to_path_buf(),
-            target_name: SOURCE_ADAPTER_TARGET_NAME.to_string(),
-        };
-        let verified = TufConfigVerifier::verify_config_target(
-            &input,
-            &VerificationContext {
-                product: SOURCE_ADAPTER_PRODUCT.to_string(),
-                instance_id: SOURCE_ADAPTER_INSTANCE_ID.to_string(),
-                environment: SOURCE_ADAPTER_ENVIRONMENT.to_string(),
-            },
-        )
-        .await
-        .expect("generated repo verifies");
-        let repo_path = repo.keep();
-        let datastore_path = datastore.keep();
-        SignedSourceAdapterRuntimeRepo {
-            root_path,
-            metadata_dir: repo_path.join("metadata"),
-            targets_dir: repo_path.join("targets"),
-            datastore_dir: datastore_path,
-            tuf_root_sha256: verified.tuf.root_sha256,
-            signer_kids: verified.tuf.signer_kids,
-            config_hash,
-        }
-    }
-
-    fn initialize_source_adapter_antirollback(
-        repo: &SignedSourceAdapterRuntimeRepo,
-        config_hash: &str,
-        sequence: u64,
-    ) {
-        FileAntiRollbackStore::new(repo.datastore_dir.join("antirollback.json"))
-            .initialize(AntiRollbackRecord {
-                key: AntiRollbackKey {
-                    product: SOURCE_ADAPTER_PRODUCT.to_string(),
-                    instance_id: SOURCE_ADAPTER_INSTANCE_ID.to_string(),
-                    environment: SOURCE_ADAPTER_ENVIRONMENT.to_string(),
-                    stream_id: SOURCE_ADAPTER_STREAM_ID.to_string(),
-                },
-                last_sequence: sequence,
-                last_config_hash: config_hash.to_string(),
-                root_version: Some(1),
-                break_glass: BreakGlassState::default(),
-                local_approvals: LocalApprovalState::default(),
-            })
-            .expect("antirollback initializes");
-    }
-
-    fn source_adapter_governed_bootstrap_yaml(repo: &SignedSourceAdapterRuntimeRepo) -> String {
-        let signers = repo
-            .signer_kids
-            .iter()
-            .map(|kid| {
-                format!(
-                    r#"        {kid}:
-          kid: {kid}
-          enabled: true"#,
-                    kid = yaml_string(kid)
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        let role_signers = repo
-            .signer_kids
-            .iter()
-            .map(|kid| format!("          - {}", yaml_string(kid)))
-            .collect::<Vec<_>>()
-            .join("\n");
-        format!(
-            r#"
-server:
-  bind: "127.0.0.1:0"
-auth:
-  bearer_tokens:
-    - id: notary-contract
-      hash_env: {token_hash_env}
-audit:
-  sink: jsonl
-  path: {audit_path}
-  hash_secret_env: {audit_hash_secret_env}
-config_trust:
-  product: {product}
-  instance_id: {instance_id}
-  environment: {environment}
-  stream_id: {stream_id}
-  root_path: {root_path}
-  metadata_dir: {metadata_dir}
-  targets_dir: {targets_dir}
-  datastore_dir: {datastore_dir}
-  target_name: {target_name}
-  antirollback_state_path: {antirollback_state_path}
-  accepted_roots:
-    - root_id: "test-root"
-      production: false
-      tuf_root_sha256: {tuf_root_sha256}
-      high_risk_change_classes:
-        - source_adapter_sidecar_workflow_bundle
-      signers:
-{signers}
-      roles:
-        - name: "workflow"
-          threshold: 1
-          signer_kids:
-{role_signers}
-          allowed_change_classes:
-            - source_adapter_sidecar_workflow_bundle
-"#,
-            token_hash_env = yaml_string(SOURCE_ADAPTER_SIDECAR_TOKEN_HASH_ENV),
-            audit_path = yaml_path(&repo.datastore_dir.join("sidecar-audit.jsonl")),
-            audit_hash_secret_env = yaml_string(TEST_AUDIT_HASH_SECRET_ENV),
-            product = yaml_string(SOURCE_ADAPTER_PRODUCT),
-            instance_id = yaml_string(SOURCE_ADAPTER_INSTANCE_ID),
-            environment = yaml_string(SOURCE_ADAPTER_ENVIRONMENT),
-            stream_id = yaml_string(SOURCE_ADAPTER_STREAM_ID),
-            root_path = yaml_path(&repo.root_path),
-            metadata_dir = yaml_path(&repo.metadata_dir),
-            targets_dir = yaml_path(&repo.targets_dir),
-            datastore_dir = yaml_path(&repo.datastore_dir),
-            target_name = yaml_string(SOURCE_ADAPTER_TARGET_NAME),
-            antirollback_state_path = yaml_path(&repo.datastore_dir.join("antirollback.json")),
-            tuf_root_sha256 = yaml_string(&repo.tuf_root_sha256),
-            signers = signers,
-            role_signers = role_signers,
-        )
-    }
-
-    fn yaml_path(path: &std::path::Path) -> String {
-        yaml_string(path.to_str().expect("fixture path is UTF-8"))
-    }
-
-    fn yaml_string(value: &str) -> String {
-        serde_json::to_string(value).expect("string serializes")
-    }
-
-    fn tough_fixture_dir(name: &str) -> std::path::PathBuf {
-        let cargo_home = std::env::var_os("CARGO_HOME")
-            .map(std::path::PathBuf::from)
-            .or_else(|| {
-                std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".cargo"))
-            })
-            .expect("CARGO_HOME or HOME is set");
-        let src_root = cargo_home.join("registry/src");
-        let registry = std::fs::read_dir(&src_root)
-            .expect("cargo registry src exists")
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .find(|path| path.join("tough-0.22.0/tests/data").is_dir())
-            .expect("tough-0.22.0 source fixture directory exists");
-        registry.join("tough-0.22.0/tests/data").join(name)
     }
 
     #[test]
@@ -9890,264 +9600,6 @@ sources:
             results[0].provenance.used.source_runtimes.is_empty(),
             "unsigned local sidecar has no pinned runtime summary"
         );
-    }
-
-    #[tokio::test]
-    async fn governed_http_json_sidecar_e2e_notary_pins_assurance_and_evaluates() {
-        let _env_guard = HTTP_JSON_SIDECAR_ENV_LOCK.lock().await;
-        std::env::set_var(
-            SOURCE_ADAPTER_SIDECAR_TOKEN_ENV,
-            SOURCE_ADAPTER_SIDECAR_TOKEN,
-        );
-        std::env::set_var(
-            TEST_AUDIT_HASH_SECRET_ENV,
-            "registry-notary-sidecar-test-audit-secret-32-bytes-minimum",
-        );
-        let upstream = TestServer::builder()
-            .http_transport()
-            .build(Router::new().route("/people", get(http_json_people_handler)));
-        let upstream_url = upstream
-            .server_address()
-            .expect("HTTP transport exposes upstream address")
-            .to_string()
-            .trim_end_matches('/')
-            .to_string();
-        let manifest = http_json_sidecar_test_manifest(&upstream_url);
-        let target_bytes = render_governed_runtime_target_json(&manifest)
-            .expect("governed http_json target renders");
-        let target_json: Value =
-            serde_json::from_slice(&target_bytes).expect("target is valid JSON");
-        assert!(target_json["worker"].is_null());
-        assert!(target_json["jobs_root"].is_null());
-        assert!(target_json["limits"]["max_worker_memory_mb"].is_null());
-
-        let previous_config_hash =
-            "sha256:1111111111111111111111111111111111111111111111111111111111111111";
-        let repo =
-            signed_source_adapter_runtime_repo(&target_bytes, 13, previous_config_hash).await;
-        initialize_source_adapter_antirollback(&repo, previous_config_hash, 12);
-        let bootstrap = source_adapter_governed_bootstrap_yaml(&repo);
-        let sidecar_config = load_source_adapter_sidecar_startup_config(&bootstrap)
-            .await
-            .expect("governed http_json sidecar startup config loads");
-        let sidecar = sidecar_router(sidecar_config)
-            .await
-            .expect("governed http_json sidecar starts");
-        let server = TestServer::builder().http_transport().build(sidecar);
-
-        let ready = server.get("/ready").await;
-        ready.assert_status_ok();
-        let ready_body: Value = ready.json();
-        assert_eq!(ready_body["status"], "ready");
-        assert_eq!(ready_body["config_hash"], repo.config_hash);
-
-        let mut evidence = source_adapter_sidecar_spike_config(
-            server
-                .server_address()
-                .expect("HTTP transport exposes sidecar address")
-                .as_str(),
-        );
-        evidence
-            .source_connections
-            .get_mut("source_adapter_crvs")
-            .expect("connection exists")
-            .expected_sidecar = Some(expected_source_adapter_sidecar(&repo.config_hash));
-        let evidence = Arc::new(evidence);
-        let source = Arc::new(
-            HttpEvidenceSources::from_config(&evidence, Arc::new(AppMetrics::default()))
-                .expect("source config"),
-        );
-        assert!(source.check_ready().await);
-        let principal = EvidencePrincipal {
-            principal_id: "caseworker".to_string(),
-            scopes: vec!["civil_registry:evidence_verification".to_string()],
-            access_mode: AccessMode::MachineClient,
-            verified_claims: None,
-            authorization_details: None,
-        };
-
-        let results = crate::RegistryNotaryRuntime::new()
-            .evaluate(
-                Arc::clone(&evidence),
-                source.clone(),
-                &EvidenceStore::default(),
-                &principal,
-                EvaluateRequest {
-                    requester: None,
-                    target: Some(registry_notary_core::EvidenceEntity::from_subject_request(
-                        "Person",
-                        SubjectRequest {
-                            id: "person-123".to_string(),
-                            id_type: None,
-                        },
-                    )),
-                    relationship: None,
-                    on_behalf_of: None,
-                    claims: vec![registry_notary_core::ClaimRef::from("date-of-birth")],
-                    disclosure: Some("value".to_string()),
-                    format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
-                    purpose: Some(SOURCE_ADAPTER_SPIKE_PURPOSE.to_string()),
-                },
-                None,
-            )
-            .await
-            .expect("governed http_json sidecar sources the claim");
-
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].claim_id, "date-of-birth");
-        assert_eq!(results[0].value, Some(json!("1990-01-01")));
-        assert_eq!(
-            source
-                .observed_sidecar_config_hashes(&evidence, &["date-of-birth".to_string()])
-                .await,
-            vec![repo.config_hash.clone()]
-        );
-        let runtimes = &results[0].provenance.used.source_runtimes;
-        assert_eq!(runtimes.len(), 1, "one sidecar runtime summary expected");
-        assert_eq!(runtimes[0].kind, SOURCE_RUNTIME_KIND_SOURCE_ADAPTER_SIDECAR);
-        assert_eq!(runtimes[0].config_hash, repo.config_hash);
-        assert!(runtimes[0].assurance.pinned);
-        assert!(runtimes[0].assurance.expression_hashes_verified);
-        assert!(runtimes[0].assurance.runtime_verified);
-        assert!(runtimes[0].assurance.smoke_verified);
-    }
-
-    /// Governed-assurance twin of
-    /// `governed_http_json_sidecar_e2e_notary_pins_assurance_and_evaluates`, but
-    /// for the `script_rhai` engine. The notary<->sidecar assurance protocol is
-    /// engine-agnostic (the notary never sees the engine), so only the sidecar
-    /// manifest/upstream differ: this reuses the existing `script_rhai`
-    /// manifest/config (`script_rhai_sidecar_test_manifest` /
-    /// `script_rhai_sidecar_test_config`) and its mock upstream
-    /// (`rhai_lookup_handler`), then drives the SAME governed evaluation path and
-    /// asserts the SAME pinned-assurance contract: config_hash pinning plus the
-    /// `expression_hashes_verified` / `runtime_verified` / `smoke_verified`
-    /// booleans, with the claim resolving to the expected value. All sidecar env
-    /// mutations are serialized behind the shared `HTTP_JSON_SIDECAR_ENV_LOCK`,
-    /// exactly as the template does, so no two sidecar tests race on process env.
-    #[tokio::test]
-    async fn governed_script_rhai_sidecar_e2e_notary_pins_assurance_and_evaluates() {
-        let _env_guard = HTTP_JSON_SIDECAR_ENV_LOCK.lock().await;
-        std::env::set_var(
-            SOURCE_ADAPTER_SIDECAR_TOKEN_ENV,
-            SOURCE_ADAPTER_SIDECAR_TOKEN,
-        );
-        std::env::set_var(
-            TEST_AUDIT_HASH_SECRET_ENV,
-            "registry-notary-sidecar-test-audit-secret-32-bytes-minimum",
-        );
-        let upstream = TestServer::builder()
-            .http_transport()
-            .build(Router::new().route("/lookup", get(rhai_lookup_handler)));
-        let upstream_url = upstream
-            .server_address()
-            .expect("HTTP transport exposes upstream address")
-            .to_string()
-            .trim_end_matches('/')
-            .to_string();
-        let manifest = script_rhai_sidecar_test_manifest(&upstream_url);
-        let target_bytes = render_governed_runtime_target_json(&manifest)
-            .expect("governed script_rhai target renders");
-        let target_json: Value =
-            serde_json::from_slice(&target_bytes).expect("target is valid JSON");
-        // Ungoverned runtime fields are not part of the governed target shape:
-        // `worker`/`jobs_root` are not even fields of `GovernedRuntimeTarget`.
-        assert!(target_json["worker"].is_null());
-        assert!(target_json["jobs_root"].is_null());
-        // Unlike the http_json manifest, the script_rhai manifest pins
-        // `limits.max_worker_memory_mb` (a governed `LimitConfig` field), so the
-        // rendered target carries it through verbatim.
-        assert_eq!(target_json["limits"]["max_worker_memory_mb"], json!(256));
-
-        let previous_config_hash =
-            "sha256:1111111111111111111111111111111111111111111111111111111111111111";
-        let repo =
-            signed_source_adapter_runtime_repo(&target_bytes, 13, previous_config_hash).await;
-        initialize_source_adapter_antirollback(&repo, previous_config_hash, 12);
-        let bootstrap = source_adapter_governed_bootstrap_yaml(&repo);
-        let sidecar_config = load_source_adapter_sidecar_startup_config(&bootstrap)
-            .await
-            .expect("governed script_rhai sidecar startup config loads");
-        let sidecar = sidecar_router(sidecar_config)
-            .await
-            .expect("governed script_rhai sidecar starts and passes startup smoke");
-        let server = TestServer::builder().http_transport().build(sidecar);
-
-        let ready = server.get("/ready").await;
-        ready.assert_status_ok();
-        let ready_body: Value = ready.json();
-        assert_eq!(ready_body["status"], "ready");
-        assert_eq!(ready_body["config_hash"], repo.config_hash);
-
-        let mut evidence = source_adapter_sidecar_spike_config(
-            server
-                .server_address()
-                .expect("HTTP transport exposes sidecar address")
-                .as_str(),
-        );
-        evidence
-            .source_connections
-            .get_mut("source_adapter_crvs")
-            .expect("connection exists")
-            .expected_sidecar = Some(expected_source_adapter_sidecar(&repo.config_hash));
-        let evidence = Arc::new(evidence);
-        let source = Arc::new(
-            HttpEvidenceSources::from_config(&evidence, Arc::new(AppMetrics::default()))
-                .expect("source config"),
-        );
-        assert!(source.check_ready().await);
-        let principal = EvidencePrincipal {
-            principal_id: "caseworker".to_string(),
-            scopes: vec!["civil_registry:evidence_verification".to_string()],
-            access_mode: AccessMode::MachineClient,
-            verified_claims: None,
-            authorization_details: None,
-        };
-
-        let results = crate::RegistryNotaryRuntime::new()
-            .evaluate(
-                Arc::clone(&evidence),
-                source.clone(),
-                &EvidenceStore::default(),
-                &principal,
-                EvaluateRequest {
-                    requester: None,
-                    target: Some(registry_notary_core::EvidenceEntity::from_subject_request(
-                        "Person",
-                        SubjectRequest {
-                            id: "person-123".to_string(),
-                            id_type: None,
-                        },
-                    )),
-                    relationship: None,
-                    on_behalf_of: None,
-                    claims: vec![registry_notary_core::ClaimRef::from("date-of-birth")],
-                    disclosure: Some("value".to_string()),
-                    format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
-                    purpose: Some(SOURCE_ADAPTER_SPIKE_PURPOSE.to_string()),
-                },
-                None,
-            )
-            .await
-            .expect("governed script_rhai sidecar sources the claim");
-
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].claim_id, "date-of-birth");
-        assert_eq!(results[0].value, Some(json!("1990-01-01")));
-        assert_eq!(
-            source
-                .observed_sidecar_config_hashes(&evidence, &["date-of-birth".to_string()])
-                .await,
-            vec![repo.config_hash.clone()]
-        );
-        let runtimes = &results[0].provenance.used.source_runtimes;
-        assert_eq!(runtimes.len(), 1, "one sidecar runtime summary expected");
-        assert_eq!(runtimes[0].kind, SOURCE_RUNTIME_KIND_SOURCE_ADAPTER_SIDECAR);
-        assert_eq!(runtimes[0].config_hash, repo.config_hash);
-        assert!(runtimes[0].assurance.pinned);
-        assert!(runtimes[0].assurance.expression_hashes_verified);
-        assert!(runtimes[0].assurance.runtime_verified);
-        assert!(runtimes[0].assurance.smoke_verified);
     }
 
     #[tokio::test]

@@ -731,7 +731,7 @@ def validate_openfn_sidecar_governance(
                 "hosted-openfn-unsigned-dev-config",
                 artifact,
                 "services.openfn-dhis2-sidecar.command",
-                "hosted OpenFn sidecar must start from governed config_trust, not unsigned dev config",
+                "hosted OpenFn sidecar must start from the pinned bootstrap config, not unsigned dev config",
             )
         )
     if "openfn-dhis2-sidecar.bootstrap.yaml" not in command_text:
@@ -745,8 +745,6 @@ def validate_openfn_sidecar_governance(
         )
     required_mounts = {
         "/etc/registry-notary-openfn",
-        "/var/lib/registry-notary-openfn-sidecar/tuf",
-        "/var/lib/registry-notary-openfn-sidecar/config-trust",
         "/var/lib/registry-notary-openfn-sidecar/audit",
     }
     for target in sorted(required_mounts):
@@ -762,31 +760,37 @@ def validate_openfn_sidecar_governance(
 
     bootstrap = root / "config/coolify/openfn/openfn-dhis2-sidecar.bootstrap.yaml"
     notary = root / "config/coolify/notary/dhis2-health-notary.yaml"
-    report = root / "config/coolify/openfn/governed/openfn-dhis2-sidecar-runtime.report.json"
     try:
         bootstrap_config = load_yaml_mapping(bootstrap)
         notary_config = load_yaml_mapping(notary)
-        report_config = load_json_mapping(report)
     except Exception as exc:
         issues.append(
             Issue(
-                "unreadable-openfn-governed-artifact",
+                "unreadable-openfn-bootstrap-artifact",
                 artifact,
-                "config/coolify/openfn/governed",
-                f"could not read governed OpenFn sidecar artifacts: {exc}",
+                "config/coolify/openfn/openfn-dhis2-sidecar.bootstrap.yaml",
+                f"could not read hosted OpenFn sidecar artifacts: {exc}",
             )
         )
         return issues
 
-    config_trust = extract_openfn_config_trust_scalars(bootstrap_config)
-    accepted_roots = nested_get(bootstrap_config, ("config_trust", "accepted_roots"))
-    if not config_trust or not isinstance(accepted_roots, list) or not accepted_roots:
+    if "config_trust" in bootstrap_config:
         issues.append(
             Issue(
-                "missing-openfn-config-trust",
+                "hosted-openfn-legacy-config-trust",
                 artifact,
                 "config/coolify/openfn/openfn-dhis2-sidecar.bootstrap.yaml",
-                "hosted OpenFn sidecar bootstrap must include config_trust.accepted_roots",
+                "hosted OpenFn sidecar bootstrap must not use retired config_trust startup",
+            )
+        )
+    assurance = extract_openfn_assurance_scalars(bootstrap_config)
+    if not assurance:
+        issues.append(
+            Issue(
+                "missing-openfn-assurance-config",
+                artifact,
+                "config/coolify/openfn/openfn-dhis2-sidecar.bootstrap.yaml",
+                "hosted OpenFn sidecar bootstrap must expose local assurance for the Notary pin",
             )
         )
     audit = bootstrap_config.get("audit")
@@ -817,14 +821,14 @@ def validate_openfn_sidecar_governance(
         )
         return issues
 
-    expected_hash = report_config.get("config_hash")
+    expected_hash = assurance.get("config_hash")
     if expected.get("config_hash") != expected_hash:
         issues.append(
             Issue(
                 "openfn-sidecar-hash-mismatch",
                 artifact,
                 "config/coolify/notary/dhis2-health-notary.yaml",
-                "hosted DHIS2 Notary expected_sidecar.config_hash must match the generated sidecar report",
+                "hosted DHIS2 Notary expected_sidecar.config_hash must match the sidecar bootstrap assurance",
             )
         )
     for key in (
@@ -842,26 +846,45 @@ def validate_openfn_sidecar_governance(
                 )
             )
     for key in ("product", "instance_id", "environment", "stream_id"):
-        if expected.get(key) != config_trust.get(key):
+        if expected.get(key) != assurance.get(key):
             issues.append(
                 Issue(
                     "openfn-sidecar-identity-mismatch",
                     artifact,
                     f"config/coolify/notary/dhis2-health-notary.yaml:{key}",
-                    "hosted DHIS2 Notary expected_sidecar identity must match sidecar config_trust",
+                    "hosted DHIS2 Notary expected_sidecar identity must match sidecar assurance",
+                )
+            )
+    for key in ("expression_hashes_verified", "runtime_verified", "smoke_verified"):
+        if assurance.get(key) not in (True, "true"):
+            issues.append(
+                Issue(
+                    "openfn-sidecar-assurance-not-true",
+                    artifact,
+                    f"config/coolify/openfn/openfn-dhis2-sidecar.bootstrap.yaml:{key}",
+                    "hosted OpenFn sidecar assurance must mark expression, runtime, and smoke checks verified",
                 )
             )
     return issues
 
 
-def extract_openfn_config_trust_scalars(config: dict[str, Any]) -> dict[str, Any]:
-    trust = config.get("config_trust")
-    if not isinstance(trust, dict):
+def extract_openfn_assurance_scalars(config: dict[str, Any]) -> dict[str, Any]:
+    assurance = config.get("assurance")
+    if not isinstance(assurance, dict):
         return {}
     return {
-        key: trust.get(key)
-        for key in ("product", "instance_id", "environment", "stream_id")
-        if trust.get(key) is not None
+        key: assurance.get(key)
+        for key in (
+            "product",
+            "instance_id",
+            "environment",
+            "stream_id",
+            "config_hash",
+            "expression_hashes_verified",
+            "runtime_verified",
+            "smoke_verified",
+        )
+        if assurance.get(key) is not None
     }
 
 
@@ -1427,8 +1450,6 @@ def validate_config_loader_hosted_outputs(
         for source, target in (
             ("civil-registry-cache", "/out/civil-cache"),
             ("health-registry-cache", "/out/health-cache"),
-            ("openfn-sidecar-tuf-state", "/out/openfn-tuf-state"),
-            ("openfn-sidecar-config-state", "/out/openfn-config-state"),
             ("openfn-sidecar-audit-state", "/out/openfn-audit-state"),
         )
     ) or not all(
@@ -1437,10 +1458,7 @@ def validate_config_loader_hosted_outputs(
             "chown -R 65532:65532",
             "civil-cache health-cache",
             "chown -R 1000:1000",
-            "openfn-tuf-state openfn-config-state openfn-audit-state",
-            "dhis2-openfn-sidecar-antirollback.json",
-            "last_sequence\":0",
-            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "openfn-audit-state",
         )
     ):
         issues.append(

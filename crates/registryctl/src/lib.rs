@@ -18,6 +18,14 @@ use registry_config_report::{
     RegistryctlValidationReport, ReportStatus, REGISTRYCTL_VALIDATION_REPORT_SCHEMA_VERSION_V1,
 };
 use registry_platform_authcommon::{fingerprint_api_key, validate_api_key_entropy};
+use registry_platform_config::{
+    sha256_uri, verify_config_bundle, ConfigBundleFile, ConfigBundleManifest,
+    ConfigBundleSignature, ConfigBundleSignatureEnvelope, ConfigTrustAnchor,
+    ConfigTrustAnchorSigner, MAX_BUNDLE_FILE_BYTES, MAX_CONFIG_BUNDLE_SEQUENCE,
+};
+use registry_platform_crypto::{
+    canonicalize_json, sign as sign_payload, PrivateJwk, PublicJwk, SigningAlgorithm,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
@@ -55,6 +63,8 @@ const UPDATE_CHECK_CACHE_SECONDS: u64 = 60 * 60 * 24;
 /// The only `schema_version` `registryctl_manifest` generates today; `Project::load` rejects
 /// any other value so a future/incompatible schema file fails loudly instead of half-parsing.
 const PROJECT_SCHEMA_VERSION: &str = "registryctl/v1";
+const CONFIG_BUNDLE_SIGNATURE_SCHEMA: &str = "registry.platform.config_bundle_signatures.v1";
+const CONFIG_TRUST_ANCHOR_SCHEMA: &str = "registry.platform.config_trust_anchor.v1";
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub enum NotarySource {
@@ -237,6 +247,66 @@ pub struct NotaryInitOptions {
     pub smoke_target_id: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct BundleInspectReport {
+    pub schema_version: String,
+    pub manifest: ConfigBundleManifest,
+    pub signature_count: usize,
+    pub signature_kids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BundleVerifyReport {
+    pub schema_version: String,
+    pub product: String,
+    pub environment: String,
+    pub stream_id: String,
+    pub instance_id: Option<String>,
+    pub bundle_id: String,
+    pub sequence: u64,
+    pub config_path: PathBuf,
+    pub config_hash: String,
+    pub signer_kids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BundleSignReport {
+    pub schema_version: String,
+    pub bundle_dir: PathBuf,
+    pub manifest_path: PathBuf,
+    pub signature_path: PathBuf,
+    pub config_path: String,
+    pub config_hash: String,
+    pub kid: String,
+    pub alg: String,
+    pub signature_count: usize,
+}
+
+#[derive(Debug)]
+pub struct BundleSignOptions {
+    pub input: PathBuf,
+    pub key: String,
+    pub product: String,
+    pub environment: String,
+    pub stream_id: String,
+    pub instance_id: Option<String>,
+    pub sequence: u64,
+    pub bundle_id: String,
+    pub out: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AnchorReport {
+    pub schema_version: String,
+    pub anchor_path: PathBuf,
+    pub product: String,
+    pub environment: String,
+    pub stream_id: String,
+    pub instance_id: String,
+    pub signer_count: usize,
+    pub enabled_signer_count: usize,
+}
+
 #[derive(Debug)]
 pub struct OpenFnConvertOptions {
     pub input: PathBuf,
@@ -351,6 +421,444 @@ pub struct OpenFnImportOptions {
     pub sidecar_token_env: String,
     pub allow_latest_adaptors: bool,
     pub allow_empty_job_bodies: bool,
+}
+
+pub fn inspect_config_bundle(bundle_dir: &Path) -> Result<BundleInspectReport> {
+    let manifest_path = bundle_dir.join("manifest.json");
+    let signature_path = bundle_dir.join("manifest.sig.json");
+    let manifest_bytes = fs::read(&manifest_path)
+        .with_context(|| format!("failed to read {}", manifest_path.display()))?;
+    let manifest: ConfigBundleManifest = serde_json::from_slice(&manifest_bytes)
+        .with_context(|| format!("failed to parse {}", manifest_path.display()))?;
+    manifest
+        .validate()
+        .with_context(|| format!("invalid config bundle manifest {}", manifest_path.display()))?;
+
+    let envelope = read_signature_envelope_if_present(&signature_path)?;
+    let signature_kids: Vec<String> = envelope
+        .as_ref()
+        .map(|envelope| {
+            envelope
+                .signatures
+                .iter()
+                .map(|signature| signature.kid.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(BundleInspectReport {
+        schema_version: "registryctl.config_bundle.inspect.v1".to_string(),
+        manifest,
+        signature_count: signature_kids.len(),
+        signature_kids,
+    })
+}
+
+pub fn verify_config_bundle_cli(
+    bundle_dir: &Path,
+    anchor_path: &Path,
+) -> Result<BundleVerifyReport> {
+    let verified = verify_config_bundle(bundle_dir, anchor_path)
+        .with_context(|| format!("failed to verify config bundle {}", bundle_dir.display()))?;
+    Ok(BundleVerifyReport {
+        schema_version: "registryctl.config_bundle.verify.v1".to_string(),
+        product: verified.manifest.product,
+        environment: verified.manifest.environment,
+        stream_id: verified.manifest.stream_id,
+        instance_id: verified.manifest.instance_id,
+        bundle_id: verified.manifest.bundle_id,
+        sequence: verified.manifest.sequence,
+        config_path: verified.config_path,
+        config_hash: verified.manifest.config_hash,
+        signer_kids: verified.signer_kids,
+    })
+}
+
+pub fn sign_config_bundle(options: BundleSignOptions) -> Result<BundleSignReport> {
+    if options.sequence == 0 || options.sequence > MAX_CONFIG_BUNDLE_SEQUENCE {
+        bail!("sequence must be in 1..={}", MAX_CONFIG_BUNDLE_SEQUENCE);
+    }
+    ensure_output_bundle_dir_is_empty(&options.out)?;
+    let files = collect_config_bundle_input_files(&options.input)?;
+    let primary_config_path = primary_config_path(&options.product, &files)?;
+    let created_at = OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .context("failed to format created_at")?;
+    let manifest_files = files
+        .iter()
+        .map(|file| ConfigBundleFile {
+            path: file.relative_path.clone(),
+            sha256: file.sha256.clone(),
+        })
+        .collect::<Vec<_>>();
+    let config_hash = files
+        .iter()
+        .find(|file| file.relative_path == primary_config_path)
+        .map(|file| file.sha256.clone())
+        .expect("primary config path was selected from files");
+    let manifest = ConfigBundleManifest {
+        schema: "registry.platform.config_bundle.v1".to_string(),
+        product: options.product,
+        environment: options.environment,
+        stream_id: options.stream_id,
+        instance_id: options.instance_id,
+        bundle_id: options.bundle_id,
+        sequence: options.sequence,
+        previous_config_hash: None,
+        config_hash: config_hash.clone(),
+        files: manifest_files,
+        created_at,
+    };
+    manifest
+        .validate()
+        .context("generated manifest is invalid")?;
+
+    for file in &files {
+        let destination = options.out.join(&file.relative_path);
+        let parent = destination
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+        fs::write(&destination, &file.bytes)
+            .with_context(|| format!("failed to write {}", destination.display()))?;
+    }
+    let manifest_path = options.out.join("manifest.json");
+    let signature_path = options.out.join("manifest.sig.json");
+    write_json_file(&manifest_path, &manifest)?;
+    let manifest_value =
+        serde_json::to_value(&manifest).context("failed to render manifest for signing")?;
+
+    let private_jwk_text = read_private_jwk_text(&options.key)?;
+    let private_jwk = PrivateJwk::parse(&private_jwk_text).with_context(|| {
+        format!(
+            "failed to parse private JWK from {}",
+            key_display(&options.key)
+        )
+    })?;
+    let public_jwk = private_jwk.public();
+    let kid = public_jwk
+        .jkt()
+        .context("failed to compute JWK thumbprint for signing key")?;
+    let alg = signing_algorithm_label(private_jwk.algorithm().context("invalid signing key alg")?);
+    let canonical_manifest =
+        canonicalize_json(&manifest_value).context("failed to canonicalize manifest JSON")?;
+    let signature = sign_payload(&canonical_manifest, &private_jwk)
+        .context("failed to sign config bundle manifest")?;
+
+    let envelope = ConfigBundleSignatureEnvelope {
+        schema: CONFIG_BUNDLE_SIGNATURE_SCHEMA.to_string(),
+        signatures: vec![ConfigBundleSignature {
+            kid: kid.clone(),
+            alg: alg.to_string(),
+            sig: base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(signature),
+        }],
+    };
+    write_json_file(&signature_path, &envelope)?;
+
+    Ok(BundleSignReport {
+        schema_version: "registryctl.config_bundle.sign.v1".to_string(),
+        bundle_dir: options.out,
+        manifest_path,
+        signature_path,
+        config_path: primary_config_path,
+        config_hash,
+        kid,
+        alg: alg.to_string(),
+        signature_count: envelope.signatures.len(),
+    })
+}
+
+pub fn init_config_anchor(
+    anchor_path: &Path,
+    product: String,
+    environment: String,
+    stream_id: String,
+    instance_id: String,
+) -> Result<AnchorReport> {
+    let anchor = ConfigTrustAnchor {
+        schema: CONFIG_TRUST_ANCHOR_SCHEMA.to_string(),
+        product,
+        environment,
+        stream_id,
+        instance_id,
+        signers: Vec::new(),
+    };
+    write_json_file(anchor_path, &anchor)?;
+    Ok(anchor_report(anchor_path, &anchor))
+}
+
+pub fn add_config_anchor_key(
+    anchor_path: &Path,
+    jwk_path: &Path,
+    enabled: bool,
+) -> Result<AnchorReport> {
+    let mut anchor = read_anchor_unvalidated(anchor_path)?;
+    let jwk_bytes =
+        fs::read(jwk_path).with_context(|| format!("failed to read {}", jwk_path.display()))?;
+    let jwk = PublicJwk::parse(
+        std::str::from_utf8(&jwk_bytes)
+            .with_context(|| format!("{} is not UTF-8 JSON", jwk_path.display()))?,
+    )
+    .with_context(|| format!("failed to parse public JWK {}", jwk_path.display()))?;
+    let kid = jwk
+        .jkt()
+        .context("failed to compute JWK thumbprint for anchor key")?;
+    if anchor.signers.iter().any(|signer| signer.kid == kid) {
+        bail!("trust anchor already contains signer {kid}");
+    }
+    anchor
+        .signers
+        .push(ConfigTrustAnchorSigner { kid, jwk, enabled });
+    anchor
+        .validate()
+        .with_context(|| format!("invalid trust anchor {}", anchor_path.display()))?;
+    write_json_file(anchor_path, &anchor)?;
+    Ok(anchor_report(anchor_path, &anchor))
+}
+
+pub fn remove_config_anchor_key(anchor_path: &Path, kid: &str) -> Result<AnchorReport> {
+    let mut anchor = read_anchor_unvalidated(anchor_path)?;
+    let before = anchor.signers.len();
+    anchor.signers.retain(|signer| signer.kid != kid);
+    if anchor.signers.len() == before {
+        bail!("trust anchor does not contain signer {kid}");
+    }
+    if !anchor.signers.is_empty() {
+        anchor
+            .validate()
+            .with_context(|| format!("invalid trust anchor {}", anchor_path.display()))?;
+    }
+    write_json_file(anchor_path, &anchor)?;
+    Ok(anchor_report(anchor_path, &anchor))
+}
+
+#[derive(Debug)]
+struct BundleInputFile {
+    relative_path: String,
+    bytes: Vec<u8>,
+    sha256: String,
+}
+
+fn ensure_output_bundle_dir_is_empty(out: &Path) -> Result<()> {
+    if out.exists() {
+        if !out.is_dir() {
+            bail!(
+                "bundle output path exists and is not a directory: {}",
+                out.display()
+            );
+        }
+        let mut entries =
+            fs::read_dir(out).with_context(|| format!("failed to read {}", out.display()))?;
+        if entries.next().transpose()?.is_some() {
+            bail!("bundle output directory must be empty: {}", out.display());
+        }
+    } else {
+        fs::create_dir_all(out).with_context(|| format!("failed to create {}", out.display()))?;
+    }
+    Ok(())
+}
+
+fn collect_config_bundle_input_files(input: &Path) -> Result<Vec<BundleInputFile>> {
+    if !input.is_dir() {
+        bail!("bundle input path must be a directory: {}", input.display());
+    }
+    let mut files = Vec::new();
+    collect_config_bundle_input_files_inner(input, input, &mut files)?;
+    files.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    if files.is_empty() {
+        bail!("bundle input directory contains no regular files");
+    }
+    Ok(files)
+}
+
+fn collect_config_bundle_input_files_inner(
+    root: &Path,
+    dir: &Path,
+    files: &mut Vec<BundleInputFile>,
+) -> Result<()> {
+    let metadata =
+        fs::symlink_metadata(dir).with_context(|| format!("failed to stat {}", dir.display()))?;
+    if metadata.file_type().is_symlink() {
+        bail!("bundle input symlink is not allowed: {}", dir.display());
+    }
+    if !metadata.is_dir() {
+        bail!("bundle input path is not a directory: {}", dir.display());
+    }
+    for entry in fs::read_dir(dir).with_context(|| format!("failed to read {}", dir.display()))? {
+        let entry = entry.with_context(|| format!("failed to read entry in {}", dir.display()))?;
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path)
+            .with_context(|| format!("failed to stat {}", path.display()))?;
+        if metadata.file_type().is_symlink() {
+            bail!("bundle input symlink is not allowed: {}", path.display());
+        }
+        if metadata.is_dir() {
+            collect_config_bundle_input_files_inner(root, &path, files)?;
+        } else if metadata.is_file() {
+            if metadata.len() > MAX_BUNDLE_FILE_BYTES {
+                bail!("bundle input file exceeds size cap: {}", path.display());
+            }
+            let relative_path = bundle_relative_path(root, &path)?;
+            if matches!(
+                relative_path.as_str(),
+                "manifest.json" | "manifest.sig.json"
+            ) {
+                bail!(
+                    "bundle input must not contain reserved file {}",
+                    relative_path
+                );
+            }
+            let bytes =
+                fs::read(&path).with_context(|| format!("failed to read {}", path.display()))?;
+            if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_BUNDLE_FILE_BYTES {
+                bail!("bundle input file exceeds size cap: {}", path.display());
+            }
+            let sha256 = sha256_uri(&bytes);
+            files.push(BundleInputFile {
+                relative_path,
+                bytes,
+                sha256,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn bundle_relative_path(root: &Path, path: &Path) -> Result<String> {
+    let relative = path
+        .strip_prefix(root)
+        .with_context(|| format!("{} is not under {}", path.display(), root.display()))?;
+    let mut parts = Vec::new();
+    for component in relative.components() {
+        match component {
+            std::path::Component::Normal(part) => {
+                let part = part
+                    .to_str()
+                    .ok_or_else(|| anyhow!("bundle path is not valid UTF-8: {}", path.display()))?;
+                if part.is_empty() || part == "." || part == ".." {
+                    bail!("bundle path is not normalized: {}", path.display());
+                }
+                parts.push(part.to_string());
+            }
+            _ => bail!("bundle path is not normalized: {}", path.display()),
+        }
+    }
+    if parts.is_empty() {
+        bail!("bundle path is empty: {}", path.display());
+    }
+    Ok(parts.join("/"))
+}
+
+fn primary_config_path(product: &str, files: &[BundleInputFile]) -> Result<String> {
+    let expected = match product {
+        "registry-notary" => Some("config/notary.yaml"),
+        "registry-relay" => Some("config/relay.yaml"),
+        _ => None,
+    };
+    if let Some(expected) = expected {
+        if files.iter().any(|file| file.relative_path == expected) {
+            return Ok(expected.to_string());
+        }
+    }
+    if files.len() == 1 {
+        return Ok(files[0].relative_path.clone());
+    }
+    bail!(
+        "bundle input has multiple files; expected primary config path {}",
+        expected.unwrap_or("as the only regular file")
+    )
+}
+
+fn read_private_jwk_text(key_ref: &str) -> Result<String> {
+    if key_ref.starts_with("op://") {
+        let output = Command::new("op")
+            .arg("read")
+            .arg(key_ref)
+            .output()
+            .context("failed to run op read for bundle signing key")?;
+        if !output.status.success() {
+            bail!("op read failed for bundle signing key reference");
+        }
+        return String::from_utf8(output.stdout)
+            .context("private JWK returned by op read is not UTF-8 JSON");
+    }
+    fs::read_to_string(key_ref).with_context(|| format!("failed to read {}", key_ref))
+}
+
+fn key_display(key_ref: &str) -> &str {
+    if key_ref.starts_with("op://") {
+        "op://..."
+    } else {
+        key_ref
+    }
+}
+
+fn read_signature_envelope_if_present(
+    signature_path: &Path,
+) -> Result<Option<ConfigBundleSignatureEnvelope>> {
+    match fs::read(signature_path) {
+        Ok(bytes) => serde_json::from_slice(&bytes)
+            .with_context(|| format!("failed to parse {}", signature_path.display()))
+            .map(Some),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => {
+            Err(error).with_context(|| format!("failed to read {}", signature_path.display()))
+        }
+    }
+}
+
+fn read_anchor_unvalidated(anchor_path: &Path) -> Result<ConfigTrustAnchor> {
+    let bytes = fs::read(anchor_path)
+        .with_context(|| format!("failed to read {}", anchor_path.display()))?;
+    let anchor: ConfigTrustAnchor = serde_json::from_slice(&bytes)
+        .with_context(|| format!("failed to parse {}", anchor_path.display()))?;
+    if anchor.schema != CONFIG_TRUST_ANCHOR_SCHEMA {
+        bail!("trust anchor schema is invalid");
+    }
+    if anchor.product.trim().is_empty()
+        || anchor.environment.trim().is_empty()
+        || anchor.stream_id.trim().is_empty()
+        || anchor.instance_id.trim().is_empty()
+    {
+        bail!("trust anchor binding fields must be non-empty");
+    }
+    Ok(anchor)
+}
+
+fn write_json_file<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))?;
+    let json = serde_json::to_vec_pretty(value).context("failed to render JSON")?;
+    fs::write(path, json).with_context(|| format!("failed to write {}", path.display()))
+}
+
+fn anchor_report(anchor_path: &Path, anchor: &ConfigTrustAnchor) -> AnchorReport {
+    AnchorReport {
+        schema_version: "registryctl.config_anchor.v1".to_string(),
+        anchor_path: anchor_path.to_path_buf(),
+        product: anchor.product.clone(),
+        environment: anchor.environment.clone(),
+        stream_id: anchor.stream_id.clone(),
+        instance_id: anchor.instance_id.clone(),
+        signer_count: anchor.signers.len(),
+        enabled_signer_count: anchor
+            .signers
+            .iter()
+            .filter(|signer| signer.enabled)
+            .count(),
+    }
+}
+
+fn signing_algorithm_label(algorithm: SigningAlgorithm) -> &'static str {
+    match algorithm {
+        SigningAlgorithm::EdDsa => "EdDSA",
+        SigningAlgorithm::Es256 => "ES256",
+        SigningAlgorithm::Rs256 => "RS256",
+    }
 }
 
 pub fn init_spreadsheet_api(dir: &Path, sample: Sample) -> Result<()> {
@@ -4327,6 +4835,91 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+
+    const TEST_PRIVATE_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"registryctl-test-private-key"}"#;
+
+    #[test]
+    fn config_bundle_sign_anchor_and_verify_round_trip() {
+        let temp = TempDir::new().unwrap();
+        let input_dir = temp.path().join("input");
+        let bundle_dir = temp.path().join("bundle");
+        fs::create_dir_all(input_dir.join("config")).unwrap();
+        let config_bytes = b"server:\n  bind: 127.0.0.1:8080\n";
+        fs::write(input_dir.join("config/notary.yaml"), config_bytes).unwrap();
+        let config_hash = registry_platform_config::sha256_uri(config_bytes);
+        let private_path = temp.path().join("private.jwk");
+        fs::write(&private_path, TEST_PRIVATE_JWK).unwrap();
+        let private = PrivateJwk::parse(TEST_PRIVATE_JWK).unwrap();
+        let public = private.public();
+        let public_path = temp.path().join("public.jwk");
+        fs::write(&public_path, serde_json::to_vec_pretty(&public).unwrap()).unwrap();
+        let anchor_path = temp.path().join("trust_anchor.json");
+
+        let init = init_config_anchor(
+            &anchor_path,
+            "registry-notary".to_string(),
+            "production".to_string(),
+            "civil-registry".to_string(),
+            "notary-011".to_string(),
+        )
+        .unwrap();
+        assert_eq!(init.signer_count, 0);
+
+        let sign = sign_config_bundle(BundleSignOptions {
+            input: input_dir,
+            key: private_path.display().to_string(),
+            product: "registry-notary".to_string(),
+            environment: "production".to_string(),
+            stream_id: "civil-registry".to_string(),
+            instance_id: None,
+            sequence: 1,
+            bundle_id: "rollout-1".to_string(),
+            out: bundle_dir.clone(),
+        })
+        .unwrap();
+        assert_eq!(sign.alg, "EdDSA");
+        assert_eq!(sign.signature_count, 1);
+        assert_eq!(sign.config_path, "config/notary.yaml");
+
+        let add = add_config_anchor_key(&anchor_path, &public_path, true).unwrap();
+        assert_eq!(add.signer_count, 1);
+        assert_eq!(add.enabled_signer_count, 1);
+
+        let inspect = inspect_config_bundle(&bundle_dir).unwrap();
+        assert_eq!(inspect.signature_count, 1);
+        assert_eq!(inspect.manifest.bundle_id, "rollout-1");
+
+        let verified = verify_config_bundle_cli(&bundle_dir, &anchor_path).unwrap();
+        assert_eq!(verified.config_hash, config_hash);
+        assert_eq!(verified.signer_kids, vec![public.jkt().unwrap()]);
+        assert_eq!(verified.config_path, bundle_dir.join("config/notary.yaml"));
+    }
+
+    #[test]
+    fn config_anchor_remove_key_updates_anchor_without_private_material() {
+        let temp = TempDir::new().unwrap();
+        let anchor_path = temp.path().join("trust_anchor.json");
+        let private = PrivateJwk::parse(TEST_PRIVATE_JWK).unwrap();
+        let public = private.public();
+        let public_path = temp.path().join("public.jwk");
+        fs::write(&public_path, serde_json::to_vec_pretty(&public).unwrap()).unwrap();
+        init_config_anchor(
+            &anchor_path,
+            "registry-notary".to_string(),
+            "production".to_string(),
+            "civil-registry".to_string(),
+            "notary-011".to_string(),
+        )
+        .unwrap();
+        add_config_anchor_key(&anchor_path, &public_path, true).unwrap();
+
+        let report = remove_config_anchor_key(&anchor_path, &public.jkt().unwrap()).unwrap();
+
+        assert_eq!(report.signer_count, 0);
+        let anchor = fs::read_to_string(anchor_path).unwrap();
+        assert!(!anchor.contains(r#""d":"#));
+        assert!(!anchor.contains(r#""d": "#));
+    }
 
     fn assert_digest_pinned_image(image: &str, repository: &str) {
         assert!(image.starts_with(&format!("{repository}@sha256:")));

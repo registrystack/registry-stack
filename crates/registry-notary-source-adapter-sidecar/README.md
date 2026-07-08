@@ -32,62 +32,15 @@ existing exact, not found, and ambiguous-source behavior.
 
 ## Governed Configuration
 
-Production deployments start the sidecar from a governed TUF target. The
-default startup loader rejects YAML without `config_trust`; legacy unsigned
-manifests require the explicit `--allow-unsigned-dev-config` local-development
-escape hatch. In governed mode the local YAML contains only listener/auth
-bootstrap plus `config_trust`; workflow runtime material lives in the signed
-target.
+The sidecar now starts from a local manifest. Legacy `config_trust` bootstrap is
+rejected, and the old TUF startup path is intentionally not supported. The
+`--allow-unsigned-dev-config` flag remains a local-development escape hatch for
+loading a manifest directly.
 
-```yaml
-server:
-  bind: "127.0.0.1:9191"
-  request_timeout_ms: 30000
-  request_body_timeout_ms: 10000
-  http1_header_read_timeout_ms: 10000
-  max_connections: 1024
-auth:
-  bearer_tokens:
-    - id: notary
-      hash_env: SOURCE_ADAPTER_SIDECAR_TOKEN_HASH
-audit:
-  sink: file
-  path: /var/log/registry-notary-source-adapter-sidecar/audit.jsonl
-  hash_secret_env: SOURCE_ADAPTER_SIDECAR_AUDIT_HASH_SECRET
-config_trust:
-  product: registry-notary-source-adapter-sidecar
-  instance_id: demo
-  environment: staging
-  stream_id: source-adapter-sidecar-runtime
-  root_path: /etc/registry-notary-source-adapter-sidecar/tuf/root.json
-  metadata_dir: /etc/registry-notary-source-adapter-sidecar/tuf/metadata
-  targets_dir: /etc/registry-notary-source-adapter-sidecar/tuf/targets
-  datastore_dir: /var/lib/registry-notary-source-adapter-sidecar/tuf
-  target_name: source-adapter-sidecar-runtime.json
-  antirollback_state_path: /var/lib/registry-notary-source-adapter-sidecar/config-trust/antirollback.json
-  accepted_roots: []
-```
-
-`accepted_roots: []` is intentionally incomplete. Real production bootstrap
-must list the trusted TUF root, accepted signer keys, roles, thresholds, and
-allowed change classes. Startup fails closed if the target is not verified,
-authorized, bound to the configured product/instance/environment/stream, marked
-`restart_required`, or accepted by anti-rollback after runtime checks pass.
-Governed startup also requires a durable audit sink. Protected data routes
-write a pre-access audit event before dispatching to a source and write an
-outcome event before returning to the caller; audit write failure returns
-`500` with `audit.write_failed`.
-
-The signed target uses schema `registry.notary.source_adapter_sidecar.runtime.v1` and
-always contains `limits` and `sources`.
-
-The sidecar exposes `GET /v1/assurance` with the verified product identity,
-TUF versions, signer kids, change classes, and `config_hash`. `GET /ready`
-stays compact and includes only readiness status, `config_hash`, and the key
-verification booleans. Neither endpoint includes target credentials, workflow
-contents, raw smoke lookup payloads, or environment details.
-
-Release helpers render, locally sign, and verify governed runtime material:
+Release helpers still render and verify governed runtime material for bundle
+authoring workflows. The rendered target uses schema
+`registry.notary.source_adapter_sidecar.runtime.v1` and contains only `limits`
+and `sources`.
 
 ```bash
 cargo run -p registry-notary-source-adapter-sidecar -- \
@@ -102,49 +55,10 @@ cargo run -p registry-notary-source-adapter-sidecar -- \
 
 Built-in adapter targets carry no workflow expression material.
 
-For local demos and release rehearsal, create a signed local TUF repository from
-the rendered target. This helper uses the supplied root and signing key. It is
-not a substitute for production key custody or approval workflow.
-
-```bash
-cargo run -p registry-notary-source-adapter-sidecar -- \
-  config create-local-tuf-repo \
-  --target /tmp/source-adapter-sidecar-runtime.json \
-  --target-name source-adapter-sidecar-runtime.json \
-  --root-path /path/to/tuf/root.json \
-  --signing-key-path /path/to/tuf/targets-signing-key.pem \
-  --metadata-dir /tmp/source-adapter-sidecar-tuf/metadata \
-  --targets-dir /tmp/source-adapter-sidecar-tuf/targets \
-  --product registry-notary-source-adapter-sidecar \
-  --instance-id demo \
-  --environment staging \
-  --stream-id source-adapter-sidecar-runtime \
-  --bundle-id opencrvs-sidecar-2026-06-09 \
-  --sequence 1 \
-  --previous-config-hash sha256:0000000000000000000000000000000000000000000000000000000000000000 \
-  --change-class source_adapter_sidecar_workflow_bundle \
-  --declared-signer-kid local-demo-signer
-```
-
-To verify an already signed local TUF repository, omit `--target` and provide
-the local TUF coordinates plus the expected identity:
-
-```bash
-cargo run -p registry-notary-source-adapter-sidecar -- \
-  config verify-bundle \
-  --product registry-notary-source-adapter-sidecar \
-  --instance-id demo \
-  --environment staging \
-  --stream-id source-adapter-sidecar-runtime \
-  --root-path /etc/registry-notary-source-adapter-sidecar/tuf/root.json \
-  --metadata-dir /etc/registry-notary-source-adapter-sidecar/tuf/metadata \
-  --targets-dir /etc/registry-notary-source-adapter-sidecar/tuf/targets \
-  --datastore-dir /var/lib/registry-notary-source-adapter-sidecar/tuf \
-  --target-name source-adapter-sidecar-runtime.json
-```
-
-The verification report includes the target `config_hash` and, for local TUF
-verification, signer kids, change classes, and TUF metadata versions.
+The verification report includes the target `config_hash`. Protected data routes
+write a pre-access audit event before dispatching to a source and write an
+outcome event before returning to the caller; audit write failure returns `500`
+with `audit.write_failed`.
 
 Registry Notary pins the expected sidecar state in the source connection:
 

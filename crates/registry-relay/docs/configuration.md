@@ -20,7 +20,7 @@ auth: {}
 audit: {}
 deployment:
   profile: local # required; use local only for development
-config_trust: {} # optional governed config apply state
+config_trust: {} # optional signed bundle boot trust
 datasets: []
 provenance: {} # optional
 standards: {}  # optional, feature-gated adapters
@@ -151,79 +151,38 @@ HTTP/2 connections use the same finite connection cap and keepalive timeout. If 
 
 The default CORS policy is deny by omission. Add explicit trusted origins only.
 
-## Governed config apply
+## Config Bundle Trust
 
-Most deployments can skip this section. `config_trust` is optional; it governs
-signed, threshold-approved config changes for high-assurance deployments. Simple
-local deployments omit it and keep using the local YAML loaded at startup.
+Most deployments can skip this section. `config_trust` is optional; it makes
+startup config come from a signed, local config bundle. Simple local deployments
+omit it and keep using the local YAML loaded at startup.
 
-This governed example is syntactically valid but illustrative. Generate the
-`tuf_root_sha256` and targets-role signer key IDs from your own trusted TUF
-repository before using governed apply in an environment.
+This example is syntactically valid but illustrative. Generate the trust anchor
+and signed bundle with `registryctl anchor` and `registryctl bundle` before using
+it in an environment.
 
 ```yaml
 config_trust:
+  trust_anchor_path: /etc/registry-relay/config/trust-anchor.json
+  bundle_path: /etc/registry-relay/config/bundle
   antirollback_state_path: /var/lib/registry-relay/config-antirollback.json
-  local_approval_state_path: /var/lib/registry-relay/config-local-approvals.json
-  break_glass_rate_limit:
-    max_accepted: 1
-    window_seconds: 3600
-  required_approver_count:
-    emergency.break_glass: 2
-  accepted_roots:
-    - root_id: ops-root
-      production: true
-      tuf_root_sha256: sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-      valid_from_unix_seconds: 1770000000
-      valid_until_unix_seconds: 1772592000
-      high_risk_change_classes:
-        - auth_scopes
-        - signing_key_cleanup
-        - signing_key_rotation
-      signers:
-        "1111111111111111111111111111111111111111111111111111111111111111":
-          kid: "1111111111111111111111111111111111111111111111111111111111111111"
-          enabled: true
-        "2222222222222222222222222222222222222222222222222222222222222222":
-          kid: "2222222222222222222222222222222222222222222222222222222222222222"
-          enabled: true
-      roles:
-        - name: config-admin
-          threshold: 2
-          signer_kids:
-            - "1111111111111111111111111111111111111111111111111111111111111111"
-            - "2222222222222222222222222222222222222222222222222222222222222222"
-          allowed_change_classes:
-            - public_metadata
+  break_glass_override_path: /run/registry-relay/config-override.json
 ```
 
-Governed config apply requires
-`antirollback_state_path` and `local_approval_state_path`, which must point to
-durable local state such as a mounted volume. `break_glass_rate_limit` is the
-trusted local rolling-window policy used for break-glass apply requests; when
-omitted it defaults to one accepted request per rate-limit identity per hour.
-`required_approver_count` is an optional per-emergency-change-class map for
-stored break-glass approval records. Counts default to `1`; values must be
-greater than zero.
-Registry Relay fails closed for
-apply when required local state is absent, unreadable, stale, or inconsistent;
-verify and dry-run remain available.
+Config bundle trust is boot-time only. Relay reads no remote metadata, exposes
+no admin config apply endpoint, and does not hot-apply runtime config. At boot it
+verifies the anchor permissions, the bundle manifest and signature, product and
+environment binding, bundle file closure, anti-rollback sequence, and full Relay
+config validation. The accepted bundle is audited before the anti-rollback state
+is advanced.
 
-Signed apply also requires at least one local `accepted_roots` entry that
-authorizes every change class in the signed target metadata. Registry Relay uses
-the local root only after TUF target verification succeeds. Verified TUF
-targets-role signature key IDs, not target-declared custom metadata, must
-satisfy one role threshold per change class. Inline admin YAML can be used for
-verify/dry-run checks, but apply requires a signed local TUF target and never
-treats raw inline YAML as signed governance input.
-
-For TUF root rotation, add the new final `tuf_root_sha256` as another local
-`accepted_roots` entry before applying bundles that verify through the rotated
-root. `valid_from_unix_seconds` and `valid_until_unix_seconds` are optional
-local bounds for overlap windows. Omit them for an indefinite local root; set
-them when old and new roots must both authorize bundles only during a planned
-transition window. Expired or not-yet-valid roots fail authorization even when
-the TUF metadata and signer quorum are otherwise valid.
+`antirollback_state_path` must point to durable local state such as a mounted
+volume. `break_glass_override_path` is optional and points to a root-owned
+one-shot override file. Rollback overrides may accept the exact signed bundle
+hash named by the file. `accept_unsigned` overrides may pin an absolute local
+config path and hash for emergency startup; signature, binding, and sequence
+checks are skipped, but file permissions, hash pinning, and Relay config
+validation still run.
 
 ## Catalog and vocabularies
 
@@ -262,7 +221,7 @@ exact reviewed manifest.
 | --- | --- | --- | --- |
 | Simple local | `metadata.source.path` | Optional | Local file read at startup |
 | Pinned local | `metadata.source.path`, `metadata.source.digest` | Must match the local manifest | Local file read at startup |
-| Governed | `config_trust`, `metadata.source.path`, `metadata.source.digest` | Required before startup and apply | Signed config target plus signed metadata target; optional signed package index when `package_digest` is claimed |
+| Governed | `config_trust`, `metadata.source.path`, `metadata.source.digest` | Required before startup | Signed config target plus signed metadata target; optional signed package index when `package_digest` is claimed |
 
 Keep operational details in this runtime config: sources, tables, physical
 columns, scopes, filters, aggregates, standards adapters, ingest, and refresh.

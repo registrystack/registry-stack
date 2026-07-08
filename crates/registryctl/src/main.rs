@@ -1,11 +1,11 @@
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 use registryctl::{
-    DeploymentProfile, DoctorFormat, NotaryInitOptions, NotaryInitSourceKind, NotarySource,
-    OpenFnBatchMode, OpenFnConvertOptions, OpenFnImportOptions, Sample,
+    BundleSignOptions, DeploymentProfile, DoctorFormat, NotaryInitOptions, NotaryInitSourceKind,
+    NotarySource, OpenFnBatchMode, OpenFnConvertOptions, OpenFnImportOptions, Sample,
 };
 
 fn main() -> Result<()> {
@@ -83,6 +83,74 @@ fn main() -> Result<()> {
         Commands::Notary { command } => match command {
             NotaryCommand::Smoke => registryctl::notary_smoke_project(&std::env::current_dir()?)?,
             NotaryCommand::Open => registryctl::notary_open_project(&std::env::current_dir()?)?,
+        },
+        Commands::Bundle { command } => match command {
+            BundleCommand::Inspect { bundle_dir } => {
+                print_json(&registryctl::inspect_config_bundle(&bundle_dir)?)?;
+            }
+            BundleCommand::Verify {
+                bundle_dir,
+                anchor_path,
+            } => {
+                print_json(&registryctl::verify_config_bundle_cli(
+                    &bundle_dir,
+                    &anchor_path,
+                )?)?;
+            }
+            BundleCommand::Sign {
+                input,
+                key,
+                product,
+                environment,
+                stream_id,
+                instance_id,
+                sequence,
+                bundle_id,
+                out,
+            } => {
+                print_json(&registryctl::sign_config_bundle(BundleSignOptions {
+                    input,
+                    key,
+                    product,
+                    environment,
+                    stream_id,
+                    instance_id,
+                    sequence,
+                    bundle_id,
+                    out,
+                })?)?;
+            }
+        },
+        Commands::Anchor { command } => match command {
+            AnchorCommand::Init {
+                anchor_path,
+                product,
+                environment,
+                stream_id,
+                instance_id,
+            } => {
+                print_json(&registryctl::init_config_anchor(
+                    &anchor_path,
+                    product,
+                    environment,
+                    stream_id,
+                    instance_id,
+                )?)?;
+            }
+            AnchorCommand::AddKey {
+                anchor_path,
+                jwk_path,
+                disabled,
+            } => {
+                print_json(&registryctl::add_config_anchor_key(
+                    &anchor_path,
+                    &jwk_path,
+                    !disabled,
+                )?)?;
+            }
+            AnchorCommand::RemoveKey { anchor_path, kid } => {
+                print_json(&registryctl::remove_config_anchor_key(&anchor_path, &kid)?)?;
+            }
         },
         Commands::Openfn { command } => match *command {
             OpenFnCommand::Import {
@@ -240,6 +308,14 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+fn print_json<T: serde::Serialize>(value: &T) -> Result<()> {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(value).context("failed to render JSON output")?
+    );
+    Ok(())
+}
+
 #[derive(Debug, Parser)]
 #[command(name = "registryctl")]
 #[command(version)]
@@ -294,6 +370,16 @@ enum Commands {
         #[command(subcommand)]
         command: NotaryCommand,
     },
+    /// Work with Registry Config Bundle directories.
+    Bundle {
+        #[command(subcommand)]
+        command: BundleCommand,
+    },
+    /// Work with Registry Config Bundle trust anchors.
+    Anchor {
+        #[command(subcommand)]
+        command: AnchorCommand,
+    },
     /// Work with OpenFn workflow exports.
     Openfn {
         #[command(subcommand)]
@@ -310,7 +396,11 @@ impl Commands {
     fn should_check_for_updates(&self) -> bool {
         !matches!(
             self,
-            Self::Doctor { .. } | Self::UpdateCheck | Self::UpdateCheckRefresh
+            Self::Doctor { .. }
+                | Self::Bundle { .. }
+                | Self::Anchor { .. }
+                | Self::UpdateCheck
+                | Self::UpdateCheckRefresh
         )
     }
 }
@@ -420,6 +510,128 @@ mod tests {
         assert!(matches!(cli.command, Commands::UpdateCheckRefresh));
         assert!(!cli.command.should_check_for_updates());
     }
+
+    #[test]
+    fn bundle_cli_accepts_inspect_verify_and_sign() {
+        let inspect =
+            Cli::try_parse_from(["registryctl", "bundle", "inspect", "--bundle-dir", "bundle"])
+                .unwrap();
+        assert!(matches!(
+            inspect.command,
+            Commands::Bundle {
+                command: BundleCommand::Inspect { .. }
+            }
+        ));
+        assert!(!inspect.command.should_check_for_updates());
+
+        let verify = Cli::try_parse_from([
+            "registryctl",
+            "bundle",
+            "verify",
+            "--bundle-dir",
+            "bundle",
+            "--anchor-path",
+            "trust_anchor.json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            verify.command,
+            Commands::Bundle {
+                command: BundleCommand::Verify { .. }
+            }
+        ));
+
+        let sign = Cli::try_parse_from([
+            "registryctl",
+            "bundle",
+            "sign",
+            "--input",
+            "input",
+            "--key",
+            "private.jwk",
+            "--product",
+            "registry-notary",
+            "--environment",
+            "production",
+            "--stream-id",
+            "civil-registry",
+            "--sequence",
+            "42",
+            "--bundle-id",
+            "2026-07-07-rollout-3",
+            "--out",
+            "bundle",
+        ])
+        .unwrap();
+        assert!(matches!(
+            sign.command,
+            Commands::Bundle {
+                command: BundleCommand::Sign { .. }
+            }
+        ));
+    }
+
+    #[test]
+    fn anchor_cli_accepts_init_add_key_and_remove_key() {
+        let init = Cli::try_parse_from([
+            "registryctl",
+            "anchor",
+            "init",
+            "--anchor-path",
+            "trust_anchor.json",
+            "--product",
+            "registry-notary",
+            "--environment",
+            "production",
+            "--stream-id",
+            "civil-registry",
+            "--instance-id",
+            "notary-011",
+        ])
+        .unwrap();
+        assert!(matches!(
+            init.command,
+            Commands::Anchor {
+                command: AnchorCommand::Init { .. }
+            }
+        ));
+        assert!(!init.command.should_check_for_updates());
+
+        let add = Cli::try_parse_from([
+            "registryctl",
+            "anchor",
+            "add-key",
+            "--anchor-path",
+            "trust_anchor.json",
+            "--jwk-path",
+            "public.jwk",
+            "--disabled",
+        ])
+        .unwrap();
+        assert!(matches!(
+            add.command,
+            Commands::Anchor {
+                command: AnchorCommand::AddKey { disabled: true, .. }
+            }
+        ));
+
+        let remove = Cli::try_parse_from([
+            "registryctl",
+            "anchor",
+            "remove-key",
+            "--anchor-path",
+            "trust_anchor.json",
+            "--kid",
+            "kid-1",
+        ])
+        .unwrap();
+        assert!(matches!(
+            remove.command,
+            Commands::Anchor {
+                command: AnchorCommand::RemoveKey { .. }
+            }
+        ));
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -501,6 +713,98 @@ enum NotaryCommand {
     Smoke,
     /// Open or print the local Notary API docs URL.
     Open,
+}
+
+#[derive(Debug, Subcommand)]
+enum BundleCommand {
+    /// Inspect a Registry Config Bundle manifest and signature metadata.
+    Inspect {
+        /// Bundle directory containing manifest.json and config files.
+        #[arg(long)]
+        bundle_dir: PathBuf,
+    },
+    /// Verify a Registry Config Bundle against a trust anchor.
+    Verify {
+        /// Bundle directory containing manifest.json, manifest.sig.json, and config files.
+        #[arg(long)]
+        bundle_dir: PathBuf,
+        /// Trust anchor JSON path.
+        #[arg(long)]
+        anchor_path: PathBuf,
+    },
+    /// Build and sign a Registry Config Bundle from an input directory.
+    Sign {
+        /// Directory containing config files to package.
+        #[arg(long)]
+        input: PathBuf,
+        /// Private JWK path or op:// reference.
+        #[arg(long)]
+        key: String,
+        /// Product binding, for example registry-notary.
+        #[arg(long)]
+        product: String,
+        /// Environment binding, for example production.
+        #[arg(long)]
+        environment: String,
+        /// Stream binding.
+        #[arg(long = "stream-id")]
+        stream_id: String,
+        /// Optional instance binding.
+        #[arg(long = "instance-id")]
+        instance_id: Option<String>,
+        /// Monotonic bundle sequence.
+        #[arg(long)]
+        sequence: u64,
+        /// Bundle identifier.
+        #[arg(long = "bundle-id")]
+        bundle_id: String,
+        /// Output bundle directory to create.
+        #[arg(long)]
+        out: PathBuf,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum AnchorCommand {
+    /// Initialize a Registry Config Bundle trust anchor file.
+    Init {
+        /// Trust anchor JSON path to write.
+        #[arg(long)]
+        anchor_path: PathBuf,
+        /// Product binding, for example registry-notary.
+        #[arg(long)]
+        product: String,
+        /// Environment binding, for example production.
+        #[arg(long)]
+        environment: String,
+        /// Stream binding.
+        #[arg(long)]
+        stream_id: String,
+        /// Instance binding for this node.
+        #[arg(long)]
+        instance_id: String,
+    },
+    /// Add a public JWK signer to a trust anchor.
+    AddKey {
+        /// Trust anchor JSON path to update.
+        #[arg(long)]
+        anchor_path: PathBuf,
+        /// Public JWK JSON path.
+        #[arg(long)]
+        jwk_path: PathBuf,
+        /// Add the signer as disabled.
+        #[arg(long)]
+        disabled: bool,
+    },
+    /// Remove a signer from a trust anchor by key id.
+    RemoveKey {
+        /// Trust anchor JSON path to update.
+        #[arg(long)]
+        anchor_path: PathBuf,
+        /// Signer key id to remove.
+        #[arg(long)]
+        kid: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]

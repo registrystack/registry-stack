@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
-# Render input for config/coolify/openfn/governed/openfn-dhis2-sidecar-runtime.json.
-# Hosted runtime starts from openfn-dhis2-sidecar.bootstrap.yaml and verifies the
-# signed TUF target before serving.
+# Template for the hosted DHIS2 OpenFn sidecar bootstrap config.
+# Hosted runtime starts from openfn-dhis2-sidecar.bootstrap.yaml, exposes local
+# sidecar assurance, and writes durable audit records before serving.
 #
 # Built-in http_json source: the OpenFn worker engine is retired, so this hosted
 # manifest mirrors config/source-adapter/dhis2-health-sidecar.yaml -- a single

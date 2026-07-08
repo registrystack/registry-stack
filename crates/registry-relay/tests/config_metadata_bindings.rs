@@ -109,27 +109,15 @@ fn insert_config_trust(path: &std::path::Path, tmp: &TempDir) {
     let trust = format!(
         r#"
 config_trust:
+  trust_anchor_path: "{}"
+  bundle_path: "{}"
   antirollback_state_path: "{}"
-  local_approval_state_path: "{}"
-  accepted_roots:
-    - root_id: test-root
-      production: false
-      tuf_root_sha256: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-      high_risk_change_classes: []
-      signers:
-        signer-a:
-          kid: signer-a
-          enabled: true
-      roles:
-        - name: metadata
-          threshold: 1
-          signer_kids:
-            - signer-a
-          allowed_change_classes:
-            - public_metadata
+  break_glass_override_path: "{}"
 "#,
+        tmp.path().join("trust-anchor.json").display(),
+        tmp.path().join("bundle").display(),
         tmp.path().join("antirollback.json").display(),
-        tmp.path().join("local-approvals.json").display()
+        tmp.path().join("break-glass").display()
     );
     std::fs::write(
         path,
@@ -519,15 +507,15 @@ fn load_with_metadata_rejects_pinned_manifest_digest_mismatch() {
 }
 
 #[test]
-fn load_with_metadata_requires_digest_for_governed_config() {
+fn load_with_metadata_requires_local_bundle_for_governed_config() {
     let tmp = TempDir::new().expect("tempdir");
     write_metadata_manifest(&tmp, true);
     let runtime_path = write_runtime_config(&tmp, "metadata.yaml");
     insert_config_trust(&runtime_path, &tmp);
 
     let err = config::load_with_metadata(&runtime_path)
-        .expect_err("governed metadata must pin source digest");
-    assert_eq!(err.code(), "metadata.manifest.digest_required");
+        .expect_err("governed config must fail closed without a local bundle");
+    assert_eq!(err.code(), "config.validation_error");
 }
 
 #[test]

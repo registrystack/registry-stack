@@ -3,13 +3,19 @@
 
 use std::process::Command;
 
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use registry_config_report::{CONFIG_EXPLANATION_SCHEMA_V1, PRODUCT_DIAGNOSTIC_REPORT_SCHEMA_V1};
+use registry_platform_config::{
+    sha256_uri, ConfigBundleFile, ConfigBundleManifest, ConfigBundleSignature,
+    ConfigBundleSignatureEnvelope, ConfigTrustAnchor, ConfigTrustAnchorSigner,
+};
+use registry_platform_crypto::{canonicalize_json, sign, PrivateJwk};
+use registry_platform_ops::{AntiRollbackKey, AntiRollbackRecord, FileAntiRollbackStore};
 use serde_json::Value;
 use tempfile::TempDir;
 
-fn yaml_path(tmp: &TempDir) -> String {
-    tmp.path().to_string_lossy().replace('\\', "/")
-}
+const PRIVATE_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}"#;
+const ZERO_HASH: &str = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
 
 fn write_minimal_config(tmp: &TempDir) -> std::path::PathBuf {
     let path = tmp.path().join("relay.yaml");
@@ -72,7 +78,96 @@ fn write_profile_config(
     profile: &str,
     openapi_requires_auth: bool,
 ) -> std::path::PathBuf {
-    let path = tmp.path().join(format!("relay-{profile}.yaml"));
+    write_signed_profile_config(tmp, profile, openapi_requires_auth, false)
+}
+
+fn write_signed_profile_config(
+    tmp: &TempDir,
+    profile: &str,
+    openapi_requires_auth: bool,
+    public_admin: bool,
+) -> std::path::PathBuf {
+    let fixture_name = format!(
+        "{profile}-{}-{}",
+        if openapi_requires_auth {
+            "openapi-auth"
+        } else {
+            "openapi-public"
+        },
+        if public_admin {
+            "public-admin"
+        } else {
+            "private-admin"
+        }
+    );
+    let bundle_dir = tmp.path().join(format!("bundle-{fixture_name}"));
+    let config_dir = bundle_dir.join("config");
+    std::fs::create_dir_all(&config_dir).expect("bundle config dir");
+    let bundled_config = relay_profile_config_yaml(profile, openapi_requires_auth, public_admin);
+    let bundled_config_hash = sha256_uri(bundled_config.as_bytes());
+    std::fs::write(config_dir.join("relay.yaml"), bundled_config.as_bytes())
+        .expect("bundle config writes");
+
+    let private = PrivateJwk::parse(PRIVATE_JWK).expect("private JWK parses");
+    let public = private.public();
+    let kid = public.jkt().expect("thumbprint computes");
+    let manifest = ConfigBundleManifest {
+        schema: "registry.platform.config_bundle.v1".to_string(),
+        product: "registry-relay".to_string(),
+        environment: "lab".to_string(),
+        stream_id: format!("relay-doctor-{fixture_name}"),
+        instance_id: Some("relay-lab".to_string()),
+        bundle_id: format!("relay-doctor-{fixture_name}-bundle"),
+        sequence: 1,
+        previous_config_hash: Some(ZERO_HASH.to_string()),
+        config_hash: bundled_config_hash.clone(),
+        files: vec![ConfigBundleFile {
+            path: "config/relay.yaml".to_string(),
+            sha256: bundled_config_hash.clone(),
+        }],
+        created_at: "2026-07-07T10:00:00Z".to_string(),
+    };
+    write_manifest_and_signature(&bundle_dir, &manifest, &private, &kid);
+
+    let anchor = ConfigTrustAnchor {
+        schema: "registry.platform.config_trust_anchor.v1".to_string(),
+        product: "registry-relay".to_string(),
+        environment: "lab".to_string(),
+        stream_id: manifest.stream_id.clone(),
+        instance_id: "relay-lab".to_string(),
+        signers: vec![ConfigTrustAnchorSigner {
+            kid,
+            jwk: public,
+            enabled: true,
+        }],
+    };
+    let anchor_path = tmp.path().join(format!("trust-anchor-{fixture_name}.json"));
+    std::fs::write(
+        &anchor_path,
+        serde_json::to_vec_pretty(&anchor).expect("anchor serializes"),
+    )
+    .expect("anchor writes");
+
+    let state_path = tmp.path().join(format!("antirollback-{fixture_name}.json"));
+    FileAntiRollbackStore::new(&state_path)
+        .initialize(AntiRollbackRecord {
+            key: AntiRollbackKey {
+                product: "registry-relay".to_string(),
+                instance_id: "relay-lab".to_string(),
+                environment: "lab".to_string(),
+                stream_id: manifest.stream_id.clone(),
+            },
+            last_sequence: 0,
+            last_config_hash: ZERO_HASH.to_string(),
+            last_bundle_id: None,
+            root_version: None,
+            override_pin: None,
+            break_glass: Default::default(),
+            local_approvals: Default::default(),
+        })
+        .expect("state initializes");
+
+    let path = tmp.path().join(format!("relay-{fixture_name}.yaml"));
     std::fs::write(
         &path,
         format!(
@@ -82,8 +177,10 @@ instance:
 deployment:
   profile: {profile}
 config_trust:
-  antirollback_state_path: {state}/antirollback.json
-  local_approval_state_path: {state}/local-approvals.json
+  trust_anchor_path: {anchor}
+  bundle_path: {bundle}
+  antirollback_state_path: {state}
+  break_glass_override_path: {break_glass}
 server:
   bind: 127.0.0.1:0
   openapi_requires_auth: {openapi_requires_auth}
@@ -100,7 +197,14 @@ audit:
   sink: stdout
   format: jsonl
 "#,
-            state = yaml_path(tmp)
+            anchor = anchor_path.to_string_lossy().replace('\\', "/"),
+            bundle = bundle_dir.to_string_lossy().replace('\\', "/"),
+            state = state_path.to_string_lossy().replace('\\', "/"),
+            break_glass = tmp
+                .path()
+                .join(format!("break-glass-{fixture_name}"))
+                .to_string_lossy()
+                .replace('\\', "/"),
         ),
     )
     .expect("config writes");
@@ -108,24 +212,29 @@ audit:
 }
 
 fn write_public_admin_profile_config(tmp: &TempDir, profile: &str) -> std::path::PathBuf {
-    let path = tmp
-        .path()
-        .join(format!("relay-{profile}-public-admin.yaml"));
-    std::fs::write(
-        &path,
-        format!(
-            r#"
+    write_signed_profile_config(tmp, profile, true, true)
+}
+
+fn relay_profile_config_yaml(
+    profile: &str,
+    openapi_requires_auth: bool,
+    public_admin: bool,
+) -> String {
+    let admin_bind = if public_admin {
+        "  admin_bind: 0.0.0.0:0\n"
+    } else {
+        ""
+    };
+    format!(
+        r#"
 instance:
-  id: registry-relay-profile-test
+  id: relay-lab
+  environment: lab
 deployment:
   profile: {profile}
-config_trust:
-  antirollback_state_path: {state}/antirollback.json
-  local_approval_state_path: {state}/local-approvals.json
 server:
   bind: 127.0.0.1:0
-  admin_bind: 0.0.0.0:0
-  openapi_requires_auth: true
+{admin_bind}  openapi_requires_auth: {openapi_requires_auth}
 catalog:
   title: Test
   base_url: https://data.example.test
@@ -139,11 +248,36 @@ audit:
   sink: stdout
   format: jsonl
 "#,
-            state = yaml_path(tmp)
-        ),
     )
-    .expect("config writes");
-    path
+}
+
+fn write_manifest_and_signature(
+    bundle_dir: &std::path::Path,
+    manifest: &ConfigBundleManifest,
+    private: &PrivateJwk,
+    kid: &str,
+) {
+    let manifest_value = serde_json::to_value(manifest).expect("manifest value");
+    let canonical = canonicalize_json(&manifest_value).expect("canonical manifest");
+    let signature = sign(&canonical, private).expect("manifest signs");
+    let envelope = ConfigBundleSignatureEnvelope {
+        schema: "registry.platform.config_bundle_signatures.v1".to_string(),
+        signatures: vec![ConfigBundleSignature {
+            kid: kid.to_string(),
+            alg: "EdDSA".to_string(),
+            sig: URL_SAFE_NO_PAD.encode(signature),
+        }],
+    };
+    std::fs::write(
+        bundle_dir.join("manifest.json"),
+        serde_json::to_vec_pretty(manifest).expect("manifest serializes"),
+    )
+    .expect("manifest writes");
+    std::fs::write(
+        bundle_dir.join("manifest.sig.json"),
+        serde_json::to_vec_pretty(&envelope).expect("signature serializes"),
+    )
+    .expect("signature writes");
 }
 
 fn write_missing_secret_config(tmp: &TempDir) -> std::path::PathBuf {

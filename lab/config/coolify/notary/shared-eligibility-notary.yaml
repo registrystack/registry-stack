@@ -49,12 +49,6 @@ audit:
   sink: stdout
   hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
 
-config_trust:
-  antirollback_state_path: /var/lib/registry-notary/config-state/shared-eligibility-notary-config-antirollback.json
-  local_approval_state_path: /var/lib/registry-notary/config-state/shared-eligibility-notary-config-local-approvals.json
-  break_glass_rate_limit:
-    max_accepted: 1
-    window_seconds: 3600
 
 cel:
   worker_count: 16

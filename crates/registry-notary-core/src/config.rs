@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use registry_platform_authcommon::CredentialFingerprintRef;
-use registry_platform_config::{DeprecatedConfigField, RegistryTrustRoot};
+use registry_platform_config::DeprecatedConfigField;
 use registry_platform_crypto::validate_did_web_https_issuer_binding;
 use registry_platform_crypto::PublicJwk;
 pub use registry_platform_crypto::{
@@ -86,64 +86,11 @@ pub struct NotaryInstanceConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigTrustConfig {
+    pub trust_anchor_path: PathBuf,
+    pub bundle_path: PathBuf,
     pub antirollback_state_path: PathBuf,
-    pub local_approval_state_path: PathBuf,
-    #[serde(
-        default = "default_break_glass_rate_limit",
-        skip_serializing_if = "config_trust_rate_limit_is_default"
-    )]
-    pub break_glass_rate_limit: ConfigTrustRateLimit,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub required_approver_count: BTreeMap<String, usize>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub accepted_roots: Vec<RegistryTrustRoot>,
-    /// Operator-owned allowlist of remote TUF config sources.
-    ///
-    /// Admin requests may name one of these pre-configured sources but cannot
-    /// introduce new repository URLs or override the per-entry
-    /// `allow_dev_insecure_fetch_urls` flag. Omit the list (or leave it empty)
-    /// when all remote TUF apply flows use local repository sources.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub remote_tuf_repositories: Vec<RemoteTufRepositoryConfig>,
-}
-
-/// One entry in the `config_trust.remote_tuf_repositories` operator allowlist.
-///
-/// An admin request that names a remote TUF source must match an entry here
-/// exactly (by `root_path`, `metadata_base_url`, `targets_base_url`, and
-/// `datastore_dir`). The `allow_dev_insecure_fetch_urls` flag is always taken
-/// from this entry, never from the request, so operators control the fetch
-/// policy.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct RemoteTufRepositoryConfig {
-    pub root_path: PathBuf,
-    pub metadata_base_url: String,
-    pub targets_base_url: String,
-    pub datastore_dir: PathBuf,
-    /// Permit `http://` URLs to loopback addresses (localhost, 127.0.0.1, ::1).
-    /// Intended for local development and tests only; must be `false` in
-    /// production.
-    #[serde(default)]
-    pub allow_dev_insecure_fetch_urls: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ConfigTrustRateLimit {
-    pub max_accepted: u32,
-    pub window_seconds: u64,
-}
-
-fn default_break_glass_rate_limit() -> ConfigTrustRateLimit {
-    ConfigTrustRateLimit {
-        max_accepted: 1,
-        window_seconds: 3600,
-    }
-}
-
-fn config_trust_rate_limit_is_default(rate_limit: &ConfigTrustRateLimit) -> bool {
-    rate_limit == &default_break_glass_rate_limit()
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub break_glass_override_path: Option<PathBuf>,
 }
 
 impl Default for NotaryInstanceConfig {
@@ -180,72 +127,30 @@ impl StandaloneRegistryNotaryConfig {
             .admin_listener
             .validate(self.server.bind, self.config_trust.is_some())?;
         if let Some(config_trust) = &self.config_trust {
+            if config_trust.trust_anchor_path.as_os_str().is_empty() {
+                return Err(EvidenceConfigError::InvalidConfigTrustConfig {
+                    reason: "config_trust.trust_anchor_path must not be empty".to_string(),
+                });
+            }
+            if config_trust.bundle_path.as_os_str().is_empty() {
+                return Err(EvidenceConfigError::InvalidConfigTrustConfig {
+                    reason: "config_trust.bundle_path must not be empty".to_string(),
+                });
+            }
             if config_trust.antirollback_state_path.as_os_str().is_empty() {
                 return Err(EvidenceConfigError::InvalidConfigTrustConfig {
                     reason: "config_trust.antirollback_state_path must not be empty".to_string(),
                 });
             }
             if config_trust
-                .local_approval_state_path
-                .as_os_str()
-                .is_empty()
+                .break_glass_override_path
+                .as_ref()
+                .is_some_and(|path| path.as_os_str().is_empty())
             {
                 return Err(EvidenceConfigError::InvalidConfigTrustConfig {
-                    reason: "config_trust.local_approval_state_path must not be empty".to_string(),
-                });
-            }
-            if config_trust.break_glass_rate_limit.max_accepted == 0 {
-                return Err(EvidenceConfigError::InvalidConfigTrustConfig {
-                    reason:
-                        "config_trust.break_glass_rate_limit.max_accepted must be greater than zero"
-                            .to_string(),
-                });
-            }
-            if config_trust.break_glass_rate_limit.window_seconds == 0 {
-                return Err(EvidenceConfigError::InvalidConfigTrustConfig {
-                    reason: "config_trust.break_glass_rate_limit.window_seconds must be greater than zero"
+                    reason: "config_trust.break_glass_override_path must not be empty when set"
                         .to_string(),
                 });
-            }
-            if config_trust
-                .required_approver_count
-                .values()
-                .any(|count| *count == 0)
-            {
-                return Err(EvidenceConfigError::InvalidConfigTrustConfig {
-                    reason: "config_trust.required_approver_count values must be greater than zero"
-                        .to_string(),
-                });
-            }
-            for root in &config_trust.accepted_roots {
-                root.validate()
-                    .map_err(|error| EvidenceConfigError::InvalidConfigTrustConfig {
-                        reason: format!(
-                            "config_trust.accepted_roots contains an invalid trust root: {error}"
-                        ),
-                    })?;
-            }
-            for repo in &config_trust.remote_tuf_repositories {
-                if repo.root_path.as_os_str().is_empty()
-                    || repo.datastore_dir.as_os_str().is_empty()
-                {
-                    return Err(EvidenceConfigError::InvalidConfigTrustConfig {
-                        reason: "config_trust.remote_tuf_repositories paths must not be empty"
-                            .to_string(),
-                    });
-                }
-                if !is_allowed_remote_tuf_url(
-                    &repo.metadata_base_url,
-                    repo.allow_dev_insecure_fetch_urls,
-                ) || !is_allowed_remote_tuf_url(
-                    &repo.targets_base_url,
-                    repo.allow_dev_insecure_fetch_urls,
-                ) {
-                    return Err(EvidenceConfigError::InvalidConfigTrustConfig {
-                        reason: "config_trust.remote_tuf_repositories URLs must be https:// unless allow_dev_insecure_fetch_urls is true for loopback dev"
-                            .to_string(),
-                    });
-                }
             }
         }
         self.replay.validate()?;
@@ -677,10 +582,7 @@ impl StandaloneRegistryNotaryConfig {
             admin_shared_exposure: self.server.admin_listener.mode
                 == RegistryNotaryAdminListenerMode::SharedWithPublic,
             openapi_public: !self.server.openapi_requires_auth,
-            config_unsigned: self
-                .config_trust
-                .as_ref()
-                .is_none_or(|trust| trust.accepted_roots.is_empty()),
+            config_unsigned: self.config_trust.is_none(),
             self_attestation_enabled: self.self_attestation.enabled,
             transaction_token_anchor_configured: self.auth.access_token_signing.enabled,
             // DPoP/mTLS proof validation for transaction tokens is not yet
@@ -4412,13 +4314,6 @@ fn is_insecure_localhost_url(url: &str) -> bool {
     matches!(host, "localhost" | "127.0.0.1" | "::1")
 }
 
-fn is_allowed_remote_tuf_url(url: &str, allow_dev_insecure_fetch_urls: bool) -> bool {
-    if url.starts_with("https://") {
-        return true;
-    }
-    allow_dev_insecure_fetch_urls && is_insecure_localhost_url(url)
-}
-
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct EvidenceAuditConfig {
@@ -6909,8 +6804,6 @@ mod tests {
     use super::*;
     use std::collections::BTreeSet;
 
-    use registry_platform_config::{TrustRootRole, TrustRootSigner};
-
     /// Builds a minimal valid config from which individual tests can deviate.
     fn minimal_config() -> StandaloneRegistryNotaryConfig {
         serde_norway::from_str(
@@ -7174,65 +7067,10 @@ expected_sidecar:
     }
 
     #[test]
-    fn gate_input_reports_config_unsigned_when_trust_has_no_roots() {
-        let mut config = minimal_config();
-        // Empty config_trust metadata is not enough to prove a signed trust root
-        // was loaded. This test only calls gate_input(), which is pure projection
-        // and does not validate.
-        config.server.admin_listener.mode = RegistryNotaryAdminListenerMode::Dedicated;
-        config.config_trust = Some(ConfigTrustConfig {
-            antirollback_state_path: PathBuf::from(
-                "/var/lib/registry-notary/config-antirollback.json",
-            ),
-            local_approval_state_path: PathBuf::from(
-                "/var/lib/registry-notary/config-local-approvals.json",
-            ),
-            break_glass_rate_limit: default_break_glass_rate_limit(),
-            required_approver_count: BTreeMap::new(),
-            accepted_roots: Vec::new(),
-            remote_tuf_repositories: Vec::new(),
-        });
-        assert!(config.gate_input().config_unsigned);
-    }
-
-    #[test]
-    fn gate_input_clears_config_unsigned_when_trust_roots_configured() {
+    fn gate_input_clears_config_unsigned_when_config_trust_configured() {
         let mut config = minimal_config();
         config.server.admin_listener.mode = RegistryNotaryAdminListenerMode::Dedicated;
-        config.config_trust = Some(ConfigTrustConfig {
-            antirollback_state_path: PathBuf::from(
-                "/var/lib/registry-notary/config-antirollback.json",
-            ),
-            local_approval_state_path: PathBuf::from(
-                "/var/lib/registry-notary/config-local-approvals.json",
-            ),
-            break_glass_rate_limit: default_break_glass_rate_limit(),
-            required_approver_count: BTreeMap::new(),
-            accepted_roots: vec![RegistryTrustRoot {
-                root_id: "ops-root".to_string(),
-                production: false,
-                tuf_root_sha256:
-                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                        .to_string(),
-                valid_from_unix_seconds: None,
-                valid_until_unix_seconds: None,
-                high_risk_change_classes: BTreeSet::new(),
-                signers: BTreeMap::from([(
-                    "kid-a".to_string(),
-                    TrustRootSigner {
-                        kid: "kid-a".to_string(),
-                        enabled: true,
-                    },
-                )]),
-                roles: vec![TrustRootRole {
-                    name: "config-admin".to_string(),
-                    threshold: 1,
-                    signer_kids: vec!["kid-a".to_string()],
-                    allowed_change_classes: BTreeSet::from(["public_metadata".to_string()]),
-                }],
-            }],
-            remote_tuf_repositories: Vec::new(),
-        });
+        config.config_trust = Some(valid_config_trust());
         assert!(!config.gate_input().config_unsigned);
     }
 
@@ -7386,6 +7224,17 @@ deployment:
         config.server.admin_listener.mode = RegistryNotaryAdminListenerMode::Dedicated;
     }
 
+    fn valid_config_trust() -> ConfigTrustConfig {
+        ConfigTrustConfig {
+            trust_anchor_path: PathBuf::from("/etc/registry-notary/config-anchor.json"),
+            bundle_path: PathBuf::from("/etc/registry-notary/config-bundle"),
+            antirollback_state_path: PathBuf::from(
+                "/var/lib/registry-notary/config-antirollback.json",
+            ),
+            break_glass_override_path: None,
+        }
+    }
+
     fn minimal_claim(id: &str) -> ClaimDefinition {
         serde_norway::from_str(&format!(
             r#"
@@ -7408,252 +7257,54 @@ rule:
         config.validate().expect("simple local config validates");
         use_dedicated_admin_listener(&mut config);
 
-        config.config_trust = Some(ConfigTrustConfig {
-            antirollback_state_path: PathBuf::from(""),
-            local_approval_state_path: PathBuf::from(
-                "/var/lib/registry-notary/config-local-approvals.json",
-            ),
-            break_glass_rate_limit: default_break_glass_rate_limit(),
-            required_approver_count: BTreeMap::new(),
-            accepted_roots: Vec::new(),
-            remote_tuf_repositories: Vec::new(),
-        });
+        let mut trust = valid_config_trust();
+        trust.trust_anchor_path = PathBuf::from("");
+        config.config_trust = Some(trust);
         let error = config
             .validate()
-            .expect_err("empty governed-state path must fail validation");
+            .expect_err("empty trust-anchor path must fail validation");
         assert!(matches!(
             error,
             EvidenceConfigError::InvalidConfigTrustConfig { .. }
         ));
 
-        config.config_trust = Some(ConfigTrustConfig {
-            antirollback_state_path: PathBuf::from(
-                "/var/lib/registry-notary/config-antirollback.json",
-            ),
-            local_approval_state_path: PathBuf::from(""),
-            break_glass_rate_limit: default_break_glass_rate_limit(),
-            required_approver_count: BTreeMap::new(),
-            accepted_roots: Vec::new(),
-            remote_tuf_repositories: Vec::new(),
-        });
+        let mut trust = valid_config_trust();
+        trust.bundle_path = PathBuf::from("");
+        config.config_trust = Some(trust);
         let error = config
             .validate()
-            .expect_err("empty local-approval path must fail validation");
+            .expect_err("empty bundle path must fail validation");
         assert!(matches!(
             error,
             EvidenceConfigError::InvalidConfigTrustConfig { .. }
         ));
 
-        config.config_trust = Some(ConfigTrustConfig {
-            antirollback_state_path: PathBuf::from(
-                "/var/lib/registry-notary/config-antirollback.json",
-            ),
-            local_approval_state_path: PathBuf::from(
-                "/var/lib/registry-notary/config-local-approvals.json",
-            ),
-            break_glass_rate_limit: default_break_glass_rate_limit(),
-            required_approver_count: BTreeMap::new(),
-            accepted_roots: Vec::new(),
-            remote_tuf_repositories: Vec::new(),
-        });
+        let mut trust = valid_config_trust();
+        trust.antirollback_state_path = PathBuf::from("");
+        config.config_trust = Some(trust);
+        let error = config
+            .validate()
+            .expect_err("empty anti-rollback path must fail validation");
+        assert!(matches!(
+            error,
+            EvidenceConfigError::InvalidConfigTrustConfig { .. }
+        ));
+
+        let mut trust = valid_config_trust();
+        trust.break_glass_override_path = Some(PathBuf::from(""));
+        config.config_trust = Some(trust);
+        let error = config
+            .validate()
+            .expect_err("empty break-glass override path must fail validation");
+        assert!(matches!(
+            error,
+            EvidenceConfigError::InvalidConfigTrustConfig { .. }
+        ));
+
+        config.config_trust = Some(valid_config_trust());
         config
             .validate()
-            .expect("explicit governed-state paths validate");
-    }
-
-    #[test]
-    fn config_trust_rejects_zero_required_approver_count() {
-        let mut config = minimal_config();
-        use_dedicated_admin_listener(&mut config);
-        config.config_trust = Some(ConfigTrustConfig {
-            antirollback_state_path: PathBuf::from(
-                "/var/lib/registry-notary/config-antirollback.json",
-            ),
-            local_approval_state_path: PathBuf::from(
-                "/var/lib/registry-notary/config-local-approvals.json",
-            ),
-            break_glass_rate_limit: default_break_glass_rate_limit(),
-            required_approver_count: BTreeMap::from([("emergency.break_glass".to_string(), 0)]),
-            accepted_roots: Vec::new(),
-            remote_tuf_repositories: Vec::new(),
-        });
-
-        let error = config
-            .validate()
-            .expect_err("zero required approver count must fail validation");
-        assert!(matches!(
-            error,
-            EvidenceConfigError::InvalidConfigTrustConfig { .. }
-        ));
-    }
-
-    #[test]
-    fn config_trust_accepts_shared_trust_roots_and_validates_them() {
-        let mut config = minimal_config();
-        use_dedicated_admin_listener(&mut config);
-        config.config_trust = Some(ConfigTrustConfig {
-            antirollback_state_path: PathBuf::from(
-                "/var/lib/registry-notary/config-antirollback.json",
-            ),
-            local_approval_state_path: PathBuf::from(
-                "/var/lib/registry-notary/config-local-approvals.json",
-            ),
-            break_glass_rate_limit: default_break_glass_rate_limit(),
-            required_approver_count: BTreeMap::new(),
-            accepted_roots: vec![RegistryTrustRoot {
-                root_id: "ops-root".to_string(),
-                production: false,
-                tuf_root_sha256:
-                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                        .to_string(),
-                valid_from_unix_seconds: None,
-                valid_until_unix_seconds: None,
-                high_risk_change_classes: BTreeSet::new(),
-                signers: BTreeMap::from([(
-                    "kid-a".to_string(),
-                    TrustRootSigner {
-                        kid: "kid-a".to_string(),
-                        enabled: true,
-                    },
-                )]),
-                roles: vec![TrustRootRole {
-                    name: "config-admin".to_string(),
-                    threshold: 1,
-                    signer_kids: vec!["kid-a".to_string()],
-                    allowed_change_classes: BTreeSet::from(["public_metadata".to_string()]),
-                }],
-            }],
-            remote_tuf_repositories: Vec::new(),
-        });
-        config
-            .validate()
-            .expect("shared trust root config validates");
-
-        let trust = config.config_trust.as_mut().expect("trust config exists");
-        trust.accepted_roots[0].roles[0].threshold = 2;
-        let error = config
-            .validate()
-            .expect_err("invalid shared trust root must fail validation");
-        assert!(matches!(
-            error,
-            EvidenceConfigError::InvalidConfigTrustConfig { .. }
-        ));
-    }
-
-    #[test]
-    fn config_trust_remote_tuf_repositories_accepts_https_urls() {
-        let mut config = minimal_config();
-        use_dedicated_admin_listener(&mut config);
-        config.config_trust = Some(ConfigTrustConfig {
-            antirollback_state_path: PathBuf::from(
-                "/var/lib/registry-notary/config-antirollback.json",
-            ),
-            local_approval_state_path: PathBuf::from(
-                "/var/lib/registry-notary/config-local-approvals.json",
-            ),
-            break_glass_rate_limit: default_break_glass_rate_limit(),
-            required_approver_count: BTreeMap::new(),
-            accepted_roots: Vec::new(),
-            remote_tuf_repositories: vec![RemoteTufRepositoryConfig {
-                root_path: PathBuf::from("/etc/registry-notary/tuf/root.json"),
-                metadata_base_url: "https://config.example.test/metadata".to_string(),
-                targets_base_url: "https://config.example.test/targets".to_string(),
-                datastore_dir: PathBuf::from("/var/lib/registry-notary/tuf"),
-                allow_dev_insecure_fetch_urls: false,
-            }],
-        });
-        config
-            .validate()
-            .expect("https remote_tuf_repositories entry validates");
-    }
-
-    #[test]
-    fn config_trust_remote_tuf_repositories_rejects_http_without_dev_flag() {
-        let mut config = minimal_config();
-        use_dedicated_admin_listener(&mut config);
-        config.config_trust = Some(ConfigTrustConfig {
-            antirollback_state_path: PathBuf::from(
-                "/var/lib/registry-notary/config-antirollback.json",
-            ),
-            local_approval_state_path: PathBuf::from(
-                "/var/lib/registry-notary/config-local-approvals.json",
-            ),
-            break_glass_rate_limit: default_break_glass_rate_limit(),
-            required_approver_count: BTreeMap::new(),
-            accepted_roots: Vec::new(),
-            remote_tuf_repositories: vec![RemoteTufRepositoryConfig {
-                root_path: PathBuf::from("/etc/registry-notary/tuf/root.json"),
-                metadata_base_url: "http://config.example.test/metadata".to_string(),
-                targets_base_url: "https://config.example.test/targets".to_string(),
-                datastore_dir: PathBuf::from("/var/lib/registry-notary/tuf"),
-                allow_dev_insecure_fetch_urls: false,
-            }],
-        });
-        let error = config
-            .validate()
-            .expect_err("http without allow_dev_insecure_fetch_urls must fail");
-        assert!(matches!(
-            error,
-            EvidenceConfigError::InvalidConfigTrustConfig { .. }
-        ));
-    }
-
-    #[test]
-    fn config_trust_remote_tuf_repositories_allows_http_loopback_in_dev() {
-        let mut config = minimal_config();
-        use_dedicated_admin_listener(&mut config);
-        config.config_trust = Some(ConfigTrustConfig {
-            antirollback_state_path: PathBuf::from(
-                "/var/lib/registry-notary/config-antirollback.json",
-            ),
-            local_approval_state_path: PathBuf::from(
-                "/var/lib/registry-notary/config-local-approvals.json",
-            ),
-            break_glass_rate_limit: default_break_glass_rate_limit(),
-            required_approver_count: BTreeMap::new(),
-            accepted_roots: Vec::new(),
-            remote_tuf_repositories: vec![RemoteTufRepositoryConfig {
-                root_path: PathBuf::from("/etc/registry-notary/tuf/root.json"),
-                metadata_base_url: "http://localhost:9000/metadata".to_string(),
-                targets_base_url: "http://127.0.0.1:9000/targets".to_string(),
-                datastore_dir: PathBuf::from("/var/lib/registry-notary/tuf"),
-                allow_dev_insecure_fetch_urls: true,
-            }],
-        });
-        config
-            .validate()
-            .expect("http loopback with allow_dev_insecure_fetch_urls validates");
-    }
-
-    #[test]
-    fn config_trust_remote_tuf_repositories_rejects_empty_paths() {
-        let mut config = minimal_config();
-        use_dedicated_admin_listener(&mut config);
-        config.config_trust = Some(ConfigTrustConfig {
-            antirollback_state_path: PathBuf::from(
-                "/var/lib/registry-notary/config-antirollback.json",
-            ),
-            local_approval_state_path: PathBuf::from(
-                "/var/lib/registry-notary/config-local-approvals.json",
-            ),
-            break_glass_rate_limit: default_break_glass_rate_limit(),
-            required_approver_count: BTreeMap::new(),
-            accepted_roots: Vec::new(),
-            remote_tuf_repositories: vec![RemoteTufRepositoryConfig {
-                root_path: PathBuf::from(""),
-                metadata_base_url: "https://config.example.test/metadata".to_string(),
-                targets_base_url: "https://config.example.test/targets".to_string(),
-                datastore_dir: PathBuf::from("/var/lib/registry-notary/tuf"),
-                allow_dev_insecure_fetch_urls: false,
-            }],
-        });
-        let error = config
-            .validate()
-            .expect_err("empty root_path must fail validation");
-        assert!(matches!(
-            error,
-            EvidenceConfigError::InvalidConfigTrustConfig { .. }
-        ));
+            .expect("explicit config bundle trust paths validate");
     }
 
     #[test]
@@ -8556,18 +8207,7 @@ credential_configurations:
     #[test]
     fn governed_config_requires_dedicated_admin_listener() {
         let mut config = minimal_config();
-        config.config_trust = Some(ConfigTrustConfig {
-            antirollback_state_path: PathBuf::from(
-                "/var/lib/registry-notary/config-antirollback.json",
-            ),
-            local_approval_state_path: PathBuf::from(
-                "/var/lib/registry-notary/config-local-approvals.json",
-            ),
-            break_glass_rate_limit: default_break_glass_rate_limit(),
-            required_approver_count: BTreeMap::new(),
-            accepted_roots: Vec::new(),
-            remote_tuf_repositories: Vec::new(),
-        });
+        config.config_trust = Some(valid_config_trust());
 
         let error = config
             .validate()

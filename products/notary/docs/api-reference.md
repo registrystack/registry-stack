@@ -28,9 +28,6 @@ that route.
 | `GET /admin/v1/capabilities` | not exposed | not exposed | not exposed |
 | `GET /admin/v1/posture` | not exposed | not exposed | not exposed |
 | `POST /admin/v1/reload` | `admin_reload` | not exposed | not exposed |
-| `POST /admin/v1/config/verify` | not exposed | not exposed | not exposed |
-| `POST /admin/v1/config/dry-run` | not exposed | not exposed | not exposed |
-| `POST /admin/v1/config/apply` | not exposed | not exposed | not exposed |
 | `GET /openapi.json` | `openapi_json` | not exposed | not exposed |
 | `GET /.well-known/evidence-service` | `service_document` | `service_document` | `serviceDocument` |
 | `GET /.well-known/evidence/jwks.json` | `issuer_jwks`, `refresh_jwks`, `raw_issuer_jwks` | `issuer_jwks`, `refresh_jwks`, `raw_issuer_jwks` | `issuerJwks`, `refreshJwks`, `rawIssuerJwks` |
@@ -55,6 +52,11 @@ that route.
 | `POST /oid4vci/nonce` | `oid4vci_nonce` | `oid4vci_nonce` | `oid4vciNonce` |
 | `POST /oid4vci/credential` | `oid4vci_credential` | `oid4vci_credential` | `oid4vciCredential` |
 | `POST /federation/v1/evaluations` | `federation_evaluate_jws` | `federation_evaluate_jws` | `federationEvaluateJws` |
+
+Registry Notary does not expose admin config verify, dry-run, or apply routes.
+Signed config bundles are local directories verified with the node CLI
+`config verify-bundle` and activated by placing the bundle on the node and
+restarting the service.
 
 `/.well-known/evidence-service` is discovery metadata, but it is protected
 discovery metadata. Callers must send the configured API key, bearer token, or

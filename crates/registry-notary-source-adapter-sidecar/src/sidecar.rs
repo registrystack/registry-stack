@@ -7,7 +7,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use chrono::{TimeDelta, Utc};
+use chrono::Utc;
 use crosswalk_core::{MappingRuntime, RuntimeOptions, StandaloneExpressionInput};
 use hyper::service::service_fn;
 use hyper_util::{
@@ -20,10 +20,6 @@ use registry_notary_source_adapter_rhai::{
 };
 use registry_platform_audit::{AuditProfile, ChainState, JsonlFileSink};
 use registry_platform_authcommon::{parse_bearer_token, parse_fingerprint, verify_api_key};
-use registry_platform_config::{
-    ConfigTargetMetadata, LocalTufRepositoryInput, RegistryAcceptedTrustRoots, RegistryTrustRoot,
-    TufConfigVerifier, TufVerifiedTarget, VerificationContext,
-};
 use registry_platform_httputil::is_cloud_metadata_ip;
 use registry_platform_ops::{AntiRollbackKey, AntiRollbackProposal, FileAntiRollbackStore};
 use serde::{Deserialize, Serialize};
@@ -33,19 +29,13 @@ use std::{
     convert::Infallible,
     fmt,
     net::{IpAddr, SocketAddr},
-    num::NonZeroU64,
-    path::{Component, Path as FsPath, PathBuf},
+    path::PathBuf,
     sync::Arc,
     time::{Duration, Instant},
 };
 use thiserror::Error;
 use tokio::sync::{watch, Mutex, OnceCell, OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinSet;
-use tough::{
-    editor::{signed::PathExists, RepositoryEditor},
-    key_source::{KeySource, LocalKeySource},
-    schema::Target,
-};
 use tower::ServiceExt;
 use tower_http::timeout::{RequestBodyTimeoutLayer, TimeoutLayer};
 use tracing::{info, warn};
@@ -150,7 +140,7 @@ pub struct SidecarConfigTrustConfig {
     pub target_name: String,
     pub antirollback_state_path: PathBuf,
     #[serde(default)]
-    pub accepted_roots: Vec<RegistryTrustRoot>,
+    pub accepted_roots: Vec<Value>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -738,17 +728,10 @@ pub struct SidecarAssurance {
     pub bundle_id: String,
     pub sequence: u64,
     pub config_hash: String,
-    pub tuf_root_sha256: String,
-    pub root_version: u64,
-    pub targets_version: u64,
-    pub snapshot_version: u64,
-    pub timestamp_version: u64,
-    pub change_classes: BTreeSet<String>,
     pub signer_kids: Vec<String>,
     pub expression_hashes_verified: bool,
     pub runtime_verified: bool,
     pub smoke_verified: bool,
-    pub apply_policy: String,
 }
 
 #[derive(Clone, Debug)]
@@ -1033,74 +1016,24 @@ pub async fn load_startup_config(raw: &str) -> Result<SidecarConfig, SidecarErro
 
 pub async fn load_startup_config_with_options(
     raw: &str,
-    allow_unsigned_dev_config: bool,
+    _allow_unsigned_dev_config: bool,
 ) -> Result<SidecarConfig, SidecarError> {
     let probe: SidecarConfigTrustProbe =
         serde_norway::from_str(raw).map_err(|error| SidecarError::Config(error.to_string()))?;
     if probe.config_trust.is_none() {
-        if allow_unsigned_dev_config {
-            return serde_norway::from_str(raw)
-                .map_err(|error| SidecarError::Config(error.to_string()));
-        }
-        return Err(SidecarError::Config(
-            "config_trust is required; use --allow-unsigned-dev-config only for local unsigned development manifests".to_string(),
-        ));
+        return serde_norway::from_str(raw)
+            .map_err(|error| SidecarError::Config(error.to_string()));
     }
-    let bootstrap: SidecarBootstrapConfig =
-        serde_norway::from_str(raw).map_err(|error| SidecarError::Config(error.to_string()))?;
-    load_governed_startup_config(bootstrap).await
+    Err(SidecarError::Config(
+        "sidecar config_trust TUF startup is no longer supported; use a local sidecar manifest"
+            .to_string(),
+    ))
 }
 
 #[derive(Debug, Deserialize)]
 struct SidecarConfigTrustProbe {
     #[serde(default)]
     config_trust: Option<Value>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SidecarBootstrapConfig {
-    server: ServerConfig,
-    auth: AuthConfig,
-    #[serde(default)]
-    audit: SidecarAuditConfig,
-    config_trust: SidecarConfigTrustConfig,
-}
-
-#[derive(Clone, Debug)]
-pub struct LocalTufBundleVerifyOptions {
-    pub product: String,
-    pub instance_id: String,
-    pub environment: String,
-    pub stream_id: String,
-    pub root_path: PathBuf,
-    pub metadata_dir: PathBuf,
-    pub targets_dir: PathBuf,
-    pub datastore_dir: PathBuf,
-    pub target_name: String,
-}
-
-#[derive(Clone, Debug)]
-pub struct CreateLocalTufRepoOptions {
-    pub target_path: PathBuf,
-    pub target_name: String,
-    pub root_path: PathBuf,
-    pub signing_key_path: PathBuf,
-    pub metadata_dir: PathBuf,
-    pub targets_dir: PathBuf,
-    pub product: String,
-    pub instance_id: String,
-    pub environment: String,
-    pub stream_id: String,
-    pub bundle_id: String,
-    pub sequence: u64,
-    pub previous_config_hash: String,
-    pub change_classes: Vec<String>,
-    pub declared_signer_kids: Vec<String>,
-    pub apply_policy: String,
-    pub targets_expiration_days: i64,
-    pub snapshot_expiration_days: i64,
-    pub timestamp_expiration_days: i64,
 }
 
 pub fn render_governed_runtime_target_json(raw_manifest: &str) -> Result<Vec<u8>, SidecarError> {
@@ -1119,386 +1052,16 @@ pub fn render_governed_runtime_target_json(raw_manifest: &str) -> Result<Vec<u8>
     Ok(bytes)
 }
 
-pub async fn create_local_tuf_demo_repo_report_json(
-    options: CreateLocalTufRepoOptions,
-) -> Result<Value, SidecarError> {
-    validate_target_name(&options.target_name)?;
-    if options.sequence == 0 {
-        return Err(SidecarError::Config(
-            "TUF metadata sequence must be greater than zero".to_string(),
-        ));
-    }
-    if options.change_classes.is_empty() {
-        return Err(SidecarError::Config(
-            "at least one change class is required".to_string(),
-        ));
-    }
-    let declared_signer_kids = if options.declared_signer_kids.is_empty() {
-        vec!["local-demo-signer".to_string()]
-    } else {
-        options.declared_signer_kids.clone()
-    };
-    let target_bytes = std::fs::read(&options.target_path).map_err(|error| {
-        SidecarError::Config(format!(
-            "target {} could not be read: {error}",
-            options.target_path.display()
-        ))
-    })?;
-    let target = governed_target_from_bytes(&target_bytes)?;
-    validate_governed_runtime_target(&target)?;
-    let config_hash = registry_platform_config::sha256_uri(&target_bytes);
-
-    let source_targets_dir = options.metadata_dir.join(".source-targets");
-    if source_targets_dir.exists() {
-        std::fs::remove_dir_all(&source_targets_dir).map_err(|error| {
-            SidecarError::Config(format!(
-                "stale TUF source target staging directory {} could not be removed: {error}",
-                source_targets_dir.display()
-            ))
-        })?;
-    }
-    let staged_target_path = source_targets_dir.join(&options.target_name);
-    if let Some(parent) = staged_target_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| {
-            SidecarError::Config(format!(
-                "TUF source target staging directory {} could not be created: {error}",
-                parent.display()
-            ))
-        })?;
-    }
-    std::fs::copy(&options.target_path, &staged_target_path).map_err(|error| {
-        SidecarError::Config(format!(
-            "target could not be staged as {}: {error}",
-            staged_target_path.display()
-        ))
-    })?;
-
-    let mut tuf_target = Target::from_path(&staged_target_path)
-        .await
-        .map_err(|error| {
-            SidecarError::Config(format!("target metadata could not be built: {error}"))
-        })?;
-    let custom = json!({
-        "product": options.product,
-        "instance_id": options.instance_id,
-        "environment": options.environment,
-        "stream_id": options.stream_id,
-        "bundle_id": options.bundle_id,
-        "sequence": options.sequence,
-        "previous_config_hash": options.previous_config_hash,
-        "config_hash": config_hash,
-        "change_classes": options.change_classes,
-        "signer_kids": declared_signer_kids.clone(),
-        "apply_policy": options.apply_policy
-    });
-    let Value::Object(custom) = custom else {
-        return Err(SidecarError::Config(
-            "custom target metadata was not an object".to_string(),
-        ));
-    };
-    tuf_target.custom = custom.into_iter().collect::<HashMap<_, _>>();
-
-    let version = NonZeroU64::new(options.sequence).ok_or_else(|| {
-        SidecarError::Config("TUF metadata sequence must be greater than zero".to_string())
-    })?;
-    let mut editor = RepositoryEditor::new(&options.root_path)
-        .await
-        .map_err(|error| SidecarError::Config(format!("TUF root could not be loaded: {error}")))?;
-    editor
-        .targets_expires(expiry_from_days(options.targets_expiration_days)?)
-        .map_err(|error| {
-            SidecarError::Config(format!("TUF targets expiration could not be set: {error}"))
-        })?;
-    editor.targets_version(version).map_err(|error| {
-        SidecarError::Config(format!("TUF targets version could not be set: {error}"))
-    })?;
-    editor.snapshot_expires(expiry_from_days(options.snapshot_expiration_days)?);
-    editor.snapshot_version(version);
-    editor.timestamp_expires(expiry_from_days(options.timestamp_expiration_days)?);
-    editor.timestamp_version(version);
-    editor
-        .add_target(options.target_name.clone(), tuf_target)
-        .map_err(|error| SidecarError::Config(format!("TUF target could not be added: {error}")))?;
-    let keys: Vec<Box<dyn KeySource>> = vec![Box::new(LocalKeySource {
-        path: options.signing_key_path.clone(),
-    })];
-    let signed = editor.sign(&keys).await.map_err(|error| {
-        SidecarError::Config(format!("TUF repository could not be signed: {error}"))
-    })?;
-    signed.write(&options.metadata_dir).await.map_err(|error| {
-        SidecarError::Config(format!("TUF metadata could not be written: {error}"))
-    })?;
-    signed
-        .copy_targets(&source_targets_dir, &options.targets_dir, PathExists::Fail)
-        .await
-        .map_err(|error| {
-            SidecarError::Config(format!("TUF targets could not be written: {error}"))
-        })?;
-    std::fs::remove_dir_all(&source_targets_dir).map_err(|error| {
-        SidecarError::Config(format!(
-            "TUF source target staging directory {} could not be removed: {error}",
-            source_targets_dir.display()
-        ))
-    })?;
-
-    Ok(json!({
-        "created": true,
-        "target_name": options.target_name,
-        "config_hash": config_hash,
-        "metadata_dir": options.metadata_dir,
-        "targets_dir": options.targets_dir,
-        "root_path": options.root_path,
-        "metadata": {
-            "product": options.product,
-            "instance_id": options.instance_id,
-            "environment": options.environment,
-            "stream_id": options.stream_id,
-            "bundle_id": options.bundle_id,
-            "sequence": options.sequence,
-            "previous_config_hash": options.previous_config_hash,
-            "config_hash": config_hash,
-            "change_classes": options.change_classes,
-            "signer_kids": declared_signer_kids,
-            "apply_policy": options.apply_policy,
-        }
-    }))
-}
-
 pub async fn verify_governed_bundle_report_json(
-    target_bytes: Option<&[u8]>,
-    local_tuf: Option<LocalTufBundleVerifyOptions>,
+    target_bytes: &[u8],
 ) -> Result<Value, SidecarError> {
-    let (target_name, target_bytes, tuf_report, metadata_report) = match local_tuf {
-        Some(options) => {
-            let context = VerificationContext {
-                product: options.product,
-                instance_id: options.instance_id,
-                environment: options.environment,
-            };
-            let input = LocalTufRepositoryInput {
-                root_path: options.root_path,
-                metadata_dir: options.metadata_dir,
-                targets_dir: options.targets_dir,
-                datastore_dir: options.datastore_dir,
-                target_name: options.target_name,
-            };
-            let verified = TufConfigVerifier::verify_config_target(&input, &context)
-                .await
-                .map_err(|error| {
-                    SidecarError::StartupCheck(format!("TUF target verification failed: {error}"))
-                })?;
-            if verified.metadata.stream_id != options.stream_id {
-                return Err(SidecarError::StartupCheck(
-                    "signed config target stream_id does not match expected stream_id".to_string(),
-                ));
-            }
-            let target_name = verified.tuf.target_name.clone();
-            let tuf_report = tuf_report(&verified.tuf);
-            let metadata_report = metadata_report(&verified.metadata);
-            (
-                target_name,
-                verified.tuf.target_bytes,
-                Some(tuf_report),
-                Some(metadata_report),
-            )
-        }
-        None => {
-            let bytes = target_bytes
-                .ok_or_else(|| {
-                    SidecarError::Config(
-                        "target bytes are required when local TUF options are absent".to_string(),
-                    )
-                })?
-                .to_vec();
-            ("<local-target-json>".to_string(), bytes, None, None)
-        }
-    };
     let target = governed_target_from_bytes(&target_bytes)?;
     validate_governed_runtime_target(&target)?;
     Ok(json!({
         "verified": true,
-        "target_name": target_name,
+        "target_name": "<local-target-json>",
         "config_hash": registry_platform_config::sha256_uri(&target_bytes),
-        "tuf": tuf_report,
-        "metadata": metadata_report,
     }))
-}
-
-fn validate_target_name(target_name: &str) -> Result<(), SidecarError> {
-    if target_name.trim().is_empty() {
-        return Err(SidecarError::Config(
-            "TUF target name must not be blank".to_string(),
-        ));
-    }
-    let path = FsPath::new(target_name);
-    if path.is_absolute()
-        || path
-            .components()
-            .any(|component| matches!(component, Component::ParentDir | Component::RootDir))
-    {
-        return Err(SidecarError::Config(
-            "TUF target name must be a relative path without traversal".to_string(),
-        ));
-    }
-    Ok(())
-}
-
-fn expiry_from_days(days: i64) -> Result<chrono::DateTime<Utc>, SidecarError> {
-    let duration = TimeDelta::try_days(days).ok_or_else(|| {
-        SidecarError::Config("TUF expiration days are outside the supported range".to_string())
-    })?;
-    Utc::now().checked_add_signed(duration).ok_or_else(|| {
-        SidecarError::Config("TUF expiration is outside the supported range".to_string())
-    })
-}
-
-async fn load_governed_startup_config(
-    bootstrap: SidecarBootstrapConfig,
-) -> Result<SidecarConfig, SidecarError> {
-    validate_config_trust(&bootstrap.config_trust)?;
-    let context = VerificationContext {
-        product: bootstrap.config_trust.product.clone(),
-        instance_id: bootstrap.config_trust.instance_id.clone(),
-        environment: bootstrap.config_trust.environment.clone(),
-    };
-    let input = LocalTufRepositoryInput {
-        root_path: bootstrap.config_trust.root_path.clone(),
-        metadata_dir: bootstrap.config_trust.metadata_dir.clone(),
-        targets_dir: bootstrap.config_trust.targets_dir.clone(),
-        datastore_dir: bootstrap.config_trust.datastore_dir.clone(),
-        target_name: bootstrap.config_trust.target_name.clone(),
-    };
-    let verified = TufConfigVerifier::verify_config_target(&input, &context)
-        .await
-        .map_err(|error| {
-            SidecarError::StartupCheck(format!("TUF target verification failed: {error}"))
-        })?;
-    if verified.metadata.stream_id != bootstrap.config_trust.stream_id {
-        return Err(SidecarError::StartupCheck(
-            "signed config target stream_id does not match bootstrap config_trust".to_string(),
-        ));
-    }
-    if verified.metadata.apply_policy != "restart_required" {
-        return Err(SidecarError::StartupCheck(
-            "signed config target apply_policy must be restart_required".to_string(),
-        ));
-    }
-    let accepted_roots = RegistryAcceptedTrustRoots {
-        accepted_roots: bootstrap.config_trust.accepted_roots.clone(),
-    };
-    accepted_roots
-        .authorize(
-            &verified.metadata.change_classes,
-            &verified.tuf.signer_kids,
-            &verified.tuf.root_sha256,
-        )
-        .map_err(|error| {
-            SidecarError::StartupCheck(format!(
-                "signed config target was not authorized by local trust roots: {error}"
-            ))
-        })?;
-    let target: GovernedRuntimeTarget = serde_json::from_slice(&verified.tuf.target_bytes)
-        .map_err(|error| {
-            SidecarError::StartupCheck(format!("governed runtime target is invalid JSON: {error}"))
-        })?;
-    materialize_governed_config(bootstrap, verified.tuf, verified.metadata, target)
-}
-
-fn validate_config_trust(config_trust: &SidecarConfigTrustConfig) -> Result<(), SidecarError> {
-    for (field, value) in [
-        ("product", config_trust.product.as_str()),
-        ("instance_id", config_trust.instance_id.as_str()),
-        ("environment", config_trust.environment.as_str()),
-        ("stream_id", config_trust.stream_id.as_str()),
-        ("target_name", config_trust.target_name.as_str()),
-    ] {
-        if value.trim().is_empty() {
-            return Err(SidecarError::Config(format!(
-                "config_trust.{field} must be non-empty"
-            )));
-        }
-    }
-    if config_trust.accepted_roots.is_empty() {
-        return Err(SidecarError::Config(
-            "config_trust.accepted_roots must not be empty".to_string(),
-        ));
-    }
-    Ok(())
-}
-
-fn materialize_governed_config(
-    bootstrap: SidecarBootstrapConfig,
-    tuf: TufVerifiedTarget,
-    metadata: ConfigTargetMetadata,
-    target: GovernedRuntimeTarget,
-) -> Result<SidecarConfig, SidecarError> {
-    if target.schema != "registry.notary.source_adapter_sidecar.runtime.v1" {
-        return Err(SidecarError::StartupCheck(
-            "governed runtime target schema is unsupported".to_string(),
-        ));
-    }
-    let key = AntiRollbackKey {
-        product: metadata.product.clone(),
-        instance_id: metadata.instance_id.clone(),
-        environment: metadata.environment.clone(),
-        stream_id: metadata.stream_id.clone(),
-    };
-    let proposal = AntiRollbackProposal {
-        sequence: metadata.sequence,
-        previous_config_hash: metadata.previous_config_hash.clone(),
-        config_hash: metadata.config_hash.clone(),
-        root_version: Some(tuf.root_version),
-        break_glass: None,
-        break_glass_rate_limit: None,
-        local_approval: None,
-        local_approval_rate_limit: None,
-    };
-    let assurance = SidecarAssurance {
-        status: "ready".to_string(),
-        product: metadata.product.clone(),
-        instance_id: metadata.instance_id.clone(),
-        environment: metadata.environment.clone(),
-        stream_id: metadata.stream_id.clone(),
-        bundle_id: metadata.bundle_id.clone(),
-        sequence: metadata.sequence,
-        config_hash: metadata.config_hash.clone(),
-        tuf_root_sha256: tuf.root_sha256.clone(),
-        root_version: tuf.root_version,
-        targets_version: tuf.targets_version,
-        snapshot_version: tuf.snapshot_version,
-        timestamp_version: tuf.timestamp_version,
-        change_classes: metadata.change_classes.clone(),
-        signer_kids: tuf.signer_kids.clone(),
-        // These three booleans attest the *whole-target* `config_hash` that TUF
-        // has just verified -- reaching this function requires a
-        // `TufVerifiedTarget`. That hash covers the inline governed content
-        // directly: the http_json CEL expressions, the script_rhai script, and
-        // the runtime policy. It is therefore the real content anchor; there is
-        // no separate per-expression hash ledger to verify independently. They
-        // are reported `true` here because the matching runtime compile and
-        // startup smoke are enforced downstream in `sidecar_router` (config
-        // validation compiles every expression/script, and `run_smoke_lookups`
-        // exercises the live path) -- a failure there blocks readiness, so any
-        // sidecar actually serving these values has satisfied all three.
-        expression_hashes_verified: true,
-        runtime_verified: true,
-        smoke_verified: true,
-        apply_policy: metadata.apply_policy.clone(),
-    };
-    Ok(SidecarConfig {
-        server: bootstrap.server,
-        auth: bootstrap.auth,
-        audit: bootstrap.audit,
-        config_trust: Some(bootstrap.config_trust.clone()),
-        limits: target.limits,
-        sources: target.sources,
-        assurance: Some(assurance),
-        governed_acceptance: Some(GovernedAcceptance {
-            antirollback_state_path: bootstrap.config_trust.antirollback_state_path,
-            key,
-            proposal,
-        }),
-    })
 }
 
 fn governed_target_from_bytes(target_bytes: &[u8]) -> Result<GovernedRuntimeTarget, SidecarError> {
@@ -1539,33 +1102,6 @@ fn validate_governed_runtime_target(target: &GovernedRuntimeTarget) -> Result<()
         governed_acceptance: None,
     };
     validate_config(&config)
-}
-
-fn tuf_report(tuf: &TufVerifiedTarget) -> Value {
-    json!({
-        "root_sha256": tuf.root_sha256,
-        "root_version": tuf.root_version,
-        "targets_version": tuf.targets_version,
-        "snapshot_version": tuf.snapshot_version,
-        "timestamp_version": tuf.timestamp_version,
-        "signer_kids": tuf.signer_kids,
-    })
-}
-
-fn metadata_report(metadata: &ConfigTargetMetadata) -> Value {
-    json!({
-        "product": metadata.product,
-        "instance_id": metadata.instance_id,
-        "environment": metadata.environment,
-        "stream_id": metadata.stream_id,
-        "bundle_id": metadata.bundle_id,
-        "sequence": metadata.sequence,
-        "previous_config_hash": metadata.previous_config_hash,
-        "config_hash": metadata.config_hash,
-        "change_classes": metadata.change_classes,
-        "signer_kids": metadata.signer_kids,
-        "apply_policy": metadata.apply_policy,
-    })
 }
 
 pub async fn sidecar_router(config: SidecarConfig) -> Result<Router, SidecarError> {
@@ -7673,19 +7209,10 @@ mod tests {
             sequence: 1,
             config_hash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                 .to_string(),
-            tuf_root_sha256:
-                "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-                    .to_string(),
-            root_version: 1,
-            targets_version: 1,
-            snapshot_version: 1,
-            timestamp_version: 1,
-            change_classes: BTreeSet::new(),
             signer_kids: Vec::new(),
             expression_hashes_verified: true,
             runtime_verified: true,
             smoke_verified: true,
-            apply_policy: "strict".to_string(),
         });
 
         let error = sidecar_router(config)

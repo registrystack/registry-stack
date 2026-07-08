@@ -113,9 +113,9 @@ or the [Registry Notary operator configuration reference](../../products/registr
 - Declare `deployment.profile` explicitly. An omitted profile binds no gates and only raises a
   `deployment.profile_undeclared` warning, so a silent gap stays silent until you declare a
   profile.
-- Treat `evidence_grade` as requiring a signed, governed config bundle: running it from a plain
-  local YAML file trips `relay.config.unsigned` / `notary.config.unsigned` and the process refuses
-  to start.
+- Treat `evidence_grade` as requiring a signed local config bundle: running it from a plain local
+  YAML file trips `relay.config.unsigned` / `notary.config.unsigned` and the process refuses to
+  start.
 - Review `GET /admin/v1/posture` regularly. It reports the declared profile, active findings, and
   active waivers, so the deployment's actual state is inspectable rather than asserted.
 - Give every waiver a non-empty, non-secret reason and a mandatory expiry date. `startup_fail`

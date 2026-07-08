@@ -372,13 +372,7 @@ fn endpoint_kind_from_route(route: &str) -> &'static str {
     match route {
         "/healthz" => "health",
         "/ready" => "ready",
-        "/metrics"
-        | "/admin/v1/capabilities"
-        | "/admin/v1/posture"
-        | "/admin/v1/reload"
-        | "/admin/v1/config/verify"
-        | "/admin/v1/config/dry-run"
-        | "/admin/v1/config/apply" => "admin",
+        "/metrics" | "/admin/v1/capabilities" | "/admin/v1/posture" | "/admin/v1/reload" => "admin",
         "/openapi.json" | "/docs" | "/docs/scalar.js" => "openapi",
         "/.well-known/evidence-service"
         | "/.well-known/evidence/jwks.json"
