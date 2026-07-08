@@ -1656,6 +1656,61 @@ evidence:
             )
         self.assertIssue(issues, "missing-openfn-audit-config")
 
+    def test_rejects_hosted_openfn_missing_runtime_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            notary_dir = root / "config" / "coolify" / "notary"
+            openfn_dir = root / "config" / "coolify" / "openfn"
+            notary_dir.mkdir(parents=True)
+            openfn_dir.mkdir(parents=True)
+            (openfn_dir / "openfn-dhis2-sidecar.bootstrap.yaml").write_text(
+                """
+audit:
+  sink: file
+  path: /var/lib/registry-notary-openfn-sidecar/audit/dhis2-openfn-sidecar-audit.jsonl
+  hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
+assurance:
+  status: accepted
+  product: registry-notary-openfn-sidecar
+  instance_id: hosted-dhis2-openfn-sidecar
+  environment: hosted-lab
+  stream_id: dhis2-openfn-sidecar-runtime
+  bundle_id: hosted-dhis2-openfn-sidecar-bootstrap
+  sequence: 1
+  config_hash: sha256:1111111111111111111111111111111111111111111111111111111111111111
+  signer_kids: []
+  expression_hashes_verified: true
+  runtime_verified: true
+  smoke_verified: true
+""",
+                encoding="utf-8",
+            )
+            (notary_dir / "dhis2-health-notary.yaml").write_text(
+                """
+evidence:
+  source_connections:
+    dhis2_openfn:
+      expected_sidecar:
+        product: registry-notary-openfn-sidecar
+        instance_id: hosted-dhis2-openfn-sidecar
+        environment: hosted-lab
+        stream_id: dhis2-openfn-sidecar-runtime
+        config_hash: sha256:1111111111111111111111111111111111111111111111111111111111111111
+        require_expression_hashes_verified: true
+        require_runtime_verified: true
+        require_smoke_verified: true
+""",
+                encoding="utf-8",
+            )
+            issues = self.validator.validate_artifacts(
+                {
+                    "registry-lab": self._valid_registry_lab(),
+                    "esignet": self._valid_esignet(),
+                },
+                {"registry-lab": root, "esignet": root},
+            )
+        self.assertIssue(issues, "missing-openfn-runtime-config")
+
     def test_rejects_hosted_openfn_expected_sidecar_hash_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

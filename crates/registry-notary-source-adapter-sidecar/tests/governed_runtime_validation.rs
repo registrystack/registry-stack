@@ -122,6 +122,27 @@ sources:
         render_governed_runtime_target_json(&self.manifest())
             .expect("governed http_json runtime target renders")
     }
+
+    fn manifest_with_assurance(&self) -> String {
+        format!(
+            r#"{}
+assurance:
+  status: accepted
+  product: registry-notary-source-adapter-sidecar
+  instance_id: source-adapter-test
+  environment: test
+  stream_id: sidecar-runtime
+  bundle_id: sidecar-runtime-bundle
+  sequence: 7
+  config_hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  signer_kids: []
+  expression_hashes_verified: true
+  runtime_verified: true
+  smoke_verified: true
+"#,
+            self.manifest()
+        )
+    }
 }
 
 #[tokio::test]
@@ -152,6 +173,25 @@ async fn startup_loader_accepts_local_manifest_without_dev_escape_hatch() {
 
     assert!(config.config_trust.is_none());
     assert!(config.assurance.is_none());
+}
+
+#[tokio::test]
+async fn startup_loader_populates_local_manifest_assurance() {
+    let harness = Harness::new().await;
+    let config = load_startup_config(&harness.manifest_with_assurance())
+        .await
+        .expect("local manifest with assurance parses");
+
+    let assurance = config.assurance.expect("assurance is populated");
+    assert_eq!(assurance.status, "accepted");
+    assert_eq!(assurance.instance_id, "source-adapter-test");
+    assert_eq!(
+        assurance.config_hash,
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    );
+    assert!(assurance.expression_hashes_verified);
+    assert!(assurance.runtime_verified);
+    assert!(assurance.smoke_verified);
 }
 
 #[tokio::test]

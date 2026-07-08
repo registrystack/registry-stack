@@ -38,6 +38,7 @@ fn record(sequence: u64, config_hash: &str) -> AntiRollbackRecord {
         key: key(),
         last_sequence: sequence,
         last_config_hash: config_hash.to_string(),
+        last_bundle_manifest_hash: None,
         last_bundle_id: None,
         root_version: Some(3),
         override_pin: None,
@@ -490,9 +491,10 @@ fn antirollback_rejects_wrong_mode_override_pin_fields() {
 fn normal_bundle_acceptance_clears_active_override_pin_even_on_same_bundle_restart() {
     let dir = tempfile::tempdir().expect("tempdir");
     let store = FileAntiRollbackStore::new(dir.path().join("config-antirollback.json"));
-    store
-        .initialize(record(42, &hash("current")))
-        .expect("initial state writes");
+    let mut current = record(42, &hash("current"));
+    current.last_bundle_id = Some("2026-07-07-rollout-3".to_string());
+    current.last_bundle_manifest_hash = Some(hash("manifest"));
+    store.initialize(current).expect("initial state writes");
     store
         .persist_override_pin(
             &key(),
@@ -515,6 +517,7 @@ fn normal_bundle_acceptance_clears_active_override_pin_even_on_same_bundle_resta
             "2026-07-07-rollout-3".to_string(),
             42,
             hash("current"),
+            hash("manifest"),
         )
         .expect("normal verification clears pin");
 

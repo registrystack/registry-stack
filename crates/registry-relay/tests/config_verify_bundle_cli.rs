@@ -83,6 +83,7 @@ fn config_verify_bundle_cli_rejects_expired_override_pin() {
             last_config_hash:
                 "sha256:1111111111111111111111111111111111111111111111111111111111111111"
                     .to_string(),
+            last_bundle_manifest_hash: None,
             last_bundle_id: None,
             root_version: None,
             override_pin: Some(ConfigOverridePin {
@@ -143,6 +144,53 @@ fn config_verify_bundle_cli_reports_rejected_validation() {
     assert_eq!(report["errors"][0]["code"], "rejected_validation");
 }
 
+#[test]
+fn config_verify_bundle_cli_rejects_missing_split_metadata() {
+    let temp = TempDir::new().expect("tempdir");
+    let config = relay_config_yaml().replace(
+        "catalog:\n",
+        "metadata:\n  source:\n    path: missing-metadata.yaml\ncatalog:\n",
+    );
+    let fixture = write_bundle_fixture_with_config(&temp, "registry-relay", 0, config);
+
+    let output = verify_bundle_command(&fixture)
+        .output()
+        .expect("command runs");
+
+    assert!(!output.status.success());
+    let report = stdout_json(&output);
+    assert_eq!(report["result"], "rejected_validation");
+    assert_eq!(report["errors"][0]["code"], "rejected_validation");
+}
+
+#[test]
+fn config_verify_bundle_cli_requires_signed_metadata_digest() {
+    let temp = TempDir::new().expect("tempdir");
+    let config = relay_config_yaml().replace(
+        "catalog:\n",
+        "metadata:\n  source:\n    path: ../metadata.yaml\ncatalog:\n",
+    );
+    let fixture = write_bundle_fixture_with_extra_files(
+        &temp,
+        "registry-relay",
+        0,
+        config,
+        vec![(
+            "metadata.yaml".to_string(),
+            metadata_manifest_yaml().into_bytes(),
+        )],
+    );
+
+    let output = verify_bundle_command(&fixture)
+        .output()
+        .expect("command runs");
+
+    assert!(!output.status.success());
+    let report = stdout_json(&output);
+    assert_eq!(report["result"], "rejected_validation");
+    assert_eq!(report["errors"][0]["code"], "rejected_validation");
+}
+
 fn verify_bundle_command(fixture: &BundleFixture) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_registry-relay"));
     command.args([
@@ -163,13 +211,46 @@ fn write_bundle_fixture(
     manifest_product: &str,
     last_sequence: u64,
 ) -> BundleFixture {
+    write_bundle_fixture_with_config(temp, manifest_product, last_sequence, relay_config_yaml())
+}
+
+fn write_bundle_fixture_with_config(
+    temp: &TempDir,
+    manifest_product: &str,
+    last_sequence: u64,
+    config: String,
+) -> BundleFixture {
+    write_bundle_fixture_with_extra_files(temp, manifest_product, last_sequence, config, Vec::new())
+}
+
+fn write_bundle_fixture_with_extra_files(
+    temp: &TempDir,
+    manifest_product: &str,
+    last_sequence: u64,
+    config: String,
+    extra_files: Vec<(String, Vec<u8>)>,
+) -> BundleFixture {
     let bundle_dir = temp.path().join("bundle");
     let config_dir = bundle_dir.join("config");
     std::fs::create_dir_all(&config_dir).expect("bundle config dir");
     let config_path = config_dir.join("relay.yaml");
-    let config = relay_config_yaml();
     std::fs::write(&config_path, config.as_bytes()).expect("config writes");
     let config_hash = sha256_uri(config.as_bytes());
+    let mut files = vec![ConfigBundleFile {
+        path: "config/relay.yaml".to_string(),
+        sha256: config_hash.clone(),
+    }];
+    for (path, bytes) in extra_files {
+        let full_path = bundle_dir.join(&path);
+        if let Some(parent) = full_path.parent() {
+            std::fs::create_dir_all(parent).expect("extra file parent");
+        }
+        std::fs::write(&full_path, &bytes).expect("extra file writes");
+        files.push(ConfigBundleFile {
+            path,
+            sha256: sha256_uri(&bytes),
+        });
+    }
 
     let private = PrivateJwk::parse(PRIVATE_JWK).expect("private JWK parses");
     let public = private.public();
@@ -184,10 +265,7 @@ fn write_bundle_fixture(
         sequence: 1,
         previous_config_hash: Some(ZERO_HASH.to_string()),
         config_hash: config_hash.clone(),
-        files: vec![ConfigBundleFile {
-            path: "config/relay.yaml".to_string(),
-            sha256: config_hash.clone(),
-        }],
+        files,
         created_at: "2026-07-07T10:00:00Z".to_string(),
     };
     write_manifest_and_signature(&bundle_dir, &manifest, &private, &kid);
@@ -227,6 +305,7 @@ fn write_bundle_fixture(
                 "sha256:1111111111111111111111111111111111111111111111111111111111111111"
                     .to_string()
             },
+            last_bundle_manifest_hash: None,
             last_bundle_id: None,
             root_version: None,
             override_pin: None,
@@ -303,6 +382,20 @@ auth:
 datasets: []
 audit:
   sink: stdout
+"#
+    .to_string()
+}
+
+fn metadata_manifest_yaml() -> String {
+    r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: split-demo
+  base_url: https://metadata.example.test/
+  title: Split Metadata Catalog
+  publisher:
+    name: Metadata Ministry
+datasets: []
 "#
     .to_string()
 }

@@ -55,7 +55,6 @@ use registry_relay::audit::{
 };
 use registry_relay::auth::middleware::{AuthProviderRef, RuntimeAuthProvider};
 use registry_relay::auth::runtime::build_auth;
-use registry_relay::config::governed::parse_candidate_config_with_provenance;
 use registry_relay::config::{
     self, AuditSinkConfig, Config, IssuerConfig, SignerConfig, SourceConfig,
 };
@@ -314,17 +313,6 @@ async fn run_server(
     let runtime = handle.load_full();
     let app = build_relay_app_from_runtime(Arc::clone(&handle))?;
 
-    runtime
-        .ingest
-        .run_initial_ingest(runtime.readiness_tx.clone())
-        .await;
-    let (mut refresh_tasks, refresh_shutdown) = Arc::clone(&runtime.ingest)
-        .spawn_refresh_tasks_with_config(
-            &runtime.config,
-            runtime.readiness_tx.clone(),
-            Arc::clone(&runtime.audit_sink),
-        );
-
     let provenance_state_for_log = runtime.provenance_state.as_ref().map(|state| {
         let cfg = state.config();
         (state.is_enabled(), cfg.mode, cfg.issuer_did.clone())
@@ -371,15 +359,10 @@ async fn run_server(
     };
 
     let serve_limits = ServeLimits::from_config(&runtime.config.server);
-    let main_serve = serve_listener(listener, app, serve_limits, shutdown_signal());
-
-    // Run both servers concurrently. `tokio::select!` is the natural
-    // fit because either listener exiting (clean or not) tears down
-    // the other.
-    let result: Result<(), Box<dyn std::error::Error + Send + Sync>> =
-        if let Some(admin_listener) = admin_listener {
-            let auth: AuthProviderRef = Arc::new(RuntimeAuthProvider::new(Arc::clone(&handle)));
-            let admin_app = registry_relay::server::build_admin_app_with_metadata_and_metrics(
+    let admin_app = if admin_listener.is_some() {
+        let auth: AuthProviderRef = Arc::new(RuntimeAuthProvider::new(Arc::clone(&handle)));
+        Some(
+            registry_relay::server::build_admin_app_with_metadata_and_metrics(
                 Arc::clone(&runtime.config),
                 auth,
                 Arc::clone(&runtime.audit_sink),
@@ -389,7 +372,35 @@ async fn run_server(
                 runtime.compiled_metadata.clone(),
                 Arc::clone(&runtime.metrics),
             )?
-            .layer(Extension(Arc::clone(&handle)));
+            .layer(Extension(Arc::clone(&handle))),
+        )
+    } else {
+        None
+    };
+
+    if let Some(acceptance) = runtime.pending_bundle_acceptance.as_ref() {
+        write_boot_config_audits(&runtime.audit_sink, acceptance).await?;
+        persist_bundle_acceptance(acceptance)?;
+    }
+
+    runtime
+        .ingest
+        .run_initial_ingest(runtime.readiness_tx.clone())
+        .await;
+    let (mut refresh_tasks, refresh_shutdown) = Arc::clone(&runtime.ingest)
+        .spawn_refresh_tasks_with_config(
+            &runtime.config,
+            runtime.readiness_tx.clone(),
+            Arc::clone(&runtime.audit_sink),
+        );
+
+    // Run both servers concurrently. `tokio::select!` is the natural
+    // fit because either listener exiting (clean or not) tears down
+    // the other.
+    let main_serve = serve_listener(listener, app, serve_limits, shutdown_signal());
+    let result: Result<(), Box<dyn std::error::Error + Send + Sync>> =
+        if let Some(admin_listener) = admin_listener {
+            let admin_app = admin_app.expect("admin app is built when admin listener is present");
             let admin_serve =
                 serve_listener(admin_listener, admin_app, serve_limits, shutdown_signal());
             tokio::select! {
@@ -1085,6 +1096,7 @@ async fn run_config_verify_bundle(
         &key,
         verified.manifest.sequence,
         &verified.manifest.config_hash,
+        &verified.manifest_hash,
     ) {
         print_json_report(config_verify_bundle_report(
             "rejected_rollback",
@@ -1097,29 +1109,19 @@ async fn run_config_verify_bundle(
         ))?;
         return Err(Box::new(error));
     }
-    let config_text = std::str::from_utf8(&verified.config_bytes)?;
-    let (_config, provenance) = match parse_candidate_config_with_provenance(
-        config_text,
-        &verified.manifest.bundle_id,
-        verified.manifest.sequence,
-        ConfigSource::SignedBundleFile,
-    ) {
-        Ok(parsed) => parsed,
-        Err(detail) => {
-            print_json_report(config_verify_bundle_report(
-                "rejected_validation",
-                &verified.manifest.stream_id,
-                Some(verified.manifest.bundle_id.clone()),
-                Some(verified.manifest.sequence),
-                verified.manifest.previous_config_hash.clone(),
-                Some(verified.manifest.config_hash.clone()),
-                Some(("rejected_validation", detail.to_string())),
-            ))?;
-            return Err(io::Error::new(io::ErrorKind::InvalidData, detail).into());
-        }
-    };
+    if let Err(error) = config::validate_verified_bundle_runtime(&verified) {
+        print_json_report(config_verify_bundle_report(
+            "rejected_validation",
+            &verified.manifest.stream_id,
+            Some(verified.manifest.bundle_id.clone()),
+            Some(verified.manifest.sequence),
+            verified.manifest.previous_config_hash.clone(),
+            Some(verified.manifest.config_hash.clone()),
+            Some(("rejected_validation", error.to_string())),
+        ))?;
+        return Err(io::Error::new(io::ErrorKind::InvalidData, error.to_string()).into());
+    }
 
-    let _ = provenance;
     print_json_report(config_verify_bundle_report(
         "verified",
         &verified.manifest.stream_id,
@@ -1258,17 +1260,12 @@ async fn compile_relay_runtime_with_options(
             "audit chain failed startup verification; /ready will report not-ready until it is recovered"
         );
     }
-    if let Some(acceptance) = &pending_bundle_acceptance {
-        write_boot_config_audits(&audit_sink, acceptance).await?;
-        persist_bundle_acceptance(acceptance)?;
-    }
     // Boot-time validation already logged waived gates; now that the audit
-    // pipeline exists, record them durably. The startup path loads config
-    // from a local file, matching the source `validate::run` evaluated.
+    // pipeline exists, record them durably with the accepted source.
     registry_relay::server::audit_waived_deployment_gates(
         &config,
         &audit_sink,
-        ConfigSource::LocalFile,
+        config_provenance.source,
     )
     .await?;
     let bind: SocketAddr = bind_override.unwrap_or(config.server.bind);
@@ -1318,6 +1315,7 @@ async fn compile_relay_runtime_with_options(
         compiled_metadata,
         metadata_source_digest,
         None,
+        pending_bundle_acceptance,
         auth,
         audit_sink,
         bind,
@@ -2263,9 +2261,15 @@ mod tests {
     };
     use axum::routing::get;
     use axum::Router;
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
     use registry_platform_audit::{
         verify_jsonl_lines_with_hasher, AuditChainHasher, AuditEnvelope, AuditError,
     };
+    use registry_platform_config::{
+        sha256_uri, ConfigBundleFile, ConfigBundleManifest, ConfigBundleSignature,
+        ConfigBundleSignatureEnvelope, ConfigTrustAnchor, ConfigTrustAnchorSigner,
+    };
+    use registry_platform_crypto::{canonicalize_json, sign, PrivateJwk};
     use registry_platform_ops::{
         AntiRollbackKey, AntiRollbackStoreError, BundleStateAction, ConfigOverrideMode,
         ConfigOverridePin, DeploymentProfile, FileAntiRollbackStore, PendingBundleAcceptance,
@@ -2273,10 +2277,13 @@ mod tests {
     use registry_relay::audit::{AuditPipeline, AuditRecord, EndpointKind, InMemorySink};
     use registry_relay::config::Config;
     use serde_json::{json, Value};
+    use std::path::{Path, PathBuf};
     use std::sync::{Mutex as StdMutex, OnceLock};
     use std::time::Duration;
     use tempfile::tempdir;
     use tokio::net::TcpListener;
+
+    const CONFIG_BUNDLE_PRIVATE_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}"#;
 
     #[cfg(unix)]
     #[tokio::test]
@@ -2377,6 +2384,112 @@ mod tests {
         format!("sha256:{}", label.to_string().repeat(64))
     }
 
+    struct SignedRelayBundleFixture {
+        bundle_dir: PathBuf,
+        anchor_path: PathBuf,
+        state_path: PathBuf,
+    }
+
+    fn write_signed_relay_bundle(
+        tmp: &tempfile::TempDir,
+        hash_secret_env: &str,
+    ) -> SignedRelayBundleFixture {
+        let bundle_dir = tmp.path().join("bundle");
+        let config_dir = bundle_dir.join("config");
+        std::fs::create_dir_all(&config_dir).expect("bundle config dir");
+        let config = runtime_config_yaml(hash_secret_env);
+        let config_path = config_dir.join("relay.yaml");
+        std::fs::write(&config_path, config.as_bytes()).expect("config writes");
+        let config_hash = sha256_uri(config.as_bytes());
+        let private = PrivateJwk::parse(CONFIG_BUNDLE_PRIVATE_JWK).expect("private jwk");
+        let public = private.public();
+        let kid = public.jkt().expect("thumbprint");
+        let manifest = ConfigBundleManifest {
+            schema: "registry.platform.config_bundle.v1".to_string(),
+            product: "registry-relay".to_string(),
+            environment: "lab".to_string(),
+            stream_id: "relay-bind-test".to_string(),
+            instance_id: None,
+            bundle_id: "relay-bind-bundle".to_string(),
+            sequence: 1,
+            previous_config_hash: None,
+            config_hash: config_hash.clone(),
+            files: vec![ConfigBundleFile {
+                path: "config/relay.yaml".to_string(),
+                sha256: config_hash,
+            }],
+            created_at: "2026-07-07T10:00:00Z".to_string(),
+        };
+        write_bundle_manifest_and_signature(&bundle_dir, &manifest, &private, &kid);
+        let anchor = ConfigTrustAnchor {
+            schema: "registry.platform.config_trust_anchor.v1".to_string(),
+            product: "registry-relay".to_string(),
+            environment: "lab".to_string(),
+            stream_id: "relay-bind-test".to_string(),
+            instance_id: "relay-bind-test".to_string(),
+            signers: vec![ConfigTrustAnchorSigner {
+                kid,
+                jwk: public,
+                enabled: true,
+            }],
+        };
+        let anchor_path = tmp.path().join("trust_anchor.json");
+        std::fs::write(
+            &anchor_path,
+            serde_json::to_vec_pretty(&anchor).expect("anchor serializes"),
+        )
+        .expect("anchor writes");
+        SignedRelayBundleFixture {
+            bundle_dir,
+            anchor_path,
+            state_path: tmp.path().join("antirollback.json"),
+        }
+    }
+
+    fn write_bundle_manifest_and_signature(
+        bundle_dir: &Path,
+        manifest: &ConfigBundleManifest,
+        private: &PrivateJwk,
+        kid: &str,
+    ) {
+        let manifest_value = serde_json::to_value(manifest).expect("manifest value");
+        let canonical = canonicalize_json(&manifest_value).expect("canonical manifest");
+        let signature = sign(&canonical, private).expect("manifest signs");
+        let envelope = ConfigBundleSignatureEnvelope {
+            schema: "registry.platform.config_bundle_signatures.v1".to_string(),
+            signatures: vec![ConfigBundleSignature {
+                kid: kid.to_string(),
+                alg: "EdDSA".to_string(),
+                sig: URL_SAFE_NO_PAD.encode(signature),
+            }],
+        };
+        std::fs::write(
+            bundle_dir.join("manifest.json"),
+            serde_json::to_vec_pretty(manifest).expect("manifest serializes"),
+        )
+        .expect("manifest writes");
+        std::fs::write(
+            bundle_dir.join("manifest.sig.json"),
+            serde_json::to_vec_pretty(&envelope).expect("signature serializes"),
+        )
+        .expect("signature writes");
+    }
+
+    fn relay_bootstrap_config(fixture: &SignedRelayBundleFixture, hash_secret_env: &str) -> String {
+        format!(
+            r#"{}
+config_trust:
+  trust_anchor_path: {}
+  bundle_path: {}
+  antirollback_state_path: {}
+"#,
+            runtime_config_yaml(hash_secret_env),
+            fixture.anchor_path.display(),
+            fixture.bundle_dir.display(),
+            fixture.state_path.display()
+        )
+    }
+
     fn test_antirollback_key() -> AntiRollbackKey {
         AntiRollbackKey {
             product: "registry-relay".to_string(),
@@ -2412,6 +2525,10 @@ mod tests {
             key: test_antirollback_key(),
             source,
             bundle_id: signed_source.then(|| "relay-loader-bundle".to_string()),
+            bundle_manifest_hash: signed_source.then(|| {
+                "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+                    .to_string()
+            }),
             sequence: signed_source.then_some(1),
             config_hash,
             previous_config_hash: None,
@@ -2522,6 +2639,45 @@ mod tests {
             .load(&acceptance.key)
             .expect_err("state remains absent");
         assert_eq!(err, AntiRollbackStoreError::MissingState);
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn boot_listener_bind_failure_aborts_before_antirollback_persist() {
+        let _guard = env_lock();
+        let env_name = "REGISTRY_RELAY_BIND_FAILURE_AUDIT_HASH_SECRET";
+        std::env::set_var(env_name, "registry-relay-bind-failure-secret-32-bytes");
+        let dir = tempdir().expect("tempdir");
+        let fixture = write_signed_relay_bundle(&dir, env_name);
+        let config_path = dir.path().join("bootstrap.yaml");
+        std::fs::write(&config_path, relay_bootstrap_config(&fixture, env_name))
+            .expect("bootstrap writes");
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("held listener binds");
+        let occupied_addr = listener.local_addr().expect("listener exposes addr");
+
+        let error = super::run_server(config_path, None, Some(occupied_addr), true)
+            .await
+            .expect_err("occupied listener rejects startup");
+
+        assert!(
+            error.to_string().contains("Address already in use"),
+            "unexpected error: {error}"
+        );
+        let key = AntiRollbackKey {
+            product: "registry-relay".to_string(),
+            instance_id: String::new(),
+            environment: "lab".to_string(),
+            stream_id: "relay-bind-test".to_string(),
+        };
+        let err = FileAntiRollbackStore::new(&fixture.state_path)
+            .load(&key)
+            .expect_err("state remains absent");
+        assert_eq!(err, AntiRollbackStoreError::MissingState);
+
+        drop(listener);
+        std::env::remove_var(env_name);
     }
 
     fn config_with_file_audit(path: &std::path::Path, hash_secret_env: &str) -> Config {

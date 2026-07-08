@@ -53,7 +53,7 @@ evidence:
         instance_id: hosted-dhis2-openfn-sidecar
         environment: hosted-lab
         stream_id: dhis2-openfn-sidecar-runtime
-        config_hash: sha256:4c58e9ae9726d68f6a6d41a23b69ff2b6ff9ef661cdf386bb650804496c00dd5
+        config_hash: sha256:f26ea614665359a61f4c59e38fb478be94b04a4a7c26a22f08078ccc7064a5f2
         require_expression_hashes_verified: true
         require_runtime_verified: true
         require_smoke_verified: true

@@ -1730,8 +1730,7 @@
       "notes": "Unauthenticated admin-listener probe or metrics route.",
       "source": "manual",
       "enforcement_tests": [
-        "tests/observability_metrics.rs::metrics_requires_metrics_scope_on_admin_listener",
-        "tests/admin_reload.rs::reload_all_without_credential_is_rejected"
+        "tests/observability_metrics.rs::metrics_requires_metrics_scope_on_admin_listener"
       ],
       "waiver": null
     },
@@ -1752,8 +1751,7 @@
       "notes": "Unauthenticated admin-listener probe or metrics route.",
       "source": "manual",
       "enforcement_tests": [
-        "tests/observability_metrics.rs::metrics_requires_metrics_scope_on_admin_listener",
-        "tests/admin_reload.rs::reload_all_without_credential_is_rejected"
+        "tests/observability_metrics.rs::metrics_requires_metrics_scope_on_admin_listener"
       ],
       "waiver": null
     },
@@ -1774,8 +1772,7 @@
       "notes": "Unauthenticated admin-listener probe or metrics route.",
       "source": "manual",
       "enforcement_tests": [
-        "tests/observability_metrics.rs::metrics_requires_metrics_scope_on_admin_listener",
-        "tests/admin_reload.rs::reload_all_without_credential_is_rejected"
+        "tests/observability_metrics.rs::metrics_requires_metrics_scope_on_admin_listener"
       ],
       "waiver": null
     },
@@ -1798,9 +1795,7 @@
       "notes": "Admin listener posture route for dedicated read-only operations credentials.",
       "source": "manual",
       "enforcement_tests": [
-        "tests/admin_reload.rs::posture_requires_ops_read_scope",
-        "tests/admin_reload.rs::ops_read_key_cannot_reload",
-        "tests/admin_reload.rs::admin_routes_are_not_mounted_on_public_app"
+        "tests/admin_auth_extraction_contract.rs::admin_handlers_use_required_scoped_extractors"
       ],
       "waiver": null
     },
@@ -1823,7 +1818,7 @@
       "notes": "Admin listener capabilities route for discovering supported reload and config trust posture operations.",
       "source": "manual",
       "enforcement_tests": [
-        "tests/admin_reload.rs::capabilities_requires_ops_read_and_reports_relay_admin_surface"
+        "tests/admin_auth_extraction_contract.rs::admin_handlers_use_required_scoped_extractors"
       ],
       "waiver": null
     },
@@ -1846,7 +1841,7 @@
       "notes": "Admin listener route.",
       "source": "manual",
       "enforcement_tests": [
-        "tests/admin_reload.rs::reload_all_without_credential_is_rejected",
+        "tests/admin_auth_extraction_contract.rs::admin_handlers_use_required_scoped_extractors",
         "tests/observability_metrics.rs::metrics_requires_metrics_scope_on_admin_listener",
         "tests/auth_flow.rs::missing_header_returns_missing_credential",
         "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit"
@@ -1872,7 +1867,7 @@
       "notes": "Admin listener route.",
       "source": "manual",
       "enforcement_tests": [
-        "tests/admin_reload.rs::reload_all_without_credential_is_rejected",
+        "tests/admin_auth_extraction_contract.rs::admin_handlers_use_required_scoped_extractors",
         "tests/observability_metrics.rs::metrics_requires_metrics_scope_on_admin_listener",
         "tests/auth_flow.rs::missing_header_returns_missing_credential",
         "tests/audit_record.rs::middleware_captures_error_code_from_auth_short_circuit"

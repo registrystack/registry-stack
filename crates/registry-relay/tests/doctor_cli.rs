@@ -159,6 +159,7 @@ fn write_signed_profile_config(
             },
             last_sequence: 0,
             last_config_hash: ZERO_HASH.to_string(),
+            last_bundle_manifest_hash: None,
             last_bundle_id: None,
             root_version: None,
             override_pin: None,
