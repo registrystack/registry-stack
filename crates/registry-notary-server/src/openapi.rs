@@ -85,7 +85,7 @@ fn build_openapi_document() -> Value {
             "/admin/v1/capabilities": {
                 "get": {
                     "summary": "Discover authenticated admin capabilities",
-                    "description": "Returns redacted product capability metadata for governed configuration, posture, and reload operations.",
+                    "description": "Returns redacted product capability metadata for posture and supported admin operations.",
                     "operationId": "adminCapabilities",
                     "security": [
                         { "apiKeyAuth": [] },
@@ -123,62 +123,6 @@ fn build_openapi_document() -> Value {
                         "403": { "description": "Caller lacks registry_notary:ops_read scope" },
                         "500": { "description": "Posture could not be filtered for the requested tier" },
                         "503": { "description": "Posture state is unavailable" }
-                    }
-                }
-            },
-            "/admin/v1/config/verify": {
-                "post": {
-                    "summary": "Validate a candidate runtime config",
-                    "description": "Standalone mode parses and validates an inline candidate config or verifies a local or remote signed TUF config target. Governed signed credential issuer key rotations may be hot-applied when anti-rollback state accepts the bundle.",
-                    "operationId": "adminConfigVerify",
-                    "security": [
-                        { "apiKeyAuth": [] },
-                        { "bearerAuth": [] }
-                    ],
-                    "requestBody": config_apply_request_body_schema(),
-                    "responses": {
-                        "200": { "description": "Candidate config parsed and validated" },
-                        "400": { "description": "Candidate config is invalid" },
-                        "401": { "description": "Missing or invalid credential" },
-                        "403": { "description": "Caller lacks registry_notary:admin scope" }
-                    }
-                }
-            },
-            "/admin/v1/config/dry-run": {
-                "post": {
-                    "summary": "Dry-run a candidate runtime config",
-                    "description": "Standalone mode validates an inline candidate config or verifies a local or remote signed TUF config target. Inline candidates and non-swappable changes report rejected_restart_required without mutating runtime state.",
-                    "operationId": "adminConfigDryRun",
-                    "security": [
-                        { "apiKeyAuth": [] },
-                        { "bearerAuth": [] }
-                    ],
-                    "requestBody": config_apply_request_body_schema(),
-                    "responses": {
-                        "200": { "description": "Candidate config was evaluated without applying" },
-                        "400": { "description": "Candidate config is invalid" },
-                        "401": { "description": "Missing or invalid credential" },
-                        "403": { "description": "Caller lacks registry_notary:admin scope" }
-                    }
-                }
-            },
-            "/admin/v1/config/apply": {
-                "post": {
-                    "summary": "Attempt to apply a candidate runtime config",
-                    "description": "Standalone mode applies only signed local TUF config targets. Governed signed credential issuer key rotations can swap the issuer runtime after anti-rollback acceptance. Break-glass apply additionally requires approval details, a locally configured rate-limit policy, and a signed emergency change class. Inline config candidates are rejected with registry.admin.config.inline_apply_rejected. Other signed changes remain restart-required.",
-                    "operationId": "adminConfigApply",
-                    "security": [
-                        { "apiKeyAuth": [] },
-                        { "bearerAuth": [] }
-                    ],
-                    "requestBody": config_apply_request_body_schema(),
-                    "responses": {
-                        "200": { "description": "Compatible signed config was applied without restart" },
-                        "409": { "description": "Candidate config requires restart and was not applied" },
-                        "400": { "description": "Candidate config is invalid" },
-                        "401": { "description": "Missing or invalid credential" },
-                        "403": { "description": "Caller lacks registry_notary:admin scope" },
-                        "503": { "description": "Config apply is unavailable" }
                     }
                 }
             },
@@ -867,13 +811,6 @@ fn build_openapi_document() -> Value {
                 "CredentialResponse": credential_response_schema(),
                 "TokenRequest": token_request_schema(),
                 "TokenResponse": token_response_schema(),
-                "ConfigApplyRequest": config_apply_request_schema(),
-                "ConfigApplyResponse": config_apply_response_schema(),
-                "TufConfigTargetRequest": tuf_config_target_request_schema(),
-                "LocalTufConfigTargetRequest": local_tuf_config_target_request_schema(),
-                "RemoteTufConfigTargetRequest": remote_tuf_config_target_request_schema(),
-                "BreakGlassApproval": break_glass_approval_schema(),
-                "BreakGlassRateLimit": break_glass_rate_limit_schema(),
                 "Oid4vciError": oid4vci_error_schema()
             },
             "securitySchemes": {
@@ -988,20 +925,6 @@ fn build_openapi_document() -> Value {
         "200",
         "#/components/schemas/EvaluationResponse",
     );
-    for (path, status) in [
-        ("/admin/v1/config/verify", "200"),
-        ("/admin/v1/config/dry-run", "200"),
-        ("/admin/v1/config/apply", "200"),
-        ("/admin/v1/config/apply", "409"),
-    ] {
-        set_json_response_schema(
-            &mut document_value,
-            path,
-            "post",
-            status,
-            "#/components/schemas/ConfigApplyResponse",
-        );
-    }
     document_value["info"]["summary"] = json!(INFO_SUMMARY);
     document_value["info"]["contact"] = json!({ "name": CONTACT_NAME });
     serde_json::from_value::<OpenApi>(document_value.clone()).unwrap_or_else(|err| {
@@ -1116,24 +1039,24 @@ fn add_response_examples(document: &mut Value) {
             "supported_posture_tiers": ["default", "restricted"],
             "config": {
                 "verify": {
-                    "supported": true,
-                    "currently_available": true
+                    "supported": false,
+                    "currently_available": false
                 },
                 "dry_run": {
-                    "supported": true,
-                    "currently_available": true
+                    "supported": false,
+                    "currently_available": false
                 },
                 "apply": {
-                    "supported": true,
-                    "currently_available": true,
-                    "supported_sources": ["tuf_local", "tuf_remote"],
+                    "supported": false,
+                    "currently_available": false,
+                    "supported_sources": [],
                     "requires_signed_input": true
                 }
             },
             "break_glass": {
-                "supported": true,
-                "currently_available": true,
-                "rate_limit_scope": "instance"
+                "supported": false,
+                "currently_available": false,
+                "rate_limit_scope": "none"
             },
             "listeners": {
                 "admin": {
@@ -1147,17 +1070,13 @@ fn add_response_examples(document: &mut Value) {
                 }
             },
             "root_transition": {
-                "supported": true,
-                "currently_available": true
+                "supported": false,
+                "currently_available": false
             },
             "hot_swap": {
-                "supported": true,
-                "currently_available": true,
-                "components": [
-                    "credential_issuer_signing",
-                    "preauth_signing",
-                    "federation_signing"
-                ]
+                "supported": false,
+                "currently_available": false,
+                "components": []
             },
             "reload": {
                 "resource_reload": {
@@ -1215,106 +1134,6 @@ fn add_response_examples(document: &mut Value) {
             "auth.scope_denied",
             "Scope denied",
             "missing required scope",
-        ),
-    );
-    for path in ["/admin/v1/config/verify", "/admin/v1/config/dry-run"] {
-        set_json_response(
-            document,
-            path,
-            "post",
-            "200",
-            "Standalone router evaluated the candidate config",
-            json!({
-                "bundle_id": "demo-bundle",
-                "sequence": 1,
-                "result": if path.ends_with("verify") { "verified" } else { "rejected_restart_required" },
-                "posture_result": if path.ends_with("verify") { "not_applied" } else { "rejected" },
-                "applied": false,
-                "restart_required": true
-            }),
-        );
-    }
-    set_json_response(
-        document,
-        "/admin/v1/config/apply",
-        "post",
-        "200",
-        "Compatible signed config was applied without restart",
-        json!({
-            "bundle_id": "demo-bundle",
-            "sequence": 2,
-            "result": "applied",
-            "posture_result": "accepted",
-            "applied": true,
-            "restart_required": false
-        }),
-    );
-    set_json_response(
-        document,
-        "/admin/v1/config/apply",
-        "post",
-        "409",
-        "Candidate config requires restart",
-        json!({
-            "bundle_id": "demo-bundle",
-            "sequence": 1,
-            "result": "rejected_restart_required",
-            "posture_result": "rejected",
-            "applied": false,
-            "restart_required": true
-        }),
-    );
-    for path in [
-        "/admin/v1/config/verify",
-        "/admin/v1/config/dry-run",
-        "/admin/v1/config/apply",
-    ] {
-        set_problem_response(
-            document,
-            path,
-            "post",
-            "400",
-            "Candidate config is invalid",
-            problem_example(
-                400,
-                "config.candidate_invalid",
-                "Candidate config invalid",
-                "candidate config could not be parsed",
-            ),
-        );
-        set_problem_response(
-            document,
-            path,
-            "post",
-            "401",
-            "Missing or invalid credential",
-            missing_credential_example(),
-        );
-        set_problem_response(
-            document,
-            path,
-            "post",
-            "403",
-            "Caller lacks registry_notary:admin scope",
-            problem_example(
-                403,
-                "auth.scope_denied",
-                "Scope denied",
-                "missing required scope",
-            ),
-        );
-    }
-    set_problem_response(
-        document,
-        "/admin/v1/config/apply",
-        "post",
-        "503",
-        "Config apply is unavailable",
-        problem_example(
-            503,
-            "config.apply_unavailable",
-            "Config apply unavailable",
-            "config_trust.antirollback_state_path is not configured",
         ),
     );
     set_json_response(
@@ -3056,218 +2875,6 @@ fn token_response_schema() -> Value {
     })
 }
 
-fn config_apply_request_body_schema() -> Value {
-    json!({
-        "required": true,
-        "content": {
-            "application/json": {
-                "schema": { "$ref": "#/components/schemas/ConfigApplyRequest" }
-            }
-        }
-    })
-}
-
-fn config_apply_request_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "bundle_id": {
-                "type": "string",
-                "description": "Operator-visible candidate identifier. Signed TUF targets may derive it from target metadata."
-            },
-            "sequence": {
-                "type": "integer",
-                "format": "uint64",
-                "description": "Monotonic bundle sequence. Signed TUF targets may derive it from target metadata."
-            },
-            "config_yaml": {
-                "type": "string",
-                "description": "Inline YAML candidate for verify and dry-run diagnostics."
-            },
-            "stream_id": {
-                "type": "string",
-                "default": "default",
-                "description": "Governance stream identifier used by anti-rollback state."
-            },
-            "previous_config_hash": {
-                "type": "string",
-                "pattern": "^(sha256:)?[0-9a-f]{64}$",
-                "description": "Governed predecessor config hash. Requests and signed target metadata may provide either bare lowercase SHA-256 hex or sha256:<64 lowercase hex>; responses, audit, docs, and errors use the canonical sha256:-prefixed form."
-            },
-            "root_version": {
-                "type": "integer",
-                "format": "uint64"
-            },
-            "break_glass": {
-                "type": "boolean",
-                "default": false,
-                "description": "Apply-only emergency mode. Verify and dry-run reject break-glass requests."
-            },
-            "break_glass_approval": {
-                "$ref": "#/components/schemas/BreakGlassApproval"
-            },
-            "break_glass_approval_reference": {
-                "type": "string",
-                "description": "Apply-only reference for a matching durable break-glass approval record in the verifier-owned local approval store."
-            },
-            "local_approval_reference": {
-                "type": "string",
-                "description": "Apply-only reference for a matching local approval record used by root_transition bundles."
-            },
-            "tuf": {
-                "$ref": "#/components/schemas/TufConfigTargetRequest"
-            }
-        },
-        "additionalProperties": false
-    })
-}
-
-fn config_apply_response_schema() -> Value {
-    json!({
-        "type": "object",
-        "required": [
-            "bundle_id",
-            "sequence",
-            "result",
-            "posture_result",
-            "applied",
-            "restart_required"
-        ],
-        "properties": {
-            "bundle_id": { "type": "string" },
-            "sequence": { "type": "integer", "format": "uint64" },
-            "result": {
-                "type": "string",
-                "description": "Config apply outcome, such as applied, verified, rejected_restart_required, rejected_readiness, or rejected_rollback."
-            },
-            "posture_result": {
-                "type": "string",
-                "description": "Posture projection of the outcome, such as accepted, rejected, or not_applied."
-            },
-            "applied": { "type": "boolean" },
-            "restart_required": { "type": "boolean" },
-            "detail": {
-                "type": "string",
-                "description": "Optional diagnostic detail. Previous-config-hash mismatch details use canonical sha256:<64 lowercase hex> for the expected value and name the detected received format."
-            }
-        },
-        "additionalProperties": false
-    })
-}
-
-fn tuf_config_target_request_schema() -> Value {
-    json!({
-        "oneOf": [
-            { "$ref": "#/components/schemas/LocalTufConfigTargetRequest" },
-            { "$ref": "#/components/schemas/RemoteTufConfigTargetRequest" }
-        ]
-    })
-}
-
-fn local_tuf_config_target_request_schema() -> Value {
-    json!({
-        "type": "object",
-        "required": ["root_path", "metadata_dir", "targets_dir", "datastore_dir", "target_name"],
-        "properties": {
-            "root_path": { "type": "string" },
-            "metadata_dir": { "type": "string" },
-            "targets_dir": { "type": "string" },
-            "datastore_dir": { "type": "string" },
-            "target_name": { "type": "string" }
-        },
-        "additionalProperties": false
-    })
-}
-
-fn remote_tuf_config_target_request_schema() -> Value {
-    json!({
-        "type": "object",
-        "description": "Remote TUF config source. The source must exactly match an entry in the operator-configured config_trust.remote_tuf_repositories allowlist (comparing root_path, metadata_base_url, targets_base_url, and datastore_dir); unlisted sources are rejected before any fetch.",
-        "required": [
-            "root_path",
-            "metadata_base_url",
-            "targets_base_url",
-            "datastore_dir",
-            "target_name"
-        ],
-        "properties": {
-            "root_path": { "type": "string" },
-            "metadata_base_url": {
-                "type": "string",
-                "format": "uri",
-                "description": "HTTPS TUF metadata base URL. HTTP loopback is accepted only when the matching allowlist entry sets allow_dev_insecure_fetch_urls."
-            },
-            "targets_base_url": {
-                "type": "string",
-                "format": "uri",
-                "description": "HTTPS TUF targets base URL. HTTP loopback is accepted only when the matching allowlist entry sets allow_dev_insecure_fetch_urls."
-            },
-            "datastore_dir": { "type": "string" },
-            "target_name": { "type": "string" },
-            "allow_dev_insecure_fetch_urls": {
-                "type": "boolean",
-                "default": false,
-                "description": "Deprecated and ignored. Fetch policy is taken from the matching config_trust.remote_tuf_repositories allowlist entry."
-            }
-        },
-        "additionalProperties": false
-    })
-}
-
-fn break_glass_approval_schema() -> Value {
-    json!({
-        "type": "object",
-        "required": [
-            "approved_by",
-            "reason",
-            "approval_reference",
-            "emergency_change_class",
-            "expires_at_unix_seconds",
-            "rate_limit_identity"
-        ],
-        "properties": {
-            "approved_by": { "type": "string", "minLength": 1 },
-            "reason": {
-                "type": "string",
-                "minLength": 1,
-                "description": "Local approval reason. Audit records store only a hash of this value."
-            },
-            "approval_reference": { "type": "string", "minLength": 1 },
-            "emergency_change_class": {
-                "type": "string",
-                "minLength": 1,
-                "description": "Must appear in the signed target change_classes and be authorized by local trust roots."
-            },
-            "expires_at_unix_seconds": {
-                "type": "integer",
-                "format": "uint64"
-            },
-            "rate_limit_identity": { "type": "string", "minLength": 1 }
-        },
-        "additionalProperties": false
-    })
-}
-
-fn break_glass_rate_limit_schema() -> Value {
-    json!({
-        "type": "object",
-        "required": ["max_accepted", "window_seconds"],
-        "properties": {
-            "max_accepted": {
-                "type": "integer",
-                "format": "uint32",
-                "minimum": 1
-            },
-            "window_seconds": {
-                "type": "integer",
-                "format": "uint64",
-                "minimum": 1
-            }
-        },
-        "additionalProperties": false
-    })
-}
-
 fn oid4vci_error_schema() -> Value {
     json!({
         "type": "object",
@@ -3958,9 +3565,6 @@ mod tests {
             "/ready",
             "/admin/v1/reload",
             "/admin/v1/capabilities",
-            "/admin/v1/config/verify",
-            "/admin/v1/config/dry-run",
-            "/admin/v1/config/apply",
             "/admin/v1/posture",
             "/openapi.json",
             "/.well-known/evidence-service",
@@ -3986,6 +3590,16 @@ mod tests {
             "/admin/v1/credentials/{credential_id}/status",
         ] {
             assert!(paths.contains_key(route), "missing {route}");
+        }
+        for route in [
+            "/admin/v1/config/verify",
+            "/admin/v1/config/dry-run",
+            "/admin/v1/config/apply",
+        ] {
+            assert!(
+                !paths.contains_key(route),
+                "removed admin config route is still documented: {route}"
+            );
         }
     }
 
@@ -4051,64 +3665,32 @@ mod tests {
     }
 
     #[test]
-    fn config_admin_operations_reference_break_glass_request_schema() {
+    fn deleted_config_admin_operations_are_not_documented() {
         let doc = serde_json::to_value(openapi_document()).expect("document serializes");
         for path in [
             "/admin/v1/config/verify",
             "/admin/v1/config/dry-run",
             "/admin/v1/config/apply",
         ] {
-            assert_eq!(
-                doc["paths"][path]["post"]["requestBody"]["content"]["application/json"]["schema"]
-                    ["$ref"],
-                json!("#/components/schemas/ConfigApplyRequest"),
-                "missing ConfigApplyRequest request body for {path}"
+            assert!(
+                doc["paths"].get(path).is_none(),
+                "{path} must not be documented"
             );
         }
-
-        let request_schema = &doc["components"]["schemas"]["ConfigApplyRequest"]["properties"];
-        assert_eq!(
-            request_schema["break_glass_approval"]["$ref"],
-            json!("#/components/schemas/BreakGlassApproval")
-        );
-        assert_eq!(
-            request_schema["break_glass_approval_reference"]["type"],
-            "string"
-        );
-        assert_eq!(request_schema["local_approval_reference"]["type"], "string");
-        assert_eq!(
-            request_schema["tuf"]["$ref"],
-            json!("#/components/schemas/TufConfigTargetRequest")
-        );
-        assert_eq!(
-            doc["components"]["schemas"]["TufConfigTargetRequest"]["oneOf"],
-            json!([
-                { "$ref": "#/components/schemas/LocalTufConfigTargetRequest" },
-                { "$ref": "#/components/schemas/RemoteTufConfigTargetRequest" }
-            ])
-        );
-        let remote_tuf =
-            &doc["components"]["schemas"]["RemoteTufConfigTargetRequest"]["properties"];
-        assert_eq!(remote_tuf["metadata_base_url"]["format"], "uri");
-        assert_eq!(remote_tuf["targets_base_url"]["format"], "uri");
-        assert_eq!(
-            remote_tuf["allow_dev_insecure_fetch_urls"]["type"],
-            "boolean"
-        );
-        assert_eq!(
-            doc["components"]["schemas"]["BreakGlassApproval"]["properties"]
-                ["emergency_change_class"]["description"],
-            json!("Must appear in the signed target change_classes and be authorized by local trust roots.")
-        );
-        assert_eq!(
-            doc["components"]["schemas"]["ConfigApplyResponse"]["properties"]["detail"]["type"],
-            json!("string")
-        );
-        assert_eq!(
-            doc["paths"]["/admin/v1/config/apply"]["post"]["responses"]["409"]["content"]
-                ["application/json"]["schema"]["$ref"],
-            json!("#/components/schemas/ConfigApplyResponse")
-        );
+        for schema in [
+            "ConfigApplyRequest",
+            "ConfigApplyResponse",
+            "TufConfigTargetRequest",
+            "LocalTufConfigTargetRequest",
+            "RemoteTufConfigTargetRequest",
+            "BreakGlassApproval",
+            "BreakGlassRateLimit",
+        ] {
+            assert!(
+                doc["components"]["schemas"].get(schema).is_none(),
+                "retired schema is still documented: {schema}"
+            );
+        }
     }
 
     #[test]
@@ -4178,10 +3760,6 @@ mod tests {
             ("/ready", "get", "200"),
             ("/admin/v1/capabilities", "get", "200"),
             ("/admin/v1/posture", "get", "200"),
-            ("/admin/v1/config/verify", "post", "200"),
-            ("/admin/v1/config/dry-run", "post", "200"),
-            ("/admin/v1/config/apply", "post", "200"),
-            ("/admin/v1/config/apply", "post", "409"),
             ("/openapi.json", "get", "200"),
             ("/.well-known/evidence-service", "get", "200"),
             ("/.well-known/evidence/jwks.json", "get", "200"),
@@ -4287,16 +3865,6 @@ mod tests {
         for (path, method, status) in [
             ("/admin/v1/reload", "post", "401"),
             ("/admin/v1/reload", "post", "403"),
-            ("/admin/v1/config/verify", "post", "400"),
-            ("/admin/v1/config/verify", "post", "401"),
-            ("/admin/v1/config/verify", "post", "403"),
-            ("/admin/v1/config/dry-run", "post", "400"),
-            ("/admin/v1/config/dry-run", "post", "401"),
-            ("/admin/v1/config/dry-run", "post", "403"),
-            ("/admin/v1/config/apply", "post", "400"),
-            ("/admin/v1/config/apply", "post", "401"),
-            ("/admin/v1/config/apply", "post", "403"),
-            ("/admin/v1/config/apply", "post", "503"),
             ("/admin/v1/posture", "get", "400"),
             ("/admin/v1/posture", "get", "401"),
             ("/admin/v1/posture", "get", "403"),
@@ -4607,9 +4175,6 @@ mod tests {
         for (path, method) in [
             ("/admin/v1/reload", "post"),
             ("/admin/v1/capabilities", "get"),
-            ("/admin/v1/config/verify", "post"),
-            ("/admin/v1/config/dry-run", "post"),
-            ("/admin/v1/config/apply", "post"),
             ("/admin/v1/credentials/{credential_id}/status", "post"),
         ] {
             assert_eq!(

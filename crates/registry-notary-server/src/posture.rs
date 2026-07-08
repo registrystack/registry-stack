@@ -10,7 +10,8 @@ use registry_notary_core::{
     REPLAY_STORAGE_IN_MEMORY, REPLAY_STORAGE_REDIS,
 };
 use registry_platform_ops::{
-    filter_posture_for_tier, posture_safe_runtime_config_hash, PostureFilterError, PostureTier,
+    filter_posture_for_tier, posture_safe_runtime_config_hash, ConfigOverrideMode,
+    ConfigOverridePin, PostureFilterError, PostureTier,
 };
 use serde_json::{json, Map, Value};
 use time::OffsetDateTime;
@@ -331,6 +332,10 @@ fn configuration_object(config_apply: &ConfigApplyPosture, context: &PostureCont
             .map_or(Value::Null, |value| json!(value)),
     );
     configuration.insert(
+        "last_bundle_signer_kids".to_string(),
+        json!(config_apply.last_bundle_signer_kids),
+    );
+    configuration.insert(
         "last_apply_result".to_string(),
         config_apply
             .last_apply_result
@@ -353,7 +358,23 @@ fn configuration_object(config_apply: &ConfigApplyPosture, context: &PostureCont
             emergency_object(config_apply, emergency),
         );
     }
+    if let Some(pin) = &config_apply.override_pin {
+        configuration.insert("override".to_string(), override_object(pin));
+    }
     Value::Object(configuration)
+}
+
+fn override_object(pin: &ConfigOverridePin) -> Value {
+    json!({
+        "active": pin.active,
+        "mode": match pin.mode {
+            ConfigOverrideMode::AcceptRollback => "accept_rollback",
+            ConfigOverrideMode::AcceptUnsigned => "accept_unsigned",
+        },
+        "used_at": &pin.used_at,
+        "reason": &pin.reason,
+        "expires_at": pin.expires_at.as_deref(),
+    })
 }
 
 fn emergency_object(

@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
@@ -29,21 +29,27 @@ use registry_notary_core::deployment::{
     EvaluatedFinding, FINDING_SOURCE_BINDING_NO_MATCHING_POLICY,
 };
 use registry_notary_core::{
-    deprecated_config_fields, EvidenceAuthMode, Oauth2ClientCredentialsSourceAuthConfig,
-    RegistryNotaryAdminListenerMode, SigningKeyProviderConfig, SourceAuthConfig,
-    SourceConnectorKind, StandaloneRegistryNotaryConfig,
-};
-use registry_notary_server::config_governed::{
-    parse_candidate_config, resolve_tuf_config_candidate, ConfigGovernanceContext,
-    LocalTufConfigTargetRequest, RemoteTufConfigTargetRequest, TufConfigTargetRequest,
+    deprecated_config_fields, ConfigAuditEvent, ConfigTrustConfig, EvidenceAuthMode,
+    Oauth2ClientCredentialsSourceAuthConfig, RegistryNotaryAdminListenerMode,
+    SigningKeyProviderConfig, SourceAuthConfig, SourceConnectorKind,
+    StandaloneRegistryNotaryConfig,
 };
 use registry_notary_server::{
-    compile_notary_runtime, notary_router_from_runtime, notary_routers_from_runtime,
-    openapi_document, EvidenceIssuerRegistry,
+    compile_notary_runtime_with_provenance, notary_router_from_runtime,
+    notary_routers_from_runtime, openapi_document, EvidenceIssuerRegistry,
 };
-use registry_platform_config::{expand_config_env_vars, reject_deprecated_config_fields};
+use registry_platform_config::{
+    expand_config_env_vars, load_break_glass_override, load_trust_anchor,
+    reject_deprecated_config_fields, sha256_uri, verify_config_bundle, ConfigBreakGlassMode,
+    ConfigBreakGlassOverride, ConfigBundleError, VerifiedConfigBundle,
+};
 use registry_platform_crypto::{LocalJwkSigner, PrivateJwk, PublicJwk};
 use registry_platform_httputil::{url as httputil_url, FetchUrlPolicy};
+use registry_platform_ops::{
+    override_pin_active_and_unexpired, posture_safe_runtime_config_hash, AntiRollbackKey,
+    AntiRollbackRecord, ConfigOverrideMode, ConfigOverridePin, ConfigProvenance, ConfigSource,
+    FileAntiRollbackStore,
+};
 use serde_json::{json, Value};
 use serve::{serve_listener, ServeLimits};
 use sha2::{Digest, Sha256};
@@ -76,6 +82,9 @@ struct Args {
     /// Override server.bind after config load.
     #[arg(long, env = "REGISTRY_NOTARY_BIND", global = true)]
     bind: Option<SocketAddr>,
+    /// Initialize signed config anti-rollback state on first boot.
+    #[arg(long, global = true)]
+    initialize_state: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -176,84 +185,21 @@ enum Command {
 
 #[derive(Debug, Subcommand)]
 enum ConfigCommand {
-    /// Verify a local or remote TUF-profile signed configuration target.
-    #[command(
-        long_about = "Verify a local or remote TUF-profile signed configuration target. Signed target metadata may provide previous_config_hash as either sha256:<64 lowercase hex> or bare <64 lowercase hex>; reports and diagnostics use the canonical sha256:-prefixed form."
-    )]
+    /// Verify a Registry Config Bundle directory against local trust and state.
     VerifyBundle(ConfigVerifyBundleArgs),
-    /// Apply a local or remote TUF-profile signed configuration target through the admin API.
-    #[command(
-        long_about = "Apply a local or remote TUF-profile signed configuration target through the admin API. Signed target metadata may provide previous_config_hash as either sha256:<64 lowercase hex> or bare <64 lowercase hex>; reports, diagnostics, and admin API responses use the canonical sha256:-prefixed form."
-    )]
-    ApplyBundle(ConfigApplyBundleArgs),
 }
 
 #[derive(Debug, Clone, ClapArgs)]
 struct ConfigVerifyBundleArgs {
-    /// Local TUF root metadata path.
+    /// Bundle directory containing manifest.json, manifest.sig.json, and config files.
     #[arg(long)]
-    root_path: PathBuf,
-    /// Local TUF metadata directory.
+    bundle_dir: PathBuf,
+    /// Trust anchor JSON path.
     #[arg(long)]
-    metadata_dir: Option<PathBuf>,
-    /// Local TUF targets directory.
+    anchor_path: PathBuf,
+    /// Anti-rollback state JSON path.
     #[arg(long)]
-    targets_dir: Option<PathBuf>,
-    /// Remote TUF metadata base URL.
-    #[arg(long)]
-    metadata_base_url: Option<String>,
-    /// Remote TUF targets base URL.
-    #[arg(long)]
-    targets_base_url: Option<String>,
-    /// Persistent TUF datastore directory.
-    #[arg(long)]
-    datastore_dir: PathBuf,
-    /// Target filename to verify.
-    #[arg(long)]
-    target_name: String,
-    /// Allow HTTP loopback remote TUF repositories for tests and local development.
-    #[arg(long)]
-    allow_dev_insecure_fetch_urls: bool,
-}
-
-#[derive(Debug, Clone, ClapArgs)]
-struct ConfigApplyBundleArgs {
-    /// Admin API base URL.
-    #[arg(long)]
-    admin_url: String,
-    /// Environment variable containing the admin bearer token.
-    #[arg(long)]
-    admin_token_env: String,
-    /// Local TUF root metadata path.
-    #[arg(long)]
-    root_path: PathBuf,
-    /// Local TUF metadata directory.
-    #[arg(long)]
-    metadata_dir: Option<PathBuf>,
-    /// Local TUF targets directory.
-    #[arg(long)]
-    targets_dir: Option<PathBuf>,
-    /// Remote TUF metadata base URL.
-    #[arg(long)]
-    metadata_base_url: Option<String>,
-    /// Remote TUF targets base URL.
-    #[arg(long)]
-    targets_base_url: Option<String>,
-    /// Persistent TUF datastore directory.
-    #[arg(long)]
-    datastore_dir: PathBuf,
-    /// Target filename to apply.
-    #[arg(long)]
-    target_name: String,
-    /// Allow HTTP loopback remote TUF repositories for tests and local development.
-    #[arg(long)]
-    allow_dev_insecure_fetch_urls: bool,
-    /// Allow plaintext HTTP for the admin apply URL in local development.
-    #[arg(long)]
-    allow_insecure_admin_url: bool,
-    /// Apply-only reference for a matching local root-transition approval record.
-    #[arg(long)]
-    local_approval_reference: Option<String>,
+    state_path: PathBuf,
 }
 
 #[derive(Debug, Subcommand)]
@@ -441,7 +387,7 @@ async fn run(args: Args) -> Result<ExitCode, Box<dyn std::error::Error>> {
     match args.command {
         None => {
             let config_path = required_config_path(args.config.as_deref())?;
-            run_server(config_path, args.bind).await?;
+            run_server(config_path, args.bind, args.initialize_state).await?;
             Ok(ExitCode::SUCCESS)
         }
         Some(Command::Openapi) => {
@@ -487,14 +433,7 @@ async fn run(args: Args) -> Result<ExitCode, Box<dyn std::error::Error>> {
         Some(Command::Config {
             command: ConfigCommand::VerifyBundle(verify_args),
         }) => {
-            let config_path = required_config_path(args.config.as_deref())?;
-            config_verify_bundle(config_path, verify_args).await?;
-            Ok(ExitCode::SUCCESS)
-        }
-        Some(Command::Config {
-            command: ConfigCommand::ApplyBundle(apply_args),
-        }) => {
-            config_apply_bundle(apply_args).await?;
+            config_verify_bundle(verify_args).await?;
             Ok(ExitCode::SUCCESS)
         }
         Some(Command::Init { template }) => {
@@ -564,16 +503,26 @@ async fn run(args: Args) -> Result<ExitCode, Box<dyn std::error::Error>> {
 async fn run_server(
     config_path: &Path,
     bind_override: Option<SocketAddr>,
+    initialize_state: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     init_tracing()?;
 
-    let mut config = load_expanded_config(config_path)?;
+    let loaded = load_server_config(config_path, initialize_state)?;
+    let mut config = loaded.config;
     apply_bind_override(&mut config, bind_override);
     let bind = config.server.bind;
     let admin_mode = config.server.admin_listener.mode;
     let admin_bind = config.server.admin_listener.bind;
     let serve_limits = ServeLimits::from_config(&config.server);
-    let runtime = compile_notary_runtime(config)?;
+    let runtime = compile_notary_runtime_with_provenance(
+        config,
+        loaded.config_source,
+        loaded.config_provenance.clone(),
+    )?;
+    if let Some(acceptance) = &loaded.pending_bundle_acceptance {
+        emit_boot_config_audits(&runtime, acceptance).await?;
+        persist_bundle_acceptance(acceptance)?;
+    }
     match admin_mode {
         RegistryNotaryAdminListenerMode::Dedicated => {
             let routers = notary_routers_from_runtime(runtime);
@@ -644,6 +593,221 @@ async fn run_server(
     Ok(())
 }
 
+#[derive(Debug)]
+struct LoadedServerConfig {
+    config: StandaloneRegistryNotaryConfig,
+    config_source: ConfigSource,
+    config_provenance: Option<ConfigProvenance>,
+    pending_bundle_acceptance: Option<PendingBundleAcceptance>,
+}
+
+#[derive(Debug)]
+struct ParsedConfigDocument {
+    config: StandaloneRegistryNotaryConfig,
+    value: Value,
+    admin_listener_present: bool,
+}
+
+#[derive(Debug, Clone)]
+struct PendingBundleAcceptance {
+    state_path: PathBuf,
+    key: AntiRollbackKey,
+    source: ConfigSource,
+    bundle_id: Option<String>,
+    sequence: Option<u64>,
+    config_hash: String,
+    previous_config_hash: Option<String>,
+    previous_hash_matched: Option<bool>,
+    signer_kids: Vec<String>,
+    break_glass: bool,
+    state_action: BundleStateAction,
+    override_pin: Option<ConfigOverridePin>,
+    override_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BundleStateAction {
+    Initialize,
+    Accept,
+    PersistOverridePin,
+    AlreadyPinned,
+}
+
+impl PendingBundleAcceptance {
+    fn initial_record(&self) -> AntiRollbackRecord {
+        AntiRollbackRecord {
+            key: self.key.clone(),
+            last_sequence: self
+                .sequence
+                .expect("initial state requires bundle sequence"),
+            last_config_hash: self.config_hash.clone(),
+            last_bundle_id: self.bundle_id.clone(),
+            root_version: None,
+            override_pin: None,
+            break_glass: Default::default(),
+            local_approvals: Default::default(),
+        }
+    }
+}
+
+fn bundle_acceptance_audit(acceptance: &PendingBundleAcceptance) -> ConfigAuditEvent {
+    ConfigAuditEvent {
+        action: "boot".to_string(),
+        source: acceptance.source.as_posture_str().to_string(),
+        bundle_id: acceptance.bundle_id.clone(),
+        sequence: acceptance.sequence,
+        signer_kids: acceptance.signer_kids.clone(),
+        previous_config_hash: acceptance.previous_config_hash.clone(),
+        previous_hash_matched: acceptance.previous_hash_matched,
+        config_hash: Some(acceptance.config_hash.clone()),
+        product_validation_result: "accepted".to_string(),
+        apply_result: "applied".to_string(),
+        posture_result: "accepted".to_string(),
+        applied: true,
+        restart_required: false,
+        change_classes: Vec::new(),
+        break_glass: acceptance.break_glass,
+        break_glass_approval_reference: None,
+        break_glass_approved_by: None,
+        break_glass_reason_hash: None,
+        break_glass_emergency_change_class: None,
+        break_glass_expires_at_unix_seconds: None,
+        break_glass_rate_limit_identity: None,
+        local_approval_reference: None,
+        local_approval_approved_by: None,
+        local_approval_reason_hash: None,
+        local_approval_change_class: None,
+        local_approval_expires_at_unix_seconds: None,
+        local_approval_rate_limit_identity: None,
+    }
+}
+
+async fn emit_boot_config_audits(
+    runtime: &registry_notary_server::NotaryRuntimeSnapshot,
+    acceptance: &PendingBundleAcceptance,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if matches!(
+        acceptance.state_action,
+        BundleStateAction::PersistOverridePin
+    ) {
+        runtime
+            .emit_config_boot_audit(
+                "config.break_glass_used",
+                break_glass_used_audit(acceptance)?,
+            )
+            .await?;
+        if acceptance.source != ConfigSource::SignedBundleFile {
+            return Ok(());
+        }
+    }
+    if acceptance.source != ConfigSource::SignedBundleFile {
+        return Ok(());
+    }
+    runtime
+        .emit_config_boot_audit(
+            "config.bundle_accepted",
+            bundle_acceptance_audit(acceptance),
+        )
+        .await?;
+    Ok(())
+}
+
+fn break_glass_used_audit(
+    acceptance: &PendingBundleAcceptance,
+) -> Result<ConfigAuditEvent, Box<dyn std::error::Error>> {
+    let pin = acceptance
+        .override_pin
+        .as_ref()
+        .ok_or("break-glass acceptance is missing override pin")?;
+    Ok(ConfigAuditEvent {
+        action: "boot".to_string(),
+        source: acceptance.source.as_posture_str().to_string(),
+        bundle_id: acceptance.bundle_id.clone(),
+        sequence: acceptance.sequence,
+        signer_kids: acceptance.signer_kids.clone(),
+        previous_config_hash: acceptance.previous_config_hash.clone(),
+        previous_hash_matched: acceptance.previous_hash_matched,
+        config_hash: Some(acceptance.config_hash.clone()),
+        product_validation_result: "accepted".to_string(),
+        apply_result: "applied".to_string(),
+        posture_result: "accepted".to_string(),
+        applied: true,
+        restart_required: false,
+        change_classes: Vec::new(),
+        break_glass: true,
+        break_glass_approval_reference: None,
+        break_glass_approved_by: Some(pin.operator.clone()),
+        break_glass_reason_hash: Some(sha256_hash(&pin.reason)),
+        break_glass_emergency_change_class: Some(match pin.mode {
+            ConfigOverrideMode::AcceptRollback => "accept_rollback".to_string(),
+            ConfigOverrideMode::AcceptUnsigned => "accept_unsigned".to_string(),
+        }),
+        break_glass_expires_at_unix_seconds: pin.expires_at.as_deref().and_then(rfc3339_unix),
+        break_glass_rate_limit_identity: None,
+        local_approval_reference: None,
+        local_approval_approved_by: None,
+        local_approval_reason_hash: None,
+        local_approval_change_class: None,
+        local_approval_expires_at_unix_seconds: None,
+        local_approval_rate_limit_identity: None,
+    })
+}
+
+fn rfc3339_unix(value: &str) -> Option<u64> {
+    OffsetDateTime::parse(value, &Rfc3339)
+        .ok()
+        .and_then(|time| u64::try_from(time.unix_timestamp()).ok())
+}
+
+fn persist_bundle_acceptance(
+    acceptance: &PendingBundleAcceptance,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let store = FileAntiRollbackStore::new(&acceptance.state_path);
+    match acceptance.state_action {
+        BundleStateAction::Initialize => store.initialize(acceptance.initial_record())?,
+        BundleStateAction::Accept => {
+            store.accept_bundle(
+                &acceptance.key,
+                acceptance
+                    .bundle_id
+                    .clone()
+                    .ok_or("signed bundle acceptance is missing bundle_id")?,
+                acceptance
+                    .sequence
+                    .ok_or("signed bundle acceptance is missing sequence")?,
+                acceptance.config_hash.clone(),
+            )?;
+        }
+        BundleStateAction::PersistOverridePin => {
+            let pin = acceptance
+                .override_pin
+                .clone()
+                .ok_or("break-glass acceptance is missing override pin")?;
+            store.persist_override_pin(&acceptance.key, pin)?;
+            if let Some(path) = &acceptance.override_path {
+                consume_break_glass_override(path)?;
+            }
+        }
+        BundleStateAction::AlreadyPinned => {
+            if let Some(path) = &acceptance.override_path {
+                consume_break_glass_override(path)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn consume_break_glass_override(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or("break-glass override path has no file name")?;
+    let consumed_name = format!("{file_name}.consumed-{}", Ulid::new());
+    let consumed_path = path.with_file_name(consumed_name);
+    fs::rename(path, consumed_path)?;
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LogFormat {
     Text,
@@ -710,267 +874,136 @@ async fn shutdown_when_signaled(mut shutdown_rx: tokio::sync::watch::Receiver<bo
 }
 
 async fn config_verify_bundle(
-    config_path: &Path,
     args: ConfigVerifyBundleArgs,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let request = tuf_config_target_request_from_cli(&args)?;
-    let current_config = load_expanded_config(config_path)?;
-    let resolved = resolve_tuf_config_candidate(
-        &request,
-        &ConfigGovernanceContext::from_config(&current_config),
-    )
-    .await?;
-    let candidate_config = parse_candidate_config(&resolved.config_yaml)
-        .map_err(|detail| io::Error::new(io::ErrorKind::InvalidData, detail))?;
-    let _compiled = compile_notary_runtime(candidate_config)?;
+    let verified = match verify_config_bundle(&args.bundle_dir, &args.anchor_path) {
+        Ok(verified) => verified,
+        Err(error) => {
+            let result = bundle_verify_rejection_result(&error);
+            print_config_verify_bundle_report(config_verify_bundle_report(
+                result,
+                "unknown",
+                None,
+                None,
+                None,
+                None,
+                Some((result, error.to_string())),
+            ))?;
+            return Err(Box::new(error));
+        }
+    };
+    let key = AntiRollbackKey {
+        product: verified.manifest.product.clone(),
+        instance_id: verified.manifest.instance_id.clone().unwrap_or_default(),
+        environment: verified.manifest.environment.clone(),
+        stream_id: verified.manifest.stream_id.clone(),
+    };
+    if let Err(error) = verify_bundle_state_read_only(
+        &args.state_path,
+        &key,
+        verified.manifest.sequence,
+        &verified.manifest.config_hash,
+    ) {
+        print_config_verify_bundle_report(config_verify_bundle_report(
+            "rejected_rollback",
+            &verified.manifest.stream_id,
+            Some(verified.manifest.bundle_id.clone()),
+            Some(verified.manifest.sequence),
+            verified.manifest.previous_config_hash.clone(),
+            Some(verified.manifest.config_hash.clone()),
+            Some(("rejected_rollback", error.to_string())),
+        ))?;
+        return Err(error);
+    }
+    let config_text = std::str::from_utf8(&verified.config_bytes)?;
+    let parsed = match parse_config_document(config_text).and_then(|parsed| {
+        validate_config_document(&parsed)?;
+        Ok(parsed)
+    }) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            print_config_verify_bundle_report(config_verify_bundle_report(
+                "rejected_validation",
+                &verified.manifest.stream_id,
+                Some(verified.manifest.bundle_id.clone()),
+                Some(verified.manifest.sequence),
+                verified.manifest.previous_config_hash.clone(),
+                Some(verified.manifest.config_hash.clone()),
+                Some(("rejected_validation", error.to_string())),
+            ))?;
+            return Err(error);
+        }
+    };
+    let _ = parsed;
+    print_config_verify_bundle_report(config_verify_bundle_report(
+        "verified",
+        &verified.manifest.stream_id,
+        Some(verified.manifest.bundle_id),
+        Some(verified.manifest.sequence),
+        verified.manifest.previous_config_hash,
+        Some(verified.manifest.config_hash),
+        None,
+    ))?;
+    Ok(())
+}
 
-    let report = json!({
-        "result": "verified",
-        "source": resolved.source_label(),
-        "target_name": args.target_name,
-        "bundle_id": resolved.bundle_id,
-        "stream_id": resolved.stream_id,
-        "sequence": resolved.sequence,
-        "previous_config_hash": resolved.previous_config_hash,
-        "config_hash": resolved.internal_config_hash(),
-        "root_version": resolved.root_version,
-        "tuf_root_sha256": resolved.tuf_root_sha256,
-        "change_classes": resolved.change_classes.into_iter().collect::<Vec<_>>(),
-        "signer_kids": resolved.signer_kids.into_iter().collect::<Vec<_>>(),
-    });
+fn verify_bundle_state_read_only(
+    state_path: &Path,
+    key: &AntiRollbackKey,
+    sequence: u64,
+    config_hash: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let record = FileAntiRollbackStore::new(state_path).load(key)?;
+    if sequence > record.last_sequence
+        || (sequence == record.last_sequence && config_hash == record.last_config_hash)
+        || record.override_pin.as_ref().is_some_and(|pin| {
+            override_pin_active_and_unexpired(pin) && pin.config_hash == config_hash
+        })
+    {
+        Ok(())
+    } else {
+        Err("signed config bundle sequence is not monotonic".into())
+    }
+}
+
+fn print_config_verify_bundle_report(report: Value) -> Result<(), Box<dyn std::error::Error>> {
     println!("{}", serde_json::to_string_pretty(&report)?);
     Ok(())
 }
 
-async fn config_apply_bundle(
-    args: ConfigApplyBundleArgs,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let token = admin_bearer_token_from_env(&args.admin_token_env)?;
-    let url = admin_config_apply_url(&args.admin_url, args.allow_insecure_admin_url)?;
-    let body = config_apply_bundle_request_body(&args)?;
-    let response = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .no_proxy()
-        .build()?
-        .post(url)
-        .bearer_auth(token)
-        .json(&body)
-        .send()
-        .await?;
-    let status = response.status();
-    let response_bytes = response.bytes().await?;
-    let response_json: Value = serde_json::from_slice(&response_bytes).map_err(|err| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("admin config apply response was not JSON: {err}"),
-        )
-    })?;
-    println!("{}", serde_json::to_string_pretty(&response_json)?);
-    if status.is_success() {
-        Ok(())
-    } else {
-        Err(format!("admin config apply returned HTTP {status}").into())
-    }
-}
-
-fn admin_bearer_token_from_env(env_name: &str) -> Result<String, io::Error> {
-    if !valid_env_key(env_name) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("invalid --admin-token-env value: {env_name}"),
-        ));
-    }
-    let token = std::env::var(env_name).map_err(|_| {
-        io::Error::new(
-            io::ErrorKind::NotFound,
-            format!("admin bearer token env var {env_name} is not set"),
-        )
-    })?;
-    let token = token.trim();
-    if token.is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("admin bearer token env var {env_name} is empty"),
-        ));
-    }
-    Ok(token.to_string())
-}
-
-fn admin_config_apply_url(
-    admin_url: &str,
-    allow_insecure_admin_url: bool,
-) -> Result<reqwest::Url, io::Error> {
-    let admin_url = admin_url.trim();
-    if admin_url.is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "--admin-url must not be empty",
-        ));
-    }
-    let url = format!("{}/admin/v1/config/apply", admin_url.trim_end_matches('/'));
-    let url = reqwest::Url::parse(&url).map_err(|err| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("--admin-url did not form a valid admin apply URL: {err}"),
-        )
-    })?;
-    if url.scheme() == "http" {
-        if !allow_insecure_admin_url {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "--admin-url must use https unless --allow-insecure-admin-url is set for local development",
-            ));
-        }
-        if !is_loopback_admin_url(&url) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "--allow-insecure-admin-url only permits http admin URLs on localhost or loopback addresses",
-            ));
-        }
-    }
-    Ok(url)
-}
-
-fn is_loopback_admin_url(url: &reqwest::Url) -> bool {
-    url.host_str().is_some_and(|host| {
-        host.eq_ignore_ascii_case("localhost")
-            || host
-                .parse::<IpAddr>()
-                .map(|addr| addr.is_loopback())
-                .unwrap_or(false)
+fn config_verify_bundle_report(
+    result: &'static str,
+    stream_id: &str,
+    bundle_id: Option<String>,
+    bundle_sequence: Option<u64>,
+    previous_config_hash: Option<String>,
+    config_hash: Option<String>,
+    error: Option<(&'static str, String)>,
+) -> Value {
+    let errors = error
+        .map(|(code, message)| vec![json!({ "code": code, "message": message })])
+        .unwrap_or_default();
+    json!({
+        "schema": "registry.platform.config_apply_report.v1",
+        "attempt_id": Ulid::new().to_string(),
+        "component": "registry-notary",
+        "stream_id": stream_id,
+        "source": ConfigSource::SignedBundleFile.as_posture_str(),
+        "bundle_id": bundle_id,
+        "bundle_sequence": bundle_sequence,
+        "previous_config_hash": previous_config_hash,
+        "config_hash": config_hash,
+        "result": result,
+        "restart_required": false,
+        "change_classes": [],
+        "affected_components": [],
+        "warnings": [],
+        "errors": errors,
     })
-}
-
-fn config_apply_bundle_request_body(args: &ConfigApplyBundleArgs) -> Result<Value, io::Error> {
-    let mut body = json!({
-        "tuf": tuf_config_target_json_from_apply_cli(args)?,
-    });
-    if let Some(reference) = &args.local_approval_reference {
-        body["local_approval_reference"] = Value::String(reference.clone());
-    }
-    Ok(body)
-}
-
-fn tuf_config_target_json_from_apply_cli(args: &ConfigApplyBundleArgs) -> Result<Value, io::Error> {
-    let has_local_source = args.metadata_dir.is_some() || args.targets_dir.is_some();
-    let has_remote_source = args.metadata_base_url.is_some()
-        || args.targets_base_url.is_some()
-        || args.allow_dev_insecure_fetch_urls;
-
-    if has_local_source && has_remote_source {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "TUF request must choose exactly one local or remote source shape",
-        ));
-    }
-
-    if has_remote_source {
-        let metadata_base_url = args.metadata_base_url.clone().ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "--metadata-base-url is required for remote TUF apply",
-            )
-        })?;
-        let targets_base_url = args.targets_base_url.clone().ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "--targets-base-url is required for remote TUF apply",
-            )
-        })?;
-        return Ok(json!({
-            "root_path": path_for_json(&args.root_path),
-            "metadata_base_url": metadata_base_url,
-            "targets_base_url": targets_base_url,
-            "datastore_dir": path_for_json(&args.datastore_dir),
-            "target_name": &args.target_name,
-            "allow_dev_insecure_fetch_urls": args.allow_dev_insecure_fetch_urls,
-        }));
-    }
-
-    let metadata_dir = args.metadata_dir.clone().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "--metadata-dir is required for local TUF apply",
-        )
-    })?;
-    let targets_dir = args.targets_dir.clone().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "--targets-dir is required for local TUF apply",
-        )
-    })?;
-    Ok(json!({
-        "root_path": path_for_json(&args.root_path),
-        "metadata_dir": path_for_json(&metadata_dir),
-        "targets_dir": path_for_json(&targets_dir),
-        "datastore_dir": path_for_json(&args.datastore_dir),
-        "target_name": &args.target_name,
-    }))
 }
 
 fn path_for_json(path: &Path) -> String {
     path.to_string_lossy().into_owned()
-}
-
-fn tuf_config_target_request_from_cli(
-    args: &ConfigVerifyBundleArgs,
-) -> Result<TufConfigTargetRequest, io::Error> {
-    let has_local_source = args.metadata_dir.is_some() || args.targets_dir.is_some();
-    let has_remote_source = args.metadata_base_url.is_some()
-        || args.targets_base_url.is_some()
-        || args.allow_dev_insecure_fetch_urls;
-
-    if has_local_source && has_remote_source {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "TUF request must choose exactly one local or remote source shape",
-        ));
-    }
-
-    if has_remote_source {
-        let metadata_base_url = args.metadata_base_url.clone().ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "--metadata-base-url is required for remote TUF verification",
-            )
-        })?;
-        let targets_base_url = args.targets_base_url.clone().ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "--targets-base-url is required for remote TUF verification",
-            )
-        })?;
-        return Ok(TufConfigTargetRequest::Remote(
-            RemoteTufConfigTargetRequest {
-                root_path: args.root_path.clone(),
-                metadata_base_url,
-                targets_base_url,
-                datastore_dir: args.datastore_dir.clone(),
-                target_name: args.target_name.clone(),
-                allow_dev_insecure_fetch_urls: args.allow_dev_insecure_fetch_urls,
-            },
-        ));
-    }
-
-    let metadata_dir = args.metadata_dir.clone().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "--metadata-dir is required for local TUF verification",
-        )
-    })?;
-    let targets_dir = args.targets_dir.clone().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "--targets-dir is required for local TUF verification",
-        )
-    })?;
-    Ok(TufConfigTargetRequest::Local(LocalTufConfigTargetRequest {
-        root_path: args.root_path.clone(),
-        metadata_dir,
-        targets_dir,
-        datastore_dir: args.datastore_dir.clone(),
-        target_name: args.target_name.clone(),
-    }))
 }
 
 fn required_config_path(path: Option<&Path>) -> Result<&Path, Box<dyn std::error::Error>> {
@@ -1017,30 +1050,601 @@ async fn run_healthcheck(url: &str, timeout: Duration) -> Result<(), Box<dyn std
     }
 }
 
-fn load_expanded_config(
-    config_path: &Path,
-) -> Result<StandaloneRegistryNotaryConfig, Box<dyn std::error::Error>> {
-    let raw = fs::read_to_string(config_path)?;
-    parse_expanded_config(&raw)
-}
-
 fn parse_expanded_config(
     raw: &str,
 ) -> Result<StandaloneRegistryNotaryConfig, Box<dyn std::error::Error>> {
+    let parsed = parse_config_document(raw)?;
+    validate_config_document(&parsed)?;
+    Ok(parsed.config)
+}
+
+fn parse_config_document(raw: &str) -> Result<ParsedConfigDocument, Box<dyn std::error::Error>> {
     let expanded = expand_config_env_vars(raw)?;
     let parsed_value = parse_config_value(&expanded)?;
     validate_admin_listener_shape(&parsed_value)?;
     reject_deprecated_config_fields(&parsed_value, &deprecated_config_fields())?;
     let admin_listener_present = server_admin_listener_block_present(&parsed_value);
     let config: StandaloneRegistryNotaryConfig = serde_norway::from_str(&expanded)?;
+    Ok(ParsedConfigDocument {
+        config,
+        value: parsed_value,
+        admin_listener_present,
+    })
+}
+
+fn validate_config_document(
+    parsed: &ParsedConfigDocument,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let config = &parsed.config;
     config.validate()?;
-    if admin_listener_default_warning_needed(&config, admin_listener_present) {
+    if admin_listener_default_warning_needed(config, parsed.admin_listener_present) {
         tracing::warn!(
             restore_key = "server.admin_listener.mode",
             "server.admin_listener is absent; admin listener defaults to disabled; set server.admin_listener.mode to shared_with_public or dedicated to enable the admin surface"
         );
     }
-    Ok(config)
+    Ok(())
+}
+
+fn load_server_config(
+    config_path: &Path,
+    initialize_state: bool,
+) -> Result<LoadedServerConfig, Box<dyn std::error::Error>> {
+    let raw = fs::read_to_string(config_path)?;
+    let bootstrap = parse_config_document(&raw)?;
+    let Some(config_trust) = bootstrap.config.config_trust.as_ref() else {
+        validate_config_document(&bootstrap)?;
+        return Ok(LoadedServerConfig {
+            config: bootstrap.config,
+            config_source: ConfigSource::LocalFile,
+            config_provenance: None,
+            pending_bundle_acceptance: None,
+        });
+    };
+
+    let verified =
+        match verify_config_bundle(&config_trust.bundle_path, &config_trust.trust_anchor_path) {
+            Ok(verified) => verified,
+            Err(error) => {
+                if let Some(loaded) = load_unsigned_break_glass_or_pin_server_config(
+                    config_trust,
+                    config_trust.break_glass_override_path.as_deref(),
+                )? {
+                    return Ok(loaded);
+                }
+                log_bundle_verification_error(&error);
+                return Err(Box::<dyn std::error::Error>::from(error));
+            }
+        };
+    match load_verified_bundle_server_config(config_trust, initialize_state, verified) {
+        Ok(loaded) => Ok(loaded),
+        Err(error) => {
+            if let Some(loaded) = load_unsigned_break_glass_or_pin_server_config(
+                config_trust,
+                config_trust.break_glass_override_path.as_deref(),
+            )? {
+                return Ok(loaded);
+            }
+            Err(error)
+        }
+    }
+}
+
+fn load_verified_bundle_server_config(
+    config_trust: &ConfigTrustConfig,
+    initialize_state: bool,
+    verified: VerifiedConfigBundle,
+) -> Result<LoadedServerConfig, Box<dyn std::error::Error>> {
+    let key = AntiRollbackKey {
+        product: verified.manifest.product.clone(),
+        instance_id: verified.manifest.instance_id.clone().unwrap_or_default(),
+        environment: verified.manifest.environment.clone(),
+        stream_id: verified.manifest.stream_id.clone(),
+    };
+    let (state_action, override_pin, previous_hash_matched, override_path) =
+        resolve_bundle_state_action(
+            &config_trust.antirollback_state_path,
+            &key,
+            verified.manifest.sequence,
+            &verified.manifest.config_hash,
+            verified.manifest.previous_config_hash.as_deref(),
+            config_trust.break_glass_override_path.as_deref(),
+            initialize_state,
+        )?;
+    let config_text = std::str::from_utf8(&verified.config_bytes).map_err(|error| {
+        tracing::error!(
+            code = "config.bundle_rejected",
+            result = "rejected_validation",
+            error = %error,
+            "signed config bundle primary config is not UTF-8"
+        );
+        eprintln!("config.bundle_rejected result=rejected_validation error={error}");
+        Box::<dyn std::error::Error>::from(error)
+    })?;
+    let parsed = parse_config_document(config_text).map_err(|error| {
+        tracing::error!(
+            code = "config.bundle_rejected",
+            result = "rejected_validation",
+            error = %error,
+            "signed config bundle primary config failed to parse"
+        );
+        eprintln!("config.bundle_rejected result=rejected_validation error={error}");
+        error
+    })?;
+    validate_config_document(&parsed).map_err(|error| {
+        tracing::error!(
+            code = "config.bundle_rejected",
+            result = "rejected_validation",
+            error = %error,
+            "signed config bundle primary config failed product validation"
+        );
+        eprintln!("config.bundle_rejected result=rejected_validation error={error}");
+        error
+    })?;
+    let provenance = ConfigProvenance {
+        source: ConfigSource::SignedBundleFile,
+        internal_config_hash: verified.manifest.config_hash.clone(),
+        posture_config_hash: posture_safe_runtime_config_hash(&parsed.value),
+        dynamic_reload_supported: false,
+        last_bundle_id: Some(verified.manifest.bundle_id.clone()),
+        last_bundle_sequence: Some(verified.manifest.sequence),
+        last_bundle_signer_kids: verified.signer_kids.clone(),
+        override_pin: override_pin.clone(),
+        last_apply_result: None,
+        last_apply_at: None,
+        restart_required: false,
+    };
+    Ok(LoadedServerConfig {
+        config: parsed.config,
+        config_source: ConfigSource::SignedBundleFile,
+        config_provenance: Some(provenance),
+        pending_bundle_acceptance: Some(PendingBundleAcceptance {
+            state_path: config_trust.antirollback_state_path.clone(),
+            key,
+            source: ConfigSource::SignedBundleFile,
+            bundle_id: Some(verified.manifest.bundle_id),
+            sequence: Some(verified.manifest.sequence),
+            config_hash: verified.manifest.config_hash,
+            previous_config_hash: verified.manifest.previous_config_hash,
+            previous_hash_matched,
+            signer_kids: verified.signer_kids,
+            break_glass: matches!(state_action, BundleStateAction::PersistOverridePin),
+            state_action,
+            override_pin,
+            override_path,
+        }),
+    })
+}
+
+fn load_unsigned_break_glass_or_pin_server_config(
+    config_trust: &ConfigTrustConfig,
+    override_path: Option<&Path>,
+) -> Result<Option<LoadedServerConfig>, Box<dyn std::error::Error>> {
+    let anchor = match load_trust_anchor(&config_trust.trust_anchor_path) {
+        Ok(anchor) => anchor,
+        Err(error) => {
+            tracing::error!(
+                code = "config.bundle_rejected",
+                result = "rejected_signature",
+                error = %error,
+                "unsigned break-glass config trust anchor failed validation"
+            );
+            eprintln!("config.bundle_rejected result=rejected_signature error={error}");
+            return Err(Box::<dyn std::error::Error>::from(error));
+        }
+    };
+    let key = AntiRollbackKey {
+        product: anchor.product,
+        instance_id: anchor.instance_id,
+        environment: anchor.environment,
+        stream_id: anchor.stream_id,
+    };
+    let store = FileAntiRollbackStore::new(&config_trust.antirollback_state_path);
+    let record = match store.load(&key) {
+        Ok(record) => record,
+        Err(error) => {
+            tracing::error!(
+                code = "config.bundle_rejected",
+                result = "rejected_rollback",
+                error = %error,
+                "unsigned break-glass config requires existing anti-rollback state"
+            );
+            eprintln!("config.bundle_rejected result=rejected_rollback error={error}");
+            return Err(Box::<dyn std::error::Error>::from(error));
+        }
+    };
+    if let Some(pin) = record
+        .override_pin
+        .as_ref()
+        .filter(|pin| {
+            pin.mode == ConfigOverrideMode::AcceptUnsigned && override_pin_active_and_unexpired(pin)
+        })
+        .cloned()
+    {
+        let recovery_override_path = matching_leftover_override_path(override_path, &pin);
+        return load_unsigned_pin_server_config(
+            config_trust,
+            key,
+            record,
+            pin,
+            BundleStateAction::AlreadyPinned,
+            recovery_override_path,
+        )
+        .map(Some);
+    }
+    let Some((override_path, override_file)) =
+        load_optional_break_glass_override(override_path, ConfigBreakGlassMode::AcceptUnsigned)?
+    else {
+        return Ok(None);
+    };
+    let pin = override_pin_from_file(&override_file);
+    load_unsigned_pin_server_config(
+        config_trust,
+        key,
+        record,
+        pin,
+        BundleStateAction::PersistOverridePin,
+        Some(override_path),
+    )
+    .map(Some)
+}
+
+fn load_unsigned_pin_server_config(
+    config_trust: &ConfigTrustConfig,
+    key: AntiRollbackKey,
+    record: AntiRollbackRecord,
+    pin: ConfigOverridePin,
+    state_action: BundleStateAction,
+    override_path: Option<PathBuf>,
+) -> Result<LoadedServerConfig, Box<dyn std::error::Error>> {
+    let config_path = pin
+        .config_path
+        .as_deref()
+        .map(PathBuf::from)
+        .ok_or("unsigned break-glass pin is missing config_path")?;
+    let config_bytes = read_unsigned_config_bytes(&config_path)?;
+    let actual = sha256_uri(&config_bytes);
+    if actual != pin.config_hash {
+        tracing::error!(
+            code = "config.bundle_rejected",
+            result = "rejected_rollback",
+            expected = %pin.config_hash,
+            actual,
+            "unsigned break-glass pinned config hash mismatch"
+        );
+        eprintln!("config.bundle_rejected result=rejected_rollback error=hash_mismatch");
+        return Err("unsigned break-glass config hash mismatch".into());
+    }
+    let config_text = std::str::from_utf8(&config_bytes).map_err(|error| {
+        tracing::error!(
+            code = "config.bundle_rejected",
+            result = "rejected_validation",
+            error = %error,
+            "unsigned break-glass config is not UTF-8"
+        );
+        eprintln!("config.bundle_rejected result=rejected_validation error={error}");
+        Box::<dyn std::error::Error>::from(error)
+    })?;
+    let parsed = parse_config_document(config_text).map_err(|error| {
+        tracing::error!(
+            code = "config.bundle_rejected",
+            result = "rejected_validation",
+            error = %error,
+            "unsigned break-glass config failed to parse"
+        );
+        eprintln!("config.bundle_rejected result=rejected_validation error={error}");
+        error
+    })?;
+    validate_config_document(&parsed).map_err(|error| {
+        tracing::error!(
+            code = "config.bundle_rejected",
+            result = "rejected_validation",
+            error = %error,
+            "unsigned break-glass config failed product validation"
+        );
+        eprintln!("config.bundle_rejected result=rejected_validation error={error}");
+        error
+    })?;
+    let override_pin = Some(pin.clone());
+    Ok(LoadedServerConfig {
+        config: parsed.config,
+        config_source: ConfigSource::LocalFile,
+        config_provenance: Some(ConfigProvenance {
+            source: ConfigSource::LocalFile,
+            internal_config_hash: pin.config_hash.clone(),
+            posture_config_hash: posture_safe_runtime_config_hash(&parsed.value),
+            dynamic_reload_supported: false,
+            last_bundle_id: record.last_bundle_id,
+            last_bundle_sequence: Some(record.last_sequence),
+            last_bundle_signer_kids: Vec::new(),
+            override_pin: override_pin.clone(),
+            last_apply_result: None,
+            last_apply_at: None,
+            restart_required: false,
+        }),
+        pending_bundle_acceptance: Some(PendingBundleAcceptance {
+            state_path: config_trust.antirollback_state_path.clone(),
+            key,
+            source: ConfigSource::LocalFile,
+            bundle_id: None,
+            sequence: None,
+            config_hash: pin.config_hash,
+            previous_config_hash: None,
+            previous_hash_matched: None,
+            signer_kids: Vec::new(),
+            break_glass: matches!(state_action, BundleStateAction::PersistOverridePin),
+            state_action,
+            override_pin,
+            override_path,
+        }),
+    })
+}
+
+fn bundle_verify_rejection_result(error: &ConfigBundleError) -> &'static str {
+    match error {
+        ConfigBundleError::BindingMismatch(_) => "rejected_binding",
+        ConfigBundleError::SignatureRejected
+        | ConfigBundleError::InvalidSignatureEnvelope(_)
+        | ConfigBundleError::InvalidTrustAnchor(_)
+        | ConfigBundleError::InvalidPermissions(_) => "rejected_signature",
+        ConfigBundleError::Io(_)
+        | ConfigBundleError::Json(_)
+        | ConfigBundleError::InvalidManifest(_)
+        | ConfigBundleError::InvalidBreakGlass(_)
+        | ConfigBundleError::FileClosure(_)
+        | ConfigBundleError::HashMismatch { .. } => "rejected_validation",
+    }
+}
+
+fn resolve_bundle_state_action(
+    state_path: &Path,
+    key: &AntiRollbackKey,
+    sequence: u64,
+    config_hash: &str,
+    previous_config_hash: Option<&str>,
+    rollback_override_path: Option<&Path>,
+    initialize_state: bool,
+) -> Result<
+    (
+        BundleStateAction,
+        Option<ConfigOverridePin>,
+        Option<bool>,
+        Option<PathBuf>,
+    ),
+    Box<dyn std::error::Error>,
+> {
+    let store = FileAntiRollbackStore::new(state_path);
+    match store.load(key) {
+        Ok(record) if sequence > record.last_sequence => Ok((
+            BundleStateAction::Accept,
+            None,
+            previous_hash_matched(previous_config_hash, &record),
+            None,
+        )),
+        Ok(record)
+            if sequence == record.last_sequence && config_hash == record.last_config_hash =>
+        {
+            let matched = previous_hash_matched(previous_config_hash, &record);
+            let active_pin = record
+                .override_pin
+                .filter(override_pin_active_and_unexpired);
+            Ok((BundleStateAction::Accept, active_pin, matched, None))
+        }
+        Ok(record)
+            if record.override_pin.as_ref().is_some_and(|pin| {
+                override_pin_active_and_unexpired(pin) && pin.config_hash == config_hash
+            }) =>
+        {
+            let matched = previous_hash_matched(previous_config_hash, &record);
+            Ok((
+                BundleStateAction::AlreadyPinned,
+                record.override_pin,
+                matched,
+                None,
+            ))
+        }
+        Ok(record) => {
+            let Some((override_path, override_file)) = load_optional_break_glass_override(
+                rollback_override_path,
+                ConfigBreakGlassMode::AcceptRollback,
+            )?
+            else {
+                tracing::error!(
+                    code = "config.bundle_rejected",
+                    result = "rejected_rollback",
+                    "signed config bundle sequence is not monotonic"
+                );
+                eprintln!("config.bundle_rejected result=rejected_rollback");
+                return Err("signed config bundle sequence is not monotonic".into());
+            };
+            if override_file.config_hash != config_hash {
+                tracing::error!(
+                    code = "config.break_glass_invalid",
+                    error = "hash_mismatch",
+                    "rollback break-glass override hash does not match bundle config hash"
+                );
+                eprintln!("config.break_glass_invalid error=hash_mismatch");
+                tracing::error!(
+                    code = "config.bundle_rejected",
+                    result = "rejected_rollback",
+                    "signed config bundle sequence is not monotonic"
+                );
+                eprintln!("config.bundle_rejected result=rejected_rollback");
+                return Err("rollback break-glass override hash mismatch".into());
+            }
+            let matched = previous_hash_matched(previous_config_hash, &record);
+            Ok((
+                BundleStateAction::PersistOverridePin,
+                Some(override_pin_from_file(&override_file)),
+                matched,
+                Some(override_path),
+            ))
+        }
+        Err(registry_platform_ops::AntiRollbackStoreError::MissingState) if initialize_state => {
+            Ok((
+                BundleStateAction::Initialize,
+                None,
+                previous_config_hash.map(|_| false),
+                None,
+            ))
+        }
+        Err(error) => {
+            tracing::error!(
+                code = "config.bundle_rejected",
+                result = "rejected_rollback",
+                error = %error,
+                "signed config bundle anti-rollback state rejected startup"
+            );
+            eprintln!("config.bundle_rejected result=rejected_rollback error={error}");
+            Err(Box::new(error))
+        }
+    }
+}
+
+fn load_optional_break_glass_override(
+    path: Option<&Path>,
+    mode: ConfigBreakGlassMode,
+) -> Result<Option<(PathBuf, ConfigBreakGlassOverride)>, Box<dyn std::error::Error>> {
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    if !path.exists() {
+        return Ok(None);
+    }
+    let override_file = load_break_glass_override(path).map_err(|error| {
+        tracing::error!(
+            code = "config.break_glass_invalid",
+            error = %error,
+            "config break-glass override rejected"
+        );
+        eprintln!("config.break_glass_invalid error={error}");
+        Box::<dyn std::error::Error>::from(error)
+    })?;
+    if override_file.mode != mode {
+        return Ok(None);
+    }
+    Ok(Some((path.to_path_buf(), override_file)))
+}
+
+fn matching_leftover_override_path(
+    path: Option<&Path>,
+    pin: &ConfigOverridePin,
+) -> Option<PathBuf> {
+    let path = path?;
+    if !path.exists() {
+        return None;
+    }
+    match load_break_glass_override(path) {
+        Ok(override_file)
+            if override_file.mode == ConfigBreakGlassMode::AcceptUnsigned
+                && override_file.config_hash == pin.config_hash =>
+        {
+            Some(path.to_path_buf())
+        }
+        Ok(_) => None,
+        Err(error) => {
+            tracing::error!(
+                code = "config.break_glass_invalid",
+                error = %error,
+                "config break-glass override rejected during pin recovery"
+            );
+            eprintln!("config.break_glass_invalid error={error}");
+            None
+        }
+    }
+}
+
+fn read_unsigned_config_bytes(path: &Path) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        tracing::error!(
+            code = "config.bundle_rejected",
+            result = "rejected_validation",
+            error = %error,
+            "unsigned break-glass config failed to stat"
+        );
+        eprintln!("config.bundle_rejected result=rejected_validation error={error}");
+        error
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        tracing::error!(
+            code = "config.bundle_rejected",
+            result = "rejected_validation",
+            "unsigned break-glass config path is not a regular file"
+        );
+        eprintln!("config.bundle_rejected result=rejected_validation error=not_regular_file");
+        return Err("unsigned break-glass config path is not a regular file".into());
+    }
+    if metadata.len() > registry_platform_config::MAX_BUNDLE_FILE_BYTES {
+        tracing::error!(
+            code = "config.bundle_rejected",
+            result = "rejected_validation",
+            "unsigned break-glass config exceeds maximum size"
+        );
+        eprintln!("config.bundle_rejected result=rejected_validation error=max_size");
+        return Err("unsigned break-glass config exceeds maximum size".into());
+    }
+    let bytes = fs::read(path).map_err(|error| {
+        tracing::error!(
+            code = "config.bundle_rejected",
+            result = "rejected_validation",
+            error = %error,
+            "unsigned break-glass config failed to read"
+        );
+        eprintln!("config.bundle_rejected result=rejected_validation error={error}");
+        error
+    })?;
+    if u64::try_from(bytes.len())
+        .ok()
+        .is_none_or(|len| len > registry_platform_config::MAX_BUNDLE_FILE_BYTES)
+    {
+        tracing::error!(
+            code = "config.bundle_rejected",
+            result = "rejected_validation",
+            "unsigned break-glass config exceeds maximum size"
+        );
+        eprintln!("config.bundle_rejected result=rejected_validation error=max_size");
+        return Err("unsigned break-glass config exceeds maximum size".into());
+    }
+    Ok(bytes)
+}
+
+fn log_bundle_verification_error(error: &ConfigBundleError) {
+    let result = bundle_verify_rejection_result(error);
+    tracing::error!(
+        code = "config.bundle_rejected",
+        result,
+        error = %error,
+        "signed config bundle verification failed"
+    );
+    eprintln!("config.bundle_rejected result={result} error={error}");
+}
+
+fn previous_hash_matched(
+    previous_config_hash: Option<&str>,
+    record: &AntiRollbackRecord,
+) -> Option<bool> {
+    previous_config_hash.map(|previous| previous == record.last_config_hash)
+}
+
+fn override_pin_from_file(override_file: &ConfigBreakGlassOverride) -> ConfigOverridePin {
+    ConfigOverridePin {
+        active: true,
+        mode: match override_file.mode {
+            ConfigBreakGlassMode::AcceptRollback => ConfigOverrideMode::AcceptRollback,
+            ConfigBreakGlassMode::AcceptUnsigned => ConfigOverrideMode::AcceptUnsigned,
+        },
+        config_hash: override_file.config_hash.clone(),
+        config_path: override_file
+            .config_path
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned()),
+        expires_at: Some(override_file.expires_at.clone()),
+        used_at: OffsetDateTime::now_utc()
+            .format(&Rfc3339)
+            .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string()),
+        operator: override_file.operator.clone(),
+        reason: override_file.reason.clone(),
+    }
 }
 
 #[derive(Debug)]
@@ -3529,77 +4133,17 @@ ESCAPED="client \"quoted\" value" # comment with "quote"
     }
 
     #[test]
-    fn config_verify_bundle_cli_accepts_local_tuf_flags() {
+    fn config_verify_bundle_cli_accepts_bundle_flags() {
         let args = Args::try_parse_from([
             "registry-notary",
-            "--config",
-            "/etc/registry-notary/current.yaml",
             "config",
             "verify-bundle",
-            "--root-path",
-            "/etc/registry-notary/tuf/metadata/1.root.json",
-            "--metadata-dir",
-            "/etc/registry-notary/tuf/metadata",
-            "--targets-dir",
-            "/etc/registry-notary/tuf/targets",
-            "--datastore-dir",
-            "/var/lib/registry-notary/tuf",
-            "--target-name",
-            "registry-notary.yaml",
-        ])
-        .expect("args parse");
-
-        assert_eq!(
-            args.config,
-            Some(PathBuf::from("/etc/registry-notary/current.yaml"))
-        );
-        let Some(Command::Config {
-            command: ConfigCommand::VerifyBundle(command),
-        }) = args.command
-        else {
-            panic!("expected config verify-bundle command");
-        };
-        assert_eq!(
-            command.root_path,
-            PathBuf::from("/etc/registry-notary/tuf/metadata/1.root.json")
-        );
-        assert_eq!(
-            command.metadata_dir,
-            Some(PathBuf::from("/etc/registry-notary/tuf/metadata"))
-        );
-        assert_eq!(
-            command.targets_dir,
-            Some(PathBuf::from("/etc/registry-notary/tuf/targets"))
-        );
-        assert_eq!(
-            command.datastore_dir,
-            PathBuf::from("/var/lib/registry-notary/tuf")
-        );
-        assert_eq!(command.target_name, "registry-notary.yaml");
-        assert_eq!(command.metadata_base_url, None);
-        assert_eq!(command.targets_base_url, None);
-        assert!(!command.allow_dev_insecure_fetch_urls);
-    }
-
-    #[test]
-    fn config_verify_bundle_cli_accepts_remote_tuf_flags() {
-        let args = Args::try_parse_from([
-            "registry-notary",
-            "--config",
-            "/etc/registry-notary/current.yaml",
-            "config",
-            "verify-bundle",
-            "--root-path",
-            "/etc/registry-notary/tuf/metadata/1.root.json",
-            "--metadata-base-url",
-            "https://config.example.gov/metadata",
-            "--targets-base-url",
-            "https://config.example.gov/targets",
-            "--datastore-dir",
-            "/var/lib/registry-notary/tuf",
-            "--target-name",
-            "registry-notary.yaml",
-            "--allow-dev-insecure-fetch-urls",
+            "--bundle-dir",
+            "/etc/registry-notary/bundle",
+            "--anchor-path",
+            "/etc/registry-notary/trust_anchor.json",
+            "--state-path",
+            "/var/lib/registry-notary/config-state/antirollback.json",
         ])
         .expect("args parse");
 
@@ -3610,276 +4154,43 @@ ESCAPED="client \"quoted\" value" # comment with "quote"
             panic!("expected config verify-bundle command");
         };
         assert_eq!(
-            command.root_path,
-            PathBuf::from("/etc/registry-notary/tuf/metadata/1.root.json")
-        );
-        assert_eq!(command.metadata_dir, None);
-        assert_eq!(command.targets_dir, None);
-        assert_eq!(
-            command.metadata_base_url.as_deref(),
-            Some("https://config.example.gov/metadata")
+            command.bundle_dir,
+            PathBuf::from("/etc/registry-notary/bundle")
         );
         assert_eq!(
-            command.targets_base_url.as_deref(),
-            Some("https://config.example.gov/targets")
+            command.anchor_path,
+            PathBuf::from("/etc/registry-notary/trust_anchor.json")
         );
         assert_eq!(
-            command.datastore_dir,
-            PathBuf::from("/var/lib/registry-notary/tuf")
+            command.state_path,
+            PathBuf::from("/var/lib/registry-notary/config-state/antirollback.json")
         );
-        assert_eq!(command.target_name, "registry-notary.yaml");
-        assert!(command.allow_dev_insecure_fetch_urls);
     }
 
     #[test]
-    fn config_verify_bundle_cli_requires_target_name() {
+    fn config_verify_bundle_cli_requires_state_path() {
         let err = Args::try_parse_from([
             "registry-notary",
-            "--config",
-            "/etc/registry-notary/current.yaml",
             "config",
             "verify-bundle",
-            "--root-path",
-            "/etc/registry-notary/tuf/metadata/1.root.json",
-            "--metadata-dir",
-            "/etc/registry-notary/tuf/metadata",
-            "--targets-dir",
-            "/etc/registry-notary/tuf/targets",
-            "--datastore-dir",
-            "/var/lib/registry-notary/tuf",
+            "--bundle-dir",
+            "/etc/registry-notary/bundle",
+            "--anchor-path",
+            "/etc/registry-notary/trust_anchor.json",
         ])
-        .expect_err("missing target-name is rejected");
+        .expect_err("missing state-path is rejected");
 
-        assert!(err.to_string().contains("--target-name"));
+        assert!(err.to_string().contains("--state-path"));
     }
 
     #[test]
-    fn config_apply_bundle_cli_accepts_local_tuf_flags_without_config() {
-        let args = Args::try_parse_from([
-            "registry-notary",
-            "config",
-            "apply-bundle",
-            "--admin-url",
-            "https://notary-admin.example.gov",
-            "--admin-token-env",
-            "REGISTRY_NOTARY_ADMIN_TOKEN",
-            "--root-path",
-            "/etc/registry-notary/tuf/metadata/1.root.json",
-            "--metadata-dir",
-            "/etc/registry-notary/tuf/metadata",
-            "--targets-dir",
-            "/etc/registry-notary/tuf/targets",
-            "--datastore-dir",
-            "/var/lib/registry-notary/tuf",
-            "--target-name",
-            "registry-notary.yaml",
-            "--local-approval-reference",
-            "ROOT-2026-Q2",
-        ])
-        .expect("args parse");
-
-        assert_eq!(args.config, None);
-        let Some(Command::Config {
-            command: ConfigCommand::ApplyBundle(command),
-        }) = args.command
-        else {
-            panic!("expected config apply-bundle command");
-        };
-        assert_eq!(command.admin_url, "https://notary-admin.example.gov");
-        assert_eq!(command.admin_token_env, "REGISTRY_NOTARY_ADMIN_TOKEN");
-        assert_eq!(
-            command.root_path,
-            PathBuf::from("/etc/registry-notary/tuf/metadata/1.root.json")
-        );
-        assert_eq!(
-            command.metadata_dir,
-            Some(PathBuf::from("/etc/registry-notary/tuf/metadata"))
-        );
-        assert_eq!(
-            command.targets_dir,
-            Some(PathBuf::from("/etc/registry-notary/tuf/targets"))
-        );
-        assert_eq!(
-            command.datastore_dir,
-            PathBuf::from("/var/lib/registry-notary/tuf")
-        );
-        assert_eq!(command.target_name, "registry-notary.yaml");
-        assert_eq!(
-            command.local_approval_reference.as_deref(),
-            Some("ROOT-2026-Q2")
-        );
-        assert_eq!(command.metadata_base_url, None);
-        assert_eq!(command.targets_base_url, None);
-        assert!(!command.allow_dev_insecure_fetch_urls);
-    }
-
-    #[test]
-    fn config_apply_bundle_cli_accepts_remote_tuf_flags() {
-        let args = Args::try_parse_from([
-            "registry-notary",
-            "config",
-            "apply-bundle",
-            "--admin-url",
-            "https://notary-admin.example.gov",
-            "--admin-token-env",
-            "REGISTRY_NOTARY_ADMIN_TOKEN",
-            "--root-path",
-            "/etc/registry-notary/tuf/metadata/1.root.json",
-            "--metadata-base-url",
-            "https://config.example.gov/metadata",
-            "--targets-base-url",
-            "https://config.example.gov/targets",
-            "--datastore-dir",
-            "/var/lib/registry-notary/tuf",
-            "--target-name",
-            "registry-notary.yaml",
-            "--allow-dev-insecure-fetch-urls",
-        ])
-        .expect("args parse");
-
-        let Some(Command::Config {
-            command: ConfigCommand::ApplyBundle(command),
-        }) = args.command
-        else {
-            panic!("expected config apply-bundle command");
-        };
-        assert_eq!(command.metadata_dir, None);
-        assert_eq!(command.targets_dir, None);
-        assert_eq!(
-            command.metadata_base_url.as_deref(),
-            Some("https://config.example.gov/metadata")
-        );
-        assert_eq!(
-            command.targets_base_url.as_deref(),
-            Some("https://config.example.gov/targets")
-        );
-        assert!(command.allow_dev_insecure_fetch_urls);
-        assert!(!command.allow_insecure_admin_url);
-    }
-
-    #[test]
-    fn config_apply_bundle_cli_parses_insecure_admin_url_dev_opt_in() {
-        let args = Args::try_parse_from([
-            "registry-notary",
-            "config",
-            "apply-bundle",
-            "--admin-url",
-            "http://127.0.0.1:8080",
-            "--allow-insecure-admin-url",
-            "--admin-token-env",
-            "REGISTRY_NOTARY_ADMIN_TOKEN",
-            "--root-path",
-            "/etc/registry-notary/tuf/metadata/1.root.json",
-            "--metadata-dir",
-            "/etc/registry-notary/tuf/metadata",
-            "--targets-dir",
-            "/etc/registry-notary/tuf/targets",
-            "--datastore-dir",
-            "/var/lib/registry-notary/tuf",
-            "--target-name",
-            "registry-notary.yaml",
-        ])
-        .expect("args parse");
-
-        let Some(Command::Config {
-            command: ConfigCommand::ApplyBundle(command),
-        }) = args.command
-        else {
-            panic!("expected config apply-bundle command");
-        };
-        assert_eq!(command.admin_url, "http://127.0.0.1:8080");
-        assert!(command.allow_insecure_admin_url);
-    }
-
-    #[test]
-    fn admin_apply_url_rejects_remote_plaintext_even_with_dev_opt_in() {
-        let error = admin_config_apply_url("http://notary-admin.example.gov", true)
-            .expect_err("remote plaintext admin URL must be rejected");
+    fn config_apply_bundle_cli_is_removed() {
+        let err = Args::try_parse_from(["registry-notary", "config", "apply-bundle"])
+            .expect_err("apply-bundle is no longer a supported config subcommand");
 
         assert!(
-            error
-                .to_string()
-                .contains("localhost or loopback addresses"),
-            "unexpected error: {error}"
-        );
-    }
-
-    #[test]
-    fn admin_apply_url_accepts_loopback_plaintext_only_with_dev_opt_in() {
-        let error = admin_config_apply_url("http://127.0.0.1:8080", false)
-            .expect_err("loopback plaintext still requires explicit opt-in");
-        assert!(error.to_string().contains("--allow-insecure-admin-url"));
-
-        let url = admin_config_apply_url("http://localhost:8080", true)
-            .expect("localhost plaintext is allowed with explicit opt-in");
-        assert_eq!(url.as_str(), "http://localhost:8080/admin/v1/config/apply");
-    }
-
-    #[test]
-    fn config_apply_bundle_request_body_builds_local_tuf_json() {
-        let args = ConfigApplyBundleArgs {
-            admin_url: "https://notary-admin.example.gov".to_string(),
-            admin_token_env: "REGISTRY_NOTARY_ADMIN_TOKEN".to_string(),
-            root_path: PathBuf::from("/etc/registry-notary/tuf/metadata/1.root.json"),
-            metadata_dir: Some(PathBuf::from("/etc/registry-notary/tuf/metadata")),
-            targets_dir: Some(PathBuf::from("/etc/registry-notary/tuf/targets")),
-            metadata_base_url: None,
-            targets_base_url: None,
-            datastore_dir: PathBuf::from("/var/lib/registry-notary/tuf"),
-            target_name: "registry-notary.yaml".to_string(),
-            allow_dev_insecure_fetch_urls: false,
-            allow_insecure_admin_url: false,
-            local_approval_reference: Some("ROOT-2026-Q2".to_string()),
-        };
-
-        let body = config_apply_bundle_request_body(&args).expect("body builds");
-
-        assert_eq!(
-            body,
-            json!({
-                "tuf": {
-                    "root_path": "/etc/registry-notary/tuf/metadata/1.root.json",
-                    "metadata_dir": "/etc/registry-notary/tuf/metadata",
-                    "targets_dir": "/etc/registry-notary/tuf/targets",
-                    "datastore_dir": "/var/lib/registry-notary/tuf",
-                    "target_name": "registry-notary.yaml"
-                },
-                "local_approval_reference": "ROOT-2026-Q2"
-            })
-        );
-    }
-
-    #[test]
-    fn config_apply_bundle_request_body_builds_remote_tuf_json() {
-        let args = ConfigApplyBundleArgs {
-            admin_url: "https://notary-admin.example.gov".to_string(),
-            admin_token_env: "REGISTRY_NOTARY_ADMIN_TOKEN".to_string(),
-            root_path: PathBuf::from("/etc/registry-notary/tuf/metadata/1.root.json"),
-            metadata_dir: None,
-            targets_dir: None,
-            metadata_base_url: Some("https://config.example.gov/metadata".to_string()),
-            targets_base_url: Some("https://config.example.gov/targets".to_string()),
-            datastore_dir: PathBuf::from("/var/lib/registry-notary/tuf"),
-            target_name: "registry-notary.yaml".to_string(),
-            allow_dev_insecure_fetch_urls: true,
-            allow_insecure_admin_url: false,
-            local_approval_reference: None,
-        };
-
-        let body = config_apply_bundle_request_body(&args).expect("body builds");
-
-        assert_eq!(
-            body,
-            json!({
-                "tuf": {
-                    "root_path": "/etc/registry-notary/tuf/metadata/1.root.json",
-                    "metadata_base_url": "https://config.example.gov/metadata",
-                    "targets_base_url": "https://config.example.gov/targets",
-                    "datastore_dir": "/var/lib/registry-notary/tuf",
-                    "target_name": "registry-notary.yaml",
-                    "allow_dev_insecure_fetch_urls": true
-                }
-            })
+            err.to_string().contains("unrecognized subcommand"),
+            "unexpected error: {err}"
         );
     }
 
@@ -3973,7 +4284,7 @@ ESCAPED="client \"quoted\" value" # comment with "quote"
         )
         .expect("invalid startup config writes");
 
-        let error = run_server(&config_path, Some(held_addr))
+        let error = run_server(&config_path, Some(held_addr), false)
             .await
             .expect_err("invalid runtime config fails before serving");
         let message = error.to_string();
@@ -4047,7 +4358,7 @@ evidence:
         )
         .expect("startup config writes");
 
-        let error = run_server(&config_path, Some(held_addr))
+        let error = run_server(&config_path, Some(held_addr), false)
             .await
             .expect_err("missing signing key env fails before serving");
         let message = error.to_string();

@@ -241,8 +241,8 @@ These are the risks the design does *not* close:
   workflow in this version.
 - Admin reload is non-functional standalone: Notary's admin reload route returns HTTP 501
   (`registry.admin.capability.not_supported`) in the standalone router and performs no
-  reload, and non-swappable changes require a service restart. Some changes do hot-apply
-  without a restart, though: signing-key rotation and auth-policy swaps among them.
+  reload. Runtime configuration changes require deploying a signed local bundle and
+  restarting the service.
 
 ## What is explicitly out of scope
 

@@ -57,8 +57,7 @@ so a buggy script or a hostile *upstream response* cannot escalate:
   startup**; a compile, policy, or smoke failure blocks readiness.
 - **Governed provenance.** The script is embedded inline in the signed runtime
   target, so it is covered by the target's `config_hash`, the same
-  [TUF (The Update Framework)](https://theupdateframework.io/)-verified
-  content anchor used for inline CEL today.
+  Config Bundle v1 content anchor used for inline CEL today.
 
 ## The script contract
 

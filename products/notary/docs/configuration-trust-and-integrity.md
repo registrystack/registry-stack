@@ -9,22 +9,22 @@ integrators connecting a source, and security reviewers evaluating the trust
 model. For the exact configuration fields and commands, follow the links in
 [Where to go next](#where-to-go-next).
 
-The short version: production configuration is delivered as a cryptographically
-signed bundle and verified before it takes effect, the components fail closed
-when verification fails, and secrets are never part of the signed configuration.
+The short version: production configuration can be delivered as a
+cryptographically signed local bundle and verified before startup, the
+components fail closed when verification fails, and secrets are never part of
+the signed configuration.
 The strength of these guarantees rests on how you protect your signing keys.
 
 ## What you can rely on
 
-- **Signed before it runs.** In production the source adapter sidecar starts from a
-  signed configuration bundle and verifies it before it serves any traffic. A
-  bundle that is not signed by a key you authorized, has been tampered with, has
-  expired, or is older than what is already accepted is refused.
-- **Fail closed, not degraded.** If the signature, signer authorization, file
-  target verification, signer authorization, identity binding, anti-rollback,
-  runtime configuration validation and compile, or startup readiness checks fail,
-  the sidecar refuses to serve. It does not start in a partial or best-effort
-  state.
+- Signed before it runs: In production the source adapter sidecar can start
+  from a signed local configuration bundle and verify it before it serves any
+  traffic. A bundle that is not signed by a key you authorized, has been
+  tampered with, or is older than what is already accepted is refused.
+- Fail closed, not degraded: If the signature, signer authorization, file
+  closure, identity binding, anti-rollback, runtime configuration validation and
+  compile, or startup readiness checks fail, the sidecar refuses to serve. It
+  does not start in a partial or best-effort state.
 - **No silent rollback.** A previously valid but superseded bundle cannot be
   replayed to move you back to an older configuration.
 - **Notary can pin the sidecar it trusts.** Registry Notary can record the exact
@@ -40,14 +40,12 @@ The strength of these guarantees rests on how you protect your signing keys.
 
 These guarantees are only as strong as the operational practices behind them.
 
-- **Key custody.** You hold the signing keys and the trust root. Anyone who can
+- Key custody: You hold the signing keys and the trust anchor. Anyone who can
   sign with an authorized key can change what runs. Protect signing keys with the
   same care as your most sensitive production secrets, and prefer hardware-backed
   or HSM custody for production. This is the single most important control.
-- **Trust-root distribution and pinning.** You distribute the trust root to each
-  deployment and configure which roots, signer keys, roles, thresholds, and
-  change classes are accepted. Require multiple signatures (a threshold) for
-  high-risk changes such as workflow or source-binding bundles.
+- Trust-anchor distribution and pinning: You distribute the trust anchor to
+  each deployment and configure which signer keys are accepted.
 - **Credential injection.** You supply credential values at deploy time through
   the environment variables the bundle names. The platform does not distribute
   secret values; your deployment tooling (a secret manager, sealed secrets, or
@@ -64,20 +62,21 @@ These guarantees are only as strong as the operational practices behind them.
 
 ## How configuration integrity works
 
-A configuration bundle is the runtime material (limits, source definitions,
-mapping expressions or scripts, and runtime policy) plus signed metadata that
-binds it to a specific product, instance, environment, and stream, gives it a
-sequence number, and records its whole-target content hash.
+A configuration bundle is a local directory containing `manifest.json`,
+`manifest.sig.json`, and `config/...`. The manifest binds runtime material
+(limits, source definitions, mapping expressions or scripts, and runtime policy)
+to a specific product, instance, environment, and stream, gives it a sequence
+number, records the whole-config content hash, and lists the exact files allowed
+inside the bundle.
 
 Before a bundle takes effect, the component checks, in order and failing closed
 on the first failure:
 
-1. the signatures verify against the trust root you configured;
+1. the manifest signatures verify against the trust anchor you configured;
 2. the bundle is bound to this exact product, instance, environment, and stream;
-3. the signers are authorized for the change classes in the bundle, meeting the
-   required signature threshold;
-4. the sequence is not older than what was last accepted (anti-rollback);
-5. the TUF-verified target matches the recorded whole-target `config_hash`;
+3. the signers are enabled in the trust anchor;
+4. the file closure and hashes match the manifest;
+5. the sequence is not older than what was last accepted (anti-rollback);
 6. the runtime material deserializes and compiles or validates successfully,
    including configured CEL expressions and scripts;
 7. startup readiness, including smoke lookups against configured sources,
@@ -87,18 +86,13 @@ Only after all readiness-critical checks pass is the bundle recorded as accepted
 and the listener started. The accepted configuration is summarized by a stable
 `config_hash` that Notary and operators can pin.
 
-### Built on TUF
+### Built on local signed bundles
 
-Configuration integrity is not homegrown cryptography. It uses
-[The Update Framework (TUF)](https://theupdateframework.io/) through a standard,
-maintained client implementation. TUF provides signed metadata with separate
-roles, threshold signatures, signed key rotation, freshness (expiration)
-enforcement, and protection against rollback and mix-and-match attacks. The
-change-class authorization model (which keys may approve which kinds of change,
-and how many signatures each requires) is a Registry-specific policy layered on
-top of TUF's verified output. In short: TUF establishes that a bundle is
-authentic and current; the Registry layer decides whether the signers were
-allowed to make that particular change.
+Configuration integrity uses Registry Config Bundle v1, not an HTTP admin apply
+surface. Operators build and sign a local bundle directory, place that directory
+on the node, and restart the service. The node CLI can verify a bundle before
+promotion with `config verify-bundle`; there is no `apply-bundle` command, no
+admin config verify, dry-run, or apply route, and no hot apply.
 
 ## How secrets are handled
 
@@ -146,7 +140,7 @@ controls.
   the sidecar as a trusted component behind a private boundary, and rely on
   network controls and the bearer token for that boundary.
 - **Configuration integrity is not runtime-code integrity.** The signature
-  proves the governed runtime target is authentic and current. The whole-target
+  proves the governed runtime bundle is authentic. The whole-config
   `config_hash` covers the inline governed content, including CEL expressions,
   Rhai scripts, and runtime policy. The sidecar does not maintain a separate
   per-file expression hash ledger, and the assurance booleans do not attest to
@@ -157,23 +151,21 @@ controls.
   JavaScript egress firewall for workflow code. Constrain outbound traffic with
   deployment networking, for example a Kubernetes network policy or an internal
   network.
-- **Verification is at apply time, not continuous.** The sidecar verifies its
-  bundle at startup; Notary refreshes the sidecar's assurance on readiness checks
-  and caches it for a short interval. Revoked keys or newly expired metadata are
-  recognized on the next verification (a restart or the next readiness refresh),
-  not instantaneously.
+- Verification is at startup, not continuous: The sidecar verifies its
+  bundle at startup; Notary refreshes the sidecar's assurance on readiness
+  checks and caches it for a short interval. Trust-anchor or bundle changes are
+  recognized on the next verification, which requires a restart.
 - **Release images are not signed.** Pin images by digest and review the root
   release capsule, SBOM, and vulnerability scan artifacts.
 
 ## Development mode
 
-Local development can run from an unsigned manifest using an explicit opt-in
-flag. This mode exists only for local iteration and demos; it disables the
-guarantees above and must never be used in production. Production startup
-requires a configured trust anchor and refuses unsigned configuration. For
-rehearsing the signed flow locally, the release tooling can build and verify a
-signed bundle against a local trust root, which exercises the real verification
-path without production key custody.
+Local development can run from unsigned local config using an explicit opt-in
+flag. Emergency `accept_unsigned` is also local: it pins an absolute config path
+and hash for boot recovery, not an HTTP admin break-glass flow. These modes
+disable the signature guarantees above and must never be used as normal
+production operation. For rehearsing the signed flow locally, release tooling
+can build and verify a signed bundle against a local trust anchor.
 
 ## Where to go next
 
@@ -183,8 +175,7 @@ path without production key custody.
   configuration blocks, including the source connection and expected-sidecar
   pinning.
 - [Source adapter sidecar reference](../../../crates/registry-notary-source-adapter-sidecar/README.md):
-  the governed bundle layout and the commands that render, sign, and verify a
-  bundle.
+  the sidecar runtime details for source-adapter deployments.
 - [Signing key providers](signing-key-provider.md): credential (SD-JWT VC)
   signing keys. Note these are the keys Notary uses to sign issued credentials,
   which are separate from the keys that sign configuration bundles.

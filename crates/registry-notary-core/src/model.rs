@@ -1381,8 +1381,8 @@ pub struct ProvenanceUsed {
 }
 
 /// Minimized public summary of a source runtime that crossed an external
-/// execution boundary. The full assurance document (bundle id, sequence, TUF
-/// versions, signer kids, change classes, TTLs) stays in restricted audit.
+/// execution boundary. The full assurance document (bundle id, sequence,
+/// signer kids, config hash, and TTLs) stays in restricted audit.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SourceRuntimeSummary {
     pub kind: String,
@@ -1700,6 +1700,8 @@ pub struct ConfigAuditEvent {
     pub signer_kids: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous_config_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_hash_matched: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_hash: Option<String>,
     pub product_validation_result: String,

@@ -1,6 +1,6 @@
 # Local development unsigned manifest.
-# Production startup requires config_trust and a governed TUF target; run this
-# file only with --allow-unsigned-dev-config.
+# This local-development unsigned manifest must be run only with
+# --allow-unsigned-dev-config.
 #
 # Built-in DHIS2 health-programme source using the http_json engine. This
 # replaces the OpenFn job at registry-lab config/openfn/jobs/dhis2-health-lookup.js

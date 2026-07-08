@@ -16,6 +16,8 @@ use registry_platform_crypto::canonicalize_json;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use time::format_description::well_known::Rfc3339;
+use time::OffsetDateTime;
 
 pub const POSTURE_SCHEMA_V1: &str = include_str!("../schemas/registry.ops.posture.v1.schema.json");
 
@@ -237,6 +239,8 @@ pub struct ConfigProvenance {
     pub dynamic_reload_supported: bool,
     pub last_bundle_id: Option<String>,
     pub last_bundle_sequence: Option<u64>,
+    pub last_bundle_signer_kids: Vec<String>,
+    pub override_pin: Option<ConfigOverridePin>,
     pub last_apply_result: Option<PostureApplyResult>,
     pub last_apply_at: Option<String>,
     pub restart_required: bool,
@@ -255,6 +259,8 @@ impl ConfigProvenance {
             dynamic_reload_supported,
             last_bundle_id: None,
             last_bundle_sequence: None,
+            last_bundle_signer_kids: Vec::new(),
+            override_pin: None,
             last_apply_result: None,
             last_apply_at: None,
             restart_required: false,
@@ -270,15 +276,10 @@ impl ConfigProvenance {
 #[non_exhaustive]
 pub enum ApplyReportResult {
     Verified,
-    Applied,
     RejectedSignature,
-    RejectedThreshold,
-    RejectedFreshness,
+    RejectedBinding,
+    RejectedValidation,
     RejectedRollback,
-    RejectedRestartRequired,
-    RejectedReadiness,
-    RejectedBreakGlass,
-    RejectedLocalApproval,
     InternalError,
 }
 
@@ -286,15 +287,10 @@ impl ApplyReportResult {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Verified => "verified",
-            Self::Applied => "applied",
             Self::RejectedSignature => "rejected_signature",
-            Self::RejectedThreshold => "rejected_threshold",
-            Self::RejectedFreshness => "rejected_freshness",
+            Self::RejectedBinding => "rejected_binding",
+            Self::RejectedValidation => "rejected_validation",
             Self::RejectedRollback => "rejected_rollback",
-            Self::RejectedRestartRequired => "rejected_restart_required",
-            Self::RejectedReadiness => "rejected_readiness",
-            Self::RejectedBreakGlass => "rejected_break_glass",
-            Self::RejectedLocalApproval => "rejected_local_approval",
             Self::InternalError => "internal_error",
         }
     }
@@ -302,15 +298,10 @@ impl ApplyReportResult {
     pub fn as_posture_result(self) -> PostureApplyResult {
         match self {
             Self::Verified => PostureApplyResult::NotApplied,
-            Self::Applied => PostureApplyResult::Accepted,
             Self::RejectedSignature
-            | Self::RejectedThreshold
-            | Self::RejectedFreshness
-            | Self::RejectedRollback
-            | Self::RejectedRestartRequired
-            | Self::RejectedReadiness
-            | Self::RejectedBreakGlass
-            | Self::RejectedLocalApproval => PostureApplyResult::Rejected,
+            | Self::RejectedBinding
+            | Self::RejectedValidation
+            | Self::RejectedRollback => PostureApplyResult::Rejected,
             Self::InternalError => PostureApplyResult::Failed,
         }
     }
@@ -336,12 +327,21 @@ impl PostureApplyResult {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, Deserialize, Serialize)]
 pub struct AntiRollbackKey {
     pub product: String,
+    #[serde(skip)]
     pub instance_id: String,
     pub environment: String,
     pub stream_id: String,
+}
+
+impl PartialEq for AntiRollbackKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.product == other.product
+            && self.environment == other.environment
+            && self.stream_id == other.stream_id
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -349,10 +349,15 @@ pub struct AntiRollbackRecord {
     pub key: AntiRollbackKey,
     pub last_sequence: u64,
     pub last_config_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_bundle_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root_version: Option<u64>,
-    #[serde(default)]
+    #[serde(default, rename = "override", skip_serializing_if = "Option::is_none")]
+    pub override_pin: Option<ConfigOverridePin>,
+    #[serde(default, skip_serializing_if = "BreakGlassState::is_empty")]
     pub break_glass: BreakGlassState,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "LocalApprovalState::is_empty")]
     pub local_approvals: LocalApprovalState,
 }
 
@@ -381,10 +386,37 @@ pub struct AntiRollbackProposal {
     pub local_approval_rate_limit: Option<BreakGlassRateLimit>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigOverrideMode {
+    AcceptRollback,
+    AcceptUnsigned,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct ConfigOverridePin {
+    pub active: bool,
+    pub mode: ConfigOverrideMode,
+    pub config_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
+    pub used_at: String,
+    pub operator: String,
+    pub reason: String,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
 pub struct BreakGlassState {
     #[serde(default)]
     pub accepted: Vec<BreakGlassAcceptance>,
+}
+
+impl BreakGlassState {
+    fn is_empty(&self) -> bool {
+        self.accepted.is_empty()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -403,6 +435,12 @@ pub struct BreakGlassAcceptance {
 pub struct LocalApprovalState {
     #[serde(default)]
     pub accepted: Vec<LocalApprovalAcceptance>,
+}
+
+impl LocalApprovalState {
+    fn is_empty(&self) -> bool {
+        self.accepted.is_empty()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -509,7 +547,7 @@ impl Display for AntiRollbackStoreError {
             Self::MissingState => write!(f, "anti-rollback state is missing"),
             Self::KeyMismatch => write!(f, "anti-rollback state key does not match runtime"),
             Self::NonMonotonicSequence => write!(f, "bundle sequence is not monotonic"),
-            Self::RootVersionRollback => write!(f, "TUF root version is not monotonic"),
+            Self::RootVersionRollback => write!(f, "root version is not monotonic"),
             Self::PreviousConfigHashMismatch => write!(f, "previous config hash does not match"),
             Self::BreakGlassUnsupported => write!(f, "break-glass approval is not supported"),
             Self::BreakGlassApprovalExpired => write!(f, "break-glass approval is expired"),
@@ -590,6 +628,21 @@ impl FileAntiRollbackStore {
     pub fn initialize(&self, record: AntiRollbackRecord) -> Result<(), AntiRollbackStoreError> {
         let _lock = self.acquire_lock()?;
         record.validate()?;
+        let target_path = self.write_target_path()?;
+        match fs::read(&target_path) {
+            Ok(bytes) => {
+                if serde_json::from_slice::<AntiRollbackRecord>(&bytes)
+                    .ok()
+                    .is_some_and(|existing| existing.validate().is_ok())
+                {
+                    return Err(AntiRollbackStoreError::InvalidState(
+                        "anti-rollback state already exists".to_string(),
+                    ));
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(AntiRollbackStoreError::Io(error.to_string())),
+        }
         self.write_record(&record)
     }
 
@@ -644,7 +697,7 @@ impl FileAntiRollbackStore {
         }
         let mut break_glass = current.break_glass.clone();
         let mut local_approvals = current.local_approvals.clone();
-        let approved_break_glass = if let Some(approval) = &proposal.break_glass {
+        if let Some(approval) = &proposal.break_glass {
             let rate_limit = match (self.break_glass_rate_limit, proposal.break_glass_rate_limit) {
                 (Some(local), Some(proposed)) if local != proposed => {
                     return Err(AntiRollbackStoreError::InvalidBreakGlassRateLimit(
@@ -665,15 +718,11 @@ impl FileAntiRollbackStore {
                 &proposal.config_hash,
                 now_unix_seconds,
             )?;
-            true
-        } else {
-            false
-        };
-        if !approved_break_glass
-            && proposal.previous_config_hash.as_deref() != Some(current.last_config_hash.as_str())
-        {
-            return Err(AntiRollbackStoreError::PreviousConfigHashMismatch);
         }
+        // v1 config bundles record previous_config_hash for audit/fleet tooling
+        // only. Enforcing it would reject legitimate offline sequence skips.
+        let _previous_hash_matched =
+            proposal.previous_config_hash.as_deref() == Some(current.last_config_hash.as_str());
         if let Some(approval) = &proposal.local_approval {
             let rate_limit = proposal
                 .local_approval_rate_limit
@@ -700,9 +749,94 @@ impl FileAntiRollbackStore {
             key: key.clone(),
             last_sequence: proposal.sequence,
             last_config_hash: proposal.config_hash,
+            last_bundle_id: current.last_bundle_id,
             root_version: proposal.root_version.or(current.root_version),
+            override_pin: None,
             break_glass,
             local_approvals,
+        };
+        accepted.validate()?;
+        self.write_record(&accepted)?;
+        Ok(accepted)
+    }
+
+    pub fn accept_bundle(
+        &self,
+        key: &AntiRollbackKey,
+        bundle_id: String,
+        sequence: u64,
+        config_hash: String,
+    ) -> Result<AntiRollbackRecord, AntiRollbackStoreError> {
+        self.accept_bundle_at(
+            key,
+            bundle_id,
+            sequence,
+            config_hash,
+            current_unix_seconds()?,
+        )
+    }
+
+    pub fn accept_bundle_at(
+        &self,
+        key: &AntiRollbackKey,
+        bundle_id: String,
+        sequence: u64,
+        config_hash: String,
+        _now_unix_seconds: u64,
+    ) -> Result<AntiRollbackRecord, AntiRollbackStoreError> {
+        let _lock = self.acquire_lock()?;
+        let current = self.load(key)?;
+        validate_non_empty("last_bundle_id", &bundle_id)?;
+        validate_hash(&config_hash)?;
+        if sequence < current.last_sequence {
+            return Err(AntiRollbackStoreError::NonMonotonicSequence);
+        }
+        if sequence == current.last_sequence && config_hash != current.last_config_hash {
+            return Err(AntiRollbackStoreError::NonMonotonicSequence);
+        }
+        if sequence == current.last_sequence
+            && config_hash == current.last_config_hash
+            && current.last_bundle_id.as_deref() == Some(bundle_id.as_str())
+            && current.override_pin.is_none()
+        {
+            return Ok(current);
+        }
+        let accepted = AntiRollbackRecord {
+            key: key.clone(),
+            last_sequence: sequence,
+            last_config_hash: config_hash,
+            last_bundle_id: Some(bundle_id),
+            root_version: None,
+            override_pin: None,
+            break_glass: BreakGlassState::default(),
+            local_approvals: LocalApprovalState::default(),
+        };
+        accepted.validate()?;
+        self.write_record(&accepted)?;
+        Ok(accepted)
+    }
+
+    pub fn persist_override_pin(
+        &self,
+        key: &AntiRollbackKey,
+        pin: ConfigOverridePin,
+    ) -> Result<AntiRollbackRecord, AntiRollbackStoreError> {
+        self.persist_override_pin_at(key, pin, current_unix_seconds()?)
+    }
+
+    pub fn persist_override_pin_at(
+        &self,
+        key: &AntiRollbackKey,
+        pin: ConfigOverridePin,
+        now_unix_seconds: u64,
+    ) -> Result<AntiRollbackRecord, AntiRollbackStoreError> {
+        let _lock = self.acquire_lock()?;
+        let current = self.load(key)?;
+        validate_override_pin(&pin)?;
+        validate_active_override_pin_window(&pin, now_unix_seconds)?;
+        let accepted = AntiRollbackRecord {
+            override_pin: Some(pin),
+            ..current
         };
         accepted.validate()?;
         self.write_record(&accepted)?;
@@ -777,10 +911,15 @@ impl Drop for AntiRollbackStoreLock {
 impl AntiRollbackRecord {
     fn validate(&self) -> Result<(), AntiRollbackStoreError> {
         validate_non_empty("product", &self.key.product)?;
-        validate_non_empty("instance_id", &self.key.instance_id)?;
         validate_non_empty("environment", &self.key.environment)?;
         validate_non_empty("stream_id", &self.key.stream_id)?;
         validate_hash(&self.last_config_hash)?;
+        if let Some(bundle_id) = &self.last_bundle_id {
+            validate_non_empty("last_bundle_id", bundle_id)?;
+        }
+        if let Some(pin) = &self.override_pin {
+            validate_override_pin(pin)?;
+        }
         for accepted in &self.break_glass.accepted {
             validate_non_empty(
                 "break_glass.approval_reference",
@@ -808,6 +947,13 @@ impl AntiRollbackRecord {
     }
 }
 
+pub fn override_pin_active_and_unexpired(pin: &ConfigOverridePin) -> bool {
+    pin.active
+        && current_unix_seconds()
+            .ok()
+            .is_some_and(|now| validate_active_override_pin_window(pin, now).is_ok())
+}
+
 fn validate_break_glass_approval(
     approval: &BreakGlassApproval,
     now_unix_seconds: u64,
@@ -819,6 +965,65 @@ fn validate_break_glass_approval(
     validate_approval_field("rate_limit_identity", &approval.rate_limit_identity)?;
     if approval.expires_at_unix_seconds <= now_unix_seconds {
         return Err(AntiRollbackStoreError::BreakGlassApprovalExpired);
+    }
+    Ok(())
+}
+
+fn validate_override_pin(pin: &ConfigOverridePin) -> Result<(), AntiRollbackStoreError> {
+    validate_hash(&pin.config_hash)?;
+    validate_non_empty("override.used_at", &pin.used_at)?;
+    validate_non_empty("override.operator", &pin.operator)?;
+    validate_non_empty("override.reason", &pin.reason)?;
+    match pin.mode {
+        ConfigOverrideMode::AcceptRollback if pin.config_path.is_some() => {
+            return Err(AntiRollbackStoreError::InvalidState(
+                "rollback override pin must not include config_path".to_string(),
+            ));
+        }
+        ConfigOverrideMode::AcceptUnsigned => {
+            let Some(path) = &pin.config_path else {
+                return Err(AntiRollbackStoreError::InvalidState(
+                    "unsigned override pin must include config_path".to_string(),
+                ));
+            };
+            validate_non_empty("override.config_path", path)?;
+            if !Path::new(path).is_absolute() {
+                return Err(AntiRollbackStoreError::InvalidState(
+                    "unsigned override pin config_path must be absolute".to_string(),
+                ));
+            }
+        }
+        ConfigOverrideMode::AcceptRollback => {}
+    }
+    Ok(())
+}
+
+fn validate_active_override_pin_window(
+    pin: &ConfigOverridePin,
+    now_unix_seconds: u64,
+) -> Result<(), AntiRollbackStoreError> {
+    if !pin.active {
+        return Ok(());
+    }
+    let expires_at = pin.expires_at.as_deref().ok_or_else(|| {
+        AntiRollbackStoreError::InvalidState(
+            "active override pin must include expires_at".to_string(),
+        )
+    })?;
+    let expires_at = OffsetDateTime::parse(expires_at, &Rfc3339).map_err(|_| {
+        AntiRollbackStoreError::InvalidState(
+            "active override pin expires_at must be RFC3339".to_string(),
+        )
+    })?;
+    let expires_at_unix = u64::try_from(expires_at.unix_timestamp()).map_err(|_| {
+        AntiRollbackStoreError::InvalidState(
+            "active override pin expires_at is before Unix epoch".to_string(),
+        )
+    })?;
+    if expires_at_unix <= now_unix_seconds {
+        return Err(AntiRollbackStoreError::InvalidState(
+            "active override pin is expired".to_string(),
+        ));
     }
     Ok(())
 }

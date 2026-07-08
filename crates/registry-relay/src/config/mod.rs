@@ -24,8 +24,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use registry_platform_authcommon::CredentialFingerprintRef;
-use registry_platform_config::RegistryTrustRoot;
-use registry_platform_ops::{AuditWritePolicy, BreakGlassRateLimit, DeploymentProfile};
+use registry_platform_ops::{AuditWritePolicy, DeploymentProfile};
 use serde::{Deserialize, Serialize};
 
 pub mod capabilities;
@@ -39,7 +38,9 @@ pub mod validate;
 pub mod vocabularies;
 
 pub use loader::{
-    load, load_config_metadata, load_metadata_manifest, load_with_metadata, LoadedConfig,
+    load, load_config_metadata, load_metadata_manifest, load_with_metadata,
+    load_with_metadata_options, BundleStateAction, LoadOptions, LoadedConfig,
+    PendingBundleAcceptance,
 };
 pub use provenance::{
     ClaimValidity, DelegatedIssuerConfig, FileWatchSignerConfig, GatewayIssuerConfig, IssuerConfig,
@@ -162,45 +163,18 @@ fn default_instance_id() -> String {
     "registry-relay-local".to_string()
 }
 
-/// Optional governed-configuration local trust state.
+/// Optional signed configuration bundle trust state.
 ///
-/// Simple local deployments omit this block. Signed/governed apply requires it
-/// so anti-rollback state lives in an explicit durable location.
+/// Simple local deployments omit this block. Bundle-aware deployments pin the
+/// local trust anchor, bundle, and anti-rollback state paths explicitly.
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigTrustConfig {
+    pub trust_anchor_path: PathBuf,
+    pub bundle_path: PathBuf,
     pub antirollback_state_path: PathBuf,
-    pub local_approval_state_path: PathBuf,
-    #[serde(default = "default_break_glass_rate_limit")]
-    pub break_glass_rate_limit: BreakGlassRateLimit,
     #[serde(default)]
-    pub required_approver_count: BTreeMap<String, usize>,
-    #[serde(default)]
-    pub remote_tuf_repositories: Vec<RemoteTufRepositoryConfig>,
-    #[serde(default)]
-    pub accepted_roots: Vec<RegistryTrustRoot>,
-}
-
-/// Operator-owned remote TUF source allowlist for governed config admin flows.
-///
-/// HTTP admin requests may name one of these sources, but cannot introduce new
-/// repository URLs or opt the server into insecure dev fetching.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct RemoteTufRepositoryConfig {
-    pub root_path: PathBuf,
-    pub metadata_base_url: String,
-    pub targets_base_url: String,
-    pub datastore_dir: PathBuf,
-    #[serde(default)]
-    pub allow_dev_insecure_fetch_urls: bool,
-}
-
-fn default_break_glass_rate_limit() -> BreakGlassRateLimit {
-    BreakGlassRateLimit {
-        max_accepted: 1,
-        window_seconds: 3600,
-    }
+    pub break_glass_override_path: Option<PathBuf>,
 }
 
 /// Optional split metadata manifest loaded alongside the runtime config.

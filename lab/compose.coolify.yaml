@@ -162,15 +162,11 @@ services:
           mkdir -p "/out/$$d"
           chown -R 65532:65532 "/out/$$d"
         done
-        for d in openfn-tuf-state openfn-config-state openfn-audit-state; do
+        for d in openfn-audit-state; do
           mkdir -p "/out/$$d"
           chown -R 1000:1000 "/out/$$d"
         done
-        openfn_antirollback=/out/openfn-config-state/dhis2-openfn-sidecar-antirollback.json
-        if [ ! -s "$$openfn_antirollback" ]; then
-          printf '%s\n' '{"key":{"product":"registry-notary-openfn-sidecar","instance_id":"hosted-dhis2-openfn-sidecar","environment":"hosted-lab","stream_id":"dhis2-openfn-sidecar-runtime"},"last_sequence":0,"last_config_hash":"sha256:0000000000000000000000000000000000000000000000000000000000000000","root_version":1,"break_glass":{"accepted":[]},"local_approvals":{"accepted":[]}}' > "$$openfn_antirollback"
-        fi
-        chown -R 1000:1000 /out/openfn-tuf-state /out/openfn-config-state /out/openfn-audit-state
+        chown -R 1000:1000 /out/openfn-audit-state
         echo "config-loader: populated config volumes from $$CONFIG_REPO_REF"
     volumes:
       - cfg-relay:/out/relay
@@ -182,8 +178,6 @@ services:
       - cfg-lab-homepage:/out/lab-homepage
       - civil-registry-cache:/out/civil-cache
       - health-registry-cache:/out/health-cache
-      - openfn-sidecar-tuf-state:/out/openfn-tuf-state
-      - openfn-sidecar-config-state:/out/openfn-config-state
       - openfn-sidecar-audit-state:/out/openfn-audit-state
 
   postgres:
@@ -434,8 +428,6 @@ services:
         condition: service_completed_successfully
     volumes:
       - cfg-openfn-tmpl:/etc/registry-notary-openfn:ro
-      - openfn-sidecar-tuf-state:/var/lib/registry-notary-openfn-sidecar/tuf
-      - openfn-sidecar-config-state:/var/lib/registry-notary-openfn-sidecar/config-trust
       - openfn-sidecar-audit-state:/var/lib/registry-notary-openfn-sidecar/audit
     healthcheck:
       test:
@@ -509,8 +501,6 @@ volumes:
   cfg-data:
   cfg-pginit:
   cfg-openfn-tmpl:
-  openfn-sidecar-tuf-state:
-  openfn-sidecar-config-state:
   openfn-sidecar-audit-state:
   cfg-static-scripts:
   cfg-lab-homepage:

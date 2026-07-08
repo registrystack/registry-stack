@@ -9,23 +9,21 @@ covers what is specific to that source path: how the sidecar verifies the
 configuration it runs, how Notary confirms it is talking to the sidecar you
 expect, and how secrets are handled along the way.
 
-The general governed-configuration model (signed bundles, TUF verification, trust
-roots, signer thresholds, and anti-rollback) is a shared Registry Platform
-capability used by Registry Relay and Registry Notary alike. This page does not
-restate it. See
+The general governed-configuration model (local signed bundles, trust anchors,
+and anti-rollback) is a shared Registry Platform capability used by Registry
+Relay and Registry Notary alike. This page does not restate it. See
 [Governed configuration](../../platform/docs/governed-configuration.md)
 for the shared model and how verification, authorization, and rollback protection
-work. Configuration integrity there is built on TUF (The Update Framework)
-through a standard, maintained client, not homegrown cryptography. What follows
-is the Notary- and sidecar-specific layer on top of that model.
+work. What follows is the Notary- and sidecar-specific layer on top of that
+model.
 
 ## What you can rely on
 
-- **The sidecar fails closed at startup.** In production the sidecar starts only
-  from a governed TUF target. If target verification, signer authorization,
-  identity binding, anti-rollback, runtime configuration validation and compile,
-  or the startup smoke lookup fail, it refuses to serve. It does not start in a
-  partial or best-effort state.
+- The sidecar fails closed at startup: In production the sidecar can start
+  from a signed local bundle. If manifest signature verification, trust-anchor
+  binding, file closure, anti-rollback, runtime configuration validation and
+  compile, or the startup smoke lookup fail, it refuses to serve. It does not
+  start in a partial or best-effort state.
 - **Notary can pin the sidecar it trusts.** A source connection can record the
   exact sidecar identity and configuration hash it expects. Notary refuses to
   read from a sidecar whose reported assurance does not match, so a drifted or
@@ -38,8 +36,8 @@ is the Notary- and sidecar-specific layer on top of that model.
 
 ## What you are responsible for
 
-Key custody and trust-root distribution are part of the
-[shared governed-configuration model](../../platform/docs/governed-configuration.md#trust-roots-roles-and-change-classes)
+Key custody and trust-anchor distribution are part of the
+[shared governed-configuration model](../../platform/docs/governed-configuration.md)
 and matter equally here: the guarantees in "What you can rely on" are only as
 strong as your protection of the signing keys. Specific to the sidecar path:
 
@@ -101,7 +99,7 @@ for them with deployment controls.
   the sidecar as a trusted component behind a private boundary, and rely on
   network controls and the bearer token for that boundary.
 - **Configuration integrity is not runtime-code integrity.** The signature proves
-  the governed runtime target is authentic and current. The whole-target
+  the governed runtime bundle is authentic. The whole-config
   `config_hash` covers the inline governed content, including CEL expressions,
   Rhai scripts, and runtime policy. The sidecar does not maintain a separate
   per-file expression hash ledger, and the assurance booleans do not attest to
@@ -123,28 +121,26 @@ for them with deployment controls.
 
 ## Development mode
 
-Local development can run the sidecar from an unsigned manifest using an explicit
-opt-in flag. This mode exists only for local iteration and demos; it disables the
-guarantees described in [What you can rely on](#what-you-can-rely-on) and must
-never be used in production. Production startup requires
-a configured trust anchor and refuses unsigned configuration. For rehearsing the
-signed flow locally, the sidecar's release tooling can build and verify a signed
-bundle against a local trust root, which exercises the real verification path
-without production key custody.
+Local development can run the sidecar from unsigned local config using an
+explicit opt-in flag. Emergency `accept_unsigned` is also local: it pins an
+absolute config path and hash for boot recovery, not an HTTP admin break-glass
+flow. These modes disable the guarantees described in
+[What you can rely on](#what-you-can-rely-on) and must never be used as normal
+production operation. For rehearsing the signed flow locally, release tooling can
+build and verify a signed bundle against a local trust anchor.
 
 ## Where to go next
 
 - [Governed configuration](../../platform/docs/governed-configuration.md):
-  the shared platform model behind signed configuration, trust roots, signer
-  thresholds, and anti-rollback. Read this first for the trust model itself.
+  the shared platform model behind signed local bundles, trust anchors, and
+  anti-rollback. Read this first for the trust model itself.
 - [Model sources and claims](source-claim-modeling-guide.md): configure the
   source adapter sidecar connector and the claim boundary.
 - [Operator configuration reference](operator-config-reference.md): the exact
   configuration blocks, including the source connection and expected-sidecar
   pinning.
 - [Source adapter sidecar reference](../../../crates/registry-notary-source-adapter-sidecar/README.md):
-  the governed bundle layout and the commands that render, sign, and verify a
-  bundle.
+  the sidecar runtime details for source-adapter deployments.
 - [Signing key providers](signing-key-provider.md): credential (SD-JWT VC)
   signing keys. Note these are the keys Notary uses to sign issued credentials,
   which are separate from the keys that sign configuration bundles.

@@ -6,8 +6,9 @@ products and local tooling.
 This crate is intentionally thin. It owns versioned JSON Schemas, serde types,
 canonical fixtures, report status vocabulary, required-environment
 classification vocabulary, and classifier-driven redaction helpers. It does not
-own product runtime config fields, product validation rules, TUF verification,
-anti-rollback, local approvals, or governed config apply reports.
+own product runtime config fields, product validation rules, bundle signature
+verification, anti-rollback, emergency overrides, or config bundle verification
+reports.
 
 ## Assets
 

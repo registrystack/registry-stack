@@ -246,9 +246,7 @@ class HostedDeployValidationTest(unittest.TestCase):
         compose["services"]["config-loader"]["volumes"] = [
             volume
             for volume in compose["services"]["config-loader"]["volumes"]
-            if not volume.startswith("openfn-sidecar-tuf-state:")
-            and not volume.startswith("openfn-sidecar-config-state:")
-            and not volume.startswith("openfn-sidecar-audit-state:")
+            if not volume.startswith("openfn-sidecar-audit-state:")
         ]
         issues = self._validate(compose, self._valid_esignet())
         self.assertIssue(issues, "runtime-state-not-chowned")
@@ -1578,11 +1576,10 @@ oid4vci:
         issues = self._validate(compose, self._valid_esignet())
         self.assertIssue(issues, "unsupported-notary-entrypoint")
 
-    def test_rejects_missing_openfn_config_trust_mount(self) -> None:
+    def test_rejects_missing_openfn_bootstrap_mount(self) -> None:
         compose = self._valid_registry_lab()
         compose["services"]["openfn-dhis2-sidecar"]["volumes"] = [
-            "cfg-openfn-tmpl:/etc/registry-notary-openfn:ro",
-            "openfn-sidecar-tuf-state:/var/lib/registry-notary-openfn-sidecar/tuf",
+            "openfn-sidecar-audit-state:/var/lib/registry-notary-openfn-sidecar/audit",
         ]
         issues = self._validate(compose, self._valid_esignet())
         self.assertIssue(issues, "missing-openfn-governed-mount")
@@ -1613,23 +1610,24 @@ oid4vci:
             root = Path(tmp)
             notary_dir = root / "config" / "coolify" / "notary"
             openfn_dir = root / "config" / "coolify" / "openfn"
-            governed_dir = openfn_dir / "governed"
             notary_dir.mkdir(parents=True)
-            governed_dir.mkdir(parents=True)
+            openfn_dir.mkdir(parents=True)
             (openfn_dir / "openfn-dhis2-sidecar.bootstrap.yaml").write_text(
                 """
-config_trust:
+assurance:
+  status: accepted
   product: registry-notary-openfn-sidecar
   instance_id: hosted-dhis2-openfn-sidecar
   environment: hosted-lab
   stream_id: dhis2-openfn-sidecar-runtime
-  accepted_roots:
-    - root_id: demo
+  bundle_id: hosted-dhis2-openfn-sidecar-bootstrap
+  sequence: 1
+  config_hash: sha256:1111111111111111111111111111111111111111111111111111111111111111
+  signer_kids: []
+  expression_hashes_verified: true
+  runtime_verified: true
+  smoke_verified: true
 """,
-                encoding="utf-8",
-            )
-            (governed_dir / "openfn-dhis2-sidecar-runtime.report.json").write_text(
-                '{"config_hash":"sha256:1111111111111111111111111111111111111111111111111111111111111111"}',
                 encoding="utf-8",
             )
             (notary_dir / "dhis2-health-notary.yaml").write_text(
@@ -1663,23 +1661,28 @@ evidence:
             root = Path(tmp)
             notary_dir = root / "config" / "coolify" / "notary"
             openfn_dir = root / "config" / "coolify" / "openfn"
-            governed_dir = openfn_dir / "governed"
             notary_dir.mkdir(parents=True)
-            governed_dir.mkdir(parents=True)
+            openfn_dir.mkdir(parents=True)
             (openfn_dir / "openfn-dhis2-sidecar.bootstrap.yaml").write_text(
                 """
-config_trust:
+audit:
+  sink: file
+  path: /var/lib/registry-notary-openfn-sidecar/audit/dhis2-openfn-sidecar-audit.jsonl
+  hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
+assurance:
+  status: accepted
   product: registry-notary-openfn-sidecar
   instance_id: hosted-dhis2-openfn-sidecar
   environment: hosted-lab
   stream_id: dhis2-openfn-sidecar-runtime
-  accepted_roots:
-    - root_id: demo
+  bundle_id: hosted-dhis2-openfn-sidecar-bootstrap
+  sequence: 1
+  config_hash: sha256:1111111111111111111111111111111111111111111111111111111111111111
+  signer_kids: []
+  expression_hashes_verified: true
+  runtime_verified: true
+  smoke_verified: true
 """,
-                encoding="utf-8",
-            )
-            (governed_dir / "openfn-dhis2-sidecar-runtime.report.json").write_text(
-                '{"config_hash":"sha256:1111111111111111111111111111111111111111111111111111111111111111"}',
                 encoding="utf-8",
             )
             (notary_dir / "dhis2-health-notary.yaml").write_text(
@@ -1867,14 +1870,10 @@ for d in civil-cache health-cache; do
   mkdir -p "/out/$d"
   chown -R 65532:65532 "/out/$d"
 done
-for d in openfn-tuf-state openfn-config-state openfn-audit-state; do
+for d in openfn-audit-state; do
   mkdir -p "/out/$d"
   chown -R 1000:1000 "/out/$d"
 done
-openfn_antirollback=/out/openfn-config-state/dhis2-openfn-sidecar-antirollback.json
-if [ ! -s "$openfn_antirollback" ]; then
-  printf '%s\n' '{"key":{"product":"registry-notary-openfn-sidecar","instance_id":"hosted-dhis2-openfn-sidecar","environment":"hosted-lab","stream_id":"dhis2-openfn-sidecar-runtime"},"last_sequence":0,"last_config_hash":"sha256:0000000000000000000000000000000000000000000000000000000000000000","root_version":1,"break_glass":{"accepted":[]},"local_approvals":{"accepted":[]}}' > "$openfn_antirollback"
-fi
 cp -a /tmp/repo/config/coolify/notary/civil-notary.yaml /out/notary/
 cp -a /tmp/repo/config/coolify/notary/citizen-civil-notary.yaml /out/notary/
 cp -a /tmp/repo/config/coolify/notary/social-protection-notary.yaml /out/notary/
@@ -1888,8 +1887,6 @@ cp -a /tmp/repo/scripts/lab_homepage_static /out/static-scripts/
                         "civil-registry-cache:/out/civil-cache",
                         "social-protection-registry-cache:/out/social-cache",
                         "health-registry-cache:/out/health-cache",
-                        "openfn-sidecar-tuf-state:/out/openfn-tuf-state",
-                        "openfn-sidecar-config-state:/out/openfn-config-state",
                         "openfn-sidecar-audit-state:/out/openfn-audit-state",
                     ],
                 },
@@ -2062,8 +2059,6 @@ cp -a /tmp/repo/scripts/lab_homepage_static /out/static-scripts/
                     },
                     "volumes": [
                         "cfg-openfn-tmpl:/etc/registry-notary-openfn:ro",
-                        "openfn-sidecar-tuf-state:/var/lib/registry-notary-openfn-sidecar/tuf",
-                        "openfn-sidecar-config-state:/var/lib/registry-notary-openfn-sidecar/config-trust",
                         "openfn-sidecar-audit-state:/var/lib/registry-notary-openfn-sidecar/audit",
                     ],
                 },

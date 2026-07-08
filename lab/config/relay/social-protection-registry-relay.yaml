@@ -8,12 +8,6 @@ server:
   openapi_requires_auth: false
   cache_dir: /var/lib/registry-relay/cache
 
-config_trust:
-  antirollback_state_path: /var/lib/registry-relay/cache/social-protection-registry-relay-config-antirollback.json
-  local_approval_state_path: /var/lib/registry-relay/cache/social-protection-registry-relay-config-local-approvals.json
-  break_glass_rate_limit:
-    max_accepted: 1
-    window_seconds: 3600
 
 metadata:
   source:

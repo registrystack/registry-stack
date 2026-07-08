@@ -1,8 +1,9 @@
 use registry_platform_ops::{
     AntiRollbackKey, AntiRollbackProposal, AntiRollbackRecord, AntiRollbackStoreError,
-    ApplyReportResult, BreakGlassApproval, BreakGlassRateLimit, FileAntiRollbackStore,
-    FileLocalApprovalStore, LocalApprovalStoreError, LocalOperatorApproval, PostureApplyResult,
-    ADMIN_CAPABILITIES_SCHEMA_V1, ADMIN_ERROR_SCHEMA_V1, CONFIG_APPLY_REPORT_SCHEMA_V1,
+    ApplyReportResult, BreakGlassApproval, BreakGlassRateLimit, ConfigOverrideMode,
+    ConfigOverridePin, FileAntiRollbackStore, FileLocalApprovalStore, LocalApprovalStoreError,
+    LocalOperatorApproval, PostureApplyResult, ADMIN_CAPABILITIES_SCHEMA_V1, ADMIN_ERROR_SCHEMA_V1,
+    CONFIG_APPLY_REPORT_SCHEMA_V1,
 };
 use serde_json::{json, Value};
 
@@ -28,12 +29,18 @@ fn hash(label: &str) -> String {
     )
 }
 
+fn future_rfc3339() -> String {
+    "2999-01-01T00:00:00Z".to_string()
+}
+
 fn record(sequence: u64, config_hash: &str) -> AntiRollbackRecord {
     AntiRollbackRecord {
         key: key(),
         last_sequence: sequence,
         last_config_hash: config_hash.to_string(),
+        last_bundle_id: None,
         root_version: Some(3),
+        override_pin: None,
         break_glass: Default::default(),
         local_approvals: Default::default(),
     }
@@ -88,48 +95,23 @@ fn apply_report_result_projects_to_posture_vocabulary() {
             PostureApplyResult::NotApplied,
         ),
         (
-            ApplyReportResult::Applied,
-            "applied",
-            PostureApplyResult::Accepted,
-        ),
-        (
             ApplyReportResult::RejectedSignature,
             "rejected_signature",
             PostureApplyResult::Rejected,
         ),
         (
-            ApplyReportResult::RejectedThreshold,
-            "rejected_threshold",
+            ApplyReportResult::RejectedBinding,
+            "rejected_binding",
             PostureApplyResult::Rejected,
         ),
         (
-            ApplyReportResult::RejectedFreshness,
-            "rejected_freshness",
+            ApplyReportResult::RejectedValidation,
+            "rejected_validation",
             PostureApplyResult::Rejected,
         ),
         (
             ApplyReportResult::RejectedRollback,
             "rejected_rollback",
-            PostureApplyResult::Rejected,
-        ),
-        (
-            ApplyReportResult::RejectedRestartRequired,
-            "rejected_restart_required",
-            PostureApplyResult::Rejected,
-        ),
-        (
-            ApplyReportResult::RejectedReadiness,
-            "rejected_readiness",
-            PostureApplyResult::Rejected,
-        ),
-        (
-            ApplyReportResult::RejectedBreakGlass,
-            "rejected_break_glass",
-            PostureApplyResult::Rejected,
-        ),
-        (
-            ApplyReportResult::RejectedLocalApproval,
-            "rejected_local_approval",
             PostureApplyResult::Rejected,
         ),
         (
@@ -196,19 +178,19 @@ fn admin_capabilities_schema_distinguishes_supported_operations() {
         "admin_api_version": "v1",
         "supported_posture_tiers": ["default", "restricted"],
         "config": {
-            "verify": {"supported": true, "currently_available": true},
-            "dry_run": {"supported": true, "currently_available": true},
+            "verify": {"supported": false, "currently_available": false},
+            "dry_run": {"supported": false, "currently_available": false},
             "apply": {
-                "supported": true,
-                "currently_available": true,
+                "supported": false,
+                "currently_available": false,
                 "requires_signed_input": true,
-                "supported_sources": ["tuf_local"]
+                "supported_sources": []
             }
         },
         "break_glass": {
-            "supported": true,
-            "currently_available": true,
-            "rate_limit_scope": "instance"
+            "supported": false,
+            "currently_available": false,
+            "rate_limit_scope": "none"
         },
         "listeners": {
             "admin": {
@@ -222,13 +204,13 @@ fn admin_capabilities_schema_distinguishes_supported_operations() {
             }
         },
         "root_transition": {
-            "supported": true,
-            "currently_available": true
+            "supported": false,
+            "currently_available": false
         },
         "hot_swap": {
-            "supported": true,
-            "currently_available": true,
-            "components": ["compiled_metadata", "provenance_state"]
+            "supported": false,
+            "currently_available": false,
+            "components": []
         },
         "reload": {
             "resource_reload": {"supported": true, "currently_available": true},
@@ -252,19 +234,19 @@ fn admin_capabilities_schema_rejects_topology_leaks_and_unknown_modes() {
         "admin_api_version": "v1",
         "supported_posture_tiers": ["default", "restricted"],
         "config": {
-            "verify": {"supported": true, "currently_available": true},
-            "dry_run": {"supported": true, "currently_available": true},
+            "verify": {"supported": false, "currently_available": false},
+            "dry_run": {"supported": false, "currently_available": false},
             "apply": {
-                "supported": true,
-                "currently_available": true,
+                "supported": false,
+                "currently_available": false,
                 "requires_signed_input": true,
-                "supported_sources": ["tuf_local", "tuf_remote"]
+                "supported_sources": []
             }
         },
         "break_glass": {
-            "supported": true,
-            "currently_available": true,
-            "rate_limit_scope": "instance"
+            "supported": false,
+            "currently_available": false,
+            "rate_limit_scope": "none"
         },
         "listeners": {
             "admin": {
@@ -278,13 +260,13 @@ fn admin_capabilities_schema_rejects_topology_leaks_and_unknown_modes() {
             }
         },
         "root_transition": {
-            "supported": true,
-            "currently_available": true
+            "supported": false,
+            "currently_available": false
         },
         "hot_swap": {
-            "supported": true,
-            "currently_available": true,
-            "components": ["signing_keys"]
+            "supported": false,
+            "currently_available": false,
+            "components": []
         },
         "reload": {
             "resource_reload": {"supported": false, "currently_available": false},
@@ -316,7 +298,7 @@ fn config_apply_report_schema_matches_shared_result_vocabulary() {
         "bundle_sequence": 42,
         "previous_config_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "config_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        "result": "applied",
+        "result": "verified",
         "restart_required": false,
         "change_classes": ["signing_key_rotation"],
         "affected_components": ["provenance_state"],
@@ -326,15 +308,10 @@ fn config_apply_report_schema_matches_shared_result_vocabulary() {
 
     for result in [
         ApplyReportResult::Verified,
-        ApplyReportResult::Applied,
         ApplyReportResult::RejectedSignature,
-        ApplyReportResult::RejectedThreshold,
-        ApplyReportResult::RejectedFreshness,
+        ApplyReportResult::RejectedBinding,
+        ApplyReportResult::RejectedValidation,
         ApplyReportResult::RejectedRollback,
-        ApplyReportResult::RejectedRestartRequired,
-        ApplyReportResult::RejectedReadiness,
-        ApplyReportResult::RejectedBreakGlass,
-        ApplyReportResult::RejectedLocalApproval,
         ApplyReportResult::InternalError,
     ] {
         let mut document = base.clone();
@@ -342,9 +319,20 @@ fn config_apply_report_schema_matches_shared_result_vocabulary() {
         assert_valid(CONFIG_APPLY_REPORT_SCHEMA_V1, &document);
     }
 
-    let mut invalid = base;
-    invalid["result"] = json!("rejected_compile");
-    assert_invalid(CONFIG_APPLY_REPORT_SCHEMA_V1, &invalid);
+    for old_result in [
+        "applied",
+        "rejected_threshold",
+        "rejected_freshness",
+        "rejected_restart_required",
+        "rejected_readiness",
+        "rejected_break_glass",
+        "rejected_local_approval",
+        "rejected_compile",
+    ] {
+        let mut invalid = base.clone();
+        invalid["result"] = json!(old_result);
+        assert_invalid(CONFIG_APPLY_REPORT_SCHEMA_V1, &invalid);
+    }
 }
 
 #[test]
@@ -372,6 +360,175 @@ fn antirollback_state_survives_new_store_instance() {
         second.load(&key()).expect("state loads after restart"),
         record(41, &hash("old"))
     );
+}
+
+#[test]
+fn antirollback_initialize_does_not_overwrite_existing_state() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("config-antirollback.json");
+    let store = FileAntiRollbackStore::new(&path);
+    store
+        .initialize(record(42, &hash("current")))
+        .expect("initial state writes");
+
+    let err = store
+        .initialize(record(41, &hash("old")))
+        .expect_err("initialize must not lower an existing state floor");
+
+    assert!(matches!(err, AntiRollbackStoreError::InvalidState(_)));
+    assert_eq!(
+        store.load(&key()).expect("state did not roll back"),
+        record(42, &hash("current"))
+    );
+}
+
+#[test]
+fn antirollback_state_key_serializes_without_instance_id() {
+    let serialized = serde_json::to_value(record(41, &hash("old"))).expect("record serializes");
+
+    assert_eq!(serialized["key"]["product"], "registry-relay");
+    assert_eq!(serialized["key"]["environment"], "production");
+    assert_eq!(serialized["key"]["stream_id"], "national-config");
+    assert!(serialized["key"].get("instance_id").is_none());
+
+    let same_stream_other_instance = AntiRollbackKey {
+        product: "registry-relay".to_string(),
+        instance_id: "relay-b".to_string(),
+        environment: "production".to_string(),
+        stream_id: "national-config".to_string(),
+    };
+    assert_eq!(key(), same_stream_other_instance);
+}
+
+#[test]
+fn antirollback_persists_unsigned_override_pin_with_absolute_locator() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = FileAntiRollbackStore::new(dir.path().join("config-antirollback.json"));
+    store
+        .initialize(record(42, &hash("current")))
+        .expect("initial state writes");
+
+    let pin = ConfigOverridePin {
+        active: true,
+        mode: ConfigOverrideMode::AcceptUnsigned,
+        config_hash: hash("rollback"),
+        config_path: Some("/etc/registry/rollback.yaml".to_string()),
+        expires_at: Some(future_rfc3339()),
+        used_at: "2026-07-07T10:00:00Z".to_string(),
+        operator: "jeremi".to_string(),
+        reason: "control plane unavailable".to_string(),
+    };
+    let accepted = store
+        .persist_override_pin(&key(), pin.clone())
+        .expect("pin persists");
+
+    assert_eq!(accepted.last_sequence, 42);
+    assert_eq!(accepted.last_config_hash, hash("current"));
+    assert_eq!(accepted.override_pin, Some(pin));
+}
+
+#[test]
+fn antirollback_rejects_expired_active_override_pin() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = FileAntiRollbackStore::new(dir.path().join("config-antirollback.json"));
+    store
+        .initialize(record(42, &hash("current")))
+        .expect("initial state writes");
+
+    let err = store
+        .persist_override_pin_at(
+            &key(),
+            ConfigOverridePin {
+                active: true,
+                mode: ConfigOverrideMode::AcceptUnsigned,
+                config_hash: hash("rollback"),
+                config_path: Some("/etc/registry/rollback.yaml".to_string()),
+                expires_at: Some("2026-07-07T10:00:00Z".to_string()),
+                used_at: "2026-07-07T09:00:00Z".to_string(),
+                operator: "jeremi".to_string(),
+                reason: "control plane unavailable".to_string(),
+            },
+            1_783_428_401,
+        )
+        .expect_err("expired active pin must not persist");
+
+    assert!(matches!(err, AntiRollbackStoreError::InvalidState(_)));
+    assert_eq!(
+        store.load(&key()).expect("state did not change"),
+        record(42, &hash("current"))
+    );
+}
+
+#[test]
+fn antirollback_rejects_wrong_mode_override_pin_fields() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = FileAntiRollbackStore::new(dir.path().join("config-antirollback.json"));
+    store
+        .initialize(record(42, &hash("current")))
+        .expect("initial state writes");
+
+    let err = store
+        .persist_override_pin(
+            &key(),
+            ConfigOverridePin {
+                active: true,
+                mode: ConfigOverrideMode::AcceptRollback,
+                config_hash: hash("rollback"),
+                config_path: Some("/etc/registry/rollback.yaml".to_string()),
+                expires_at: Some(future_rfc3339()),
+                used_at: "2026-07-07T10:00:00Z".to_string(),
+                operator: "jeremi".to_string(),
+                reason: "signed rollback".to_string(),
+            },
+        )
+        .expect_err("rollback pin must not include config path");
+
+    assert!(matches!(err, AntiRollbackStoreError::InvalidState(_)));
+}
+
+#[test]
+fn normal_bundle_acceptance_clears_active_override_pin_even_on_same_bundle_restart() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = FileAntiRollbackStore::new(dir.path().join("config-antirollback.json"));
+    store
+        .initialize(record(42, &hash("current")))
+        .expect("initial state writes");
+    store
+        .persist_override_pin(
+            &key(),
+            ConfigOverridePin {
+                active: true,
+                mode: ConfigOverrideMode::AcceptRollback,
+                config_hash: hash("current"),
+                config_path: None,
+                expires_at: Some(future_rfc3339()),
+                used_at: "2026-07-07T10:00:00Z".to_string(),
+                operator: "jeremi".to_string(),
+                reason: "signed rollback".to_string(),
+            },
+        )
+        .expect("pin persists");
+
+    let accepted = store
+        .accept_bundle(
+            &key(),
+            "2026-07-07-rollout-3".to_string(),
+            42,
+            hash("current"),
+        )
+        .expect("normal verification clears pin");
+
+    assert_eq!(accepted.last_sequence, 42);
+    assert_eq!(
+        accepted.last_bundle_id.as_deref(),
+        Some("2026-07-07-rollout-3")
+    );
+    assert_eq!(accepted.override_pin, None);
+
+    let serialized = serde_json::to_value(&accepted).expect("record serializes");
+    assert!(serialized.get("root_version").is_none());
+    assert!(serialized.get("break_glass").is_none());
+    assert!(serialized.get("local_approvals").is_none());
 }
 
 #[cfg(unix)]
@@ -499,14 +656,14 @@ fn antirollback_rejects_same_sequence_with_different_config_hash() {
 }
 
 #[test]
-fn antirollback_rejects_previous_hash_mismatch_without_break_glass() {
+fn antirollback_treats_previous_hash_mismatch_as_advisory() {
     let dir = tempfile::tempdir().expect("tempdir");
     let store = FileAntiRollbackStore::new(dir.path().join("config-antirollback.json"));
     store
         .initialize(record(42, &hash("current")))
         .expect("initial state writes");
 
-    let err = store
+    let accepted = store
         .accept(
             &key(),
             AntiRollbackProposal {
@@ -520,9 +677,11 @@ fn antirollback_rejects_previous_hash_mismatch_without_break_glass() {
                 local_approval_rate_limit: None,
             },
         )
-        .expect_err("previous hash mismatch is rejected");
+        .expect("previous hash mismatch is advisory");
 
-    assert_eq!(err, AntiRollbackStoreError::PreviousConfigHashMismatch);
+    assert_eq!(accepted.last_sequence, 43);
+    assert_eq!(accepted.last_config_hash, hash("next"));
+    assert_eq!(store.load(&key()).expect("state advanced"), accepted);
 }
 
 #[test]
@@ -557,14 +716,14 @@ fn antirollback_rejects_root_version_rollback() {
 }
 
 #[test]
-fn break_glass_requires_local_approval_record() {
+fn break_glass_rate_limit_without_approval_does_not_create_override() {
     let dir = tempfile::tempdir().expect("tempdir");
     let store = FileAntiRollbackStore::new(dir.path().join("config-antirollback.json"));
     store
         .initialize(record(42, &hash("current")))
         .expect("initial state writes");
 
-    let err = store
+    let accepted = store
         .accept(
             &key(),
             AntiRollbackProposal {
@@ -578,17 +737,14 @@ fn break_glass_requires_local_approval_record() {
                 local_approval_rate_limit: None,
             },
         )
-        .expect_err("break-glass requires local approval policy");
+        .expect("normal acceptance ignores stray break-glass rate limit");
 
-    assert_eq!(err, AntiRollbackStoreError::PreviousConfigHashMismatch);
-    assert_eq!(
-        store.load(&key()).expect("state did not advance"),
-        record(42, &hash("current"))
-    );
+    assert_eq!(accepted.last_sequence, 43);
+    assert!(accepted.break_glass.accepted.is_empty());
 }
 
 #[test]
-fn break_glass_waives_previous_hash_only_with_valid_approval() {
+fn legacy_break_glass_records_valid_approval() {
     let dir = tempfile::tempdir().expect("tempdir");
     let store = FileAntiRollbackStore::new(dir.path().join("config-antirollback.json"));
     store
@@ -610,7 +766,7 @@ fn break_glass_waives_previous_hash_only_with_valid_approval() {
             },
             1_000,
         )
-        .expect("approved break-glass can waive previous hash");
+        .expect("approved break-glass records emergency use");
 
     assert_eq!(accepted.last_sequence, 43);
     assert_eq!(accepted.last_config_hash, hash("recovery"));
@@ -977,7 +1133,7 @@ fn local_operator_approval_store_rejects_duplicate_approvers() {
 }
 
 #[test]
-fn antirollback_records_local_operator_approval_without_waiving_previous_hash() {
+fn antirollback_records_local_operator_approval_and_validates_approval_hash_claim() {
     let dir = tempfile::tempdir().expect("tempdir");
     let store = FileAntiRollbackStore::new(dir.path().join("config-antirollback.json"));
     store
@@ -1016,7 +1172,7 @@ fn antirollback_records_local_operator_approval_without_waiving_previous_hash() 
             &key(),
             AntiRollbackProposal {
                 sequence: 44,
-                previous_config_hash: Some(hash("wrong")),
+                previous_config_hash: Some(hash("next")),
                 config_hash: hash("another"),
                 root_version: Some(4),
                 break_glass: None,
@@ -1026,10 +1182,10 @@ fn antirollback_records_local_operator_approval_without_waiving_previous_hash() 
             },
             1_100,
         )
-        .expect_err("local approval does not waive previous hash mismatch");
+        .expect_err("local approval must match proposal previous hash claim");
     assert_eq!(
         previous_hash_mismatch,
-        AntiRollbackStoreError::PreviousConfigHashMismatch
+        AntiRollbackStoreError::InvalidLocalApproval("previous_config_hash")
     );
 
     let mut mismatched_rate_limit_approval = local_approval(3_000, &hash("another"));

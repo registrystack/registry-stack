@@ -132,10 +132,8 @@ Read the full context in the [Registry Notary protocol](../../spec/rs-pr-notary/
 - Standalone admin reload is not implemented: The standalone Notary `/admin/v1/reload` route
   returns HTTP 501 with code `registry.admin.capability.not_supported` and performs no reload, and
   non-swappable changes require a service restart.
-  Governed config apply and the file-watch signer do hot-apply some changes without one
-  (signing-key rotation reports `restart_required: false`, client and OpenAPI auth-policy changes
-  are swapped in, and a same-public-key signer replacement reloads), so not every key or
-  configuration change needs a restart.
+  Signed config bundles are verified from a local bundle directory and activated by placing the
+  bundle on the node and restarting; there is no admin config apply route and no hot apply.
 
 ## Federation limits
 

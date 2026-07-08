@@ -53,13 +53,6 @@ replay:
     connect_timeout_ms: 1000
     operation_timeout_ms: 500
 
-config_trust:
-  antirollback_state_path: /var/lib/registry-notary/config-state/citizen-civil-notary-config-antirollback.json
-  local_approval_state_path: /var/lib/registry-notary/config-state/citizen-civil-notary-config-local-approvals.json
-  break_glass_rate_limit:
-    max_accepted: 1
-    window_seconds: 3600
-
 evidence:
   enabled: true
   service_id: citizen-civil-notary

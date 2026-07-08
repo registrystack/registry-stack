@@ -1,66 +1,272 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Binary-level coverage for governed configuration bundle verification.
+//! Binary-level coverage for config bundle v1 verification.
 
-use std::collections::BTreeSet;
-use std::num::NonZeroU64;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 
-use chrono::Utc;
-use registry_platform_config::sha256_uri;
-use registry_platform_ops::internal_config_hash;
-use serde_json::{json, Value};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use registry_platform_config::{
+    sha256_uri, ConfigBundleFile, ConfigBundleManifest, ConfigBundleSignature,
+    ConfigBundleSignatureEnvelope, ConfigTrustAnchor, ConfigTrustAnchorSigner,
+};
+use registry_platform_crypto::{canonicalize_json, sign, PrivateJwk};
+use registry_platform_ops::{
+    AntiRollbackKey, AntiRollbackRecord, ConfigOverrideMode, ConfigOverridePin,
+    FileAntiRollbackStore,
+};
+use serde_json::Value;
 use tempfile::TempDir;
-use tough::editor::signed::PathExists;
-use tough::editor::RepositoryEditor;
-use tough::key_source::{KeySource, LocalKeySource};
-use tough::schema::Target;
-use wiremock::matchers::{method, path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
 
-const TEST_ISSUER_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}"#;
-const TEST_TOKEN_HASH: &str =
-    "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51";
-const TEST_AUDIT_SECRET: &str = "notary-cli-audit-secret-32-bytes-min";
-const TUF_TARGETS_SIGNER_KID: &str =
-    "8ec3a843a0f9328c863cac4046ab1cacbbc67888476ac7acf73d9bcd9a223ada";
+const PRIVATE_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}"#;
+const ZERO_HASH: &str = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
 
-struct SignedConfigFixture {
-    root_path: PathBuf,
-    metadata_dir: PathBuf,
-    targets_dir: PathBuf,
-    datastore_dir: PathBuf,
-    target_name: String,
+struct BundleFixture {
+    bundle_dir: PathBuf,
+    anchor_path: PathBuf,
+    state_path: PathBuf,
+    config_hash: String,
 }
 
-fn tough_fixture(name: &str) -> PathBuf {
-    let cargo_home = std::env::var_os("CARGO_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cargo")))
-        .expect("CARGO_HOME or HOME is set");
-    let src_root = cargo_home.join("registry/src");
-    let registry = std::fs::read_dir(&src_root)
-        .expect("cargo registry src exists")
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .find(|path| path.join("tough-0.22.0/tests/data").is_dir())
-        .expect("tough-0.22.0 source fixture directory exists");
-    registry.join("tough-0.22.0/tests/data").join(name)
-}
+#[test]
+fn config_verify_bundle_cli_reports_verified_signed_bundle() {
+    let temp = TempDir::new().expect("tempdir");
+    let fixture = write_bundle_fixture(&temp, "registry-notary", 0);
 
-fn config_yaml(tmp: &TempDir, signer_kid: &str) -> String {
-    let root_sha = sha256_uri(
-        &std::fs::read(tough_fixture("simple-rsa").join("root.json"))
-            .expect("trusted TUF root fixture reads"),
+    let output = verify_bundle_command(&fixture)
+        .output()
+        .expect("command runs");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
-    let allowed_change_classes = BTreeSet::from(["public_metadata"]);
-    let change_classes = allowed_change_classes
-        .iter()
-        .map(|class| format!("            - {class}"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!(
-        r#"
+    let report = stdout_json(&output);
+    assert_eq!(report["result"], "verified");
+    assert_eq!(report["component"], "registry-notary");
+    assert_eq!(report["stream_id"], "notary-test-stream");
+    assert_eq!(report["bundle_id"], "notary-test-bundle");
+    assert_eq!(report["bundle_sequence"], 1);
+    assert_eq!(report["config_hash"], fixture.config_hash);
+}
+
+#[test]
+fn config_verify_bundle_cli_reports_rejected_rollback() {
+    let temp = TempDir::new().expect("tempdir");
+    let fixture = write_bundle_fixture(&temp, "registry-notary", 2);
+
+    let output = verify_bundle_command(&fixture)
+        .output()
+        .expect("command runs");
+
+    assert!(!output.status.success());
+    let report = stdout_json(&output);
+    assert_eq!(report["result"], "rejected_rollback");
+    assert_eq!(report["errors"][0]["code"], "rejected_rollback");
+}
+
+#[test]
+fn config_verify_bundle_cli_rejects_expired_override_pin() {
+    let temp = TempDir::new().expect("tempdir");
+    let fixture = write_bundle_fixture(&temp, "registry-notary", 2);
+    std::fs::write(
+        &fixture.state_path,
+        serde_json::to_vec_pretty(&AntiRollbackRecord {
+            key: AntiRollbackKey {
+                product: "registry-notary".to_string(),
+                instance_id: "notary-cli".to_string(),
+                environment: "development".to_string(),
+                stream_id: "notary-test-stream".to_string(),
+            },
+            last_sequence: 2,
+            last_config_hash:
+                "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+                    .to_string(),
+            last_bundle_id: None,
+            root_version: None,
+            override_pin: Some(ConfigOverridePin {
+                active: true,
+                mode: ConfigOverrideMode::AcceptRollback,
+                config_hash: fixture.config_hash.clone(),
+                config_path: None,
+                expires_at: Some("2026-07-07T10:00:00Z".to_string()),
+                used_at: "2026-07-07T09:00:00Z".to_string(),
+                operator: "jeremi".to_string(),
+                reason: "expired rollback".to_string(),
+            }),
+            break_glass: Default::default(),
+            local_approvals: Default::default(),
+        })
+        .expect("state serializes"),
+    )
+    .expect("state writes");
+
+    let output = verify_bundle_command(&fixture)
+        .output()
+        .expect("command runs");
+
+    assert!(!output.status.success());
+    let report = stdout_json(&output);
+    assert_eq!(report["result"], "rejected_rollback");
+    assert_eq!(report["errors"][0]["code"], "rejected_rollback");
+}
+
+#[test]
+fn config_verify_bundle_cli_reports_rejected_binding() {
+    let temp = TempDir::new().expect("tempdir");
+    let fixture = write_bundle_fixture(&temp, "registry-relay", 0);
+
+    let output = verify_bundle_command(&fixture)
+        .output()
+        .expect("command runs");
+
+    assert!(!output.status.success());
+    let report = stdout_json(&output);
+    assert_eq!(report["result"], "rejected_binding");
+    assert_eq!(report["errors"][0]["code"], "rejected_binding");
+}
+
+fn verify_bundle_command(fixture: &BundleFixture) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_registry-notary"));
+    command.args([
+        "config",
+        "verify-bundle",
+        "--bundle-dir",
+        fixture.bundle_dir.to_str().expect("path is UTF-8"),
+        "--anchor-path",
+        fixture.anchor_path.to_str().expect("path is UTF-8"),
+        "--state-path",
+        fixture.state_path.to_str().expect("path is UTF-8"),
+    ]);
+    command
+}
+
+fn write_bundle_fixture(
+    temp: &TempDir,
+    manifest_product: &str,
+    last_sequence: u64,
+) -> BundleFixture {
+    let bundle_dir = temp.path().join("bundle");
+    let config_dir = bundle_dir.join("config");
+    std::fs::create_dir_all(&config_dir).expect("bundle config dir");
+    let config_path = config_dir.join("notary.yaml");
+    let config = notary_config_yaml();
+    std::fs::write(&config_path, config.as_bytes()).expect("config writes");
+    let config_hash = sha256_uri(config.as_bytes());
+
+    let private = PrivateJwk::parse(PRIVATE_JWK).expect("private JWK parses");
+    let public = private.public();
+    let kid = public.jkt().expect("thumbprint computes");
+    let manifest = ConfigBundleManifest {
+        schema: "registry.platform.config_bundle.v1".to_string(),
+        product: manifest_product.to_string(),
+        environment: "development".to_string(),
+        stream_id: "notary-test-stream".to_string(),
+        instance_id: None,
+        bundle_id: "notary-test-bundle".to_string(),
+        sequence: 1,
+        previous_config_hash: Some(ZERO_HASH.to_string()),
+        config_hash: config_hash.clone(),
+        files: vec![ConfigBundleFile {
+            path: "config/notary.yaml".to_string(),
+            sha256: config_hash.clone(),
+        }],
+        created_at: "2026-07-07T10:00:00Z".to_string(),
+    };
+    write_manifest_and_signature(&bundle_dir, &manifest, &private, &kid);
+
+    let anchor = ConfigTrustAnchor {
+        schema: "registry.platform.config_trust_anchor.v1".to_string(),
+        product: "registry-notary".to_string(),
+        environment: "development".to_string(),
+        stream_id: "notary-test-stream".to_string(),
+        instance_id: "notary-cli".to_string(),
+        signers: vec![ConfigTrustAnchorSigner {
+            kid,
+            jwk: public,
+            enabled: true,
+        }],
+    };
+    let anchor_path = temp.path().join("trust_anchor.json");
+    std::fs::write(
+        &anchor_path,
+        serde_json::to_vec_pretty(&anchor).expect("anchor serializes"),
+    )
+    .expect("anchor writes");
+
+    let state_path = temp.path().join("antirollback.json");
+    FileAntiRollbackStore::new(&state_path)
+        .initialize(AntiRollbackRecord {
+            key: AntiRollbackKey {
+                product: "registry-notary".to_string(),
+                instance_id: "notary-cli".to_string(),
+                environment: "development".to_string(),
+                stream_id: "notary-test-stream".to_string(),
+            },
+            last_sequence,
+            last_config_hash: if last_sequence == 0 {
+                ZERO_HASH.to_string()
+            } else {
+                "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+                    .to_string()
+            },
+            last_bundle_id: None,
+            root_version: None,
+            override_pin: None,
+            break_glass: Default::default(),
+            local_approvals: Default::default(),
+        })
+        .expect("state initializes");
+
+    BundleFixture {
+        bundle_dir,
+        anchor_path,
+        state_path,
+        config_hash,
+    }
+}
+
+fn write_manifest_and_signature(
+    bundle_dir: &std::path::Path,
+    manifest: &ConfigBundleManifest,
+    private: &PrivateJwk,
+    kid: &str,
+) {
+    let manifest_value = serde_json::to_value(manifest).expect("manifest value");
+    let canonical = canonicalize_json(&manifest_value).expect("canonical manifest");
+    let signature = sign(&canonical, private).expect("manifest signs");
+    let envelope = ConfigBundleSignatureEnvelope {
+        schema: "registry.platform.config_bundle_signatures.v1".to_string(),
+        signatures: vec![ConfigBundleSignature {
+            kid: kid.to_string(),
+            alg: "EdDSA".to_string(),
+            sig: URL_SAFE_NO_PAD.encode(signature),
+        }],
+    };
+    std::fs::write(
+        bundle_dir.join("manifest.json"),
+        serde_json::to_vec_pretty(manifest).expect("manifest serializes"),
+    )
+    .expect("manifest writes");
+    std::fs::write(
+        bundle_dir.join("manifest.sig.json"),
+        serde_json::to_vec_pretty(&envelope).expect("signature serializes"),
+    )
+    .expect("signature writes");
+}
+
+fn stdout_json(output: &std::process::Output) -> Value {
+    serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+        panic!(
+            "stdout was not JSON: {error}\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+    })
+}
+
+fn notary_config_yaml() -> String {
+    r#"
 instance:
   id: notary-cli
   environment: development
@@ -68,9 +274,6 @@ deployment:
   profile: local
 server:
   bind: 127.0.0.1:0
-  admin_listener:
-    mode: dedicated
-    bind: 127.0.0.1:1
 auth:
   mode: api_key
   api_keys:
@@ -80,7 +283,6 @@ auth:
         name: TEST_TOKEN_HASH
 audit:
   sink: stdout
-  hash_secret_env: TEST_AUDIT_SECRET
 evidence:
   enabled: true
   signing_keys:
@@ -90,385 +292,6 @@ evidence:
       alg: EdDSA
       kid: did:web:issuer.example#key-1
       status: active
-config_trust:
-  antirollback_state_path: "{}"
-  local_approval_state_path: "{}"
-  accepted_roots:
-    - root_id: ops-root
-      production: false
-      tuf_root_sha256: "{}"
-      high_risk_change_classes: []
-      signers:
-        {}:
-          kid: {}
-          enabled: true
-      roles:
-        - name: config-admin
-          threshold: 1
-          signer_kids:
-            - {}
-          allowed_change_classes:
-{}
-"#,
-        tmp.path().join("antirollback.json").display(),
-        tmp.path().join("local-approvals.json").display(),
-        root_sha,
-        signer_kid,
-        signer_kid,
-        signer_kid,
-        change_classes
-    )
-}
-
-fn write_config(tmp: &TempDir, signer_kid: &str) -> PathBuf {
-    let config_path = tmp.path().join("current.yaml");
-    std::fs::write(&config_path, config_yaml(tmp, signer_kid)).expect("config writes");
-    config_path
-}
-
-async fn write_signed_notary_config_tuf_fixture(
-    tmp: &TempDir,
-    current_config_hash: &str,
-    config_yaml: &str,
-) -> SignedConfigFixture {
-    let repo_dir = tmp.path().join("signed-notary-config");
-    let source_dir = repo_dir.join("source");
-    let metadata_dir = repo_dir.join("metadata");
-    let targets_dir = repo_dir.join("targets");
-    let datastore_dir = repo_dir.join("datastore");
-    std::fs::create_dir_all(&source_dir).expect("source dir");
-    std::fs::create_dir_all(&datastore_dir).expect("datastore dir");
-    let target_name = "registry-notary.yaml";
-    let target_path = source_dir.join(target_name);
-    std::fs::write(&target_path, config_yaml).expect("target config writes");
-
-    let mut target = Target::from_path(&target_path)
-        .await
-        .expect("target metadata builds");
-    let custom = json!({
-        "product": "registry-notary",
-        "instance_id": "notary-cli",
-        "environment": "development",
-        "stream_id": "notary-test-stream",
-        "bundle_id": "notary-test-bundle",
-        "sequence": 1,
-        "previous_config_hash": current_config_hash,
-        "config_hash": sha256_uri(config_yaml.as_bytes()),
-        "change_classes": ["public_metadata"],
-        "signer_kids": [TUF_TARGETS_SIGNER_KID],
-        "apply_policy": "restart_required"
-    });
-    target.custom = custom
-        .as_object()
-        .expect("custom target metadata is an object")
-        .iter()
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .collect();
-
-    let root_path = tough_fixture("simple-rsa").join("root.json");
-    let key_path = tough_fixture("snakeoil.pem");
-    let keys: Vec<Box<dyn KeySource>> = vec![Box::new(LocalKeySource { path: key_path })];
-    let version = NonZeroU64::new(1).expect("nonzero version");
-    let mut editor = RepositoryEditor::new(&root_path)
-        .await
-        .expect("repository editor builds");
-    editor
-        .targets_expires(Utc::now() + chrono::Duration::days(13))
-        .expect("targets expiration");
-    editor.targets_version(version).expect("targets version");
-    editor.snapshot_expires(Utc::now() + chrono::Duration::days(21));
-    editor.snapshot_version(version);
-    editor.timestamp_expires(Utc::now() + chrono::Duration::days(3));
-    editor.timestamp_version(version);
-    editor
-        .add_target(target_name, target)
-        .expect("target added");
-    let signed_repo = editor.sign(&keys).await.expect("repository signs");
-    signed_repo
-        .write(&metadata_dir)
-        .await
-        .expect("metadata writes");
-    signed_repo
-        .copy_targets(&source_dir, &targets_dir, PathExists::Fail)
-        .await
-        .expect("targets write");
-
-    SignedConfigFixture {
-        root_path: metadata_dir.join("1.root.json"),
-        metadata_dir,
-        targets_dir,
-        datastore_dir,
-        target_name: target_name.to_string(),
-    }
-}
-
-async fn serve_signed_tuf_fixture(signed: &SignedConfigFixture) -> MockServer {
-    let server = MockServer::start().await;
-    mount_directory_files(&server, "/metadata", &signed.metadata_dir).await;
-    mount_directory_files(&server, "/targets", &signed.targets_dir).await;
-    Mock::given(method("GET"))
-        .and(path("/metadata/2.root.json"))
-        .respond_with(ResponseTemplate::new(404))
-        .mount(&server)
-        .await;
-    server
-}
-
-/// Patch a config YAML file to add the remote TUF repository to the
-/// `config_trust.remote_tuf_repositories` allowlist.
-///
-/// Called after `serve_signed_tuf_fixture` so we have the server URI.
-fn insert_remote_tuf_repository(
-    config_path: &Path,
-    signed: &SignedConfigFixture,
-    server: &MockServer,
-) {
-    let yaml = std::fs::read_to_string(config_path).expect("config reads");
-    let entry = format!(
-        r#"  remote_tuf_repositories:
-    - root_path: "{}"
-      metadata_base_url: "{}/metadata"
-      targets_base_url: "{}/targets"
-      datastore_dir: "{}"
-      allow_dev_insecure_fetch_urls: true
-"#,
-        signed.root_path.display(),
-        server.uri(),
-        server.uri(),
-        signed.datastore_dir.display()
-    );
-    std::fs::write(
-        config_path,
-        yaml.replace("  accepted_roots:\n", &(entry + "  accepted_roots:\n")),
-    )
-    .expect("config writes");
-}
-
-async fn mount_directory_files(server: &MockServer, url_prefix: &str, dir: &Path) {
-    for entry in std::fs::read_dir(dir).expect("directory reads") {
-        let entry = entry.expect("directory entry reads");
-        let path_on_disk = entry.path();
-        if !path_on_disk.is_file() {
-            continue;
-        }
-        let filename = path_on_disk
-            .file_name()
-            .and_then(|name| name.to_str())
-            .expect("fixture filename is UTF-8");
-        Mock::given(method("GET"))
-            .and(path(format!("{url_prefix}/{filename}")))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_bytes(
-                    std::fs::read(path_on_disk).expect("generated repo file reads"),
-                ),
-            )
-            .mount(server)
-            .await;
-    }
-}
-
-fn verify_bundle_command(config_path: &Path, signed: &SignedConfigFixture) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_registry-notary"));
-    command
-        .arg("--config")
-        .arg(config_path)
-        .arg("config")
-        .arg("verify-bundle")
-        .arg("--root-path")
-        .arg(&signed.root_path)
-        .arg("--metadata-dir")
-        .arg(&signed.metadata_dir)
-        .arg("--targets-dir")
-        .arg(&signed.targets_dir)
-        .arg("--datastore-dir")
-        .arg(&signed.datastore_dir)
-        .arg("--target-name")
-        .arg(&signed.target_name)
-        .env("ISSUER_KEY", TEST_ISSUER_JWK)
-        .env("TEST_TOKEN_HASH", TEST_TOKEN_HASH)
-        .env("TEST_AUDIT_SECRET", TEST_AUDIT_SECRET);
-    command
-}
-
-fn remote_verify_bundle_command(
-    config_path: &Path,
-    signed: &SignedConfigFixture,
-    server: &MockServer,
-) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_registry-notary"));
-    command
-        .arg("--config")
-        .arg(config_path)
-        .arg("config")
-        .arg("verify-bundle")
-        .arg("--root-path")
-        .arg(&signed.root_path)
-        .arg("--metadata-base-url")
-        .arg(format!("{}/metadata", server.uri()))
-        .arg("--targets-base-url")
-        .arg(format!("{}/targets", server.uri()))
-        .arg("--datastore-dir")
-        .arg(&signed.datastore_dir)
-        .arg("--target-name")
-        .arg(&signed.target_name)
-        .arg("--allow-dev-insecure-fetch-urls")
-        .env("ISSUER_KEY", TEST_ISSUER_JWK)
-        .env("TEST_TOKEN_HASH", TEST_TOKEN_HASH)
-        .env("TEST_AUDIT_SECRET", TEST_AUDIT_SECRET);
-    command
-}
-
-#[tokio::test]
-async fn config_verify_bundle_cli_reports_verified_signed_bundle() {
-    let tmp = TempDir::new().expect("tempdir");
-    let current_config = write_config(&tmp, TUF_TARGETS_SIGNER_KID);
-    let candidate_yaml = config_yaml(&tmp, TUF_TARGETS_SIGNER_KID);
-    let current_hash = internal_config_hash(std::fs::read(&current_config).unwrap().as_slice());
-    let signed = write_signed_notary_config_tuf_fixture(&tmp, &current_hash, &candidate_yaml).await;
-
-    let output = verify_bundle_command(&current_config, &signed)
-        .output()
-        .expect("verify-bundle command runs");
-
-    assert!(
-        output.status.success(),
-        "verify-bundle failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let report: Value =
-        serde_json::from_slice(&output.stdout).expect("verify-bundle emits JSON report");
-    assert_eq!(report["result"], "verified");
-    assert_eq!(report["source"], "signed_bundle_file");
-    assert_eq!(report["bundle_id"], "notary-test-bundle");
-    assert_eq!(report["stream_id"], "notary-test-stream");
-    assert_eq!(report["sequence"], 1);
-    assert_eq!(report["target_name"], signed.target_name);
-    assert_eq!(report["change_classes"], json!(["public_metadata"]));
-    assert_eq!(report["signer_kids"], json!([TUF_TARGETS_SIGNER_KID]));
-    assert_eq!(
-        report["config_hash"],
-        internal_config_hash(candidate_yaml.as_bytes())
-    );
-}
-
-#[tokio::test]
-async fn config_verify_bundle_cli_normalizes_bare_previous_config_hash() {
-    let tmp = TempDir::new().expect("tempdir");
-    let current_config = write_config(&tmp, TUF_TARGETS_SIGNER_KID);
-    let candidate_yaml = config_yaml(&tmp, TUF_TARGETS_SIGNER_KID);
-    let current_hash = internal_config_hash(std::fs::read(&current_config).unwrap().as_slice());
-    let bare_hash = current_hash
-        .strip_prefix("sha256:")
-        .expect("internal config hash is canonical sha256");
-    let signed = write_signed_notary_config_tuf_fixture(&tmp, bare_hash, &candidate_yaml).await;
-
-    let output = verify_bundle_command(&current_config, &signed)
-        .output()
-        .expect("verify-bundle command runs");
-
-    assert!(
-        output.status.success(),
-        "verify-bundle failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let report: Value =
-        serde_json::from_slice(&output.stdout).expect("verify-bundle emits JSON report");
-    assert_eq!(report["result"], "verified");
-    assert_eq!(report["previous_config_hash"], current_hash);
-}
-
-#[tokio::test]
-async fn config_verify_bundle_cli_reports_verified_remote_signed_bundle() {
-    let tmp = TempDir::new().expect("tempdir");
-    let current_config = write_config(&tmp, TUF_TARGETS_SIGNER_KID);
-    let candidate_yaml = config_yaml(&tmp, TUF_TARGETS_SIGNER_KID);
-    let current_hash = internal_config_hash(std::fs::read(&current_config).unwrap().as_slice());
-    let signed = write_signed_notary_config_tuf_fixture(&tmp, &current_hash, &candidate_yaml).await;
-    let server = serve_signed_tuf_fixture(&signed).await;
-    insert_remote_tuf_repository(&current_config, &signed, &server);
-
-    let output = remote_verify_bundle_command(&current_config, &signed, &server)
-        .output()
-        .expect("remote verify-bundle command runs");
-
-    assert!(
-        output.status.success(),
-        "remote verify-bundle failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let report: Value =
-        serde_json::from_slice(&output.stdout).expect("verify-bundle emits JSON report");
-    assert_eq!(report["result"], "verified");
-    assert_eq!(report["source"], "signed_bundle_endpoint");
-    assert_eq!(report["bundle_id"], "notary-test-bundle");
-    assert_eq!(report["stream_id"], "notary-test-stream");
-    assert_eq!(report["sequence"], 1);
-    assert_eq!(report["target_name"], signed.target_name);
-    assert_eq!(report["change_classes"], json!(["public_metadata"]));
-    assert_eq!(report["signer_kids"], json!([TUF_TARGETS_SIGNER_KID]));
-    assert_eq!(
-        report["config_hash"],
-        internal_config_hash(candidate_yaml.as_bytes())
-    );
-    assert!(!tmp.path().join("antirollback.json").exists());
-    assert!(!tmp.path().join("local-approvals.json").exists());
-}
-
-#[tokio::test]
-async fn config_verify_bundle_cli_rejects_ambiguous_local_and_remote_tuf_source() {
-    let tmp = TempDir::new().expect("tempdir");
-    let current_config = write_config(&tmp, TUF_TARGETS_SIGNER_KID);
-    let candidate_yaml = config_yaml(&tmp, TUF_TARGETS_SIGNER_KID);
-    let current_hash = internal_config_hash(std::fs::read(&current_config).unwrap().as_slice());
-    let signed = write_signed_notary_config_tuf_fixture(&tmp, &current_hash, &candidate_yaml).await;
-    let mut command = verify_bundle_command(&current_config, &signed);
-    command
-        .arg("--metadata-base-url")
-        .arg("https://config.example.gov/metadata")
-        .arg("--targets-base-url")
-        .arg("https://config.example.gov/targets");
-
-    let output = command.output().expect("verify-bundle command runs");
-
-    assert!(
-        !output.status.success(),
-        "ambiguous verify-bundle unexpectedly succeeded: {}",
-        String::from_utf8_lossy(&output.stdout)
-    );
-    assert!(
-        String::from_utf8_lossy(&output.stderr)
-            .contains("TUF request must choose exactly one local or remote source shape"),
-        "stderr did not explain ambiguous TUF source:\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(!tmp.path().join("antirollback.json").exists());
-}
-
-#[tokio::test]
-async fn config_verify_bundle_cli_rejects_unauthorized_local_trust_root() {
-    let tmp = TempDir::new().expect("tempdir");
-    let current_config = write_config(&tmp, "unauthorized-signer");
-    let candidate_yaml = config_yaml(&tmp, TUF_TARGETS_SIGNER_KID);
-    let current_hash = internal_config_hash(std::fs::read(&current_config).unwrap().as_slice());
-    let signed = write_signed_notary_config_tuf_fixture(&tmp, &current_hash, &candidate_yaml).await;
-
-    let output = verify_bundle_command(&current_config, &signed)
-        .output()
-        .expect("verify-bundle command runs");
-
-    assert!(
-        !output.status.success(),
-        "verify-bundle unexpectedly succeeded: {}",
-        String::from_utf8_lossy(&output.stdout)
-    );
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("not authorized"),
-        "stderr did not explain authorization failure:\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(!tmp.path().join("antirollback.json").exists());
-    assert!(!tmp.path().join("local-approvals.json").exists());
+"#
+    .to_string()
 }

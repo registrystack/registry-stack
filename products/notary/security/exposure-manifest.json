@@ -123,82 +123,10 @@
       "openapi": true,
       "stability": "admin",
       "data_classification": "operational",
-      "notes": "Read-only capabilities route for discovering supported reload and governed config operations.",
+      "notes": "Read-only capabilities route for discovering supported reload and config trust posture operations.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http.rs::admin_capabilities_requires_ops_read_and_reports_notary_surface",
-        "crates/registry-notary-server/tests/standalone_http.rs::admin_config_apply_routes_are_admin_only"
-      ],
-      "waiver": null
-    },
-    {
-      "service": "registry-notary",
-      "listener": "admin",
-      "method": "POST",
-      "path": "/admin/v1/config/verify",
-      "feature": null,
-      "audience": "operator",
-      "auth": "api_key_or_oidc",
-      "scopes": [
-        "registry_notary:admin"
-      ],
-      "rate_limit": null,
-      "audit": "required",
-      "openapi": true,
-      "stability": "admin",
-      "data_classification": "operational",
-      "notes": "Protected Registry Notary route. Standalone mode validates the candidate and reports restart_required until a swappable runtime config handle exists.",
-      "source": "manual",
-      "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http.rs::admin_config_apply_routes_are_admin_only"
-      ],
-      "waiver": null
-    },
-    {
-      "service": "registry-notary",
-      "listener": "admin",
-      "method": "POST",
-      "path": "/admin/v1/config/dry-run",
-      "feature": null,
-      "audience": "operator",
-      "auth": "api_key_or_oidc",
-      "scopes": [
-        "registry_notary:admin"
-      ],
-      "rate_limit": null,
-      "audit": "required",
-      "openapi": true,
-      "stability": "admin",
-      "data_classification": "operational",
-      "notes": "Protected Registry Notary route. Standalone mode validates the candidate and reports rejected_restart_required without mutating runtime state.",
-      "source": "manual",
-      "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http.rs::admin_config_apply_routes_are_admin_only",
-        "crates/registry-notary-server/tests/standalone_http.rs::admin_config_dry_run_reports_restart_required_without_mutating_posture"
-      ],
-      "waiver": null
-    },
-    {
-      "service": "registry-notary",
-      "listener": "admin",
-      "method": "POST",
-      "path": "/admin/v1/config/apply",
-      "feature": null,
-      "audience": "operator",
-      "auth": "api_key_or_oidc",
-      "scopes": [
-        "registry_notary:admin"
-      ],
-      "rate_limit": null,
-      "audit": "required",
-      "openapi": true,
-      "stability": "admin",
-      "data_classification": "operational",
-      "notes": "Protected Registry Notary route. Standalone mode rejects apply as restart_required until a swappable runtime config handle exists.",
-      "source": "manual",
-      "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http.rs::admin_config_apply_routes_are_admin_only",
-        "crates/registry-notary-server/tests/standalone_http.rs::admin_config_apply_signed_tuf_target_rejects_restart_required_without_mutating_posture"
+        "crates/registry-notary-server/tests/standalone_http.rs::admin_capabilities_requires_ops_read_and_reports_notary_surface"
       ],
       "waiver": null
     },
@@ -801,7 +729,7 @@
       "notes": "source-adapter sidecar assurance route. Bearer auth protects verified runtime and config hash state used by Notary expected-sidecar checks.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-source-adapter-sidecar/tests/governed_runtime_validation.rs::governed_startup_loads_signed_tuf_target_reports_assurance_and_accepts_antirollback"
+        "crates/registry-notary-source-adapter-sidecar/tests/governed_runtime_validation.rs::governed_target_renders_http_json_runtime_and_verifies_locally"
       ],
       "waiver": null
     },

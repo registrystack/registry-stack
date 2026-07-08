@@ -41,7 +41,7 @@ the basic path passes `doctor`.
 | `auth` | Caller authentication and scope mapping | Yes |
 | `deployment` | Operator-declared deployment profile and gate waivers | Yes, `deployment.profile` is required |
 | `audit` | Redacted audit envelope sink and HMAC secret | Recommended for every deployable environment |
-| `config_trust` | Durable local state for governed config apply | No, only for signed governed config |
+| `config_trust` | Signed bundle boot trust, anti-rollback state, and optional local override path | No, only for signed bundle startup |
 | `evidence` | Claims, sources, rules, formats, signing keys, and credential profiles | Yes |
 | `cel` | Optional CEL (Common Expression Language) worker policy, limits, and regex posture | Defaults are present |
 | `replay` | One-time-use store for federation request JWTs, OID4VCI nonces, and holder proof JWTs | Defaults to in-process memory |
@@ -119,7 +119,7 @@ The gates bound for Registry Notary:
 | `notary.sidecar.expected_sidecar_missing` | A source-adapter source omits `expected_sidecar` | warn | error | readiness_fail |
 | `notary.admin.shared_exposure` | The admin surface shares the public listener | error | readiness_fail | startup_fail |
 | `notary.openapi.public` | OpenAPI is served without authentication | warn | error | error |
-| `notary.config.unsigned` | Local YAML config rather than signed governed config | warn | error | startup_fail |
+| `notary.config.unsigned` | Local YAML config rather than signed bundle startup | warn | error | startup_fail |
 | `notary.source_binding.no_matching_policy` | A claim source binding declares no matching policy (no `policy_id`, no context constraints), so resolution falls back to unrestricted, identifier-only matching | - | warn | error |
 | `notary.assisted_access.transaction_token_anchor_missing` | `self_attestation.enabled` is true (citizen or wallet flows) while `auth.access_token_signing` is not enabled | error | readiness_fail | startup_fail |
 | `notary.assisted_access.sender_constraint_missing` | `auth.access_token_signing` is enabled but the issued transaction token is not sender-constrained | warn | error | readiness_fail |
@@ -193,127 +193,42 @@ For local development, the binary accepts `--env-file`. For shared
 environments, prefer the platform secret store and avoid checking dotenv files
 into the repository.
 
-## Governed config apply
+## Config Bundle Trust
 
-Most deployments can skip this section. `config_trust` is optional; it governs
-signed, threshold-approved config changes for high-assurance deployments. Simple
-local deployments omit it and keep using the local YAML loaded at startup.
+Most deployments can skip this section. `config_trust` is optional; it makes
+startup config come from a signed, local config bundle. Simple local deployments
+omit it and keep using the local YAML loaded at startup.
 
-This governed example is syntactically valid but illustrative. Generate the
-`tuf_root_sha256` and targets-role signer key IDs from your own trusted
-[TUF (The Update Framework)](https://theupdateframework.io/) repository
-before using governed apply in an environment.
+This example is syntactically valid but illustrative. Generate the trust anchor
+and signed bundle with `registryctl anchor` and `registryctl bundle` before using
+it in an environment.
 
 ```yaml
 config_trust:
+  trust_anchor_path: /etc/registry-notary/config/trust-anchor.json
+  bundle_path: /etc/registry-notary/config/bundle
   antirollback_state_path: /var/lib/registry-notary/config-antirollback.json
-  local_approval_state_path: /var/lib/registry-notary/config-local-approvals.json
-  break_glass_rate_limit:
-    max_accepted: 1
-    window_seconds: 3600
-  remote_tuf_repositories:
-    - root_path: /etc/registry-notary/tuf/metadata/1.root.json
-      metadata_base_url: https://config.example.gov/metadata
-      targets_base_url: https://config.example.gov/targets
-      datastore_dir: /var/lib/registry-notary/tuf
-      allow_dev_insecure_fetch_urls: false
-  accepted_roots:
-    - root_id: ops-root
-      production: false
-      tuf_root_sha256: sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-      valid_from_unix_seconds: 1770000000
-      valid_until_unix_seconds: 1772592000
-      signers:
-        "1111111111111111111111111111111111111111111111111111111111111111":
-          kid: "1111111111111111111111111111111111111111111111111111111111111111"
-          enabled: true
-      roles:
-        - name: config-admin
-          threshold: 1
-          signer_kids: ["1111111111111111111111111111111111111111111111111111111111111111"]
-          allowed_change_classes: [public_metadata, root_transition]
+  break_glass_override_path: /run/registry-notary/config-override.json
 ```
 
-Governed config apply requires `antirollback_state_path` and
-`local_approval_state_path`, which must point to durable local state such as a
-mounted volume. `break_glass_rate_limit` is the trusted local rolling-window
-policy for break-glass apply requests; when omitted it defaults to one
-accepted request per rate-limit identity per hour. `accepted_roots` uses the
-shared Registry trust-root shape.
+Config bundle trust is boot-time only. Notary reads no remote metadata, exposes
+no admin config apply endpoint, and does not hot-apply runtime config. At boot it
+verifies the anchor permissions, the bundle manifest and signature, product and
+environment binding, bundle file closure, anti-rollback sequence, and full
+Notary config validation. The accepted bundle is audited before the
+anti-rollback state is advanced.
 
-Standalone Registry Notary verifies local or remote signed TUF config targets
-against `accepted_roots` when the admin request provides a `tuf` source.
-Verified TUF targets-role signature key IDs, not target-declared custom
-metadata, satisfy the role threshold. Inline YAML remains available for
-verify/dry-run diagnostics.
+`antirollback_state_path` must point to durable local state such as a mounted
+volume. `break_glass_override_path` is optional and points to a root-owned
+one-shot override file. Rollback overrides may accept the exact signed bundle
+hash named by the file. `accept_unsigned` overrides may pin an absolute local
+config path and hash for emergency startup; signature, binding, and sequence
+checks are skipped, but file permissions, hash pinning, and Notary config
+validation still run.
 
-| | Local TUF source | Remote TUF source |
-| --- | --- | --- |
-| Shared fields | `root_path`, `datastore_dir`, `target_name` | `root_path`, `datastore_dir`, `target_name` |
-| Distinct fields | `metadata_dir`, `targets_dir` | `metadata_base_url`, `targets_base_url` |
-| Recorded as | `signed_bundle_file` | `signed_bundle_endpoint` |
-
-`remote_tuf_repositories` is an operator-controlled allowlist of remote TUF
-sources that may be submitted in admin apply requests. An apply request whose
-remote TUF source does not exactly match one of the listed entries (comparing
-`root_path`, `metadata_base_url`, `targets_base_url`, and `datastore_dir`) is
-rejected before any TUF fetch is attempted. This prevents an attacker who can
-POST to the admin endpoint from directing the Notary to an arbitrary TUF server.
-When omitted the list is empty and all remote TUF apply requests are rejected.
-Each entry carries its own `allow_dev_insecure_fetch_urls` flag; the flag from
-the matching allowlist entry is always used, never the value in the incoming
-request. HTTP loopback remote repositories require `allow_dev_insecure_fetch_urls:
-true` and are intended only for tests and local development. Production entries
-must use HTTPS URLs and must set `allow_dev_insecure_fetch_urls: false`.
-
-Governed bundle metadata may set `previous_config_hash` as either bare lowercase
-SHA-256 hex or `sha256:<64 lowercase hex>`. Notary normalizes both forms at the
-product boundary before anti-rollback comparison. The canonical form in
-verification reports, admin API responses, audit events, docs, and mismatch
-errors is `sha256:<64 lowercase hex>`. On a true chain mismatch, the error detail
-includes the expected canonical hash and the received value's detected format.
-
-### TUF root transition
-
-For TUF root transition, apply a signed local TUF bundle whose target metadata
-includes `root_transition`, changes only `config_trust.accepted_roots`, keeps
-the antirollback and local approval paths unchanged, retains existing roots
-unchanged, and references a matching unexpired local approval. Add the new
-final `tuf_root_sha256` as another local `accepted_roots` entry before applying
-bundles that verify through the rotated root. `valid_from_unix_seconds` and
-`valid_until_unix_seconds` are optional local bounds for overlap windows;
-expired or not-yet-valid roots fail authorization even when TUF verification
-and signer quorum otherwise succeed.
-
-### Hot-apply and reload
-
-`POST /admin/v1/config/apply` can hot-apply governed signed signing-key
-rotations for credential issuer, pre-authorized access-token, eSignet
-(an OpenID Connect identity service) client-assertion, and federation response
-signing paths after TUF verification,
-trust-root authorization, and local anti-rollback acceptance. It can also
-hot-apply `signing_key_cleanup` for expired publish-only keys that are no longer
-active signing references. Inline config candidates are accepted only by verify
-and dry-run; apply rejects them with
-`registry.admin.config.inline_apply_rejected`. Other signed changes continue to
-reject with `rejected_restart_required`, so rejected signed targets do not
-advance anti-rollback state or change active posture provenance. This
-restart-required apply result is distinct from unsupported live reload: it means
-the signed candidate is valid but cannot be hot-applied.
-Use `GET /admin/v1/capabilities` with `registry_notary:ops_read` before
-automation invokes governed config or reload operations. Standalone Notary does
-not support resource, table, or runtime config reload; the mounted
-`POST /admin/v1/reload` route returns `501
+Standalone Notary does not support resource, table, or runtime config reload;
+the mounted `POST /admin/v1/reload` route returns `501
 registry.admin.capability.not_supported`.
-
-### Break-glass apply
-
-Break-glass apply is
-available only for signed targets whose target metadata includes the local
-approval's `emergency_change_class`; the approval fields come from the admin
-request, the rolling-window policy comes from local
-`config_trust.break_glass_rate_limit`, and the audit record stores no raw reason
-text.
 
 ## Minimal machine config
 

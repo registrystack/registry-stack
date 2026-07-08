@@ -56,15 +56,10 @@
       "type": "string",
       "enum": [
         "verified",
-        "applied",
         "rejected_signature",
-        "rejected_threshold",
-        "rejected_freshness",
+        "rejected_binding",
+        "rejected_validation",
         "rejected_rollback",
-        "rejected_restart_required",
-        "rejected_readiness",
-        "rejected_break_glass",
-        "rejected_local_approval",
         "internal_error"
       ]
     },
