@@ -522,8 +522,8 @@ async fn run_server(
         loaded.config_provenance.clone(),
     )?;
     if let Some(acceptance) = &loaded.pending_bundle_acceptance {
-        emit_boot_config_audits(&runtime, acceptance).await?;
-        persist_bundle_acceptance(acceptance)?;
+        let audit_result = emit_boot_config_audits(&runtime, acceptance).await;
+        persist_after_successful_boot_audit(acceptance, audit_result)?;
     }
     match admin_mode {
         RegistryNotaryAdminListenerMode::Dedicated => {
@@ -646,10 +646,7 @@ async fn emit_boot_config_audits(
     runtime: &registry_notary_server::NotaryRuntimeSnapshot,
     acceptance: &PendingBundleAcceptance,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if matches!(
-        acceptance.state_action,
-        BundleStateAction::PersistOverridePin
-    ) {
+    if acceptance.emits_break_glass_used_audit() {
         runtime
             .emit_config_boot_audit(
                 "config.break_glass_used",
@@ -720,6 +717,14 @@ fn persist_bundle_acceptance(
 ) -> Result<(), Box<dyn std::error::Error>> {
     persist_config_bundle_acceptance(acceptance)?;
     Ok(())
+}
+
+fn persist_after_successful_boot_audit(
+    acceptance: &PendingBundleAcceptance,
+    audit_result: Result<(), Box<dyn std::error::Error>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    audit_result?;
+    persist_bundle_acceptance(acceptance)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3608,6 +3613,46 @@ CLIENT_SECRET='secret value'
             acceptance.state_action,
             BundleStateAction::Initialize
         ));
+    }
+
+    #[test]
+    fn boot_bundle_acceptance_audit_failure_aborts_before_antirollback_persist() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state_path = tmp.path().join("antirollback.json");
+        let acceptance = PendingBundleAcceptance {
+            state_path: state_path.clone(),
+            key: registry_platform_ops::AntiRollbackKey {
+                product: "registry-notary".to_string(),
+                instance_id: "notary-loader".to_string(),
+                environment: "development".to_string(),
+                stream_id: "notary-loader-test".to_string(),
+            },
+            source: ConfigSource::SignedBundleFile,
+            bundle_id: Some("notary-loader-bundle".to_string()),
+            sequence: Some(1),
+            config_hash: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+                .to_string(),
+            previous_config_hash: None,
+            previous_hash_matched: None,
+            signer_kids: vec!["kid-1".to_string()],
+            break_glass: false,
+            state_action: BundleStateAction::Initialize,
+            override_pin: None,
+            override_path: None,
+        };
+        let audit_result: Result<(), Box<dyn std::error::Error>> =
+            Err(Box::new(std::io::Error::other("boot audit write failed")));
+
+        let result = persist_after_successful_boot_audit(&acceptance, audit_result);
+
+        assert!(result.is_err());
+        let err = registry_platform_ops::FileAntiRollbackStore::new(&state_path)
+            .load(&acceptance.key)
+            .expect_err("state remains absent");
+        assert_eq!(
+            err,
+            registry_platform_ops::AntiRollbackStoreError::MissingState
+        );
     }
 
     #[test]

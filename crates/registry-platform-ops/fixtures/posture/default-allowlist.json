@@ -19,6 +19,7 @@
     "/configuration/last_config_hash",
     "/configuration/last_bundle_id",
     "/configuration/last_bundle_sequence",
+    "/configuration/last_bundle_signer_kids",
     "/configuration/last_apply_result",
     "/configuration/last_apply_at",
     "/configuration/restart_required",
