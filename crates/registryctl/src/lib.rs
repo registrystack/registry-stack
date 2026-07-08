@@ -584,7 +584,7 @@ pub fn init_config_anchor(
         instance_id,
         signers: Vec::new(),
     };
-    write_json_file(anchor_path, &anchor)?;
+    write_trust_anchor_file(anchor_path, &anchor)?;
     Ok(anchor_report(anchor_path, &anchor))
 }
 
@@ -613,7 +613,7 @@ pub fn add_config_anchor_key(
     anchor
         .validate()
         .with_context(|| format!("invalid trust anchor {}", anchor_path.display()))?;
-    write_json_file(anchor_path, &anchor)?;
+    write_trust_anchor_file(anchor_path, &anchor)?;
     Ok(anchor_report(anchor_path, &anchor))
 }
 
@@ -629,7 +629,7 @@ pub fn remove_config_anchor_key(anchor_path: &Path, kid: &str) -> Result<AnchorR
             .validate()
             .with_context(|| format!("invalid trust anchor {}", anchor_path.display()))?;
     }
-    write_json_file(anchor_path, &anchor)?;
+    write_trust_anchor_file(anchor_path, &anchor)?;
     Ok(anchor_report(anchor_path, &anchor))
 }
 
@@ -834,6 +834,60 @@ fn write_json_file<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))?;
     let json = serde_json::to_vec_pretty(value).context("failed to render JSON")?;
     fs::write(path, json).with_context(|| format!("failed to write {}", path.display()))
+}
+
+#[cfg(unix)]
+fn write_trust_anchor_file<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))?;
+    let json = serde_json::to_vec_pretty(value).context("failed to render JSON")?;
+
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() {
+                anyhow::bail!(
+                    "trust anchor path must not be a symlink: {}",
+                    path.display()
+                );
+            }
+            let mut permissions = metadata.permissions();
+            permissions.set_mode(0o600);
+            fs::set_permissions(path, permissions)
+                .with_context(|| format!("failed to set permissions on {}", path.display()))?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to stat {}", path.display()));
+        }
+    }
+
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)
+        .with_context(|| format!("failed to write {}", path.display()))?;
+    file.write_all(&json)
+        .with_context(|| format!("failed to write {}", path.display()))?;
+
+    let mut permissions = file
+        .metadata()
+        .with_context(|| format!("failed to stat {}", path.display()))?
+        .permissions();
+    permissions.set_mode(0o600);
+    file.set_permissions(permissions)
+        .with_context(|| format!("failed to set permissions on {}", path.display()))
+}
+
+#[cfg(not(unix))]
+fn write_trust_anchor_file<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    write_json_file(path, value)
 }
 
 fn anchor_report(anchor_path: &Path, anchor: &ConfigTrustAnchor) -> AnchorReport {
@@ -4919,6 +4973,52 @@ mod tests {
         let anchor = fs::read_to_string(anchor_path).unwrap();
         assert!(!anchor.contains(r#""d":"#));
         assert!(!anchor.contains(r#""d": "#));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn config_anchor_writes_verifier_safe_permissions_on_unix() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = TempDir::new().unwrap();
+        let anchor_path = temp.path().join("trust_anchor.json");
+        let private = PrivateJwk::parse(TEST_PRIVATE_JWK).unwrap();
+        let public = private.public();
+        let public_path = temp.path().join("public.jwk");
+        fs::write(&public_path, serde_json::to_vec_pretty(&public).unwrap()).unwrap();
+
+        init_config_anchor(
+            &anchor_path,
+            "registry-notary".to_string(),
+            "production".to_string(),
+            "civil-registry".to_string(),
+            "notary-011".to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            fs::metadata(&anchor_path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+
+        let mut permissions = fs::metadata(&anchor_path).unwrap().permissions();
+        permissions.set_mode(0o664);
+        fs::set_permissions(&anchor_path, permissions).unwrap();
+
+        add_config_anchor_key(&anchor_path, &public_path, true).unwrap();
+        assert_eq!(
+            fs::metadata(&anchor_path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+
+        let mut permissions = fs::metadata(&anchor_path).unwrap().permissions();
+        permissions.set_mode(0o664);
+        fs::set_permissions(&anchor_path, permissions).unwrap();
+
+        remove_config_anchor_key(&anchor_path, &public.jkt().unwrap()).unwrap();
+        assert_eq!(
+            fs::metadata(&anchor_path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
     }
 
     fn assert_digest_pinned_image(image: &str, repository: &str) {

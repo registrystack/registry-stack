@@ -521,17 +521,15 @@ async fn run_server(
         loaded.config_source,
         loaded.config_provenance.clone(),
     )?;
-    if let Some(acceptance) = &loaded.pending_bundle_acceptance {
-        let audit_result = emit_boot_config_audits(&runtime, acceptance).await;
-        persist_after_successful_boot_audit(acceptance, audit_result)?;
-    }
     match admin_mode {
         RegistryNotaryAdminListenerMode::Dedicated => {
-            let routers = notary_routers_from_runtime(runtime);
             let public_listener = tokio::net::TcpListener::bind(bind).await?;
             let public_addr: SocketAddr = public_listener.local_addr()?;
             let admin_listener = tokio::net::TcpListener::bind(admin_bind).await?;
             let admin_addr: SocketAddr = admin_listener.local_addr()?;
+            emit_and_persist_boot_acceptance(&runtime, loaded.pending_bundle_acceptance.as_ref())
+                .await?;
+            let routers = notary_routers_from_runtime(runtime);
             tracing::info!(
                 %public_addr,
                 %admin_addr,
@@ -565,10 +563,12 @@ async fn run_server(
             tokio::try_join!(public, admin)?;
         }
         RegistryNotaryAdminListenerMode::SharedWithPublic => {
-            let app = notary_router_from_runtime(runtime)
-                .layer(TraceLayer::new_for_http().make_span_with(http_trace_span));
             let listener = tokio::net::TcpListener::bind(bind).await?;
             let local_addr: SocketAddr = listener.local_addr()?;
+            emit_and_persist_boot_acceptance(&runtime, loaded.pending_bundle_acceptance.as_ref())
+                .await?;
+            let app = notary_router_from_runtime(runtime)
+                .layer(TraceLayer::new_for_http().make_span_with(http_trace_span));
             tracing::info!(
                 %local_addr,
                 build_features = ?compiled_build_features(),
@@ -578,11 +578,13 @@ async fn run_server(
             serve_listener(listener, app, serve_limits, shutdown_signal()).await?;
         }
         RegistryNotaryAdminListenerMode::Disabled => {
+            let listener = tokio::net::TcpListener::bind(bind).await?;
+            let local_addr: SocketAddr = listener.local_addr()?;
+            emit_and_persist_boot_acceptance(&runtime, loaded.pending_bundle_acceptance.as_ref())
+                .await?;
             let app = notary_routers_from_runtime(runtime)
                 .public
                 .layer(TraceLayer::new_for_http().make_span_with(http_trace_span));
-            let listener = tokio::net::TcpListener::bind(bind).await?;
-            let local_addr: SocketAddr = listener.local_addr()?;
             tracing::info!(
                 %local_addr,
                 build_features = ?compiled_build_features(),
@@ -727,6 +729,17 @@ fn persist_after_successful_boot_audit(
     persist_bundle_acceptance(acceptance)
 }
 
+async fn emit_and_persist_boot_acceptance(
+    runtime: &registry_notary_server::NotaryRuntimeSnapshot,
+    acceptance: Option<&PendingBundleAcceptance>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let Some(acceptance) = acceptance else {
+        return Ok(());
+    };
+    let audit_result = emit_boot_config_audits(runtime, acceptance).await;
+    persist_after_successful_boot_audit(acceptance, audit_result)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LogFormat {
     Text,
@@ -817,6 +830,7 @@ async fn config_verify_bundle(
         &key,
         verified.manifest.sequence,
         &verified.manifest.config_hash,
+        &verified.manifest_hash,
     ) {
         print_config_verify_bundle_report(config_verify_bundle_report(
             "rejected_rollback",
@@ -831,7 +845,7 @@ async fn config_verify_bundle(
     }
     let config_text = std::str::from_utf8(&verified.config_bytes)?;
     let parsed = match parse_config_document(config_text).and_then(|parsed| {
-        validate_config_document(&parsed)?;
+        validate_signed_bundle_config_document(&parsed)?;
         Ok(parsed)
     }) {
         Ok(parsed) => parsed,
@@ -848,7 +862,20 @@ async fn config_verify_bundle(
             return Err(error);
         }
     };
-    let _ = parsed;
+    if let Err(error) =
+        compile_notary_runtime_with_provenance(parsed.config, ConfigSource::SignedBundleFile, None)
+    {
+        print_config_verify_bundle_report(config_verify_bundle_report(
+            "rejected_validation",
+            &verified.manifest.stream_id,
+            Some(verified.manifest.bundle_id.clone()),
+            Some(verified.manifest.sequence),
+            verified.manifest.previous_config_hash.clone(),
+            Some(verified.manifest.config_hash.clone()),
+            Some(("rejected_validation", error.to_string())),
+        ))?;
+        return Err(Box::new(error));
+    }
     print_config_verify_bundle_report(config_verify_bundle_report(
         "verified",
         &verified.manifest.stream_id,
@@ -970,8 +997,25 @@ fn parse_config_document(raw: &str) -> Result<ParsedConfigDocument, Box<dyn std:
 fn validate_config_document(
     parsed: &ParsedConfigDocument,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    validate_config_document_with_mode(parsed, false)
+}
+
+fn validate_signed_bundle_config_document(
+    parsed: &ParsedConfigDocument,
+) -> Result<(), Box<dyn std::error::Error>> {
+    validate_config_document_with_mode(parsed, true)
+}
+
+fn validate_config_document_with_mode(
+    parsed: &ParsedConfigDocument,
+    governed_runtime: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     let config = &parsed.config;
-    config.validate()?;
+    if governed_runtime {
+        config.validate_governed_runtime()?;
+    } else {
+        config.validate()?;
+    }
     if admin_listener_default_warning_needed(config, parsed.admin_listener_present) {
         tracing::warn!(
             restore_key = "server.admin_listener.mode",
@@ -1036,6 +1080,7 @@ fn load_verified_bundle_server_config(
         &key,
         verified.manifest.sequence,
         &verified.manifest.config_hash,
+        &verified.manifest_hash,
         verified.manifest.previous_config_hash.as_deref(),
         config_trust.break_glass_override_path.as_deref(),
         initialize_state,
@@ -1061,7 +1106,7 @@ fn load_verified_bundle_server_config(
         eprintln!("config.bundle_rejected result=rejected_validation error={error}");
         error
     })?;
-    validate_config_document(&parsed).map_err(|error| {
+    validate_signed_bundle_config_document(&parsed).map_err(|error| {
         tracing::error!(
             code = "config.bundle_rejected",
             result = "rejected_validation",
@@ -1093,6 +1138,7 @@ fn load_verified_bundle_server_config(
             key,
             source: ConfigSource::SignedBundleFile,
             bundle_id: Some(verified.manifest.bundle_id),
+            bundle_manifest_hash: Some(verified.manifest_hash),
             sequence: Some(verified.manifest.sequence),
             config_hash: verified.manifest.config_hash,
             previous_config_hash: verified.manifest.previous_config_hash,
@@ -1181,6 +1227,7 @@ fn load_unsigned_pin_server_config(
             key: selection.key,
             source: ConfigSource::LocalFile,
             bundle_id: None,
+            bundle_manifest_hash: None,
             sequence: None,
             config_hash: selection.pin.config_hash,
             previous_config_hash: None,
@@ -3446,6 +3493,7 @@ auth:
       scopes: [registry_notary:credential_issue]
 audit:
   sink: stdout
+  hash_secret_env: TEST_NOTARY_LOADER_AUDIT_HASH_SECRET
 evidence:
   enabled: true
   signing_keys:
@@ -3629,6 +3677,10 @@ CLIENT_SECRET='secret value'
             },
             source: ConfigSource::SignedBundleFile,
             bundle_id: Some("notary-loader-bundle".to_string()),
+            bundle_manifest_hash: Some(
+                "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+                    .to_string(),
+            ),
             sequence: Some(1),
             config_hash: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
                 .to_string(),
@@ -3653,6 +3705,57 @@ CLIENT_SECRET='secret value'
             err,
             registry_platform_ops::AntiRollbackStoreError::MissingState
         );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn boot_listener_bind_failure_aborts_before_antirollback_persist() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        std::env::set_var("TEST_NOTARY_LOADER_API_HASH", sha256_hash("api-token"));
+        std::env::set_var(
+            "TEST_NOTARY_LOADER_AUDIT_HASH_SECRET",
+            "registry-notary-loader-audit-secret-32-bytes",
+        );
+        std::env::set_var(
+            "TEST_NOTARY_LOADER_ISSUER_JWK",
+            demo_issuer_jwk("did:web:issuer.example#key-1").expect("issuer key generates"),
+        );
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let fixture = write_signed_notary_bundle(&tmp);
+        let config_path = tmp.path().join("bootstrap.yaml");
+        std::fs::write(&config_path, notary_bootstrap_config(&fixture)).expect("bootstrap writes");
+        let held_listener =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("test listener binds");
+        let held_addr = held_listener
+            .local_addr()
+            .expect("test listener exposes local addr");
+
+        let error = run_server(&config_path, Some(held_addr), true)
+            .await
+            .expect_err("occupied listener rejects startup");
+
+        assert!(
+            error.to_string().contains("Address already in use"),
+            "unexpected error: {error}"
+        );
+        let key = registry_platform_ops::AntiRollbackKey {
+            product: "registry-notary".to_string(),
+            instance_id: String::new(),
+            environment: "development".to_string(),
+            stream_id: "notary-loader-test".to_string(),
+        };
+        let err = registry_platform_ops::FileAntiRollbackStore::new(&fixture.state_path)
+            .load(&key)
+            .expect_err("state remains absent");
+        assert_eq!(
+            err,
+            registry_platform_ops::AntiRollbackStoreError::MissingState
+        );
+
+        drop(held_listener);
+        std::env::remove_var("TEST_NOTARY_LOADER_API_HASH");
+        std::env::remove_var("TEST_NOTARY_LOADER_AUDIT_HASH_SECRET");
+        std::env::remove_var("TEST_NOTARY_LOADER_ISSUER_JWK");
     }
 
     #[test]

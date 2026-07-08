@@ -18,6 +18,9 @@ use serde_json::Value;
 use tempfile::TempDir;
 
 const PRIVATE_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}"#;
+const TEST_TOKEN_HASH: &str =
+    "sha256:31f2999a69fa6301763a9f61eea44388a13318ce8b80a16a115a9efdb62b883b";
+const TEST_AUDIT_HASH_SECRET: &str = "registry-notary-cli-audit-secret-32-bytes";
 const ZERO_HASH: &str = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
 
 struct BundleFixture {
@@ -83,6 +86,7 @@ fn config_verify_bundle_cli_rejects_expired_override_pin() {
             last_config_hash:
                 "sha256:1111111111111111111111111111111111111111111111111111111111111111"
                     .to_string(),
+            last_bundle_manifest_hash: None,
             last_bundle_id: None,
             root_version: None,
             override_pin: Some(ConfigOverridePin {
@@ -143,6 +147,49 @@ fn config_verify_bundle_cli_reports_rejected_validation() {
     assert_eq!(report["errors"][0]["code"], "rejected_validation");
 }
 
+#[test]
+fn config_verify_bundle_cli_runs_deployment_gates() {
+    let temp = TempDir::new().expect("tempdir");
+    let config = notary_config_yaml().replace("  profile: local", "  profile: evidence_grade");
+    let fixture = write_bundle_fixture_with_config(&temp, "registry-notary", 0, config);
+
+    let output = verify_bundle_command(&fixture)
+        .output()
+        .expect("command runs");
+
+    assert!(!output.status.success());
+    let report = stdout_json(&output);
+    assert_eq!(report["result"], "rejected_validation");
+    assert_eq!(report["errors"][0]["code"], "rejected_validation");
+    assert!(report["errors"][0]["message"]
+        .as_str()
+        .expect("error message")
+        .contains("notary.audit.sink_missing"));
+}
+
+#[test]
+fn config_verify_bundle_cli_rejects_governed_shared_admin_listener() {
+    let temp = TempDir::new().expect("tempdir");
+    let config = notary_config_yaml().replace(
+        "server:\n  bind: 127.0.0.1:0\n  admin_listener:\n    mode: dedicated\n    bind: 127.0.0.1:1\n",
+        "server:\n  bind: 127.0.0.1:0\n  admin_listener:\n    mode: shared_with_public\n",
+    );
+    let fixture = write_bundle_fixture_with_config(&temp, "registry-notary", 0, config);
+
+    let output = verify_bundle_command(&fixture)
+        .output()
+        .expect("command runs");
+
+    assert!(!output.status.success());
+    let report = stdout_json(&output);
+    assert_eq!(report["result"], "rejected_validation");
+    assert_eq!(report["errors"][0]["code"], "rejected_validation");
+    assert!(report["errors"][0]["message"]
+        .as_str()
+        .expect("error message")
+        .contains("server.admin_listener.mode = dedicated"));
+}
+
 fn verify_bundle_command(fixture: &BundleFixture) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_registry-notary"));
     command.args([
@@ -155,6 +202,9 @@ fn verify_bundle_command(fixture: &BundleFixture) -> Command {
         "--state-path",
         fixture.state_path.to_str().expect("path is UTF-8"),
     ]);
+    command.env("TEST_TOKEN_HASH", TEST_TOKEN_HASH);
+    command.env("TEST_AUDIT_HASH_SECRET", TEST_AUDIT_HASH_SECRET);
+    command.env("ISSUER_KEY", PRIVATE_JWK);
     command
 }
 
@@ -163,11 +213,19 @@ fn write_bundle_fixture(
     manifest_product: &str,
     last_sequence: u64,
 ) -> BundleFixture {
+    write_bundle_fixture_with_config(temp, manifest_product, last_sequence, notary_config_yaml())
+}
+
+fn write_bundle_fixture_with_config(
+    temp: &TempDir,
+    manifest_product: &str,
+    last_sequence: u64,
+    config: String,
+) -> BundleFixture {
     let bundle_dir = temp.path().join("bundle");
     let config_dir = bundle_dir.join("config");
     std::fs::create_dir_all(&config_dir).expect("bundle config dir");
     let config_path = config_dir.join("notary.yaml");
-    let config = notary_config_yaml();
     std::fs::write(&config_path, config.as_bytes()).expect("config writes");
     let config_hash = sha256_uri(config.as_bytes());
 
@@ -227,6 +285,7 @@ fn write_bundle_fixture(
                 "sha256:1111111111111111111111111111111111111111111111111111111111111111"
                     .to_string()
             },
+            last_bundle_manifest_hash: None,
             last_bundle_id: None,
             root_version: None,
             override_pin: None,
@@ -292,6 +351,9 @@ deployment:
   profile: local
 server:
   bind: 127.0.0.1:0
+  admin_listener:
+    mode: dedicated
+    bind: 127.0.0.1:1
 auth:
   mode: api_key
   api_keys:
@@ -301,6 +363,7 @@ auth:
         name: TEST_TOKEN_HASH
 audit:
   sink: stdout
+  hash_secret_env: TEST_AUDIT_HASH_SECRET
 evidence:
   enabled: true
   signing_keys:

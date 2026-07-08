@@ -539,6 +539,11 @@ impl StandaloneRegistryNotaryConfig {
         Ok(())
     }
 
+    pub fn validate_governed_runtime(&self) -> Result<(), EvidenceConfigError> {
+        self.validate()?;
+        self.server.admin_listener.validate(self.server.bind, true)
+    }
+
     /// Snapshot the configuration facts the deployment gate engine reads.
     ///
     /// Pure projection of the loaded config. Building it here keeps gate

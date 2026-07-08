@@ -16,7 +16,7 @@ use axum::Extension;
 use datafusion::execution::context::SessionContext;
 use hmac::{KeyInit, Mac, SimpleHmac};
 use registry_manifest_core::CompiledMetadata;
-use registry_platform_ops::ConfigProvenance;
+use registry_platform_ops::{ConfigProvenance, PendingBundleAcceptance};
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
 use tokio::sync::watch;
@@ -109,6 +109,7 @@ pub struct RelayRuntimeSnapshot {
     pub compiled_metadata: Option<Arc<CompiledMetadata>>,
     pub metadata_source_digest: Option<String>,
     pub metadata_package_digest: Option<String>,
+    pub pending_bundle_acceptance: Option<PendingBundleAcceptance>,
     pub auth: AuthProviderRef,
     pub audit_sink: Arc<AuditPipeline>,
     pub bind: SocketAddr,
@@ -139,6 +140,7 @@ impl RelayRuntimeSnapshot {
         compiled_metadata: Option<Arc<CompiledMetadata>>,
         metadata_source_digest: Option<String>,
         metadata_package_digest: Option<String>,
+        pending_bundle_acceptance: Option<PendingBundleAcceptance>,
         auth: AuthProviderRef,
         audit_sink: Arc<AuditPipeline>,
         bind: SocketAddr,
@@ -167,6 +169,7 @@ impl RelayRuntimeSnapshot {
             compiled_metadata,
             metadata_source_digest,
             metadata_package_digest,
+            pending_bundle_acceptance,
             auth,
             audit_sink,
             bind,
@@ -197,6 +200,7 @@ impl RelayRuntimeSnapshot {
             self.compiled_metadata.clone(),
             self.metadata_source_digest.clone(),
             self.metadata_package_digest.clone(),
+            self.pending_bundle_acceptance.clone(),
             self.auth.clone(),
             Arc::clone(&self.audit_sink),
             self.bind,

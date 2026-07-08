@@ -808,6 +808,21 @@ def validate_openfn_sidecar_governance(
                 "governed OpenFn sidecar bootstrap must include a durable file audit sink",
             )
         )
+    limits = bootstrap_config.get("limits")
+    sources = bootstrap_config.get("sources")
+    if (
+        not isinstance(limits, dict)
+        or not isinstance(sources, dict)
+        or "dhis2_health" not in sources
+    ):
+        issues.append(
+            Issue(
+                "missing-openfn-runtime-config",
+                artifact,
+                "config/coolify/openfn/openfn-dhis2-sidecar.bootstrap.yaml",
+                "hosted OpenFn sidecar bootstrap must include the runtime limits and dhis2_health source",
+            )
+        )
 
     expected = extract_openfn_expected_sidecar_scalars(notary_config)
     if not expected:

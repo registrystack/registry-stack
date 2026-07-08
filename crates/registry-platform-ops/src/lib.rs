@@ -351,6 +351,8 @@ pub struct AntiRollbackRecord {
     pub last_sequence: u64,
     pub last_config_hash: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_bundle_manifest_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_bundle_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root_version: Option<u64>,
@@ -422,6 +424,7 @@ pub struct PendingBundleAcceptance {
     pub key: AntiRollbackKey,
     pub source: ConfigSource,
     pub bundle_id: Option<String>,
+    pub bundle_manifest_hash: Option<String>,
     pub sequence: Option<u64>,
     pub config_hash: String,
     pub previous_config_hash: Option<String>,
@@ -445,6 +448,7 @@ impl PendingBundleAcceptance {
                 .sequence
                 .expect("initial state requires bundle sequence"),
             last_config_hash: self.config_hash.clone(),
+            last_bundle_manifest_hash: self.bundle_manifest_hash.clone(),
             last_bundle_id: self.bundle_id.clone(),
             root_version: None,
             override_pin: None,
@@ -653,6 +657,7 @@ pub enum ConfigBootError {
     MissingUnsignedConfigPath,
     UnsignedConfigHashMismatch { expected: String, actual: String },
     MissingSignedBundleId,
+    MissingSignedBundleManifestHash,
     MissingSignedBundleSequence,
     MissingOverridePin,
     InvalidOverridePath,
@@ -668,6 +673,7 @@ impl ConfigBootError {
             | Self::MissingUnsignedConfigPath
             | Self::UnsignedConfigHashMismatch { .. } => "rejected_rollback",
             Self::MissingSignedBundleId
+            | Self::MissingSignedBundleManifestHash
             | Self::MissingSignedBundleSequence
             | Self::MissingOverridePin
             | Self::InvalidOverridePath => "rejected_validation",
@@ -705,6 +711,9 @@ impl Display for ConfigBootError {
             ),
             Self::MissingSignedBundleId => {
                 write!(f, "signed bundle acceptance is missing bundle_id")
+            }
+            Self::MissingSignedBundleManifestHash => {
+                write!(f, "signed bundle acceptance is missing manifest hash")
             }
             Self::MissingSignedBundleSequence => {
                 write!(f, "signed bundle acceptance is missing sequence")
@@ -895,6 +904,7 @@ impl FileAntiRollbackStore {
             key: key.clone(),
             last_sequence: proposal.sequence,
             last_config_hash: proposal.config_hash,
+            last_bundle_manifest_hash: current.last_bundle_manifest_hash,
             last_bundle_id: current.last_bundle_id,
             root_version: proposal.root_version.or(current.root_version),
             override_pin: None,
@@ -912,12 +922,14 @@ impl FileAntiRollbackStore {
         bundle_id: String,
         sequence: u64,
         config_hash: String,
+        bundle_manifest_hash: String,
     ) -> Result<AntiRollbackRecord, AntiRollbackStoreError> {
         self.accept_bundle_at(
             key,
             bundle_id,
             sequence,
             config_hash,
+            bundle_manifest_hash,
             current_unix_seconds()?,
         )
     }
@@ -928,21 +940,27 @@ impl FileAntiRollbackStore {
         bundle_id: String,
         sequence: u64,
         config_hash: String,
+        bundle_manifest_hash: String,
         _now_unix_seconds: u64,
     ) -> Result<AntiRollbackRecord, AntiRollbackStoreError> {
         let _lock = self.acquire_lock()?;
         let current = self.load(key)?;
         validate_non_empty("last_bundle_id", &bundle_id)?;
+        validate_hash(&bundle_manifest_hash)?;
         validate_hash(&config_hash)?;
         if sequence < current.last_sequence {
             return Err(AntiRollbackStoreError::NonMonotonicSequence);
         }
-        if sequence == current.last_sequence && config_hash != current.last_config_hash {
+        if sequence == current.last_sequence
+            && (config_hash != current.last_config_hash
+                || current.last_bundle_manifest_hash.as_deref()
+                    != Some(bundle_manifest_hash.as_str()))
+        {
             return Err(AntiRollbackStoreError::NonMonotonicSequence);
         }
         if sequence == current.last_sequence
             && config_hash == current.last_config_hash
-            && current.last_bundle_id.as_deref() == Some(bundle_id.as_str())
+            && current.last_bundle_manifest_hash.as_deref() == Some(bundle_manifest_hash.as_str())
             && current.override_pin.is_none()
         {
             return Ok(current);
@@ -951,6 +969,7 @@ impl FileAntiRollbackStore {
             key: key.clone(),
             last_sequence: sequence,
             last_config_hash: config_hash,
+            last_bundle_manifest_hash: Some(bundle_manifest_hash),
             last_bundle_id: Some(bundle_id),
             root_version: None,
             override_pin: None,
@@ -1060,6 +1079,9 @@ impl AntiRollbackRecord {
         validate_non_empty("environment", &self.key.environment)?;
         validate_non_empty("stream_id", &self.key.stream_id)?;
         validate_hash(&self.last_config_hash)?;
+        if let Some(manifest_hash) = &self.last_bundle_manifest_hash {
+            validate_hash(manifest_hash)?;
+        }
         if let Some(bundle_id) = &self.last_bundle_id {
             validate_non_empty("last_bundle_id", bundle_id)?;
         }
@@ -1120,10 +1142,13 @@ pub fn verify_bundle_state_read_only(
     key: &AntiRollbackKey,
     sequence: u64,
     config_hash: &str,
+    bundle_manifest_hash: &str,
 ) -> Result<(), ConfigBootError> {
     let record = FileAntiRollbackStore::new(state_path).load(key)?;
     if sequence > record.last_sequence
-        || (sequence == record.last_sequence && config_hash == record.last_config_hash)
+        || (sequence == record.last_sequence
+            && config_hash == record.last_config_hash
+            && record.last_bundle_manifest_hash.as_deref() == Some(bundle_manifest_hash))
         || record.override_pin.as_ref().is_some_and(|pin| {
             pin.mode == ConfigOverrideMode::AcceptRollback
                 && override_pin_active_and_unexpired(pin)
@@ -1141,6 +1166,7 @@ pub fn resolve_bundle_state_action(
     key: &AntiRollbackKey,
     sequence: u64,
     config_hash: &str,
+    bundle_manifest_hash: &str,
     previous_config_hash: Option<&str>,
     rollback_override_path: Option<&Path>,
     initialize_state: bool,
@@ -1154,7 +1180,9 @@ pub fn resolve_bundle_state_action(
             override_path: None,
         }),
         Ok(record)
-            if sequence == record.last_sequence && config_hash == record.last_config_hash =>
+            if sequence == record.last_sequence
+                && config_hash == record.last_config_hash
+                && record.last_bundle_manifest_hash.as_deref() == Some(bundle_manifest_hash) =>
         {
             let matched = previous_hash_matched(previous_config_hash, &record);
             let active_pin = record
@@ -1402,6 +1430,10 @@ pub fn persist_bundle_acceptance(
                     .sequence
                     .ok_or(ConfigBootError::MissingSignedBundleSequence)?,
                 acceptance.config_hash.clone(),
+                acceptance
+                    .bundle_manifest_hash
+                    .clone()
+                    .ok_or(ConfigBootError::MissingSignedBundleManifestHash)?,
             )?;
         }
         BundleStateAction::PersistOverridePin => {
@@ -2283,6 +2315,7 @@ mod tests {
             key,
             last_sequence: sequence,
             last_config_hash: config_hash,
+            last_bundle_manifest_hash: Some(test_hash('f')),
             last_bundle_id: Some("bundle-1".to_string()),
             root_version: None,
             override_pin,
@@ -2410,6 +2443,7 @@ mod tests {
             key,
             source,
             bundle_id: Some("bundle-2".to_string()),
+            bundle_manifest_hash: Some(test_hash('e')),
             sequence: Some(2),
             config_hash,
             previous_config_hash: Some(test_hash('a')),
@@ -2504,6 +2538,67 @@ mod tests {
     }
 
     #[test]
+    fn accept_bundle_rejects_same_sequence_same_config_different_manifest_hash() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state_path = dir.path().join("antirollback.json");
+        let key = test_key();
+        let current_hash = test_hash('a');
+        let store = FileAntiRollbackStore::new(&state_path);
+        store
+            .initialize(antirollback_record(
+                key.clone(),
+                4,
+                current_hash.clone(),
+                None,
+            ))
+            .expect("state initializes");
+
+        let err = store
+            .accept_bundle(
+                &key,
+                "bundle-2".to_string(),
+                4,
+                current_hash,
+                test_hash('e'),
+            )
+            .expect_err("same sequence with different manifest hash is rejected");
+
+        assert_eq!(err, AntiRollbackStoreError::NonMonotonicSequence);
+    }
+
+    #[test]
+    fn accept_bundle_accepts_same_sequence_same_config_same_manifest_hash() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state_path = dir.path().join("antirollback.json");
+        let key = test_key();
+        let current_hash = test_hash('a');
+        let store = FileAntiRollbackStore::new(&state_path);
+        store
+            .initialize(antirollback_record(
+                key.clone(),
+                4,
+                current_hash.clone(),
+                None,
+            ))
+            .expect("state initializes");
+
+        let accepted = store
+            .accept_bundle(
+                &key,
+                "bundle-1".to_string(),
+                4,
+                current_hash,
+                test_hash('f'),
+            )
+            .expect("same signed bundle restarts idempotently");
+
+        assert_eq!(
+            accepted.last_bundle_manifest_hash.as_deref(),
+            Some(test_hash('f').as_str())
+        );
+    }
+
+    #[test]
     fn read_only_bundle_state_verifier_matches_acceptance_rules() {
         let dir = tempfile::tempdir().expect("tempdir");
         let state_path = dir.path().join("antirollback.json");
@@ -2518,12 +2613,18 @@ mod tests {
             ))
             .expect("state initializes");
 
-        verify_bundle_state_read_only(&state_path, &key, 5, &test_hash('b'))
+        verify_bundle_state_read_only(&state_path, &key, 5, &test_hash('b'), &test_hash('e'))
             .expect("higher sequence verifies");
-        verify_bundle_state_read_only(&state_path, &key, 4, &current_hash)
+        verify_bundle_state_read_only(&state_path, &key, 4, &current_hash, &test_hash('f'))
             .expect("same sequence and hash verifies");
-        let err = verify_bundle_state_read_only(&state_path, &key, 4, &test_hash('c'))
-            .expect_err("same sequence with different hash is rejected");
+        let err =
+            verify_bundle_state_read_only(&state_path, &key, 4, &test_hash('c'), &test_hash('f'))
+                .expect_err("same sequence with different hash is rejected");
+
+        assert_eq!(err, ConfigBootError::NonMonotonicSequence);
+        let err =
+            verify_bundle_state_read_only(&state_path, &key, 4, &current_hash, &test_hash('e'))
+                .expect_err("same sequence with different manifest hash is rejected");
 
         assert_eq!(err, ConfigBootError::NonMonotonicSequence);
 
@@ -2540,7 +2641,7 @@ mod tests {
                 )),
             ))
             .expect("pinned state initializes");
-        verify_bundle_state_read_only(&pinned_state_path, &key, 4, &pinned_hash)
+        verify_bundle_state_read_only(&pinned_state_path, &key, 4, &pinned_hash, &test_hash('e'))
             .expect("active override pin verifies matching hash");
 
         let unsigned_pin_state_path = dir.path().join("unsigned-pin-antirollback.json");
@@ -2555,8 +2656,14 @@ mod tests {
                 )),
             ))
             .expect("unsigned pin state initializes");
-        let err = verify_bundle_state_read_only(&unsigned_pin_state_path, &key, 4, &pinned_hash)
-            .expect_err("unsigned override pin does not verify signed rollback");
+        let err = verify_bundle_state_read_only(
+            &unsigned_pin_state_path,
+            &key,
+            4,
+            &pinned_hash,
+            &test_hash('e'),
+        )
+        .expect_err("unsigned override pin does not verify signed rollback");
 
         assert_eq!(err, ConfigBootError::NonMonotonicSequence);
     }
@@ -2579,9 +2686,47 @@ mod tests {
             ))
             .expect("state initializes");
 
-        let err =
-            resolve_bundle_state_action(&state_path, &key, 4, &signed_hash, None, None, false)
-                .expect_err("unsigned override pin does not accept signed rollback");
+        let err = resolve_bundle_state_action(
+            &state_path,
+            &key,
+            4,
+            &signed_hash,
+            &test_hash('e'),
+            None,
+            None,
+            false,
+        )
+        .expect_err("unsigned override pin does not accept signed rollback");
+
+        assert_eq!(err, ConfigBootError::NonMonotonicSequence);
+    }
+
+    #[test]
+    fn signed_bundle_state_resolver_rejects_same_sequence_different_manifest_hash() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state_path = dir.path().join("antirollback.json");
+        let key = test_key();
+        let current_hash = test_hash('a');
+        FileAntiRollbackStore::new(&state_path)
+            .initialize(antirollback_record(
+                key.clone(),
+                4,
+                current_hash.clone(),
+                None,
+            ))
+            .expect("state initializes");
+
+        let err = resolve_bundle_state_action(
+            &state_path,
+            &key,
+            4,
+            &current_hash,
+            &test_hash('e'),
+            None,
+            None,
+            false,
+        )
+        .expect_err("same sequence with different manifest hash is rejected");
 
         assert_eq!(err, ConfigBootError::NonMonotonicSequence);
     }
@@ -2672,6 +2817,7 @@ mod tests {
             &key,
             4,
             &config_hash,
+            &test_hash('e'),
             None,
             Some(&override_path),
             false,

@@ -39,8 +39,8 @@ pub mod vocabularies;
 
 pub use loader::{
     load, load_config_metadata, load_metadata_manifest, load_with_metadata,
-    load_with_metadata_options, BundleStateAction, LoadOptions, LoadedConfig,
-    PendingBundleAcceptance,
+    load_with_metadata_options, validate_verified_bundle_runtime, BundleStateAction, LoadOptions,
+    LoadedConfig, PendingBundleAcceptance,
 };
 pub use provenance::{
     ClaimValidity, DelegatedIssuerConfig, FileWatchSignerConfig, GatewayIssuerConfig, IssuerConfig,

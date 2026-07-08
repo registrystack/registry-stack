@@ -51,7 +51,7 @@ pub struct SidecarConfig {
     pub config_trust: Option<SidecarConfigTrustConfig>,
     pub limits: LimitConfig,
     pub sources: BTreeMap<String, SourceConfig>,
-    #[serde(skip)]
+    #[serde(default)]
     pub assurance: Option<SidecarAssurance>,
     #[serde(skip)]
     governed_acceptance: Option<GovernedAcceptance>,
@@ -718,7 +718,8 @@ pub enum HttpFlowStatusAction {
     Timeout,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct SidecarAssurance {
     pub status: String,
     pub product: String,

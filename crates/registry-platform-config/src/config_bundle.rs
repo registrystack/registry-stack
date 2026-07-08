@@ -114,6 +114,7 @@ pub enum ConfigBreakGlassMode {
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct VerifiedConfigBundle {
     pub manifest: ConfigBundleManifest,
+    pub manifest_hash: String,
     pub signer_kids: Vec<String>,
     pub config_path: PathBuf,
     pub config_bytes: Vec<u8>,
@@ -202,11 +203,13 @@ pub fn verify_config_bundle(
     envelope.validate()?;
     let canonical_manifest = canonicalize_json(&manifest_value)
         .map_err(|error| ConfigBundleError::Json(error.to_string()))?;
+    let manifest_hash = sha256_uri(&canonical_manifest);
     let signer_kids = verify_manifest_signatures(&canonical_manifest, &envelope, &anchor)?;
     manifest.validate_binding(&anchor)?;
     let (config_path, config_bytes) = verify_file_closure(bundle_dir, &manifest)?;
     Ok(VerifiedConfigBundle {
         manifest,
+        manifest_hash,
         signer_kids,
         config_path,
         config_bytes,

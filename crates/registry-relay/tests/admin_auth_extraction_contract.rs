@@ -23,6 +23,7 @@ fn admin_handlers_use_required_scoped_extractors() {
             && source.contains(
                 "async fn capabilities(runtime: RuntimeSnapshot, _ops: OpsReadPrincipal)"
             )
+            && source.contains("async fn posture(")
             && source.contains("_ops: OpsReadPrincipal"),
         "admin routes must carry explicit scoped extractors in their route surface"
     );

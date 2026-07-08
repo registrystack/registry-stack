@@ -90,6 +90,10 @@ class BuiltinSidecarLabConfigTest(unittest.TestCase):
         self.assertIn("assurance:", bootstrap)
         self.assertIn("product: registry-notary-openfn-sidecar", bootstrap)
         self.assertIn("runtime_verified: true", bootstrap)
+        self.assertIn("limits:", bootstrap)
+        self.assertIn("sources:", bootstrap)
+        self.assertIn("dhis2_health:", bootstrap)
+        self.assertIn('"tracked_entity": lookup.value', bootstrap)
 
     def test_smoke_scripts_mirror_just_source_defaults(self) -> None:
         for path in (LOCAL_CIVIL_SMOKE, LOCAL_DHIS2_SMOKE):
