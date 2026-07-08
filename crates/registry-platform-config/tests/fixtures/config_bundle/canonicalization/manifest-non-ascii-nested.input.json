@@ -1,0 +1,31 @@
+{
+  "stream_id": "civil-registry",
+  "schema": "registry.platform.config_bundle.v1",
+  "z_notes": {
+    "nested": {
+      "beta": 2,
+      "alpha": 1
+    },
+    "équipe": "registre",
+    "labels": [
+      {
+        "z": "fin",
+        "a": "début"
+      }
+    ]
+  },
+  "product": "registry-notary",
+  "previous_config_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "sequence": 7,
+  "instance_id": "notary-équipe-1",
+  "files": [
+    {
+      "sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "path": "config/registre-é.yaml"
+    }
+  ],
+  "environment": "production",
+  "created_at": "2026-07-07T10:00:00Z",
+  "config_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "bundle_id": "déploiement-7"
+}

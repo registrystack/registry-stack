@@ -119,7 +119,7 @@ async fn config_command(command: ConfigCommand) -> Result<(), Box<dyn std::error
         }
         ConfigCommand::VerifyBundle(args) => {
             let target_bytes = tokio::fs::read(args.target).await?;
-            let report = verify_governed_bundle_report_json(&target_bytes).await?;
+            let report = verify_governed_bundle_report_json(&target_bytes)?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
     }

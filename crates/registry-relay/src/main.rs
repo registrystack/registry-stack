@@ -44,10 +44,11 @@ use registry_config_report::{
 };
 use registry_platform_audit::AuditChainProfile;
 use registry_platform_authcommon::{fingerprint_api_key, CredentialFingerprintProvider};
-use registry_platform_config::{expand_config_env_vars, verify_config_bundle, ConfigBundleError};
+use registry_platform_config::{expand_config_env_vars, verify_config_bundle};
 use registry_platform_ops::{
-    internal_config_hash, override_pin_active_and_unexpired, AntiRollbackKey, ConfigOverrideMode,
-    ConfigSource, DeploymentProfile, FileAntiRollbackStore,
+    antirollback_key_from_verified_bundle, bundle_verify_rejection_result, internal_config_hash,
+    persist_bundle_acceptance as persist_config_bundle_acceptance, verify_bundle_state_read_only,
+    ConfigOverrideMode, ConfigSource, DeploymentProfile,
 };
 use registry_relay::audit::{
     AuditPipeline, ConfigAuditExt, FileSink, OperationalAuditEvent, StdoutSink, SyslogSink,
@@ -1078,12 +1079,7 @@ async fn run_config_verify_bundle(
             return Err(Box::new(error));
         }
     };
-    let key = AntiRollbackKey {
-        product: verified.manifest.product.clone(),
-        instance_id: verified.manifest.instance_id.clone().unwrap_or_default(),
-        environment: verified.manifest.environment.clone(),
-        stream_id: verified.manifest.stream_id.clone(),
-    };
+    let key = antirollback_key_from_verified_bundle(&verified);
     if let Err(error) = verify_bundle_state_read_only(
         &command.state_path,
         &key,
@@ -1099,7 +1095,7 @@ async fn run_config_verify_bundle(
             Some(verified.manifest.config_hash.clone()),
             Some(("rejected_rollback", error.to_string())),
         ))?;
-        return Err(error);
+        return Err(Box::new(error));
     }
     let config_text = std::str::from_utf8(&verified.config_bytes)?;
     let (_config, provenance) = match parse_candidate_config_with_provenance(
@@ -1134,41 +1130,6 @@ async fn run_config_verify_bundle(
         None,
     ))?;
     Ok(())
-}
-
-fn verify_bundle_state_read_only(
-    state_path: &PathBuf,
-    key: &AntiRollbackKey,
-    sequence: u64,
-    config_hash: &str,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let record = FileAntiRollbackStore::new(state_path).load(key)?;
-    if sequence > record.last_sequence
-        || (sequence == record.last_sequence && config_hash == record.last_config_hash)
-        || record.override_pin.as_ref().is_some_and(|pin| {
-            override_pin_active_and_unexpired(pin) && pin.config_hash == config_hash
-        })
-    {
-        Ok(())
-    } else {
-        Err("signed config bundle sequence is not monotonic".into())
-    }
-}
-
-fn bundle_verify_rejection_result(error: &ConfigBundleError) -> &'static str {
-    match error {
-        ConfigBundleError::BindingMismatch(_) => "rejected_binding",
-        ConfigBundleError::SignatureRejected
-        | ConfigBundleError::InvalidSignatureEnvelope(_)
-        | ConfigBundleError::InvalidTrustAnchor(_)
-        | ConfigBundleError::InvalidPermissions(_) => "rejected_signature",
-        ConfigBundleError::Io(_)
-        | ConfigBundleError::Json(_)
-        | ConfigBundleError::InvalidManifest(_)
-        | ConfigBundleError::InvalidBreakGlass(_)
-        | ConfigBundleError::FileClosure(_)
-        | ConfigBundleError::HashMismatch { .. } => "rejected_validation",
-    }
 }
 
 fn print_json_report(value: Value) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -1387,14 +1348,11 @@ async fn write_boot_config_audits(
         config::BundleStateAction::PersistOverridePin
     ) {
         write_break_glass_used_audit(audit_sink, acceptance).await?;
-        if acceptance.source != ConfigSource::SignedBundleFile {
-            return Ok(());
-        }
     }
-    if acceptance.source != ConfigSource::SignedBundleFile {
-        return Ok(());
+    if acceptance.source == ConfigSource::SignedBundleFile {
+        write_bundle_acceptance_audit(audit_sink, acceptance).await?;
     }
-    write_bundle_acceptance_audit(audit_sink, acceptance).await
+    Ok(())
 }
 
 async fn write_bundle_acceptance_audit(
@@ -1495,53 +1453,7 @@ fn rfc3339_unix(value: &str) -> Option<u64> {
 fn persist_bundle_acceptance(
     acceptance: &config::PendingBundleAcceptance,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let store = FileAntiRollbackStore::new(&acceptance.state_path);
-    match acceptance.state_action {
-        config::BundleStateAction::Initialize => {
-            store.initialize(acceptance.initial_record())?;
-        }
-        config::BundleStateAction::Accept => {
-            store.accept_bundle(
-                &acceptance.key,
-                acceptance
-                    .bundle_id
-                    .clone()
-                    .ok_or("signed bundle acceptance is missing bundle_id")?,
-                acceptance
-                    .sequence
-                    .ok_or("signed bundle acceptance is missing sequence")?,
-                acceptance.config_hash.clone(),
-            )?;
-        }
-        config::BundleStateAction::PersistOverridePin => {
-            let pin = acceptance
-                .override_pin
-                .clone()
-                .ok_or("break-glass acceptance is missing override pin")?;
-            store.persist_override_pin(&acceptance.key, pin)?;
-            if let Some(path) = &acceptance.override_path {
-                consume_break_glass_override(path)?;
-            }
-        }
-        config::BundleStateAction::AlreadyPinned => {
-            if let Some(path) = &acceptance.override_path {
-                consume_break_glass_override(path)?;
-            }
-        }
-    }
-    Ok(())
-}
-
-fn consume_break_glass_override(
-    path: &std::path::Path,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or("break-glass override path has no file name")?;
-    let consumed_name = format!("{file_name}.consumed-{}", Ulid::new());
-    let consumed_path = path.with_file_name(consumed_name);
-    fs::rename(path, consumed_path)?;
+    persist_config_bundle_acceptance(acceptance)?;
     Ok(())
 }
 
@@ -3086,7 +2998,7 @@ audit:
         ]))
         .expect_err("state path is required");
 
-        assert_eq!(err.to_string(), "missing required flag --state-path");
+        assert_eq!(err.to_string(), "--state-path is required");
     }
 
     #[test]

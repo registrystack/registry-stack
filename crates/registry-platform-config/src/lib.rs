@@ -6,9 +6,9 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 pub use config_bundle::{
-    load_break_glass_override, load_trust_anchor, verify_config_bundle, ConfigBreakGlassMode,
-    ConfigBreakGlassOverride, ConfigBundleError, ConfigBundleFile, ConfigBundleManifest,
-    ConfigBundleSignature, ConfigBundleSignatureEnvelope, ConfigTrustAnchor,
+    load_break_glass_override, load_trust_anchor, read_config_file_limited, verify_config_bundle,
+    ConfigBreakGlassMode, ConfigBreakGlassOverride, ConfigBundleError, ConfigBundleFile,
+    ConfigBundleManifest, ConfigBundleSignature, ConfigBundleSignatureEnvelope, ConfigTrustAnchor,
     ConfigTrustAnchorSigner, VerifiedConfigBundle, MAX_BUNDLE_FILE_BYTES,
     MAX_CONFIG_BUNDLE_SEQUENCE, MAX_MANIFEST_BYTES, MAX_SIGNATURE_ENVELOPE_BYTES,
     MAX_TRUST_ANCHOR_BYTES,

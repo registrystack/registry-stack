@@ -254,6 +254,9 @@
           ],
           "minimum": 0
         },
+        "last_bundle_signer_kids": {
+          "$ref": "#/$defs/string_array"
+        },
         "last_apply_result": {
           "enum": [
             "accepted",
