@@ -116,5 +116,6 @@ Notary's pitch is minimization; it will be held to it.
       implementation verification remains open.
 - [ ] Audit log and error path review confirms minimized data never appears
       (overlaps section 4 leak review).
-- [ ] Retention behavior documented.
+- [x] Retention behavior documented. Evidence:
+      [retention-and-persistent-state.mdx](../docs/site/src/content/docs/operate/retention-and-persistent-state.mdx).
 - [ ] DPI safeguards mapping current; GDPR alignment notes published.

@@ -1,0 +1,108 @@
+---
+title: Retention and persistent state
+description: What Registry Relay and Registry Notary retain, what expires, and what operators must preserve or ship off host.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-07-09"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+Use this page to decide which Registry Stack state needs backup, off-host shipping, expiry,
+or deletion policy outside the products.
+It documents current Registry Relay, Registry Notary, and source-adapter behavior.
+Retention enforcement, record-level erasure, and data-subject-rights workflows are outside the
+1.0 product boundary.
+
+## Operator boundary
+
+Registry Stack gives operators rotation knobs, TTL-bound protocol stores, pseudonymized audit
+handles, and deployment-posture gates.
+It does not decide the legal retention period for a deployment, delete source-registry records,
+or prove that a local rotating file kept every historical audit event.
+
+Two consequences follow from that boundary:
+
+- Treat local audit files as tamper-evidence for the retained records, not as a completeness
+  guarantee for all records ever written.
+  Use off-host shipping when completeness matters, and use append-only storage or retained
+  tail-hash anchors to make retained local records harder to rewrite unnoticed.
+- Treat keyed pseudonyms as a linkability control, not as erasure.
+  Destroying or rotating the HMAC secret prevents recomputing old pseudonyms from raw values,
+  but it does not delete audit records, cache entries, status records, or source data.
+
+## Durable state and externally retained records
+
+| Store | What it can contain | Expiry or rotation | Operator control |
+|---|---|---|---|
+| Relay, Notary, and sidecar audit sinks | Chained audit envelopes with timestamps, event bodies, hashes, and HMAC-pseudonymized sensitive handles when configured. Operational metadata can still identify actors or actions. | Product file sinks default to `100 MB` and `14` retained files. `stdout` and `syslog` retention belongs to the collector. | Configure `audit.sink`, file path, rotation, `audit.hash_secret_env`, and off-host shipping. |
+| Relay ingest cache | Normalized Parquet snapshots under `server.cache_dir`. These snapshots can contain full source rows from configured registries. | No time TTL. A successful refresh keeps the current and immediately previous snapshot for each resource and removes older snapshots best effort. | Place `server.cache_dir` on writable storage with the same data classification as the source rows. |
+| Config-trust anti-rollback state | The last accepted sequence, config and bundle hashes, root version, and optional break-glass pin metadata. Operator names, approval references, and reasons can be sensitive. | The state file is rewritten atomically and has no normal TTL. Break-glass overrides require expiry, and consumed override files are renamed. | Preserve `antirollback_state_path` across upgrades and protect break-glass override files with local root controls. |
+| Replay and nonce stores | One-time JWT identifiers, holder-proof identifiers, pre-authorized-code identifiers, and nonce reservations. Redis keys are hashed, but scopes can still encode deployment context. | Entries expire at protocol-supplied times. Consumed nonce state is replaced by a short tombstone and then removed. In-memory stores are lost on restart. | Use Redis for production or multi-instance Notary deployments. Keep in-memory replay to development and tests. |
+| Credential status store | Credential identifier, issuer, credential profile, lifecycle status, and issue, expiry, and update timestamps. A credential identifier can be linkable. | Disabled by default. When enabled, records expire at credential `expires_at + retention_seconds`; the default retention extension is `86,400` seconds. | Configure `credential_status.enabled`, storage, Redis settings, base URL, and `retention_seconds`. |
+| Operator-owned config, source, and secret paths | Runtime configuration, signed bundles, trust anchors, metadata manifests, source files, provenance keys, and secret references. Source files can contain personal data. | Registry Stack does not expire these files, except through the specific audit, cache, replay, status, and break-glass mechanics above. | Mount source data read-only where possible; back up config, trust anchors, anti-rollback state, and secrets through your platform controls. |
+
+## Process-local caches and client-held state
+
+| Store | What it can contain | Expiry or rotation | Operator control |
+|---|---|---|---|
+| Relay and Notary OIDC JWKS cache | Issuer signing keys and negative lookup entries, not subject records. | In process only. Default positive cache TTL is `600` seconds and default negative cache TTL is `60` seconds. | Configure Relay OIDC `jwks_cache_ttl` where exposed. Notary shared fetchers use platform defaults where no product knob is exposed. Restart clears the cache. |
+| Relay auth-failure throttle | Process-local counters keyed by resolved client address. Client IP addresses can be personal data. | Fixed window when enabled; defaults are disabled, `20` failures, and `60` seconds. Restart clears counters. | Configure `auth.failure_throttle.*` and `server.trust_proxy` correctly behind proxies. |
+| Relay response headers | No Relay-owned response/result cache was found. Client and proxy caching follow HTTP headers. | Metadata and default release responses are `no-store`; successful release responses can opt into private max-age. | Configure release-profile response max age only when private client caching is acceptable. |
+| Relay pagination cursors | Client-held signed cursor payloads can include query context, filters, principal ID, ingest version, and position. | Not stored server-side and no product TTL. Cursors become invalid when signer, principal, query, config, or ingest version changes. | Treat cursor tokens as client-held request context and avoid logging them unnecessarily. |
+| OID4VCI pre-authorized-code state | Login state, PKCE verifier, eSignet nonce, selected credential config, and tx-code PIN state. Secrets are redacted in debug output. | In process only. Login state and pre-authorized-code TTLs default to `300` seconds and cap at `600` seconds. | Configure `oid4vci.pre_authorized_code.*` and use short TTLs for production flows. |
+| Credential status-list JWT cache | Signed status-list JWT strings and hashed cache keys derived from credential status metadata, status URL, timestamps, and public JWK hash. | In memory only. Entries are pruned on access and expire no later than the `300` second JWT expiry; valid status entries expire earlier when the credential expires first. | Enabled only when credential status is enabled. Restart clears the cache; there is no separate size or storage knob. |
+| Notary and sidecar OAuth token caches | Access tokens for outbound source systems. | In memory. Refresh occurs at `expires_in - refresh_skew`; default fallback expiry is `300` seconds and default skew is `60` seconds. | Configure source-auth token settings and keep token secrets out of logs and config files. |
+| Source-adapter result cache | `http_json` exact-match results or empty not-found results. Exact-match entries can contain source rows. | In memory per source. Optional exact-match and not-found TTLs; default max entries is `10,000`. FHIR caching is rejected. | Configure `cache.exact_match_ttl_ms`, `cache.not_found_ttl_ms`, and `cache.max_entries` per source. |
+| Sidecar assurance cache | Expected sidecar assurance metadata and config hash, not source rows. | In memory. Default assurance TTL is `30,000` milliseconds. | Configure expected sidecar assurance TTLs with the sidecar trust model. |
+
+## Audit retention
+
+Relay, Notary, and the source-adapter sidecar can write chained JSONL audit records.
+The product file-sink defaults retain `14` files at `100 MB` each.
+The shared platform sink has a smaller generic default, but the products override it when their
+own audit config is used.
+
+The chain detects edits, deletions, insertions, and reordering within the retained records.
+It does not prove that older rotated-away records still exist.
+If a deployment uses a local rotating file sink without off-host shipping, Relay and Notary surface
+deployment-posture findings such as `relay.audit.retention_local_only` and
+`notary.audit.retention_local_only`.
+Set `deployment.evidence.audit_offhost_shipping` only after the deployment really ships audit
+records to external durable storage.
+
+Never truncate, rewrite, or reserialize audit files as part of cleanup.
+Back them up as files, keep old hash secrets for the audit retention period, and rotate hash
+secrets only as an intentional key-lifecycle event.
+
+## Replay and status retention
+
+Replay and nonce stores enforce one-time use within a configured protocol lifetime.
+Redis-backed stores are the production path for multi-instance Notary deployments because
+in-memory stores are process-local and disappear on restart.
+The in-memory fallback is useful for local development, but it is a high-risk production posture
+because replay state is not shared across instances or restarts.
+
+Credential status storage is separate from replay.
+When enabled, it retains lifecycle records so the status endpoint can answer later checks for a
+credential.
+The store does not retain the credential body, source row, holder private key, or source-system
+credentials, but credential identifiers can still be linkable and need retention controls.
+
+## What remains outside the product
+
+Registry Stack does not implement a general erasure workflow for source records, audit records,
+cache entries, or credential status records.
+It also does not prune operator-owned config files, source files, old release artifacts, or
+break-glass evidence after the product-level expiry checks have run.
+Those controls belong in the operator's storage, backup, incident-response, and data-protection
+processes.
+
+## Next
+
+- [Upgrade and roll back a deployment](../upgrade-and-rollback/)
+- [Harden a production deployment](../../security/hardening-checklist/)
+- [Known limitations and non-guarantees](../../explanation/known-limitations/)
