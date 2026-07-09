@@ -94,12 +94,14 @@ If your hand-written config uses different paths, include them in the archive:
 Generated Notary projects use Redis for replay and nonce state.
 The generated Redis service writes append-only files to the `registry-notary-redis-data`
 volume.
-Capture that volume after asking Redis to flush a snapshot:
+Capture that volume, asking Redis to flush a snapshot first when the service is running:
 
 ```sh
-redis_container="$(docker compose ps -q registry-notary-redis)"
+redis_container="$(docker compose ps --all -q registry-notary-redis)"
 if [ -n "$redis_container" ]; then
-  docker compose exec -T registry-notary-redis redis-cli SAVE
+  if [ "$(docker inspect "$redis_container" --format '{{.State.Running}}')" = "true" ]; then
+    docker compose exec -T registry-notary-redis redis-cli SAVE
+  fi
   redis_volume="$(docker inspect "$redis_container" --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}')"
   docker run --rm \
     -v "$redis_volume:/redis:ro" \
@@ -140,6 +142,18 @@ On a new host, compare `.env` with `id -u` and `id -g`.
 If `REGISTRY_STACK_RUNTIME_UID` or `REGISTRY_STACK_RUNTIME_GID` names the old host owner, edit
 those two values before starting containers so Relay and Notary can write the restored private
 state directories.
+If the archive was extracted by root or with numeric owners preserved, align restored state
+ownership and private permissions with the runtime identity:
+
+```sh
+runtime_uid="$(awk -F= '$1 == "REGISTRY_STACK_RUNTIME_UID" { print $2 }' .env)"
+runtime_gid="$(awk -F= '$1 == "REGISTRY_STACK_RUNTIME_GID" { print $2 }' .env)"
+if [ -n "$runtime_uid" ] && [ -n "$runtime_gid" ] && [ -d state ]; then
+  sudo chown -R "$runtime_uid:$runtime_gid" state
+  find state -type d -exec chmod 700 {} +
+  find state -type f -exec chmod 600 {} +
+fi
+```
 
 ## Restore Redis data
 
