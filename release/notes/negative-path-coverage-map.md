@@ -99,8 +99,9 @@ public evidence or disposition.
   Disposition: product paths and STS audit-failure abort behavior are covered.
 - `NP-14`: Covered.
   Public anchors:
-  `crates/registry-relay/tests/admin_auth_extraction_contract.rs::admin_handlers_use_required_scoped_extractors`
-  and `crates/registry-relay/tests/observability_metrics.rs::denied_admin_and_metrics_requests_do_not_leak_privileged_surfaces`.
+  `crates/registry-relay/tests/admin_auth_extraction_contract.rs::admin_handlers_use_required_scoped_extractors`,
+  `crates/registry-relay/tests/observability_metrics.rs::denied_admin_and_metrics_requests_do_not_leak_privileged_surfaces`,
+  and `crates/registry-relay/tests/observability_metrics.rs::metrics_do_not_expose_sensitive_or_high_cardinality_values`.
   Disposition: current admin and metrics surfaces assert required scoped
   extractors, stable unauthenticated and wrong-scope denials, denial audit
   records, bounded metrics labels, and no privileged admin-state disclosure.
@@ -123,16 +124,15 @@ public evidence or disposition.
 - `NP-19`: Covered.
   Public anchors:
   `crates/registry-notary-server/src/api.rs::issue_credential_rejects_purpose_mismatch`
-  `crates/registry-notary-server/src/api.rs::credential_denial_response_for_evaluation`,
   and `crates/registry-notary-server/tests/standalone_http.rs::direct_credential_purpose_mismatch_denial_is_audited_and_redacted`.
   Disposition: purpose mismatch is denied before credential signing, and the
   direct `/v1/credentials` product route now returns a stable problem response,
   emits a redacted `credential_denied` audit record with self-attestation access
   mode and hashed identifiers, and produces no `credential_issued` event.
 - `NP-20`: Covered.
-  Public anchors: `crates/registry-platform-sdjwt/src/lib.rs`,
-  `crates/registry-notary-server/src/api.rs::validate_holder_proof_payload`,
-  `crates/registry-notary-server/src/api.rs::credential_denial_response_for_evaluation`,
+  Public anchors:
+  `crates/registry-platform-sdjwt/src/lib.rs::holder_proof_rejects_wrong_type_and_dangerous_headers`,
+  `crates/registry-notary-server/src/api.rs::strict_credential_issue_rejects_oid4vci_proof_shape`,
   and `crates/registry-notary-server/tests/standalone_http.rs::strict_credentials_issue_rejects_oid4vci_proof_at_http_boundary`.
   Disposition: platform holder-proof validation and the direct
   `/v1/credentials` product route both reject the wrong proof class, return the
@@ -140,9 +140,13 @@ public evidence or disposition.
   `credential_denied` audit record with profile and holder-binding metadata,
   and return no credential material.
 - `NP-21`: Covered.
-  Public anchors: `crates/registry-notary-server/src/api.rs` and
-  `crates/registry-platform-sdjwt/src/lib.rs`.
-  Disposition: no new release work identified from the current map.
+  Public anchors:
+  `crates/registry-platform-sdjwt/src/lib.rs::holder_proof_enforces_audience_lifetime_and_bindings`,
+  `crates/registry-notary-server/tests/sd_jwt_vc_verifier_compat.rs::missing_cnf_when_holder_binding_required_fails_with_holder_binding_required`,
+  and `crates/registry-notary-server/tests/sd_jwt_vc_verifier_compat.rs::holder_proof_mismatch_fails_with_holder_binding_proof_invalid`.
+  Disposition: holder-binding failure coverage cites named Notary verifier and
+  platform holder-proof tests for required confirmation and proof-mismatch
+  denial behavior.
 - `NP-22`: Covered.
   Public anchors:
   `crates/registry-notary-server/src/standalone.rs::notary_transaction_token_auth_consumes_jti_once`,
