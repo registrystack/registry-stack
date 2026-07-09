@@ -4270,7 +4270,14 @@ async fn issue_credential(
         if principal.is_self_attestation() {
             if let Err(error) = apply_stored_self_attestation_access_mode(&mut principal, metadata)
             {
-                return evidence_error_response(error);
+                return credential_denial_response_for_evaluation(
+                    &state,
+                    error,
+                    &request.evaluation_id,
+                    &evaluation,
+                    &principal,
+                    None,
+                );
             }
         }
     }
@@ -4282,26 +4289,61 @@ async fn issue_credential(
         } else {
             EvidenceError::EvaluationBindingMismatch
         };
-        return evidence_error_response(error);
+        return credential_denial_response_for_evaluation(
+            &state,
+            error,
+            &request.evaluation_id,
+            &evaluation,
+            &principal,
+            None,
+        );
     }
     if let Err(error) =
         require_evaluation_access(evidence, state.source.as_ref(), &principal, &evaluation)
     {
-        return evidence_error_response(error);
+        return credential_denial_response_for_evaluation(
+            &state,
+            error,
+            &request.evaluation_id,
+            &evaluation,
+            &principal,
+            None,
+        );
     }
     if let Some(format) = request.format.as_deref() {
         if format != FORMAT_SD_JWT_VC {
-            return evidence_error_response(EvidenceError::FormatUnsupported);
+            return credential_denial_response_for_evaluation(
+                &state,
+                EvidenceError::FormatUnsupported,
+                &request.evaluation_id,
+                &evaluation,
+                &principal,
+                None,
+            );
         }
     }
     if let Some(disclosure) = request.disclosure.as_deref() {
         if disclosure != evaluation.disclosure {
-            return evidence_error_response(EvidenceError::EvaluationBindingMismatch);
+            return credential_denial_response_for_evaluation(
+                &state,
+                EvidenceError::EvaluationBindingMismatch,
+                &request.evaluation_id,
+                &evaluation,
+                &principal,
+                None,
+            );
         }
     }
     if let Some(claims) = &request.claims {
         if claims != &evaluation.claim_ids {
-            return evidence_error_response(EvidenceError::EvaluationBindingMismatch);
+            return credential_denial_response_for_evaluation(
+                &state,
+                EvidenceError::EvaluationBindingMismatch,
+                &request.evaluation_id,
+                &evaluation,
+                &principal,
+                None,
+            );
         }
     }
     if let Some(purpose) = request.purpose.as_deref() {
@@ -4322,10 +4364,26 @@ async fn issue_credential(
         request.credential_profile.as_deref(),
     ) {
         Ok(profile) => profile,
-        Err(error) => return evidence_error_response(error),
+        Err(error) => {
+            return credential_denial_response_for_evaluation(
+                &state,
+                error,
+                &request.evaluation_id,
+                &evaluation,
+                &principal,
+                None,
+            );
+        }
     };
     if evaluation.format != FORMAT_SD_JWT_VC {
-        return evidence_error_response(EvidenceError::EvaluationBindingMismatch);
+        return credential_denial_response_for_evaluation(
+            &state,
+            EvidenceError::EvaluationBindingMismatch,
+            &request.evaluation_id,
+            &evaluation,
+            &principal,
+            Some((profile_id, profile)),
+        );
     }
     if let Err(error) = require_self_attestation_stored_access(
         &state,
@@ -4340,13 +4398,25 @@ async fn issue_credential(
         request.format.as_deref().unwrap_or(&evaluation.format),
         Some(profile_id),
     ) {
-        return evidence_error_response(error);
+        return credential_denial_response_for_evaluation(
+            &state,
+            error,
+            &request.evaluation_id,
+            &evaluation,
+            &principal,
+            Some((profile_id, profile)),
+        );
     }
     if principal.is_self_attestation() {
         if !state.self_attestation.allowed_operations.issue_credential {
-            return evidence_error_response(self_attestation_denied(
-                SelfAttestationDenialCode::OperationDenied,
-            ));
+            return credential_denial_response_for_evaluation(
+                &state,
+                self_attestation_denied(SelfAttestationDenialCode::OperationDenied),
+                &request.evaluation_id,
+                &evaluation,
+                &principal,
+                Some((profile_id, profile)),
+            );
         }
         let profile_policy = match evaluation.self_attestation.as_ref() {
             Some(metadata) if metadata.access_mode == AccessMode::DelegatedAttestation => {
@@ -4364,7 +4434,14 @@ async fn issue_credential(
             ),
         };
         if let Err(error) = profile_policy {
-            return evidence_error_response(error);
+            return credential_denial_response_for_evaluation(
+                &state,
+                error,
+                &request.evaluation_id,
+                &evaluation,
+                &principal,
+                Some((profile_id, profile)),
+            );
         }
     }
     // Fail-closed: every evaluated claim must appear in the profile's
@@ -4379,7 +4456,14 @@ async fn issue_credential(
             .iter()
             .any(|allowed| allowed == claim)
     }) {
-        return evidence_error_response(EvidenceError::EvaluationBindingMismatch);
+        return credential_denial_response_for_evaluation(
+            &state,
+            EvidenceError::EvaluationBindingMismatch,
+            &request.evaluation_id,
+            &evaluation,
+            &principal,
+            Some((profile_id, profile)),
+        );
     }
     if !profile.disclosure.allowed.is_empty()
         && !profile
@@ -4388,7 +4472,14 @@ async fn issue_credential(
             .iter()
             .any(|allowed| allowed == &evaluation.disclosure)
     {
-        return evidence_error_response(EvidenceError::DisclosureNotAllowed);
+        return credential_denial_response_for_evaluation(
+            &state,
+            EvidenceError::DisclosureNotAllowed,
+            &request.evaluation_id,
+            &evaluation,
+            &principal,
+            Some((profile_id, profile)),
+        );
     }
     let proof_binding = match validate_holder_request(
         profile,
@@ -4456,7 +4547,16 @@ async fn issue_credential(
     let subject_ref = if principal.is_self_attestation() {
         match holder_id {
             Some(holder_id) => holder_id,
-            None => return evidence_error_response(EvidenceError::HolderProofRequired),
+            None => {
+                return credential_denial_response_for_evaluation(
+                    &state,
+                    EvidenceError::HolderProofRequired,
+                    &request.evaluation_id,
+                    &evaluation,
+                    &principal,
+                    Some((profile_id, profile)),
+                );
+            }
         }
     } else {
         match holder_id.or_else(|| {
@@ -4466,7 +4566,16 @@ async fn issue_credential(
                 .map(|result| result.target_ref.handle.as_str())
         }) {
             Some(subject_ref) => subject_ref,
-            None => return evidence_error_response(EvidenceError::InvalidRequest),
+            None => {
+                return credential_denial_response_for_evaluation(
+                    &state,
+                    EvidenceError::InvalidRequest,
+                    &request.evaluation_id,
+                    &evaluation,
+                    &principal,
+                    Some((profile_id, profile)),
+                );
+            }
         }
     };
     if let Some(binding) = proof_binding {
@@ -4478,7 +4587,7 @@ async fn issue_credential(
         )
         .await
         {
-            return evidence_error_response(match error {
+            let evidence_error = match error {
                 RequiredReplayError::AlreadySeen => {
                     state.metrics.record_replay("holder_proof", "replayed");
                     EvidenceError::HolderProofReplay
@@ -4491,7 +4600,18 @@ async fn issue_credential(
                     state.metrics.record_replay("holder_proof", "error");
                     EvidenceError::CredentialIssuanceFailed
                 }
-            });
+            };
+            if matches!(evidence_error, EvidenceError::HolderProofReplay) {
+                return credential_denial_response_for_evaluation(
+                    &state,
+                    evidence_error,
+                    &request.evaluation_id,
+                    &evaluation,
+                    &principal,
+                    Some((profile_id, profile)),
+                );
+            }
+            return evidence_error_response(evidence_error);
         }
         state.metrics.record_replay("holder_proof", "accepted");
     }

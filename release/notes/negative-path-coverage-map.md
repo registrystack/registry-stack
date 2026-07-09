@@ -200,14 +200,17 @@ public evidence or disposition.
   `/v1/evaluations` product route now cover pre-source denial, stable PDP
   problem shape, zero upstream source reads, `source_read_count = 0`,
   `forwarded = false`, and response/audit redaction.
-- `NP-28`: Partial.
-  Public anchors: `crates/registry-notary-server/src/api.rs` and
-  `crates/registry-notary-server/src/runtime.rs`.
-  Disposition: selected credential denials now have product-surface
-  `credential_denied` audit coverage through NP-19 and NP-20, and existing API
-  tests cover selected OID4VCI token and nonce side effects. This row remains
-  Partial because other direct credential early-denial paths still need complete
-  audit-parity coverage or an explicit maintainer-approved deferral.
+- `NP-28`: Covered.
+  Public anchors:
+  `crates/registry-notary-server/tests/standalone_http.rs::direct_credential_binding_denials_are_audited_and_redacted`,
+  `crates/registry-notary-server/tests/standalone_http.rs::direct_credential_holder_proof_replay_is_audited_and_redacted`,
+  `crates/registry-notary-server/tests/standalone_http.rs::direct_credential_purpose_mismatch_denial_is_audited_and_redacted`,
+  and `crates/registry-notary-server/tests/standalone_http.rs::strict_credentials_issue_rejects_oid4vci_proof_at_http_boundary`.
+  Disposition: direct `/v1/credentials` evaluation-bound denials now share
+  product-surface `credential_denied` audit coverage for binding mismatch,
+  purpose mismatch, holder-proof shape, and holder-proof replay paths; tests
+  assert stable problem responses, no unintended credential issuance,
+  redacted audit records, and no credential material in denial responses.
 - `NP-29`: Partial.
   Public anchors:
   `crates/registry-notary-server/tests/standalone_http.rs::federation_evaluation_returns_signed_response_and_rejects_replay`,

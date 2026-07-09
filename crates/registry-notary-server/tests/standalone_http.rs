@@ -5445,6 +5445,168 @@ async fn direct_credentials_issue_creates_retrievable_status_record() {
 }
 
 #[tokio::test]
+async fn direct_credential_holder_proof_replay_is_audited_and_redacted() {
+    set_audit_secret();
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+
+    let idp = MockIdp::start().await;
+    let upstream = TestServer::builder()
+        .http_transport()
+        .build(Router::new().route(
+            "/v1/datasets/people/entities/person/records",
+            get(self_attestation_registry_data_api),
+        ));
+    let base_url = upstream
+        .server_address()
+        .expect("HTTP transport exposes upstream address")
+        .to_string();
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = self_attestation_oidc_config(
+        base_url.trim_end_matches('/'),
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+    );
+    config.self_attestation.allowed_operations.issue_credential = true;
+    config
+        .evidence
+        .claims
+        .first_mut()
+        .expect("person-is-alive claim exists")
+        .formats
+        .push("application/dc+sd-jwt".to_string());
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let token = idp.mint_token(json!({
+        "sub": "citizen-subject",
+        "aud": "registry-notary-citizen",
+        "azp": "citizen-portal",
+        "scope": "self_attestation",
+        "national_id": "person-1",
+        "auth_time": now,
+        "iat": now,
+        "exp": now + 300,
+        "nbf": now,
+    }));
+    let authorization = format!("Bearer {token}");
+
+    let evaluate = server
+        .post("/v1/evaluations")
+        .add_header("authorization", authorization.clone())
+        .json(&json!({
+            "target": person_identifier_target("national_id", "person-1"),
+            "claims": ["person-is-alive"],
+            "disclosure": "value",
+            "format": "application/dc+sd-jwt"
+        }))
+        .await;
+    evaluate.assert_status_ok();
+    let evaluate_body: Value = evaluate.json();
+    let evaluation_id = evaluate_body["results"][0]["evaluation_id"]
+        .as_str()
+        .expect("evaluation id returned")
+        .to_string();
+    let holder_id = holder_did_jwk();
+    let proof = sign_direct_holder_proof(&holder_id, &evaluation_id, "direct-replay-jti-1");
+    let credential_request = json!({
+        "evaluation_id": evaluation_id,
+        "credential_profile": "civil_status_sd_jwt",
+        "format": "application/dc+sd-jwt",
+        "claims": ["person-is-alive"],
+        "disclosure": "value",
+        "holder": {
+            "binding": "did",
+            "id": holder_id,
+            "proof": proof
+        }
+    });
+
+    let first = server
+        .post("/v1/credentials")
+        .add_header("authorization", authorization.clone())
+        .json(&credential_request)
+        .await;
+    first.assert_status_ok();
+    let first_body: Value = first.json();
+    assert!(first_body["credential"].is_string());
+
+    let replay = server
+        .post("/v1/credentials")
+        .add_header("authorization", authorization.clone())
+        .json(&credential_request)
+        .await;
+    replay.assert_status(StatusCode::CONFLICT);
+    assert_eq!(
+        replay
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("application/problem+json")
+    );
+    let replay_body: Value = replay.json();
+    assert_eq!(replay_body["code"], json!("credential.holder_proof_replay"));
+    assert!(replay_body.get("credential").is_none());
+    assert!(replay_body.get("credential_id").is_none());
+    assert!(replay_body.get("issuer_signed_jwt").is_none());
+    assert!(replay_body.get("disclosures").is_none());
+    let replay_body_text = serde_json::to_string(&replay_body).expect("problem body serializes");
+    assert!(!replay_body_text.contains(&token));
+    assert!(!replay_body_text.contains("person-1"));
+    assert!(!replay_body_text.contains("direct-replay-jti-1"));
+
+    let records = audit_records_from_envelopes(&audit_path);
+    let denied = audit_record_with(
+        &records,
+        "/v1/credentials",
+        "credential_denied",
+        StatusCode::CONFLICT,
+        "credential.holder_proof_replay",
+    );
+    assert_eq!(denied["access_mode"], json!("self_attestation"));
+    assert_eq!(denied["scopes_used"], json!(["self_attestation"]));
+    assert_eq!(denied["credential_profile"], json!("civil_status_sd_jwt"));
+    assert_eq!(denied["holder_binding_mode"], json!("did"));
+    assert!(denied.get("principal_id").is_none());
+    assert!(denied["principal_id_hash"]
+        .as_str()
+        .expect("principal id hash is present")
+        .starts_with("hmac-sha256:"));
+    assert!(denied.get("correlation_id").is_none());
+    assert!(denied["correlation_id_hash"]
+        .as_str()
+        .expect("correlation id hash is present")
+        .starts_with("hmac-sha256:"));
+    assert_eq!(
+        records
+            .iter()
+            .filter(|record| {
+                record["path"] == json!("/v1/credentials")
+                    && record["decision"] == json!("credential_issued")
+            })
+            .count(),
+        1,
+        "first use should issue exactly one credential"
+    );
+    assert_audit_records_do_not_contain(
+        &records,
+        &[
+            &token,
+            &authorization,
+            &proof,
+            "direct-replay-jti-1",
+            "person-1",
+            "citizen-subject",
+            "source-token",
+        ],
+    );
+
+    idp.stop().await;
+}
+
+#[tokio::test]
 async fn strict_credentials_issue_rejects_oid4vci_proof_at_http_boundary() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
@@ -5702,6 +5864,202 @@ async fn direct_credential_purpose_mismatch_denial_is_audited_and_redacted() {
         .as_str()
         .expect("correlation id hash is present")
         .starts_with("hmac-sha256:"));
+    assert_audit_records_do_not_contain(
+        &records,
+        &[
+            &token,
+            &authorization,
+            "person-1",
+            "citizen-subject",
+            "source-token",
+            "issuer_signed_jwt",
+            "disclosures",
+        ],
+    );
+    assert!(!records.iter().any(|record| {
+        record["path"] == json!("/v1/credentials")
+            && record["decision"] == json!("credential_issued")
+    }));
+
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn direct_credential_binding_denials_are_audited_and_redacted() {
+    set_audit_secret();
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+
+    let idp = MockIdp::start().await;
+    let upstream = TestServer::builder()
+        .http_transport()
+        .build(Router::new().route(
+            "/v1/datasets/people/entities/person/records",
+            get(self_attestation_registry_data_api),
+        ));
+    let base_url = upstream
+        .server_address()
+        .expect("HTTP transport exposes upstream address")
+        .to_string();
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = self_attestation_oidc_config(
+        base_url.trim_end_matches('/'),
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+    );
+    config.self_attestation.allowed_operations.issue_credential = true;
+    config
+        .evidence
+        .claims
+        .first_mut()
+        .expect("person-is-alive claim exists")
+        .formats
+        .push("application/dc+sd-jwt".to_string());
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let token = idp.mint_token(json!({
+        "sub": "citizen-subject",
+        "aud": "registry-notary-citizen",
+        "azp": "citizen-portal",
+        "scope": "self_attestation",
+        "national_id": "person-1",
+        "auth_time": now,
+        "iat": now,
+        "exp": now + 300,
+        "nbf": now,
+    }));
+    let authorization = format!("Bearer {token}");
+
+    let evaluate = server
+        .post("/v1/evaluations")
+        .add_header("authorization", authorization.clone())
+        .json(&json!({
+            "target": person_identifier_target("national_id", "person-1"),
+            "claims": ["person-is-alive"],
+            "disclosure": "value",
+            "format": "application/dc+sd-jwt"
+        }))
+        .await;
+    evaluate.assert_status_ok();
+    let evaluate_body: Value = evaluate.json();
+    let evaluation_id = evaluate_body["results"][0]["evaluation_id"]
+        .as_str()
+        .expect("evaluation id returned");
+
+    let cases = [
+        (
+            "unsupported format",
+            json!({
+                "evaluation_id": evaluation_id,
+                "credential_profile": "civil_status_sd_jwt",
+                "format": "application/json",
+                "claims": ["person-is-alive"],
+                "disclosure": "value"
+            }),
+            StatusCode::NOT_ACCEPTABLE,
+            "claim.format_not_supported",
+        ),
+        (
+            "disclosure mismatch",
+            json!({
+                "evaluation_id": evaluation_id,
+                "credential_profile": "civil_status_sd_jwt",
+                "format": "application/dc+sd-jwt",
+                "claims": ["person-is-alive"],
+                "disclosure": "predicate"
+            }),
+            StatusCode::FORBIDDEN,
+            "evaluation.binding_mismatch",
+        ),
+        (
+            "claim-set mismatch",
+            json!({
+                "evaluation_id": evaluation_id,
+                "credential_profile": "civil_status_sd_jwt",
+                "format": "application/dc+sd-jwt",
+                "claims": ["person-is-dead"],
+                "disclosure": "value"
+            }),
+            StatusCode::FORBIDDEN,
+            "evaluation.binding_mismatch",
+        ),
+    ];
+
+    for (name, payload, status, code) in &cases {
+        let issue = server
+            .post("/v1/credentials")
+            .add_header("authorization", authorization.clone())
+            .json(&payload)
+            .await;
+        issue.assert_status(*status);
+        assert_eq!(
+            issue
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/problem+json"),
+            "{name} returns problem+json"
+        );
+        let body: Value = issue.json();
+        assert_eq!(body["code"], json!(*code), "{name} returns stable code");
+        assert!(body.get("credential").is_none(), "{name} has no credential");
+        assert!(
+            body.get("credential_id").is_none(),
+            "{name} has no credential id"
+        );
+        assert!(
+            body.get("issuer_signed_jwt").is_none(),
+            "{name} has no issuer JWT"
+        );
+        assert!(
+            body.get("disclosures").is_none(),
+            "{name} has no disclosures"
+        );
+        let body_text = serde_json::to_string(&body).expect("problem body serializes");
+        assert!(!body_text.contains(&token), "{name} does not echo token");
+        assert!(
+            !body_text.contains("person-1"),
+            "{name} does not echo subject"
+        );
+    }
+
+    let records = audit_records_from_envelopes(&audit_path);
+    let denied_records = records
+        .iter()
+        .filter(|record| {
+            record["path"] == json!("/v1/credentials")
+                && record["decision"] == json!("credential_denied")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        denied_records.len(),
+        cases.len(),
+        "every binding denial should emit credential_denied audit"
+    );
+    for (_, _, status, code) in cases {
+        let denied = audit_record_with(
+            &records,
+            "/v1/credentials",
+            "credential_denied",
+            status,
+            code,
+        );
+        assert_eq!(denied["access_mode"], json!("self_attestation"));
+        assert_eq!(denied["scopes_used"], json!(["self_attestation"]));
+        assert!(denied.get("principal_id").is_none());
+        assert!(denied["principal_id_hash"]
+            .as_str()
+            .expect("principal id hash is present")
+            .starts_with("hmac-sha256:"));
+        assert!(denied.get("correlation_id").is_none());
+        assert!(denied["correlation_id_hash"]
+            .as_str()
+            .expect("correlation id hash is present")
+            .starts_with("hmac-sha256:"));
+    }
     assert_audit_records_do_not_contain(
         &records,
         &[
