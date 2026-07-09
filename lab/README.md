@@ -160,6 +160,7 @@ just relay-postgres  # Relay ignored Postgres integration test
 just relay-zitadel   # Relay ignored Zitadel integration test
 just notary-redis   # Notary and Platform live Redis integration tests
 just oidc-relay      # separate OIDC-protected Relay node
+just openid-conformance-list # mapped OpenID Foundation conformance-suite slices
 just esignet-up     # start local MOSIP eSignet for citizen wallet/self-attestation demos
 just citizen-login  # print local eSignet login URL
 just citizen-code   # exchange returned code and run flow
@@ -353,6 +354,24 @@ API-key demo nodes intact while proving a separate Relay node can verify a real
 Zitadel access token. Today the script accepts either a `200` row read or a
 `403` scope denial: both prove JWT verification succeeded, while `403` means the
 machine-user token did not emit the mapped Zitadel roles.
+
+The lab also has a pinned OpenID Foundation conformance-suite wrapper for
+repeatable OID4VCI issuer evidence:
+
+```bash
+just openid-conformance-prepare
+just openid-conformance-up
+just openid-conformance-list
+```
+
+The first mapped scenario is `notary-oid4vci-issuer-metadata`, which targets
+Registry Notary's OID4VCI issuer metadata through the OIDF
+`oid4vci-1_0-issuer-test-plan`. It needs a running citizen OID4VCI Notary whose
+`credential_issuer` URL is reachable from the suite container and exactly
+matches the metadata. See
+[`docs/openid-conformance-suite.md`](docs/openid-conformance-suite.md) and the
+initial report at
+[`docs/openid-conformance-initial-report.md`](docs/openid-conformance-initial-report.md).
 
 `smoke-citizen-self-attestation.sh` is an optional eSignet-oriented story for a
 citizen-facing Registry Notary on port `4325`. It supports either a JWT access
