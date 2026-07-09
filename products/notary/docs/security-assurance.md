@@ -1,19 +1,13 @@
 # Security Assurance
 
-The root monorepo release workflow publishes Registry Notary images from stable
-`vX.Y.Z` tags and `registry-stack-technical-preview-<date-or-version>` tags to
-`ghcr.io/registrystack/registry-notary` and
-`ghcr.io/registrystack/registry-notary-source-adapter-sidecar`. Every release publishes
-`sha-<commit-sha>` as the immutable image tag for both images. Stable releases
-also update `vX.Y.Z`, `vX.Y`, `vX`, and `latest`; `latest` means latest stable
-release. Technical-preview releases publish the matching
-`registry-stack-technical-preview-<date-or-version>` alias and do not move
-`latest`. Pull requests and `main` pushes build local validation images for
-smoke, SBOM, and Grype evidence, but do not push GHCR tags. Nightly or manual
-development snapshots publish `snapshot`, `snapshot-YYYYMMDD`, and
-`snapshot-<shortsha>` unless both existing `snapshot` images'
-`org.opencontainers.image.revision` labels already match the current `main`
-revision. Final deployments should pin the selected images by digest.
+The root monorepo release workflow publishes Registry Notary images from semver
+`vX.Y.Z` release tags to `ghcr.io/registrystack/registry-notary:<tag>` and
+`ghcr.io/registrystack/registry-notary-source-adapter-sidecar:<tag>`. The
+workflow records the pushed image digests, SBOMs, and Grype reports as GitHub
+Release assets. It does not currently publish moving aliases such as `latest`,
+`vX`, or `vX.Y`, snapshot tags, `sha-<commit-sha>` image tags, or OCI image
+signatures for the container images themselves. Final deployments should pin
+the selected images by digest.
 
 The Registry Notary image is built with CEL and PKCS#11 compiled in. Runtime
 use remains config-gated, and the image is covered by the CEL worker-protocol
@@ -99,11 +93,10 @@ the root release verification procedure:
 less release/VERIFY.md
 ```
 
-Legacy product-local cosign verification for old `ghcr.io/jeremi` image tags
-used the triggering Git release tag as the certificate identity, since that
-identity is not necessarily the same as the GHCR tag being verified. That
-verification approach is historical and is not part of the current release
-process; see `release/VERIFY.md` for the current one.
+Previous product-local releases used keyless `cosign` for image tags under the
+old personal GHCR namespace and product-local workflow identities. Treat those
+records as legacy evidence for those historical artifacts only; they do not
+verify current `ghcr.io/registrystack` monorepo images.
 
 ## Deliberate route posture exceptions
 

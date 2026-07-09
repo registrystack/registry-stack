@@ -1,18 +1,12 @@
 # Security assurance
 
-The root monorepo release workflow publishes Registry Relay images from stable
-`vX.Y.Z` tags and `registry-stack-technical-preview-<date-or-version>` tags to
-`ghcr.io/registrystack/registry-relay`. Every release publishes
-`sha-<commit-sha>` as the immutable image tag. Stable releases also update
-`vX.Y.Z`, `vX.Y`, `vX`, and `latest`; `latest` means latest stable release.
-Technical-preview releases publish the matching
-`registry-stack-technical-preview-<date-or-version>` alias and do not move
-`latest`. Pull requests and `main` pushes build a local validation image for
-smoke, SBOM, and Grype evidence, but do not push a GHCR tag. Nightly or manual
-development snapshots publish `snapshot`, `snapshot-YYYYMMDD`, and
-`snapshot-<shortsha>` only when the existing `snapshot` image's
-`org.opencontainers.image.revision` label does not already match the current
-`main` revision. Final deployments should pin the selected image by digest.
+The root monorepo release workflow publishes Registry Relay images from semver
+`vX.Y.Z` release tags to `ghcr.io/registrystack/registry-relay:<tag>`. The
+workflow records the pushed image digest, SBOM, and Grype report as GitHub
+Release assets. It does not currently publish moving aliases such as `latest`,
+`vX`, or `vX.Y`, snapshot tags, `sha-<commit-sha>` image tags, or OCI image
+signatures for the container image itself. Final deployments should pin the
+selected image by digest.
 
 A release is gated on zero unreviewed `zizmor` findings at severity `high` or
 above, zero unreviewed Grype image findings at severity `critical` or above,
@@ -84,31 +78,10 @@ the root release verification procedure:
 less release/VERIFY.md
 ```
 
-Legacy product-local cosign verification for old `ghcr.io/jeremi` image tags
-used the triggering Git release tag:
-
-```sh
-cosign verify \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity "https://github.com/jeremi/registry-relay/.github/workflows/container.yml@refs/tags/<git-tag>" \
-  ghcr.io/jeremi/registry-relay:<tag>
-```
-
-For those legacy image tags, the certificate identity is the Git tag that
-triggered the workflow, not
-necessarily the GHCR tag being verified. When verifying moving aliases such as
-`latest`, `vX`, `vX.Y`, or the immutable `sha-<commit-sha>` tag, set
-`<git-tag>` to the stable `vX.Y.Z` tag or
-`registry-stack-technical-preview-<date-or-version>` tag that produced the
-alias. To verify a moving alias without preselecting one release tag, constrain
-the signing workflow with a release-tag regexp:
-
-```sh
-cosign verify \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity-regexp '^https://github.com/jeremi/registry-relay/\.github/workflows/container\.yml@refs/tags/(v[0-9]+\.[0-9]+\.[0-9]+|registry-stack-technical-preview-[0-9A-Za-z][0-9A-Za-z._-]*)$' \
-  ghcr.io/jeremi/registry-relay:<moving-tag>
-```
+Previous product-local releases used keyless `cosign` for image tags under the
+old personal GHCR namespace and product-local workflow identities. Treat those
+records as legacy evidence for those historical artifacts only; they do not
+verify current `ghcr.io/registrystack` monorepo images.
 
 ## Local security command
 
