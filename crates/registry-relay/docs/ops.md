@@ -108,10 +108,9 @@ checklist carry a one-line note.
   rotation](#audit-sink-and-rotation).
 - [ ] `audit.hash_secret_env` is set to at least 32 bytes of deployment-specific
   random secret material; the relay fails closed if it is missing or weak.
-- [ ] Append-only external log storage (or independent tail-hash anchoring) is
-  used where stronger integrity is required; as of v0.8, the built-in sinks do not protect
-  against a writer that can rewrite the sink. See [Audit sink and
-  rotation](#audit-sink-and-rotation).
+- [ ] Audit records are shipped off-host when completeness matters; local
+  rotating files prove only the retained set's internal chain. See [Audit sink
+  and rotation](#audit-sink-and-rotation).
 - [ ] Identifier fields that need audit redaction carry `sensitive: true` in
   table or entity field config. Note:
   `sensitive: true` is audit-only; it does not hide fields from authorized
@@ -329,7 +328,7 @@ Current runtime behavior:
 - `audit.sink: stdout` writes audit JSONL to stdout.
 - `audit.sink: file` writes audit JSONL to the configured path and rotates in-process by `rotate.max_size_mb` and `rotate.max_files`.
 - `audit.sink: syslog` ships audit JSONL to the local syslog Unix datagram socket.
-- Audit output is always wrapped in `registry-platform-audit` envelopes with `prev_hash` and `record_hash` fields. These fields detect ordering gaps and accidental corruption in retained logs, but, as of v0.8, the file/stdout/syslog sinks do not protect against a writer that can rewrite the sink. Use an append-only external log store or independent tail-hash anchoring when stronger integrity is required. `audit.chain` is retained for config compatibility.
+- Audit output is always wrapped in `registry-platform-audit` envelopes with `prev_hash` and `record_hash` fields. These fields detect edits, reordering, and gaps inside the retained log set, starting from the first retained record. They do not prove that earlier records were never deleted, or protect against a writer that can rewrite the entire local sink. Use off-host audit shipping when completeness matters. `audit.chain` is retained for config compatibility.
 - HTTP request completion is logged at `info` with method, matched route template, request id, status, and latency. It does not log raw query strings, request bodies, auth headers, or row values.
 - `REGISTRY_RELAY_LOG_FORMAT=json` switches stderr operational logs from text to JSONL.
 

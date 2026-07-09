@@ -637,6 +637,10 @@
       "required": [
         "configured",
         "sink_type",
+        "shipping_target_configured",
+        "shipping_target",
+        "last_successful_ship_at",
+        "backlog_depth",
         "checkpoint_status",
         "verification_status"
       ],
@@ -654,6 +658,35 @@
             "none",
             "unknown"
           ]
+        },
+        "shipping_target_configured": {
+          "type": "boolean"
+        },
+        "shipping_target": {
+          "enum": [
+            "none",
+            "stdout",
+            "syslog",
+            "declared_external",
+            "unknown"
+          ]
+        },
+        "last_successful_ship_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/rfc3339"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "backlog_depth": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
         },
         "checkpoint_status": {
           "enum": [

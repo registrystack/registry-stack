@@ -16,18 +16,16 @@
   for it; see `docs/configuration.md` for the deployment posture.
 - `deployment.evidence.audit_offhost_shipping` attestation and the
   `relay.audit.retention_local_only` deployment gate: a local rotating `file`
-  audit sink without a declared off-host shipping attestation now raises a
-  posture finding (warn under `production`, error under `evidence_grade`) so
-  an attacker with host access cannot silently destroy audit evidence.
-  `stdout` and `syslog` sinks are exempt. The gate is waivable.
+  audit sink without a declared off-host shipping attestation now warns under
+  `production` and refuses startup under `evidence_grade` so an attacker with
+  host access cannot silently destroy audit evidence. `stdout` and `syslog`
+  sinks are exempt.
 - `registry-relay audit quarantine --config <path> --reason <text>
   --operator <id>`: offline recovery for a corrupt or forked audit chain
   (#196). The corrupt file set is archived to `<name>.corrupt-<ts>` (never
   deleted), a fresh chain starts whose first record is a hash-linked
-  `audit.chain.break` event chained onto the last verifiable tail, and a
-  local `<path>.anchor.json` records the trusted start hash as operator
-  evidence. Recovery refuses to run while a live server holds the audit
-  writer lock.
+  `audit.chain.break` event chained onto the last verifiable tail. Recovery
+  refuses to run while a live server holds the audit writer lock.
 - Startup now eagerly verifies the retained audit chain when the `file` sink
   is configured. On an inconsistent chain the process stays up but `/ready`
   returns `503` with the stable code `audit.chain.inconsistent` until an

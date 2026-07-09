@@ -1904,7 +1904,7 @@ fn local_env_diagnostics(
     if matches!(config.audit.sink.as_str(), "file" | "jsonl") {
         diagnostics.push(Diagnostic::warn(
             "audit file/jsonl sink is local-chain-only",
-            "for beta tamper-evidence, ship audit envelopes off-host via stdout/syslog or publish external head/tail anchors",
+            "for beta tamper-evidence, ship audit envelopes off-host via stdout/syslog or declare deployment.evidence.audit_offhost_shipping after external shipping is in place",
         ));
     }
     if config.replay.storage == "redis" {

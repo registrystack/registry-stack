@@ -529,7 +529,7 @@ you rotate the secret, retain the old secret under your audit retention controls
 for any period when older records must remain comparable, or accept that new
 records will not match old handles.
 
-Audit output uses `registry-platform-audit` envelopes with `prev_hash` and `record_hash` on every record. These fields detect ordering gaps and accidental corruption in retained logs, but they do not protect against an actor who can rewrite the audit sink. Use an append-only external sink or independent tail-hash anchoring when stronger integrity is required. `chain` is retained in config for compatibility with older deployments, but platform audit envelopes are always chained.
+Audit output uses `registry-platform-audit` envelopes with `prev_hash` and `record_hash` on every record. These fields detect edits, reordering, and gaps inside the retained log set, starting from the first retained record. They do not prove that earlier records were never deleted, or protect against an actor who can rewrite the entire local sink. Use off-host audit shipping when completeness matters. `chain` is retained in config for compatibility with older deployments, but platform audit envelopes are always chained.
 
 A normally booted relay always reports keyed integrity `hmac` in its posture because startup requires the audit hash secret (`hash_secret_env`); the `none` value appears only in dev or test configurations that build the posture without that secret.
 
@@ -614,7 +614,7 @@ Waiver reasons are only visible in the restricted posture tier; the default tier
 | `relay.config.unsigned` | warn | error | startup_fail |
 | `relay.audit.best_effort` | (not bound) | warn | readiness_fail |
 | `relay.audit.sink_missing` | error | readiness_fail | startup_fail |
-| `relay.audit.retention_local_only` | (not bound) | warn | error |
+| `relay.audit.retention_local_only` | (not bound) | warn | startup_fail |
 
 `relay.audit.retention_local_only` fires when the audit sink is a local rotating `file` sink and `evidence.audit_offhost_shipping` is not declared: a local rotating file caps retention, and an attacker with host access can destroy the audit trail. `stdout` sinks are exempt (retention is the orchestrator's log pipeline's concern) and `syslog` sinks are exempt (forwarding is the syslog daemon's own surface).
 

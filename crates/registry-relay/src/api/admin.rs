@@ -502,15 +502,33 @@ fn posture_tier_invalid_response() -> Response {
 }
 
 fn audit_summary(config: &Config) -> Value {
+    let (shipping_target_configured, shipping_target) = audit_shipping_state(config);
     json!({
         "configured": true,
         "sink_type": audit_sink_label(config),
+        "shipping_target_configured": shipping_target_configured,
+        "shipping_target": shipping_target,
+        "last_successful_ship_at": null,
+        "backlog_depth": null,
         "checkpoint_status": if config.audit.chain { "available" } else { "unavailable" },
         "latest_tail_hash": null,
         "latest_sequence": null,
         "verified_at": null,
         "verification_status": "not_supported",
     })
+}
+
+fn audit_shipping_state(config: &Config) -> (bool, &'static str) {
+    match &config.audit.sink {
+        crate::config::AuditSinkConfig::Stdout { .. } => (true, "stdout"),
+        crate::config::AuditSinkConfig::Syslog { .. } => (true, "syslog"),
+        crate::config::AuditSinkConfig::File { .. }
+            if config.deployment.evidence.audit_offhost_shipping =>
+        {
+            (true, "declared_external")
+        }
+        crate::config::AuditSinkConfig::File { .. } => (false, "none"),
+    }
 }
 
 /// Build the `deployment` posture object: declared profile, gate findings, and
@@ -905,6 +923,29 @@ datasets: []
         config.audit.write_policy = AuditWritePolicy::AvailabilityFirst;
         let audit = audit_assurance(&config);
         assert_eq!(audit["write_policy"], "availability_first");
+    }
+
+    #[test]
+    fn posture_audit_summary_reports_shipping_state() {
+        let mut config = parse_minimal_config(&minimal_config_yaml());
+        let audit = audit_summary(&config);
+        assert_eq!(audit["shipping_target_configured"], true);
+        assert_eq!(audit["shipping_target"], "stdout");
+        assert!(audit["last_successful_ship_at"].is_null());
+        assert!(audit["backlog_depth"].is_null());
+
+        config.audit.sink = crate::config::AuditSinkConfig::File {
+            path: std::path::PathBuf::from("/tmp/relay-audit.jsonl"),
+            rotate: crate::config::RotateConfig::default(),
+        };
+        let audit = audit_summary(&config);
+        assert_eq!(audit["shipping_target_configured"], false);
+        assert_eq!(audit["shipping_target"], "none");
+
+        config.deployment.evidence.audit_offhost_shipping = true;
+        let audit = audit_summary(&config);
+        assert_eq!(audit["shipping_target_configured"], true);
+        assert_eq!(audit["shipping_target"], "declared_external");
     }
 
     /// An undeclared profile (the minimal config default) omits `profile`,

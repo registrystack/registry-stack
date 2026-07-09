@@ -180,7 +180,7 @@ const GATES: &[Gate] = &[
         // retention in a way this gate can observe.
         hosted_lab: None,
         production: Some(FindingWarn),
-        evidence_grade: Some(FindingError),
+        evidence_grade: Some(StartupFail),
     },
 ];
 
@@ -789,7 +789,8 @@ mod tests {
             FindingWarn
         );
         let evidence = evaluate(Some(DeploymentProfile::EvidenceGrade), &facts, &[], TODAY);
-        assert_eq!(finding(&evidence, id).severity, FindingError);
+        assert_eq!(finding(&evidence, id).severity, StartupFail);
+        assert_eq!(evidence.startup_failures, vec![id.to_string()]);
         // Non-triggering: clean facts never surface the finding.
         let clean = evaluate(
             Some(DeploymentProfile::Production),
@@ -801,7 +802,7 @@ mod tests {
     }
 
     #[test]
-    fn audit_retention_local_only_is_waivable() {
+    fn audit_retention_local_only_production_finding_is_waivable() {
         let facts = DeploymentFacts {
             audit_retention_local_only: true,
             ..clean_facts()

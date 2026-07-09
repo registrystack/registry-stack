@@ -52,6 +52,8 @@ struct InstancePosture {
 struct AuditPosture {
     sink: String,
     configured: bool,
+    shipping_target_configured: bool,
+    shipping_target: String,
 }
 
 #[derive(Clone, Debug)]
@@ -123,7 +125,10 @@ impl PostureContext {
             credential_status_storage: classify_credential_status_storage(
                 &config.credential_status,
             ),
-            audit: audit_posture(&config.audit),
+            audit: audit_posture(
+                &config.audit,
+                config.deployment.evidence.audit_offhost_shipping,
+            ),
             source_connections: SourceConnectionPosture {
                 by_kind: source_connection_counts_by_kind(config),
             },
@@ -293,6 +298,10 @@ pub(crate) async fn posture_document(
             "audit": {
                 "configured": context.audit.configured,
                 "sink_type": context.audit.sink,
+                "shipping_target_configured": context.audit.shipping_target_configured,
+                "shipping_target": context.audit.shipping_target,
+                "last_successful_ship_at": Value::Null,
+                "backlog_depth": Value::Null,
                 "checkpoint_status": "unavailable",
                 "latest_tail_hash": Value::Null,
                 "latest_sequence": Value::Null,
@@ -419,6 +428,8 @@ fn default_posture_context() -> PostureContext {
         audit: AuditPosture {
             sink: "unknown".to_string(),
             configured: false,
+            shipping_target_configured: false,
+            shipping_target: "unknown".to_string(),
         },
         source_connections: SourceConnectionPosture {
             by_kind: BTreeMap::new(),
@@ -463,7 +474,14 @@ fn classify_credential_status_storage(config: &CredentialStatusConfig) -> String
     }
 }
 
-fn audit_posture(config: &EvidenceAuditConfig) -> AuditPosture {
+fn audit_posture(config: &EvidenceAuditConfig, audit_offhost_shipping: bool) -> AuditPosture {
+    let (shipping_target_configured, shipping_target) = match config.sink.as_str() {
+        "stdout" => (true, "stdout"),
+        "syslog" => (true, "syslog"),
+        "file" | "jsonl" if audit_offhost_shipping => (true, "declared_external"),
+        "file" | "jsonl" => (false, "none"),
+        _ => (false, "unknown"),
+    };
     AuditPosture {
         sink: match config.sink.as_str() {
             "file" | "jsonl" => "file".to_string(),
@@ -472,6 +490,8 @@ fn audit_posture(config: &EvidenceAuditConfig) -> AuditPosture {
             _ => "unknown".to_string(),
         },
         configured: config.hash_secret_env.is_some(),
+        shipping_target_configured,
+        shipping_target: shipping_target.to_string(),
     }
 }
 

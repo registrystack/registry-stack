@@ -113,7 +113,7 @@ The gates bound for Registry Notary:
 | --- | --- | --- | --- | --- |
 | `notary.replay.in_memory_high_risk` | In-memory replay while federation, OID4VCI pre-authorized code, holder proof, wallet traffic, or `multi_instance` is declared | error | readiness_fail | startup_fail |
 | `notary.audit.sink_missing` | No durable, retained audit sink | error | startup_fail | startup_fail |
-| `notary.audit.retention_local_only` | Audit sink is `file` or `jsonl` and `deployment.evidence.audit_offhost_shipping` is not declared. `stdout` and `syslog` are exempt. | n/a | warn | error |
+| `notary.audit.retention_local_only` | Audit sink is `file` or `jsonl` and `deployment.evidence.audit_offhost_shipping` is not declared. `stdout` and `syslog` are exempt. | n/a | warn | startup_fail |
 | `notary.source.insecure_url` | Source connection over a plain `http://` URL with no localhost or private-network allowance | error | readiness_fail | startup_fail |
 | `notary.source.private_network_escape` | A source enables the private-network escape hatch | warn | error | error |
 | `notary.sidecar.expected_sidecar_missing` | A source-adapter source omits `expected_sidecar` | warn | error | readiness_fail |

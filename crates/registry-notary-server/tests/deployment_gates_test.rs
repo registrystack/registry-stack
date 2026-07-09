@@ -12,9 +12,11 @@ use registry_notary_core::{
     EvidenceCredentialConfig, RegistryNotaryAdminListenerMode, StandaloneRegistryNotaryConfig,
 };
 use registry_notary_server::{
-    compile_notary_runtime, notary_router_from_runtime, standalone_router, StandaloneServerError,
+    compile_notary_runtime, compile_notary_runtime_with_provenance, notary_router_from_runtime,
+    standalone_router, StandaloneServerError,
 };
 use registry_platform_authcommon::{CredentialFingerprintProvider, CredentialFingerprintRef};
+use registry_platform_ops::ConfigSource;
 use serde_json::Value;
 
 const AUDIT_SECRET: &str = "0123456789abcdef0123456789abcdef";
@@ -455,6 +457,12 @@ async fn posture_renders_deployment_and_audit_assurance() {
             "audit assurance is missing {field}"
         );
     }
+
+    let posture_audit = &posture["posture"]["audit"];
+    assert_eq!(posture_audit["shipping_target_configured"], false);
+    assert_eq!(posture_audit["shipping_target"], "none");
+    assert!(posture_audit["last_successful_ship_at"].is_null());
+    assert!(posture_audit["backlog_depth"].is_null());
 }
 
 #[tokio::test]
@@ -1029,12 +1037,10 @@ async fn production_syslog_sink_is_exempt_from_retention_local_only() {
 }
 
 #[test]
-fn jsonl_sink_without_attestation_is_finding_error_gate_binding_under_evidence_grade() {
-    // evidence_grade + jsonl sink without attestation = finding_error (not
-    // startup_fail). The minimal config also triggers notary.config.unsigned
-    // (startup_fail) under evidence_grade, so we verify the gate binding
-    // directly rather than via posture, matching the pattern used for the
-    // other #208 finding_error gates above.
+fn jsonl_sink_without_attestation_is_startup_gate_binding_under_evidence_grade() {
+    // evidence_grade + jsonl sink without attestation is a startup gate. The
+    // minimal config also triggers notary.config.unsigned under evidence_grade,
+    // so verify the audit gate binding directly.
     use registry_notary_core::deployment::{
         evaluate_gates, DeploymentProfile, GateInput, GateSeverity,
         FINDING_AUDIT_RETENTION_LOCAL_ONLY,
@@ -1057,10 +1063,10 @@ fn jsonl_sink_without_attestation_is_finding_error_gate_binding_under_evidence_g
         .expect("notary.audit.retention_local_only present under evidence_grade");
     assert_eq!(
         found.severity,
-        GateSeverity::FindingError,
-        "evidence_grade retention_local_only must be finding_error"
+        GateSeverity::StartupFail,
+        "evidence_grade retention_local_only must be startup_fail"
     );
-    assert!(!evaluation
+    assert!(evaluation
         .startup_failures
         .contains(&FINDING_AUDIT_RETENTION_LOCAL_ONLY.to_string()));
     assert!(!evaluation
@@ -1069,7 +1075,31 @@ fn jsonl_sink_without_attestation_is_finding_error_gate_binding_under_evidence_g
 }
 
 #[test]
-fn retention_local_only_waiver_is_honored_under_evidence_grade() {
+fn evidence_grade_file_sink_without_attestation_refuses_startup() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let config = ConfigBuilder::new(&audit_path(&tmp))
+        .deployment("deployment:\n  profile: evidence_grade\n")
+        .build();
+
+    let error = match compile_notary_runtime_with_provenance(
+        config,
+        ConfigSource::SignedBundleFile,
+        None,
+    ) {
+        Ok(_) => panic!("evidence_grade local-only audit retention must refuse startup"),
+        Err(error) => error,
+    };
+    match error {
+        StandaloneServerError::DeploymentGateStartupFailure { findings, .. } => assert!(
+            findings.contains("notary.audit.retention_local_only"),
+            "startup failure must name the audit retention gate: {findings}"
+        ),
+        other => panic!("expected a deployment gate startup failure, got: {other:?}"),
+    }
+}
+
+#[test]
+fn retention_local_only_waiver_is_honored_under_production() {
     use registry_notary_core::deployment::{
         evaluate_gates, DeploymentFindingStatus, DeploymentProfile, DeploymentWaiverConfig,
         GateInput, FINDING_AUDIT_RETENTION_LOCAL_ONLY,
@@ -1085,7 +1115,7 @@ fn retention_local_only_waiver_is_honored_under_evidence_grade() {
         expires: "2999-01-01".to_string(),
     };
     let evaluation = evaluate_gates(
-        Some(DeploymentProfile::EvidenceGrade),
+        Some(DeploymentProfile::Production),
         &input,
         &[waiver],
         "2026-06-13",

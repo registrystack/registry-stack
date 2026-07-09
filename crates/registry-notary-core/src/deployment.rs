@@ -320,7 +320,7 @@ fn gate_catalog() -> &'static [Gate] {
             id: FINDING_AUDIT_RETENTION_LOCAL_ONLY,
             hosted_lab: None,
             production: Some(FindingWarn),
-            evidence_grade: Some(FindingError),
+            evidence_grade: Some(StartupFail),
             condition: |input| input.audit_retention_local_only,
         },
         // Risky-but-legal defaults, surfaced as profile-bound findings. (#208)
@@ -862,7 +862,7 @@ mod tests {
     }
 
     #[test]
-    fn audit_retention_local_only_binds_finding_error_under_evidence_grade() {
+    fn audit_retention_local_only_binds_startup_fail_under_evidence_grade() {
         let input = GateInput {
             audit_sink_class_durable: true,
             audit_retention_local_only: true,
@@ -879,8 +879,11 @@ mod tests {
             .iter()
             .find(|f| f.id == FINDING_AUDIT_RETENTION_LOCAL_ONLY)
             .expect("retention finding present under evidence_grade");
-        assert_eq!(finding.severity, GateSeverity::FindingError);
-        assert!(evaluation.startup_failures.is_empty());
+        assert_eq!(finding.severity, GateSeverity::StartupFail);
+        assert_eq!(
+            evaluation.startup_failures,
+            vec![FINDING_AUDIT_RETENTION_LOCAL_ONLY.to_string()]
+        );
         assert!(evaluation.readiness_failures.is_empty());
     }
 
@@ -928,7 +931,7 @@ mod tests {
     }
 
     #[test]
-    fn audit_retention_local_only_waiver_suppresses_the_finding() {
+    fn audit_retention_local_only_waiver_suppresses_production_finding() {
         let input = GateInput {
             audit_sink_class_durable: true,
             audit_retention_local_only: true,

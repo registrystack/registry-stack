@@ -76,6 +76,38 @@ fn posture_examples_and_redaction_fixtures_validate() {
 }
 
 #[test]
+fn posture_audit_shipping_state_fields_round_trip() {
+    let validator = posture_validator();
+    for fixture in [
+        registry_platform_ops::RELAY_POSTURE_EXAMPLE_V1,
+        registry_platform_ops::NOTARY_POSTURE_EXAMPLE_V1,
+    ] {
+        let posture = parse(fixture);
+        assert_valid(&validator, &posture);
+        let audit = &posture["posture"]["audit"];
+        assert!(audit["shipping_target_configured"].is_boolean());
+        assert!(audit["shipping_target"].is_string());
+        assert!(audit.get("last_successful_ship_at").is_some());
+        assert!(audit.get("backlog_depth").is_some());
+
+        let rendered = serde_json::to_string(&posture).expect("posture renders");
+        let reparsed: serde_json::Value =
+            serde_json::from_str(&rendered).expect("rendered posture parses");
+        assert_eq!(
+            reparsed["posture"]["audit"], posture["posture"]["audit"],
+            "shipping-state posture fields must round-trip unchanged"
+        );
+    }
+
+    let mut missing_shipping_state = parse(registry_platform_ops::RELAY_POSTURE_EXAMPLE_V1);
+    missing_shipping_state["posture"]["audit"]
+        .as_object_mut()
+        .expect("posture audit is object")
+        .remove("shipping_target_configured");
+    assert_invalid(&validator, &missing_shipping_state);
+}
+
+#[test]
 fn malformed_posture_documents_fail_validation() {
     let validator = posture_validator();
 

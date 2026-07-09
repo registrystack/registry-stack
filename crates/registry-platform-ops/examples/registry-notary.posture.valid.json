@@ -59,6 +59,10 @@
     "audit": {
       "configured": true,
       "sink_type": "file",
+      "shipping_target_configured": true,
+      "shipping_target": "declared_external",
+      "last_successful_ship_at": null,
+      "backlog_depth": null,
       "checkpoint_status": "available",
       "latest_tail_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
       "latest_sequence": 88,

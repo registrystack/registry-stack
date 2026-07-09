@@ -91,7 +91,7 @@ Hardening checklist:
 profile hosted by the instance. There is no per-issuer partitioning of admin
 authority: a caller holding this scope can mutate credential status, apply
 config, and drive the other `registry_notary:admin`-gated routes for any
-credential profile the instance serves, not just one.
+credential profile the instance serves, rather than one.
 
 Deployments that need separate administrative domains, for example two
 issuing authorities that must not be able to administer each other's
@@ -188,14 +188,14 @@ Use one of these patterns:
 | Sink | Use when | Requirement |
 | --- | --- | --- |
 | `stdout` | Container runtime or platform log agent owns collection | Ship logs off-host and retain them immutably enough for your assurance level |
-| `file` or `jsonl` | A host process owns local JSONL files | Configure file permissions, rotation, backups, and external anchoring |
+| `file` or `jsonl` | A host process owns local JSONL files | Configure file permissions, rotation, backups, and off-host shipping |
 | `syslog` | Local syslog or journald pipeline is standard | Confirm socket path and downstream retention |
 
 Audit records include `prev_hash` and `record_hash`. File sinks can resume from
-the retained tail hash, but any local-only chain can still be rewritten by a
-host-level attacker. For pilots that rely on tamper evidence, ship records
-off-host or periodically anchor the tail hash in independently controlled
-storage.
+the retained tail hash, but the local chain proves only retained-set integrity.
+It does not prove that earlier records were never deleted, and a host-level
+attacker can still rewrite a local-only sink. For pilots that rely on complete
+audit evidence, ship records off-host.
 
 ## Metrics
 

@@ -151,6 +151,14 @@ block.
 | `checkpoints` | `unsupported` | Periodic signed checkpoints over the audit chain are not produced by this build. |
 | `anchoring` | `none` | Audit state is not anchored to an external transparency log or ledger. |
 
+The nested `posture.audit` diagnostic block also reports shipping state:
+`shipping_target_configured`, `shipping_target`, `last_successful_ship_at`, and
+`backlog_depth`.
+`shipping_target` is `stdout`, `syslog`, `declared_external`, `none`, or
+`unknown`.
+This build reports `last_successful_ship_at` and `backlog_depth` as `null`
+because Notary has no product-owned shipping queue.
+
 Note: a running notary always reports `keyed_integrity = hmac` and
 `write_policy = fail_closed_route_families` because startup refuses any
 configuration that omits the `hash_secret_env` HMAC key; the `hmac` and

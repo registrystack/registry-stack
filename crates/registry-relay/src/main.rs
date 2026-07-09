@@ -1097,7 +1097,7 @@ fn config_verify_bundle_report(
 
 /// Offline audit-chain recovery (#196). Quarantines a retained chain that no
 /// longer verifies under the configured keyed hasher and starts a fresh,
-/// anchored segment. Refuses to run while a relay holds the single-writer lock.
+/// break segment. Refuses to run while a relay holds the single-writer lock.
 async fn run_audit_quarantine(
     config_path: PathBuf,
     env_file: Option<PathBuf>,
@@ -3620,16 +3620,13 @@ audit:
             serde_json::from_str(recovered_lines[0]).expect("break envelope parses");
         assert_eq!(break_envelope["record"]["event"], "audit.chain.break");
 
-        // The anchor pins the recovered segment's start to the break event's
-        // predecessor (the last good tail).
-        let anchor: Value = serde_json::from_str(
-            &std::fs::read_to_string(dir.path().join("audit.jsonl.anchor.json"))
-                .expect("anchor file"),
-        )
-        .expect("anchor json");
-        assert_eq!(
-            anchor["trusted_start_prev_hash"],
-            break_envelope["prev_hash"]
+        assert!(
+            !dir.path().join("audit.jsonl.anchor.json").exists(),
+            "recovery no longer writes a local completeness anchor"
+        );
+        assert!(
+            break_envelope["prev_hash"].is_string(),
+            "break event remains chained to the last good local tail"
         );
     }
 }

@@ -15,8 +15,8 @@
   archives the corrupt file set to `<name>.corrupt-<ts>`, starts a fresh
   chain whose first record is a hash-linked `audit.chain.break` event chained
   onto the last verifiable tail (torn trailing lines from an unclean stop are
-  treated as a break, not an abort), and records the trusted start hash in
-  `<path>.anchor.json` as operator evidence.
+  treated as a break, not an abort), and leaves off-host shipping as the
+  completeness guarantee.
 
 ### Changed
 
@@ -27,6 +27,11 @@
   `JsonlFileSink::with_rotation` (Registry Relay and Registry Notary both
   configure 100 MB x 14 files) are unaffected; this change primarily protects
   the `registry-platform-sts` bridge binary, which uses the crate default.
+- `registry-platform-audit` chain verification now treats the first retained
+  record's `prev_hash` as the retained-set boundary. The crate no longer
+  exposes local trusted-anchor verification helpers; local verification proves
+  retained-set tamper evidence, while off-host shipping is the completeness
+  guarantee.
 
 ## v0.3.1 - 2026-06-21
 

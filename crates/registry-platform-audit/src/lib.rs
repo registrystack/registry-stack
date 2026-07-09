@@ -359,7 +359,7 @@ pub enum AuditError {
     WeakSecret { name: String, min_bytes: usize },
     #[error("audit hash field {field} is not a valid lowercase sha256 hex string")]
     InvalidHashHex { field: &'static str },
-    #[error("audit sink cannot provide a tail hash; use bootstrap_or_start_empty with an external anchor or explicit dev-only restart mode")]
+    #[error("audit sink cannot provide a tail hash; use bootstrap_or_start_empty or explicit dev-only restart mode")]
     NonTailableSink,
     #[error("audit chain hash mismatch")]
     HashMismatch,
@@ -1140,43 +1140,6 @@ pub struct ChainVerification {
     pub last_hash: Option<[u8; 32]>,
 }
 
-/// External anchors used to turn chain consistency checks into anchored
-/// verification.
-///
-/// `trusted_start_prev_hash` verifies a retained suffix starts after a hash
-/// stored outside the JSONL set. `trusted_last_hash` verifies the retained set
-/// still ends at a previously stored tail/head hash. Callers should store these
-/// anchor values in a location an audit-log writer cannot rewrite.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct ChainVerificationAnchors {
-    pub trusted_start_prev_hash: Option<[u8; 32]>,
-    pub trusted_last_hash: Option<[u8; 32]>,
-}
-
-impl ChainVerificationAnchors {
-    #[must_use]
-    pub fn from_trusted_start_prev_hash(trusted_start_prev_hash: Option<[u8; 32]>) -> Self {
-        Self {
-            trusted_start_prev_hash,
-            trusted_last_hash: None,
-        }
-    }
-
-    #[must_use]
-    pub fn from_trusted_last_hash(trusted_last_hash: [u8; 32]) -> Self {
-        Self {
-            trusted_start_prev_hash: None,
-            trusted_last_hash: Some(trusted_last_hash),
-        }
-    }
-
-    #[must_use]
-    pub fn with_trusted_last_hash(mut self, trusted_last_hash: [u8; 32]) -> Self {
-        self.trusted_last_hash = Some(trusted_last_hash);
-        self
-    }
-}
-
 #[derive(Debug, Error, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ChainVerificationError {
@@ -1190,50 +1153,27 @@ pub enum ChainVerificationError {
     },
     #[error("audit chain line {line} has an invalid record_hash")]
     RecordHashMismatch { line: usize },
-    #[error("audit chain last hash mismatch")]
-    LastHashMismatch {
-        expected: [u8; 32],
-        actual: Option<[u8; 32]>,
-    },
 }
 
-/// Verify a retained audit chain with the caller-selected hash mode.
+/// Verify retained audit records with the caller-selected hash mode.
 ///
-/// This checks internal consistency over the provided records. Store external
-/// anchors off-host and use [`verify_chain_with_anchors`] when continuity across
-/// retained sets matters.
+/// The first retained record's `prev_hash` is the retained-set boundary. This
+/// checks tamper-evidence for records still present in the verified set; it does
+/// not prove that earlier records were never deleted. Use off-host audit
+/// shipping when completeness matters.
 pub fn verify_chain(
     envelopes: &[AuditEnvelope],
     hasher: &AuditChainHasher,
 ) -> Result<ChainVerification, ChainVerificationError> {
-    verify_chain_expected_prev_hash(envelopes, None, hasher)
+    verify_retained_set(envelopes, hasher)
 }
 
-pub fn verify_chain_with_anchors(
+fn verify_retained_set(
     envelopes: &[AuditEnvelope],
-    anchors: ChainVerificationAnchors,
-    hasher: &AuditChainHasher,
-) -> Result<ChainVerification, ChainVerificationError> {
-    let verification =
-        verify_chain_expected_prev_hash(envelopes, anchors.trusted_start_prev_hash, hasher)?;
-    if let Some(expected) = anchors.trusted_last_hash {
-        if verification.last_hash != Some(expected) {
-            return Err(ChainVerificationError::LastHashMismatch {
-                expected,
-                actual: verification.last_hash,
-            });
-        }
-    }
-    Ok(verification)
-}
-
-fn verify_chain_expected_prev_hash(
-    envelopes: &[AuditEnvelope],
-    expected_start_prev_hash: Option<[u8; 32]>,
     hasher: &AuditChainHasher,
 ) -> Result<ChainVerification, ChainVerificationError> {
     let mut records = 0usize;
-    let mut previous_hash = expected_start_prev_hash;
+    let mut previous_hash = envelopes.first().and_then(|envelope| envelope.prev_hash);
     let mut start_prev_hash = None;
     let mut last_hash = None;
 
@@ -1287,8 +1227,7 @@ fn verify_chain_expected_prev_hash(
 /// legacy pre-beta logs.
 ///
 /// Production verification MUST use [`verify_jsonl_lines_with_hasher`] with an
-/// explicit keyed [`AuditChainHasher`] (and ideally
-/// [`verify_jsonl_lines_with_anchors`] with off-host anchors).
+/// explicit keyed [`AuditChainHasher`].
 #[deprecated(
     note = "performs UNKEYED verification (dev/test only); use verify_jsonl_lines_with_hasher with an explicit AuditChainHasher in production"
 )]
@@ -1311,19 +1250,6 @@ where
 {
     let envelopes = parse_jsonl_lines(lines)?;
     verify_chain(&envelopes, hasher)
-}
-
-pub fn verify_jsonl_lines_with_anchors<I, S>(
-    lines: I,
-    anchors: ChainVerificationAnchors,
-    hasher: &AuditChainHasher,
-) -> Result<ChainVerification, ChainVerificationError>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<str>,
-{
-    let envelopes = parse_jsonl_lines(lines)?;
-    verify_chain_with_anchors(&envelopes, anchors, hasher)
 }
 
 fn parse_jsonl_lines<I, S>(lines: I) -> Result<Vec<AuditEnvelope>, ChainVerificationError>
@@ -1377,7 +1303,7 @@ pub struct ChainRecoveryOutcome {
     pub already_consistent: bool,
     /// 1-indexed line (retained-set order) of the first inconsistent record.
     pub first_bad_line: Option<usize>,
-    /// Last verified record hash before the break (the anchor the recovered
+    /// Last verified record hash before the break (the predecessor the recovered
     /// segment chains onto), or `None` when the first record was already bad.
     pub last_good_hash: Option<[u8; 32]>,
     /// Record hash of the emitted `audit.chain.break` event.
@@ -1414,21 +1340,19 @@ pub struct ChainBreakRecord {
     pub operator: Option<String>,
 }
 
-/// Quarantine a retained audit chain that no longer verifies and start a fresh,
-/// anchored segment (#196). This is the offline operator recovery path: it takes
+/// Quarantine a retained audit chain that no longer verifies and start a fresh
+/// break segment (#196). This is the offline operator recovery path: it takes
 /// the single-writer lock, so it refuses to run while the server holds it
 /// (returns [`AuditError::SinkLocked`]).
 ///
-/// Verification anchors on the first retained record's `prev_hash`
-/// (retained-suffix semantics), so a legitimately aged-out genesis is not
-/// treated as corruption. Any first-failing-line divergence is handled
-/// uniformly — a mid-file fork (`PrevHashMismatch`), a rewrite or wrong-key
-/// tail (`RecordHashMismatch`), or a torn line (`InvalidJson`): every retained
-/// data file is moved aside to `<name>.corrupt-<ts>` (retained, never deleted),
-/// and a fresh active file is started whose first record is a hash-linked
-/// `audit.chain.break` event chained onto the last good tail. A local anchor
-/// file `<path>.anchor.json` records the trusted start hash so operators can
-/// later prove where the recovered segment begins.
+/// Retained-set verification starts at the first retained record's `prev_hash`,
+/// so a legitimately aged-out genesis is not treated as corruption. Any
+/// first-failing-line divergence is handled uniformly: a mid-file fork
+/// (`PrevHashMismatch`), a rewrite or wrong-key tail (`RecordHashMismatch`), or a
+/// torn line (`InvalidJson`): every retained data file is moved aside to
+/// `<name>.corrupt-<ts>` (retained, never deleted), and a fresh active file is
+/// started whose first record is a hash-linked `audit.chain.break` event chained
+/// onto the last good tail.
 ///
 /// `now_unix_ms` is supplied by the caller so the archive suffix is
 /// deterministic and testable.
@@ -1436,9 +1360,7 @@ pub struct ChainBreakRecord {
 /// Security note (audit integrity, per CONTRIBUTING): the break event is itself
 /// chained and hashed, and the corrupt segment is retained, so the discontinuity
 /// is tamper-evident and an operator cannot silently erase records after the
-/// break. The anchor is local-only (D3): a local attacker who can rewrite the
-/// audit directory can also rewrite the anchor; off-host shipping / external
-/// anchoring is the structural mitigation and stays the stronger guarantee.
+/// break. Off-host shipping remains the structural completeness guarantee.
 pub fn quarantine_and_recover_chain(
     path: &Path,
     max_files: u32,
@@ -1459,7 +1381,7 @@ pub fn quarantine_and_recover_chain(
         }
     }
     // Parse leniently rather than with `parse_jsonl_lines`: a torn trailing
-    // line (#196 — an unclean container stop truncates the last write) must
+    // line (#196, where an unclean container stop truncates the last write) must
     // recover the same as any other break, not abort with `InvalidJson`
     // before the scan even runs. Stop at the first unparseable line and treat
     // the successfully parsed prefix as the retained set; `first_bad` then
@@ -1517,30 +1439,6 @@ pub fn quarantine_and_recover_chain(
     file.write_all(line.as_bytes()).map_err(AuditError::Io)?;
     file.flush().map_err(AuditError::Io)?;
 
-    let anchor_path = PathBuf::from(format!("{}.anchor.json", path.display()));
-    let anchor = json!({
-        "schema": "registry.audit.anchor.v1",
-        "trusted_start_prev_hash": last_good.map(|hash| hex_lower(&hash)),
-        "break_event_hash": hex_lower(&break_envelope.record_hash),
-        "recovered_at_unix_ms": now_unix_ms,
-        "quarantine_suffix": suffix,
-    });
-    let mut anchor_file = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .audit_file_mode()
-        .open(&anchor_path)
-        .map_err(AuditError::Io)?;
-    anchor_file
-        .write_all(
-            serde_json::to_string_pretty(&anchor)
-                .map_err(AuditError::Json)?
-                .as_bytes(),
-        )
-        .map_err(AuditError::Io)?;
-    anchor_file.flush().map_err(AuditError::Io)?;
-
     Ok(ChainRecoveryOutcome {
         already_consistent: false,
         first_bad_line: Some(first_bad),
@@ -1551,7 +1449,7 @@ pub fn quarantine_and_recover_chain(
     })
 }
 
-/// Scan for the first record that breaks chain continuity, anchoring on the
+/// Scan for the first record that breaks chain continuity, starting from the
 /// first retained record's `prev_hash`. Returns `(first_bad_line_1indexed,
 /// last_good_hash, good_count)`; `first_bad_line == 0` means fully consistent.
 fn scan_first_inconsistency(
@@ -1583,28 +1481,9 @@ fn scan_first_inconsistency(
 
 fn tail_hash_from_files(
     path: &Path,
-    max_size_bytes: u64,
+    _max_size_bytes: u64,
     max_files: u32,
     hasher: &AuditChainHasher,
-) -> Result<Option<[u8; 32]>, AuditError> {
-    tail_hash_from_files_with_warning(path, max_size_bytes, max_files, hasher, || {
-        tracing::warn!(
-            code = "audit.chain.aged_out_anchor",
-            "audit chain verification is anchored on an aged-out predecessor (oldest retained \
-             record has a non-None prev_hash): a middle-of-set gap would be caught as a boundary \
-             mismatch, but deletion of the oldest rotated file cannot be ruled out from local disk \
-             alone; rely on off-host audit shipping / external anchoring to detect loss of the \
-             leading records"
-        );
-    })
-}
-
-fn tail_hash_from_files_with_warning(
-    path: &Path,
-    max_size_bytes: u64,
-    max_files: u32,
-    hasher: &AuditChainHasher,
-    warn_retained_suffix: impl FnOnce(),
 ) -> Result<Option<[u8; 32]>, AuditError> {
     let paths = existing_audit_paths(path, max_files);
     if paths.is_empty() {
@@ -1612,12 +1491,8 @@ fn tail_hash_from_files_with_warning(
     }
 
     let mut contents = String::new();
-    let mut oldest_file_has_records = false;
-    for (index, source) in paths.iter().enumerate() {
+    for source in &paths {
         let file_contents = read_audit_file(source)?;
-        if index == 0 {
-            oldest_file_has_records = file_contents.lines().any(|line| !line.trim().is_empty());
-        }
         contents.push_str(&file_contents);
         if !contents.ends_with('\n') {
             contents.push('\n');
@@ -1628,32 +1503,7 @@ fn tail_hash_from_files_with_warning(
     if envelopes.is_empty() {
         return Ok(None);
     }
-    // The retained-suffix compatibility path trusts the first envelope's
-    // prev_hash as the anchor, so it is only sound when that envelope is the
-    // start of the oldest retained file. If the oldest rotated file is empty
-    // (truncated), the first parsed envelope comes from a newer file and would
-    // silently hide missing leading records, so require the oldest rotated file
-    // to actually supply the anchor record.
-    let starts_with_rotated_file = paths.first().is_some_and(|candidate| candidate != path);
-    let oldest_rotated_anchor = starts_with_rotated_file && oldest_file_has_records;
-    let retained_suffix = max_size_bytes != 0
-        && (oldest_rotated_anchor || max_files == 1)
-        && envelopes[0].prev_hash.is_some();
-    let verification = if retained_suffix {
-        // The oldest retained record has a non-None prev_hash, so the chain is
-        // anchored on a predecessor that has already aged out of the retained
-        // set. A middle-of-set gap would surface as a boundary PrevHashMismatch
-        // during concatenated verification, but deleting the true oldest
-        // on-disk file leaves a state byte-identical to a legitimate aged-out
-        // rotation, so it cannot be distinguished from local disk alone.
-        // Off-host audit shipping / external anchoring is the structural
-        // mitigation; surface the residual so operators can correlate.
-        warn_retained_suffix();
-        verify_chain_expected_prev_hash(&envelopes, envelopes[0].prev_hash, hasher)
-    } else {
-        verify_chain(&envelopes, hasher)
-    }
-    .map_err(AuditError::ChainVerification)?;
+    let verification = verify_chain(&envelopes, hasher).map_err(AuditError::ChainVerification)?;
     Ok(verification.last_hash)
 }
 
@@ -2321,16 +2171,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_sink_rejects_missing_first_line_in_tail_hash() {
+    async fn file_sink_tail_hash_accepts_retained_set_after_missing_first_line() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("audit.jsonl");
         let sink = JsonlFileSink::new(&path);
         let chain = ChainState::unkeyed_dev_only();
-        let first = chain
+        let _first = chain
             .append(&sink, json!({ "event": "first" }))
             .await
             .expect("first append");
-        let _second = chain
+        let second = chain
             .append(&sink, json!({ "event": "second" }))
             .await
             .expect("second append");
@@ -2339,21 +2189,16 @@ mod tests {
         let rewritten = contents.lines().skip(1).collect::<Vec<_>>().join("\n") + "\n";
         fs::write(&path, rewritten).expect("rewrite without first line");
 
-        assert!(matches!(
+        assert_eq!(
             sink.tail_hash_with_hasher(&AuditChainHasher::unkeyed_dev_only())
-                .await,
-            Err(AuditError::ChainVerification(
-                ChainVerificationError::PrevHashMismatch {
-                    line: 1,
-                    expected: None,
-                    actual: Some(actual),
-                }
-            )) if actual == first.record_hash
-        ));
+                .await
+                .expect("retained set tail"),
+            Some(second.record_hash)
+        );
     }
 
     #[tokio::test]
-    async fn file_sink_bootstrap_rejects_missing_first_line() {
+    async fn file_sink_bootstrap_accepts_retained_set_after_missing_first_line() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("audit.jsonl");
         let sink = JsonlFileSink::new(&path);
@@ -2362,7 +2207,7 @@ mod tests {
             .append(&sink, json!({ "event": "first" }))
             .await
             .expect("first append");
-        chain
+        let second = chain
             .append(&sink, json!({ "event": "second" }))
             .await
             .expect("second append");
@@ -2371,16 +2216,14 @@ mod tests {
         let rewritten = contents.lines().skip(1).collect::<Vec<_>>().join("\n") + "\n";
         fs::write(&path, rewritten).expect("rewrite without first line");
 
-        assert!(matches!(
-            ChainState::bootstrap_unkeyed_dev_only(&sink).await,
-            Err(AuditError::ChainVerification(
-                ChainVerificationError::PrevHashMismatch {
-                    line: 1,
-                    expected: None,
-                    actual: Some(_),
-                }
-            ))
-        ));
+        let bootstrapped = ChainState::bootstrap_unkeyed_dev_only(&sink)
+            .await
+            .expect("bootstrap retained set");
+        let third = bootstrapped
+            .append(&sink, json!({ "event": "third" }))
+            .await
+            .expect("append after retained set");
+        assert_eq!(third.prev_hash, Some(second.record_hash));
     }
 
     #[tokio::test]
@@ -2415,14 +2258,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_sink_retained_suffix_compat_path_warns_and_bootstraps() {
+    async fn file_sink_retained_suffix_bootstraps_as_retained_set() {
         // max_size 1 rotates every append and max_files 2 retains only the
         // active file plus one rotated file. After three appends the genesis
         // record has aged out, so the oldest retained record carries a non-None
-        // prev_hash: the retained-suffix compatibility path. On disk this is
-        // byte-identical to a set whose true oldest rotated file was deleted, so
-        // verification anchors on the aged-out predecessor and must emit an
-        // operator-visible warning while still bootstrapping cleanly.
+        // prev_hash. Local verification treats that as the retained-set
+        // boundary; off-host shipping is the completeness guarantee.
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("audit.jsonl");
         let sink = JsonlFileSink::with_rotation(&path, 1, 2);
@@ -2436,20 +2277,11 @@ mod tests {
             third_hash = Some(envelope.record_hash);
         }
 
-        let mut warned = false;
-        let result = tail_hash_from_files_with_warning(
-            &path,
-            1,
-            2,
-            &AuditChainHasher::unkeyed_dev_only(),
-            || {
-                warned = true;
-            },
-        );
-        assert_eq!(result.expect("compat path bootstraps"), third_hash);
-        assert!(
-            warned,
-            "expected the aged-out-anchor warning path to be invoked"
+        assert_eq!(
+            sink.tail_hash_with_hasher(&AuditChainHasher::unkeyed_dev_only())
+                .await
+                .expect("retained suffix bootstraps"),
+            third_hash
         );
     }
 
@@ -2513,7 +2345,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_sink_bootstrap_rejects_truncated_oldest_rotated_file() {
+    async fn file_sink_bootstrap_accepts_truncated_oldest_rotated_file_as_retained_set() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("audit.jsonl");
         // max_size 1 rotates on every append and max_files 50 retains
@@ -2522,40 +2354,45 @@ mod tests {
         // genesis.
         let sink = JsonlFileSink::with_rotation(&path, 1, 50);
         let chain = ChainState::unkeyed_dev_only();
-        for event in ["genesis", "second"] {
-            chain
-                .append(&sink, json!({ "event": event }))
-                .await
-                .expect("append");
-        }
+        let _genesis = chain
+            .append(&sink, json!({ "event": "genesis" }))
+            .await
+            .expect("append genesis");
+        let second = chain
+            .append(&sink, json!({ "event": "second" }))
+            .await
+            .expect("append second");
 
-        // Healthy set bootstraps cleanly: the oldest rotated file carries the
-        // genesis record, so verification starts from prev_hash = None.
+        // Healthy set bootstraps cleanly.
         sink.tail_hash_with_hasher(&AuditChainHasher::unkeyed_dev_only())
             .await
             .expect("healthy tail");
 
         // Truncate the oldest rotated file, dropping the genesis record. The
         // first retained record now has a non-None prev_hash pointing at the
-        // lost record; bootstrapping must detect the gap, not anchor on it.
+        // lost record; local verification treats that value as the retained-set
+        // boundary instead of claiming completeness.
         let rotated = rotated_path(&path, 1);
         fs::write(&rotated, "").expect("truncate rotated file");
 
-        assert!(matches!(
+        assert_eq!(
             sink.tail_hash_with_hasher(&AuditChainHasher::unkeyed_dev_only())
-                .await,
-            Err(AuditError::ChainVerification(
-                ChainVerificationError::PrevHashMismatch {
-                    line: 1,
-                    expected: None,
-                    actual: Some(_),
-                }
-            ))
-        ));
+                .await
+                .expect("retained tail"),
+            Some(second.record_hash)
+        );
+        let bootstrapped = ChainState::bootstrap_unkeyed_dev_only(&sink)
+            .await
+            .expect("bootstrap retained set");
+        let third = bootstrapped
+            .append(&sink, json!({ "event": "third" }))
+            .await
+            .expect("append after retained set");
+        assert_eq!(third.prev_hash, Some(second.record_hash));
     }
 
     #[test]
-    fn verify_jsonl_lines_remains_genesis_strict_for_suffix() {
+    fn verify_jsonl_lines_accepts_retained_suffix() {
         let first = AuditEnvelope::new(json!({ "event": "first" }), None).expect("first");
         let second = AuditEnvelope::new(json!({ "event": "second" }), Some(first.record_hash))
             .expect("second");
@@ -2563,31 +2400,27 @@ mod tests {
             .expect("third");
         let suffix = [second.to_jsonl().unwrap(), third.to_jsonl().unwrap()];
 
-        assert!(matches!(
-            verify_jsonl_lines_with_hasher(suffix.iter(), &AuditChainHasher::unkeyed_dev_only()),
-            Err(ChainVerificationError::PrevHashMismatch {
-                line: 1,
-                expected: None,
-                actual: Some(_),
-            })
-        ));
+        let verification =
+            verify_jsonl_lines_with_hasher(suffix.iter(), &AuditChainHasher::unkeyed_dev_only())
+                .expect("suffix verifies as retained set");
+        assert_eq!(verification.records, 2);
+        assert_eq!(verification.start_prev_hash, Some(first.record_hash));
+        assert_eq!(verification.last_hash, Some(third.record_hash));
     }
 
     #[test]
-    fn verify_chain_with_anchors_accepts_trusted_retained_suffix() {
+    fn verify_chain_accepts_retained_suffix() {
         let first = AuditEnvelope::new(json!({ "event": "first" }), None).expect("first");
         let second = AuditEnvelope::new(json!({ "event": "second" }), Some(first.record_hash))
             .expect("second");
         let third = AuditEnvelope::new(json!({ "event": "third" }), Some(second.record_hash))
             .expect("third");
 
-        let verification = verify_chain_with_anchors(
+        let verification = verify_chain(
             &[second.clone(), third.clone()],
-            ChainVerificationAnchors::from_trusted_start_prev_hash(Some(first.record_hash))
-                .with_trusted_last_hash(third.record_hash),
             &AuditChainHasher::unkeyed_dev_only(),
         )
-        .expect("anchored suffix verifies");
+        .expect("retained suffix verifies");
 
         assert_eq!(verification.records, 2);
         assert_eq!(verification.start_prev_hash, Some(first.record_hash));
@@ -2595,7 +2428,7 @@ mod tests {
     }
 
     #[test]
-    fn verify_chain_with_trusted_tail_rejects_full_rewrite() {
+    fn verify_chain_accepts_self_consistent_full_rewrite_without_offhost_evidence() {
         let first = AuditEnvelope::new(json!({ "event": "first" }), None).expect("first");
         let second = AuditEnvelope::new(json!({ "event": "second" }), Some(first.record_hash))
             .expect("second");
@@ -2608,48 +2441,10 @@ mod tests {
         .expect("fake second");
 
         let rewritten = [rewritten_first, rewritten_second];
-        assert!(verify_chain(&rewritten, &AuditChainHasher::unkeyed_dev_only()).is_ok());
-
-        let err = verify_chain_with_anchors(
-            &rewritten,
-            ChainVerificationAnchors::from_trusted_last_hash(second.record_hash),
-            &AuditChainHasher::unkeyed_dev_only(),
-        )
-        .expect_err("trusted tail detects full rewrite");
-
-        assert!(matches!(
-            err,
-            ChainVerificationError::LastHashMismatch { .. }
-        ));
-    }
-
-    #[test]
-    fn verify_jsonl_lines_with_anchors_checks_trusted_tail() {
-        let first = AuditEnvelope::new(json!({ "event": "first" }), None).expect("first");
-        let second = AuditEnvelope::new(json!({ "event": "second" }), Some(first.record_hash))
-            .expect("second");
-        let lines = [first.to_jsonl().unwrap(), second.to_jsonl().unwrap()];
-
-        let verification = verify_jsonl_lines_with_anchors(
-            lines.iter(),
-            ChainVerificationAnchors::from_trusted_last_hash(second.record_hash),
-            &AuditChainHasher::unkeyed_dev_only(),
-        )
-        .expect("anchored JSONL verifies");
-
+        let verification = verify_chain(&rewritten, &AuditChainHasher::unkeyed_dev_only())
+            .expect("self-consistent rewrite verifies locally");
         assert_eq!(verification.records, 2);
-        assert_eq!(verification.last_hash, Some(second.record_hash));
-
-        let err = verify_jsonl_lines_with_anchors(
-            lines.iter(),
-            ChainVerificationAnchors::from_trusted_last_hash([42; 32]),
-            &AuditChainHasher::unkeyed_dev_only(),
-        )
-        .expect_err("wrong trusted tail rejected");
-        assert!(matches!(
-            err,
-            ChainVerificationError::LastHashMismatch { .. }
-        ));
+        assert_ne!(verification.last_hash, Some(second.record_hash));
     }
 
     #[tokio::test]
@@ -3154,7 +2949,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn recovery_quarantines_a_fork_and_starts_an_anchored_segment() {
+    async fn recovery_quarantines_a_fork_and_starts_a_break_segment() {
         // #196: build a forked file by hand (the write-time self-check now
         // refuses to create one), then recover it.
         let dir = tempfile::tempdir().expect("tempdir");
@@ -3212,24 +3007,13 @@ mod tests {
         assert_eq!(break_record.first_bad_line, 3);
         assert_eq!(break_record.operator.as_deref(), Some("operator-1"));
 
-        // The recovered segment verifies as a retained suffix anchored on the
-        // last good hash.
-        verify_chain_with_anchors(
-            &[break_envelope],
-            ChainVerificationAnchors::from_trusted_start_prev_hash(Some(good.record_hash)),
-            &AuditChainHasher::unkeyed_dev_only(),
-        )
-        .expect("recovered segment verifies from the anchor");
-
-        // The local anchor records where the recovered segment starts.
-        let anchor: serde_json::Value = serde_json::from_str(
-            &fs::read_to_string(dir.path().join("audit.jsonl.anchor.json")).expect("anchor exists"),
-        )
-        .expect("anchor json");
-        assert_eq!(
-            anchor["trusted_start_prev_hash"].as_str().unwrap(),
-            hex_lower(&good.record_hash)
-        );
+        // The recovered segment verifies as a retained set whose first
+        // predecessor is the last good hash. No local completeness anchor is
+        // written; off-host shipping is the completeness guarantee.
+        let verification = verify_chain(&[break_envelope], &AuditChainHasher::unkeyed_dev_only())
+            .expect("recovered segment verifies as retained set");
+        assert_eq!(verification.start_prev_hash, Some(good.record_hash));
+        assert!(!dir.path().join("audit.jsonl.anchor.json").exists());
     }
 
     #[tokio::test]

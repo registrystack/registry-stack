@@ -23,6 +23,7 @@ struct TestConfigOptions<'a> {
     config_trust: bool,
     omit_deployment_profile: bool,
     multi_instance: bool,
+    audit_offhost_shipping: bool,
     durable_audit: Option<bool>,
     unbound_credential_profile: bool,
     unconstrained_source_binding: bool,
@@ -59,16 +60,23 @@ fn write_config_with_options(tmp: &TempDir, options: TestConfigOptions<'_>) -> P
     } else {
         String::new()
     };
+    let deployment_evidence = if options.audit_offhost_shipping {
+        "  evidence:\n    audit_offhost_shipping: true\n"
+    } else {
+        ""
+    };
     let deployment = if options.omit_deployment_profile {
         if options.multi_instance {
-            "deployment:\n  multi_instance: true\n"
+            format!("deployment:\n  multi_instance: true\n{deployment_evidence}")
+        } else if options.audit_offhost_shipping {
+            format!("deployment:\n{deployment_evidence}")
         } else {
-            ""
+            String::new()
         }
     } else if options.multi_instance {
-        "deployment:\n  profile: local\n  multi_instance: true\n"
+        format!("deployment:\n  profile: local\n  multi_instance: true\n{deployment_evidence}")
     } else {
-        "deployment:\n  profile: local\n"
+        format!("deployment:\n  profile: local\n{deployment_evidence}")
     };
     let durable_audit = options.durable_audit.unwrap_or(options.config_trust);
     let audit = if durable_audit {
@@ -726,6 +734,7 @@ fn doctor_json_evidence_grade_public_openapi_reports_error_but_succeeds() {
         TestConfigOptions {
             openapi_requires_auth: Some(false),
             config_trust: true,
+            audit_offhost_shipping: true,
             ..TestConfigOptions::default()
         },
     );
@@ -1154,6 +1163,7 @@ fn doctor_json_evidence_grade_source_binding_without_matching_policy_reports_onc
         TestConfigOptions {
             unconstrained_source_binding: true,
             config_trust: true,
+            audit_offhost_shipping: true,
             ..TestConfigOptions::default()
         },
     );

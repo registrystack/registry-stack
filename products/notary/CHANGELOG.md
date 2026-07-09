@@ -22,10 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   audit sink is `file` or `jsonl` and `deployment.evidence.audit_offhost_shipping`
   is not declared, because a local file sink caps retention and an attacker
   with host access can destroy the evidence. `stdout` and `syslog` sinks are
-  exempt. Bound `finding_warn` under `production` and `finding_error` under
+  exempt. Bound `finding_warn` under `production` and `startup_fail` under
   `evidence_grade`; unbound under `local` and `hosted_lab`. Operators can
   clear the finding by declaring `deployment.evidence.audit_offhost_shipping:
-  true` once audit events are shipped off-host, or by waiving the finding.
+  true` once audit events are shipped off-host.
 - Added `evidence.machine_quota`, a per-principal quota for machine
   `evaluate` and `batch_evaluate` traffic. The budget is counted in subjects
   (a single evaluate costs 1, a batch costs `items.len()`) over a fixed

@@ -18,10 +18,7 @@ use axum::{extract::State, response::IntoResponse, routing::get, Json, Router};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use jsonwebtoken::Algorithm;
-use registry_platform_audit::{
-    verify_chain, verify_chain_with_anchors, AuditChainHasher, AuditEnvelope,
-    ChainVerificationAnchors,
-};
+use registry_platform_audit::{verify_chain, AuditChainHasher, AuditEnvelope};
 use registry_platform_crypto::{sign, LocalJwkSigner, PrivateJwk, PublicJwk, SigningProvider};
 use registry_platform_oid4vci::{CREDENTIAL_SIGNING_ALG_EDDSA, PROOF_JWT_TYPE};
 use registry_platform_replay::{
@@ -522,17 +519,9 @@ pub mod fixtures {
 }
 
 pub type ChainAssertionError = registry_platform_audit::ChainVerificationError;
-pub type ChainAssertionAnchors = ChainVerificationAnchors;
 
 pub fn assert_chain_integrity(envelopes: &[AuditEnvelope]) -> Result<(), ChainAssertionError> {
     verify_chain(envelopes, &AuditChainHasher::unkeyed_dev_only()).map(|_| ())
-}
-
-pub fn assert_chain_integrity_with_anchors(
-    envelopes: &[AuditEnvelope],
-    anchors: ChainAssertionAnchors,
-) -> Result<(), ChainAssertionError> {
-    verify_chain_with_anchors(envelopes, anchors, &AuditChainHasher::unkeyed_dev_only()).map(|_| ())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -896,7 +885,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn anchored_chain_integrity_assertion_checks_trusted_tail() {
+    async fn chain_integrity_assertion_accepts_retained_suffix() {
         let sink = MemorySink::default();
         let chain = ChainState::unkeyed_dev_only();
         let first = chain
@@ -907,29 +896,16 @@ mod tests {
             .append(&sink, json!({ "event": "second" }))
             .await
             .expect("second append");
-        let rewritten_sink = MemorySink::default();
-        let rewritten_chain = ChainState::unkeyed_dev_only();
-        let rewritten_first = rewritten_chain
-            .append(&rewritten_sink, json!({ "event": "fake-first" }))
-            .await
-            .expect("rewritten first append");
-        let rewritten_second = rewritten_chain
-            .append(&rewritten_sink, json!({ "event": "fake-second" }))
-            .await
-            .expect("rewritten second append");
-        let rewritten = [rewritten_first, rewritten_second];
 
-        assert_chain_integrity(&rewritten).expect("unanchored chain is internally consistent");
-        assert!(assert_chain_integrity_with_anchors(
-            &rewritten,
-            ChainAssertionAnchors::from_trusted_last_hash(second.record_hash),
+        assert_chain_integrity(std::slice::from_ref(&second))
+            .expect("retained suffix is internally consistent");
+        let verification = verify_chain(
+            std::slice::from_ref(&second),
+            &AuditChainHasher::unkeyed_dev_only(),
         )
-        .is_err());
-        assert_chain_integrity_with_anchors(
-            &[first, second.clone()],
-            ChainAssertionAnchors::from_trusted_last_hash(second.record_hash),
-        )
-        .expect("anchored chain verifies");
+        .expect("retained suffix verifies");
+        assert_eq!(verification.start_prev_hash, Some(first.record_hash));
+        assert_eq!(verification.last_hash, Some(second.record_hash));
     }
 
     #[tokio::test]
