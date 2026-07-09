@@ -34,6 +34,8 @@ The generated Compose file keeps writable Notary state under `state/notary/`.
 Redis replay and nonce state lives in the `registry-notary-redis-data` Docker
 volume. Use `registryctl stop` or `docker compose down` for container
 replacement; `docker compose down -v` deletes named volumes.
+Docker Compose reads `.env` to run Notary as the project owner on Unix hosts,
+keeping private state directories writable without widening their permissions.
 For backup and restore steps, see
 https://docs.registrystack.org/operate/backup-and-restore/.
 Before exposing this project through a reverse proxy, IAM, and front rate

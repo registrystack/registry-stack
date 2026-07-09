@@ -2,6 +2,7 @@
 services:
   registry-notary:
     image: ghcr.io/registrystack/registry-notary@sha256:338d3ac7ddbea55f6e76014b9c23e4ff4e7206c2c40e356452288de06a745ff3
+    user: "${REGISTRY_STACK_RUNTIME_UID:-65532}:${REGISTRY_STACK_RUNTIME_GID:-65532}"
     env_file:
       - ./secrets/local.env
     ports:
