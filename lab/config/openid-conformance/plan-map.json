@@ -1,0 +1,89 @@
+{
+  "schema_version": "registry.lab.openid_conformance_plan_map.v1",
+  "suite": {
+    "repo": "https://gitlab.com/openid/conformance-suite.git",
+    "ref": "dee9a25160e789f0f80517674693ef7989ab9fa1",
+    "release_tag": "release-v5.2.0",
+    "base_url": "https://localhost.emobix.co.uk:8443",
+    "local_base_url": "https://localhost.emobix.co.uk:8443",
+    "mtls_base_url": "https://localhost.emobix.co.uk:8444"
+  },
+  "scenarios": [
+    {
+      "id": "notary-oid4vci-issuer-metadata",
+      "surface": "Registry Notary citizen OID4VCI issuer",
+      "status": "applicable",
+      "suite_plan": "oid4vci-1_0-issuer-test-plan",
+      "suite_modules": [
+        "oid4vci-1_0-issuer-metadata-test"
+      ],
+      "variants": {
+        "client_auth_type": "private_key_jwt",
+        "sender_constrain": "dpop",
+        "fapi_profile": "vci",
+        "fapi_request_method": "unsigned",
+        "authorization_request_type": "simple",
+        "credential_format": "sd_jwt_vc",
+        "vci_credential_encryption": "plain",
+        "vci_grant_type": "pre_authorization_code",
+        "vci_authorization_code_flow_variant": "issuer_initiated"
+      },
+      "config_template": "registry-notary-oid4vci-issuer.template.json",
+      "default_parameters": {
+        "issuer_url_env": "REGISTRY_LAB_OPENID_CONFORMANCE_ISSUER_URL",
+        "authorization_server_env": "REGISTRY_LAB_OPENID_CONFORMANCE_AUTHORIZATION_SERVER",
+        "credential_configuration_id_env": "REGISTRY_LAB_OPENID_CONFORMANCE_CREDENTIAL_CONFIGURATION_ID",
+        "default_credential_configuration_id": "person_is_alive_sd_jwt"
+      },
+      "requires": [
+        "A Registry Notary OID4VCI issuer whose credential_issuer metadata exactly matches the configured issuer_url.",
+        "An issuer URL reachable from the OIDF conformance-suite server container, usually a local HTTPS tunnel or host.docker.internal URL.",
+        "No raw bearer tokens, proof JWTs, or issued credentials committed from lab/output."
+      ],
+      "notes": [
+        "This is the initial repeatable suite slice because it exercises OID4VCI issuer metadata without the suite callback ceremony.",
+        "The full OID4VCI issuer plan remains mapped below and should be enabled after the lab can drive the issuer-initiated credential_offer callback expected by the OIDF suite."
+      ]
+    },
+    {
+      "id": "notary-oid4vci-issuer-full",
+      "surface": "Registry Notary citizen OID4VCI issuer",
+      "status": "blocked-by-lab-callback-adapter",
+      "suite_plan": "oid4vci-1_0-issuer-test-plan",
+      "suite_modules": [],
+      "variants": {
+        "client_auth_type": "private_key_jwt",
+        "sender_constrain": "dpop",
+        "fapi_profile": "vci",
+        "fapi_request_method": "unsigned",
+        "authorization_request_type": "simple",
+        "credential_format": "sd_jwt_vc",
+        "vci_credential_encryption": "plain",
+        "vci_grant_type": "pre_authorization_code",
+        "vci_authorization_code_flow_variant": "issuer_initiated"
+      },
+      "config_template": "registry-notary-oid4vci-issuer.template.json",
+      "requires": [
+        "A lab command that starts the Notary with a suite-reachable issuer URL.",
+        "A bridge that sends or redirects a Notary credential offer to the suite's exposed /credential_offer endpoint.",
+        "A recorded policy decision on whether the first full run should target pre-authorized-code or authorization-code OID4VCI."
+      ],
+      "notes": [
+        "The current lab OID4VCI probe pulls the Notary offer endpoint directly; the OIDF issuer plan waits for a callback into the suite.",
+        "Do not treat this blocked mapping as certification evidence."
+      ]
+    }
+  ],
+  "non_oidf_surfaces": [
+    {
+      "surface": "Registry Relay OIDC bearer validation",
+      "evidence": "just oidc-relay and just relay-zitadel",
+      "reason": "The OIDF suite does not publish a generic resource-server conformance plan for a Relay-style protected API. The lab smoke path verifies JWT discovery, signature, audience, token type, and scope mapping against Zitadel."
+    },
+    {
+      "surface": "Lab Zitadel and eSignet OpenID Providers",
+      "evidence": "out of Registry Stack conformance scope",
+      "reason": "They are third-party identity providers used to exercise Registry Relay and Registry Notary; Registry Stack should not claim OP certification for them."
+    }
+  ]
+}

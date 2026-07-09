@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added a pinned OpenID Foundation conformance-suite wrapper, OID4VCI issuer
+  plan mapping, and an initial #205 Registry Notary metadata conformance run
+  report.
+
 ## registry-stack-beta-10-2026-07-04
 
 - Removed `fingerprint.commitment` from Lab Relay and Notary demo configs in

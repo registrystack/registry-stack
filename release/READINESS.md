@@ -44,7 +44,10 @@ write.
 - [ ] Per-claim evidence recorded (conformance run, test vectors, or interop).
 - [ ] OpenID conformance suite running repeatably against a supported
       deployment topology (#205). Must not depend on the monorepo `lab/`,
-      which is being replaced by a standalone lab repository (#224).
+      which is being replaced by a standalone lab repository (#224). Initial
+      harness and metadata-run evidence:
+      [`openid-conformance-suite.md`](../lab/docs/openid-conformance-suite.md),
+      [`openid-conformance-initial-report.md`](../lab/docs/openid-conformance-initial-report.md).
 - [ ] Credentialing, OID4VCI, and status-list interop proof (#57).
 
 ## 4. Adversarial verification

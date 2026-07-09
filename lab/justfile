@@ -177,6 +177,26 @@ commons-check:
 oidc-relay:
     scripts/smoke-oidc-relay.sh
 
+# List mapped OpenID Foundation conformance-suite scenarios.
+openid-conformance-list:
+    scripts/openid-conformance-runner.py list
+
+# Clone, refresh, and build the pinned OpenID Foundation conformance-suite checkout.
+openid-conformance-prepare:
+    scripts/openid-conformance-runner.py prepare
+
+# Start the pinned local OpenID Foundation conformance-suite services.
+openid-conformance-up:
+    scripts/openid-conformance-runner.py up
+
+# Stop the local OpenID Foundation conformance-suite services.
+openid-conformance-down:
+    scripts/openid-conformance-runner.py down
+
+# Run a mapped OpenID Foundation conformance-suite scenario. Pass runner args after the scenario.
+openid-conformance-run scenario *args:
+    scripts/openid-conformance-runner.py run "{{scenario}}" {{args}}
+
 # Run the optional eSignet-backed citizen self-attestation Notary smoke.
 citizen-self-attestation:
     scripts/smoke-citizen-self-attestation.sh

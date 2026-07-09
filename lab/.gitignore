@@ -3,6 +3,7 @@
 .env.local
 __pycache__/
 *.py[cod]
+.cache/
 output/*
 !output/.gitignore
 static-metadata/*
