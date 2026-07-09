@@ -64,13 +64,19 @@ public evidence or disposition.
   `crates/registry-relay/tests/error_taxonomy.rs`.
   Disposition: keep open for complete raw-value and side-effect assertions.
 - `NP-10`: Covered.
-  Public anchors: `crates/registry-relay/src/server.rs` and
-  `crates/registry-notary-server/tests/standalone_http.rs`.
+  Public anchors:
+  `crates/registry-relay/src/server.rs::body_limit_layer_returns_problem_details_and_audit_code`,
+  `crates/registry-relay/src/server.rs::uri_length_layer_returns_problem_details_and_audit_code`,
+  and `crates/registry-notary-server/tests/standalone_http.rs`.
   Disposition: Relay asserts denial plus audit for this middleware path; Notary
   asserts stable early-boundary problem responses, server-owned request ids, and
   non-disclosure where the audited route layer has not run.
 - `NP-11`: Partial.
-  Public anchor: `crates/registry-relay/src/connector/mod.rs`.
+  Public anchors:
+  `crates/registry-relay/src/connector/mod.rs::postgres_sslmode_rejects_default_prefer`,
+  `crates/registry-relay/src/connector/mod.rs::postgres_sslmode_rejects_explicit_prefer`,
+  `crates/registry-relay/src/connector/mod.rs::postgres_sslmode_rejects_disable`,
+  and `crates/registry-relay/src/connector/mod.rs::postgres_sslmode_parse_error_does_not_leak_url`.
   Disposition: config-load denial is covered; product-surface diagnostic and
   audit expectations remain to be signed off.
 - `NP-12`: Partial.
@@ -95,15 +101,15 @@ public evidence or disposition.
   Disposition: no new release work identified from the current map.
 - `NP-16`: Gap.
   Public anchor: internal checklist only.
-  Disposition: deferred to the maintainer-owned minimization follow-up bundle;
+  Disposition: deferred to a maintainer-owned follow-up bundle;
   public scenario detail remains intentionally omitted.
 - `NP-17`: Gap.
   Public anchor: internal checklist only.
-  Disposition: deferred to the maintainer-owned minimization follow-up bundle;
+  Disposition: deferred to a maintainer-owned follow-up bundle;
   public scenario detail remains intentionally omitted.
 - `NP-18`: Gap.
   Public anchor: internal checklist only.
-  Disposition: deferred to the maintainer-owned minimization follow-up bundle;
+  Disposition: deferred to a maintainer-owned follow-up bundle;
   public scenario detail remains intentionally omitted.
 - `NP-19`: Partial.
   Public anchor: `crates/registry-notary-server/src/api.rs`.
@@ -123,7 +129,10 @@ public evidence or disposition.
   Disposition: focused route, no-mint, and audit coverage remains to be added
   or deferred.
 - `NP-24`: Partial.
-  Public anchor: `crates/registry-notary-server/src/standalone.rs`.
+  Public anchors:
+  `crates/registry-notary-server/src/standalone.rs::source_json_reader_rejects_oversized_body`,
+  `crates/registry-notary-server/src/standalone.rs::http_sources_reject_private_source_urls_before_fetch`,
+  and `crates/registry-notary-server/src/standalone.rs::http_sources_reject_cloud_metadata_source_urls_before_fetch`.
   Disposition: Notary behavior is covered; Relay handling is a deliberate
   product difference that needs explicit release sign-off.
 - `NP-25`: Covered.
