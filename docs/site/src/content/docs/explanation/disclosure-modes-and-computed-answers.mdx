@@ -92,12 +92,8 @@ inside the service.
 A `redacted` result goes further: it carries neither the source value nor the satisfaction
 outcome.
 Both are withheld.
-
-One current renderer limitation to note: this no-outcome guarantee holds for the standard result
-body, but the CCCEV JSON-LD renderer currently emits `cccev:isConformantTo: false` for a redacted
-result instead of omitting it.
-A deployment that allows both redacted disclosure and CCCEV output should be aware that the
-outcome is not fully withheld in that render.
+The standard result body reports no `satisfied` value, and the CCCEV JSON-LD renderer omits
+`cccev:isConformantTo`.
 
 `predicate` still discloses a true-or-false fact; `redacted` does not.
 
