@@ -57,9 +57,9 @@ section is about challenging it.
 
 - [ ] Maintainer adversarial review of the load-bearing crates:
       `registry-platform-pdp`, `registry-platform-sdjwt`,
-      `registry-platform-crypto`, `registry-platform-sts`,
-      `registry-platform-authcommon`, Relay scope enforcement, Notary
-      disclosure policy evaluation.
+      `registry-platform-crypto`, `registry-platform-authcommon`, Relay scope
+      enforcement, Notary disclosure policy evaluation. `registry-platform-sts`
+      is parked outside the workspace until a consumer is promoted (#298).
 - [ ] Negative-path test coverage mapped against the attack checklist;
       gaps closed with tests that assert denial and correct audit records.
       Mapping evidence: [`negative-path-coverage-map.md`](notes/negative-path-coverage-map.md).

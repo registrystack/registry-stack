@@ -14,7 +14,6 @@ members = [
     "crates/registry-platform-pdp",
     "crates/registry-platform-replay",
     "crates/registry-platform-sdjwt",
-    "crates/registry-platform-sts",
     "crates/registry-platform-testing",
     "crates/registry-manifest-core",
     "crates/registry-manifest-cli",
@@ -30,6 +29,10 @@ members = [
     "products/notary/xtask",
 ]
 exclude = [
+    # Parked until Assisted Access or the delegation profile work supplies a
+    # release-surface consumer (#298). Keep the source in git, but out of
+    # workspace CI.
+    "crates/registry-platform-sts",
     "products/platform/fuzz",
     "products/notary/fuzz",
     "products/manifest/fuzz",

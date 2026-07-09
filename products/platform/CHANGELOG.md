@@ -48,6 +48,10 @@
 
 ### Changed
 
+- Parked `registry-platform-sts` outside the active workspace until Assisted
+  Access or delegation-profile work promotes a release-surface consumer (#298).
+  The source remains in git, but the crate is no longer built as part of
+  workspace CI or listed as a load-bearing platform crate.
 - `registry-platform-audit`'s `JsonlFileSink::new` default rotation retention
   is raised from 5 files to 50 files (~500 MiB at the 10 MiB default file
   size), so the crate default no longer silently discards audit history after

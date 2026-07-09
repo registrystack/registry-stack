@@ -1,5 +1,9 @@
 # Registry Platform STS
 
+Status: parked. The source is retained for future Assisted Access or delegation
+profile work, but this crate is not currently a workspace member or release
+artifact. Revisit tracked by #298.
+
 Security token service primitives for exchanging a verified subject token for a
 Notary-bound transaction token.
 
