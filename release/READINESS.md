@@ -98,7 +98,9 @@ What 1.0 promises the institutions that run this.
       credential issuance, metrics, Redis replay/nonce survival, and
       anti-rollback monotonic rejection remain outside this run).
 - [ ] Security-relevant configuration defaults inventoried and reviewed for
-      secure-by-default (#172 and #171 are known open questions).
+      secure-by-default (#172 and #171 are known open questions). Inventory
+      evidence: [`security-config-defaults.md`](notes/security-config-defaults.md);
+      review decisions remain open.
 - [ ] DoS posture decided: rate-limit backstops (#78, #51) triaged as
       1.0-blocking or explicitly deferred with rationale.
 - [ ] Vulnerability disclosure flow behind `SECURITY.md` tested end to end.
