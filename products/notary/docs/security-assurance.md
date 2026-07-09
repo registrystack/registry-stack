@@ -151,13 +151,14 @@ block.
 | `checkpoints` | `unsupported` | Periodic signed checkpoints over the audit chain are not produced by this build. |
 | `anchoring` | `none` | Audit state is not anchored to an external transparency log or ledger. |
 
-The nested `posture.audit` diagnostic block also reports shipping state:
-`shipping_target_configured`, `shipping_target`, `last_successful_ship_at`, and
-`backlog_depth`.
+The nested `posture.audit` diagnostic block also reports the audit shipping
+target as two fields: `shipping_target_configured` and `shipping_target`, where
 `shipping_target` is `stdout`, `syslog`, `declared_external`, `none`, or
-`unknown`.
-This build reports `last_successful_ship_at` and `backlog_depth` as `null`
-because Notary has no product-owned shipping queue.
+`unknown`. Both are DECLARED state derived from configuration, the sink type
+plus the operator's `deployment.evidence.audit_offhost_shipping` attestation,
+not observed delivery health: a local file sink counts as having a shipping
+target only when the operator attests that logs are shipped off-host. This
+build does not measure or report observed shipping health.
 
 Note: a running notary always reports `keyed_integrity = hmac` and
 `write_policy = fail_closed_route_families` because startup refuses any

@@ -14,9 +14,9 @@ use axum::{Extension, Router};
 use registry_manifest_core::CompiledMetadata;
 use registry_platform_crypto::KeyReadiness;
 use registry_platform_ops::{
-    filter_posture_for_tier, internal_config_hash, override_pin_posture,
-    posture_safe_runtime_config_hash, AuditWritePolicy, ConfigProvenance, ConfigSource,
-    PostureFilterError, PostureTier,
+    audit_shipping_target, filter_posture_for_tier, internal_config_hash, override_pin_posture,
+    posture_safe_runtime_config_hash, AuditSinkKind, AuditWritePolicy, ConfigProvenance,
+    ConfigSource, PostureFilterError, PostureTier,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -508,8 +508,6 @@ fn audit_summary(config: &Config) -> Value {
         "sink_type": audit_sink_label(config),
         "shipping_target_configured": shipping_target_configured,
         "shipping_target": shipping_target,
-        "last_successful_ship_at": null,
-        "backlog_depth": null,
         "checkpoint_status": if config.audit.chain { "available" } else { "unavailable" },
         "latest_tail_hash": null,
         "latest_sequence": null,
@@ -519,16 +517,14 @@ fn audit_summary(config: &Config) -> Value {
 }
 
 fn audit_shipping_state(config: &Config) -> (bool, &'static str) {
-    match &config.audit.sink {
-        crate::config::AuditSinkConfig::Stdout { .. } => (true, "stdout"),
-        crate::config::AuditSinkConfig::Syslog { .. } => (true, "syslog"),
-        crate::config::AuditSinkConfig::File { .. }
-            if config.deployment.evidence.audit_offhost_shipping =>
-        {
-            (true, "declared_external")
-        }
-        crate::config::AuditSinkConfig::File { .. } => (false, "none"),
-    }
+    // Relay's sink is a closed enum, so the shared classifier never sees
+    // `Unknown` here.
+    let sink = match &config.audit.sink {
+        crate::config::AuditSinkConfig::Stdout { .. } => AuditSinkKind::Stdout,
+        crate::config::AuditSinkConfig::Syslog { .. } => AuditSinkKind::Syslog,
+        crate::config::AuditSinkConfig::File { .. } => AuditSinkKind::LocalFile,
+    };
+    audit_shipping_target(sink, config.deployment.evidence.audit_offhost_shipping)
 }
 
 /// Build the `deployment` posture object: declared profile, gate findings, and
@@ -931,8 +927,6 @@ datasets: []
         let audit = audit_summary(&config);
         assert_eq!(audit["shipping_target_configured"], true);
         assert_eq!(audit["shipping_target"], "stdout");
-        assert!(audit["last_successful_ship_at"].is_null());
-        assert!(audit["backlog_depth"].is_null());
 
         config.audit.sink = crate::config::AuditSinkConfig::File {
             path: std::path::PathBuf::from("/tmp/relay-audit.jsonl"),

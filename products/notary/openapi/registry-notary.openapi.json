@@ -2260,10 +2260,8 @@
                   "observed_at": "2026-06-04T10:00:00Z",
                   "posture": {
                     "audit": {
-                      "backlog_depth": null,
                       "checkpoint_status": "available",
                       "configured": true,
-                      "last_successful_ship_at": null,
                       "latest_sequence": 88,
                       "latest_tail_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
                       "shipping_target": "declared_external",

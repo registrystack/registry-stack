@@ -212,6 +212,40 @@ pub struct AuditAssurance {
     pub anchoring: AuditAnchoring,
 }
 
+/// Declared audit sink kind, as far as the posture shipping-state classifier
+/// distinguishes them. Products map their own sink configuration onto this
+/// enum; unmapped or future sink strings map to [`AuditSinkKind::Unknown`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum AuditSinkKind {
+    Stdout,
+    Syslog,
+    LocalFile,
+    Unknown,
+}
+
+/// Classify the posture audit shipping state from the declared sink kind and the
+/// operator's `deployment.evidence.audit_offhost_shipping` attestation.
+///
+/// Returns `(shipping_target_configured, shipping_target)`, where
+/// `shipping_target` is one of `stdout`, `syslog`, `declared_external`, `none`,
+/// or `unknown`. This is DECLARED state derived from configuration, not observed
+/// delivery health: a local file sink counts as having a shipping target only
+/// when the operator attests that logs are shipped off-host. Owning the target
+/// strings here keeps Relay and Notary from drifting on the mapping.
+pub fn audit_shipping_target(
+    sink: AuditSinkKind,
+    offhost_shipping_declared: bool,
+) -> (bool, &'static str) {
+    match sink {
+        AuditSinkKind::Stdout => (true, "stdout"),
+        AuditSinkKind::Syslog => (true, "syslog"),
+        AuditSinkKind::LocalFile if offhost_shipping_declared => (true, "declared_external"),
+        AuditSinkKind::LocalFile => (false, "none"),
+        AuditSinkKind::Unknown => (false, "unknown"),
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum ConfigSource {
@@ -2372,6 +2406,39 @@ mod tests {
 
     fn test_hash(label: char) -> String {
         format!("sha256:{}", label.to_string().repeat(64))
+    }
+
+    #[test]
+    fn audit_shipping_target_maps_every_sink_kind() {
+        // stdout and syslog are always their own shipping target, regardless of
+        // the off-host attestation.
+        for declared in [false, true] {
+            assert_eq!(
+                audit_shipping_target(AuditSinkKind::Stdout, declared),
+                (true, "stdout")
+            );
+            assert_eq!(
+                audit_shipping_target(AuditSinkKind::Syslog, declared),
+                (true, "syslog")
+            );
+        }
+        // A local file sink has a shipping target only when the operator attests
+        // off-host shipping; otherwise it ships nowhere.
+        assert_eq!(
+            audit_shipping_target(AuditSinkKind::LocalFile, true),
+            (true, "declared_external")
+        );
+        assert_eq!(
+            audit_shipping_target(AuditSinkKind::LocalFile, false),
+            (false, "none")
+        );
+        // An unmapped/future sink kind is never claimed as configured.
+        for declared in [false, true] {
+            assert_eq!(
+                audit_shipping_target(AuditSinkKind::Unknown, declared),
+                (false, "unknown")
+            );
+        }
     }
 
     fn test_key() -> AntiRollbackKey {

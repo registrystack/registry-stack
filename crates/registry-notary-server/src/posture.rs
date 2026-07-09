@@ -10,8 +10,8 @@ use registry_notary_core::{
     REPLAY_STORAGE_IN_MEMORY, REPLAY_STORAGE_REDIS,
 };
 use registry_platform_ops::{
-    filter_posture_for_tier, override_pin_posture, posture_safe_runtime_config_hash,
-    PostureFilterError, PostureTier,
+    audit_shipping_target, filter_posture_for_tier, override_pin_posture,
+    posture_safe_runtime_config_hash, AuditSinkKind, PostureFilterError, PostureTier,
 };
 use serde_json::{json, Map, Value};
 use time::OffsetDateTime;
@@ -300,8 +300,6 @@ pub(crate) async fn posture_document(
                 "sink_type": context.audit.sink,
                 "shipping_target_configured": context.audit.shipping_target_configured,
                 "shipping_target": context.audit.shipping_target,
-                "last_successful_ship_at": Value::Null,
-                "backlog_depth": Value::Null,
                 "checkpoint_status": "unavailable",
                 "latest_tail_hash": Value::Null,
                 "latest_sequence": Value::Null,
@@ -475,13 +473,16 @@ fn classify_credential_status_storage(config: &CredentialStatusConfig) -> String
 }
 
 fn audit_posture(config: &EvidenceAuditConfig, audit_offhost_shipping: bool) -> AuditPosture {
-    let (shipping_target_configured, shipping_target) = match config.sink.as_str() {
-        "stdout" => (true, "stdout"),
-        "syslog" => (true, "syslog"),
-        "file" | "jsonl" if audit_offhost_shipping => (true, "declared_external"),
-        "file" | "jsonl" => (false, "none"),
-        _ => (false, "unknown"),
+    // Map the config sink string onto the shared classifier's sink kinds; an
+    // unrecognised sink is explicitly Unknown rather than a silent wildcard.
+    let sink_kind = match config.sink.as_str() {
+        "stdout" => AuditSinkKind::Stdout,
+        "syslog" => AuditSinkKind::Syslog,
+        "file" | "jsonl" => AuditSinkKind::LocalFile,
+        _ => AuditSinkKind::Unknown,
     };
+    let (shipping_target_configured, shipping_target) =
+        audit_shipping_target(sink_kind, audit_offhost_shipping);
     AuditPosture {
         sink: match config.sink.as_str() {
             "file" | "jsonl" => "file".to_string(),

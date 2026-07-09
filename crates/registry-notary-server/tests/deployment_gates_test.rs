@@ -461,8 +461,6 @@ async fn posture_renders_deployment_and_audit_assurance() {
     let posture_audit = &posture["posture"]["audit"];
     assert_eq!(posture_audit["shipping_target_configured"], false);
     assert_eq!(posture_audit["shipping_target"], "none");
-    assert!(posture_audit["last_successful_ship_at"].is_null());
-    assert!(posture_audit["backlog_depth"].is_null());
 }
 
 #[tokio::test]

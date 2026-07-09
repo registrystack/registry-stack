@@ -128,8 +128,6 @@
           "sink_type": "stdout",
           "shipping_target_configured": true,
           "shipping_target": "stdout",
-          "last_successful_ship_at": null,
-          "backlog_depth": null,
           "checkpoint_status": "unavailable",
           "latest_tail_hash": null,
           "latest_sequence": null,

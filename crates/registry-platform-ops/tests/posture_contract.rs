@@ -87,8 +87,6 @@ fn posture_audit_shipping_state_fields_round_trip() {
         let audit = &posture["posture"]["audit"];
         assert!(audit["shipping_target_configured"].is_boolean());
         assert!(audit["shipping_target"].is_string());
-        assert!(audit.get("last_successful_ship_at").is_some());
-        assert!(audit.get("backlog_depth").is_some());
 
         let rendered = serde_json::to_string(&posture).expect("posture renders");
         let reparsed: serde_json::Value =
