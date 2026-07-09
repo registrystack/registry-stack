@@ -4100,7 +4100,14 @@ async fn issue_credential(
     }
     if let Some(purpose) = request.purpose.as_deref() {
         if purpose != evaluation.purpose {
-            return evidence_error_response(EvidenceError::EvaluationBindingMismatch);
+            return credential_denial_response_for_evaluation(
+                &state,
+                EvidenceError::EvaluationBindingMismatch,
+                &request.evaluation_id,
+                &evaluation,
+                &principal,
+                None,
+            );
         }
     }
     let (profile_id, profile) = match credential_profile_for(
@@ -4186,7 +4193,16 @@ async fn issue_credential(
         &evidence.service_id,
     ) {
         Ok(binding) => binding,
-        Err(error) => return evidence_error_response(error),
+        Err(error) => {
+            return credential_denial_response_for_evaluation(
+                &state,
+                error,
+                &request.evaluation_id,
+                &evaluation,
+                &principal,
+                Some((profile_id, profile)),
+            );
+        }
     };
     let holder_id = request
         .holder
@@ -7393,6 +7409,46 @@ fn is_matching_policy_provenance_code(code: &str) -> bool {
     )
 }
 
+fn credential_denial_response_for_evaluation(
+    state: &RegistryNotaryApiState,
+    error: EvidenceError,
+    evaluation_id: &str,
+    evaluation: &registry_notary_core::StoredEvaluation,
+    principal: &EvidencePrincipal,
+    profile: Option<(&str, &CredentialProfileConfig)>,
+) -> Response {
+    let mut response = evidence_error_response(error);
+    if evaluation.self_attestation.is_some() || principal.is_self_attestation() {
+        if let Err(error) = attach_self_attestation_credential_denial_audit(
+            &mut response,
+            &state.self_attestation_rate_keys,
+            evaluation_id,
+            evaluation,
+            profile,
+        ) {
+            return evidence_error_response(error);
+        }
+        override_attestation_audit_access_mode(&mut response, evaluation.access_mode());
+    } else {
+        attach_evidence_audit_with_purposes(
+            &mut response,
+            "credential_denied",
+            Some(evaluation_id.to_string()),
+            &evaluation.claim_ids,
+            None,
+            Some(vec![evaluation.purpose.clone()]),
+        );
+        if let Some((profile_id, profile)) = profile {
+            if let Some(audit) = response.extensions_mut().get_mut::<EvidenceAuditContext>() {
+                audit.credential_profile = ConfigMetadata::new(profile_id).ok();
+                audit.holder_binding_mode =
+                    ConfigMetadata::new(profile.holder_binding.mode.as_str()).ok();
+            }
+        }
+    }
+    response
+}
+
 struct SelfAttestationCredentialAuditDetails<'a> {
     profile_id: &'a str,
     holder_binding_mode: &'a str,
@@ -7400,6 +7456,84 @@ struct SelfAttestationCredentialAuditDetails<'a> {
     purposes: Option<Vec<String>>,
     protocol: Option<&'a str>,
     credential_configuration_id: Option<&'a str>,
+}
+
+fn attach_self_attestation_credential_denial_audit(
+    response: &mut Response,
+    keys: &SelfAttestationRateLimitKeys,
+    evaluation_id: &str,
+    evaluation: &registry_notary_core::StoredEvaluation,
+    profile: Option<(&str, &CredentialProfileConfig)>,
+) -> Result<(), EvidenceError> {
+    let first_result = evaluation.results.first();
+    let target_type = first_result
+        .map(|result| result.target_ref.entity_type.clone())
+        .filter(|entity_type| !entity_type.is_empty());
+    let target_ref_hash = first_result
+        .map(|result| {
+            hash_audit_handle(
+                keys,
+                "target",
+                result.target_ref.entity_type.as_str(),
+                None,
+                &result.target_ref.handle,
+            )
+        })
+        .transpose()?;
+    let requester_type = first_result
+        .and_then(|result| result.requester_ref.as_ref())
+        .map(|requester| requester.entity_type.clone());
+    let requester_ref_hash = first_result
+        .and_then(|result| result.requester_ref.as_ref())
+        .map(|requester| {
+            hash_audit_handle(
+                keys,
+                "requester",
+                requester.entity_type.as_str(),
+                None,
+                &requester.handle,
+            )
+        })
+        .transpose()?;
+    let profile_id = profile.map(|(profile_id, _)| profile_id);
+    let holder_binding_mode = profile.map(|(_, profile)| profile.holder_binding.mode.as_str());
+    let matching = first_result.and_then(|result| result.matching.as_ref());
+    response.extensions_mut().insert(EvidenceAuditContext {
+        verification_id: Some(evaluation_id.to_string()),
+        verification_decision: Some("credential_denied".to_string()),
+        claim_hash: (!evaluation.claim_ids.is_empty())
+            .then(|| evidence_claim_hash(&evaluation.claim_ids)),
+        purposes: Some(vec![evaluation.purpose.clone()]),
+        row_count: None,
+        access_mode: Some(AccessMode::SelfAttestation),
+        denial_code: None,
+        token_claim_name: None,
+        credential_profile: profile_id.and_then(|value| ConfigMetadata::new(value).ok()),
+        protocol: None,
+        credential_configuration_id: None,
+        holder_binding_mode: holder_binding_mode.and_then(|value| ConfigMetadata::new(value).ok()),
+        rate_limit_bucket: None,
+        policy_hash: evaluation
+            .self_attestation
+            .as_ref()
+            .and_then(|metadata| metadata.policy_hash.clone()),
+        target_type,
+        target_ref_hash,
+        requester_type,
+        requester_ref_hash,
+        matching_policy_id: matching.map(|matching| matching.policy_id.clone()),
+        ecosystem_binding_id: matching.and_then(|matching| matching.ecosystem_binding_id.clone()),
+        ecosystem_binding_version: matching
+            .and_then(|matching| matching.ecosystem_binding_version.clone()),
+        pack_id: matching.and_then(|matching| matching.pack_id.clone()),
+        pack_version: matching.and_then(|matching| matching.pack_version.clone()),
+        matching_method: matching.map(|matching| matching.method.clone()),
+        matching_outcome: matching.map(|_| "matched".to_string()),
+        matching_error_code: None,
+        batch_items: None,
+        ..EvidenceAuditContext::default()
+    });
+    Ok(())
 }
 
 fn attach_self_attestation_credential_audit(
@@ -12999,6 +13133,7 @@ evaluation_profiles:
     async fn issue_credential_rejects_purpose_mismatch() {
         let evidence = credential_issue_evidence_config();
         let store = Arc::new(EvidenceStore::default());
+        let sign_count = Arc::new(AtomicUsize::new(0));
         store.insert(registry_notary_core::StoredEvaluation {
             client_id: "caseworker".to_string(),
             purpose: "benefits".to_string(),
@@ -13028,7 +13163,9 @@ evaluation_profiles:
                 Arc::new(AppMetrics::default()),
                 Arc::new(CountingSource::default()),
                 Arc::clone(&store),
-                Arc::new(TestIssuerResolver),
+                Arc::new(CountingIssuerResolver {
+                    sign_count: Arc::clone(&sign_count),
+                }),
                 None,
             )
             .expect("state builds"),
@@ -13063,6 +13200,11 @@ evaluation_profiles:
             .expect("body reads");
         let body: Value = serde_json::from_slice(&body).expect("problem body parses");
         assert_eq!(body["code"], json!("evaluation.binding_mismatch"));
+        assert_eq!(
+            sign_count.load(Ordering::SeqCst),
+            0,
+            "purpose mismatch must be denied before credential signing"
+        );
     }
 
     #[test]
