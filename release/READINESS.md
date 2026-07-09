@@ -39,7 +39,8 @@ Every standard the docs claim must carry evidence: a conformance suite run,
 published test vectors passing, or interop with an implementation we did not
 write.
 
-- [ ] Inventory of standards and specification claims across docs and specs.
+- [x] Inventory of standards and specification claims across docs and specs.
+      Evidence: [`standards-claims-inventory.md`](notes/standards-claims-inventory.md).
 - [ ] Per-claim evidence recorded (conformance run, test vectors, or interop).
 - [ ] OpenID conformance suite running repeatably against a supported
       deployment topology (#205). Must not depend on the monorepo `lab/`,
