@@ -173,6 +173,31 @@ jobs:
             grype "${digest_ref}" -o json > "dist/staged/image-evidence/${image}.digest-bound.grype.json"
           done < <(find dist/staged/image-evidence -type f -name "*.digest" | sort)
 
+      - name: Generate digest-bound binary SBOMs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/staged/binary-sbom
+          while IFS= read -r -d '' binary; do
+            asset="$(basename "${binary}")"
+            sbom="dist/staged/binary-sbom/${asset}.spdx.json"
+            syft "file:${binary}" -o "spdx-json=${sbom}"
+            digest="$(sha256sum "${binary}" | awk '{print $1}')"
+            generator/release/scripts/registry-release bind-spdx-file-subject \
+              "${sbom}" \
+              --file-name "${asset}" \
+              --sha256 "${digest}"
+            basename "${sbom}" >> dist/backfill-assets
+          done < <(find dist/staged/bin -maxdepth 1 -type f ! -name SHA256SUMS -print0 | sort -z)
+          sort -u -o dist/backfill-assets dist/backfill-assets
+          if [[ "${REPLACE_EXISTING}" != "true" ]]; then
+            if conflicts="$(comm -12 dist/preexisting-assets dist/backfill-assets)" && [[ -n "${conflicts}" ]]; then
+              echo "Backfill assets already exist for ${TAG}; rerun with replace_existing=true to replace them" >&2
+              printf '%s\n' "${conflicts}" >&2
+              exit 1
+            fi
+          fi
+
       - name: Render backfill release capsule
         shell: bash
         run: |
@@ -184,6 +209,7 @@ jobs:
             --tag "${TAG}" \
             --version "${version}" \
             --binary-dir dist/staged/bin \
+            --binary-sbom-dir dist/staged/binary-sbom \
             --image-evidence-dir dist/staged/image-evidence \
             --output-json "dist/release-capsule/${CAPSULE_JSON}" \
             --output-markdown "dist/release-capsule/${CAPSULE_MD}" \
@@ -206,7 +232,7 @@ jobs:
           fi
           upload_assets=()
           while IFS= read -r asset; do
-            local_path="$(find dist/release-capsule dist/staged/image-evidence -maxdepth 1 -type f -name "${asset}" -print -quit)"
+            local_path="$(find dist/release-capsule dist/staged/image-evidence dist/staged/binary-sbom -maxdepth 1 -type f -name "${asset}" -print -quit)"
             if [[ -z "${local_path}" ]]; then
               echo "Generated backfill asset ${asset} was not found" >&2
               exit 1
@@ -248,7 +274,7 @@ jobs:
           fi
 
           while IFS= read -r asset; do
-            local_path="$(find dist/release-capsule dist/staged/image-evidence -maxdepth 1 -type f -name "${asset}" -print -quit)"
+            local_path="$(find dist/release-capsule dist/staged/image-evidence dist/staged/binary-sbom -maxdepth 1 -type f -name "${asset}" -print -quit)"
             expected="$(sha256sum "${local_path}" | awk '{print $1}')"
             actual="$(sha256sum "dist/reconciled/${asset}" | awk '{print $1}')"
             if [[ "${expected}" != "${actual}" ]]; then

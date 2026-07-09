@@ -60,6 +60,18 @@ Every pull request should make the review path clear:
   as security-sensitive. These changes need explicit maintainer review notes,
   even when the maintainer is also the author.
 
+## Dependency Changes
+
+New or changed release dependencies must follow the
+[`Dependency Vetting Policy`](release/notes/dependency-vetting-policy.md).
+Document why the dependency is needed, whether it is runtime or tool-only,
+license and advisory status, feature selection, transitive impact, and any
+accepted risk with a review trigger.
+
+Git dependencies require an immutable commit pin, a rationale, and a documented
+review trigger. Crosswalk's current pin rationale lives in
+[`external/README.md`](external/README.md).
+
 ## Scope
 
 Keep changes focused on the owning area:
