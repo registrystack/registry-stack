@@ -31,6 +31,7 @@ struct MetricsFixture {
     _tmp: TempDir,
     public: TestServer,
     admin: TestServer,
+    audit_sink: InMemorySink,
 }
 
 fn fixture(name: &str) -> String {
@@ -190,7 +191,8 @@ fn build_fixture() -> MetricsFixture {
         .expect("ingest registry builds"),
     );
     let (readiness_tx, readiness_rx) = watch::channel::<ReadinessSnapshot>(ready_snapshot());
-    let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(InMemorySink::new());
+    let audit_sink = InMemorySink::new();
+    let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(audit_sink.clone());
     let public = TestServer::new(
         build_app_with_readiness(
             Arc::clone(&config),
@@ -216,6 +218,7 @@ fn build_fixture() -> MetricsFixture {
         _tmp: tmp,
         public,
         admin,
+        audit_sink,
     }
 }
 
@@ -263,6 +266,76 @@ fn assert_contains_live_datasource_metrics(body: &str) {
     );
 }
 
+fn assert_contains_request_series(
+    body: &str,
+    method: &str,
+    endpoint_kind: &str,
+    status_code: u16,
+    error_code: &str,
+) {
+    let expected = format!(
+        "registry_relay_http_requests_total{{method=\"{method}\",endpoint_kind=\"{endpoint_kind}\",status_code=\"{status_code}\",status_class=\"4xx\",error_code=\"{error_code}\"}}"
+    );
+    assert!(
+        body.lines().any(|line| line.starts_with(&expected)),
+        "metrics response should include bounded request series {expected:?}:\n{body}"
+    );
+}
+
+fn audit_record_from_platform_envelope(line: &str) -> serde_json::Value {
+    let envelope: serde_json::Value =
+        serde_json::from_str(line.trim_end()).expect("valid platform audit envelope");
+    envelope["record"].clone()
+}
+
+fn assert_auth_denial_body(label: &str, body: &str, code: &str) {
+    assert!(
+        body.contains(code),
+        "{label} denial should carry stable auth code {code}:\n{body}"
+    );
+    assert_denial_body_does_not_expose_admin_state(body);
+}
+
+fn assert_denied_audit_record(
+    records: &[serde_json::Value],
+    path: &str,
+    endpoint_kind: &str,
+    status_code: u16,
+    error_code: &str,
+) {
+    let record = records
+        .iter()
+        .find(|record| {
+            record["path"] == path
+                && record["status_code"] == status_code
+                && record["error_code"] == error_code
+        })
+        .unwrap_or_else(|| panic!("denied audit record is present for {path} {error_code}"));
+    assert_eq!(record["endpoint_kind"], endpoint_kind);
+}
+
+fn assert_denial_body_does_not_expose_admin_state(body: &str) {
+    for forbidden in [
+        "# HELP",
+        "registry_relay_http_requests_total",
+        "registry_relay_readiness_ready_resources",
+        "registry_relay_datasource_live_scans_total",
+        "reloaded",
+        "succeeded",
+        "failed",
+        "beneficiaries_csv",
+        "01BX5ZZKBKACTAV9WEVGEMMVS0",
+        ADMIN_TOKEN,
+        METRICS_TOKEN,
+        SENSITIVE_KEY_ID,
+    ] {
+        assert!(
+            !body.contains(forbidden),
+            "denial response must not expose privileged value {forbidden:?}:\n{body}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn metrics_requires_metrics_scope_on_admin_listener() {
     let fixture = build_fixture();
@@ -290,6 +363,153 @@ async fn metrics_requires_metrics_scope_on_admin_listener() {
         .add_header("x-api-key", METRICS_TOKEN)
         .await
         .assert_status(StatusCode::OK);
+}
+
+#[tokio::test]
+async fn denied_admin_and_metrics_requests_do_not_leak_privileged_surfaces() {
+    let fixture = build_fixture();
+
+    let unauthenticated_capabilities = fixture.admin.get("/admin/v1/capabilities").await;
+    unauthenticated_capabilities.assert_status(StatusCode::UNAUTHORIZED);
+    let unauthenticated_capabilities_body = unauthenticated_capabilities.text();
+    assert_auth_denial_body(
+        "unauthenticated capabilities",
+        &unauthenticated_capabilities_body,
+        "auth.missing_credential",
+    );
+
+    let denied_capabilities = fixture
+        .admin
+        .get("/admin/v1/capabilities")
+        .add_header("x-api-key", METRICS_TOKEN)
+        .await;
+    denied_capabilities.assert_status(StatusCode::FORBIDDEN);
+    let denied_capabilities_body = denied_capabilities.text();
+    assert_auth_denial_body(
+        "capabilities",
+        &denied_capabilities_body,
+        "auth.scope_denied",
+    );
+
+    let unauthenticated_posture = fixture.admin.get("/admin/v1/posture?tier=restricted").await;
+    unauthenticated_posture.assert_status(StatusCode::UNAUTHORIZED);
+    let unauthenticated_posture_body = unauthenticated_posture.text();
+    assert_auth_denial_body(
+        "unauthenticated posture",
+        &unauthenticated_posture_body,
+        "auth.missing_credential",
+    );
+
+    let denied_posture = fixture
+        .admin
+        .get("/admin/v1/posture?tier=restricted")
+        .add_header("x-api-key", METRICS_TOKEN)
+        .await;
+    denied_posture.assert_status(StatusCode::FORBIDDEN);
+    let denied_posture_body = denied_posture.text();
+    assert_auth_denial_body("posture", &denied_posture_body, "auth.scope_denied");
+
+    let unauthenticated_reload = fixture.admin.post("/admin/v1/reload").await;
+    unauthenticated_reload.assert_status(StatusCode::UNAUTHORIZED);
+    let unauthenticated_reload_body = unauthenticated_reload.text();
+    assert_auth_denial_body(
+        "unauthenticated reload",
+        &unauthenticated_reload_body,
+        "auth.missing_credential",
+    );
+
+    let denied_reload = fixture
+        .admin
+        .post("/admin/v1/reload")
+        .add_header("x-api-key", METRICS_TOKEN)
+        .await;
+    denied_reload.assert_status(StatusCode::FORBIDDEN);
+    let denied_reload_body = denied_reload.text();
+    assert_auth_denial_body("reload", &denied_reload_body, "auth.scope_denied");
+
+    let unauthenticated_table_reload = fixture
+        .admin
+        .post("/admin/v1/datasets/social_registry/tables/beneficiaries_csv/reload")
+        .await;
+    unauthenticated_table_reload.assert_status(StatusCode::UNAUTHORIZED);
+    let unauthenticated_table_reload_body = unauthenticated_table_reload.text();
+    assert_auth_denial_body(
+        "unauthenticated table reload",
+        &unauthenticated_table_reload_body,
+        "auth.missing_credential",
+    );
+
+    let denied_table_reload = fixture
+        .admin
+        .post("/admin/v1/datasets/social_registry/tables/beneficiaries_csv/reload")
+        .add_header("x-api-key", METRICS_TOKEN)
+        .await;
+    denied_table_reload.assert_status(StatusCode::FORBIDDEN);
+    let denied_table_reload_body = denied_table_reload.text();
+    assert_auth_denial_body(
+        "table reload",
+        &denied_table_reload_body,
+        "auth.scope_denied",
+    );
+
+    let unauthenticated_metrics = fixture.admin.get("/metrics").await;
+    unauthenticated_metrics.assert_status(StatusCode::UNAUTHORIZED);
+    let unauthenticated_metrics_body = unauthenticated_metrics.text();
+    assert_auth_denial_body(
+        "unauthenticated metrics",
+        &unauthenticated_metrics_body,
+        "auth.missing_credential",
+    );
+
+    let denied_metrics = fixture
+        .admin
+        .get("/metrics")
+        .add_header("x-api-key", ADMIN_TOKEN)
+        .await;
+    denied_metrics.assert_status(StatusCode::FORBIDDEN);
+    let denied_metrics_body = denied_metrics.text();
+    assert_auth_denial_body("metrics", &denied_metrics_body, "auth.scope_denied");
+
+    let audit_lines = fixture.audit_sink.snapshot();
+    assert!(
+        audit_lines.len() >= 10,
+        "denied admin and metrics requests should be auditable: {audit_lines:?}"
+    );
+    let records = audit_lines
+        .iter()
+        .map(|line| audit_record_from_platform_envelope(line))
+        .collect::<Vec<_>>();
+    for (path, endpoint_kind) in [
+        ("/admin/v1/capabilities", "admin"),
+        ("/admin/v1/posture", "admin"),
+        ("/admin/v1/reload", "admin"),
+        (
+            "/admin/v1/datasets/social_registry/tables/beneficiaries_csv/reload",
+            "admin",
+        ),
+        ("/metrics", "other"),
+    ] {
+        assert_denied_audit_record(
+            &records,
+            path,
+            endpoint_kind,
+            401,
+            "auth.missing_credential",
+        );
+        assert_denied_audit_record(&records, path, endpoint_kind, 403, "auth.scope_denied");
+    }
+
+    let metrics = fixture
+        .admin
+        .get("/metrics")
+        .add_header("x-api-key", METRICS_TOKEN)
+        .await;
+    metrics.assert_status(StatusCode::OK);
+    let body = metrics.text();
+    assert_contains_request_series(&body, "POST", "admin", 401, "auth.missing_credential");
+    assert_contains_request_series(&body, "POST", "admin", 403, "auth.scope_denied");
+    assert_contains_request_series(&body, "GET", "admin", 401, "auth.missing_credential");
+    assert_contains_request_series(&body, "GET", "admin", 403, "auth.scope_denied");
 }
 
 #[tokio::test]

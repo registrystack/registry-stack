@@ -14,6 +14,7 @@ use axum::{Json, Router};
 use axum_test::TestServer;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use registry_notary_core::tokens::NOTARY_TRANSACTION_TOKEN_JWT_TYP;
 #[cfg(feature = "registry-notary-cel")]
 use registry_notary_core::FEDERATION_RESPONSE_JWT_TYP;
 use registry_notary_core::{
@@ -8846,6 +8847,29 @@ fn mint_notary_access_token_with_scope_and_authorization_details(
     scope: &str,
     authorization_details: Option<Value>,
 ) -> String {
+    mint_notary_access_token_with_jti_scope_and_authorization_details(
+        private_jwk,
+        kid,
+        typ,
+        issuer,
+        national_id,
+        None,
+        scope,
+        authorization_details,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn mint_notary_access_token_with_jti_scope_and_authorization_details(
+    private_jwk: &str,
+    kid: &str,
+    typ: &str,
+    issuer: &str,
+    national_id: &str,
+    jti: Option<&str>,
+    scope: &str,
+    authorization_details: Option<Value>,
+) -> String {
     let key = PrivateJwk::parse(private_jwk).expect("test JWK parses");
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let header = json!({ "alg": "EdDSA", "typ": typ, "kid": kid });
@@ -8862,6 +8886,12 @@ fn mint_notary_access_token_with_scope_and_authorization_details(
         "nbf": now,
         "exp": now + 300,
     });
+    if let Some(jti) = jti {
+        payload
+            .as_object_mut()
+            .expect("payload is an object")
+            .insert("jti".to_string(), json!(jti));
+    }
     if let Some(authorization_details) = authorization_details {
         payload
             .as_object_mut()
@@ -8937,6 +8967,123 @@ async fn preauth_trust_anchor_rejects_wrong_key_and_credential_key_notary_tokens
         .add_header("authorization", format!("Bearer {credential_key_token}"))
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn preauth_transaction_token_jti_denials_are_stable_and_redacted() {
+    set_preauth_env();
+    let idp = MockIdp::start().await;
+    let token_upstream = MockHttpUpstream::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = preauth_test_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp,
+        &token_upstream,
+    );
+    config.auth.access_token_signing.token_typ = NOTARY_TRANSACTION_TOKEN_JWT_TYP.to_string();
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let missing_jti_token = mint_notary_access_token(
+        TEST_ACCESS_TOKEN_JWK,
+        "did:web:issuer.example#access-token-key",
+        NOTARY_TRANSACTION_TOKEN_JWT_TYP,
+        NOTARY_ISSUER,
+        "person-1",
+    );
+    let missing_jti = server
+        .get("/v1/claims")
+        .add_header("authorization", format!("Bearer {missing_jti_token}"))
+        .await;
+    missing_jti.assert_status(StatusCode::UNAUTHORIZED);
+    let missing_jti_body: Value = missing_jti.json();
+    assert_eq!(missing_jti_body["code"], json!("auth.missing_credential"));
+    assert!(missing_jti_body.get("data").is_none());
+    assert!(!missing_jti_body.to_string().contains(&missing_jti_token));
+
+    let replay_token = mint_notary_access_token_with_jti_scope_and_authorization_details(
+        TEST_ACCESS_TOKEN_JWK,
+        "did:web:issuer.example#access-token-key",
+        NOTARY_TRANSACTION_TOKEN_JWT_TYP,
+        NOTARY_ISSUER,
+        "person-1",
+        Some("txn-jti-http-replay-1"),
+        "self_attestation",
+        Some(json!([{
+            "type": registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_TYPE,
+            "schema_version": registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_SCHEMA_VERSION,
+            "actions": ["evaluate"],
+            "locations": ["evidence.test"]
+        }])),
+    );
+    let first_use = server
+        .get("/v1/claims")
+        .add_header("authorization", format!("Bearer {replay_token}"))
+        .await;
+    first_use.assert_status_ok();
+    let first_use_body: Value = first_use.json();
+    assert!(first_use_body["data"].is_array());
+
+    let replay = server
+        .get("/v1/claims")
+        .add_header("authorization", format!("Bearer {replay_token}"))
+        .await;
+    replay.assert_status(StatusCode::UNAUTHORIZED);
+    let replay_body: Value = replay.json();
+    assert_eq!(replay_body["code"], json!("auth.missing_credential"));
+    assert!(replay_body.get("data").is_none());
+    assert!(!replay_body.to_string().contains(&replay_token));
+    assert!(!replay_body.to_string().contains("txn-jti-http-replay-1"));
+
+    let multi_auth = server
+        .get("/v1/claims")
+        .add_header("x-api-key", "api-token")
+        .add_header("authorization", format!("Bearer {replay_token}"))
+        .await;
+    multi_auth.assert_status(StatusCode::BAD_REQUEST);
+    let multi_auth_body: Value = multi_auth.json();
+    assert_eq!(multi_auth_body["code"], json!("auth.multiple_credentials"));
+    assert!(multi_auth_body.get("data").is_none());
+    assert!(!multi_auth_body.to_string().contains(&replay_token));
+    assert!(!multi_auth_body.to_string().contains("api-token"));
+    assert!(!multi_auth_body
+        .to_string()
+        .contains("txn-jti-http-replay-1"));
+
+    let audit = std::fs::read_to_string(&audit_path).expect("audit was written");
+    assert!(!audit.contains(&missing_jti_token));
+    assert!(!audit.contains(&replay_token));
+    assert!(!audit.contains("api-token"));
+    assert!(!audit.contains("txn-jti-http-replay-1"));
+    assert!(!audit.contains("person-1"));
+    let records = audit_envelopes(&audit_path)
+        .into_iter()
+        .map(|envelope| envelope.record)
+        .collect::<Vec<_>>();
+    assert!(records
+        .iter()
+        .any(|record| record["path"] == json!("/v1/claims") && record["status"] == json!(200)));
+    let missing_credential_denials = records
+        .iter()
+        .filter(|record| {
+            record["path"] == json!("/v1/claims")
+                && record["status"] == json!(401)
+                && record["error_code"] == json!("auth.missing_credential")
+        })
+        .count();
+    assert!(
+        missing_credential_denials >= 2,
+        "missing-jti and replay denials should both be audited: {records:?}"
+    );
+    assert!(records.iter().any(|record| {
+        record["path"] == json!("/v1/claims")
+            && record["status"] == json!(400)
+            && record["error_code"] == json!("auth.multiple_credentials")
+    }));
+
     idp.stop().await;
 }
 

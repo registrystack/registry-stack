@@ -2143,6 +2143,69 @@ mod full_stack {
         assert_table_id_hash_without_plaintext(&record);
     }
 
+    #[tokio::test]
+    async fn disabled_details_malformed_filter_value_records_generic_error_without_value_leak() {
+        let harness = build_harness(&["disability_registry:rows"]).await;
+        let hostile_value = "hostile-filter-value-should-not-leak";
+
+        let response = harness
+            .server
+            .post("/dci/dr/registry/sync/get-disability-details")
+            .add_header("authorization", format!("Bearer {VALID_KEY}"))
+            .json(&json!({
+                "header": valid_header("msg-full-stack-invalid-filter"),
+                "message": {
+                    "transaction_id": "txn-full-stack-invalid-filter",
+                    "disabled_criteria": {
+                        "query": {
+                            "member.member_identifier": {
+                                "eq": {
+                                    "raw": hostile_value
+                                }
+                            }
+                        }
+                    }
+                }
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
+        let body: Value = response.json();
+        assert_eq!(body["code"], "filter.invalid_value");
+        let body_text = serde_json::to_string(&body).expect("response body serializes");
+        for value in [hostile_value, "disabled_people_table", "DataFusion"] {
+            assert!(
+                !body_text.contains(value),
+                "response must not leak malformed filter value or backend detail {value:?}"
+            );
+        }
+
+        let records = harness.audit_sink.snapshot();
+        assert_eq!(
+            records.len(),
+            1,
+            "malformed filter request emits one audit record"
+        );
+        let audit_text = &records[0];
+        let record = audit_record_for(
+            &harness.audit_sink,
+            "/dci/dr/registry/sync/get-disability-details",
+        );
+        assert_eq!(record["status_code"], 400);
+        assert_eq!(record["error_code"], "filter.invalid_value");
+        assert_eq!(record["principal_id"], CLIENT_ID);
+        assert_eq!(record["dataset_id"], "disability_registry");
+        assert_eq!(record["entity_name"], "disabled_person");
+        assert_table_id_hash_without_plaintext(&record);
+        assert_eq!(record["row_count"], 0);
+        for value in [hostile_value, "disabled_people_table", "DataFusion"] {
+            assert!(
+                !audit_text.contains(value),
+                "audit record must not leak malformed filter value or backend detail {value:?}"
+            );
+        }
+    }
+
     fn assert_table_id_hash_without_plaintext(record: &Value) {
         assert!(record["table_id"].is_null());
         assert!(record["table_id_hash"].as_str().is_some_and(is_audit_hash));
