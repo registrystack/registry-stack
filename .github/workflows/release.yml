@@ -364,6 +364,27 @@ jobs:
           build_image registry-notary-source-adapter-sidecar release/docker/Dockerfile.registry-notary-openfn-sidecar
           build_image registry-relay release/docker/Dockerfile.registry-relay
 
+      - name: Generate image binary SBOMs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/image-binary-sbom
+          while IFS= read -r -d '' binary; do
+            asset="$(basename "${binary}")"
+            case "${asset}" in
+              SHA256SUMS|RELEASE_BUILDER_IMAGE)
+                continue
+                ;;
+            esac
+            sbom="dist/image-binary-sbom/image-input-${asset}.spdx.json"
+            syft "file:${binary}" -o "spdx-json=${sbom}"
+            digest="$(sha256sum "${binary}" | awk '{print $1}')"
+            release/scripts/registry-release bind-spdx-file-subject \
+              "${sbom}" \
+              --file-name "${asset}" \
+              --sha256 "${digest}"
+          done < <(find dist/image-bin -maxdepth 1 -type f -print0 | sort -z)
+
       - name: Upload image evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
@@ -371,6 +392,7 @@ jobs:
           path: |
             dist/images/*
             dist/sbom/*
+            dist/image-binary-sbom/*
             dist/grype/*
           if-no-files-found: error
 
@@ -432,6 +454,37 @@ jobs:
           # checksummed for the release capsule, SHA256SUMS asset, and install.sh.
           (cd dist/bin && rm -f SHA256SUMS && sha256sum -- * > SHA256SUMS)
 
+      - name: Install Syft
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${SYFT_VERSION:?}"
+          : "${SYFT_LINUX_AMD64_SHA256:?}"
+          mkdir -p "${HOME}/.local/bin" /tmp/registry-stack-tools
+          syft_version="${SYFT_VERSION#v}"
+          curl -sSfL \
+            "https://github.com/anchore/syft/releases/download/${SYFT_VERSION}/syft_${syft_version}_linux_amd64.tar.gz" \
+            -o /tmp/registry-stack-tools/syft.tar.gz
+          echo "${SYFT_LINUX_AMD64_SHA256}  /tmp/registry-stack-tools/syft.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/registry-stack-tools/syft.tar.gz -C "${HOME}/.local/bin" syft
+          echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
+
+      - name: Generate binary SBOMs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/binary-sbom
+          while IFS= read -r -d '' binary; do
+            asset="$(basename "${binary}")"
+            sbom="dist/binary-sbom/${asset}.spdx.json"
+            syft "file:${binary}" -o "spdx-json=${sbom}"
+            digest="$(sha256sum "${binary}" | awk '{print $1}')"
+            release/scripts/registry-release bind-spdx-file-subject \
+              "${sbom}" \
+              --file-name "${asset}" \
+              --sha256 "${digest}"
+          done < <(find dist/bin -maxdepth 1 -type f ! -name SHA256SUMS -print0 | sort -z)
+
       - name: Download image evidence
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
@@ -448,6 +501,7 @@ jobs:
             --tag "${{ needs.verify.outputs.tag }}" \
             --version "${{ needs.verify.outputs.version }}" \
             --binary-dir dist/bin \
+            --binary-sbom-dir dist/binary-sbom \
             --image-evidence-dir dist/image-evidence \
             --output-json "dist/release-capsule/registry-stack-${{ needs.verify.outputs.tag }}-release-capsule.json" \
             --output-markdown "dist/release-capsule/registry-stack-${{ needs.verify.outputs.tag }}-release-capsule.md" \
@@ -466,7 +520,7 @@ jobs:
           while IFS= read -r -d '' file; do
             digest="$(sha256sum "${file}" | awk '{print $1}')"
             printf '%s  %s\n' "${digest}" "$(basename "${file}")" >> "${subjects}"
-          done < <(find dist/bin dist/image-evidence dist/release-capsule -type f -print0 | sort -z)
+          done < <(find dist/bin dist/binary-sbom dist/image-evidence dist/release-capsule -type f -print0 | sort -z)
           if [[ ! -s "${subjects}" ]]; then
             echo "No release artifacts found for provenance" >&2
             exit 1
@@ -483,7 +537,7 @@ jobs:
           # Capture the asset list BEFORE signing so signatures are never re-signed.
           # Writing .sig/.pem into the same dist/ dirs keeps the downstream
           # "Reconcile release assets" guard satisfied (expected == actual).
-          mapfile -d '' -t files < <(find dist/bin dist/image-evidence dist/release-capsule -type f -print0 | sort -z)
+          mapfile -d '' -t files < <(find dist/bin dist/binary-sbom dist/image-evidence dist/release-capsule -type f -print0 | sort -z)
           if [[ "${#files[@]}" -eq 0 ]]; then
             echo "No artifacts to sign" >&2
             exit 1
@@ -504,7 +558,7 @@ jobs:
           set -euo pipefail
           tag="${{ needs.verify.outputs.tag }}"
           notes="release/notes/${tag}.md"
-          mapfile -d '' -t assets < <(find dist/bin dist/image-evidence dist/release-capsule -type f -print0 | sort -z)
+          mapfile -d '' -t assets < <(find dist/bin dist/binary-sbom dist/image-evidence dist/release-capsule -type f -print0 | sort -z)
           if [[ "${#assets[@]}" -eq 0 ]]; then
             echo "No release assets found" >&2
             exit 1
@@ -527,7 +581,7 @@ jobs:
           set -euo pipefail
           tag="${{ needs.verify.outputs.tag }}"
           tmp="$(mktemp -d)"
-          find dist/bin dist/image-evidence dist/release-capsule -type f -print0 \
+          find dist/bin dist/binary-sbom dist/image-evidence dist/release-capsule -type f -print0 \
             | xargs -0 -n1 basename \
             | sort > "${tmp}/expected-assets"
           provenance_asset="registry-stack-${tag}-release-provenance.intoto.jsonl"
@@ -539,7 +593,7 @@ jobs:
             exit 1
           fi
           while IFS= read -r asset; do
-            local_path="$(find dist/bin dist/image-evidence dist/release-capsule -type f -name "${asset}" -print -quit)"
+            local_path="$(find dist/bin dist/binary-sbom dist/image-evidence dist/release-capsule -type f -name "${asset}" -print -quit)"
             gh release download "${tag}" --pattern "${asset}" --dir "${tmp}/downloaded" --clobber
             expected="$(sha256sum "${local_path}" | awk '{print $1}')"
             actual="$(sha256sum "${tmp}/downloaded/${asset}" | awk '{print $1}')"

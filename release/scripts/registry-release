@@ -17,6 +17,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
+SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 SEMVER_TAG = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$")
 IMAGE_DIGEST_REF = re.compile(r"^([^@]+)@(sha256:[0-9a-f]{64})$")
 
@@ -319,6 +320,32 @@ def spdx_subject_contains_digest(data: object, digest_ref: str, digest: str) -> 
     return False
 
 
+def spdx_subject_contains_file_digest(data: object, file_name: str, digest: str) -> bool:
+    if not isinstance(data, dict):
+        return False
+    described = data.get("documentDescribes")
+    packages = data.get("packages")
+    if not isinstance(described, list) or not isinstance(packages, list):
+        return False
+    described_ids = {item for item in described if isinstance(item, str)}
+    if not described_ids:
+        return False
+    for package in packages:
+        if not isinstance(package, dict) or package.get("SPDXID") not in described_ids:
+            continue
+        if package.get("name") != file_name and package.get("packageFileName") != file_name:
+            continue
+        checksums = package.get("checksums")
+        if not isinstance(checksums, list):
+            continue
+        for checksum in checksums:
+            if not isinstance(checksum, dict):
+                continue
+            if checksum.get("algorithm") == "SHA256" and checksum.get("checksumValue") == digest:
+                return True
+    return False
+
+
 def bind_spdx_subject(spdx_path: Path, image_name: str, digest_ref: str) -> int:
     digest_match = IMAGE_DIGEST_REF.fullmatch(digest_ref)
     if digest_match is None:
@@ -357,6 +384,52 @@ def bind_spdx_subject(spdx_path: Path, image_name: str, digest_ref: str) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     print(f"bound SPDX subject {subject_id} to {digest_ref}")
+    return 0
+
+
+def spdx_id_component(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9.-]+", "-", value).strip("-") or "asset"
+
+
+def bind_spdx_file_subject(spdx_path: Path, file_name: str, digest: str) -> int:
+    if Path(file_name).name != file_name or not file_name:
+        print(f"error: file name must be a bare release asset name, got {file_name}", file=sys.stderr)
+        return 1
+    if SHA256_HEX.fullmatch(digest) is None:
+        print(f"error: sha256 must be 64 lowercase hex characters, got {digest}", file=sys.stderr)
+        return 1
+    try:
+        data = load_json(spdx_path)
+        if not isinstance(data, dict):
+            raise ValueError("SPDX document must be an object")
+        packages = data.setdefault("packages", [])
+        described = data.setdefault("documentDescribes", [])
+        if not isinstance(packages, list) or not isinstance(described, list):
+            raise ValueError("SPDX document packages and documentDescribes must be arrays")
+        subject_id = f"SPDXRef-RegistryStack-{spdx_id_component(file_name)}-sha256-subject"
+        packages[:] = [package for package in packages if not (isinstance(package, dict) and package.get("SPDXID") == subject_id)]
+        packages.append(
+            {
+                "SPDXID": subject_id,
+                "name": file_name,
+                "packageFileName": file_name,
+                "downloadLocation": "NOASSERTION",
+                "filesAnalyzed": False,
+                "checksums": [
+                    {
+                        "algorithm": "SHA256",
+                        "checksumValue": digest,
+                    }
+                ],
+            }
+        )
+        if subject_id not in described:
+            described.append(subject_id)
+        spdx_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(f"bound SPDX subject {subject_id} to {file_name} sha256:{digest}")
     return 0
 
 
@@ -403,6 +476,7 @@ def render_capsule(
     tag: str,
     version: str,
     binary_dir: Path,
+    binary_sbom_dir: Path,
     image_evidence_dir: Path,
     output_json: Path,
     output_markdown: Path,
@@ -427,10 +501,23 @@ def render_capsule(
         for path in sorted(binary_dir.iterdir()) if binary_dir.exists() else []:
             if not path.is_file() or path.name == "SHA256SUMS":
                 continue
+            binary_sha256 = verified_binary_sha256(path, checksums)
+            sbom = binary_sbom_dir / f"{path.name}.spdx.json"
+            if not sbom.is_file():
+                raise ValueError(f"{path.name} is missing a binary SBOM file")
+            sbom_report = load_json(sbom)
+            if not spdx_subject_contains_file_digest(sbom_report, path.name, binary_sha256):
+                raise ValueError(f"{path.name} SBOM subject does not contain sha256:{binary_sha256}")
             binary = {
                 "name": path.name,
                 "path": str(path),
-                "sha256": verified_binary_sha256(path, checksums),
+                "sha256": binary_sha256,
+                "sbom": {
+                    "asset_name": sbom.name,
+                    "subject": path.name,
+                    "format": "spdx-json",
+                    "sha256": sha256(sbom),
+                },
             }
             binaries.append(binary)
 
@@ -540,7 +627,10 @@ def capsule_markdown(evidence: dict) -> str:
         "",
     ]
     for binary in evidence["binaries"]:
-        lines.append(f"- `{binary['name']}` sha256 `{binary['sha256']}`")
+        lines.append(
+            f"- `{binary['name']}` sha256 `{binary['sha256']}`; "
+            f"SBOM `{binary['sbom']['asset_name']}`"
+        )
     lines.extend(["", "## Images", ""])
     for image in evidence["images"]:
         scan = image["vulnerability_scan"]
@@ -621,11 +711,16 @@ def main() -> int:
     bind_spdx_parser.add_argument("spdx", type=Path)
     bind_spdx_parser.add_argument("--image-name", required=True)
     bind_spdx_parser.add_argument("--digest-ref", required=True)
+    bind_file_spdx_parser = subparsers.add_parser("bind-spdx-file-subject")
+    bind_file_spdx_parser.add_argument("spdx", type=Path)
+    bind_file_spdx_parser.add_argument("--file-name", required=True)
+    bind_file_spdx_parser.add_argument("--sha256", required=True)
     capsule_parser = subparsers.add_parser("render-capsule")
     capsule_parser.add_argument("manifest", type=Path)
     capsule_parser.add_argument("--tag", required=True)
     capsule_parser.add_argument("--version", required=True)
     capsule_parser.add_argument("--binary-dir", type=Path, required=True)
+    capsule_parser.add_argument("--binary-sbom-dir", type=Path, required=True)
     capsule_parser.add_argument("--image-evidence-dir", type=Path, required=True)
     capsule_parser.add_argument("--output-json", type=Path, required=True)
     capsule_parser.add_argument("--output-markdown", type=Path, required=True)
@@ -647,12 +742,15 @@ def main() -> int:
         return stage_capsule_backfill_assets(args.asset_dir, args.tag, args.binary_dir, args.image_evidence_dir)
     if args.command == "bind-spdx-subject":
         return bind_spdx_subject(args.spdx, args.image_name, args.digest_ref)
+    if args.command == "bind-spdx-file-subject":
+        return bind_spdx_file_subject(args.spdx, args.file_name, args.sha256)
     if args.command == "render-capsule":
         return render_capsule(
             args.manifest,
             args.tag,
             args.version,
             args.binary_dir,
+            args.binary_sbom_dir,
             args.image_evidence_dir,
             args.output_json,
             args.output_markdown,

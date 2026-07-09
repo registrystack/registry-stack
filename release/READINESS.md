@@ -79,11 +79,16 @@ Release assets are already cosign-signed with SLSA provenance
 ([`REPEATABLE-BUILDS.md`](REPEATABLE-BUILDS.md)); open tracking issues:
 GH#122, GH#123, GH#127, GH#128, GH#129.
 
-- [ ] SBOM published per release.
-- [ ] Unsafe-code inventory generated and reviewed.
-- [ ] Dependency vetting policy documented.
-- [ ] Crosswalk pinned-dependency rationale and review trigger documented in
-      `external/`.
+- [x] SBOM published per release. Evidence:
+      [release workflow](../.github/workflows/release.yml) publishes
+      digest-bound SPDX SBOMs for release binaries, image-input binaries
+      including the Notary PKCS#11 variant, and images on the next tag release.
+- [x] Unsafe-code inventory generated and reviewed. Evidence:
+      [`unsafe-code-inventory.md`](notes/unsafe-code-inventory.md).
+- [x] Dependency vetting policy documented. Evidence:
+      [`dependency-vetting-policy.md`](notes/dependency-vetting-policy.md).
+- [x] Crosswalk pinned-dependency rationale and review trigger documented in
+      `external/`. Evidence: [`external/README.md`](../external/README.md).
 
 ## 7. Operations and lifecycle
 

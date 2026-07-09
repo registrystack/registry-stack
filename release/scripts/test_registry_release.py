@@ -69,6 +69,22 @@ class RegistryReleaseTest(unittest.TestCase):
             self.assertIn(asset, workflow)
             self.assertIn(f"registry-stack-registryctl-{asset}", workflow)
 
+    def test_release_workflow_publishes_digest_bound_binary_sboms(self) -> None:
+        workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        backfill = (ROOT / ".github/workflows/release-capsule-backfill.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("Generate binary SBOMs", workflow)
+        self.assertIn("dist/binary-sbom", workflow)
+        self.assertIn("Generate image binary SBOMs", workflow)
+        self.assertIn("dist/image-binary-sbom", workflow)
+        self.assertIn("image-input-${asset}.spdx.json", workflow)
+        self.assertIn("bind-spdx-file-subject", workflow)
+        self.assertIn("Generate digest-bound binary SBOMs", backfill)
+        self.assertIn("dist/staged/binary-sbom", backfill)
+        self.assertIn("--binary-sbom-dir", backfill)
+
     def test_validate_beta_6_manifest(self) -> None:
         result = run_tool("validate", "release/manifests/registry-stack-beta-6.yaml")
         self.assertEqual(0, result.returncode, result.stderr)
@@ -172,11 +188,16 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual(1, len(evidence["binaries"]))
         self.assertEqual(1, len(evidence["images"]))
+        self.assertEqual(
+            "registryctl-v0.8.0-linux-amd64.spdx.json",
+            evidence["binaries"][0]["sbom"]["asset_name"],
+        )
         self.assertNotIn("signing_status", evidence["binaries"][0])
         self.assertNotIn("attestation_status", evidence["binaries"][0])
         self.assertNotIn("signing_status", evidence["images"][0])
         self.assertNotIn("attestation_status", evidence["images"][0])
         self.assertIn("Release Trust Capsule", capsule_markdown)
+        self.assertIn("SBOM `registryctl-v0.8.0-linux-amd64.spdx.json`", capsule_markdown)
         self.assertNotIn("signing `", capsule_markdown)
         self.assertNotIn("attestation `", capsule_markdown)
 
@@ -329,6 +350,55 @@ class RegistryReleaseTest(unittest.TestCase):
 
         self.assertNotEqual(0, result.returncode)
         self.assertIn("SHA256SUMS entry does not match file contents", result.stderr)
+
+    def test_render_capsule_rejects_missing_binary_sbom(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_ref = init_release_repo(root)
+            manifest = write_manifest(root, source_ref=source_ref)
+            binary_dir = write_binary_fixture(root)
+            binary_sbom_dir = root / "binary-sbom"
+            binary_sbom_dir.mkdir()
+            image_dir = write_image_fixture(root)
+
+            result = render_capsule(
+                manifest,
+                binary_dir,
+                image_dir,
+                root / "capsule.json",
+                root / "capsule.md",
+                root,
+                binary_sbom_dir=binary_sbom_dir,
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("missing a binary SBOM file", result.stderr)
+
+    def test_render_capsule_rejects_binary_sbom_without_digest_subject(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_ref = init_release_repo(root)
+            manifest = write_manifest(root, source_ref=source_ref)
+            binary_dir = write_binary_fixture(root)
+            binary_sbom_dir = write_binary_sbom_fixture(root, binary_dir)
+            image_dir = write_image_fixture(root)
+            (binary_sbom_dir / "registryctl-v0.8.0-linux-amd64.spdx.json").write_text(
+                json.dumps({"spdxVersion": "SPDX-2.3", "name": "unrelated"}),
+                encoding="utf-8",
+            )
+
+            result = render_capsule(
+                manifest,
+                binary_dir,
+                image_dir,
+                root / "capsule.json",
+                root / "capsule.md",
+                root,
+                binary_sbom_dir=binary_sbom_dir,
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("SBOM subject does not contain sha256", result.stderr)
 
     def test_render_capsule_rejects_invalid_digest_ref_shape(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -532,6 +602,53 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertTrue(any(package["name"] == IMAGE_DIGEST_REF for package in subject_packages))
         self.assertTrue(any(IMAGE_DIGEST in json.dumps(package) for package in subject_packages))
 
+    def test_bind_spdx_file_subject_adds_sha256_bound_described_package(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            spdx = root / "registryctl.spdx.json"
+            digest = "a" * 64
+            spdx.write_text(
+                json.dumps(
+                    {
+                        "spdxVersion": "SPDX-2.3",
+                        "name": "syft-registryctl-output",
+                        "documentDescribes": ["SPDXRef-DocumentRoot"],
+                        "packages": [
+                            {
+                                "SPDXID": "SPDXRef-DocumentRoot",
+                                "name": "registryctl",
+                                "downloadLocation": "NOASSERTION",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = run_tool(
+                "bind-spdx-file-subject",
+                str(spdx),
+                "--file-name",
+                "registryctl-v0.8.0-linux-amd64",
+                "--sha256",
+                digest,
+            )
+
+            data = json.loads(spdx.read_text(encoding="utf-8"))
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        described = set(data["documentDescribes"])
+        subject_packages = [
+            package for package in data["packages"] if package["SPDXID"] in described
+        ]
+        self.assertTrue(
+            any(
+                package["name"] == "registryctl-v0.8.0-linux-amd64"
+                and package["checksums"][0]["checksumValue"] == digest
+                for package in subject_packages
+            )
+        )
+
 
 def run_tool(*args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
@@ -629,6 +746,46 @@ def write_multiplatform_binary_fixture(root: Path) -> Path:
     return binary_dir
 
 
+def write_binary_sbom_fixture(root: Path, binary_dir: Path) -> Path:
+    sbom_dir = root / "binary-sbom"
+    sbom_dir.mkdir(exist_ok=True)
+    for binary in sorted(binary_dir.iterdir()):
+        if not binary.is_file() or binary.name == "SHA256SUMS":
+            continue
+        digest = subprocess.check_output(
+            ["sha256sum", binary.name],
+            cwd=binary_dir,
+            text=True,
+        ).split()[0]
+        subject_id = f"SPDXRef-RegistryStack-{binary.name}-sha256-subject"
+        (sbom_dir / f"{binary.name}.spdx.json").write_text(
+            json.dumps(
+                {
+                    "spdxVersion": "SPDX-2.3",
+                    "name": f"{binary.name}-sbom",
+                    "documentDescribes": [subject_id],
+                    "packages": [
+                        {
+                            "SPDXID": subject_id,
+                            "name": binary.name,
+                            "packageFileName": binary.name,
+                            "downloadLocation": "NOASSERTION",
+                            "filesAnalyzed": False,
+                            "checksums": [
+                                {
+                                    "algorithm": "SHA256",
+                                    "checksumValue": digest,
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+    return sbom_dir
+
+
 def write_release_asset_fixture(root: Path, *, include_cross_platform: bool = False) -> Path:
     asset_dir = root / "release-assets"
     asset_dir.mkdir()
@@ -714,7 +871,11 @@ def render_capsule(
     output_json: Path,
     output_md: Path,
     repo: Path,
+    *,
+    binary_sbom_dir: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
+    if binary_sbom_dir is None:
+        binary_sbom_dir = write_binary_sbom_fixture(repo, binary_dir)
     return run_tool(
         "render-capsule",
         str(manifest),
@@ -724,6 +885,8 @@ def render_capsule(
         "0.8.0",
         "--binary-dir",
         str(binary_dir),
+        "--binary-sbom-dir",
+        str(binary_sbom_dir),
         "--image-evidence-dir",
         str(image_dir),
         "--output-json",
