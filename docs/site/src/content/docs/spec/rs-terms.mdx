@@ -180,7 +180,7 @@ The registry stack comprises five related projects. Product names are Title Case
 
 **ecosystem binding**: Manifest-level binding that connects an external ecosystem profile or governed evidence pack to a Registry Stack runtime surface. A governed evidence ecosystem binding names the evidence-pack metadata and policy identity a runtime service can use for PDP enforcement. Registry Stack product term.
 
-**ODRL enforcement profile**: Registry Stack product term for the supported runtime-enforcement subset of Open Digital Rights Language (ODRL) terms. The current governed Evidence Gateway profile is `registry-evidence-gateway-pdp/v1`; it supports `odrl:purpose` and `odrl:spatial` as runtime-enforced ODRL constraint terms and denies unsupported ODRL terms rather than treating them as enforced.
+**ODRL enforcement profile**: Registry Stack product term for the governed Evidence Gateway profile vocabulary for Open Digital Rights Language (ODRL) terms. The current profile is `registry-evidence-gateway-pdp/v1`; the profile vocabulary includes `odrl:purpose` and `odrl:spatial`, but runtime services can support a subset. Registry Relay currently enforces `odrl:purpose` and denies `odrl:spatial` fail-closed.
 
 **PDP gate**: A named policy decision point check evaluated by the shared Registry PDP, such as policy identity, ODRL terms, purpose, jurisdiction, assurance, source freshness, legal basis, consent, requested disclosure, source binding, route identity, checked scope, and redaction. PDP gates produce evaluated rule IDs in audit records.
 

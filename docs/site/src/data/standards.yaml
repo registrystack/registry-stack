@@ -355,8 +355,8 @@
       url: https://github.com/registrystack/registry-stack/blob/v0.8.4/crates/registry-platform-pdp/src/lib.rs
     - label: Registry Relay governed evidence PDP path
       url: https://github.com/registrystack/registry-stack/blob/v0.8.4/crates/registry-relay/src/api/governed.rs
-  last_checked: 2026-06-20
-  notes: Relay catalog JSON-LD can include dataset-scoped ODRL Offers, and Manifest renders ODRL policy metadata. That publication surface is descriptive and is not itself an access grant. Separately, Relay's governed Evidence Gateway runtime path can select a governed-evidence binding and call the shared PDP using the `registry-evidence-gateway-pdp/v1` profile; the implemented runtime enforcement terms are currently `odrl:purpose` and `odrl:spatial`, while unsupported ODRL terms are denied rather than treated as enforced.
+  last_checked: 2026-07-09
+  notes: Relay catalog JSON-LD can include dataset-scoped ODRL Offers, and Manifest renders ODRL policy metadata. That publication surface is descriptive and is not itself an access grant. The shared governed Evidence Gateway profile vocabulary includes `odrl:purpose` and `odrl:spatial`, but Relay's governed runtime path currently enforces `odrl:purpose` only; `odrl:spatial` and other unsupported ODRL terms are denied fail-closed rather than treated as enforced.
 - id: sdmx
   name: SDMX-JSON
   standards_body: SDMX

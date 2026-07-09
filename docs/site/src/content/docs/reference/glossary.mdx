@@ -124,10 +124,10 @@ Product names are always in English, including on future translated pages.
   <dd>Registry Stack product term for an evidence response shaped by data minimization, selective disclosure, or verifiable attestation. The response can be narrower than the full source record when the configured use case supports that pattern.</dd>
 
   <dt>ODRL</dt>
-  <dd>Open Digital Rights Language. W3C recommendation. Relay and Manifest emit ODRL Offer documents for dataset-scoped descriptive policies. Governed runtime PDP enforcement currently uses the supported Evidence Gateway ODRL terms `odrl:purpose` and `odrl:spatial`; publishing an ODRL document alone is not enforcement.</dd>
+  <dd>Open Digital Rights Language. W3C recommendation. Relay and Manifest emit ODRL Offer documents for dataset-scoped descriptive policies. Relay governed runtime PDP enforcement currently uses `odrl:purpose`; publishing an ODRL document alone is not enforcement.</dd>
 
   <dt>ODRL enforcement profile</dt>
-  <dd>Supported runtime-enforcement subset of ODRL terms. The current governed Evidence Gateway profile is `registry-evidence-gateway-pdp/v1`; it supports `odrl:purpose` and `odrl:spatial` as runtime-enforced ODRL constraint terms and denies unsupported ODRL terms rather than treating them as enforced.</dd>
+  <dd>Governed Evidence Gateway profile vocabulary for ODRL terms. The current profile is `registry-evidence-gateway-pdp/v1`; Relay currently enforces `odrl:purpose` and denies terms such as `odrl:spatial` fail-closed rather than treating them as enforced.</dd>
 
   <dt>observations</dt>
   <dd>The array of data rows returned in the `AggregateResult.observations` field for a Registry Relay aggregate query. Each observation is an object keyed by dimension and measure identifiers. The field replaces the former `data` name from the SDMX-refactor rename.</dd>

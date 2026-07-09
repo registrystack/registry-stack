@@ -187,6 +187,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
+name = "registry-manifest-cli"
+version = "0.8.4"
+dependencies = [
+ "registry-manifest-core",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "unsafe-libyaml",
+]
+
+[[package]]
 name = "registry-manifest-core"
 version = "0.8.4"
 dependencies = [
@@ -203,6 +214,7 @@ name = "registry-manifest-fuzz"
 version = "0.0.0"
 dependencies = [
  "libfuzzer-sys",
+ "registry-manifest-cli",
  "registry-manifest-core",
  "serde_json",
  "serde_yaml_ng",
