@@ -45,12 +45,12 @@ use registry_platform_config::{
 use registry_platform_crypto::{LocalJwkSigner, PrivateJwk, PublicJwk};
 use registry_platform_httputil::{url as httputil_url, FetchUrlPolicy};
 use registry_platform_ops::{
-    antirollback_key_from_verified_bundle, bundle_verify_rejection_result,
+    antirollback_key_from_verified_bundle, audit_shipping_target, bundle_verify_rejection_result,
     load_unsigned_break_glass_or_pin,
     persist_bundle_acceptance as persist_config_bundle_acceptance,
     posture_safe_runtime_config_hash, resolve_bundle_state_action, verify_bundle_state_read_only,
-    BundleStateAction, BundleStateRequest, ConfigBootError, ConfigOverrideMode, ConfigProvenance,
-    ConfigSource, PendingBundleAcceptance, UnsignedConfigSelection,
+    AuditSinkKind, BundleStateAction, BundleStateRequest, ConfigBootError, ConfigOverrideMode,
+    ConfigProvenance, ConfigSource, PendingBundleAcceptance, UnsignedConfigSelection,
 };
 use serde_json::{json, Value};
 use serve::{serve_listener, ServeLimits};
@@ -1806,12 +1806,37 @@ fn doctor_json_report(
             .unwrap_or_default(),
         "generated_at": now_rfc3339(),
     });
+    if let Some(config) = config {
+        report["audit_shipping"] = notary_audit_shipping(config);
+    }
     if let Some(raw) = raw_config {
         report["hashes"] = json!({
             "internal_config_hash": sha256_hash(raw),
         });
     }
     report
+}
+
+/// Report the operator-declared audit shipping posture for the doctor
+/// diagnostic report. This mirrors the `posture.audit` shipping fields
+/// (`sink_type`, `shipping_target_configured`, `shipping_target`) and is
+/// derived from config via the shared classifier: it is declared state, not
+/// observed delivery health. Unmapped sink strings fall back to
+/// [`AuditSinkKind::Unknown`] rather than a silent wildcard.
+fn notary_audit_shipping(config: &StandaloneRegistryNotaryConfig) -> Value {
+    let (sink_kind, sink_type) = match config.audit.sink.as_str() {
+        "stdout" => (AuditSinkKind::Stdout, "stdout"),
+        "syslog" => (AuditSinkKind::Syslog, "syslog"),
+        "file" | "jsonl" => (AuditSinkKind::LocalFile, "file"),
+        _ => (AuditSinkKind::Unknown, "unknown"),
+    };
+    let (shipping_target_configured, shipping_target) =
+        audit_shipping_target(sink_kind, config.deployment.evidence.audit_offhost_shipping);
+    json!({
+        "sink_type": sink_type,
+        "shipping_target_configured": shipping_target_configured,
+        "shipping_target": shipping_target,
+    })
 }
 
 fn doctor_json_diagnostic(diagnostic: &Diagnostic) -> Value {
@@ -1901,7 +1926,12 @@ fn local_env_diagnostics(
             "audit hash secret",
         ));
     }
-    if matches!(config.audit.sink.as_str(), "file" | "jsonl") {
+    if matches!(config.audit.sink.as_str(), "file" | "jsonl")
+        && !config.deployment.evidence.audit_offhost_shipping
+    {
+        // Once the operator declares off-host shipping over the local file sink,
+        // the deployment gate is cleared and the declared state is visible in
+        // the report's audit_shipping section, so this warning is silenced.
         diagnostics.push(Diagnostic::warn(
             "audit file/jsonl sink is local-chain-only",
             "for beta tamper-evidence, ship audit envelopes off-host via stdout/syslog or declare deployment.evidence.audit_offhost_shipping after external shipping is in place",
@@ -4369,6 +4399,72 @@ evidence:
             .as_deref()
             .expect("warning has next action")
             .contains("off-host"));
+    }
+
+    #[test]
+    fn attested_local_file_audit_sink_suppresses_beta_tamper_evidence_warning() {
+        let mut config = doctor_live_test_config("http://127.0.0.1:1");
+        config.audit.sink = "jsonl".to_string();
+        config.deployment.evidence.audit_offhost_shipping = true;
+
+        let diagnostics = local_env_diagnostics(&config, &EnvFileReport::default());
+
+        assert!(
+            !diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.label.contains("local-chain-only")),
+            "declaring off-host shipping must silence the local-chain-only warning"
+        );
+    }
+
+    #[test]
+    fn notary_audit_shipping_reports_stdout_sink_as_shipped() {
+        let mut config = doctor_live_test_config("http://127.0.0.1:1");
+        config.audit.sink = "stdout".to_string();
+
+        let shipping = notary_audit_shipping(&config);
+
+        assert_eq!(shipping["sink_type"], "stdout");
+        assert_eq!(shipping["shipping_target_configured"], true);
+        assert_eq!(shipping["shipping_target"], "stdout");
+    }
+
+    #[test]
+    fn notary_audit_shipping_reports_local_file_sink_without_attestation_as_unshipped() {
+        let mut config = doctor_live_test_config("http://127.0.0.1:1");
+        config.audit.sink = "jsonl".to_string();
+        config.deployment.evidence.audit_offhost_shipping = false;
+
+        let shipping = notary_audit_shipping(&config);
+
+        assert_eq!(shipping["sink_type"], "file");
+        assert_eq!(shipping["shipping_target_configured"], false);
+        assert_eq!(shipping["shipping_target"], "none");
+    }
+
+    #[test]
+    fn notary_audit_shipping_reports_attested_local_file_sink_as_declared_external() {
+        let mut config = doctor_live_test_config("http://127.0.0.1:1");
+        config.audit.sink = "file".to_string();
+        config.deployment.evidence.audit_offhost_shipping = true;
+
+        let shipping = notary_audit_shipping(&config);
+
+        assert_eq!(shipping["sink_type"], "file");
+        assert_eq!(shipping["shipping_target_configured"], true);
+        assert_eq!(shipping["shipping_target"], "declared_external");
+    }
+
+    #[test]
+    fn notary_audit_shipping_maps_unrecognized_sink_to_unknown() {
+        let mut config = doctor_live_test_config("http://127.0.0.1:1");
+        config.audit.sink = "s3".to_string();
+
+        let shipping = notary_audit_shipping(&config);
+
+        assert_eq!(shipping["sink_type"], "unknown");
+        assert_eq!(shipping["shipping_target_configured"], false);
+        assert_eq!(shipping["shipping_target"], "unknown");
     }
 
     #[test]

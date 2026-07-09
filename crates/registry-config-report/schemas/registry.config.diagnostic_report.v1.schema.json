@@ -54,6 +54,9 @@
       },
       "default": []
     },
+    "audit_shipping": {
+      "$ref": "#/$defs/audit_shipping"
+    },
     "hashes": {
       "$ref": "#/$defs/hashes"
     },
@@ -337,6 +340,26 @@
         },
         "posture_safe_config_hash": {
           "$ref": "#/$defs/sha256_hash"
+        }
+      }
+    },
+    "audit_shipping": {
+      "type": "object",
+      "required": [
+        "sink_type",
+        "shipping_target_configured",
+        "shipping_target"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "sink_type": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "shipping_target_configured": {
+          "type": "boolean"
+        },
+        "shipping_target": {
+          "$ref": "#/$defs/non_empty_string"
         }
       }
     }

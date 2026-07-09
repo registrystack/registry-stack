@@ -107,6 +107,45 @@ fn product_diagnostic_schema_rejects_wrong_schema_unknown_status_and_bad_hash() 
 }
 
 #[test]
+fn product_diagnostic_schema_accepts_optional_declared_audit_shipping() {
+    // Canonical fixtures carry the declared audit shipping state the products'
+    // doctor reports emit; the strict schema accepts it.
+    let report = parse(NOTARY_DIAGNOSTIC_OK_FIXTURE_V1);
+    assert_eq!(report["audit_shipping"]["sink_type"], "file");
+    assert_eq!(report["audit_shipping"]["shipping_target_configured"], true);
+    assert_eq!(
+        report["audit_shipping"]["shipping_target"],
+        "declared_external"
+    );
+    assert_valid(PRODUCT_DIAGNOSTIC_REPORT_SCHEMA_V1, &report);
+
+    // The section is optional: a report may omit it (e.g. when config is
+    // unavailable) and still validate.
+    let mut without = report.clone();
+    without
+        .as_object_mut()
+        .expect("report object")
+        .remove("audit_shipping");
+    assert_valid(PRODUCT_DIAGNOSTIC_REPORT_SCHEMA_V1, &without);
+}
+
+#[test]
+fn product_diagnostic_schema_rejects_malformed_audit_shipping() {
+    let mut missing_field = parse(RELAY_DIAGNOSTIC_OK_FIXTURE_V1);
+    missing_field["audit_shipping"]
+        .as_object_mut()
+        .expect("audit_shipping object")
+        .remove("shipping_target");
+    assert_invalid(PRODUCT_DIAGNOSTIC_REPORT_SCHEMA_V1, &missing_field);
+
+    // Declared shipping state carries no observed-delivery health, so extra
+    // fields such as a last-success timestamp are rejected by the schema.
+    let mut unknown_field = parse(RELAY_DIAGNOSTIC_OK_FIXTURE_V1);
+    unknown_field["audit_shipping"]["last_success_at"] = json!("2026-06-20T00:00:00Z");
+    assert_invalid(PRODUCT_DIAGNOSTIC_REPORT_SCHEMA_V1, &unknown_field);
+}
+
+#[test]
 fn explanation_schema_validates_canonical_fixture() {
     assert_valid(
         CONFIG_EXPLANATION_SCHEMA_V1,

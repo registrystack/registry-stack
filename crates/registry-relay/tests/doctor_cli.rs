@@ -429,6 +429,36 @@ fn doctor_json_reports_success_and_redacts_env_file_values() {
 }
 
 #[test]
+fn doctor_json_reports_declared_audit_shipping_state() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let config_path = write_minimal_config(&tmp);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_registry-relay"))
+        .env("RUST_LOG", "off")
+        .args([
+            "doctor",
+            "--config",
+            config_path.to_str().expect("utf-8 path"),
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("doctor command runs");
+
+    assert!(
+        output.status.success(),
+        "doctor failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report = parse_stdout_json(&output.stdout);
+    assert_diagnostic_report(&report);
+    // The minimal config uses the stdout sink, which ships evidence off-host.
+    assert_eq!(report["audit_shipping"]["sink_type"], "stdout");
+    assert_eq!(report["audit_shipping"]["shipping_target_configured"], true);
+    assert_eq!(report["audit_shipping"]["shipping_target"], "stdout");
+}
+
+#[test]
 fn doctor_json_reports_config_failure_with_nonzero_exit() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let config_path = write_missing_secret_config(&tmp);

@@ -34,5 +34,10 @@
     }
   ],
   "context_constraints": [],
+  "audit_shipping": {
+    "sink_type": "file",
+    "shipping_target_configured": false,
+    "shipping_target": "none"
+  },
   "generated_at": "2026-06-20T00:00:00Z"
 }

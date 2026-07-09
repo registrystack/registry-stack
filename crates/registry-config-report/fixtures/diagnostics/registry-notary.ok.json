@@ -25,6 +25,11 @@
     }
   ],
   "context_constraints": [],
+  "audit_shipping": {
+    "sink_type": "file",
+    "shipping_target_configured": true,
+    "shipping_target": "declared_external"
+  },
   "hashes": {
     "internal_config_hash": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
     "posture_safe_config_hash": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"

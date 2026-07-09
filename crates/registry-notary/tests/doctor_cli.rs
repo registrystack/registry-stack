@@ -1194,6 +1194,101 @@ fn doctor_json_evidence_grade_source_binding_without_matching_policy_reports_onc
 }
 
 #[test]
+fn doctor_json_file_sink_without_attestation_warns_and_reports_unshipped_audit() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config = write_config_with_options(
+        &tmp,
+        TestConfigOptions {
+            durable_audit: Some(true),
+            ..TestConfigOptions::default()
+        },
+    );
+    let env_file = write_env_file(&tmp);
+
+    let output = doctor_command(&config, Some(&env_file))
+        .args(["--format", "json"])
+        .output()
+        .expect("doctor runs");
+
+    assert!(
+        output.status.success(),
+        "a local file sink without attestation should warn, not fail\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout is utf8");
+    let report: Value = serde_json::from_str(&stdout).expect("doctor emits JSON");
+    assert_product_diagnostic_report(&report);
+
+    assert_eq!(report["audit_shipping"]["sink_type"], "file");
+    assert_eq!(
+        report["audit_shipping"]["shipping_target_configured"],
+        false
+    );
+    assert_eq!(report["audit_shipping"]["shipping_target"], "none");
+
+    assert!(
+        report["diagnostics"]
+            .as_array()
+            .expect("diagnostics array")
+            .iter()
+            .any(|diagnostic| diagnostic["message"]
+                .as_str()
+                .expect("message string")
+                .contains("local-chain-only")),
+        "a local file sink without attestation must warn that audit is local-chain-only"
+    );
+}
+
+#[test]
+fn doctor_json_file_sink_with_attestation_reports_declared_external_without_warning() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config = write_config_with_options(
+        &tmp,
+        TestConfigOptions {
+            durable_audit: Some(true),
+            audit_offhost_shipping: true,
+            ..TestConfigOptions::default()
+        },
+    );
+    let env_file = write_env_file(&tmp);
+
+    let output = doctor_command(&config, Some(&env_file))
+        .args(["--format", "json"])
+        .output()
+        .expect("doctor runs");
+
+    assert!(
+        output.status.success(),
+        "a local file sink with attestation should pass doctor\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout is utf8");
+    let report: Value = serde_json::from_str(&stdout).expect("doctor emits JSON");
+    assert_product_diagnostic_report(&report);
+
+    assert_eq!(report["audit_shipping"]["sink_type"], "file");
+    assert_eq!(report["audit_shipping"]["shipping_target_configured"], true);
+    assert_eq!(
+        report["audit_shipping"]["shipping_target"],
+        "declared_external"
+    );
+
+    assert!(
+        !report["diagnostics"]
+            .as_array()
+            .expect("diagnostics array")
+            .iter()
+            .any(|diagnostic| diagnostic["message"]
+                .as_str()
+                .expect("message string")
+                .contains("local-chain-only")),
+        "declaring off-host shipping must silence the local-chain-only warning"
+    );
+}
+
+#[test]
 fn doctor_json_reports_success_as_single_redacted_document() {
     let tmp = TempDir::new().expect("tempdir");
     let config = write_config(&tmp);
