@@ -61,6 +61,11 @@ function internalRedirect(path) {
   return basePath ? `${basePath}${path}` : path;
 }
 
+/** @param {string} path */
+function currentDocsetRedirect(path) {
+  return isArchivedBuild ? `https://docs.registrystack.org${path}` : internalRedirect(path);
+}
+
 export default defineConfig({
   site: 'https://docs.registrystack.org',
   base,
@@ -124,7 +129,8 @@ export default defineConfig({
     '/projects/registry-notary/run-locally/': internalRedirect('/products/registry-notary/'),
     '/projects/registry-notary/configure-a-claim/': internalRedirect('/products/registry-notary/source-claim-modeling-guide/'),
     '/projects/registry-notary/reference/': internalRedirect('/products/registry-notary/operator-config-reference/'),
-    '/products/registry-notary/opencrvs-dci-onboarding/': 'https://docs.registrystack.org/products/registry-notary/opencrvs-onboarding/',
+    // The target exists only in the current docset; archives redirect to the latest page.
+    '/products/registry-notary/opencrvs-dci-onboarding/': currentDocsetRedirect('/products/registry-notary/opencrvs-onboarding/'),
     // registry-manifest, registry-atlas, registry-platform, registry-lab projects/*
     // redirects removed: targets are deferred from the MVP docs cut.
     '/projects/registry-lab/demo-flow/': internalRedirect('/start/quickstart/'),

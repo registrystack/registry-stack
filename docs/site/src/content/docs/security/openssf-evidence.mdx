@@ -24,7 +24,7 @@ For release signature and provenance verification commands, use
 | Are GitHub Release assets signed? | Yes, for release assets produced after keyless cosign signing landed. Each signed asset has a matching `.sig` and `.pem` file. | [`SECURITY.md`](https://github.com/registrystack/registry-stack/blob/main/SECURITY.md) and [release workflow](https://github.com/registrystack/registry-stack/blob/main/.github/workflows/release.yml) |
 | Is `v0.8.0` signed? | No. The `v0.8.0` prerelease was published before release-asset signing was added and has not been backfilled with `.sig` and `.pem` assets. | [GitHub Release assets](https://github.com/registrystack/registry-stack/releases/tag/v0.8.0) |
 | Are release Git tags signed? | Not yet. The release workflow checks source-tag consistency, but Git tag objects are not yet GPG-, SSH-, or Sigstore-signed. | [Release workflow](https://github.com/registrystack/registry-stack/blob/main/.github/workflows/release.yml) |
-| Are provenance attestations published? | Enabled for tag-triggered releases produced by the current workflow. `v0.8.3` is the first provenance-bearing root release. Existing releases produced before this workflow change, including `v0.8.2`, may not include `.intoto.jsonl` provenance assets. | [Release workflow](https://github.com/registrystack/registry-stack/blob/main/.github/workflows/release.yml) and [`release/VERIFY.md`](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md) |
+| Are provenance attestations published? | Enabled for tag-triggered releases produced by the current workflow. As of 2026-07-09, `v0.8.3` and `v0.8.4` include root release provenance; releases produced before this workflow change, including `v0.8.2`, may not include `.intoto.jsonl` provenance assets. | [Release workflow](https://github.com/registrystack/registry-stack/blob/main/.github/workflows/release.yml) and [`release/VERIFY.md`](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md) |
 
 ## Scorecard
 
@@ -84,7 +84,7 @@ legacy imported product controls.
 | Release artifacts | Checksums, image digests, image SBOMs, vulnerability scans, release capsules | Published for every GitHub Release from `v0.8.0` onward (`v0.8.1` was a release candidate with no GitHub Release); signature assets are release-workflow gated |
 | Signed releases | Keyless cosign signing for GitHub Release assets with `.sig` and `.pem` verification material | Implemented for newly produced release assets |
 | Signed version tags | Cryptographic Git tag signatures | Not implemented |
-| Provenance attestations | Release-level SLSA provenance for non-signature GitHub Release assets | Workflow enabled; v0.8.3 is the first provenance-bearing root release |
+| Provenance attestations | Release-level SLSA provenance for non-signature GitHub Release assets | Workflow enabled; as of 2026-07-09, `v0.8.3` and `v0.8.4` both include provenance |
 
 ## Legacy product controls
 

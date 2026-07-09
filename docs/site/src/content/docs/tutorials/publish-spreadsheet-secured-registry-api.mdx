@@ -43,6 +43,9 @@ registryctl --version
 If your shell cannot find `registryctl`, add the install directory printed by the installer to your
 `PATH`.
 
+Prebuilt `registryctl` assets exist for Linux x86_64, Linux arm64, and macOS arm64.
+On Intel macOS, the installer falls back to a source build, which requires a Rust toolchain.
+
 ## Create the sample project
 
 Create a project from the benefits sample:
@@ -341,6 +344,7 @@ Relay refused to start when the floor dropped under 2 on personal data.
 | `registryctl` is not found | The install directory is not on `PATH`. | Add the directory printed by the installer, usually `~/.local/bin`, to `PATH`. |
 | The installer reports an unsupported platform | No binary is published for that OS or CPU. | Install Rust with [`rustup`](https://rustup.rs), then run `cargo install --git https://github.com/registrystack/registry-stack --tag v0.8.4 registryctl --locked`. |
 | `registryctl start` cannot find Docker | Docker or another Compose provider is not installed or running. | Start Docker Desktop, OrbStack, Colima, Podman, or your supported provider, then run `registryctl start` again. |
+| Docker reports no `linux/arm64` manifest for a Registry Stack image | The v0.8.4 Relay and Notary images are published for `linux/amd64` only. | Start with `DOCKER_DEFAULT_PLATFORM=linux/amd64 registryctl start`. |
 | `registryctl start` fails and the container log shows `failed to parse config YAML ... unknown field` | The locally cached container image does not match the digest-pinned image in the generated `compose.yaml`. | Run `docker compose pull` in the project directory (on Apple silicon, prefix it with `DOCKER_DEFAULT_PLATFORM=linux/amd64`), then `registryctl start` again. |
 | `registryctl start` times out and the container log shows `missing field \`commitment\`` | registryctl v0.8.4 pins a service image older than its own generated config format ([GH#278](https://github.com/registrystack/registry-stack/issues/278)). | No local workaround reconstructs the value; track [GH#278](https://github.com/registrystack/registry-stack/issues/278) for the re-pinned image, or pin the project's `compose.yaml` images to the matching release tag: replace `ghcr.io/registrystack/registry-relay@sha256:<digest>` with `ghcr.io/registrystack/registry-relay:v0.8.4` (same pattern for `registry-notary`), then run `docker compose pull`. |
 | `registryctl start` fails with `Relay did not become healthy and ready before timeout` after a config edit | The edited `relay/config.yaml` fails validation, so the container exits at startup. | Run `registryctl logs`, fix the field named in the `ERROR` line, then run `registryctl stop` and `registryctl start` again. |

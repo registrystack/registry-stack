@@ -30,7 +30,7 @@ For the full walkthroughs, use the Registry Docs tutorials:
 
 - [Publish a spreadsheet as a secured registry API](https://docs.registrystack.org/tutorials/publish-spreadsheet-secured-registry-api/)
 - [Verify a claim from your registry API](https://docs.registrystack.org/tutorials/verify-claim-registry-api/)
-- [Verify a claim from your own API](https://docs.registrystack.org/tutorials/verify-claim-own-api/)
+- [Connect Notary to a Registry Data API source](https://docs.registrystack.org/tutorials/run-notary-standalone-for-api/)
 
 To scaffold a standalone Notary project for an existing FHIR source-adapter
 sidecar:
@@ -54,6 +54,7 @@ REGISTRYCTL_VERSION=vX.Y.Z curl -fsSL https://raw.githubusercontent.com/registry
 Prebuilt binaries are published for the `v0.8.4` stack release on Linux x86_64,
 Linux arm64, and macOS arm64. On other platforms, install from source with
 `cargo install --git https://github.com/registrystack/registry-stack --tag v0.8.4 registryctl --locked`.
+Intel macOS has no prebuilt binary for `v0.8.4`, so the installer uses that source-build path.
 
 ## Update checks
 
@@ -124,8 +125,8 @@ shared crates have fresh release tags.
 
 ## End-to-end smoke
 
-The generated project uses the public Relay image published from current main:
-`ghcr.io/registrystack/registry-relay:snapshot`. With Docker Compose available, run:
+The generated project uses the digest-pinned Registry Relay image recorded in the registryctl
+templates, not a floating image tag. With Docker Compose available, run:
 
 ```sh
 tmpdir="$(mktemp -d)"
