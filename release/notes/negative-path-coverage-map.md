@@ -120,16 +120,25 @@ public evidence or disposition.
   Public anchor: internal checklist only.
   Disposition: deferred to a maintainer-owned follow-up bundle;
   public scenario detail remains intentionally omitted.
-- `NP-19`: Partial.
+- `NP-19`: Covered.
   Public anchors:
   `crates/registry-notary-server/src/api.rs::issue_credential_rejects_purpose_mismatch`
-  and `crates/registry-notary-server/src/api.rs`.
-  Disposition: side-effect coverage now asserts a purpose mismatch is denied
-  before credential signing; denial-audit parity remains to be closed or
-  deferred.
-- `NP-20`: Partial.
-  Public anchor: `crates/registry-platform-sdjwt/src/lib.rs`.
-  Disposition: product-level audit coverage remains to be closed or deferred.
+  `crates/registry-notary-server/src/api.rs::credential_denial_response_for_evaluation`,
+  and `crates/registry-notary-server/tests/standalone_http.rs::direct_credential_purpose_mismatch_denial_is_audited_and_redacted`.
+  Disposition: purpose mismatch is denied before credential signing, and the
+  direct `/v1/credentials` product route now returns a stable problem response,
+  emits a redacted `credential_denied` audit record with self-attestation access
+  mode and hashed identifiers, and produces no `credential_issued` event.
+- `NP-20`: Covered.
+  Public anchors: `crates/registry-platform-sdjwt/src/lib.rs`,
+  `crates/registry-notary-server/src/api.rs::validate_holder_proof_payload`,
+  `crates/registry-notary-server/src/api.rs::credential_denial_response_for_evaluation`,
+  and `crates/registry-notary-server/tests/standalone_http.rs::strict_credentials_issue_rejects_oid4vci_proof_at_http_boundary`.
+  Disposition: platform holder-proof validation and the direct
+  `/v1/credentials` product route both reject the wrong proof class, return the
+  stable `credential.holder_proof_required` problem, emit a redacted
+  `credential_denied` audit record with profile and holder-binding metadata,
+  and return no credential material.
 - `NP-21`: Covered.
   Public anchors: `crates/registry-notary-server/src/api.rs` and
   `crates/registry-platform-sdjwt/src/lib.rs`.
@@ -149,10 +158,15 @@ public evidence or disposition.
   `crates/registry-platform-sts/src/lib.rs::exchange_rejects_invalid_subject_token_before_mint_audit`,
   `crates/registry-platform-sts/src/lib.rs::exchange_rejects_missing_sender_constraint_before_mint_audit`,
   `crates/registry-platform-sts/src/lib.rs::exchange_rejects_session_binding_mismatch_before_mint_audit`,
-  and `crates/registry-platform-sts/src/lib.rs`.
+  `crates/registry-platform-sts/src/lib.rs::http_token_endpoint_rejects_missing_session_binding`,
+  `crates/registry-platform-sts/src/lib.rs::StsAuditSink`,
+  and `crates/registry-platform-sts/src/bin/registry-platform-sts.rs`.
   Disposition: STS negative exchange tests now pin no-mint behavior for the
-  mapped request-shape and binding denials; product-route response and
-  denial-audit parity remain to be closed or deferred.
+  mapped request-shape and binding denials, and the HTTP token endpoint has
+  response-shape coverage for a binding denial. The remaining blocker is
+  denial-audit parity: the public STS audit interface currently records
+  token-mint events only, so closing this row requires a maintainer decision to
+  add a denial audit event or approve deferral.
 - `NP-24`: Partial.
   Public anchors:
   `crates/registry-notary-server/src/standalone.rs::source_json_reader_rejects_oversized_body`,
@@ -173,19 +187,37 @@ public evidence or disposition.
   `crates/registry-notary-server/tests/standalone_http.rs`.
   Disposition: verify against the post-#314 signed-bundle surface before
   release sign-off.
-- `NP-27`: Partial.
-  Public anchors: `crates/registry-notary-server/src/runtime.rs` and
-  `crates/registry-notary-server/src/api.rs`.
-  Disposition: keep open for focused route, no-source-read, and audit parity.
+- `NP-27`: Covered.
+  Public anchors:
+  `crates/registry-notary-server/src/runtime.rs::evaluate_denies_missing_scope_before_reading_source`,
+  `crates/registry-notary-server/src/api.rs::pdp_pre_source_denial_audit_records_zero_source_and_no_forward`,
+  and `crates/registry-notary-server/tests/standalone_http.rs::evaluate_policy_denial_records_zero_source_and_redacted_audit`.
+  Disposition: the direct runtime path, API audit helper, and standalone
+  `/v1/evaluations` product route now cover pre-source denial, stable PDP
+  problem shape, zero upstream source reads, `source_read_count = 0`,
+  `forwarded = false`, and response/audit redaction.
 - `NP-28`: Partial.
   Public anchors: `crates/registry-notary-server/src/api.rs` and
   `crates/registry-notary-server/src/runtime.rs`.
-  Disposition: focused denial and audit coverage remains to be added or
-  deferred.
+  Disposition: selected credential denials now have product-surface
+  `credential_denied` audit coverage through NP-19 and NP-20, and existing API
+  tests cover selected OID4VCI token and nonce side effects. This row remains
+  Partial because other direct credential early-denial paths still need complete
+  audit-parity coverage or an explicit maintainer-approved deferral.
 - `NP-29`: Partial.
-  Public anchors: `crates/registry-notary-server/tests/standalone_http.rs` and
-  `crates/registry-notary-server/src/federation/mod.rs`.
-  Disposition: keep open for complete product-surface parity.
+  Public anchors:
+  `crates/registry-notary-server/tests/standalone_http.rs::federation_evaluation_returns_signed_response_and_rejects_replay`,
+  `crates/registry-notary-server/tests/standalone_http.rs::federation_auth_exempt_route_still_requires_valid_jws`,
+  `crates/registry-notary-server/tests/standalone_http.rs::federation_denial_happens_before_source_read`,
+  `crates/registry-notary-server/tests/standalone_http.rs::federation_stale_source_observation_returns_signed_evaluation_error`,
+  and `crates/registry-notary-server/src/federation/audit.rs::federation_audit_event`.
+  Disposition: federation coverage already exercises disabled-route behavior,
+  invalid JWS denial, replay denial, no-source-read denials, and signed stale
+  source errors with audit redaction. The remaining blocker is complete
+  denied-audit context parity for post-verification federation denials; current
+  denied outcomes do not carry every peer/profile/purpose/JTI/subject hash field
+  that success and signed-error outcomes can carry, so this needs maintainer
+  decision or explicit deferral before release sign-off.
 
 ## Release Decision
 
