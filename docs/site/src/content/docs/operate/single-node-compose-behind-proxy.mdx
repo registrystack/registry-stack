@@ -106,6 +106,16 @@ services:
 
 When the reverse proxy runs on another host in a private subnet, bind the VM's private address
 instead of `127.0.0.1` and block direct public access to those ports at the firewall.
+Also edit `registryctl.yaml` so local probes use the private address from the host where you run
+`registryctl restart`, `registryctl smoke`, and `registryctl notary smoke`:
+
+```yaml
+runtime:
+  relay_base_url: http://10.0.0.5:4242
+  notary_base_url: http://10.0.0.5:4255
+```
+
+Keep the generated loopback URLs when the proxy and `registryctl` run on the same VM.
 Do not publish product admin, metrics, posture, or reload routes through the public edge.
 If Relay uses `server.admin_bind`, keep that listener on loopback or a private operations
 network.

@@ -2070,6 +2070,7 @@ fn add_notary_from_local_relay(project_dir: &Path, force: bool) -> Result<()> {
     create_relay_state_dirs(project_dir)?;
     create_notary_state_dirs(project_dir)?;
     write_compose_runtime_env(project_dir)?;
+    ensure_gitignore_entries(project_dir, &[".env", "state/"])?;
     let notary_credentials = NotaryLocalCredentials::generate(relay_row_reader.to_string())?;
     write_text(
         notary_config_path,
@@ -2134,6 +2135,33 @@ fn write_compose_runtime_env(dir: &Path) -> Result<()> {
         )
     };
     write_text(path, &body)
+}
+
+fn ensure_gitignore_entries(dir: &Path, entries: &[&str]) -> Result<()> {
+    let path = dir.join(".gitignore");
+    let mut contents = if path.exists() {
+        fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?
+    } else {
+        String::new()
+    };
+
+    let missing: Vec<&str> = entries
+        .iter()
+        .copied()
+        .filter(|entry| !contents.lines().any(|line| line.trim() == *entry))
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    if !contents.is_empty() && !contents.ends_with('\n') {
+        contents.push('\n');
+    }
+    for entry in missing {
+        contents.push_str(entry);
+        contents.push('\n');
+    }
+    write_text(path, &contents)
 }
 
 fn compose_runtime_env_values(dir: &Path) -> Result<Vec<(String, String)>> {
@@ -6509,6 +6537,7 @@ workflows:
         init_spreadsheet_api(&project, Sample::Benefits).unwrap();
         fs::remove_dir_all(project.join("state")).unwrap();
         fs::remove_file(project.join(".env")).unwrap();
+        fs::write(project.join(".gitignore"), "secrets/\ncustom-output/\n").unwrap();
 
         add_notary(&project, NotarySource::LocalRelay, false).unwrap();
 
@@ -6535,6 +6564,11 @@ workflows:
             ],
         );
         assert_runtime_env_matches_project_owner(&project);
+        let gitignore = fs::read_to_string(project.join(".gitignore")).unwrap();
+        assert!(gitignore.lines().any(|line| line == "secrets/"));
+        assert!(gitignore.lines().any(|line| line == "custom-output/"));
+        assert!(gitignore.lines().any(|line| line == ".env"));
+        assert!(gitignore.lines().any(|line| line == "state/"));
 
         let compose = fs::read_to_string(project.join("compose.yaml")).unwrap();
         assert!(compose.contains("./state/relay/cache:/var/lib/registry-relay/cache"));
