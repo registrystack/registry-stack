@@ -28,7 +28,7 @@ product type.
 
 ## Running locally
 
-```
+```bash
 cargo +nightly fuzz run --fuzz-dir fuzz <target> -- -max_total_time=60 -rss_limit_mb=1024
 ```
 
