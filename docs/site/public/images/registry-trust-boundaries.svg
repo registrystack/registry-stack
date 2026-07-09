@@ -185,7 +185,7 @@
 
   <!-- Footnote: the unauthenticated surface at the service edge -->
   <line x1="0" y1="548" x2="720" y2="548" stroke="#e5e5e5" stroke-width="1"/>
-  <text x="16" y="566" class="foot">Unauthenticated at the service edge: liveness and readiness probes · public verification keys (JWKS /</text>
-  <text x="16" y="580" class="foot">did:web) · credential-issuer discovery · OID4VCI wallet-flow endpoints · docs · public credential-status</text>
+  <text x="16" y="566" class="foot">Unauthenticated at the service edge: liveness and readiness probes · issuer JWKS public verification keys ·</text>
+  <text x="16" y="580" class="foot">credential-issuer discovery · OID4VCI wallet-flow endpoints · docs · public credential-status</text>
   <text x="16" y="594" class="foot">reads · credential type metadata.</text>
 </svg>
