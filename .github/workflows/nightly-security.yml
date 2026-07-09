@@ -184,16 +184,22 @@ jobs:
         with:
           tool: cargo-fuzz@${{ env.CARGO_FUZZ_VERSION }}
 
-      - name: Run request parser fuzz smoke
+      - name: Run notary fuzz smoke
         working-directory: products/notary
         run: |
           set -euo pipefail
-          mkdir -p fuzz/artifacts/core_request_bodies
-          cargo +nightly fuzz run --fuzz-dir fuzz --target x86_64-unknown-linux-gnu core_request_bodies -- \
-            -max_total_time=120 \
-            -rss_limit_mb=1024 \
-            -artifact_prefix=fuzz/artifacts/core_request_bodies/ \
-            -print_final_stats=1
+          for target in \
+            core_request_bodies \
+            rhai_source_adapter \
+            sidecar_config_manifest
+          do
+            mkdir -p "fuzz/artifacts/${target}"
+            cargo +nightly fuzz run --fuzz-dir fuzz --target x86_64-unknown-linux-gnu "${target}" -- \
+              -max_total_time=60 \
+              -rss_limit_mb=1024 \
+              -artifact_prefix="fuzz/artifacts/${target}/" \
+              -print_final_stats=1
+          done
 
       - name: Upload notary fuzz artifacts
         if: failure()
@@ -237,7 +243,8 @@ jobs:
             authcommon_parsers \
             oid4vci_request_and_proof \
             sdjwt_holder_proof \
-            sdjwt_issuance
+            sdjwt_issuance \
+            sts_subject_token
           do
             mkdir -p "fuzz/artifacts/${target}"
             cargo +nightly fuzz run --fuzz-dir fuzz --target x86_64-unknown-linux-gnu "${target}" -- \

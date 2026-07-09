@@ -41,13 +41,16 @@ excludes libFuzzer's generated 40-hex-character corpus entries; if a
 generated input is worth keeping permanently, copy it into the seed corpus
 under a descriptive name instead of committing the raw generated filename.
 
-## Proposed CI wiring (not yet implemented)
+## CI wiring
 
-No CI job runs these targets beyond ad hoc local proving runs. Issue #26
-tracks a crash/corpus regression pattern (persisted corpus plus
-previous-crash replay) that hasn't landed yet; adding a CI job ahead of that
-pattern would give a false sense of regression coverage without one. Once #26
-lands, the intended shape is:
+`.github/workflows/nightly-security.yml` runs a smoke pass for every committed
+target when the nightly security workflow runs. The job uses the nightly
+toolchain, `cargo-fuzz` 0.13.2, `-max_total_time=60`, `-rss_limit_mb=1024`, and
+uploads `fuzz/artifacts/` on failure.
+
+Issue #26 tracks the fuller crash/corpus regression pattern (persisted corpus
+plus previous-crash replay) for the manifest fuzz work and shared CI shape. Once
+that pattern lands, the intended shape is:
 
 - **Per-PR smoke** (fast, required): for each target,
   `cargo +nightly fuzz run --fuzz-dir fuzz <target> -- -max_total_time=60 -rss_limit_mb=1024`
@@ -61,7 +64,6 @@ lands, the intended shape is:
   crash in these boundaries may be a security finding and should route
   through `SECURITY.md` like any other suspected vulnerability.
 
-This mirrors the existing `.github/workflows/nightly-security.yml`
-`notary-fuzz` job's invocation shape (nightly toolchain, `cargo-fuzz` 0.13.2,
-`-rss_limit_mb=1024`, `-print_final_stats=1`), extended with corpus
-persistence and crash-artifact upload once the regression pattern exists.
+The nightly smoke is not a replacement for the persisted-corpus regression
+track; it proves the committed targets and corpora keep building and do not
+crash immediately.
