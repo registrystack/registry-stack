@@ -7,8 +7,11 @@ services:
     ports:
       - "4242:8080"
     volumes:
-      - ./relay/config.yaml:/etc/registry-relay/config.yaml:ro
+      - ./relay:/etc/registry-relay:ro
       - ./data:/var/lib/registry-relay/data:ro
+      - ./state/relay/cache:/var/lib/registry-relay/cache
+      - ./state/relay/config-state:/var/lib/registry-relay/config-state
+      - ./state/relay/audit:/var/log/registry-relay
 
   registry-notary:
     image: ghcr.io/registrystack/registry-notary@sha256:338d3ac7ddbea55f6e76014b9c23e4ff4e7206c2c40e356452288de06a745ff3
@@ -17,10 +20,18 @@ services:
     ports:
       - "4255:8080"
     volumes:
-      - ./notary/config.yaml:/etc/registry-notary/config.yaml:ro
+      - ./notary:/etc/registry-notary:ro
+      - ./state/notary/config-state:/var/lib/registry-notary/config-state
+      - ./state/notary/audit:/var/log/registry-notary
     command:
       - --config
       - /etc/registry-notary/config.yaml
 
   registry-notary-redis:
     image: {{notary_redis_image}}
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - registry-notary-redis-data:/data
+
+volumes:
+  registry-notary-redis-data:

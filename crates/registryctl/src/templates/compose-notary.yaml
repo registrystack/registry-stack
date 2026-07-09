@@ -9,7 +9,9 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - ./notary/config.yaml:/etc/registry-notary/config.yaml:ro
+      - ./notary:/etc/registry-notary:ro
+      - ./state/notary/config-state:/var/lib/registry-notary/config-state
+      - ./state/notary/audit:/var/log/registry-notary
     command:
       - --config
       - /etc/registry-notary/config.yaml
@@ -17,4 +19,10 @@ services:
 
   registry-notary-redis:
     image: {{notary_redis_image}}
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - registry-notary-redis-data:/data
 {{source_networks}}
+
+volumes:
+  registry-notary-redis-data:

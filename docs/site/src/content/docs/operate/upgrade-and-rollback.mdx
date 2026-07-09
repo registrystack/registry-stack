@@ -35,7 +35,9 @@ sequence. The [revert section](#roll-back-to-the-previous-release) covers this.
 - You know where your deployment keeps its persistent state. At minimum: the audit log
   directory of each product, the anti-rollback state file if `config_trust` is enabled
   (`antirollback_state_path`), the Redis instance backing replay and nonce state for
-  Registry Notary, and your config files and secrets.
+  Registry Notary, and your config files and secrets. For generated and single-node
+  Compose deployments, follow [Back up and restore a deployment](../backup-and-restore/)
+  before changing the running containers.
 - You can run the release-verification steps in
   [SECURITY.md](https://github.com/registrystack/registry-stack/blob/v0.8.4/SECURITY.md)
   (cosign, and slsa-verifier for releases with provenance).
@@ -63,9 +65,10 @@ sequence. The [revert section](#roll-back-to-the-previous-release) covers this.
    `explain-config` to confirm the resolved configuration and required environment variables
    match your expectation.
 
-4. Back up state that a failed upgrade must not lose: the audit log directory (copy, never
-   truncate or edit; the hash chain makes hand-edited files unverifiable), the anti-rollback
-   state file, and your config and secrets as currently deployed.
+4. Back up state that a failed upgrade must not lose: `secrets/local.env`, the audit log
+   directory (copy, never truncate or edit; the hash chain makes hand-edited files
+   unverifiable), the anti-rollback state file, Redis replay and nonce state, and your
+   config and source files as currently deployed.
 
 5. Deploy the new release alongside or in place of the old one, per your orchestration.
    Keep the old release's binary or image reference and config available until the soak
@@ -140,5 +143,6 @@ If the new release misbehaves and the cause is not a config error you can fix fo
 ## Next
 
 - [API stability and versioning](../../reference/api-stability/)
+- [Back up and restore a deployment](../backup-and-restore/)
 - [Security support window](../../security/support-window/)
 - [Report a vulnerability](../../security/report-a-vulnerability/)
