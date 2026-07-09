@@ -14,6 +14,15 @@ are checking.
 Repeatable build evidence for the `v0.8.3` Linux amd64 binary assets is
 documented in [`release/REPEATABLE-BUILDS.md`](REPEATABLE-BUILDS.md).
 
+## Install Verification Tools
+
+The commands below use the GitHub CLI, cosign, and `slsa-verifier`.
+Install `slsa-verifier` from the upstream
+[`slsa-framework/slsa-verifier` releases](https://github.com/slsa-framework/slsa-verifier/releases).
+For repeatable evidence, pin and record the verifier version you used. As of
+2026-07-09, the current upstream release is
+[`v2.7.1`](https://github.com/slsa-framework/slsa-verifier/releases/tag/v2.7.1).
+
 ## Download Assets
 
 ```bash

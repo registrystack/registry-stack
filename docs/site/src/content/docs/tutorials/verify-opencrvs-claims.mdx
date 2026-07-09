@@ -41,6 +41,11 @@ curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/v0.8.4
 registryctl --version
 ```
 
+The quick installer verifies the downloaded binary against `SHA256SUMS` only.
+It does not verify cosign signatures or SLSA provenance; use
+[`release/VERIFY.md`](https://github.com/registrystack/registry-stack/blob/v0.8.4/release/VERIFY.md)
+for release authenticity checks.
+
 ## Generate the Notary project
 
 Generate the project with the OpenCRVS DCI (Digital Convergence Initiative) source kind and the known test UIN:

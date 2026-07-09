@@ -10,6 +10,10 @@ usage() {
 	cat <<'EOF'
 Install registryctl.
 
+The installer verifies the downloaded binary against SHA256SUMS only. It does
+not verify cosign signatures or SLSA provenance; use release/VERIFY.md for
+release authenticity checks.
+
 Environment:
   REGISTRYCTL_VERSION      Pinned release tag to install. Defaults to v0.8.4.
   REGISTRYCTL_INSTALL_DIR  Install directory. Defaults to ~/.local/bin.
@@ -67,6 +71,7 @@ source_hint() {
 
 asset="registryctl-${version}-${os_label}-${arch_label}"
 base_url="https://github.com/${repo}/releases/download/${version}"
+verify_url="https://github.com/${repo}/blob/${version}/release/VERIFY.md"
 tmpdir="$(mktemp -d 2>/dev/null || mktemp -d -t registryctl)"
 
 cleanup() {
@@ -115,6 +120,14 @@ if [ "$actual_hash" != "$expected_hash" ]; then
 	echo "Actual:   $actual_hash" >&2
 	exit 1
 fi
+
+cat <<EOF
+Integrity check passed: $asset matched SHA256SUMS.
+Authenticity check not performed by this installer. To verify cosign signatures
+and SLSA provenance, follow:
+  $verify_url
+
+EOF
 
 mkdir -p "$install_dir"
 cp "$tmpdir/$asset" "$install_dir/registryctl"
