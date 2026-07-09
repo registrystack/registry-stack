@@ -14,6 +14,7 @@ repos:
         label: Registry Relay
         nav_order: 0
         doc_type: explanation
+        standards_referenced: [openapi, ogc-api-records, ogc-api-features, ogc-api-edr, odrl, sp-dci]
         description: Operator and adopter documentation for Registry Relay.
       - src: crates/registry-relay/docs/client-integration.md
         archive_src: docs/client-integration.md
@@ -21,35 +22,41 @@ repos:
         label: Client integration
         nav_order: 20
         doc_type: how-to
+        standards_referenced: [openapi, sdmx, w3c-did]
       - src: crates/registry-relay/docs/configuration.md
         archive_src: docs/configuration.md
         dest: products/registry-relay/configuration
         label: Configuration
         nav_order: 30
         doc_type: reference
+        standards_referenced: [openapi, ogc-api-features, odrl, sp-dci, w3c-did]
       - src: crates/registry-relay/docs/api.md
         dest: products/registry-relay/api
         label: API guide
         nav_order: 25
         doc_type: reference
+        standards_referenced: [dcat, ogc-api-records, ogc-api-features, ogc-api-edr, openapi, shacl, json-schema, sdmx, sp-dci, w3c-did]
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
       - src: crates/registry-relay/docs/metadata.md
         dest: products/registry-relay/metadata
         label: Portable metadata
         nav_order: 35
         doc_type: reference
+        standards_referenced: [dcat, bregdcat-ap, cpsv-ap, ogc-api-records, shacl, json-schema, json-ld, odrl, sp-dci, w3c-did]
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
       - src: crates/registry-relay/docs/ops.md
         dest: products/registry-relay/ops
         label: Operations runbook
         nav_order: 40
         doc_type: how-to
+        standards_referenced: [dcat, ogc-api-edr, sp-dci, w3c-did]
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
       - src: crates/registry-relay/docs/provenance.md
         dest: products/registry-relay/provenance
         label: Credential issuance migration
         nav_order: 45
         doc_type: how-to
+        standards_referenced: [json-ld, w3c-did]
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
       - src: crates/registry-relay/docs/openfn-relay-adaptor-guide.md
         dest: products/registry-relay/openfn-relay-adaptor-guide
@@ -62,6 +69,7 @@ repos:
         label: Standards adapter operator guide
         nav_order: 55
         doc_type: how-to
+        standards_referenced: [ogc-api-records, ogc-api-features, ogc-api-edr, sp-dci]
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
       - src: crates/registry-relay/docs/xlsx-readiness-contract.md
         dest: products/registry-relay/xlsx-readiness-contract
@@ -74,18 +82,21 @@ repos:
         label: Standards assumptions
         nav_order: 65
         doc_type: explanation
+        standards_referenced: [dcat, bregdcat-ap, cpsv-ap, ogc-api-records, shacl, json-schema, odrl, sp-dci, w3c-did]
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
       - src: crates/registry-relay/docs/relay-scenario-catalog.md
         dest: products/registry-relay/relay-scenario-catalog
         label: Relay scenario catalog
         nav_order: 70
         doc_type: explanation
+        standards_referenced: [dcat, ogc-api-records, ogc-api-features, openapi, shacl, sp-dci]
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
       - src: crates/registry-relay/docs/release-notes.md
         dest: products/registry-relay/release-notes
         label: Release notes
         nav_order: 80
         doc_type: reference
+        standards_referenced: [dcat, ogc-api-edr, openapi, shacl, json-ld, sdmx, sp-dci, w3c-did]
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
   registry-notary:
     remote: https://github.com/registrystack/registry-stack
@@ -102,6 +113,7 @@ repos:
         label: Registry Notary
         nav_order: 0
         doc_type: explanation
+        standards_referenced: [sd-jwt-vc, oid4vci, fhir-r4]
         description: Integrator and operator documentation for Registry Notary.
       - src: products/notary/docs/architecture-overview.md
         archive_src: docs/architecture-overview.md
@@ -109,125 +121,146 @@ repos:
         label: Notary architecture
         nav_order: 10
         doc_type: explanation
+        standards_referenced: [sd-jwt-vc, oid4vci, w3c-did]
       - src: products/notary/docs/client-sdk-guide.md
         archive_src: docs/client-sdk-guide.md
         dest: products/registry-notary/client-sdk-guide
         label: Client SDK guide
         nav_order: 40
         doc_type: how-to
+        standards_referenced: [sd-jwt-vc, oid4vci, w3c-did]
       - src: products/notary/docs/identity-and-record-matching.md
         archive_src: docs/identity-and-record-matching.md
         dest: products/registry-notary/identity-and-record-matching
         label: Identity and record matching
         nav_order: 50
         doc_type: explanation
+        standards_referenced: [sd-jwt-vc, verifiable-credentials, w3c-did]
       - src: products/notary/docs/source-claim-modeling-guide.md
         archive_src: docs/source-claim-modeling-guide.md
         dest: products/registry-notary/source-claim-modeling-guide
         label: Source and claim modeling
         nav_order: 60
         doc_type: how-to
+        standards_referenced: [sd-jwt-vc]
       - src: products/notary/docs/operator-config-reference.md
         archive_src: docs/operator-config-reference.md
         dest: products/registry-notary/operator-config-reference
         label: Operator configuration reference
         nav_order: 70
         doc_type: reference
+        standards_referenced: [openapi, sd-jwt-vc, sp-dci, oid4vci, w3c-did, fhir-r4]
       - src: products/notary/docs/credential-lifecycle-status.md
         archive_src: docs/credential-lifecycle-status.md
         dest: products/registry-notary/credential-lifecycle-status
         label: Credential lifecycle and status
         nav_order: 80
         doc_type: how-to
+        standards_referenced: [sd-jwt-vc, w3c-did]
       - src: products/notary/docs/signing-key-provider.md
         archive_src: docs/signing-key-provider.md
         dest: products/registry-notary/signing-key-provider
         label: Signing key provider
         nav_order: 90
         doc_type: how-to
+        standards_referenced: [sd-jwt-vc, w3c-did]
       - src: products/notary/docs/sd-jwt-vc-conformance-profile.md
         archive_src: docs/sd-jwt-vc-conformance-profile.md
         dest: products/registry-notary/sd-jwt-vc-conformance-profile
         label: SD-JWT VC conformance profile
         nav_order: 130
         doc_type: reference
+        standards_referenced: [json-ld, sd-jwt-vc, verifiable-credentials, oid4vci, w3c-did]
       - src: products/notary/docs/notary-capability-matrix.md
         dest: products/registry-notary/notary-capability-matrix
         label: Capability matrix
         nav_order: 15
         doc_type: explanation
+        standards_referenced: [sd-jwt-vc, w3c-did]
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
       - src: products/notary/docs/notary-scenario-patterns.md
         dest: products/registry-notary/notary-scenario-patterns
         label: Scenario patterns
         nav_order: 20
         doc_type: explanation
+        standards_referenced: [sd-jwt-vc, w3c-did]
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
       - src: products/notary/docs/fhir-source-adapter-guide.md
         dest: products/registry-notary/fhir-source-adapter-guide
         label: FHIR source adapter
         nav_order: 62
         doc_type: how-to
+        standards_referenced: [fhir-r4, prov-o]
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
       - src: products/notary/docs/script-rhai-source-adapter-guide.md
         dest: products/registry-notary/script-rhai-source-adapter-guide
         label: Script and Rhai source adapters
         nav_order: 64
         doc_type: how-to
+        standards_referenced: [openapi, fhir-r4]
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
       - src: products/notary/docs/opencrvs-onboarding.md
         dest: products/registry-notary/opencrvs-onboarding
         label: OpenCRVS onboarding
         nav_order: 66
         doc_type: explanation
+        standards_referenced: [sd-jwt-vc, w3c-did]
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
       - src: products/notary/docs/opencrvs-dci-standalone-tutorial.md
         dest: products/registry-notary/opencrvs-dci-standalone-tutorial
         label: OpenCRVS DCI standalone tutorial
         nav_order: 68
         doc_type: tutorial
+        standards_referenced: [sd-jwt-vc, verifiable-credentials, w3c-did]
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
       - src: products/notary/docs/federated-evaluation-operator-guide.md
         dest: products/registry-notary/federated-evaluation-operator-guide
         label: Federated evaluation operator guide
         nav_order: 72
         doc_type: how-to
+        standards_referenced: [w3c-did]
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
       - src: products/notary/docs/self-attestation-operator-guide.md
         dest: products/registry-notary/self-attestation-operator-guide
         label: Self-attestation operator guide
         nav_order: 75
         doc_type: how-to
+        standards_referenced: [oid4vci, w3c-did]
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
       - src: products/notary/docs/sidecar-trust-and-secrets.md
         dest: products/registry-notary/sidecar-trust-and-secrets
         label: Sidecar trust and secrets
         nav_order: 85
         doc_type: explanation
+        standards_referenced: [sd-jwt-vc, fhir-r4]
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
       - src: products/notary/docs/deployment-hardening-runbook.md
         dest: products/registry-notary/deployment-hardening-runbook
         label: Deployment hardening runbook
         nav_order: 95
         doc_type: how-to
+        standards_referenced: [sd-jwt-vc, oid4vci, w3c-did]
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
       - src: products/notary/docs/api-reference.md
         dest: products/registry-notary/api-reference
         label: API reference
         nav_order: 100
         doc_type: reference
+        standards_referenced: [openapi, sd-jwt-vc, cccev, oid4vci, w3c-did]
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
       - src: products/notary/docs/oid4vci-wallet-interop.md
         dest: products/registry-notary/oid4vci-wallet-interop
         label: OID4VCI wallet interop
         nav_order: 110
         doc_type: how-to
+        standards_referenced: [sd-jwt-vc, oid4vci, w3c-did]
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
       - src: products/notary/docs/release-notes.md
         dest: products/registry-notary/release-notes
         label: Release notes
         nav_order: 140
         doc_type: reference
+        standards_referenced: [openapi, sd-jwt-vc, oid4vci]
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
   registry-manifest:
     remote: https://github.com/registrystack/registry-stack
@@ -242,6 +275,7 @@ repos:
         label: Registry Manifest
         nav_order: 0
         doc_type: explanation
+        standards_referenced: [dcat, bregdcat-ap, cpsv-ap, ogc-api-records, shacl, skos, json-schema, json-ld, odrl, sp-dci, w3c-did, prov-o, govstack-digital-registries]
         description: Operator and integrator documentation for Registry Manifest.
       - src: products/manifest/docs/validate-and-render.md
         archive_src: docs/validate-and-render.md
@@ -249,21 +283,25 @@ repos:
         label: Validate and render a manifest
         nav_order: 10
         doc_type: how-to
+        standards_referenced: [dcat, bregdcat-ap, cpsv-ap, ogc-api-records, shacl, skos, json-schema, json-ld, odrl]
       - src: products/manifest/docs/profile-fixtures.md
         archive_src: docs/profile-fixtures.md
         dest: products/registry-manifest/profile-fixtures
         label: Validate against profile fixtures
         nav_order: 20
         doc_type: how-to
+        standards_referenced: [sp-dci]
       - src: products/manifest/docs/reference.md
         archive_src: docs/reference.md
         dest: products/registry-manifest/reference
         label: Reference
         nav_order: 30
         doc_type: reference
+        standards_referenced: [dcat, bregdcat-ap, cpsv-ap, ogc-api-records, shacl, skos, json-schema, json-ld, cccev, odrl, w3c-did]
       - src: products/manifest/docs/itb-semic-validation.md
         dest: products/registry-manifest/itb-semic-validation
         label: ITB and SEMIC validation
         nav_order: 25
         doc_type: how-to
+        standards_referenced: [dcat, bregdcat-ap, shacl, json-schema, json-ld]
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]

@@ -6,7 +6,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { stripPageTypeBanner } from './sync-repo-docs.mjs';
+import {
+  frontmatterBlock,
+  stripPageTypeBanner,
+  validateStandardsReferenced,
+} from './sync-repo-docs.mjs';
 
 test('strips a leading Page-type banner and its trailing blank line', () => {
   const md = [
@@ -35,4 +39,41 @@ test('leaves an ordinary leading blockquote intact', () => {
 test('returns content unchanged when there is no banner', () => {
   const md = '# Title\n\nBody paragraph.';
   assert.equal(stripPageTypeBanner(md), md);
+});
+
+test('validates standards_referenced ids against the standards register', () => {
+  const known = new Set(['openapi', 'sd-jwt-vc']);
+  assert.deepEqual(
+    validateStandardsReferenced(['openapi', 'sd-jwt-vc'], 'registry-notary: docs/api.md', known),
+    ['openapi', 'sd-jwt-vc'],
+  );
+});
+
+test('rejects unknown standards_referenced ids', () => {
+  const known = new Set(['openapi']);
+  assert.throws(
+    () => validateStandardsReferenced(['missing'], 'registry-relay: docs/api.md', known),
+    /missing.*not in src\/data\/standards.yaml/,
+  );
+});
+
+test('rejects duplicate standards_referenced ids', () => {
+  const known = new Set(['openapi']);
+  assert.throws(
+    () => validateStandardsReferenced(['openapi', 'openapi'], 'registry-relay: docs/api.md', known),
+    /duplicated/,
+  );
+});
+
+test('writes standards_referenced into generated frontmatter', () => {
+  const fm = frontmatterBlock({
+    title: 'API guide',
+    description: 'Registry Relay API guide.',
+    owner: 'registry-relay',
+    doc_type: 'reference',
+    standards_referenced: ['openapi', 'dcat'],
+    editUrl: 'https://example.test/repo/blob/main/docs/api.md',
+  });
+
+  assert.match(fm, /standards_referenced:\n  - openapi\n  - dcat/);
 });

@@ -257,7 +257,29 @@ function rewriteLinks(md, ctx) {
   });
 }
 
-function frontmatterBlock(fields) {
+export function validateStandardsReferenced(value, context, knownStandards) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    throw new Error(`${context}: standards_referenced must be a list`);
+  }
+
+  const seen = new Set();
+  for (const id of value) {
+    if (typeof id !== 'string' || id.trim() !== id || id === '') {
+      throw new Error(`${context}: standards_referenced entries must be non-empty strings`);
+    }
+    if (!knownStandards.has(id)) {
+      throw new Error(`${context}: standards_referenced id "${id}" is not in src/data/standards.yaml`);
+    }
+    if (seen.has(id)) {
+      throw new Error(`${context}: standards_referenced id "${id}" is duplicated`);
+    }
+    seen.add(id);
+  }
+  return value;
+}
+
+export function frontmatterBlock(fields) {
   const fm = {
     title: fields.title,
     description: fields.description,
@@ -267,7 +289,7 @@ function frontmatterBlock(fields) {
     last_reviewed: today,
     doc_type: fields.doc_type,
     locale: 'en',
-    standards_referenced: [],
+    standards_referenced: fields.standards_referenced ?? [],
     editUrl: fields.editUrl,
   };
   // YAML.stringify keeps the body deterministic and quotes where needed.
@@ -296,7 +318,7 @@ function deriveDescription(md, fallback) {
   return fallback;
 }
 
-async function syncEntry(repoId, repo, entry, source, destIndex) {
+async function syncEntry(repoId, repo, entry, source, destIndex, knownStandards) {
   const sourceFile = resolve(source.path, entry.src);
   if (!existsSync(sourceFile)) {
     fail(`${repoId}: allowlisted source ${entry.src} not found in ${source.mode} source`);
@@ -327,11 +349,17 @@ async function syncEntry(repoId, repo, entry, source, destIndex) {
   });
 
   const description = entry.description || deriveDescription(stripped, `${title} for ${repoId}.`);
+  const standards_referenced = validateStandardsReferenced(
+    entry.standards_referenced,
+    `${repoId}: ${entry.src}`,
+    knownStandards,
+  );
   const fm = frontmatterBlock({
     title,
     description,
     owner: repoId,
     doc_type: entry.doc_type,
+    standards_referenced,
     editUrl: blobUrl({ ...repo }, entry.src),
   });
 
@@ -346,12 +374,27 @@ async function syncEntry(repoId, repo, entry, source, destIndex) {
   return { outFile: relative(root, outFile), assets: assetsToCopy.length };
 }
 
+async function loadKnownStandards() {
+  const standardsPath = resolve(dataDir, 'standards.yaml');
+  const standards = YAML.parse(await readFile(standardsPath, 'utf8'));
+  if (!Array.isArray(standards)) {
+    fail('standards.yaml must contain a top-level list');
+  }
+  for (const [index, standard] of standards.entries()) {
+    if (!standard || typeof standard.id !== 'string' || standard.id === '') {
+      fail(`standards.yaml entry ${index + 1} is missing id`);
+    }
+  }
+  return new Set(standards.map((standard) => standard.id));
+}
+
 async function main() {
   const manifestPath = resolve(dataDir, 'repo-docs.yaml');
   const manifest = YAML.parse(await readFile(manifestPath, 'utf8'));
   if (!manifest || typeof manifest.repos !== 'object') {
     fail('repo-docs.yaml must contain a top-level `repos` map');
   }
+  const knownStandards = await loadKnownStandards();
   const docsets = await loadDocsets({ dataDir });
   const docset = getDocset(docsets, selectedDocsetId(docsets));
   if (docset.id !== docsets.current) {
@@ -377,7 +420,7 @@ async function main() {
 
     const destIndex = buildDestIndex(repo.docs);
     for (const entry of repo.docs) {
-      const result = await syncEntry(repoId, repo, entry, source, destIndex);
+      const result = await syncEntry(repoId, repo, entry, source, destIndex, knownStandards);
       pageCount += 1;
       assetCount += result.assets;
     }
