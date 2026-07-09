@@ -1349,11 +1349,23 @@ mod tests {
         events: Mutex<Vec<TokenMintAuditEvent>>,
     }
 
+    struct FailingAuditSink;
+
     #[async_trait]
     impl StsAuditSink for RecordingAuditSink {
         async fn record_token_mint(&self, event: TokenMintAuditEvent) -> Result<(), StsAuditError> {
             self.events.lock().unwrap().push(event);
             Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl StsAuditSink for FailingAuditSink {
+        async fn record_token_mint(
+            &self,
+            _event: TokenMintAuditEvent,
+        ) -> Result<(), StsAuditError> {
+            Err(StsAuditError::Unavailable)
         }
     }
 
@@ -1727,6 +1739,110 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(err, StsError::SenderConstraintMissing));
+    }
+
+    #[tokio::test]
+    async fn exchange_rejects_wrong_resource_before_mint_audit() {
+        let audit = Arc::new(RecordingAuditSink::default());
+        let service = service().with_audit_sink(audit.clone());
+        let mut request = request();
+        request.resource = Some("https://other-notary.example.test".to_string());
+
+        let err = service
+            .exchange(request, context(), OffsetDateTime::UNIX_EPOCH)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, StsError::AudienceMismatch));
+        assert!(audit.events.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn exchange_rejects_unsupported_requested_token_type_before_mint_audit() {
+        let audit = Arc::new(RecordingAuditSink::default());
+        let service = service().with_audit_sink(audit.clone());
+        let mut request = request();
+        request.requested_token_type = Some(JWT_TOKEN_TYPE.to_string());
+
+        let err = service
+            .exchange(request, context(), OffsetDateTime::UNIX_EPOCH)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, StsError::UnsupportedRequestedTokenType));
+        assert!(audit.events.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn exchange_rejects_invalid_subject_token_before_mint_audit() {
+        let audit = Arc::new(RecordingAuditSink::default());
+        let service = service().with_audit_sink(audit.clone());
+        let mut request = request();
+        request.subject_token = "invalid".to_string();
+
+        let err = service
+            .exchange(request, context(), OffsetDateTime::UNIX_EPOCH)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, StsError::SubjectTokenInvalid));
+        assert!(audit.events.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn exchange_rejects_missing_sender_constraint_before_mint_audit() {
+        let audit = Arc::new(RecordingAuditSink::default());
+        let mut subject = verified_subject();
+        subject.confirmation = None;
+        let mut config = TokenExchangeConfig::notary_transaction_token(
+            "https://sts.example.test",
+            "https://notary.example.test",
+        );
+        config.sender_constraint = SenderConstraintPolicy::Required;
+        let signer = Arc::new(LocalJwkSigner::new(PrivateJwk::parse(RAW_JWK).unwrap()).unwrap());
+        let service = TokenExchangeService::new(
+            Arc::new(StaticVerifier { subject }),
+            signer,
+            Arc::new(InMemoryRateLimitStore::default()),
+            config,
+        )
+        .with_audit_sink(audit.clone());
+
+        let err = service
+            .exchange(request(), context(), OffsetDateTime::UNIX_EPOCH)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, StsError::SenderConstraintMissing));
+        assert!(audit.events.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn exchange_rejects_session_binding_mismatch_before_mint_audit() {
+        let audit = Arc::new(RecordingAuditSink::default());
+        let service = strict_service().with_audit_sink(audit.clone());
+        let mut context = bound_context();
+        context.session_binding = Some("hmac-sha256:wrong".to_string());
+
+        let err = service
+            .exchange(request(), context, OffsetDateTime::UNIX_EPOCH)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, StsError::SessionBindingInvalid));
+        assert!(audit.events.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn exchange_aborts_when_audit_sink_fails() {
+        let service = strict_service().with_audit_sink(Arc::new(FailingAuditSink));
+
+        let err = service
+            .exchange(request(), bound_context(), OffsetDateTime::UNIX_EPOCH)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, StsError::Audit(StsAuditError::Unavailable)));
     }
 
     #[tokio::test]

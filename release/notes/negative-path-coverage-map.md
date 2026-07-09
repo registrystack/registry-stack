@@ -53,12 +53,15 @@ public evidence or disposition.
 - `NP-07`: Covered.
   Public anchor: `crates/registry-relay/tests/error_taxonomy.rs`.
   Disposition: no new release work identified from the current map.
-- `NP-08`: Partial.
+- `NP-08`: Covered.
   Public anchors:
   `crates/registry-relay/tests/entity_routes.rs::governed_entity_policy_ignores_unverified_trust_provenance_without_leak`,
   `crates/registry-relay/tests/entity_routes.rs::governed_entity_policy_ignores_unverified_source_freshness_header_without_leak`,
+  `crates/registry-relay/tests/entity_routes.rs::governed_entity_policy_ignores_unverified_raw_pdp_context_headers_without_leak`,
+  `crates/registry-relay/tests/entity_routes.rs::governed_entity_policy_ignores_unverified_source_observed_at_header_without_leak`,
   and `crates/registry-relay/src/api/governed.rs`.
-  Disposition: keep open for remaining governed-route parity.
+  Disposition: governed-route denial, audit provenance, and response
+  non-disclosure are covered for the mapped forged-context inputs.
 - `NP-09`: Partial.
   Public anchors: `crates/registry-relay/tests/spdci_api_standards.rs` and
   `crates/registry-relay/tests/error_taxonomy.rs`.
@@ -83,14 +86,14 @@ public evidence or disposition.
   Public anchor: `crates/registry-manifest-core/tests/metadata_core.rs`.
   Disposition: validation-limit coverage exists; runtime load and serving-state
   side effects remain to be closed or deferred.
-- `NP-13`: Partial.
+- `NP-13`: Covered.
   Public anchors: `crates/registry-relay/tests/deployment_profile_gates.rs`,
   `crates/registry-relay/src/api/admin.rs`,
   `crates/registry-notary-server/src/standalone.rs`,
   `crates/registry-notary-server/tests/standalone_http.rs`, and
-  `crates/registry-notary-server/src/api.rs`.
-  Disposition: product paths have coverage; STS audit-abort parity remains to
-  be closed or deferred.
+  `crates/registry-notary-server/src/api.rs`,
+  `crates/registry-platform-sts/src/lib.rs::exchange_aborts_when_audit_sink_fails`.
+  Disposition: product paths and STS audit-failure abort behavior are covered.
 - `NP-14`: Partial.
   Public anchors: `crates/registry-relay/tests/admin_auth_extraction_contract.rs`
   and `crates/registry-relay/tests/observability_metrics.rs`.
@@ -112,8 +115,12 @@ public evidence or disposition.
   Disposition: deferred to a maintainer-owned follow-up bundle;
   public scenario detail remains intentionally omitted.
 - `NP-19`: Partial.
-  Public anchor: `crates/registry-notary-server/src/api.rs`.
-  Disposition: keep open for complete side-effect and audit assertions.
+  Public anchors:
+  `crates/registry-notary-server/src/api.rs::issue_credential_rejects_purpose_mismatch`
+  and `crates/registry-notary-server/src/api.rs`.
+  Disposition: side-effect coverage now asserts a purpose mismatch is denied
+  before credential signing; denial-audit parity remains to be closed or
+  deferred.
 - `NP-20`: Partial.
   Public anchor: `crates/registry-platform-sdjwt/src/lib.rs`.
   Disposition: product-level audit coverage remains to be closed or deferred.
@@ -125,9 +132,16 @@ public evidence or disposition.
   Public anchor: `crates/registry-notary-server/src/standalone.rs`.
   Disposition: keep open for product-surface HTTP audit and no-response parity.
 - `NP-23`: Partial.
-  Public anchor: `crates/registry-platform-sts/src/lib.rs`.
-  Disposition: focused route, no-mint, and audit coverage remains to be added
-  or deferred.
+  Public anchors:
+  `crates/registry-platform-sts/src/lib.rs::exchange_rejects_wrong_resource_before_mint_audit`,
+  `crates/registry-platform-sts/src/lib.rs::exchange_rejects_unsupported_requested_token_type_before_mint_audit`,
+  `crates/registry-platform-sts/src/lib.rs::exchange_rejects_invalid_subject_token_before_mint_audit`,
+  `crates/registry-platform-sts/src/lib.rs::exchange_rejects_missing_sender_constraint_before_mint_audit`,
+  `crates/registry-platform-sts/src/lib.rs::exchange_rejects_session_binding_mismatch_before_mint_audit`,
+  and `crates/registry-platform-sts/src/lib.rs`.
+  Disposition: STS negative exchange tests now pin no-mint behavior for the
+  mapped request-shape and binding denials; product-route response and
+  denial-audit parity remain to be closed or deferred.
 - `NP-24`: Partial.
   Public anchors:
   `crates/registry-notary-server/src/standalone.rs::source_json_reader_rejects_oversized_body`,
