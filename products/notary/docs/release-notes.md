@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Production and evidence-grade deployments now fail closed until signer custody
+  is explicitly approved for credential, access-token, and federation signing
+  roles. `/ready` exposes typed, non-secret custody facts, while detailed
+  deployment findings remain on authenticated operator surfaces.
+
 ## 0.8.4
 
 - BREAKING: Static API-key and bearer-token config no longer accepts

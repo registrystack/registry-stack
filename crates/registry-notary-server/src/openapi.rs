@@ -865,6 +865,20 @@ fn build_openapi_document() -> Value {
         ("EvidenceRelationship", evidence_relationship_schema()),
         ("EvidenceOnBehalfOf", evidence_on_behalf_of_schema()),
         ("EvidenceActor", evidence_actor_schema()),
+        ("ReadinessResponse", readiness_response_schema()),
+        ("ReadinessChecks", readiness_checks_schema()),
+        (
+            "SigningProviderReadinessChecks",
+            signing_provider_readiness_checks_schema(),
+        ),
+        ("SignerCustodyChecks", signer_custody_checks_schema()),
+        ("SignerCustodySurfaces", signer_custody_surfaces_schema()),
+        ("SignerSurfaceChecks", signer_surface_checks_schema()),
+        (
+            "EnabledSignerSurfaceChecks",
+            enabled_signer_surface_checks_schema(),
+        ),
+        ("ReadinessProblem", readiness_problem_schema()),
         ("ListClaimsResponse", list_claims_response_schema()),
         ("ClaimSummary", claim_summary_schema()),
         ("ClaimSemantics", claim_semantics_schema()),
@@ -890,6 +904,20 @@ fn build_openapi_document() -> Value {
     for (name, schema) in schema_overrides.iter() {
         document_value["components"]["schemas"][*name] = schema.clone();
     }
+    set_json_response_schema(
+        &mut document_value,
+        "/ready",
+        "get",
+        "200",
+        "#/components/schemas/ReadinessResponse",
+    );
+    set_problem_response_schema(
+        &mut document_value,
+        "/ready",
+        "get",
+        "503",
+        "#/components/schemas/ReadinessProblem",
+    );
     set_json_response_schema(
         &mut document_value,
         "/v1/claims",
@@ -981,9 +1009,44 @@ fn add_response_examples(document: &mut Value) {
         json!({
             "status": "ready",
             "checks": {
-                "total": 1,
-                "ok": 1,
-                "failed": 0
+                "total": 3,
+                "ok": 3,
+                "degraded": 0,
+                "failed": 0,
+                "signing_providers": {
+                    "total": 1,
+                    "ok": 1,
+                    "failed": 0,
+                    "custody": {
+                        "active_provider_counts": {
+                            "pkcs11": 1
+                        },
+                        "signing_provider_count": 1,
+                        "local_software_signing_provider_count": 0,
+                        "custody_approval_required": true,
+                        "custody_approved": true,
+                        "unapproved_signing_provider_count": 0,
+                        "surfaces": {
+                            "credential_issuance": {
+                                "signing_provider_count": 1,
+                                "local_software_signing_provider_count": 0,
+                                "unapproved_signing_provider_count": 0
+                            },
+                            "access_token_issuance": {
+                                "enabled": false,
+                                "signing_provider_count": 0,
+                                "local_software_signing_provider_count": 0,
+                                "unapproved_signing_provider_count": 0
+                            },
+                            "federation": {
+                                "enabled": false,
+                                "signing_provider_count": 0,
+                                "local_software_signing_provider_count": 0,
+                                "unapproved_signing_provider_count": 0
+                            }
+                        }
+                    }
+                }
             }
         }),
     );
@@ -1006,12 +1069,55 @@ fn add_response_examples(document: &mut Value) {
         "get",
         "503",
         "Evidence runtime is not ready or is degraded",
-        problem_example(
-            503,
-            "readiness.not_ready",
-            "Evidence runtime is not ready",
-            "one or more readiness checks are not ready",
-        ),
+        json!({
+            "type": format!("{}/readiness/not-ready", crate::PROBLEM_TYPE_BASE_URL),
+            "title": "Evidence runtime is not ready",
+            "status": 503,
+            "detail": "one or more readiness checks are not ready",
+            "code": "readiness.not_ready",
+            "request_id": "01J00000000000000000000000",
+            "readiness_status": "not_ready",
+            "checks": {
+                "total": 3,
+                "ok": 1,
+                "degraded": 1,
+                "failed": 1,
+                "signing_providers": {
+                    "total": 1,
+                    "ok": 1,
+                    "failed": 0,
+                    "custody": {
+                        "active_provider_counts": {
+                            "local_jwk_env": 1
+                        },
+                        "signing_provider_count": 1,
+                        "local_software_signing_provider_count": 1,
+                        "custody_approval_required": true,
+                        "custody_approved": false,
+                        "unapproved_signing_provider_count": 1,
+                        "surfaces": {
+                            "credential_issuance": {
+                                "signing_provider_count": 1,
+                                "local_software_signing_provider_count": 1,
+                                "unapproved_signing_provider_count": 1
+                            },
+                            "access_token_issuance": {
+                                "enabled": false,
+                                "signing_provider_count": 0,
+                                "local_software_signing_provider_count": 0,
+                                "unapproved_signing_provider_count": 0
+                            },
+                            "federation": {
+                                "enabled": false,
+                                "signing_provider_count": 0,
+                                "local_software_signing_provider_count": 0,
+                                "unapproved_signing_provider_count": 0
+                            }
+                        }
+                    }
+                }
+            }
+        }),
     );
     set_problem_response(
         document,
@@ -2425,6 +2531,41 @@ fn set_json_response_schema(
     status: &str,
     schema_ref: &str,
 ) {
+    set_response_schema(
+        document,
+        path,
+        method,
+        status,
+        "application/json",
+        schema_ref,
+    );
+}
+
+fn set_problem_response_schema(
+    document: &mut Value,
+    path: &str,
+    method: &str,
+    status: &str,
+    schema_ref: &str,
+) {
+    set_response_schema(
+        document,
+        path,
+        method,
+        status,
+        "application/problem+json",
+        schema_ref,
+    );
+}
+
+fn set_response_schema(
+    document: &mut Value,
+    path: &str,
+    method: &str,
+    status: &str,
+    content_type: &str,
+    schema_ref: &str,
+) {
     let Some(media_type) = document
         .get_mut("paths")
         .and_then(Value::as_object_mut)
@@ -2438,7 +2579,7 @@ fn set_json_response_schema(
         .and_then(Value::as_object_mut)
         .and_then(|response| response.get_mut("content"))
         .and_then(Value::as_object_mut)
-        .and_then(|content| content.get_mut("application/json"))
+        .and_then(|content| content.get_mut(content_type))
         .and_then(Value::as_object_mut)
     else {
         return;
@@ -2595,6 +2736,163 @@ fn set_response_example(
         });
     }
     media_type.insert("example".to_string(), example);
+}
+
+fn readiness_response_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["status", "checks"],
+        "properties": {
+            "status": { "type": "string", "enum": ["ready"] },
+            "checks": { "$ref": "#/components/schemas/ReadinessChecks" }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn readiness_checks_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["total", "ok", "degraded", "failed", "signing_providers"],
+        "properties": {
+            "total": non_negative_count_schema(),
+            "ok": non_negative_count_schema(),
+            "degraded": non_negative_count_schema(),
+            "failed": non_negative_count_schema(),
+            "signing_providers": {
+                "$ref": "#/components/schemas/SigningProviderReadinessChecks"
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn signing_provider_readiness_checks_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["total", "ok", "failed", "custody"],
+        "properties": {
+            "total": non_negative_count_schema(),
+            "ok": non_negative_count_schema(),
+            "failed": non_negative_count_schema(),
+            "custody": { "$ref": "#/components/schemas/SignerCustodyChecks" }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn signer_custody_checks_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": [
+            "active_provider_counts",
+            "signing_provider_count",
+            "local_software_signing_provider_count",
+            "custody_approval_required",
+            "custody_approved",
+            "unapproved_signing_provider_count",
+            "surfaces"
+        ],
+        "properties": {
+            "active_provider_counts": {
+                "type": "object",
+                "description": "Counts by configured provider kind. PKCS#11 identifies an interface, not whether custody is hardware- or software-backed.",
+                "additionalProperties": non_negative_count_schema()
+            },
+            "signing_provider_count": non_negative_count_schema(),
+            "local_software_signing_provider_count": non_negative_count_schema(),
+            "custody_approval_required": { "type": "boolean" },
+            "custody_approved": { "type": "boolean" },
+            "unapproved_signing_provider_count": non_negative_count_schema(),
+            "surfaces": { "$ref": "#/components/schemas/SignerCustodySurfaces" }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn signer_custody_surfaces_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["credential_issuance", "access_token_issuance", "federation"],
+        "properties": {
+            "credential_issuance": { "$ref": "#/components/schemas/SignerSurfaceChecks" },
+            "access_token_issuance": {
+                "$ref": "#/components/schemas/EnabledSignerSurfaceChecks"
+            },
+            "federation": { "$ref": "#/components/schemas/EnabledSignerSurfaceChecks" }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn signer_surface_checks_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": [
+            "signing_provider_count",
+            "local_software_signing_provider_count",
+            "unapproved_signing_provider_count"
+        ],
+        "properties": {
+            "signing_provider_count": non_negative_count_schema(),
+            "local_software_signing_provider_count": non_negative_count_schema(),
+            "unapproved_signing_provider_count": non_negative_count_schema()
+        },
+        "additionalProperties": false
+    })
+}
+
+fn enabled_signer_surface_checks_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": [
+            "enabled",
+            "signing_provider_count",
+            "local_software_signing_provider_count",
+            "unapproved_signing_provider_count"
+        ],
+        "properties": {
+            "enabled": { "type": "boolean" },
+            "signing_provider_count": non_negative_count_schema(),
+            "local_software_signing_provider_count": non_negative_count_schema(),
+            "unapproved_signing_provider_count": non_negative_count_schema()
+        },
+        "additionalProperties": false
+    })
+}
+
+fn readiness_problem_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": [
+            "type",
+            "title",
+            "status",
+            "detail",
+            "code",
+            "request_id",
+            "readiness_status",
+            "checks"
+        ],
+        "properties": {
+            "type": { "type": "string", "format": "uri" },
+            "title": { "type": "string" },
+            "status": { "type": "integer", "format": "int32" },
+            "detail": { "type": "string" },
+            "code": { "type": "string" },
+            "request_id": { "type": "string" },
+            "readiness_status": {
+                "type": "string",
+                "enum": ["degraded", "not_ready"]
+            },
+            "checks": { "$ref": "#/components/schemas/ReadinessChecks" }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn non_negative_count_schema() -> Value {
+    json!({ "type": "integer", "minimum": 0 })
 }
 
 fn problem_details_schema() -> Value {
@@ -3750,6 +4048,50 @@ mod tests {
             doc["paths"]["/ready"]["get"]["responses"]["4XX"]["description"],
             "Client error"
         );
+    }
+
+    #[test]
+    fn documents_typed_readiness_custody_contract() {
+        let doc = openapi_document();
+        let ready = &doc["paths"]["/ready"]["get"]["responses"];
+        assert_eq!(
+            ready["200"]["content"]["application/json"]["schema"]["$ref"],
+            json!("#/components/schemas/ReadinessResponse")
+        );
+        assert_eq!(
+            ready["503"]["content"]["application/problem+json"]["schema"]["$ref"],
+            json!("#/components/schemas/ReadinessProblem")
+        );
+        assert!(doc["components"]["schemas"]["ReadinessProblem"]["required"]
+            .as_array()
+            .expect("required array")
+            .iter()
+            .any(|field| field == "request_id"));
+
+        let custody = &doc["components"]["schemas"]["SignerCustodyChecks"];
+        let required = custody["required"].as_array().expect("required array");
+        for field in [
+            "active_provider_counts",
+            "custody_approval_required",
+            "custody_approved",
+            "unapproved_signing_provider_count",
+            "surfaces",
+        ] {
+            assert!(required.iter().any(|entry| entry == field));
+        }
+
+        for status in ["200", "503"] {
+            let content_type = if status == "200" {
+                "application/json"
+            } else {
+                "application/problem+json"
+            };
+            let checks = &ready[status]["content"][content_type]["example"]["checks"];
+            assert!(checks.get("deployment").is_none());
+            assert!(checks["signing_providers"]["custody"]["surfaces"]
+                .get("access_token_issuance")
+                .is_some());
+        }
     }
 
     #[test]

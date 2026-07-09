@@ -213,6 +213,32 @@ async fn evaluate_sends_safe_headers_and_parses_metadata() {
 }
 
 #[tokio::test]
+async fn ready_200_returns_typed_custody_checks() {
+    let app = Router::new().route(
+        "/ready",
+        get(|| async {
+            Json(json!({
+                "status": "ready",
+                "checks": readiness_checks_json(true, 0),
+            }))
+        }),
+    );
+    let base = spawn(app).await;
+    let client = RegistryNotaryClient::builder(base)
+        .build()
+        .expect("client builds");
+
+    let response = client.ready().await.expect("ready response parses");
+
+    assert_eq!(response.body.status, "ready");
+    let custody = response.body.checks.signing_providers.custody;
+    assert!(custody.custody_approval_required);
+    assert!(custody.custody_approved);
+    assert_eq!(custody.unapproved_signing_provider_count, 0);
+    assert_eq!(custody.active_provider_counts.get("pkcs11"), Some(&1));
+}
+
+#[tokio::test]
 async fn ready_503_returns_problem_details() {
     let app = Router::new().route(
         "/ready",
@@ -226,8 +252,9 @@ async fn ready_503_returns_problem_details() {
                     "status": 503,
                     "detail": "one or more readiness checks are not ready",
                     "code": "readiness.not_ready",
+                    "request_id": "01J00000000000000000000000",
                     "readiness_status": "not_ready",
-                    "checks": { "total": 1, "ok": 0, "failed": 1 }
+                    "checks": readiness_checks_json(false, 1)
                 })),
             )
         }),
@@ -245,9 +272,66 @@ async fn ready_503_returns_problem_details() {
         } => {
             assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
             assert_eq!(problem.code, "readiness.not_ready");
+            assert_eq!(
+                problem.request_id.as_deref(),
+                Some("01J00000000000000000000000")
+            );
+            assert_eq!(problem.readiness_status.as_deref(), Some("not_ready"));
+            let custody = &problem
+                .checks
+                .as_ref()
+                .expect("readiness checks are retained")
+                .signing_providers
+                .custody;
+            assert!(custody.custody_approval_required);
+            assert!(!custody.custody_approved);
+            assert_eq!(custody.unapproved_signing_provider_count, 1);
         }
         other => panic!("expected readiness problem, got {other:?}"),
     }
+}
+
+fn readiness_checks_json(custody_approved: bool, unapproved_count: usize) -> serde_json::Value {
+    json!({
+        "total": 3,
+        "ok": if unapproved_count == 0 { 3 } else { 1 },
+        "degraded": 0,
+        "failed": usize::from(unapproved_count > 0),
+        "signing_providers": {
+            "total": 1,
+            "ok": 1,
+            "failed": 0,
+            "custody": {
+                "active_provider_counts": {
+                    "pkcs11": 1,
+                },
+                "signing_provider_count": 1,
+                "local_software_signing_provider_count": 0,
+                "custody_approval_required": true,
+                "custody_approved": custody_approved,
+                "unapproved_signing_provider_count": unapproved_count,
+                "surfaces": {
+                    "credential_issuance": {
+                        "signing_provider_count": 1,
+                        "local_software_signing_provider_count": 0,
+                        "unapproved_signing_provider_count": unapproved_count,
+                    },
+                    "access_token_issuance": {
+                        "enabled": false,
+                        "signing_provider_count": 0,
+                        "local_software_signing_provider_count": 0,
+                        "unapproved_signing_provider_count": 0,
+                    },
+                    "federation": {
+                        "enabled": false,
+                        "signing_provider_count": 0,
+                        "local_software_signing_provider_count": 0,
+                        "unapproved_signing_provider_count": 0,
+                    },
+                },
+            },
+        },
+    })
 }
 
 #[tokio::test]

@@ -25,7 +25,7 @@ use crate::options::{RequestOptions, RetryPolicy};
 use crate::responses::{
     AdminReloadResponse, CredentialIssueResponse, CredentialStatusResponse,
     CredentialStatusUpdateRequest, EvaluateResponse, Evaluation, FormatsResponse, HealthResponse,
-    ListClaimsResponse, NotaryResponse,
+    ListClaimsResponse, NotaryResponse, ReadinessResponse,
 };
 #[cfg(feature = "verifier")]
 use crate::verifier::{VerificationError, VerifiedCredential, VerifyOptions};
@@ -135,7 +135,7 @@ impl RegistryNotaryClient {
     }
 
     /// Fetch `GET /ready`.
-    pub async fn ready(&self) -> Result<NotaryResponse<HealthResponse>, NotaryClientError> {
+    pub async fn ready(&self) -> Result<NotaryResponse<ReadinessResponse>, NotaryClientError> {
         self.get_json(
             "/ready",
             RequestOptions::default(),

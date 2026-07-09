@@ -12,10 +12,14 @@ use registry_notary_core::{
     EvidenceCredentialConfig, RegistryNotaryAdminListenerMode, StandaloneRegistryNotaryConfig,
 };
 use registry_notary_server::{
-    compile_notary_runtime, notary_router_from_runtime, standalone_router, StandaloneServerError,
+    compile_notary_runtime, compile_notary_runtime_with_provenance, notary_router_from_runtime,
+    standalone_router, StandaloneServerError,
 };
 use registry_platform_authcommon::{CredentialFingerprintProvider, CredentialFingerprintRef};
+use registry_platform_ops::ConfigSource;
+use registry_platform_testing::fixtures::ED25519_PRIVATE_JWK;
 use serde_json::Value;
+use std::path::Path;
 
 const AUDIT_SECRET: &str = "0123456789abcdef0123456789abcdef";
 // The raw caseworker API-key fingerprint env value. The tests here never
@@ -28,7 +32,18 @@ fn set_env() {
     unsafe {
         std::env::set_var("REGISTRY_NOTARY_GATES_AUDIT_HASH_SECRET", AUDIT_SECRET);
         std::env::set_var("REGISTRY_NOTARY_GATES_SOURCE_TOKEN", "gates-source-token");
+        std::env::set_var("REGISTRY_NOTARY_GATES_ISSUER_JWK", ED25519_PRIVATE_JWK);
+        std::env::set_var(
+            "REGISTRY_NOTARY_GATES_FEDERATION_SECRET",
+            "gates-federation-pairwise-secret",
+        );
     }
+}
+
+#[derive(Clone, Copy)]
+enum TestSignerProvider {
+    LocalJwkEnv,
+    FileWatch,
 }
 
 /// A minimal but complete config skeleton, parameterised by the knobs the gates
@@ -51,6 +66,13 @@ struct ConfigBuilder {
     /// Add an source-adapter source connection without an expected_sidecar (triggers
     /// notary.sidecar.expected_sidecar_missing).
     source_adapter_no_sidecar: bool,
+    /// Provider for the active test signing key.
+    signer_provider: Option<TestSignerProvider>,
+    /// Bind the test signing key to a credential profile.
+    credential_signer: bool,
+    /// Bind the test signing key to federation response signing.
+    federation_signer: bool,
+    signer_path: String,
 }
 
 impl ConfigBuilder {
@@ -63,6 +85,13 @@ impl ConfigBuilder {
             private_network_source: false,
             openapi_public: false,
             source_adapter_no_sidecar: false,
+            signer_provider: None,
+            credential_signer: false,
+            federation_signer: false,
+            signer_path: Path::new(audit_path)
+                .with_file_name("gates-signer.jwk")
+                .display()
+                .to_string(),
         }
     }
 
@@ -93,6 +122,24 @@ impl ConfigBuilder {
 
     fn source_adapter_no_sidecar(mut self, enable: bool) -> Self {
         self.source_adapter_no_sidecar = enable;
+        self
+    }
+
+    fn local_software_signer(mut self, enable: bool) -> Self {
+        self.signer_provider = enable.then_some(TestSignerProvider::LocalJwkEnv);
+        self.credential_signer = enable;
+        self
+    }
+
+    fn file_watch_signer(mut self) -> Self {
+        self.signer_provider = Some(TestSignerProvider::FileWatch);
+        self.credential_signer = true;
+        self
+    }
+
+    fn federation_local_software_signer(mut self) -> Self {
+        self.signer_provider = Some(TestSignerProvider::LocalJwkEnv);
+        self.federation_signer = true;
         self
     }
 
@@ -151,8 +198,101 @@ impl ConfigBuilder {
         }
     }
 
+    fn signing_section(&self) -> String {
+        let provider = match self.signer_provider {
+            Some(TestSignerProvider::LocalJwkEnv) => concat!(
+                "  signing_keys:\n",
+                "    issuer-key:\n",
+                "      provider: local_jwk_env\n",
+                "      private_jwk_env: REGISTRY_NOTARY_GATES_ISSUER_JWK\n",
+                "      alg: EdDSA\n",
+                "      kid: registry-platform-testing-ed25519-1\n",
+                "      status: active\n",
+            )
+            .to_string(),
+            Some(TestSignerProvider::FileWatch) => format!(
+                concat!(
+                    "  signing_keys:\n",
+                    "    issuer-key:\n",
+                    "      provider: file_watch\n",
+                    "      path: \"{}\"\n",
+                    "      alg: EdDSA\n",
+                    "      kid: registry-platform-testing-ed25519-1\n",
+                    "      status: active\n",
+                ),
+                self.signer_path,
+            ),
+            None => return String::new(),
+        };
+        if self.credential_signer {
+            format!(
+                "{provider}{}",
+                concat!(
+                    "  credential_profiles:\n",
+                    "    gates_sd_jwt:\n",
+                    "      format: application/dc+sd-jwt\n",
+                    "      issuer: did:web:evidence.example.test\n",
+                    "      signing_key: issuer-key\n",
+                    "      vct: https://evidence.example.test/credentials/gates\n",
+                    "      holder_binding:\n",
+                    "        mode: none\n",
+                    "      allowed_claims:\n",
+                    "        - farmed-land-size\n",
+                    "      disclosure:\n",
+                    "        allowed: [value, redacted]\n",
+                )
+            )
+        } else {
+            provider
+        }
+    }
+
+    fn claim_credential_profiles(&self) -> &'static str {
+        if self.credential_signer {
+            "      credential_profiles:\n        - gates_sd_jwt\n"
+        } else {
+            ""
+        }
+    }
+
+    fn federation_section(&self) -> &'static str {
+        if !self.federation_signer {
+            return "";
+        }
+        concat!(
+            "federation:\n",
+            "  enabled: true\n",
+            "  node_id: did:web:evidence.example.test\n",
+            "  issuer: https://evidence.example.test\n",
+            "  jwks_uri: https://evidence.example.test/federation/jwks.json\n",
+            "  federation_api: https://evidence.example.test/federation/v1\n",
+            "  supported_protocol_versions: [registry-notary-federation/v0.1]\n",
+            "  signing:\n",
+            "    signing_key: issuer-key\n",
+            "  pairwise_subject_hash:\n",
+            "    secret_env: REGISTRY_NOTARY_GATES_FEDERATION_SECRET\n",
+            "  peers:\n",
+            "    - node_id: did:web:peer.example.test\n",
+            "      issuer: https://peer.example.test\n",
+            "      jwks_uri: https://peer.example.test/federation/jwks.json\n",
+            "      allowed_protocol_versions: [registry-notary-federation/v0.1]\n",
+            "      allowed_purposes: [https://purpose.example.test/eligibility]\n",
+            "      allowed_profiles: [gates]\n",
+            "      source_scopes: [farmer_registry:evidence_verification]\n",
+            "  evaluation_profiles:\n",
+            "    - id: gates\n",
+            "      ruleset: gates-v1\n",
+            "      claim_id: farmed-land-size\n",
+            "      subject_id_type: national_id\n",
+        )
+    }
+
     fn build(&self) -> StandaloneRegistryNotaryConfig {
         set_env();
+        if matches!(self.signer_provider, Some(TestSignerProvider::FileWatch)) {
+            std::fs::write(&self.signer_path, ED25519_PRIVATE_JWK)
+                .expect("file-watch signer fixture writes");
+        }
         let raw = format!(
             r#"
 {server}auth:
@@ -167,6 +307,7 @@ impl ConfigBuilder {
   enabled: true
   service_id: evidence.test
   api_base_url: https://evidence.example.test
+{signing}
   source_connections:
     farmer_registry:
       base_url: "http://127.0.0.1:1"
@@ -207,11 +348,15 @@ impl ConfigBuilder {
         allowed: [value, redacted]
       formats:
         - application/vnd.registry-notary.claim-result+json
-{deployment}"#,
+{claim_credential_profiles}
+{deployment}{federation}"#,
             server = self.server_section(),
             audit = self.audit_section(),
+            signing = self.signing_section(),
             extra_sources = self.extra_source_connections(),
+            claim_credential_profiles = self.claim_credential_profiles(),
             deployment = self.deployment_block,
+            federation = self.federation_section(),
         );
         // The caseworker fingerprint env var must resolve at runtime.
         // SAFETY: see set_env.
@@ -419,6 +564,144 @@ async fn production_high_risk_replay_reports_readiness_failure() {
     ready.assert_status(StatusCode::SERVICE_UNAVAILABLE);
     let body: Value = ready.json();
     assert_eq!(body["readiness_status"], "not_ready");
+}
+
+#[tokio::test]
+async fn production_unapproved_local_signer_reports_readiness_failure() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let config = ConfigBuilder::new(&audit_path(&tmp))
+        .local_software_signer(true)
+        .deployment("deployment:\n  profile: production\n")
+        .build();
+
+    let app = standalone_router(config).expect("production local signer config still starts");
+    let server = TestServer::builder().http_transport().build(app);
+    let ready = server.get("/ready").await;
+    ready.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    let body: Value = ready.json();
+    assert_eq!(body["readiness_status"], "not_ready");
+    let header_request_id = ready
+        .headers()
+        .get("x-request-id")
+        .and_then(|value| value.to_str().ok())
+        .expect("readiness failure carries x-request-id");
+    assert_eq!(body["request_id"], header_request_id);
+    assert_eq!(body["checks"]["failed"], 1);
+    assert!(body["checks"].get("deployment").is_none());
+    let custody = &body["checks"]["signing_providers"]["custody"];
+    assert_eq!(custody["custody_approval_required"], true);
+    assert_eq!(custody["custody_approved"], false);
+    assert_eq!(custody["signing_provider_count"], 1);
+    assert_eq!(custody["local_software_signing_provider_count"], 1);
+    assert_eq!(custody["unapproved_signing_provider_count"], 1);
+    assert_eq!(custody["active_provider_counts"]["local_jwk_env"], 1);
+    assert_eq!(
+        custody["surfaces"]["credential_issuance"]["signing_provider_count"],
+        1
+    );
+    assert_eq!(
+        custody["surfaces"]["credential_issuance"]["unapproved_signing_provider_count"],
+        1
+    );
+}
+
+#[tokio::test]
+async fn production_file_watch_signer_requires_custody_approval() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let config = ConfigBuilder::new(&audit_path(&tmp))
+        .file_watch_signer()
+        .deployment("deployment:\n  profile: production\n")
+        .build();
+
+    let app = standalone_router(config).expect("production file-watch signer config starts");
+    let server = TestServer::builder().http_transport().build(app);
+    let ready = server.get("/ready").await;
+    ready.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    let body: Value = ready.json();
+    let custody = &body["checks"]["signing_providers"]["custody"];
+    assert_eq!(custody["active_provider_counts"]["file_watch"], 1);
+    assert_eq!(custody["local_software_signing_provider_count"], 1);
+    assert_eq!(custody["unapproved_signing_provider_count"], 1);
+}
+
+#[tokio::test]
+async fn production_federation_signer_is_reported_by_surface() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let config = ConfigBuilder::new(&audit_path(&tmp))
+        .federation_local_software_signer()
+        .deployment("deployment:\n  profile: production\n")
+        .build();
+
+    let app = standalone_router(config).expect("production federation signer config starts");
+    let server = TestServer::builder().http_transport().build(app);
+    let ready = server.get("/ready").await;
+    ready.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    let body: Value = ready.json();
+    let custody = &body["checks"]["signing_providers"]["custody"];
+    assert_eq!(
+        custody["surfaces"]["credential_issuance"]["signing_provider_count"],
+        0
+    );
+    assert_eq!(custody["surfaces"]["federation"]["enabled"], true);
+    assert_eq!(
+        custody["surfaces"]["federation"]["signing_provider_count"],
+        1
+    );
+    assert_eq!(
+        custody["surfaces"]["federation"]["local_software_signing_provider_count"],
+        1
+    );
+    assert_eq!(
+        custody["surfaces"]["federation"]["unapproved_signing_provider_count"],
+        1
+    );
+}
+
+#[tokio::test]
+async fn production_signer_custody_approval_is_visible_in_readiness() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let config = ConfigBuilder::new(&audit_path(&tmp))
+        .local_software_signer(true)
+        .deployment(
+            "deployment:\n  profile: production\n  evidence:\n    signer_custody_approved: true\n",
+        )
+        .build();
+
+    let app = standalone_router(config).expect("approved local signer config starts");
+    let server = TestServer::builder().http_transport().build(app);
+    let ready = server.get("/ready").await;
+    ready.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    let body: Value = ready.json();
+    assert_eq!(body["readiness_status"], "degraded");
+    assert_eq!(body["checks"]["failed"], 0);
+    let custody = &body["checks"]["signing_providers"]["custody"];
+    assert_eq!(custody["custody_approval_required"], true);
+    assert_eq!(custody["custody_approved"], true);
+    assert_eq!(custody["signing_provider_count"], 1);
+    assert_eq!(custody["local_software_signing_provider_count"], 1);
+    assert_eq!(custody["unapproved_signing_provider_count"], 0);
+}
+
+#[test]
+fn evidence_grade_unapproved_signer_fails_startup() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let config = ConfigBuilder::new(&audit_path(&tmp))
+        .local_software_signer(true)
+        .deployment("deployment:\n  profile: evidence_grade\n")
+        .build();
+
+    match compile_notary_runtime_with_provenance(config, ConfigSource::SignedBundleFile, None) {
+        Err(StandaloneServerError::DeploymentGateStartupFailure { findings, .. }) => {
+            assert!(
+                findings.contains("notary.signer_custody.unapproved"),
+                "signer-custody gate should be the startup blocker: {findings}"
+            );
+        }
+        Ok(_) => panic!("expected signer-custody deployment gate startup failure, got success"),
+        Err(other) => {
+            panic!("expected signer-custody deployment gate startup failure, got {other}")
+        }
+    }
 }
 
 #[tokio::test]

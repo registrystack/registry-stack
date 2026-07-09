@@ -2,6 +2,7 @@
 //! Error types for the Registry Notary client.
 
 use crate::options::RetryAfter;
+use crate::responses::ReadinessChecks;
 
 use std::time::Duration;
 
@@ -53,6 +54,12 @@ pub struct ProblemDetails {
     /// Server request/correlation id, when included in the problem body.
     #[serde(default)]
     pub request_id: Option<String>,
+    /// Readiness status for `GET /ready` failures.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub readiness_status: Option<String>,
+    /// Typed readiness checks for `GET /ready` failures.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checks: Option<ReadinessChecks>,
 }
 
 impl std::fmt::Debug for ProblemDetails {
@@ -64,6 +71,7 @@ impl std::fmt::Debug for ProblemDetails {
             .field("detail", &"<redacted>")
             .field("code", &self.code)
             .field("request_id", &self.request_id)
+            .field("readiness_status", &self.readiness_status)
             .finish()
     }
 }

@@ -120,6 +120,11 @@ pub struct DeploymentEvidenceConfig {
     /// a log aggregator or SIEM) so a local file sink does not cap retention.
     #[serde(default)]
     pub audit_offhost_shipping: bool,
+    /// Operator asserts a production review has approved signer custody for
+    /// this deployment. Provider kind is not proof of custody: PKCS#11 modules
+    /// can be backed by either hardware or software tokens.
+    #[serde(default)]
+    pub signer_custody_approved: bool,
 }
 
 /// One operator-configured waiver.
@@ -217,6 +222,7 @@ pub struct GateInput {
     pub transaction_token_anchor_configured: bool,
     pub transaction_token_sender_constrained: bool,
     pub source_binding_without_matching_policy: bool,
+    pub signer_without_custody_approval: bool,
 }
 
 impl GateInput {
@@ -270,6 +276,7 @@ pub const FINDING_ASSISTED_ACCESS_SENDER_CONSTRAINT_MISSING: &str =
     "notary.assisted_access.sender_constraint_missing";
 pub const FINDING_SOURCE_BINDING_NO_MATCHING_POLICY: &str =
     "notary.source_binding.no_matching_policy";
+pub const FINDING_SIGNER_CUSTODY_UNAPPROVED: &str = "notary.signer_custody.unapproved";
 
 // Diagnostic finding ids emitted by the framework itself.
 pub const FINDING_PROFILE_UNDECLARED: &str = "deployment.profile_undeclared";
@@ -399,6 +406,17 @@ fn gate_catalog() -> &'static [Gate] {
             production: Some(FindingWarn),
             evidence_grade: Some(FindingError),
             condition: |input| input.source_binding_without_matching_policy,
+        },
+        // notary.signer_custody.unapproved: provider kind cannot prove custody
+        // because PKCS#11 can be hardware- or software-backed. Production and
+        // evidence-grade deployments therefore require explicit custody
+        // approval for each configured signing role.
+        Gate {
+            id: FINDING_SIGNER_CUSTODY_UNAPPROVED,
+            hosted_lab: None,
+            production: Some(ReadinessFail),
+            evidence_grade: Some(StartupFail),
+            condition: |input| input.signer_without_custody_approval,
         },
     ]
 }
@@ -1246,6 +1264,76 @@ mod tests {
                     .any(|finding| finding.id == FINDING_SOURCE_BINDING_NO_MATCHING_POLICY),
                 "finding '{}' must be absent under profile '{}' with non-triggering input",
                 FINDING_SOURCE_BINDING_NO_MATCHING_POLICY,
+                profile.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn signer_custody_gate_rejects_unapproved_production_custody() {
+        let triggering = GateInput {
+            signer_without_custody_approval: true,
+            ..GateInput::default()
+        };
+        let non_triggering = GateInput {
+            signer_without_custody_approval: false,
+            ..GateInput::default()
+        };
+        let cases = [
+            (DeploymentProfile::Local, None),
+            (DeploymentProfile::HostedLab, None),
+            (
+                DeploymentProfile::Production,
+                Some(GateSeverity::ReadinessFail),
+            ),
+            (
+                DeploymentProfile::EvidenceGrade,
+                Some(GateSeverity::StartupFail),
+            ),
+        ];
+        for (profile, expected_severity) in cases {
+            let evaluation = evaluate_gates(Some(profile), &triggering, &[], "2026-06-13");
+            let found = evaluation
+                .findings
+                .iter()
+                .find(|finding| finding.id == FINDING_SIGNER_CUSTODY_UNAPPROVED);
+            match expected_severity {
+                Some(severity) => {
+                    let finding = found.unwrap_or_else(|| {
+                        panic!(
+                            "expected finding '{}' under profile '{}'",
+                            FINDING_SIGNER_CUSTODY_UNAPPROVED,
+                            profile.as_str()
+                        )
+                    });
+                    assert_eq!(finding.severity, severity);
+                    match severity {
+                        GateSeverity::StartupFail => assert!(evaluation
+                            .startup_failures
+                            .contains(&FINDING_SIGNER_CUSTODY_UNAPPROVED.to_string())),
+                        GateSeverity::ReadinessFail => assert!(evaluation
+                            .readiness_failures
+                            .contains(&FINDING_SIGNER_CUSTODY_UNAPPROVED.to_string())),
+                        GateSeverity::FindingError | GateSeverity::FindingWarn => {}
+                    }
+                }
+                None => assert!(
+                    found.is_none(),
+                    "finding '{}' must be unbound under profile '{}'",
+                    FINDING_SIGNER_CUSTODY_UNAPPROVED,
+                    profile.as_str()
+                ),
+            }
+
+            let clear_evaluation =
+                evaluate_gates(Some(profile), &non_triggering, &[], "2026-06-13");
+            assert!(
+                !clear_evaluation
+                    .findings
+                    .iter()
+                    .any(|finding| finding.id == FINDING_SIGNER_CUSTODY_UNAPPROVED),
+                "finding '{}' must be absent under profile '{}' with non-triggering input",
+                FINDING_SIGNER_CUSTODY_UNAPPROVED,
                 profile.as_str()
             );
         }
