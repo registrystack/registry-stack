@@ -144,7 +144,7 @@ pub enum DeploymentConfigError {
     #[error("deployment.waivers[{index}].expires must be a YYYY-MM-DD date")]
     InvalidWaiverExpiry { index: usize },
     #[error(
-        "deployment.waivers[{index}] waives finding '{finding}', which is a hard deployment gate and cannot be waived"
+        "deployment.waivers[{index}] waives finding '{finding}', a hard deployment gate that cannot be waived; remove the waiver and fix the underlying condition it reports (for audit retention, ship audit events off-host and set deployment.evidence.audit_offhost_shipping: true, or use a non-local audit sink)"
     )]
     HardGateNotWaivable { index: usize, finding: String },
     #[error(
@@ -312,10 +312,14 @@ fn gate_catalog() -> &'static [Gate] {
             condition: |input| !input.audit_sink_class_durable,
         },
         // notary.audit.retention_local_only: a local file sink caps retention
-        // and an attacker with host access can destroy audit evidence, unless
-        // the operator attests logs are shipped off-host. stdout and syslog
-        // are exempt: their retention is owned by the orchestrator log
-        // pipeline or the syslog daemon's own forwarding surface.
+        // and an attacker with host access can destroy audit evidence; the
+        // audit hash chain also cannot detect leading or trailing truncation
+        // of a local-only log, so off-host shipping (plus its attestation) is
+        // the completeness evidence that clears this gate. Under production
+        // this is only a warn, so the warning is the operator's single signal.
+        // stdout and syslog are exempt: their retention is owned by the
+        // orchestrator log pipeline or the syslog daemon's own forwarding
+        // surface.
         Gate {
             id: FINDING_AUDIT_RETENTION_LOCAL_ONLY,
             hosted_lab: None,
