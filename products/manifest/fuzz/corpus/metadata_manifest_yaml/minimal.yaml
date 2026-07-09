@@ -1,0 +1,9 @@
+schema_version: registry-manifest/v1
+catalog:
+  id: fuzz-minimal
+  base_url: https://registry.example.test
+  title: Fuzz Minimal
+  publisher:
+    name: Registry Authority
+datasets: []
+codelists: []

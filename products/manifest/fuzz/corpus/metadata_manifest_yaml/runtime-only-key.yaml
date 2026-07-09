@@ -1,0 +1,14 @@
+schema_version: registry-manifest/v1
+catalog:
+  id: runtime-key
+  base_url: https://registry.example.test
+  title: Runtime Key
+  publisher:
+    name: Registry Authority
+datasets:
+  - id: people
+    title: People
+    source:
+      url: https://source.example.test
+    entities: []
+codelists: []

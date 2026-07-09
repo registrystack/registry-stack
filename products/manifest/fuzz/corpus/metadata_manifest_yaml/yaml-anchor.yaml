@@ -1,0 +1,13 @@
+schema_version: registry-manifest/v1
+catalog:
+  id: anchored
+  base_url: https://registry.example.test
+  title: Anchored
+  publisher: &publisher
+    name: Registry Authority
+datasets:
+  - id: people
+    title: People
+    publisher: *publisher
+    entities: []
+codelists: []

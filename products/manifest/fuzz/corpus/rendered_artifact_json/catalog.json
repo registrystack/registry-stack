@@ -1,0 +1,8 @@
+{
+  "schema_version": "registry-manifest-catalog/v1",
+  "catalog": {
+    "id": "fuzz-catalog",
+    "title": "Fuzz Catalog"
+  },
+  "datasets": []
+}

@@ -65,7 +65,10 @@ jobs:
               crates/registry-platform-cache/*|crates/registry-platform-oid4vci/*|crates/registry-platform-replay/*|crates/registry-platform-sdjwt/*)
                 return 0
                 ;;
-              products/notary/*|products/platform/*|release/docker/*)
+              crates/registry-manifest-core/*|crates/registry-manifest-cli/*)
+                return 0
+                ;;
+              products/notary/*|products/platform/*|products/manifest/*|release/docker/*)
                 return 0
                 ;;
               *)
@@ -262,6 +265,56 @@ jobs:
           path: products/platform/fuzz/artifacts
           if-no-files-found: ignore
 
+  manifest-fuzz:
+    name: Manifest fuzz smoke
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # nightly
+        with:
+          toolchain: nightly
+
+      - name: Cache Cargo registry and build artifacts
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Install cargo-fuzz
+        uses: taiki-e/install-action@25435dc8dd3baed7417e0c96d3fe89013a5b2e09 # v2.81.3
+        with:
+          tool: cargo-fuzz@${{ env.CARGO_FUZZ_VERSION }}
+
+      - name: Run manifest fuzz smoke
+        working-directory: products/manifest
+        run: |
+          set -euo pipefail
+          for target in \
+            metadata_manifest_yaml \
+            rendered_artifact_json
+          do
+            mkdir -p "fuzz/artifacts/${target}"
+            cargo +nightly fuzz run --fuzz-dir fuzz --target x86_64-unknown-linux-gnu "${target}" -- \
+              -max_total_time=60 \
+              -rss_limit_mb=1024 \
+              -artifact_prefix="fuzz/artifacts/${target}/" \
+              -print_final_stats=1
+          done
+
+      - name: Upload manifest fuzz artifacts
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: nightly-manifest-fuzz-artifacts
+          path: products/manifest/fuzz/artifacts
+          if-no-files-found: ignore
+
   save-state:
     name: Save successful nightly state
     needs:
@@ -269,6 +322,7 @@ jobs:
       - assurance
       - notary-fuzz
       - platform-fuzz
+      - manifest-fuzz
     if: needs.changes.outputs.run == 'true'
     runs-on: ubuntu-24.04
     steps:
