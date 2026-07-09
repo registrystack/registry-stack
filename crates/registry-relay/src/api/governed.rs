@@ -26,6 +26,8 @@ pub(crate) const TRUST_JURISDICTION_HEADER: &str = "x-registry-trust-jurisdictio
 pub(crate) const TRUST_ASSURANCE_HEADER: &str = "x-registry-trust-assurance";
 pub(crate) const TRUST_LEGAL_BASIS_HEADER: &str = "x-registry-trust-legal-basis";
 pub(crate) const TRUST_CONSENT_HEADER: &str = "x-registry-trust-consent";
+const TRUST_SOURCE_OBSERVED_AT_UNIX_SECONDS_HEADER: &str =
+    "x-registry-source-observed-at-unix-seconds";
 pub(crate) const TRUST_SOURCE_OBSERVED_AGE_SECONDS_HEADER: &str =
     "x-registry-source-observed-age-seconds";
 const TRUST_SCOPE_PREFIX: &str = "registry:trust";
@@ -305,9 +307,11 @@ fn request_pdp_context(
             .filter(|principal| principal.scopes.contains(request_info.checked_scope))
             .map(|_| BTreeSet::from([request_info.checked_scope.to_string()]))
             .unwrap_or_default(),
-        source_observed_at_unix_seconds: trust_header_value(
+        source_observed_at_unix_seconds: verified_trust_header_value(
             headers,
-            "x-registry-source-observed-at-unix-seconds",
+            principal,
+            TRUST_SOURCE_OBSERVED_AT_UNIX_SECONDS_HEADER,
+            "source_observed_at_unix_seconds",
         )
         .map(parse_unix_seconds)
         .transpose()?,
