@@ -566,7 +566,7 @@ impl JsonlFileSink {
         let _guard = self.inner.lock.lock().await;
         let inner = Arc::clone(&self.inner);
         tokio::task::spawn_blocking(move || {
-            tail_hash_from_files(&inner.path, inner.max_size_bytes, inner.max_files, &hasher)
+            tail_hash_from_files(&inner.path, inner.max_files, &hasher)
         })
         .await
         .map_err(join_error_to_io)?
@@ -1412,6 +1412,17 @@ pub fn quarantine_and_recover_chain(
         fs::rename(source, &dest).map_err(AuditError::Io)?;
     }
 
+    // An upgrade from a release that wrote the local completeness anchor can
+    // leave `<path>.anchor.json` behind. It describes the chain now being
+    // quarantined, so move it aside under the same suffix rather than leaving
+    // it where it looks current. A clean install has no sidecar; that is not an
+    // error.
+    let legacy_anchor = PathBuf::from(format!("{}.anchor.json", path.display()));
+    if legacy_anchor.exists() {
+        let dest = PathBuf::from(format!("{}.{suffix}", legacy_anchor.display()));
+        fs::rename(&legacy_anchor, &dest).map_err(AuditError::Io)?;
+    }
+
     let break_record = ChainBreakRecord {
         event: CHAIN_BREAK_EVENT.to_string(),
         reason: reason.to_string(),
@@ -1481,7 +1492,6 @@ fn scan_first_inconsistency(
 
 fn tail_hash_from_files(
     path: &Path,
-    _max_size_bytes: u64,
     max_files: u32,
     hasher: &AuditChainHasher,
 ) -> Result<Option<[u8; 32]>, AuditError> {
@@ -2447,6 +2457,45 @@ mod tests {
         assert_ne!(verification.last_hash, Some(second.record_hash));
     }
 
+    #[test]
+    fn verify_chain_accepts_trailing_truncation_without_offhost_evidence() {
+        // Dropping the tail of a valid chain leaves a self-consistent prefix
+        // with nothing to mark the removed records: truncating the newest
+        // envelopes is not locally detectable. Off-host shipping is the
+        // completeness guarantee.
+        let first = AuditEnvelope::new(json!({ "event": "first" }), None).expect("first");
+        let second = AuditEnvelope::new(json!({ "event": "second" }), Some(first.record_hash))
+            .expect("second");
+        let _third = AuditEnvelope::new(json!({ "event": "third" }), Some(second.record_hash))
+            .expect("third");
+
+        let truncated = [first, second.clone()];
+        let verification = verify_chain(&truncated, &AuditChainHasher::unkeyed_dev_only())
+            .expect("truncated prefix verifies");
+        assert_eq!(verification.records, 2);
+        assert_eq!(verification.last_hash, Some(second.record_hash));
+    }
+
+    #[test]
+    fn verify_chain_detects_interior_deletion() {
+        // Removing an envelope from inside the retained set breaks the hash
+        // link: the survivor after the gap still points at the deleted record's
+        // hash, which no longer matches its predecessor.
+        let first = AuditEnvelope::new(json!({ "event": "first" }), None).expect("first");
+        let second = AuditEnvelope::new(json!({ "event": "second" }), Some(first.record_hash))
+            .expect("second");
+        let third = AuditEnvelope::new(json!({ "event": "third" }), Some(second.record_hash))
+            .expect("third");
+
+        let with_gap = [first, third];
+        let err = verify_chain(&with_gap, &AuditChainHasher::unkeyed_dev_only())
+            .expect_err("interior deletion is detected");
+        assert!(matches!(
+            err,
+            ChainVerificationError::PrevHashMismatch { line: 2, .. }
+        ));
+    }
+
     #[tokio::test]
     async fn file_sink_bootstrap_accepts_max_files_one_retained_tail() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -3014,6 +3063,56 @@ mod tests {
             .expect("recovered segment verifies as retained set");
         assert_eq!(verification.start_prev_hash, Some(good.record_hash));
         assert!(!dir.path().join("audit.jsonl.anchor.json").exists());
+    }
+
+    #[tokio::test]
+    async fn recovery_quarantines_a_legacy_completeness_anchor_sidecar() {
+        // Upgrade path: a release from before the anchor sidecar was removed
+        // can leave `<path>.anchor.json` on disk. Recovery must move it aside
+        // with the data files so it cannot keep describing the now-quarantined
+        // chain as current.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        let genesis = AuditEnvelope::new(json!({ "event": "genesis" }), None).expect("genesis");
+        let good = AuditEnvelope::new(json!({ "event": "good" }), Some(genesis.record_hash))
+            .expect("good");
+        let forked = AuditEnvelope::new(json!({ "event": "forked" }), Some(genesis.record_hash))
+            .expect("forked");
+        let original = format!(
+            "{}{}{}",
+            genesis.to_jsonl().expect("genesis jsonl"),
+            good.to_jsonl().expect("good jsonl"),
+            forked.to_jsonl().expect("forked jsonl"),
+        );
+        fs::write(&path, &original).expect("write forked chain");
+
+        let sidecar = dir.path().join("audit.jsonl.anchor.json");
+        let sidecar_contents = r#"{"schema":"registry.audit.anchor.v1"}"#;
+        fs::write(&sidecar, sidecar_contents).expect("write legacy sidecar");
+
+        let outcome = quarantine_and_recover_chain(
+            &path,
+            1,
+            &AuditChainHasher::unkeyed_dev_only(),
+            "fork recovery",
+            Some("operator-1"),
+            1234,
+        )
+        .expect("recovery runs");
+
+        assert!(!outcome.already_consistent);
+
+        // The legacy sidecar is moved aside under the same suffix as the data
+        // files and no longer sits where the active chain's anchor would be.
+        assert!(
+            !sidecar.exists(),
+            "the legacy anchor sidecar must not remain active after quarantine"
+        );
+        let quarantined_sidecar = dir.path().join("audit.jsonl.anchor.json.corrupt-1234");
+        assert_eq!(
+            fs::read_to_string(&quarantined_sidecar).expect("quarantined sidecar exists"),
+            sidecar_contents
+        );
     }
 
     #[tokio::test]
