@@ -1448,6 +1448,47 @@ fn audit_record_contains_text(value: &Value, needle: &str) -> bool {
     }
 }
 
+fn audit_records_from_envelopes(path: &std::path::Path) -> Vec<Value> {
+    audit_envelopes(path)
+        .into_iter()
+        .map(|envelope| envelope.record)
+        .collect()
+}
+
+fn audit_record_with<'a>(
+    records: &'a [Value],
+    path: &str,
+    decision: &str,
+    status: StatusCode,
+    error_code: &str,
+) -> &'a Value {
+    records
+        .iter()
+        .find(|record| {
+            record["path"] == json!(path)
+                && record["decision"] == json!(decision)
+                && record["status"] == json!(status.as_u16())
+                && record["error_code"] == json!(error_code)
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "audit record missing path={path} decision={decision} status={} error_code={error_code}",
+                status.as_u16()
+            )
+        })
+}
+
+fn assert_audit_records_do_not_contain(records: &[Value], forbidden: &[&str]) {
+    for needle in forbidden {
+        assert!(
+            !records
+                .iter()
+                .any(|record| audit_record_contains_text(record, needle)),
+            "audit records leaked forbidden text: {needle}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn healthz_ready_opaque_counters_in_503_body() {
     let server = TestServer::builder()
@@ -5467,10 +5508,11 @@ async fn strict_credentials_issue_rejects_oid4vci_proof_at_http_boundary() {
     let evaluation_id = evaluate_body["results"][0]["evaluation_id"]
         .as_str()
         .expect("evaluation id returned");
+    let proof = sign_oid4vci_proof("registry-notary", "nonce-1");
 
     let issue = server
         .post("/v1/credentials")
-        .add_header("authorization", authorization)
+        .add_header("authorization", authorization.clone())
         .json(&json!({
             "evaluation_id": evaluation_id,
             "credential_profile": "civil_status_sd_jwt",
@@ -5480,13 +5522,202 @@ async fn strict_credentials_issue_rejects_oid4vci_proof_at_http_boundary() {
             "holder": {
                 "binding": "did",
                 "id": holder_did_jwk(),
-                "proof": sign_oid4vci_proof("registry-notary", "nonce-1")
+                "proof": proof.clone()
             }
         }))
         .await;
     issue.assert_status(StatusCode::BAD_REQUEST);
+    assert_eq!(
+        issue
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("application/problem+json")
+    );
     let body: Value = issue.json();
     assert_eq!(body["code"], json!("credential.holder_proof_required"));
+    assert!(body.get("credential").is_none());
+    assert!(body.get("issuer_signed_jwt").is_none());
+    assert!(body.get("disclosures").is_none());
+    let body_text = serde_json::to_string(&body).expect("problem body serializes");
+    assert!(!body_text.contains(&proof));
+    assert!(!body_text.contains(&token));
+    assert!(!body_text.contains("person-1"));
+
+    let records = audit_records_from_envelopes(&audit_path);
+    let denied = audit_record_with(
+        &records,
+        "/v1/credentials",
+        "credential_denied",
+        StatusCode::BAD_REQUEST,
+        "credential.holder_proof_required",
+    );
+    assert_eq!(denied["access_mode"], json!("self_attestation"));
+    assert_eq!(denied["scopes_used"], json!(["self_attestation"]));
+    assert_eq!(denied["credential_profile"], json!("civil_status_sd_jwt"));
+    assert_eq!(denied["holder_binding_mode"], json!("did"));
+    assert!(denied.get("principal_id").is_none());
+    assert!(denied["principal_id_hash"]
+        .as_str()
+        .expect("principal id hash is present")
+        .starts_with("hmac-sha256:"));
+    assert!(denied.get("correlation_id").is_none());
+    assert!(denied["correlation_id_hash"]
+        .as_str()
+        .expect("correlation id hash is present")
+        .starts_with("hmac-sha256:"));
+    assert_audit_records_do_not_contain(
+        &records,
+        &[
+            &token,
+            &authorization,
+            &proof,
+            "person-1",
+            "citizen-subject",
+            "source-token",
+            "issuer_signed_jwt",
+            "disclosures",
+        ],
+    );
+    assert!(!records.iter().any(|record| {
+        record["path"] == json!("/v1/credentials")
+            && record["decision"] == json!("credential_issued")
+    }));
+
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn direct_credential_purpose_mismatch_denial_is_audited_and_redacted() {
+    set_audit_secret();
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+
+    let idp = MockIdp::start().await;
+    let upstream = TestServer::builder()
+        .http_transport()
+        .build(Router::new().route(
+            "/v1/datasets/people/entities/person/records",
+            get(self_attestation_registry_data_api),
+        ));
+    let base_url = upstream
+        .server_address()
+        .expect("HTTP transport exposes upstream address")
+        .to_string();
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = self_attestation_oidc_config(
+        base_url.trim_end_matches('/'),
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+    );
+    config.self_attestation.allowed_operations.issue_credential = true;
+    config
+        .evidence
+        .claims
+        .first_mut()
+        .expect("person-is-alive claim exists")
+        .formats
+        .push("application/dc+sd-jwt".to_string());
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let token = idp.mint_token(json!({
+        "sub": "citizen-subject",
+        "aud": "registry-notary-citizen",
+        "azp": "citizen-portal",
+        "scope": "self_attestation",
+        "national_id": "person-1",
+        "auth_time": now,
+        "iat": now,
+        "exp": now + 300,
+        "nbf": now,
+    }));
+    let authorization = format!("Bearer {token}");
+
+    let evaluate = server
+        .post("/v1/evaluations")
+        .add_header("authorization", authorization.clone())
+        .json(&json!({
+            "target": person_identifier_target("national_id", "person-1"),
+            "claims": ["person-is-alive"],
+            "disclosure": "value",
+            "format": "application/dc+sd-jwt"
+        }))
+        .await;
+    evaluate.assert_status_ok();
+    let evaluate_body: Value = evaluate.json();
+    let evaluation_id = evaluate_body["results"][0]["evaluation_id"]
+        .as_str()
+        .expect("evaluation id returned");
+
+    let issue = server
+        .post("/v1/credentials")
+        .add_header("authorization", authorization.clone())
+        .json(&json!({
+            "evaluation_id": evaluation_id,
+            "credential_profile": "civil_status_sd_jwt",
+            "format": "application/dc+sd-jwt",
+            "claims": ["person-is-alive"],
+            "disclosure": "value",
+            "purpose": "appeals"
+        }))
+        .await;
+    issue.assert_status(StatusCode::FORBIDDEN);
+    assert_eq!(
+        issue
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("application/problem+json")
+    );
+    let body: Value = issue.json();
+    assert_eq!(body["code"], json!("evaluation.binding_mismatch"));
+    assert!(body.get("credential").is_none());
+    assert!(body.get("credential_id").is_none());
+    assert!(body.get("issuer_signed_jwt").is_none());
+    assert!(body.get("disclosures").is_none());
+    let body_text = serde_json::to_string(&body).expect("problem body serializes");
+    assert!(!body_text.contains(&token));
+    assert!(!body_text.contains("person-1"));
+
+    let records = audit_records_from_envelopes(&audit_path);
+    let denied = audit_record_with(
+        &records,
+        "/v1/credentials",
+        "credential_denied",
+        StatusCode::FORBIDDEN,
+        "evaluation.binding_mismatch",
+    );
+    assert_eq!(denied["access_mode"], json!("self_attestation"));
+    assert_eq!(denied["scopes_used"], json!(["self_attestation"]));
+    assert!(denied.get("principal_id").is_none());
+    assert!(denied["principal_id_hash"]
+        .as_str()
+        .expect("principal id hash is present")
+        .starts_with("hmac-sha256:"));
+    assert!(denied.get("correlation_id").is_none());
+    assert!(denied["correlation_id_hash"]
+        .as_str()
+        .expect("correlation id hash is present")
+        .starts_with("hmac-sha256:"));
+    assert_audit_records_do_not_contain(
+        &records,
+        &[
+            &token,
+            &authorization,
+            "person-1",
+            "citizen-subject",
+            "source-token",
+            "issuer_signed_jwt",
+            "disclosures",
+        ],
+    );
+    assert!(!records.iter().any(|record| {
+        record["path"] == json!("/v1/credentials")
+            && record["decision"] == json!("credential_issued")
+    }));
 
     idp.stop().await;
 }
@@ -6138,6 +6369,118 @@ async fn self_attestation_preflight_uses_wallet_origin_allow_list() {
         .await;
     ops.assert_status(StatusCode::NO_CONTENT);
     assert!(ops.headers().get("access-control-allow-origin").is_none());
+}
+
+#[tokio::test]
+async fn evaluate_policy_denial_records_zero_source_and_redacted_audit() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
+
+    let source_hits = Arc::new(AtomicUsize::new(0));
+    let source_hits_for_route = Arc::clone(&source_hits);
+    let upstream = TestServer::builder()
+        .http_transport()
+        .build(Router::new().route(
+            "/v1/datasets/farmer_registry/entities/farmer/records",
+            get(
+                move |headers: HeaderMap, query: Query<BTreeMap<String, String>>| {
+                    let source_hits = Arc::clone(&source_hits_for_route);
+                    async move {
+                        source_hits.fetch_add(1, Ordering::SeqCst);
+                        registry_data_api(headers, query).await
+                    }
+                },
+            ),
+        ));
+    let base_url = upstream
+        .server_address()
+        .expect("HTTP transport exposes upstream address")
+        .to_string();
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = registry_data_api_config(
+        base_url.trim_end_matches('/'),
+        audit_path.to_str().expect("audit path is UTF-8"),
+    );
+    let binding = config
+        .evidence
+        .claims
+        .iter_mut()
+        .find(|claim| claim.id == "farmed-land-size")
+        .expect("farmed-land-size claim exists")
+        .source_bindings
+        .get_mut("farmer")
+        .expect("farmer binding exists");
+    binding.matching.permitted_jurisdictions = vec!["RW".to_string()];
+
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let response = server
+        .post("/v1/evaluations")
+        .add_header("x-api-key", "api-token")
+        .add_header("data-purpose", "https://purpose.example.test/eligibility")
+        .json(&json!({
+            "target": person_target("person-1"),
+            "claims": ["farmed-land-size"],
+            "disclosure": "value"
+        }))
+        .await;
+
+    response.assert_status(StatusCode::FORBIDDEN);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("application/problem+json")
+    );
+    let body: Value = response.json();
+    assert_eq!(body["code"], json!("pdp.jurisdiction_not_permitted"));
+    assert!(body.get("results").is_none());
+    let body_text = serde_json::to_string(&body).expect("problem body serializes");
+    assert!(!body_text.contains("api-token"));
+    assert!(!body_text.contains("source-token"));
+    assert!(!body_text.contains("person-1"));
+    assert_eq!(source_hits.load(Ordering::SeqCst), 0);
+
+    let records = audit_records_from_envelopes(&audit_path);
+    let denied = audit_record_with(
+        &records,
+        "/v1/evaluations",
+        "evaluate_denied",
+        StatusCode::FORBIDDEN,
+        "pdp.jurisdiction_not_permitted",
+    );
+    assert_eq!(denied["source_read_count"], json!(0));
+    assert_eq!(denied["forwarded"], json!(false));
+    assert!(denied.get("principal_id").is_none());
+    assert!(denied["principal_id_hash"]
+        .as_str()
+        .expect("principal id hash is present")
+        .starts_with("hmac-sha256:"));
+    assert!(denied["claim_hash"]
+        .as_str()
+        .expect("claim hash is present")
+        .starts_with("sha256:"));
+    assert!(denied.get("correlation_id").is_none());
+    assert!(denied["correlation_id_hash"]
+        .as_str()
+        .expect("correlation id hash is present")
+        .starts_with("hmac-sha256:"));
+    assert_audit_records_do_not_contain(
+        &records,
+        &[
+            "api-token",
+            "source-token",
+            "person-1",
+            base_url.trim_end_matches('/'),
+        ],
+    );
 }
 
 #[tokio::test]
