@@ -243,17 +243,6 @@ Registry Relay returns namespaced codes from its error taxonomy. Codes in the co
 | `admin.reload_failed` | reload failed | One or more resources failed to reload. |
 | `admin.unknown_resource` | unknown admin resource | The reload target id was not found. |
 
-### Provenance
-
-`provenance.*` runtime codes for signed response credentials. Provenance startup-config failures use `provenance.config.*` codes; see [Configuration](#configuration).
-
-| Code | Meaning | Usual cause |
-| --- | --- | --- |
-| `provenance.signer_unavailable` | provenance signer unavailable | The configured signing backend is not currently available. |
-| `provenance.issuance_failed` | provenance issuance failed | The request could not be served as a verifiable credential. |
-| `provenance.unknown_resource` | provenance unknown claim type or version | No resource is registered for the requested claim type or version. |
-| `provenance.did_document_unavailable` | provenance did document unavailable | The deployment does not host a `did:web` document. |
-
 ### SP DCI
 
 `spdci.*` codes for SP DCI request validation and response mapping.
@@ -321,7 +310,7 @@ Registry Relay returns namespaced codes from its error taxonomy. Codes in the co
 
 ### Configuration
 
-`config.*` and the provenance and feature-flag startup codes below are startup-only. They are surfaced on standard error and a non-zero process exit, not as a direct client response.
+`config.*` and the feature-flag startup codes below are startup-only. They are surfaced on standard error and a non-zero process exit, not as a direct client response.
 
 | Code | Meaning | Usual cause |
 | --- | --- | --- |
@@ -329,16 +318,6 @@ Registry Relay returns namespaced codes from its error taxonomy. Codes in the co
 | `config.validation_error` | config validation error | The configuration failed cross-field validation. |
 | `config.missing_secret` | missing secret | A required hash environment variable is unset. |
 | `config.duplicate_id` | duplicate identifier in config | Two configured ids collide. |
-| `provenance.config.missing_issuer` | provenance issuer missing | Provenance is enabled but no issuer block resolved. |
-| `provenance.config.issuer_did_mismatch` | provenance issuer did mismatch | The configured issuer DID does not match the deployment host. |
-| `provenance.config.signer_kind_invalid` | provenance signer kind invalid | The signer kind is not `software` or `file_watch`. |
-| `provenance.config.jwk_env_missing` | provenance jwk_env missing | The configured signing key material is unavailable. |
-| `provenance.config.algorithm_unsupported` | provenance signing algorithm unsupported | `signing_algorithm` is not EdDSA or ES256. |
-| `provenance.config.claim_validity_out_of_range` | provenance claim validity out of range | Claim validity is below 1 minute or above 365 days. |
-| `provenance.config.context_base_url_invalid` | provenance context base url invalid | `context_base_url` is not a valid http or https URL. |
-| `provenance.config.schema_base_url_invalid` | provenance schema base url invalid | `schema_base_url` is not a valid http or https URL. |
-| `provenance.config.verification_method_mismatch` | provenance verification method mismatch | `verification_method_id` does not start with the issuer DID plus a fragment. |
-| `publicschema.config.feature_disabled` | publicschema cel feature disabled | PublicSchema CEL mapping was configured but the binary lacks the feature. |
 | `spdci.config.feature_disabled` | spdci api standards feature disabled | SP DCI standards adapters were configured but the binary lacks the feature. |
 | `spdci.config.mapping_feature_disabled` | spdci cel mapping feature disabled | SP DCI response mapping was configured but the binary lacks the feature. |
 | `ogcapi.features.config.feature_disabled` | ogc api features feature disabled | OGC API Features config was set but the binary lacks the feature. |

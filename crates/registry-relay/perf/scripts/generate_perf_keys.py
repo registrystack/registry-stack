@@ -1,16 +1,13 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["cryptography>=42"]
+# dependencies = []
 # ///
 """
 Synthetic API-key generator for Registry Relay performance testing.
 
 Hashing scheme: Registry Relay expects env vars holding sha256:<64 lowercase hex chars>
 where the hex is SHA-256(raw_token_bytes). This is stdlib hashlib.
-
-The `cryptography` dep is used solely to derive the Ed25519 public half from
-the freshly generated private seed when assembling the provenance JWK.
 
 Generates 6 tokens, writes an env file, and prints only the variable names and
 the output path. Raw tokens and hashes are never printed to stdout.
@@ -19,12 +16,10 @@ Also emits:
 
 - REGISTRY_RELAY_AUDIT_HASH_SECRET: per-deployment audit HMAC secret used to
   hash sensitive audit identifiers.
-- REGISTRY_RELAY_PROVENANCE_JWK: JSON-encoded Ed25519 private JWK used by
-  the provenance signer to issue signed VC-JWT responses.
 
 If the env file already exists and is being reused (--force not set), this
 script exits without writing. When --force is set a new file is written with
-fresh values for all variables (tokens, audit secret, signing JWK).
+fresh values for all variables (tokens and audit secret).
 
 Usage:
     uv run perf/scripts/generate_perf_keys.py --env-file target/perf/perf.env
@@ -32,16 +27,11 @@ Usage:
 """
 
 import argparse
-import base64
 import hashlib
-import json
 import os
 import secrets
 import sys
 from pathlib import Path
-
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 
 # Key definitions: (id, fingerprint_env_var, scopes list or None)
@@ -63,7 +53,6 @@ def sha256_fingerprint(raw: str) -> str:
     return f"sha256:{digest}"
 
 
-
 def generate_token() -> str:
     """Return a URL-safe random token (~32 bytes of entropy, 43 chars)."""
     return secrets.token_urlsafe(32)
@@ -74,48 +63,9 @@ def generate_audit_hash_secret() -> str:
     return secrets.token_urlsafe(48)
 
 
-def _b64url(raw: bytes) -> str:
-    """Unpadded base64url encoding per RFC 7515."""
-    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
-
-
-# kid for the perf provenance signer. Must match the fragment in
-# provenance.issuer.verification_method_id in perf/config/*.yaml.
-PROVENANCE_KID = "perf-evidence-verification-v1"
-
-
-def generate_provenance_jwk() -> str:
-    """Return a JSON-encoded Ed25519 private JWK with kid + alg fields.
-
-    The value is consumed by the software signer via
-    `provenance.issuer.signer.jwk_env`. Format matches docs/provenance.md.
-    """
-    private = Ed25519PrivateKey.generate()
-    seed = private.private_bytes(
-        encoding=serialization.Encoding.Raw,
-        format=serialization.PrivateFormat.Raw,
-        encryption_algorithm=serialization.NoEncryption(),
-    )
-    public = private.public_key().public_bytes(
-        encoding=serialization.Encoding.Raw,
-        format=serialization.PublicFormat.Raw,
-    )
-    jwk = {
-        "kty": "OKP",
-        "crv": "Ed25519",
-        "alg": "EdDSA",
-        "kid": PROVENANCE_KID,
-        "d": _b64url(seed),
-        "x": _b64url(public),
-    }
-    # Compact, no whitespace. The env var is a single JSON string.
-    return json.dumps(jwk, separators=(",", ":"))
-
-
 def build_env_lines(
     tokens: dict[str, str],
     audit_hash_secret: str,
-    provenance_jwk: str,
 ) -> list[str]:
     """Build the env file lines from the token map. Never includes raw tokens."""
     lines = [
@@ -147,13 +97,8 @@ def build_env_lines(
         "# Audit HMAC secret for sensitive audit identifiers.",
         "# Must remain stable across server restarts for consistent audit lookups.",
         f"REGISTRY_RELAY_AUDIT_HASH_SECRET={audit_hash_secret}",
-        "#",
-        "# Provenance signing key: JSON-encoded Ed25519 private JWK.",
-        "# Read by the software signer at startup. NEVER commit this file.",
-        f"REGISTRY_RELAY_PROVENANCE_JWK={provenance_jwk}",
     ]
     return lines
-
 
 
 def main() -> None:
@@ -183,13 +128,11 @@ def main() -> None:
 
     env_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Generate one random token per keyed entry, the audit secret, and the
-    # Ed25519 private JWK for the provenance signer.
+    # Generate one random token per keyed entry and the audit secret.
     tokens: dict[str, str] = {key_id: generate_token() for key_id, _, _ in KEY_DEFS}
     audit_hash_secret = generate_audit_hash_secret()
-    provenance_jwk = generate_provenance_jwk()
 
-    env_lines = build_env_lines(tokens, audit_hash_secret, provenance_jwk)
+    env_lines = build_env_lines(tokens, audit_hash_secret)
     env_content = "\n".join(env_lines) + "\n"
 
     env_path.write_text(env_content, encoding="utf-8")
@@ -212,7 +155,6 @@ def main() -> None:
         "REGISTRY_RELAY_ENTITY",
     ] + [hash_env for _, hash_env, _ in KEY_DEFS] + [
         "REGISTRY_RELAY_AUDIT_HASH_SECRET",
-        "REGISTRY_RELAY_PROVENANCE_JWK",
     ]
     for name in var_names:
         print(f"  {name}")

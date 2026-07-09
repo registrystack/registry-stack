@@ -72,23 +72,21 @@ The table is generated from `src/data/contracts.yaml`.
 
 Stable machine identifiers for the registry stack resolve at `https://id.registrystack.org/`: RFC 9457 problem types, JSON-LD namespaces, JSON Schemas, and JSON-LD contexts. The resolver identifies each one and links back to the owning documentation. The running service response and the artifacts below remain authoritative for runtime behavior.
 
-### Verifiable credential schemas and context
+### Credential contract ownership
 
-Registry Relay issues signed responses as verifiable credentials whose `credentialSubject` shape is described by published JSON Schemas, alongside a JSON-LD context for the credential terms. A Relay gateway serves them unauthenticated under its `/schemas/{type}/{version}` and `/contexts/{vocab}/{version}` routes when provenance is enabled; deployments with provenance disabled do not expose these routes:
+Registry Relay no longer issues signed response credentials and no longer serves the former credential-support routes `/.well-known/did.json`, `/schemas/{claim_type}/{version}`, or `/contexts/{vocab}/{version}`.
+Registry Notary owns credential issuance, credential status, issuer metadata, and public verification keys.
+Use the Registry Notary OpenAPI contract and capability discovery document for credential workflows.
 
-- **EntityRecord schema**: the `credentialSubject` envelope of an EntityRecord credential.
-- **AggregateResult schema**: the `credentialSubject` envelope of an AggregateResult credential.
-- **Provenance context**: the JSON-LD 1.1 context for the credential terms.
-
-These three are production contracts: they are embedded in issued credentials, served by the gateway, and content-pinned in the relay resource manifest. The emitted `$id` values resolve under `id.registrystack.org/schemas/registry-relay/...`; the provenance context terms resolve under `id.registrystack.org/ns/registry-relay/provenance/v1#`.
+The removed Relay routes are not production contracts for 1.0.
+Clients that need signed credentials must follow an evidence offering to a Registry Notary or another configured evidence service.
 
 ### JSON-LD namespaces
 
-The registry stack defines JSON-LD vocabularies for its metadata and provenance terms:
+The registry stack defines JSON-LD vocabularies for its metadata terms:
 
 - `registry-relay/v1`: Registry Relay metadata terms, used in emitted DCAT-AP catalogs.
 - `registry-manifest/v1`: Registry Manifest terms.
-- `registry-relay/provenance/v1`: Registry Relay provenance credential terms (the context above).
 
 Their canonical home is `id.registrystack.org/ns/registry-relay/...` and `id.registrystack.org/ns/registry-manifest/...`.
 

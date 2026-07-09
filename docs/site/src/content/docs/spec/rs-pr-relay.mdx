@@ -25,8 +25,6 @@ standards_referenced:
   - ogc-api-edr
   - sdmx
   - sp-dci
-  - w3c-did
-  - verifiable-credentials
 layer:
   - consultation
 audience:
@@ -34,7 +32,7 @@ audience:
   - specification editor
 ---
 
-This document defines the HTTP protocol contract that Registry Relay exposes: the configuration-driven service model that fixes a gateway's surface, how a caller authenticates and is scoped per dataset, how governed Evidence Gateway PDP enforcement applies to configured read routes, the consultation and aggregate routes that read configured sources, the scope-filtered metadata publication, the evidence-offering descriptors, the optional signed response credentials, and the audit and error behavior every request carries. It is the precise, citable version of the behavior the [Registry Relay API reference](../../reference/apis/registry-relay/) describes narratively.
+This document defines the HTTP protocol contract that Registry Relay exposes: the configuration-driven service model that fixes a gateway's surface, how a caller authenticates and is scoped per dataset, how governed Evidence Gateway PDP enforcement applies to configured read routes, the consultation and aggregate routes that read configured sources, the scope-filtered metadata publication, the evidence-offering descriptors, the credential-issuance boundary with Registry Notary, and the audit and error behavior every request carries. It is the precise, citable version of the behavior the [Registry Relay API reference](../../reference/apis/registry-relay/) describes narratively.
 
 It refines the Registry Relay component defined in [RS-ARC-G](../rs-arc-g/) Section 3 (specifically REQ-ARC-G-003, REQ-ARC-G-004, REQ-ARC-G-006, and REQ-ARC-G-007) one level of detail down, from architectural boundary to wire behavior. Where this document and RS-ARC-G state the same constraint, RS-ARC-G is the general invariant and this document is its protocol-level form. It is the Relay counterpart to [RS-PR-NOTARY](../rs-pr-notary/), which specifies Registry Notary.
 
@@ -50,6 +48,7 @@ The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 
 | 0.2.0 | 2026-07-07 | draft | Corrected REQ-PR-RELAY-020's trust-context header names to the actual wire names, and clarified that the signed response credential surfaces of Section 8 are gated by runtime configuration (the `provenance` key), not a Cargo feature, distinguishing them from the genuinely feature-gated OGC and SP DCI adapters. |
 | 0.2.1 | 2026-07-07 | draft | Documented additional request-context headers alongside REQ-PR-RELAY-020, noting they are not currently wired to any Relay policy decision. |
 | 0.2.2 | 2026-07-09 | draft | Clarified that `x-registry-source-observed-at-unix-seconds` is scope guarded trust context, leaving four additional request-context headers outside Relay policy decisions. |
+| 0.3.0 | 2026-07-09 | draft | Removed Relay-local signed response credential requirements and made Registry Notary the only credential issuance surface. |
 
 ## 1. Scope and references
 
@@ -61,7 +60,7 @@ This specification covers Registry Relay's externally observable protocol behavi
 - The consultation data routes (entities, records, relationships, schemas) and the aggregate routes.
 - Scope-filtered metadata publication at `/metadata/*`.
 - Evidence-offering descriptors and their boundary with Registry Notary.
-- The optional signed response credentials.
+- The credential-issuance boundary between Relay and Notary.
 - The audit obligation, the error format, and the feature-gated surfaces.
 
 This specification does not define:
@@ -151,13 +150,14 @@ Registry Relay publishes evidence-offering metadata describing where a caller re
 
 REQ-PR-RELAY-012: Registry Relay MAY publish evidence-offering metadata at `GET /metadata/evidence-offerings` and `GET /metadata/evidence-offerings/{offering_id}`, naming the Registry Notary endpoint, the claim ids, and the supported disclosure modes and formats for an offering. Registry Relay MUST NOT perform claim evaluation or issue credentials itself. This is the protocol-level form of REQ-ARC-G-007.
 
-## 8. Signed response credentials
+## 8. Credential issuance boundary
 
-Signed response credentials are an opt-in feature that attaches verifiable provenance to a consultation response. They are distinct from the credentials Registry Notary issues.
+Registry Relay does not issue credentials, host issuer DID documents, or manage issuer signing keys.
+Registry Notary owns credential issuance and verification.
 
-REQ-PR-RELAY-013: Signed response credentials are opt-in, enabled by the `provenance` configuration key. When the feature is enabled and a caller requests one of the configured `accepted_media_types` (by default `application/vc+jwt` or `application/jwt`), Registry Relay MAY attach a W3C Verifiable Credentials Data Model (VCDM) 2.0 VC-JWT to an entity-record or aggregate response, and MUST publish the supporting JSON Schemas under `/schemas/...` and JSON-LD contexts under `/contexts/...`. In gateway issuer mode, Registry Relay MUST publish the issuer `did:web` document at `/.well-known/did.json`; in delegated issuer mode it MUST NOT, because the delegating ministry hosts the DID document for its own domain.
+REQ-PR-RELAY-013: Registry Relay MUST NOT issue response credentials, MUST NOT accept the legacy `provenance` configuration key, and MUST NOT accept entity-level `publicschema` credential mapping configuration. It MUST NOT serve the former credential-support routes `/.well-known/did.json`, `/schemas/{claim_type}/{version}`, or `/contexts/{vocab}/{version}`.
 
-REQ-PR-RELAY-014: A signed response credential is a VCDM 2.0 VC-JWT over a Relay consultation response. It MUST NOT be described as an SD-JWT VC, and a Registry Notary SD-JWT VC credential MUST NOT be described as a VCDM VC-JWT. REQ-ARC-G-008's prohibition on a VCDM envelope binds Registry Notary credentials (RS-PR-NOTARY), not Relay's optional response provenance; the two are different artifacts produced by different services.
+REQ-PR-RELAY-014: A Relay entity or aggregate response MUST remain an ordinary negotiated data response. A caller request for `application/vc+jwt` MUST NOT cause Relay to sign the response. If a workflow needs a signed credential, the workflow MUST use Registry Notary or another configured evidence service reached through evidence-offering metadata.
 
 ## 9. Audit and error behavior
 
@@ -171,7 +171,7 @@ REQ-PR-RELAY-016: Error responses MUST use the problem-details media type `appli
 
 Several surfaces mount only when the gateway is built with the matching Cargo feature; others mount only when runtime configuration enables them. A reader MUST NOT infer their presence from the route catalog of a different build or a different configuration.
 
-REQ-PR-RELAY-017: The OGC API Features, Records, and EDR adapters, and the SP DCI sync routes, mount only when the gateway is built with the matching Cargo feature. The signed response credential surfaces of Section 8 mount only when runtime configuration enables the `provenance` key; they are not gated by a Cargo feature. A conformance claim against this specification MUST NOT imply a surface that the deployed build does not mount or that the running configuration does not enable.
+REQ-PR-RELAY-017: The OGC API Features, Records, and EDR adapters, and the SP DCI sync routes, mount only when the gateway is built with the matching Cargo feature. A conformance claim against this specification MUST NOT imply a surface that the deployed build does not mount.
 
 REQ-PR-RELAY-018: Admin routes MUST be served on a separate, optional admin listener and MUST NOT appear in the public OpenAPI document. Reload and configuration mutation routes MUST require the `registry_relay:admin` scope, metrics MUST require `registry_relay:metrics_read`, and operational posture reads MUST require `registry_relay:ops_read`. Runtime deployments gate the public OpenAPI document by default; it is exposed without authentication only when `openapi_requires_auth` is disabled for demos or controlled tooling.
 
@@ -180,7 +180,7 @@ REQ-PR-RELAY-018: Admin routes MUST be served on a separate, optional admin list
 These constraints are stated so a reader does not infer a capability from the route list that the reviewed implementation does not provide.
 
 - No source mutation, no streaming: Registry Relay does not mutate source registry data in v1 and reads sources as batch snapshots or table scans; there is no event-stream backend (REQ-PR-RELAY-001).
-- Feature-gated and config-gated surfaces: OGC adapters and SP DCI sync are present only in builds compiled with the matching Cargo feature; signed response credentials are present only when runtime configuration enables the `provenance` key, not via a Cargo feature (REQ-PR-RELAY-017).
+- Feature-gated surfaces: OGC adapters and SP DCI sync are present only in builds compiled with the matching Cargo feature (REQ-PR-RELAY-017).
 - No claim evaluation: Relay describes evidence offerings but never evaluates a claim or issues a credential; that is Registry Notary's role (REQ-PR-RELAY-012).
 - Manifest format not owned here: The metadata schema and renderers belong to Registry Manifest; Relay serves and scopes the artifacts only (REQ-PR-RELAY-011).
 - PDP enforcement boundary: Governed PDP enforcement applies to configured runtime reads; scoped metadata publication remains a separate publication and discovery surface (REQ-PR-RELAY-019, REQ-PR-RELAY-023).
@@ -198,7 +198,7 @@ A Registry Relay deployment conforms to this specification when it:
 - returns aggregate observations computed from configured measures, in both native and SDMX-JSON serializations (REQ-PR-RELAY-009);
 - scope-filters the metadata it serves, does not own the manifest format, and keeps metadata publication separate from runtime PDP authorization (REQ-PR-RELAY-010, REQ-PR-RELAY-011, REQ-PR-RELAY-023);
 - describes evidence offerings without performing verification (REQ-PR-RELAY-012);
-- treats signed response credentials as opt-in VCDM VC-JWT provenance, distinct from Notary's SD-JWT VC (REQ-PR-RELAY-013, REQ-PR-RELAY-014);
+- keeps credential issuance out of Relay and points signed-credential workflows to Registry Notary or configured evidence services (REQ-PR-RELAY-013, REQ-PR-RELAY-014);
 - audits every data and metadata read, and reports errors as problem+json (REQ-PR-RELAY-015, REQ-PR-RELAY-016);
 - mounts Cargo-feature-gated, configuration-gated, and admin surfaces only as built and configured (REQ-PR-RELAY-017, REQ-PR-RELAY-018).
 

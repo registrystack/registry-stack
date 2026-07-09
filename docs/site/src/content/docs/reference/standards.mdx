@@ -95,8 +95,9 @@ What these levels mean for integrators:
 - OGC API Features and OGC API EDR are listed as profiled `emits` claims for Registry Relay.
   The claims are scoped to the tested feature-gated adapter routes, not full OGC conformance.
 - The Verifiable Credentials Data Model (W3C VC) is listed as `aligns_with` (`referenced`).
-  [Registry Relay](../../products/registry-relay/) has VC-oriented provenance fixtures and [Registry Notary](../../products/registry-notary/) issues SD-JWT VC credentials,
-  but neither project emits a full W3C VC Data Model envelope.
+  [Registry Notary](../../products/registry-notary/) issues SD-JWT VC credentials, but it does
+  not emit a full W3C VC Data Model envelope. [Registry Relay](../../products/registry-relay/)
+  no longer emits or hosts VC artifacts.
   {/* Notary evidence packet explicitly states "W3C Verifiable Credentials Data Model: NOT PRESENT" (.research/registry-notary.md). This is a confirmed absence, not an evidence gap; keep at aligns_with until a reviewed VC profile and validation fixtures are pinned. Promote when a reviewed VC profile and validation fixtures are pinned. */}
 - PROV-O is listed as `inspired_by` (`referenced`).
   The code uses provenance-shaped concepts (audit fields, claim provenance struct) but no PROV-O

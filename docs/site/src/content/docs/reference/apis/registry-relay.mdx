@@ -19,7 +19,6 @@ standards_referenced:
   - shacl
   - json-ld
   - sp-dci
-  - w3c-did
 ---
 
 [Open the Registry Relay API operations](../relay/)
@@ -59,10 +58,9 @@ For setup steps, scope strings, and credential configuration, see
   baseline OpenAPI component because not every entity requires purpose capture. At runtime,
   `api.require_purpose_header: true` on an entity or aggregate source makes the header mandatory for
   that operation. Calls that omit it are rejected with `400 auth.purpose_required`.
-- **Feature-gated surfaces.** OGC API Features, Records, and EDR adapters, SP-DCI sync routes, and
-  the signed response credential routes (DID document, JSON Schemas, JSON-LD contexts, VC-JWT
-  serialization; config key: `provenance`) only mount when the gateway is built and configured with
-  the matching Cargo feature.
+- **Feature-gated surfaces.** OGC API Features, Records, and EDR adapters, and SP-DCI sync routes
+  only mount when the gateway is built and configured with the matching Cargo feature.
+  Relay does not issue response credentials or host issuer DID documents.
 - **Admin routes.** Reload and metrics routes are mounted on a separate, optional admin listener,
   require `registry_relay:admin` for reload/config mutation, `registry_relay:metrics_read` for
   metrics, and `registry_relay:ops_read` for operational posture reads. They do not appear in the
