@@ -37,11 +37,11 @@ Reason: local libyaml FFI for the YAML alias and anchor prepass.
 
 Unsafe surface:
 
-- `crates/registry-manifest-cli/src/main.rs:944`
+- `crates/registry-manifest-cli/src/lib.rs:27`
   initializes and drives the libyaml parser over an input string.
-- `crates/registry-manifest-cli/src/main.rs:1009` releases parser state through
+- `crates/registry-manifest-cli/src/lib.rs:92` releases parser state through
   `ParserGuard`.
-- `crates/registry-manifest-cli/src/main.rs:1015` reads libyaml parser error
+- `crates/registry-manifest-cli/src/lib.rs:98` reads libyaml parser error
   details through raw pointers.
 
 Review notes:
