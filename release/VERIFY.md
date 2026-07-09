@@ -78,3 +78,9 @@ evidence files, SBOMs, Grype reports, and release capsules. It publishes SLSA
 provenance for those non-signature release assets when the workflow runs from
 the release tag ref. OCI image signatures are not yet published for the root
 monorepo release.
+
+The release capsule summarizes asset hashes, image digests, SBOMs, Grype
+reports, workflow lineage, and release warnings. It does not carry per-artifact
+signature or provenance status fields; verify those properties from each
+asset's sibling `.sig` and `.pem` files and from the release-level SLSA
+provenance asset.
