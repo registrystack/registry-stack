@@ -1,0 +1,202 @@
+---
+title: Back up and restore a deployment
+description: How to preserve generated secrets, product state directories, Redis data, and config-trust files across container recreation and upgrades.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+  - registry-relay
+  - registry-notary
+last_reviewed: "2026-07-09"
+doc_type: how-to
+locale: en
+standards_referenced: []
+---
+
+Use this procedure before you recreate containers, move a host, or upgrade a
+single-node Registry Relay or Registry Notary deployment. Start with `secrets/local.env`
+because losing it rotates generated API credentials, audit HMAC secrets, and the local
+Notary issuer identity; then preserve product state directories, Redis data, config-trust
+files, and source inputs.
+
+## When to use this
+
+Use this for `registryctl` generated projects and for hand-written single-node Docker Compose
+deployments that keep state on the host running the containers.
+Use your platform's snapshot, secret-manager, and database backup process for hosted,
+multi-node, or Kubernetes deployments.
+
+This procedure preserves durable state.
+It does not preserve process-local state such as OpenID Connect (OIDC) JSON Web Key Set
+(JWKS) caches, source-adapter token caches, or in-flight OpenID for Verifiable Credential
+Issuance pre-authorized flows.
+Those flows are interrupted by restart and must be started again by the holder or upstream
+journey.
+
+## Before you start
+
+- Know the project directory that contains `compose.yaml`, `registryctl.yaml`, `secrets/`,
+  and `state/`.
+- Know whether the deployment includes Registry Notary and the `registry-notary-redis`
+  service.
+- Stop write traffic or use a filesystem snapshot if you need an exact point-in-time copy of
+  audit files.
+- Keep backups encrypted and access-controlled. `secrets/local.env`, audit files,
+  config-trust state, and Redis replay data are security-sensitive.
+
+## Back up generated secrets first
+
+Create a backup directory and copy `secrets/local.env` before copying other state:
+
+```sh
+backup_dir="backup/registry-stack-$(date +%Y%m%d)"
+install -d -m 700 "$backup_dir"
+cp -p secrets/local.env "$backup_dir/local.env"
+sha256sum "$backup_dir/local.env" > "$backup_dir/local.env.sha256"
+chmod 600 "$backup_dir/local.env" "$backup_dir/local.env.sha256"
+```
+
+Expected output is no output.
+The checksum file lets you confirm that a later restore put back the exact same secret file.
+
+## Back up config, source files, and product state
+
+Back up the generated project manifest, Compose file, product config directories, source data,
+and host-mounted state:
+
+```sh
+backup_items="registryctl.yaml compose.yaml relay state data"
+[ -d notary ] && backup_items="$backup_items notary"
+tar -cf "$backup_dir/config-source-state.tar" $backup_items
+sha256sum "$backup_dir/config-source-state.tar" > "$backup_dir/config-source-state.tar.sha256"
+```
+
+Expected output is one checksum line in `config-source-state.tar.sha256`.
+The archive includes `state/relay/` and `state/notary/` when those directories exist.
+Those paths are where generated Compose projects mount Relay cache, optional file-audit
+directories, and config-trust anti-rollback state if you enable it with
+`antirollback_state_path`.
+
+If your hand-written config uses different paths, include them in the archive:
+
+- Relay or Notary file-audit directories, such as `/var/log/registry-relay/` or
+  `/var/log/registry-notary/`.
+- `config_trust.trust_anchor_path`, `config_trust.bundle_path`, and
+  `config_trust.antirollback_state_path`.
+- Source files, metadata manifests, signed bundles, and trust anchors that are mounted
+  into the containers.
+
+## Back up Redis when Notary is present
+
+Generated Notary projects use Redis for replay and nonce state.
+The generated Redis service writes append-only files to the `registry-notary-redis-data`
+volume.
+Capture that volume after asking Redis to flush a snapshot:
+
+```sh
+redis_container="$(docker compose ps -q registry-notary-redis)"
+if [ -n "$redis_container" ]; then
+  docker compose exec -T registry-notary-redis redis-cli SAVE
+  redis_volume="$(docker inspect "$redis_container" --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}')"
+  docker run --rm \
+    -v "$redis_volume:/redis:ro" \
+    -v "$PWD/$backup_dir:/backup" \
+    busybox tar -cf /backup/registry-notary-redis-data.tar -C /redis .
+  sha256sum "$backup_dir/registry-notary-redis-data.tar" > "$backup_dir/registry-notary-redis-data.tar.sha256"
+fi
+```
+
+`redis-cli SAVE` prints `OK` when Redis wrote the snapshot.
+If the project has no Notary Redis service, the script block produces no backup archive.
+
+## Restore files
+
+On a new host, install Docker Compose and `registryctl`, create the project directory, and copy
+the backup directory into it.
+On the original host, stop the generated services before restoring files:
+
+```sh
+registryctl stop
+```
+
+Expected output comes from Docker Compose and shows the containers stopping or already stopped.
+Then restore secrets and host-mounted state:
+
+```sh
+sha256sum -c "$backup_dir/local.env.sha256"
+install -d -m 700 secrets
+cp -p "$backup_dir/local.env" secrets/local.env
+sha256sum -c "$backup_dir/config-source-state.tar.sha256"
+tar -xf "$backup_dir/config-source-state.tar"
+```
+
+Both checksum commands print `OK` for the named file.
+Do not generate a new `secrets/local.env` to replace a lost one unless you intend to rotate
+the deployment's API credentials, audit HMAC secret, and local Notary issuer key.
+
+## Restore Redis data
+
+Restore Redis before starting Notary if the backup includes
+`registry-notary-redis-data.tar`:
+
+```sh
+if [ -f "$backup_dir/registry-notary-redis-data.tar" ]; then
+  sha256sum -c "$backup_dir/registry-notary-redis-data.tar.sha256"
+  docker compose up -d registry-notary-redis
+  redis_container="$(docker compose ps -q registry-notary-redis)"
+  redis_volume="$(docker inspect "$redis_container" --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}')"
+  docker compose stop registry-notary-redis
+  docker run --rm \
+    -v "$redis_volume:/redis" \
+    -v "$PWD/$backup_dir:/backup:ro" \
+    busybox sh -c 'cd /redis && rm -rf ./* && tar -xf /backup/registry-notary-redis-data.tar'
+fi
+```
+
+The checksum command prints `OK`.
+The temporary `docker run` command is quiet when the archive extracts successfully.
+
+## Verify after restore
+
+Start the deployment and run product checks:
+
+```sh
+registryctl start
+registryctl doctor --profile local --format json
+registryctl smoke
+registryctl notary smoke
+```
+
+Expected output from `doctor` is a JSON report with no `startup_fail` findings.
+Run `registryctl notary smoke` only when the project has a Notary section.
+
+For a deployment that uses `config_trust`, verify that the restored anti-rollback state still
+matches the configured trust anchor and signed bundle before the service is allowed to serve.
+Run the command on the host or inside a container where the configured paths are available:
+
+```sh
+registry-relay config verify-bundle \
+  --bundle-dir /etc/registry-relay/config/bundle \
+  --anchor-path /etc/registry-relay/config/trust-anchor.json \
+  --state-path /var/lib/registry-relay/config-state/config-antirollback.json
+```
+
+Use the equivalent `registry-notary config verify-bundle` command and Notary paths when
+verifying a Notary bundle.
+A rollback rejection means the restored anti-rollback file has seen a newer bundle sequence
+than the bundle you are trying to boot.
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Generated API keys no longer work after restore | `secrets/local.env` was regenerated or copied from the wrong project | Restore the original `secrets/local.env`, then restart the containers |
+| Audit records cannot be correlated across the restore | The audit HMAC secret changed | Restore the prior `secrets/local.env`; if the old file is gone, document the break as a key-rotation event |
+| Notary starts but replay checks behave like a fresh deployment | The Redis volume was removed or restored empty | Restore `registry-notary-redis-data.tar`, or accept that in-flight replay and nonce state was lost |
+| Config bundle startup fails with a rollback code | The anti-rollback state records a newer accepted sequence | Boot a signed bundle with a higher sequence, or follow the break-glass process documented for config trust |
+
+## Next
+
+- [Retention and persistent state](../retention-and-persistent-state/)
+- [Upgrade and roll back a deployment](../upgrade-and-rollback/)
+- [Harden a production deployment](../../security/hardening-checklist/)

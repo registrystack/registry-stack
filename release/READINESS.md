@@ -106,7 +106,10 @@ What 1.0 promises the institutions that run this.
       (#203; exercises the draft operate/upgrade-and-rollback page with
       source-built release-tag images; release-artifact verification,
       credential issuance, metrics, Redis replay/nonce survival, and
-      anti-rollback monotonic rejection remain outside this run).
+      anti-rollback monotonic rejection remain outside this run). Backup and
+      restore guidance for generated and single-node deployments is documented
+      in [`backup-and-restore.mdx`](../docs/site/src/content/docs/operate/backup-and-restore.mdx)
+      (#226).
 - [ ] Security-relevant configuration defaults inventoried and reviewed for
       secure-by-default (#172 and #171 are known open questions). Inventory
       evidence: [`security-config-defaults.md`](notes/security-config-defaults.md);

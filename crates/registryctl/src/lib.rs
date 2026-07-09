@@ -1959,6 +1959,7 @@ fn init_benefits_project(dir: &Path) -> Result<()> {
     fs::create_dir_all(dir.join("data"))?;
     fs::create_dir_all(dir.join("secrets"))?;
     fs::create_dir_all(dir.join("output"))?;
+    create_relay_state_dirs(dir)?;
 
     let credentials = LocalCredentials::generate()?;
     write_text(
@@ -1991,6 +1992,7 @@ fn init_standalone_notary_project(dir: &Path, options: NotaryInitOptions) -> Res
     fs::create_dir_all(dir.join("notary"))?;
     fs::create_dir_all(dir.join("secrets"))?;
     fs::create_dir_all(dir.join("output"))?;
+    create_notary_state_dirs(dir)?;
 
     if !options.source_kind.uses_static_source_token() && options.source_token_from_env.is_some() {
         bail!(
@@ -2059,6 +2061,7 @@ fn add_notary_from_local_relay(project_dir: &Path, force: bool) -> Result<()> {
     })?;
 
     fs::create_dir_all(project_dir.join("notary"))?;
+    create_notary_state_dirs(project_dir)?;
     let notary_credentials = NotaryLocalCredentials::generate(relay_row_reader.to_string())?;
     write_text(
         notary_config_path,
@@ -2079,6 +2082,74 @@ fn add_notary_from_local_relay(project_dir: &Path, force: bool) -> Result<()> {
 
 fn write_text(path: PathBuf, contents: &str) -> Result<()> {
     fs::write(&path, contents).with_context(|| format!("failed to write {}", path.display()))
+}
+
+fn create_relay_state_dirs(dir: &Path) -> Result<()> {
+    for path in [
+        "state",
+        "state/relay",
+        "state/relay/cache",
+        "state/relay/config-state",
+        "state/relay/audit",
+    ] {
+        create_private_dir_all(&dir.join(path))?;
+    }
+    Ok(())
+}
+
+fn create_notary_state_dirs(dir: &Path) -> Result<()> {
+    for path in [
+        "state",
+        "state/notary",
+        "state/notary/config-state",
+        "state/notary/audit",
+    ] {
+        create_private_dir_all(&dir.join(path))?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn create_private_dir_all(path: &Path) -> Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true).mode(0o700);
+    builder
+        .create(path)
+        .with_context(|| format!("failed to create {}", path.display()))?;
+
+    let metadata =
+        fs::symlink_metadata(path).with_context(|| format!("failed to stat {}", path.display()))?;
+    if metadata.file_type().is_symlink() {
+        bail!(
+            "state directory path must not be a symlink: {}",
+            path.display()
+        );
+    }
+    if !metadata.is_dir() {
+        bail!(
+            "state directory path must be a directory: {}",
+            path.display()
+        );
+    }
+
+    let mut permissions = metadata.permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(path, permissions)
+        .with_context(|| format!("failed to set permissions on {}", path.display()))
+}
+
+#[cfg(not(unix))]
+fn create_private_dir_all(path: &Path) -> Result<()> {
+    fs::create_dir_all(path).with_context(|| format!("failed to create {}", path.display()))?;
+    if !path.is_dir() {
+        bail!(
+            "state directory path must be a directory: {}",
+            path.display()
+        );
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -5546,6 +5617,9 @@ workflows:
             "data/benefits_casework.xlsx",
             "secrets/local.env",
             "output/.gitkeep",
+            "state/relay/cache",
+            "state/relay/config-state",
+            "state/relay/audit",
             "bruno/registry-api/bruno.json",
             "bruno/registry-api/collection.bru",
             "bruno/registry-api/environments/local.bru",
@@ -5554,6 +5628,16 @@ workflows:
         ] {
             assert!(project.join(path).exists(), "{path} should exist");
         }
+        assert_private_state_dirs(
+            &project,
+            &[
+                "state",
+                "state/relay",
+                "state/relay/cache",
+                "state/relay/config-state",
+                "state/relay/audit",
+            ],
+        );
         assert!(!project.join("relay/metadata.yaml").exists());
 
         let config_text = fs::read_to_string(project.join("relay/config.yaml")).unwrap();
@@ -5570,6 +5654,10 @@ workflows:
         assert!(config.get("metadata").is_none());
         assert!(manifest["relay"].get("metadata").is_none());
         assert!(!compose.contains("metadata.yaml"));
+        assert!(compose.contains("./relay:/etc/registry-relay:ro"));
+        assert!(compose.contains("./state/relay/cache:/var/lib/registry-relay/cache"));
+        assert!(compose.contains("./state/relay/config-state:/var/lib/registry-relay/config-state"));
+        assert!(compose.contains("./state/relay/audit:/var/log/registry-relay"));
         assert_eq!(
             config["datasets"][0]["aggregates"][0]["access"]["aggregate_only_execution"],
             true
@@ -5590,6 +5678,8 @@ workflows:
         let readme = fs::read_to_string(project.join("README.md")).unwrap();
         assert!(readme.contains("registryctl doctor --profile local --format json"));
         assert!(readme.contains("redacts local secret values"));
+        assert!(readme.contains("Back up that file before upgrades"));
+        assert!(readme.contains("https://docs.registrystack.org/operate/backup-and-restore/"));
     }
 
     #[test]
@@ -5709,15 +5799,28 @@ workflows:
             "notary/config.yaml",
             "secrets/local.env",
             "output/.gitkeep",
+            "state/notary/config-state",
+            "state/notary/audit",
             "bruno/registry-api/Notary/Evaluate person exists.bru",
         ] {
             assert!(project.join(path).exists(), "{path} should exist");
         }
+        assert_private_state_dirs(
+            &project,
+            &[
+                "state",
+                "state/notary",
+                "state/notary/config-state",
+                "state/notary/audit",
+            ],
+        );
 
         let readme = fs::read_to_string(project.join("README.md")).unwrap();
         assert!(readme.contains("registryctl doctor --profile local --format json"));
         assert!(readme.contains("calls the Notary"));
         assert!(readme.contains("validator and redacts local secret values"));
+        assert!(readme.contains("Back up that file before upgrades"));
+        assert!(readme.contains("https://docs.registrystack.org/operate/backup-and-restore/"));
 
         let manifest: Value =
             serde_yaml::from_str(&fs::read_to_string(project.join("registryctl.yaml")).unwrap())
@@ -5739,6 +5842,13 @@ workflows:
         assert!(compose.contains("host.docker.internal:host-gateway"));
         assert!(compose.contains("name: my-first-api_default"));
         assert!(compose.contains("- source_api"));
+        assert!(compose.contains("./notary:/etc/registry-notary:ro"));
+        assert!(
+            compose.contains("./state/notary/config-state:/var/lib/registry-notary/config-state")
+        );
+        assert!(compose.contains("./state/notary/audit:/var/log/registry-notary"));
+        assert!(compose.contains("command: [\"redis-server\", \"--appendonly\", \"yes\"]"));
+        assert!(compose.contains("registry-notary-redis-data:/data"));
 
         let config = fs::read_to_string(project.join("notary/config.yaml")).unwrap();
         let config_yaml: Value = serde_yaml::from_str(&config).unwrap();
@@ -6343,7 +6453,13 @@ workflows:
         assert!(compose.contains(&format!("image: {NOTARY_REDIS_IMAGE}")));
         assert!(!compose.contains("redis:latest"));
         assert!(compose.contains("\"4255:8080\""));
-        assert!(compose.contains("./notary/config.yaml:/etc/registry-notary/config.yaml:ro"));
+        assert!(compose.contains("./notary:/etc/registry-notary:ro"));
+        assert!(
+            compose.contains("./state/notary/config-state:/var/lib/registry-notary/config-state")
+        );
+        assert!(compose.contains("./state/notary/audit:/var/log/registry-notary"));
+        assert!(compose.contains("command: [\"redis-server\", \"--appendonly\", \"yes\"]"));
+        assert!(compose.contains("registry-notary-redis-data:/data"));
     }
 
     #[test]
@@ -6575,6 +6691,7 @@ workflows:
         let gitignore = fs::read_to_string(project.join(".gitignore")).unwrap();
         assert!(gitignore.lines().any(|line| line == "secrets/"));
         assert!(gitignore.lines().any(|line| line == "output/"));
+        assert!(gitignore.lines().any(|line| line == "state/"));
     }
 
     #[test]
@@ -7218,6 +7335,27 @@ workflows:
         }
         fs::set_permissions(path, permissions).unwrap();
     }
+
+    fn assert_private_state_dirs(project: &Path, paths: &[&str]) {
+        for path in paths {
+            assert_private_state_dir(project, path);
+        }
+    }
+
+    #[cfg(unix)]
+    fn assert_private_state_dir(project: &Path, path: &str) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let actual_mode = fs::metadata(project.join(path))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(actual_mode, 0o700, "{path} should be private");
+    }
+
+    #[cfg(not(unix))]
+    fn assert_private_state_dir(_project: &Path, _path: &str) {}
 
     fn fake_product_report(product: &str, status: &str, diagnostics: Vec<JsonValue>) -> String {
         let error_count = diagnostics

@@ -43,6 +43,16 @@ registryctl doctor --profile local --format json
 
 The generated local demo credentials live in `secrets/local.env`. They are for
 this local project only and are not production credentials.
+Back up that file before upgrades or host moves. It contains the keys that keep
+audit hashes and generated API credentials stable.
+
+The generated Compose file keeps writable Relay state under `state/relay/`. If
+you add Notary, Redis replay and nonce state lives in the
+`registry-notary-redis-data` Docker volume. Use `registryctl stop` or
+`docker compose down` for container replacement; `docker compose down -v`
+deletes named volumes.
+For backup and restore steps, see
+https://docs.registrystack.org/operate/backup-and-restore/.
 
 Run `registryctl doctor --format json` after config edits. It calls the Relay
 validator and redacts local secret values in the report. Then run
