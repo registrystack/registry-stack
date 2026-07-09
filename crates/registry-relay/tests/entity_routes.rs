@@ -1427,6 +1427,70 @@ async fn governed_entity_policy_ignores_unverified_trust_provenance_without_leak
 }
 
 #[tokio::test]
+async fn governed_entity_policy_ignores_unverified_raw_pdp_context_headers_without_leak() {
+    let policy = r#"          governed_policy:
+            permitted_purposes:
+              - https://data.example.test/purposes/testing
+            permitted_jurisdictions: [ZZ]
+            trusted_context: {}
+"#;
+    let (server, audit_sink) =
+        server_with_query_audit_and_governed_entity_policy_without_trust_assertion_scopes(policy)
+            .await;
+    let hostile_values = [
+        "forged-subject-ref-12345",
+        "forged-relationship",
+        "forged-actor",
+        "forged-format",
+    ];
+
+    let denied = server
+        .get("/v1/datasets/social_registry/entities/individual/records?id=p-1")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
+        .add_header("x-registry-subject-ref", hostile_values[0])
+        .add_header("x-registry-relationship", hostile_values[1])
+        .add_header("x-registry-on-behalf-of", hostile_values[2])
+        .add_header("x-registry-credential-format", hostile_values[3])
+        .await;
+
+    denied.assert_status(StatusCode::FORBIDDEN);
+    let body = denied.json::<Value>();
+    assert_eq!(body["code"], "pdp.jurisdiction_not_permitted");
+    let body_text = serde_json::to_string(&body).expect("response body serializes");
+    for value in hostile_values {
+        assert!(
+            !body_text.contains(value),
+            "response must not echo forged PDP context value {value}"
+        );
+    }
+
+    let records = audit_sink.snapshot();
+    assert_eq!(
+        records.len(),
+        1,
+        "denied governed entity request emits one audit record"
+    );
+    let audit_text = &records[0];
+    let record = audit_record_from_envelope(audit_text);
+    assert_eq!(record["status_code"], 403);
+    assert_eq!(record["error_code"], "pdp.jurisdiction_not_permitted");
+    assert_eq!(
+        record["pdp_stable_problem_code"],
+        "pdp.jurisdiction_not_permitted"
+    );
+    assert!(
+        record["pdp_trust_provenance"].is_null(),
+        "unverified raw PDP context headers must not be recorded as trusted provenance"
+    );
+    for value in hostile_values {
+        assert!(
+            !audit_text.contains(value),
+            "audit record must not include forged PDP context value {value}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn governed_entity_policy_ignores_unverified_source_freshness_header_without_leak() {
     let policy = r#"          governed_policy:
             permitted_purposes:
@@ -1472,6 +1536,58 @@ async fn governed_entity_policy_ignores_unverified_source_freshness_header_witho
     assert!(
         !audit_text.contains(forged_freshness),
         "audit record must not include forged freshness value {forged_freshness}"
+    );
+}
+
+#[tokio::test]
+async fn governed_entity_policy_ignores_unverified_source_observed_at_header_without_leak() {
+    let policy = r#"          governed_policy:
+            permitted_purposes:
+              - https://data.example.test/purposes/testing
+            max_source_age_seconds: 30
+            trusted_context: {}
+"#;
+    let (server, audit_sink) =
+        server_with_query_audit_and_governed_entity_policy_without_trust_assertion_scopes(policy)
+            .await;
+    let forged_observed_at = "9999999999";
+
+    let denied = server
+        .get("/v1/datasets/social_registry/entities/individual/records?id=p-1")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
+        .add_header(
+            "x-registry-source-observed-at-unix-seconds",
+            forged_observed_at,
+        )
+        .await;
+
+    denied.assert_status(StatusCode::FORBIDDEN);
+    let body = denied.json::<Value>();
+    assert_eq!(body["code"], "pdp.evidence_stale");
+    let body_text = serde_json::to_string(&body).expect("response body serializes");
+    assert!(
+        !body_text.contains(forged_observed_at),
+        "response must not echo forged source observed timestamp {forged_observed_at}"
+    );
+
+    let records = audit_sink.snapshot();
+    assert_eq!(
+        records.len(),
+        1,
+        "denied governed entity request emits one audit record"
+    );
+    let audit_text = &records[0];
+    let record = audit_record_from_envelope(audit_text);
+    assert_eq!(record["status_code"], 403);
+    assert_eq!(record["error_code"], "pdp.evidence_stale");
+    assert_eq!(record["pdp_stable_problem_code"], "pdp.evidence_stale");
+    assert!(
+        record["pdp_trust_provenance"].is_null(),
+        "unverified source observed timestamp must not be recorded as trusted provenance"
+    );
+    assert!(
+        !audit_text.contains(forged_observed_at),
+        "audit record must not include forged source observed timestamp {forged_observed_at}"
     );
 }
 

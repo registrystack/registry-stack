@@ -12999,6 +12999,7 @@ evaluation_profiles:
     async fn issue_credential_rejects_purpose_mismatch() {
         let evidence = credential_issue_evidence_config();
         let store = Arc::new(EvidenceStore::default());
+        let sign_count = Arc::new(AtomicUsize::new(0));
         store.insert(registry_notary_core::StoredEvaluation {
             client_id: "caseworker".to_string(),
             purpose: "benefits".to_string(),
@@ -13028,7 +13029,9 @@ evaluation_profiles:
                 Arc::new(AppMetrics::default()),
                 Arc::new(CountingSource::default()),
                 Arc::clone(&store),
-                Arc::new(TestIssuerResolver),
+                Arc::new(CountingIssuerResolver {
+                    sign_count: Arc::clone(&sign_count),
+                }),
                 None,
             )
             .expect("state builds"),
@@ -13063,6 +13066,11 @@ evaluation_profiles:
             .expect("body reads");
         let body: Value = serde_json::from_slice(&body).expect("problem body parses");
         assert_eq!(body["code"], json!("evaluation.binding_mismatch"));
+        assert_eq!(
+            sign_count.load(Ordering::SeqCst),
+            0,
+            "purpose mismatch must be denied before credential signing"
+        );
     }
 
     #[test]
