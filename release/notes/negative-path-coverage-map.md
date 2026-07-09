@@ -202,15 +202,31 @@ public evidence or disposition.
   `forwarded = false`, and response/audit redaction.
 - `NP-28`: Covered.
   Public anchors:
+  `crates/registry-notary-server/tests/standalone_http.rs::direct_credential_pre_evaluation_denials_are_audited_and_redacted`,
+  `crates/registry-notary-server/tests/standalone_http.rs::direct_credential_operation_denial_is_audited_and_preserves_denial_code`,
+  `crates/registry-notary-server/tests/standalone_http.rs::direct_credential_rate_limit_is_audited_with_stored_context`,
   `crates/registry-notary-server/tests/standalone_http.rs::direct_credential_binding_denials_are_audited_and_redacted`,
   `crates/registry-notary-server/tests/standalone_http.rs::direct_credential_holder_proof_replay_is_audited_and_redacted`,
   `crates/registry-notary-server/tests/standalone_http.rs::direct_credential_purpose_mismatch_denial_is_audited_and_redacted`,
-  and `crates/registry-notary-server/tests/standalone_http.rs::strict_credentials_issue_rejects_oid4vci_proof_at_http_boundary`.
-  Disposition: direct `/v1/credentials` evaluation-bound denials now share
-  product-surface `credential_denied` audit coverage for binding mismatch,
-  purpose mismatch, holder-proof shape, and holder-proof replay paths; tests
-  assert stable problem responses, no unintended credential issuance,
-  redacted audit records, and no credential material in denial responses.
+  `crates/registry-notary-server/tests/standalone_http.rs::strict_credentials_issue_rejects_oid4vci_proof_at_http_boundary`,
+  `crates/registry-notary-server/tests/self_attestation_guard_test.rs::self_attestation_credential_issuance_rejects_disallowed_profile`,
+  `crates/registry-notary-server/src/api.rs::evaluation_access_uses_stored_claim_version_scope`,
+  `crates/registry-notary-server/src/runtime.rs::credential_profile_for_rejects_profile_not_listed_in_claim`,
+  and `crates/registry-notary-server/src/api.rs::issue_credential_fails_closed_when_status_record_write_fails`.
+  Disposition: caller-triggered pre-evaluation request, classification, and
+  lookup denials emit a minimal `credential_denied` event without recording an
+  untrusted evaluation id. Evaluation-bound binding, stored-access, policy,
+  proof, and replay denials share redacted stored-evaluation context and
+  preserve structured self-attestation denial codes, including issue-time
+  assurance failures. Credential issuance rate limiting retains its dedicated
+  `credential_issue_rate_limited` decision with the same safe stored context.
+  Authentication failures retain the auth middleware taxonomy; missing handler
+  state, disabled evidence, audit-key derivation, replay-store failure,
+  credential-profile or issuer resolution, signing, and status failures remain
+  service errors rather than being relabeled as credential policy denials.
+  Tests assert stable problem responses, no unintended
+  credential issuance, no credential material, redacted audit records,
+  `source_read_count = 0`, and `forwarded = false` on credential denial paths.
 - `NP-29`: Partial.
   Public anchors:
   `crates/registry-notary-server/tests/standalone_http.rs::federation_evaluation_returns_signed_response_and_rejects_replay`,
