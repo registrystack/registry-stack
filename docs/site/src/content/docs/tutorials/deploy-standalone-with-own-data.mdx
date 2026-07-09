@@ -34,9 +34,11 @@ canonical example, and run the published container directly.
 
 This guide targets a single-node, self-hosted deployment for evaluation and pilot use.
 It is not a formal production deployment profile.
-A formal production deployment profile (Compose and Kubernetes shapes, sizing, and a hardening
-baseline) is not yet published.
-Before exposing any deployment beyond local evaluation, work through the
+A single-node Compose deployment path behind an institution-owned reverse proxy and IAM is
+published at
+[Run single-node Compose behind your reverse proxy](../../operate/single-node-compose-behind-proxy/).
+Kubernetes and high-availability profiles are outside the 1.0 deployment profile.
+Before exposing any deployment beyond local evaluation, work through that guide and the
 [Relay operations runbook](https://github.com/registrystack/registry-stack/blob/v0.8.4/crates/registry-relay/docs/ops.md)
 production hardening checklist.
 

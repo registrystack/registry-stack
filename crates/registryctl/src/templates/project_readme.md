@@ -53,6 +53,9 @@ you add Notary, Redis replay and nonce state lives in the
 deletes named volumes.
 For backup and restore steps, see
 https://docs.registrystack.org/operate/backup-and-restore/.
+Before exposing this project through a reverse proxy, IAM, and front rate
+limiter, follow
+https://docs.registrystack.org/operate/single-node-compose-behind-proxy/.
 
 Run `registryctl doctor --format json` after config edits. It calls the Relay
 validator and redacts local secret values in the report. Then run

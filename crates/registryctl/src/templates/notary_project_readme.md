@@ -36,6 +36,9 @@ volume. Use `registryctl stop` or `docker compose down` for container
 replacement; `docker compose down -v` deletes named volumes.
 For backup and restore steps, see
 https://docs.registrystack.org/operate/backup-and-restore/.
+Before exposing this project through a reverse proxy, IAM, and front rate
+limiter, follow
+https://docs.registrystack.org/operate/single-node-compose-behind-proxy/.
 
 Run `registryctl doctor --format json` after config edits. It calls the Notary
 validator and redacts local secret values in the report. Then run
