@@ -174,6 +174,13 @@ const GATES: &[Gate] = &[
     Gate {
         id: "relay.audit.retention_local_only",
         condition: |facts| facts.audit_retention_local_only,
+        // A local file sink caps retention and lets an attacker with host
+        // access destroy the trail; the audit hash chain also cannot detect
+        // leading or trailing truncation of a local-only log, so off-host
+        // shipping (plus its attestation) is the completeness evidence that
+        // clears this gate. Under production this is only a warn, so that
+        // warning is the operator's single signal.
+        //
         // Stdout and syslog sinks are exempt: stdout retention is the
         // orchestrator's log pipeline's concern, and syslog forwarding is the
         // syslog daemon's own surface. Only a local rotating file sink caps
@@ -250,7 +257,7 @@ pub fn evaluate(
 
         // A waivable, triggered gate may be suppressed by a matching waiver.
         // `startup_fail` is never waivable.
-        let waivable = severity != StartupFail;
+        let waivable = severity_is_waivable(severity);
         let waiver = if waivable {
             waivers.iter().find(|waiver| waiver.finding == gate.id)
         } else {
@@ -325,6 +332,47 @@ pub fn catalog_gate_id(id: &str) -> Option<&'static str> {
         .iter()
         .map(|gate| gate.id)
         .find(|gate_id| *gate_id == id)
+}
+
+/// The severity `gate_id` binds under `profile`, or `None` when the gate is
+/// unbound at that profile (including an undeclared profile) or `gate_id` is
+/// not a catalog gate. Config validation reads this to reject, at load, a
+/// waiver whose gate cannot be waived under the active profile instead of
+/// silently dropping it.
+pub fn gate_severity_for_profile(
+    gate_id: &str,
+    profile: Option<DeploymentProfile>,
+) -> Option<GateSeverity> {
+    let profile = profile?;
+    GATES
+        .iter()
+        .find(|gate| gate.id == gate_id)
+        .and_then(|gate| gate.severity_for(profile))
+}
+
+/// Whether a triggered gate at `severity` can be suppressed by a waiver.
+/// `startup_fail` is the hard, never-waivable severity: running at all
+/// falsifies the profile claim, so no waiver may clear it. Every other severity
+/// is waivable. This is the single definition of waivability shared by gate
+/// evaluation and load-time waiver validation.
+pub fn severity_is_waivable(severity: GateSeverity) -> bool {
+    severity != StartupFail
+}
+
+/// Operator remediation for a waiver that names a hard, non-waivable gate.
+/// Every hard gate shares the base guidance (remove the waiver and fix the
+/// condition it reports); the audit retention gate additionally names its two
+/// concrete levers, since off-host shipping plus its attestation is the only
+/// completeness evidence that clears it.
+pub fn hard_gate_remediation(gate_id: &str) -> &'static str {
+    match gate_id {
+        "relay.audit.retention_local_only" => {
+            "remove the waiver and fix the underlying condition it reports: ship audit events \
+             off-host and set deployment.evidence.audit_offhost_shipping: true, or use a \
+             non-local audit sink"
+        }
+        _ => "remove the waiver and fix the underlying condition it reports",
+    }
 }
 
 /// A waiver is expired once `today` is strictly past its `expires` date. The
@@ -964,5 +1012,54 @@ datasets: []
         // Only a genuine signed bundle clears the gate.
         assert!(!facts_from_config(&config, ConfigSource::SignedBundleFile).config_unsigned);
         assert!(!facts_from_config(&config, ConfigSource::SignedBundleEndpoint).config_unsigned);
+    }
+
+    #[test]
+    fn gate_severity_for_profile_resolves_binding() {
+        // The retention gate warns under production and is a startup failure
+        // under evidence_grade; it is unbound under hosted_lab and local.
+        let id = "relay.audit.retention_local_only";
+        assert_eq!(
+            gate_severity_for_profile(id, Some(DeploymentProfile::Production)),
+            Some(FindingWarn)
+        );
+        assert_eq!(
+            gate_severity_for_profile(id, Some(DeploymentProfile::EvidenceGrade)),
+            Some(StartupFail)
+        );
+        assert_eq!(
+            gate_severity_for_profile(id, Some(DeploymentProfile::HostedLab)),
+            None
+        );
+        assert_eq!(
+            gate_severity_for_profile(id, Some(DeploymentProfile::Local)),
+            None
+        );
+        // An undeclared profile or an unknown gate binds nothing.
+        assert_eq!(gate_severity_for_profile(id, None), None);
+        assert_eq!(
+            gate_severity_for_profile("not.a.gate", Some(DeploymentProfile::EvidenceGrade)),
+            None
+        );
+    }
+
+    #[test]
+    fn severity_is_waivable_only_below_startup_fail() {
+        assert!(severity_is_waivable(FindingWarn));
+        assert!(severity_is_waivable(FindingError));
+        assert!(severity_is_waivable(ReadinessFail));
+        assert!(!severity_is_waivable(StartupFail));
+    }
+
+    #[test]
+    fn hard_gate_remediation_names_audit_offhost_levers() {
+        let audit = hard_gate_remediation("relay.audit.retention_local_only");
+        assert!(audit.contains("audit_offhost_shipping"));
+        assert!(audit.contains("non-local audit sink"));
+        assert!(audit.contains("remove the waiver"));
+        // Any other hard gate gets the generic guidance without audit specifics.
+        let generic = hard_gate_remediation("relay.config.unsigned");
+        assert!(generic.contains("remove the waiver"));
+        assert!(!generic.contains("audit_offhost_shipping"));
     }
 }

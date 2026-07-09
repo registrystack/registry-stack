@@ -127,6 +127,27 @@ fn validate_deployment(config: &Config, source: ConfigSource) -> Result<(), Conf
             );
             return Err(ConfigError::ValidationError);
         }
+        // A waiver that names a hard, non-waivable gate under the active
+        // profile can never suppress it. Silently dropping such a waiver would
+        // let an operator believe a startup gate was waived when it was not, so
+        // reject it at load, mirroring Notary's `HardGateNotWaivable`. Waivable
+        // and unbound gates are left to gate evaluation. This check keys on the
+        // gate's severity under the profile, not on whether its condition
+        // currently holds, so the operator hears about an impossible waiver
+        // even before the condition trips.
+        if let Some(severity) =
+            crate::deployment::gate_severity_for_profile(&waiver.finding, config.deployment.profile)
+        {
+            if !crate::deployment::severity_is_waivable(severity) {
+                tracing::error!(
+                    code = "config.validation_error",
+                    finding = %waiver.finding,
+                    action = crate::deployment::hard_gate_remediation(&waiver.finding),
+                    "deployment waiver names a hard deployment gate that cannot be waived under the active profile"
+                );
+                return Err(ConfigError::ValidationError);
+            }
+        }
     }
 
     let facts = crate::deployment::facts_from_config(config, source);
@@ -4297,9 +4318,9 @@ datasets: []
         }
     }
 
-    /// Runs `run(config)` with a capturing subscriber and returns the
-    /// rendered log output alongside the validation result.
-    fn run_with_captured_logs(config: &Config) -> (Result<(), Error>, String) {
+    /// Runs `f` with a capturing subscriber and returns its result alongside
+    /// the rendered log output.
+    fn capture_logs<T>(f: impl FnOnce() -> T) -> (T, String) {
         let logs = SharedLog::default();
         let subscriber = tracing_subscriber::fmt()
             .compact()
@@ -4309,11 +4330,17 @@ datasets: []
             .with_writer(logs.clone())
             .finish();
         let guard = tracing::subscriber::set_default(subscriber);
-        let result = run(config);
+        let result = f();
         drop(guard);
         let rendered = String::from_utf8(logs.0.lock().expect("log buffer lock").clone())
             .expect("logs are utf-8");
         (result, rendered)
+    }
+
+    /// Runs `run(config)` with a capturing subscriber and returns the
+    /// rendered log output alongside the validation result.
+    fn run_with_captured_logs(config: &Config) -> (Result<(), Error>, String) {
+        capture_logs(|| run(config))
     }
 
     #[test]
@@ -4447,6 +4474,82 @@ datasets: []
             "deployment:\n  profile: hosted_lab\n  waivers:\n    - finding: \"relay.config.unsigned\"\n      reason: \"synthetic-waiver-not-a-secret\"\n      expires: \"2999-01-01\"",
         );
         run(&config).expect("a canonical dotted finding id must pass validation");
+    }
+
+    #[test]
+    fn waiver_on_hard_gate_is_rejected_at_load() {
+        // Under evidence_grade the retention gate is a startup_fail gate and
+        // cannot be waived. The waiver must be rejected at load, not silently
+        // dropped. Evaluate as a signed bundle so the `relay.config.unsigned`
+        // startup gate does not fire: the hard-gate waiver is then the only
+        // reason validation can fail (the base config uses a stdout sink, so
+        // the retention condition itself does not even trigger here).
+        let config = parse_deployment_config(
+            "deployment:\n  profile: evidence_grade\n  waivers:\n    - finding: relay.audit.retention_local_only\n      reason: \"synthetic-waiver-not-a-secret\"\n      expires: \"2999-01-01\"",
+        );
+        let (result, rendered) =
+            capture_logs(|| run_with_source(&config, ConfigSource::SignedBundleFile));
+        assert!(
+            matches!(result, Err(Error::Config(ConfigError::ValidationError))),
+            "a waiver on a hard evidence_grade gate must be rejected, got {result:?}"
+        );
+        assert!(
+            rendered.contains("cannot be waived under the active profile"),
+            "expected the hard-gate rejection message in the log: {rendered}"
+        );
+        assert!(
+            rendered.contains("relay.audit.retention_local_only"),
+            "expected the rejected finding id in the log: {rendered}"
+        );
+        assert!(
+            rendered.contains("audit_offhost_shipping"),
+            "expected the audit off-host remediation in the log: {rendered}"
+        );
+    }
+
+    #[test]
+    fn waiver_on_waivable_gate_still_loads_and_waives() {
+        // The same finding under production is a waivable finding_warn. A
+        // file-sink deployment triggers the retention condition, and the waiver
+        // must be accepted and suppress it (reported as waived in the boot log).
+        let config: Config = serde_saphyr::from_str(
+            r#"
+server:
+  bind: "127.0.0.1:8080"
+catalog:
+  title: "Test Registry"
+  base_url: "https://data.example.test"
+  publisher: "Test Ministry"
+auth:
+  mode: api_key
+  api_keys: []
+audit:
+  sink: file
+  path: "/var/log/relay/audit.jsonl"
+datasets: []
+deployment:
+  profile: production
+  waivers:
+    - finding: relay.audit.retention_local_only
+      reason: "synthetic-waiver-not-a-secret"
+      expires: "2999-01-01"
+"#,
+        )
+        .expect("config parses");
+        let (result, rendered) = run_with_captured_logs(&config);
+        result.expect("a waivable production gate waiver must pass validation");
+        assert!(
+            rendered.contains("deployment.gate_waived"),
+            "expected the retention gate to be reported waived: {rendered}"
+        );
+        assert!(
+            rendered.contains("relay.audit.retention_local_only"),
+            "expected the waived finding id in the boot log: {rendered}"
+        );
+        assert!(
+            !rendered.contains("cannot be waived"),
+            "a waivable gate must not trigger the hard-gate rejection: {rendered}"
+        );
     }
 
     #[test]
