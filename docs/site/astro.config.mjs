@@ -82,6 +82,9 @@ export default defineConfig({
     '/start/your-first-call/': internalRedirect('/tutorials/first-run-with-solmara-lab/'),
     // The monorepo lab tutorial was replaced by the standalone Solmara Lab (2026-07).
     '/tutorials/first-run-with-registry-lab/': internalRedirect('/tutorials/first-run-with-solmara-lab/'),
+    // Monorepo lab source-system tutorials are archived until replacement Solmara Lab profiles exist.
+    '/tutorials/configure-dhis2-claim-checks/': internalRedirect('/explanation/integration-patterns/'),
+    '/tutorials/getting-started-fhir-evidence/': internalRedirect('/explanation/integration-patterns/'),
     // verify-claim-own-api moved into the Apply to your stack path (2026-06).
     '/tutorials/verify-claim-own-api/': internalRedirect('/tutorials/run-notary-standalone-for-api/'),
     '/tutorials/verify-opencrvs-dci-claims/': internalRedirect('/tutorials/verify-opencrvs-claims/'),
@@ -261,8 +264,6 @@ export default defineConfig({
           label: 'Integrations',
           items: [
             { label: 'OpenCRVS claims', slug: 'tutorials/verify-opencrvs-claims' },
-            { label: 'DHIS2 claim checks', slug: 'tutorials/configure-dhis2-claim-checks' },
-            { label: 'FHIR evidence', slug: 'tutorials/getting-started-fhir-evidence' },
           ],
         },
         {
