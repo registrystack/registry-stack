@@ -37,7 +37,7 @@ const METADATA_UNAVAILABLE_CODE: &str = "metadata.core_unavailable";
 /// relative hrefs. The handlers are fully static: they take no
 /// [`Principal`], read no runtime state, and reveal nothing scoped to a
 /// caller, so the route is mounted on the public (auth-exempt)
-/// sub-router in [`crate::server::build_app_with_provenance`]. If either
+/// sub-router in [`crate::server::build_app`]. If either
 /// handler ever becomes dynamic (per-principal links, runtime state), its
 /// route placement must move back behind auth.
 pub fn well_known_router<S>() -> Router<S>

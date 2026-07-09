@@ -63,7 +63,6 @@ fn sample_record(request_id: usize) -> AuditRecord {
         suppressed_groups: None,
         duration_ms: 3,
         error_code: None,
-        provenance: None,
         config: None,
     }
 }

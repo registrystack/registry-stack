@@ -2044,7 +2044,7 @@ async fn openapi_json_declares_bearer_security_scheme_and_marks_health_and_ready
     );
 
     // `/healthz` and `/ready` are on the unauthenticated sub-router in
-    // `server::build_app_with_provenance`. Their entries override the
+    // `server::build_app`. Their entries override the
     // document-level requirement so codegen and Scalar's auth panel do
     // not demand a bearer for them.
     assert_eq!(

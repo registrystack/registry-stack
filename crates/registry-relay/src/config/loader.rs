@@ -784,14 +784,7 @@ mod tests {
                     "id": "people",
                     "source": { "kind": "file", "path": "/private/a.csv" }
                 }]
-            }],
-            "provenance": {
-                "issuer": {
-                    "did": "did:web:issuer-a.example",
-                    "verification_method_id": "did:web:issuer-a.example#key-1",
-                    "signer": { "kind": "software", "jwk_env": "JWK_A" }
-                }
-            }
+            }]
         });
         let mut changed = base.clone();
         changed["server"]["bind"] = json!("10.0.0.5:8080");
@@ -799,10 +792,6 @@ mod tests {
         changed["audit"]["hash_secret_env"] = json!("AUDIT_SECRET_B");
         changed["auth"]["api_keys"][0]["fingerprint"]["name"] = json!("KEY_HASH_B");
         changed["datasets"][0]["tables"][0]["source"]["path"] = json!("/private/b.csv");
-        changed["provenance"]["issuer"]["did"] = json!("did:web:issuer-b.example");
-        changed["provenance"]["issuer"]["verification_method_id"] =
-            json!("did:web:issuer-b.example#key-2");
-        changed["provenance"]["issuer"]["signer"]["jwk_env"] = json!("JWK_B");
 
         assert_eq!(
             posture_safe_runtime_config_hash(&base),

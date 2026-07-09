@@ -143,46 +143,24 @@ pub fn build_app(
     auth: AuthProviderRef,
     audit_sink: Arc<AuditPipeline>,
 ) -> Result<Router, ConfigError> {
-    build_app_with_provenance(config, auth, audit_sink, None)
+    build_app_with_metrics(config, auth, audit_sink, RequestMetrics::shared())
 }
 
-/// Same as [`build_app`] but lets a caller install a pre-built
-/// [`crate::provenance::ProvenanceState`]. Tests that don't exercise provenance keep the
-/// smaller [`build_app`] entry.
-pub fn build_app_with_provenance(
+/// Same as [`build_app`] but lets callers supply the request metrics
+/// collector installed in the cross-cutting stack.
+pub fn build_app_with_metrics(
     config: Arc<Config>,
     auth: AuthProviderRef,
     audit_sink: Arc<AuditPipeline>,
-    provenance: Option<Arc<crate::provenance::ProvenanceState>>,
-) -> Result<Router, ConfigError> {
-    build_app_with_provenance_and_metrics(
-        config,
-        auth,
-        audit_sink,
-        provenance,
-        RequestMetrics::shared(),
-    )
-}
-
-/// Same as [`build_app_with_provenance`] but lets callers supply the
-/// request metrics collector installed in the cross-cutting stack.
-pub fn build_app_with_provenance_and_metrics(
-    config: Arc<Config>,
-    auth: AuthProviderRef,
-    audit_sink: Arc<AuditPipeline>,
-    provenance: Option<Arc<crate::provenance::ProvenanceState>>,
     metrics: Arc<RequestMetrics>,
 ) -> Result<Router, ConfigError> {
-    build_app_with_provenance_metadata_and_metrics(
-        config, auth, audit_sink, provenance, None, metrics,
-    )
+    build_app_with_metadata_and_metrics(config, auth, audit_sink, None, metrics)
 }
 
-fn build_app_with_provenance_metadata_and_metrics(
+fn build_app_with_metadata_and_metrics(
     config: Arc<Config>,
     auth: AuthProviderRef,
     audit_sink: Arc<AuditPipeline>,
-    provenance: Option<Arc<crate::provenance::ProvenanceState>>,
     metadata: Option<Arc<CompiledMetadata>>,
     metrics: Arc<RequestMetrics>,
 ) -> Result<Router, ConfigError> {
@@ -201,23 +179,6 @@ fn build_app_with_provenance_metadata_and_metrics(
         .merge(api::well_known_router());
     if !config.server.openapi_requires_auth {
         public = public.merge(api::openapi_router());
-    }
-
-    // When provenance is configured and enabled, the gateway exposes
-    // JSON Schemas, JSON-LD contexts, and (gateway mode only) the
-    // `/.well-known/did.json` document on the public unauthenticated
-    // surface. These routes share the same audit and tracing pipeline
-    // as `/health` and `/ready`.
-    //
-    // A `ProvenanceState` whose `is_enabled()` returns `false` is
-    // still installed as an extension below so internal wiring stays
-    // identical; the public surface, however, must stay invisible for
-    // deployments that load a config with `provenance.enabled: false`.
-    if provenance.as_ref().is_some_and(|state| state.is_enabled()) {
-        public = public
-            .merge(api::schemas_router())
-            .merge(api::contexts_router())
-            .merge(api::did_router());
     }
 
     // Data-plane sub-router. All protected public API routes are merged
@@ -278,9 +239,6 @@ fn build_app_with_provenance_metadata_and_metrics(
         .layer(Extension(attribute_release_evaluator))
         .layer(Extension(cursor_signer))
         .layer(Extension(config));
-    if let Some(state) = provenance {
-        router = router.layer(Extension(state));
-    }
     if let Some(metadata) = metadata {
         router = router.layer(Extension(metadata));
     }
@@ -340,11 +298,9 @@ pub fn build_app_with_entity_query(
 }
 
 /// Production assembly: readiness, entity/query state, and optional
-/// [`crate::provenance::ProvenanceState`]. Used by `main.rs` once runtime state has been
-/// built from the parsed config; tests that need provenance plus query
-/// call this directly with their own handles.
+/// Production assembly: readiness and entity/query state.
 #[allow(clippy::too_many_arguments)]
-pub fn build_app_with_entity_query_and_provenance(
+pub fn build_app_with_entity_query_and_metrics(
     config: Arc<Config>,
     auth: AuthProviderRef,
     audit_sink: Arc<AuditPipeline>,
@@ -352,49 +308,18 @@ pub fn build_app_with_entity_query_and_provenance(
     entity_registry: Arc<EntityRegistry>,
     query: Arc<EntityQueryEngine>,
     aggregate_query: Arc<AggregateQueryEngine>,
-    provenance: Option<Arc<crate::provenance::ProvenanceState>>,
-) -> Result<Router, ConfigError> {
-    build_app_with_entity_query_and_provenance_and_metrics(
-        config,
-        auth,
-        audit_sink,
-        readiness,
-        entity_registry,
-        query,
-        aggregate_query,
-        provenance,
-        RequestMetrics::shared(),
-    )
-}
-
-/// Same as [`build_app_with_entity_query_and_provenance`] but lets the
-/// caller share one request metrics collector across multiple listeners.
-/// The binary uses this to expose data-plane and admin traffic through
-/// the admin-only `/metrics` route.
-#[allow(clippy::too_many_arguments)]
-pub fn build_app_with_entity_query_and_provenance_and_metrics(
-    config: Arc<Config>,
-    auth: AuthProviderRef,
-    audit_sink: Arc<AuditPipeline>,
-    readiness: tokio::sync::watch::Receiver<ReadinessSnapshot>,
-    entity_registry: Arc<EntityRegistry>,
-    query: Arc<EntityQueryEngine>,
-    aggregate_query: Arc<AggregateQueryEngine>,
-    provenance: Option<Arc<crate::provenance::ProvenanceState>>,
     metrics: Arc<RequestMetrics>,
 ) -> Result<Router, ConfigError> {
-    Ok(
-        build_app_with_provenance_and_metrics(config, auth, audit_sink, provenance, metrics)?
-            .layer(Extension(readiness))
-            .layer(Extension(aggregate_query))
-            .layer(Extension(query))
-            .layer(Extension(entity_registry)),
-    )
+    Ok(build_app_with_metrics(config, auth, audit_sink, metrics)?
+        .layer(Extension(readiness))
+        .layer(Extension(aggregate_query))
+        .layer(Extension(query))
+        .layer(Extension(entity_registry)))
 }
 
 /// Production assembly with split metadata compiled from `metadata.yaml`.
 #[allow(clippy::too_many_arguments)]
-pub fn build_app_with_entity_query_metadata_provenance_and_metrics(
+pub fn build_app_with_entity_query_metadata_and_metrics(
     config: Arc<Config>,
     auth: AuthProviderRef,
     audit_sink: Arc<AuditPipeline>,
@@ -403,16 +328,15 @@ pub fn build_app_with_entity_query_metadata_provenance_and_metrics(
     query: Arc<EntityQueryEngine>,
     aggregate_query: Arc<AggregateQueryEngine>,
     metadata: Option<Arc<CompiledMetadata>>,
-    provenance: Option<Arc<crate::provenance::ProvenanceState>>,
     metrics: Arc<RequestMetrics>,
 ) -> Result<Router, ConfigError> {
-    Ok(build_app_with_provenance_metadata_and_metrics(
-        config, auth, audit_sink, provenance, metadata, metrics,
-    )?
-    .layer(Extension(readiness))
-    .layer(Extension(aggregate_query))
-    .layer(Extension(query))
-    .layer(Extension(entity_registry)))
+    Ok(
+        build_app_with_metadata_and_metrics(config, auth, audit_sink, metadata, metrics)?
+            .layer(Extension(readiness))
+            .layer(Extension(aggregate_query))
+            .layer(Extension(query))
+            .layer(Extension(entity_registry)),
+    )
 }
 
 /// Assemble the admin HTTP application for `config.server.admin_bind`.

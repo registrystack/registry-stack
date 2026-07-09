@@ -29,8 +29,6 @@ use crate::config::Config;
 use crate::entity::EntityRegistry;
 use crate::ingest::{IngestRegistry, ReadinessSnapshot};
 use crate::observability::RequestMetrics;
-use crate::provenance::publicschema::PublicSchemaVcRegistry;
-use crate::provenance::ProvenanceState;
 use crate::query::{AggregateQueryEngine, EntityQueryEngine};
 #[cfg(feature = "spdci-api-standards")]
 use crate::spdci::SpdciResponseMapper;
@@ -123,8 +121,6 @@ pub struct RelayRuntimeSnapshot {
     pub readiness_tx: watch::Sender<ReadinessSnapshot>,
     pub readiness_rx: watch::Receiver<ReadinessSnapshot>,
     pub cursor_signer: Arc<CursorSigner>,
-    pub provenance_state: Option<Arc<ProvenanceState>>,
-    pub publicschema_registry: Option<Arc<PublicSchemaVcRegistry>>,
     pub attribute_release_evaluator: Arc<AttributeReleaseEvaluator>,
     #[cfg(feature = "spdci-api-standards")]
     pub spdci_response_mapper: Option<Arc<SpdciResponseMapper>>,
@@ -154,8 +150,6 @@ impl RelayRuntimeSnapshot {
         readiness_tx: watch::Sender<ReadinessSnapshot>,
         readiness_rx: watch::Receiver<ReadinessSnapshot>,
         cursor_signer: Arc<CursorSigner>,
-        provenance_state: Option<Arc<ProvenanceState>>,
-        publicschema_registry: Option<Arc<PublicSchemaVcRegistry>>,
         #[cfg(feature = "spdci-api-standards")] spdci_response_mapper: Option<
             Arc<SpdciResponseMapper>,
         >,
@@ -183,43 +177,11 @@ impl RelayRuntimeSnapshot {
             readiness_tx,
             readiness_rx,
             cursor_signer,
-            provenance_state,
-            publicschema_registry,
             attribute_release_evaluator,
             #[cfg(feature = "spdci-api-standards")]
             spdci_response_mapper,
             metrics,
         }
-    }
-
-    #[must_use]
-    pub fn with_provenance_state(&self, provenance_state: Option<Arc<ProvenanceState>>) -> Self {
-        Self::new(
-            Arc::clone(&self.config),
-            self.config_provenance.clone(),
-            self.compiled_metadata.clone(),
-            self.metadata_source_digest.clone(),
-            self.metadata_package_digest.clone(),
-            self.pending_bundle_acceptance.clone(),
-            self.auth.clone(),
-            Arc::clone(&self.audit_sink),
-            self.bind,
-            self.admin_bind,
-            self.audit_kind,
-            Arc::clone(&self.df_ctx),
-            Arc::clone(&self.ingest),
-            Arc::clone(&self.entity_registry),
-            Arc::clone(&self.query),
-            Arc::clone(&self.aggregate_query),
-            self.readiness_tx.clone(),
-            self.readiness_rx.clone(),
-            Arc::clone(&self.cursor_signer),
-            provenance_state,
-            self.publicschema_registry.clone(),
-            #[cfg(feature = "spdci-api-standards")]
-            self.spdci_response_mapper.clone(),
-            Arc::clone(&self.metrics),
-        )
     }
 
     #[must_use]
@@ -284,8 +246,6 @@ pub struct RuntimeSnapshot {
     readiness_rx: Option<watch::Receiver<ReadinessSnapshot>>,
     cursor_signer: Option<Arc<CursorSigner>>,
     audit_sink: Option<Arc<AuditPipeline>>,
-    provenance_state: Option<Arc<ProvenanceState>>,
-    publicschema_registry: Option<Arc<PublicSchemaVcRegistry>>,
     attribute_release_evaluator: Option<Arc<AttributeReleaseEvaluator>>,
     #[cfg(feature = "spdci-api-standards")]
     spdci_response_mapper: Option<Arc<SpdciResponseMapper>>,
@@ -408,22 +368,6 @@ impl RuntimeSnapshot {
     }
 
     #[must_use]
-    pub fn provenance_state(&self) -> Option<Arc<ProvenanceState>> {
-        self.snapshot
-            .as_ref()
-            .and_then(|snapshot| snapshot.provenance_state.clone())
-            .or_else(|| self.provenance_state.clone())
-    }
-
-    #[must_use]
-    pub fn publicschema_registry(&self) -> Option<Arc<PublicSchemaVcRegistry>> {
-        self.snapshot
-            .as_ref()
-            .and_then(|snapshot| snapshot.publicschema_registry.clone())
-            .or_else(|| self.publicschema_registry.clone())
-    }
-
-    #[must_use]
     pub fn attribute_release_evaluator(&self) -> Option<Arc<AttributeReleaseEvaluator>> {
         self.snapshot
             .as_ref()
@@ -524,17 +468,6 @@ where
                 .await
                 .unwrap_or(None)
                 .map(|Extension(value)| value),
-            provenance_state: Option::<Extension<Arc<ProvenanceState>>>::from_request_parts(
-                parts, state,
-            )
-            .await
-            .unwrap_or(None)
-            .map(|Extension(value)| value),
-            publicschema_registry:
-                Option::<Extension<Arc<PublicSchemaVcRegistry>>>::from_request_parts(parts, state)
-                    .await
-                    .unwrap_or(None)
-                    .map(|Extension(value)| value),
             attribute_release_evaluator:
                 Option::<Extension<Arc<AttributeReleaseEvaluator>>>::from_request_parts(
                     parts, state,

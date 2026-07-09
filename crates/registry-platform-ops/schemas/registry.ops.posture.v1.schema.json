@@ -789,7 +789,6 @@
         "aggregate_count",
         "evidence_offering_count",
         "metadata_manifest",
-        "provenance",
         "standards_adapters"
       ],
       "properties": {
@@ -834,44 +833,6 @@
             }
           }
         },
-        "provenance": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "enabled"
-          ],
-          "properties": {
-            "enabled": {
-              "type": "boolean"
-            },
-            "issuer": {
-              "type": "string",
-              "minLength": 1
-            },
-            "active_kid": {
-              "type": "string",
-              "minLength": 1
-            },
-            "active_provider": {
-              "enum": [
-                "local_jwk_env",
-                "file_watch",
-                "pkcs11",
-                "local_pkcs12_file",
-                "kms"
-              ]
-            },
-            "retired_kids": {
-              "$ref": "#/$defs/string_array"
-            },
-            "key_readiness": {
-              "type": "object",
-              "additionalProperties": {
-                "$ref": "#/$defs/readiness_status"
-              }
-            }
-          }
-        },
         "standards_adapters": {
           "$ref": "#/$defs/adapter_state_map"
         }
@@ -891,9 +852,6 @@
           "$ref": "#/$defs/adapter_state"
         },
         "spdci": {
-          "$ref": "#/$defs/adapter_state"
-        },
-        "publicschema_cel": {
           "$ref": "#/$defs/adapter_state"
         }
       }

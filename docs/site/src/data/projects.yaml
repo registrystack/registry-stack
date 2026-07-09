@@ -42,7 +42,7 @@
   name: Registry Relay
   repo_path: ../registry-relay
   target_repo_path: ../registry-relay
-  role: Read-only HTTP gateway that fronts a sensitive registry database. Exposes entity-shaped query routes, caller-scoped metadata, evidence-offering discovery, optional OGC API adapters, and optional signed response provenance while composing shared auth, OIDC, audit, HTTP security, crypto, and SD-JWT primitives from Registry Platform.
+  role: Read-only HTTP gateway that fronts a sensitive registry database. Exposes entity-shaped query routes, caller-scoped metadata, evidence-offering discovery, and optional OGC API adapters while composing shared auth, OIDC, audit, HTTP security, and crypto primitives from Registry Platform.
   owns:
     - Runtime configuration and source binding.
     - Entity-shaped Registry Data API routes.
@@ -53,6 +53,7 @@
     - Source-registry provisioning, write-back, or domain-data mutation paths in v1.
     - Portable metadata schema ownership.
     - Standalone claim service internals owned by Registry Notary.
+    - Credential issuance, DID hosting, and issuer signing keys owned by Registry Notary.
     - Shared security and operational primitives owned by Registry Platform.
     - Storage table ids or arbitrary SQL in public APIs.
   source_docs:

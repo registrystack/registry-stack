@@ -361,18 +361,9 @@ async fn run_aggregate(
         Ok(decision) => decision,
         Err(error) => return aggregate_access_error_response(error, &path),
     };
-    let signed_vc_requested = crate::api::provenance_issuance::signed_vc_requested(
-        runtime.provenance_state().as_ref(),
-        &headers,
-    )
-    .is_some();
-    let format = if signed_vc_requested {
-        format::AggregateResponseFormat::Json
-    } else {
-        match format::aggregate_response_format(&headers, body.format.as_deref()) {
-            Ok(format) => format,
-            Err(error) => return error.into_response(),
-        }
+    let format = match format::aggregate_response_format(&headers, body.format.as_deref()) {
+        Ok(format) => format,
+        Err(error) => return error.into_response(),
     };
     let mut request = match aggregate_query_request(body, aggregate) {
         Ok(request) => request,
@@ -404,23 +395,7 @@ async fn run_aggregate(
                 }
                 format::AggregateResponseFormat::Json => Json(envelope.clone()).into_response(),
             };
-            let mut response = crate::api::provenance_issuance::maybe_issue_aggregate_result(
-                runtime.provenance_state().as_ref(),
-                runtime.config().as_ref(),
-                &headers,
-                plain_response,
-                crate::api::provenance_issuance::AggregateIssuanceArgs {
-                    dataset: &path.dataset_id,
-                    aggregate_id: &path.aggregate_id,
-                    group_by: result.group_by.clone(),
-                    indicators: result.indicators.clone(),
-                    rows: result.data.clone(),
-                    suppressed_rows: result.disclosure_control.suppressed_rows.unwrap_or(0),
-                    min_cell_size: u64::from(result.disclosure_control.min_cell_size),
-                    computed_at_rfc3339: result.computed_at.clone(),
-                    as_of_rfc3339: as_of,
-                },
-            );
+            let mut response = plain_response;
             let mut audit_context = Some(AuditContextExt {
                 dataset_id: Some(path.dataset_id),
                 aggregate_id: Some(path.aggregate_id),

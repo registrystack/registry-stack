@@ -301,8 +301,8 @@ fn config_apply_report_schema_matches_shared_result_vocabulary() {
         "config_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "result": "verified",
         "restart_required": false,
-        "change_classes": ["signing_key_rotation"],
-        "affected_components": ["provenance_state"],
+        "change_classes": ["trust_root_rotation"],
+        "affected_components": ["runtime_config"],
         "warnings": [],
         "errors": []
     });

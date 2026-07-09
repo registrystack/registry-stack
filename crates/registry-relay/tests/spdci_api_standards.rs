@@ -1733,8 +1733,9 @@ mod full_stack {
     use registry_relay::ingest::{
         register_versioned_table, table_name, ReadinessSnapshot, ReadyResource,
     };
+    use registry_relay::observability::RequestMetrics;
     use registry_relay::query::{AggregateQueryEngine, EntityQueryEngine};
-    use registry_relay::server::build_app_with_entity_query_and_provenance;
+    use registry_relay::server::build_app_with_entity_query_and_metrics;
     use registry_relay::spdci::build_spdci_response_mapper;
     use serde_json::{json, Value};
     use sha2::{Digest, Sha256};
@@ -1766,7 +1767,7 @@ mod full_stack {
         audit_sink: InMemorySink,
     }
 
-    /// Build the production application (`build_app_with_entity_query_and_provenance`)
+    /// Build the production application (`build_app_with_entity_query_and_metrics`)
     /// with `scopes` minted into the keyring for `VALID_KEY`. The SP DCI
     /// disability registry under the `dr` registry name is wired exactly
     /// like in production: data is registered through
@@ -1859,9 +1860,7 @@ mod full_stack {
         let audit_sink = InMemorySink::new();
         let sink_arc: Arc<AuditPipeline> = AuditPipeline::from_sink(audit_sink.clone());
 
-        // Production assembly. `provenance` stays `None` because the SP
-        // DCI surface does not interact with VC issuance.
-        let mut app = build_app_with_entity_query_and_provenance(
+        let mut app = build_app_with_entity_query_and_metrics(
             Arc::clone(&config),
             auth,
             sink_arc,
@@ -1869,7 +1868,7 @@ mod full_stack {
             registry,
             query,
             aggregate_query,
-            None,
+            RequestMetrics::shared(),
         )
         .unwrap();
         // Mirror the `if let Some(...) { app.layer(...) }` block in

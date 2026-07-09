@@ -19,7 +19,7 @@
             "slug": "products/registry-relay/ops"
           },
           {
-            "label": "Signed response credentials",
+            "label": "Credential issuance migration",
             "slug": "products/registry-relay/provenance"
           },
           {

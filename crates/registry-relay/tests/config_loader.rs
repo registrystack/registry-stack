@@ -789,6 +789,82 @@ claim_verification:
 }
 
 #[test]
+fn relay_provenance_config_block_is_rejected() {
+    let tmp = TempDir::new().expect("tempdir");
+    let body = minimal_config(
+        r#"
+  - id: social_registry
+    title: Social Registry
+    description: Synthetic registry
+    owner: Test
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: monthly
+    tables: []
+    entities: []
+"#,
+    )
+    .replace(
+        "auth:\n  mode: api_key\n  api_keys: []",
+        r#"auth:
+  mode: api_key
+  api_keys: []
+provenance:
+  enabled: true"#,
+    );
+    let config_path = write_config(&tmp, &body);
+
+    assert_config_code(config::load(&config_path), "config.parse_error");
+}
+
+#[test]
+fn relay_publicschema_entity_block_is_rejected() {
+    let tmp = TempDir::new().expect("tempdir");
+    let body = minimal_config(
+        r#"
+  - id: social_registry
+    title: Social Registry
+    description: Synthetic registry
+    owner: Test
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: monthly
+    tables:
+      - id: people_table
+        source:
+          type: file
+          path: fixtures/people.csv
+        primary_key: person_id
+        schema:
+          strict: true
+          fields:
+            - name: person_id
+              type: string
+              nullable: false
+    entities:
+      - name: person
+        table: people_table
+        publicschema:
+          target: Person
+          mapping_path: mappings/person.publicschema.yaml
+        fields:
+          - name: id
+            from: person_id
+        access:
+          metadata_scope: social_registry:metadata
+          aggregate_scope: social_registry:aggregate
+          read_scope: social_registry:rows
+        api:
+          default_limit: 100
+          max_limit: 1000
+"#,
+    );
+    let config_path = write_config(&tmp, &body);
+
+    assert_config_code(config::load(&config_path), "config.parse_error");
+}
+
+#[test]
 fn vocab_expand_roundtrip() {
     let mut registry: BTreeMap<String, String> = BTreeMap::new();
     registry.insert("psc".to_string(), "https://publicschema.org/".to_string());

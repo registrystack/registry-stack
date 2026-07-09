@@ -86,13 +86,11 @@ checklist carry a one-line note.
 ### Secrets handling
 
 - [ ] API-key hashes, `audit.hash_secret_env` material, OIDC client secrets,
-  database passwords, and provenance signing JWKs are stored in the platform
+  and database passwords are stored in the platform
   secret manager, not in YAML, image layers, shell history, crash reports, or
   issue trackers. See [API-key provisioning and rotation](#api-key-provisioning-and-rotation)
-  and [Signed response credential signer rotation](#signed-response-credential-signer-rotation).
+  and [Audit sink and rotation](#audit-sink-and-rotation).
 - [ ] Full environment dumps are disabled in diagnostic tooling.
-- [ ] Provenance signing-key rotation includes a DID document overlap window
-  long enough for existing credentials to expire. See [Signed response credential signer rotation](#signed-response-credential-signer-rotation).
 
 ### Source data mounts
 
@@ -121,17 +119,15 @@ checklist carry a one-line note.
 - [ ] Bearer tokens, raw API keys, raw query values, row bodies, VC-JWTs, and
   unreviewed `detail` text are not logged.
 
-### Metadata and provenance posture
+### Metadata and Notary posture
 
 - [ ] Portable metadata is validated before deployment (`just
   metadata-validate-profiles`). See [Build and release](#build-and-release).
 - [ ] Runtime backend URLs, source paths, scope names, and table ids are absent
   from portable metadata manifests.
 - [ ] Scoped runtime metadata is not placed in shared public caches.
-- [ ] Provenance is enabled only when verifiers can resolve the configured
-  schemas, contexts, and DID documents. See [Signed response credential signer rotation](#signed-response-credential-signer-rotation).
-- [ ] Registry Notary evidence verification is kept separate from Relay response
-  provenance.
+- [ ] Registry Notary evidence verification and credential issuance are kept
+  outside Relay. Relay should not hold issuance signing keys.
 
 ### Container runtime policy
 
@@ -152,7 +148,7 @@ checklist carry a one-line note.
 - [ ] Startup time allows for the largest XLSX/Parquet ingest before readiness
   is declared. See [Readiness and probes](#readiness-and-probes).
 - [ ] Alerts are set on startup validation failures, source ingest failures,
-  audit sink failures, auth provider failures, and provenance signer failures.
+  audit sink failures, and auth provider failures.
   See [Metrics](#metrics).
 - [ ] Degraded-source behavior and readiness expectations are tested in staging
   with production-shaped data sizes.
@@ -317,50 +313,11 @@ Live keyring reload is not wired in V1. Treat key rotation as a rolling restart 
 
 Never log raw keys, fingerprints, or full environment dumps. In issue reports, include only key ids and scope names.
 
-## Signed response credential signer rotation
+## Credential issuance migration
 
-The signed response credential feature (W3C VCDM 2.0 VC-JWT; config key `provenance`, see [provenance.md](provenance.md)) introduces a signing key. The runtime contract is identical in shape to API-key rotation, but the recovery model is different: existing VCs signed under a retired key must still verify until they expire, so the DID Document keeps publishing those keys for a controlled window.
+Relay no longer owns response credential issuance, DID hosting, credential schemas, credential contexts, or signing-key rotation. Remove `provenance:` and entity `publicschema:` blocks from Relay config, remove Relay issuance signing secrets from the runtime secret store, and remove probes for `/.well-known/did.json`, `/schemas/{claim_type}/{version}`, and `/contexts/{vocab}/{version}`.
 
-The signing key never lives in YAML. It is injected through the env var named by `provenance.issuer.signer.jwk_env`, holding a JSON-encoded private JWK. The public half goes in the DID Document; the private half stays in the secret store.
-
-Production smoke for local software Ed25519 deployments:
-
-1. Boot or roll the gateway with `REGISTRY_RELAY_PROVENANCE_JWK`
-   injected by the runtime secret store.
-2. Fetch `/.well-known/did.json` and
-   `/schemas/entity-record/v1.json` from the public data-plane URL.
-3. Request an entity-record VC with `Accept: application/vc+jwt` and a key
-   scoped only for row reads.
-4. Run `node scripts/verify_vc_jwt.mjs` against the saved VC, DID
-   Document, expected issuer, expected `EntityRecord` claim type, and
-   saved schema.
-5. During rotation, save a pre-rotation VC, roll the new private JWK
-   and `verification_method_id`, confirm the DID Document publishes
-   both old and new `kid` values, then verify both old and new VCs.
-   Remove the retired public key only after the longest configured
-   `claim_validity` window has elapsed and repeat the DID fetch.
-
-See [Production smoke checklist](provenance.md#production-smoke-checklist) for exact commands.
-
-Rotation procedure (gateway mode):
-
-1. Mint a new Ed25519 keypair for `EdDSA`. Store the new private JWK in the deployment secret store.
-2. Add the new public JWK to the DID Document under a new `verificationMethod` id (e.g. `did:web:data.example.gov#issuance-2026q3`).
-3. Move the currently active verification method to `provenance.issuer.retired_keys[]`, recording the `retired_after` RFC 3339 timestamp and the public JWK in its own env var.
-4. Update `verification_method_id` to the new id and point the signer at the new material (`signer.jwk_env` for `software`, or the configured JWK file for `file_watch`).
-5. Roll the gateway after the signed bundle or local config change is in place.
-   With `file_watch`, replacing file contents without a config change is only a
-   same-public-key refresh; a different public key under the same
-   `verification_method_id` is rejected so older VCs remain verifiable through
-   the retired-key flow.
-6. Confirm the new VCs verify with the new public JWK and that previously issued VCs (still inside their validity window) verify against the retired entry.
-7. Once the longest applicable `claim_validity` window plus five minutes has elapsed since `retired_after`, drop the retired entry from config and roll Relay with a signed bundle or local startup config update.
-
-Delegated mode follows the same steps, except the DID Document edits land on the ministry's side. Coordinate the cutover so the ministry publishes the new `verificationMethod` before the gateway starts signing with the corresponding private key.
-
-Remote signing (`signer.kind: kms`) is reserved for a future backend and is rejected by V1 config validation. The supported production paths are local Ed25519 signing with a private JWK loaded from the configured secret environment variable (`software`) or from a configured local JWK file (`file_watch`).
-
-Never log the JWK, the env var value, or any full environment dump. The provenance audit block intentionally records only `iss`, `kid`, `jti`, `claim_type`, `subject`, and the `iat`/`nbf`/`exp` triple, not the signed body or any signing material.
+Use Registry Notary for credential issuance, evidence verification, issuer metadata, and signing-key operations. Relay should only publish evidence offering metadata that lets clients discover the relevant Notary service.
 
 ## Audit sink and rotation
 
@@ -574,13 +531,6 @@ Audit records missing:
   by the Relay runtime identity. In the production container, that is UID/GID
   `65532:65532`.
 - For `audit.sink: syslog`, confirm the host exposes the expected Unix datagram socket (`/var/run/syslog` on macOS, `/dev/log` on other Unix platforms).
-
-Caller expected a signed VC but received plain JSON:
-
-- Confirm the request `Accept` header lists one of `provenance.accepted_media_types` (default `application/vc+jwt` or `application/jwt`).
-- Confirm `provenance.enabled: true` in the loaded config and that the process was restarted after the config change.
-- Confirm the configured signer material is available and valid: `signer.jwk_env` for `software`, or `signer.path` for `file_watch`. Missing or malformed material fails the signer at startup, not at request time.
-- For `mode: delegated`, confirm the ministry's DID Document publishes the gateway's `verification_method_id`.
 
 Admin reload fails:
 

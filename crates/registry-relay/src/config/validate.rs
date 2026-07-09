@@ -8,7 +8,6 @@
 //! response/audit detail strings stay scrubbed.
 
 use std::collections::{BTreeMap, HashSet};
-use std::env;
 use std::net::IpAddr;
 use std::time::Duration;
 
@@ -16,7 +15,6 @@ use crate::error::{ConfigError, Error, RuntimeBindingError};
 use crate::table_provider::table_name;
 use registry_manifest_core::CompiledMetadata;
 use registry_platform_authcommon::CredentialFingerprintRefError;
-use registry_platform_crypto::{validate_did, DidMethod};
 use registry_platform_httpsec::CorsPolicy;
 use registry_platform_ops::ConfigSource;
 
@@ -78,10 +76,6 @@ pub fn run_with_source(config: &Config, source: ConfigSource) -> Result<(), Erro
     validate_catalog_uris(config).map_err(Error::from)?;
     validate_ogc_feature_flags(config).map_err(Error::from)?;
     validate_resources(config).map_err(Error::from)?;
-    if let Some(provenance) = &config.provenance {
-        validate_provenance(provenance).map_err(Error::from)?;
-    }
-    validate_publicschema_feature(config).map_err(Error::from)?;
     validate_spdci_feature(config).map_err(Error::from)?;
     validate_deployment(config, source).map_err(Error::from)?;
     Ok(())
@@ -984,98 +978,6 @@ fn spdci_entity_fields<'a>(
     Ok((entity, fields))
 }
 
-fn validate_publicschema_feature(config: &Config) -> Result<(), ConfigError> {
-    for dataset in &config.datasets {
-        for entity in &dataset.entities {
-            let Some(publicschema) = &entity.publicschema else {
-                continue;
-            };
-            #[cfg(not(feature = "publicschema-cel"))]
-            {
-                let _ = publicschema;
-                tracing::error!(
-                    code = "publicschema.config.feature_disabled",
-                    dataset_id = %dataset.id,
-                    entity = %entity.name,
-                    "entity declares publicschema mapping but binary was built without the publicschema-cel feature",
-                );
-                return Err(ConfigError::PublicSchemaFeatureDisabled);
-            }
-
-            #[cfg(feature = "publicschema-cel")]
-            {
-                if publicschema.target.trim().is_empty() {
-                    tracing::error!(
-                        code = "config.validation_error",
-                        dataset_id = %dataset.id,
-                        entity = %entity.name,
-                        "publicschema.target must not be empty",
-                    );
-                    return Err(ConfigError::ValidationError);
-                }
-                if publicschema.mapping_path.as_os_str().is_empty() {
-                    tracing::error!(
-                        code = "config.validation_error",
-                        dataset_id = %dataset.id,
-                        entity = %entity.name,
-                        "publicschema.mapping_path must not be empty",
-                    );
-                    return Err(ConfigError::ValidationError);
-                }
-                if let Some(context_url) = &publicschema.context_url {
-                    if !is_http_url(context_url) {
-                        tracing::error!(
-                            code = "config.validation_error",
-                            dataset_id = %dataset.id,
-                            entity = %entity.name,
-                            "publicschema.context_url must be an http(s) URL",
-                        );
-                        return Err(ConfigError::ValidationError);
-                    }
-                }
-                if let Some(schema_url) = &publicschema.schema_url {
-                    if !is_http_url(schema_url) {
-                        tracing::error!(
-                            code = "config.validation_error",
-                            dataset_id = %dataset.id,
-                            entity = %entity.name,
-                            "publicschema.schema_url must be an http(s) URL",
-                        );
-                        return Err(ConfigError::ValidationError);
-                    }
-                }
-                if publicschema
-                    .schema_validation_path
-                    .as_ref()
-                    .is_some_and(|path| path.as_os_str().is_empty())
-                {
-                    tracing::error!(
-                        code = "config.validation_error",
-                        dataset_id = %dataset.id,
-                        entity = %entity.name,
-                        "publicschema.schema_validation_path must not be empty",
-                    );
-                    return Err(ConfigError::ValidationError);
-                }
-                if publicschema
-                    .credential_type
-                    .as_deref()
-                    .is_some_and(|credential_type| credential_type.trim().is_empty())
-                {
-                    tracing::error!(
-                        code = "config.validation_error",
-                        dataset_id = %dataset.id,
-                        entity = %entity.name,
-                        "publicschema.credential_type must not be empty",
-                    );
-                    return Err(ConfigError::ValidationError);
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
 fn validate_ogc_feature_flags(_config: &Config) -> Result<(), ConfigError> {
     #[cfg(any(
         not(feature = "ogcapi-features"),
@@ -1132,195 +1034,6 @@ fn validate_ogc_feature_flags(_config: &Config) -> Result<(), ConfigError> {
 fn is_ogc_records_conformance_uri(uri: &str) -> bool {
     uri.starts_with("http://www.opengis.net/spec/ogcapi-records-1/")
         || uri.starts_with("https://www.opengis.net/spec/ogcapi-records-1/")
-}
-
-/// Cross-field validation for provenance configuration.
-///
-/// When `enabled = false` the block still validates its shape so
-/// operators get fast feedback when they enable it.
-fn validate_provenance(cfg: &super::provenance::ProvenanceConfig) -> Result<(), ConfigError> {
-    use super::provenance::{IssuerConfig, SignerConfig};
-
-    // Claim validity windows: 1 minute lower bound, 365 days upper.
-    let min = std::time::Duration::from_secs(60);
-    let max = std::time::Duration::from_secs(60 * 60 * 24 * 365);
-    for (name, value) in [
-        ("aggregate_result", cfg.claim_validity.aggregate_result),
-        ("entity_record", cfg.claim_validity.entity_record),
-    ] {
-        if value < min || value > max {
-            tracing::error!(
-                code = "provenance.config.claim_validity_out_of_range",
-                claim = %name,
-                "claim_validity.{name} must be between 1m and 365d",
-            );
-            return Err(ConfigError::ProvenanceClaimValidityOutOfRange);
-        }
-    }
-
-    if !is_http_url(&cfg.context_base_url) {
-        tracing::error!(
-            code = "provenance.config.context_base_url_invalid",
-            "context_base_url must be a syntactically valid http(s) URL",
-        );
-        return Err(ConfigError::ProvenanceContextBaseUrlInvalid);
-    }
-    if !is_http_url(&cfg.schema_base_url) {
-        tracing::error!(
-            code = "provenance.config.schema_base_url_invalid",
-            "schema_base_url must be a syntactically valid http(s) URL",
-        );
-        return Err(ConfigError::ProvenanceSchemaBaseUrlInvalid);
-    }
-
-    let (issuer_did, vm_id, signer, retired) = match &cfg.issuer {
-        IssuerConfig::Gateway(g) => (
-            g.did.as_str(),
-            g.verification_method_id.as_str(),
-            &g.signer,
-            &g.retired_keys,
-        ),
-        IssuerConfig::Delegated(d) => (
-            d.ministry_did.as_str(),
-            d.verification_method_id.as_str(),
-            &d.signer,
-            &d.retired_keys,
-        ),
-    };
-
-    if issuer_did.is_empty() {
-        tracing::error!(
-            code = "provenance.config.missing_issuer",
-            "issuer DID is empty",
-        );
-        return Err(ConfigError::ProvenanceMissingIssuer);
-    }
-    if validate_did(issuer_did, &[DidMethod::Web]).is_err() {
-        tracing::error!(
-            code = "provenance.config.issuer_did_invalid",
-            "issuer DID must be a valid did:web identifier",
-        );
-        return Err(ConfigError::ProvenanceIssuerDidMismatch);
-    }
-    if validate_did(vm_id, &[DidMethod::Web]).is_err() {
-        tracing::error!(
-            code = "provenance.config.verification_method_invalid",
-            "verification_method_id must be a valid did:web fragment",
-        );
-        return Err(ConfigError::ProvenanceVerificationMethodMismatch);
-    }
-    // `verification_method_id` must start with `<did>#`.
-    let prefix = format!("{issuer_did}#");
-    if !vm_id.starts_with(&prefix) {
-        tracing::error!(
-            code = "provenance.config.verification_method_mismatch",
-            "verification_method_id must be a fragment of the issuer DID",
-        );
-        return Err(ConfigError::ProvenanceVerificationMethodMismatch);
-    }
-    for retired_key in retired {
-        let retired_vm_id = retired_key.verification_method_id.as_str();
-        if validate_did(retired_vm_id, &[DidMethod::Web]).is_err() {
-            tracing::error!(
-                code = "provenance.config.verification_method_invalid",
-                "retired verification_method_id must be a valid did:web fragment",
-            );
-            return Err(ConfigError::ProvenanceVerificationMethodMismatch);
-        }
-        if !retired_vm_id.starts_with(&prefix) {
-            tracing::error!(
-                code = "provenance.config.verification_method_mismatch",
-                "retired verification_method_id must be a fragment of the issuer DID",
-            );
-            return Err(ConfigError::ProvenanceVerificationMethodMismatch);
-        }
-    }
-
-    // Signer-level validation.
-    match signer {
-        SignerConfig::Software(s) => {
-            if !matches!(
-                s.signing_algorithm,
-                super::provenance::ProvenanceAlgorithm::EdDSA
-                    | super::provenance::ProvenanceAlgorithm::ES256
-            ) {
-                tracing::error!(
-                    code = "provenance.config.algorithm_unsupported",
-                    "signing_algorithm must be EdDSA or ES256",
-                );
-                return Err(ConfigError::ProvenanceAlgorithmUnsupported);
-            }
-            // The in-process software signer only ships the EdDSA path
-            // in V1; `SoftwareSigner::from_config` returns a `KeyLoad`
-            // error at sign-time for ES256. Reject the combination
-            // here so operators discover the gap at startup rather
-            // than on the first protected request.
-            if s.signing_algorithm == super::provenance::ProvenanceAlgorithm::ES256 {
-                tracing::error!(
-                    code = "provenance.config.algorithm_unsupported",
-                    "software signer does not yet support ES256; use EdDSA",
-                );
-                return Err(ConfigError::ProvenanceAlgorithmUnsupported);
-            }
-            // Only require the env var to be present at validation time
-            // when provenance is enabled. With `enabled: false` the env
-            // var may legitimately be absent in non-production.
-            if cfg.enabled {
-                let present = env::var(&s.jwk_env)
-                    .ok()
-                    .map(|v| !v.is_empty())
-                    .unwrap_or(false);
-                if !present {
-                    tracing::error!(
-                        code = "provenance.config.jwk_env_missing",
-                        jwk_env = %s.jwk_env,
-                        "software signer jwk_env is unset or empty",
-                    );
-                    return Err(ConfigError::ProvenanceJwkEnvMissing);
-                }
-            }
-        }
-        SignerConfig::FileWatch(s) => {
-            if s.signing_algorithm != super::provenance::ProvenanceAlgorithm::EdDSA {
-                tracing::error!(
-                    code = "provenance.config.algorithm_unsupported",
-                    "file_watch signer supports only EdDSA in V1",
-                );
-                return Err(ConfigError::ProvenanceAlgorithmUnsupported);
-            }
-            if s.path.as_os_str().is_empty() {
-                tracing::error!(
-                    code = "provenance.config.file_watch_path_missing",
-                    "file_watch signer path must not be empty",
-                );
-                return Err(ConfigError::ProvenanceSignerKindInvalid);
-            }
-            if cfg.enabled && !s.path.is_file() {
-                tracing::error!(
-                    code = "provenance.config.file_watch_key_missing",
-                    "file_watch signer key file is missing or not a regular file",
-                );
-                return Err(ConfigError::ProvenanceJwkEnvMissing);
-            }
-        }
-        SignerConfig::Kms(k) => {
-            tracing::error!(
-                code = "provenance.config.signer_kind_invalid",
-                provider = ?k.provider,
-                signing_algorithm = %k.signing_algorithm.as_str(),
-                "kms signer is reserved for future backends; V1 supports only software signing",
-            );
-            return Err(ConfigError::ProvenanceSignerKindInvalid);
-        }
-    }
-
-    Ok(())
-}
-
-fn is_http_url(s: &str) -> bool {
-    // Minimal scheme check. Full URL parsing is out of scope for V1
-    // (no `url` crate dependency).
-    s.starts_with("http://") || s.starts_with("https://")
 }
 
 /// Match `^[a-z][a-z0-9_]*$` without pulling in a regex crate.
@@ -4397,7 +4110,6 @@ fn is_reserved_relationship_segment(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::ProvenanceConfig;
 
     #[test]
     fn id_regex_accepts_canonical() {
@@ -4532,61 +4244,6 @@ mod tests {
             "https://user:pw@idp.example.test/jwks",
             false
         ));
-    }
-
-    fn provenance_with_retired_verification_method(retired_vm_id: &str) -> ProvenanceConfig {
-        serde_saphyr::from_str(&format!(
-            r#"
-enabled: false
-accepted_media_types:
-  - application/vc+jwt
-schema_base_url: https://data.example.test/schemas
-context_base_url: https://data.example.test/contexts
-claim_validity:
-  aggregate_result: 10m
-  entity_record: 10m
-issuer:
-  mode: gateway
-  did: did:web:data.example.test
-  verification_method_id: did:web:data.example.test#relay-public-key
-  signer:
-    kind: software
-    jwk_env: REGISTRY_RELAY_TEST_PRIVATE_JWK
-    signing_algorithm: EdDSA
-  retired_keys:
-    - verification_method_id: {retired_vm_id}
-      jwk_env: REGISTRY_RELAY_RETIRED_PUBLIC_JWK
-      retired_after: 2026-06-05T00:00:00Z
-"#
-        ))
-        .expect("provenance fixture parses")
-    }
-
-    #[test]
-    fn retired_verification_method_must_be_valid_did_web_fragment() {
-        let cfg = provenance_with_retired_verification_method("https://data.example.test#old");
-
-        assert!(matches!(
-            validate_provenance(&cfg),
-            Err(ConfigError::ProvenanceVerificationMethodMismatch)
-        ));
-    }
-
-    #[test]
-    fn retired_verification_method_must_belong_to_issuer_did() {
-        let cfg = provenance_with_retired_verification_method("did:web:other.example.test#old-key");
-
-        assert!(matches!(
-            validate_provenance(&cfg),
-            Err(ConfigError::ProvenanceVerificationMethodMismatch)
-        ));
-    }
-
-    #[test]
-    fn retired_verification_method_accepts_issuer_did_fragment() {
-        let cfg = provenance_with_retired_verification_method("did:web:data.example.test#old-key");
-
-        validate_provenance(&cfg).expect("issuer-bound retired key is valid");
     }
 
     fn deployment_config_yaml(extra: &str) -> String {

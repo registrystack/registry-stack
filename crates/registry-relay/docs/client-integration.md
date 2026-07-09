@@ -23,10 +23,6 @@ sequenceDiagram
     Client->>Relay: Retry idempotent GET with jittered backoff
   end
   Relay-->>Client: Entity records (opaque next_cursor)
-  opt signed response credentials enabled and requested
-    Client->>Relay: Read with Accept application/vc+jwt
-    Relay-->>Client: Signed VC-JWT, verified against issuer DID and schema
-  end
   opt claim or evidence verification needed
     Client->>Relay: Discover evidence offering
     Relay-->>Client: access.kind registry-notary endpoint
@@ -35,8 +31,8 @@ sequenceDiagram
 ```
 
 *The typical client lifecycle: authenticated discovery, scoped reads with
-conservative retries, optional response provenance, and handoff to Registry
-Notary for verification. Each step is detailed in the sections that follow.*
+conservative retries, and handoff to Registry Notary for verification or
+credential issuance. Each step is detailed in the sections that follow.*
 
 ## Connect to an existing deployment
 
@@ -77,9 +73,9 @@ Before a client is allowed to consume Relay data, confirm:
 - Row reads that serve a human or program decision send `Data-Purpose`.
 - Collection reads include required filters where entities declare them.
 - The client handles RFC 9457 Problem Details instead of parsing text messages.
-- The client treats cursors, `ETags`, and provenance credentials as opaque values.
+- The client treats cursors and `ETags` as opaque values.
 - Logs redact bearer tokens, API keys, query values for sensitive fields, raw
-  row bodies, VC-JWT bodies, and Problem Details `detail`.
+  row bodies, credential bodies from Notary workflows, and Problem Details `detail`.
 
 ## OpenFn workflows
 
@@ -234,7 +230,6 @@ Typical client handling:
 | `pagination.cursor_invalidated` | Restart pagination |
 | `metadata.*` | Refresh discovery or report deployment mismatch |
 | `aggregate.*` | Check aggregate structure, measure discovery, and caller scope |
-| `provenance.*` | Fall back to plain JSON only if the workflow permits unsigned data |
 
 ## Retries
 
@@ -249,30 +244,11 @@ Use conservative retries:
 Relay is read-only for registry data, but retries still create extra audit
 events and may repeat costly source reads.
 
-## Signed response credentials
-
-When signed response credentials are enabled, clients can request VC-JWT
-credentials with an accepted VC media type. The credential shape aligns with
-the W3C Verifiable Credentials Data Model 2.0; full VCDM conformance is not
-asserted, and the
-[RegistryStack standards register](https://docs.registrystack.org/reference/standards/)
-records the exact claim level. Treat the returned compact JWS as an opaque
-signed artifact and verify it with the issuer DID document and published
-schemas.
-
-These are signed response credentials, not W3C PROV-O. The `provenance` config
-key governs the issuer configuration for backward compatibility, but the correct
-public description is "signed response credentials".
-
-Do not confuse Relay signed response credentials with Registry Notary evidence
-verification. Relay can sign selected data responses. Registry Notary owns
-claim evaluation, evidence verification, credential issuance workflows, and the
-verification semantics behind evidence offerings.
-
 ## Registry Notary handoff
 
 Relay publishes evidence offering metadata for discovery and delegates all claim
-and evidence verification to Registry Notary. The only evidence offering routes
+and evidence verification to Registry Notary. Notary also owns credential
+issuance. The only evidence offering routes
 in Relay are:
 
 ```http

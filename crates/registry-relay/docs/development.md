@@ -86,7 +86,6 @@ cargo test --test auth_flow
 cargo test --test catalog_entity
 cargo test --features ogcapi-records --test ogc_records_api
 cargo test --test api_docs
-cargo test provenance
 ```
 
 Portable metadata checks are separate from the Relay runtime:
@@ -179,13 +178,12 @@ External-service tests remain ignored unless their required environment is confi
 src/api/          HTTP handlers and route-local helpers
 src/audit/        audit records, sinks, redaction, hash chaining
 src/auth/         auth trait, API-key provider, scope checks
-src/config/       YAML model, loader, validation, provenance config
+src/config/       YAML model, loader, validation
 src/entity/       entity registry built from config
 src/format/       CSV, XLSX, and Parquet decoders
 src/ingest/       source ingest, cache layout, refresh, readiness
 src/metadata/     Relay adapters for scoped metadata publication
 src/api/ogc/      optional OGC API Features and Records adapters
-src/provenance/   VC-JWT issuance, DID Web, schemas, contexts, signers
 src/query/        entity and aggregate query planning
 src/server.rs     router composition and cross-cutting middleware
 profiles/        ecosystem profile descriptors and fixture metadata manifests
@@ -224,7 +222,7 @@ Storage tables are private. Public routes must go through entity config, scope c
 
 ## Adding config
 
-1. Add the serde model to `src/config/mod.rs` or `src/config/provenance.rs`.
+1. Add the serde model to `src/config/mod.rs`.
 2. Add validation in `src/config/validate.rs`.
 3. Update `config/example.yaml` only when the field is part of the canonical example.
 4. Add positive and negative loader tests under `tests/config_loader.rs` or a focused test file.
@@ -258,7 +256,6 @@ Refresh the static OpenAPI artifact when any of these change:
 - query parameter or request body;
 - response body or media type;
 - Problem Details schema or stable error code;
-- provenance media type or schema;
 - standards adapter surface;
 - metadata visibility rule that changes generated operations.
 

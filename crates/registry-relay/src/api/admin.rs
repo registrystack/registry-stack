@@ -12,7 +12,7 @@ use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{get, post};
 use axum::{Extension, Router};
 use registry_manifest_core::CompiledMetadata;
-use registry_platform_crypto::{KeyProviderKind, KeyReadiness};
+use registry_platform_crypto::KeyReadiness;
 use registry_platform_ops::{
     filter_posture_for_tier, internal_config_hash, override_pin_posture,
     posture_safe_runtime_config_hash, AuditWritePolicy, ConfigProvenance, ConfigSource,
@@ -27,10 +27,9 @@ use tokio::sync::watch;
 use crate::audit::{audit_write_failed_response, ErrorCodeExt, OperationalAuditEvent};
 use crate::auth::scopes::require_scope;
 use crate::auth::Principal;
-use crate::config::{AuthMode, Config, DatasetId, IssuerConfig, ResourceId, SignerConfig};
+use crate::config::{AuthMode, Config, DatasetId, ResourceId};
 use crate::error::{AdminError, AuthError, Error, IngestError};
 use crate::ingest::{IngestRegistry, ReadinessSnapshot};
-use crate::provenance::ProvenanceState;
 use crate::runtime_config::RuntimeSnapshot;
 
 const PROBLEM_JSON: HeaderValue = HeaderValue::from_static("application/problem+json");
@@ -310,7 +309,6 @@ async fn posture(
             compiled: runtime.compiled_metadata().as_deref(),
             source_digest: runtime.metadata_source_digest().as_deref(),
             package_digest: runtime.metadata_package_digest().as_deref(),
-            provenance_state: runtime.provenance_state().as_deref(),
         },
         tier,
     ) {
@@ -324,7 +322,6 @@ struct PostureMetadata<'a> {
     compiled: Option<&'a CompiledMetadata>,
     source_digest: Option<&'a str>,
     package_digest: Option<&'a str>,
-    provenance_state: Option<&'a ProvenanceState>,
 }
 
 fn build_posture(
@@ -426,13 +423,11 @@ fn build_posture(
             "aggregate_count": config.datasets.iter().map(|dataset| dataset.aggregates.len() + dataset.tables.iter().map(|table| table.aggregates.len()).sum::<usize>()).sum::<usize>(),
             "evidence_offering_count": metadata.compiled.map(|compiled| compiled.evidence_offerings().count()).unwrap_or(0),
             "metadata_manifest": metadata_manifest,
-            "provenance": provenance_summary(config, metadata.provenance_state),
             "standards_adapters": {
                 "ogcapi_records": feature_status(cfg!(feature = "ogcapi-records")),
                 "ogcapi_features": feature_status(cfg!(feature = "ogcapi-features")),
                 "ogcapi_edr": feature_status(cfg!(feature = "ogcapi-edr")),
                 "spdci": feature_status(cfg!(feature = "spdci-api-standards") && config.standards.spdci.is_some()),
-                "publicschema_cel": feature_status(cfg!(feature = "publicschema-cel")),
             },
         },
         "posture": {
@@ -504,75 +499,6 @@ fn posture_tier_invalid_response() -> Response {
         .extensions_mut()
         .insert(ErrorCodeExt(POSTURE_TIER_INVALID_CODE.to_string()));
     response
-}
-
-fn provenance_summary(config: &Config, state: Option<&ProvenanceState>) -> Value {
-    let Some(provenance) = &config.provenance else {
-        return json!({
-            "enabled": false,
-            "retired_kids": [],
-            "key_readiness": {},
-        });
-    };
-    let (issuer, active_kid, active_provider, retired_kids) = match &provenance.issuer {
-        IssuerConfig::Gateway(issuer) => (
-            issuer.did.as_str(),
-            issuer.verification_method_id.as_str(),
-            signer_provider_kind(&issuer.signer),
-            issuer
-                .retired_keys
-                .iter()
-                .map(|key| key.verification_method_id.as_str())
-                .collect::<Vec<_>>(),
-        ),
-        IssuerConfig::Delegated(issuer) => (
-            issuer.ministry_did.as_str(),
-            issuer.verification_method_id.as_str(),
-            signer_provider_kind(&issuer.signer),
-            issuer
-                .retired_keys
-                .iter()
-                .map(|key| key.verification_method_id.as_str())
-                .collect::<Vec<_>>(),
-        ),
-    };
-    let active_readiness = if provenance.enabled {
-        state
-            .map(|state| state.config().signer.readiness())
-            .unwrap_or(KeyReadiness::NotReady)
-    } else {
-        KeyReadiness::Unknown
-    };
-    let mut key_readiness = Map::new();
-    key_readiness.insert(active_kid.to_string(), json!(active_readiness.as_str()));
-    if let Some(state) = state {
-        for key in &state.config().retired_keys {
-            key_readiness.insert(
-                key.verification_method_id.clone(),
-                json!(KeyReadiness::Ready.as_str()),
-            );
-        }
-    } else {
-        for kid in &retired_kids {
-            key_readiness.insert((*kid).to_string(), json!(KeyReadiness::Unknown.as_str()));
-        }
-    }
-    json!({
-        "enabled": provenance.enabled,
-        "issuer": issuer,
-        "active_kid": active_kid,
-        "active_provider": active_provider.as_str(),
-        "retired_kids": retired_kids,
-        "key_readiness": key_readiness,
-    })
-}
-
-fn signer_provider_kind(signer: &SignerConfig) -> KeyProviderKind {
-    match signer {
-        SignerConfig::Software(_) => KeyProviderKind::LocalJwkEnv,
-        SignerConfig::FileWatch(_) => KeyProviderKind::FileWatch,
-        SignerConfig::Kms(_) => KeyProviderKind::Kms,
-    }
 }
 
 fn audit_summary(config: &Config) -> Value {
@@ -715,7 +641,6 @@ fn fallback_config_provenance(config: &Config) -> ConfigProvenance {
         },
         "datasets": config.datasets.iter().map(|dataset| dataset.id.to_string()).collect::<Vec<_>>(),
         "metadata_manifest_configured": config.metadata.is_some(),
-        "provenance": provenance_summary(config, None),
     });
     let bytes = serde_json::to_vec(&public_shape).expect("public config shape serializes");
     ConfigProvenance::local_file(
@@ -930,7 +855,6 @@ datasets: []
             compiled: None,
             source_digest: None,
             package_digest: None,
-            provenance_state: None,
         }
     }
 

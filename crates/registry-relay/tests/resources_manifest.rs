@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Pinned-byte invariant for provenance resources.
+//! Pinned-byte invariant for vendored resources.
 //!
-//! `resources/MANIFEST.toml` records the sha256 of every JSON-LD
-//! context and JSON Schema the gateway serves. This test re-hashes
-//! both the on-disk file and the compiled-in byte slice and asserts
-//! equality with the pinned value. An unreviewed edit to any resource
-//! file would change one or both hashes and fail CI before any tampered
-//! bytes can be deployed.
+//! `resources/MANIFEST.toml` records the sha256 of every resource the
+//! gateway serves verbatim. This test re-hashes both the on-disk file
+//! and the compiled-in byte slice and asserts equality with the pinned
+//! value. An unreviewed edit to any resource file would change one or
+//! both hashes and fail CI before any tampered bytes can be deployed.
 
 use std::collections::HashMap;
 use std::fs;
@@ -75,22 +74,6 @@ fn compiled_in_resources_match_pinned_sha256() {
     // binary carries the same bytes as the on-disk file (the previous
     // test asserts the on-disk bytes match the manifest).
     let mut compiled: HashMap<&'static str, &'static [u8]> = HashMap::new();
-    compiled.insert(
-        "jsonld/provenance/v1/context.jsonld",
-        registry_relay::provenance::resources::PROVENANCE_CONTEXT_V1,
-    );
-    compiled.insert(
-        "jsonld/vc/v2/credentials.jsonld",
-        registry_relay::provenance::resources::VC_V2_CONTEXT,
-    );
-    compiled.insert(
-        "schemas/aggregate-result/v1.json",
-        registry_relay::provenance::resources::AGGREGATE_RESULT_V1,
-    );
-    compiled.insert(
-        "schemas/entity-record/v1.json",
-        registry_relay::provenance::resources::ENTITY_RECORD_V1,
-    );
     compiled.insert(
         "scalar/api-reference.js",
         registry_relay::api::docs::SCALAR_BUNDLE,

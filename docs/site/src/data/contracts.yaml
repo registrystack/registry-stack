@@ -11,7 +11,7 @@
   name: Registry Relay OpenAPI
   owner: registry-relay
   status: hand-authored-abstract-contract
-  surface: "Protected Registry Data API, metadata API, evidence offering discovery, aggregates, health and readiness, plus optional standards adapters (OGC API Features, OGC API Records, OGC API EDR, SP DCI) and signed response credential routes (config key: provenance)."
+  surface: "Protected Registry Data API, metadata API, evidence offering discovery, aggregates, health and readiness, plus optional standards adapters (OGC API Features, OGC API Records, OGC API EDR, SP DCI)."
   source_of_truth:
     label: Registry Relay abstract OpenAPI contract
     url: https://github.com/registrystack/registry-stack/blob/v0.8.4/crates/registry-relay/openapi/registry-relay.openapi.json

@@ -15,9 +15,7 @@ pub mod admin;
 pub mod aggregates;
 #[cfg(feature = "attribute-release")]
 pub mod attribute_release;
-pub mod contexts;
 pub mod datasets;
-pub mod did;
 pub mod docs;
 pub mod entity;
 pub(crate) mod governed;
@@ -30,8 +28,6 @@ pub mod metadata;
 ))]
 pub mod ogc;
 pub mod openapi;
-pub(crate) mod provenance_issuance;
-pub mod schemas;
 #[cfg(feature = "spdci-api-standards")]
 pub mod spdci;
 
@@ -40,9 +36,7 @@ pub use admin::router as admin_router;
 pub use aggregates::router as aggregates_router;
 #[cfg(feature = "attribute-release")]
 pub use attribute_release::router as attribute_release_router;
-pub use contexts::router as contexts_router;
 pub use datasets::router as datasets_router;
-pub use did::router as did_router;
 pub use docs::router as docs_router;
 pub use entity::router as entity_router;
 pub use health::router as health_router;
@@ -55,6 +49,5 @@ pub use ogc::features_router as ogc_router;
 #[cfg(feature = "ogcapi-records")]
 pub use ogc::records_router;
 pub use openapi::router as openapi_router;
-pub use schemas::router as schemas_router;
 #[cfg(feature = "spdci-api-standards")]
 pub use spdci::router as spdci_router;

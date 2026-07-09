@@ -119,13 +119,6 @@ fn shared_runtime_classifier_ignores_secret_and_topology_changes() {
                     "token_env": "DCI_TOKEN_A"
                 }
             }
-        },
-        "provenance": {
-            "issuer": {
-                "did": "did:web:issuer-a.example.test",
-                "verification_method_id": "did:web:issuer-a.example.test#key-1",
-                "signer": { "kind": "software", "jwk_env": "JWK_A" }
-            }
         }
     });
     let mut second = first.clone();
@@ -136,10 +129,6 @@ fn shared_runtime_classifier_ignores_secret_and_topology_changes() {
     second["evidence"]["api_base_url"] = json!("https://notary-b.example.test");
     second["evidence"]["source_connections"]["dci"]["base_url"] = json!("https://dci-b.internal");
     second["evidence"]["source_connections"]["dci"]["token_env"] = json!("DCI_TOKEN_B");
-    second["provenance"]["issuer"]["did"] = json!("did:web:issuer-b.example.test");
-    second["provenance"]["issuer"]["verification_method_id"] =
-        json!("did:web:issuer-b.example.test#key-2");
-    second["provenance"]["issuer"]["signer"]["jwk_env"] = json!("JWK_B");
 
     assert_eq!(
         posture_safe_runtime_config_hash(&first),

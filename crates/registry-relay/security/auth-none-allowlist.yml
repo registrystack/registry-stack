@@ -24,18 +24,6 @@ allowed:
     method: HEAD
     path: /.well-known/api-catalog
     reason: Public RFC 9727 discovery linkset; static handler with no principal input.
-  - listener: public
-    method: GET
-    path: /.well-known/did.json
-    reason: Public DID document when provenance gateway mode is enabled.
-  - listener: public
-    method: GET
-    path: /schemas/{claim_type}/{version}
-    reason: Public provenance schema when provenance is enabled.
-  - listener: public
-    method: GET
-    path: /contexts/{vocab}/{version}
-    reason: Public JSON-LD context when provenance is enabled.
   - listener: admin
     method: GET
     path: /healthz

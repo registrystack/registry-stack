@@ -35,6 +35,11 @@
 
 ### Changed
 
+- BREAKING: Removed Relay-local credential issuance before 1.0. Relay no
+  longer accepts `provenance` or entity `publicschema` config, no longer serves
+  `/.well-known/did.json`, `/schemas/{claim_type}/{version}`, or
+  `/contexts/{vocab}/{version}`, and no longer returns `application/vc+jwt`.
+  Use Registry Notary for credential issuance and verification.
 - The beta `attribute-release` API and `attribute_release_profiles` config
   surface are now behind the off-by-default `attribute-release` Cargo feature.
   The 1.0 default build no longer serves or advertises those routes.

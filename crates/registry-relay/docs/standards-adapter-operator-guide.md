@@ -115,35 +115,13 @@ Operator checklist:
 The async search, subscribe, callback, and transaction-status APIs are out of
 scope for the current sync adapter.
 
-## PublicSchema VC mapping
-
-Purpose: map Relay entity-record provenance credentials to PublicSchema-shaped
-credential subjects.
-
-Enablement:
-
-```sh
-cargo build --features publicschema-cel
-```
-
-Operator checklist:
-
-- Enable provenance first.
-- Configure the entity `provenance.publicschema` mapping.
-- Validate the mapping against the target PublicSchema JSON Schema.
-- Confirm the VC contains only fields intended for downstream disclosure.
-- Keep mapping files under review with the schema version they target.
-
-PublicSchema mapping changes are contract changes for credential consumers.
-Version and test them like API changes.
-
 ## Verification commands
 
 Focused adapter checks:
 
 ```sh
 cargo test --all-features --test ogc_api --test ogc_records_api --test ogc_edr_api
-cargo test --all-features --test spdci_api_standards --test publicschema_cel_feature
+cargo test --all-features --test spdci_api_standards
 ```
 
 Broader local gate:

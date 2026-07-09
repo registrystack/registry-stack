@@ -19,7 +19,7 @@ This is not an open-data portal and not a spreadsheet wrapper. It publishes rest
 
 Registry Relay is an experiment toward a redesigned [GovStack](https://govstack.global/) Digital Registries Building Block. The current BB spec defines a single uniform CRUD platform; this project explores the BB instead as a protected consultation gateway with optional capability families (evidence-offering discovery, aggregates, standards adapters) over a shared entity model. Provisioning and Write are intentionally out of scope for V1; conformance is by capability, not by a single mandatory interface.
 
-Standards integrations such as DCAT-AP, OGC API Records, OGC API Features, PublicSchema, signed response credentials (W3C VCDM 2.0 VC-JWT), and the optional [Social Protection Digital Convergence Initiative (SP DCI)](https://spdci.org/) sync adapter are layered on top of the core gateway. [STANDARDS_ASSUMPTIONS.md](STANDARDS_ASSUMPTIONS.md) states precisely what Relay publishes versus what downstream tools may infer.
+Standards integrations such as DCAT-AP, OGC API Records, OGC API Features, Registry Notary evidence-offering discovery, and the optional [Social Protection Digital Convergence Initiative (SP DCI)](https://spdci.org/) sync adapter are layered on top of the core gateway. [STANDARDS_ASSUMPTIONS.md](STANDARDS_ASSUMPTIONS.md) states precisely what Relay publishes versus what downstream tools may infer.
 
 ## Get Started
 
@@ -59,7 +59,7 @@ See [demo/README.md](demo/README.md) for the datasets, personas, Bruno collectio
 - [Configuration guide](docs/configuration.md): the full YAML contract. The binary reads `--config <path>`, then `REGISTRY_RELAY_CONFIG`, then `./config/example.yaml`; [config/example.yaml](config/example.yaml) is the canonical example. API keys are never stored in YAML: configs reference environment-backed SHA-256 fingerprints, and `auth.mode: oidc` validates bearer JWTs against an external IdP.
 - [Portable metadata](docs/metadata.md): `metadata.yaml` manifests, the metadata CLI, static publication, ODRL policy metadata, and DCAT-AP/SHACL validation. Manifests can outlive Relay itself and be published as static files.
 - [Operations runbook](docs/ops.md): deployment, hardening checklist, key rotation, audit handling, reloads, probes, and troubleshooting.
-- [Signed response credentials](docs/provenance.md): opt-in W3C VCDM 2.0 VC-JWT signed response credentials (`Accept: application/vc+jwt`), issuer modes, and verification. The config key is `provenance` for compatibility.
+- [Credential issuance migration](docs/provenance.md): notes for removing legacy Relay response-credential issuer config and using Registry Notary as the issuance surface.
 - [Development guide](docs/development.md): local setup, verification commands, project layout, and the OpenAPI release policy.
 
 ## Build

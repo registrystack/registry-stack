@@ -21,7 +21,6 @@ default = []
 attribute-release = ["crosswalk-runtime"]
 crosswalk-runtime = ["dep:crosswalk-core"]
 standards-cel-mapping = ["crosswalk-runtime"]
-publicschema-cel = ["crosswalk-runtime", "dep:jsonschema"]
 spdci-api-standards = ["dep:jsonschema"]
 ogcapi-features = ["dep:ogcapi-types", "dep:geojson"]
 ogcapi-edr = ["dep:geo", "dep:geo-types", "dep:geojson", "dep:wkt"]
@@ -93,19 +92,14 @@ registry-platform-oidc = { workspace = true }
 registry-platform-config = { workspace = true }
 registry-config-report = { workspace = true }
 registry-platform-pdp = { workspace = true }
-registry-platform-sdjwt = { workspace = true }
 getrandom = { version = "0.4" }
 hmac = { version = "0.13" }
 sha2 = { version = "0.11" }
 subtle = { version = "2" }
 zeroize = { version = "1" }
-# JWS compact serialization and EdDSA / ES256 signing primitives.
-# We build the VC-JWT payload by hand to control the VCDM 2.0 envelope
-# shape; jsonwebtoken provides the signing/verification primitives only.
+# JWS validation primitives used by OIDC/JWKS authentication.
 jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs"] }
-# urn:uuid:* identifiers for VC jti / id.
-uuid = { version = "1", features = ["v4"] }
-# base64url encoding used by the VC-JWT compact serialization.
+# base64url encoding used by API key and OIDC helpers.
 base64 = { version = "0.22" }
 # Used by the OIDC auth provider to fetch JWKS documents and resolve
 # `.well-known/openid-configuration`. native-tls keeps the TLS stack
@@ -146,8 +140,7 @@ insta = { version = "1", features = ["json"] }
 # package version matches the one calamine 0.35 pulls transitively so we
 # don't multiply build-time copies.
 zip = { version = "8", default-features = false, features = ["deflate"] }
-# Validates credentialSubject payloads against the JSON Schemas we
-# publish at /schemas/...
+# Validates payloads in standards-adapter tests.
 jsonschema = { version = "0.18" }
 # Ed25519 key generation for tests so they can mint fresh keypairs and
 # convert them to/from JWK without shelling out to openssl.
