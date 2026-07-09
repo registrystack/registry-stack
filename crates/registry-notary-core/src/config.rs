@@ -7234,7 +7234,7 @@ deployment:
             trust_anchor_path: PathBuf::from("/etc/registry-notary/config-anchor.json"),
             bundle_path: PathBuf::from("/etc/registry-notary/config-bundle"),
             antirollback_state_path: PathBuf::from(
-                "/var/lib/registry-notary/config-antirollback.json",
+                "/var/lib/registry-notary/config-state/antirollback.json",
             ),
             break_glass_override_path: None,
         }

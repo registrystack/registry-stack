@@ -231,11 +231,12 @@ Restart after config edits:
 
 ```sh
 registryctl restart
-registryctl doctor --profile local --format json
+registryctl doctor --profile production --format json
 ```
 
 `doctor` prints a JSON report.
 Resolve any `startup_fail` finding before routing public traffic.
+Use the deployment profile declared for the environment if it is stricter than `production`.
 
 Check Relay through the proxy:
 

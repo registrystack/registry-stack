@@ -164,7 +164,7 @@ it in an environment.
 config_trust:
   trust_anchor_path: /etc/registry-relay/config/trust-anchor.json
   bundle_path: /etc/registry-relay/config/bundle
-  antirollback_state_path: /var/lib/registry-relay/config-antirollback.json
+  antirollback_state_path: /var/lib/registry-relay/config-state/antirollback.json
   break_glass_override_path: /run/registry-relay/config-override.json
 ```
 

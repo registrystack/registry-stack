@@ -444,7 +444,7 @@ Example:
 registry-relay config verify-bundle \
   --bundle-dir /etc/registry-relay/config/bundle \
   --anchor-path /etc/registry-relay/config/trust-anchor.json \
-  --state-path /var/lib/registry-relay/config-antirollback.json
+  --state-path /var/lib/registry-relay/config-state/antirollback.json
 ```
 
 ## Readiness and probes
