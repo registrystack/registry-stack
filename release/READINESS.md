@@ -59,6 +59,7 @@ section is about challenging it.
       disclosure policy evaluation.
 - [ ] Negative-path test coverage mapped against the attack checklist;
       gaps closed with tests that assert denial and correct audit records.
+      Mapping evidence: [`negative-path-coverage-map.md`](notes/negative-path-coverage-map.md).
 - [ ] cargo-fuzz targets for manifest and artifact parsers (#26).
 - [ ] cargo-fuzz targets for token, credential, and sidecar parse boundaries.
 - [ ] Data-minimization leak review across logs, error paths, audit records,

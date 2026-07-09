@@ -48,7 +48,8 @@ The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 
 | 0.1.1 | 2026-06-20 | draft | Document governed Evidence Gateway PDP enforcement, aggregate authorization ordering, metadata filtering boundaries, and PDP audit provenance. |
 | 0.1.2 | 2026-06-21 | draft | Clarified aggregate disclosure limits and privacy-budget boundaries. |
 | 0.2.0 | 2026-07-07 | draft | Corrected REQ-PR-RELAY-020's trust-context header names to the actual wire names, and clarified that the signed response credential surfaces of Section 8 are gated by runtime configuration (the `provenance` key), not a Cargo feature, distinguishing them from the genuinely feature-gated OGC and SP DCI adapters. |
-| 0.2.1 | 2026-07-07 | draft | Documented the five further trust-context headers Relay parses without a scope guard alongside REQ-PR-RELAY-020, noting they are not currently wired to any Relay policy decision. |
+| 0.2.1 | 2026-07-07 | draft | Documented additional request-context headers alongside REQ-PR-RELAY-020, noting they are not currently wired to any Relay policy decision. |
+| 0.2.2 | 2026-07-09 | draft | Clarified that `x-registry-source-observed-at-unix-seconds` is scope guarded trust context, leaving four additional request-context headers outside Relay policy decisions. |
 
 ## 1. Scope and references
 
@@ -110,9 +111,9 @@ Governed Evidence Gateway policy enforcement is an additional runtime decision, 
 
 REQ-PR-RELAY-019: A governed Relay read MUST receive a PDP permit before returning entity-backed data or aggregate data. If the PDP denies the request, Relay MUST fail closed and return a stable `pdp.*` problem code rather than falling back to an ungoverned read. The stable denial codes include `pdp.purpose_not_permitted`, `pdp.assurance_insufficient`, `pdp.evidence_stale`, `pdp.legal_basis_required`, `pdp.consent_required`, `pdp.jurisdiction_not_permitted`, `pdp.unsupported_policy_term`, `pdp.policy_id_required`, and `pdp.policy_hash_invalid`.
 
-REQ-PR-RELAY-020: Relay MUST ignore request trust-context headers unless the authenticated principal is scoped to assert that exact trust value. The supported trust-context headers are `x-registry-trust-jurisdiction`, `x-registry-trust-assurance`, `x-registry-trust-legal-basis`, `x-registry-trust-consent`, and `x-registry-source-observed-age-seconds`. Unscoped or malformed trust metadata MUST NOT satisfy the PDP gate.
+REQ-PR-RELAY-020: Relay MUST ignore request trust-context headers unless the authenticated principal is scoped to assert that exact trust value. The supported trust-context headers are `x-registry-trust-jurisdiction`, `x-registry-trust-assurance`, `x-registry-trust-legal-basis`, `x-registry-trust-consent`, `x-registry-source-observed-age-seconds`, and `x-registry-source-observed-at-unix-seconds`. Unscoped or malformed trust metadata MUST NOT satisfy the PDP gate.
 
-Relay also parses five further headers without a scope guard: `x-registry-subject-ref`, `x-registry-relationship`, `x-registry-on-behalf-of`, `x-registry-credential-format`, and `x-registry-source-observed-at-unix-seconds`. These populate the request's trust context for the PDP, but none of them are currently wired to any Relay policy decision.
+Relay also parses four further request-context headers without a scope guard: `x-registry-subject-ref`, `x-registry-relationship`, `x-registry-on-behalf-of`, and `x-registry-credential-format`. These populate the request context for the PDP, but none of them are currently wired to any Relay policy decision.
 
 REQ-PR-RELAY-021: Aggregate routes MUST perform ordinary aggregate and source-read scope authorization before invoking governed PDP enforcement. A scope denial MUST return `auth.scope_denied` and MUST NOT report PDP policy provenance. For aggregate execution, the PDP checked-scope value MUST be the source entity read scope unless the aggregate is configured for aggregate-only execution, in which case it MUST be the aggregate scope.
 
