@@ -4241,17 +4241,17 @@ async fn issue_credential(
     request: Result<Json<CredentialIssueRequest>, JsonRejection>,
 ) -> Response {
     if has_idempotency_key(&headers) {
-        return evidence_error_response(EvidenceError::InvalidRequest);
+        return credential_denial_response_without_evaluation(EvidenceError::InvalidRequest);
     }
     let request = match parse_json_body(request) {
         Ok(request) => request,
-        Err(error) => return evidence_error_response(error),
+        Err(error) => return credential_denial_response_without_evaluation(error),
     };
     let Some(Extension(state)) = state else {
         return evidence_error_response(EvidenceError::ServerDisabled);
     };
     let Some(Extension(principal)) = principal else {
-        return evidence_error_response(EvidenceError::MissingCredential);
+        return credential_denial_response_without_evaluation(EvidenceError::MissingCredential);
     };
     let evidence = match state.enabled_evidence() {
         Ok(evidence) => evidence,
@@ -4260,11 +4260,15 @@ async fn issue_credential(
     let mut principal =
         match classify_self_attestation_principal(&state.self_attestation, &principal) {
             Ok(principal) => principal,
-            Err(error) => return evidence_error_response(error),
+            Err(error) => return credential_denial_response_without_evaluation(error),
         };
     let evaluation = match state.store.get(&request.evaluation_id) {
         Some(evaluation) => evaluation,
-        None => return evidence_error_response(EvidenceError::EvaluationNotFound),
+        None => {
+            return credential_denial_response_without_evaluation(
+                EvidenceError::EvaluationNotFound,
+            );
+        }
     };
     if let Some(metadata) = evaluation.self_attestation.as_ref() {
         if principal.is_self_attestation() {
@@ -4364,16 +4368,7 @@ async fn issue_credential(
         request.credential_profile.as_deref(),
     ) {
         Ok(profile) => profile,
-        Err(error) => {
-            return credential_denial_response_for_evaluation(
-                &state,
-                error,
-                &request.evaluation_id,
-                &evaluation,
-                &principal,
-                None,
-            );
-        }
+        Err(error) => return evidence_error_response(error),
     };
     if evaluation.format != FORMAT_SD_JWT_VC {
         return credential_denial_response_for_evaluation(
@@ -4525,13 +4520,24 @@ async fn issue_credential(
             .check_credential_issuance(&principal_hash, holder_hash.as_ref())
         {
             let mut response = evidence_error_response(error.evidence_error());
-            attach_self_attestation_rate_limit_audit(
+            if let Err(audit_error) = attach_self_attestation_credential_denial_audit(
                 &mut response,
-                "credential_issue_rate_limited",
-                &evaluation.claim_ids,
-                error.bucket(),
-            );
+                &state.self_attestation_rate_keys,
+                &request.evaluation_id,
+                &evaluation,
+                Some((profile_id, profile)),
+            ) {
+                return evidence_error_response(audit_error);
+            }
+            if let Some(audit) = response.extensions_mut().get_mut::<EvidenceAuditContext>() {
+                audit.verification_decision = Some("credential_issue_rate_limited".to_string());
+                audit.denial_code = Some(SelfAttestationDenialCode::RateLimited);
+                audit.rate_limit_bucket = error
+                    .bucket()
+                    .and_then(|bucket| RateLimitBucket::new(bucket.as_str()).ok());
+            }
             override_attestation_audit_access_mode(&mut response, principal.access_mode());
+            attach_zero_source_no_forward_audit(&mut response);
             return response;
         }
     }
@@ -7127,6 +7133,11 @@ fn self_attestation_denied(reason: SelfAttestationDenialCode) -> EvidenceError {
 fn denial_code_from_error(error: &EvidenceError) -> Option<SelfAttestationDenialCode> {
     match error {
         EvidenceError::SelfAttestationDenied { reason } => Some(*reason),
+        EvidenceError::SelfAttestationRateLimited => Some(SelfAttestationDenialCode::RateLimited),
+        EvidenceError::SelfAttestationInvalidToken => Some(SelfAttestationDenialCode::InvalidToken),
+        EvidenceError::SelfAttestationAssuranceDenied => {
+            Some(SelfAttestationDenialCode::AssuranceDenied)
+        }
         _ => None,
     }
 }
@@ -7735,6 +7746,18 @@ fn is_matching_policy_provenance_code(code: &str) -> bool {
     )
 }
 
+// Before a stored evaluation is found, keep caller-controlled evaluation ids out of audit data.
+fn credential_denial_response_without_evaluation(error: EvidenceError) -> Response {
+    let denial_code = denial_code_from_error(&error);
+    let mut response = evidence_error_response(error);
+    attach_evidence_audit(&mut response, "credential_denied", None, &[], None);
+    attach_zero_source_no_forward_audit(&mut response);
+    if let Some(audit) = response.extensions_mut().get_mut::<EvidenceAuditContext>() {
+        audit.denial_code = denial_code;
+    }
+    response
+}
+
 fn credential_denial_response_for_evaluation(
     state: &RegistryNotaryApiState,
     error: EvidenceError,
@@ -7743,6 +7766,7 @@ fn credential_denial_response_for_evaluation(
     principal: &EvidencePrincipal,
     profile: Option<(&str, &CredentialProfileConfig)>,
 ) -> Response {
+    let denial_code = denial_code_from_error(&error);
     let mut response = evidence_error_response(error);
     if evaluation.self_attestation.is_some() || principal.is_self_attestation() {
         if let Err(error) = attach_self_attestation_credential_denial_audit(
@@ -7771,6 +7795,10 @@ fn credential_denial_response_for_evaluation(
                     ConfigMetadata::new(profile.holder_binding.mode.as_str()).ok();
             }
         }
+    }
+    attach_zero_source_no_forward_audit(&mut response);
+    if let Some(audit) = response.extensions_mut().get_mut::<EvidenceAuditContext>() {
+        audit.denial_code = denial_code;
     }
     response
 }
