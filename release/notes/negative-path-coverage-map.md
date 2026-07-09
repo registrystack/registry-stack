@@ -62,10 +62,13 @@ public evidence or disposition.
   and `crates/registry-relay/src/api/governed.rs`.
   Disposition: governed-route denial, audit provenance, and response
   non-disclosure are covered for the mapped forged-context inputs.
-- `NP-09`: Partial.
-  Public anchors: `crates/registry-relay/tests/spdci_api_standards.rs` and
-  `crates/registry-relay/tests/error_taxonomy.rs`.
-  Disposition: keep open for complete raw-value and side-effect assertions.
+- `NP-09`: Covered.
+  Public anchors:
+  `crates/registry-relay/tests/spdci_api_standards.rs::disabled_details_malformed_filter_value_records_generic_error_without_value_leak`
+  and `crates/registry-relay/tests/error_taxonomy.rs`.
+  Disposition: malformed-filter denial now asserts a stable error code, one
+  audit record, hashed table identity, zero returned rows, and no raw value or
+  backend detail disclosure.
 - `NP-10`: Covered.
   Public anchors:
   `crates/registry-relay/src/server.rs::body_limit_layer_returns_problem_details_and_audit_code`,
@@ -94,10 +97,13 @@ public evidence or disposition.
   `crates/registry-notary-server/src/api.rs`,
   `crates/registry-platform-sts/src/lib.rs::exchange_aborts_when_audit_sink_fails`.
   Disposition: product paths and STS audit-failure abort behavior are covered.
-- `NP-14`: Partial.
-  Public anchors: `crates/registry-relay/tests/admin_auth_extraction_contract.rs`
-  and `crates/registry-relay/tests/observability_metrics.rs`.
-  Disposition: keep open for broad admin-route and audit parity.
+- `NP-14`: Covered.
+  Public anchors:
+  `crates/registry-relay/tests/admin_auth_extraction_contract.rs::admin_handlers_use_required_scoped_extractors`
+  and `crates/registry-relay/tests/observability_metrics.rs::denied_admin_and_metrics_requests_do_not_leak_privileged_surfaces`.
+  Disposition: current admin and metrics surfaces assert required scoped
+  extractors, stable unauthenticated and wrong-scope denials, denial audit
+  records, bounded metrics labels, and no privileged admin-state disclosure.
 - `NP-15`: Covered.
   Public anchors: `crates/registry-relay/src/server.rs` and
   `crates/registry-relay/tests/e2e_health.rs`.
@@ -128,9 +134,14 @@ public evidence or disposition.
   Public anchors: `crates/registry-notary-server/src/api.rs` and
   `crates/registry-platform-sdjwt/src/lib.rs`.
   Disposition: no new release work identified from the current map.
-- `NP-22`: Partial.
-  Public anchor: `crates/registry-notary-server/src/standalone.rs`.
-  Disposition: keep open for product-surface HTTP audit and no-response parity.
+- `NP-22`: Covered.
+  Public anchors:
+  `crates/registry-notary-server/src/standalone.rs::notary_transaction_token_auth_consumes_jti_once`,
+  `crates/registry-notary-server/src/standalone.rs::consume_notary_token_jti_rejects_missing_jti_for_transaction_typ`,
+  and `crates/registry-notary-server/tests/standalone_http.rs::preauth_transaction_token_jti_denials_are_stable_and_redacted`.
+  Disposition: single-use transaction-token `jti` enforcement, missing-`jti`
+  fail-closed behavior, replay denial, product-surface HTTP audit parity, and
+  response/audit redaction are covered.
 - `NP-23`: Partial.
   Public anchors:
   `crates/registry-platform-sts/src/lib.rs::exchange_rejects_wrong_resource_before_mint_audit`,
