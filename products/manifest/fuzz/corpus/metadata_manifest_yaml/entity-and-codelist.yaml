@@ -1,0 +1,44 @@
+schema_version: registry-manifest/v1
+catalog:
+  id: fuzz-entity
+  base_url: https://registry.example.test
+  title:
+    en: Fuzz Entity
+  publisher:
+    name: Registry Authority
+  application_profiles:
+    - id: bregdcat-ap
+      version: "3.0.0"
+vocabularies:
+  person: https://example.test/vocab/person/
+datasets:
+  - id: people
+    title:
+      en: People
+    entities:
+      - name: person
+        title:
+          en: Person
+        identifiers:
+          - name: person_id
+            kind: local
+        fields:
+          - name: person_id
+            type: string
+            required: true
+            constraints:
+              min_length: 1
+              max_length: 64
+          - name: sex
+            type: code
+            codelist: sex
+codelists:
+  - id: sex
+    scheme_iri: https://registry.example.test/codelists/sex
+    concepts:
+      - code: female
+        label:
+          en: Female
+      - code: male
+        label:
+          en: Male

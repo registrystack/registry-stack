@@ -32,6 +32,7 @@ members = [
 exclude = [
     "products/platform/fuzz",
     "products/notary/fuzz",
+    "products/manifest/fuzz",
 ]
 resolver = "2"
 

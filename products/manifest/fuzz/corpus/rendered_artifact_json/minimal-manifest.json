@@ -1,0 +1,13 @@
+{
+  "schema_version": "registry-manifest/v1",
+  "catalog": {
+    "id": "json-minimal",
+    "base_url": "https://registry.example.test",
+    "title": "JSON Minimal",
+    "publisher": {
+      "name": "Registry Authority"
+    }
+  },
+  "datasets": [],
+  "codelists": []
+}
