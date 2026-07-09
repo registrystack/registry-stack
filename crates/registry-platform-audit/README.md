@@ -54,12 +54,14 @@ async fn write_audit_event() -> Result<(), registry_platform_audit::AuditError> 
 
 ## Security Notes
 
-- The chain APIs detect edits, insertions, deletions after the first retained
-  envelope, and reordered envelopes inside the verified record set. The first
-  retained envelope's `prev_hash` is the retained-set boundary.
+- The chain APIs detect edits, insertions, reordering, and deletions of
+  interior records inside the retained set. The first retained envelope's
+  `prev_hash` is the retained-set boundary.
 - The chain APIs prove internal consistency of retained records. They do not
-  prove completeness, detect deletion of leading retained records, or detect a
-  self-consistent full rewrite by an actor who can replace all retained logs.
+  prove completeness: removal of trailing records leaves a self-consistent
+  shorter chain, and they do not detect deletion of leading retained records
+  or a self-consistent full rewrite by an actor who can replace all retained
+  logs.
 - Off-host audit shipping is the completeness guarantee. Evidence-grade Relay
   and Notary deployments refuse startup when a local `file` or `jsonl` sink is
   used without declaring off-host shipping.

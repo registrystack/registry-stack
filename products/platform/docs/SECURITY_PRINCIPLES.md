@@ -50,7 +50,7 @@ Platform crates outside `audit` deliberately do not take a hard dependency on `a
 
 PII-bearing identifiers must be hashed or redacted before envelope construction. Use keyed HMAC hashing in operator-facing environments; `unkeyed_dev_only()` is only for local fixtures and tests.
 
-Audit chain verification without an external anchor is a consistency check over the retained records. It detects edits, gaps, and reordering inside that set, but it is not proof against a malicious actor replacing the full retained log set with a new internally consistent chain. For stronger evidence, store trusted start or tail/head hashes outside the JSONL logs, such as off-host log shipping, transparency logs, deployment evidence, or operator-maintained manifests, and verify with the audit crate's anchored verification helpers.
+Audit chain verification (`registry_platform_audit::verify_chain`) is a consistency check over the retained records. It detects edits, insertions, reordering, and deletions of interior records inside that set, but it does not detect removal of trailing records, deletion of leading retained records, or a malicious actor replacing the full retained log set with a new internally consistent chain. Completeness is an off-host shipping guarantee, not a property local verification can establish: ship audit records to a log aggregator, SIEM, or other store outside the host, and declare `deployment.evidence.audit_offhost_shipping`. Evidence-grade Relay and Notary deployments refuse startup when a local `file` or `jsonl` sink is used without that declaration.
 
 ## 10. Keep Workspace Hygiene Canonical
 
