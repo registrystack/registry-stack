@@ -1,6 +1,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
+use registry_manifest_cli::{reject_yaml_anchors_and_aliases, YAML_MAX_BYTES};
 use registry_manifest_core::{
     canonicalize_json, compile_manifest, render_base_dcat, render_breg_dcat_ap, render_catalog,
     render_cpsv_ap, render_dataset_policy_document, render_dcat_profile,
@@ -11,17 +12,22 @@ use registry_manifest_core::{
 };
 use serde_json::Value;
 
-const MAX_INPUT_CHARS: usize = 64 * 1024;
-
 fuzz_target!(|data: &[u8]| {
+    if data.len() as u64 > YAML_MAX_BYTES {
+        return;
+    }
+
     let Ok(input) = std::str::from_utf8(data) else {
         return;
     };
 
-    let bounded = take_chars(input, MAX_INPUT_CHARS);
-    let _ = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&bounded);
+    if reject_yaml_anchors_and_aliases(input).is_err() {
+        return;
+    }
 
-    let Ok(manifest) = serde_yaml_ng::from_str::<MetadataManifest>(&bounded) else {
+    let _ = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(input);
+
+    let Ok(manifest) = serde_yaml_ng::from_str::<MetadataManifest>(input) else {
         return;
     };
 
@@ -87,8 +93,4 @@ fn exercise_renderers(compiled: &CompiledMetadata) {
 fn exercise_json(value: Value) {
     let _ = canonicalize_json(&value);
     let _ = serde_json::to_vec(&value);
-}
-
-fn take_chars(input: &str, limit: usize) -> String {
-    input.chars().take(limit).collect()
 }
