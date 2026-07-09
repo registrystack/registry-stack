@@ -61,15 +61,15 @@ The checksum file lets you confirm that a later restore put back the exact same 
 
 ## Back up config, source files, and product state
 
-Back up the generated project manifest, Compose file, product config directories, source data,
+Back up the project manifest when present, Compose file, product config directories, source data,
 and host-mounted state:
 
 ```sh
-backup_items="registryctl.yaml compose.yaml"
-[ -f .env ] && backup_items="$backup_items .env"
-for item in relay notary state data; do
+backup_items=""
+for item in registryctl.yaml compose.yaml relay notary state data; do
   [ -e "$item" ] && backup_items="$backup_items $item"
 done
+[ -f .env ] && backup_items="$backup_items .env"
 tar -cf "$backup_dir/config-source-state.tar" $backup_items
 sha256sum "$backup_dir/config-source-state.tar" > "$backup_dir/config-source-state.tar.sha256"
 ```
@@ -184,12 +184,17 @@ Start the deployment and run product checks:
 ```sh
 registryctl start
 registryctl doctor --profile local --format json
-registryctl smoke
-registryctl notary smoke
+if [ -f registryctl.yaml ] && grep -q '^relay:' registryctl.yaml; then
+  registryctl smoke
+fi
+if [ -f registryctl.yaml ] && grep -q '^notary:' registryctl.yaml; then
+  registryctl notary smoke
+fi
 ```
 
 Expected output from `doctor` is a JSON report with no `startup_fail` findings.
-Run `registryctl notary smoke` only when the project has a Notary section.
+Run the Relay and Notary smoke checks only when `registryctl.yaml` declares the matching
+product section.
 
 For a deployment that uses `config_trust`, verify that the restored anti-rollback state still
 matches the configured trust anchor and signed bundle before the service is allowed to serve.
@@ -199,7 +204,7 @@ Run the command on the host or inside a container where the configured paths are
 registry-relay config verify-bundle \
   --bundle-dir /etc/registry-relay/config/bundle \
   --anchor-path /etc/registry-relay/config/trust-anchor.json \
-  --state-path /var/lib/registry-relay/config-state/config-antirollback.json
+  --state-path /var/lib/registry-relay/config-state/antirollback.json
 ```
 
 Use the equivalent `registry-notary config verify-bundle` command and Notary paths when
