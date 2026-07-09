@@ -5705,6 +5705,15 @@ async fn request_body_limit_returns_413_above_threshold() {
         body["type"],
         json!("https://id.registrystack.org/problems/registry-platform/request/body-too-large")
     );
+    let body_text = serde_json::to_string(&body).expect("problem body serializes");
+    assert!(
+        !body_text.contains("api-token"),
+        "oversized-body problem response must not echo credential material"
+    );
+    assert!(
+        !body_text.contains("1048577"),
+        "oversized-body problem response must not echo the supplied content length"
+    );
 }
 
 #[tokio::test]
@@ -5746,6 +5755,11 @@ async fn request_uri_limit_returns_414_problem_details() {
         json!("https://id.registrystack.org/problems/registry-notary/request/uri-too-long")
     );
     assert_eq!(body["code"], json!("request.uri_too_long"));
+    let body_text = serde_json::to_string(&body).expect("problem body serializes");
+    assert!(
+        !body_text.contains(&long_path),
+        "overlong-URI problem response must not echo the submitted URI"
+    );
 }
 
 #[tokio::test]

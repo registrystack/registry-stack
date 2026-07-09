@@ -22,30 +22,30 @@ public evidence or disposition.
 ## Map
 
 - `NP-01`: Partial.
-  Public anchors: `crates/registry-platform-oidc/src/lib.rs`,
+  Public anchors: `crates/registry-relay/src/auth/oidc/provider.rs`,
+  `crates/registry-notary-server/tests/sd_jwt_vc_verifier_compat.rs`,
   `crates/registry-platform-crypto/src/lib.rs`, and
   `crates/registry-platform-sdjwt/src/lib.rs`.
-  Disposition: keep open for release sign-off until product-surface coverage is
-  complete.
+  Disposition: keep open for complete product-surface audit parity.
 - `NP-02`: Partial.
-  Public anchors: `crates/registry-platform-oidc/src/lib.rs`,
-  `crates/registry-platform-sts/src/lib.rs`, and
-  `crates/registry-notary-server/src/api.rs`.
-  Disposition: keep open for release sign-off until audit assertions are
-  complete across affected surfaces.
+  Public anchors: `crates/registry-relay/src/auth/oidc/provider.rs`,
+  `crates/registry-notary-server/src/api.rs`, and
+  `crates/registry-platform-sts/src/lib.rs`.
+  Disposition: keep open for remaining STS and audit assertions.
 - `NP-03`: Partial.
-  Public anchors: `crates/registry-platform-oidc/src/lib.rs`,
+  Public anchors: `crates/registry-relay/src/auth/oidc/provider.rs`,
   `crates/registry-platform-sdjwt/src/lib.rs`, and
   `crates/registry-notary-server/src/api.rs`.
   Disposition: keep open for route-level denial and audit parity.
 - `NP-04`: Partial.
-  Public anchor: `crates/registry-platform-oidc/src/lib.rs`.
-  Disposition: keep open for product-surface assertions.
+  Public anchors: `crates/registry-relay/src/auth/oidc/provider.rs` and
+  `crates/registry-platform-oidc/src/lib.rs`.
+  Disposition: keep open for product-surface response and audit assertions.
 - `NP-05`: Partial.
   Public anchors: `crates/registry-relay/tests/dataset_routes.rs`,
   `crates/registry-relay/tests/entity_routes.rs`, and
   `crates/registry-relay/tests/observability_metrics.rs`.
-  Disposition: keep open for complete audit assertion parity.
+  Disposition: keep open for full cross-route audit parity.
 - `NP-06`: Partial.
   Public anchors: `crates/registry-platform-pdp/src/lib.rs` and
   `crates/registry-relay/tests/entity_routes.rs`.
@@ -55,90 +55,99 @@ public evidence or disposition.
   Disposition: no new release work identified from the current map.
 - `NP-08`: Partial.
   Public anchors:
-  `crates/registry-relay/tests/entity_routes.rs::governed_entity_policy_ignores_unverified_trust_provenance_without_leak`
-  and
-  `crates/registry-relay/tests/entity_routes.rs::governed_entity_policy_ignores_unverified_source_freshness_header_without_leak`.
-  Disposition: this branch adds denial and audit non-disclosure coverage for the
-  Relay governed-entity trust-provenance and freshness paths; keep open for any
-  remaining route parity.
+  `crates/registry-relay/tests/entity_routes.rs::governed_entity_policy_ignores_unverified_trust_provenance_without_leak`,
+  `crates/registry-relay/tests/entity_routes.rs::governed_entity_policy_ignores_unverified_source_freshness_header_without_leak`,
+  and `crates/registry-relay/src/api/governed.rs`.
+  Disposition: keep open for remaining governed-route parity.
 - `NP-09`: Partial.
   Public anchors: `crates/registry-relay/tests/spdci_api_standards.rs` and
   `crates/registry-relay/tests/error_taxonomy.rs`.
-  Disposition: keep open for complete side-effect assertions.
-- `NP-10`: Partial.
-  Public anchor: `crates/registry-notary-server/src/standalone.rs`.
-  Disposition: Notary parity coverage remains to be added or explicitly
-  deferred.
+  Disposition: keep open for complete raw-value and side-effect assertions.
+- `NP-10`: Covered.
+  Public anchors: `crates/registry-relay/src/server.rs` and
+  `crates/registry-notary-server/tests/standalone_http.rs`.
+  Disposition: Relay asserts denial plus audit for this middleware path; Notary
+  asserts stable early-boundary problem responses, server-owned request ids, and
+  non-disclosure where the audited route layer has not run.
 - `NP-11`: Partial.
-  Public anchor: `crates/registry-notary-server/src/standalone.rs`.
-  Disposition: keep open for product-surface denial and audit assertions.
+  Public anchor: `crates/registry-relay/src/connector/mod.rs`.
+  Disposition: config-load denial is covered; product-surface diagnostic and
+  audit expectations remain to be signed off.
 - `NP-12`: Partial.
-  Public anchor: `crates/registry-notary-server/tests/target_matching_contract_test.rs`.
-  Disposition: keep open for route-level parity.
+  Public anchor: `crates/registry-manifest-core/tests/metadata_core.rs`.
+  Disposition: validation-limit coverage exists; runtime load and serving-state
+  side effects remain to be closed or deferred.
 - `NP-13`: Partial.
-  Public anchors: `crates/registry-notary-server/tests/deployment_gates_test.rs`,
+  Public anchors: `crates/registry-relay/tests/deployment_profile_gates.rs`,
+  `crates/registry-relay/src/api/admin.rs`,
+  `crates/registry-notary-server/src/standalone.rs`,
   `crates/registry-notary-server/tests/standalone_http.rs`, and
   `crates/registry-notary-server/src/api.rs`.
   Disposition: product paths have coverage; STS audit-abort parity remains to
   be closed or deferred.
 - `NP-14`: Partial.
-  Public anchors: `crates/registry-notary-server/tests/standalone_http.rs`
-  and `crates/registry-notary-server/src/api.rs`.
-  Disposition: keep open for full audit parity.
+  Public anchors: `crates/registry-relay/tests/admin_auth_extraction_contract.rs`
+  and `crates/registry-relay/tests/observability_metrics.rs`.
+  Disposition: keep open for broad admin-route and audit parity.
 - `NP-15`: Covered.
-  Public anchors: `crates/registry-notary-server/src/standalone.rs` and
-  `crates/registry-notary-server/tests/standalone_http.rs`.
+  Public anchors: `crates/registry-relay/src/server.rs` and
+  `crates/registry-relay/tests/e2e_health.rs`.
   Disposition: no new release work identified from the current map.
 - `NP-16`: Gap.
   Public anchor: internal checklist only.
-  Disposition: deferred to a maintainer-owned follow-up bundle; public scenario
-  detail remains intentionally omitted.
+  Disposition: deferred to the maintainer-owned minimization follow-up bundle;
+  public scenario detail remains intentionally omitted.
 - `NP-17`: Gap.
   Public anchor: internal checklist only.
-  Disposition: deferred to a maintainer-owned follow-up bundle; public scenario
-  detail remains intentionally omitted.
+  Disposition: deferred to the maintainer-owned minimization follow-up bundle;
+  public scenario detail remains intentionally omitted.
 - `NP-18`: Gap.
   Public anchor: internal checklist only.
-  Disposition: deferred to a maintainer-owned follow-up bundle; public scenario
-  detail remains intentionally omitted.
+  Disposition: deferred to the maintainer-owned minimization follow-up bundle;
+  public scenario detail remains intentionally omitted.
 - `NP-19`: Partial.
   Public anchor: `crates/registry-notary-server/src/api.rs`.
-  Disposition: keep open for complete side-effect assertions.
+  Disposition: keep open for complete side-effect and audit assertions.
 - `NP-20`: Partial.
   Public anchor: `crates/registry-platform-sdjwt/src/lib.rs`.
-  Disposition: product audit coverage remains to be closed or deferred.
+  Disposition: product-level audit coverage remains to be closed or deferred.
 - `NP-21`: Covered.
   Public anchors: `crates/registry-notary-server/src/api.rs` and
   `crates/registry-platform-sdjwt/src/lib.rs`.
   Disposition: no new release work identified from the current map.
 - `NP-22`: Partial.
-  Public anchor: `crates/registry-notary-server/tests/standalone_http.rs`.
-  Disposition: keep open for product-surface parity.
+  Public anchor: `crates/registry-notary-server/src/standalone.rs`.
+  Disposition: keep open for product-surface HTTP audit and no-response parity.
 - `NP-23`: Partial.
   Public anchor: `crates/registry-platform-sts/src/lib.rs`.
-  Disposition: focused route and audit coverage remains to be added or deferred.
+  Disposition: focused route, no-mint, and audit coverage remains to be added
+  or deferred.
 - `NP-24`: Partial.
-  Public anchor: `crates/registry-notary-server/tests/standalone_http.rs`.
+  Public anchor: `crates/registry-notary-server/src/standalone.rs`.
   Disposition: Notary behavior is covered; Relay handling is a deliberate
-  product decision that needs explicit release sign-off.
-- `NP-25`: Gap.
-  Public anchor: internal checklist only.
-  Disposition: current behavior contradicts the target release posture; release
-  closure requires a behavior decision plus tests or an explicit deferral.
+  product difference that needs explicit release sign-off.
+- `NP-25`: Covered.
+  Public anchors: `crates/registry-notary-core/src/deployment.rs` and
+  `crates/registry-notary-server/tests/deployment_gates_test.rs`.
+  Disposition: current Notary startup gates require an explicit deployment
+  profile, keep `local` as the development opt-out, and reject unknown profile
+  values.
 - `NP-26`: Partial.
-  Public anchors: `crates/registry-notary-server/src/config_governed.rs`,
-  `crates/registry-notary-server/tests/deployment_gates_test.rs`, and
+  Public anchors: `crates/registry-notary-core/src/config.rs`,
+  `crates/registry-notary-core/src/deployment.rs`,
+  `crates/registry-notary-server/src/standalone.rs`, and
   `crates/registry-notary-server/tests/standalone_http.rs`.
   Disposition: verify against the post-#314 signed-bundle surface before
   release sign-off.
 - `NP-27`: Partial.
   Public anchors: `crates/registry-notary-server/src/runtime.rs` and
   `crates/registry-notary-server/src/api.rs`.
-  Disposition: keep open for complete route and audit parity.
+  Disposition: keep open for focused route, no-source-read, and audit parity.
 - `NP-28`: Partial.
   Public anchors: `crates/registry-notary-server/src/api.rs` and
   `crates/registry-notary-server/src/runtime.rs`.
-  Disposition: focused denial coverage remains to be added or deferred.
+  Disposition: focused denial and audit coverage remains to be added or
+  deferred.
 - `NP-29`: Partial.
   Public anchors: `crates/registry-notary-server/tests/standalone_http.rs` and
   `crates/registry-notary-server/src/federation/mod.rs`.
