@@ -67,7 +67,6 @@ fn sample_record() -> AuditRecord {
         suppressed_groups: None,
         duration_ms: 12,
         error_code: None,
-        provenance: None,
         config: None,
     }
 }
@@ -127,7 +126,6 @@ fn benchmark_record_construction(c: &mut Criterion) {
                 suppressed_groups: None,
                 duration_ms: 12,
                 error_code: None,
-                provenance: None,
                 config: None,
             })
         });

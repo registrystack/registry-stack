@@ -47,7 +47,7 @@ repos:
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
       - src: crates/registry-relay/docs/provenance.md
         dest: products/registry-relay/provenance
-        label: Signed response credentials
+        label: Credential issuance migration
         nav_order: 45
         doc_type: how-to
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]

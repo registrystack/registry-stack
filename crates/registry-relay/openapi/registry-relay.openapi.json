@@ -1180,11 +1180,6 @@
         "description": "Per-dataset metadata. See `/datasets/{id}` for the live shape.",
         "type": "object"
       },
-      "DidDocument": {
-        "additionalProperties": true,
-        "description": "DID Document.",
-        "type": "object"
-      },
       "Entity_social_registry_household": {
         "description": "Registered household.",
         "examples": [
@@ -2036,50 +2031,6 @@
         ]
       }
     },
-    "/.well-known/did.json": {
-      "get": {
-        "description": "Returns the gateway-hosted DID Document in gateway issuer mode. Used by verifiers to resolve the signing key for signed response credentials (VC-JWT). Delegated issuer deployments mount the route but return `provenance.did_document_unavailable`.",
-        "operationId": "get_gateway_did_document",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "content": {
-              "application/did+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DidDocument"
-                }
-              }
-            },
-            "description": "Successful response"
-          },
-          "404": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            },
-            "description": "Requested provenance artefact is not available."
-          },
-          "default": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            },
-            "description": "Problem Details error response."
-          }
-        },
-        "security": [],
-        "summary": "Get gateway DID Document",
-        "tags": [
-          "Provenance"
-        ]
-      }
-    },
     "/admin/v1/datasets/{dataset_id}/tables/{table_id}/reload": {
       "post": {
         "description": "Reloads one configured source table through the admin listener. The route requires `registry_relay:admin`, writes the fail-closed admin mutation audit preflight before reload, and publishes readiness after the reload attempt.",
@@ -2172,69 +2123,6 @@
         ]
       }
     },
-    "/contexts/{vocab}/{version}": {
-      "get": {
-        "description": "Returns a published JSON-LD context used by signed response credential (VC-JWT) responses.",
-        "operationId": "get_provenance_context",
-        "parameters": [
-          {
-            "description": "Context vocabulary, for example `provenance`.",
-            "in": "path",
-            "name": "vocab",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Context version filename, for example `v1.jsonld`.",
-            "in": "path",
-            "name": "version",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/ld+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonLdContext"
-                }
-              }
-            },
-            "description": "Successful response"
-          },
-          "404": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            },
-            "description": "Requested provenance artefact is not available."
-          },
-          "default": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            },
-            "description": "Problem Details error response."
-          }
-        },
-        "security": [],
-        "summary": "Get signed response credential JSON-LD context",
-        "tags": [
-          "Provenance"
-        ]
-      }
-    },
     "/docs": {
       "get": {
         "description": "Serves the browser API reference shell.",
@@ -2259,7 +2147,7 @@
                 }
               }
             },
-            "description": "Requested provenance artefact is not available."
+            "description": "Requested resource is not available."
           },
           "default": {
             "content": {
@@ -2300,7 +2188,7 @@
                 }
               }
             },
-            "description": "Requested provenance artefact is not available."
+            "description": "Requested resource is not available."
           },
           "default": {
             "content": {
@@ -3409,7 +3297,7 @@
                 }
               }
             },
-            "description": "Requested provenance artefact is not available."
+            "description": "Requested resource is not available."
           },
           "default": {
             "content": {
@@ -4423,7 +4311,7 @@
                 }
               }
             },
-            "description": "Requested provenance artefact is not available."
+            "description": "Requested resource is not available."
           },
           "default": {
             "content": {
@@ -4464,7 +4352,7 @@
                 }
               }
             },
-            "description": "Requested provenance artefact is not available."
+            "description": "Requested resource is not available."
           },
           "default": {
             "content": {
@@ -4505,7 +4393,7 @@
                 }
               }
             },
-            "description": "Requested provenance artefact is not available."
+            "description": "Requested resource is not available."
           },
           "default": {
             "content": {
@@ -4573,69 +4461,6 @@
         "summary": "Readiness probe",
         "tags": [
           "Service"
-        ]
-      }
-    },
-    "/schemas/{claim_type}/{version}": {
-      "get": {
-        "description": "Returns a published JSON Schema for a supported signed response credential claim type. Schema bytes are stable for a given version and cacheable.",
-        "operationId": "get_provenance_schema",
-        "parameters": [
-          {
-            "description": "Claim type slug, for example `aggregate-result`.",
-            "in": "path",
-            "name": "claim_type",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Schema version filename, for example `v1.json`.",
-            "in": "path",
-            "name": "version",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/schema+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonSchemaDocument"
-                }
-              }
-            },
-            "description": "Successful response"
-          },
-          "404": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            },
-            "description": "Requested provenance artefact is not available."
-          },
-          "default": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            },
-            "description": "Problem Details error response."
-          }
-        },
-        "security": [],
-        "summary": "Get signed response credential JSON Schema",
-        "tags": [
-          "Provenance"
         ]
       }
     },

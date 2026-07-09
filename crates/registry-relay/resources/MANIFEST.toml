@@ -1,32 +1,8 @@
 # Vendored resources manifest.
 #
-# Pinned SHA-256 of every shipped resource the gateway serves verbatim:
-# the Wave 3 JSON-LD contexts and JSON Schemas under the unauthenticated
-# `/contexts/...` and `/schemas/...` routes (the vendored W3C VC v2
-# context lives here too), and the Scalar UI bundle the `/docs` viewer
-# loads. The test suite re-hashes each file and asserts equality, so any
-# unreviewed edit fails CI before reaching production. The Wave 3 hash
-# space is `decisions/wave-3-data-provenance.md` section §10.
-
-[[resource]]
-path = "jsonld/provenance/v1/context.jsonld"
-sha256 = "c8e9096a02c4a93ef4a8e7884eb9d5f05b9d544c3549d060d313a32fdedc1b1c"
-served_as = "context"
-
-[[resource]]
-path = "jsonld/vc/v2/credentials.jsonld"
-sha256 = "0f3f6806198ec8436cc9d6604ddf17e21890f158a91f55fe6d7e38bb7c2df549"
-served_as = "vendored"
-
-[[resource]]
-path = "schemas/aggregate-result/v1.json"
-sha256 = "058dd6cd062e8567baed1438f454aa3dd19c3631c41f94788d387719d29d0f0a"
-served_as = "schema"
-
-[[resource]]
-path = "schemas/entity-record/v1.json"
-sha256 = "3e2a5a29f0587fdac9b671c648c5c972c09ef2a55125ea81c44eee45ac9157c8"
-served_as = "schema"
+# Pinned SHA-256 of every shipped resource the gateway serves verbatim.
+# The test suite re-hashes each file and asserts equality, so any
+# unreviewed edit fails CI before reaching production.
 
 # SDMX-JSON 2.1.0 data message schema for offline validation of aggregate
 # `application/vnd.sdmx.data+json` responses.

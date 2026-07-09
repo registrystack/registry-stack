@@ -97,11 +97,11 @@ caller queries.
 - Local code lists for status, type, role, eligibility, and lifecycle fields
   are documented.
 - Code values are normalized (case, spelling, whitespace) before promotion, or
-  Relay/mapping logic handles the variants explicitly.
+  Relay metadata/adapter logic handles the variants explicitly.
 - Unknown code values fail validation or route to manual review; they are not
   accepted as ordinary active records.
-- Cross-system mappings (local fields to PublicSchema concepts) live in
-  metadata or mapping config, not the workbook.
+- Cross-system mappings live in metadata or downstream integration config, not
+  the workbook.
 
 ### Privacy
 

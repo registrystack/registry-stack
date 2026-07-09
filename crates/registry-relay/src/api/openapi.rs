@@ -30,7 +30,6 @@ const OPENAPI_UNAVAILABLE_CODE: &str = "openapi.generation_unavailable";
 const TAG_SERVICE: &str = "Service";
 const TAG_CATALOG: &str = "Catalog";
 const TAG_ADMIN: &str = "Admin";
-const TAG_PROVENANCE: &str = "Provenance";
 #[cfg(feature = "ogcapi-features")]
 const TAG_OGC: &str = "OGC API Features";
 #[cfg(feature = "ogcapi-records")]
@@ -41,7 +40,6 @@ const TAG_OGC_EDR: &str = "OGC API EDR";
 const TAG_SPD_CI: &str = "SP DCI";
 #[cfg(any(feature = "attribute-release", test))]
 const TAG_ATTRIBUTE_RELEASE: &str = "Attribute Releases";
-const VC_JWT_MEDIA_TYPE: &str = "application/vc+jwt";
 
 const INFO_SUMMARY: &str = "Read-only data gateway exposing entity records, \
     catalog metadata, and SHACL/DCAT-AP shapes for governed datasets.";
@@ -194,7 +192,7 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
 
     // `/.well-known/api-catalog` is the RFC 9727 discovery linkset. The
     // handler is static and lives on the public sub-router (relay#86), so
-    // it advertises `security: []` like `/docs` and `/.well-known/did.json`.
+    // it advertises `security: []` like `/docs`.
     paths.insert(
         "/.well-known/api-catalog".to_string(),
         json!({
@@ -497,9 +495,6 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
     insert_ogc_records_paths(&mut paths);
     #[cfg(feature = "ogcapi-edr")]
     insert_ogc_edr_paths(&mut paths);
-    if provenance_enabled(config) {
-        insert_provenance_paths(&mut paths);
-    }
     #[cfg(feature = "spdci-api-standards")]
     if spdci_configured(config) {
         insert_spdci_paths(&mut paths);
@@ -678,13 +673,6 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
             if entity_config.api.require_purpose_header {
                 add_purpose_header_parameter(&mut paths, &record_path, "get");
             }
-            add_signed_vc_variant(
-                &mut paths,
-                &record_path,
-                "get",
-                config,
-                "Signed entity-record Verifiable Credential.",
-            );
             tag(&mut paths, &record_path, "get", &entity_tag);
 
             // Field schema (JSON Schema view)
@@ -803,13 +791,6 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
                     &aggregate_run_path,
                     "get",
                     "Aggregate definition not found for this dataset.",
-                );
-                add_signed_vc_variant(
-                    &mut paths,
-                    &aggregate_run_path,
-                    "get",
-                    config,
-                    "Signed aggregate-result Verifiable Credential.",
                 );
                 if dataset_aggregates_require_purpose(dataset_config) {
                     add_purpose_header_parameter(&mut paths, &aggregate_run_path, "get");
@@ -1030,9 +1011,6 @@ fn reduce_release_artifact_to_static_contract(document: &mut Value, config: &Con
         .and_then(|components| components.get_mut("schemas"))
         .and_then(Value::as_object_mut)
     {
-        schemas
-            .entry("DidDocument".to_string())
-            .or_insert_with(|| generic_object_schema("DID Document."));
         schemas
             .entry("JsonSchemaDocument".to_string())
             .or_insert_with(|| generic_object_schema("Published JSON Schema document."));
@@ -1350,7 +1328,6 @@ fn ensure_static_release_paths(paths: &mut Map<String, Value>) {
             )
         });
     insert_admin_table_reload_path(paths);
-    insert_provenance_paths(paths);
 }
 
 fn insert_admin_table_reload_path(paths: &mut Map<String, Value>) {
@@ -1387,13 +1364,6 @@ fn insert_admin_table_reload_path(paths: &mut Map<String, Value>) {
             }
         }),
     );
-}
-
-fn provenance_enabled(config: &Config) -> bool {
-    config
-        .provenance
-        .as_ref()
-        .is_some_and(|provenance| provenance.enabled)
 }
 
 #[cfg(feature = "spdci-api-standards")]
@@ -1436,15 +1406,6 @@ fn tag_definitions(catalog: &CatalogDocument, config: &Config) -> Value {
             "description": "Catalog discovery: dataset listing, dataset metadata, DCAT-AP export.",
         }),
     ];
-    if provenance_enabled(config) {
-        tags.push(json!({
-            "name": TAG_PROVENANCE,
-            "description": "Public verification artefacts for signed response credentials. \
-                            Relay issues W3C VCDM 2.0 VC-JWT signed response credentials \
-                            (not W3C PROV-O). The `provenance` config key governs the \
-                            response-credential issuer configuration.",
-        }));
-    }
     #[cfg(feature = "ogcapi-features")]
     tags.push(json!({
         "name": TAG_OGC,
@@ -1522,9 +1483,6 @@ fn tag_groups(catalog: &CatalogDocument, config: &Config) -> Value {
         json!({ "name": "Service", "tags": [TAG_SERVICE] }),
         json!({ "name": "Catalog", "tags": [TAG_CATALOG] }),
     ];
-    if provenance_enabled(config) {
-        groups.push(json!({ "name": "Provenance", "tags": [TAG_PROVENANCE] }));
-    }
     #[cfg(feature = "ogcapi-features")]
     groups.push(json!({ "name": "OGC", "tags": [TAG_OGC] }));
     #[cfg(feature = "ogcapi-records")]
@@ -1736,83 +1694,6 @@ fn add_purpose_header_parameter(paths: &mut Map<String, Value>, path: &str, meth
     }
 }
 
-fn add_signed_vc_variant(
-    paths: &mut Map<String, Value>,
-    path: &str,
-    method: &str,
-    config: &Config,
-    description: &str,
-) {
-    let Some(provenance) = config
-        .provenance
-        .as_ref()
-        .filter(|provenance| provenance.enabled)
-    else {
-        return;
-    };
-    let Some(op) = op_at(paths, path, method) else {
-        return;
-    };
-    add_accept_parameter(op, &provenance.accepted_media_types);
-    let Some(content) = op
-        .get_mut("responses")
-        .and_then(Value::as_object_mut)
-        .and_then(|responses| responses.get_mut("200"))
-        .and_then(Value::as_object_mut)
-        .and_then(|ok| ok.get_mut("content"))
-        .and_then(Value::as_object_mut)
-    else {
-        return;
-    };
-    content.insert(
-        VC_JWT_MEDIA_TYPE.to_string(),
-        json!({
-            "schema": {
-                "type": "string",
-                "description": description,
-                "examples": ["eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9..."],
-            }
-        }),
-    );
-}
-
-fn add_accept_parameter(op: &mut Map<String, Value>, accepted_media_types: &[String]) {
-    let parameters = op
-        .entry("parameters".to_string())
-        .or_insert_with(|| Value::Array(Vec::new()))
-        .as_array_mut();
-    let Some(parameters) = parameters else {
-        return;
-    };
-    let already_declared = parameters.iter().any(|p| {
-        p.get("name")
-            .and_then(Value::as_str)
-            .is_some_and(|n| n.eq_ignore_ascii_case("Accept"))
-            && p.get("in").and_then(Value::as_str) == Some("header")
-    });
-    if already_declared {
-        return;
-    }
-    let mut values = vec!["application/json".to_string()];
-    for media_type in accepted_media_types {
-        if !values
-            .iter()
-            .any(|value| value.eq_ignore_ascii_case(media_type))
-        {
-            values.push(media_type.clone());
-        }
-    }
-    parameters.push(json!({
-        "name": "Accept",
-        "in": "header",
-        "required": false,
-        "description": "Use `application/json` or omit for the default JSON response. \
-                        Use an enabled VC media type (for example `application/vc+jwt`) \
-                        to request a signed response credential (W3C VCDM 2.0 VC-JWT).",
-        "schema": { "type": "string", "enum": values },
-    }));
-}
-
 fn add_response_404(paths: &mut Map<String, Value>, path: &str, method: &str, description: &str) {
     if let Some(op) = op_at(paths, path, method) {
         if let Some(responses) = op.get_mut("responses").and_then(Value::as_object_mut) {
@@ -1838,7 +1719,7 @@ fn mark_deprecated(paths: &mut Map<String, Value>, path: &str, method: &str) {
 /// Override the document-level security requirement on a single
 /// operation so it advertises as unauthenticated. Used for `/healthz`
 /// and `/ready`, which are merged onto the public sub-router in
-/// `crate::server::build_app_with_provenance`.
+/// `crate::server::build_app`.
 fn mark_public(paths: &mut Map<String, Value>, path: &str, method: &str) {
     if let Some(op) = op_at(paths, path, method) {
         op.insert("security".to_string(), json!([]));
@@ -2341,6 +2222,7 @@ fn evidence_offering_example() -> Value {
 
 // --- schemas --------------------------------------------------------
 
+#[allow(unused_variables)]
 fn schemas(catalog: &CatalogDocument, config: &Config) -> Value {
     let mut schemas = Map::new();
     schemas.insert("HealthResponse".to_string(), health_schema());
@@ -2368,20 +2250,14 @@ fn schemas(catalog: &CatalogDocument, config: &Config) -> Value {
         evidence_offering_list_schema(),
     );
     schemas.insert("EvidenceOffering".to_string(), evidence_offering_schema());
-    if provenance_enabled(config) {
-        schemas.insert(
-            "DidDocument".to_string(),
-            generic_object_schema("DID Document."),
-        );
-        schemas.insert(
-            "JsonSchemaDocument".to_string(),
-            generic_object_schema("Published JSON Schema document."),
-        );
-        schemas.insert(
-            "JsonLdContext".to_string(),
-            generic_object_schema("Published JSON-LD context document."),
-        );
-    }
+    schemas.insert(
+        "JsonSchemaDocument".to_string(),
+        generic_object_schema("Published JSON Schema document."),
+    );
+    schemas.insert(
+        "JsonLdContext".to_string(),
+        generic_object_schema("Published JSON-LD context document."),
+    );
     schemas.insert("AggregateListResponse".to_string(), aggregate_list_schema());
     schemas.insert("AggregateResult".to_string(), aggregate_result_schema());
     schemas.insert(
@@ -3546,67 +3422,6 @@ fn dataset_aggregates_require_purpose(dataset: &DatasetConfig) -> bool {
 
 // --- path-item builders --------------------------------------------
 
-fn insert_provenance_paths(paths: &mut Map<String, Value>) {
-    paths.insert(
-        "/schemas/{claim_type}/{version}".to_string(),
-        public_resource_path_item(
-            "get_provenance_schema",
-            "Get signed response credential JSON Schema",
-            "Returns a published JSON Schema for a supported signed response credential claim type. \
-             Schema bytes are stable for a given version and cacheable.",
-            "application/schema+json",
-            "JsonSchemaDocument",
-            vec![
-                path_parameter("claim_type", "Claim type slug, for example `aggregate-result`."),
-                path_parameter("version", "Schema version filename, for example `v1.json`."),
-            ],
-        ),
-    );
-    mark_public(paths, "/schemas/{claim_type}/{version}", "get");
-    tag(
-        paths,
-        "/schemas/{claim_type}/{version}",
-        "get",
-        TAG_PROVENANCE,
-    );
-
-    paths.insert(
-        "/contexts/{vocab}/{version}".to_string(),
-        public_resource_path_item(
-            "get_provenance_context",
-            "Get signed response credential JSON-LD context",
-            "Returns a published JSON-LD context used by signed response credential (VC-JWT) responses.",
-            "application/ld+json",
-            "JsonLdContext",
-            vec![
-                path_parameter("vocab", "Context vocabulary, for example `provenance`."),
-                path_parameter(
-                    "version",
-                    "Context version filename, for example `v1.jsonld`.",
-                ),
-            ],
-        ),
-    );
-    mark_public(paths, "/contexts/{vocab}/{version}", "get");
-    tag(paths, "/contexts/{vocab}/{version}", "get", TAG_PROVENANCE);
-
-    paths.insert(
-        "/.well-known/did.json".to_string(),
-        public_resource_path_item(
-            "get_gateway_did_document",
-            "Get gateway DID Document",
-            "Returns the gateway-hosted DID Document in gateway issuer mode. \
-             Used by verifiers to resolve the signing key for signed response credentials (VC-JWT). \
-             Delegated issuer deployments mount the route but return `provenance.did_document_unavailable`.",
-            "application/did+json",
-            "DidDocument",
-            Vec::new(),
-        ),
-    );
-    mark_public(paths, "/.well-known/did.json", "get");
-    tag(paths, "/.well-known/did.json", "get", TAG_PROVENANCE);
-}
-
 #[cfg(feature = "spdci-api-standards")]
 fn insert_spdci_paths(paths: &mut Map<String, Value>) {
     for (path, op_id, summary, description) in [
@@ -4187,7 +4002,7 @@ fn public_resource_path_item(
                         }
                     }
                 },
-                "404": problem_response("Requested provenance artefact is not available."),
+                "404": problem_response("Requested resource is not available."),
                 "default": problem_response("Problem Details error response."),
             }
         }
@@ -4933,14 +4748,10 @@ fn attribute_release_resolve_response_schema() -> Value {
 mod tests {
     #[cfg(feature = "spdci-api-standards")]
     use std::collections::BTreeMap;
-    use std::time::Duration;
 
     use super::*;
     use crate::auth::{AuthMode as PrincipalAuthMode, ScopeSet};
-    use crate::config::{
-        AdmsStatus, AuthMode, ClaimValidity, GatewayIssuerConfig, IssuerConfig,
-        ProvenanceAlgorithm, ProvenanceConfig, SignerConfig, SoftwareSignerConfig,
-    };
+    use crate::config::{AdmsStatus, AuthMode};
     #[cfg(feature = "attribute-release")]
     use crate::config::{
         AttributeReleaseProfile, ClaimSensitivity, ReleaseClaimConfig, ReleaseResponseConfig,
@@ -4952,31 +4763,6 @@ mod tests {
         crate::config::test_support::load_example_config_for_tests(
             "relay-openapi-audit-secret-32-bytes",
         )
-    }
-
-    fn enable_provenance(config: &mut Config) {
-        config.provenance = Some(ProvenanceConfig {
-            enabled: true,
-            accepted_media_types: vec![
-                "application/vc+jwt".to_string(),
-                "application/jwt".to_string(),
-            ],
-            schema_base_url: "https://data.example.test/schemas".to_string(),
-            context_base_url: "https://data.example.test/contexts".to_string(),
-            claim_validity: ClaimValidity {
-                aggregate_result: Duration::from_secs(3600),
-                entity_record: Duration::from_secs(86_400),
-            },
-            issuer: IssuerConfig::Gateway(GatewayIssuerConfig {
-                did: "did:web:data.example.test".to_string(),
-                verification_method_id: "did:web:data.example.test#issuance".to_string(),
-                signer: SignerConfig::Software(SoftwareSignerConfig {
-                    jwk_env: "REGISTRY_RELAY_PROVENANCE_JWK".to_string(),
-                    signing_algorithm: ProvenanceAlgorithm::EdDSA,
-                }),
-                retired_keys: Vec::new(),
-            }),
-        });
     }
 
     #[cfg(feature = "attribute-release")]
@@ -5215,34 +5001,18 @@ mod tests {
     }
 
     #[test]
-    fn provenance_openapi_documents_public_artifacts_and_signed_vc_variants_when_enabled() {
-        let mut config = load_example_config();
-        enable_provenance(&mut config);
+    fn openapi_omits_relay_credential_issuance_routes_and_media_types() {
+        let config = load_example_config();
         let doc = openapi_document(&catalog_with_individual(), &config);
 
-        for (path, media_type, schema) in [
-            (
-                "/schemas/{claim_type}/{version}",
-                "application/schema+json",
-                "#/components/schemas/JsonSchemaDocument",
-            ),
-            (
-                "/contexts/{vocab}/{version}",
-                "application/ld+json",
-                "#/components/schemas/JsonLdContext",
-            ),
-            (
-                "/.well-known/did.json",
-                "application/did+json",
-                "#/components/schemas/DidDocument",
-            ),
+        for path in [
+            "/schemas/{claim_type}/{version}",
+            "/contexts/{vocab}/{version}",
+            "/.well-known/did.json",
         ] {
-            let op = &doc["paths"][path]["get"];
-            assert_eq!(op["security"], json!([]), "{path} should be public");
-            assert_eq!(op["tags"], json!([TAG_PROVENANCE]));
-            assert_eq!(
-                op["responses"]["200"]["content"][media_type]["schema"]["$ref"], schema,
-                "{path} should document its media type"
+            assert!(
+                doc["paths"][path].is_null(),
+                "{path} must not be documented"
             );
         }
 
@@ -5251,23 +5021,24 @@ mod tests {
             "/v1/datasets/social_registry/aggregates/{aggregate_id}",
         ] {
             let op = &doc["paths"][path]["get"];
-            assert_eq!(
-                op["responses"]["200"]["content"][VC_JWT_MEDIA_TYPE]["schema"]["type"], "string",
-                "{path} should document signed VC-JWT responses"
+            assert!(
+                op["responses"]["200"]["content"]["application/vc+jwt"].is_null(),
+                "{path} must not document signed VC-JWT responses"
             );
-            let accept = op["parameters"]
-                .as_array()
-                .expect("parameters")
-                .iter()
-                .find(|parameter| parameter["name"] == "Accept")
-                .expect("Accept parameter");
-            assert_eq!(accept["schema"]["enum"][1], VC_JWT_MEDIA_TYPE);
-            assert_eq!(accept["schema"]["enum"][2], "application/jwt");
+            let accept = op["parameters"].as_array().and_then(|parameters| {
+                parameters
+                    .iter()
+                    .find(|parameter| parameter["name"] == "Accept")
+            });
+            assert!(
+                accept.is_none(),
+                "{path} must not add VC Accept negotiation"
+            );
         }
 
-        assert!(doc["components"]["schemas"]["DidDocument"].is_object());
         assert!(doc["components"]["schemas"]["JsonSchemaDocument"].is_object());
         assert!(doc["components"]["schemas"]["JsonLdContext"].is_object());
+        assert!(doc["components"]["schemas"]["DidDocument"].is_null());
     }
 
     #[test]

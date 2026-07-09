@@ -289,44 +289,5 @@ audit:
   hash_secret_env: REGISTRY_RELAY_AUDIT_HASH_SECRET
   # path: /var/log/registry-relay/audit.jsonl   # when sink == file
 
-# Data provenance (signed Verifiable Credentials).
-#
-# When `enabled: false` (or the whole `provenance:` block is omitted),
-# provenance stays invisible: no Accept negotiation, no signing, no
-# extra audit events. Plain JSON responses stay unchanged.
-#
-# Opting in requires a local signer (`software` env var or `file_watch`
-# JWK file) and an issuer DID. Two issuer modes:
-#
-# * `gateway`: registry-relay self-issues under its own DID and hosts
-#   `/.well-known/did.json`.
-# * `delegated`: registry-relay signs under a ministry's DID. The ministry
-#   hosts its own DID Document including the gateway's `kid`. registry-relay
-#   does NOT publish `/.well-known/did.json` in this mode.
-#
-# See `docs/provenance.md` for the full operational contract.
-#
-# provenance:
-#   enabled: false
-#   accepted_media_types:
-#     - application/vc+jwt
-#     - application/jwt
-#   schema_base_url: https://data.example.gov/schemas
-#   context_base_url: https://data.example.gov/contexts
-#   claim_validity:
-#     aggregate_result: 1h    # tune to dataset refresh cadence
-#     entity_record:    24h   # tune to consumer caching window
-#   issuer:
-#     mode: gateway
-#     did: did:web:data.example.gov
-#     verification_method_id: did:web:data.example.gov#issuance
-#     signer:
-#       kind: software
-#       jwk_env: REGISTRY_RELAY_PROVENANCE_JWK   # private JWK (JSON), never logged
-#       signing_algorithm: EdDSA
-#     # Or, for simple local file-mounted secret refresh:
-#     # signer:
-#     #   kind: file_watch
-#     #   path: /run/secrets/registry-relay/provenance-active.jwk
-#     #   signing_algorithm: EdDSA
-#     retired_keys: []                     # public JWKs of rotated-out keys
+# Credential issuance lives in Registry Notary. Relay config no longer accepts
+# `provenance:` or entity `publicschema:` issuer blocks.

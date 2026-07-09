@@ -55,18 +55,12 @@ use registry_relay::audit::{
 };
 use registry_relay::auth::middleware::{AuthProviderRef, RuntimeAuthProvider};
 use registry_relay::auth::runtime::build_auth;
-use registry_relay::config::{
-    self, AuditSinkConfig, Config, IssuerConfig, SignerConfig, SourceConfig,
-};
+use registry_relay::config::{self, AuditSinkConfig, Config, SourceConfig};
 use registry_relay::entity::EntityRegistry;
 use registry_relay::error::{ConfigError, Error};
 use registry_relay::format::FormatRegistry;
 use registry_relay::ingest::{IngestRegistry, ReadinessSnapshot};
 use registry_relay::observability::RequestMetrics;
-use registry_relay::provenance::{
-    build_resolved_provenance_config, publicschema::build_publicschema_registry, ProvenanceState,
-    ResolvedProvenanceConfig,
-};
 use registry_relay::query::{AggregateQueryEngine, EntityQueryEngine};
 use registry_relay::runtime_config::{RelayRuntimeHandle, RelayRuntimeSnapshot};
 use registry_relay::serve::{serve_listener, ServeLimits};
@@ -313,42 +307,19 @@ async fn run_server(
     let runtime = handle.load_full();
     let app = build_relay_app_from_runtime(Arc::clone(&handle))?;
 
-    let provenance_state_for_log = runtime.provenance_state.as_ref().map(|state| {
-        let cfg = state.config();
-        (state.is_enabled(), cfg.mode, cfg.issuer_did.clone())
-    });
-
     let listener = TcpListener::bind(runtime.bind).await.map_err(|err| {
         error!(error = %err, bind = %runtime.bind, "failed to bind listener");
         err
     })?;
 
-    match provenance_state_for_log.as_ref() {
-        Some((enabled, mode, issuer_did)) => {
-            info!(
-                bind = %runtime.bind,
-                admin_bind = ?runtime.admin_bind,
-                datasets = runtime.dataset_count(),
-                api_keys = runtime.auth_size_hint(),
-                audit_sink = runtime.audit_kind,
-                provenance_enabled = *enabled,
-                provenance_mode = ?mode,
-                provenance_issuer_did = %issuer_did,
-                "registry-relay listening"
-            );
-        }
-        None => {
-            info!(
-                bind = %runtime.bind,
-                admin_bind = ?runtime.admin_bind,
-                datasets = runtime.dataset_count(),
-                api_keys = runtime.auth_size_hint(),
-                audit_sink = runtime.audit_kind,
-                provenance_enabled = false,
-                "registry-relay listening"
-            );
-        }
-    }
+    info!(
+        bind = %runtime.bind,
+        admin_bind = ?runtime.admin_bind,
+        datasets = runtime.dataset_count(),
+        api_keys = runtime.auth_size_hint(),
+        audit_sink = runtime.audit_kind,
+        "registry-relay listening"
+    );
 
     let admin_listener = match runtime.admin_bind {
         Some(addr) => Some(TcpListener::bind(addr).await.map_err(|err| {
@@ -851,9 +822,6 @@ fn required_env_report(config: &Config) -> Vec<Value> {
     if let Some(hash_secret_env) = &config.audit.hash_secret_env {
         envs.insert(hash_secret_env.clone(), ConfigValueClassification::Secret);
     }
-    if let Some(provenance) = &config.provenance {
-        issuer_required_env(&provenance.issuer, &mut envs);
-    }
     for dataset in &config.datasets {
         for table in dataset.table_configs() {
             if let SourceConfig::Postgres { connection_env, .. } = &table.source {
@@ -876,42 +844,6 @@ fn required_env_report(config: &Config) -> Vec<Value> {
         .collect()
 }
 
-fn issuer_required_env(
-    issuer: &IssuerConfig,
-    envs: &mut BTreeMap<String, ConfigValueClassification>,
-) {
-    match issuer {
-        IssuerConfig::Gateway(config) => {
-            signer_required_env(&config.signer, envs);
-            for retired_key in &config.retired_keys {
-                envs.insert(
-                    retired_key.jwk_env.clone(),
-                    ConfigValueClassification::Public,
-                );
-            }
-        }
-        IssuerConfig::Delegated(config) => {
-            signer_required_env(&config.signer, envs);
-            for retired_key in &config.retired_keys {
-                envs.insert(
-                    retired_key.jwk_env.clone(),
-                    ConfigValueClassification::Public,
-                );
-            }
-        }
-        _ => {}
-    }
-}
-
-fn signer_required_env(
-    signer: &SignerConfig,
-    envs: &mut BTreeMap<String, ConfigValueClassification>,
-) {
-    if let SignerConfig::Software(config) = signer {
-        envs.insert(config.jwk_env.clone(), ConfigValueClassification::Secret);
-    }
-}
-
 fn relay_optional_sections_absent(config: &Config) -> Vec<Value> {
     let mut sections = Vec::new();
     if config.config_trust.is_none() {
@@ -926,12 +858,6 @@ fn relay_optional_sections_absent(config: &Config) -> Vec<Value> {
             "reason": "split metadata manifest is not configured",
         }));
     }
-    if config.provenance.is_none() {
-        sections.push(json!({
-            "path": "provenance",
-            "reason": "signed response credentials are disabled",
-        }));
-    }
     sections
 }
 
@@ -941,7 +867,6 @@ fn relay_live_apply_classes() -> Vec<Value> {
         ("auth.oidc", LiveApplyClass::HotSwappable),
         ("audit", LiveApplyClass::HotSwappable),
         ("catalog", LiveApplyClass::HotSwappable),
-        ("provenance.issuer.signer", LiveApplyClass::HotSwappable),
         ("datasets", LiveApplyClass::RestartRequired),
         ("server.bind", LiveApplyClass::RestartRequired),
         ("server.admin_bind", LiveApplyClass::RestartRequired),
@@ -1294,17 +1219,6 @@ async fn compile_relay_runtime_with_options(
     let (readiness_tx, readiness_rx) = watch::channel::<ReadinessSnapshot>(initial_snapshot);
     let cursor_signer = Arc::new(registry_relay::runtime_config::CursorSigner::new_random());
 
-    // Build provenance state from the parsed config.
-    // `build_resolved_provenance_config` returns:
-    //   * `Ok(None)` when the operator omitted the `provenance:` block
-    //     or set `enabled: false`, leaving the binary unchanged and
-    //     requiring no signing secrets.
-    //   * `Ok(Some(_))` only when provenance is enabled and signer
-    //     material has loaded successfully.
-    let provenance_state: Option<Arc<ProvenanceState>> =
-        build_resolved_provenance_config(config.provenance.as_ref())?
-            .map(|resolved: ResolvedProvenanceConfig| Arc::new(ProvenanceState::new(resolved)));
-    let publicschema_registry = build_publicschema_registry(&config)?.map(Arc::new);
     #[cfg(feature = "spdci-api-standards")]
     let spdci_response_mapper = build_spdci_response_mapper(&config)?.map(Arc::new);
     let metrics = RequestMetrics::shared();
@@ -1329,8 +1243,6 @@ async fn compile_relay_runtime_with_options(
         readiness_tx,
         readiness_rx,
         cursor_signer,
-        provenance_state,
-        publicschema_registry,
         #[cfg(feature = "spdci-api-standards")]
         spdci_response_mapper,
         metrics,
@@ -1457,26 +1369,23 @@ fn build_relay_app_from_runtime(
 ) -> Result<axum::Router, Box<dyn std::error::Error + Send + Sync>> {
     let runtime = handle.load_full();
     let auth: AuthProviderRef = Arc::new(RuntimeAuthProvider::new(Arc::clone(&handle)));
-    let mut app =
-        registry_relay::server::build_app_with_entity_query_metadata_provenance_and_metrics(
-            Arc::clone(&runtime.config),
-            auth,
-            Arc::clone(&runtime.audit_sink),
-            runtime.readiness_rx.clone(),
-            Arc::clone(&runtime.entity_registry),
-            Arc::clone(&runtime.query),
-            Arc::clone(&runtime.aggregate_query),
-            runtime.compiled_metadata.clone(),
-            runtime.provenance_state.clone(),
-            Arc::clone(&runtime.metrics),
-        )?;
-    if let Some(publicschema_registry) = &runtime.publicschema_registry {
-        app = app.layer(Extension(Arc::clone(publicschema_registry)));
-    }
+    let app = registry_relay::server::build_app_with_entity_query_metadata_and_metrics(
+        Arc::clone(&runtime.config),
+        auth,
+        Arc::clone(&runtime.audit_sink),
+        runtime.readiness_rx.clone(),
+        Arc::clone(&runtime.entity_registry),
+        Arc::clone(&runtime.query),
+        Arc::clone(&runtime.aggregate_query),
+        runtime.compiled_metadata.clone(),
+        Arc::clone(&runtime.metrics),
+    )?;
     #[cfg(feature = "spdci-api-standards")]
-    if let Some(spdci_response_mapper) = &runtime.spdci_response_mapper {
-        app = app.layer(Extension(Arc::clone(spdci_response_mapper)));
-    }
+    let app = if let Some(spdci_response_mapper) = &runtime.spdci_response_mapper {
+        app.layer(Extension(Arc::clone(spdci_response_mapper)))
+    } else {
+        app
+    };
     Ok(app.layer(Extension(handle)))
 }
 
@@ -1749,7 +1658,6 @@ fn lightweight_schema() -> Value {
             "auth": { "type": "object" },
             "audit": { "type": "object" },
             "datasets": { "type": "array" },
-            "provenance": { "type": "object" },
             "standards": { "type": "object" },
             "deployment": { "type": "object" }
         },
@@ -2352,7 +2260,6 @@ mod tests {
             suppressed_groups: None,
             duration_ms: 7,
             error_code: None,
-            provenance: None,
             config: None,
         }
     }
@@ -3222,7 +3129,7 @@ audit:
             "passphrase",
         ] {
             assert_eq!(
-                relay_config_value_classification(&["provenance", key], &json!("sensitive")),
+                relay_config_value_classification(&["config_trust", key], &json!("sensitive")),
                 ConfigValueClassification::Secret,
                 "{key} should be classified as secret"
             );
@@ -3280,7 +3187,7 @@ audit:
         // key material or key identifiers.
         for key in ["public_key", "pubkey", "kid", "key_id", "signer_public_key"] {
             assert_eq!(
-                relay_config_value_classification(&["provenance", key], &json!("MFkwEw...")),
+                relay_config_value_classification(&["config_trust", key], &json!("MFkwEw...")),
                 ConfigValueClassification::Public,
                 "{key} should stay public"
             );

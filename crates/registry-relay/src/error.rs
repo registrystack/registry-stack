@@ -71,9 +71,6 @@ pub enum Error {
     RuntimeBinding(#[from] RuntimeBindingError),
     #[error("{0}")]
     Internal(#[from] InternalError),
-    /// Provenance runtime errors.
-    #[error("{0}")]
-    Provenance(#[from] ProvenanceError),
     /// SP DCI request and runtime errors.
     #[error("{0}")]
     Spdci(#[from] SpdciError),
@@ -287,38 +284,6 @@ pub enum ConfigError {
     MissingSecret,
     #[error("duplicate identifier in config")]
     DuplicateId,
-    /// Provenance is enabled but no issuer block resolved.
-    #[error("provenance issuer missing")]
-    ProvenanceMissingIssuer,
-    /// Gateway DID does not match the deployment host.
-    #[error("provenance issuer did mismatch")]
-    ProvenanceIssuerDidMismatch,
-    /// Signer kind is not one of `software` or `file_watch`.
-    #[error("provenance signer kind invalid")]
-    ProvenanceSignerKindInvalid,
-    /// Software signer's `jwk_env` is unset or empty.
-    #[error("provenance jwk_env missing")]
-    ProvenanceJwkEnvMissing,
-    /// `signing_algorithm` is not EdDSA or ES256.
-    #[error("provenance signing algorithm unsupported")]
-    ProvenanceAlgorithmUnsupported,
-    /// Claim validity is below 1 minute or above 365 days.
-    #[error("provenance claim validity out of range")]
-    ProvenanceClaimValidityOutOfRange,
-    /// `context_base_url` is not a valid http(s) URL.
-    #[error("provenance context base url invalid")]
-    ProvenanceContextBaseUrlInvalid,
-    /// `schema_base_url` is not a valid http(s) URL.
-    #[error("provenance schema base url invalid")]
-    ProvenanceSchemaBaseUrlInvalid,
-    /// `verification_method_id` does not start with the
-    /// configured issuer DID plus a fragment.
-    #[error("provenance verification method mismatch")]
-    ProvenanceVerificationMethodMismatch,
-    /// PublicSchema CEL mapping was configured but the binary was
-    /// built without the optional mapper dependency.
-    #[error("publicschema cel feature disabled")]
-    PublicSchemaFeatureDisabled,
     /// SP DCI standards adapters were configured but the binary was
     /// built without the optional adapter feature.
     #[error("spdci api standards feature disabled")]
@@ -386,27 +351,6 @@ pub enum RuntimeBindingError {
     EcosystemBindingMissing,
     #[error("runtime ecosystem binding is invalid")]
     EcosystemBindingInvalid,
-}
-
-/// `provenance.*` runtime codes.
-#[derive(Debug, Error)]
-pub enum ProvenanceError {
-    /// The signer is configured but unavailable at request time (e.g.
-    /// KMS outage). Surfaces as `503` when `Accept` requested only a
-    /// provenance media type.
-    #[error("provenance signer unavailable")]
-    SignerUnavailable,
-    /// Building the VC payload or compact JWS failed for an internal
-    /// reason. Generic 500 with a stable code; details land in logs.
-    #[error("provenance issuance failed")]
-    IssuanceFailed,
-    /// Requested claim type or version is not registered (used by
-    /// `/schemas/{type}/{version}.json` and contexts route).
-    #[error("provenance unknown claim type or version")]
-    UnknownResource,
-    /// `/.well-known/did.json` is not served in delegated mode.
-    #[error("provenance did document unavailable")]
-    DidDocumentUnavailable,
 }
 
 /// `spdci.*` runtime codes. Cover request envelope validation against
@@ -558,7 +502,6 @@ impl Error {
             Error::Metadata(e) => e.code(),
             Error::RuntimeBinding(e) => e.code(),
             Error::Internal(e) => e.code(),
-            Error::Provenance(e) => e.code(),
             Error::Spdci(e) => e.code(),
             Error::Ogc(e) => e.code(),
             Error::Spatial(e) => e.code(),
@@ -588,7 +531,6 @@ impl Error {
             Error::Metadata(e) => e.http_status(),
             Error::RuntimeBinding(e) => e.http_status(),
             Error::Internal(e) => e.http_status(),
-            Error::Provenance(e) => e.http_status(),
             Error::Spdci(e) => e.http_status(),
             Error::Ogc(e) => e.http_status(),
             Error::Spatial(e) => e.http_status(),
@@ -614,7 +556,6 @@ impl Error {
             Error::Metadata(e) => e.title(),
             Error::RuntimeBinding(e) => e.title(),
             Error::Internal(e) => e.title(),
-            Error::Provenance(e) => e.title(),
             Error::Spdci(e) => e.title(),
             Error::Ogc(e) => e.title(),
             Error::Spatial(e) => e.title(),
@@ -642,7 +583,6 @@ impl Error {
             Error::Metadata(e) => e.detail().to_string(),
             Error::RuntimeBinding(e) => e.detail().to_string(),
             Error::Internal(e) => e.detail().to_string(),
-            Error::Provenance(e) => e.detail().to_string(),
             Error::Spdci(e) => e.detail().to_string(),
             Error::Ogc(e) => e.detail().to_string(),
             Error::Spatial(e) => e.detail(),
@@ -1144,26 +1084,6 @@ impl ConfigError {
             }
             ConfigError::MissingSecret => "config.missing_secret",
             ConfigError::DuplicateId => "config.duplicate_id",
-            ConfigError::ProvenanceMissingIssuer => "provenance.config.missing_issuer",
-            ConfigError::ProvenanceIssuerDidMismatch => "provenance.config.issuer_did_mismatch",
-            ConfigError::ProvenanceSignerKindInvalid => "provenance.config.signer_kind_invalid",
-            ConfigError::ProvenanceJwkEnvMissing => "provenance.config.jwk_env_missing",
-            ConfigError::ProvenanceAlgorithmUnsupported => {
-                "provenance.config.algorithm_unsupported"
-            }
-            ConfigError::ProvenanceClaimValidityOutOfRange => {
-                "provenance.config.claim_validity_out_of_range"
-            }
-            ConfigError::ProvenanceContextBaseUrlInvalid => {
-                "provenance.config.context_base_url_invalid"
-            }
-            ConfigError::ProvenanceSchemaBaseUrlInvalid => {
-                "provenance.config.schema_base_url_invalid"
-            }
-            ConfigError::ProvenanceVerificationMethodMismatch => {
-                "provenance.config.verification_method_mismatch"
-            }
-            ConfigError::PublicSchemaFeatureDisabled => "publicschema.config.feature_disabled",
             ConfigError::SpdciFeatureDisabled => "spdci.config.feature_disabled",
             ConfigError::SpdciMappingFeatureDisabled => "spdci.config.mapping_feature_disabled",
             ConfigError::OgcApiFeaturesFeatureDisabled => "ogcapi.features.config.feature_disabled",
@@ -1187,18 +1107,6 @@ impl ConfigError {
             // strings; the stable taxonomy code retains it.
             ConfigError::MissingSecret => "Missing credential hash",
             ConfigError::DuplicateId => "Duplicate identifier",
-            ConfigError::ProvenanceMissingIssuer => "Provenance issuer missing",
-            ConfigError::ProvenanceIssuerDidMismatch => "Provenance issuer DID mismatch",
-            ConfigError::ProvenanceSignerKindInvalid => "Provenance signer kind invalid",
-            ConfigError::ProvenanceJwkEnvMissing => "Provenance signing key unavailable",
-            ConfigError::ProvenanceAlgorithmUnsupported => "Provenance algorithm unsupported",
-            ConfigError::ProvenanceClaimValidityOutOfRange => "Provenance claim validity invalid",
-            ConfigError::ProvenanceContextBaseUrlInvalid => "Provenance context base URL invalid",
-            ConfigError::ProvenanceSchemaBaseUrlInvalid => "Provenance schema base URL invalid",
-            ConfigError::ProvenanceVerificationMethodMismatch => {
-                "Provenance verification method mismatch"
-            }
-            ConfigError::PublicSchemaFeatureDisabled => "PublicSchema CEL feature disabled",
             ConfigError::SpdciFeatureDisabled => "SP DCI API standards feature disabled",
             ConfigError::SpdciMappingFeatureDisabled => "SP DCI CEL mapping feature disabled",
             ConfigError::OgcApiFeaturesFeatureDisabled => "OGC API Features feature disabled",
@@ -1217,36 +1125,6 @@ impl ConfigError {
             }
             ConfigError::MissingSecret => "a required hash environment variable is unset",
             ConfigError::DuplicateId => "two configured ids collide",
-            ConfigError::ProvenanceMissingIssuer => {
-                "provenance is enabled but no issuer block resolved"
-            }
-            ConfigError::ProvenanceIssuerDidMismatch => {
-                "configured issuer DID does not match the deployment host"
-            }
-            ConfigError::ProvenanceSignerKindInvalid => {
-                "signer kind must be software or file_watch"
-            }
-            ConfigError::ProvenanceJwkEnvMissing => {
-                "the configured signing key material is unavailable"
-            }
-            ConfigError::ProvenanceAlgorithmUnsupported => {
-                "signing_algorithm must be EdDSA or ES256"
-            }
-            ConfigError::ProvenanceClaimValidityOutOfRange => {
-                "claim validity must be between 1 minute and 365 days"
-            }
-            ConfigError::ProvenanceContextBaseUrlInvalid => {
-                "context_base_url must be a syntactically valid http(s) URL"
-            }
-            ConfigError::ProvenanceSchemaBaseUrlInvalid => {
-                "schema_base_url must be a syntactically valid http(s) URL"
-            }
-            ConfigError::ProvenanceVerificationMethodMismatch => {
-                "verification_method_id must be a fragment of the issuer DID"
-            }
-            ConfigError::PublicSchemaFeatureDisabled => {
-                "publicschema mappings require a binary built with the publicschema-cel feature"
-            }
             ConfigError::SpdciFeatureDisabled => {
                 "SP DCI standards adapters require a binary built with the spdci-api-standards feature"
             }
@@ -1394,53 +1272,6 @@ impl RuntimeBindingError {
             }
             RuntimeBindingError::EcosystemBindingInvalid => {
                 "configured ecosystem binding must reference a governed-evidence binding with policy identity and ODRL enforcement"
-            }
-        }
-    }
-}
-
-impl ProvenanceError {
-    fn code(&self) -> &'static str {
-        match self {
-            ProvenanceError::SignerUnavailable => "provenance.signer_unavailable",
-            ProvenanceError::IssuanceFailed => "provenance.issuance_failed",
-            ProvenanceError::UnknownResource => "provenance.unknown_resource",
-            ProvenanceError::DidDocumentUnavailable => "provenance.did_document_unavailable",
-        }
-    }
-
-    fn http_status(&self) -> StatusCode {
-        match self {
-            ProvenanceError::SignerUnavailable => StatusCode::SERVICE_UNAVAILABLE,
-            ProvenanceError::IssuanceFailed => StatusCode::INTERNAL_SERVER_ERROR,
-            ProvenanceError::UnknownResource | ProvenanceError::DidDocumentUnavailable => {
-                StatusCode::NOT_FOUND
-            }
-        }
-    }
-
-    fn title(&self) -> &'static str {
-        match self {
-            ProvenanceError::SignerUnavailable => "Signer unavailable",
-            ProvenanceError::IssuanceFailed => "Provenance issuance failed",
-            ProvenanceError::UnknownResource => "Unknown provenance resource",
-            ProvenanceError::DidDocumentUnavailable => "DID document unavailable",
-        }
-    }
-
-    fn detail(&self) -> &'static str {
-        match self {
-            ProvenanceError::SignerUnavailable => {
-                "the configured signing backend is not currently available"
-            }
-            ProvenanceError::IssuanceFailed => {
-                "the request could not be served as a verifiable credential"
-            }
-            ProvenanceError::UnknownResource => {
-                "no resource is registered for the requested claim type or version"
-            }
-            ProvenanceError::DidDocumentUnavailable => {
-                "this deployment does not host a did:web document"
             }
         }
     }

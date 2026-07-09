@@ -22,7 +22,6 @@ deployment:
   profile: local # required; use local only for development
 config_trust: {} # optional signed bundle boot trust
 datasets: []
-provenance: {} # optional
 standards: {}  # optional, feature-gated adapters
 ```
 
@@ -198,7 +197,7 @@ vocabularies:
   m8g: http://data.europa.eu/m8g/
 ```
 
-`base_url` is used in generated catalog links, OpenAPI servers, and provenance subject URIs. `participant_id` is optional and defaults from the catalog base URL when omitted.
+`base_url` is used in generated catalog links and OpenAPI servers. `participant_id` is optional and defaults from the catalog base URL when omitted.
 
 Vocabulary prefixes let entity fields and dataset metadata use compact semantic references such as `psc:concepts/Person`.
 
@@ -872,10 +871,6 @@ entities:
           ops: [eq, in]
       allowed_expansions:
         - household
-    publicschema:
-      target: Person
-      mapping_path: mappings/individual-person.publicschema.yaml
-      schema_validation_path: ../publicschema.org/dist/schemas/Person.schema.json
 ```
 
 When `fields` is present, only listed fields are exposed. When it is omitted, every table column is exposed. For sensitive datasets, prefer an explicit field list. Use entity `read_scope`, required filters, purpose-header requirements, and explicit field projection for exposure control; `sensitive: true` controls audit redaction only.
@@ -940,31 +935,6 @@ access:
 ```
 
 `evidence_verification_scope` remains a scope label for standards adapters and integrations that need to distinguish evidence-oriented access from row reads. It does not enable a Relay-local verification endpoint.
-
-### PublicSchema VC mapping
-
-Requires `--features publicschema-cel`. When present, entity-record VC issuance uses the mapping file to produce a PublicSchema.org credential subject instead of the default entity JSON shape.
-
-```yaml
-publicschema:
-  target: Person                                          # required; PublicSchema concept name
-  mapping_path: mappings/individual-person.publicschema.yaml  # required; CEL mapping document
-  schema_validation_path: ../publicschema.org/dist/schemas/Person.schema.json  # optional; validates subject before signing
-  context_url: https://publicschema.org/ctx/draft.jsonld  # optional; overrides default context
-  schema_url: https://publicschema.org/schemas/Person.schema.json  # optional; overrides default credentialSchema.id
-  credential_type: Person                                 # optional; overrides default VC type[1]
-```
-
-| Field | Default | Notes |
-| --- | --- | --- |
-| `target` | (required) | PublicSchema concept name; drives `credential_type` and `schema_url` defaults |
-| `mapping_path` | (required) | Path to a CEL mapping YAML document; compiled at startup |
-| `schema_validation_path` | absent | Local JSON Schema; when set, every mapped subject is validated before signing |
-| `context_url` | `https://publicschema.org/ctx/draft.jsonld` | JSON-LD context URL in the issued VC |
-| `schema_url` | `https://publicschema.org/schemas/{target}.schema.json` | `credentialSchema.id` in the issued VC |
-| `credential_type` | `{target}` | `type[1]` value in the issued VC |
-
-See [provenance.md](provenance.md) for CEL context variables, issuance behavior, audit records, and the build and test commands for this feature.
 
 ## Aggregates
 
@@ -1039,13 +1009,11 @@ aggregates:
 
 `geometry_entity` must be an entity declared in the same dataset. `geometry_id_field` and `geometry_field` must be exposed entity fields with compatible types (string/integer for id, geojson-typed string for geometry). Only `kind: geojson` geometry is supported for spatial aggregates in V1.
 
-## Provenance (response-credential issuer configuration)
+## Credential issuance
 
-The `provenance` block is optional. When absent or `enabled: false`, the gateway behaves as a plain JSON service. When enabled, callers can opt in to signed response credentials (W3C VCDM 2.0 VC-JWT) with `Accept: application/vc+jwt`. V1 supports local Ed25519 signing from either a `software` env-var JWK or a `file_watch` JWK file.
+Relay no longer accepts `provenance` or entity `publicschema` config. Remove those blocks, Relay signer environment variables, and probes for `/.well-known/did.json`, `/schemas/{claim_type}/{version}`, and `/contexts/{vocab}/{version}` before upgrading.
 
-The key is named `provenance` for compatibility; it governs the response-credential issuer (DID, signing key, claim validity, and accepted media types). These credentials are W3C VCDM 2.0 VC-JWT with a Registry Relay JSON-LD context; they are not W3C PROV-O.
-
-See [provenance.md](provenance.md) for the full signer, DID, schema, context, and rotation contract.
+Use Registry Notary for credential issuance and verification. Relay metadata can advertise Notary evidence offerings with `access.kind: registry-notary`; see [provenance.md](provenance.md) for the migration note.
 
 ## Production checklist
 

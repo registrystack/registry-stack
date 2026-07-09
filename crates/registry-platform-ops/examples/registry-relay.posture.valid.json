@@ -90,15 +90,11 @@
       "configured": true,
       "sha256": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
     },
-    "provenance": {
-      "enabled": true
-    },
     "standards_adapters": {
       "ogcapi_records": "enabled",
       "ogcapi_features": "disabled",
       "ogcapi_edr": "disabled",
-      "spdci": "disabled",
-      "publicschema_cel": "disabled"
+      "spdci": "disabled"
     }
   }
 }

@@ -143,5 +143,5 @@ Known limits:
 - Admin reload reloads runtime resources, not `config.yaml`; config and keyring changes require a restart or rolling deploy.
 - Row-level authorization is not available. Use dataset/entity scopes, required filters, purpose headers, explicit field projections, and audit redaction.
 - `sensitive: true` controls audit redaction only; it does not hide fields from authorized API responses.
-- Remote signing backends for signed response credentials are reserved for future work; V1 supports local software Ed25519 signing (config key `provenance`).
+- Registry Relay does not issue response credentials or host DID documents. Use Registry Notary for credential issuance and verification.
 - The static OpenAPI artifact is an abstract contract. Deployments fetch `/openapi.json` for their concrete dataset/entity shape. The route is auth-gated by default unless `server.openapi_requires_auth` is disabled for demos or controlled tooling.

@@ -22,7 +22,7 @@ Status labels:
 | Planning analyst | Query configured aggregates without enumerating sensitive rows |
 | Metadata consumer | Discover datasets, schemas, policies, profiles, and standards surfaces |
 | Auditor | Reconstruct who accessed what, for which purpose, and under which scope |
-| Standards integrator | Consume Relay through DCAT, OGC, SP DCI, PublicSchema, or signed response credential contracts |
+| Standards integrator | Consume Relay through DCAT, OGC, SP DCI, or Registry Notary discovery contracts |
 
 ## Systems
 
@@ -34,7 +34,7 @@ Status labels:
 | Registry Notary | Claim evaluation, evidence verification, credential issuance, and verification semantics |
 | Service portal or case system | Calls Relay or Notary during a service workflow |
 | Audit sink | Receives chained platform audit records |
-| Standards consumer | Reads OGC, DCAT, SP DCI, PublicSchema, or OpenAPI views |
+| Standards consumer | Reads OGC, DCAT, SP DCI, Registry Notary discovery, or OpenAPI views |
 
 ## Reusable patterns
 
@@ -109,13 +109,12 @@ sequenceDiagram
 | 4 | Operator publishes portable metadata separately from Relay runtime | Metadata publication | Supported | Static publication is manual; no managed release process yet. |
 | 5 | Metadata consumer reads DCAT and SHACL views | Metadata publication | Supported | Profile coverage depends on manifest quality |
 | 6 | Auditor traces row access through platform audit records | Governance | Supported | External audit storage is deployment-owned |
-| 7 | Client requests signed response credentials (VC-JWT) | Signed credentials | Supported | Remote signer mode is not implemented |
+| 7 | Client requests a signed credential from Registry Notary after Relay discovery | Notary handoff | Supported | Relay publishes evidence offering discovery only |
 | 8 | Client discovers evidence offerings and calls Registry Notary | Notary handoff | Supported | Notary request semantics live in Notary docs |
 | 9 | GIS consumer reads spatial entities through OGC API Features | Standards adapter | Supported | Requires spatial config and feature build |
 | 10 | Catalog consumer reads metadata through OGC API Records | Standards adapter | Supported | Records surface is metadata-only |
 | 11 | EDR consumer queries admin-area aggregates | Standards adapter | Lab-supported | Requires configured spatial aggregates and feature build |
 | 12 | SP DCI sync consumer calls a configured registry adapter | Standards adapter | Lab-supported | Async DCI APIs are out of scope |
-| 13 | PublicSchema consumer maps entity-record VCs | Standards adapter | Partial | Mapping coverage is profile-specific |
 | 14 | Program system writes registry data through Relay | Write workflow | Out of scope | Relay V1 is read-only |
 | 15 | Relay performs local evidence verification | Evidence verification | Out of scope | Registry Notary owns verification execution |
 | 16 | Relay enforces row-level authorization expressions | Fine-grained auth | Planned | V1 uses scopes, filters, purpose headers, and projection |

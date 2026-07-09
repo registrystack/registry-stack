@@ -5,7 +5,7 @@
 //! read-only, entity-shaped HTTP APIs. The public surface is deliberately
 //! domain-oriented: storage tables are private ingest details, while configured
 //! entities define routes, fields, relationships, scopes, filters, aggregates,
-//! metadata, and optional provenance claims.
+//! and metadata.
 //!
 //! The main runtime path is:
 //!
@@ -29,7 +29,6 @@ pub mod ingest;
 pub mod metadata;
 mod net;
 pub mod observability;
-pub mod provenance;
 pub mod query;
 pub mod runtime_config;
 pub mod serve;

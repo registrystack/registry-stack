@@ -30,7 +30,6 @@ use serde::{Deserialize, Serialize};
 pub mod capabilities;
 pub mod governed;
 pub mod loader;
-pub mod provenance;
 #[cfg(test)]
 #[doc(hidden)]
 pub mod test_support;
@@ -42,12 +41,6 @@ pub use loader::{
     load_with_metadata_options, validate_verified_bundle_runtime, BundleStateAction, LoadOptions,
     LoadedConfig, PendingBundleAcceptance,
 };
-pub use provenance::{
-    ClaimValidity, DelegatedIssuerConfig, FileWatchSignerConfig, GatewayIssuerConfig, IssuerConfig,
-    KmsProvider, KmsSignerConfig, ProvenanceAlgorithm, ProvenanceConfig, RetiredKeyConfig,
-    SignerConfig, SoftwareSignerConfig,
-};
-
 /// Root configuration document. Parsed from YAML at startup.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -65,10 +58,6 @@ pub struct Config {
     pub auth: AuthConfig,
     pub audit: AuditConfig,
     pub datasets: Vec<DatasetConfig>,
-    /// Optional data provenance configuration. Disabled by default:
-    /// deployments without this block load unchanged.
-    #[serde(default)]
-    pub provenance: Option<ProvenanceConfig>,
     /// Optional external standards adapters. The config model is parsed
     /// in every build so feature-disabled binaries can reject it with a
     /// stable taxonomy code.
@@ -1027,8 +1016,6 @@ pub struct EntityConfig {
     #[serde(default)]
     pub aggregates: Vec<AggregateConfig>,
     #[serde(default)]
-    pub publicschema: Option<EntityPublicSchemaConfig>,
-    #[serde(default)]
     pub spatial: Option<EntitySpatialConfig>,
     /// Governed identity attribute-release profiles attached to this entity.
     /// Each profile resolves exactly one subject and returns only the
@@ -1240,31 +1227,6 @@ fn default_max_bbox_degrees() -> f64 {
 
 fn default_max_geometry_vertices() -> u32 {
     10_000
-}
-
-#[derive(Debug, Clone, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct EntityPublicSchemaConfig {
-    /// PublicSchema concept name, for example `Person`.
-    pub target: String,
-    /// Path to a PublicSchema CEL mapping YAML document.
-    pub mapping_path: PathBuf,
-    /// JSON-LD context URL embedded in the issued VC. Defaults to the
-    /// canonical PublicSchema draft context.
-    #[serde(default)]
-    pub context_url: Option<String>,
-    /// JSON Schema URL embedded in `credentialSchema.id`. Defaults to
-    /// `https://publicschema.org/schemas/{target}.schema.json`.
-    #[serde(default)]
-    pub schema_url: Option<String>,
-    /// Optional local JSON Schema used to validate mapped
-    /// credentialSubject output before signing.
-    #[serde(default)]
-    pub schema_validation_path: Option<PathBuf>,
-    /// VC `type[1]` value. Defaults to `{target}` so a Person mapping
-    /// issues a `["VerifiableCredential", "Person"]` credential.
-    #[serde(default)]
-    pub credential_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]

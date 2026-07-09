@@ -36,7 +36,7 @@ Known pilot limitations such as read-only operation, no built-in provisioning
 or write API, no hosted key-management service, no end-user consent workflow,
 and evidence offerings that only advertise Registry Notary endpoints should be
 reported as product gaps unless they create an exploitable security or privacy
-issue beyond the documented limitation. Optional standards adapters and
-provenance credential responses are deployment-configured surfaces; report
-security issues there when the adapter exposes data, credentials, or metadata
-outside the configured scopes or documented public routes.
+issue beyond the documented limitation. Optional standards adapters are
+deployment-configured surfaces; report security issues there when the adapter
+exposes data, credentials, or metadata outside the configured scopes or
+documented public routes.

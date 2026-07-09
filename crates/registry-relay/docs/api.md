@@ -8,7 +8,7 @@ relationships, aggregate ids, and standards adapter roots.
 
 ## Listeners and surfaces
 
-The data-plane listener is `server.bind`. It serves health probes, docs, catalog metadata, dataset metadata, entity reads, evidence-offering discovery, aggregates, OpenAPI, optional standards adapters, and optional provenance resources.
+The data-plane listener is `server.bind`. It serves health probes, docs, catalog metadata, dataset metadata, entity reads, evidence-offering discovery, aggregates, OpenAPI, and optional standards adapters.
 
 The admin listener is optional and only exists when `server.admin_bind` is configured. Admin routes must stay on a private network. They are never mounted on the public data-plane listener.
 
@@ -22,7 +22,6 @@ The public URL space is structured as follows:
 - `/ogc/v1/records/*` (feature: `ogcapi-records`) exposes a metadata-only catalog view.
 - `/ogc/edr/v1/*` (feature: `ogcapi-edr`) exposes spatial aggregates as OGC EDR area collections.
 - `/dci/{registry}/registry/sync/*` (feature: `spdci-api-standards`) provides SP DCI standards adapter routes.
-- `/.well-known/did.json`, `/schemas/{claim_type}/{version}`, and `/contexts/{vocab}/{version}` are provenance verifier-support routes, mounted only when `provenance.enabled: true`.
 - `/healthz`, `/ready`, `/docs`, and `/docs/scalar.js` are unauthenticated.
 - `/openapi.json` and `/docs` serve the machine-readable and human-readable API surface respectively.
 
@@ -33,8 +32,6 @@ For SP DCI, `sync/search` is the generic path for any configured
 paths are Disability Registry-specific and return unknown-resource errors unless
 the named `{registry}` points at the same dataset/entity as
 `standards.spdci.disability_registry`.
-
-When `provenance.enabled: true`, public verifier-support routes are mounted for `/.well-known/did.json` in gateway issuer mode and for `/schemas/{claim_type}/{version}` plus `/contexts/{vocab}/{version}`.
 
 Most admin routes are documented only in this guide because they are served on the separate `server.admin_bind` listener, not the public data-plane. The committed OpenAPI artifact also includes the table-specific ingest reload route because it is part of the documented operator contract.
 
@@ -96,7 +93,7 @@ Clients send:
 Authorization: Bearer <jwt>
 ```
 
-The OIDC mode does not accept `x-api-key`. The gateway validates the standard claims (`iss`, `aud`, `exp`, optional `nbf`) against the configured `auth.oidc` block, looks up the signing key in the cached JWKS (refreshed on unknown `kid`), and verifies the signature. The Principal's `principal_id` is taken from the token's `sub` (preferred), then `client_id`, then `azp`. Token verification failures map to granular `auth.*` codes (`token_expired`, `audience_mismatch`, `kid_unknown`, etc.) so audit pipelines can distinguish IdP outages from policy denials; see `docs/configuration.md` for the full table.
+The OIDC mode does not accept `x-api-key`. The gateway validates the standard claims (`iss`, `aud`, `exp`, optional `nbf`) against the configured `auth.oidc` block, looks up the signing key in the cached JWKS (refreshed on unknown `kid`), and verifies the signature. The Principal's `principal_id` is taken from the token's `sub` (preferred), then `client_id`, then `azp`. Token verification failures map to granular `auth.*` codes, including `token_expired`, `audience_mismatch`, and `kid_unknown`, so audit pipelines can distinguish IdP outages from policy denials; see `docs/configuration.md` for the full table.
 
 Scopes are independent. Grant the narrowest scope that lets the caller do its job:
 
@@ -412,6 +409,6 @@ The exact text in `detail` is operator-facing but intentionally scrubbed. Do not
 
 Startup-only split metadata failures use stable `metadata.manifest.*` and `runtime.binding.*` codes logged to stderr; see [metadata.md](metadata.md) for the full table.
 
-## Provenance opt-in
+## Credential issuance
 
-When `provenance.enabled: true`, callers can request signed Verifiable Credentials for entity record and aggregate result responses by sending `Accept: application/vc+jwt`; plain JSON remains the default when the caller does not opt in. See [provenance.md](provenance.md) for signer config, DID Web behavior, VC-JWT shape, and verification steps.
+Relay does not issue response credentials, host DID documents, or publish credential-support schemas and contexts. Use Registry Notary for credential issuance and verification workflows. See [provenance.md](provenance.md) for migration notes.

@@ -475,10 +475,8 @@ async fn entity_record(
         &record_access.read_decision,
         &record_access.expansion_decisions,
     );
-    // Preserve the expansion list locally so the provenance helper can
-    // partition the record into `{fields, expanded}` later. The plain
-    // JSON path consumes `query_params.expansions` so we clone first.
-    let expansions_for_vc = query_params.expansions.clone();
+    // The plain response path keeps the expansion partition produced by
+    // the query layer.
     match query
         .read_record(
             &path.dataset_id,
@@ -511,22 +509,7 @@ async fn entity_record(
             } else {
                 Json(record.value.clone()).into_response()
             };
-            let provenance_state = runtime.provenance_state();
-            let config_ref = runtime.config();
-            let publicschema_ref = runtime.publicschema_registry();
-            let mut response = crate::api::provenance_issuance::maybe_issue_entity_record(
-                provenance_state.as_ref(),
-                config_ref.as_ref(),
-                publicschema_ref.as_ref(),
-                &headers,
-                plain_response,
-                &path.dataset_id,
-                &path.entity,
-                &path.id,
-                record.value,
-                expansions_for_vc,
-                crate::api::provenance_issuance::now_rfc3339(),
-            );
+            let mut response = plain_response;
             if let Some(mut context) = audit_context {
                 context.row_count = Some(1);
                 response = with_audit_context(response, context);

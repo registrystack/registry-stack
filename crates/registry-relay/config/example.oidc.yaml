@@ -2,9 +2,8 @@
 # OIDC / OAuth2 resource-server example. Derived from `config/example.yaml`
 # with the `auth:` block swapped from `api_key` to `oidc` against a
 # local Zitadel instance, and trimmed of illustrative material that is
-# orthogonal to the auth path (extra aggregates, the provenance walk-
-# through comment block). Refer to `config/example.yaml` for the full
-# entity / aggregate / provenance surface.
+# orthogonal to the auth path (extra aggregates). Refer to
+# `config/example.yaml` for the full entity and aggregate surface.
 #
 # The relay is a resource server: it verifies bearer JWTs against the
 # configured IdP's JWKS and never mints or refreshes tokens.

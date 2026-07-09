@@ -239,25 +239,6 @@ pub struct ConfigAuditExt {
     pub local_approval_rate_limit_identity: Option<String>,
 }
 
-/// Response-extension marker emitted by handlers that signed a VC for
-/// the response. The audit middleware embeds the issuance metadata
-/// alongside the regular request audit record.
-///
-/// Fields mirror the spec verbatim. `validity` is exposed as three
-/// separate Unix-seconds timestamps; the audit envelope serializer
-/// wraps them into the `{iat, nbf, exp}` object.
-#[derive(Debug, Clone)]
-pub struct ProvenanceIssuanceExt {
-    pub iss: String,
-    pub kid: String,
-    pub jti: String,
-    pub claim_type: String,
-    pub subject: String,
-    pub iat: i64,
-    pub nbf: i64,
-    pub exp: i64,
-}
-
 /// Endpoint family for an audit record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -400,10 +381,6 @@ pub struct AuditRecord {
     pub duration_ms: u64,
     /// Stable taxonomy code on 4xx/5xx; `null` on 2xx/3xx.
     pub error_code: Option<String>,
-    /// Present when the response carried a signed VC. `None` for plain
-    /// JSON responses and deployments without provenance enabled.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub provenance: Option<ProvenanceIssuanceRecord>,
     /// Present on governed config verify, dry-run, and apply attempts.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config: Option<ConfigAuditExt>,
@@ -436,47 +413,6 @@ pub struct AuditRecord {
     /// Availability class of the backing source.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ar_source_availability_class: Option<String>,
-}
-
-/// Provenance issuance metadata embedded in an `AuditRecord` when the
-/// response carried a signed VC.
-#[derive(Debug, Clone, Serialize)]
-pub struct ProvenanceIssuanceRecord {
-    /// Always `"provenance.vc.issued"`; pinned here so a consumer can
-    /// filter on this discriminator without inspecting the rest of
-    /// the record.
-    pub event: &'static str,
-    pub iss: String,
-    pub kid: String,
-    pub jti: String,
-    pub claim_type: String,
-    pub subject: String,
-    pub validity: ProvenanceValidity,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ProvenanceValidity {
-    pub iat: i64,
-    pub nbf: i64,
-    pub exp: i64,
-}
-
-impl From<&ProvenanceIssuanceExt> for ProvenanceIssuanceRecord {
-    fn from(ext: &ProvenanceIssuanceExt) -> Self {
-        Self {
-            event: "provenance.vc.issued",
-            iss: ext.iss.clone(),
-            kid: ext.kid.clone(),
-            jti: ext.jti.clone(),
-            claim_type: ext.claim_type.clone(),
-            subject: ext.subject.clone(),
-            validity: ProvenanceValidity {
-                iat: ext.iat,
-                nbf: ext.nbf,
-                exp: ext.exp,
-            },
-        }
-    }
 }
 
 /// Errors surfaced by sinks. The middleware logs and swallows these;
@@ -592,7 +528,6 @@ impl OperationalAuditEvent {
             suppressed_groups: None,
             duration_ms: 0,
             error_code: self.error_code.map(ToString::to_string),
-            provenance: None,
             config: self.config,
             ar_profile_id: None,
             ar_profile_version: None,
@@ -949,10 +884,6 @@ pub async fn audit_layer(
         .cloned()
         .map(|context| merge_inferred_context(context, inferred_context.clone()))
         .unwrap_or(inferred_context);
-    let provenance = response
-        .extensions()
-        .get::<ProvenanceIssuanceExt>()
-        .map(ProvenanceIssuanceRecord::from);
     let config_audit = response.extensions().get::<ConfigAuditExt>().cloned();
 
     // Auth middleware (inner) attaches `Principal` to the response on
@@ -1036,7 +967,6 @@ pub async fn audit_layer(
         suppressed_groups: context.suppressed_groups,
         duration_ms,
         error_code,
-        provenance,
         config: config_audit,
         ar_profile_id: context.ar_profile_id,
         ar_profile_version: context.ar_profile_version,
