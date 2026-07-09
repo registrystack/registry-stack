@@ -5680,6 +5680,8 @@ workflows:
         assert!(readme.contains("redacts local secret values"));
         assert!(readme.contains("Back up that file before upgrades"));
         assert!(readme.contains("https://docs.registrystack.org/operate/backup-and-restore/"));
+        assert!(readme
+            .contains("https://docs.registrystack.org/operate/single-node-compose-behind-proxy/"));
     }
 
     #[test]
@@ -5821,6 +5823,8 @@ workflows:
         assert!(readme.contains("validator and redacts local secret values"));
         assert!(readme.contains("Back up that file before upgrades"));
         assert!(readme.contains("https://docs.registrystack.org/operate/backup-and-restore/"));
+        assert!(readme
+            .contains("https://docs.registrystack.org/operate/single-node-compose-behind-proxy/"));
 
         let manifest: Value =
             serde_yaml::from_str(&fs::read_to_string(project.join("registryctl.yaml")).unwrap())

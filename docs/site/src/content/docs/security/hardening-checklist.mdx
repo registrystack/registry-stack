@@ -85,6 +85,9 @@ or the [Registry Notary operator configuration reference](../../products/registr
 
 ## Transport and edge
 
+- For the 1.0 single-node VM topology, follow
+  [Run single-node Compose behind your reverse proxy](../../operate/single-node-compose-behind-proxy/)
+  before exposing Relay or Notary beyond the host.
 - Terminate TLS and manage certificates at your reverse proxy or load balancer; RS-SEC-G Section 9
   leaves transport termination and certificate management to the operator.
 - Keep the admin listener private. A publicly exposed admin surface trips

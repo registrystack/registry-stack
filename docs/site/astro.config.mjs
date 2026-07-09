@@ -304,6 +304,7 @@ export default defineConfig({
           label: 'Operate',
           collapsed: true,
           items: [
+            { label: 'Single-node Compose', slug: 'operate/single-node-compose-behind-proxy' },
             { label: 'Backup and restore', slug: 'operate/backup-and-restore' },
             { label: 'Retention and state', slug: 'operate/retention-and-persistent-state' },
             { label: 'Upgrade and roll back', slug: 'operate/upgrade-and-rollback' },

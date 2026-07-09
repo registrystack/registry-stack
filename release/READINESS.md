@@ -110,6 +110,11 @@ What 1.0 promises the institutions that run this.
       restore guidance for generated and single-node deployments is documented
       in [`backup-and-restore.mdx`](../docs/site/src/content/docs/operate/backup-and-restore.mdx)
       (#226).
+- [ ] Single-node Compose deployment behind an institution-owned reverse proxy,
+      IAM, and front rate limiter documented. Evidence:
+      [`single-node-compose-behind-proxy.mdx`](../docs/site/src/content/docs/operate/single-node-compose-behind-proxy.mdx)
+      (#13). Kubernetes and high-availability profiles remain outside the 1.0
+      deployment profile.
 - [ ] Security-relevant configuration defaults inventoried and reviewed for
       secure-by-default (#172 and #171 are known open questions). Inventory
       evidence: [`security-config-defaults.md`](notes/security-config-defaults.md);
