@@ -64,7 +64,7 @@ Product names are always in English, including on future translated pages.
   <dd>Digital Public Infrastructure. Shared, interoperable digital systems (identity, payments, data exchange) deployed at population scale to support public service delivery. These projects cover the registry-consultation slice of a DPI deployment.</dd>
 
   <dt>DID</dt>
-  <dd>Decentralized Identifier. W3C DID Core 1.0. Registry Relay publishes a `did:web` document at `/.well-known/did.json` when signed response credentials are enabled (config key: `provenance`). Registry Notary parses `did:jwk` values for credential subjects.</dd>
+  <dd>Decentralized Identifier. W3C DID Core 1.0. Registry Relay no longer publishes a `did:web` document. Registry Notary parses `did:jwk` values for credential subjects.</dd>
 
   <dt id="delegated-self-attestation">delegated self-attestation</dt>
   <dd>Registry Notary self-attestation access mode `delegated_attestation`. The authenticated principal is the requester, the request target and scoped authorization details identify the same configured dependent subject, and the dependent claim can read sources only after a configured relationship proof claim evaluates to boolean `true`. This is separate from static-peer delegated evaluation under Notary federation.</dd>
@@ -112,7 +112,7 @@ Product names are always in English, including on future translated pages.
   <dd>Commitment that every registry in the stack publishes its catalog, schemas, services, and policies in standards-shaped form (DCAT, BRegDCAT-AP, CPSV-AP, CCCEV, SHACL, JSON Schema, ODRL, OpenAPI, OGC Records, SKOS-shaped codelists, SD-JWT VC), so downstream systems integrate against stable contracts rather than per-deployment ones.</dd>
 
   <dt>JSON-LD</dt>
-  <dd>JSON-based linked data format. W3C recommendation (JSON-LD 1.1). Used for catalog, policy, CCCEV render output, and signed response credential contexts.</dd>
+  <dd>JSON-based linked data format. W3C recommendation (JSON-LD 1.1). Used for catalog, policy, and CCCEV render output.</dd>
 
   <dt>metadata manifest</dt>
   <dd>Portable `metadata.yaml` document (schema version `registry-manifest/v1`) that describes datasets, entities, fields, public services, forms, requirements, policies, evidence offerings, federation metadata, evaluation profiles, and governed evidence ecosystem bindings. Must not include Relay runtime bindings such as source paths, table names, or scopes.</dd>
@@ -214,7 +214,7 @@ Product names are always in English, including on future translated pages.
   <dd>Registry Notary access pattern where an authenticated OIDC principal is the protected requester for configured claim evaluation or credential issuance. In direct self-attestation, the subject is the authenticated requester. In delegated self-attestation, the requester acts for a configured dependent target only when the relationship proof passes.</dd>
 
   <dt>signed response credentials</dt>
-  <dd>Opt-in Registry Relay feature that attaches a W3C VCDM 2.0 VC-JWT signed credential to entity record and aggregate responses when the caller requests `Accept: application/vc+jwt`. The config key is `provenance` for backward compatibility. The DID document is served at `/.well-known/did.json` in gateway issuer mode, JSON Schemas are served under `/schemas/...`, and JSON-LD contexts are served under `/contexts/...`. Enabled by the `crosswalk-runtime` Cargo feature group.</dd>
+  <dd>Removed Registry Relay feature that attached a W3C VCDM 2.0 VC-JWT signed credential to entity record and aggregate responses. Registry Relay no longer accepts `provenance` or entity `publicschema` credential mapping config, no longer serves `/.well-known/did.json`, `/schemas/{claim_type}/{version}`, or `/contexts/{vocab}/{version}`, and no longer returns `application/vc+jwt`. Use Registry Notary for credential issuance.</dd>
 
   <dt>SHACL</dt>
   <dd>Shapes Constraint Language. W3C recommendation. Relay and Manifest emit SHACL node shapes for entity validation.</dd>

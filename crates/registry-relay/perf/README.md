@@ -73,9 +73,7 @@ op run --env-file=target/perf/perf.env -- \
   target/release/registry-relay --config perf/config/medium.yaml
 ```
 
-Without 1Password (export the env file lines literally; do not shell-source
-the file, quote removal corrupts the JSON `REGISTRY_RELAY_PROVENANCE_JWK`
-value):
+Without 1Password, export the env file lines literally:
 
 ```bash
 while IFS= read -r line || [ -n "$line" ]; do
@@ -226,6 +224,5 @@ correct choice only when freshness is worth the upstream database round trip.
 | `PERF_EVIDENCE_VERIFICATION_KEY_HASH`        | (generated sha256 hash)  | Fingerprint for `perf_evidence_verification`              |
 | `PERF_ADMIN_KEY_HASH`                     | (generated sha256 hash)  | Fingerprint for `perf_admin`                           |
 | `REGISTRY_RELAY_AUDIT_HASH_SECRET`        | (generated)              | HMAC secret for sensitive audit identifiers; must stay stable across restarts |
-| `REGISTRY_RELAY_PROVENANCE_JWK`           | (generated Ed25519 JWK)  | Private signing key for VC-JWT provenance responses |
 
 All hash env vars follow registry-relay's convention: `sha256:<64 lowercase hex chars>`.

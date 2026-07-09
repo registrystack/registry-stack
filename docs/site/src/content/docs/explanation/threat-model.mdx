@@ -94,8 +94,8 @@ auditing separately.
 edge. Each service runs exactly one authentication mode (either static-credential
 fingerprint or OIDC) and authenticates every claim- or record-bearing route before
 responding. The unauthenticated surfaces are the operational, discovery, and
-protocol-bootstrap routes: liveness and readiness probes, the public verification keys
-(JWKS / `did:web`), credential-issuer discovery, the OID4VCI wallet-flow endpoints, the
+protocol-bootstrap routes: liveness and readiness probes, issuer JWKS public verification keys,
+credential-issuer discovery, the OID4VCI wallet-flow endpoints, the
 docs, public credential-status reads, and credential type metadata. The federation
 evaluations route is exempt from the API-key/OIDC middleware but still requires a verified
 peer-signed JWS, so it is not anonymous.
@@ -127,7 +127,7 @@ Notary; it stays inside the citizen / OIDC trust context.
 The assets the design sets out to protect are:
 
 - Private signing keys: The private signing key never leaves the issuer; only the public
-  half is published (through JWKS, and through `did:web` in Relay gateway mode). A verifier
+  half is published through issuer JWKS. A verifier
   never needs a credential to verify, which keeps verification off the protected side
   entirely.
 - Person-level source data: The source rows behind a claim are read in place and never
@@ -269,8 +269,7 @@ conformance claim:
 - Feature-gated surfaces of other builds: Several runtime surfaces (the OGC API
   Features/Records/EDR adapters and SP DCI sync) are feature-gated and mount only when the
   build is configured with the matching Cargo feature. Do not infer their presence from the
-  route catalog of a different build. Relay signed response credentials are not Cargo-gated;
-  they are config-gated through `provenance`. Admin routes run on
+  route catalog of a different build. Admin routes run on
   a separate optional listener and are documented in the generated OpenAPI, but standalone mode
   does not implement runtime config reload; it returns HTTP 501.
 

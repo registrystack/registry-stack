@@ -78,7 +78,7 @@ flowchart LR
     serve["Serve:<br/>record read · claim evaluation"]
     audit["Audit:<br/>Platform envelope · fail-closed<br/>principal · scopes · request_id · purpose"]
     caller --> authn --> authz --> serve --> audit
-    keys["Verification keys:<br/>JWKS · did:web<br/>(public half only)"] -.-> authn
+    keys["Verification keys:<br/>issuer JWKS<br/>(public half only)"] -.-> authn
     peers["Federation:<br/>static peers · verify-before-read"] -.-> authz
 ```
 
@@ -99,7 +99,7 @@ REQ-SEC-G-005: Authorization MUST be scope-based and deny-by-default. A caller M
 REQ-SEC-G-006: A service MUST NOT widen a caller's reach at request time beyond what configuration grants. Every route that returns person-level records or claim results MUST require authentication, and the unauthenticated surface MUST be limited to routes that carry no person-level data:
 
 - liveness and readiness probes;
-- public verification-key discovery (the issuer JWKS and, where published, the `did:web` document);
+- public verification-key discovery through the issuer JWKS;
 - served documentation and discovery metadata: documentation routes, well-known discovery documents, published JSON Schemas and JSON-LD contexts, and public credential-type metadata;
 - the OID4VCI issuance routes that run before an access token is bound, which carry that protocol's own security controls (their surface-specific form lives in [RS-PR-NOTARY](../rs-pr-notary/));
 - where a deployment enables credential status, the credential status route, which discloses only issuer, credential profile, status, and timestamps for an unguessable credential identifier.
@@ -108,9 +108,9 @@ The OpenAPI document requires authentication unless the deployment opts out. A r
 
 ## 5. Verification-key publication
 
-A verifier needs the issuer's public key to check a credential or a signed response, and it needs that key without holding a credential of its own. The model therefore separates the published public half from the private signing material, which never leaves the issuer.
+A verifier needs the issuer's public key to check a credential, and it needs that key without holding a credential of its own. The model therefore separates the published public half from the private signing material, which never leaves the issuer.
 
-REQ-SEC-G-007: An issuer MUST sign with an asymmetric key and MUST publish only the public half, through the issuer JWKS and, for Registry Relay response provenance in gateway mode, a `did:web` document (per REQ-PR-RELAY-013). Private key material MUST NOT be published and MUST NOT be required by a verifier. A key that is being rotated out MAY remain published for verification while credentials it signed are still within their validity, so a verifier can check previously issued artifacts across a rotation.
+REQ-SEC-G-007: An issuer MUST sign with an asymmetric key and MUST publish only the public half through the issuer JWKS. Private key material MUST NOT be published and MUST NOT be required by a verifier. A key that is being rotated out MAY remain published for verification while credentials it signed are still within their validity, so a verifier can check previously issued artifacts across a rotation.
 
 The custody mechanism for the private key (environment, file, or hardware module) is a deployment choice, described in the [signing-key reference](../../products/registry-notary/signing-key-provider/) and out of scope here (Section 9).
 

@@ -124,11 +124,10 @@ Read the full context in the [Registry Notary protocol](../../spec/rs-pr-notary/
 - CCCEV output is a profiled shape, not conformant: [CCCEV](../../reference/standards/)-shaped
   output is a profiled subset and is not conformant to CCCEV 2.00.
   It is consumed by parsing the `@graph` for `cccev:Evidence` nodes.
-- Two signed artifacts, not one: Notary issues SD-JWT VC credentials (`dc+sd-jwt`, signed with
+- Notary owns credential issuance: Notary issues SD-JWT VC credentials (`dc+sd-jwt`, signed with
   EdDSA/Ed25519 by default; ES256/P-256 is also supported per credential profile; with no W3C
   [Verifiable Credentials Data Model](../../reference/standards/) JSON-LD envelope).
-  Relay's optional signed response credentials are VCDM 2.0 VC-JWT.
-  These are different artifacts; verify each against its own format.
+  Relay no longer issues signed response credentials or hosts issuer DID documents.
 - Standalone admin reload is not implemented: The standalone Notary `/admin/v1/reload` route
   returns HTTP 501 with code `registry.admin.capability.not_supported` and performs no reload, and
   non-swappable changes require a service restart.
@@ -161,13 +160,12 @@ Its boundaries are covered in depth in the [Registry Relay protocol](../../spec/
   and the SP DCI sync adapter) are feature-gated and present only in builds configured with the
   matching Cargo feature.
   Do not infer their presence in one build from another build's route catalog.
-  (Signed response credentials are not Cargo-gated; they are config-gated through `provenance`.)
 - Aggregates are not privacy-budgeted: As noted stack-wide, Relay aggregate routes provide no
   longitudinal privacy-budget or cumulative-differencing protection.
 - Relay does not evaluate or own the manifest: Relay does not evaluate claims or issue Notary's
-  SD-JWT VC credentials (that is Notary's role), though with `provenance` enabled and a caller
-  requesting `Accept: application/vc+jwt` it can attach its own VC-JWT signed response credential.
-  It also does not own or version the metadata manifest format, which belongs to Registry
+  SD-JWT VC credentials (that is Notary's role), and it does not issue response credentials of its
+  own.
+  Relay also does not own or version the metadata manifest format, which belongs to Registry
   Manifest.
   Relay only serves and scopes compiled artifacts.
 - Governed enforcement is one PDP profile, not full interoperability: Governed runtime policy

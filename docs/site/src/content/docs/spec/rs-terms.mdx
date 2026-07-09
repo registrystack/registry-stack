@@ -57,6 +57,7 @@ The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 
 | 0.3.1 | 2026-06-20 | draft | Added PDP, PEP, trust context, source binding, route identity, checked scope, ecosystem binding, ODRL enforcement profile, audit provenance, and fail-closed definitions. |
 | 0.3.2 | 2026-06-22 | draft | Added delegated self-attestation and clarified direct self-attestation. |
 | 0.4.0 | 2026-07-07 | draft | Renamed the static discovery bundle consistently, added the DID issuer-mode security qualifier, corrected signed response credential gating and disclosure profile casing, added SDMX and eight vocabulary entries (matching policy, claim definition, credential profile, source connector, source adapter sidecar, static-peer federation, issuer mode, JWKS), extended `standards_referenced`, and aligned self-attestation terminology with RS-PR-NOTARY. |
+| 0.5.0 | 2026-07-09 | draft | Marked Registry Relay signed response credentials and issuer mode as removed before 1.0. |
 
 ## 1. Products
 
@@ -88,13 +89,13 @@ The registry stack comprises five related projects. Product names are Title Case
 
 **delegated self-attestation**: Registry Notary self-attestation access mode `delegated_attestation`. The requester is derived from the authenticated principal, the request target and scoped authorization details identify the same configured dependent subject, the relationship is derived from scoped authorization details, and the dependent claim can read sources only after the configured proof claim evaluates to boolean `true`. This is distinct from static-peer delegated evaluation under Notary federation. Registry Stack product term.
 
-**signed response credentials**: Opt-in Registry Relay feature that attaches a W3C Verifiable Credentials Data Model (VCDM) 2.0 VC-JWT signed credential to entity record and aggregate responses when the caller requests `Accept: application/vc+jwt`. The config key is `provenance` for backward compatibility. The Decentralized Identifier (DID) document is served at `/.well-known/did.json` in gateway issuer mode, JSON Schemas are served under `/schemas/...`, and JSON-LD contexts are served under `/contexts/...`. Gated by runtime provenance configuration, not a Cargo feature.
+**signed response credentials**: Removed Registry Relay feature that attached a W3C Verifiable Credentials Data Model (VCDM) 2.0 VC-JWT signed credential to entity record and aggregate responses. Registry Relay no longer accepts the legacy `provenance` configuration key, no longer serves `/.well-known/did.json`, `/schemas/{claim_type}/{version}`, or `/contexts/{vocab}/{version}`, and no longer returns `application/vc+jwt`. Use Registry Notary for credential issuance.
 
 **SD-JWT VC**: Selective Disclosure JWT Verifiable Credential (IETF draft). Registry Notary issues SD-JWT VC credentials signed with EdDSA. Media type: `application/dc+sd-jwt`.
 
 **OID4VCI**: OpenID for Verifiable Credential Issuance. The protocol a wallet uses to obtain a credential from an issuer. Registry Notary implements an OID4VCI issuance flow: a credential offer, issuer metadata at `/.well-known/openid-credential-issuer`, a nonce endpoint, and a holder proof. The surface is a profiled subset of OID4VCI Draft 13 advertising the `dc+sd-jwt` format; full issuer conformance is not asserted (`openid4vci.support: not_full_issuer`).
 
-**DID**: Decentralized Identifier. W3C DID Core 1.0. Registry Relay publishes its DID document (`did.json`) only in gateway issuer mode; in delegated issuer mode Relay MUST NOT publish `did.json` and the runtime refuses to serve it (REQ-PR-RELAY-013). Registry Notary parses `did:jwk` values for credential subjects.
+**DID**: Decentralized Identifier. W3C DID Core 1.0. Registry Relay no longer publishes a DID document. Registry Notary parses `did:jwk` values for credential subjects.
 
 **eSignet**: Open-source identity and authentication service (part of MOSIP). The hosted lab uses eSignet as the authorization server a citizen signs in to before Registry Notary issues a self-attestation credential. Not a Registry Stack product term; included here because it appears in hosted lab documentation.
 
@@ -124,7 +125,7 @@ The registry stack comprises five related projects. Product names are Title Case
 
 **credential profile**: Registry Notary configuration that names which claims may be issued as a credential. A claim is issuable only when both sides agree: the claim lists the profile in its `credential_profiles`, and the profile lists the claim in its `allowed_claims`. Registry Stack product term.
 
-**issuer mode**: Registry Relay signed response credentials configuration axis with two values: gateway mode, where Relay hosts its own DID document and signs under its own DID, and delegated mode, where a delegating ministry hosts the DID document for its own domain and Relay MUST NOT publish `did.json`. Registry Stack product term.
+**issuer mode**: Removed Registry Relay signed response credentials configuration axis. Registry Relay no longer signs under a gateway DID or a delegated ministry DID. Registry Notary owns issuer configuration for credentials.
 
 **JWKS**: JSON Web Key Set. Registry Notary publishes its issuer's public verification keys at `GET /.well-known/evidence/jwks.json`, served without authentication so a verifier can obtain the public key without holding a Notary credential.
 
@@ -148,7 +149,7 @@ The registry stack comprises five related projects. Product names are Title Case
 
 **ODRL**: Open Digital Rights Language. W3C recommendation. Registry Relay and Registry Manifest emit ODRL Offer documents for dataset-scoped descriptive policies. Governed Evidence Gateway runtime enforcement uses only the supported ODRL enforcement terms declared by the `registry-evidence-gateway-pdp/v1` profile; publishing an ODRL policy document is not itself runtime enforcement.
 
-**JSON-LD**: JSON-based linked data format. W3C recommendation (JSON-LD 1.1). Used for catalog, policy, CCCEV render output, and signed response credential contexts.
+**JSON-LD**: JSON-based linked data format. W3C recommendation (JSON-LD 1.1). Used for catalog, policy, and CCCEV render output.
 
 **OGC API Records**: Open Geospatial Consortium API specification for records. Registry Relay exposes records endpoints behind the `ogcapi-records` feature flag. Registry Manifest renders and publishes an OGC Records item collection.
 

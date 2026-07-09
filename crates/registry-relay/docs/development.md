@@ -138,12 +138,10 @@ check only. Keep the external SEMIC recipe as the release validation signal.
 
 ### Fixture corpus
 
-`tests/fixtures/vc/entity-record-v1/` and
-`tests/fixtures/vc/aggregate-result-v1/` contain static VC-JWTs, decoded
-payloads, DID Documents, and JSON Schemas. They are signed outside
-`registry-relay` and verified by `tests/vc_external_verifier.rs` through
-the Node verifier. Add a new fixture directory whenever the public VC wire
-contract changes or a new claim type/version is introduced.
+Relay-local response credential fixtures were removed with Relay credential
+issuance. Keep credential issuance fixtures in Registry Notary. Relay fixtures
+should cover ordinary data responses, metadata responses, and rejection or
+migration paths for removed credential-issuance configuration only.
 
 ## Coverage metrics
 
@@ -287,7 +285,8 @@ Review the static artifact for:
 - no deployment-only hostnames except example domains;
 - no accidental broadening of scopes;
 - Problem Details responses on non-2xx operations;
-- correct media types for JSON, CSV, and VC-JWT responses;
+- correct media types for JSON and CSV responses;
+- no removed Relay response-credential media types or support routes;
 - tags and summaries that match the docs;
 - route families that match the API guide.
 

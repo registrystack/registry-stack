@@ -62,8 +62,8 @@ authenticate, authorize, serve, audit.
 Every route that returns a record, evaluates a claim, or issues from a stored evaluation requires
 authentication.
 Operational probes, public verification keys, discovery metadata, docs or OpenAPI when configured,
-OID4VCI bootstrap routes, credential-status reads, and Relay provenance support routes may be
-public because they do not return record or claim results on their own.
+OID4VCI bootstrap routes, and credential-status reads may be public because they do not return
+record or claim results on their own.
 Issuers sign with asymmetric keys and publish only the public half, so any verifier can check an
 issued credential without holding a credential of its own (REQ-SEC-G-007).
 

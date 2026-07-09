@@ -42,7 +42,7 @@ The Registry Relay binary reads the variables below.
 | `REGISTRY_RELAY_LOG_FORMAT` | Operational log format: `json` or `jsonl` select JSON output; any other value selects text. | Defaults to text. |
 | `DATA_GATE_POSTGRES_ROOT_CERT_PATH` | Path to a PEM file with a custom root certificate to trust for a Postgres source connector's TLS connection. | Optional. Falls back to the system default trust store when unset. |
 
-The audit hash secret and other secret material are read from operator-named variables declared in config fields such as `audit.hash_secret_env` (for example, `REGISTRY_RELAY_AUDIT_HASH_SECRET`), the API key fingerprint env names, the provenance signer `jwk_env`, and the Postgres `connection_env`. For the full list of config fields that name secret environment variables, see the [Registry Relay configuration reference](../../products/registry-relay/configuration/).
+The audit hash secret and other secret material are read from operator-named variables declared in config fields such as `audit.hash_secret_env` (for example, `REGISTRY_RELAY_AUDIT_HASH_SECRET`), API key fingerprint env names, and the Postgres `connection_env`. For the full list of config fields that name secret environment variables, see the [Registry Relay configuration reference](../../products/registry-relay/configuration/).
 
 ## registryctl
 
