@@ -76,7 +76,7 @@ what we could not find ourselves.
 Release assets are already cosign-signed with SLSA provenance
 ([`VERIFY.md`](VERIFY.md)) and repeatable-build evidence exists
 ([`REPEATABLE-BUILDS.md`](REPEATABLE-BUILDS.md)); open tracking issues:
-#122, #123, #127, #128, #129.
+GH#122, GH#123, GH#127, GH#128, GH#129.
 
 - [ ] SBOM published per release.
 - [ ] Unsafe-code inventory generated and reviewed.
@@ -108,7 +108,9 @@ What 1.0 promises the institutions that run this.
 Notary's pitch is minimization; it will be held to it.
 
 - [ ] Behavioral guarantee claims extracted from the docs site and verified
-      against implementation.
+      against implementation. Extraction evidence:
+      [`behavioral-guarantee-claims.md`](notes/behavioral-guarantee-claims.md);
+      implementation verification remains open.
 - [ ] Audit log and error path review confirms minimized data never appears
       (overlaps section 4 leak review).
 - [ ] Retention behavior documented.
