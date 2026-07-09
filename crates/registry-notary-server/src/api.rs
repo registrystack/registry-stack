@@ -4684,8 +4684,8 @@ fn oid4vci_credential_display_metadata(
 
 fn oid4vci_display_image_metadata(image: &Oid4vciDisplayImageConfig) -> DisplayImageMetadata {
     DisplayImageMetadata {
-        uri: image.uri.clone(),
-        url: image.url.clone(),
+        uri: image.uri.clone().or_else(|| image.url.clone()),
+        url: None,
         alt_text: image.alt_text.clone(),
     }
 }
@@ -8957,8 +8957,14 @@ mod tests {
         );
         assert_eq!(
             metadata["credential_configurations_supported"]["person_is_alive_sd_jwt"]["display"][0]
-                ["logo"]["url"],
+                ["logo"]["uri"],
             "https://issuer.example/assets/person-is-alive.png"
+        );
+        assert!(
+            metadata["credential_configurations_supported"]["person_is_alive_sd_jwt"]["display"][0]
+                ["logo"]
+                .get("url")
+                .is_none()
         );
         assert_eq!(
             metadata["credential_configurations_supported"]["person_is_alive_sd_jwt"]["scope"],
