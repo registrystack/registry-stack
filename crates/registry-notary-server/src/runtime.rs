@@ -5682,16 +5682,19 @@ fn render_cccev_evidence_node(config: &EvidenceConfig, result: &ClaimResultView)
         "cccev:value": result.value,
     });
 
-    json!({
+    let mut evidence_node = json!({
         "@id": evidence_id,
         "@type": "cccev:Evidence",
         "dcterms:identifier": result.evaluation_id,
         "cccev:isProvidedBy": provided_by,
-        "cccev:isConformantTo": result.satisfied.unwrap_or(false),
         "cccev:supportsRequirement": requirement_iri,
         "cccev:supportsValue": supports_value,
         "cccev:validityPeriod": validity_period,
-    })
+    });
+    if let Some(satisfied) = result.satisfied {
+        evidence_node["cccev:isConformantTo"] = json!(satisfied);
+    }
+    evidence_node
 }
 
 pub fn credential_profile_for<'a>(
@@ -8256,6 +8259,51 @@ mod tests {
             rendered["@graph"][0]["cccev:isProvidedBy"]["dcterms:identifier"],
             json!("registry-notary"),
             "CCCEV provider agent must map from generated_by.service_id"
+        );
+    }
+
+    #[test]
+    fn render_cccev_omits_conformance_for_redacted_result() {
+        let evidence = test_evidence(vec![test_claim("selected", Vec::new(), true)]);
+        let result = ClaimResultView {
+            evaluation_id: "eval-test".to_string(),
+            claim_id: "selected".to_string(),
+            claim_version: "1".to_string(),
+            subject_type: "Person".to_string(),
+            requester_ref: None,
+            target_ref: TargetRefView {
+                entity_type: "Person".to_string(),
+                handle: "rnref:v1:test".to_string(),
+                identifier_schemes: Vec::new(),
+                profile: None,
+            },
+            matching: None,
+            value: None,
+            satisfied: None,
+            disclosure: "redacted".to_string(),
+            redacted_fields: vec!["selected".to_string()],
+            format: FORMAT_CCCEV_JSONLD.to_string(),
+            issued_at: "2026-06-08T00:00:00Z".to_string(),
+            expires_at: None,
+            provenance: ClaimProvenance::new(
+                "registry-notary".to_string(),
+                "eval-test".to_string(),
+                "selected".to_string(),
+                "1".to_string(),
+                ProvenanceUsed {
+                    source_count: 0,
+                    source_versions: BTreeMap::new(),
+                    source_runtimes: Vec::new(),
+                },
+            ),
+        };
+
+        let rendered =
+            render_results(&evidence, &[result], FORMAT_CCCEV_JSONLD).expect("CCCEV renders");
+
+        assert!(
+            rendered["@graph"][0].get("cccev:isConformantTo").is_none(),
+            "redacted CCCEV evidence must not reveal a false outcome"
         );
     }
 
