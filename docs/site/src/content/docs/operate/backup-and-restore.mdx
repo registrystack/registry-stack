@@ -65,8 +65,11 @@ Back up the generated project manifest, Compose file, product config directories
 and host-mounted state:
 
 ```sh
-backup_items="registryctl.yaml compose.yaml relay state data"
-[ -d notary ] && backup_items="$backup_items notary"
+backup_items="registryctl.yaml compose.yaml"
+[ -f .env ] && backup_items="$backup_items .env"
+for item in relay notary state data; do
+  [ -e "$item" ] && backup_items="$backup_items $item"
+done
 tar -cf "$backup_dir/config-source-state.tar" $backup_items
 sha256sum "$backup_dir/config-source-state.tar" > "$backup_dir/config-source-state.tar.sha256"
 ```
@@ -133,6 +136,10 @@ tar -xf "$backup_dir/config-source-state.tar"
 Both checksum commands print `OK` for the named file.
 Do not generate a new `secrets/local.env` to replace a lost one unless you intend to rotate
 the deployment's API credentials, audit HMAC secret, and local Notary issuer key.
+On a new host, compare `.env` with `id -u` and `id -g`.
+If `REGISTRY_STACK_RUNTIME_UID` or `REGISTRY_STACK_RUNTIME_GID` names the old host owner, edit
+those two values before starting containers so Relay and Notary can write the restored private
+state directories.
 
 ## Restore Redis data
 
