@@ -19,7 +19,6 @@ ROOT = Path(__file__).resolve().parents[2]
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 SEMVER_TAG = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$")
 IMAGE_DIGEST_REF = re.compile(r"^([^@]+)@(sha256:[0-9a-f]{64})$")
-STATUS_VALUES = {"verified", "not-present", "not-applicable", "unknown"}
 
 
 def load_yaml(path: Path) -> object:
@@ -378,26 +377,6 @@ def grype_version(report: object) -> str:
     return str(value) if value else "not-recorded"
 
 
-def artifact_status(image_evidence_dir: Path, name: str) -> tuple[str, str]:
-    status_path = find_one(image_evidence_dir, f"{name}.status.json")
-    if status_path is None:
-        return ("not-present", "not-present")
-    status = load_json(status_path)
-    if not isinstance(status, dict):
-        raise ValueError(f"{status_path} must be an object")
-    return (
-        str(status.get("signing_status", "not-present")),
-        str(status.get("attestation_status", "not-present")),
-    )
-
-
-def assert_public_status(value: str, field: str, artifact: str) -> None:
-    if value not in STATUS_VALUES:
-        raise ValueError(f"{artifact} {field} has invalid value {value}")
-    if value == "unknown":
-        raise ValueError(f"{artifact} {field} must not be unknown in a public capsule")
-
-
 def parse_sha256s(path: Path) -> dict[str, str]:
     checksums: dict[str, str] = {}
     if not path.exists():
@@ -452,11 +431,7 @@ def render_capsule(
                 "name": path.name,
                 "path": str(path),
                 "sha256": verified_binary_sha256(path, checksums),
-                "signing_status": "not-present",
-                "attestation_status": "not-present",
             }
-            assert_public_status(binary["signing_status"], "signing_status", path.name)
-            assert_public_status(binary["attestation_status"], "attestation_status", path.name)
             binaries.append(binary)
 
         images = []
@@ -482,7 +457,6 @@ def render_capsule(
                 raise ValueError(f"{name} Grype report has no digest-bound subject")
             if subject not in {digest_ref, digest}:
                 raise ValueError(f"{name} Grype subject {subject} does not match digest ref {digest_ref}")
-            signing_status, attestation_status = artifact_status(image_evidence_dir, name)
             summary = severity_summary(grype_report)
             image = {
                 "name": name,
@@ -490,8 +464,6 @@ def render_capsule(
                 "digest": digest,
                 "tag": tag,
                 "tag_ref": f"{digest_ref.rsplit('@', 1)[0]}:{tag}",
-                "signing_status": signing_status,
-                "attestation_status": attestation_status,
                 "sbom": {
                     "asset_name": sbom.name,
                     "subject": digest_ref,
@@ -509,8 +481,6 @@ def render_capsule(
                     "sha256": sha256(grype),
                 },
             }
-            assert_public_status(image["signing_status"], "signing_status", name)
-            assert_public_status(image["attestation_status"], "attestation_status", name)
             images.append(image)
 
         errors, source = source_lineage(manifest, tag, repo, default_branch)
@@ -570,11 +540,11 @@ def capsule_markdown(evidence: dict) -> str:
         "",
     ]
     for binary in evidence["binaries"]:
-        lines.append(f"- `{binary['name']}` sha256 `{binary['sha256']}`; signing `{binary['signing_status']}`; attestation `{binary['attestation_status']}`")
+        lines.append(f"- `{binary['name']}` sha256 `{binary['sha256']}`")
     lines.extend(["", "## Images", ""])
     for image in evidence["images"]:
         scan = image["vulnerability_scan"]
-        lines.append(f"- `{image['name']}` tag `{image['tag_ref']}` digest `{image['digest_ref']}`; SBOM `{image['sbom']['asset_name']}`; Grype `{scan['asset_name']}`; signing `{image['signing_status']}`; attestation `{image['attestation_status']}`")
+        lines.append(f"- `{image['name']}` tag `{image['tag_ref']}` digest `{image['digest_ref']}`; SBOM `{image['sbom']['asset_name']}`; Grype `{scan['asset_name']}`")
     lines.extend(["", "## Caveats", ""])
     warnings = evidence.get("warnings") or []
     if warnings:

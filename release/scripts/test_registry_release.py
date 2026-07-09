@@ -172,7 +172,13 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual(1, len(evidence["binaries"]))
         self.assertEqual(1, len(evidence["images"]))
+        self.assertNotIn("signing_status", evidence["binaries"][0])
+        self.assertNotIn("attestation_status", evidence["binaries"][0])
+        self.assertNotIn("signing_status", evidence["images"][0])
+        self.assertNotIn("attestation_status", evidence["images"][0])
         self.assertIn("Release Trust Capsule", capsule_markdown)
+        self.assertNotIn("signing `", capsule_markdown)
+        self.assertNotIn("attestation `", capsule_markdown)
 
     def test_render_capsule_includes_cross_platform_binaries(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -211,7 +217,7 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("does not match digest ref", result.stderr)
 
-    def test_render_capsule_rejects_unknown_status(self) -> None:
+    def test_render_capsule_ignores_stale_status_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source_ref = init_release_repo(root)
@@ -222,10 +228,13 @@ class RegistryReleaseTest(unittest.TestCase):
                 json.dumps({"signing_status": "unknown", "attestation_status": "not-present"}),
                 encoding="utf-8",
             )
-            result = render_capsule(manifest, binary_dir, image_dir, root / "capsule.json", root / "capsule.md", root)
+            output_json = root / "capsule.json"
+            result = render_capsule(manifest, binary_dir, image_dir, output_json, root / "capsule.md", root)
+            evidence = json.loads(output_json.read_text(encoding="utf-8"))
 
-        self.assertNotEqual(0, result.returncode)
-        self.assertIn("must not be unknown", result.stderr)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertNotIn("signing_status", evidence["images"][0])
+        self.assertNotIn("attestation_status", evidence["images"][0])
 
     def test_render_capsule_rejects_missing_required_image_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
