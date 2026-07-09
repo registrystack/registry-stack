@@ -16,7 +16,16 @@
   chain whose first record is a hash-linked `audit.chain.break` event chained
   onto the last verifiable tail (torn trailing lines from an unclean stop are
   treated as a break, not an abort), and leaves off-host shipping as the
-  completeness guarantee.
+  completeness guarantee. Recovery also quarantines a legacy
+  `<active-path>.anchor.json` sidecar left behind by pre-removal releases,
+  renaming it with the same `.corrupt-<timestamp>` suffix as the quarantined
+  data files.
+- `registry-platform-ops`: `AuditSinkKind` and `audit_shipping_target(sink,
+  offhost_shipping_declared)`, a shared classifier that maps a sink kind and
+  the `deployment.evidence.audit_offhost_shipping` attestation onto the
+  posture/doctor shipping-state fields (`shipping_target_configured`,
+  `shipping_target`), so Registry Relay and Registry Notary cannot drift on
+  the classification.
 
 ### Changed
 
@@ -28,10 +37,29 @@
   configure 100 MB x 14 files) are unaffected; this change primarily protects
   the `registry-platform-sts` bridge binary, which uses the crate default.
 - `registry-platform-audit` chain verification now treats the first retained
-  record's `prev_hash` as the retained-set boundary. The crate no longer
-  exposes local trusted-anchor verification helpers; local verification proves
-  retained-set tamper evidence, while off-host shipping is the completeness
-  guarantee.
+  record's `prev_hash` as the retained-set boundary. **Removed the local
+  trusted-anchor verification API**: `ChainVerificationAnchors`,
+  `verify_chain_with_anchors`, `verify_jsonl_lines_with_anchors`, and the
+  `LastHashMismatch` error variant are gone, and the `.anchor.json`
+  completeness-anchor sidecar is no longer written or read. Consumers verify
+  retained-set internal consistency with `verify_chain`; completeness comes
+  from off-host shipping evidence
+  (`deployment.evidence.audit_offhost_shipping`), not a local anchor. Local
+  verification detects edits, insertions, reordering, and interior deletions
+  within the retained set only; leading or trailing truncation and a
+  self-consistent full rewrite of the retained set are not locally
+  detectable.
+- `registry-platform-ops`'s `registry.ops.posture.v1` schema:
+  `posture.audit` gains two required fields, `shipping_target_configured`
+  (bool) and `shipping_target` (one of `stdout`, `syslog`,
+  `declared_external`, `none`, `unknown`), reporting the sink type and the
+  off-host shipping attestation. These are declared, config-derived state,
+  not observed delivery health; there are deliberately no delivery-health
+  fields yet (that contract is an open decision). The schema is
+  `additionalProperties: false` and keeps the `v1` identifier, so posture
+  documents produced before this release fail against the new schema and
+  vice versa: producers and strict validators pinned to
+  `registry.ops.posture.v1` must upgrade together.
 
 ## v0.3.1 - 2026-06-21
 

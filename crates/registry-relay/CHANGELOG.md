@@ -30,6 +30,9 @@
   is configured. On an inconsistent chain the process stays up but `/ready`
   returns `503` with the stable code `audit.chain.inconsistent` until an
   operator runs `registry-relay audit quarantine`.
+- `registry-relay doctor`'s JSON report now carries an `audit_shipping`
+  object (`sink_type`, `shipping_target_configured`, `shipping_target`) when
+  the config parses, mirroring the posture `audit` shipping fields.
 
 ### Changed
 
@@ -48,6 +51,13 @@
   tail before writing. A second Relay process pointed at the same audit file
   fails at startup instead of silently interleaving writes and forking the
   hash chain, and a write that would extend a diverged chain fails closed.
+- BREAKING: A deployment waiver naming a hard (`startup_fail`-severity under
+  the active profile) deployment gate now fails config load instead of being
+  silently accepted and ignored at evaluation. Under `evidence_grade`,
+  `relay.audit.retention_local_only` is such a gate. Migration: remove the
+  waiver, then either ship audit events off-host and declare
+  `deployment.evidence.audit_offhost_shipping: true`, or switch to a
+  `stdout`/`syslog` sink.
 
 ## 0.8.4 - 2026-07-04
 

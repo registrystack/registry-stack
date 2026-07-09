@@ -25,7 +25,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exempt. Bound `finding_warn` under `production` and `startup_fail` under
   `evidence_grade`; unbound under `local` and `hosted_lab`. Operators can
   clear the finding by declaring `deployment.evidence.audit_offhost_shipping:
-  true` once audit events are shipped off-host.
+  true` once audit events are shipped off-host. `startup_fail` is a hard gate
+  and hard gates cannot be waived: a config carrying a `deployment.waivers`
+  entry for this finding under `evidence_grade` now fails to load
+  (`HardGateNotWaivable`). Migration: remove the waiver, then either ship
+  audit events off-host and declare
+  `deployment.evidence.audit_offhost_shipping: true`, or switch to a
+  `stdout`/`syslog` sink.
+- `registry-notary doctor`'s JSON report
+  (`registry.config.diagnostic_report.v1`) now carries an `audit_shipping`
+  object (`sink_type`, `shipping_target_configured`, `shipping_target`) when
+  the config parses, mirroring the posture `audit` shipping fields. The
+  existing "audit file/jsonl sink is local-chain-only" warning now fires only
+  when off-host shipping has not been declared.
 - Added `evidence.machine_quota`, a per-principal quota for machine
   `evaluate` and `batch_evaluate` traffic. The budget is counted in subjects
   (a single evaluate costs 1, a batch costs `items.len()`) over a fixed
