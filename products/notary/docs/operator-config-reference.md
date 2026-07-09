@@ -69,6 +69,7 @@ deployment:
       expires: 2026-09-30
   evidence:
     audit_offhost_shipping: true   # declares audit events are shipped off-host
+    signer_custody_approved: true  # explicit approval for all configured signing roles
 ```
 
 | Field | Purpose |
@@ -83,6 +84,7 @@ deployment:
 | Field | Purpose |
 | --- | --- |
 | `audit_offhost_shipping` | Operator asserts audit log events are shipped off-host (for example to a log aggregator or SIEM), so a local file sink does not cap retention. |
+| `signer_custody_approved` | Operator asserts a production review has approved custody for every key used by credential issuance, access-token issuance, or federation signing. Defaults to `false`. Provider kind alone is never treated as approval. |
 
 Profiles:
 
@@ -123,6 +125,7 @@ The gates bound for Registry Notary:
 | `notary.source_binding.no_matching_policy` | A claim source binding declares no matching policy (no `policy_id`, no context constraints), so resolution falls back to unrestricted, identifier-only matching | - | warn | error |
 | `notary.assisted_access.transaction_token_anchor_missing` | `self_attestation.enabled` is true (citizen or wallet flows) while `auth.access_token_signing` is not enabled | error | readiness_fail | startup_fail |
 | `notary.assisted_access.sender_constraint_missing` | `auth.access_token_signing` is enabled but the issued transaction token is not sender-constrained | warn | error | readiness_fail |
+| `notary.signer_custody.unapproved` | A key used by credential issuance, access-token issuance, or federation signing is configured without `deployment.evidence.signer_custody_approved` | - | readiness_fail | startup_fail |
 
 `notary.assisted_access.sender_constraint_missing` currently triggers whenever
 its anchor condition is met: DPoP or mTLS proof validation for transaction
@@ -130,6 +133,21 @@ tokens is not yet implemented, so no config makes a transaction token
 sender-constrained today. Enabling `auth.access_token_signing` for citizen or
 wallet flows always leaves this finding active under `production` and
 `evidence_grade`.
+
+`notary.signer_custody.unapproved` is not a waiver. It is cleared only when the
+operator declares `deployment.evidence.signer_custody_approved: true` after a
+production review of every custody-relevant key. `pkcs11` identifies an
+interface, not a hardware guarantee: the configured module can use an HSM or a
+software token such as SoftHSM, so Registry Notary never treats provider kind as
+approval.
+
+The public `/ready` response reports whether custody approval is required and
+declared, active provider-kind counts, local JWK/file provider counts, total
+unapproved signer counts, and per-surface counts for credential issuance,
+access-token issuance, and federation. It does not expose the deployment profile,
+the complete deployment-finding list, environment variable names, file paths,
+token labels, module paths, or key ids. Detailed findings remain available from
+authenticated operator posture and `registry-notary doctor`.
 
 ### Waivers
 

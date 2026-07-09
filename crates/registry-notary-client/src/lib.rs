@@ -82,8 +82,10 @@ pub use error::{
 pub use options::{RequestOptions, RetryAfter, RetryPolicy};
 pub use responses::{
     AdminReloadResponse, CredentialIssueResponse, CredentialStatusResponse,
-    CredentialStatusUpdateRequest, EvaluateResponse, Evaluation, FormatsResponse, HealthResponse,
-    ListClaimsResponse, NotaryResponse,
+    CredentialStatusUpdateRequest, EnabledSignerSurfaceChecks, EvaluateResponse, Evaluation,
+    FormatsResponse, HealthResponse, ListClaimsResponse, NotaryResponse, ReadinessChecks,
+    ReadinessResponse, SignerCustodyChecks, SignerCustodySurfaces, SignerSurfaceChecks,
+    SigningProviderReadinessChecks,
 };
 #[cfg(feature = "verifier")]
 pub use verifier::{HolderBindingPolicy, VerificationError, VerifiedCredential, VerifyOptions};

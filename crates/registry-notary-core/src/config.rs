@@ -600,16 +600,21 @@ impl StandaloneRegistryNotaryConfig {
                     .values()
                     .any(|binding| binding.matching.lacks_matching_policy())
             }),
+            signer_without_custody_approval: !self.deployment.evidence.signer_custody_approved
+                && self.custody_scoped_signing_key_ids().iter().any(|key_id| {
+                    self.evidence
+                        .signing_keys
+                        .get(*key_id)
+                        .is_some_and(|key| key.status.may_sign())
+                }),
         }
     }
 
-    /// Signing-key ids whose resolved public material must not be shared, per
-    /// issue #173. These are the separated signing roles: every credential
-    /// profile signing key, the access-token signing key (when enabled), and the
-    /// federation signing key (when enabled). The eSignet pre-authorized-code RP
-    /// client key is intentionally excluded: it is a separate role that is
-    /// allowed to reuse the credential issuer's key material.
-    pub fn reuse_scoped_signing_key_ids(&self) -> HashSet<&str> {
+    /// Signing-key ids used to issue credentials or access tokens, or to sign
+    /// federation responses. These are the custody-relevant Notary roles. The
+    /// eSignet RP client key is intentionally excluded because it signs an
+    /// outbound client assertion rather than a Notary-issued artifact.
+    pub fn custody_scoped_signing_key_ids(&self) -> HashSet<&str> {
         let mut scoped: HashSet<&str> = self
             .evidence
             .credential_profiles
@@ -629,6 +634,16 @@ impl StandaloneRegistryNotaryConfig {
             }
         }
         scoped
+    }
+
+    /// Signing-key ids whose resolved public material must not be shared, per
+    /// issue #173. These are the separated signing roles: every credential
+    /// profile signing key, the access-token signing key (when enabled), and the
+    /// federation signing key (when enabled). The eSignet pre-authorized-code RP
+    /// client key is intentionally excluded: it is a separate role that is
+    /// allowed to reuse the credential issuer's key material.
+    pub fn reuse_scoped_signing_key_ids(&self) -> HashSet<&str> {
+        self.custody_scoped_signing_key_ids()
     }
 
     /// Confine ES256 signing keys to credential profiles and confine RS256 to
@@ -4387,6 +4402,19 @@ fn source_connection_uses_insecure_url(connection: &SourceConnectionConfig) -> b
         && !connection.allow_insecure_private_network
 }
 
+pub fn signing_provider_uses_local_software_custody(provider: SigningKeyProviderConfig) -> bool {
+    matches!(
+        provider,
+        SigningKeyProviderConfig::LocalJwkEnv
+            | SigningKeyProviderConfig::FileWatch
+            | SigningKeyProviderConfig::LocalPkcs12File
+    )
+}
+
+pub fn signing_key_uses_local_software_custody(key: &SigningKeyConfig) -> bool {
+    key.status.may_sign() && signing_provider_uses_local_software_custody(key.provider)
+}
+
 pub fn deprecated_config_fields() -> Vec<DeprecatedConfigField> {
     vec![
         DeprecatedConfigField::renamed("auth.oidc.jwks_uri", "auth.oidc.jwks_url"),
@@ -6853,6 +6881,8 @@ auth:
         assert!(!input.admin_shared_exposure);
         // OpenAPI requires auth by default.
         assert!(!input.openapi_public);
+        // An active but unreferenced key is not a Notary signing role.
+        assert!(!input.signer_without_custody_approval);
     }
 
     #[test]
@@ -6889,6 +6919,40 @@ auth:
         config.audit.sink = "file".to_string();
         config.deployment.evidence.audit_offhost_shipping = true;
         assert!(!config.gate_input().audit_retention_local_only);
+    }
+
+    #[test]
+    fn gate_input_requires_custody_approval_for_referenced_signer() {
+        let mut config = minimal_config();
+        config.auth.access_token_signing.enabled = true;
+        config.auth.access_token_signing.signing_key_id = "issuer-key".to_string();
+
+        assert!(config.gate_input().signer_without_custody_approval);
+    }
+
+    #[test]
+    fn gate_input_does_not_treat_pkcs11_as_custody_approval() {
+        let mut config = minimal_config();
+        config.auth.access_token_signing.enabled = true;
+        config.auth.access_token_signing.signing_key_id = "issuer-key".to_string();
+        config
+            .evidence
+            .signing_keys
+            .get_mut("issuer-key")
+            .expect("issuer key exists")
+            .provider = SigningKeyProviderConfig::Pkcs11;
+
+        assert!(config.gate_input().signer_without_custody_approval);
+    }
+
+    #[test]
+    fn gate_input_clears_signer_custody_when_approved() {
+        let mut config = minimal_config();
+        config.auth.access_token_signing.enabled = true;
+        config.auth.access_token_signing.signing_key_id = "issuer-key".to_string();
+        config.deployment.evidence.signer_custody_approved = true;
+
+        assert!(!config.gate_input().signer_without_custody_approval);
     }
 
     #[test]

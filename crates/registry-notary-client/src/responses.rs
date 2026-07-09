@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Client-owned response types and ergonomic wrappers.
 
-use std::fmt;
+use std::{collections::BTreeMap, fmt};
 
 use registry_notary_core::{BatchEvaluateResponse, ClaimResultView};
 use reqwest::StatusCode;
@@ -123,13 +123,104 @@ pub struct AdminReloadResponse {
     pub detail: String,
 }
 
-/// Health or readiness response body.
+/// Health response body.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HealthResponse {
     /// Overall status.
     pub status: String,
     /// Service-specific checks.
     pub checks: serde_json::Value,
+}
+
+/// Readiness response body.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReadinessResponse {
+    /// Overall readiness status.
+    pub status: String,
+    /// Readiness checks, including signer-custody facts.
+    pub checks: ReadinessChecks,
+}
+
+/// Aggregate readiness checks returned on both success and failure.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReadinessChecks {
+    /// Total number of readiness checks.
+    pub total: usize,
+    /// Checks that are ready.
+    pub ok: usize,
+    /// Checks that are serving with reduced assurance.
+    pub degraded: usize,
+    /// Checks that are not ready.
+    pub failed: usize,
+    /// Signing-provider health and custody facts.
+    pub signing_providers: SigningProviderReadinessChecks,
+}
+
+/// Runtime signer health and custody checks.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SigningProviderReadinessChecks {
+    /// Active signing providers checked by the runtime.
+    pub total: usize,
+    /// Signing providers that are ready.
+    pub ok: usize,
+    /// Signing providers that are not ready.
+    pub failed: usize,
+    /// Custody facts for configured signing roles.
+    pub custody: SignerCustodyChecks,
+}
+
+/// Public, non-secret signer-custody facts.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SignerCustodyChecks {
+    /// Active provider kinds and their counts.
+    pub active_provider_counts: BTreeMap<String, usize>,
+    /// Distinct providers bound to custody-relevant signing roles.
+    pub signing_provider_count: usize,
+    /// Custody-relevant providers using local JWK or file material.
+    pub local_software_signing_provider_count: usize,
+    /// Whether the deployment profile requires explicit custody approval.
+    pub custody_approval_required: bool,
+    /// Whether the operator declared that custody review has approved the signers.
+    pub custody_approved: bool,
+    /// Custody-relevant providers not covered by approval.
+    pub unapproved_signing_provider_count: usize,
+    /// Counts grouped by signing surface.
+    pub surfaces: SignerCustodySurfaces,
+}
+
+/// Signer-custody facts grouped by Notary signing surface.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SignerCustodySurfaces {
+    /// Credential issuance signer facts.
+    pub credential_issuance: SignerSurfaceChecks,
+    /// Access-token issuance signer facts.
+    pub access_token_issuance: EnabledSignerSurfaceChecks,
+    /// Federation response signer facts.
+    pub federation: EnabledSignerSurfaceChecks,
+}
+
+/// Signer counts for an always-available signing surface.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SignerSurfaceChecks {
+    /// Distinct signing providers used by the surface.
+    pub signing_provider_count: usize,
+    /// Surface providers using local JWK or file material.
+    pub local_software_signing_provider_count: usize,
+    /// Surface providers not covered by custody approval.
+    pub unapproved_signing_provider_count: usize,
+}
+
+/// Signer counts for an optional signing surface.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EnabledSignerSurfaceChecks {
+    /// Whether the optional surface is enabled.
+    pub enabled: bool,
+    /// Distinct signing providers used by the surface.
+    pub signing_provider_count: usize,
+    /// Surface providers using local JWK or file material.
+    pub local_software_signing_provider_count: usize,
+    /// Surface providers not covered by custody approval.
+    pub unapproved_signing_provider_count: usize,
 }
 
 impl_safe_debug!(
@@ -140,6 +231,13 @@ impl_safe_debug!(
     CredentialStatusResponse,
     AdminReloadResponse,
     HealthResponse,
+    ReadinessResponse,
+    ReadinessChecks,
+    SigningProviderReadinessChecks,
+    SignerCustodyChecks,
+    SignerCustodySurfaces,
+    SignerSurfaceChecks,
+    EnabledSignerSurfaceChecks,
     BatchEvaluateResponse,
     serde_json::Value,
     String,
