@@ -40,10 +40,24 @@ if ! git rev-parse --verify "$BASE_REF^{commit}" >/dev/null 2>&1; then
     exit 1
 fi
 
-if ! git cat-file -e "$BASE_REF:$SPEC_PATH" 2>/dev/null; then
+# git's <rev>:<path> object syntax resolves <path> relative to the repo
+# root, not the current working directory. Compute the repo-root-relative
+# form of SPEC_PATH and verify it points at the same file before trusting
+# git's answer for whether that path exists at BASE_REF: a wrong
+# computation must fail loudly here, not be read as "genuinely absent at
+# the base ref" later.
+REPO_PREFIX="$(git rev-parse --show-prefix)"
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+SPEC_PATH_FROM_ROOT="${REPO_PREFIX}${SPEC_PATH}"
+if [[ ! "$REPO_ROOT/$SPEC_PATH_FROM_ROOT" -ef "$SPEC_PATH" ]]; then
+    echo "failed to resolve repo-root-relative path for '$SPEC_PATH' (got '$SPEC_PATH_FROM_ROOT'); refusing to run base-ref comparison" >&2
+    exit 1
+fi
+
+if ! git cat-file -e "$BASE_REF:$SPEC_PATH_FROM_ROOT" 2>/dev/null; then
     echo "OpenAPI spec did not exist at '$BASE_REF'; skipped breaking-change diff"
     exit 0
 fi
 
-git show "$BASE_REF:$SPEC_PATH" > "$BASELINE"
+git show "$BASE_REF:$SPEC_PATH_FROM_ROOT" > "$BASELINE"
 oasdiff breaking --fail-on ERR "$BASELINE" "$GENERATED"
