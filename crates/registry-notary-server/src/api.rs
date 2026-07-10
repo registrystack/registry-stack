@@ -4260,7 +4260,19 @@ async fn issue_credential(
     let mut principal =
         match classify_self_attestation_principal(&state.self_attestation, &principal) {
             Ok(principal) => principal,
-            Err(error) => return credential_denial_response_without_evaluation(error),
+            Err(error) => {
+                let denial_code = denial_code_from_error(&error);
+                let mut response = evidence_error_response(error);
+                attach_self_attestation_audit(
+                    &mut response,
+                    "credential_denied",
+                    &[],
+                    denial_code,
+                    Some(state.self_attestation.subject_binding.token_claim.as_str()),
+                );
+                attach_zero_source_no_forward_audit(&mut response);
+                return response;
+            }
         };
     let evaluation = match state.store.get(&request.evaluation_id) {
         Some(evaluation) => evaluation,
