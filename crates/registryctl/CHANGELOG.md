@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Generated local Relay and Notary configs now declare `deployment.profile: local`,
+  preserving fail-closed profile validation while allowing new projects to start.
+
 ## [0.8.4] - 2026-07-04
 
 ### Added
