@@ -1890,6 +1890,7 @@ fn fallback_product_report(
         diagnostics,
         required_env: Vec::new(),
         context_constraints: Vec::new(),
+        audit_shipping: None,
         hashes: None,
         generated_at: generated_at.to_string(),
     }
@@ -7481,6 +7482,57 @@ workflows:
             json["products"][0]["report"]["diagnostics"][0]["code"],
             "deployment.profile_undeclared"
         );
+    }
+
+    #[test]
+    fn doctor_carries_audit_shipping_section_through_typed_aggregation() {
+        // registryctl deserializes each product's doctor JSON into
+        // ConfigDiagnosticReport and re-serializes it into the aggregated
+        // report. If the struct doesn't model audit_shipping, this section is
+        // silently dropped even though the product emitted it.
+        let temp = TempDir::new().unwrap();
+        let project_dir = temp.path().join("my-first-api");
+        init_spreadsheet_api(&project_dir, Sample::Benefits).unwrap();
+        let product_json = serde_json::json!({
+            "schema_version": "registry.config.diagnostic_report.v1",
+            "product": "registry-relay",
+            "config_schema_version": "registry.relay.config.v1",
+            "source": {"kind": "generated_file", "path": "relay/config.yaml"},
+            "status": "ok",
+            "summary": {"error_count": 0, "warning_count": 0},
+            "diagnostics": [],
+            "context_constraints": [],
+            "audit_shipping": {
+                "sink_type": "file",
+                "shipping_target_configured": true,
+                "shipping_target": "declared_external",
+                "shipping_health": "stale",
+                "shipping_observed_at": "2026-06-19T23:00:00Z"
+            },
+            "generated_at": "2026-06-20T00:00:00Z"
+        })
+        .to_string();
+        let fake_bin = temp.path().join("bin");
+        fs::create_dir_all(&fake_bin).unwrap();
+        write_fake_product(
+            &fake_bin.join("registry-relay"),
+            &format!(
+                "printf '%s\\n' {}\nexit 0\n",
+                shell_single_quoted(&product_json)
+            ),
+        );
+
+        let report =
+            run_doctor_report_with_path(&project_dir, DoctorFormat::Json, None, Some(&fake_bin))
+                .unwrap();
+        let json = serde_json::to_value(&report).unwrap();
+
+        let shipping = &json["products"][0]["report"]["audit_shipping"];
+        assert_eq!(shipping["sink_type"], "file");
+        assert_eq!(shipping["shipping_target_configured"], true);
+        assert_eq!(shipping["shipping_target"], "declared_external");
+        assert_eq!(shipping["shipping_health"], "stale");
+        assert_eq!(shipping["shipping_observed_at"], "2026-06-19T23:00:00Z");
     }
 
     #[test]

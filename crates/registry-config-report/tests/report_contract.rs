@@ -232,6 +232,44 @@ fn serde_types_round_trip_canonical_fixtures() {
 }
 
 #[test]
+fn diagnostic_report_round_trip_preserves_audit_shipping_section() {
+    // The canonical fixtures all carry a populated audit_shipping section.
+    // Decoding into the typed ConfigDiagnosticReport and re-encoding must not
+    // silently drop it (a prior gap: the struct didn't model the field, so
+    // registryctl's doctor aggregation lost it on re-serialization).
+    for fixture in [
+        RELAY_DIAGNOSTIC_OK_FIXTURE_V1,
+        RELAY_DIAGNOSTIC_ERROR_FIXTURE_V1,
+        NOTARY_DIAGNOSTIC_OK_FIXTURE_V1,
+        NOTARY_DIAGNOSTIC_ERROR_FIXTURE_V1,
+    ] {
+        let original = parse(fixture);
+        let decoded: ConfigDiagnosticReport = decode(fixture);
+        let encoded = serde_json::to_value(&decoded).expect("report re-encodes");
+        assert_eq!(
+            encoded["audit_shipping"], original["audit_shipping"],
+            "audit_shipping section must survive a typed decode/encode round trip"
+        );
+    }
+}
+
+#[test]
+fn serde_reports_omit_absent_audit_shipping_to_preserve_schema_contract() {
+    // audit_shipping is OPTIONAL on the wire: a report that never populates it
+    // (e.g. registryctl's fallback report when a product binary can't be run)
+    // must serialize without the key at all, not as an explicit null.
+    let mut report: ConfigDiagnosticReport =
+        serde_json::from_str(RELAY_DIAGNOSTIC_OK_FIXTURE_V1).expect("fixture decodes");
+    report.audit_shipping = None;
+    let json = serde_json::to_value(&report).expect("report serializes");
+    assert!(
+        json.get("audit_shipping").is_none(),
+        "absent audit_shipping must be omitted, not null"
+    );
+    assert_valid(PRODUCT_DIAGNOSTIC_REPORT_SCHEMA_V1, &json);
+}
+
+#[test]
 fn serde_reports_omit_empty_hashes_to_preserve_schema_contract() {
     let empty_hashes = ConfigHashes {
         internal_config_hash: None,
