@@ -31,25 +31,25 @@ docsets:
     products:
       registry-stack:
         version: v0.9.0
-        ref: 705ed0b33490f0494cc60eb4786093e364000b4f
+        ref: 89b6a69981fb9b67f1158a5ef7f404dc01e0f23c
       registry-platform:
         version: v0.9.0
-        ref: 705ed0b33490f0494cc60eb4786093e364000b4f
+        ref: 89b6a69981fb9b67f1158a5ef7f404dc01e0f23c
       registry-manifest:
         version: v0.9.0
-        ref: 705ed0b33490f0494cc60eb4786093e364000b4f
+        ref: 89b6a69981fb9b67f1158a5ef7f404dc01e0f23c
       registry-notary:
         version: v0.9.0
-        ref: 705ed0b33490f0494cc60eb4786093e364000b4f
+        ref: 89b6a69981fb9b67f1158a5ef7f404dc01e0f23c
       registry-relay:
         version: v0.9.0
-        ref: 705ed0b33490f0494cc60eb4786093e364000b4f
+        ref: 89b6a69981fb9b67f1158a5ef7f404dc01e0f23c
       registry-lab:
         version: v0.9.0
-        ref: 705ed0b33490f0494cc60eb4786093e364000b4f
+        ref: 89b6a69981fb9b67f1158a5ef7f404dc01e0f23c
       registry-registryctl:
         version: v0.9.0
-        ref: 705ed0b33490f0494cc60eb4786093e364000b4f
+        ref: 89b6a69981fb9b67f1158a5ef7f404dc01e0f23c
       crosswalk:
         version: crosswalk-core-v0.2.0
         ref: 1d44ec735fdc8a7c719264b339574371e8330337
