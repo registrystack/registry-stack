@@ -1166,10 +1166,11 @@ fn update_notice(current_version: &str, latest_tag: &str) -> Option<String> {
     if latest <= current {
         return None;
     }
-    let install_script =
-        format!("{REGISTRYCTL_RAW_REPOSITORY}/{latest_tag}/crates/registryctl/install.sh");
+    let install_script = format!(
+        "{REGISTRYCTL_RAW_REPOSITORY}/refs/tags/{latest_tag}/crates/registryctl/install.sh"
+    );
     Some(format!(
-        "registryctl {latest_tag} is available. You have {}.\nThe quick installer verifies SHA256 integrity only. For canonical release authenticity guidance, see:\n  {REGISTRYCTL_VERIFY_GUIDE}\nUpgrade with:\n  curl -fsSL {install_script} | REGISTRYCTL_VERSION={latest_tag} sh",
+        "registryctl {latest_tag} is available. You have {}.\nThe quick installer verifies SHA256 integrity only. For canonical release authenticity guidance, see:\n  {REGISTRYCTL_VERIFY_GUIDE}\nUpgrade with:\n  curl -fsSL {install_script} | REGISTRYCTL_VERSION={latest_tag} bash",
         display_version(current_version),
     ))
 }
@@ -5405,7 +5406,7 @@ mod tests {
     }
 
     #[test]
-    fn update_notice_uses_exact_tag_pinned_installer_url_and_env_on_sh() {
+    fn update_notice_uses_explicit_tag_ref_and_env_on_bash() {
         let notice = update_notice("0.1.0", "v0.2.0").unwrap();
 
         assert!(notice.contains("registryctl v0.2.0 is available"));
@@ -5413,11 +5414,14 @@ mod tests {
         assert_eq!(
             notice.lines().last(),
             Some(
-                "  curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/v0.2.0/crates/registryctl/install.sh | REGISTRYCTL_VERSION=v0.2.0 sh"
+                "  curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/refs/tags/v0.2.0/crates/registryctl/install.sh | REGISTRYCTL_VERSION=v0.2.0 bash"
             )
         );
         assert!(!notice.contains(
             "https://raw.githubusercontent.com/registrystack/registry-stack/main/crates/registryctl/install.sh"
+        ));
+        assert!(!notice.contains(
+            "https://raw.githubusercontent.com/registrystack/registry-stack/v0.2.0/crates/registryctl/install.sh"
         ));
         assert!(!notice.contains("REGISTRYCTL_VERSION=v0.2.0 curl"));
     }

@@ -5,7 +5,7 @@
 Install a pinned release without cloning this repo:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/v0.8.4/crates/registryctl/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/refs/tags/v0.8.4/crates/registryctl/install.sh | bash
 ```
 
 The quick installer verifies the downloaded binary against `SHA256SUMS` only.
@@ -52,7 +52,7 @@ The installer defaults to `v0.8.4`. To install a different pinned release, set
 `REGISTRYCTL_VERSION`:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/v0.8.4/crates/registryctl/install.sh | REGISTRYCTL_VERSION=vX.Y.Z sh
+curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/refs/tags/v0.8.4/crates/registryctl/install.sh | REGISTRYCTL_VERSION=vX.Y.Z bash
 ```
 
 The installer still fetches the script from `v0.8.4`; `REGISTRYCTL_VERSION`

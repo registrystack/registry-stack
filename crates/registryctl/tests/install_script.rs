@@ -9,7 +9,7 @@ fn installer_rejects_shell_active_and_noncanonical_release_tags() {
     let hostile = "v999.0.0-$(touch${IFS}/tmp/registryctl-owned)";
 
     for version in [hostile, "latest", "v1.2.3-rc1", "v01.2.3"] {
-        let output = Command::new("sh")
+        let output = Command::new("bash")
             .arg(&installer)
             .env("REGISTRYCTL_VERSION", version)
             .output()
