@@ -33,6 +33,22 @@ class GateInventoryTest(unittest.TestCase):
         text = self.workflow.replace("name: Relay exposure check", "name: Relay exposure")
         self.assertIn("Relay exposure check", self.module.missing_gates(text))
 
+    def test_missing_registryctl_tutorial_execution_is_reported(self) -> None:
+        text = self.workflow.replace(
+            "run: npm run check:tutorial:registryctl",
+            "run: npm run execute-registryctl-tutorial",
+        )
+        self.assertIn(
+            "Registryctl tutorial source execution", self.module.missing_gates(text)
+        )
+
+    def test_missing_registryctl_tutorial_path_filter_is_reported(self) -> None:
+        text = self.workflow.replace(
+            "registryctl_tutorial: ${{ steps.filter.outputs.registryctl_tutorial }}",
+            "registryctl_tutorial_disabled: ${{ steps.filter.outputs.registryctl_tutorial }}",
+        )
+        self.assertIn("Registryctl tutorial path filter", self.module.missing_gates(text))
+
 
 if __name__ == "__main__":
     unittest.main()

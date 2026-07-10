@@ -7,11 +7,11 @@
 # "## Verify" sections and executing them, in order, against a Solmara Lab
 # checkout.
 #
-# Also drift-checks the registryctl tutorials (publish-spreadsheet,
-# verify-claim-registry-api) by extracting every `sh`
-# fence and asserting the command-line count. Those tutorials are
-# execution-verified manually (they need registryctl and a workstation); the
-# count assertion makes silent command additions or removals fail CI.
+# Also applies the cheap drift pre-gate to the registryctl tutorials
+# (publish-spreadsheet, verify-claim-registry-api) by extracting every `sh`
+# fence and asserting the command-line count. The dedicated source-under-test
+# runner in check-registryctl-tutorials.sh executes those commands in CI; this
+# count assertion fails before that more expensive container build starts.
 #
 # Usage:
 #   scripts/check-tutorial.sh              extract + execute (needs Docker)
