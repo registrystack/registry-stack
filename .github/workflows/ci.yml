@@ -23,6 +23,7 @@ jobs:
       release_tool: ${{ steps.filter.outputs.release_tool }}
       release_source_proof: ${{ steps.filter.outputs.release_source_proof }}
       docs: ${{ steps.filter.outputs.docs }}
+      registryctl_tutorial: ${{ steps.filter.outputs.registryctl_tutorial }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -39,6 +40,7 @@ jobs:
           release_tool=false
           release_source_proof=false
           docs=false
+          registryctl_tutorial=false
           all=false
 
           if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
@@ -57,6 +59,7 @@ jobs:
             release_tool=true
             release_source_proof=true
             docs=true
+            registryctl_tutorial=true
           }
 
           changed_files="${RUNNER_TEMP}/registry-stack-changed-files"
@@ -97,6 +100,11 @@ jobs:
                   docs=true
                   ;;
               esac
+              case "${path}" in
+                Cargo.toml|Cargo.lock|rust-toolchain*|LICENSE|docs/site/package.json|docs/site/package-lock.json|docs/site/scripts/check-registryctl-tutorials.sh|docs/site/scripts/registryctl-tutorial.*|docs/site/src/content/docs/tutorials/publish-spreadsheet-secured-registry-api.mdx|docs/site/src/content/docs/tutorials/verify-claim-registry-api.mdx|crates/registry-config-report/*|crates/registry-manifest-*/*|crates/registry-notary/*|crates/registry-notary-*/*|crates/registry-platform-*/*|crates/registry-relay/*|crates/registryctl/*|products/notary/*|release/docker/Dockerfile.registry-notary|release/docker/Dockerfile.registry-relay)
+                  registryctl_tutorial=true
+                  ;;
+              esac
             done < "${changed_files}"
           fi
 
@@ -105,6 +113,7 @@ jobs:
             echo "release_tool=${release_tool}"
             echo "release_source_proof=${release_source_proof}"
             echo "docs=${docs}"
+            echo "registryctl_tutorial=${registryctl_tutorial}"
           } >> "${GITHUB_OUTPUT}"
 
   rust:
@@ -219,6 +228,58 @@ jobs:
 
       - name: Test source model checker
         run: python3 -m unittest release/scripts/test_check_release_source_model.py
+
+  registryctl-tutorials:
+    name: registryctl tutorials from source
+    needs: changes
+    if: needs.changes.outputs.registryctl_tutorial == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Assert amd64 runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(uname -m)" == "x86_64" ]]
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 22.12.0
+          cache: npm
+          cache-dependency-path: docs/site/package-lock.json
+
+      - name: Install docs dependencies
+        working-directory: docs/site
+        run: npm ci
+
+      - name: Test registryctl tutorial helpers
+        working-directory: docs/site
+        run: npm run test:tutorial:registryctl
+
+      - name: Check tutorial command counts
+        working-directory: docs/site
+        run: npm run check:tutorial:dry-run
+
+      - name: Cache source-under-test Cargo build
+        uses: actions/cache@2c8a9bd7457de244a408f35966fab2fb45fda9c8
+        with:
+          path: |
+            target/registryctl-tutorial-cargo-home
+            target/registryctl-tutorial-linux-amd64
+          key: registryctl-tutorial-${{ runner.os }}-rust-1.95.0-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            registryctl-tutorial-${{ runner.os }}-rust-1.95.0-
+
+      - name: Execute registryctl tutorials from source
+        working-directory: docs/site
+        run: npm run check:tutorial:registryctl
 
   docs:
     name: Docs
