@@ -1157,12 +1157,8 @@ fn registryctl_release_http_error(error: ureq::Error) -> anyhow::Error {
 }
 
 fn update_notice(current_version: &str, latest_tag: &str) -> Option<String> {
-    let Some(current) = VersionNumber::parse(current_version) else {
-        return None;
-    };
-    let Some(latest) = VersionNumber::parse_release_tag(latest_tag) else {
-        return None;
-    };
+    let current = VersionNumber::parse(current_version)?;
+    let latest = VersionNumber::parse_release_tag(latest_tag)?;
     if latest <= current {
         return None;
     }
