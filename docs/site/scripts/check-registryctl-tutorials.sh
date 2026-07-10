@@ -201,10 +201,14 @@ registryctl() {
 	if ((status == 0)); then
 		if [[ "${1:-}" == "init" && "${2:-}" == "relay" && -n "${3:-}" ]]; then
 			project_dir="$PWD/$3"
-			rebind_project "$project_dir"
+			if ! rebind_project "$project_dir"; then
+				return 1
+			fi
 			CURRENT_SECRET_FILE="$project_dir/secrets/local.env"
 		elif [[ "${1:-}" == "add" && "${2:-}" == "notary" ]]; then
-			rebind_project "$PWD"
+			if ! rebind_project "$PWD"; then
+				return 1
+			fi
 			CURRENT_SECRET_FILE="$PWD/secrets/local.env"
 		fi
 	fi
