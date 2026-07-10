@@ -79,9 +79,8 @@ or the [Registry Notary operator configuration reference](../../products/registr
   for any period during which older records must remain comparable to new ones, or accept that new
   records will not match old audit handles.
 - Hash-chained envelopes (`prev_hash`, `record_hash`) detect ordering gaps and accidental
-  corruption, but they do not protect against an actor who can rewrite the audit sink itself. Use
-  an append-only external sink or independent tail-hash anchoring when you need stronger integrity
-  than the envelope alone provides.
+  corruption inside the retained set, but they do not prove that every historical audit record
+  remains present. Use off-host audit shipping when completeness matters.
 
 ## Transport and edge
 

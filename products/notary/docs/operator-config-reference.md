@@ -69,6 +69,8 @@ deployment:
       expires: 2026-09-30
   evidence:
     audit_offhost_shipping: true   # declares audit events are shipped off-host
+    audit_ack_cursor_path: /var/lib/registry-notary/audit-ack-cursor.json # local state file the shipper updates
+    audit_ack_max_age_secs: 900    # how old acked_at may get before the cursor reads as stale
     signer_custody_approved: true  # explicit approval for all configured signing roles
 ```
 
@@ -84,6 +86,8 @@ deployment:
 | Field | Purpose |
 | --- | --- |
 | `audit_offhost_shipping` | Operator asserts audit log events are shipped off-host (for example to a log aggregator or SIEM), so a local file sink does not cap retention. |
+| `audit_ack_cursor_path` | Path to the local state file an off-host audit shipper writes on each successful hand-off (the `registry.audit.ack_cursor.v1` contract: `acked_at`, `last_acked_hash`, an optional `writer`). An *observed* freshness signal layered on top of the `audit_offhost_shipping` declaration. Setting it without `audit_offhost_shipping` declared on a local file sink fails config load. |
+| `audit_ack_max_age_secs` | How old the cursor's `acked_at` may get before it reads as stale. Defaults to 900 seconds. Setting it without `audit_ack_cursor_path` fails config load. |
 | `signer_custody_approved` | Operator asserts a production review has approved custody for every key used by credential issuance, access-token issuance, or federation signing. Defaults to `false`. Provider kind alone is never treated as approval. |
 
 Profiles:
@@ -105,7 +109,7 @@ Each gate evaluates to one of four severities under the declared profile:
 | Severity | Effect |
 | --- | --- |
 | `startup_fail` | The process refuses to start. Never waivable. |
-| `readiness_fail` | The readiness endpoint reports not-ready; the process runs. |
+| `readiness_fail` | The readiness endpoint reports not-ready; the process runs. Never waivable. |
 | `finding_error` | A posture finding, error class. |
 | `finding_warn` | A posture finding, warn class. |
 
@@ -115,7 +119,9 @@ The gates bound for Registry Notary:
 | --- | --- | --- | --- | --- |
 | `notary.replay.in_memory_high_risk` | In-memory replay while federation, OID4VCI pre-authorized code, holder proof, wallet traffic, or `multi_instance` is declared | error | readiness_fail | startup_fail |
 | `notary.audit.sink_missing` | No durable, retained audit sink | error | startup_fail | startup_fail |
-| `notary.audit.retention_local_only` | Audit sink is `file` or `jsonl` and `deployment.evidence.audit_offhost_shipping` is not declared. `stdout` and `syslog` are exempt. | n/a | warn | error |
+| `notary.audit.retention_local_only` | Audit sink is `file` or `jsonl` and `deployment.evidence.audit_offhost_shipping` is not declared. `stdout` and `syslog` are exempt. | n/a | warn | startup_fail |
+| `notary.audit.shipping_unverified` | Off-host shipping is declared for a `file` or `jsonl` sink but no `deployment.evidence.audit_ack_cursor_path` is configured, so shipping is asserted but not observed. `stdout` and `syslog` are exempt. | n/a | warn | warn |
+| `notary.audit.shipping_stale` | An ack cursor is configured but its observed health is not `ok` (missing, unreadable, malformed, or older than `deployment.evidence.audit_ack_max_age_secs`) | n/a | error | readiness_fail |
 | `notary.source.insecure_url` | Source connection over a plain `http://` URL with no localhost or private-network allowance | error | readiness_fail | startup_fail |
 | `notary.source.private_network_escape` | A source enables the private-network escape hatch | warn | error | error |
 | `notary.sidecar.expected_sidecar_missing` | A source-adapter source omits `expected_sidecar` | warn | error | readiness_fail |
@@ -155,8 +161,9 @@ A waiver names exactly one finding id, a free-text reason, and a mandatory
 `expires` date (`YYYY-MM-DD`). While active, a waiver changes a triggered
 finding's status to `waived` in posture instead of applying its severity effect.
 
-- `startup_fail` gates are never waivable. A waiver for one is rejected at config
-  load, because running at all would falsify the declared profile.
+- `startup_fail` and `readiness_fail` gates are never waivable. A waiver for one
+  is rejected at config load, because running (or reporting ready) would falsify
+  the declared profile.
 - An expired waiver stops suppressing its finding and additionally raises
   `deployment.waiver_expired` in posture, so lapsed approvals surface rather than
   silently persisting.

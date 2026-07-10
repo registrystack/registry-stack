@@ -2,16 +2,17 @@
 //! Redacted Registry Ops posture for standalone Registry Notary.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::SystemTime;
 
 use registry_notary_core::{
-    BulkMode, CredentialStatusConfig, EvidenceAuditConfig, SelfAttestationConfig,
-    SelfAttestationRateLimitMode, SigningKeyStatus, StandaloneRegistryNotaryConfig,
-    CREDENTIAL_STATUS_STORAGE_REDIS, MAX_BEARER_PRE_AUTHORIZED_CODE_TTL_SECONDS,
-    REPLAY_STORAGE_IN_MEMORY, REPLAY_STORAGE_REDIS,
+    BulkMode, CredentialStatusConfig, DeploymentEvidenceConfig, EvidenceAuditConfig,
+    SelfAttestationConfig, SelfAttestationRateLimitMode, SigningKeyStatus,
+    StandaloneRegistryNotaryConfig, CREDENTIAL_STATUS_STORAGE_REDIS,
+    MAX_BEARER_PRE_AUTHORIZED_CODE_TTL_SECONDS, REPLAY_STORAGE_IN_MEMORY, REPLAY_STORAGE_REDIS,
 };
 use registry_platform_ops::{
-    filter_posture_for_tier, override_pin_posture, posture_safe_runtime_config_hash,
-    PostureFilterError, PostureTier,
+    audit_shipping_target, evaluate_ack_health, filter_posture_for_tier, override_pin_posture,
+    posture_safe_runtime_config_hash, AuditSinkKind, PostureFilterError, PostureTier,
 };
 use serde_json::{json, Map, Value};
 use time::OffsetDateTime;
@@ -52,6 +53,14 @@ struct InstancePosture {
 struct AuditPosture {
     sink: String,
     configured: bool,
+    shipping_target_configured: bool,
+    shipping_target: String,
+    /// Observed off-host shipping freshness from the local ack cursor. `None`
+    /// (rendered null) iff `shipping_target_configured` is false; otherwise the
+    /// observation's health, with `"unverified"` when no cursor is configured.
+    shipping_health: Option<String>,
+    /// The ack cursor's `acked_at` when one was read, else `None` (null).
+    shipping_observed_at: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -123,7 +132,7 @@ impl PostureContext {
             credential_status_storage: classify_credential_status_storage(
                 &config.credential_status,
             ),
-            audit: audit_posture(&config.audit),
+            audit: audit_posture(&config.audit, &config.deployment.evidence),
             source_connections: SourceConnectionPosture {
                 by_kind: source_connection_counts_by_kind(config),
             },
@@ -293,6 +302,10 @@ pub(crate) async fn posture_document(
             "audit": {
                 "configured": context.audit.configured,
                 "sink_type": context.audit.sink,
+                "shipping_target_configured": context.audit.shipping_target_configured,
+                "shipping_target": context.audit.shipping_target,
+                "shipping_health": context.audit.shipping_health,
+                "shipping_observed_at": context.audit.shipping_observed_at,
                 "checkpoint_status": "unavailable",
                 "latest_tail_hash": Value::Null,
                 "latest_sequence": Value::Null,
@@ -419,6 +432,10 @@ fn default_posture_context() -> PostureContext {
         audit: AuditPosture {
             sink: "unknown".to_string(),
             configured: false,
+            shipping_target_configured: false,
+            shipping_target: "unknown".to_string(),
+            shipping_health: None,
+            shipping_observed_at: None,
         },
         source_connections: SourceConnectionPosture {
             by_kind: BTreeMap::new(),
@@ -463,7 +480,30 @@ fn classify_credential_status_storage(config: &CredentialStatusConfig) -> String
     }
 }
 
-fn audit_posture(config: &EvidenceAuditConfig) -> AuditPosture {
+fn audit_posture(
+    config: &EvidenceAuditConfig,
+    evidence: &DeploymentEvidenceConfig,
+) -> AuditPosture {
+    // Map the config sink string onto the shared classifier's sink kinds; an
+    // unrecognised sink is explicitly Unknown rather than a silent wildcard.
+    let sink_kind = match config.sink.as_str() {
+        "stdout" => AuditSinkKind::Stdout,
+        "syslog" => AuditSinkKind::Syslog,
+        "file" | "jsonl" => AuditSinkKind::LocalFile,
+        _ => AuditSinkKind::Unknown,
+    };
+    let (shipping_target_configured, shipping_target) =
+        audit_shipping_target(sink_kind, evidence.audit_offhost_shipping);
+    // Observed shipping freshness from the local ack cursor. Sampling now() here
+    // keeps the health out of any gate predicate; the observation is null unless
+    // a shipping target is actually configured.
+    let observation = evaluate_ack_health(
+        evidence.audit_ack_cursor_path(),
+        SystemTime::now(),
+        evidence.audit_ack_max_age(),
+    );
+    let shipping_health =
+        shipping_target_configured.then(|| observation.health.as_str().to_string());
     AuditPosture {
         sink: match config.sink.as_str() {
             "file" | "jsonl" => "file".to_string(),
@@ -472,6 +512,10 @@ fn audit_posture(config: &EvidenceAuditConfig) -> AuditPosture {
             _ => "unknown".to_string(),
         },
         configured: config.hash_secret_env.is_some(),
+        shipping_target_configured,
+        shipping_target: shipping_target.to_string(),
+        shipping_health,
+        shipping_observed_at: observation.acked_at,
     }
 }
 

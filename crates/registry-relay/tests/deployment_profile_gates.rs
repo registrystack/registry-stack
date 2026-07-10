@@ -439,7 +439,7 @@ fn stdout_and_syslog_sinks_are_exempt_without_attestation() {
 }
 
 #[test]
-fn file_sink_without_attestation_errors_under_evidence_grade_and_is_waivable() {
+fn file_sink_without_attestation_refuses_startup_under_evidence_grade() {
     let yaml = config_yaml_with_audit(
         "audit:\n  sink: file\n  path: \"/tmp/relay-audit-offhost-test.jsonl\"",
         "deployment:\n  profile: evidence_grade\n",
@@ -462,25 +462,19 @@ fn file_sink_without_attestation_errors_under_evidence_grade_and_is_waivable() {
         .unwrap_or_else(|| panic!("expected {RETENTION_GATE_ID} finding"));
     assert_eq!(
         finding.severity,
-        registry_platform_ops::GateSeverity::FindingError
+        registry_platform_ops::GateSeverity::StartupFail
     );
-
-    let waivers = [registry_relay::deployment::WaiverInput {
-        finding: RETENTION_GATE_ID.to_string(),
-        reason: "synthetic-waiver-not-a-secret".to_string(),
-        expires: "2999-01-01".to_string(),
-    }];
-    let waived_evaluation = registry_relay::deployment::evaluate(
-        config.deployment.profile,
-        &facts,
-        &waivers,
-        &registry_relay::deployment::today_utc(),
-    );
-    let waived_finding = retention_gate_finding(&waived_evaluation)
-        .unwrap_or_else(|| panic!("expected {RETENTION_GATE_ID} finding"));
     assert_eq!(
-        waived_finding.status,
-        registry_platform_ops::DeploymentFindingStatus::Waived
+        evaluation.startup_failures,
+        vec![RETENTION_GATE_ID.to_string()]
+    );
+    assert!(
+        config::validate::run_with_source(
+            &config,
+            registry_platform_ops::ConfigSource::SignedBundleFile
+        )
+        .is_err(),
+        "the evidence-grade retention gate must refuse startup even when config provenance is signed"
     );
 }
 

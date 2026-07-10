@@ -20,6 +20,9 @@ use registry_relay::ingest::table_name;
 use registry_relay::query::{EntityCollectionQuery, EntityQueryEngine};
 
 const CONFIG_YAML: &str = r#"
+deployment:
+  profile: local
+
 server:
   bind: 127.0.0.1:0
 

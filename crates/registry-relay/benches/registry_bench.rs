@@ -16,7 +16,10 @@ use registry_relay::entity::EntityRegistry;
 const BENCH_NUM_DATASETS: usize = 10;
 const BENCH_ENTITIES_PER_DATASET: usize = 5;
 
-const CONFIG_HEADER: &str = "server:
+const CONFIG_HEADER: &str = "deployment:
+  profile: local
+
+server:
   bind: 127.0.0.1:0
 
 catalog:

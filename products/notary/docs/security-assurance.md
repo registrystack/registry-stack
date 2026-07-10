@@ -151,6 +151,27 @@ block.
 | `checkpoints` | `unsupported` | Periodic signed checkpoints over the audit chain are not produced by this build. |
 | `anchoring` | `none` | Audit state is not anchored to an external transparency log or ledger. |
 
+The nested `posture.audit` diagnostic block also reports the audit shipping
+target as two fields: `shipping_target_configured` and `shipping_target`, where
+`shipping_target` is `stdout`, `syslog`, `declared_external`, `none`, or
+`unknown`. Both are DECLARED state derived from configuration, the sink type
+plus the operator's `deployment.evidence.audit_offhost_shipping` attestation,
+not observed delivery health: a local file sink counts as having a shipping
+target only when the operator attests that logs are shipped off-host.
+
+When `deployment.evidence.audit_ack_cursor_path` points at the local state
+file an off-host audit shipper writes on each successful hand-off (the
+`registry.audit.ack_cursor.v1` contract: `acked_at`, `last_acked_hash`, an
+optional `writer`), the block adds two more fields: `shipping_health` (`ok`,
+`stale`, `missing`, `invalid`, `unverified`, or `null`) and
+`shipping_observed_at` (the cursor's `acked_at`, or `null`). Both are `null`
+whenever `shipping_target_configured` is `false`; `shipping_health` is
+`unverified` when a shipping target is declared but no cursor is configured.
+This is an OBSERVED liveness/freshness signal for the shipping path, read
+from the cursor file, not proof that every audit event arrived: it tells an
+operator whether the shipper is still checking in, not whether the shipped
+copy is complete.
+
 Note: a running notary always reports `keyed_integrity = hmac` and
 `write_policy = fail_closed_route_families` because startup refuses any
 configuration that omits the `hash_secret_env` HMAC key; the `hmac` and

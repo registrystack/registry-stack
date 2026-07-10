@@ -11,21 +11,26 @@
 //!
 //! * `startup_fail`: the process refuses to start. Never waivable.
 //! * `readiness_fail`: the readiness endpoint reports not-ready; the process
-//!   keeps running.
+//!   keeps running. Also never waivable: the gate exists to stop traffic when
+//!   an evidence guarantee fails, so a waiver must not silently un-fail it.
 //! * `finding_error` / `finding_warn`: a posture finding only.
 //!
 //! A triggered gate can be suppressed by a config waiver that names the
 //! finding, carries a free-text reason, and a mandatory expiry date. A waived
 //! finding reports status `waived` instead of its severity effect. An expired
 //! waiver stops suppressing the finding and additionally raises
-//! `deployment.waiver_expired`. `startup_fail` gates are never waivable.
+//! `deployment.waiver_expired`. `startup_fail` and `readiness_fail` gates are
+//! never waivable.
 //!
 //! When no profile is declared, `deployment.profile_undeclared` is a startup
 //! failure. `local` is the explicit opt-out for development.
 
+use std::time::{Duration, SystemTime};
+
 use registry_platform_ops::{
-    AuditWritePolicy, ConfigSource, DeploymentFinding, DeploymentFindingStatus,
-    DeploymentFindingWaiver, DeploymentProfile, DeploymentWaiver, GateSeverity,
+    evaluate_ack_health, AckHealth, AckObservation, AuditWritePolicy, ConfigSource,
+    DeploymentFinding, DeploymentFindingStatus, DeploymentFindingWaiver, DeploymentProfile,
+    DeploymentWaiver, GateSeverity, DEFAULT_AUDIT_ACK_MAX_AGE,
 };
 
 use crate::config::{AuditSinkConfig, AuthMode, Config};
@@ -75,6 +80,17 @@ pub struct DeploymentFacts {
     /// evidence declared: retention is capped by local rotation, and an
     /// attacker with host access can destroy the audit trail.
     pub audit_retention_local_only: bool,
+    /// The declared audit shipping target is `declared_external` (a local file
+    /// sink whose operator attests off-host shipping). This is the DECLARED
+    /// state that shipping-completeness evidence is expected to back.
+    pub audit_shipping_declared_external: bool,
+    /// An off-host ack cursor path is configured, so shipping freshness is
+    /// observed rather than merely declared.
+    pub audit_ack_cursor_configured: bool,
+    /// The observed ack cursor is fresh (health `ok`). False for every other
+    /// observed health (stale, missing, invalid), so the shipping-stale gate
+    /// fails closed when the cursor cannot vouch for recent delivery.
+    pub audit_ack_health_ok: bool,
 }
 
 /// One gate in the relay catalog.
@@ -174,13 +190,51 @@ const GATES: &[Gate] = &[
     Gate {
         id: "relay.audit.retention_local_only",
         condition: |facts| facts.audit_retention_local_only,
+        // A local file sink caps retention and lets an attacker with host
+        // access destroy the trail; the audit hash chain also cannot detect
+        // leading or trailing truncation of a local-only log, so off-host
+        // shipping (plus its attestation) is the completeness evidence that
+        // clears this gate. Under production this is only a warn, so that
+        // warning is the operator's single signal.
+        //
         // Stdout and syslog sinks are exempt: stdout retention is the
         // orchestrator's log pipeline's concern, and syslog forwarding is the
         // syslog daemon's own surface. Only a local rotating file sink caps
         // retention in a way this gate can observe.
         hosted_lab: None,
         production: Some(FindingWarn),
-        evidence_grade: Some(FindingError),
+        evidence_grade: Some(StartupFail),
+    },
+    Gate {
+        id: "relay.audit.shipping_unverified",
+        condition: |facts| {
+            facts.audit_shipping_declared_external && !facts.audit_ack_cursor_configured
+        },
+        // The operator declares off-host shipping (`declared_external`), but
+        // nothing observes whether events actually arrive: local hash chains
+        // prove only retained-set consistency, so without an ack cursor the
+        // completeness of shipped events is asserted, never checked. Configure
+        // `deployment.evidence.audit_ack_cursor_path` so the shipper's cursor
+        // becomes observed evidence. Bound at warn under production and
+        // evidence_grade only: it is a gap in evidence quality, not a failed
+        // guarantee, so it never blocks readiness or startup.
+        hosted_lab: None,
+        production: Some(FindingWarn),
+        evidence_grade: Some(FindingWarn),
+    },
+    Gate {
+        id: "relay.audit.shipping_stale",
+        condition: |facts| facts.audit_ack_cursor_configured && !facts.audit_ack_health_ok,
+        // An ack cursor is configured, so shipping is observed, but the
+        // observation is not fresh: the cursor is stale, missing, or invalid.
+        // This fails closed (any non-`ok` health trips the gate) because a
+        // cursor that cannot vouch for recent delivery is evidence that
+        // off-host shipping may have stopped, so recent audit events may exist
+        // only in local retention. Escalates to readiness_fail under
+        // evidence_grade so traffic stops until shipping is restored.
+        hosted_lab: None,
+        production: Some(FindingError),
+        evidence_grade: Some(ReadinessFail),
     },
 ];
 
@@ -249,8 +303,8 @@ pub fn evaluate(
         }
 
         // A waivable, triggered gate may be suppressed by a matching waiver.
-        // `startup_fail` is never waivable.
-        let waivable = severity != StartupFail;
+        // `startup_fail` and `readiness_fail` are never waivable.
+        let waivable = severity_is_waivable(severity);
         let waiver = if waivable {
             waivers.iter().find(|waiver| waiver.finding == gate.id)
         } else {
@@ -327,6 +381,83 @@ pub fn catalog_gate_id(id: &str) -> Option<&'static str> {
         .find(|gate_id| *gate_id == id)
 }
 
+/// The severity `gate_id` binds under `profile`, or `None` when the gate is
+/// unbound at that profile (including an undeclared profile) or `gate_id` is
+/// not a catalog gate. Config validation reads this to reject, at load, a
+/// waiver whose gate cannot be waived under the active profile instead of
+/// silently dropping it.
+pub fn gate_severity_for_profile(
+    gate_id: &str,
+    profile: Option<DeploymentProfile>,
+) -> Option<GateSeverity> {
+    let profile = profile?;
+    GATES
+        .iter()
+        .find(|gate| gate.id == gate_id)
+        .and_then(|gate| gate.severity_for(profile))
+}
+
+/// Whether a triggered gate at `severity` can be suppressed by a waiver.
+/// Only the posture findings `finding_warn` and `finding_error` are waivable.
+/// Both hard gates are non-waivable: `startup_fail` means running at all would
+/// falsify the profile claim, and `readiness_fail` gates exist to stop traffic
+/// when an evidence guarantee fails, so a waiver must not silently un-fail them.
+/// This mirrors Notary's `GateSeverity::is_waivable` and is the single
+/// definition of waivability shared by gate evaluation and load-time waiver
+/// validation. The severities are matched explicitly, so a future
+/// `GateSeverity` variant fails closed as non-waivable until this function is
+/// extended to classify it deliberately.
+pub fn severity_is_waivable(severity: GateSeverity) -> bool {
+    match severity {
+        FindingWarn | FindingError => true,
+        ReadinessFail | StartupFail => false,
+        // `GateSeverity` is `#[non_exhaustive]`; an unclassified future variant
+        // must never default to waivable.
+        _ => false,
+    }
+}
+
+/// Operator remediation for a waiver that names a hard, non-waivable gate
+/// (`readiness_fail` or `startup_fail` under the active profile). Every gate
+/// that can be non-waivable under some profile names its own concrete lever to
+/// clear the underlying condition, since a waiver can never suppress it. An
+/// unmatched id (a gate that is only ever waivable, or an unknown id) falls back
+/// to generic guidance.
+pub fn hard_gate_remediation(gate_id: &str) -> &'static str {
+    match gate_id {
+        "relay.admin.public_exposure" => {
+            "this gate cannot be waived under the active profile; bind the admin listener to a \
+             loopback address (server.admin_bind) so admin routes are not reachable off-host"
+        }
+        "relay.oidc.client_allowlist_empty" => {
+            "this gate cannot be waived under the active profile; populate \
+             auth.oidc.allowed_clients so only known clients are accepted"
+        }
+        "relay.config.unsigned" => {
+            "this gate cannot be waived under the active profile; load config from a signed \
+             governed bundle instead of a local YAML file"
+        }
+        "relay.audit.sink_missing" => {
+            "this gate cannot be waived under the active profile; configure a durable audit sink"
+        }
+        "relay.audit.best_effort" => {
+            "this gate cannot be waived under the active profile; set audit.write_policy to a \
+             durability-first policy instead of availability-first (best effort)"
+        }
+        "relay.audit.retention_local_only" => {
+            "this gate cannot be waived under the active profile; ship audit events off-host and \
+             set deployment.evidence.audit_offhost_shipping: true, or use a non-local audit sink"
+        }
+        "relay.audit.shipping_stale" => {
+            "this gate cannot be waived under the active profile; restore off-host shipping so the \
+             writer refreshes the ack cursor, widen deployment.evidence.audit_ack_max_age_secs if \
+             the freshness window is unrealistic, or remove deployment.evidence.audit_ack_cursor_path \
+             to fall back to declared-only shipping evidence"
+        }
+        _ => "fix the underlying condition; this gate cannot be waived under the active profile",
+    }
+}
+
 /// A waiver is expired once `today` is strictly past its `expires` date. The
 /// expiry day itself is still covered. ISO 8601 dates compare correctly with
 /// lexical string ordering.
@@ -343,6 +474,10 @@ fn is_expired(waiver: &WaiverInput, today: &str) -> bool {
 /// always configures an audit sink, so `audit_sink_missing` is always false
 /// here; the gate remains in the catalog for completeness.
 pub fn facts_from_config(config: &Config, config_source: ConfigSource) -> DeploymentFacts {
+    // The filesystem read for observed shipping health happens here, where
+    // facts are projected from config, never inside a gate condition (gate
+    // conditions must stay pure functions over plain facts).
+    let observation = audit_ack_observation(config);
     DeploymentFacts {
         admin_public_exposure: admin_public_exposure(config),
         openapi_public: !config.server.openapi_requires_auth,
@@ -367,7 +502,50 @@ pub fn facts_from_config(config: &Config, config_source: ConfigSource) -> Deploy
         audit_best_effort: config.audit.write_policy == AuditWritePolicy::AvailabilityFirst,
         audit_retention_local_only: matches!(config.audit.sink, AuditSinkConfig::File { .. })
             && !config.deployment.evidence.audit_offhost_shipping,
+        // `declared_external` is the shared classifier's target for a local
+        // file sink whose operator attests off-host shipping; relay's sink enum
+        // is closed, so this `matches!` is exactly that case.
+        audit_shipping_declared_external: matches!(config.audit.sink, AuditSinkConfig::File { .. })
+            && config.deployment.evidence.audit_offhost_shipping,
+        audit_ack_cursor_configured: config.deployment.evidence.audit_ack_cursor_path.is_some(),
+        audit_ack_health_ok: observation.health == AckHealth::Ok,
     }
+}
+
+/// Read the operator's audit off-host ack cursor and evaluate its freshness.
+///
+/// The cursor path and freshness window are the operator declarations in
+/// `deployment.evidence`; `audit_ack_max_age_secs` defaults to
+/// [`DEFAULT_AUDIT_ACK_MAX_AGE`] when unset. This performs the cursor
+/// filesystem read (sampling `SystemTime::now()`); with no cursor path
+/// configured the observation is [`AckHealth::Unverified`]. Shared by gate fact
+/// projection, posture emission, and the doctor report so they cannot drift.
+pub fn audit_ack_observation(config: &Config) -> AckObservation {
+    let path = config.deployment.evidence.audit_ack_cursor_path.as_deref();
+    let max_age = config
+        .deployment
+        .evidence
+        .audit_ack_max_age_secs
+        .map(Duration::from_secs)
+        .unwrap_or(DEFAULT_AUDIT_ACK_MAX_AGE);
+    evaluate_ack_health(path, SystemTime::now(), max_age)
+}
+
+/// Map an ack [`AckObservation`] onto the posture `shipping_health` and
+/// `shipping_observed_at` fields, shared by posture emission and the doctor
+/// report so they report identical semantics.
+///
+/// `shipping_health` is `None` (serialized as null) when no shipping target is
+/// declared; otherwise the observed health string (`"unverified"` when no
+/// cursor is configured). `shipping_observed_at` is the cursor's `acked_at`
+/// when one was successfully read (health `ok`, `stale`, or a future-skew
+/// `invalid`), else `None`.
+pub fn shipping_health_fields(
+    observation: &AckObservation,
+    shipping_target_configured: bool,
+) -> (Option<&'static str>, Option<String>) {
+    let health = shipping_target_configured.then(|| observation.health.as_str());
+    (health, observation.acked_at.clone())
 }
 
 /// Admin routes are "publicly exposed" when the admin listener is bound to a
@@ -429,6 +607,9 @@ mod tests {
             audit_sink_missing: false,
             audit_best_effort: false,
             audit_retention_local_only: false,
+            audit_shipping_declared_external: false,
+            audit_ack_cursor_configured: false,
+            audit_ack_health_ok: true,
         }
     }
 
@@ -471,6 +652,9 @@ mod tests {
             audit_sink_missing: true,
             audit_best_effort: true,
             audit_retention_local_only: true,
+            audit_shipping_declared_external: true,
+            audit_ack_cursor_configured: true,
+            audit_ack_health_ok: false,
         };
         let evaluation = evaluate(None, &facts, &[], TODAY);
         assert_eq!(finding_ids(&evaluation), vec![PROFILE_UNDECLARED]);
@@ -789,7 +973,8 @@ mod tests {
             FindingWarn
         );
         let evidence = evaluate(Some(DeploymentProfile::EvidenceGrade), &facts, &[], TODAY);
-        assert_eq!(finding(&evidence, id).severity, FindingError);
+        assert_eq!(finding(&evidence, id).severity, StartupFail);
+        assert_eq!(evidence.startup_failures, vec![id.to_string()]);
         // Non-triggering: clean facts never surface the finding.
         let clean = evaluate(
             Some(DeploymentProfile::Production),
@@ -801,7 +986,7 @@ mod tests {
     }
 
     #[test]
-    fn audit_retention_local_only_is_waivable() {
+    fn audit_retention_local_only_production_finding_is_waivable() {
         let facts = DeploymentFacts {
             audit_retention_local_only: true,
             ..clean_facts()
@@ -819,6 +1004,150 @@ mod tests {
         );
         assert_eq!(evaluation.active_waivers.len(), 1);
         assert_eq!(evaluation.active_waivers[0].finding, id);
+    }
+
+    #[test]
+    fn shipping_unverified_warns_when_declared_external_without_cursor() {
+        // Off-host shipping is declared but no ack cursor observes it: warn
+        // under production and evidence_grade only, unbound at hosted_lab.
+        let facts = DeploymentFacts {
+            audit_shipping_declared_external: true,
+            audit_ack_cursor_configured: false,
+            ..clean_facts()
+        };
+        let id = "relay.audit.shipping_unverified";
+        let hosted = evaluate(Some(DeploymentProfile::HostedLab), &facts, &[], TODAY);
+        assert!(!finding_ids(&hosted).contains(&id.to_string()));
+        assert_eq!(
+            finding(
+                &evaluate(Some(DeploymentProfile::Production), &facts, &[], TODAY),
+                id
+            )
+            .severity,
+            FindingWarn
+        );
+        let evidence = evaluate(Some(DeploymentProfile::EvidenceGrade), &facts, &[], TODAY);
+        assert_eq!(finding(&evidence, id).severity, FindingWarn);
+        // A warn never blocks readiness or startup.
+        assert!(!evidence.has_readiness_failure());
+        assert!(!evidence.has_startup_failure());
+    }
+
+    #[test]
+    fn shipping_unverified_silent_when_cursor_configured_or_not_declared() {
+        let id = "relay.audit.shipping_unverified";
+        // A cursor is configured: shipping is observed, so unverified is silent.
+        let with_cursor = DeploymentFacts {
+            audit_shipping_declared_external: true,
+            audit_ack_cursor_configured: true,
+            ..clean_facts()
+        };
+        let evaluation = evaluate(
+            Some(DeploymentProfile::Production),
+            &with_cursor,
+            &[],
+            TODAY,
+        );
+        assert!(!finding_ids(&evaluation).contains(&id.to_string()));
+        // Shipping is not declared_external (e.g. stdout sink): unverified is
+        // silent even without a cursor.
+        let not_declared = DeploymentFacts {
+            audit_shipping_declared_external: false,
+            audit_ack_cursor_configured: false,
+            ..clean_facts()
+        };
+        let evaluation = evaluate(
+            Some(DeploymentProfile::EvidenceGrade),
+            &not_declared,
+            &[],
+            TODAY,
+        );
+        assert!(!finding_ids(&evaluation).contains(&id.to_string()));
+    }
+
+    #[test]
+    fn shipping_stale_escalates_when_cursor_unhealthy() {
+        // A cursor is configured but its observed health is not `ok`: error
+        // under production, readiness_fail under evidence_grade, unbound at
+        // hosted_lab. Fail closed on any non-ok health.
+        let facts = DeploymentFacts {
+            audit_ack_cursor_configured: true,
+            audit_ack_health_ok: false,
+            ..clean_facts()
+        };
+        let id = "relay.audit.shipping_stale";
+        let hosted = evaluate(Some(DeploymentProfile::HostedLab), &facts, &[], TODAY);
+        assert!(!finding_ids(&hosted).contains(&id.to_string()));
+        assert_eq!(
+            finding(
+                &evaluate(Some(DeploymentProfile::Production), &facts, &[], TODAY),
+                id
+            )
+            .severity,
+            FindingError
+        );
+        let evidence = evaluate(Some(DeploymentProfile::EvidenceGrade), &facts, &[], TODAY);
+        assert_eq!(finding(&evidence, id).severity, ReadinessFail);
+        assert_eq!(evidence.readiness_failures, vec![id.to_string()]);
+        assert!(evidence.has_readiness_failure());
+    }
+
+    #[test]
+    fn shipping_stale_silent_when_cursor_healthy_or_absent() {
+        let id = "relay.audit.shipping_stale";
+        // Healthy cursor: silent.
+        let healthy = DeploymentFacts {
+            audit_ack_cursor_configured: true,
+            audit_ack_health_ok: true,
+            ..clean_facts()
+        };
+        let evaluation = evaluate(Some(DeploymentProfile::EvidenceGrade), &healthy, &[], TODAY);
+        assert!(!finding_ids(&evaluation).contains(&id.to_string()));
+        // No cursor configured at all: the stale gate does not bind (only the
+        // unverified gate can bind in that case), even if health_ok is false.
+        let no_cursor = DeploymentFacts {
+            audit_ack_cursor_configured: false,
+            audit_ack_health_ok: false,
+            ..clean_facts()
+        };
+        let evaluation = evaluate(
+            Some(DeploymentProfile::EvidenceGrade),
+            &no_cursor,
+            &[],
+            TODAY,
+        );
+        assert!(!finding_ids(&evaluation).contains(&id.to_string()));
+    }
+
+    #[test]
+    fn shipping_stale_readiness_fail_is_non_waivable() {
+        // Under evidence_grade `relay.audit.shipping_stale` is readiness_fail,
+        // which is non-waivable: a waiver must not suppress it and readiness
+        // still fails.
+        let facts = DeploymentFacts {
+            audit_ack_cursor_configured: true,
+            audit_ack_health_ok: false,
+            ..clean_facts()
+        };
+        let id = "relay.audit.shipping_stale";
+        let waivers = [WaiverInput {
+            finding: id.to_string(),
+            reason: "synthetic stale-shipping waiver".to_string(),
+            expires: FUTURE.to_string(),
+        }];
+        let evaluation = evaluate(
+            Some(DeploymentProfile::EvidenceGrade),
+            &facts,
+            &waivers,
+            TODAY,
+        );
+        let f = finding(&evaluation, id);
+        assert_eq!(f.status, DeploymentFindingStatus::Active);
+        assert_eq!(f.severity, ReadinessFail);
+        assert!(evaluation.has_readiness_failure());
+        assert_eq!(evaluation.readiness_failures, vec![id.to_string()]);
+        // The waiver is still listed as active for review; it does not suppress.
+        assert_eq!(evaluation.active_waivers.len(), 1);
     }
 
     #[test]
@@ -847,22 +1176,32 @@ mod tests {
     }
 
     #[test]
-    fn waiver_suppresses_readiness_fail() {
+    fn waiver_does_not_suppress_readiness_fail() {
+        // A readiness_fail gate is non-waivable: readiness gates stop traffic
+        // when an evidence guarantee fails, so a waiver must not silently
+        // un-fail them. `relay.admin.public_exposure` is readiness_fail under
+        // production.
         let facts = DeploymentFacts {
             admin_public_exposure: true,
             ..clean_facts()
         };
+        let id = "relay.admin.public_exposure";
         let waivers = [WaiverInput {
-            finding: "relay.admin.public_exposure".to_string(),
+            finding: id.to_string(),
             reason: "synthetic readiness waiver".to_string(),
             expires: FUTURE.to_string(),
         }];
         let evaluation = evaluate(Some(DeploymentProfile::Production), &facts, &waivers, TODAY);
-        assert_eq!(
-            finding(&evaluation, "relay.admin.public_exposure").status,
-            DeploymentFindingStatus::Waived
-        );
-        assert!(!evaluation.has_readiness_failure());
+        // The waiver does not suppress the finding: it stays active and
+        // readiness still fails.
+        let f = finding(&evaluation, id);
+        assert_eq!(f.status, DeploymentFindingStatus::Active);
+        assert_eq!(f.severity, ReadinessFail);
+        assert!(evaluation.has_readiness_failure());
+        assert_eq!(evaluation.readiness_failures, vec![id.to_string()]);
+        // The waiver is still listed as active for review; it simply does not
+        // suppress the gate.
+        assert_eq!(evaluation.active_waivers.len(), 1);
     }
 
     #[test]
@@ -963,5 +1302,83 @@ datasets: []
         // Only a genuine signed bundle clears the gate.
         assert!(!facts_from_config(&config, ConfigSource::SignedBundleFile).config_unsigned);
         assert!(!facts_from_config(&config, ConfigSource::SignedBundleEndpoint).config_unsigned);
+    }
+
+    #[test]
+    fn gate_severity_for_profile_resolves_binding() {
+        // The retention gate warns under production and is a startup failure
+        // under evidence_grade; it is unbound under hosted_lab and local.
+        let id = "relay.audit.retention_local_only";
+        assert_eq!(
+            gate_severity_for_profile(id, Some(DeploymentProfile::Production)),
+            Some(FindingWarn)
+        );
+        assert_eq!(
+            gate_severity_for_profile(id, Some(DeploymentProfile::EvidenceGrade)),
+            Some(StartupFail)
+        );
+        assert_eq!(
+            gate_severity_for_profile(id, Some(DeploymentProfile::HostedLab)),
+            None
+        );
+        assert_eq!(
+            gate_severity_for_profile(id, Some(DeploymentProfile::Local)),
+            None
+        );
+        // An undeclared profile or an unknown gate binds nothing.
+        assert_eq!(gate_severity_for_profile(id, None), None);
+        assert_eq!(
+            gate_severity_for_profile("not.a.gate", Some(DeploymentProfile::EvidenceGrade)),
+            None
+        );
+    }
+
+    #[test]
+    fn severity_is_waivable_only_for_findings() {
+        // Only posture findings are waivable. Both hard gates (readiness_fail
+        // and startup_fail) are non-waivable, matching Notary's semantics.
+        assert!(severity_is_waivable(FindingWarn));
+        assert!(severity_is_waivable(FindingError));
+        assert!(!severity_is_waivable(ReadinessFail));
+        assert!(!severity_is_waivable(StartupFail));
+    }
+
+    #[test]
+    fn hard_gate_remediation_covers_every_non_waivable_gate() {
+        // The audit retention gate names its off-host levers.
+        let audit = hard_gate_remediation("relay.audit.retention_local_only");
+        assert!(audit.contains("audit_offhost_shipping"));
+        assert!(audit.contains("non-local audit sink"));
+        assert!(audit.contains("cannot be waived under the active profile"));
+        // Every other gate that can be non-waivable under some profile
+        // (readiness_fail or startup_fail) gets its own actionable lever, not
+        // the audit-retention specifics.
+        for (gate_id, needle) in [
+            ("relay.admin.public_exposure", "admin_bind"),
+            ("relay.oidc.client_allowlist_empty", "allowed_clients"),
+            ("relay.config.unsigned", "signed"),
+            ("relay.audit.sink_missing", "durable audit sink"),
+            ("relay.audit.best_effort", "write_policy"),
+            ("relay.audit.shipping_stale", "audit_ack_max_age_secs"),
+        ] {
+            let remediation = hard_gate_remediation(gate_id);
+            assert!(
+                remediation.contains(needle),
+                "remediation for {gate_id} should mention {needle}: {remediation}"
+            );
+            assert!(
+                remediation.contains("cannot be waived under the active profile"),
+                "remediation for {gate_id} should state non-waivability: {remediation}"
+            );
+            assert!(
+                !remediation.contains("audit_offhost_shipping"),
+                "only the retention gate names the off-host lever: {remediation}"
+            );
+        }
+        // An unmatched gate id falls back to the generic guidance.
+        assert_eq!(
+            hard_gate_remediation("not.a.gate"),
+            "fix the underlying condition; this gate cannot be waived under the active profile"
+        );
     }
 }

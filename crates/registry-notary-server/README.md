@@ -191,13 +191,15 @@ keep it out of config files, and keep it stable for the retention period where
 auditors must correlate records.
 
 Audit envelopes contain `prev_hash` and `record_hash`. File/jsonl sinks resume
-from the retained tail hash on startup. Sinks that cannot be read back, such as
-stdout and syslog, need an external anchoring process if auditors must prove
-continuity across process restarts. Store the retained head hash, meaning the
-first envelope's `prev_hash`, and the tail hash, meaning the last envelope's
-`record_hash`, in append-only or independently controlled storage. Verification
-should reject a retained suffix unless its head matches the trusted starting
-hash and its tail matches the trusted final hash for the review window.
+from the retained tail hash on startup. `registry-platform-audit::verify_chain`
+proves internal consistency of the retained record set: edits, insertions,
+reordering, and deletions of interior records are detected. It cannot prove
+completeness of the retained set on its own, since a suffix truncation or a
+fully replaced log stays self-consistent. Completeness is an off-host
+shipping guarantee: declare `deployment.evidence.audit_offhost_shipping: true`
+once audit events are actually shipped to a log aggregator or SIEM outside
+this host. Evidence-grade deployments refuse to start when the audit sink is
+`file` or `jsonl` and that declaration is missing.
 
 ## Security Notes
 

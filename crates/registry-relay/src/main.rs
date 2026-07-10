@@ -46,9 +46,10 @@ use registry_platform_audit::AuditChainProfile;
 use registry_platform_authcommon::{fingerprint_api_key, CredentialFingerprintProvider};
 use registry_platform_config::{expand_config_env_vars, verify_config_bundle};
 use registry_platform_ops::{
-    antirollback_key_from_verified_bundle, bundle_verify_rejection_result, internal_config_hash,
-    persist_bundle_acceptance as persist_config_bundle_acceptance, verify_bundle_state_read_only,
-    ConfigOverrideMode, ConfigSource, DeploymentProfile,
+    antirollback_key_from_verified_bundle, audit_shipping_target, bundle_verify_rejection_result,
+    internal_config_hash, persist_bundle_acceptance as persist_config_bundle_acceptance,
+    verify_bundle_state_read_only, AuditSinkKind, ConfigOverrideMode, ConfigSource,
+    DeploymentProfile,
 };
 use registry_relay::audit::{
     AuditPipeline, ConfigAuditExt, FileSink, OperationalAuditEvent, StdoutSink, SyslogSink,
@@ -638,6 +639,9 @@ impl DoctorReport {
             "context_constraints": [],
             "generated_at": now_rfc3339(),
         });
+        if let Some(config) = config {
+            output["audit_shipping"] = audit_shipping_report(config);
+        }
         if let Some(raw) = raw_config {
             output["hashes"] = json!({
                 "internal_config_hash": internal_config_hash(raw.as_bytes()),
@@ -1097,7 +1101,7 @@ fn config_verify_bundle_report(
 
 /// Offline audit-chain recovery (#196). Quarantines a retained chain that no
 /// longer verifies under the configured keyed hasher and starts a fresh,
-/// anchored segment. Refuses to run while a relay holds the single-writer lock.
+/// break segment. Refuses to run while a relay holds the single-writer lock.
 async fn run_audit_quarantine(
     config_path: PathBuf,
     env_file: Option<PathBuf>,
@@ -2095,6 +2099,37 @@ fn audit_sink_kind(config: &Config) -> &'static str {
         AuditSinkConfig::Syslog {} => "syslog",
         _ => "unknown (fallback: stdout)",
     }
+}
+
+/// Report the audit shipping posture for the doctor diagnostic report. This
+/// mirrors the `posture.audit` shipping fields: the declared state
+/// (`sink_type`, `shipping_target_configured`, `shipping_target`) derived from
+/// config via the shared classifier, plus the observed state
+/// (`shipping_health`, `shipping_observed_at`) read from the local ack cursor.
+fn audit_shipping_report(config: &Config) -> Value {
+    let (sink_kind, sink_type) = match &config.audit.sink {
+        AuditSinkConfig::Stdout { .. } => (AuditSinkKind::Stdout, "stdout"),
+        AuditSinkConfig::Syslog { .. } => (AuditSinkKind::Syslog, "syslog"),
+        AuditSinkConfig::File { .. } => (AuditSinkKind::LocalFile, "file"),
+        _ => (AuditSinkKind::Unknown, "unknown"),
+    };
+    let (shipping_target_configured, shipping_target) =
+        audit_shipping_target(sink_kind, config.deployment.evidence.audit_offhost_shipping);
+    // Observed shipping freshness from the local ack cursor, via the shared
+    // helpers so the doctor report and posture emission never drift.
+    let observation = registry_relay::deployment::audit_ack_observation(config);
+    let (shipping_health, shipping_observed_at) =
+        registry_relay::deployment::shipping_health_fields(
+            &observation,
+            shipping_target_configured,
+        );
+    json!({
+        "sink_type": sink_type,
+        "shipping_target_configured": shipping_target_configured,
+        "shipping_target": shipping_target,
+        "shipping_health": shipping_health,
+        "shipping_observed_at": shipping_observed_at,
+    })
 }
 
 /// Initialise operational tracing on stderr. `RUST_LOG` controls the
@@ -3620,16 +3655,13 @@ audit:
             serde_json::from_str(recovered_lines[0]).expect("break envelope parses");
         assert_eq!(break_envelope["record"]["event"], "audit.chain.break");
 
-        // The anchor pins the recovered segment's start to the break event's
-        // predecessor (the last good tail).
-        let anchor: Value = serde_json::from_str(
-            &std::fs::read_to_string(dir.path().join("audit.jsonl.anchor.json"))
-                .expect("anchor file"),
-        )
-        .expect("anchor json");
-        assert_eq!(
-            anchor["trusted_start_prev_hash"],
-            break_envelope["prev_hash"]
+        assert!(
+            !dir.path().join("audit.jsonl.anchor.json").exists(),
+            "recovery no longer writes a local completeness anchor"
+        );
+        assert!(
+            break_envelope["prev_hash"].is_string(),
+            "break event remains chained to the last good local tail"
         );
     }
 }

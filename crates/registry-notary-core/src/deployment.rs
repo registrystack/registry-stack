@@ -8,6 +8,9 @@
 //! severity. An undeclared deployment is a startup failure; `local` is the
 //! explicit opt-out for development.
 
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
 
 /// The set of deployment profiles an operator can declare.
@@ -120,11 +123,41 @@ pub struct DeploymentEvidenceConfig {
     /// a log aggregator or SIEM) so a local file sink does not cap retention.
     #[serde(default)]
     pub audit_offhost_shipping: bool,
+    /// Optional path to a `registry.audit.ack_cursor.v1` file maintained by
+    /// whatever ships audit events off-host. When set, the cursor's freshness
+    /// is the observed shipping-completeness signal the shipping gates read;
+    /// local hash chains prove only retained-set consistency, not delivery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audit_ack_cursor_path: Option<PathBuf>,
+    /// Optional freshness window, in seconds, for the off-host ack cursor.
+    /// Unset defaults to [`DEFAULT_AUDIT_ACK_MAX_AGE`] (900s). Meaningless
+    /// without `audit_ack_cursor_path`; config load rejects that combination.
+    ///
+    /// [`DEFAULT_AUDIT_ACK_MAX_AGE`]: registry_platform_ops::DEFAULT_AUDIT_ACK_MAX_AGE
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audit_ack_max_age_secs: Option<u64>,
     /// Operator asserts a production review has approved signer custody for
     /// this deployment. Provider kind is not proof of custody: PKCS#11 modules
     /// can be backed by either hardware or software tokens.
     #[serde(default)]
     pub signer_custody_approved: bool,
+}
+
+impl DeploymentEvidenceConfig {
+    /// The off-host ack cursor path, if the operator configured one.
+    pub fn audit_ack_cursor_path(&self) -> Option<&Path> {
+        self.audit_ack_cursor_path.as_deref()
+    }
+
+    /// Freshness window for the off-host ack cursor, defaulting to
+    /// [`DEFAULT_AUDIT_ACK_MAX_AGE`] when `audit_ack_max_age_secs` is unset.
+    ///
+    /// [`DEFAULT_AUDIT_ACK_MAX_AGE`]: registry_platform_ops::DEFAULT_AUDIT_ACK_MAX_AGE
+    pub fn audit_ack_max_age(&self) -> Duration {
+        self.audit_ack_max_age_secs
+            .map(Duration::from_secs)
+            .unwrap_or(registry_platform_ops::DEFAULT_AUDIT_ACK_MAX_AGE)
+    }
 }
 
 /// One operator-configured waiver.
@@ -149,7 +182,7 @@ pub enum DeploymentConfigError {
     #[error("deployment.waivers[{index}].expires must be a YYYY-MM-DD date")]
     InvalidWaiverExpiry { index: usize },
     #[error(
-        "deployment.waivers[{index}] waives finding '{finding}', which is a hard deployment gate and cannot be waived"
+        "deployment.waivers[{index}] waives finding '{finding}', a hard deployment gate that cannot be waived; remove the waiver and fix the underlying condition it reports (for audit retention, ship audit events off-host and set deployment.evidence.audit_offhost_shipping: true, or use a non-local audit sink)"
     )]
     HardGateNotWaivable { index: usize, finding: String },
     #[error(
@@ -212,6 +245,17 @@ pub struct GateInput {
     pub multi_instance: bool,
     pub audit_sink_class_durable: bool,
     pub audit_retention_local_only: bool,
+    /// The declared audit shipping target is `declared_external`: a local file
+    /// sink with `audit_offhost_shipping` attested. Off-host completeness is
+    /// claimed but only observable through an ack cursor.
+    pub audit_shipping_declared_external: bool,
+    /// An off-host ack cursor path is configured, so shipping freshness is
+    /// observed rather than merely declared.
+    pub audit_ack_cursor_configured: bool,
+    /// The configured ack cursor's observed health is `ok` (fresh). False for
+    /// every other observation (stale, missing, invalid) and when no cursor is
+    /// configured: the shipping-stale gate fails closed on anything but `ok`.
+    pub audit_ack_health_ok: bool,
     pub source_insecure_url: bool,
     pub source_private_network_escape: bool,
     pub source_adapter_sidecar_without_expected_sidecar: bool,
@@ -264,6 +308,8 @@ impl Gate {
 pub const FINDING_REPLAY_IN_MEMORY_HIGH_RISK: &str = "notary.replay.in_memory_high_risk";
 pub const FINDING_AUDIT_SINK_MISSING: &str = "notary.audit.sink_missing";
 pub const FINDING_AUDIT_RETENTION_LOCAL_ONLY: &str = "notary.audit.retention_local_only";
+pub const FINDING_AUDIT_SHIPPING_UNVERIFIED: &str = "notary.audit.shipping_unverified";
+pub const FINDING_AUDIT_SHIPPING_STALE: &str = "notary.audit.shipping_stale";
 pub const FINDING_SOURCE_INSECURE_URL: &str = "notary.source.insecure_url";
 pub const FINDING_SOURCE_PRIVATE_NETWORK_ESCAPE: &str = "notary.source.private_network_escape";
 pub const FINDING_SIDECAR_EXPECTED_MISSING: &str = "notary.sidecar.expected_sidecar_missing";
@@ -319,16 +365,48 @@ fn gate_catalog() -> &'static [Gate] {
             condition: |input| !input.audit_sink_class_durable,
         },
         // notary.audit.retention_local_only: a local file sink caps retention
-        // and an attacker with host access can destroy audit evidence, unless
-        // the operator attests logs are shipped off-host. stdout and syslog
-        // are exempt: their retention is owned by the orchestrator log
-        // pipeline or the syslog daemon's own forwarding surface.
+        // and an attacker with host access can destroy audit evidence; the
+        // audit hash chain also cannot detect leading or trailing truncation
+        // of a local-only log, so off-host shipping (plus its attestation) is
+        // the completeness evidence that clears this gate. Under production
+        // this is only a warn, so the warning is the operator's single signal.
+        // stdout and syslog are exempt: their retention is owned by the
+        // orchestrator log pipeline or the syslog daemon's own forwarding
+        // surface.
         Gate {
             id: FINDING_AUDIT_RETENTION_LOCAL_ONLY,
             hosted_lab: None,
             production: Some(FindingWarn),
-            evidence_grade: Some(FindingError),
+            evidence_grade: Some(StartupFail),
             condition: |input| input.audit_retention_local_only,
+        },
+        // notary.audit.shipping_unverified: off-host shipping is declared over a
+        // local file sink (shipping_target = declared_external) but no ack
+        // cursor is configured, so the completeness the attestation claims is
+        // never observed. A warn under production and evidence_grade: the
+        // operator should point at the shipper's ack cursor so staleness can be
+        // caught. stdout and syslog do not trigger this: their retention is
+        // owned off-box and needs no local cursor.
+        Gate {
+            id: FINDING_AUDIT_SHIPPING_UNVERIFIED,
+            hosted_lab: None,
+            production: Some(FindingWarn),
+            evidence_grade: Some(FindingWarn),
+            condition: |input| {
+                input.audit_shipping_declared_external && !input.audit_ack_cursor_configured
+            },
+        },
+        // notary.audit.shipping_stale: an ack cursor is configured but its
+        // observed health is not ok. Fail closed: stale, missing, and invalid
+        // all count, because a cursor that cannot be trusted to be fresh is as
+        // good as no completeness evidence. Escalates to readiness_fail under
+        // evidence_grade so the instance refuses to report ready.
+        Gate {
+            id: FINDING_AUDIT_SHIPPING_STALE,
+            hosted_lab: None,
+            production: Some(FindingError),
+            evidence_grade: Some(ReadinessFail),
+            condition: |input| input.audit_ack_cursor_configured && !input.audit_ack_health_ok,
         },
         // Risky-but-legal defaults, surfaced as profile-bound findings. (#208)
         Gate {
@@ -880,7 +958,7 @@ mod tests {
     }
 
     #[test]
-    fn audit_retention_local_only_binds_finding_error_under_evidence_grade() {
+    fn audit_retention_local_only_binds_startup_fail_under_evidence_grade() {
         let input = GateInput {
             audit_sink_class_durable: true,
             audit_retention_local_only: true,
@@ -897,8 +975,11 @@ mod tests {
             .iter()
             .find(|f| f.id == FINDING_AUDIT_RETENTION_LOCAL_ONLY)
             .expect("retention finding present under evidence_grade");
-        assert_eq!(finding.severity, GateSeverity::FindingError);
-        assert!(evaluation.startup_failures.is_empty());
+        assert_eq!(finding.severity, GateSeverity::StartupFail);
+        assert_eq!(
+            evaluation.startup_failures,
+            vec![FINDING_AUDIT_RETENTION_LOCAL_ONLY.to_string()]
+        );
         assert!(evaluation.readiness_failures.is_empty());
     }
 
@@ -946,7 +1027,234 @@ mod tests {
     }
 
     #[test]
-    fn audit_retention_local_only_waiver_suppresses_the_finding() {
+    fn audit_shipping_unverified_binds_finding_warn_under_production_and_evidence_grade() {
+        let input = GateInput {
+            audit_sink_class_durable: true,
+            audit_shipping_declared_external: true,
+            audit_ack_cursor_configured: false,
+            ..GateInput::default()
+        };
+        for profile in [
+            DeploymentProfile::Production,
+            DeploymentProfile::EvidenceGrade,
+        ] {
+            let evaluation = evaluate_gates(Some(profile), &input, &[], "2026-06-13");
+            let finding = evaluation
+                .findings
+                .iter()
+                .find(|f| f.id == FINDING_AUDIT_SHIPPING_UNVERIFIED)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "shipping_unverified finding present under profile '{}'",
+                        profile.as_str()
+                    )
+                });
+            assert_eq!(finding.severity, GateSeverity::FindingWarn);
+            assert_eq!(finding.status, DeploymentFindingStatus::Active);
+            assert!(evaluation.startup_failures.is_empty());
+            assert!(evaluation.readiness_failures.is_empty());
+        }
+    }
+
+    #[test]
+    fn audit_shipping_unverified_is_unbound_under_local_and_hosted_lab() {
+        let input = GateInput {
+            audit_sink_class_durable: true,
+            audit_shipping_declared_external: true,
+            ..GateInput::default()
+        };
+        for profile in [DeploymentProfile::Local, DeploymentProfile::HostedLab] {
+            let evaluation = evaluate_gates(Some(profile), &input, &[], "2026-06-13");
+            assert!(
+                !evaluation
+                    .findings
+                    .iter()
+                    .any(|f| f.id == FINDING_AUDIT_SHIPPING_UNVERIFIED),
+                "shipping_unverified finding must be unbound under profile '{}'",
+                profile.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn audit_shipping_unverified_absent_when_cursor_configured() {
+        let input = GateInput {
+            audit_sink_class_durable: true,
+            audit_shipping_declared_external: true,
+            audit_ack_cursor_configured: true,
+            audit_ack_health_ok: true,
+            ..GateInput::default()
+        };
+        let evaluation = evaluate_gates(
+            Some(DeploymentProfile::Production),
+            &input,
+            &[],
+            "2026-06-13",
+        );
+        assert!(
+            !evaluation
+                .findings
+                .iter()
+                .any(|f| f.id == FINDING_AUDIT_SHIPPING_UNVERIFIED),
+            "a configured ack cursor clears shipping_unverified"
+        );
+    }
+
+    #[test]
+    fn audit_shipping_unverified_absent_without_declared_external() {
+        let input = GateInput {
+            audit_sink_class_durable: true,
+            audit_shipping_declared_external: false,
+            audit_ack_cursor_configured: false,
+            ..GateInput::default()
+        };
+        let evaluation = evaluate_gates(
+            Some(DeploymentProfile::Production),
+            &input,
+            &[],
+            "2026-06-13",
+        );
+        assert!(
+            !evaluation
+                .findings
+                .iter()
+                .any(|f| f.id == FINDING_AUDIT_SHIPPING_UNVERIFIED),
+            "shipping_unverified only binds when the target is declared_external"
+        );
+    }
+
+    #[test]
+    fn audit_shipping_stale_binds_finding_error_under_production() {
+        let input = GateInput {
+            audit_sink_class_durable: true,
+            audit_ack_cursor_configured: true,
+            audit_ack_health_ok: false,
+            ..GateInput::default()
+        };
+        let evaluation = evaluate_gates(
+            Some(DeploymentProfile::Production),
+            &input,
+            &[],
+            "2026-06-13",
+        );
+        let finding = evaluation
+            .findings
+            .iter()
+            .find(|f| f.id == FINDING_AUDIT_SHIPPING_STALE)
+            .expect("shipping_stale finding present under production");
+        assert_eq!(finding.severity, GateSeverity::FindingError);
+        assert_eq!(finding.status, DeploymentFindingStatus::Active);
+        assert!(evaluation.readiness_failures.is_empty());
+    }
+
+    #[test]
+    fn audit_shipping_stale_binds_readiness_fail_under_evidence_grade() {
+        let input = GateInput {
+            audit_sink_class_durable: true,
+            audit_ack_cursor_configured: true,
+            audit_ack_health_ok: false,
+            ..GateInput::default()
+        };
+        let evaluation = evaluate_gates(
+            Some(DeploymentProfile::EvidenceGrade),
+            &input,
+            &[],
+            "2026-06-13",
+        );
+        let finding = evaluation
+            .findings
+            .iter()
+            .find(|f| f.id == FINDING_AUDIT_SHIPPING_STALE)
+            .expect("shipping_stale finding present under evidence_grade");
+        assert_eq!(finding.severity, GateSeverity::ReadinessFail);
+        assert_eq!(
+            evaluation.readiness_failures,
+            vec![FINDING_AUDIT_SHIPPING_STALE.to_string()]
+        );
+        assert!(evaluation.startup_failures.is_empty());
+    }
+
+    #[test]
+    fn audit_shipping_stale_cleared_when_health_ok() {
+        let input = GateInput {
+            audit_sink_class_durable: true,
+            audit_ack_cursor_configured: true,
+            audit_ack_health_ok: true,
+            ..GateInput::default()
+        };
+        for profile in [
+            DeploymentProfile::Production,
+            DeploymentProfile::EvidenceGrade,
+        ] {
+            let evaluation = evaluate_gates(Some(profile), &input, &[], "2026-06-13");
+            assert!(
+                !evaluation
+                    .findings
+                    .iter()
+                    .any(|f| f.id == FINDING_AUDIT_SHIPPING_STALE),
+                "a fresh cursor clears shipping_stale under profile '{}'",
+                profile.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn audit_shipping_stale_is_unbound_under_local_and_hosted_lab() {
+        let input = GateInput {
+            audit_sink_class_durable: true,
+            audit_ack_cursor_configured: true,
+            audit_ack_health_ok: false,
+            ..GateInput::default()
+        };
+        for profile in [DeploymentProfile::Local, DeploymentProfile::HostedLab] {
+            let evaluation = evaluate_gates(Some(profile), &input, &[], "2026-06-13");
+            assert!(
+                !evaluation
+                    .findings
+                    .iter()
+                    .any(|f| f.id == FINDING_AUDIT_SHIPPING_STALE),
+                "shipping_stale finding must be unbound under profile '{}'",
+                profile.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn validate_rejects_waiver_for_shipping_stale_under_evidence_grade() {
+        // shipping_stale is readiness_fail under evidence_grade, so it is a hard
+        // gate that cannot be waived. A waiver naming it must be rejected at load.
+        let config = DeploymentConfig {
+            profile: Some(DeploymentProfile::EvidenceGrade),
+            multi_instance: false,
+            waivers: vec![waiver(FINDING_AUDIT_SHIPPING_STALE, "2099-01-01")],
+            evidence: DeploymentEvidenceConfig::default(),
+        };
+        let error = config
+            .validate()
+            .expect_err("readiness_fail shipping_stale waiver rejected");
+        assert!(matches!(
+            error,
+            DeploymentConfigError::HardGateNotWaivable { .. }
+        ));
+    }
+
+    #[test]
+    fn validate_allows_waiver_for_shipping_stale_under_production() {
+        // shipping_stale is finding_error (waivable) under production, so a
+        // waiver naming it is accepted at load.
+        let config = DeploymentConfig {
+            profile: Some(DeploymentProfile::Production),
+            multi_instance: false,
+            waivers: vec![waiver(FINDING_AUDIT_SHIPPING_STALE, "2099-01-01")],
+            evidence: DeploymentEvidenceConfig::default(),
+        };
+        config
+            .validate()
+            .expect("finding_error shipping_stale waiver accepted under production");
+    }
+
+    #[test]
+    fn audit_retention_local_only_waiver_suppresses_production_finding() {
         let input = GateInput {
             audit_sink_class_durable: true,
             audit_retention_local_only: true,

@@ -28,3 +28,9 @@ runtime output.
   default-tier emitted posture for the sensitive fixture.
 - `fixtures/posture/restricted-posture.valid.json` is a valid restricted-tier
   fixture showing topology fields that must not appear in default posture.
+- `schemas/registry.audit.ack_cursor.v1.schema.json` defines the local state
+  file an off-host audit shipper writes on each successful hand-off
+  (`acked_at`, `last_acked_hash`, optional `writer`). `evaluate_ack_health`
+  reads a file against this contract and classifies its freshness as `ok`,
+  `stale`, `missing`, `invalid`, or `unverified`.
+- `fixtures/audit/ack-cursor.valid.json` is a valid ack cursor fixture.

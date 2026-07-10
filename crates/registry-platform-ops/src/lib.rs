@@ -9,7 +9,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use fs2::FileExt;
 use registry_platform_crypto::canonicalize_json;
@@ -48,6 +48,17 @@ pub const DEFAULT_REDACTED_POSTURE_FIXTURE_V1: &str =
 
 pub const RESTRICTED_POSTURE_FIXTURE_V1: &str =
     include_str!("../fixtures/posture/restricted-posture.valid.json");
+
+/// JSON Schema for the audit off-host ack cursor: the local state file written
+/// by whatever ships audit events off-host and read by services to check
+/// shipping freshness.
+pub const AUDIT_ACK_CURSOR_SCHEMA_V1: &str =
+    include_str!("../schemas/registry.audit.ack_cursor.v1.schema.json");
+
+/// Canonical valid ack cursor document, shared so callers and tests agree on the
+/// exact shape [`evaluate_ack_health`] accepts.
+pub const AUDIT_ACK_CURSOR_FIXTURE_V1: &str =
+    include_str!("../fixtures/audit/ack-cursor.valid.json");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -210,6 +221,251 @@ pub struct AuditAssurance {
     pub retention_owner: AuditRetentionOwner,
     pub checkpoints: AuditCheckpoints,
     pub anchoring: AuditAnchoring,
+}
+
+/// Declared audit sink kind, as far as the posture shipping-state classifier
+/// distinguishes them. Products map their own sink configuration onto this
+/// enum; unmapped or future sink strings map to [`AuditSinkKind::Unknown`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum AuditSinkKind {
+    Stdout,
+    Syslog,
+    LocalFile,
+    Unknown,
+}
+
+/// Classify the posture audit shipping state from the declared sink kind and the
+/// operator's `deployment.evidence.audit_offhost_shipping` attestation.
+///
+/// Returns `(shipping_target_configured, shipping_target)`, where
+/// `shipping_target` is one of `stdout`, `syslog`, `declared_external`, `none`,
+/// or `unknown`. This is DECLARED state derived from configuration, not observed
+/// delivery health: a local file sink counts as having a shipping target only
+/// when the operator attests that logs are shipped off-host. Owning the target
+/// strings here keeps Relay and Notary from drifting on the mapping.
+pub fn audit_shipping_target(
+    sink: AuditSinkKind,
+    offhost_shipping_declared: bool,
+) -> (bool, &'static str) {
+    match sink {
+        AuditSinkKind::Stdout => (true, "stdout"),
+        AuditSinkKind::Syslog => (true, "syslog"),
+        AuditSinkKind::LocalFile if offhost_shipping_declared => (true, "declared_external"),
+        AuditSinkKind::LocalFile => (false, "none"),
+        AuditSinkKind::Unknown => (false, "unknown"),
+    }
+}
+
+/// Default freshness window for the shipping-stale deployment gates.
+///
+/// An off-host ack cursor whose `acked_at` is older than this is treated as
+/// [`AckHealth::Stale`] by [`evaluate_ack_health`] unless the caller supplies a
+/// different `max_age`.
+pub const DEFAULT_AUDIT_ACK_MAX_AGE: Duration = Duration::from_secs(900);
+
+/// Maximum forward clock skew tolerated on a cursor's `acked_at` timestamp. A
+/// timestamp further in the future than this is rejected so a forged future
+/// timestamp cannot mark a cursor fresh forever.
+const AUDIT_ACK_MAX_FUTURE_SKEW: Duration = Duration::from_secs(300);
+
+const AUDIT_ACK_CURSOR_SCHEMA_CONST: &str = "registry.audit.ack_cursor.v1";
+
+/// Observed off-host audit shipping freshness derived from the local ack cursor.
+///
+/// This is the OBSERVED counterpart to the DECLARED shipping target reported by
+/// [`audit_shipping_target`]: local hash chains prove only retained-set
+/// consistency, so the cursor written by the shipper is the completeness signal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum AckHealth {
+    /// A cursor was read and its `acked_at` is within the freshness window.
+    Ok,
+    /// A cursor was read but its `acked_at` is older than the freshness window.
+    Stale,
+    /// A cursor path was configured but no file exists at it.
+    Missing,
+    /// A cursor exists but is unreadable, not valid JSON, fails the contract, or
+    /// carries a future-skewed timestamp.
+    Invalid,
+    /// No cursor path was configured, so shipping freshness is not observed.
+    Unverified,
+}
+
+impl AckHealth {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::Stale => "stale",
+            Self::Missing => "missing",
+            Self::Invalid => "invalid",
+            Self::Unverified => "unverified",
+        }
+    }
+}
+
+/// Result of evaluating an audit off-host ack cursor.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AckObservation {
+    pub health: AckHealth,
+    /// Raw RFC3339 `acked_at` string from the cursor, when one was successfully
+    /// parsed (`Ok`, `Stale`, or a future-skew `Invalid`).
+    pub acked_at: Option<String>,
+    /// Human-readable reason for a `Missing` or `Invalid` observation. Never
+    /// swallows the underlying error; carries the parse or I/O message.
+    pub detail: Option<String>,
+}
+
+impl AckObservation {
+    fn invalid(detail: String) -> Self {
+        Self {
+            health: AckHealth::Invalid,
+            acked_at: None,
+            detail: Some(detail),
+        }
+    }
+}
+
+/// Evaluate the freshness of off-host audit shipping from a local ack cursor.
+///
+/// `now` is a parameter (never sampled internally) so callers can test every
+/// state deterministically. `max_age` is the freshness window; use
+/// [`DEFAULT_AUDIT_ACK_MAX_AGE`] for the default deployment gates.
+///
+/// Semantics:
+/// - `cursor_path` `None` -> [`AckHealth::Unverified`] (no observation configured).
+/// - file missing -> [`AckHealth::Missing`].
+/// - unreadable / invalid JSON / contract violation / future-skewed timestamp ->
+///   [`AckHealth::Invalid`] with a `detail`.
+/// - `acked_at` within `max_age` of `now` -> [`AckHealth::Ok`]; older ->
+///   [`AckHealth::Stale`].
+pub fn evaluate_ack_health(
+    cursor_path: Option<&Path>,
+    now: SystemTime,
+    max_age: Duration,
+) -> AckObservation {
+    let Some(path) = cursor_path else {
+        return AckObservation {
+            health: AckHealth::Unverified,
+            acked_at: None,
+            detail: None,
+        };
+    };
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return AckObservation {
+                health: AckHealth::Missing,
+                acked_at: None,
+                detail: Some(format!("ack cursor not found at {}", path.display())),
+            };
+        }
+        Err(error) => {
+            return AckObservation::invalid(format!("ack cursor unreadable: {error}"));
+        }
+    };
+    let value: Value = match serde_json::from_slice(&bytes) {
+        Ok(value) => value,
+        Err(error) => {
+            return AckObservation::invalid(format!("ack cursor is not valid JSON: {error}"));
+        }
+    };
+    let acked_at_raw = match validate_ack_cursor(&value) {
+        Ok(acked_at) => acked_at,
+        Err(reason) => return AckObservation::invalid(reason),
+    };
+    let acked_at = match OffsetDateTime::parse(&acked_at_raw, &Rfc3339) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            return AckObservation::invalid(format!(
+                "ack cursor acked_at is not a valid RFC3339 timestamp: {error}"
+            ));
+        }
+    };
+    let acked_at_system = SystemTime::from(acked_at);
+    if let Ok(ahead) = acked_at_system.duration_since(now) {
+        if ahead > AUDIT_ACK_MAX_FUTURE_SKEW {
+            return AckObservation {
+                health: AckHealth::Invalid,
+                acked_at: Some(acked_at_raw),
+                detail: Some(format!(
+                    "ack cursor acked_at is {}s in the future (max tolerated skew {}s)",
+                    ahead.as_secs(),
+                    AUDIT_ACK_MAX_FUTURE_SKEW.as_secs()
+                )),
+            };
+        }
+    }
+    let age = now
+        .duration_since(acked_at_system)
+        .unwrap_or(Duration::ZERO);
+    let health = if age <= max_age {
+        AckHealth::Ok
+    } else {
+        AckHealth::Stale
+    };
+    AckObservation {
+        health,
+        acked_at: Some(acked_at_raw),
+        detail: None,
+    }
+}
+
+/// Validate a parsed ack cursor against the `registry.audit.ack_cursor.v1`
+/// contract, mirroring the JSON Schema. Returns the raw `acked_at` string on
+/// success or a human-readable reason on failure.
+fn validate_ack_cursor(value: &Value) -> Result<String, String> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| "ack cursor is not a JSON object".to_string())?;
+    for key in object.keys() {
+        if !matches!(
+            key.as_str(),
+            "schema" | "acked_at" | "last_acked_hash" | "writer"
+        ) {
+            return Err(format!("ack cursor has unknown field: {key}"));
+        }
+    }
+    match object.get("schema").and_then(Value::as_str) {
+        Some(AUDIT_ACK_CURSOR_SCHEMA_CONST) => {}
+        Some(other) => {
+            return Err(format!(
+                "ack cursor schema is {other}, expected {AUDIT_ACK_CURSOR_SCHEMA_CONST}"
+            ));
+        }
+        None => return Err("ack cursor is missing required field: schema".to_string()),
+    }
+    let last_acked_hash = object
+        .get("last_acked_hash")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "ack cursor is missing required field: last_acked_hash".to_string())?;
+    if !is_sha256_lower_hash(last_acked_hash) {
+        return Err(format!(
+            "ack cursor last_acked_hash is malformed: {last_acked_hash}"
+        ));
+    }
+    if let Some(writer) = object.get("writer") {
+        if !writer.is_string() {
+            return Err("ack cursor writer must be a string".to_string());
+        }
+    }
+    let acked_at = object
+        .get("acked_at")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "ack cursor is missing required field: acked_at".to_string())?;
+    Ok(acked_at.to_string())
+}
+
+/// Match the `^sha256:[0-9a-f]{64}$` pattern the ack cursor schema pins on
+/// `last_acked_hash`: strictly lowercase hex, no uppercase.
+fn is_sha256_lower_hash(value: &str) -> bool {
+    let Some(hex) = value.strip_prefix("sha256:") else {
+        return false;
+    };
+    hex.len() == 64
+        && hex
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2372,6 +2628,235 @@ mod tests {
 
     fn test_hash(label: char) -> String {
         format!("sha256:{}", label.to_string().repeat(64))
+    }
+
+    #[test]
+    fn audit_shipping_target_maps_every_sink_kind() {
+        // stdout and syslog are always their own shipping target, regardless of
+        // the off-host attestation.
+        for declared in [false, true] {
+            assert_eq!(
+                audit_shipping_target(AuditSinkKind::Stdout, declared),
+                (true, "stdout")
+            );
+            assert_eq!(
+                audit_shipping_target(AuditSinkKind::Syslog, declared),
+                (true, "syslog")
+            );
+        }
+        // A local file sink has a shipping target only when the operator attests
+        // off-host shipping; otherwise it ships nowhere.
+        assert_eq!(
+            audit_shipping_target(AuditSinkKind::LocalFile, true),
+            (true, "declared_external")
+        );
+        assert_eq!(
+            audit_shipping_target(AuditSinkKind::LocalFile, false),
+            (false, "none")
+        );
+        // An unmapped/future sink kind is never claimed as configured.
+        for declared in [false, true] {
+            assert_eq!(
+                audit_shipping_target(AuditSinkKind::Unknown, declared),
+                (false, "unknown")
+            );
+        }
+    }
+
+    fn cursor_acked_at_system() -> SystemTime {
+        SystemTime::from(
+            OffsetDateTime::parse("2026-06-04T09:59:00Z", &Rfc3339).expect("acked_at parses"),
+        )
+    }
+
+    fn write_cursor(dir: &Path, body: &str) -> PathBuf {
+        let path = dir.join("audit-ack-cursor.json");
+        fs::write(&path, body).expect("write cursor");
+        path
+    }
+
+    #[test]
+    fn evaluate_ack_health_unverified_when_no_cursor_configured() {
+        let observation = evaluate_ack_health(None, SystemTime::now(), DEFAULT_AUDIT_ACK_MAX_AGE);
+        assert_eq!(observation.health, AckHealth::Unverified);
+        assert!(observation.acked_at.is_none());
+        assert!(observation.detail.is_none());
+    }
+
+    #[test]
+    fn evaluate_ack_health_missing_when_file_absent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("does-not-exist.json");
+        let observation =
+            evaluate_ack_health(Some(&path), SystemTime::now(), DEFAULT_AUDIT_ACK_MAX_AGE);
+        assert_eq!(observation.health, AckHealth::Missing);
+        assert!(observation.acked_at.is_none());
+        assert!(
+            observation
+                .detail
+                .as_deref()
+                .expect("missing detail")
+                .contains("does-not-exist.json"),
+            "missing detail should name the path"
+        );
+    }
+
+    #[test]
+    fn evaluate_ack_health_ok_when_fresh() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = write_cursor(dir.path(), AUDIT_ACK_CURSOR_FIXTURE_V1);
+        let now = cursor_acked_at_system() + Duration::from_secs(60);
+        let observation = evaluate_ack_health(Some(&path), now, DEFAULT_AUDIT_ACK_MAX_AGE);
+        assert_eq!(observation.health, AckHealth::Ok);
+        assert_eq!(
+            observation.acked_at.as_deref(),
+            Some("2026-06-04T09:59:00Z")
+        );
+        assert!(observation.detail.is_none());
+    }
+
+    #[test]
+    fn evaluate_ack_health_ok_at_exact_max_age_boundary() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = write_cursor(dir.path(), AUDIT_ACK_CURSOR_FIXTURE_V1);
+        let now = cursor_acked_at_system() + DEFAULT_AUDIT_ACK_MAX_AGE;
+        let observation = evaluate_ack_health(Some(&path), now, DEFAULT_AUDIT_ACK_MAX_AGE);
+        assert_eq!(
+            observation.health,
+            AckHealth::Ok,
+            "age exactly equal to max_age is fresh"
+        );
+    }
+
+    #[test]
+    fn evaluate_ack_health_stale_just_past_max_age() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = write_cursor(dir.path(), AUDIT_ACK_CURSOR_FIXTURE_V1);
+        let now = cursor_acked_at_system() + DEFAULT_AUDIT_ACK_MAX_AGE + Duration::from_secs(1);
+        let observation = evaluate_ack_health(Some(&path), now, DEFAULT_AUDIT_ACK_MAX_AGE);
+        assert_eq!(observation.health, AckHealth::Stale);
+        assert_eq!(
+            observation.acked_at.as_deref(),
+            Some("2026-06-04T09:59:00Z")
+        );
+        assert!(observation.detail.is_none());
+    }
+
+    #[test]
+    fn evaluate_ack_health_invalid_on_future_skew() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = write_cursor(dir.path(), AUDIT_ACK_CURSOR_FIXTURE_V1);
+        // now is well before acked_at: a forged future timestamp must not pass.
+        let now = cursor_acked_at_system() - Duration::from_secs(600);
+        let observation = evaluate_ack_health(Some(&path), now, DEFAULT_AUDIT_ACK_MAX_AGE);
+        assert_eq!(observation.health, AckHealth::Invalid);
+        assert_eq!(
+            observation.acked_at.as_deref(),
+            Some("2026-06-04T09:59:00Z")
+        );
+        assert!(
+            observation
+                .detail
+                .as_deref()
+                .expect("skew detail")
+                .contains("future"),
+            "skew detail should mention the future timestamp"
+        );
+    }
+
+    #[test]
+    fn evaluate_ack_health_ok_within_future_skew_tolerance() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = write_cursor(dir.path(), AUDIT_ACK_CURSOR_FIXTURE_V1);
+        // 60s in the future is within the 300s skew tolerance and counts as fresh.
+        let now = cursor_acked_at_system() - Duration::from_secs(60);
+        let observation = evaluate_ack_health(Some(&path), now, DEFAULT_AUDIT_ACK_MAX_AGE);
+        assert_eq!(observation.health, AckHealth::Ok);
+    }
+
+    #[test]
+    fn evaluate_ack_health_invalid_on_malformed_json() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = write_cursor(dir.path(), "{ not json");
+        let observation =
+            evaluate_ack_health(Some(&path), SystemTime::now(), DEFAULT_AUDIT_ACK_MAX_AGE);
+        assert_eq!(observation.health, AckHealth::Invalid);
+        assert!(observation.acked_at.is_none());
+        assert!(observation.detail.is_some());
+    }
+
+    #[test]
+    fn evaluate_ack_health_invalid_on_contract_violations() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let hash = "sha256:4444444444444444444444444444444444444444444444444444444444444444";
+        let uppercase = "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        for (label, body) in [
+            (
+                "wrong schema const",
+                format!(
+                    r#"{{"schema":"registry.audit.ack_cursor.v2","acked_at":"2026-06-04T09:59:00Z","last_acked_hash":"{hash}"}}"#
+                ),
+            ),
+            (
+                "missing required field",
+                format!(
+                    r#"{{"schema":"registry.audit.ack_cursor.v1","last_acked_hash":"{hash}"}}"#
+                ),
+            ),
+            (
+                "malformed hash",
+                r#"{"schema":"registry.audit.ack_cursor.v1","acked_at":"2026-06-04T09:59:00Z","last_acked_hash":"sha256:NOTHEX"}"#
+                    .to_string(),
+            ),
+            (
+                "uppercase hash",
+                format!(
+                    r#"{{"schema":"registry.audit.ack_cursor.v1","acked_at":"2026-06-04T09:59:00Z","last_acked_hash":"{uppercase}"}}"#
+                ),
+            ),
+            (
+                "unknown field",
+                format!(
+                    r#"{{"schema":"registry.audit.ack_cursor.v1","acked_at":"2026-06-04T09:59:00Z","last_acked_hash":"{hash}","backlog_depth":3}}"#
+                ),
+            ),
+            (
+                "non-rfc3339 acked_at",
+                format!(
+                    r#"{{"schema":"registry.audit.ack_cursor.v1","acked_at":"not-a-timestamp","last_acked_hash":"{hash}"}}"#
+                ),
+            ),
+        ] {
+            let path = write_cursor(dir.path(), &body);
+            let observation = evaluate_ack_health(
+                Some(&path),
+                cursor_acked_at_system(),
+                DEFAULT_AUDIT_ACK_MAX_AGE,
+            );
+            assert_eq!(
+                observation.health,
+                AckHealth::Invalid,
+                "expected invalid for {label}"
+            );
+            assert!(
+                observation.detail.is_some(),
+                "invalid observation for {label} must carry a detail"
+            );
+        }
+    }
+
+    #[test]
+    fn ack_health_as_str_covers_every_variant() {
+        assert_eq!(AckHealth::Ok.as_str(), "ok");
+        assert_eq!(AckHealth::Stale.as_str(), "stale");
+        assert_eq!(AckHealth::Missing.as_str(), "missing");
+        assert_eq!(AckHealth::Invalid.as_str(), "invalid");
+        assert_eq!(AckHealth::Unverified.as_str(), "unverified");
+    }
+
+    #[test]
+    fn default_audit_ack_max_age_is_fifteen_minutes() {
+        assert_eq!(DEFAULT_AUDIT_ACK_MAX_AGE, Duration::from_secs(900));
     }
 
     fn test_key() -> AntiRollbackKey {

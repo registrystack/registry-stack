@@ -15,8 +15,31 @@
   archives the corrupt file set to `<name>.corrupt-<ts>`, starts a fresh
   chain whose first record is a hash-linked `audit.chain.break` event chained
   onto the last verifiable tail (torn trailing lines from an unclean stop are
-  treated as a break, not an abort), and records the trusted start hash in
-  `<path>.anchor.json` as operator evidence.
+  treated as a break, not an abort), and leaves off-host shipping as the
+  completeness guarantee. Recovery also quarantines a legacy
+  `<active-path>.anchor.json` sidecar left behind by pre-removal releases,
+  renaming it with the same `.corrupt-<timestamp>` suffix as the quarantined
+  data files.
+- `registry-platform-ops`: `AuditSinkKind` and `audit_shipping_target(sink,
+  offhost_shipping_declared)`, a shared classifier that maps a sink kind and
+  the `deployment.evidence.audit_offhost_shipping` attestation onto the
+  posture/doctor shipping-state fields (`shipping_target_configured`,
+  `shipping_target`), so Registry Relay and Registry Notary cannot drift on
+  the classification.
+- `registry-platform-ops`: `registry.audit.ack_cursor.v1`, the JSON Schema
+  contract for the local state file written by whatever ships audit events
+  off-host (`acked_at`, `last_acked_hash`, optional `writer`), plus
+  `evaluate_ack_health(cursor_path, now, max_age)`, a shared helper that reads
+  the cursor and classifies it as `ok`, `stale`, `missing`, `invalid`, or
+  `unverified` (no cursor configured). The default freshness window is
+  `DEFAULT_AUDIT_ACK_MAX_AGE` (900s); a cursor whose `acked_at` is more than
+  300s ahead of `now` is treated as `invalid` rather than perpetually fresh.
+  An unreadable file, malformed JSON, a contract violation, or a
+  non-RFC3339 `acked_at` all fail closed to `invalid` with a `detail` message,
+  never silently to `ok`. This is an observed liveness/freshness signal for
+  the off-host shipping path, not proof that every audit event arrived:
+  `last_acked_hash` binds the cursor to the chain for future backlog-depth
+  checks, but no such check exists yet.
 
 ### Changed
 
@@ -27,6 +50,49 @@
   `JsonlFileSink::with_rotation` (Registry Relay and Registry Notary both
   configure 100 MB x 14 files) are unaffected; this change primarily protects
   the `registry-platform-sts` bridge binary, which uses the crate default.
+- `registry-platform-audit` chain verification now treats the first retained
+  record's `prev_hash` as the retained-set boundary. **Removed the local
+  trusted-anchor verification API**: `ChainVerificationAnchors`,
+  `verify_chain_with_anchors`, `verify_jsonl_lines_with_anchors`, and the
+  `LastHashMismatch` error variant are gone, and the `.anchor.json`
+  completeness-anchor sidecar is no longer written or read. Consumers verify
+  retained-set internal consistency with `verify_chain`; completeness comes
+  from off-host shipping evidence
+  (`deployment.evidence.audit_offhost_shipping`), not a local anchor. Local
+  verification detects edits, insertions, reordering, and interior deletions
+  within the retained set only; leading or trailing truncation and a
+  self-consistent full rewrite of the retained set are not locally
+  detectable.
+- `registry-platform-ops`'s `registry.ops.posture.v1` schema:
+  `posture.audit` gains two required fields, `shipping_target_configured`
+  (bool) and `shipping_target` (one of `stdout`, `syslog`,
+  `declared_external`, `none`, `unknown`), reporting the sink type and the
+  off-host shipping attestation. These are declared, config-derived state,
+  not observed delivery health; there are deliberately no delivery-health
+  fields yet (that contract is an open decision). The schema is
+  `additionalProperties: false` and keeps the `v1` identifier, so posture
+  documents produced before this release fail against the new schema and
+  vice versa: producers and strict validators pinned to
+  `registry.ops.posture.v1` must upgrade together.
+- BREAKING: `registry-platform-ops`'s `registry.ops.posture.v1` schema:
+  `posture.audit` gains two more required, nullable fields, `shipping_health`
+  (one of `ok`, `stale`, `missing`, `invalid`, `unverified`, or `null`) and
+  `shipping_observed_at` (an RFC3339 timestamp, or `null`), reporting the
+  observed freshness of off-host audit shipping from the ack cursor described
+  above under Added. Both are `null` iff `shipping_target_configured` is
+  `false`; `shipping_health` is `"unverified"` when a shipping target is
+  declared but no cursor is configured. This fills the delivery-health gap the
+  previous entry called out, but stays an observed *freshness* signal, not
+  proof that every shipped event arrived. The schema keeps the `v1`
+  identifier and `additionalProperties: false`, so this is the second breaking
+  change to `posture.audit` under the `v1` identifier in this release:
+  producers and strict validators pinned to `registry.ops.posture.v1` must
+  upgrade together, and a validator built against the previous field set
+  rejects documents carrying the new fields.
+- `registry-config-report`'s `registry.config.diagnostic_report.v1` schema:
+  the `audit_shipping` block gains optional `shipping_health` and
+  `shipping_observed_at` fields with the same semantics as the posture fields
+  above. Optional, so existing diagnostic report consumers are unaffected.
 
 ## v0.3.1 - 2026-06-21
 

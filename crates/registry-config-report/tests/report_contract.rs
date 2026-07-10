@@ -107,6 +107,87 @@ fn product_diagnostic_schema_rejects_wrong_schema_unknown_status_and_bad_hash() 
 }
 
 #[test]
+fn product_diagnostic_schema_accepts_optional_declared_audit_shipping() {
+    // Canonical fixtures carry the declared audit shipping state the products'
+    // doctor reports emit; the strict schema accepts it.
+    let report = parse(NOTARY_DIAGNOSTIC_OK_FIXTURE_V1);
+    assert_eq!(report["audit_shipping"]["sink_type"], "file");
+    assert_eq!(report["audit_shipping"]["shipping_target_configured"], true);
+    assert_eq!(
+        report["audit_shipping"]["shipping_target"],
+        "declared_external"
+    );
+    assert_valid(PRODUCT_DIAGNOSTIC_REPORT_SCHEMA_V1, &report);
+
+    // The section is optional: a report may omit it (e.g. when config is
+    // unavailable) and still validate.
+    let mut without = report.clone();
+    without
+        .as_object_mut()
+        .expect("report object")
+        .remove("audit_shipping");
+    assert_valid(PRODUCT_DIAGNOSTIC_REPORT_SCHEMA_V1, &without);
+}
+
+#[test]
+fn product_diagnostic_schema_rejects_malformed_audit_shipping() {
+    let mut missing_field = parse(RELAY_DIAGNOSTIC_OK_FIXTURE_V1);
+    missing_field["audit_shipping"]
+        .as_object_mut()
+        .expect("audit_shipping object")
+        .remove("shipping_target");
+    assert_invalid(PRODUCT_DIAGNOSTIC_REPORT_SCHEMA_V1, &missing_field);
+
+    // A field that is not part of the audit_shipping contract (e.g. a last-success
+    // timestamp) is still rejected by the strict schema.
+    let mut unknown_field = parse(RELAY_DIAGNOSTIC_OK_FIXTURE_V1);
+    unknown_field["audit_shipping"]["last_success_at"] = json!("2026-06-20T00:00:00Z");
+    assert_invalid(PRODUCT_DIAGNOSTIC_REPORT_SCHEMA_V1, &unknown_field);
+}
+
+#[test]
+fn product_diagnostic_schema_accepts_observed_audit_shipping_fields() {
+    // Canonical fixtures now carry the observed shipping-health fields and still
+    // validate under the strict schema.
+    for fixture in [
+        RELAY_DIAGNOSTIC_OK_FIXTURE_V1,
+        NOTARY_DIAGNOSTIC_OK_FIXTURE_V1,
+        RELAY_DIAGNOSTIC_ERROR_FIXTURE_V1,
+        NOTARY_DIAGNOSTIC_ERROR_FIXTURE_V1,
+    ] {
+        let report = parse(fixture);
+        assert!(report["audit_shipping"].get("shipping_health").is_some());
+        assert!(report["audit_shipping"]
+            .get("shipping_observed_at")
+            .is_some());
+        assert_valid(PRODUCT_DIAGNOSTIC_REPORT_SCHEMA_V1, &report);
+    }
+
+    // An observed health plus timestamp validates.
+    let mut with_health = parse(NOTARY_DIAGNOSTIC_OK_FIXTURE_V1);
+    with_health["audit_shipping"]["shipping_health"] = json!("stale");
+    with_health["audit_shipping"]["shipping_observed_at"] = json!("2026-06-19T23:00:00Z");
+    assert_valid(PRODUCT_DIAGNOSTIC_REPORT_SCHEMA_V1, &with_health);
+
+    // Null health/observed (declared-only, no cursor) validates.
+    let mut null_health = parse(RELAY_DIAGNOSTIC_OK_FIXTURE_V1);
+    null_health["audit_shipping"]["shipping_health"] = json!(null);
+    null_health["audit_shipping"]["shipping_observed_at"] = json!(null);
+    assert_valid(PRODUCT_DIAGNOSTIC_REPORT_SCHEMA_V1, &null_health);
+
+    // An invalid shipping_health enum value is rejected.
+    let mut bad_health = parse(RELAY_DIAGNOSTIC_OK_FIXTURE_V1);
+    bad_health["audit_shipping"]["shipping_health"] = json!("healthy");
+    assert_invalid(PRODUCT_DIAGNOSTIC_REPORT_SCHEMA_V1, &bad_health);
+
+    // Even alongside the new observed fields, unknown fields inside
+    // audit_shipping still fail.
+    let mut unknown = parse(NOTARY_DIAGNOSTIC_OK_FIXTURE_V1);
+    unknown["audit_shipping"]["backlog_depth"] = json!(3);
+    assert_invalid(PRODUCT_DIAGNOSTIC_REPORT_SCHEMA_V1, &unknown);
+}
+
+#[test]
 fn explanation_schema_validates_canonical_fixture() {
     assert_valid(
         CONFIG_EXPLANATION_SCHEMA_V1,
@@ -148,6 +229,44 @@ fn serde_types_round_trip_canonical_fixtures() {
     let _: ConfigExplanation = decode(CONFIG_EXPLANATION_FIXTURE_V1);
     let _: ConfigExplanationDocument = decode(CONFIG_EXPLANATION_FIXTURE_V1);
     round_trip::<RegistryctlValidationReport>(REGISTRYCTL_VALIDATION_FIXTURE_V1);
+}
+
+#[test]
+fn diagnostic_report_round_trip_preserves_audit_shipping_section() {
+    // The canonical fixtures all carry a populated audit_shipping section.
+    // Decoding into the typed ConfigDiagnosticReport and re-encoding must not
+    // silently drop it (a prior gap: the struct didn't model the field, so
+    // registryctl's doctor aggregation lost it on re-serialization).
+    for fixture in [
+        RELAY_DIAGNOSTIC_OK_FIXTURE_V1,
+        RELAY_DIAGNOSTIC_ERROR_FIXTURE_V1,
+        NOTARY_DIAGNOSTIC_OK_FIXTURE_V1,
+        NOTARY_DIAGNOSTIC_ERROR_FIXTURE_V1,
+    ] {
+        let original = parse(fixture);
+        let decoded: ConfigDiagnosticReport = decode(fixture);
+        let encoded = serde_json::to_value(&decoded).expect("report re-encodes");
+        assert_eq!(
+            encoded["audit_shipping"], original["audit_shipping"],
+            "audit_shipping section must survive a typed decode/encode round trip"
+        );
+    }
+}
+
+#[test]
+fn serde_reports_omit_absent_audit_shipping_to_preserve_schema_contract() {
+    // audit_shipping is OPTIONAL on the wire: a report that never populates it
+    // (e.g. registryctl's fallback report when a product binary can't be run)
+    // must serialize without the key at all, not as an explicit null.
+    let mut report: ConfigDiagnosticReport =
+        serde_json::from_str(RELAY_DIAGNOSTIC_OK_FIXTURE_V1).expect("fixture decodes");
+    report.audit_shipping = None;
+    let json = serde_json::to_value(&report).expect("report serializes");
+    assert!(
+        json.get("audit_shipping").is_none(),
+        "absent audit_shipping must be omitted, not null"
+    );
+    assert_valid(PRODUCT_DIAGNOSTIC_REPORT_SCHEMA_V1, &json);
 }
 
 #[test]

@@ -2502,6 +2502,10 @@
                       "configured": true,
                       "latest_sequence": 88,
                       "latest_tail_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+                      "shipping_health": "ok",
+                      "shipping_observed_at": "2026-06-04T09:59:00Z",
+                      "shipping_target": "declared_external",
+                      "shipping_target_configured": true,
                       "sink_type": "file",
                       "verification_status": "verified",
                       "verified_at": "2026-06-04T09:59:30Z"

@@ -14,9 +14,9 @@ use axum::{Extension, Router};
 use registry_manifest_core::CompiledMetadata;
 use registry_platform_crypto::KeyReadiness;
 use registry_platform_ops::{
-    filter_posture_for_tier, internal_config_hash, override_pin_posture,
-    posture_safe_runtime_config_hash, AuditWritePolicy, ConfigProvenance, ConfigSource,
-    PostureFilterError, PostureTier,
+    audit_shipping_target, filter_posture_for_tier, internal_config_hash, override_pin_posture,
+    posture_safe_runtime_config_hash, AuditSinkKind, AuditWritePolicy, ConfigProvenance,
+    ConfigSource, PostureFilterError, PostureTier,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -502,15 +502,37 @@ fn posture_tier_invalid_response() -> Response {
 }
 
 fn audit_summary(config: &Config) -> Value {
+    let (shipping_target_configured, shipping_target) = audit_shipping_state(config);
+    // Observed shipping freshness from the local ack cursor (declared state is
+    // above; this is the observed counterpart). Reading the cursor here mirrors
+    // the doctor report via the shared helpers so the two never drift.
+    let observation = crate::deployment::audit_ack_observation(config);
+    let (shipping_health, shipping_observed_at) =
+        crate::deployment::shipping_health_fields(&observation, shipping_target_configured);
     json!({
         "configured": true,
         "sink_type": audit_sink_label(config),
+        "shipping_target_configured": shipping_target_configured,
+        "shipping_target": shipping_target,
+        "shipping_health": shipping_health,
+        "shipping_observed_at": shipping_observed_at,
         "checkpoint_status": if config.audit.chain { "available" } else { "unavailable" },
         "latest_tail_hash": null,
         "latest_sequence": null,
         "verified_at": null,
         "verification_status": "not_supported",
     })
+}
+
+fn audit_shipping_state(config: &Config) -> (bool, &'static str) {
+    // Relay's sink is a closed enum, so the shared classifier never sees
+    // `Unknown` here.
+    let sink = match &config.audit.sink {
+        crate::config::AuditSinkConfig::Stdout { .. } => AuditSinkKind::Stdout,
+        crate::config::AuditSinkConfig::Syslog { .. } => AuditSinkKind::Syslog,
+        crate::config::AuditSinkConfig::File { .. } => AuditSinkKind::LocalFile,
+    };
+    audit_shipping_target(sink, config.deployment.evidence.audit_offhost_shipping)
 }
 
 /// Build the `deployment` posture object: declared profile, gate findings, and
@@ -905,6 +927,76 @@ datasets: []
         config.audit.write_policy = AuditWritePolicy::AvailabilityFirst;
         let audit = audit_assurance(&config);
         assert_eq!(audit["write_policy"], "availability_first");
+    }
+
+    #[test]
+    fn posture_audit_summary_reports_shipping_state() {
+        let mut config = parse_minimal_config(&minimal_config_yaml());
+        let audit = audit_summary(&config);
+        assert_eq!(audit["shipping_target_configured"], true);
+        assert_eq!(audit["shipping_target"], "stdout");
+
+        config.audit.sink = crate::config::AuditSinkConfig::File {
+            path: std::path::PathBuf::from("/tmp/relay-audit.jsonl"),
+            rotate: crate::config::RotateConfig::default(),
+        };
+        let audit = audit_summary(&config);
+        assert_eq!(audit["shipping_target_configured"], false);
+        assert_eq!(audit["shipping_target"], "none");
+
+        config.deployment.evidence.audit_offhost_shipping = true;
+        let audit = audit_summary(&config);
+        assert_eq!(audit["shipping_target_configured"], true);
+        assert_eq!(audit["shipping_target"], "declared_external");
+    }
+
+    #[test]
+    fn posture_audit_summary_reports_shipping_health() {
+        // Stdout ships inherently and has no cursor: health is "unverified",
+        // observed_at is null.
+        let mut config = parse_minimal_config(&minimal_config_yaml());
+        let audit = audit_summary(&config);
+        assert_eq!(audit["shipping_health"], "unverified");
+        assert!(audit["shipping_observed_at"].is_null());
+
+        // A local file sink with no off-host shipping has no shipping target, so
+        // health is null (not "unverified").
+        config.audit.sink = crate::config::AuditSinkConfig::File {
+            path: std::path::PathBuf::from("/tmp/relay-audit.jsonl"),
+            rotate: crate::config::RotateConfig::default(),
+        };
+        let audit = audit_summary(&config);
+        assert_eq!(audit["shipping_target_configured"], false);
+        assert!(audit["shipping_health"].is_null());
+        assert!(audit["shipping_observed_at"].is_null());
+
+        // Declared off-host shipping with a fresh cursor: health "ok" and the
+        // observed_at echoes the cursor's acked_at.
+        config.deployment.evidence.audit_offhost_shipping = true;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cursor_path = dir.path().join("ack-cursor.json");
+        let acked_at = OffsetDateTime::now_utc()
+            .format(&Rfc3339)
+            .expect("rfc3339 timestamp");
+        std::fs::write(
+            &cursor_path,
+            format!(
+                r#"{{"schema":"registry.audit.ack_cursor.v1","acked_at":"{acked_at}","last_acked_hash":"sha256:{hash}","writer":"test-shipper"}}"#,
+                hash = "4".repeat(64)
+            ),
+        )
+        .expect("cursor writes");
+        config.deployment.evidence.audit_ack_cursor_path = Some(cursor_path.clone());
+        let audit = audit_summary(&config);
+        assert_eq!(audit["shipping_health"], "ok");
+        assert_eq!(audit["shipping_observed_at"], acked_at);
+
+        // Removing the file leaves the cursor configured but missing: fail
+        // closed to "missing".
+        std::fs::remove_file(&cursor_path).expect("cursor removed");
+        let audit = audit_summary(&config);
+        assert_eq!(audit["shipping_health"], "missing");
+        assert!(audit["shipping_observed_at"].is_null());
     }
 
     /// An undeclared profile (the minimal config default) omits `profile`,

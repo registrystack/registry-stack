@@ -161,7 +161,7 @@ async fn platform_chained_envelopes_verify_and_detect_tampering() {
 }
 
 #[tokio::test]
-async fn platform_verification_rejects_rotation_segment_without_genesis() {
+async fn platform_verification_accepts_rotation_segment_as_retained_set() {
     let sink = InMemorySink::new();
     let state = ChainState::unkeyed_dev_only();
     let first = state
@@ -169,24 +169,18 @@ async fn platform_verification_rejects_rotation_segment_without_genesis() {
         .await
         .expect("first append");
 
-    let rotated = state
+    let retained = state
         .append(&sink, sample_record(2))
         .await
-        .expect("second append")
-        .to_jsonl()
-        .expect("rotated jsonl");
+        .expect("second append");
+    let rotated = retained.to_jsonl().expect("rotated jsonl");
 
-    let err =
+    let verification =
         verify_jsonl_lines_with_hasher([rotated.as_str()], &AuditChainHasher::unkeyed_dev_only())
-            .expect_err("public verification requires the retained genesis chain");
-    assert!(matches!(
-        err,
-        ChainVerificationError::PrevHashMismatch {
-            line: 1,
-            expected: None,
-            actual: Some(actual),
-        } if actual == first.record_hash
-    ));
+            .expect("rotation segment verifies as a retained set");
+    assert_eq!(verification.records, 1);
+    assert_eq!(verification.start_prev_hash, Some(first.record_hash));
+    assert_eq!(verification.last_hash, Some(retained.record_hash));
 }
 
 #[tokio::test]

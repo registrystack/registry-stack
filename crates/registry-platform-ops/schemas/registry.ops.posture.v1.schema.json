@@ -637,6 +637,10 @@
       "required": [
         "configured",
         "sink_type",
+        "shipping_target_configured",
+        "shipping_target",
+        "shipping_health",
+        "shipping_observed_at",
         "checkpoint_status",
         "verification_status"
       ],
@@ -653,6 +657,40 @@
             "webhook",
             "none",
             "unknown"
+          ]
+        },
+        "shipping_target_configured": {
+          "type": "boolean"
+        },
+        "shipping_target": {
+          "enum": [
+            "none",
+            "stdout",
+            "syslog",
+            "declared_external",
+            "unknown"
+          ]
+        },
+        "shipping_health": {
+          "description": "Observed off-host shipping freshness from the local ack cursor. Null iff shipping_target_configured is false; \"unverified\" means a shipping target is declared but no ack cursor is configured.",
+          "enum": [
+            "ok",
+            "stale",
+            "missing",
+            "invalid",
+            "unverified",
+            null
+          ]
+        },
+        "shipping_observed_at": {
+          "description": "The ack cursor's acked_at when a cursor was successfully read (shipping_health ok or stale), else null.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/rfc3339"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "checkpoint_status": {

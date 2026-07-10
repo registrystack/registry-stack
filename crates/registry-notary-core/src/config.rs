@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use std::collections::HashSet;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use registry_platform_authcommon::CredentialFingerprintRef;
 use registry_platform_config::DeprecatedConfigField;
@@ -536,6 +536,27 @@ impl StandaloneRegistryNotaryConfig {
                 reason: error.to_string(),
             }
         })?;
+        self.validate_audit_ack_cursor()?;
+        Ok(())
+    }
+
+    /// Validate the off-host ack cursor configuration against the audit sink.
+    ///
+    /// A freshness window with no cursor to read is meaningless, and pointing a
+    /// cursor at a local file sink that does not declare off-host shipping
+    /// asserts observed shipping that the operator never attested. Both are
+    /// config errors so the contradiction is caught at load, not papered over.
+    fn validate_audit_ack_cursor(&self) -> Result<(), EvidenceConfigError> {
+        let evidence = &self.deployment.evidence;
+        if evidence.audit_ack_max_age_secs.is_some() && evidence.audit_ack_cursor_path.is_none() {
+            return Err(EvidenceConfigError::AuditAckMaxAgeWithoutCursor);
+        }
+        if evidence.audit_ack_cursor_path.is_some()
+            && matches!(self.audit.sink.as_str(), "file" | "jsonl")
+            && !evidence.audit_offhost_shipping
+        {
+            return Err(EvidenceConfigError::AuditAckCursorWithoutShippingDeclared);
+        }
         Ok(())
     }
 
@@ -546,9 +567,25 @@ impl StandaloneRegistryNotaryConfig {
 
     /// Snapshot the configuration facts the deployment gate engine reads.
     ///
-    /// Pure projection of the loaded config. Building it here keeps gate
-    /// predicates free of config-shape knowledge.
+    /// Projection of the loaded config, sampling the wall clock for the
+    /// off-host ack cursor freshness check. Building it here keeps gate
+    /// predicates free of config-shape knowledge and free of I/O.
     pub fn gate_input(&self) -> crate::deployment::GateInput {
+        self.gate_input_at(SystemTime::now())
+    }
+
+    /// Snapshot gate facts as of `now`.
+    ///
+    /// `now` is threaded through so the ack-cursor freshness read is
+    /// deterministic in tests. This is where the ack cursor is read from disk
+    /// (via [`registry_platform_ops::evaluate_ack_health`]); gate predicates
+    /// never touch the filesystem.
+    pub fn gate_input_at(&self, now: SystemTime) -> crate::deployment::GateInput {
+        let ack_observation = registry_platform_ops::evaluate_ack_health(
+            self.deployment.evidence.audit_ack_cursor_path(),
+            now,
+            self.deployment.evidence.audit_ack_max_age(),
+        );
         crate::deployment::GateInput {
             replay_in_memory: self.replay.storage != REPLAY_STORAGE_REDIS,
             federation_enabled: self.federation.enabled,
@@ -566,6 +603,14 @@ impl StandaloneRegistryNotaryConfig {
             // log pipeline or the syslog daemon's own forwarding surface.
             audit_retention_local_only: matches!(self.audit.sink.as_str(), "file" | "jsonl")
                 && !self.deployment.evidence.audit_offhost_shipping,
+            // declared_external: a local file sink whose off-host shipping is
+            // attested. This mirrors `audit_shipping_target(LocalFile, true)`
+            // from the shared classifier, kept as the direct rule here to match
+            // audit_retention_local_only above.
+            audit_shipping_declared_external: matches!(self.audit.sink.as_str(), "file" | "jsonl")
+                && self.deployment.evidence.audit_offhost_shipping,
+            audit_ack_cursor_configured: self.deployment.evidence.audit_ack_cursor_path().is_some(),
+            audit_ack_health_ok: ack_observation.health == registry_platform_ops::AckHealth::Ok,
             source_insecure_url: self
                 .evidence
                 .source_connections
@@ -4525,6 +4570,14 @@ pub enum EvidenceConfigError {
     InvalidConfigTrustConfig { reason: String },
     #[error("invalid deployment config: {reason}")]
     InvalidDeploymentConfig { reason: String },
+    #[error(
+        "deployment.evidence.audit_ack_max_age_secs is set but deployment.evidence.audit_ack_cursor_path is not; a freshness window is meaningless with no cursor to read. Set audit_ack_cursor_path to the registry.audit.ack_cursor.v1 file the audit shipper maintains, or remove audit_ack_max_age_secs"
+    )]
+    AuditAckMaxAgeWithoutCursor,
+    #[error(
+        "deployment.evidence.audit_ack_cursor_path is set with a local file audit sink but deployment.evidence.audit_offhost_shipping is false; an ack cursor asserts observed off-host shipping that has not been declared. Set audit_offhost_shipping: true once shipping is in place, or remove audit_ack_cursor_path"
+    )]
+    AuditAckCursorWithoutShippingDeclared,
     #[error("source_connection '{connection}': invalid source_auth config: {reason}")]
     InvalidSourceAuthConfig { connection: String, reason: String },
     #[error("source_connection '{connection}': invalid expected_sidecar config: {reason}")]
@@ -6967,6 +7020,163 @@ auth:
         let mut config = minimal_config();
         config.audit.sink = "syslog".to_string();
         assert!(!config.gate_input().audit_retention_local_only);
+    }
+
+    /// The fixture ack cursor's `acked_at` (`2026-06-04T09:59:00Z`) as a
+    /// `SystemTime`, so tests can pin `now` relative to it deterministically.
+    fn fixture_acked_at() -> SystemTime {
+        let acked = time::OffsetDateTime::parse(
+            "2026-06-04T09:59:00Z",
+            &time::format_description::well_known::Rfc3339,
+        )
+        .expect("fixture acked_at parses");
+        SystemTime::from(acked)
+    }
+
+    fn write_ack_cursor(dir: &std::path::Path, contents: &str) -> std::path::PathBuf {
+        let path = dir.join("ack-cursor.json");
+        std::fs::write(&path, contents).expect("ack cursor writes");
+        path
+    }
+
+    #[test]
+    fn gate_input_reports_shipping_declared_external_for_attested_file_sink() {
+        let mut config = minimal_config();
+        config.audit.sink = "file".to_string();
+        config.deployment.evidence.audit_offhost_shipping = true;
+        assert!(config.gate_input().audit_shipping_declared_external);
+    }
+
+    #[test]
+    fn gate_input_clears_shipping_declared_external_without_attestation() {
+        let mut config = minimal_config();
+        config.audit.sink = "file".to_string();
+        assert!(!config.gate_input().audit_shipping_declared_external);
+    }
+
+    #[test]
+    fn gate_input_clears_shipping_declared_external_for_stdout_sink() {
+        let mut config = minimal_config();
+        config.deployment.evidence.audit_offhost_shipping = true;
+        assert!(!config.gate_input().audit_shipping_declared_external);
+    }
+
+    #[test]
+    fn gate_input_reports_ack_cursor_configured_when_path_set() {
+        let mut config = minimal_config();
+        assert!(!config.gate_input().audit_ack_cursor_configured);
+        config.deployment.evidence.audit_ack_cursor_path =
+            Some(std::path::PathBuf::from("/nonexistent/ack-cursor.json"));
+        assert!(config.gate_input().audit_ack_cursor_configured);
+    }
+
+    #[test]
+    fn gate_input_at_reports_ack_health_ok_for_fresh_cursor() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = write_ack_cursor(
+            dir.path(),
+            registry_platform_ops::AUDIT_ACK_CURSOR_FIXTURE_V1,
+        );
+        let mut config = minimal_config();
+        config.deployment.evidence.audit_ack_cursor_path = Some(path);
+        // now is 60s after the cursor's acked_at, well within the 900s window.
+        let now = fixture_acked_at() + Duration::from_secs(60);
+        assert!(config.gate_input_at(now).audit_ack_health_ok);
+    }
+
+    #[test]
+    fn gate_input_at_reports_ack_health_not_ok_for_stale_cursor() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = write_ack_cursor(
+            dir.path(),
+            registry_platform_ops::AUDIT_ACK_CURSOR_FIXTURE_V1,
+        );
+        let mut config = minimal_config();
+        config.deployment.evidence.audit_ack_cursor_path = Some(path);
+        // now is 901s after acked_at, one second past the default window.
+        let now = fixture_acked_at() + Duration::from_secs(901);
+        assert!(!config.gate_input_at(now).audit_ack_health_ok);
+    }
+
+    #[test]
+    fn gate_input_at_reports_ack_health_not_ok_for_missing_cursor() {
+        let mut config = minimal_config();
+        config.deployment.evidence.audit_ack_cursor_path =
+            Some(std::path::PathBuf::from("/nonexistent/ack-cursor.json"));
+        let now = fixture_acked_at() + Duration::from_secs(60);
+        assert!(!config.gate_input_at(now).audit_ack_health_ok);
+    }
+
+    #[test]
+    fn gate_input_at_honors_custom_max_age_window() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = write_ack_cursor(
+            dir.path(),
+            registry_platform_ops::AUDIT_ACK_CURSOR_FIXTURE_V1,
+        );
+        let mut config = minimal_config();
+        config.deployment.evidence.audit_ack_cursor_path = Some(path);
+        config.deployment.evidence.audit_ack_max_age_secs = Some(30);
+        // 60s after acked_at is stale under a 30s window.
+        let now = fixture_acked_at() + Duration::from_secs(60);
+        assert!(!config.gate_input_at(now).audit_ack_health_ok);
+    }
+
+    #[test]
+    fn validate_rejects_ack_max_age_without_cursor() {
+        let mut config = minimal_config();
+        config.deployment.evidence.audit_ack_max_age_secs = Some(600);
+        let error = config
+            .validate()
+            .expect_err("max age without cursor rejected");
+        assert!(matches!(
+            error,
+            EvidenceConfigError::AuditAckMaxAgeWithoutCursor
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_ack_cursor_on_local_file_sink_without_shipping_declared() {
+        let mut config = minimal_config();
+        config.audit.sink = "file".to_string();
+        config.deployment.evidence.audit_ack_cursor_path = Some(std::path::PathBuf::from(
+            "/var/lib/registry/ack-cursor.json",
+        ));
+        let error = config
+            .validate()
+            .expect_err("cursor on undeclared local file sink rejected");
+        assert!(matches!(
+            error,
+            EvidenceConfigError::AuditAckCursorWithoutShippingDeclared
+        ));
+    }
+
+    #[test]
+    fn validate_allows_ack_cursor_on_attested_local_file_sink() {
+        let mut config = minimal_config();
+        config.audit.sink = "file".to_string();
+        config.audit.path = Some("/var/log/registry/audit.jsonl".to_string());
+        config.audit.hash_secret_env = Some("TEST_TOKEN_HASH".to_string());
+        config.deployment.evidence.audit_offhost_shipping = true;
+        config.deployment.evidence.audit_ack_cursor_path = Some(std::path::PathBuf::from(
+            "/var/lib/registry/ack-cursor.json",
+        ));
+        config
+            .validate()
+            .expect("cursor on attested local file sink is valid");
+    }
+
+    #[test]
+    fn validate_allows_ack_cursor_on_stdout_sink_without_shipping_declared() {
+        // stdout retention is owned off-box, so a cursor there does not require
+        // the off-host shipping attestation.
+        let mut config = minimal_config();
+        config.deployment.evidence.audit_ack_cursor_path = Some(std::path::PathBuf::from(
+            "/var/lib/registry/ack-cursor.json",
+        ));
+        config
+            .validate()
+            .expect("cursor on stdout sink is valid without attestation");
     }
 
     #[test]

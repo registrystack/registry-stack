@@ -20,6 +20,13 @@
     }
   ],
   "context_constraints": [],
+  "audit_shipping": {
+    "sink_type": "stdout",
+    "shipping_target_configured": true,
+    "shipping_target": "stdout",
+    "shipping_health": "unverified",
+    "shipping_observed_at": null
+  },
   "hashes": {
     "internal_config_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "posture_safe_config_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"

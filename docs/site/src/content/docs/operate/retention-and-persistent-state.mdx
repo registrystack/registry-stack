@@ -28,8 +28,7 @@ Two consequences follow from that boundary:
 
 - Treat local audit files as tamper-evidence for the retained records, not as a completeness
   guarantee for all records ever written.
-  Use off-host shipping when completeness matters, and use append-only storage or retained
-  tail-hash anchors to make retained local records harder to rewrite unnoticed.
+  Use off-host shipping when completeness matters.
 - Treat keyed pseudonyms as a linkability control, not as erasure.
   Destroying or rotating the HMAC secret prevents recomputing old pseudonyms from raw values,
   but it does not delete audit records, cache entries, status records, or source data.
@@ -66,11 +65,13 @@ The product file-sink defaults retain `14` files at `100 MB` each.
 The shared platform sink has a smaller generic default, but the products override it when their
 own audit config is used.
 
-The chain detects edits, deletions, insertions, and reordering within the retained records.
-It does not prove that older rotated-away records still exist.
+The chain detects edits, insertions, reordering, and deletion after the first retained record
+within the retained set.
+It does not prove that older rotated-away records, or earlier retained records, still exist.
 If a deployment uses a local rotating file sink without off-host shipping, Relay and Notary surface
 deployment-posture findings such as `relay.audit.retention_local_only` and
 `notary.audit.retention_local_only`.
+Under `evidence_grade`, those findings refuse startup.
 Set `deployment.evidence.audit_offhost_shipping` only after the deployment really ships audit
 records to external durable storage.
 

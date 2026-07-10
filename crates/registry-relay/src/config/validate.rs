@@ -20,10 +20,10 @@ use registry_platform_ops::ConfigSource;
 
 use super::capabilities::source_capabilities;
 use super::{
-    AggregateConfig, AggregateSpatialConfig, AllowedFilter, AttributeReleaseProfile, AuthMode,
-    Config, DatasetConfig, EntityConfig, EntityRelationshipConfig, EntitySpatialConfig,
-    FieldConfig, FieldType, FilterOp, GovernedPolicyConfig, OidcConfig, RefreshConfig,
-    RelationshipKind, ReleaseClaimConfig, ResourceConfig, Sensitivity, SourceConfig,
+    AggregateConfig, AggregateSpatialConfig, AllowedFilter, AttributeReleaseProfile,
+    AuditSinkConfig, AuthMode, Config, DatasetConfig, EntityConfig, EntityRelationshipConfig,
+    EntitySpatialConfig, FieldConfig, FieldType, FilterOp, GovernedPolicyConfig, OidcConfig,
+    RefreshConfig, RelationshipKind, ReleaseClaimConfig, ResourceConfig, Sensitivity, SourceConfig,
     SpatialBboxFieldsConfig, SpatialGeometryConfig, CRS84,
 };
 
@@ -77,7 +77,46 @@ pub fn run_with_source(config: &Config, source: ConfigSource) -> Result<(), Erro
     validate_ogc_feature_flags(config).map_err(Error::from)?;
     validate_resources(config).map_err(Error::from)?;
     validate_spdci_feature(config).map_err(Error::from)?;
+    validate_audit_ack_cursor(config).map_err(Error::from)?;
     validate_deployment(config, source).map_err(Error::from)?;
+    Ok(())
+}
+
+/// Validate the audit off-host ack cursor evidence declarations.
+///
+/// A cursor observes off-host shipping freshness, so its config must be
+/// self-consistent:
+///
+/// * `audit_ack_max_age_secs` without `audit_ack_cursor_path` is rejected: a
+///   freshness window is meaningless with no cursor to observe.
+/// * `audit_ack_cursor_path` on a local file sink whose operator has not
+///   declared `audit_offhost_shipping` is rejected: the cursor asserts observed
+///   shipping that the deployment does not claim. Stdout and syslog sinks ship
+///   inherently, so they may configure a cursor without the boolean.
+fn validate_audit_ack_cursor(config: &Config) -> Result<(), ConfigError> {
+    let evidence = &config.deployment.evidence;
+    if evidence.audit_ack_max_age_secs.is_some() && evidence.audit_ack_cursor_path.is_none() {
+        tracing::error!(
+            code = "config.validation_error",
+            field = "deployment.evidence.audit_ack_max_age_secs",
+            "audit_ack_max_age_secs is set without deployment.evidence.audit_ack_cursor_path; a \
+             freshness window is meaningless without a cursor to observe"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+    if evidence.audit_ack_cursor_path.is_some()
+        && matches!(config.audit.sink, AuditSinkConfig::File { .. })
+        && !evidence.audit_offhost_shipping
+    {
+        tracing::error!(
+            code = "config.validation_error",
+            field = "deployment.evidence.audit_ack_cursor_path",
+            "audit_ack_cursor_path asserts observed off-host shipping, but the audit sink is a \
+             local file and deployment.evidence.audit_offhost_shipping is false; set \
+             audit_offhost_shipping: true or remove the cursor path"
+        );
+        return Err(ConfigError::ValidationError);
+    }
     Ok(())
 }
 
@@ -126,6 +165,27 @@ fn validate_deployment(config: &Config, source: ConfigSource) -> Result<(), Conf
                 "deployment waiver expiry must be an ISO 8601 YYYY-MM-DD date"
             );
             return Err(ConfigError::ValidationError);
+        }
+        // A waiver that names a hard, non-waivable gate (startup_fail or
+        // readiness_fail) under the active profile can never suppress it.
+        // Silently dropping such a waiver would let an operator believe a hard
+        // gate was waived when it was not, so reject it at load, mirroring
+        // Notary's `HardGateNotWaivable`. Waivable and unbound gates are left to
+        // gate evaluation. This check keys on the gate's severity under the
+        // profile, not on whether its condition currently holds, so the operator
+        // hears about an impossible waiver even before the condition trips.
+        if let Some(severity) =
+            crate::deployment::gate_severity_for_profile(&waiver.finding, config.deployment.profile)
+        {
+            if !crate::deployment::severity_is_waivable(severity) {
+                tracing::error!(
+                    code = "config.validation_error",
+                    finding = %waiver.finding,
+                    action = crate::deployment::hard_gate_remediation(&waiver.finding),
+                    "deployment waiver names a hard deployment gate that cannot be waived under the active profile"
+                );
+                return Err(ConfigError::ValidationError);
+            }
         }
     }
 
@@ -4297,9 +4357,9 @@ datasets: []
         }
     }
 
-    /// Runs `run(config)` with a capturing subscriber and returns the
-    /// rendered log output alongside the validation result.
-    fn run_with_captured_logs(config: &Config) -> (Result<(), Error>, String) {
+    /// Runs `f` with a capturing subscriber and returns its result alongside
+    /// the rendered log output.
+    fn capture_logs<T>(f: impl FnOnce() -> T) -> (T, String) {
         let logs = SharedLog::default();
         let subscriber = tracing_subscriber::fmt()
             .compact()
@@ -4309,11 +4369,17 @@ datasets: []
             .with_writer(logs.clone())
             .finish();
         let guard = tracing::subscriber::set_default(subscriber);
-        let result = run(config);
+        let result = f();
         drop(guard);
         let rendered = String::from_utf8(logs.0.lock().expect("log buffer lock").clone())
             .expect("logs are utf-8");
         (result, rendered)
+    }
+
+    /// Runs `run(config)` with a capturing subscriber and returns the
+    /// rendered log output alongside the validation result.
+    fn run_with_captured_logs(config: &Config) -> (Result<(), Error>, String) {
+        capture_logs(|| run(config))
     }
 
     #[test]
@@ -4447,6 +4513,242 @@ datasets: []
             "deployment:\n  profile: hosted_lab\n  waivers:\n    - finding: \"relay.config.unsigned\"\n      reason: \"synthetic-waiver-not-a-secret\"\n      expires: \"2999-01-01\"",
         );
         run(&config).expect("a canonical dotted finding id must pass validation");
+    }
+
+    #[test]
+    fn waiver_on_hard_gate_is_rejected_at_load() {
+        // Under evidence_grade the retention gate is a startup_fail gate and
+        // cannot be waived. The waiver must be rejected at load, not silently
+        // dropped. Evaluate as a signed bundle so the `relay.config.unsigned`
+        // startup gate does not fire: the hard-gate waiver is then the only
+        // reason validation can fail (the base config uses a stdout sink, so
+        // the retention condition itself does not even trigger here).
+        let config = parse_deployment_config(
+            "deployment:\n  profile: evidence_grade\n  waivers:\n    - finding: relay.audit.retention_local_only\n      reason: \"synthetic-waiver-not-a-secret\"\n      expires: \"2999-01-01\"",
+        );
+        let (result, rendered) =
+            capture_logs(|| run_with_source(&config, ConfigSource::SignedBundleFile));
+        assert!(
+            matches!(result, Err(Error::Config(ConfigError::ValidationError))),
+            "a waiver on a hard evidence_grade gate must be rejected, got {result:?}"
+        );
+        assert!(
+            rendered.contains("cannot be waived under the active profile"),
+            "expected the hard-gate rejection message in the log: {rendered}"
+        );
+        assert!(
+            rendered.contains("relay.audit.retention_local_only"),
+            "expected the rejected finding id in the log: {rendered}"
+        );
+        assert!(
+            rendered.contains("audit_offhost_shipping"),
+            "expected the audit off-host remediation in the log: {rendered}"
+        );
+    }
+
+    #[test]
+    fn waiver_on_waivable_gate_still_loads_and_waives() {
+        // The same finding under production is a waivable finding_warn. A
+        // file-sink deployment triggers the retention condition, and the waiver
+        // must be accepted and suppress it (reported as waived in the boot log).
+        let config: Config = serde_saphyr::from_str(
+            r#"
+server:
+  bind: "127.0.0.1:8080"
+catalog:
+  title: "Test Registry"
+  base_url: "https://data.example.test"
+  publisher: "Test Ministry"
+auth:
+  mode: api_key
+  api_keys: []
+audit:
+  sink: file
+  path: "/var/log/relay/audit.jsonl"
+datasets: []
+deployment:
+  profile: production
+  waivers:
+    - finding: relay.audit.retention_local_only
+      reason: "synthetic-waiver-not-a-secret"
+      expires: "2999-01-01"
+"#,
+        )
+        .expect("config parses");
+        let (result, rendered) = run_with_captured_logs(&config);
+        result.expect("a waivable production gate waiver must pass validation");
+        assert!(
+            rendered.contains("deployment.gate_waived"),
+            "expected the retention gate to be reported waived: {rendered}"
+        );
+        assert!(
+            rendered.contains("relay.audit.retention_local_only"),
+            "expected the waived finding id in the boot log: {rendered}"
+        );
+        assert!(
+            !rendered.contains("cannot be waived"),
+            "a waivable gate must not trigger the hard-gate rejection: {rendered}"
+        );
+    }
+
+    #[test]
+    fn waiver_on_readiness_gate_is_rejected_at_load() {
+        // Under evidence_grade `relay.audit.best_effort` is a readiness_fail
+        // gate, which is non-waivable under Notary's (now Relay's) semantics.
+        // The waiver must be rejected at config load with the structured
+        // validation error, not silently dropped, even though the condition
+        // itself does not hold here. Evaluate as a signed bundle so the
+        // `relay.config.unsigned` startup gate does not fire and the readiness
+        // waiver is the only reason validation can fail.
+        let config = parse_deployment_config(
+            "deployment:\n  profile: evidence_grade\n  waivers:\n    - finding: relay.audit.best_effort\n      reason: \"synthetic-waiver-not-a-secret\"\n      expires: \"2999-01-01\"",
+        );
+        let (result, rendered) =
+            capture_logs(|| run_with_source(&config, ConfigSource::SignedBundleFile));
+        assert!(
+            matches!(result, Err(Error::Config(ConfigError::ValidationError))),
+            "a waiver on a readiness_fail evidence_grade gate must be rejected, got {result:?}"
+        );
+        assert!(
+            rendered.contains("config.validation_error"),
+            "expected the structured validation error code in the log: {rendered}"
+        );
+        assert!(
+            rendered.contains("cannot be waived under the active profile"),
+            "expected the hard-gate rejection message in the log: {rendered}"
+        );
+        assert!(
+            rendered.contains("relay.audit.best_effort"),
+            "expected the rejected readiness-gate finding id in the log: {rendered}"
+        );
+    }
+
+    #[test]
+    fn audit_ack_max_age_without_cursor_is_rejected() {
+        // A freshness window is meaningless without a cursor path to observe.
+        let config = parse_deployment_config(
+            "deployment:\n  profile: local\n  evidence:\n    audit_ack_max_age_secs: 60",
+        );
+        let (result, rendered) = run_with_captured_logs(&config);
+        assert!(
+            matches!(result, Err(Error::Config(ConfigError::ValidationError))),
+            "max_age without a cursor path must be rejected, got {result:?}"
+        );
+        assert!(
+            rendered.contains("audit_ack_max_age_secs"),
+            "expected the offending field in the log: {rendered}"
+        );
+    }
+
+    #[test]
+    fn audit_ack_cursor_on_local_file_without_offhost_is_rejected() {
+        // A cursor asserts observed off-host shipping; a local file sink that
+        // does not declare off-host shipping must not configure one.
+        let config: Config = serde_saphyr::from_str(
+            r#"
+server:
+  bind: "127.0.0.1:8080"
+catalog:
+  title: "Test Registry"
+  base_url: "https://data.example.test"
+  publisher: "Test Ministry"
+auth:
+  mode: api_key
+  api_keys: []
+audit:
+  sink: file
+  path: "/var/log/relay/audit.jsonl"
+datasets: []
+deployment:
+  profile: local
+  evidence:
+    audit_ack_cursor_path: "/var/lib/relay/ack-cursor.json"
+"#,
+        )
+        .expect("config parses");
+        let (result, rendered) = run_with_captured_logs(&config);
+        assert!(
+            matches!(result, Err(Error::Config(ConfigError::ValidationError))),
+            "a cursor on a local file sink without off-host shipping must be rejected, got {result:?}"
+        );
+        assert!(
+            rendered.contains("audit_ack_cursor_path"),
+            "expected the offending field in the log: {rendered}"
+        );
+        assert!(
+            rendered.contains("audit_offhost_shipping"),
+            "expected the off-host remediation in the log: {rendered}"
+        );
+    }
+
+    #[test]
+    fn audit_ack_cursor_on_local_file_with_offhost_loads() {
+        // The same local file sink loads once off-host shipping is declared.
+        let config: Config = serde_saphyr::from_str(
+            r#"
+server:
+  bind: "127.0.0.1:8080"
+catalog:
+  title: "Test Registry"
+  base_url: "https://data.example.test"
+  publisher: "Test Ministry"
+auth:
+  mode: api_key
+  api_keys: []
+audit:
+  sink: file
+  path: "/var/log/relay/audit.jsonl"
+datasets: []
+deployment:
+  profile: local
+  evidence:
+    audit_offhost_shipping: true
+    audit_ack_cursor_path: "/var/lib/relay/ack-cursor.json"
+    audit_ack_max_age_secs: 600
+"#,
+        )
+        .expect("config parses");
+        run(&config).expect("a declared-off-host local file sink with a cursor must load");
+    }
+
+    #[test]
+    fn audit_ack_cursor_on_stdout_without_offhost_loads() {
+        // Stdout ships inherently, so a cursor may be configured without the
+        // off-host boolean.
+        let config = parse_deployment_config(
+            "deployment:\n  profile: local\n  evidence:\n    audit_ack_cursor_path: \"/var/lib/relay/ack-cursor.json\"",
+        );
+        run(&config).expect("a stdout sink with a cursor and no boolean must load");
+    }
+
+    #[test]
+    fn waiver_on_shipping_stale_is_rejected_at_load() {
+        // Under evidence_grade `relay.audit.shipping_stale` is a readiness_fail
+        // gate, which is non-waivable. The waiver must be rejected at load, not
+        // silently dropped, even though no cursor is configured so the condition
+        // does not hold. Evaluate as a signed bundle so the
+        // `relay.config.unsigned` startup gate does not fire.
+        let config = parse_deployment_config(
+            "deployment:\n  profile: evidence_grade\n  waivers:\n    - finding: relay.audit.shipping_stale\n      reason: \"synthetic-waiver-not-a-secret\"\n      expires: \"2999-01-01\"",
+        );
+        let (result, rendered) =
+            capture_logs(|| run_with_source(&config, ConfigSource::SignedBundleFile));
+        assert!(
+            matches!(result, Err(Error::Config(ConfigError::ValidationError))),
+            "a waiver on the readiness_fail shipping_stale gate must be rejected, got {result:?}"
+        );
+        assert!(
+            rendered.contains("cannot be waived under the active profile"),
+            "expected the hard-gate rejection message in the log: {rendered}"
+        );
+        assert!(
+            rendered.contains("relay.audit.shipping_stale"),
+            "expected the rejected finding id in the log: {rendered}"
+        );
+        assert!(
+            rendered.contains("audit_ack_max_age_secs"),
+            "expected the shipping_stale remediation in the log: {rendered}"
+        );
     }
 
     #[test]

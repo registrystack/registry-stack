@@ -356,6 +356,24 @@ pub struct ContextConstraintsReportEntry {
     pub product_owned_adjacent_controls: Vec<String>,
 }
 
+/// Off-host audit shipping posture, as reported by a product's doctor
+/// diagnostics.
+///
+/// `sink_type`, `shipping_target_configured`, and `shipping_target` describe
+/// the *declared* state derived from configuration. `shipping_health` and
+/// `shipping_observed_at` describe the *observed* state read from the local
+/// audit ack cursor; they are always present on the wire but nullable, since
+/// products emit explicit `null`s rather than omitting them when there is no
+/// cursor to observe.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct AuditShippingReport {
+    pub sink_type: String,
+    pub shipping_target_configured: bool,
+    pub shipping_target: String,
+    pub shipping_health: Option<String>,
+    pub shipping_observed_at: Option<String>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct ConfigDiagnosticReport {
     pub schema_version: String,
@@ -371,6 +389,8 @@ pub struct ConfigDiagnosticReport {
     pub required_env: Vec<RequiredEnvVar>,
     #[serde(default)]
     pub context_constraints: Vec<ContextConstraintsReportEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audit_shipping: Option<AuditShippingReport>,
     #[serde(skip_serializing_if = "config_hashes_option_is_empty")]
     pub hashes: Option<ConfigHashes>,
     pub generated_at: String,

@@ -23,7 +23,9 @@ struct TestConfigOptions<'a> {
     config_trust: bool,
     omit_deployment_profile: bool,
     multi_instance: bool,
+    audit_offhost_shipping: bool,
     durable_audit: Option<bool>,
+    audit_ack_cursor_path: Option<&'a str>,
     unbound_credential_profile: bool,
     unconstrained_source_binding: bool,
 }
@@ -59,16 +61,30 @@ fn write_config_with_options(tmp: &TempDir, options: TestConfigOptions<'_>) -> P
     } else {
         String::new()
     };
+    let mut evidence_lines = String::new();
+    if options.audit_offhost_shipping {
+        evidence_lines.push_str("    audit_offhost_shipping: true\n");
+    }
+    if let Some(cursor) = options.audit_ack_cursor_path {
+        evidence_lines.push_str(&format!("    audit_ack_cursor_path: \"{cursor}\"\n"));
+    }
+    let deployment_evidence = if evidence_lines.is_empty() {
+        String::new()
+    } else {
+        format!("  evidence:\n{evidence_lines}")
+    };
     let deployment = if options.omit_deployment_profile {
         if options.multi_instance {
-            "deployment:\n  multi_instance: true\n"
+            format!("deployment:\n  multi_instance: true\n{deployment_evidence}")
+        } else if !deployment_evidence.is_empty() {
+            format!("deployment:\n{deployment_evidence}")
         } else {
-            ""
+            String::new()
         }
     } else if options.multi_instance {
-        "deployment:\n  profile: local\n  multi_instance: true\n"
+        format!("deployment:\n  profile: local\n  multi_instance: true\n{deployment_evidence}")
     } else {
-        "deployment:\n  profile: local\n"
+        format!("deployment:\n  profile: local\n{deployment_evidence}")
     };
     let durable_audit = options.durable_audit.unwrap_or(options.config_trust);
     let audit = if durable_audit {
@@ -726,6 +742,7 @@ fn doctor_json_evidence_grade_public_openapi_reports_error_but_succeeds() {
         TestConfigOptions {
             openapi_requires_auth: Some(false),
             config_trust: true,
+            audit_offhost_shipping: true,
             ..TestConfigOptions::default()
         },
     );
@@ -1189,6 +1206,7 @@ fn doctor_json_evidence_grade_source_binding_without_matching_policy_reports_onc
         TestConfigOptions {
             unconstrained_source_binding: true,
             config_trust: true,
+            audit_offhost_shipping: true,
             ..TestConfigOptions::default()
         },
     );
@@ -1216,6 +1234,228 @@ fn doctor_json_evidence_grade_source_binding_without_matching_policy_reports_onc
         "the bound evidence_grade gate should be the only source of this finding code: {diagnostics:?}"
     );
     assert_eq!(diagnostics[0]["severity"], "error");
+}
+
+#[test]
+fn doctor_json_file_sink_without_attestation_warns_and_reports_unshipped_audit() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config = write_config_with_options(
+        &tmp,
+        TestConfigOptions {
+            durable_audit: Some(true),
+            ..TestConfigOptions::default()
+        },
+    );
+    let env_file = write_env_file(&tmp);
+
+    let output = doctor_command(&config, Some(&env_file))
+        .args(["--format", "json"])
+        .output()
+        .expect("doctor runs");
+
+    assert!(
+        output.status.success(),
+        "a local file sink without attestation should warn, not fail\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout is utf8");
+    let report: Value = serde_json::from_str(&stdout).expect("doctor emits JSON");
+    assert_product_diagnostic_report(&report);
+
+    assert_eq!(report["audit_shipping"]["sink_type"], "file");
+    assert_eq!(
+        report["audit_shipping"]["shipping_target_configured"],
+        false
+    );
+    assert_eq!(report["audit_shipping"]["shipping_target"], "none");
+
+    assert!(
+        report["diagnostics"]
+            .as_array()
+            .expect("diagnostics array")
+            .iter()
+            .any(|diagnostic| diagnostic["message"]
+                .as_str()
+                .expect("message string")
+                .contains("local-chain-only")),
+        "a local file sink without attestation must warn that audit is local-chain-only"
+    );
+}
+
+#[test]
+fn doctor_json_file_sink_with_attestation_reports_declared_external_without_warning() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config = write_config_with_options(
+        &tmp,
+        TestConfigOptions {
+            durable_audit: Some(true),
+            audit_offhost_shipping: true,
+            ..TestConfigOptions::default()
+        },
+    );
+    let env_file = write_env_file(&tmp);
+
+    let output = doctor_command(&config, Some(&env_file))
+        .args(["--format", "json"])
+        .output()
+        .expect("doctor runs");
+
+    assert!(
+        output.status.success(),
+        "a local file sink with attestation should pass doctor\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout is utf8");
+    let report: Value = serde_json::from_str(&stdout).expect("doctor emits JSON");
+    assert_product_diagnostic_report(&report);
+
+    assert_eq!(report["audit_shipping"]["sink_type"], "file");
+    assert_eq!(report["audit_shipping"]["shipping_target_configured"], true);
+    assert_eq!(
+        report["audit_shipping"]["shipping_target"],
+        "declared_external"
+    );
+
+    assert!(
+        !report["diagnostics"]
+            .as_array()
+            .expect("diagnostics array")
+            .iter()
+            .any(|diagnostic| diagnostic["message"]
+                .as_str()
+                .expect("message string")
+                .contains("local-chain-only")),
+        "declaring off-host shipping must silence the local-chain-only warning"
+    );
+}
+
+/// Write a `registry.audit.ack_cursor.v1` cursor with `acked_at` under `tmp`.
+fn write_doctor_ack_cursor(tmp: &TempDir, acked_at: &str) -> PathBuf {
+    let path = tmp.path().join("ack-cursor.json");
+    std::fs::write(
+        &path,
+        format!(
+            r#"{{"schema":"registry.audit.ack_cursor.v1","acked_at":"{acked_at}","last_acked_hash":"sha256:4444444444444444444444444444444444444444444444444444444444444444","writer":"test-shipper"}}"#
+        ),
+    )
+    .expect("ack cursor writes");
+    path
+}
+
+fn run_doctor_json(config: &Path, env_file: &Path) -> Value {
+    let output = doctor_command(config, Some(env_file))
+        .args(["--format", "json"])
+        .output()
+        .expect("doctor runs");
+    assert!(
+        output.status.success(),
+        "doctor should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout is utf8");
+    let report: Value = serde_json::from_str(&stdout).expect("doctor emits JSON");
+    assert_product_diagnostic_report(&report);
+    report
+}
+
+#[test]
+fn doctor_json_reports_shipping_health_ok_for_fresh_cursor() {
+    let tmp = TempDir::new().expect("tempdir");
+    let acked_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let cursor = write_doctor_ack_cursor(&tmp, &acked_at);
+    let cursor_path = cursor.to_str().expect("cursor path is utf8").to_string();
+    // Default options use the stdout sink, so a shipping target is configured.
+    let config = write_config_with_options(
+        &tmp,
+        TestConfigOptions {
+            audit_ack_cursor_path: Some(&cursor_path),
+            ..TestConfigOptions::default()
+        },
+    );
+    let env_file = write_env_file(&tmp);
+
+    let report = run_doctor_json(&config, &env_file);
+
+    assert_eq!(report["audit_shipping"]["shipping_target_configured"], true);
+    assert_eq!(report["audit_shipping"]["shipping_health"], "ok");
+    assert_eq!(report["audit_shipping"]["shipping_observed_at"], acked_at);
+}
+
+#[test]
+fn doctor_json_reports_shipping_health_stale_for_old_cursor() {
+    let tmp = TempDir::new().expect("tempdir");
+    let cursor = write_doctor_ack_cursor(&tmp, "2026-06-04T09:59:00Z");
+    let cursor_path = cursor.to_str().expect("cursor path is utf8").to_string();
+    let config = write_config_with_options(
+        &tmp,
+        TestConfigOptions {
+            audit_ack_cursor_path: Some(&cursor_path),
+            ..TestConfigOptions::default()
+        },
+    );
+    let env_file = write_env_file(&tmp);
+
+    let report = run_doctor_json(&config, &env_file);
+
+    assert_eq!(report["audit_shipping"]["shipping_health"], "stale");
+    assert_eq!(
+        report["audit_shipping"]["shipping_observed_at"],
+        "2026-06-04T09:59:00Z"
+    );
+}
+
+#[test]
+fn doctor_json_reports_shipping_health_missing_for_absent_cursor_file() {
+    let tmp = TempDir::new().expect("tempdir");
+    let cursor_path = tmp
+        .path()
+        .join("does-not-exist.json")
+        .to_str()
+        .expect("cursor path is utf8")
+        .to_string();
+    let config = write_config_with_options(
+        &tmp,
+        TestConfigOptions {
+            audit_ack_cursor_path: Some(&cursor_path),
+            ..TestConfigOptions::default()
+        },
+    );
+    let env_file = write_env_file(&tmp);
+
+    let report = run_doctor_json(&config, &env_file);
+
+    assert_eq!(report["audit_shipping"]["shipping_health"], "missing");
+    assert_eq!(
+        report["audit_shipping"]["shipping_observed_at"],
+        Value::Null
+    );
+}
+
+#[test]
+fn doctor_json_reports_shipping_health_invalid_for_malformed_cursor_file() {
+    let tmp = TempDir::new().expect("tempdir");
+    let cursor = tmp.path().join("ack-cursor.json");
+    std::fs::write(&cursor, "{ not valid json").expect("cursor writes");
+    let cursor_path = cursor.to_str().expect("cursor path is utf8").to_string();
+    let config = write_config_with_options(
+        &tmp,
+        TestConfigOptions {
+            audit_ack_cursor_path: Some(&cursor_path),
+            ..TestConfigOptions::default()
+        },
+    );
+    let env_file = write_env_file(&tmp);
+
+    let report = run_doctor_json(&config, &env_file);
+
+    assert_eq!(report["audit_shipping"]["shipping_health"], "invalid");
+    assert_eq!(
+        report["audit_shipping"]["shipping_observed_at"],
+        Value::Null
+    );
 }
 
 #[test]

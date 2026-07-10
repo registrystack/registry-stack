@@ -32,10 +32,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   audit sink is `file` or `jsonl` and `deployment.evidence.audit_offhost_shipping`
   is not declared, because a local file sink caps retention and an attacker
   with host access can destroy the evidence. `stdout` and `syslog` sinks are
-  exempt. Bound `finding_warn` under `production` and `finding_error` under
+  exempt. Bound `finding_warn` under `production` and `startup_fail` under
   `evidence_grade`; unbound under `local` and `hosted_lab`. Operators can
   clear the finding by declaring `deployment.evidence.audit_offhost_shipping:
-  true` once audit events are shipped off-host, or by waiving the finding.
+  true` once audit events are shipped off-host. `startup_fail` is a hard gate
+  and hard gates cannot be waived: a config carrying a `deployment.waivers`
+  entry for this finding under `evidence_grade` now fails to load
+  (`HardGateNotWaivable`). Migration: remove the waiver, then either ship
+  audit events off-host and declare
+  `deployment.evidence.audit_offhost_shipping: true`, or switch to a
+  `stdout`/`syslog` sink.
+- `registry-notary doctor`'s JSON report
+  (`registry.config.diagnostic_report.v1`) now carries an `audit_shipping`
+  object (`sink_type`, `shipping_target_configured`, `shipping_target`) when
+  the config parses, mirroring the posture `audit` shipping fields. The
+  existing "audit file/jsonl sink is local-chain-only" warning now fires only
+  when off-host shipping has not been declared.
 - Added `evidence.machine_quota`, a per-principal quota for machine
   `evaluate` and `batch_evaluate` traffic. The budget is counted in subjects
   (a single evaluate costs 1, a batch costs `items.len()`) over a fixed
@@ -45,6 +57,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Retry-After` header. Disabled by default (`enabled: false`); enabling it
   does not affect the existing self-attestation rate limiters or the
   per-request `max_subjects` cap.
+- `deployment.evidence.audit_ack_cursor_path` and
+  `deployment.evidence.audit_ack_max_age_secs` config fields: point Notary at
+  the local state file an off-host audit shipper writes on each successful
+  hand-off (`registry.audit.ack_cursor.v1`), and set how old the cursor's
+  `acked_at` timestamp may get before it reads as stale (defaults to 900s).
+  Config load rejects `audit_ack_max_age_secs` set without
+  `audit_ack_cursor_path` (`AuditAckMaxAgeWithoutCursor`), and rejects
+  `audit_ack_cursor_path` set on a local file audit sink that has not
+  declared `audit_offhost_shipping` (`AuditAckCursorWithoutShippingDeclared`);
+  a `stdout`/`syslog` sink may carry a cursor without that declaration.
+- Two new deployment gates read the ack cursor's observed health:
+  `notary.audit.shipping_unverified` (a shipping target is declared but no
+  ack cursor is configured; `finding_warn` under `production` and
+  `evidence_grade`, unbound under `hosted_lab`) and
+  `notary.audit.shipping_stale` (a cursor is configured but its observed
+  health is not `ok`; `finding_error` under `production`, `readiness_fail`
+  (non-waivable) under `evidence_grade`, unbound under `hosted_lab`).
+- `registry-notary doctor`'s `audit_shipping` object and the admin
+  `GET /admin/v1/posture` `posture.audit` block both gain `shipping_health`
+  (`ok`, `stale`, `missing`, `invalid`, `unverified`, or `null`) and
+  `shipping_observed_at` (an RFC3339 timestamp, or `null`), the observed
+  freshness of off-host audit shipping read from the ack cursor. Both are
+  `null` whenever `shipping_target_configured` is `false`. This is a
+  liveness/freshness signal for the shipping path, not proof every audit
+  event arrived. The committed OpenAPI example for `GET /admin/v1/posture`
+  is regenerated to include both fields.
 
 ### Changed
 

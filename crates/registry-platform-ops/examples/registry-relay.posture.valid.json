@@ -74,6 +74,10 @@
     "audit": {
       "configured": true,
       "sink_type": "file",
+      "shipping_target_configured": true,
+      "shipping_target": "declared_external",
+      "shipping_health": "ok",
+      "shipping_observed_at": "2026-06-04T09:59:00Z",
       "checkpoint_status": "available",
       "latest_tail_hash": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
       "latest_sequence": 42,
