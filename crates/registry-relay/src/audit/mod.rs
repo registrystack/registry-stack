@@ -12,7 +12,7 @@
 //! Integration:
 //! - The middleware reads `Principal` from request extensions when
 //!   present and projects its identity into `principal_id`, `auth_mode`,
-//!   and `scopes_used`.
+//!   and privacy-preserving `scopes_used`.
 //! - The error module attaches a stable error code on failure
 //!   responses via the `ErrorCodeExt` response extension defined in
 //!   this module; the audit middleware reads it and records it.
@@ -36,6 +36,9 @@ use tokio::sync::OnceCell;
 use tracing::error;
 use ulid::Ulid;
 
+use crate::auth::scopes::{
+    format_trust_context_scope, parse_trust_context_scope, ParsedTrustContextScope,
+};
 use crate::runtime_config::RuntimeSnapshot;
 
 pub mod file;
@@ -96,6 +99,37 @@ impl Default for AuditSettings {
 /// Stable error code returned when `audit.write_policy` is `fail_closed` and
 /// an audit record cannot be written. Documented in `docs/configuration.md`.
 pub const AUDIT_WRITE_FAILED_CODE: &str = "audit.write_failed";
+
+const TRUST_SCOPE_HASH_FIELD_PREFIX: &str = "trust_scope:";
+
+fn scopes_used_for_audit(
+    principal: Option<&crate::auth::Principal>,
+    hasher: &AuditKeyHasher,
+) -> Option<Vec<String>> {
+    let Some(principal) = principal else {
+        return Some(Vec::new());
+    };
+    principal
+        .scopes
+        .iter()
+        .map(|scope| redact_scope_for_audit(scope, hasher))
+        .collect()
+}
+
+fn redact_scope_for_audit(scope: &str, hasher: &AuditKeyHasher) -> Option<String> {
+    let (field, value) = match parse_trust_context_scope(scope) {
+        ParsedTrustContextScope::NotReserved => return Some(scope.to_string()),
+        ParsedTrustContextScope::Malformed => return None,
+        ParsedTrustContextScope::Canonical { field, value } => (field, value),
+    };
+    if !matches!(hasher, AuditKeyHasher::Keyed(_)) {
+        return None;
+    }
+    let hash_field = format!("{TRUST_SCOPE_HASH_FIELD_PREFIX}{}", field.as_str());
+    let handle = sensitive_value_hash_keyed(hasher, &hash_field, value);
+    debug_assert!(handle.starts_with("hmac-sha256:"));
+    format_trust_context_scope(field, &handle)
+}
 
 /// A wrapper for sensitive string values that prints `[REDACTED]` via
 /// `Debug` and `Display`, defending against accidental inclusion in logs
@@ -359,7 +393,11 @@ pub struct AuditRecord {
     pub pdp_checked_scopes: Option<Vec<String>>,
     /// Redacted inventory of trust assertions PDP evaluated.
     pub pdp_trust_provenance: Option<Vec<String>>,
-    /// Scopes actually checked on this request, in declaration order.
+    /// Scopes present on the authenticated principal, in stable scope-set order.
+    /// Exact-value trust scopes use canonical
+    /// `registry:trust:<field>:hmac-sha256:<digest>` handles so their raw values
+    /// are not disclosed while their authorization evidence remains linkable
+    /// under the deployment audit key.
     pub scopes_used: Vec<String>,
     /// Redacted parameter inventory (names + ops, never values).
     pub query_params: Value,
@@ -957,11 +995,6 @@ pub async fn audit_layer(
     let auth_mode = principal
         .as_ref()
         .map(|p| auth_mode_label(p.auth_mode).to_string());
-    let scopes_used: Vec<String> = principal
-        .as_ref()
-        .map(|p| p.scopes.iter().map(|s| s.to_string()).collect())
-        .unwrap_or_default();
-
     let endpoint_kind = classify_endpoint(&path);
     // Readiness is never self-audited. Evidence-grade shipping requires the
     // cursor watermark to equal the live audit tail, so appending the probe
@@ -972,6 +1005,14 @@ pub async fn audit_layer(
     {
         return response;
     }
+
+    let scopes_used = match scopes_used_for_audit(principal.as_ref(), &settings.hash_hasher) {
+        Some(scopes) => scopes,
+        None => {
+            error!("audit trust-scope redaction requires a keyed hasher and a canonical scope");
+            return audit_write_failed_response();
+        }
+    };
 
     let query_params = redact_query_with_secret_and_fields(
         settings.hash_hasher.clone(),
@@ -1467,6 +1508,28 @@ mod tests {
         let s = now_iso8601_millis();
         assert_eq!(s.len(), 24, "got {s:?}");
         assert!(s.ends_with('Z'));
+    }
+
+    #[test]
+    fn exact_trust_scope_redaction_requires_a_keyed_field_bound_handle() {
+        let scope = "registry:trust:subject_ref:subject:123";
+        assert_eq!(
+            redact_scope_for_audit(scope, &AuditKeyHasher::unkeyed_dev_only()),
+            None
+        );
+
+        let hasher = AuditKeyHasher::Keyed(
+            AuditHashSecret::new(b"audit-module-trust-scope-test-secret".to_vec())
+                .expect("test audit secret is strong enough"),
+        );
+        let redacted = redact_scope_for_audit(scope, &hasher).expect("keyed redaction succeeds");
+        assert!(redacted.starts_with("registry:trust:subject_ref:hmac-sha256:"));
+        assert!(!redacted.contains("subject:123"));
+        assert_ne!(
+            redacted,
+            redact_scope_for_audit("registry:trust:on_behalf_of:subject:123", &hasher,)
+                .expect("other field redaction succeeds")
+        );
     }
 
     #[test]

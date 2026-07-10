@@ -23,8 +23,8 @@ use time::OffsetDateTime;
 use ulid::Ulid;
 
 use crate::api::governed::{
-    attach_pdp_audit, require_governed_read_access, GovernedAccessError, GovernedReadDecision,
-    GovernedRedactionProjection, GovernedRequestInfo,
+    attach_pdp_audit, attach_pdp_trust_provenance, require_governed_read_access,
+    GovernedAccessError, GovernedReadDecision, GovernedRedactionProjection, GovernedRequestInfo,
 };
 use crate::audit::AuditContextExt;
 use crate::auth::scopes::require_scope;
@@ -124,11 +124,22 @@ async fn disabled_status(
         Err(error) => return error.into_response(),
     };
     let result = run_disabled_status(&runtime, &route, headers, principal, body).await;
-    let (response, row_count, pdp_audit) = match result {
-        Ok(value) => value,
-        Err(error) => (error.error.into_response(), 0, error.pdp_audit),
+    let (response, row_count, pdp_audit, pdp_trust_provenance) = match result {
+        Ok((response, row_count, pdp_audit)) => (response, row_count, pdp_audit, BTreeSet::new()),
+        Err(error) => (
+            error.error.into_response(),
+            0,
+            error.pdp_audit,
+            error.pdp_trust_provenance,
+        ),
     };
-    with_audit_context(response, &route, row_count, pdp_audit.as_ref())
+    with_audit_context(
+        response,
+        &route,
+        row_count,
+        pdp_audit.as_ref(),
+        &pdp_trust_provenance,
+    )
 }
 
 async fn run_disabled_status(
@@ -159,6 +170,7 @@ async fn run_disabled_status(
         return Err(SpdciRunError {
             error: AuthError::PurposeDenied.into(),
             pdp_audit: governed_decision.audit,
+            pdp_trust_provenance: BTreeSet::new(),
         });
     }
     let request = SpdciRequest::from_body(body, &route.config)?;
@@ -218,11 +230,24 @@ async fn sync_search_response(
         body,
     )
     .await;
-    let (response, total_count, pdp_audit) = match result {
-        Ok(value) => value,
-        Err(error) => (error.error.into_response(), 0, error.pdp_audit),
+    let (response, total_count, pdp_audit, pdp_trust_provenance) = match result {
+        Ok((response, total_count, pdp_audit)) => {
+            (response, total_count, pdp_audit, BTreeSet::new())
+        }
+        Err(error) => (
+            error.error.into_response(),
+            0,
+            error.pdp_audit,
+            error.pdp_trust_provenance,
+        ),
     };
-    with_search_audit_context(response, &route, total_count, pdp_audit.as_ref())
+    with_search_audit_context(
+        response,
+        &route,
+        total_count,
+        pdp_audit.as_ref(),
+        &pdp_trust_provenance,
+    )
 }
 
 async fn run_sync_search_response(
@@ -335,11 +360,22 @@ async fn search_response(
         body,
     )
     .await;
-    let (response, row_count, pdp_audit) = match result {
-        Ok(value) => value,
-        Err(error) => (error.error.into_response(), 0, error.pdp_audit),
+    let (response, row_count, pdp_audit, pdp_trust_provenance) = match result {
+        Ok((response, row_count, pdp_audit)) => (response, row_count, pdp_audit, BTreeSet::new()),
+        Err(error) => (
+            error.error.into_response(),
+            0,
+            error.pdp_audit,
+            error.pdp_trust_provenance,
+        ),
     };
-    with_audit_context(response, &route, row_count, pdp_audit.as_ref())
+    with_audit_context(
+        response,
+        &route,
+        row_count,
+        pdp_audit.as_ref(),
+        &pdp_trust_provenance,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -412,6 +448,7 @@ struct SearchRouteState {
 struct SpdciRunError {
     error: Error,
     pdp_audit: Option<PdpDecisionAudit>,
+    pdp_trust_provenance: BTreeSet<String>,
 }
 
 impl From<Error> for SpdciRunError {
@@ -419,6 +456,7 @@ impl From<Error> for SpdciRunError {
         Self {
             error,
             pdp_audit: None,
+            pdp_trust_provenance: BTreeSet::new(),
         }
     }
 }
@@ -428,6 +466,7 @@ impl From<GovernedAccessError> for SpdciRunError {
         Self {
             error: error.error,
             pdp_audit: error.pdp_audit,
+            pdp_trust_provenance: error.pdp_trust_provenance,
         }
     }
 }
@@ -1202,6 +1241,7 @@ fn with_audit_context(
     route: &RouteState,
     row_count: u64,
     pdp_audit: Option<&PdpDecisionAudit>,
+    pdp_trust_provenance: &BTreeSet<String>,
 ) -> Response {
     let mut context = Some(AuditContextExt {
         dataset_id: Some(route.config.dataset.to_string()),
@@ -1211,6 +1251,7 @@ fn with_audit_context(
         ..AuditContextExt::default()
     });
     attach_pdp_audit(&mut context, pdp_audit);
+    attach_pdp_trust_provenance(&mut context, pdp_trust_provenance);
     if let Some(context) = context {
         response.extensions_mut().insert(context);
     }
@@ -1222,6 +1263,7 @@ fn with_search_audit_context(
     route: &SearchRouteState,
     row_count: u64,
     pdp_audit: Option<&PdpDecisionAudit>,
+    pdp_trust_provenance: &BTreeSet<String>,
 ) -> Response {
     let mut context = Some(AuditContextExt {
         dataset_id: Some(route.config.dataset.to_string()),
@@ -1231,6 +1273,7 @@ fn with_search_audit_context(
         ..AuditContextExt::default()
     });
     attach_pdp_audit(&mut context, pdp_audit);
+    attach_pdp_trust_provenance(&mut context, pdp_trust_provenance);
     if let Some(context) = context {
         response.extensions_mut().insert(context);
     }

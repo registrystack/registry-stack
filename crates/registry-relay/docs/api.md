@@ -183,6 +183,14 @@ has the exact `registry:trust:<scope_field>:<header_value>` scope.
 | `x-registry-source-observed-age-seconds` | `source_observed_age_seconds` | Scope-gated |
 | `x-registry-source-observed-at-unix-seconds` | `source_observed_at_unix_seconds` | Scope-gated |
 
+Audit records retain ordinary route scopes unchanged in `scopes_used`. Each
+value-bearing trust scope is replaced by its canonical field-bound form,
+`registry:trust:<field>:hmac-sha256:<digest>`, computed under the deployment
+audit key. This preserves pseudonymous authorization evidence without storing
+the raw value. `pdp_trust_provenance` separately records authenticated field
+names without their values, including a malformed authenticated freshness
+field when parsing denies the request before PDP evaluation.
+
 An absent or nonmatching scope makes the header absent from PDP context. A
 policy that requires the field or matches its value then denies the request.
 `Data-Purpose` remains a caller-stated purpose, not proof of identity,

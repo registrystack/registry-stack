@@ -18,8 +18,8 @@ use serde_json::{json, Value};
 use tokio::sync::watch;
 
 use crate::api::governed::{
-    attach_pdp_audit, require_governed_read_access, GovernedAccessError, GovernedReadDecision,
-    GovernedRedactionProjection, GovernedRequestInfo,
+    attach_governed_error_audit, attach_pdp_audit, require_governed_read_access,
+    GovernedAccessError, GovernedReadDecision, GovernedRedactionProjection, GovernedRequestInfo,
 };
 use crate::audit::{AuditContextExt, ErrorCodeExt};
 use crate::auth::scopes::require_scope;
@@ -695,7 +695,7 @@ fn aggregate_access_error_response(
         aggregate_id: Some(path.aggregate_id.clone()),
         ..AuditContextExt::default()
     });
-    attach_pdp_audit(&mut audit_context, error.pdp_audit.as_ref());
+    attach_governed_error_audit(&mut audit_context, &error);
     let mut response = error.error.into_response();
     if let Some(context) = audit_context {
         response.extensions_mut().insert(context);

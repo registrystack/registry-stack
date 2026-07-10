@@ -1086,6 +1086,182 @@ async fn middleware_projects_principal_when_auth_runs_inside_audit() {
     assert!(scopes.contains("rows"), "rows missing from {scopes:?}");
 }
 
+#[tokio::test]
+async fn middleware_pseudonymizes_value_bearing_trust_scopes_in_record() {
+    use registry_relay::auth::api_key::{ApiKeyAuth, ApiKeyEntry};
+    use registry_relay::auth::middleware::auth_layer;
+    use sha2::{Digest, Sha256};
+
+    const VALID_KEY: &str = "test-bearer-token-trust-scope-redaction";
+    const SUBJECT_REF: &str = "subject:123456789";
+
+    async fn governed_probe() -> axum::response::Response {
+        let mut response = StatusCode::OK.into_response();
+        response.extensions_mut().insert(AuditContextExt {
+            pdp_trust_provenance: Some(vec!["subject_ref".to_string()]),
+            ..AuditContextExt::default()
+        });
+        response
+    }
+
+    let fingerprint = format!(
+        "sha256:{}",
+        hex_lower_local(&Sha256::digest(VALID_KEY.as_bytes()))
+    );
+    let trust_scope = format!("registry:trust:subject_ref:{SUBJECT_REF}");
+    let entry = ApiKeyEntry::new(
+        "statistics_office".to_string(),
+        ScopeSet::from_iter(["social_registry:rows".to_string(), trust_scope.clone()]),
+        fingerprint,
+    )
+    .expect("fingerprint parses");
+    let provider = Arc::new(ApiKeyAuth::new(vec![entry]));
+    let (sink, pipeline) = in_memory_pipeline();
+    let hasher = AuditKeyHasher::Keyed(
+        AuditHashSecret::new(b"trust-scope-test-audit-secret-32-bytes".to_vec())
+            .expect("test audit secret is strong enough"),
+    );
+    let expected_scope = format!(
+        "registry:trust:subject_ref:{}",
+        sensitive_value_hash_keyed(&hasher, "trust_scope:subject_ref", SUBJECT_REF)
+    );
+    let settings = AuditSettings {
+        hash_hasher: hasher,
+        ..AuditSettings::default()
+    };
+    let protected = auth_layer(Router::new().route("/probe", get(governed_probe)), provider);
+    let app = Router::new()
+        .merge(protected)
+        .layer(from_fn(audit_layer))
+        .layer(Extension(settings))
+        .layer(Extension(pipeline));
+
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/probe")
+        .header("authorization", format!("Bearer {VALID_KEY}"))
+        .body(Body::empty())
+        .expect("request builds");
+    let response = app.oneshot(req).await.expect("request completes");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let records = sink.snapshot();
+    assert_eq!(records.len(), 1);
+    let record = captured_record(&records[0]);
+    assert_eq!(
+        record["scopes_used"],
+        serde_json::json!([expected_scope, "social_registry:rows"])
+    );
+    assert!(record["scopes_used"][0]
+        .as_str()
+        .expect("redacted trust scope is a string")
+        .starts_with("registry:trust:subject_ref:hmac-sha256:"));
+    assert_eq!(
+        record["pdp_trust_provenance"],
+        serde_json::json!(["subject_ref"])
+    );
+    assert!(!records[0].contains(SUBJECT_REF));
+    assert!(!records[0].contains(&trust_scope));
+}
+
+#[tokio::test]
+async fn middleware_fails_closed_for_malformed_or_unknown_trust_scopes() {
+    let malformed_scopes = [
+        "registry:trust",
+        "registry:trust:",
+        "registry:trust:subject_ref",
+        "registry:trust::value",
+        "registry:trust:subject_ref:",
+        "registry:trust:unknown:value",
+    ];
+
+    for trust_scope in malformed_scopes {
+        let (sink, pipeline) = in_memory_pipeline();
+        let principal = Principal {
+            principal_id: "statistics_office".to_string(),
+            scopes: ScopeSet::from_iter(["social_registry:rows", trust_scope]),
+            auth_mode: AuthMode::Oidc,
+        };
+        let settings = AuditSettings {
+            hash_hasher: AuditKeyHasher::Keyed(
+                AuditHashSecret::new(b"malformed-trust-scope-test-secret".to_vec())
+                    .expect("test audit secret is strong enough"),
+            ),
+            ..AuditSettings::default()
+        };
+        let app = Router::new()
+            .route("/probe", get(|| async { StatusCode::OK }))
+            .layer(from_fn(audit_layer))
+            .layer(Extension(principal))
+            .layer(Extension(settings))
+            .layer(Extension(pipeline));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/probe")
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("request completes");
+        assert_eq!(
+            response.status(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "scope={trust_scope}"
+        );
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body reads");
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).expect("problem body is JSON")["code"],
+            "audit.write_failed",
+            "scope={trust_scope}"
+        );
+        assert!(sink.snapshot().is_empty(), "scope={trust_scope}");
+    }
+}
+
+#[tokio::test]
+async fn middleware_fails_closed_instead_of_hashing_trust_scope_without_key() {
+    let (sink, pipeline) = in_memory_pipeline();
+    let principal = Principal {
+        principal_id: "statistics_office".to_string(),
+        scopes: ScopeSet::from_iter([
+            "social_registry:rows",
+            "registry:trust:subject_ref:subject:123456789",
+        ]),
+        auth_mode: AuthMode::ApiKey,
+    };
+    let app = Router::new()
+        .route("/probe", get(|| async { StatusCode::OK }))
+        .layer(from_fn(audit_layer))
+        .layer(Extension(principal))
+        .layer(Extension(AuditSettings::default()))
+        .layer(Extension(pipeline));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/probe")
+                .body(Body::empty())
+                .expect("request builds"),
+        )
+        .await
+        .expect("request completes");
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("response body reads");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).expect("problem body is JSON")["code"],
+        "audit.write_failed"
+    );
+    assert!(sink.snapshot().is_empty());
+}
+
 fn hex_lower_local(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);

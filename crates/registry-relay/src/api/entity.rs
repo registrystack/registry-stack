@@ -19,9 +19,9 @@ use serde_json::{json, Value};
 use tokio::sync::watch;
 
 use crate::api::governed::{
-    attach_pdp_audit, entity_etag as governed_entity_etag, governed_cache_variant,
-    require_governed_read_access, strong_etag as governed_strong_etag, GovernedAccessError,
-    GovernedReadDecision, GovernedRedactionProjection, GovernedRequestInfo,
+    attach_governed_error_audit, attach_pdp_audit, entity_etag as governed_entity_etag,
+    governed_cache_variant, require_governed_read_access, strong_etag as governed_strong_etag,
+    GovernedAccessError, GovernedReadDecision, GovernedRedactionProjection, GovernedRequestInfo,
 };
 use crate::audit::{AuditContextExt, ErrorCodeExt};
 use crate::auth::scopes::require_scope;
@@ -1047,7 +1047,7 @@ fn access_error_response(
     error: GovernedAccessError,
     mut context: Option<AuditContextExt>,
 ) -> Response {
-    attach_pdp_audit(&mut context, error.pdp_audit.as_ref());
+    attach_governed_error_audit(&mut context, &error);
     with_optional_audit_context(error.error.into_response(), context)
 }
 

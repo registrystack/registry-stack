@@ -80,9 +80,12 @@
   `x-registry-relationship`, `x-registry-on-behalf-of`, and
   `x-registry-credential-format` unless the authenticated principal has the
   exact `registry:trust:<field>:<value>` scope. These optional trust-context
-  fields are now scope-gated before policy evaluation. PDP decision audits
-  record the presence of these authenticated inputs without recording their
-  values.
+  fields are now scope-gated before policy evaluation. Audit records retain
+  ordinary route scopes in `scopes_used`, replace each value-bearing trust
+  scope with a field-bound
+  `registry:trust:<field>:hmac-sha256:<digest>` handle under the deployment
+  audit key, and record authenticated trust-context field names in
+  `pdp_trust_provenance` without their values.
 - BREAKING: Removed Relay-local credential issuance before 1.0. Relay no
   longer accepts `provenance` or entity `publicschema` config, no longer serves
   `/.well-known/did.json`, `/schemas/{claim_type}/{version}`, or

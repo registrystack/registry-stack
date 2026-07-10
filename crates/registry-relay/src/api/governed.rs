@@ -15,7 +15,10 @@ use registry_platform_pdp::{
 use sha2::{Digest, Sha256};
 
 use crate::audit::AuditContextExt;
-use crate::auth::Principal;
+use crate::auth::{
+    scopes::{format_trust_context_scope, TrustContextField},
+    Principal,
+};
 use crate::config::{Config, EntityApiConfig, EntityConfig};
 use crate::entity::EntityModel;
 use crate::error::{AuthError, Error, InternalError, PdpError};
@@ -34,7 +37,6 @@ const TRUST_SOURCE_OBSERVED_AT_UNIX_SECONDS_HEADER: &str =
     "x-registry-source-observed-at-unix-seconds";
 pub(crate) const TRUST_SOURCE_OBSERVED_AGE_SECONDS_HEADER: &str =
     "x-registry-source-observed-age-seconds";
-const TRUST_SCOPE_PREFIX: &str = "registry:trust";
 
 const ODRL_PURPOSE: &str = "http://www.w3.org/ns/odrl/2/purpose";
 const ODRL_SPATIAL: &str = "http://www.w3.org/ns/odrl/2/spatial";
@@ -119,6 +121,7 @@ pub(crate) struct GovernedRequestInfo<'a> {
 pub(crate) struct GovernedAccessError {
     pub(crate) error: Error,
     pub(crate) pdp_audit: Option<PdpDecisionAudit>,
+    pub(crate) pdp_trust_provenance: BTreeSet<String>,
 }
 
 impl GovernedAccessError {
@@ -126,6 +129,7 @@ impl GovernedAccessError {
         Self {
             error: error.into(),
             pdp_audit: None,
+            pdp_trust_provenance: BTreeSet::new(),
         }
     }
 
@@ -133,7 +137,13 @@ impl GovernedAccessError {
         Self {
             error,
             pdp_audit: Some(audit),
+            pdp_trust_provenance: BTreeSet::new(),
         }
+    }
+
+    fn with_trust_provenance(mut self, field: &str) -> Self {
+        self.pdp_trust_provenance.insert(field.to_string());
+        self
     }
 }
 
@@ -298,28 +308,28 @@ fn request_pdp_context(
             headers,
             principal,
             TRUST_LEGAL_BASIS_HEADER,
-            "legal_basis",
+            TrustContextField::LegalBasis,
         )
         .map(ToOwned::to_owned),
         consent_ref: verified_trust_header_value(
             headers,
             principal,
             TRUST_CONSENT_HEADER,
-            "consent",
+            TrustContextField::Consent,
         )
         .map(ToOwned::to_owned),
         asserted_assurance: verified_trust_header_value(
             headers,
             principal,
             TRUST_ASSURANCE_HEADER,
-            "assurance",
+            TrustContextField::Assurance,
         )
         .map(ToOwned::to_owned),
         jurisdiction: verified_trust_header_value(
             headers,
             principal,
             TRUST_JURISDICTION_HEADER,
-            "jurisdiction",
+            TrustContextField::Jurisdiction,
         )
         .map(ToOwned::to_owned),
         requester_identity: principal.map(|principal| principal.principal_id.clone()),
@@ -327,21 +337,21 @@ fn request_pdp_context(
             headers,
             principal,
             TRUST_SUBJECT_REF_HEADER,
-            "subject_ref",
+            TrustContextField::SubjectRef,
         )
         .map(ToOwned::to_owned),
         relationship: verified_trust_header_value(
             headers,
             principal,
             TRUST_RELATIONSHIP_HEADER,
-            "relationship",
+            TrustContextField::Relationship,
         )
         .map(ToOwned::to_owned),
         on_behalf_of: verified_trust_header_value(
             headers,
             principal,
             TRUST_ON_BEHALF_OF_HEADER,
-            "on_behalf_of",
+            TrustContextField::OnBehalfOf,
         )
         .map(ToOwned::to_owned),
         requested_fact: Some(requested_fact.to_string()),
@@ -350,7 +360,7 @@ fn request_pdp_context(
             headers,
             principal,
             TRUST_REQUESTED_CREDENTIAL_FORMAT_HEADER,
-            "requested_credential_format",
+            TrustContextField::RequestedCredentialFormat,
         )
         .map(ToOwned::to_owned),
         source_binding: Some(source_binding.to_string()),
@@ -363,20 +373,21 @@ fn request_pdp_context(
             headers,
             principal,
             TRUST_SOURCE_OBSERVED_AT_UNIX_SECONDS_HEADER,
-            "source_observed_at_unix_seconds",
+            TrustContextField::SourceObservedAtUnixSeconds,
         )
-        .map(parse_unix_seconds)
+        .map(|value| parse_unix_seconds(value, "source_observed_at_unix_seconds"))
         .transpose()?,
         source_observed_age_seconds: source_observed_age_seconds(headers, principal)?,
     })
 }
 
 #[allow(clippy::result_large_err)]
-fn parse_unix_seconds(value: &str) -> Result<u64, GovernedAccessError> {
+fn parse_unix_seconds(value: &str, provenance_field: &str) -> Result<u64, GovernedAccessError> {
     value.parse::<u64>().map_err(|_| {
         GovernedAccessError::from_error(PdpError::from_stable_code(
             registry_platform_pdp::EVIDENCE_STALE,
         ))
+        .with_trust_provenance(provenance_field)
     })
 }
 
@@ -396,20 +407,13 @@ fn verified_trust_header_value<'a>(
     headers: &'a HeaderMap,
     principal: Option<&Principal>,
     name: &str,
-    field: &str,
+    field: TrustContextField,
 ) -> Option<&'a str> {
     let value = trust_header_value(headers, name)?;
+    let required_scope = format_trust_context_scope(field, value)?;
     principal
-        .filter(|principal| {
-            principal
-                .scopes
-                .contains(&trust_context_scope(field, value))
-        })
+        .filter(|principal| principal.scopes.contains(&required_scope))
         .map(|_| value)
-}
-
-fn trust_context_scope(field: &str, value: &str) -> String {
-    format!("{TRUST_SCOPE_PREFIX}:{field}:{value}")
 }
 
 #[allow(clippy::result_large_err)]
@@ -420,17 +424,19 @@ fn source_observed_age_seconds(
     let Some(value) = trust_header_value(headers, TRUST_SOURCE_OBSERVED_AGE_SECONDS_HEADER) else {
         return Ok(None);
     };
-    if !principal.is_some_and(|principal| {
-        principal
-            .scopes
-            .contains(&trust_context_scope("source_observed_age_seconds", value))
-    }) {
+    let Some(required_scope) =
+        format_trust_context_scope(TrustContextField::SourceObservedAgeSeconds, value)
+    else {
+        return Ok(None);
+    };
+    if !principal.is_some_and(|principal| principal.scopes.contains(&required_scope)) {
         return Ok(None);
     }
     value.parse::<u64>().map(Some).map_err(|_| {
         GovernedAccessError::from_error(PdpError::from_stable_code(
             registry_platform_pdp::EVIDENCE_STALE,
         ))
+        .with_trust_provenance("source_observed_age_seconds")
     })
 }
 
@@ -483,6 +489,34 @@ pub(crate) fn attach_pdp_audit(
         (!audit.checked_scopes.is_empty()).then(|| audit.checked_scopes.iter().cloned().collect());
     context.pdp_trust_provenance = (!audit.trust_provenance.is_empty())
         .then(|| audit.trust_provenance.iter().cloned().collect());
+}
+
+pub(crate) fn attach_pdp_trust_provenance(
+    context: &mut Option<AuditContextExt>,
+    provenance: &BTreeSet<String>,
+) {
+    if provenance.is_empty() {
+        return;
+    }
+    let Some(context) = context.as_mut() else {
+        return;
+    };
+    let mut combined: BTreeSet<String> = context
+        .pdp_trust_provenance
+        .take()
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+    combined.extend(provenance.iter().cloned());
+    context.pdp_trust_provenance = Some(combined.into_iter().collect());
+}
+
+pub(crate) fn attach_governed_error_audit(
+    context: &mut Option<AuditContextExt>,
+    error: &GovernedAccessError,
+) {
+    attach_pdp_audit(context, error.pdp_audit.as_ref());
+    attach_pdp_trust_provenance(context, &error.pdp_trust_provenance);
 }
 
 pub(crate) fn governed_cache_variant<'a>(
@@ -1065,6 +1099,56 @@ datasets: []
             context.checked_scopes,
             BTreeSet::from(["social_registry:rows".to_string()])
         );
+    }
+
+    #[test]
+    fn malformed_exact_scoped_freshness_records_trusted_field_provenance() {
+        let request_info = GovernedRequestInfo {
+            route_identity: "relay.entity.collection",
+            requested_disclosure: "entity_collection",
+            checked_scope: "social_registry:rows",
+            redaction_projection: GovernedRedactionProjection::EntityFields,
+        };
+        for (header, field) in [
+            (
+                TRUST_SOURCE_OBSERVED_AT_UNIX_SECONDS_HEADER,
+                TrustContextField::SourceObservedAtUnixSeconds,
+            ),
+            (
+                TRUST_SOURCE_OBSERVED_AGE_SECONDS_HEADER,
+                TrustContextField::SourceObservedAgeSeconds,
+            ),
+        ] {
+            let malformed_value = "not-a-unix-second";
+            let principal = Principal {
+                principal_id: "client-a".to_string(),
+                scopes: [
+                    "social_registry:rows".to_string(),
+                    format_trust_context_scope(field, malformed_value)
+                        .expect("non-empty exact trust scope formats"),
+                ]
+                .into_iter()
+                .collect::<ScopeSet>(),
+                auth_mode: AuthMode::ApiKey,
+            };
+            let mut headers = HeaderMap::new();
+            headers.insert(header, HeaderValue::from_static(malformed_value));
+
+            let error = request_pdp_context(
+                "testing",
+                &headers,
+                Some(&principal),
+                "individual",
+                "relay:social_registry:individuals_table",
+                &request_info,
+            )
+            .expect_err("malformed authenticated freshness must deny");
+
+            assert_eq!(
+                error.pdp_trust_provenance,
+                BTreeSet::from([field.as_str().to_string()])
+            );
+        }
     }
 
     fn policy_input_context(scopes: &[&str]) -> PdpRequestContext {

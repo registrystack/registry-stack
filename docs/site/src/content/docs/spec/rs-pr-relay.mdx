@@ -49,7 +49,7 @@ The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 
 | 0.2.1 | 2026-07-07 | draft | Documented additional request-context headers alongside REQ-PR-RELAY-020, noting they are not currently wired to any Relay policy decision. |
 | 0.2.2 | 2026-07-09 | draft | Clarified that `x-registry-source-observed-at-unix-seconds` is scope guarded trust context, leaving four additional request-context headers outside Relay policy decisions. |
 | 0.3.0 | 2026-07-09 | draft | Removed Relay-local signed response credential requirements and made Registry Notary the only credential issuance surface. |
-| 0.3.1 | 2026-07-10 | draft | Scope-gated the remaining client-supplied trust-context headers and documented the policy-authoring boundary. |
+| 0.3.1 | 2026-07-10 | draft | Scope-gated the remaining client-supplied trust-context headers, documented the policy-authoring boundary, and replaced exact trust values in audit records with keyed field-bound handles. |
 
 ## 1. Scope and references
 
@@ -164,7 +164,7 @@ REQ-PR-RELAY-014: A Relay entity or aggregate response MUST remain an ordinary n
 
 Registry Relay records every data and metadata read in a JSONL audit trail. Audit covers the principal, the scopes exercised, and the request, so a reviewer can reconstruct who read what under which permission.
 
-REQ-PR-RELAY-015: Every record read and every metadata request MUST produce a JSONL audit record carrying the caller's `principal_id`, the `scopes_used`, and the `request_id`. This is the protocol-level form of REQ-ARC-G-004.
+REQ-PR-RELAY-015: Every record read and every metadata request MUST produce a JSONL audit record carrying the caller's `principal_id`, the `scopes_used`, and the `request_id`. Raw value-bearing `registry:trust:<field>:<value>` scopes MUST NOT appear in `scopes_used`; each such scope MUST be replaced by the canonical field-bound `registry:trust:<field>:hmac-sha256:<digest>` handle computed under the deployment audit key. The audit record MUST retain authenticated trust-context field names without their values in `pdp_trust_provenance`, including an authenticated freshness field whose malformed value causes denial before PDP evaluation. This is the protocol-level form of REQ-ARC-G-004.
 
 REQ-PR-RELAY-016: Error responses MUST use the problem-details media type `application/problem+json` ([RFC 9457](https://www.rfc-editor.org/info/rfc9457)).
 

@@ -12,7 +12,10 @@ use datafusion::datasource::MemTable;
 use datafusion::execution::context::SessionContext;
 use registry_manifest_core as metadata_core;
 use registry_relay::api::{aggregates_router, entity_router, metadata_router, CursorSigner};
-use registry_relay::audit::{audit_layer, AuditPipeline, InMemorySink};
+use registry_relay::audit::{
+    audit_layer, sensitive_value_hash_keyed, AuditHashSecret, AuditKeyHasher, AuditPipeline,
+    AuditSettings, InMemorySink,
+};
 use registry_relay::auth::{AuthMode, Principal, ScopeSet};
 use registry_relay::config::{self, DatasetId, ResourceId};
 use registry_relay::entity::EntityRegistry;
@@ -21,6 +24,7 @@ use registry_relay::ingest::{
 };
 use registry_relay::query::EntityQueryEngine;
 use serde_json::Value;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::sync::watch;
@@ -335,6 +339,13 @@ const ENTITY_ROUTE_SCOPES_WITHOUT_TRUST_ASSERTIONS: &[&str] = &[
     "social_registry:evidence_verification",
 ];
 
+fn test_audit_hasher() -> AuditKeyHasher {
+    AuditKeyHasher::Keyed(
+        AuditHashSecret::new(b"entity-route-test-audit-secret-32-bytes".to_vec())
+            .expect("test audit secret is strong enough"),
+    )
+}
+
 async fn server_with_query() -> TestServer {
     server_with_query_version("01J5K8M0000000000000000000").await
 }
@@ -439,19 +450,35 @@ async fn server_with_query_and_governed_entity_policy_without_trust_assertion_sc
 async fn server_with_query_audit_and_governed_entity_policy_without_trust_assertion_scopes(
     governed_policy_yaml: &str,
 ) -> (TestServer, InMemorySink) {
+    server_with_query_audit_and_governed_entity_policy_and_scopes(
+        governed_policy_yaml,
+        ENTITY_ROUTE_SCOPES_WITHOUT_TRUST_ASSERTIONS,
+    )
+    .await
+}
+
+async fn server_with_query_audit_and_governed_entity_policy_and_scopes(
+    governed_policy_yaml: &str,
+    principal_scopes: &[&str],
+) -> (TestServer, InMemorySink) {
     let audit_sink = InMemorySink::new();
     let audit_pipeline: Arc<AuditPipeline> = AuditPipeline::from_sink(audit_sink.clone());
     let app = app_with_query_versions_signer_provenance_selector_metadata_and_config_patch(
         "01J5K8M0000000000000000000",
         "01J5K8M0000000000000000000",
         Arc::new(CursorSigner::new_random()),
-        ENTITY_ROUTE_SCOPES_WITHOUT_TRUST_ASSERTIONS,
+        principal_scopes,
         Some("baseline-dpi/v1"),
         test_evidence_metadata(),
         Some(governed_policy_yaml),
     )
     .await
     .layer(from_fn(audit_layer))
+    .layer(Extension(principal(principal_scopes)))
+    .layer(Extension(AuditSettings {
+        hash_hasher: test_audit_hasher(),
+        ..AuditSettings::default()
+    }))
     .layer(Extension(audit_pipeline));
     (TestServer::new(app), audit_sink)
 }
@@ -468,6 +495,11 @@ async fn server_with_query_audit_and_ecosystem_binding_selector() -> (TestServer
     )
     .await
     .layer(from_fn(audit_layer))
+    .layer(Extension(principal(ENTITY_ROUTE_SCOPES)))
+    .layer(Extension(AuditSettings {
+        hash_hasher: test_audit_hasher(),
+        ..AuditSettings::default()
+    }))
     .layer(Extension(audit_pipeline));
     (TestServer::new(app), audit_sink)
 }
@@ -1537,6 +1569,72 @@ async fn governed_entity_policy_ignores_unverified_source_freshness_header_witho
         !audit_text.contains(forged_freshness),
         "audit record must not include forged freshness value {forged_freshness}"
     );
+}
+
+#[tokio::test]
+async fn governed_entity_malformed_exact_scoped_freshness_is_redacted_with_provenance() {
+    let policy = r#"          governed_policy:
+            permitted_purposes:
+              - https://data.example.test/purposes/testing
+            max_source_age_seconds: 30
+            trusted_context: {}
+"#;
+    let malformed_freshness = "not-a-number-987654321";
+    let trust_scope = format!("registry:trust:source_observed_age_seconds:{malformed_freshness}");
+    let scopes = [
+        "social_registry:metadata",
+        "social_registry:rows",
+        "social_registry:evidence_verification",
+        trust_scope.as_str(),
+    ];
+    let (server, audit_sink) =
+        server_with_query_audit_and_governed_entity_policy_and_scopes(policy, &scopes).await;
+
+    let denied = server
+        .get("/v1/datasets/social_registry/entities/individual/records?id=p-1")
+        .add_header("data-purpose", "https://data.example.test/purposes/testing")
+        .add_header(
+            "x-registry-source-observed-age-seconds",
+            malformed_freshness,
+        )
+        .await;
+
+    denied.assert_status(StatusCode::FORBIDDEN);
+    let body = denied.json::<Value>();
+    assert_eq!(body["code"], "pdp.evidence_stale");
+    assert!(!serde_json::to_string(&body)
+        .expect("response body serializes")
+        .contains(malformed_freshness));
+
+    let records = audit_sink.snapshot();
+    assert_eq!(records.len(), 1);
+    let audit_text = &records[0];
+    let record = audit_record_from_envelope(audit_text);
+    assert_eq!(record["status_code"], 403);
+    assert_eq!(record["error_code"], "pdp.evidence_stale");
+    assert_eq!(
+        record["pdp_trust_provenance"],
+        serde_json::json!(["source_observed_age_seconds"])
+    );
+    let expected_scope = format!(
+        "registry:trust:source_observed_age_seconds:{}",
+        sensitive_value_hash_keyed(
+            &test_audit_hasher(),
+            "trust_scope:source_observed_age_seconds",
+            malformed_freshness,
+        )
+    );
+    let scopes_used: BTreeSet<&str> = record["scopes_used"]
+        .as_array()
+        .expect("scopes_used is an array")
+        .iter()
+        .map(|scope| scope.as_str().expect("scope is a string"))
+        .collect();
+    assert!(scopes_used.contains("social_registry:rows"));
+    assert!(scopes_used.contains(expected_scope.as_str()));
+    assert!(expected_scope.starts_with("registry:trust:source_observed_age_seconds:hmac-sha256:"));
+    assert!(!audit_text.contains(malformed_freshness));
+    assert!(!audit_text.contains(&trust_scope));
 }
 
 #[tokio::test]

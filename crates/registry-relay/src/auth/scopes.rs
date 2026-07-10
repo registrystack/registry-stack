@@ -1,17 +1,106 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Scope set and authorisation helpers.
 //!
-//! V1 keeps scopes as plain strings: a scope is whatever appears in
-//! `auth.api_keys[].scopes` in the config file and whatever appears in
-//! the per-resource `metadata_scope` / `aggregate_scope`
-//! fields. The gateway does not parse or namespace them; it only
-//! checks membership.
+//! Authorization scopes remain plain strings and use membership checks. The
+//! reserved `registry:trust` namespace is the exception: governed request
+//! context and audit projection share the canonical grammar defined here.
 
 use std::collections::BTreeSet;
 
 use crate::error::{AuthError, Error};
 
 use super::Principal;
+
+pub(crate) const TRUST_CONTEXT_SCOPE_PREFIX: &str = "registry:trust";
+
+/// Fields that may carry exact-value governed trust context in a scope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TrustContextField {
+    LegalBasis,
+    Consent,
+    Assurance,
+    Jurisdiction,
+    SubjectRef,
+    Relationship,
+    OnBehalfOf,
+    RequestedCredentialFormat,
+    SourceObservedAtUnixSeconds,
+    SourceObservedAgeSeconds,
+}
+
+impl TrustContextField {
+    const ALL: [Self; 10] = [
+        Self::LegalBasis,
+        Self::Consent,
+        Self::Assurance,
+        Self::Jurisdiction,
+        Self::SubjectRef,
+        Self::Relationship,
+        Self::OnBehalfOf,
+        Self::RequestedCredentialFormat,
+        Self::SourceObservedAtUnixSeconds,
+        Self::SourceObservedAgeSeconds,
+    ];
+
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::LegalBasis => "legal_basis",
+            Self::Consent => "consent",
+            Self::Assurance => "assurance",
+            Self::Jurisdiction => "jurisdiction",
+            Self::SubjectRef => "subject_ref",
+            Self::Relationship => "relationship",
+            Self::OnBehalfOf => "on_behalf_of",
+            Self::RequestedCredentialFormat => "requested_credential_format",
+            Self::SourceObservedAtUnixSeconds => "source_observed_at_unix_seconds",
+            Self::SourceObservedAgeSeconds => "source_observed_age_seconds",
+        }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|field| field.as_str() == value)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ParsedTrustContextScope<'a> {
+    NotReserved,
+    Malformed,
+    Canonical {
+        field: TrustContextField,
+        value: &'a str,
+    },
+}
+
+/// Parse the reserved trust-context namespace without exposing unrecognized
+/// field names to audit output. Values are split once so they may contain
+/// colons.
+pub(crate) fn parse_trust_context_scope(scope: &str) -> ParsedTrustContextScope<'_> {
+    if scope == TRUST_CONTEXT_SCOPE_PREFIX {
+        return ParsedTrustContextScope::Malformed;
+    }
+    let Some(payload) = scope
+        .strip_prefix(TRUST_CONTEXT_SCOPE_PREFIX)
+        .and_then(|suffix| suffix.strip_prefix(':'))
+    else {
+        return ParsedTrustContextScope::NotReserved;
+    };
+    let Some((field, value)) = payload.split_once(':') else {
+        return ParsedTrustContextScope::Malformed;
+    };
+    let Some(field) = TrustContextField::parse(field) else {
+        return ParsedTrustContextScope::Malformed;
+    };
+    if value.is_empty() {
+        return ParsedTrustContextScope::Malformed;
+    }
+    ParsedTrustContextScope::Canonical { field, value }
+}
+
+/// Format a canonical exact-value trust-context scope.
+pub(crate) fn format_trust_context_scope(field: TrustContextField, value: &str) -> Option<String> {
+    (!value.is_empty()).then(|| format!("{TRUST_CONTEXT_SCOPE_PREFIX}:{}:{value}", field.as_str()))
+}
 
 /// Set of scopes carried on a [`Principal`].
 ///
@@ -128,5 +217,78 @@ mod tests {
         let p = principal_with_scopes(["rows"]);
         let err = require_scope(&p, "admin").expect_err("missing scope denied");
         assert_eq!(err.code(), "auth.scope_denied");
+    }
+
+    #[test]
+    fn trust_context_scope_parser_enforces_reserved_namespace_boundaries() {
+        let cases = [
+            ("social_registry:rows", ParsedTrustContextScope::NotReserved),
+            (
+                "registry:trusted:subject_ref:value",
+                ParsedTrustContextScope::NotReserved,
+            ),
+            ("registry:trust", ParsedTrustContextScope::Malformed),
+            ("registry:trust:", ParsedTrustContextScope::Malformed),
+            (
+                "registry:trust:subject_ref",
+                ParsedTrustContextScope::Malformed,
+            ),
+            ("registry:trust::value", ParsedTrustContextScope::Malformed),
+            (
+                "registry:trust:subject_ref:",
+                ParsedTrustContextScope::Malformed,
+            ),
+            (
+                "registry:trust:unknown:value",
+                ParsedTrustContextScope::Malformed,
+            ),
+            (
+                "registry:trust:subject_ref:subject:123",
+                ParsedTrustContextScope::Canonical {
+                    field: TrustContextField::SubjectRef,
+                    value: "subject:123",
+                },
+            ),
+        ];
+
+        for (scope, expected) in cases {
+            assert_eq!(parse_trust_context_scope(scope), expected, "scope={scope}");
+        }
+    }
+
+    #[test]
+    fn trust_context_scope_formatter_and_parser_share_the_exact_field_set() {
+        let expected_fields = [
+            "legal_basis",
+            "consent",
+            "assurance",
+            "jurisdiction",
+            "subject_ref",
+            "relationship",
+            "on_behalf_of",
+            "requested_credential_format",
+            "source_observed_at_unix_seconds",
+            "source_observed_age_seconds",
+        ];
+        assert_eq!(
+            TrustContextField::ALL.map(TrustContextField::as_str),
+            expected_fields
+        );
+
+        for field in TrustContextField::ALL {
+            let scope = format_trust_context_scope(field, "value:with:colons")
+                .expect("non-empty value formats");
+            assert_eq!(
+                parse_trust_context_scope(&scope),
+                ParsedTrustContextScope::Canonical {
+                    field,
+                    value: "value:with:colons",
+                }
+            );
+        }
+        assert_eq!(
+            format_trust_context_scope(TrustContextField::SubjectRef, ""),
+            None
+        );
     }
 }
