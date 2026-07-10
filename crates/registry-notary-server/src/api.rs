@@ -26,18 +26,19 @@ use registry_notary_core::tokens::{
 #[cfg(feature = "registry-notary-cel")]
 use registry_notary_core::RegistryNotaryCelConfig;
 use registry_notary_core::{
-    AccessMode, BatchEvaluateItemRequest, BatchEvaluateRequest, BoundedClaimId,
-    BoundedCorrelationId, ClaimRef, ClaimResultView, ClaimSet, ConfigAuditEvent, ConfigMetadata,
-    CredentialIssueRequest, CredentialProfileConfig, EvaluateRequest, EvidenceActor,
-    EvidenceAuditEvent, EvidenceBatchItemAuditEvent, EvidenceConfig, EvidenceEntity,
-    EvidenceEntityReference, EvidenceError, EvidenceOnBehalfOf, EvidencePrincipal,
-    EvidenceRelationship, FederationConfig, Hashed, HolderRequest, Oid4vciConfig,
-    Oid4vciCredentialClaimMode, Oid4vciCredentialConfigurationConfig, Oid4vciDisplayImageConfig,
-    Oid4vciIssuerDisplayConfig, PolicyIdentifier, RateLimitBucket, RegistryNotaryAdminListenerMode,
-    RenderEvaluationRequest, SelfAttestationConfig, SelfAttestationDelegatedRelationshipConfig,
-    SelfAttestationDenialCode, SelfAttestationScopePolicy, SourceCapability,
-    StandaloneRegistryNotaryConfig, StoredSelfAttestationMetadata, SubjectRequest,
-    VerifiedClaimValue, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
+    signing_key_uses_local_software_custody, AccessMode, BatchEvaluateItemRequest,
+    BatchEvaluateRequest, BoundedClaimId, BoundedCorrelationId, ClaimRef, ClaimResultView,
+    ClaimSet, ConfigAuditEvent, ConfigMetadata, CredentialIssueRequest, CredentialProfileConfig,
+    DeploymentProfile, EvaluateRequest, EvidenceActor, EvidenceAuditEvent,
+    EvidenceBatchItemAuditEvent, EvidenceConfig, EvidenceEntity, EvidenceEntityReference,
+    EvidenceError, EvidenceOnBehalfOf, EvidencePrincipal, EvidenceRelationship, FederationConfig,
+    Hashed, HolderRequest, Oid4vciConfig, Oid4vciCredentialClaimMode,
+    Oid4vciCredentialConfigurationConfig, Oid4vciDisplayImageConfig, Oid4vciIssuerDisplayConfig,
+    PolicyIdentifier, RateLimitBucket, RegistryNotaryAdminListenerMode, RenderEvaluationRequest,
+    SelfAttestationConfig, SelfAttestationDelegatedRelationshipConfig, SelfAttestationDenialCode,
+    SelfAttestationScopePolicy, SourceCapability, StandaloneRegistryNotaryConfig,
+    StoredSelfAttestationMetadata, SubjectRequest, VerifiedClaimValue, FORMAT_CLAIM_RESULT_JSON,
+    FORMAT_SD_JWT_VC,
 };
 use registry_platform_audit::AuditKeyHasher;
 use registry_platform_crypto::KeyReadiness;
@@ -388,6 +389,10 @@ async fn ready(state: Option<Extension<Arc<RegistryNotaryApiState>>>) -> Respons
 
     let ready = ok == total;
     let is_degraded = !ready && failed == 0 && degraded > 0;
+    let state_ref = state.as_ref().map(|Extension(state)| state.as_ref());
+    let signer_custody = state_ref
+        .map(signer_custody_checks)
+        .unwrap_or_else(default_signer_custody_checks);
     let status = if ready {
         StatusCode::OK
     } else {
@@ -407,6 +412,7 @@ async fn ready(state: Option<Extension<Arc<RegistryNotaryApiState>>>) -> Respons
             "total": signer_total,
             "ok": signer_ok,
             "failed": signer_failed,
+            "custody": signer_custody,
         },
     });
     if ready {
@@ -417,6 +423,8 @@ async fn ready(state: Option<Extension<Arc<RegistryNotaryApiState>>>) -> Respons
         .into_response();
     }
 
+    let request_id = crate::standalone::current_request_correlation_id()
+        .unwrap_or_else(crate::standalone::new_request_correlation_id);
     let mut response = (
         status,
         Json(json!({
@@ -425,6 +433,7 @@ async fn ready(state: Option<Extension<Arc<RegistryNotaryApiState>>>) -> Respons
             "status": status.as_u16(),
             "detail": "one or more readiness checks are not ready",
             "code": "readiness.not_ready",
+            "request_id": request_id.as_str(),
             "readiness_status": status_text.as_str(),
             "checks": checks,
         })),
@@ -434,7 +443,204 @@ async fn ready(state: Option<Extension<Arc<RegistryNotaryApiState>>>) -> Respons
         header::CONTENT_TYPE,
         "application/problem+json".parse().unwrap(),
     );
+    response.headers_mut().insert(
+        "x-request-id",
+        request_id
+            .as_str()
+            .parse()
+            .expect("bounded correlation id is a valid header value"),
+    );
     response
+}
+
+fn signer_custody_checks(state: &RegistryNotaryApiState) -> Value {
+    let signer_readiness = state.signer_readiness();
+    let provider_counts = signer_readiness.provider_counts();
+    let config = state.runtime_config();
+    let custody_approved = config
+        .as_deref()
+        .is_some_and(|config| config.deployment.evidence.signer_custody_approved);
+    let approval_required = config
+        .as_deref()
+        .is_some_and(signer_custody_approval_required);
+    let scoped = config
+        .as_deref()
+        .map(custody_scoped_signer_counts)
+        .unwrap_or_default();
+    let credential_issuance = config
+        .as_deref()
+        .map(credential_issuance_signer_counts)
+        .unwrap_or_default();
+    let access_token_issuance = config
+        .as_deref()
+        .map(access_token_issuance_signer_counts)
+        .unwrap_or_default();
+    let access_token_issuance_enabled = config
+        .as_deref()
+        .is_some_and(|config| config.auth.access_token_signing.enabled);
+    let federation = config
+        .as_deref()
+        .map(federation_signer_counts)
+        .unwrap_or_default();
+    let federation_enabled = config
+        .as_deref()
+        .is_some_and(|config| config.federation.enabled);
+
+    json!({
+        "active_provider_counts": provider_counts,
+        "signing_provider_count": scoped.total,
+        "local_software_signing_provider_count": scoped.local_software,
+        "custody_approval_required": approval_required,
+        "custody_approved": custody_approved,
+        "unapproved_signing_provider_count": unapproved_signer_count(
+            scoped.total,
+            custody_approved,
+        ),
+        "surfaces": {
+            "credential_issuance": signer_surface_checks(
+                credential_issuance,
+                custody_approved,
+            ),
+            "access_token_issuance": signer_surface_checks_with_enabled(
+                access_token_issuance_enabled,
+                access_token_issuance,
+                custody_approved,
+            ),
+            "federation": {
+                "enabled": federation_enabled,
+                "signing_provider_count": federation.total,
+                "local_software_signing_provider_count": federation.local_software,
+                "unapproved_signing_provider_count": unapproved_signer_count(
+                    federation.total,
+                    custody_approved,
+                ),
+            },
+        },
+    })
+}
+
+fn default_signer_custody_checks() -> Value {
+    json!({
+        "active_provider_counts": {},
+        "signing_provider_count": 0,
+        "local_software_signing_provider_count": 0,
+        "custody_approval_required": false,
+        "custody_approved": false,
+        "unapproved_signing_provider_count": 0,
+        "surfaces": {
+            "credential_issuance": {
+                "signing_provider_count": 0,
+                "local_software_signing_provider_count": 0,
+                "unapproved_signing_provider_count": 0,
+            },
+            "access_token_issuance": {
+                "enabled": false,
+                "signing_provider_count": 0,
+                "local_software_signing_provider_count": 0,
+                "unapproved_signing_provider_count": 0,
+            },
+            "federation": {
+                "enabled": false,
+                "signing_provider_count": 0,
+                "local_software_signing_provider_count": 0,
+                "unapproved_signing_provider_count": 0,
+            },
+        },
+    })
+}
+
+#[derive(Clone, Copy, Default)]
+struct SignerCounts {
+    total: usize,
+    local_software: usize,
+}
+
+fn signer_custody_approval_required(config: &StandaloneRegistryNotaryConfig) -> bool {
+    matches!(
+        config.deployment.profile,
+        Some(DeploymentProfile::Production | DeploymentProfile::EvidenceGrade)
+    )
+}
+
+fn custody_scoped_signer_counts(config: &StandaloneRegistryNotaryConfig) -> SignerCounts {
+    signing_key_counts(config, config.custody_scoped_signing_key_ids())
+}
+
+fn credential_issuance_signer_counts(config: &StandaloneRegistryNotaryConfig) -> SignerCounts {
+    signing_key_counts(
+        config,
+        config
+            .evidence
+            .credential_profiles
+            .values()
+            .map(|profile| profile.signing_key.as_str()),
+    )
+}
+
+fn access_token_issuance_signer_counts(config: &StandaloneRegistryNotaryConfig) -> SignerCounts {
+    if !config.auth.access_token_signing.enabled {
+        return SignerCounts::default();
+    }
+    signing_key_counts(
+        config,
+        [config.auth.access_token_signing.signing_key_id.as_str()],
+    )
+}
+
+fn federation_signer_counts(config: &StandaloneRegistryNotaryConfig) -> SignerCounts {
+    if !config.federation.enabled {
+        return SignerCounts::default();
+    }
+    signing_key_counts(config, [config.federation.signing.signing_key.as_str()])
+}
+
+fn signing_key_counts<'a>(
+    config: &StandaloneRegistryNotaryConfig,
+    key_ids: impl IntoIterator<Item = &'a str>,
+) -> SignerCounts {
+    let mut counts = SignerCounts::default();
+    for key_id in key_ids.into_iter().collect::<BTreeSet<_>>() {
+        let Some(key) = config
+            .evidence
+            .signing_keys
+            .get(key_id)
+            .filter(|key| key.status.may_sign())
+        else {
+            continue;
+        };
+        counts.total += 1;
+        counts.local_software += usize::from(signing_key_uses_local_software_custody(key));
+    }
+    counts
+}
+
+fn signer_surface_checks(counts: SignerCounts, custody_approved: bool) -> Value {
+    json!({
+        "signing_provider_count": counts.total,
+        "local_software_signing_provider_count": counts.local_software,
+        "unapproved_signing_provider_count": unapproved_signer_count(
+            counts.total,
+            custody_approved,
+        ),
+    })
+}
+
+fn signer_surface_checks_with_enabled(
+    enabled: bool,
+    counts: SignerCounts,
+    custody_approved: bool,
+) -> Value {
+    let mut checks = signer_surface_checks(counts, custody_approved);
+    checks["enabled"] = json!(enabled);
+    checks
+}
+
+const fn unapproved_signer_count(count: usize, custody_approved: bool) -> usize {
+    if custody_approved {
+        0
+    } else {
+        count
+    }
 }
 
 async fn admin_reload(principal: Option<Extension<EvidencePrincipal>>) -> Response {
@@ -4035,17 +4241,17 @@ async fn issue_credential(
     request: Result<Json<CredentialIssueRequest>, JsonRejection>,
 ) -> Response {
     if has_idempotency_key(&headers) {
-        return evidence_error_response(EvidenceError::InvalidRequest);
+        return credential_denial_response_without_evaluation(EvidenceError::InvalidRequest);
     }
     let request = match parse_json_body(request) {
         Ok(request) => request,
-        Err(error) => return evidence_error_response(error),
+        Err(error) => return credential_denial_response_without_evaluation(error),
     };
     let Some(Extension(state)) = state else {
         return evidence_error_response(EvidenceError::ServerDisabled);
     };
     let Some(Extension(principal)) = principal else {
-        return evidence_error_response(EvidenceError::MissingCredential);
+        return credential_denial_response_without_evaluation(EvidenceError::MissingCredential);
     };
     let evidence = match state.enabled_evidence() {
         Ok(evidence) => evidence,
@@ -4054,17 +4260,40 @@ async fn issue_credential(
     let mut principal =
         match classify_self_attestation_principal(&state.self_attestation, &principal) {
             Ok(principal) => principal,
-            Err(error) => return evidence_error_response(error),
+            Err(error) => {
+                let denial_code = denial_code_from_error(&error);
+                let mut response = evidence_error_response(error);
+                attach_self_attestation_audit(
+                    &mut response,
+                    "credential_denied",
+                    &[],
+                    denial_code,
+                    Some(state.self_attestation.subject_binding.token_claim.as_str()),
+                );
+                attach_zero_source_no_forward_audit(&mut response);
+                return response;
+            }
         };
     let evaluation = match state.store.get(&request.evaluation_id) {
         Some(evaluation) => evaluation,
-        None => return evidence_error_response(EvidenceError::EvaluationNotFound),
+        None => {
+            return credential_denial_response_without_evaluation(
+                EvidenceError::EvaluationNotFound,
+            );
+        }
     };
     if let Some(metadata) = evaluation.self_attestation.as_ref() {
         if principal.is_self_attestation() {
             if let Err(error) = apply_stored_self_attestation_access_mode(&mut principal, metadata)
             {
-                return evidence_error_response(error);
+                return credential_denial_response_for_evaluation(
+                    &state,
+                    error,
+                    &request.evaluation_id,
+                    &evaluation,
+                    &principal,
+                    None,
+                );
             }
         }
     }
@@ -4076,26 +4305,61 @@ async fn issue_credential(
         } else {
             EvidenceError::EvaluationBindingMismatch
         };
-        return evidence_error_response(error);
+        return credential_denial_response_for_evaluation(
+            &state,
+            error,
+            &request.evaluation_id,
+            &evaluation,
+            &principal,
+            None,
+        );
     }
     if let Err(error) =
         require_evaluation_access(evidence, state.source.as_ref(), &principal, &evaluation)
     {
-        return evidence_error_response(error);
+        return credential_denial_response_for_evaluation(
+            &state,
+            error,
+            &request.evaluation_id,
+            &evaluation,
+            &principal,
+            None,
+        );
     }
     if let Some(format) = request.format.as_deref() {
         if format != FORMAT_SD_JWT_VC {
-            return evidence_error_response(EvidenceError::FormatUnsupported);
+            return credential_denial_response_for_evaluation(
+                &state,
+                EvidenceError::FormatUnsupported,
+                &request.evaluation_id,
+                &evaluation,
+                &principal,
+                None,
+            );
         }
     }
     if let Some(disclosure) = request.disclosure.as_deref() {
         if disclosure != evaluation.disclosure {
-            return evidence_error_response(EvidenceError::EvaluationBindingMismatch);
+            return credential_denial_response_for_evaluation(
+                &state,
+                EvidenceError::EvaluationBindingMismatch,
+                &request.evaluation_id,
+                &evaluation,
+                &principal,
+                None,
+            );
         }
     }
     if let Some(claims) = &request.claims {
         if claims != &evaluation.claim_ids {
-            return evidence_error_response(EvidenceError::EvaluationBindingMismatch);
+            return credential_denial_response_for_evaluation(
+                &state,
+                EvidenceError::EvaluationBindingMismatch,
+                &request.evaluation_id,
+                &evaluation,
+                &principal,
+                None,
+            );
         }
     }
     if let Some(purpose) = request.purpose.as_deref() {
@@ -4119,7 +4383,14 @@ async fn issue_credential(
         Err(error) => return evidence_error_response(error),
     };
     if evaluation.format != FORMAT_SD_JWT_VC {
-        return evidence_error_response(EvidenceError::EvaluationBindingMismatch);
+        return credential_denial_response_for_evaluation(
+            &state,
+            EvidenceError::EvaluationBindingMismatch,
+            &request.evaluation_id,
+            &evaluation,
+            &principal,
+            Some((profile_id, profile)),
+        );
     }
     if let Err(error) = require_self_attestation_stored_access(
         &state,
@@ -4134,13 +4405,25 @@ async fn issue_credential(
         request.format.as_deref().unwrap_or(&evaluation.format),
         Some(profile_id),
     ) {
-        return evidence_error_response(error);
+        return credential_denial_response_for_evaluation(
+            &state,
+            error,
+            &request.evaluation_id,
+            &evaluation,
+            &principal,
+            Some((profile_id, profile)),
+        );
     }
     if principal.is_self_attestation() {
         if !state.self_attestation.allowed_operations.issue_credential {
-            return evidence_error_response(self_attestation_denied(
-                SelfAttestationDenialCode::OperationDenied,
-            ));
+            return credential_denial_response_for_evaluation(
+                &state,
+                self_attestation_denied(SelfAttestationDenialCode::OperationDenied),
+                &request.evaluation_id,
+                &evaluation,
+                &principal,
+                Some((profile_id, profile)),
+            );
         }
         let profile_policy = match evaluation.self_attestation.as_ref() {
             Some(metadata) if metadata.access_mode == AccessMode::DelegatedAttestation => {
@@ -4158,7 +4441,14 @@ async fn issue_credential(
             ),
         };
         if let Err(error) = profile_policy {
-            return evidence_error_response(error);
+            return credential_denial_response_for_evaluation(
+                &state,
+                error,
+                &request.evaluation_id,
+                &evaluation,
+                &principal,
+                Some((profile_id, profile)),
+            );
         }
     }
     // Fail-closed: every evaluated claim must appear in the profile's
@@ -4173,7 +4463,14 @@ async fn issue_credential(
             .iter()
             .any(|allowed| allowed == claim)
     }) {
-        return evidence_error_response(EvidenceError::EvaluationBindingMismatch);
+        return credential_denial_response_for_evaluation(
+            &state,
+            EvidenceError::EvaluationBindingMismatch,
+            &request.evaluation_id,
+            &evaluation,
+            &principal,
+            Some((profile_id, profile)),
+        );
     }
     if !profile.disclosure.allowed.is_empty()
         && !profile
@@ -4182,7 +4479,14 @@ async fn issue_credential(
             .iter()
             .any(|allowed| allowed == &evaluation.disclosure)
     {
-        return evidence_error_response(EvidenceError::DisclosureNotAllowed);
+        return credential_denial_response_for_evaluation(
+            &state,
+            EvidenceError::DisclosureNotAllowed,
+            &request.evaluation_id,
+            &evaluation,
+            &principal,
+            Some((profile_id, profile)),
+        );
     }
     let proof_binding = match validate_holder_request(
         profile,
@@ -4228,13 +4532,24 @@ async fn issue_credential(
             .check_credential_issuance(&principal_hash, holder_hash.as_ref())
         {
             let mut response = evidence_error_response(error.evidence_error());
-            attach_self_attestation_rate_limit_audit(
+            if let Err(audit_error) = attach_self_attestation_credential_denial_audit(
                 &mut response,
-                "credential_issue_rate_limited",
-                &evaluation.claim_ids,
-                error.bucket(),
-            );
+                &state.self_attestation_rate_keys,
+                &request.evaluation_id,
+                &evaluation,
+                Some((profile_id, profile)),
+            ) {
+                return evidence_error_response(audit_error);
+            }
+            if let Some(audit) = response.extensions_mut().get_mut::<EvidenceAuditContext>() {
+                audit.verification_decision = Some("credential_issue_rate_limited".to_string());
+                audit.denial_code = Some(SelfAttestationDenialCode::RateLimited);
+                audit.rate_limit_bucket = error
+                    .bucket()
+                    .and_then(|bucket| RateLimitBucket::new(bucket.as_str()).ok());
+            }
             override_attestation_audit_access_mode(&mut response, principal.access_mode());
+            attach_zero_source_no_forward_audit(&mut response);
             return response;
         }
     }
@@ -4250,7 +4565,16 @@ async fn issue_credential(
     let subject_ref = if principal.is_self_attestation() {
         match holder_id {
             Some(holder_id) => holder_id,
-            None => return evidence_error_response(EvidenceError::HolderProofRequired),
+            None => {
+                return credential_denial_response_for_evaluation(
+                    &state,
+                    EvidenceError::HolderProofRequired,
+                    &request.evaluation_id,
+                    &evaluation,
+                    &principal,
+                    Some((profile_id, profile)),
+                );
+            }
         }
     } else {
         match holder_id.or_else(|| {
@@ -4260,7 +4584,16 @@ async fn issue_credential(
                 .map(|result| result.target_ref.handle.as_str())
         }) {
             Some(subject_ref) => subject_ref,
-            None => return evidence_error_response(EvidenceError::InvalidRequest),
+            None => {
+                return credential_denial_response_for_evaluation(
+                    &state,
+                    EvidenceError::InvalidRequest,
+                    &request.evaluation_id,
+                    &evaluation,
+                    &principal,
+                    Some((profile_id, profile)),
+                );
+            }
         }
     };
     if let Some(binding) = proof_binding {
@@ -4272,7 +4605,7 @@ async fn issue_credential(
         )
         .await
         {
-            return evidence_error_response(match error {
+            let evidence_error = match error {
                 RequiredReplayError::AlreadySeen => {
                     state.metrics.record_replay("holder_proof", "replayed");
                     EvidenceError::HolderProofReplay
@@ -4285,7 +4618,18 @@ async fn issue_credential(
                     state.metrics.record_replay("holder_proof", "error");
                     EvidenceError::CredentialIssuanceFailed
                 }
-            });
+            };
+            if matches!(evidence_error, EvidenceError::HolderProofReplay) {
+                return credential_denial_response_for_evaluation(
+                    &state,
+                    evidence_error,
+                    &request.evaluation_id,
+                    &evaluation,
+                    &principal,
+                    Some((profile_id, profile)),
+                );
+            }
+            return evidence_error_response(evidence_error);
         }
         state.metrics.record_replay("holder_proof", "accepted");
     }
@@ -6801,6 +7145,11 @@ fn self_attestation_denied(reason: SelfAttestationDenialCode) -> EvidenceError {
 fn denial_code_from_error(error: &EvidenceError) -> Option<SelfAttestationDenialCode> {
     match error {
         EvidenceError::SelfAttestationDenied { reason } => Some(*reason),
+        EvidenceError::SelfAttestationRateLimited => Some(SelfAttestationDenialCode::RateLimited),
+        EvidenceError::SelfAttestationInvalidToken => Some(SelfAttestationDenialCode::InvalidToken),
+        EvidenceError::SelfAttestationAssuranceDenied => {
+            Some(SelfAttestationDenialCode::AssuranceDenied)
+        }
         _ => None,
     }
 }
@@ -7409,6 +7758,18 @@ fn is_matching_policy_provenance_code(code: &str) -> bool {
     )
 }
 
+// Before a stored evaluation is found, keep caller-controlled evaluation ids out of audit data.
+fn credential_denial_response_without_evaluation(error: EvidenceError) -> Response {
+    let denial_code = denial_code_from_error(&error);
+    let mut response = evidence_error_response(error);
+    attach_evidence_audit(&mut response, "credential_denied", None, &[], None);
+    attach_zero_source_no_forward_audit(&mut response);
+    if let Some(audit) = response.extensions_mut().get_mut::<EvidenceAuditContext>() {
+        audit.denial_code = denial_code;
+    }
+    response
+}
+
 fn credential_denial_response_for_evaluation(
     state: &RegistryNotaryApiState,
     error: EvidenceError,
@@ -7417,6 +7778,7 @@ fn credential_denial_response_for_evaluation(
     principal: &EvidencePrincipal,
     profile: Option<(&str, &CredentialProfileConfig)>,
 ) -> Response {
+    let denial_code = denial_code_from_error(&error);
     let mut response = evidence_error_response(error);
     if evaluation.self_attestation.is_some() || principal.is_self_attestation() {
         if let Err(error) = attach_self_attestation_credential_denial_audit(
@@ -7445,6 +7807,10 @@ fn credential_denial_response_for_evaluation(
                     ConfigMetadata::new(profile.holder_binding.mode.as_str()).ok();
             }
         }
+    }
+    attach_zero_source_no_forward_audit(&mut response);
+    if let Some(audit) = response.extensions_mut().get_mut::<EvidenceAuditContext>() {
+        audit.denial_code = denial_code;
     }
     response
 }
@@ -11128,6 +11494,33 @@ mod tests {
         assert_eq!(value["checks"]["signing_providers"]["total"], json!(1));
         assert_eq!(value["checks"]["signing_providers"]["ok"], json!(0));
         assert_eq!(value["checks"]["signing_providers"]["failed"], json!(1));
+    }
+
+    #[test]
+    fn access_token_issuance_signer_is_in_custody_counts() {
+        let mut config = classifier_config();
+        config.auth.access_token_signing.enabled = true;
+        config.auth.access_token_signing.signing_key_id = "access-token-key".to_string();
+        config.evidence.signing_keys.insert(
+            "access-token-key".to_string(),
+            serde_norway::from_str(
+                r#"
+provider: local_jwk_env
+private_jwk_env: ACCESS_TOKEN_JWK
+alg: EdDSA
+kid: access-token-key
+status: active
+"#,
+            )
+            .expect("signing key parses"),
+        );
+
+        let access_token = access_token_issuance_signer_counts(&config);
+        assert_eq!(access_token.total, 1);
+        assert_eq!(access_token.local_software, 1);
+        let scoped = custody_scoped_signer_counts(&config);
+        assert_eq!(scoped.total, 1);
+        assert_eq!(scoped.local_software, 1);
     }
 
     #[tokio::test]

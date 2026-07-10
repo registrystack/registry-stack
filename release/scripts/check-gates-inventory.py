@@ -43,6 +43,23 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ("Docs dependency install", "run: npm ci"),
     ("Docs tests", "run: npm test"),
     ("Docs build check", "run: npm run check"),
+    (
+        "Registryctl tutorial path filter",
+        "registryctl_tutorial: ${{ steps.filter.outputs.registryctl_tutorial }}",
+    ),
+    ("Registryctl tutorial job", "registryctl-tutorials:"),
+    (
+        "Registryctl tutorial helper tests",
+        "run: npm run test:tutorial:registryctl",
+    ),
+    (
+        "Registryctl tutorial command pre-gate",
+        "run: npm run check:tutorial:dry-run",
+    ),
+    (
+        "Registryctl tutorial source execution",
+        "run: npm run check:tutorial:registryctl",
+    ),
 )
 
 

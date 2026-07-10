@@ -1,5 +1,6 @@
 ---
 import docsetsManifest from '../data/generated/docsets.json';
+import { reviewStatusLabel } from '../lib/review-status.mjs';
 
 const base = import.meta.env.BASE_URL;
 const activeDocsetId = process.env.DOCS_DOCSET || docsetsManifest.current;
@@ -17,6 +18,7 @@ const entryData = route.entry?.data as
   | undefined;
 
 const lastReviewed = entryData?.last_reviewed;
+const reviewLabel = reviewStatusLabel(lastReviewed);
 const editUrl = route.editUrl;
 const pagination = route.pagination;
 const prev = pagination?.prev;
@@ -64,7 +66,7 @@ const showPageFooter = hasPagination || hasMeta || showFeedback;
 
       {hasMeta && (
         <div class="doc-meta">
-          {lastReviewed && <span class="doc-meta-item">Last reviewed {lastReviewed}</span>}
+          {reviewLabel && <span class="doc-meta-item">{reviewLabel}</span>}
           {editUrl && (
             <a class="doc-meta-item" href={editUrl.href}>
               Edit this page

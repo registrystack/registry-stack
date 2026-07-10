@@ -670,7 +670,7 @@ fn doctor_json_hosted_lab_unsigned_config_warns_and_succeeds() {
 #[test]
 fn doctor_json_evidence_grade_unsigned_config_fails() {
     let tmp = TempDir::new().expect("tempdir");
-    let config = write_config(&tmp);
+    let config = write_config_with_options(&tmp, TestConfigOptions::default());
     let env_file = write_env_file(&tmp);
 
     let output = doctor_command(&config, Some(&env_file))
@@ -770,6 +770,41 @@ fn doctor_json_evidence_grade_public_openapi_reports_error_but_succeeds() {
     );
     let diagnostic =
         diagnostic_with_code(&report, "notary.openapi.public").expect("OpenAPI public finding");
+    assert_eq!(diagnostic["severity"], "error");
+    assert_active_finding(diagnostic);
+}
+
+#[test]
+fn doctor_json_production_signer_without_custody_approval_fails_readiness() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config = write_config_with_options(
+        &tmp,
+        TestConfigOptions {
+            config_trust: true,
+            unbound_credential_profile: true,
+            ..TestConfigOptions::default()
+        },
+    );
+    let env_file = write_env_file(&tmp);
+
+    let output = doctor_command(&config, Some(&env_file))
+        .args(["--profile", "production", "--format", "json"])
+        .output()
+        .expect("doctor runs");
+
+    assert!(
+        !output.status.success(),
+        "production signer without custody approval should fail readiness\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout is utf8");
+    let report: Value = serde_json::from_str(&stdout).expect("doctor emits JSON");
+    assert_product_diagnostic_report(&report);
+    assert_eq!(report["status"], "error");
+
+    let diagnostic = diagnostic_with_code(&report, "notary.signer_custody.unapproved")
+        .expect("signer custody finding");
     assert_eq!(diagnostic["severity"], "error");
     assert_active_finding(diagnostic);
 }

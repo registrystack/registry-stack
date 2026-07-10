@@ -1,10 +1,11 @@
 ---
 import MobileTableOfContents from '@astrojs/starlight/components/MobileTableOfContents.astro';
 import TableOfContents from '@astrojs/starlight/components/TableOfContents.astro';
+import { reviewStatusLabel } from '../lib/review-status.mjs';
 
 const { starlightRoute } = Astro.locals;
 const { editUrl } = starlightRoute;
-const reviewedLabel = starlightRoute.entry.data.last_reviewed;
+const reviewedLabel = reviewStatusLabel(starlightRoute.entry.data.last_reviewed);
 ---
 
 <div class="registry-mobile-toc lg:sl-hidden">
@@ -20,6 +21,6 @@ const reviewedLabel = starlightRoute.entry.data.last_reviewed;
 
   <div class="registry-page-meta">
     {editUrl && <a href={editUrl}>Edit this page on GitHub</a>}
-    <p>Last reviewed {reviewedLabel}</p>
+    {reviewedLabel && <p>{reviewedLabel}</p>}
   </div>
 </aside>

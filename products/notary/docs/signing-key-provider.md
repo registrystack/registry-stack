@@ -29,6 +29,11 @@ rejected for credential profiles, access tokens, and federation responses.
   publish-only keys use public JWK material only.
 - Startup fails closed if an active signing provider cannot be constructed or
   cannot pass its sign/verify self-test.
+- `/ready` reports active provider-kind counts, local JWK/file signer counts,
+  and whether `deployment.evidence.signer_custody_approved` is required and set.
+  Production readiness reports not-ready, and evidence-grade startup fails, when
+  a credential, access-token, or federation signing key lacks that explicit
+  approval. Provider kind is evidence for review, not proof of custody.
 
 The public JWKS endpoint is intentionally unauthenticated for wallet and
 verifier discovery. It publishes public verification keys only; private JWK
@@ -48,6 +53,10 @@ members such as `d` are rejected on public-key inputs and never emitted.
 ## Local JWK active key
 
 Use this for local development, tests, and simple mounted-secret deployments.
+Local JWK signing remains supported for local and hosted lab profiles. For
+production or evidence-grade profiles, prefer non-exporting custody and declare
+`deployment.evidence.signer_custody_approved: true` only after deployment review
+accepts every configured signing role.
 
 ```yaml
 evidence:
@@ -220,6 +229,11 @@ process so traffic can drain while the vendor call finishes or the process is
 restarted.
 
 ### SoftHSM smoke setup
+
+`pkcs11` identifies the provider interface, not whether the token is implemented
+in hardware. Production and evidence-grade deployments still require explicit
+`deployment.evidence.signer_custody_approved: true` after reviewing the module,
+token, key generation and export controls, and operating procedures.
 
 The test suite verifies the PKCS#11 path with SoftHSM when `softhsm2-util` and
 `openssl` are available:

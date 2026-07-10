@@ -880,6 +880,33 @@
         ],
         "type": "object"
       },
+      "EnabledSignerSurfaceChecks": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "local_software_signing_provider_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "signing_provider_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unapproved_signing_provider_count": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "enabled",
+          "signing_provider_count",
+          "local_software_signing_provider_count",
+          "unapproved_signing_provider_count"
+        ],
+        "type": "object"
+      },
       "EvaluateRequest": {
         "additionalProperties": false,
         "properties": {
@@ -1305,6 +1332,103 @@
         ],
         "type": "object"
       },
+      "ReadinessChecks": {
+        "additionalProperties": false,
+        "properties": {
+          "degraded": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "failed": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "ok": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "signing_providers": {
+            "$ref": "#/components/schemas/SigningProviderReadinessChecks"
+          },
+          "total": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "ok",
+          "degraded",
+          "failed",
+          "signing_providers"
+        ],
+        "type": "object"
+      },
+      "ReadinessProblem": {
+        "additionalProperties": false,
+        "properties": {
+          "checks": {
+            "$ref": "#/components/schemas/ReadinessChecks"
+          },
+          "code": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "readiness_status": {
+            "enum": [
+              "degraded",
+              "not_ready"
+            ],
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "status": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          },
+          "type": {
+            "format": "uri",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status",
+          "detail",
+          "code",
+          "request_id",
+          "readiness_status",
+          "checks"
+        ],
+        "type": "object"
+      },
+      "ReadinessResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "checks": {
+            "$ref": "#/components/schemas/ReadinessChecks"
+          },
+          "status": {
+            "enum": [
+              "ready"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "checks"
+        ],
+        "type": "object"
+      },
       "RenderEvaluationRequest": {
         "additionalProperties": false,
         "properties": {
@@ -1428,6 +1552,120 @@
           "name",
           "display",
           "claims"
+        ],
+        "type": "object"
+      },
+      "SignerCustodyChecks": {
+        "additionalProperties": false,
+        "properties": {
+          "active_provider_counts": {
+            "additionalProperties": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "description": "Counts by configured provider kind. PKCS#11 identifies an interface, not whether custody is hardware- or software-backed.",
+            "type": "object"
+          },
+          "custody_approval_required": {
+            "type": "boolean"
+          },
+          "custody_approved": {
+            "type": "boolean"
+          },
+          "local_software_signing_provider_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "signing_provider_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "surfaces": {
+            "$ref": "#/components/schemas/SignerCustodySurfaces"
+          },
+          "unapproved_signing_provider_count": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "active_provider_counts",
+          "signing_provider_count",
+          "local_software_signing_provider_count",
+          "custody_approval_required",
+          "custody_approved",
+          "unapproved_signing_provider_count",
+          "surfaces"
+        ],
+        "type": "object"
+      },
+      "SignerCustodySurfaces": {
+        "additionalProperties": false,
+        "properties": {
+          "access_token_issuance": {
+            "$ref": "#/components/schemas/EnabledSignerSurfaceChecks"
+          },
+          "credential_issuance": {
+            "$ref": "#/components/schemas/SignerSurfaceChecks"
+          },
+          "federation": {
+            "$ref": "#/components/schemas/EnabledSignerSurfaceChecks"
+          }
+        },
+        "required": [
+          "credential_issuance",
+          "access_token_issuance",
+          "federation"
+        ],
+        "type": "object"
+      },
+      "SignerSurfaceChecks": {
+        "additionalProperties": false,
+        "properties": {
+          "local_software_signing_provider_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "signing_provider_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unapproved_signing_provider_count": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "signing_provider_count",
+          "local_software_signing_provider_count",
+          "unapproved_signing_provider_count"
+        ],
+        "type": "object"
+      },
+      "SigningProviderReadinessChecks": {
+        "additionalProperties": false,
+        "properties": {
+          "custody": {
+            "$ref": "#/components/schemas/SignerCustodyChecks"
+          },
+          "failed": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "ok": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "ok",
+          "failed",
+          "custody"
         ],
         "type": "object"
       },
@@ -3141,11 +3379,49 @@
               "application/json": {
                 "example": {
                   "checks": {
+                    "degraded": 0,
                     "failed": 0,
-                    "ok": 1,
-                    "total": 1
+                    "ok": 3,
+                    "signing_providers": {
+                      "custody": {
+                        "active_provider_counts": {
+                          "pkcs11": 1
+                        },
+                        "custody_approval_required": true,
+                        "custody_approved": true,
+                        "local_software_signing_provider_count": 0,
+                        "signing_provider_count": 1,
+                        "surfaces": {
+                          "access_token_issuance": {
+                            "enabled": false,
+                            "local_software_signing_provider_count": 0,
+                            "signing_provider_count": 0,
+                            "unapproved_signing_provider_count": 0
+                          },
+                          "credential_issuance": {
+                            "local_software_signing_provider_count": 0,
+                            "signing_provider_count": 1,
+                            "unapproved_signing_provider_count": 0
+                          },
+                          "federation": {
+                            "enabled": false,
+                            "local_software_signing_provider_count": 0,
+                            "signing_provider_count": 0,
+                            "unapproved_signing_provider_count": 0
+                          }
+                        },
+                        "unapproved_signing_provider_count": 0
+                      },
+                      "failed": 0,
+                      "ok": 1,
+                      "total": 1
+                    },
+                    "total": 3
                   },
                   "status": "ready"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessResponse"
                 }
               }
             },
@@ -3172,14 +3448,56 @@
             "content": {
               "application/problem+json": {
                 "example": {
+                  "checks": {
+                    "degraded": 1,
+                    "failed": 1,
+                    "ok": 1,
+                    "signing_providers": {
+                      "custody": {
+                        "active_provider_counts": {
+                          "local_jwk_env": 1
+                        },
+                        "custody_approval_required": true,
+                        "custody_approved": false,
+                        "local_software_signing_provider_count": 1,
+                        "signing_provider_count": 1,
+                        "surfaces": {
+                          "access_token_issuance": {
+                            "enabled": false,
+                            "local_software_signing_provider_count": 0,
+                            "signing_provider_count": 0,
+                            "unapproved_signing_provider_count": 0
+                          },
+                          "credential_issuance": {
+                            "local_software_signing_provider_count": 1,
+                            "signing_provider_count": 1,
+                            "unapproved_signing_provider_count": 1
+                          },
+                          "federation": {
+                            "enabled": false,
+                            "local_software_signing_provider_count": 0,
+                            "signing_provider_count": 0,
+                            "unapproved_signing_provider_count": 0
+                          }
+                        },
+                        "unapproved_signing_provider_count": 1
+                      },
+                      "failed": 0,
+                      "ok": 1,
+                      "total": 1
+                    },
+                    "total": 3
+                  },
                   "code": "readiness.not_ready",
                   "detail": "one or more readiness checks are not ready",
+                  "readiness_status": "not_ready",
+                  "request_id": "01J00000000000000000000000",
                   "status": 503,
                   "title": "Evidence runtime is not ready",
-                  "type": "https://id.registrystack.org/problems/registry-notary/readiness/not_ready"
+                  "type": "https://id.registrystack.org/problems/registry-notary/readiness/not-ready"
                 },
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
+                  "$ref": "#/components/schemas/ReadinessProblem"
                 }
               }
             },

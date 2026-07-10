@@ -1872,6 +1872,7 @@ pub(crate) struct SignerReadinessSnapshot {
 #[derive(Debug, Clone)]
 struct SignerReadinessEntry {
     kid: String,
+    provider: SigningKeyProviderConfig,
     required_for_signing: bool,
     state: SignerReadinessState,
 }
@@ -1943,6 +1944,7 @@ impl SignerReadiness {
                     .enumerate()
                     .map(|(index, flag)| SignerReadinessEntry {
                         kid: format!("provider-{}", index + 1),
+                        provider: SigningKeyProviderConfig::LocalJwkEnv,
                         required_for_signing: true,
                         state: SignerReadinessState::Flag(flag),
                     })
@@ -1988,6 +1990,20 @@ impl SignerReadiness {
             })
             .collect()
     }
+
+    pub(crate) fn provider_counts(&self) -> BTreeMap<String, usize> {
+        let mut counts = BTreeMap::new();
+        for entry in self
+            .entries
+            .iter()
+            .filter(|entry| entry.required_for_signing)
+        {
+            *counts
+                .entry(entry.provider.as_str().to_string())
+                .or_insert(0) += 1;
+        }
+        counts
+    }
 }
 
 #[derive(Clone, Default)]
@@ -2020,6 +2036,7 @@ impl SigningKeyRegistry {
                             Arc::new(build_local_jwk_signer(key_id, key)?);
                         readiness_entries.push(provider_key_readiness(
                             key.kid.clone(),
+                            key.provider,
                             true,
                             Arc::clone(&provider),
                         ));
@@ -2035,6 +2052,7 @@ impl SigningKeyRegistry {
                     } else {
                         readiness_entries.push(static_key_readiness(
                             key.kid.clone(),
+                            key.provider,
                             false,
                             KeyReadiness::Ready,
                         ));
@@ -2054,6 +2072,7 @@ impl SigningKeyRegistry {
                             let provider: Arc<dyn SigningProvider> = Arc::new(provider);
                             readiness_entries.push(provider_key_readiness(
                                 key.kid.clone(),
+                                key.provider,
                                 true,
                                 Arc::clone(&provider),
                             ));
@@ -2080,6 +2099,7 @@ impl SigningKeyRegistry {
                     } else {
                         readiness_entries.push(static_key_readiness(
                             key.kid.clone(),
+                            key.provider,
                             false,
                             KeyReadiness::Ready,
                         ));
@@ -2097,6 +2117,7 @@ impl SigningKeyRegistry {
                         let provider: Arc<dyn SigningProvider> = Arc::new(provider);
                         readiness_entries.push(provider_key_readiness(
                             key.kid.clone(),
+                            key.provider,
                             true,
                             Arc::clone(&provider),
                         ));
@@ -2230,11 +2251,13 @@ fn current_unix_timestamp_seconds() -> u64 {
 
 fn static_key_readiness(
     kid: String,
+    provider: SigningKeyProviderConfig,
     required_for_signing: bool,
     readiness: KeyReadiness,
 ) -> SignerReadinessEntry {
     SignerReadinessEntry {
         kid,
+        provider,
         required_for_signing,
         state: SignerReadinessState::Static(readiness),
     }
@@ -2242,11 +2265,13 @@ fn static_key_readiness(
 
 fn provider_key_readiness(
     kid: String,
+    provider_kind: SigningKeyProviderConfig,
     required_for_signing: bool,
     provider: Arc<dyn SigningProvider>,
 ) -> SignerReadinessEntry {
     SignerReadinessEntry {
         kid,
+        provider: provider_kind,
         required_for_signing,
         state: SignerReadinessState::Provider(provider),
     }
@@ -4654,7 +4679,7 @@ fn build_audit_event(
     }
 }
 
-fn new_request_correlation_id() -> BoundedCorrelationId {
+pub(crate) fn new_request_correlation_id() -> BoundedCorrelationId {
     BoundedCorrelationId::new(Ulid::new().to_string()).expect("generated correlation id is bounded")
 }
 
@@ -7285,16 +7310,19 @@ mod tests {
         let readiness = SignerReadiness::from_entries(vec![
             static_key_readiness(
                 "did:web:notary.example#local".to_string(),
+                SigningKeyProviderConfig::LocalJwkEnv,
                 true,
                 KeyReadiness::Ready,
             ),
             provider_key_readiness(
                 "did:web:notary.example#hsm".to_string(),
+                SigningKeyProviderConfig::Pkcs11,
                 true,
                 Arc::clone(&provider),
             ),
             static_key_readiness(
                 "did:web:notary.example#publish-only".to_string(),
+                SigningKeyProviderConfig::LocalJwkEnv,
                 false,
                 KeyReadiness::Ready,
             ),
@@ -7303,6 +7331,10 @@ mod tests {
         assert_eq!(readiness.total(), 2);
         assert_eq!(readiness.ready_count(), 1);
         assert_eq!(readiness.failed_count(), 1);
+        assert_eq!(
+            readiness.provider_counts(),
+            BTreeMap::from([("local_jwk_env".to_string(), 1), ("pkcs11".to_string(), 1)])
+        );
         let by_kid = readiness
             .by_kid()
             .into_iter()

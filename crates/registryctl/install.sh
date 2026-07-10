@@ -5,10 +5,16 @@ repo="registrystack/registry-stack"
 default_version="v0.8.4"
 version="${REGISTRYCTL_VERSION:-$default_version}"
 install_dir="${REGISTRYCTL_INSTALL_DIR:-$HOME/.local/bin}"
+verify_url="https://github.com/${repo}/blob/main/release/VERIFY.md"
 
 usage() {
-	cat <<'EOF'
+	cat <<EOF
 Install registryctl.
+
+The installer verifies the downloaded binary against SHA256SUMS only. It does
+not verify release authenticity. Evidence availability varies by release, and
+v0.8.0 is unsigned. Follow the canonical release verification guide:
+  $verify_url
 
 Environment:
   REGISTRYCTL_VERSION      Pinned release tag to install. Defaults to v0.8.4.
@@ -28,16 +34,14 @@ need() {
 	fi
 }
 
+if [[ ! "$version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+	echo "Refusing non-canonical registryctl release tag." >&2
+	echo "Set REGISTRYCTL_VERSION to a pinned vMAJOR.MINOR.PATCH tag such as $default_version." >&2
+	exit 1
+fi
+
 need curl
 need uname
-
-case "$version" in
-latest | snapshot)
-	echo "Refusing floating registryctl release tag: $version" >&2
-	echo "Set REGISTRYCTL_VERSION to a pinned release tag such as $default_version." >&2
-	exit 1
-	;;
-esac
 
 os="$(uname -s)"
 arch="$(uname -m)"
@@ -115,6 +119,15 @@ if [ "$actual_hash" != "$expected_hash" ]; then
 	echo "Actual:   $actual_hash" >&2
 	exit 1
 fi
+
+cat <<EOF
+Integrity check passed: $asset matched SHA256SUMS.
+Authenticity check not performed by this installer.
+Evidence availability varies by release, and v0.8.0 is unsigned.
+Follow the canonical release verification guide to check available evidence:
+  $verify_url
+
+EOF
 
 mkdir -p "$install_dir"
 cp "$tmpdir/$asset" "$install_dir/registryctl"

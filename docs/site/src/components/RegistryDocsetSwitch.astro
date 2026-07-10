@@ -1,20 +1,13 @@
 ---
 import docsetsManifest from '../data/generated/docsets.json';
+import { pathForDocset } from '../lib/docset-path.mjs';
 
 const activeDocsetId = process.env.DOCS_DOCSET || docsetsManifest.current;
 const activeDocset =
   docsetsManifest.docsets.find((docset) => docset.id === activeDocsetId) ??
   docsetsManifest.docsets.find((docset) => docset.id === docsetsManifest.current);
 
-function pathForDocset(targetPath: string) {
-  const currentPath = Astro.url.pathname;
-  const activePath = activeDocset?.path ?? '/';
-  const relativePath =
-    activePath !== '/' && currentPath.startsWith(activePath)
-      ? currentPath.slice(activePath.length)
-      : currentPath.replace(/^\//, '');
-  return `${targetPath}${relativePath}`.replace(/\/{2,}/g, '/');
-}
+const activePath = activeDocset?.path ?? '/';
 ---
 
 <label class="registry-version-switch">
@@ -25,7 +18,10 @@ function pathForDocset(targetPath: string) {
     oninput="if (this.value) window.location.assign(this.value)"
   >
     {docsetsManifest.docsets.map((docset) => (
-      <option value={pathForDocset(docset.path)} selected={docset.id === activeDocset?.id}>
+      <option
+        value={pathForDocset(Astro.url.pathname, activePath, docset.path, import.meta.env.BASE_URL)}
+        selected={docset.id === activeDocset?.id}
+      >
         {docset.label}
       </option>
     ))}

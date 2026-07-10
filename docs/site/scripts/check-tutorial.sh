@@ -7,15 +7,21 @@
 # "## Verify" sections and executing them, in order, against a Solmara Lab
 # checkout.
 #
-# Also drift-checks the registryctl tutorials (publish-spreadsheet,
-# verify-claim-registry-api) by extracting every `sh`
-# fence and asserting the command-line count. Those tutorials are
-# execution-verified manually (they need registryctl and a workstation); the
-# count assertion makes silent command additions or removals fail CI.
+# Also applies the cheap drift pre-gate to the registryctl tutorials
+# (publish-spreadsheet, verify-claim-registry-api) by extracting every `sh`
+# fence and asserting the command-line count. The dedicated source-under-test
+# runner in check-registryctl-tutorials.sh executes those commands in CI; this
+# count assertion fails before that more expensive container build starts.
 #
 # Usage:
 #   scripts/check-tutorial.sh              extract + execute (needs Docker)
 #   scripts/check-tutorial.sh --dry-run    extract + print only (no Docker)
+#
+# CI policy:
+#   npm run check calls check:tutorial:dry-run, which guarantees extraction and
+#   drift detection only. check:tutorial executes the Solmara tutorial manually.
+#   The registryctl-tutorials CI job executes the registryctl tutorials through
+#   check-registryctl-tutorials.sh after this cheaper command-count pre-gate.
 #
 # Configuration:
 #   SOLMARA_LAB_PATH   path to an existing Solmara Lab checkout.
@@ -72,7 +78,7 @@ for arg in "$@"; do
 	case "$arg" in
 	--dry-run) DRY_RUN=1 ;;
 	-h | --help)
-		sed -n '3,32p' "$0"
+		sed -n '3,37p' "$0"
 		exit 0
 		;;
 	*)
@@ -196,7 +202,7 @@ for entry in "${REGISTRYCTL_TUTORIALS[@]}"; do
 done
 
 if ((DRY_RUN)); then
-	printf 'dry-run: extraction OK, skipping execution\n'
+	printf 'dry-run: extraction and drift checks passed; Solmara execution skipped\n'
 	exit 0
 fi
 

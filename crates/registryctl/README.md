@@ -5,8 +5,12 @@
 Install a pinned release without cloning this repo:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/v0.8.4/crates/registryctl/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/refs/tags/v0.8.4/crates/registryctl/install.sh | bash
 ```
+
+The quick installer verifies the downloaded binary against `SHA256SUMS` only.
+It does not verify cosign signatures or SLSA provenance; use
+[`release/VERIFY.md`](../../release/VERIFY.md) for release authenticity checks.
 
 Then create and start your first secured spreadsheet API:
 
@@ -30,7 +34,7 @@ For the full walkthroughs, use the Registry Docs tutorials:
 
 - [Publish a spreadsheet as a secured registry API](https://docs.registrystack.org/tutorials/publish-spreadsheet-secured-registry-api/)
 - [Verify a claim from your registry API](https://docs.registrystack.org/tutorials/verify-claim-registry-api/)
-- [Verify a claim from your own API](https://docs.registrystack.org/tutorials/verify-claim-own-api/)
+- [Connect Notary to a Registry Data API source](https://docs.registrystack.org/tutorials/run-notary-standalone-for-api/)
 
 To scaffold a standalone Notary project for an existing FHIR source-adapter
 sidecar:
@@ -48,12 +52,17 @@ The installer defaults to `v0.8.4`. To install a different pinned release, set
 `REGISTRYCTL_VERSION`:
 
 ```sh
-REGISTRYCTL_VERSION=vX.Y.Z curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/v0.8.4/crates/registryctl/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/refs/tags/v0.8.4/crates/registryctl/install.sh | REGISTRYCTL_VERSION=vX.Y.Z bash
 ```
+
+The installer still fetches the script from `v0.8.4`; `REGISTRYCTL_VERSION`
+selects the release asset to install.
 
 Prebuilt binaries are published for the `v0.8.4` stack release on Linux x86_64,
 Linux arm64, and macOS arm64. On other platforms, install from source with
 `cargo install --git https://github.com/registrystack/registry-stack --tag v0.8.4 registryctl --locked`.
+Intel macOS has no prebuilt binary for `v0.8.4`, so the installer stops after
+printing that Cargo command. It does not run the source build automatically.
 
 ## Update checks
 
@@ -124,8 +133,8 @@ shared crates have fresh release tags.
 
 ## End-to-end smoke
 
-The generated project uses the public Relay image published from current main:
-`ghcr.io/registrystack/registry-relay:snapshot`. With Docker Compose available, run:
+The generated project uses the digest-pinned Registry Relay image recorded in the registryctl
+templates, not a floating image tag. With Docker Compose available, run:
 
 ```sh
 tmpdir="$(mktemp -d)"

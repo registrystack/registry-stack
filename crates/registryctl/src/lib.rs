@@ -60,8 +60,10 @@ const REGISTRY_STACK_RUNTIME_GID_ENV: &str = "REGISTRY_STACK_RUNTIME_GID";
 const DEFAULT_NONROOT_CONTAINER_ID: &str = "65532";
 const REGISTRYCTL_RELEASES_API: &str =
     "https://api.github.com/repos/registrystack/registry-stack/releases/latest";
-const REGISTRYCTL_INSTALL_SCRIPT: &str =
-    "https://raw.githubusercontent.com/registrystack/registry-stack/main/crates/registryctl/install.sh";
+const REGISTRYCTL_RAW_REPOSITORY: &str =
+    "https://raw.githubusercontent.com/registrystack/registry-stack";
+const REGISTRYCTL_VERIFY_GUIDE: &str =
+    "https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md";
 const UPDATE_CHECK_CACHE_SECONDS: u64 = 60 * 60 * 24;
 /// The only `schema_version` `registryctl_manifest` generates today; `Project::load` rejects
 /// any other value so a future/incompatible schema file fails loudly instead of half-parsing.
@@ -1010,8 +1012,8 @@ pub fn maybe_warn_about_update(current_version: &str) {
 
     let should_refresh = match read_update_check_cache(&cache_path) {
         Ok(Some(cache)) => {
-            if is_newer_release(current_version, &cache.latest_tag) {
-                eprintln!("{}", update_notice(current_version, &cache.latest_tag));
+            if let Some(notice) = update_notice(current_version, &cache.latest_tag) {
+                eprintln!("{notice}");
             }
             !cache.is_fresh
         }
@@ -1025,8 +1027,8 @@ pub fn maybe_warn_about_update(current_version: &str) {
 
 pub fn update_check(current_version: &str) -> Result<()> {
     let latest_tag = fetch_latest_registryctl_release()?;
-    if is_newer_release(current_version, &latest_tag) {
-        println!("{}", update_notice(current_version, &latest_tag));
+    if let Some(notice) = update_notice(current_version, &latest_tag) {
+        println!("{notice}");
     } else {
         println!(
             "registryctl {} is current. Latest release: {}.",
@@ -1086,6 +1088,9 @@ fn read_update_check_cache(cache_path: &Path) -> Result<Option<CachedLatestRelea
     };
     let cache: UpdateCheckCache =
         serde_json::from_str(&raw).context("failed to parse registryctl update check cache")?;
+    if VersionNumber::parse_release_tag(&cache.latest_tag).is_none() {
+        bail!("registryctl update check cache contains a non-canonical release tag");
+    }
     let now = unix_now();
     Ok(Some(CachedLatestRelease {
         is_fresh: now.saturating_sub(cache.checked_at) <= UPDATE_CHECK_CACHE_SECONDS,
@@ -1094,6 +1099,9 @@ fn read_update_check_cache(cache_path: &Path) -> Result<Option<CachedLatestRelea
 }
 
 fn write_update_check_cache(cache_path: &Path, latest_tag: &str) -> Result<()> {
+    if VersionNumber::parse_release_tag(latest_tag).is_none() {
+        bail!("refusing to cache a non-canonical registryctl release tag");
+    }
     if let Some(parent) = cache_path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
@@ -1127,8 +1135,8 @@ fn fetch_latest_registryctl_release() -> Result<String> {
         .context("failed to read registryctl latest release response")?;
     let latest: GitHubLatestRelease = serde_json::from_str(&body)
         .context("failed to parse registryctl latest release response")?;
-    if latest.tag_name.trim().is_empty() {
-        bail!("registryctl latest release response did not include tag_name");
+    if VersionNumber::parse_release_tag(&latest.tag_name).is_none() {
+        bail!("registryctl latest release response did not include a canonical vMAJOR.MINOR.PATCH tag");
     }
     Ok(latest.tag_name)
 }
@@ -1148,21 +1156,19 @@ fn registryctl_release_http_error(error: ureq::Error) -> anyhow::Error {
     }
 }
 
-fn is_newer_release(current_version: &str, latest_tag: &str) -> bool {
-    let Some(current) = VersionNumber::parse(current_version) else {
-        return false;
-    };
-    let Some(latest) = VersionNumber::parse(latest_tag) else {
-        return false;
-    };
-    latest > current
-}
-
-fn update_notice(current_version: &str, latest_tag: &str) -> String {
-    format!(
-        "registryctl {latest_tag} is available. You have {}.\nUpgrade with:\n  REGISTRYCTL_VERSION={latest_tag} curl -fsSL {REGISTRYCTL_INSTALL_SCRIPT} | sh",
-        display_version(current_version)
-    )
+fn update_notice(current_version: &str, latest_tag: &str) -> Option<String> {
+    let current = VersionNumber::parse(current_version)?;
+    let latest = VersionNumber::parse_release_tag(latest_tag)?;
+    if latest <= current {
+        return None;
+    }
+    let install_script = format!(
+        "{REGISTRYCTL_RAW_REPOSITORY}/refs/tags/{latest_tag}/crates/registryctl/install.sh"
+    );
+    Some(format!(
+        "registryctl {latest_tag} is available. You have {}.\nThe quick installer verifies SHA256 integrity only. For canonical release authenticity guidance, see:\n  {REGISTRYCTL_VERIFY_GUIDE}\nUpgrade with:\n  curl -fsSL {install_script} | REGISTRYCTL_VERSION={latest_tag} bash",
+        display_version(current_version),
+    ))
 }
 
 fn display_version(version: &str) -> String {
@@ -1205,6 +1211,21 @@ struct VersionNumber {
 }
 
 impl VersionNumber {
+    fn parse_release_tag(value: &str) -> Option<Self> {
+        let version = value.strip_prefix('v')?;
+        if !version
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || byte == b'.')
+        {
+            return None;
+        }
+        let parsed = Self::parse(version)?;
+        if value != format!("v{}.{}.{}", parsed.major, parsed.minor, parsed.patch) {
+            return None;
+        }
+        Some(parsed)
+    }
+
     fn parse(value: &str) -> Option<Self> {
         let trimmed = value.trim().trim_start_matches('v');
         let without_prerelease = trimmed.split_once('-').map_or(trimmed, |(base, _)| base);
@@ -5373,22 +5394,67 @@ mod tests {
     }
 
     #[test]
-    fn update_check_detects_newer_semver_tags() {
-        assert!(is_newer_release("0.1.0", "v0.1.1"));
-        assert!(is_newer_release("0.1.9", "v0.10.0"));
-        assert!(!is_newer_release("0.1.0", "v0.1.0"));
-        assert!(!is_newer_release("0.2.0", "v0.1.9"));
-        assert!(!is_newer_release("not-a-version", "v0.2.0"));
+    fn update_check_detects_newer_canonical_release_tags() {
+        assert!(update_notice("0.1.0", "v0.1.1").is_some());
+        assert!(update_notice("0.1.9", "v0.10.0").is_some());
+        assert!(update_notice("0.1.0", "v0.1.0").is_none());
+        assert!(update_notice("0.2.0", "v0.1.9").is_none());
+        assert!(update_notice("not-a-version", "v0.2.0").is_none());
     }
 
     #[test]
-    fn update_notice_uses_pinned_installer_version() {
-        let notice = update_notice("0.1.0", "v0.2.0");
+    fn update_notice_uses_explicit_tag_ref_and_env_on_bash() {
+        let notice = update_notice("0.1.0", "v0.2.0").unwrap();
 
         assert!(notice.contains("registryctl v0.2.0 is available"));
         assert!(notice.contains("You have v0.1.0"));
-        assert!(notice.contains("REGISTRYCTL_VERSION=v0.2.0"));
-        assert!(notice.contains(REGISTRYCTL_INSTALL_SCRIPT));
+        assert_eq!(
+            notice.lines().last(),
+            Some(
+                "  curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/refs/tags/v0.2.0/crates/registryctl/install.sh | REGISTRYCTL_VERSION=v0.2.0 bash"
+            )
+        );
+        assert!(!notice.contains(
+            "https://raw.githubusercontent.com/registrystack/registry-stack/main/crates/registryctl/install.sh"
+        ));
+        assert!(!notice.contains(
+            "https://raw.githubusercontent.com/registrystack/registry-stack/v0.2.0/crates/registryctl/install.sh"
+        ));
+        assert!(!notice.contains("REGISTRYCTL_VERSION=v0.2.0 curl"));
+    }
+
+    #[test]
+    fn update_notice_warns_about_checksum_only_installer_before_command() {
+        let notice = update_notice("0.1.0", "v0.2.0").unwrap();
+        let warning = notice
+            .find("The quick installer verifies SHA256 integrity only.")
+            .unwrap();
+        let command = notice.find("Upgrade with:").unwrap();
+
+        assert!(warning < command);
+        assert!(notice.contains(REGISTRYCTL_VERIFY_GUIDE));
+    }
+
+    #[test]
+    fn update_notice_rejects_shell_active_and_noncanonical_tags() {
+        let hostile = "v999.0.0-$(touch${IFS}/tmp/registryctl-owned)";
+        let temp = TempDir::new().unwrap();
+        let cache_path = temp.path().join("registryctl/update-check.json");
+
+        assert!(update_notice("0.1.0", hostile).is_none());
+        assert!(VersionNumber::parse_release_tag(hostile).is_none());
+        assert!(VersionNumber::parse_release_tag("999.0.0").is_none());
+        assert!(VersionNumber::parse_release_tag("v01.0.0").is_none());
+        assert!(write_update_check_cache(&cache_path, hostile).is_err());
+        assert!(!cache_path.exists());
+
+        fs::create_dir_all(cache_path.parent().unwrap()).unwrap();
+        let poisoned = UpdateCheckCache {
+            checked_at: 1,
+            latest_tag: hostile.to_string(),
+        };
+        fs::write(&cache_path, serde_json::to_string(&poisoned).unwrap()).unwrap();
+        assert!(read_update_check_cache(&cache_path).is_err());
     }
 
     #[test]
@@ -5792,6 +5858,7 @@ workflows:
                 .unwrap();
         let compose = fs::read_to_string(project.join("compose.yaml")).unwrap();
         assert!(config.get("metadata").is_none());
+        assert_eq!(config["deployment"]["profile"], "local");
         assert!(manifest["relay"].get("metadata").is_none());
         assert!(!compose.contains("metadata.yaml"));
         assert!(compose.contains(
@@ -6004,6 +6071,7 @@ workflows:
 
         let config = fs::read_to_string(project.join("notary/config.yaml")).unwrap();
         let config_yaml: Value = serde_yaml::from_str(&config).unwrap();
+        assert_eq!(config_yaml["deployment"]["profile"], "local");
         assert_eq!(config_yaml["server"]["openapi_requires_auth"], false);
         assert!(config.contains("base_url: http://registry-relay:8080"));
         assert!(config.contains("token_env: EVIDENCE_SOURCE_API_TOKEN"));
@@ -6164,6 +6232,7 @@ workflows:
         assert!(runtime_matching.allowed_consent_refs.is_empty());
 
         let config_yaml: Value = serde_yaml::from_str(&config).unwrap();
+        assert_eq!(config_yaml["deployment"]["profile"], "local");
         let credential = &config_yaml["auth"]["api_keys"][0];
         assert_eq!(
             credential["authorization_details"]["legal_basis_ref"],
@@ -6573,6 +6642,8 @@ workflows:
         let notary_config: Value = serde_yaml::from_str(&notary_config_body).unwrap();
         assert_eq!(relay_config["auth"]["mode"], "api_key");
         assert_eq!(notary_config["auth"]["mode"], "api_key");
+        assert_eq!(relay_config["deployment"]["profile"], "local");
+        assert_eq!(notary_config["deployment"]["profile"], "local");
         assert_eq!(
             notary_config["evidence"]["source_connections"]["relay"]["base_url"],
             "http://registry-relay:8080"

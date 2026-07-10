@@ -12,7 +12,7 @@ Pick the path that matches what you are doing. New to Registry Notary? Start wit
 - [See it live](https://docs.registrystack.org/start/see-it-live/): watch Notary issue a privacy-preserving credential against a hosted lab, with zero install.
 - [Verify a claim with Registry Notary](https://docs.registrystack.org/tutorials/verify-claim-registry-api/): add Notary to a local registry API project with `registryctl`.
 - [Connect Notary to a Registry Data API source](https://docs.registrystack.org/tutorials/run-notary-standalone-for-api/): run Notary in a separate project against a Registry Data API-shaped source.
-- [Configure DHIS2 claim checks](https://docs.registrystack.org/tutorials/configure-dhis2-claim-checks/): use the built-in `http_json` source adapter to evaluate DHIS2 Tracker claims and issue an SD-JWT VC from the result.
+- [Integration patterns](https://docs.registrystack.org/explanation/integration-patterns/): choose the source-adapter boundary for systems such as DHIS2.
 
 - [Architecture overview](architecture-overview.md): what Registry Notary is, the request lifecycle, and how the layers relate.
 - [Capability matrix](notary-capability-matrix.md): which flows Notary supports today, by persona and system.
@@ -38,7 +38,7 @@ For operators deploying, configuring, and running a Registry Notary.
 
 - [Configuration reference](operator-config-reference.md): the config blocks for auth, evidence, sources, replay, status, self-attestation, OID4VCI, and federation.
 - [Model sources and claims](source-claim-modeling-guide.md): design source connectors, source adapter sidecars, claim boundaries, disclosure, and batch reads.
-- [DHIS2 source adapter tutorial](https://docs.registrystack.org/tutorials/configure-dhis2-claim-checks/): configure a sidecar that calls DHIS2 Tracker through the built-in `http_json` engine.
+- [Integration patterns](https://docs.registrystack.org/explanation/integration-patterns/): model a governed source-adapter sidecar for systems such as DHIS2.
 - [FHIR source adapter](fhir-source-adapter-guide.md): project bounded FHIR R4 graphs into Notary-ready source facts without exposing raw FHIR Bundles.
 - [Script (Rhai) source adapter](script-rhai-source-adapter-guide.md): run a sandboxed, orchestration-only Rhai script for sources that need a little branching across a few governed reads.
 - [Signing key providers](signing-key-provider.md): SD-JWT VC signing-key configuration, rotation, and PKCS#11 setup.

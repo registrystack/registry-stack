@@ -10,9 +10,13 @@
 import { readFile, access, readdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import YAML from 'yaml';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
-const distDir = resolve(here, '../dist');
+const distDir = process.env.DOCS_DIST_DIR
+  ? resolve(process.env.DOCS_DIST_DIR)
+  : resolve(here, '../dist');
+const docsDir = resolve(here, '../src/content/docs');
 
 // Load the discovery header from its single source of truth so this post-build
 // check fails loudly if the built corpus or any per-page .md drifts from it.
@@ -87,18 +91,76 @@ async function findPageDirs(rel = '') {
   return out;
 }
 
+/**
+ * Find every Starlight draft source and map its content ID to built outputs.
+ * @param {string} rel
+ * @returns {Promise<Array<{ source: string, title: string, pagePath: string, htmlRel: string, mdRel: string }>>}
+ */
+async function findDraftPages(rel = '') {
+  const out = [];
+  const entries = await readdir(resolve(docsDir, rel || '.'), { withFileTypes: true });
+  for (const entry of entries) {
+    const childRel = rel ? `${rel}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) {
+      out.push(...(await findDraftPages(childRel)));
+      continue;
+    }
+    if (!entry.isFile() || !/\.(?:md|mdx)$/.test(entry.name)) continue;
+
+    const source = await readFile(resolve(docsDir, childRel), 'utf8');
+    const frontmatterMatch = source.match(/^---\n([\s\S]*?)\n---\n/);
+    if (!frontmatterMatch) throw new Error(`${childRel} has no parseable YAML frontmatter`);
+    const data = YAML.parse(frontmatterMatch[1]);
+    if (data.draft !== true) continue;
+
+    const id = childRel.replace(/\.(?:md|mdx)$/, '');
+    const pagePath = id === 'index' ? '' : id.replace(/\/index$/, '');
+    out.push({
+      source: childRel,
+      title: data.title,
+      pagePath,
+      htmlRel: pagePath ? `${pagePath}/index.html` : 'index.html',
+      mdRel: pagePath ? `${pagePath}.md` : 'index.md',
+    });
+  }
+  return out;
+}
+
+/** @param {string} value */
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * The full and small corpora delimit page entries with an H1. llms.txt can
+ * evolve into a page index, so also reject a title-and-canonical-URL entry.
+ * @param {string} file
+ * @param {string} content
+ * @param {{ title: string, pagePath: string }} page
+ */
+function hasDraftCorpusEntry(file, content, page) {
+  const heading = new RegExp(`^# ${escapeRegExp(page.title)}$`, 'm');
+  if (heading.test(content)) return true;
+  if (file !== 'llms.txt') return false;
+
+  const canonicalUrl = `https://docs.registrystack.org/${page.pagePath ? `${page.pagePath}/` : ''}`;
+  return content.includes(`[${page.title}](${canonicalUrl})`);
+}
+
 console.log('check-llms: verifying AI corpus files in dist/\n');
 
 // ---- 1. Required corpus files exist ----
 const corpusFiles = ['llms.txt', 'llms-full.txt', 'llms-small.txt'];
 const corpusPresent = await Promise.all(corpusFiles.map((f) => exists(f)));
+const corpusContents = new Map();
 for (let i = 0; i < corpusFiles.length; i += 1) {
   assert(`dist/${corpusFiles[i]} exists`, corpusPresent[i]);
+  if (corpusPresent[i]) corpusContents.set(corpusFiles[i], await readDist(corpusFiles[i]));
 }
 
 // ---- 2. llms-full.txt contains both product names ----
 if (corpusPresent[1]) {
-  const full = await readDist('llms-full.txt');
+  const full = corpusContents.get('llms-full.txt');
   assert(
     'llms-full.txt mentions "registry-relay"',
     /registry.relay/i.test(full),
@@ -123,7 +185,7 @@ if (corpusPresent[1]) {
 // change to the header in page-markdown.ts that doesn't reach the corpus fails
 // here instead of shipping a silently-divergent pointer.
 if (corpusPresent[0]) {
-  const index = await readDist('llms.txt');
+  const index = corpusContents.get('llms.txt');
   for (const line of HEADER_LINES) {
     assert(
       `llms.txt contains discovery header line: "${line}"`,
@@ -138,7 +200,56 @@ if (corpusPresent[0]) {
   );
 }
 
-// ---- 4. Sample per-page .md files begin with the full discovery header ----
+// ---- 4. Starlight drafts do not leak into machine-readable outputs ----
+// Draft HTML routes may exist only as redirect stubs. The two retired lab
+// tutorials intentionally keep those redirects, but neither their source
+// content nor any other draft may produce a Markdown endpoint or corpus page.
+const retiredTutorials = new Set([
+  'tutorials/configure-dhis2-claim-checks',
+  'tutorials/getting-started-fhir-evidence',
+]);
+const draftPages = await findDraftPages();
+for (const page of draftPages) {
+  assert(
+    `draft ${page.source} does not emit dist/${page.mdRel}`,
+    !(await exists(page.mdRel)),
+    `remove the draft page from src/pages/[...slug].md.ts getStaticPaths`,
+  );
+
+  const htmlPresent = await exists(page.htmlRel);
+  const html = htmlPresent ? await readDist(page.htmlRel) : '';
+  const isRedirect = /http-equiv=["']?refresh/i.test(html);
+  assert(
+    `draft ${page.source} has no published HTML content`,
+    !htmlPresent || isRedirect,
+    `dist/${page.htmlRel} exists and is not a redirect stub`,
+  );
+  if (retiredTutorials.has(page.pagePath)) {
+    assert(
+      `retired tutorial /${page.pagePath}/ keeps its HTML redirect`,
+      htmlPresent && isRedirect,
+      `expected redirect stub at dist/${page.htmlRel}`,
+    );
+  }
+
+  for (const [file, content] of corpusContents) {
+    assert(
+      `${file} excludes draft entry "${page.title}"`,
+      !hasDraftCorpusEntry(file, content, page),
+      `found a corpus page entry for draft source ${page.source}`,
+    );
+    if (retiredTutorials.has(page.pagePath)) {
+      assert(
+        `${file} has no retired tutorial URL /${page.pagePath}/`,
+        !content.includes(`/${page.pagePath}/`),
+        `replace links to the retired tutorial with current integration guidance`,
+      );
+    }
+  }
+}
+console.log(`  ..  ${draftPages.length} draft pages checked for machine-output leaks`);
+
+// ---- 5. Sample per-page .md files begin with the full discovery header ----
 const sampleFiles = [
   'explanation/architecture.md',
   'index.md',
@@ -167,7 +278,7 @@ for (const f of sampleFiles) {
   }
 }
 
-// ---- 5. Per-page .md file title heading ----
+// ---- 6. Per-page .md file title heading ----
 const archFile = 'explanation/architecture.md';
 if (await exists(archFile)) {
   const arch = await readDist(archFile);
@@ -183,7 +294,7 @@ if (await exists(archFile)) {
   );
 }
 
-// ---- 6. Exhaustive coverage: every real page has a sibling .md ----
+// ---- 7. Exhaustive coverage: every real page has a sibling .md ----
 // Walk dist/ for index.html files and require a matching .md for each, so a
 // page that silently loses its Markdown twin fails the build instead of
 // passing on the sampled checks above. Redirect stubs (meta-refresh) and the

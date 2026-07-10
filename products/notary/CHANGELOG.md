@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- New deployment gate `notary.signer_custody.unapproved`: keys used by
+  credential issuance, access-token issuance, or federation signing require
+  explicit `deployment.evidence.signer_custody_approved: true` under
+  `production` and `evidence_grade`. Provider kind, including `pkcs11`, is not
+  treated as proof because PKCS#11 modules may be hardware- or software-backed.
+  The gate is unbound for `local` and `hosted_lab`, reports `readiness_fail`
+  under `production`, and blocks startup under `evidence_grade`. `/ready` now
+  exposes typed custody-specific provider and surface counts without publishing
+  the deployment profile, complete finding list, or secret-bearing provider
+  fields.
 - `registry-notary doctor` now warns (`notary.source_binding.no_matching_policy`)
   when a claim source binding declares no matching policy (no `policy_id`, no
   context constraints), naming each affected binding. A matching new
