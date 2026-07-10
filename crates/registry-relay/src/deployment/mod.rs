@@ -25,9 +25,12 @@
 //! When no profile is declared, `deployment.profile_undeclared` is a startup
 //! failure. `local` is the explicit opt-out for development.
 
+use std::time::{Duration, SystemTime};
+
 use registry_platform_ops::{
-    AuditWritePolicy, ConfigSource, DeploymentFinding, DeploymentFindingStatus,
-    DeploymentFindingWaiver, DeploymentProfile, DeploymentWaiver, GateSeverity,
+    evaluate_ack_health, AckHealth, AckObservation, AuditWritePolicy, ConfigSource,
+    DeploymentFinding, DeploymentFindingStatus, DeploymentFindingWaiver, DeploymentProfile,
+    DeploymentWaiver, GateSeverity, DEFAULT_AUDIT_ACK_MAX_AGE,
 };
 
 use crate::config::{AuditSinkConfig, AuthMode, Config};
@@ -77,6 +80,17 @@ pub struct DeploymentFacts {
     /// evidence declared: retention is capped by local rotation, and an
     /// attacker with host access can destroy the audit trail.
     pub audit_retention_local_only: bool,
+    /// The declared audit shipping target is `declared_external` (a local file
+    /// sink whose operator attests off-host shipping). This is the DECLARED
+    /// state that shipping-completeness evidence is expected to back.
+    pub audit_shipping_declared_external: bool,
+    /// An off-host ack cursor path is configured, so shipping freshness is
+    /// observed rather than merely declared.
+    pub audit_ack_cursor_configured: bool,
+    /// The observed ack cursor is fresh (health `ok`). False for every other
+    /// observed health (stale, missing, invalid), so the shipping-stale gate
+    /// fails closed when the cursor cannot vouch for recent delivery.
+    pub audit_ack_health_ok: bool,
 }
 
 /// One gate in the relay catalog.
@@ -190,6 +204,37 @@ const GATES: &[Gate] = &[
         hosted_lab: None,
         production: Some(FindingWarn),
         evidence_grade: Some(StartupFail),
+    },
+    Gate {
+        id: "relay.audit.shipping_unverified",
+        condition: |facts| {
+            facts.audit_shipping_declared_external && !facts.audit_ack_cursor_configured
+        },
+        // The operator declares off-host shipping (`declared_external`), but
+        // nothing observes whether events actually arrive: local hash chains
+        // prove only retained-set consistency, so without an ack cursor the
+        // completeness of shipped events is asserted, never checked. Configure
+        // `deployment.evidence.audit_ack_cursor_path` so the shipper's cursor
+        // becomes observed evidence. Bound at warn under production and
+        // evidence_grade only: it is a gap in evidence quality, not a failed
+        // guarantee, so it never blocks readiness or startup.
+        hosted_lab: None,
+        production: Some(FindingWarn),
+        evidence_grade: Some(FindingWarn),
+    },
+    Gate {
+        id: "relay.audit.shipping_stale",
+        condition: |facts| facts.audit_ack_cursor_configured && !facts.audit_ack_health_ok,
+        // An ack cursor is configured, so shipping is observed, but the
+        // observation is not fresh: the cursor is stale, missing, or invalid.
+        // This fails closed (any non-`ok` health trips the gate) because a
+        // cursor that cannot vouch for recent delivery is evidence that
+        // off-host shipping may have stopped, so recent audit events may exist
+        // only in local retention. Escalates to readiness_fail under
+        // evidence_grade so traffic stops until shipping is restored.
+        hosted_lab: None,
+        production: Some(FindingError),
+        evidence_grade: Some(ReadinessFail),
     },
 ];
 
@@ -403,6 +448,12 @@ pub fn hard_gate_remediation(gate_id: &str) -> &'static str {
             "this gate cannot be waived under the active profile; ship audit events off-host and \
              set deployment.evidence.audit_offhost_shipping: true, or use a non-local audit sink"
         }
+        "relay.audit.shipping_stale" => {
+            "this gate cannot be waived under the active profile; restore off-host shipping so the \
+             writer refreshes the ack cursor, widen deployment.evidence.audit_ack_max_age_secs if \
+             the freshness window is unrealistic, or remove deployment.evidence.audit_ack_cursor_path \
+             to fall back to declared-only shipping evidence"
+        }
         _ => "fix the underlying condition; this gate cannot be waived under the active profile",
     }
 }
@@ -423,6 +474,10 @@ fn is_expired(waiver: &WaiverInput, today: &str) -> bool {
 /// always configures an audit sink, so `audit_sink_missing` is always false
 /// here; the gate remains in the catalog for completeness.
 pub fn facts_from_config(config: &Config, config_source: ConfigSource) -> DeploymentFacts {
+    // The filesystem read for observed shipping health happens here, where
+    // facts are projected from config, never inside a gate condition (gate
+    // conditions must stay pure functions over plain facts).
+    let observation = audit_ack_observation(config);
     DeploymentFacts {
         admin_public_exposure: admin_public_exposure(config),
         openapi_public: !config.server.openapi_requires_auth,
@@ -447,7 +502,50 @@ pub fn facts_from_config(config: &Config, config_source: ConfigSource) -> Deploy
         audit_best_effort: config.audit.write_policy == AuditWritePolicy::AvailabilityFirst,
         audit_retention_local_only: matches!(config.audit.sink, AuditSinkConfig::File { .. })
             && !config.deployment.evidence.audit_offhost_shipping,
+        // `declared_external` is the shared classifier's target for a local
+        // file sink whose operator attests off-host shipping; relay's sink enum
+        // is closed, so this `matches!` is exactly that case.
+        audit_shipping_declared_external: matches!(config.audit.sink, AuditSinkConfig::File { .. })
+            && config.deployment.evidence.audit_offhost_shipping,
+        audit_ack_cursor_configured: config.deployment.evidence.audit_ack_cursor_path.is_some(),
+        audit_ack_health_ok: observation.health == AckHealth::Ok,
     }
+}
+
+/// Read the operator's audit off-host ack cursor and evaluate its freshness.
+///
+/// The cursor path and freshness window are the operator declarations in
+/// `deployment.evidence`; `audit_ack_max_age_secs` defaults to
+/// [`DEFAULT_AUDIT_ACK_MAX_AGE`] when unset. This performs the cursor
+/// filesystem read (sampling `SystemTime::now()`); with no cursor path
+/// configured the observation is [`AckHealth::Unverified`]. Shared by gate fact
+/// projection, posture emission, and the doctor report so they cannot drift.
+pub fn audit_ack_observation(config: &Config) -> AckObservation {
+    let path = config.deployment.evidence.audit_ack_cursor_path.as_deref();
+    let max_age = config
+        .deployment
+        .evidence
+        .audit_ack_max_age_secs
+        .map(Duration::from_secs)
+        .unwrap_or(DEFAULT_AUDIT_ACK_MAX_AGE);
+    evaluate_ack_health(path, SystemTime::now(), max_age)
+}
+
+/// Map an ack [`AckObservation`] onto the posture `shipping_health` and
+/// `shipping_observed_at` fields, shared by posture emission and the doctor
+/// report so they report identical semantics.
+///
+/// `shipping_health` is `None` (serialized as null) when no shipping target is
+/// declared; otherwise the observed health string (`"unverified"` when no
+/// cursor is configured). `shipping_observed_at` is the cursor's `acked_at`
+/// when one was successfully read (health `ok`, `stale`, or a future-skew
+/// `invalid`), else `None`.
+pub fn shipping_health_fields(
+    observation: &AckObservation,
+    shipping_target_configured: bool,
+) -> (Option<&'static str>, Option<String>) {
+    let health = shipping_target_configured.then(|| observation.health.as_str());
+    (health, observation.acked_at.clone())
 }
 
 /// Admin routes are "publicly exposed" when the admin listener is bound to a
@@ -509,6 +607,9 @@ mod tests {
             audit_sink_missing: false,
             audit_best_effort: false,
             audit_retention_local_only: false,
+            audit_shipping_declared_external: false,
+            audit_ack_cursor_configured: false,
+            audit_ack_health_ok: true,
         }
     }
 
@@ -551,6 +652,9 @@ mod tests {
             audit_sink_missing: true,
             audit_best_effort: true,
             audit_retention_local_only: true,
+            audit_shipping_declared_external: true,
+            audit_ack_cursor_configured: true,
+            audit_ack_health_ok: false,
         };
         let evaluation = evaluate(None, &facts, &[], TODAY);
         assert_eq!(finding_ids(&evaluation), vec![PROFILE_UNDECLARED]);
@@ -903,6 +1007,150 @@ mod tests {
     }
 
     #[test]
+    fn shipping_unverified_warns_when_declared_external_without_cursor() {
+        // Off-host shipping is declared but no ack cursor observes it: warn
+        // under production and evidence_grade only, unbound at hosted_lab.
+        let facts = DeploymentFacts {
+            audit_shipping_declared_external: true,
+            audit_ack_cursor_configured: false,
+            ..clean_facts()
+        };
+        let id = "relay.audit.shipping_unverified";
+        let hosted = evaluate(Some(DeploymentProfile::HostedLab), &facts, &[], TODAY);
+        assert!(!finding_ids(&hosted).contains(&id.to_string()));
+        assert_eq!(
+            finding(
+                &evaluate(Some(DeploymentProfile::Production), &facts, &[], TODAY),
+                id
+            )
+            .severity,
+            FindingWarn
+        );
+        let evidence = evaluate(Some(DeploymentProfile::EvidenceGrade), &facts, &[], TODAY);
+        assert_eq!(finding(&evidence, id).severity, FindingWarn);
+        // A warn never blocks readiness or startup.
+        assert!(!evidence.has_readiness_failure());
+        assert!(!evidence.has_startup_failure());
+    }
+
+    #[test]
+    fn shipping_unverified_silent_when_cursor_configured_or_not_declared() {
+        let id = "relay.audit.shipping_unverified";
+        // A cursor is configured: shipping is observed, so unverified is silent.
+        let with_cursor = DeploymentFacts {
+            audit_shipping_declared_external: true,
+            audit_ack_cursor_configured: true,
+            ..clean_facts()
+        };
+        let evaluation = evaluate(
+            Some(DeploymentProfile::Production),
+            &with_cursor,
+            &[],
+            TODAY,
+        );
+        assert!(!finding_ids(&evaluation).contains(&id.to_string()));
+        // Shipping is not declared_external (e.g. stdout sink): unverified is
+        // silent even without a cursor.
+        let not_declared = DeploymentFacts {
+            audit_shipping_declared_external: false,
+            audit_ack_cursor_configured: false,
+            ..clean_facts()
+        };
+        let evaluation = evaluate(
+            Some(DeploymentProfile::EvidenceGrade),
+            &not_declared,
+            &[],
+            TODAY,
+        );
+        assert!(!finding_ids(&evaluation).contains(&id.to_string()));
+    }
+
+    #[test]
+    fn shipping_stale_escalates_when_cursor_unhealthy() {
+        // A cursor is configured but its observed health is not `ok`: error
+        // under production, readiness_fail under evidence_grade, unbound at
+        // hosted_lab. Fail closed on any non-ok health.
+        let facts = DeploymentFacts {
+            audit_ack_cursor_configured: true,
+            audit_ack_health_ok: false,
+            ..clean_facts()
+        };
+        let id = "relay.audit.shipping_stale";
+        let hosted = evaluate(Some(DeploymentProfile::HostedLab), &facts, &[], TODAY);
+        assert!(!finding_ids(&hosted).contains(&id.to_string()));
+        assert_eq!(
+            finding(
+                &evaluate(Some(DeploymentProfile::Production), &facts, &[], TODAY),
+                id
+            )
+            .severity,
+            FindingError
+        );
+        let evidence = evaluate(Some(DeploymentProfile::EvidenceGrade), &facts, &[], TODAY);
+        assert_eq!(finding(&evidence, id).severity, ReadinessFail);
+        assert_eq!(evidence.readiness_failures, vec![id.to_string()]);
+        assert!(evidence.has_readiness_failure());
+    }
+
+    #[test]
+    fn shipping_stale_silent_when_cursor_healthy_or_absent() {
+        let id = "relay.audit.shipping_stale";
+        // Healthy cursor: silent.
+        let healthy = DeploymentFacts {
+            audit_ack_cursor_configured: true,
+            audit_ack_health_ok: true,
+            ..clean_facts()
+        };
+        let evaluation = evaluate(Some(DeploymentProfile::EvidenceGrade), &healthy, &[], TODAY);
+        assert!(!finding_ids(&evaluation).contains(&id.to_string()));
+        // No cursor configured at all: the stale gate does not bind (only the
+        // unverified gate can bind in that case), even if health_ok is false.
+        let no_cursor = DeploymentFacts {
+            audit_ack_cursor_configured: false,
+            audit_ack_health_ok: false,
+            ..clean_facts()
+        };
+        let evaluation = evaluate(
+            Some(DeploymentProfile::EvidenceGrade),
+            &no_cursor,
+            &[],
+            TODAY,
+        );
+        assert!(!finding_ids(&evaluation).contains(&id.to_string()));
+    }
+
+    #[test]
+    fn shipping_stale_readiness_fail_is_non_waivable() {
+        // Under evidence_grade `relay.audit.shipping_stale` is readiness_fail,
+        // which is non-waivable: a waiver must not suppress it and readiness
+        // still fails.
+        let facts = DeploymentFacts {
+            audit_ack_cursor_configured: true,
+            audit_ack_health_ok: false,
+            ..clean_facts()
+        };
+        let id = "relay.audit.shipping_stale";
+        let waivers = [WaiverInput {
+            finding: id.to_string(),
+            reason: "synthetic stale-shipping waiver".to_string(),
+            expires: FUTURE.to_string(),
+        }];
+        let evaluation = evaluate(
+            Some(DeploymentProfile::EvidenceGrade),
+            &facts,
+            &waivers,
+            TODAY,
+        );
+        let f = finding(&evaluation, id);
+        assert_eq!(f.status, DeploymentFindingStatus::Active);
+        assert_eq!(f.severity, ReadinessFail);
+        assert!(evaluation.has_readiness_failure());
+        assert_eq!(evaluation.readiness_failures, vec![id.to_string()]);
+        // The waiver is still listed as active for review; it does not suppress.
+        assert_eq!(evaluation.active_waivers.len(), 1);
+    }
+
+    #[test]
     fn active_waiver_suppresses_finding_and_reports_waived() {
         let facts = DeploymentFacts {
             openapi_public: true,
@@ -1111,6 +1359,7 @@ datasets: []
             ("relay.config.unsigned", "signed"),
             ("relay.audit.sink_missing", "durable audit sink"),
             ("relay.audit.best_effort", "write_policy"),
+            ("relay.audit.shipping_stale", "audit_ack_max_age_secs"),
         ] {
             let remediation = hard_gate_remediation(gate_id);
             assert!(

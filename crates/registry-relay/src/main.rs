@@ -2101,11 +2101,11 @@ fn audit_sink_kind(config: &Config) -> &'static str {
     }
 }
 
-/// Report the operator-declared audit shipping posture for the doctor
-/// diagnostic report. This mirrors the `posture.audit` shipping fields
-/// (`sink_type`, `shipping_target_configured`, `shipping_target`) and is
-/// derived from config via the shared classifier: it is declared state, not
-/// observed delivery health.
+/// Report the audit shipping posture for the doctor diagnostic report. This
+/// mirrors the `posture.audit` shipping fields: the declared state
+/// (`sink_type`, `shipping_target_configured`, `shipping_target`) derived from
+/// config via the shared classifier, plus the observed state
+/// (`shipping_health`, `shipping_observed_at`) read from the local ack cursor.
 fn audit_shipping_report(config: &Config) -> Value {
     let (sink_kind, sink_type) = match &config.audit.sink {
         AuditSinkConfig::Stdout { .. } => (AuditSinkKind::Stdout, "stdout"),
@@ -2115,10 +2115,20 @@ fn audit_shipping_report(config: &Config) -> Value {
     };
     let (shipping_target_configured, shipping_target) =
         audit_shipping_target(sink_kind, config.deployment.evidence.audit_offhost_shipping);
+    // Observed shipping freshness from the local ack cursor, via the shared
+    // helpers so the doctor report and posture emission never drift.
+    let observation = registry_relay::deployment::audit_ack_observation(config);
+    let (shipping_health, shipping_observed_at) =
+        registry_relay::deployment::shipping_health_fields(
+            &observation,
+            shipping_target_configured,
+        );
     json!({
         "sink_type": sink_type,
         "shipping_target_configured": shipping_target_configured,
         "shipping_target": shipping_target,
+        "shipping_health": shipping_health,
+        "shipping_observed_at": shipping_observed_at,
     })
 }
 

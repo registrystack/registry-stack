@@ -10,9 +10,12 @@ use registry_platform_config::{
     ConfigBundleSignatureEnvelope, ConfigTrustAnchor, ConfigTrustAnchorSigner,
 };
 use registry_platform_crypto::{canonicalize_json, sign, PrivateJwk};
-use registry_platform_ops::{AntiRollbackKey, AntiRollbackRecord, FileAntiRollbackStore};
+use registry_platform_ops::{
+    AntiRollbackKey, AntiRollbackRecord, FileAntiRollbackStore, AUDIT_ACK_CURSOR_FIXTURE_V1,
+};
 use serde_json::Value;
 use tempfile::TempDir;
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
 const PRIVATE_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}"#;
 const ZERO_HASH: &str = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
@@ -456,6 +459,127 @@ fn doctor_json_reports_declared_audit_shipping_state() {
     assert_eq!(report["audit_shipping"]["sink_type"], "stdout");
     assert_eq!(report["audit_shipping"]["shipping_target_configured"], true);
     assert_eq!(report["audit_shipping"]["shipping_target"], "stdout");
+    // No ack cursor is configured, so observed shipping health is unverified.
+    assert_eq!(report["audit_shipping"]["shipping_health"], "unverified");
+    assert!(report["audit_shipping"]["shipping_observed_at"].is_null());
+}
+
+/// Write a `local`-profile config with a stdout sink and the given ack cursor
+/// path, so the doctor reads and reports observed shipping health.
+fn write_ack_cursor_config(
+    tmp: &TempDir,
+    name: &str,
+    cursor_path: &std::path::Path,
+) -> std::path::PathBuf {
+    let path = tmp.path().join(name);
+    std::fs::write(
+        &path,
+        format!(
+            r#"
+deployment:
+  profile: local
+  evidence:
+    audit_ack_cursor_path: "{cursor}"
+server:
+  bind: 127.0.0.1:0
+catalog:
+  title: Test
+  base_url: https://data.example.test
+  publisher: Test
+vocabularies: {{}}
+auth:
+  mode: api_key
+  api_keys: []
+datasets: []
+audit:
+  sink: stdout
+  format: jsonl
+"#,
+            cursor = cursor_path.display()
+        ),
+    )
+    .expect("config writes");
+    path
+}
+
+fn run_doctor_json(config_path: &std::path::Path) -> Value {
+    let output = Command::new(env!("CARGO_BIN_EXE_registry-relay"))
+        .env("RUST_LOG", "off")
+        .args([
+            "doctor",
+            "--config",
+            config_path.to_str().expect("utf-8 path"),
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("doctor command runs");
+    assert!(
+        output.status.success(),
+        "doctor failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report = parse_stdout_json(&output.stdout);
+    assert_diagnostic_report(&report);
+    report
+}
+
+#[test]
+fn doctor_json_reports_fresh_ack_cursor_health() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let acked_at = OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .expect("rfc3339 timestamp");
+    // The embedded valid fixture with its acked_at rewritten to now.
+    let cursor = AUDIT_ACK_CURSOR_FIXTURE_V1.replace("2026-06-04T09:59:00Z", &acked_at);
+    let cursor_path = tmp.path().join("ack-cursor.json");
+    std::fs::write(&cursor_path, cursor).expect("cursor writes");
+    let config_path = write_ack_cursor_config(&tmp, "relay-fresh.yaml", &cursor_path);
+
+    let report = run_doctor_json(&config_path);
+    assert_eq!(report["audit_shipping"]["shipping_health"], "ok");
+    assert_eq!(report["audit_shipping"]["shipping_observed_at"], acked_at);
+}
+
+#[test]
+fn doctor_json_reports_stale_ack_cursor_health() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    // A far-past acked_at is always older than the default freshness window.
+    let cursor =
+        AUDIT_ACK_CURSOR_FIXTURE_V1.replace("2026-06-04T09:59:00Z", "2000-01-01T00:00:00Z");
+    let cursor_path = tmp.path().join("ack-cursor.json");
+    std::fs::write(&cursor_path, cursor).expect("cursor writes");
+    let config_path = write_ack_cursor_config(&tmp, "relay-stale.yaml", &cursor_path);
+
+    let report = run_doctor_json(&config_path);
+    assert_eq!(report["audit_shipping"]["shipping_health"], "stale");
+    assert_eq!(
+        report["audit_shipping"]["shipping_observed_at"],
+        "2000-01-01T00:00:00Z"
+    );
+}
+
+#[test]
+fn doctor_json_reports_missing_ack_cursor() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let cursor_path = tmp.path().join("does-not-exist.json");
+    let config_path = write_ack_cursor_config(&tmp, "relay-missing.yaml", &cursor_path);
+
+    let report = run_doctor_json(&config_path);
+    assert_eq!(report["audit_shipping"]["shipping_health"], "missing");
+    assert!(report["audit_shipping"]["shipping_observed_at"].is_null());
+}
+
+#[test]
+fn doctor_json_reports_invalid_ack_cursor() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let cursor_path = tmp.path().join("invalid.json");
+    std::fs::write(&cursor_path, "this is not valid json").expect("cursor writes");
+    let config_path = write_ack_cursor_config(&tmp, "relay-invalid.yaml", &cursor_path);
+
+    let report = run_doctor_json(&config_path);
+    assert_eq!(report["audit_shipping"]["shipping_health"], "invalid");
+    assert!(report["audit_shipping"]["shipping_observed_at"].is_null());
 }
 
 #[test]

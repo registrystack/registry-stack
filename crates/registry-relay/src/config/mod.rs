@@ -121,6 +121,19 @@ pub struct DeploymentEvidenceConfig {
     /// log collector or SIEM) rather than relying solely on local retention.
     #[serde(default)]
     pub audit_offhost_shipping: bool,
+    /// Optional path to a `registry.audit.ack_cursor.v1` file maintained by
+    /// whatever ships audit events off-host. When set, the runtime reads it to
+    /// observe shipping freshness and surfaces it as posture shipping health;
+    /// absent, shipping health stays `unverified` and only the declared
+    /// shipping target is reported.
+    #[serde(default)]
+    pub audit_ack_cursor_path: Option<PathBuf>,
+    /// Optional freshness window in seconds for the ack cursor's `acked_at`
+    /// timestamp. Defaults to `DEFAULT_AUDIT_ACK_MAX_AGE` (900) when unset. A
+    /// window without `audit_ack_cursor_path` is rejected at load, since a
+    /// freshness window is meaningless without a cursor to observe.
+    #[serde(default)]
+    pub audit_ack_max_age_secs: Option<u64>,
 }
 
 /// Stable deployment identity surfaced in redacted operations posture.

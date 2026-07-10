@@ -20,10 +20,10 @@ use registry_platform_ops::ConfigSource;
 
 use super::capabilities::source_capabilities;
 use super::{
-    AggregateConfig, AggregateSpatialConfig, AllowedFilter, AttributeReleaseProfile, AuthMode,
-    Config, DatasetConfig, EntityConfig, EntityRelationshipConfig, EntitySpatialConfig,
-    FieldConfig, FieldType, FilterOp, GovernedPolicyConfig, OidcConfig, RefreshConfig,
-    RelationshipKind, ReleaseClaimConfig, ResourceConfig, Sensitivity, SourceConfig,
+    AggregateConfig, AggregateSpatialConfig, AllowedFilter, AttributeReleaseProfile,
+    AuditSinkConfig, AuthMode, Config, DatasetConfig, EntityConfig, EntityRelationshipConfig,
+    EntitySpatialConfig, FieldConfig, FieldType, FilterOp, GovernedPolicyConfig, OidcConfig,
+    RefreshConfig, RelationshipKind, ReleaseClaimConfig, ResourceConfig, Sensitivity, SourceConfig,
     SpatialBboxFieldsConfig, SpatialGeometryConfig, CRS84,
 };
 
@@ -77,7 +77,46 @@ pub fn run_with_source(config: &Config, source: ConfigSource) -> Result<(), Erro
     validate_ogc_feature_flags(config).map_err(Error::from)?;
     validate_resources(config).map_err(Error::from)?;
     validate_spdci_feature(config).map_err(Error::from)?;
+    validate_audit_ack_cursor(config).map_err(Error::from)?;
     validate_deployment(config, source).map_err(Error::from)?;
+    Ok(())
+}
+
+/// Validate the audit off-host ack cursor evidence declarations.
+///
+/// A cursor observes off-host shipping freshness, so its config must be
+/// self-consistent:
+///
+/// * `audit_ack_max_age_secs` without `audit_ack_cursor_path` is rejected: a
+///   freshness window is meaningless with no cursor to observe.
+/// * `audit_ack_cursor_path` on a local file sink whose operator has not
+///   declared `audit_offhost_shipping` is rejected: the cursor asserts observed
+///   shipping that the deployment does not claim. Stdout and syslog sinks ship
+///   inherently, so they may configure a cursor without the boolean.
+fn validate_audit_ack_cursor(config: &Config) -> Result<(), ConfigError> {
+    let evidence = &config.deployment.evidence;
+    if evidence.audit_ack_max_age_secs.is_some() && evidence.audit_ack_cursor_path.is_none() {
+        tracing::error!(
+            code = "config.validation_error",
+            field = "deployment.evidence.audit_ack_max_age_secs",
+            "audit_ack_max_age_secs is set without deployment.evidence.audit_ack_cursor_path; a \
+             freshness window is meaningless without a cursor to observe"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+    if evidence.audit_ack_cursor_path.is_some()
+        && matches!(config.audit.sink, AuditSinkConfig::File { .. })
+        && !evidence.audit_offhost_shipping
+    {
+        tracing::error!(
+            code = "config.validation_error",
+            field = "deployment.evidence.audit_ack_cursor_path",
+            "audit_ack_cursor_path asserts observed off-host shipping, but the audit sink is a \
+             local file and deployment.evidence.audit_offhost_shipping is false; set \
+             audit_offhost_shipping: true or remove the cursor path"
+        );
+        return Err(ConfigError::ValidationError);
+    }
     Ok(())
 }
 
@@ -4581,6 +4620,134 @@ deployment:
         assert!(
             rendered.contains("relay.audit.best_effort"),
             "expected the rejected readiness-gate finding id in the log: {rendered}"
+        );
+    }
+
+    #[test]
+    fn audit_ack_max_age_without_cursor_is_rejected() {
+        // A freshness window is meaningless without a cursor path to observe.
+        let config = parse_deployment_config(
+            "deployment:\n  profile: local\n  evidence:\n    audit_ack_max_age_secs: 60",
+        );
+        let (result, rendered) = run_with_captured_logs(&config);
+        assert!(
+            matches!(result, Err(Error::Config(ConfigError::ValidationError))),
+            "max_age without a cursor path must be rejected, got {result:?}"
+        );
+        assert!(
+            rendered.contains("audit_ack_max_age_secs"),
+            "expected the offending field in the log: {rendered}"
+        );
+    }
+
+    #[test]
+    fn audit_ack_cursor_on_local_file_without_offhost_is_rejected() {
+        // A cursor asserts observed off-host shipping; a local file sink that
+        // does not declare off-host shipping must not configure one.
+        let config: Config = serde_saphyr::from_str(
+            r#"
+server:
+  bind: "127.0.0.1:8080"
+catalog:
+  title: "Test Registry"
+  base_url: "https://data.example.test"
+  publisher: "Test Ministry"
+auth:
+  mode: api_key
+  api_keys: []
+audit:
+  sink: file
+  path: "/var/log/relay/audit.jsonl"
+datasets: []
+deployment:
+  profile: local
+  evidence:
+    audit_ack_cursor_path: "/var/lib/relay/ack-cursor.json"
+"#,
+        )
+        .expect("config parses");
+        let (result, rendered) = run_with_captured_logs(&config);
+        assert!(
+            matches!(result, Err(Error::Config(ConfigError::ValidationError))),
+            "a cursor on a local file sink without off-host shipping must be rejected, got {result:?}"
+        );
+        assert!(
+            rendered.contains("audit_ack_cursor_path"),
+            "expected the offending field in the log: {rendered}"
+        );
+        assert!(
+            rendered.contains("audit_offhost_shipping"),
+            "expected the off-host remediation in the log: {rendered}"
+        );
+    }
+
+    #[test]
+    fn audit_ack_cursor_on_local_file_with_offhost_loads() {
+        // The same local file sink loads once off-host shipping is declared.
+        let config: Config = serde_saphyr::from_str(
+            r#"
+server:
+  bind: "127.0.0.1:8080"
+catalog:
+  title: "Test Registry"
+  base_url: "https://data.example.test"
+  publisher: "Test Ministry"
+auth:
+  mode: api_key
+  api_keys: []
+audit:
+  sink: file
+  path: "/var/log/relay/audit.jsonl"
+datasets: []
+deployment:
+  profile: local
+  evidence:
+    audit_offhost_shipping: true
+    audit_ack_cursor_path: "/var/lib/relay/ack-cursor.json"
+    audit_ack_max_age_secs: 600
+"#,
+        )
+        .expect("config parses");
+        run(&config).expect("a declared-off-host local file sink with a cursor must load");
+    }
+
+    #[test]
+    fn audit_ack_cursor_on_stdout_without_offhost_loads() {
+        // Stdout ships inherently, so a cursor may be configured without the
+        // off-host boolean.
+        let config = parse_deployment_config(
+            "deployment:\n  profile: local\n  evidence:\n    audit_ack_cursor_path: \"/var/lib/relay/ack-cursor.json\"",
+        );
+        run(&config).expect("a stdout sink with a cursor and no boolean must load");
+    }
+
+    #[test]
+    fn waiver_on_shipping_stale_is_rejected_at_load() {
+        // Under evidence_grade `relay.audit.shipping_stale` is a readiness_fail
+        // gate, which is non-waivable. The waiver must be rejected at load, not
+        // silently dropped, even though no cursor is configured so the condition
+        // does not hold. Evaluate as a signed bundle so the
+        // `relay.config.unsigned` startup gate does not fire.
+        let config = parse_deployment_config(
+            "deployment:\n  profile: evidence_grade\n  waivers:\n    - finding: relay.audit.shipping_stale\n      reason: \"synthetic-waiver-not-a-secret\"\n      expires: \"2999-01-01\"",
+        );
+        let (result, rendered) =
+            capture_logs(|| run_with_source(&config, ConfigSource::SignedBundleFile));
+        assert!(
+            matches!(result, Err(Error::Config(ConfigError::ValidationError))),
+            "a waiver on the readiness_fail shipping_stale gate must be rejected, got {result:?}"
+        );
+        assert!(
+            rendered.contains("cannot be waived under the active profile"),
+            "expected the hard-gate rejection message in the log: {rendered}"
+        );
+        assert!(
+            rendered.contains("relay.audit.shipping_stale"),
+            "expected the rejected finding id in the log: {rendered}"
+        );
+        assert!(
+            rendered.contains("audit_ack_max_age_secs"),
+            "expected the shipping_stale remediation in the log: {rendered}"
         );
     }
 
