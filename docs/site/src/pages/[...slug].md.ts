@@ -15,7 +15,7 @@ import { buildPageMarkdown, entrySlugToOutputPath } from '../lib/page-markdown';
 export const prerender = true;
 
 export async function getStaticPaths(): Promise<GetStaticPathsResult> {
-  const entries = await getCollection('docs');
+  const entries = await getCollection('docs', ({ data }) => !data.draft);
   return entries.map((entry) => ({
     params: { slug: entrySlugToOutputPath(entry.id) },
     props: { entry },

@@ -396,6 +396,26 @@
       url: https://github.com/registrystack/registry-stack/blob/v0.8.4/crates/registry-notary-core/src/model.rs
   last_checked: 2026-05-23
   notes: The code uses provenance concepts, but current evidence does not show a PROV-O vocabulary emission surface. Keep this as design influence until PROV-O terms are emitted or mapped.
+- id: fhir-r4
+  name: HL7 FHIR
+  standards_body: HL7
+  official_url: https://hl7.org/fhir/R4/
+  version_or_profile: FHIR R4 bounded source-adapter profile
+  status: used
+  claim_level: maps_to
+  adoption_mode: profiled
+  used_by:
+    - registry-notary
+  surfaces:
+    - FHIR R4 source adapter
+    - configured GET graph projections
+  evidence_docs:
+    - label: Registry Notary FHIR source adapter guide
+      url: https://github.com/registrystack/registry-stack/blob/v0.8.4/products/notary/docs/fhir-source-adapter-guide.md
+    - label: Registry Notary FHIR adapter contract tests
+      url: https://github.com/registrystack/registry-stack/blob/v0.8.4/crates/registry-notary-source-adapter-sidecar/tests/fhir_contract.rs
+  last_checked: 2026-07-09
+  notes: Registry Notary maps a bounded FHIR R4 GET graph through the governed source-adapter runtime. The adapter projects selected FHIR fields into Notary-ready source facts and does not expose raw FHIR Bundles, implement a FHIR server, or claim broad FHIR conformance.
 - id: govstack-digital-registries
   name: GovStack Digital Registries Building Block
   standards_body: GovStack

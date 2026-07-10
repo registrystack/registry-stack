@@ -6,7 +6,8 @@ against code on this branch.
 
 Verdicts: `verified` (page kept, claims anchored, at most style fixes) |
 `rewritten` (substantive content changes) | `merged` (content folded into
-another page; rationale required) | `deleted` (rationale required).
+another page; rationale required) | `deleted` (rationale required) | `retired`
+(removed from published outputs but retained as a Starlight draft; rationale required).
 
 Status: `pending` | `surveyed` | `batched` (fix batch landed, gates green) | `done` (fresh-eyes passed).
 
@@ -23,11 +24,11 @@ each remaining marker justified here.
 | start/quickstart.mdx | batched | rewritten | P2: hosted-lab URLs verified vs lab/ code; Solmara transition exposure |
 | start/credential-tour.mdx | batched | rewritten | P2: hosts verified; fixture identities + negative control to verify |
 | start/when-to-use.mdx | batched | verified | P3: clean |
-| tutorials/configure-dhis2-claim-checks.mdx | batched | rewritten | P1: fully lab/-dependent, no Solmara equivalent; fate decision needed |
+| tutorials/configure-dhis2-claim-checks.mdx | done | retired | Retired by #257 because the tutorial depends on the removed monorepo lab and has no Solmara equivalent. The draft source remains unpublished, and its route redirects to integration patterns. |
 | tutorials/deploy-standalone-with-own-data.mdx | batched | rewritten | P2: claims solid; missing troubleshooting section, heavy style debt |
 | tutorials/first-run-with-registry-lab.mdx | done | rewritten (replaced) | Replaced 2026-07-07 by tutorials/first-run-with-solmara-lab.mdx after registrystack/solmara-lab went public; redirect in astro.config.mjs; check-tutorial.sh contract ported (3 steps / 4 verify / 16 services, solmara-lab pinned at 1af06c8) |
 | tutorials/first-run-with-solmara-lab.mdx | done | rewritten (new) | Reader run passed verbatim twice (findings folded back); single-page fresh-eyes review passed post-fix; status current |
-| tutorials/getting-started-fhir-evidence.mdx | batched | rewritten | P1: fully lab/-dependent, no Solmara equivalent; fate decision needed |
+| tutorials/getting-started-fhir-evidence.mdx | done | retired | Retired by #257 because the tutorial depends on the removed monorepo lab and has no Solmara equivalent. The draft source remains unpublished, and its route redirects to integration patterns. |
 | tutorials/publish-spreadsheet-secured-registry-api.mdx | batched | rewritten | P3: best-anchored page; fix source_repos slug |
 | tutorials/run-notary-standalone-for-api.mdx | batched | rewritten | P2: CLI claims verified; overlap with deploy-standalone noted |
 | tutorials/verify-claim-registry-api.mdx | batched | rewritten | P2: problem-document JSON bodies need verification |
@@ -46,7 +47,7 @@ each remaining marker justified here.
 | explanation/trusted-context-constraints.mdx | batched | verified | Tier-C heavy. P2: contract-id strings unchecked yet status current |
 | map/boundaries-and-map.mdx | batched | rewritten | P2: doc_type mismatch (reference vs narrative); v0.8.1 pin outlier; 400-char lines |
 | operate/upgrade-and-rollback.mdx | batched | rewritten | P1: deployment/not_ready claim wrong for Notary; last_reviewed integrity |
-| reference/api-stability.mdx | batched | verified | P3: draft for GH#203; reference-vs-narrative tension; route claims unverified |
+| reference/api-stability.mdx | batched | rewritten | Tier-C: GH#203 config-bundle and break-glass row traced to platform config and ops behavior; explicit maintainer security signoff required before merge. |
 | reference/apis/index.mdx | batched | verified | P3: clean; archive_remote on personal account noted |
 | reference/apis/registry-notary.mdx | batched | verified | P3: spot-checks all confirmed |
 | reference/apis/registry-relay.mdx | batched | verified | P3: openapi_requires_auth confirmed; admin scopes unverified |
@@ -128,12 +129,15 @@ oid4vci-wallet-interop: reference to how-to).
 
 ## Deletions and merges
 
-No page was deleted or merged. Considered and declined:
+Two tutorials were retired from publication by #257. Their source files retain
+`draft: true` for review history, while redirects preserve their published URLs.
+The post-build machine-output check rejects Markdown endpoints and LLM corpus
+entries for every Starlight draft page.
 
 | Page | Action | Rationale |
 |---|---|---|
 | tutorials/run-notary-standalone-for-api.mdx | keep (merge candidate with deploy-standalone) | Overlapping "Notary against a Relay-shaped source" scope, but one is registryctl-generated and one hand-rolled; merging would break the IA's first-run journey. Maintainer conversation flagged in final report. |
-| tutorials/configure-dhis2-claim-checks.mdx + getting-started-fhir-evidence.mdx | keep (deletion candidates at lab/ removal) | Fully lab/-dependent with no Solmara equivalent; accurate against current main. Their fate belongs to the lab-deletion PR (#257), not this overhaul. |
+| tutorials/configure-dhis2-claim-checks.mdx + getting-started-fhir-evidence.mdx | retire from publication | Both tutorials require the removed monorepo lab and have no Solmara equivalent. Keep redirects to explanation/integration-patterns and exclude the draft sources from HTML content, per-page Markdown, and LLM corpora. |
 | map/boundaries-and-map.mdx | keep, doc_type reference -> explanation | Narrative boundary prose plus a generated table; IA places it under Concepts, and two independent reviews judged the content explanation-shaped. File stays at map/ (directory follows URL). |
 
 ## TODO[evidence] register (final count must be <= 2)
@@ -158,7 +162,7 @@ verifying all three Phase-4 rename facts in code).
 | tutorials/run-notary-standalone-for-api.mdx | pass-with-findings (post-GH#278 deviation) | Central promise concretely verified (predicate-only disclosure, no source-row fields). Fixed on page: literal pin syntax in the GH#278 row, cleanup reassurance. |
 | tutorials/verify-opencrvs-claims.mdx | fail at start (GH#278), partial by design | Fixed on page: source URL now an explicit placeholder + base-URL prerequisite named; source.unavailable vs auth-error troubleshooting split; GH#278 row with pin syntax; jq field names (passed/actual_status); two broken onboarding links; platform-override wording matches actual registryctl behavior. |
 | tutorials/configure-dhis2-claim-checks.mdx | environment-blocked | Ports 4311-4331 held by the running Solmara stack; stopping it was declined (volume/audit-chain risk). No execution coverage anywhere: residual gap, run after the Solmara stack can be paused or on another machine. Claims statically verified against lab/ compose+configs. |
-| tutorials/first-run-with-solmara-lab.mdx | pass-with-findings (harness-isolation entries only; every step passed verbatim, twice) | Fixed on page: curl prerequisite, compose project-name collision row, lead restructure, lab-replacement overclaim dropped, /docs-vs-openapi causal tightening. Product issues filed: solmara-lab#1 (stale Bruno example), #2 (project-name collision, down -v destroys colliding volumes), #3 (stale committed checksums). Owner's stack stopped/restarted around the run, health-checked (16 up, portal/home/relay 200). CI note: check:tutorial execute mode is not wired into any workflow (only dry-run); follow-up decision. |
+| tutorials/first-run-with-solmara-lab.mdx | pass-with-findings (harness-isolation entries only; every step passed verbatim, twice) | Fixed on page: curl prerequisite, compose project-name collision row, lead restructure, lab-replacement overclaim dropped, /docs-vs-openapi causal tightening. Product issues filed: solmara-lab#1 (stale Bruno example), #2 (project-name collision, down -v destroys colliding volumes), #3 (stale committed checksums). Owner's stack stopped/restarted around the run, health-checked (16 up, portal/home/relay 200). `npm run check` invokes `check:tutorial:dry-run` for extraction and drift detection, while the dedicated `registryctl-tutorials` CI job executes the registryctl tutorials from source. Full Solmara execution remains a manual `check:tutorial` run. |
 
 ## Deliberate deviations
 

@@ -202,8 +202,9 @@ Each contains only a `README.md` that marks it as a placeholder pending official
 
 ## v0 caveats
 
-As of the 0.2.1 release (2026-06-21), Registry Manifest remains pre-1.0.
-See the [CHANGELOG](../CHANGELOG.md) for the current released version.
+Registry Manifest ships as part of Registry Stack and remains pre-1.0.
+The root workspace version and stack release notes define the current release.
+The [CHANGELOG](../CHANGELOG.md) records the earlier standalone product release history.
 The manifest schema version `registry-manifest/v1` is enforced in code.
 Manifest-owned formats freeze at beta, including the root manifest schema,
 profile descriptor schema, generated artifact formats, codelists, and the static

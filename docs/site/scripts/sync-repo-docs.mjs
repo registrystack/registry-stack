@@ -37,8 +37,6 @@ const docsDir = resolve(root, 'src/content/docs');
 const outputRoot = resolve(docsDir, 'products');
 const cacheRoot = resolve(root, '.repo-docs-cache');
 
-const today = new Date().toISOString().slice(0, 10);
-
 const warnings = [];
 function warn(message) {
   warnings.push(message);
@@ -257,17 +255,161 @@ function rewriteLinks(md, ctx) {
   });
 }
 
-function frontmatterBlock(fields) {
+export function validateStandardsReferenced(value, context, knownStandards) {
+  if (value === undefined) {
+    throw new Error(
+      `${context}: standards_referenced is required; use [] when the page references no registered standards`,
+    );
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(`${context}: standards_referenced must be a list`);
+  }
+
+  const seen = new Set();
+  for (const id of value) {
+    if (typeof id !== 'string' || id.trim() !== id || id === '') {
+      throw new Error(`${context}: standards_referenced entries must be non-empty strings`);
+    }
+    if (!knownStandards.has(id)) {
+      throw new Error(`${context}: standards_referenced id "${id}" is not in src/data/standards.yaml`);
+    }
+    if (seen.has(id)) {
+      throw new Error(`${context}: standards_referenced id "${id}" is duplicated`);
+    }
+    seen.add(id);
+  }
+  return value;
+}
+
+export function validateLastReviewed(value, context) {
+  if (value === 'unreviewed') return value;
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    throw new Error(
+      `${context}: last_reviewed is required and must be "unreviewed" or a YYYY-MM-DD date`,
+    );
+  }
+  const parsed = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(parsed.valueOf()) || parsed.toISOString().slice(0, 10) !== value) {
+    throw new Error(`${context}: last_reviewed "${value}" is not a valid calendar date`);
+  }
+  return value;
+}
+
+function validateDocsetOverrides(entry, context, knownStandards, docsets) {
+  const overrides = entry.docset_overrides ?? [];
+  if (!Array.isArray(overrides)) {
+    throw new Error(`${context}: docset_overrides must be a list`);
+  }
+
+  const docsetById = new Map(docsets.docsets.map((docset) => [docset.id, docset]));
+  const seenDocsets = new Set();
+  for (const [index, override] of overrides.entries()) {
+    const overrideContext = `${context}: docset_overrides[${index}]`;
+    if (!override || typeof override !== 'object' || Array.isArray(override)) {
+      throw new Error(`${overrideContext} must be a map`);
+    }
+    const unknownKeys = Object.keys(override).filter(
+      (key) => !['docsets', 'standards_referenced', 'last_reviewed'].includes(key),
+    );
+    if (unknownKeys.length > 0) {
+      throw new Error(`${overrideContext} has unknown field "${unknownKeys[0]}"`);
+    }
+    if (!Array.isArray(override.docsets) || override.docsets.length === 0) {
+      throw new Error(`${overrideContext}.docsets must be a non-empty list`);
+    }
+    validateStandardsReferenced(
+      override.standards_referenced,
+      overrideContext,
+      knownStandards,
+    );
+    validateLastReviewed(override.last_reviewed, overrideContext);
+
+    for (const docsetId of override.docsets) {
+      if (typeof docsetId !== 'string' || docsetId.trim() !== docsetId || docsetId === '') {
+        throw new Error(`${overrideContext}.docsets entries must be non-empty strings`);
+      }
+      const docset = docsetById.get(docsetId);
+      if (!docset) {
+        throw new Error(`${overrideContext} references unknown docset "${docsetId}"`);
+      }
+      if (docsetId === docsets.current || docset.status !== 'archived') {
+        throw new Error(`${overrideContext} may reference archived docsets only`);
+      }
+      if (entry.exclude_docsets?.includes(docsetId)) {
+        throw new Error(`${overrideContext} references excluded docset "${docsetId}"`);
+      }
+      if (seenDocsets.has(docsetId)) {
+        throw new Error(`${context}: docset "${docsetId}" has more than one metadata override`);
+      }
+      seenDocsets.add(docsetId);
+    }
+  }
+
+  const expectedDocsets = docsets.docsets.filter((docset) => {
+    return docset.status === 'archived' && !entry.exclude_docsets?.includes(docset.id);
+  });
+  for (const docset of expectedDocsets) {
+    if (!seenDocsets.has(docset.id)) {
+      throw new Error(
+        `${context}: missing complete metadata override for archived docset "${docset.id}"`,
+      );
+    }
+  }
+}
+
+export function validateRepoDocsMetadata(manifest, knownStandards, docsets) {
+  for (const [repoId, repo] of Object.entries(manifest.repos ?? {})) {
+    if (!Array.isArray(repo.docs)) continue;
+    for (const [index, entry] of repo.docs.entries()) {
+      const source = entry?.src ?? `docs[${index}]`;
+      const context = `${repoId}: ${source}`;
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+        throw new Error(`${context}: repo doc entry must be a map`);
+      }
+      validateStandardsReferenced(entry.standards_referenced, context, knownStandards);
+      validateLastReviewed(entry.last_reviewed, context);
+      validateDocsetOverrides(entry, context, knownStandards, docsets);
+    }
+  }
+  return manifest;
+}
+
+// Historical metadata is frozen with the pinned source. Every applicable
+// archived docset has a complete standards and review-status override.
+export function applyDocsetMetadataOverrides(manifest, docset) {
+  if (docset.status !== 'archived') return manifest;
+  for (const repo of Object.values(manifest.repos ?? {})) {
+    if (!Array.isArray(repo.docs)) continue;
+    for (const entry of repo.docs) {
+      if (entry.exclude_docsets?.includes(docset.id)) continue;
+      const override = entry.docset_overrides?.find((candidate) => {
+        return candidate.docsets.includes(docset.id);
+      });
+      if (!override) {
+        throw new Error(`${entry.src}: missing metadata override for archived docset "${docset.id}"`);
+      }
+      entry.standards_referenced = [...override.standards_referenced];
+      entry.last_reviewed = override.last_reviewed;
+    }
+  }
+  return manifest;
+}
+
+export function frontmatterBlock(fields) {
+  const lastReviewed = validateLastReviewed(fields.last_reviewed, 'generated frontmatter');
+  if (!Array.isArray(fields.standards_referenced)) {
+    throw new Error('generated frontmatter: standards_referenced must be a list');
+  }
   const fm = {
     title: fields.title,
     description: fields.description,
-    status: 'current',
+    status: lastReviewed === 'unreviewed' ? 'draft' : 'current',
     owner: fields.owner,
     source_repos: [fields.owner],
-    last_reviewed: today,
+    last_reviewed: lastReviewed,
     doc_type: fields.doc_type,
     locale: 'en',
-    standards_referenced: [],
+    standards_referenced: fields.standards_referenced,
     editUrl: fields.editUrl,
   };
   // YAML.stringify keeps the body deterministic and quotes where needed.
@@ -296,7 +438,7 @@ function deriveDescription(md, fallback) {
   return fallback;
 }
 
-async function syncEntry(repoId, repo, entry, source, destIndex) {
+async function syncEntry(repoId, repo, entry, source, destIndex, knownStandards) {
   const sourceFile = resolve(source.path, entry.src);
   if (!existsSync(sourceFile)) {
     fail(`${repoId}: allowlisted source ${entry.src} not found in ${source.mode} source`);
@@ -327,11 +469,19 @@ async function syncEntry(repoId, repo, entry, source, destIndex) {
   });
 
   const description = entry.description || deriveDescription(stripped, `${title} for ${repoId}.`);
+  const standards_referenced = validateStandardsReferenced(
+    entry.standards_referenced,
+    `${repoId}: ${entry.src}`,
+    knownStandards,
+  );
+  const last_reviewed = validateLastReviewed(entry.last_reviewed, `${repoId}: ${entry.src}`);
   const fm = frontmatterBlock({
     title,
     description,
     owner: repoId,
     doc_type: entry.doc_type,
+    last_reviewed,
+    standards_referenced,
     editUrl: blobUrl({ ...repo }, entry.src),
   });
 
@@ -346,18 +496,35 @@ async function syncEntry(repoId, repo, entry, source, destIndex) {
   return { outFile: relative(root, outFile), assets: assetsToCopy.length };
 }
 
+async function loadKnownStandards() {
+  const standardsPath = resolve(dataDir, 'standards.yaml');
+  const standards = YAML.parse(await readFile(standardsPath, 'utf8'));
+  if (!Array.isArray(standards)) {
+    fail('standards.yaml must contain a top-level list');
+  }
+  for (const [index, standard] of standards.entries()) {
+    if (!standard || typeof standard.id !== 'string' || standard.id === '') {
+      fail(`standards.yaml entry ${index + 1} is missing id`);
+    }
+  }
+  return new Set(standards.map((standard) => standard.id));
+}
+
 async function main() {
   const manifestPath = resolve(dataDir, 'repo-docs.yaml');
   const manifest = YAML.parse(await readFile(manifestPath, 'utf8'));
   if (!manifest || typeof manifest.repos !== 'object') {
     fail('repo-docs.yaml must contain a top-level `repos` map');
   }
+  const knownStandards = await loadKnownStandards();
   const docsets = await loadDocsets({ dataDir });
+  validateRepoDocsMetadata(manifest, knownStandards, docsets);
   const docset = getDocset(docsets, selectedDocsetId(docsets));
   if (docset.id !== docsets.current) {
     applyDocsetRefs(manifest, docset);
     console.log(`Using archived docset ${docset.id} for product docs.`);
   }
+  applyDocsetMetadataOverrides(manifest, docset);
   filterRepoDocsForDocset(manifest, docset);
 
   // Clean and recreate the output dir so removed allowlist entries don't linger.
@@ -377,7 +544,7 @@ async function main() {
 
     const destIndex = buildDestIndex(repo.docs);
     for (const entry of repo.docs) {
-      const result = await syncEntry(repoId, repo, entry, source, destIndex);
+      const result = await syncEntry(repoId, repo, entry, source, destIndex, knownStandards);
       pageCount += 1;
       assetCount += result.assets;
     }
