@@ -47,7 +47,7 @@ each remaining marker justified here.
 | explanation/trusted-context-constraints.mdx | batched | verified | Tier-C heavy. P2: contract-id strings unchecked yet status current |
 | map/boundaries-and-map.mdx | batched | rewritten | P2: doc_type mismatch (reference vs narrative); v0.8.1 pin outlier; 400-char lines |
 | operate/upgrade-and-rollback.mdx | batched | rewritten | P1: deployment/not_ready claim wrong for Notary; last_reviewed integrity |
-| reference/api-stability.mdx | batched | verified | P3: draft for GH#203; reference-vs-narrative tension; route claims unverified |
+| reference/api-stability.mdx | batched | rewritten | Tier-C: GH#203 config-bundle and break-glass row traced to platform config and ops behavior; explicit maintainer security signoff required before merge. |
 | reference/apis/index.mdx | batched | verified | P3: clean; archive_remote on personal account noted |
 | reference/apis/registry-notary.mdx | batched | verified | P3: spot-checks all confirmed |
 | reference/apis/registry-relay.mdx | batched | verified | P3: openapi_requires_auth confirmed; admin scopes unverified |
