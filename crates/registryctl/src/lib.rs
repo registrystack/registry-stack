@@ -35,10 +35,11 @@ pub use crate::sample::Sample;
 mod sample;
 mod stored_zip;
 
-const RELAY_IMAGE: &str =
-    "ghcr.io/registrystack/registry-relay@sha256:da9332ef30ba252d54ba275eb2a9be443a65e95ef78c493b9b0ce30cbc391e71";
-const NOTARY_IMAGE: &str =
-    "ghcr.io/registrystack/registry-notary@sha256:338d3ac7ddbea55f6e76014b9c23e4ff4e7206c2c40e356452288de06a745ff3";
+const IMAGE_LOCK_SCHEMA_VERSION: &str = "registryctl.release_image_lock.v1";
+const IMAGE_LOCK_MAX_BYTES: u64 = 16 * 1024;
+const IMAGE_LOCK_PATH_ENV: &str = "REGISTRYCTL_IMAGE_LOCK";
+const RELAY_IMAGE_REPOSITORY: &str = "ghcr.io/registrystack/registry-relay";
+const NOTARY_IMAGE_REPOSITORY: &str = "ghcr.io/registrystack/registry-notary";
 const NOTARY_REDIS_IMAGE: &str = "redis:7.4-alpine";
 const LINUX_AMD64_PLATFORM: &str = "linux/amd64";
 const RELAY_BASE_URL: &str = "http://127.0.0.1:4242";
@@ -70,6 +71,193 @@ const UPDATE_CHECK_CACHE_SECONDS: u64 = 60 * 60 * 24;
 const PROJECT_SCHEMA_VERSION: &str = "registryctl/v1";
 const CONFIG_BUNDLE_SIGNATURE_SCHEMA: &str = "registry.platform.config_bundle_signatures.v1";
 const CONFIG_TRUST_ANCHOR_SCHEMA: &str = "registry.platform.config_trust_anchor.v1";
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct RegistryctlImageLock {
+    schema_version: String,
+    release_tag: String,
+    manifest_source_ref: String,
+    tag_target: String,
+    platform: String,
+    images: RegistryctlLockedImages,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct RegistryctlLockedImages {
+    #[serde(rename = "registry-relay")]
+    registry_relay: String,
+    #[serde(rename = "registry-notary")]
+    registry_notary: String,
+}
+
+impl RegistryctlImageLock {
+    fn relay_image(&self) -> &str {
+        &self.images.registry_relay
+    }
+
+    fn notary_image(&self) -> &str {
+        &self.images.registry_notary
+    }
+}
+
+pub fn registryctl_image_lock_filename() -> String {
+    format!("registryctl-v{}-image-lock.json", env!("CARGO_PKG_VERSION"))
+}
+
+/// Loads the release image lock located beside the running registryctl binary.
+///
+/// Only project-generation commands call this function. Existing projects keep
+/// using the immutable image references already stored in their generated files.
+pub fn load_registryctl_image_lock() -> Result<RegistryctlImageLock> {
+    if let Some(path) = std::env::var_os(IMAGE_LOCK_PATH_ENV) {
+        return load_registryctl_image_lock_path(&PathBuf::from(path));
+    }
+    let executable =
+        std::env::current_exe().context("failed to locate the running registryctl binary")?;
+    let directory = executable.parent().ok_or_else(|| {
+        anyhow!(
+            "running registryctl binary has no parent directory: {}",
+            executable.display()
+        )
+    })?;
+    load_registryctl_image_lock_path(&directory.join(registryctl_image_lock_filename()))
+}
+
+#[cfg(test)]
+fn load_registryctl_image_lock_beside(executable: &Path) -> Result<RegistryctlImageLock> {
+    let directory = executable.parent().ok_or_else(|| {
+        anyhow!(
+            "running registryctl binary has no parent directory: {}",
+            executable.display()
+        )
+    })?;
+    load_registryctl_image_lock_path(&directory.join(registryctl_image_lock_filename()))
+}
+
+fn load_registryctl_image_lock_path(path: &Path) -> Result<RegistryctlImageLock> {
+    let guidance = format!(
+        "reinstall registryctl v{} with its matching image lock, or set {IMAGE_LOCK_PATH_ENV} to that verified file; verify the release evidence described at {REGISTRYCTL_VERIFY_GUIDE}",
+        env!("CARGO_PKG_VERSION")
+    );
+    let metadata = fs::symlink_metadata(path).with_context(|| {
+        format!(
+            "registryctl image lock is missing at {}; {guidance}",
+            path.display()
+        )
+    })?;
+    if !metadata.file_type().is_file() {
+        bail!(
+            "registryctl image lock must be a regular file, not a symlink or directory: {}; {guidance}",
+            path.display()
+        );
+    }
+    if metadata.len() > IMAGE_LOCK_MAX_BYTES {
+        bail!(
+            "registryctl image lock exceeds the {IMAGE_LOCK_MAX_BYTES}-byte limit: {}; {guidance}",
+            path.display()
+        );
+    }
+
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    fs::File::open(path)
+        .with_context(|| {
+            format!(
+                "failed to open registryctl image lock {}; {guidance}",
+                path.display()
+            )
+        })?
+        .take(IMAGE_LOCK_MAX_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .with_context(|| {
+            format!(
+                "failed to read registryctl image lock {}; {guidance}",
+                path.display()
+            )
+        })?;
+    if bytes.len() as u64 > IMAGE_LOCK_MAX_BYTES {
+        bail!(
+            "registryctl image lock exceeds the {IMAGE_LOCK_MAX_BYTES}-byte limit: {}; {guidance}",
+            path.display()
+        );
+    }
+
+    let image_lock: RegistryctlImageLock = serde_json::from_slice(&bytes).with_context(|| {
+        format!(
+            "registryctl image lock is not valid schema-v1 JSON: {}; {guidance}",
+            path.display()
+        )
+    })?;
+    validate_registryctl_image_lock(&image_lock).with_context(|| {
+        format!(
+            "registryctl image lock validation failed for {}; {guidance}",
+            path.display()
+        )
+    })?;
+    Ok(image_lock)
+}
+
+fn validate_registryctl_image_lock(image_lock: &RegistryctlImageLock) -> Result<()> {
+    if image_lock.schema_version != IMAGE_LOCK_SCHEMA_VERSION {
+        bail!(
+            "schema_version must be {IMAGE_LOCK_SCHEMA_VERSION:?}, got {:?}",
+            image_lock.schema_version
+        );
+    }
+    let expected_release_tag = format!("v{}", env!("CARGO_PKG_VERSION"));
+    if image_lock.release_tag != expected_release_tag {
+        bail!(
+            "release_tag must exactly match registryctl version {expected_release_tag:?}, got {:?}",
+            image_lock.release_tag
+        );
+    }
+    validate_lowercase_commit("manifest_source_ref", &image_lock.manifest_source_ref)?;
+    validate_lowercase_commit("tag_target", &image_lock.tag_target)?;
+    if image_lock.platform != LINUX_AMD64_PLATFORM {
+        bail!(
+            "platform must be {LINUX_AMD64_PLATFORM:?}, got {:?}",
+            image_lock.platform
+        );
+    }
+    validate_locked_image_ref(
+        "images.registry-relay",
+        &image_lock.images.registry_relay,
+        RELAY_IMAGE_REPOSITORY,
+    )?;
+    validate_locked_image_ref(
+        "images.registry-notary",
+        &image_lock.images.registry_notary,
+        NOTARY_IMAGE_REPOSITORY,
+    )?;
+    Ok(())
+}
+
+fn validate_lowercase_commit(field: &str, value: &str) -> Result<()> {
+    if value.len() != 40
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        bail!("{field} must contain exactly 40 lowercase hexadecimal characters");
+    }
+    Ok(())
+}
+
+fn validate_locked_image_ref(field: &str, value: &str, repository: &str) -> Result<()> {
+    let prefix = format!("{repository}@sha256:");
+    let digest = value.strip_prefix(&prefix).ok_or_else(|| {
+        anyhow!("{field} must use the literal repository {repository:?} and a sha256 digest")
+    })?;
+    if digest.len() != 64
+        || !digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        bail!("{field} digest must contain exactly 64 lowercase hexadecimal characters");
+    }
+    Ok(())
+}
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub enum NotarySource {
@@ -920,19 +1108,32 @@ fn signing_algorithm_label(algorithm: SigningAlgorithm) -> &'static str {
     }
 }
 
-pub fn init_spreadsheet_api(dir: &Path, sample: Sample) -> Result<()> {
+pub fn init_spreadsheet_api(
+    dir: &Path,
+    sample: Sample,
+    image_lock: &RegistryctlImageLock,
+) -> Result<()> {
     match sample {
-        Sample::Benefits => init_benefits_project(dir),
+        Sample::Benefits => init_benefits_project(dir, image_lock),
     }
 }
 
-pub fn init_notary_project(dir: &Path, options: NotaryInitOptions) -> Result<()> {
-    init_standalone_notary_project(dir, options)
+pub fn init_notary_project(
+    dir: &Path,
+    options: NotaryInitOptions,
+    image_lock: &RegistryctlImageLock,
+) -> Result<()> {
+    init_standalone_notary_project(dir, options, image_lock)
 }
 
-pub fn add_notary(project_dir: &Path, from: NotarySource, force: bool) -> Result<()> {
+pub fn add_notary(
+    project_dir: &Path,
+    from: NotarySource,
+    force: bool,
+    image_lock: &RegistryctlImageLock,
+) -> Result<()> {
     match from {
-        NotarySource::LocalRelay => add_notary_from_local_relay(project_dir, force),
+        NotarySource::LocalRelay => add_notary_from_local_relay(project_dir, force, image_lock),
     }
 }
 
@@ -1968,7 +2169,7 @@ impl SecretRedactor {
     }
 }
 
-fn init_benefits_project(dir: &Path) -> Result<()> {
+fn init_benefits_project(dir: &Path, image_lock: &RegistryctlImageLock) -> Result<()> {
     if dir.exists() {
         let mut entries =
             fs::read_dir(dir).with_context(|| format!("failed to inspect {}", dir.display()))?;
@@ -1990,9 +2191,9 @@ fn init_benefits_project(dir: &Path) -> Result<()> {
     let credentials = LocalCredentials::generate()?;
     write_text(
         dir.join("registryctl.yaml"),
-        &registryctl_manifest(dir, ProjectManifestKind::Relay)?,
+        &registryctl_manifest(dir, ProjectManifestKind::Relay, image_lock)?,
     )?;
-    write_text(dir.join("compose.yaml"), &compose_yaml(false))?;
+    write_text(dir.join("compose.yaml"), &compose_yaml(false, image_lock))?;
     write_text(dir.join("README.md"), project_readme())?;
     write_text(dir.join(".gitignore"), include_str!("templates/gitignore"))?;
     write_text(dir.join("relay/config.yaml"), &relay_config(&credentials))?;
@@ -2003,7 +2204,11 @@ fn init_benefits_project(dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn init_standalone_notary_project(dir: &Path, options: NotaryInitOptions) -> Result<()> {
+fn init_standalone_notary_project(
+    dir: &Path,
+    options: NotaryInitOptions,
+    image_lock: &RegistryctlImageLock,
+) -> Result<()> {
     if dir.exists() {
         let mut entries =
             fs::read_dir(dir).with_context(|| format!("failed to inspect {}", dir.display()))?;
@@ -2043,11 +2248,12 @@ fn init_standalone_notary_project(dir: &Path, options: NotaryInitOptions) -> Res
         &registryctl_manifest(
             dir,
             ProjectManifestKind::StandaloneNotary { options: &options },
+            image_lock,
         )?,
     )?;
     write_text(
         dir.join("compose.yaml"),
-        &compose_notary_only_yaml(options.source_network.as_deref()),
+        &compose_notary_only_yaml(options.source_network.as_deref(), image_lock),
     )?;
     write_text(dir.join("README.md"), standalone_notary_readme())?;
     write_text(dir.join(".gitignore"), include_str!("templates/gitignore"))?;
@@ -2064,7 +2270,11 @@ fn init_standalone_notary_project(dir: &Path, options: NotaryInitOptions) -> Res
     Ok(())
 }
 
-fn add_notary_from_local_relay(project_dir: &Path, force: bool) -> Result<()> {
+fn add_notary_from_local_relay(
+    project_dir: &Path,
+    force: bool,
+    image_lock: &RegistryctlImageLock,
+) -> Result<()> {
     let project = Project::load(project_dir)?;
     let notary_config_path = project_dir.join("notary/config.yaml");
     if project.notary.is_some() && !force {
@@ -2099,9 +2309,16 @@ fn add_notary_from_local_relay(project_dir: &Path, force: bool) -> Result<()> {
     )?;
     write_text(
         project_dir.join("registryctl.yaml"),
-        &registryctl_manifest(project_dir, ProjectManifestKind::RelayWithNotary)?,
+        &registryctl_manifest(
+            project_dir,
+            ProjectManifestKind::RelayWithNotary,
+            image_lock,
+        )?,
     )?;
-    write_text(project_dir.join("compose.yaml"), &compose_yaml(true))?;
+    write_text(
+        project_dir.join("compose.yaml"),
+        &compose_yaml(true, image_lock),
+    )?;
     write_text(
         secrets_path,
         &upsert_env_values(&secrets_contents, &notary_credentials.env_values()),
@@ -4169,8 +4386,16 @@ fn compose_platform_override(
 }
 
 fn project_uses_amd64_only_release_image(project: &Project) -> bool {
-    project.runtime.relay_image.as_deref() == Some(RELAY_IMAGE)
-        || project.runtime.notary_image.as_deref() == Some(NOTARY_IMAGE)
+    project
+        .runtime
+        .relay_image
+        .as_deref()
+        .is_some_and(|image| image.starts_with(&format!("{RELAY_IMAGE_REPOSITORY}@sha256:")))
+        || project
+            .runtime
+            .notary_image
+            .as_deref()
+            .is_some_and(|image| image.starts_with(&format!("{NOTARY_IMAGE_REPOSITORY}@sha256:")))
 }
 
 fn is_linux_arm64_platform(platform: &str) -> bool {
@@ -4523,7 +4748,11 @@ enum ProjectManifestKind<'a> {
     StandaloneNotary { options: &'a NotaryInitOptions },
 }
 
-fn registryctl_manifest(dir: &Path, kind: ProjectManifestKind<'_>) -> Result<String> {
+fn registryctl_manifest(
+    dir: &Path,
+    kind: ProjectManifestKind<'_>,
+    image_lock: &RegistryctlImageLock,
+) -> Result<String> {
     let name = dir
         .file_name()
         .and_then(|name| name.to_str())
@@ -4588,9 +4817,9 @@ fn registryctl_manifest(dir: &Path, kind: ProjectManifestKind<'_>) -> Result<Str
         runtime: RuntimeSection {
             engine: "docker_compose",
             compose_file: "compose.yaml",
-            relay_image: include_relay.then_some(RELAY_IMAGE),
+            relay_image: include_relay.then(|| image_lock.relay_image()),
             relay_base_url: include_relay.then_some(RELAY_BASE_URL),
-            notary_image: include_notary.then_some(NOTARY_IMAGE),
+            notary_image: include_notary.then(|| image_lock.notary_image()),
             notary_base_url: include_notary.then_some(NOTARY_BASE_URL),
         },
         relay: include_relay.then_some(RelaySection {
@@ -4607,16 +4836,21 @@ fn registryctl_manifest(dir: &Path, kind: ProjectManifestKind<'_>) -> Result<Str
     serde_yaml::to_string(&manifest).context("failed to render registryctl manifest")
 }
 
-fn compose_yaml(include_notary: bool) -> String {
+fn compose_yaml(include_notary: bool, image_lock: &RegistryctlImageLock) -> String {
     if include_notary {
         include_str!("templates/compose-with-notary.yaml")
+            .replace("{{relay_image}}", image_lock.relay_image())
+            .replace("{{notary_image}}", image_lock.notary_image())
             .replace("{{notary_redis_image}}", NOTARY_REDIS_IMAGE)
     } else {
-        include_str!("templates/compose.yaml").to_string()
+        include_str!("templates/compose.yaml").replace("{{relay_image}}", image_lock.relay_image())
     }
 }
 
-fn compose_notary_only_yaml(source_network: Option<&str>) -> String {
+fn compose_notary_only_yaml(
+    source_network: Option<&str>,
+    image_lock: &RegistryctlImageLock,
+) -> String {
     let (service_networks, networks) = match source_network {
         Some(name) => (
             "    networks:\n      - default\n      - source_api\n",
@@ -4625,6 +4859,7 @@ fn compose_notary_only_yaml(source_network: Option<&str>) -> String {
         None => ("", String::new()),
     };
     include_str!("templates/compose-notary.yaml")
+        .replace("{{notary_image}}", image_lock.notary_image())
         .replace("{{notary_redis_image}}", NOTARY_REDIS_IMAGE)
         .replace("{{source_network_service}}", service_networks)
         .replace("{{source_networks}}", &networks)
@@ -5121,6 +5356,194 @@ mod tests {
     use super::*;
 
     const TEST_PRIVATE_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"registryctl-test-private-key"}"#;
+    const TEST_RELAY_IMAGE: &str = "ghcr.io/registrystack/registry-relay@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const TEST_NOTARY_IMAGE: &str = "ghcr.io/registrystack/registry-notary@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    fn test_image_lock() -> RegistryctlImageLock {
+        RegistryctlImageLock {
+            schema_version: IMAGE_LOCK_SCHEMA_VERSION.to_string(),
+            release_tag: format!("v{}", env!("CARGO_PKG_VERSION")),
+            manifest_source_ref: "a".repeat(40),
+            tag_target: "b".repeat(40),
+            platform: LINUX_AMD64_PLATFORM.to_string(),
+            images: RegistryctlLockedImages {
+                registry_relay: TEST_RELAY_IMAGE.to_string(),
+                registry_notary: TEST_NOTARY_IMAGE.to_string(),
+            },
+        }
+    }
+
+    fn test_image_lock_json() -> serde_json::Value {
+        serde_json::json!({
+            "schema_version": IMAGE_LOCK_SCHEMA_VERSION,
+            "release_tag": format!("v{}", env!("CARGO_PKG_VERSION")),
+            "manifest_source_ref": "a".repeat(40),
+            "tag_target": "b".repeat(40),
+            "platform": LINUX_AMD64_PLATFORM,
+            "images": {
+                "registry-relay": TEST_RELAY_IMAGE,
+                "registry-notary": TEST_NOTARY_IMAGE,
+            }
+        })
+    }
+
+    fn write_test_image_lock(temp: &TempDir, value: &serde_json::Value) -> PathBuf {
+        let executable = temp.path().join("registryctl");
+        fs::write(&executable, b"test binary").unwrap();
+        fs::write(
+            temp.path().join(registryctl_image_lock_filename()),
+            serde_json::to_vec(value).unwrap(),
+        )
+        .unwrap();
+        executable
+    }
+
+    #[test]
+    fn image_lock_loads_strict_versioned_file_beside_executable() {
+        let temp = TempDir::new().unwrap();
+        let executable = write_test_image_lock(&temp, &test_image_lock_json());
+
+        let image_lock = load_registryctl_image_lock_beside(&executable).unwrap();
+
+        assert_eq!(image_lock, test_image_lock());
+    }
+
+    #[test]
+    fn image_lock_rejects_unknown_root_and_image_fields() {
+        for (field_path, value) in [
+            ("root", serde_json::json!(true)),
+            ("images", serde_json::json!(true)),
+        ] {
+            let temp = TempDir::new().unwrap();
+            let mut document = test_image_lock_json();
+            if field_path == "root" {
+                document["unexpected"] = value;
+            } else {
+                document["images"]["unexpected"] = value;
+            }
+            let executable = write_test_image_lock(&temp, &document);
+
+            let error = load_registryctl_image_lock_beside(&executable).unwrap_err();
+
+            assert!(
+                format!("{error:#}").contains("unknown field"),
+                "unexpected error: {error:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn image_lock_rejects_release_identity_and_platform_mismatches() {
+        for (field, invalid, expected) in [
+            ("release_tag", serde_json::json!("v9.9.9"), "release_tag"),
+            (
+                "manifest_source_ref",
+                serde_json::json!("A".repeat(40)),
+                "manifest_source_ref",
+            ),
+            (
+                "tag_target",
+                serde_json::json!("b".repeat(39)),
+                "tag_target",
+            ),
+            ("platform", serde_json::json!("linux/arm64"), "platform"),
+        ] {
+            let temp = TempDir::new().unwrap();
+            let mut document = test_image_lock_json();
+            document[field] = invalid;
+            let executable = write_test_image_lock(&temp, &document);
+
+            let error = load_registryctl_image_lock_beside(&executable).unwrap_err();
+
+            assert!(
+                format!("{error:#}").contains(expected),
+                "unexpected error: {error:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn image_lock_rejects_mutable_or_noncanonical_image_references() {
+        for (field, invalid) in [
+            (
+                "registry-relay",
+                "ghcr.io/registrystack/registry-relay:v0.8.4".to_string(),
+            ),
+            (
+                "registry-notary",
+                format!("ghcr.io/example/registry-notary@sha256:{}", "b".repeat(64)),
+            ),
+            (
+                "registry-relay",
+                format!(
+                    "ghcr.io/registrystack/registry-relay@sha256:{}",
+                    "A".repeat(64)
+                ),
+            ),
+        ] {
+            let temp = TempDir::new().unwrap();
+            let mut document = test_image_lock_json();
+            document["images"][field] = serde_json::json!(invalid);
+            let executable = write_test_image_lock(&temp, &document);
+
+            let error = load_registryctl_image_lock_beside(&executable).unwrap_err();
+
+            assert!(
+                format!("{error:#}").contains(&format!("images.{field}")),
+                "unexpected error: {error:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn image_lock_rejects_missing_nonregular_and_oversized_files() {
+        let missing = TempDir::new().unwrap();
+        let missing_executable = missing.path().join("registryctl");
+        fs::write(&missing_executable, b"test binary").unwrap();
+        let error = load_registryctl_image_lock_beside(&missing_executable).unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("image lock is missing"));
+        assert!(message.contains(IMAGE_LOCK_PATH_ENV));
+
+        let directory = TempDir::new().unwrap();
+        let executable = directory.path().join("registryctl");
+        fs::write(&executable, b"test binary").unwrap();
+        fs::create_dir(directory.path().join(registryctl_image_lock_filename())).unwrap();
+        let error = load_registryctl_image_lock_beside(&executable).unwrap_err();
+        assert!(format!("{error:#}").contains("must be a regular file"));
+
+        let oversized = TempDir::new().unwrap();
+        let executable = oversized.path().join("registryctl");
+        fs::write(&executable, b"test binary").unwrap();
+        fs::write(
+            oversized.path().join(registryctl_image_lock_filename()),
+            vec![b' '; IMAGE_LOCK_MAX_BYTES as usize + 1],
+        )
+        .unwrap();
+        let error = load_registryctl_image_lock_beside(&executable).unwrap_err();
+        assert!(format!("{error:#}").contains("exceeds the 16384-byte limit"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn image_lock_rejects_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().unwrap();
+        let executable = temp.path().join("registryctl");
+        let target = temp.path().join("lock-target.json");
+        fs::write(&executable, b"test binary").unwrap();
+        fs::write(
+            &target,
+            serde_json::to_vec(&test_image_lock_json()).unwrap(),
+        )
+        .unwrap();
+        symlink(&target, temp.path().join(registryctl_image_lock_filename())).unwrap();
+
+        let error = load_registryctl_image_lock_beside(&executable).unwrap_err();
+
+        assert!(format!("{error:#}").contains("must be a regular file"));
+    }
 
     #[test]
     fn config_bundle_sign_anchor_and_verify_round_trip() {
@@ -5810,7 +6233,7 @@ workflows:
         let temp = TempDir::new().unwrap();
         let project = temp.path().join("my-first-api");
 
-        init_spreadsheet_api(&project, Sample::Benefits).unwrap();
+        init_spreadsheet_api(&project, Sample::Benefits, &test_image_lock()).unwrap();
 
         for path in [
             "registryctl.yaml",
@@ -5898,7 +6321,7 @@ workflows:
     fn bruno_files_for_relay_project_are_generated_and_secret_scoped() {
         let temp = TempDir::new().unwrap();
         let project = temp.path().join("my-first-api");
-        init_spreadsheet_api(&project, Sample::Benefits).unwrap();
+        init_spreadsheet_api(&project, Sample::Benefits, &test_image_lock()).unwrap();
 
         let env = fs::read_to_string(project.join("secrets/local.env")).unwrap();
         let local_bru =
@@ -5939,8 +6362,14 @@ workflows:
     fn bruno_generation_after_notary_add_includes_notary_requests_without_raw_keys() {
         let temp = TempDir::new().unwrap();
         let project = temp.path().join("my-first-api");
-        init_spreadsheet_api(&project, Sample::Benefits).unwrap();
-        add_notary(&project, NotarySource::LocalRelay, false).unwrap();
+        init_spreadsheet_api(&project, Sample::Benefits, &test_image_lock()).unwrap();
+        add_notary(
+            &project,
+            NotarySource::LocalRelay,
+            false,
+            &test_image_lock(),
+        )
+        .unwrap();
 
         let env = fs::read_to_string(project.join("secrets/local.env")).unwrap();
         let local_bru =
@@ -5970,7 +6399,7 @@ workflows:
     fn bruno_generate_is_idempotent_for_generated_files() {
         let temp = TempDir::new().unwrap();
         let project = temp.path().join("my-first-api");
-        init_spreadsheet_api(&project, Sample::Benefits).unwrap();
+        init_spreadsheet_api(&project, Sample::Benefits, &test_image_lock()).unwrap();
 
         let before =
             fs::read_to_string(project.join("bruno/registry-api/Relay/Health.bru")).unwrap();
@@ -6000,6 +6429,7 @@ workflows:
                 source_claim_title: "Benefits person exists".to_string(),
                 smoke_target_id: "per-2001".to_string(),
             },
+            &test_image_lock(),
         )
         .unwrap();
 
@@ -6043,7 +6473,7 @@ workflows:
                 .unwrap();
         assert!(manifest.get("relay").is_none());
         assert_eq!(manifest["project"]["kind"], "notary");
-        assert_eq!(manifest["runtime"]["notary_image"], NOTARY_IMAGE);
+        assert_eq!(manifest["runtime"]["notary_image"], TEST_NOTARY_IMAGE);
         assert_eq!(manifest["runtime"]["notary_base_url"], NOTARY_BASE_URL);
         assert_eq!(manifest["notary"]["source"], "registry_data_api");
         assert_eq!(
@@ -6102,6 +6532,7 @@ workflows:
                 source_claim_title: "Patient record exists".to_string(),
                 smoke_target_id: "person-123".to_string(),
             },
+            &test_image_lock(),
         )
         .unwrap();
 
@@ -6197,6 +6628,7 @@ workflows:
                 source_claim_title: "OpenCRVS birth record exists".to_string(),
                 smoke_target_id: "UIN-2001".to_string(),
             },
+            &test_image_lock(),
         )
         .unwrap();
 
@@ -6310,7 +6742,7 @@ workflows:
     fn manifest_pins_image_and_records_base_url() {
         let temp = TempDir::new().unwrap();
         let project = temp.path().join("my-first-api");
-        init_spreadsheet_api(&project, Sample::Benefits).unwrap();
+        init_spreadsheet_api(&project, Sample::Benefits, &test_image_lock()).unwrap();
 
         let manifest: Value =
             serde_yaml::from_str(&fs::read_to_string(project.join("registryctl.yaml")).unwrap())
@@ -6323,7 +6755,7 @@ workflows:
         );
         assert_eq!(manifest["runtime"]["relay_base_url"], RELAY_BASE_URL);
         assert!(manifest["relay"].get("metadata").is_none());
-        assert!(compose.contains(&format!("image: {RELAY_IMAGE}")));
+        assert!(compose.contains(&format!("image: {TEST_RELAY_IMAGE}")));
         assert!(!compose.contains("metadata.yaml"));
         assert!(!compose.contains("registry-relay:snapshot"));
         assert!(!compose.contains("registry-relay:latest"));
@@ -6333,7 +6765,7 @@ workflows:
     fn compose_platform_override_targets_amd64_for_arm64_relay_project() {
         let temp = TempDir::new().unwrap();
         let project_dir = temp.path().join("my-first-api");
-        init_spreadsheet_api(&project_dir, Sample::Benefits).unwrap();
+        init_spreadsheet_api(&project_dir, Sample::Benefits, &test_image_lock()).unwrap();
         let project = Project::load(&project_dir).unwrap();
 
         assert_eq!(
@@ -6354,7 +6786,7 @@ workflows:
     fn compose_platform_override_respects_operator_platform() {
         let temp = TempDir::new().unwrap();
         let project_dir = temp.path().join("my-first-api");
-        init_spreadsheet_api(&project_dir, Sample::Benefits).unwrap();
+        init_spreadsheet_api(&project_dir, Sample::Benefits, &test_image_lock()).unwrap();
         let project = Project::load(&project_dir).unwrap();
 
         assert_eq!(
@@ -6367,7 +6799,8 @@ workflows:
     fn compose_platform_override_targets_amd64_for_arm64_notary_project() {
         let temp = TempDir::new().unwrap();
         let project_dir = temp.path().join("my-notary");
-        init_standalone_notary_project(&project_dir, default_notary_options()).unwrap();
+        init_standalone_notary_project(&project_dir, default_notary_options(), &test_image_lock())
+            .unwrap();
         let project = Project::load(&project_dir).unwrap();
 
         assert_eq!(
@@ -6380,7 +6813,7 @@ workflows:
     fn relay_only_manifest_loads_without_notary_section() {
         let temp = TempDir::new().unwrap();
         let project = temp.path().join("my-first-api");
-        init_spreadsheet_api(&project, Sample::Benefits).unwrap();
+        init_spreadsheet_api(&project, Sample::Benefits, &test_image_lock()).unwrap();
 
         Project::load(&project).unwrap();
 
@@ -6580,8 +7013,14 @@ workflows:
     fn manifest_after_notary_add_records_relay_plus_notary() {
         let temp = TempDir::new().unwrap();
         let project = temp.path().join("my-first-api");
-        init_spreadsheet_api(&project, Sample::Benefits).unwrap();
-        add_notary(&project, NotarySource::LocalRelay, false).unwrap();
+        init_spreadsheet_api(&project, Sample::Benefits, &test_image_lock()).unwrap();
+        add_notary(
+            &project,
+            NotarySource::LocalRelay,
+            false,
+            &test_image_lock(),
+        )
+        .unwrap();
 
         let manifest: Value =
             serde_yaml::from_str(&fs::read_to_string(project.join("registryctl.yaml")).unwrap())
@@ -6613,8 +7052,14 @@ workflows:
     fn relay_plus_notary_local_demo_has_no_external_auth_dependencies() {
         let temp = TempDir::new().unwrap();
         let project = temp.path().join("my-first-api");
-        init_spreadsheet_api(&project, Sample::Benefits).unwrap();
-        add_notary(&project, NotarySource::LocalRelay, false).unwrap();
+        init_spreadsheet_api(&project, Sample::Benefits, &test_image_lock()).unwrap();
+        add_notary(
+            &project,
+            NotarySource::LocalRelay,
+            false,
+            &test_image_lock(),
+        )
+        .unwrap();
 
         for path in [
             "registryctl.yaml",
@@ -6663,12 +7108,18 @@ workflows:
     fn add_notary_backfills_relay_state_for_older_generated_projects() {
         let temp = TempDir::new().unwrap();
         let project = temp.path().join("my-first-api");
-        init_spreadsheet_api(&project, Sample::Benefits).unwrap();
+        init_spreadsheet_api(&project, Sample::Benefits, &test_image_lock()).unwrap();
         fs::remove_dir_all(project.join("state")).unwrap();
         fs::remove_file(project.join(".env")).unwrap();
         fs::write(project.join(".gitignore"), "secrets/\ncustom-output/\n").unwrap();
 
-        add_notary(&project, NotarySource::LocalRelay, false).unwrap();
+        add_notary(
+            &project,
+            NotarySource::LocalRelay,
+            false,
+            &test_image_lock(),
+        )
+        .unwrap();
 
         for path in [
             "state/relay/cache",
@@ -6709,13 +7160,19 @@ workflows:
     fn compose_after_notary_add_includes_digest_pinned_notary_service() {
         let temp = TempDir::new().unwrap();
         let project = temp.path().join("my-first-api");
-        init_spreadsheet_api(&project, Sample::Benefits).unwrap();
-        add_notary(&project, NotarySource::LocalRelay, false).unwrap();
+        init_spreadsheet_api(&project, Sample::Benefits, &test_image_lock()).unwrap();
+        add_notary(
+            &project,
+            NotarySource::LocalRelay,
+            false,
+            &test_image_lock(),
+        )
+        .unwrap();
 
         let compose = fs::read_to_string(project.join("compose.yaml")).unwrap();
 
         assert!(compose.contains("registry-notary:"));
-        assert!(compose.contains(&format!("image: {NOTARY_IMAGE}")));
+        assert!(compose.contains(&format!("image: {TEST_NOTARY_IMAGE}")));
         assert!(!compose.contains("registry-notary:snapshot"));
         assert!(!compose.contains("registry-notary:latest"));
         assert!(compose.contains("registry-notary-redis:"));
@@ -6735,8 +7192,14 @@ workflows:
     fn notary_config_after_add_uses_local_relay_registry_data_api() {
         let temp = TempDir::new().unwrap();
         let project = temp.path().join("my-first-api");
-        init_spreadsheet_api(&project, Sample::Benefits).unwrap();
-        add_notary(&project, NotarySource::LocalRelay, false).unwrap();
+        init_spreadsheet_api(&project, Sample::Benefits, &test_image_lock()).unwrap();
+        add_notary(
+            &project,
+            NotarySource::LocalRelay,
+            false,
+            &test_image_lock(),
+        )
+        .unwrap();
 
         let notary_config_path = project.join("notary/config.yaml");
 
@@ -6826,8 +7289,14 @@ workflows:
     fn local_relay_notary_config_permits_tutorial_purpose() {
         let temp = TempDir::new().unwrap();
         let project = temp.path().join("my-first-api");
-        init_spreadsheet_api(&project, Sample::Benefits).unwrap();
-        add_notary(&project, NotarySource::LocalRelay, false).unwrap();
+        init_spreadsheet_api(&project, Sample::Benefits, &test_image_lock()).unwrap();
+        add_notary(
+            &project,
+            NotarySource::LocalRelay,
+            false,
+            &test_image_lock(),
+        )
+        .unwrap();
 
         let notary_config = fs::read_to_string(project.join("notary/config.yaml")).unwrap();
         let parsed_config: registry_notary_core::StandaloneRegistryNotaryConfig =
@@ -6854,7 +7323,8 @@ workflows:
     fn standalone_notary_config_permits_tutorial_purpose() {
         let temp = TempDir::new().unwrap();
         let project = temp.path().join("my-notary");
-        init_standalone_notary_project(&project, default_notary_options()).unwrap();
+        init_standalone_notary_project(&project, default_notary_options(), &test_image_lock())
+            .unwrap();
 
         let notary_config = fs::read_to_string(project.join("notary/config.yaml")).unwrap();
         let parsed_config: registry_notary_core::StandaloneRegistryNotaryConfig =
@@ -6879,8 +7349,14 @@ workflows:
     fn local_env_after_notary_add_appends_notary_and_source_tokens() {
         let temp = TempDir::new().unwrap();
         let project = temp.path().join("my-first-api");
-        init_spreadsheet_api(&project, Sample::Benefits).unwrap();
-        add_notary(&project, NotarySource::LocalRelay, false).unwrap();
+        init_spreadsheet_api(&project, Sample::Benefits, &test_image_lock()).unwrap();
+        add_notary(
+            &project,
+            NotarySource::LocalRelay,
+            false,
+            &test_image_lock(),
+        )
+        .unwrap();
 
         let local_env = fs::read_to_string(project.join("secrets/local.env")).unwrap();
         let notary_config_path = project.join("notary/config.yaml");
@@ -6910,12 +7386,18 @@ workflows:
     fn add_notary_refuses_to_overwrite_existing_notary_files() {
         let temp = TempDir::new().unwrap();
         let project = temp.path().join("my-first-api");
-        init_spreadsheet_api(&project, Sample::Benefits).unwrap();
+        init_spreadsheet_api(&project, Sample::Benefits, &test_image_lock()).unwrap();
         fs::create_dir_all(project.join("notary")).unwrap();
         let marker_path = project.join("notary/config.yaml");
         fs::write(&marker_path, "user-owned notary config\n").unwrap();
 
-        let error = add_notary(&project, NotarySource::LocalRelay, false).unwrap_err();
+        let error = add_notary(
+            &project,
+            NotarySource::LocalRelay,
+            false,
+            &test_image_lock(),
+        )
+        .unwrap_err();
 
         assert!(
             error.to_string().contains("notary/config.yaml")
@@ -6932,8 +7414,14 @@ workflows:
     fn notary_smoke_project_writes_redacted_failure_report() {
         let temp = TempDir::new().unwrap();
         let project_dir = temp.path().join("my-first-api");
-        init_spreadsheet_api(&project_dir, Sample::Benefits).unwrap();
-        add_notary(&project_dir, NotarySource::LocalRelay, false).unwrap();
+        init_spreadsheet_api(&project_dir, Sample::Benefits, &test_image_lock()).unwrap();
+        add_notary(
+            &project_dir,
+            NotarySource::LocalRelay,
+            false,
+            &test_image_lock(),
+        )
+        .unwrap();
 
         let error = notary_smoke_project(&project_dir).unwrap_err();
         assert!(error
@@ -6955,7 +7443,7 @@ workflows:
     fn generated_gitignore_excludes_local_secrets_and_output() {
         let temp = TempDir::new().unwrap();
         let project = temp.path().join("my-first-api");
-        init_spreadsheet_api(&project, Sample::Benefits).unwrap();
+        init_spreadsheet_api(&project, Sample::Benefits, &test_image_lock()).unwrap();
 
         let gitignore = fs::read_to_string(project.join(".gitignore")).unwrap();
         assert!(gitignore.lines().any(|line| line == ".env"));
@@ -6968,7 +7456,7 @@ workflows:
     fn generated_credentials_reference_fingerprints_without_commitments() {
         let temp = TempDir::new().unwrap();
         let project = temp.path().join("my-first-api");
-        init_spreadsheet_api(&project, Sample::Benefits).unwrap();
+        init_spreadsheet_api(&project, Sample::Benefits, &test_image_lock()).unwrap();
 
         let env = fs::read_to_string(project.join("secrets/local.env")).unwrap();
         let config = fs::read_to_string(project.join("relay/config.yaml")).unwrap();
@@ -6997,7 +7485,7 @@ workflows:
     fn generated_fingerprint_preflight_passes_for_clean_project() {
         let temp = TempDir::new().unwrap();
         let project_dir = temp.path().join("my-first-api");
-        init_spreadsheet_api(&project_dir, Sample::Benefits).unwrap();
+        init_spreadsheet_api(&project_dir, Sample::Benefits, &test_image_lock()).unwrap();
 
         let project = Project::load(&project_dir).unwrap();
         validate_project_fingerprints(&project_dir, &project).unwrap();
@@ -7012,7 +7500,7 @@ workflows:
         ] {
             let temp = TempDir::new().unwrap();
             let project_dir = temp.path().join("my-first-api");
-            init_spreadsheet_api(&project_dir, Sample::Benefits).unwrap();
+            init_spreadsheet_api(&project_dir, Sample::Benefits, &test_image_lock()).unwrap();
 
             let env_path = project_dir.join("secrets/local.env");
             let mut env = fs::read_to_string(&env_path).unwrap();
@@ -7040,7 +7528,7 @@ workflows:
         ] {
             let temp = TempDir::new().unwrap();
             let project_dir = temp.path().join("my-first-api");
-            init_spreadsheet_api(&project_dir, Sample::Benefits).unwrap();
+            init_spreadsheet_api(&project_dir, Sample::Benefits, &test_image_lock()).unwrap();
 
             let env_path = project_dir.join("secrets/local.env");
             let env = fs::read_to_string(&env_path).unwrap();
@@ -7063,7 +7551,7 @@ workflows:
     fn generated_public_files_do_not_contain_raw_keys_or_fingerprints() {
         let temp = TempDir::new().unwrap();
         let project = temp.path().join("my-first-api");
-        init_spreadsheet_api(&project, Sample::Benefits).unwrap();
+        init_spreadsheet_api(&project, Sample::Benefits, &test_image_lock()).unwrap();
 
         let env = fs::read_to_string(project.join("secrets/local.env")).unwrap();
         let secrets: BTreeSet<_> = env
@@ -7093,7 +7581,7 @@ workflows:
     fn generated_workbook_is_xlsx_with_benefits_sample_sheets() {
         let temp = TempDir::new().unwrap();
         let project = temp.path().join("my-first-api");
-        init_spreadsheet_api(&project, Sample::Benefits).unwrap();
+        init_spreadsheet_api(&project, Sample::Benefits, &test_image_lock()).unwrap();
 
         let workbook = fs::read(project.join("data/benefits_casework.xlsx")).unwrap();
         assert!(workbook.starts_with(b"PK"));
@@ -7181,7 +7669,7 @@ workflows:
     fn smoke_project_writes_redacted_failure_report() {
         let temp = TempDir::new().unwrap();
         let project_dir = temp.path().join("my-first-api");
-        init_spreadsheet_api(&project_dir, Sample::Benefits).unwrap();
+        init_spreadsheet_api(&project_dir, Sample::Benefits, &test_image_lock()).unwrap();
 
         let error = smoke_project(&project_dir).unwrap_err();
         assert!(error
@@ -7200,7 +7688,7 @@ workflows:
     fn doctor_invokes_relay_product_for_relay_project() {
         let temp = TempDir::new().unwrap();
         let project_dir = temp.path().join("my-first-api");
-        init_spreadsheet_api(&project_dir, Sample::Benefits).unwrap();
+        init_spreadsheet_api(&project_dir, Sample::Benefits, &test_image_lock()).unwrap();
         let fake_bin = temp.path().join("bin");
         fs::create_dir_all(&fake_bin).unwrap();
         write_fake_product(
@@ -7246,7 +7734,7 @@ workflows:
     fn doctor_invokes_relay_product_with_profile_override() {
         let temp = TempDir::new().unwrap();
         let project_dir = temp.path().join("my-first-api");
-        init_spreadsheet_api(&project_dir, Sample::Benefits).unwrap();
+        init_spreadsheet_api(&project_dir, Sample::Benefits, &test_image_lock()).unwrap();
         let fake_bin = temp.path().join("bin");
         fs::create_dir_all(&fake_bin).unwrap();
         write_fake_product(
@@ -7286,8 +7774,14 @@ workflows:
     fn doctor_invokes_relay_and_notary_for_combined_project_with_profile_override() {
         let temp = TempDir::new().unwrap();
         let project_dir = temp.path().join("my-first-api");
-        init_spreadsheet_api(&project_dir, Sample::Benefits).unwrap();
-        add_notary(&project_dir, NotarySource::LocalRelay, false).unwrap();
+        init_spreadsheet_api(&project_dir, Sample::Benefits, &test_image_lock()).unwrap();
+        add_notary(
+            &project_dir,
+            NotarySource::LocalRelay,
+            false,
+            &test_image_lock(),
+        )
+        .unwrap();
         let fake_bin = temp.path().join("bin");
         fs::create_dir_all(&fake_bin).unwrap();
         write_fake_product(
@@ -7338,7 +7832,7 @@ workflows:
     fn doctor_invokes_only_notary_for_standalone_notary_project() {
         let temp = TempDir::new().unwrap();
         let project_dir = temp.path().join("notary-only");
-        init_notary_project(&project_dir, default_notary_options()).unwrap();
+        init_notary_project(&project_dir, default_notary_options(), &test_image_lock()).unwrap();
         let fake_bin = temp.path().join("bin");
         fs::create_dir_all(&fake_bin).unwrap();
         write_fake_product(
@@ -7365,7 +7859,7 @@ workflows:
     fn doctor_reports_missing_product_binary_without_panic() {
         let temp = TempDir::new().unwrap();
         let project_dir = temp.path().join("my-first-api");
-        init_spreadsheet_api(&project_dir, Sample::Benefits).unwrap();
+        init_spreadsheet_api(&project_dir, Sample::Benefits, &test_image_lock()).unwrap();
         let empty_path = temp.path().join("empty-path");
         fs::create_dir_all(&empty_path).unwrap();
 
@@ -7384,7 +7878,7 @@ workflows:
     fn doctor_reports_nonzero_product_exit_and_redacts_output() {
         let temp = TempDir::new().unwrap();
         let project_dir = temp.path().join("my-first-api");
-        init_spreadsheet_api(&project_dir, Sample::Benefits).unwrap();
+        init_spreadsheet_api(&project_dir, Sample::Benefits, &test_image_lock()).unwrap();
         let env = fs::read_to_string(project_dir.join("secrets/local.env")).unwrap();
         let secrets = env
             .lines()
@@ -7456,7 +7950,7 @@ workflows:
     fn doctor_extracts_structured_product_report_and_findings_after_redaction() {
         let temp = TempDir::new().unwrap();
         let project_dir = temp.path().join("my-first-api");
-        init_spreadsheet_api(&project_dir, Sample::Benefits).unwrap();
+        init_spreadsheet_api(&project_dir, Sample::Benefits, &test_image_lock()).unwrap();
         let env = fs::read_to_string(project_dir.join("secrets/local.env")).unwrap();
         let secret = env
             .lines()
@@ -7512,7 +8006,7 @@ workflows:
     fn doctor_extracts_notary_diagnostics_as_product_findings() {
         let temp = TempDir::new().unwrap();
         let project_dir = temp.path().join("notary-only");
-        init_notary_project(&project_dir, default_notary_options()).unwrap();
+        init_notary_project(&project_dir, default_notary_options(), &test_image_lock()).unwrap();
         let product_json = serde_json::json!({
             "schema_version": "registry.config.diagnostic_report.v1",
             "product": "registry-notary",
@@ -7563,7 +8057,7 @@ workflows:
         // silently dropped even though the product emitted it.
         let temp = TempDir::new().unwrap();
         let project_dir = temp.path().join("my-first-api");
-        init_spreadsheet_api(&project_dir, Sample::Benefits).unwrap();
+        init_spreadsheet_api(&project_dir, Sample::Benefits, &test_image_lock()).unwrap();
         let product_json = serde_json::json!({
             "schema_version": "registry.config.diagnostic_report.v1",
             "product": "registry-relay",
@@ -7610,7 +8104,7 @@ workflows:
     fn doctor_report_json_has_registryctl_schema() {
         let temp = TempDir::new().unwrap();
         let project_dir = temp.path().join("my-first-api");
-        init_spreadsheet_api(&project_dir, Sample::Benefits).unwrap();
+        init_spreadsheet_api(&project_dir, Sample::Benefits, &test_image_lock()).unwrap();
         let fake_bin = temp.path().join("bin");
         fs::create_dir_all(&fake_bin).unwrap();
         write_fake_product(

@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Release distributions now include a strict, versioned registryctl image lock
+  that binds the release source and exact Relay and Notary image digests. Project
+  generation fails before mutation when the matching lock is missing or invalid.
+
+### Changed
+
+- The installer checksum-verifies and installs the registryctl binary and image
+  lock together. Existing generated projects still start from their stored image
+  pins without consulting the lock.
+
 ### Fixed
 
 - Generated local Relay and Notary configs now declare `deployment.profile: local`,
@@ -13,6 +25,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Aggregated doctor JSON now preserves each product report's optional
   `audit_shipping` section and validates it against
   `registryctl.validation.report.v1`.
+- Generated project image pins now come from tag-built release evidence instead
+  of digests compiled into registryctl, closing the stale-pin failure tracked in
+  GH#278 without using mutable image tags or live registry lookup.
 
 ## [0.8.4] - 2026-07-04
 

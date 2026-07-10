@@ -102,6 +102,11 @@ jobs:
             echo "manifest=${manifest}"
           } >> "${GITHUB_OUTPUT}"
 
+      - name: Verify lock-bearing release version
+        run: |
+          release/scripts/registry-release verify-registryctl-image-lock-release-version \
+            --version "${{ steps.release.outputs.version }}"
+
       - name: Validate release manifest
         run: release/scripts/registry-release validate "${{ steps.release.outputs.manifest }}"
 
@@ -190,6 +195,12 @@ jobs:
           chmod 0755 dist/bin/* dist/image-bin/registry-notary dist/image-bin/registry-notary-openfn-sidecar dist/image-bin/registry-relay
           (cd dist/bin && sha256sum -- * > SHA256SUMS)
           (cd dist/image-bin && sha256sum -- * > SHA256SUMS)
+
+      - name: Verify built registryctl binary version
+        run: |
+          release/scripts/registry-release verify-registryctl-binary-version \
+            "dist/bin/registryctl-${{ needs.verify.outputs.tag }}-linux-amd64" \
+            --version "${{ needs.verify.outputs.version }}"
 
       - name: Upload binary artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -445,13 +456,43 @@ jobs:
           name: registry-stack-registryctl-linux-arm64
           path: dist/bin
 
-      - name: Refresh binary checksums
+      - name: Verify registryctl binary version
+        run: |
+          chmod 0755 "dist/bin/registryctl-${{ needs.verify.outputs.tag }}-linux-amd64"
+          release/scripts/registry-release verify-registryctl-binary-version \
+            "dist/bin/registryctl-${{ needs.verify.outputs.tag }}-linux-amd64" \
+            --version "${{ needs.verify.outputs.version }}"
+
+      - name: Download image evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: registry-stack-image-evidence
+          path: dist/image-evidence
+
+      - name: Render registryctl release image lock
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -d '' -t relay_digests < <(find dist/image-evidence -type f -name registry-relay.digest -print0)
+          mapfile -d '' -t notary_digests < <(find dist/image-evidence -type f -name registry-notary.digest -print0)
+          if [[ "${#relay_digests[@]}" -ne 1 || "${#notary_digests[@]}" -ne 1 ]]; then
+            echo "Expected exactly one Relay and one Notary digest evidence file" >&2
+            exit 1
+          fi
+          release/scripts/registry-release render-registryctl-image-lock \
+            "${{ needs.verify.outputs.manifest }}" \
+            --relay-digest "${relay_digests[0]}" \
+            --notary-digest "${notary_digests[0]}" \
+            --tag-target "${{ needs.verify.outputs.tag_target }}" \
+            --output "dist/bin/registryctl-${{ needs.verify.outputs.tag }}-image-lock.json"
+
+      - name: Refresh release file checksums
         shell: bash
         run: |
           set -euo pipefail
           # The hermetic builder's SHA256SUMS covers only the linux/amd64 binaries.
-          # Regenerate over the full dist/bin set so the macOS/arm64 binaries are
-          # checksummed for the release capsule, SHA256SUMS asset, and install.sh.
+          # Regenerate over the full dist/bin set so cross-platform binaries and
+          # the registryctl image lock are covered by the capsule and installer.
           (cd dist/bin && rm -f SHA256SUMS && sha256sum -- * > SHA256SUMS)
 
       - name: Install Syft
@@ -469,27 +510,21 @@ jobs:
           tar -xzf /tmp/registry-stack-tools/syft.tar.gz -C "${HOME}/.local/bin" syft
           echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
 
-      - name: Generate binary SBOMs
+      - name: Generate release file SBOMs
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p dist/binary-sbom
-          while IFS= read -r -d '' binary; do
-            asset="$(basename "${binary}")"
+          while IFS= read -r -d '' release_file; do
+            asset="$(basename "${release_file}")"
             sbom="dist/binary-sbom/${asset}.spdx.json"
-            syft "file:${binary}" -o "spdx-json=${sbom}"
-            digest="$(sha256sum "${binary}" | awk '{print $1}')"
+            syft "file:${release_file}" -o "spdx-json=${sbom}"
+            digest="$(sha256sum "${release_file}" | awk '{print $1}')"
             release/scripts/registry-release bind-spdx-file-subject \
               "${sbom}" \
               --file-name "${asset}" \
               --sha256 "${digest}"
           done < <(find dist/bin -maxdepth 1 -type f ! -name SHA256SUMS -print0 | sort -z)
-
-      - name: Download image evidence
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        with:
-          name: registry-stack-image-evidence
-          path: dist/image-evidence
 
       - name: Render release capsule
         shell: bash
@@ -509,7 +544,8 @@ jobs:
             --workflow-run-id "${{ github.run_id }}" \
             --default-branch-protection unverified \
             --repo . \
-            --default-branch origin/main
+            --default-branch origin/main \
+            --require-registryctl-image-lock
 
       - name: Generate provenance subjects
         id: provenance-subjects

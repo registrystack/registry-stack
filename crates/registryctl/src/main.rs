@@ -16,60 +16,70 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::UpdateCheck => registryctl::update_check(env!("CARGO_PKG_VERSION"))?,
         Commands::UpdateCheckRefresh => registryctl::refresh_update_check_cache()?,
-        Commands::Init { command } => match *command {
-            InitCommand::Relay { dir, sample } => {
-                registryctl::init_spreadsheet_api(&dir, sample)?;
+        Commands::Init { command } => {
+            let image_lock = registryctl::load_registryctl_image_lock()?;
+            match *command {
+                InitCommand::Relay { dir, sample } => {
+                    registryctl::init_spreadsheet_api(&dir, sample, &image_lock)?;
+                }
+                InitCommand::SpreadsheetApi { dir, sample } => {
+                    registryctl::init_spreadsheet_api(&dir, sample, &image_lock)?;
+                }
+                InitCommand::Notary {
+                    dir,
+                    source_kind,
+                    source_url,
+                    source_token_from_env,
+                    source_token_env,
+                    source_dataset,
+                    source_entity,
+                    source_lookup_field,
+                    source_network,
+                    source_claim,
+                    source_claim_title,
+                    smoke_target_id,
+                } => {
+                    registryctl::init_notary_project(
+                        &dir,
+                        NotaryInitOptions {
+                            source_kind,
+                            source_url: source_url
+                                .unwrap_or_else(|| source_kind.default_source_url().to_string()),
+                            source_token_from_env,
+                            source_token_env: source_token_env.unwrap_or_else(|| {
+                                source_kind.default_source_token_env().to_string()
+                            }),
+                            source_dataset: source_dataset.unwrap_or_else(|| {
+                                source_kind.default_source_dataset().to_string()
+                            }),
+                            source_entity: source_entity
+                                .unwrap_or_else(|| source_kind.default_source_entity().to_string()),
+                            source_lookup_field: source_lookup_field.unwrap_or_else(|| {
+                                source_kind.default_source_lookup_field().to_string()
+                            }),
+                            source_network,
+                            source_claim: source_claim
+                                .unwrap_or_else(|| source_kind.default_source_claim().to_string()),
+                            source_claim_title: source_claim_title.unwrap_or_else(|| {
+                                source_kind.default_source_claim_title().to_string()
+                            }),
+                            smoke_target_id: smoke_target_id.unwrap_or_else(|| {
+                                source_kind.default_smoke_target_id().to_string()
+                            }),
+                        },
+                        &image_lock,
+                    )?;
+                }
             }
-            InitCommand::SpreadsheetApi { dir, sample } => {
-                registryctl::init_spreadsheet_api(&dir, sample)?;
+        }
+        Commands::Add { command } => {
+            let image_lock = registryctl::load_registryctl_image_lock()?;
+            match command {
+                AddCommand::Notary { from, force } => {
+                    registryctl::add_notary(&std::env::current_dir()?, from, force, &image_lock)?;
+                }
             }
-            InitCommand::Notary {
-                dir,
-                source_kind,
-                source_url,
-                source_token_from_env,
-                source_token_env,
-                source_dataset,
-                source_entity,
-                source_lookup_field,
-                source_network,
-                source_claim,
-                source_claim_title,
-                smoke_target_id,
-            } => {
-                registryctl::init_notary_project(
-                    &dir,
-                    NotaryInitOptions {
-                        source_kind,
-                        source_url: source_url
-                            .unwrap_or_else(|| source_kind.default_source_url().to_string()),
-                        source_token_from_env,
-                        source_token_env: source_token_env
-                            .unwrap_or_else(|| source_kind.default_source_token_env().to_string()),
-                        source_dataset: source_dataset
-                            .unwrap_or_else(|| source_kind.default_source_dataset().to_string()),
-                        source_entity: source_entity
-                            .unwrap_or_else(|| source_kind.default_source_entity().to_string()),
-                        source_lookup_field: source_lookup_field.unwrap_or_else(|| {
-                            source_kind.default_source_lookup_field().to_string()
-                        }),
-                        source_network,
-                        source_claim: source_claim
-                            .unwrap_or_else(|| source_kind.default_source_claim().to_string()),
-                        source_claim_title: source_claim_title.unwrap_or_else(|| {
-                            source_kind.default_source_claim_title().to_string()
-                        }),
-                        smoke_target_id: smoke_target_id
-                            .unwrap_or_else(|| source_kind.default_smoke_target_id().to_string()),
-                    },
-                )?;
-            }
-        },
-        Commands::Add { command } => match command {
-            AddCommand::Notary { from, force } => {
-                registryctl::add_notary(&std::env::current_dir()?, from, force)?;
-            }
-        },
+        }
         Commands::Start => registryctl::start_project(&std::env::current_dir()?)?,
         Commands::Stop => registryctl::stop_project(&std::env::current_dir()?)?,
         Commands::Restart => registryctl::restart_project(&std::env::current_dir()?)?,

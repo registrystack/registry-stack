@@ -8,8 +8,10 @@ Install a pinned release without cloning this repo:
 curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/refs/tags/v0.8.4/crates/registryctl/install.sh | bash
 ```
 
-The quick installer verifies the downloaded binary against `SHA256SUMS` only.
-It does not verify cosign signatures or SLSA provenance; use
+The quick installer verifies downloaded release assets against `SHA256SUMS`
+only. It installs the binary for releases before `v0.9.0`; beginning with
+`v0.9.0`, it installs the binary and matching image lock beside each other. It
+does not verify cosign signatures or SLSA provenance; use
 [`release/VERIFY.md`](../../release/VERIFY.md) for release authenticity checks.
 
 Then create and start your first secured spreadsheet API:
@@ -52,17 +54,38 @@ The installer defaults to `v0.8.4`. To install a different pinned release, set
 `REGISTRYCTL_VERSION`:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/refs/tags/v0.8.4/crates/registryctl/install.sh | REGISTRYCTL_VERSION=vX.Y.Z bash
+curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/refs/tags/vX.Y.Z/crates/registryctl/install.sh | REGISTRYCTL_VERSION=vX.Y.Z bash
 ```
 
-The installer still fetches the script from `v0.8.4`; `REGISTRYCTL_VERSION`
-selects the release asset to install.
+Fetch the installer from the same pinned tag selected by
+`REGISTRYCTL_VERSION`. An older installer does not know the asset contract of a
+newer release.
 
 Prebuilt binaries are published for the `v0.8.4` stack release on Linux x86_64,
 Linux arm64, and macOS arm64. On other platforms, install from source with
 `cargo install --git https://github.com/registrystack/registry-stack --tag v0.8.4 registryctl --locked`.
 Intel macOS has no prebuilt binary for `v0.8.4`, so the installer stops after
 printing that Cargo command. It does not run the source build automatically.
+
+## Release image lock (`v0.9.0` and later)
+
+`registryctl init` and `registryctl add` read
+`registryctl-vX.Y.Z-image-lock.json` beside the running binary before writing
+project files. The strict lock binds the CLI release, source commit, tag target,
+`linux/amd64` platform, and exact Relay and Notary image digests. Registryctl
+does not discover images from mutable tags or a live registry.
+
+For `v0.9.0` and later, if you move or build the binary separately, place the
+checksum-verified image lock from the same release beside it. An operator or
+source test can set `REGISTRYCTL_IMAGE_LOCK` to an explicit verified lock path.
+Registryctl never searches the current working directory for a lock, and
+rejects a missing, mismatched, oversized, symlinked, or structurally invalid
+file.
+
+Existing projects do not need the lock for `start`, `stop`, `status`, or other
+runtime commands. They keep using the immutable image references already stored
+in `registryctl.yaml` and `compose.yaml`. A later `init` or `add` is a generation
+operation and requires the lock for that registryctl version.
 
 ## Update checks
 
@@ -133,16 +156,15 @@ shared crates have fresh release tags.
 
 ## End-to-end smoke
 
-The generated project uses the digest-pinned Registry Relay image recorded in the registryctl
-templates, not a floating image tag. With Docker Compose available, run:
+The generated project uses the digest-pinned Registry Relay image recorded in
+the matching registryctl release image lock, not a floating image tag. The
+source tutorial gate builds registryctl and the product images from the same
+checkout, places a strict test lock beside the binary, rebinds the generated
+project to those local images, and executes both reader tutorials. With Docker
+and the docs dependencies available, run:
 
 ```sh
-tmpdir="$(mktemp -d)"
-cargo run -- init relay "$tmpdir/my-first-api" --sample benefits
-cd "$tmpdir/my-first-api"
-registryctl doctor --profile local --format json
-registryctl start
-registryctl status
-registryctl smoke
-registryctl stop
+cd docs/site
+npm ci
+npm run check:tutorial:registryctl
 ```
