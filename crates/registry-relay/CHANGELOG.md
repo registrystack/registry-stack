@@ -76,6 +76,11 @@
   `/ready` is always excluded because appending a readiness audit record after
   its zero-backlog comparison would invalidate the next readiness probe.
 
+- BREAKING: Governed reads now ignore `x-registry-subject-ref`,
+  `x-registry-relationship`, `x-registry-on-behalf-of`, and
+  `x-registry-credential-format` unless the authenticated principal has the
+  exact `registry:trust:<field>:<value>` scope. These optional trust-context
+  fields are now scope-gated before policy evaluation.
 - BREAKING: Removed Relay-local credential issuance before 1.0. Relay no
   longer accepts `provenance` or entity `publicschema` config, no longer serves
   `/.well-known/did.json`, `/schemas/{claim_type}/{version}`, or

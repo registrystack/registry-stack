@@ -26,6 +26,10 @@ pub(crate) const TRUST_JURISDICTION_HEADER: &str = "x-registry-trust-jurisdictio
 pub(crate) const TRUST_ASSURANCE_HEADER: &str = "x-registry-trust-assurance";
 pub(crate) const TRUST_LEGAL_BASIS_HEADER: &str = "x-registry-trust-legal-basis";
 pub(crate) const TRUST_CONSENT_HEADER: &str = "x-registry-trust-consent";
+const TRUST_SUBJECT_REF_HEADER: &str = "x-registry-subject-ref";
+const TRUST_RELATIONSHIP_HEADER: &str = "x-registry-relationship";
+const TRUST_ON_BEHALF_OF_HEADER: &str = "x-registry-on-behalf-of";
+const TRUST_REQUESTED_CREDENTIAL_FORMAT_HEADER: &str = "x-registry-credential-format";
 const TRUST_SOURCE_OBSERVED_AT_UNIX_SECONDS_HEADER: &str =
     "x-registry-source-observed-at-unix-seconds";
 pub(crate) const TRUST_SOURCE_OBSERVED_AGE_SECONDS_HEADER: &str =
@@ -294,13 +298,36 @@ fn request_pdp_context(
         )
         .map(ToOwned::to_owned),
         requester_identity: principal.map(|principal| principal.principal_id.clone()),
-        subject_ref: trust_header_value(headers, "x-registry-subject-ref").map(ToOwned::to_owned),
-        relationship: trust_header_value(headers, "x-registry-relationship").map(ToOwned::to_owned),
-        on_behalf_of: trust_header_value(headers, "x-registry-on-behalf-of").map(ToOwned::to_owned),
+        subject_ref: verified_trust_header_value(
+            headers,
+            principal,
+            TRUST_SUBJECT_REF_HEADER,
+            "subject_ref",
+        )
+        .map(ToOwned::to_owned),
+        relationship: verified_trust_header_value(
+            headers,
+            principal,
+            TRUST_RELATIONSHIP_HEADER,
+            "relationship",
+        )
+        .map(ToOwned::to_owned),
+        on_behalf_of: verified_trust_header_value(
+            headers,
+            principal,
+            TRUST_ON_BEHALF_OF_HEADER,
+            "on_behalf_of",
+        )
+        .map(ToOwned::to_owned),
         requested_fact: Some(requested_fact.to_string()),
         requested_disclosure: Some(request_info.requested_disclosure.to_string()),
-        requested_credential_format: trust_header_value(headers, "x-registry-credential-format")
-            .map(ToOwned::to_owned),
+        requested_credential_format: verified_trust_header_value(
+            headers,
+            principal,
+            TRUST_REQUESTED_CREDENTIAL_FORMAT_HEADER,
+            "requested_credential_format",
+        )
+        .map(ToOwned::to_owned),
         source_binding: Some(source_binding.to_string()),
         route_identity: Some(request_info.route_identity.to_string()),
         checked_scopes: principal
@@ -764,6 +791,7 @@ fn hex_lower(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use crate::auth::{AuthMode, ScopeSet};
+    use axum::http::HeaderValue;
     use registry_manifest_core::OdrlEnforcementProfile;
 
     fn config_with_selector() -> Config {
@@ -1011,5 +1039,89 @@ datasets: []
             context.checked_scopes,
             BTreeSet::from(["social_registry:rows".to_string()])
         );
+    }
+
+    fn policy_input_context(scopes: &[&str]) -> PdpRequestContext {
+        let principal = Principal {
+            principal_id: "client-a".to_string(),
+            scopes: scopes.iter().copied().collect::<ScopeSet>(),
+            auth_mode: AuthMode::ApiKey,
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            TRUST_SUBJECT_REF_HEADER,
+            HeaderValue::from_static("subject:123"),
+        );
+        headers.insert(
+            TRUST_RELATIONSHIP_HEADER,
+            HeaderValue::from_static("guardian"),
+        );
+        headers.insert(
+            TRUST_ON_BEHALF_OF_HEADER,
+            HeaderValue::from_static("agency:benefits"),
+        );
+        headers.insert(
+            TRUST_REQUESTED_CREDENTIAL_FORMAT_HEADER,
+            HeaderValue::from_static("sd_jwt_vc"),
+        );
+        headers.insert(
+            TRUST_SOURCE_OBSERVED_AT_UNIX_SECONDS_HEADER,
+            HeaderValue::from_static("9999999999"),
+        );
+        let request_info = GovernedRequestInfo {
+            route_identity: "relay.entity.collection",
+            requested_disclosure: "entity_collection",
+            checked_scope: "social_registry:rows",
+            redaction_projection: GovernedRedactionProjection::EntityFields,
+        };
+
+        request_pdp_context(
+            "testing",
+            &headers,
+            Some(&principal),
+            "individual",
+            "relay:social_registry:individuals_table",
+            &request_info,
+        )
+        .expect("PDP context builds")
+    }
+
+    #[test]
+    fn request_pdp_context_ignores_policy_inputs_without_exact_value_scopes() {
+        let context = policy_input_context(&[
+            "social_registry:rows",
+            "registry:trust:subject_ref:subject:other",
+            "registry:trust:relationship:self",
+            "registry:trust:on_behalf_of:agency:other",
+            "registry:trust:requested_credential_format:jwt_vc_json",
+            "registry:trust:source_observed_at_unix_seconds:1",
+        ]);
+
+        assert_eq!(context.subject_ref, None);
+        assert_eq!(context.relationship, None);
+        assert_eq!(context.on_behalf_of, None);
+        assert_eq!(context.requested_credential_format, None);
+        assert_eq!(context.source_observed_at_unix_seconds, None);
+    }
+
+    #[test]
+    fn request_pdp_context_accepts_exact_value_scoped_policy_inputs() {
+        let context = policy_input_context(&[
+            "social_registry:rows",
+            "registry:trust:subject_ref:subject:123",
+            "registry:trust:relationship:guardian",
+            "registry:trust:on_behalf_of:agency:benefits",
+            "registry:trust:requested_credential_format:sd_jwt_vc",
+            "registry:trust:source_observed_at_unix_seconds:9999999999",
+        ]);
+
+        assert_eq!(context.subject_ref.as_deref(), Some("subject:123"));
+        assert_eq!(context.relationship.as_deref(), Some("guardian"));
+        assert_eq!(context.on_behalf_of.as_deref(), Some("agency:benefits"));
+        assert_eq!(
+            context.requested_credential_format.as_deref(),
+            Some("sd_jwt_vc")
+        );
+        assert_eq!(context.source_observed_at_unix_seconds, Some(9_999_999_999));
     }
 }

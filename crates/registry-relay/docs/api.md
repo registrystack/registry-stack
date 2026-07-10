@@ -163,6 +163,31 @@ Data-Purpose: https://data.example.gov/purposes/service-intake-check
 
 Use stable, reviewable purpose IRIs. Do not put secrets, bearer tokens, or personal data in this header; it is recorded in audit logs.
 
+## Governed request context
+
+Registry Relay treats client-supplied Policy Decision Point (PDP) context as
+untrusted. Relay passes each header in this table to the PDP only when the
+authenticated principal has the exact
+`registry:trust:<scope_field>:<header_value>` scope.
+
+| Header | Scope field | Classification |
+| --- | --- | --- |
+| `x-registry-subject-ref` | `subject_ref` | Scope-gated |
+| `x-registry-relationship` | `relationship` | Scope-gated |
+| `x-registry-on-behalf-of` | `on_behalf_of` | Scope-gated |
+| `x-registry-credential-format` | `requested_credential_format` | Scope-gated |
+| `x-registry-source-observed-at-unix-seconds` | `source_observed_at_unix_seconds` | Scope-gated |
+
+An absent or nonmatching scope makes the header absent from PDP context. A
+policy that requires the field or matches its value then denies the request.
+`Data-Purpose` remains a caller-stated purpose, not proof of identity,
+delegation, legal basis, consent, or source freshness.
+
+Policy authors must not make a Permit decision depend on unauthenticated
+request context. Use only server-derived context or values authenticated by an
+exact-value trust scope. An adapter that adds another client-supplied
+trust-context field must apply the same guard before the PDP evaluates it.
+
 ## Metadata, catalog, and OpenAPI
 
 `GET /metadata/catalog` and `GET /metadata/dcat/bregdcat-ap` return only datasets visible to the authenticated principal's metadata scopes.
