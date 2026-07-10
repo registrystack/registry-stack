@@ -109,7 +109,11 @@ What 1.0 promises the institutions that run this.
       anti-rollback monotonic rejection remain outside this run). Backup and
       restore guidance for generated and single-node deployments is documented
       in [`backup-and-restore.mdx`](../docs/site/src/content/docs/operate/backup-and-restore.mdx)
-      (#226).
+      (#226). The
+      [v0.8.4 -> v0.9.0 -> v0.8.4 procedure](exercises/upgrade-v0.8.4-to-v0.9.0.md)
+      records the beta-11 migration and rollback gate; it does not claim a
+      successful run until finalized-source and published-asset evidence are
+      added.
 - [ ] Single-node Compose deployment behind an institution-owned reverse proxy,
       IAM, and front rate limiter documented. Evidence:
       [`single-node-compose-behind-proxy.mdx`](../docs/site/src/content/docs/operate/single-node-compose-behind-proxy.mdx)

@@ -2,10 +2,46 @@
 
 ## Unreleased
 
+## 0.9.0
+
 - Production and evidence-grade deployments now fail closed until signer custody
   is explicitly approved for credential, access-token, and federation signing
   roles. `/ready` exposes typed, non-secret custody facts, while detailed
-  deployment findings remain on authenticated operator surfaces.
+  deployment findings remain on authenticated operator surfaces. Review each
+  role's custody and retain the evidence before setting
+  `deployment.evidence.signer_custody_approved: true`; the attestation is not a
+  gate bypass.
+- BREAKING: `deployment.profile` is required and must be one of `local`,
+  `hosted_lab`, `production`, or `evidence_grade`. Notary refuses startup when
+  it is absent instead of inferring a profile.
+- BREAKING: claim configuration is validated at load time. Duplicate claim ids,
+  invalid default disclosure modes, and rules referring to undeclared source
+  bindings must be corrected before Notary starts.
+- BREAKING: the TUF-era `/admin/v1/config/verify`,
+  `/admin/v1/config/dry-run`, and `/admin/v1/config/apply` endpoints are
+  removed, as is the CLI `config apply-bundle` command. First run
+  `registryctl bundle verify` for stateless signature and binding verification,
+  then place the signed Registry Config Bundle v1 on the Notary node. For a
+  genuinely absent, version-specific antirollback state path, start Notary with
+  `--initialize-state`; that boot verifies the bundle and initializes state.
+  Notary's read-only `config verify-bundle` command remains, but it requires
+  accepted state to exist, so use it only for later candidate validation and
+  restarts. Replace retired TUF-era fields inside `config_trust` with current
+  Config Bundle v1 trust fields because strict parsing rejects the old schema.
+  Hot apply is not supported. Back up the durable
+  `config_trust.antirollback_state_path` state and keep release-specific
+  restore sets. Restore the state belonging to the release during rollback;
+  never delete or reinitialize it to force an older bundle to load.
+- BREAKING: source-adapter sidecar configuration now rejects unknown keys.
+  Remove misspelled, retired, or wrapper-only fields before upgrading.
+- Evidence-grade deployments using audit shipping must configure a fresh
+  acknowledgement cursor. Local-only file retention is a hard gate and cannot
+  be waived.
+- Federation denials after request verification now preserve available redacted
+  peer, source-scope, profile, purpose, JTI, claim, and subject context in audit
+  records, including response-signing failures.
+- Added per-principal machine evaluation quotas and live audit-shipping health
+  in readiness, posture, and doctor output.
 
 ## 0.8.4
 
@@ -71,9 +107,12 @@
   signed TUF bundles, `config verify-bundle`, `config apply-bundle`, and
   `config_trust`.
   Current releases use Registry Config Bundle v1 instead: a local directory with
-  `manifest.json`, `manifest.sig.json`, and `config/...`, verified by
-  `config verify-bundle` and activated by placing the bundle on the node and
-  restarting the service.
+  `manifest.json`, `manifest.sig.json`, and `config/...`. Before a first boot,
+  `registryctl bundle verify` checks signatures and bindings without product
+  antirollback state. The first boot with genuinely absent state uses
+  `--initialize-state`; after state exists, the read-only product
+  `config verify-bundle` command supports later candidate validation and
+  restarts.
   There is no current `apply-bundle` command and no hot apply.
 - Added `server.admin_listener` to split admin and public HTTP topology. The
   `dedicated` mode serves `/admin/v1/*` and `/metrics` on a separate admin bind,

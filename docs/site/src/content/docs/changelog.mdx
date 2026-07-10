@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-docs
-last_reviewed: "2026-07-07"
+last_reviewed: "2026-07-10"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -15,6 +15,33 @@ This page records notable changes to the documentation site and the product vers
 documents.
 Per-product release notes live in each product repository; the entries below link to the
 relevant product pages on this site rather than duplicating release notes.
+
+## 2026-07-10
+
+Documentation updates for the v0.9.0 beta-11 release:
+
+- Advanced the active monorepo docs and source citations to RegistryStack `v0.9.0`.
+- Added the `v0.9.0` archived docset pinned to the beta-11 freeze source ref.
+- Updated registryctl install examples and current deployment tutorials to the `v0.9.0` release
+  tag while retaining the published v0.8.4 stale-digest workaround until tagged artifact proof
+  closes it.
+- Kept hosted first-run publication held while the credential failure in
+  [GH#330](https://github.com/registrystack/registry-stack/issues/330) and the complete
+  [GH#198](https://github.com/registrystack/registry-stack/issues/198) fresh-reader run remain open.
+
+Migration notes:
+
+- Registryctl project generation now requires the strict image lock from the same release beside
+  the binary, or at an explicitly verified `REGISTRYCTL_IMAGE_LOCK` path. Existing projects still
+  run from their stored immutable pins. See
+  [GH#339](https://github.com/registrystack/registry-stack/pull/339).
+- Relay passes a client-supplied trust-context header to the PDP only when the caller has the exact
+  `registry:trust:<field>:<value>` scope. Update caller scopes before relying on those fields;
+  their value-bearing audit scopes are now pseudonymized. See
+  [GH#338](https://github.com/registrystack/registry-stack/pull/338).
+- Notary federation denials now preserve their audit context. No new client request field is
+  required, but operators should retain the enriched denial records. See
+  [GH#337](https://github.com/registrystack/registry-stack/pull/337).
 
 ## 2026-07-04
 

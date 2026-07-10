@@ -28,7 +28,7 @@ OpenCRVS remains the evidence source, and Registry Notary evaluates the claim lo
 You need:
 
 - Docker with Compose v2.20 or later.
-- `registryctl` 0.8.4 or newer, with `init notary --source-kind opencrvs-dci` support.
+- `registryctl` 0.9.0, with `init notary --source-kind opencrvs-dci` support.
 - `curl` and `jq` for the explicit evaluation check.
 - The HTTPS base URL of your OpenCRVS test environment.
 - OpenCRVS OAuth client credentials for that environment.
@@ -36,14 +36,14 @@ You need:
 
 Install `registryctl` if you have not already:
 
-The quick installer verifies the downloaded binary against the release's
+The quick installer verifies the downloaded binary and release image lock against the release's
 `SHA256SUMS`; it does not authenticate the installer script or release. Before
 running it, review the available signature and provenance evidence in the
 canonical [`release/VERIFY.md`](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md)
 guide. Evidence availability varies by release, and `v0.8.0` is unsigned.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/refs/tags/v0.8.4/crates/registryctl/install.sh | REGISTRYCTL_VERSION=v0.8.4 bash
+curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/refs/tags/v0.9.0/crates/registryctl/install.sh | REGISTRYCTL_VERSION=v0.9.0 bash
 registryctl --version
 ```
 
@@ -119,7 +119,7 @@ Start the generated stack:
 registryctl start
 ```
 
-On Apple silicon, v0.8.4 images are published for linux/amd64 only. `registryctl start`
+On Apple silicon, v0.9.0 images are published for linux/amd64 only. `registryctl start`
 applies the amd64 platform override automatically and prints a notice; you can also set it
 explicitly:
 
@@ -256,8 +256,8 @@ For the mental model behind these blocks, see the Registry Notary
 | `registryctl notary smoke` or the explicit evaluation returns a source auth error | Registry Notary could not authenticate to OpenCRVS with the configured OAuth client credentials. | Confirm `DCI_CLIENT_ID` and `DCI_CLIENT_SECRET` in `secrets/local.env` match a valid OpenCRVS OAuth client for the target environment. |
 | The smoke or evaluation returns `source.unavailable` (HTTP 503) and the logs show a DNS lookup failure | The `--source-url` host does not resolve; the placeholder was left in, or the URL is wrong. | Rerun `registryctl init notary` with your real OpenCRVS base URL, or fix `source.url` in `notary/config.yaml`. |
 | `registryctl start` times out and the container log shows `missing field \`commitment\`` | registryctl v0.8.4 pins a service image older than its own generated config format ([GH#278](https://github.com/registrystack/registry-stack/issues/278)). | Replace the Notary image in `compose.yaml` with the published v0.8.4 digest `ghcr.io/registrystack/registry-notary@sha256:0cf05184885d7ed17dd9889e20f3797eb2a9ad07517f4ac7c05c03b774a00b8f`, run `docker compose pull`, and start again; reapply after any command that regenerates `compose.yaml`. |
-| With registryctl `v0.9.0` or later, `registryctl init notary` reports that its image lock is missing or invalid | The binary was moved or built without the strict image lock from the same release, or the lock does not match the CLI release and tag-built digest evidence. Registryctl `v0.8.4` does not use this lock. | Rerun the installer from the same pinned target tag so it checksum-verifies and installs both files. For an intentionally separate location, set `REGISTRYCTL_IMAGE_LOCK` to the exact verified lock. Never replace the digest reference with a mutable image tag. |
-| Docker reports no `linux/arm64` manifest for a v0.8.4 image | v0.8.4 images publish for `linux/amd64` only. | Start with `DOCKER_DEFAULT_PLATFORM=linux/amd64 registryctl start`, as shown in [Validate and start](#validate-and-start). |
+| `registryctl init notary` reports that its image lock is missing or invalid | The binary was moved or built without the strict image lock from the same release, or the lock does not match the CLI release and tag-built digest evidence. | Rerun the installer from the same pinned target tag so it checksum-verifies and installs both files. For an intentionally separate location, set `REGISTRYCTL_IMAGE_LOCK` to the exact verified lock. Never replace the digest reference with a mutable image tag. |
+| Docker reports no `linux/arm64` manifest for a v0.9.0 image | v0.9.0 images publish for `linux/amd64` only. | Start with `DOCKER_DEFAULT_PLATFORM=linux/amd64 registryctl start`, as shown in [Validate and start](#validate-and-start). |
 | `registryctl init notary` fails with `--source-token-from-env is not used with --source-kind opencrvs_dci` | `--source-token-from-env` was passed alongside `--source-kind opencrvs-dci`. | Configure `DCI_CLIENT_ID` and `DCI_CLIENT_SECRET` directly in `secrets/local.env` instead. |
 
 ## Next

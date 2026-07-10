@@ -14,6 +14,15 @@ standards_referenced: []
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
+:::caution[Hosted first-run publication held]
+The Relay-only steps passed their latest verification, but this hosted page is not the promoted
+first-run route while the credential failure in
+[GH#330](https://github.com/registrystack/registry-stack/issues/330) remains open and the complete
+[GH#198](https://github.com/registrystack/registry-stack/issues/198) fresh-reader run is unfinished.
+Use [the local Registry Relay tutorial](../../tutorials/publish-spreadsheet-secured-registry-api/)
+for the current first run.
+:::
+
 In about five minutes you can read a protected registry API from your terminal, with zero install,
 against a public hosted lab. You will call **Registry Relay**, which returns records to authorized
 callers, and watch it enforce scope: the same API answers some requests and refuses others,
@@ -35,8 +44,8 @@ Do not reuse anything you copy here outside the lab.
 The lab runs a civil-registry **Relay** you will call directly in this tutorial: a protected,
 scoped, read-only HTTP API over a civil registry source, at
 [civil-relay.lab.registrystack.org](https://civil-relay.lab.registrystack.org). The lab also runs
-**Registry Notary** services for the next step in this journey; see
-[Get a verifiable credential from the hosted lab](../credential-tour/). For how these connect to the rest of
+**Registry Notary** services for the held credential path; see the
+[hosted credential tour (held)](../credential-tour/). For how these connect to the rest of
 the stack, see the [architecture overview](../../explanation/architecture/). For the full set of
 live demo credentials, identities, and ready-made requests, open the lab homepage at
 [lab.registrystack.org](https://lab.registrystack.org).
@@ -136,10 +145,10 @@ read one record (`200`), and the same metadata-scope token was refused at the ro
 
 ## Next
 
-- [Get a verifiable credential from the hosted lab](../credential-tour/): continue in the same hosted
-  lab and see Registry Notary issue a privacy-preserving credential.
 - [Run a protected registry API locally](../../tutorials/publish-spreadsheet-secured-registry-api/):
   stand up your own protected Relay from a sample workbook.
+- [Hosted credential tour (held)](../credential-tour/): this continuation remains available for
+  inspection but is not the promoted first-run path.
 
 ## Troubleshooting
 

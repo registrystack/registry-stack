@@ -29,6 +29,12 @@ between a source row read and a minimized claim result.
 This tutorial uses synthetic data and local demo credentials.
 Do not use the generated local keys in production.
 
+:::note[Current first-run route]
+The v0.9.0 source beta and this local tutorial can be used while hosted credential publication is
+held by [GH#330](https://github.com/registrystack/registry-stack/issues/330) and the incomplete
+[GH#198](https://github.com/registrystack/registry-stack/issues/198) fresh-reader run.
+:::
+
 ## Start from the local API
 
 Complete [Run a protected registry API locally](../publish-spreadsheet-secured-registry-api/)
@@ -369,8 +375,8 @@ It does not delete your workbook, generated configs, local keys, or smoke result
   inspection.
 - [Connect Notary to a Registry Data API source](../run-notary-standalone-for-api/): run Notary in
   a separate project against a Registry Data API-shaped source.
-- [Credential tour](../../start/credential-tour/): explore the hosted demo to see credential issuance and
-  cross-authority flows.
+- [Hosted credential tour (held)](../../start/credential-tour/): inspect credential issuance and
+  cross-authority flows; this is not the promoted first-run route.
 
 ## Troubleshooting
 
@@ -379,11 +385,11 @@ It does not delete your workbook, generated configs, local keys, or smoke result
 | `registryctl add notary --from local-relay` cannot find a Relay project | The current directory does not contain a generated `registryctl.yaml` with a Relay section. | Run the command from the Relay tutorial project directory. |
 | `registryctl add notary --from local-relay` cannot find a source token | `secrets/local.env` is missing or does not contain the Relay row-reader key. | Recreate the Relay project or restore the generated local env file. |
 | `registryctl start` starts Relay but Notary is not ready | Notary config, source token, or Compose service wiring is invalid. | Run `registryctl status`, then `registryctl logs` and check the Notary service errors. |
-| Docker reports no `linux/arm64` manifest for a Registry Stack image | The v0.8.4 Relay and Notary images are published for `linux/amd64` only. | Start with `DOCKER_DEFAULT_PLATFORM=linux/amd64 registryctl start`. |
+| Docker reports no `linux/arm64` manifest for a Registry Stack image | The v0.9.0 Relay and Notary images are published for `linux/amd64` only. | Start with `DOCKER_DEFAULT_PLATFORM=linux/amd64 registryctl start`. |
 | `registryctl notary smoke` returns `401` for authorized calls | The Notary evaluator key was not loaded or does not match the generated Notary fingerprint. | Run `. secrets/local.env`, then retry. |
 | Claim evaluation returns a source auth error | Notary cannot authenticate to Relay with `EVIDENCE_SOURCE_REGISTRY_RELAY_TOKEN`. | Confirm `secrets/local.env` has the source token and Relay is running. |
 | Claim evaluation returns `409 Evidence not available` | The target id is not in the sample workbook or the Relay entity lookup changed. | Use `per-2001` for the tutorial target, or inspect the Relay `person` entity. |
 | `registryctl doctor` reports `not_run` and asks you to install `registry-relay` | `doctor` validates configs with native product binaries, which this Docker-based tutorial does not install. | Use `registryctl notary smoke` and `registryctl logs` to check a config edit, or install the `registry-relay` and `registry-notary` binaries. |
 | `registryctl start` times out and the container log shows `missing field \`commitment\`` | registryctl v0.8.4 pins a service image older than its own generated config format ([GH#278](https://github.com/registrystack/registry-stack/issues/278)). | Pin `compose.yaml` to the published v0.8.4 digests `ghcr.io/registrystack/registry-relay@sha256:93e194500a3500ba3f6331d5a0a9a3069127c48a709beccb083a5fcbdbc3ec61` and `ghcr.io/registrystack/registry-notary@sha256:0cf05184885d7ed17dd9889e20f3797eb2a9ad07517f4ac7c05c03b774a00b8f`, then run `docker compose pull`. `registryctl add notary` regenerates `compose.yaml`, so reapply the pins after it runs. |
-| With registryctl `v0.9.0` or later, `registryctl add notary` reports that its image lock is missing or invalid | The binary and strict release image lock are no longer installed together, or the lock does not match the CLI release and tag-built image evidence. Registryctl `v0.8.4` does not use this lock. | Rerun the installer from the same pinned target tag so it checksum-verifies and installs both files. For an operator-managed or source-test location, set `REGISTRYCTL_IMAGE_LOCK` to the checksum-verified lock from that exact release. Existing projects can still start from their stored pins, but generation commands fail closed. |
+| `registryctl add notary` reports that its image lock is missing or invalid | The binary and strict release image lock are no longer installed together, or the lock does not match the CLI release and tag-built image evidence. | Rerun the installer from the same pinned target tag so it checksum-verifies and installs both files. For an operator-managed or source-test location, set `REGISTRYCTL_IMAGE_LOCK` to the checksum-verified lock from that exact release. Existing projects can still start from their stored pins, but generation commands fail closed. |
 | `registryctl start` replaces containers you did not expect | Docker Compose derives the project name from the directory basename only, so two differently located `my-first-api` directories share one Compose project. | Give each project directory a unique name, or stop the other project first. |

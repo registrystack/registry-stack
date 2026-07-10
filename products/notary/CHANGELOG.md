@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-07-10
+
 ### Added
 
 - New deployment gate `notary.signer_custody.unapproved`: keys used by
@@ -104,6 +106,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING: `deployment.profile` is required.** Set it explicitly to one of
+  `local`, `hosted_lab`, `production`, or `evidence_grade`. Notary does not
+  infer a profile and refuses startup when it is absent.
+- **BREAKING: the TUF-era live config-apply HTTP surface is removed.**
+  `/admin/v1/config/verify`, `/admin/v1/config/dry-run`, and
+  `/admin/v1/config/apply` are no longer served, and the CLI
+  `config apply-bundle` command is removed. First run
+  `registryctl bundle verify` for stateless signature and binding verification,
+  then place the signed Registry Config Bundle v1 on the Notary node. For a
+  genuinely absent, version-specific antirollback state path, start Notary with
+  `--initialize-state`; that boot verifies the bundle and initializes state.
+  Notary's read-only `config verify-bundle` command remains, but it requires
+  accepted state to exist, so use it only for later candidate validation and
+  restarts. Replace retired TUF-era fields inside `config_trust` with current
+  Config Bundle v1 trust fields because strict parsing rejects the old schema.
+  There is no current hot-apply path. Back up the durable
+  `config_trust.antirollback_state_path` state before upgrading and keep
+  release-specific restore sets. A rollback must restore the state belonging
+  to that release; never delete or reinitialize antirollback state to force an
+  older bundle to load.
+- **BREAKING: source-adapter sidecar configuration rejects unknown keys.**
+  Remove misspelled, retired, or wrapper-only fields before upgrading instead
+  of relying on them to be ignored.
+- Production and evidence-grade operators must review custody for credential,
+  access-token, and federation signing roles. Set
+  `deployment.evidence.signer_custody_approved: true` only when retained review
+  evidence supports the approval; it is an attestation, not a gate bypass.
 - **BREAKING: claim configuration is now validated at load time (#170).**
   Startup rejects a duplicate claim `id` (REQ-DM-CLAIM-001), a
   `disclosure.default` outside the claim's allowed disclosure set
@@ -123,6 +152,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   writing. A second Notary process pointed at the same audit file fails at
   startup instead of silently interleaving writes and forking the hash
   chain, and a write that would extend a diverged chain fails closed.
+
+### Fixed
+
+- Federation denials after request-signature verification now retain the
+  redacted peer, source-scope, profile, purpose, request-JTI, claim, and
+  subject-reference audit context already available at the denial point.
+  Federation response-signing failures retain the same context. Raw peer ids,
+  request JTIs, and subject identifiers do not enter audit records.
 
 ## [0.8.4] - 2026-07-04
 

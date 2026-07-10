@@ -54,7 +54,7 @@ For how the five projects connect at runtime, see the [architecture overview](..
 | How is a CSV, XLSX, Parquet, or PostgreSQL source exposed as authorized entity routes? | [Registry Relay](../../products/registry-relay/) |
 | How is `metadata.yaml` validated or rendered into standards-facing artifacts? | [Registry Manifest](https://github.com/registrystack/registry-stack) |
 | How is a claim evaluated, delegated to a trusted Notary, or turned into an attestation or credential? | [Registry Notary](../../products/registry-notary/) |
-| How do the services run together in a local demo? | [Registry Lab](https://github.com/registrystack/registry-stack/blob/v0.8.4/lab/README.md) |
+| How do the services run together in a local demo? | [Registry Lab](https://github.com/registrystack/registry-stack/blob/v0.9.0/lab/README.md) |
 
 Cross-project explanation, standards evidence, and contract indexes live in these docs (not in any one project repo).
 
@@ -86,10 +86,10 @@ Registry Manifest is a pure library and CLI with no runtime data dependencies.
   doesn't run inside a gateway.
   {/* Evidence: Boundary section, "must not depend on Registry Relay, Axum, DataFusion,
        Postgres, auth, audit, observability, runtime row access",
-       crates/registry-manifest-core/README.md:33-41 at tag v0.8.4. */}
+       crates/registry-manifest-core/README.md:33-41 at tag v0.9.0. */}
 - Auth, audit, observability, or secret handling. These are intentionally excluded so the
   library can be used without running any runtime service.
-  {/* Evidence: Boundary section, crates/registry-manifest-core/README.md:33-41 at tag v0.8.4. */}
+  {/* Evidence: Boundary section, crates/registry-manifest-core/README.md:33-41 at tag v0.9.0. */}
 - Production source configuration. Source paths, table IDs, scopes, cache paths, and backend
   runtime details belong in Registry Relay configuration, not in portable manifests.
   {/* Evidence: contracts.yaml, registry-manifest.metadata-yaml consumer note. */}
@@ -106,11 +106,11 @@ Registry Relay exposes protected read-only APIs over registry sources. It does n
 - Record provisioning or writes. The README explicitly states write operations are out of scope
   for v1.
   {/* Evidence: "Provisioning and Write are intentionally out of scope for V1",
-       crates/registry-relay/README.md:20 at tag v0.8.4. */}
+       crates/registry-relay/README.md:20 at tag v0.9.0. */}
 - Portable metadata schema ownership. The `metadata.yaml` manifest format and its renderers are
   owned by Registry Manifest. Registry Relay may serve compiled artifacts over HTTP and scope
   them for callers, but the schema is defined and versioned in Registry Manifest.
-  {/* Evidence: crates/registry-manifest-core/README.md:7-9 at tag v0.8.4 (schema ownership);
+  {/* Evidence: crates/registry-manifest-core/README.md:7-9 at tag v0.9.0 (schema ownership);
        registry-relay evidence packet, metadata publication section. */}
 - Standalone claim service internals owned by Registry Notary. Registry Relay can declare
   evidence offerings and route clients to a Registry Notary endpoint, but claim evaluation,
@@ -125,7 +125,7 @@ Registry Relay exposes protected read-only APIs over registry sources. It does n
        configuration surface. */}
 
 Registry Relay is not an open-data portal. It publishes restricted consultation APIs for authorized
-systems only. {/* Evidence: crates/registry-relay/README.md:16 at tag v0.8.4. */}
+systems only. {/* Evidence: crates/registry-relay/README.md:16 at tag v0.9.0. */}
 
 ## Registry Notary
 
@@ -135,9 +135,9 @@ Registry Notary evaluates claims and issues SD-JWT VC credentials. It does not o
   HTTP using a source connector; it does not import or link Registry Relay libraries. Both
   services can depend on Registry Platform.
   {/* Evidence: the registry_data_api HTTP source connector is SourceConnectorKind::RegistryDataApi,
-       crates/registry-notary-core/src/config.rs:6175-6180 at tag v0.8.4; no registry-relay
+       crates/registry-notary-core/src/config.rs:6353-6360 at tag v0.9.0; no registry-relay
        dependency appears in any registry-notary* Cargo.toml, while registry-platform-* deps do,
-       crates/registry-notary-server/Cargo.toml:22-34 at tag v0.8.4. */}
+       crates/registry-notary-server/Cargo.toml:22-34 at tag v0.9.0. */}
 - Portable metadata renderers owned by Registry Manifest. Registry Notary does not produce
   DCAT, SHACL, BRegDCAT-AP, or OGC Records artifacts.
   {/* Evidence: registry-notary evidence packet, standards not found in code section: "DCAT: no
@@ -150,7 +150,7 @@ Registry Notary evaluates claims and issues SD-JWT VC credentials. It does not o
   static-peer delegated evaluation only.
   {/* Evidence: FederationRuntimeState::from_config iterates config.peers with no dynamic
        discovery path, crates/registry-notary-server/src/federation/runtime.rs:32-50 at
-       tag v0.8.4. */}
+       tag v0.9.0. */}
 - Registry Notary does not inspect published discovery artifacts, parse DCAT catalogs, or run
   capability queries.
 
@@ -167,8 +167,8 @@ Registry Lab is a compose-based local demo. It does not own:
 - Production deployment guidance. The demo uses CSV, XLSX, and Parquet fixtures and demo-grade
   credentials. It is not a reference for production configuration.
   {/* Evidence: "pre-1.0 technical release for evaluation and integration pilots",
-       lab/README.md:3-5 at tag v0.8.4; synthetic CSV, XLSX, and Parquet fixtures,
-       lab/README.md:692-695; demo credentials, lab/README.md:742-744; projects.yaml,
+       lab/README.md:3-5 at tag v0.9.0; synthetic CSV, XLSX, and Parquet fixtures,
+       lab/README.md:659-670; demo credentials, lab/README.md:707-728; projects.yaml,
        registry-lab does_not_own "Production deployment guidance". */}
 - Normative API or metadata contracts. API contracts are owned by Registry Relay and Registry
   Notary; metadata contracts are owned by Registry Manifest.

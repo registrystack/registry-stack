@@ -188,7 +188,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "registry-manifest-cli"
-version = "0.8.4"
+version = "0.9.0"
 dependencies = [
  "registry-manifest-core",
  "serde",
@@ -199,7 +199,7 @@ dependencies = [
 
 [[package]]
 name = "registry-manifest-core"
-version = "0.8.4"
+version = "0.9.0"
 dependencies = [
  "oxiri",
  "serde",

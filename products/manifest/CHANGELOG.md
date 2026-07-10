@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.9.0] - 2026-07-10
+
+### Added
+
+- Added standalone fuzz workspaces for metadata-manifest YAML and rendered
+  artifact JSON, with seed corpora and nightly smoke execution.
+
+### Changed
+
+- BREAKING: metadata manifests now reject unknown keys at every supported
+  object boundary. Extensions must use the documented extension points instead
+  of relying on silently ignored fields.
+- A present but unsupported core `schema_version` now fails validation rather
+  than being accepted as though it were the current schema.
+
+### Fixed
+
+- Exposed the Manifest CLI implementation through its library entry point so
+  the CLI binary and fuzz targets exercise the same parsing and validation
+  path.
+
+### Release Notes
+
+- Registry Manifest remains unpublished on crates.io. Consumers of the v0.9.0
+  stack must pin the v0.9.0 source ref and migrate any ad hoc unknown keys to
+  documented extension fields before validation.
+
 ## [0.2.1] - 2026-06-21
 
 ### Added

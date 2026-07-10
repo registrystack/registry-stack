@@ -74,6 +74,9 @@ write_config() {
   local audience_block
   audience_block="$(audience_yaml "${token}")"
   cat >"${config_path}" <<EOF
+deployment:
+  profile: local
+
 server:
   bind: 127.0.0.1:${port}
   cache_dir: ${output_dir}/oidc-relay-cache

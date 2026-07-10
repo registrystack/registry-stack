@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-07-10
+
 ### Added
 
 - Release distributions now include a strict, versioned registryctl image lock
@@ -14,6 +16,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **BREAKING: project files are now strictly validated.** `schema_version` is
+  required and must be `registryctl/v1`; missing or unsupported versions and
+  unknown project keys are rejected. When a Notary block is present,
+  `notary.source` must be `registry_data_api`, `relay`,
+  `fhir_source_adapter_sidecar`, or `opencrvs_dci`.
 - The installer checksum-verifies and installs the registryctl binary and image
   lock together. Existing generated projects still start from their stored image
   pins without consulting the lock.

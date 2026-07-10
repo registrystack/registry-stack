@@ -1,5 +1,59 @@
 # Release Notes
 
+## 0.9.0
+
+- BREAKING: Relay-local credential issuance and its `provenance` and entity
+  `publicschema` configuration are removed. Deploy credential issuance and
+  verification through Registry Notary.
+- BREAKING: `deployment.profile` is required and must be one of `local`,
+  `hosted_lab`, `production`, or `evidence_grade`. Relay refuses startup when
+  it is absent instead of inferring a profile.
+- BREAKING: the TUF-era `/admin/v1/config/verify`,
+  `/admin/v1/config/dry-run`, and `/admin/v1/config/apply` endpoints are
+  removed, as is the CLI `config apply-bundle` command. First run
+  `registryctl bundle verify` for stateless signature and binding verification,
+  then place the signed Registry Config Bundle v1 on the Relay node. For a
+  genuinely absent, version-specific antirollback state path, start Relay with
+  `--initialize-state`; that boot verifies the bundle and initializes state.
+  Relay's read-only `config verify-bundle` command remains, but it requires
+  accepted state to exist, so use it only for later candidate validation and
+  restarts. Replace retired TUF-era fields inside `config_trust` with current
+  Config Bundle v1 trust fields because strict parsing rejects the old schema.
+  Hot apply is not supported. Back up
+  `config_trust.antirollback_state_path` before upgrading and keep
+  release-specific restore sets. Before rollback, restore the antirollback
+  state matching that release. Never delete or reinitialize state to force an
+  older bundle to load.
+- BREAKING: governed reads honor `x-registry-subject-ref`,
+  `x-registry-relationship`, `x-registry-on-behalf-of`, and
+  `x-registry-credential-format`, and
+  `x-registry-source-observed-at-unix-seconds` only when the authenticated
+  principal carries the corresponding exact value-bound scope:
+  `registry:trust:subject_ref:<value>`,
+  `registry:trust:relationship:<value>`,
+  `registry:trust:on_behalf_of:<value>`,
+  `registry:trust:requested_credential_format:<value>`, or
+  `registry:trust:source_observed_at_unix_seconds:<value>`. Without that scope,
+  the header is treated as absent before policy evaluation.
+- BREAKING: hard deployment gates cannot be waived. Production and
+  evidence-grade operators must correct the failing condition, configure
+  off-host audit shipping, and provide a fresh acknowledgement cursor where
+  required.
+- The beta attribute-release API is excluded from default builds and requires
+  the `attribute-release` Cargo feature.
+- The committed OpenAPI artifact now matches the default build and no longer
+  advertises the feature-gated OGC API or SP DCI routes. Deployments using
+  those routes must enable the matching Cargo features and publish an OpenAPI
+  document generated from that build.
+- Added local authentication-failure throttling, retained-chain verification
+  and quarantine recovery, audit-shipping health, and generated config-bundle
+  acceptance evidence.
+- BREAKING: `audit.include_health: true` includes `/healthz` only. `/ready` is
+  always excluded because logging readiness would invalidate the next
+  zero-backlog comparison. Evidence consumers must capture the readiness
+  response, authenticated posture, and acknowledgement cursor instead of
+  expecting a `/ready` audit record.
+
 ## 0.8.4
 
 - Added `registry-relay --version` and `registry-relay -V` output, matching the stack's

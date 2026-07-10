@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## registry-stack-beta-11-2026-07-10
+
 - Added a pinned OpenID Foundation conformance-suite wrapper, OID4VCI issuer
   plan mapping, and an initial #205 Registry Notary metadata conformance run
   report.

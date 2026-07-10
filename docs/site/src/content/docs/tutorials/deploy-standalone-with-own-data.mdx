@@ -39,7 +39,7 @@ published at
 [Run single-node Compose behind your reverse proxy](../../operate/single-node-compose-behind-proxy/).
 Kubernetes and high-availability profiles are outside the 1.0 deployment profile.
 Before exposing any deployment beyond local evaluation, work through that guide and the
-[Relay operations runbook](https://github.com/registrystack/registry-stack/blob/v0.8.4/crates/registry-relay/docs/ops.md)
+[Relay operations runbook](https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-relay/docs/ops.md)
 production hardening checklist.
 
 ## Before you start
@@ -57,22 +57,22 @@ Replace every `example.gov` value, dataset id, field name, and credential with y
 ## Get the Registry Relay image
 
 Registry Relay release images publish to `ghcr.io/registrystack/registry-relay` from stable
-release tags such as `v0.8.4`.
+release tags such as `v0.9.0`.
 Consume a version tag or an image digest, not `latest`, so your deployment is reproducible and
 you can roll back.
 The published versions are listed on the
 [Relay releases page](https://github.com/registrystack/registry-stack/releases).
-The current Registry Stack release is `v0.8.4`, so the following examples use that tag.
+The current Registry Stack release is `v0.9.0`, so the following examples use that tag.
 Replace it with a newer release tag when you intentionally upgrade.
 For the image signing policy, see the Relay
-[security assurance notes](https://github.com/registrystack/registry-stack/blob/v0.8.4/crates/registry-relay/docs/security-assurance.md)
-and the [build and release section](https://github.com/registrystack/registry-stack/blob/v0.8.4/crates/registry-relay/docs/ops.md#build-and-release)
+[security assurance notes](https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-relay/docs/security-assurance.md)
+and the [build and release section](https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-relay/docs/ops.md#build-and-release)
 of the operations runbook.
 
 Pull the version you intend to run:
 
 ```sh
-docker pull ghcr.io/registrystack/registry-relay:v0.8.4
+docker pull ghcr.io/registrystack/registry-relay:v0.9.0
 ```
 
 The images are published for `linux/amd64` only; on an Arm host (Apple silicon), prefix
@@ -84,7 +84,7 @@ You can override the config path with the `--config` flag or the `REGISTRY_RELAY
 environment variable.
 
 If you build from source instead of consuming a published image, follow the
-[build and release section](https://github.com/registrystack/registry-stack/blob/v0.8.4/crates/registry-relay/docs/ops.md#build-and-release)
+[build and release section](https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-relay/docs/ops.md#build-and-release)
 of the operations runbook; the source build needs the pinned sibling checkouts it documents.
 
 ## Lay out the deployment directory
@@ -105,18 +105,21 @@ Mount the data directory read-only and keep a separate writable cache directory;
 ## Write the minimal Relay config
 
 Start from the canonical
-[`config/example.yaml`](https://github.com/registrystack/registry-stack/blob/v0.8.4/crates/registry-relay/config/example.yaml)
+[`config/example.yaml`](https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-relay/config/example.yaml)
 and the
-[configuration guide](https://github.com/registrystack/registry-stack/blob/v0.8.4/crates/registry-relay/docs/configuration.md),
+[configuration guide](https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-relay/docs/configuration.md),
 which is the authoritative reference for every block.
-A minimal deployment needs five blocks: `server` (a listener), `catalog` (public metadata
-base), `auth` (one auth mode), `audit` (a sink and hash secret), and at least one
-entry in `datasets`. Every other root block is optional.
+A minimal deployment needs six blocks: `deployment` (an explicit profile), `server` (a
+listener), `catalog` (public metadata base), `auth` (one auth mode), `audit` (a sink and
+hash secret), and at least one entry in `datasets`. Every other root block is optional.
 
 The following example exposes one dataset backed by a CSV file with a `person` entity.
 Adapt the ids, fields, and scopes to your data.
 
 ```yaml
+deployment:
+  profile: local
+
 server:
   bind: 0.0.0.0:8080
   cache_dir: /var/lib/registry-relay/cache
@@ -231,7 +234,7 @@ Key points the configuration guide spells out in full:
 
 For aggregates, relationships, OIDC auth, Postgres sources, live materialization, and provenance
 signing, follow the corresponding sections of the
-[configuration guide](https://github.com/registrystack/registry-stack/blob/v0.8.4/crates/registry-relay/docs/configuration.md).
+[configuration guide](https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-relay/docs/configuration.md).
 
 ## Provision the API-key fingerprint
 
@@ -244,7 +247,7 @@ The Relay binary generates the raw key and fingerprint together.
 Run it through the same container image, passing the `id` from your `api_keys` entry:
 
 ```sh
-docker run --rm ghcr.io/registrystack/registry-relay:v0.8.4 generate-api-key --id program_system
+docker run --rm ghcr.io/registrystack/registry-relay:v0.9.0 generate-api-key --id program_system
 ```
 
 The command emits three shell-friendly lines:
@@ -273,7 +276,7 @@ restart or roll Relay so it resolves the new fingerprint.
 For governed rotation, publish the new fingerprint under a new immutable or versioned reference,
 update `fingerprint.name` or `fingerprint.path`, and apply that signed config change with the new
 binary.
-The [API keys section](https://github.com/registrystack/registry-stack/blob/v0.8.4/crates/registry-relay/docs/configuration.md#api-keys)
+The [API keys section](https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-relay/docs/configuration.md#api-keys)
 of the configuration guide documents the underlying contract.
 
 ## Run the container
@@ -300,7 +303,7 @@ docker run --rm \
   -v "$(pwd)/cache:/var/lib/registry-relay/cache" \
   -e PROGRAM_SYSTEM_API_KEY_HASH="sha256:<your fingerprint>" \
   -e REGISTRY_RELAY_AUDIT_HASH_SECRET="$REGISTRY_RELAY_AUDIT_HASH_SECRET" \
-  ghcr.io/registrystack/registry-relay:v0.8.4
+  ghcr.io/registrystack/registry-relay:v0.9.0
 ```
 
 Relay exits non-zero if config parsing or validation fails, if a required API-key fingerprint
@@ -378,7 +381,7 @@ If you point API tooling at the deployment, note that `/openapi.json` is auth-ga
 
 If `/ready` returns `503`, the source failed to ingest; check the container logs for the failing
 table and the declared schema. The
-[readiness and probes section](https://github.com/registrystack/registry-stack/blob/v0.8.4/crates/registry-relay/docs/ops.md)
+[readiness and probes section](https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-relay/docs/ops.md)
 of the operations runbook explains the readiness contract.
 
 ## Add a standalone Registry Notary alongside
@@ -397,15 +400,15 @@ layer; the reference pages at the [end of this section](#go-deeper-on-notary) co
 ### Get the Registry Notary image
 
 Registry Notary release images publish to `ghcr.io/registrystack/registry-notary` from stable
-release tags such as `v0.8.4`.
+release tags such as `v0.9.0`.
 As with Relay, consume a version tag or an image digest, not `latest`.
 The published versions are listed on the
 [Notary releases page](https://github.com/registrystack/registry-stack/releases).
-The current Registry Stack release is `v0.8.4`, so the following examples use that tag.
+The current Registry Stack release is `v0.9.0`, so the following examples use that tag.
 Replace it with a newer release tag when you intentionally upgrade.
 
 ```sh
-docker pull ghcr.io/registrystack/registry-notary:v0.8.4
+docker pull ghcr.io/registrystack/registry-notary:v0.9.0
 ```
 
 The container listens on port 8080. Unlike Relay, the Notary entrypoint does not
@@ -431,7 +434,7 @@ read scope:
 Generate the key material the same way as before, with the matching `--id`:
 
 ```sh
-docker run --rm ghcr.io/registrystack/registry-relay:v0.8.4 generate-api-key --id notary_source
+docker run --rm ghcr.io/registrystack/registry-relay:v0.9.0 generate-api-key --id notary_source
 ```
 
 Store the emitted `fingerprint` for the Relay container's `NOTARY_SOURCE_API_KEY_HASH`
@@ -464,7 +467,7 @@ docker run --rm \
   -e PROGRAM_SYSTEM_API_KEY_HASH="sha256:<your fingerprint>" \
   -e NOTARY_SOURCE_API_KEY_HASH="sha256:<notary_source fingerprint>" \
   -e REGISTRY_RELAY_AUDIT_HASH_SECRET="$REGISTRY_RELAY_AUDIT_HASH_SECRET" \
-  ghcr.io/registrystack/registry-relay:v0.8.4
+  ghcr.io/registrystack/registry-relay:v0.9.0
 ```
 
 On this network, Notary reaches Relay at `http://relay:8080`; the host keeps using
@@ -477,7 +480,7 @@ evaluate claims) with the same fingerprint pattern as Relay.
 Generate a caller key with the Notary CLI:
 
 ```sh
-docker run --rm ghcr.io/registrystack/registry-notary:v0.8.4 hash-api-key --print-secret
+docker run --rm ghcr.io/registrystack/registry-notary:v0.9.0 hash-api-key --print-secret
 ```
 
 The command prints two lines: `api_key=<raw key for the calling system>` and
@@ -502,6 +505,9 @@ with the source connection pointed at the Relay from
 `registry_data_api` contract:
 
 ```yaml
+deployment:
+  profile: local
+
 server:
   bind: 0.0.0.0:8080
 
@@ -584,7 +590,7 @@ docker run --rm \
   -e REGISTRY_NOTARY_API_KEY_HASH="sha256:<hash from hash-api-key>" \
   -e REGISTRY_NOTARY_AUDIT_HASH_SECRET="$REGISTRY_NOTARY_AUDIT_HASH_SECRET" \
   -e RELAY_SOURCE_TOKEN="$RELAY_SOURCE_TOKEN" \
-  ghcr.io/registrystack/registry-notary:v0.8.4 \
+  ghcr.io/registrystack/registry-notary:v0.9.0 \
   --config /etc/registry-notary/config.yaml
 ```
 
@@ -604,15 +610,15 @@ docker run --rm \
   -e REGISTRY_NOTARY_API_KEY_HASH="sha256:<hash from hash-api-key>" \
   -e REGISTRY_NOTARY_AUDIT_HASH_SECRET="$REGISTRY_NOTARY_AUDIT_HASH_SECRET" \
   -e RELAY_SOURCE_TOKEN="$RELAY_SOURCE_TOKEN" \
-  ghcr.io/registrystack/registry-notary:v0.8.4 \
+  ghcr.io/registrystack/registry-notary:v0.9.0 \
   doctor --config /etc/registry-notary/config.yaml --format json
 ```
 
 `doctor --format json` emits `schema_version: registry.config.diagnostic_report.v1` with a
 `status` of `ok`, `warning`, or `error`, and reports missing environment variables, malformed
-fingerprints, and broken source references. With this guide's minimal config the expected result
-is `status: warning` with a single `deployment.profile_undeclared` finding, because the config
-declares no deployment profile; declare `deployment.profile: local` to silence it.
+fingerprints, broken source references, and deployment-profile failures. This guide declares
+`deployment.profile: local` explicitly. Removing it produces `status: error`, and the v0.9.0
+server refuses to start rather than inferring a profile.
 `explain-config --format json` prints the resolved configuration and the env vars it requires.
 For exercising the claim end to end (request shapes, outcomes, and credential issuance on top),
 work through [Evaluate a claim with Registry Notary](../verify-claim-registry-api/), which runs
@@ -633,7 +639,7 @@ Notary's own operator documentation is the authoritative own-keys path:
   [Write the minimal Notary config](#write-the-minimal-notary-config).
 
 The
-[Operating with Registry Notary section](https://github.com/registrystack/registry-stack/blob/v0.8.4/crates/registry-relay/docs/ops.md#operating-with-registry-notary)
+[Operating with Registry Notary section](https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-relay/docs/ops.md#operating-with-registry-notary)
 of the Relay runbook documents the credential handshake the two services use, matching the steps
 this guide followed: a narrowly scoped Relay key for the Notary source caller, a separate Notary
 caller key, and `_env` secret indirection on both sides so raw tokens stay out of YAML.
@@ -654,19 +660,19 @@ Your config files, data, generated keys, and the `cache` directory stay on disk.
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| The Relay container exits immediately after `docker run` | Config parsing or validation failed, a required API-key fingerprint environment variable is missing, or the listener could not bind. | Run `docker logs` on the container and fix the field or environment variable named in the error. |
+| The Relay container exits immediately after `docker run` | Config parsing or validation failed, `deployment.profile` is missing, a required API-key fingerprint environment variable is missing, or the listener could not bind. | Keep `deployment.profile: local` for this tutorial, run `docker logs` on the container, and fix the field or environment variable named in the error. |
 | `/ready` returns `503` | A configured source failed to ingest. | Check the container logs for the failing table and compare it against the declared `schema` in `config.yaml`. |
 | The Relay container exits at startup citing the audit hash secret | `REGISTRY_RELAY_AUDIT_HASH_SECRET` is missing or under 32 bytes. | Generate one with `openssl rand -hex 32`, export it, and rerun the container. |
 | Ingestion fails on the first cache write | The cache mount is missing, or its host path does not match `server.cache_dir`. | Create the `cache` directory and mount it read-write at the path named in `server.cache_dir`. |
 | `curl .../v1/datasets` returns `401 Unauthorized` | No `Authorization` header was sent, or the wrong raw key was used. | Send `Authorization: Bearer $RAW_KEY` with the key matching the fingerprint you provisioned. |
-| Notary `doctor --format json` reports `status: error` | A required environment variable is missing, a fingerprint is malformed, or a source reference is broken. | Read the reported field, fix `notary-config.yaml` or the environment variable, and rerun `doctor`. |
+| Notary `doctor --format json` reports `status: error` | `deployment.profile` is missing, a required environment variable is missing, a fingerprint is malformed, or a source reference is broken. | Keep `deployment.profile: local` for this tutorial, read the reported field, fix `notary-config.yaml` or the environment variable, and rerun `doctor`. |
 | The Notary container cannot reach Relay at `http://relay:8080` | Relay and Notary are not on the same Docker network. | Confirm both containers run with `--network registry-net` and that the Relay container is named `relay`. |
 
 ## Next
 
-- [Relay configuration guide](https://github.com/registrystack/registry-stack/blob/v0.8.4/crates/registry-relay/docs/configuration.md):
+- [Relay configuration guide](https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-relay/docs/configuration.md):
   the full block-by-block reference for aggregates, OIDC, Postgres, and provenance.
-- [Relay operations runbook](https://github.com/registrystack/registry-stack/blob/v0.8.4/crates/registry-relay/docs/ops.md):
+- [Relay operations runbook](https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-relay/docs/ops.md):
   the production hardening checklist to work through before exposing the deployment.
 - [Consultation flow](../../explanation/consultation-flow/): how Relay binds a source, applies
   scopes, serves entity routes, and audits every request.

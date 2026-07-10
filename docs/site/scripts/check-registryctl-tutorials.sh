@@ -282,7 +282,7 @@ run_relay_tutorial() {
 		'["Install registryctl","Create the sample project","Start the local stack","Run the smoke check","Load local demo keys","Make one denied request","Make one allowed request","Read one protected record","Read one protected record","Inspect the generated contract","Inspect the generated contract","Run an aggregate","Change the disclosure rule","Change the disclosure rule","Change the disclosure rule","Change the disclosure rule","Change the disclosure rule","Stop the stack"]'
 	node "$HELPER" extract-shell "$RELAY_TUTORIAL" "$blocks"
 
-	expected_install=$'curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/refs/tags/v0.8.4/crates/registryctl/install.sh | REGISTRYCTL_VERSION=v0.8.4 bash\nregistryctl --version'
+	expected_install=$'curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/refs/tags/v0.9.0/crates/registryctl/install.sh | REGISTRYCTL_VERSION=v0.9.0 bash\nregistryctl --version'
 	if [[ "$(cat "$blocks/01.sh")" != "$expected_install" ]]; then
 		printf 'release-only install block changed; update the explicit source-under-test boundary\n' >&2
 		exit 1
@@ -297,7 +297,7 @@ run_relay_tutorial() {
 	cd "$tutorial_root"
 	printf '\nrelease installer skipped: this gate uses the checked-out registryctl; GH#198 verifies release assets\n'
 	run_block 'Relay 1: source registryctl version' "$version_block" success
-	assert_contains "$LAST_OUTPUT" 'registryctl 0.8.4'
+	assert_contains "$LAST_OUTPUT" 'registryctl 0.9.0'
 	run_block 'Relay 2: Create the sample project' "$blocks/02.sh" success
 	CURRENT_SECRET_FILE="$PWD/secrets/local.env"
 	run_block 'Relay 3: Start the local stack' "$blocks/03.sh" success

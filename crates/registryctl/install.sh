@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo="registrystack/registry-stack"
-default_version="v0.8.4"
+default_version="v0.9.0"
 version="${REGISTRYCTL_VERSION:-$default_version}"
 install_dir="${REGISTRYCTL_INSTALL_DIR:-$HOME/.local/bin}"
 verify_url="https://github.com/${repo}/blob/main/release/VERIFY.md"
@@ -19,7 +19,7 @@ unsigned. Follow the canonical release verification guide:
   $verify_url
 
 Environment:
-  REGISTRYCTL_VERSION      Pinned release tag to install. Defaults to v0.8.4.
+  REGISTRYCTL_VERSION      Pinned release tag to install. Defaults to v0.9.0.
   REGISTRYCTL_INSTALL_DIR  Install directory. Defaults to ~/.local/bin.
 EOF
 }
