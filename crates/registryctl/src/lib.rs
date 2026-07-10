@@ -1012,8 +1012,8 @@ pub fn maybe_warn_about_update(current_version: &str) {
 
     let should_refresh = match read_update_check_cache(&cache_path) {
         Ok(Some(cache)) => {
-            if is_newer_release(current_version, &cache.latest_tag) {
-                eprintln!("{}", update_notice(current_version, &cache.latest_tag));
+            if let Some(notice) = update_notice(current_version, &cache.latest_tag) {
+                eprintln!("{notice}");
             }
             !cache.is_fresh
         }
@@ -1027,8 +1027,8 @@ pub fn maybe_warn_about_update(current_version: &str) {
 
 pub fn update_check(current_version: &str) -> Result<()> {
     let latest_tag = fetch_latest_registryctl_release()?;
-    if is_newer_release(current_version, &latest_tag) {
-        println!("{}", update_notice(current_version, &latest_tag));
+    if let Some(notice) = update_notice(current_version, &latest_tag) {
+        println!("{notice}");
     } else {
         println!(
             "registryctl {} is current. Latest release: {}.",
@@ -1088,6 +1088,9 @@ fn read_update_check_cache(cache_path: &Path) -> Result<Option<CachedLatestRelea
     };
     let cache: UpdateCheckCache =
         serde_json::from_str(&raw).context("failed to parse registryctl update check cache")?;
+    if VersionNumber::parse_release_tag(&cache.latest_tag).is_none() {
+        bail!("registryctl update check cache contains a non-canonical release tag");
+    }
     let now = unix_now();
     Ok(Some(CachedLatestRelease {
         is_fresh: now.saturating_sub(cache.checked_at) <= UPDATE_CHECK_CACHE_SECONDS,
@@ -1096,6 +1099,9 @@ fn read_update_check_cache(cache_path: &Path) -> Result<Option<CachedLatestRelea
 }
 
 fn write_update_check_cache(cache_path: &Path, latest_tag: &str) -> Result<()> {
+    if VersionNumber::parse_release_tag(latest_tag).is_none() {
+        bail!("refusing to cache a non-canonical registryctl release tag");
+    }
     if let Some(parent) = cache_path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
@@ -1129,8 +1135,8 @@ fn fetch_latest_registryctl_release() -> Result<String> {
         .context("failed to read registryctl latest release response")?;
     let latest: GitHubLatestRelease = serde_json::from_str(&body)
         .context("failed to parse registryctl latest release response")?;
-    if latest.tag_name.trim().is_empty() {
-        bail!("registryctl latest release response did not include tag_name");
+    if VersionNumber::parse_release_tag(&latest.tag_name).is_none() {
+        bail!("registryctl latest release response did not include a canonical vMAJOR.MINOR.PATCH tag");
     }
     Ok(latest.tag_name)
 }
@@ -1150,23 +1156,22 @@ fn registryctl_release_http_error(error: ureq::Error) -> anyhow::Error {
     }
 }
 
-fn is_newer_release(current_version: &str, latest_tag: &str) -> bool {
+fn update_notice(current_version: &str, latest_tag: &str) -> Option<String> {
     let Some(current) = VersionNumber::parse(current_version) else {
-        return false;
+        return None;
     };
-    let Some(latest) = VersionNumber::parse(latest_tag) else {
-        return false;
+    let Some(latest) = VersionNumber::parse_release_tag(latest_tag) else {
+        return None;
     };
-    latest > current
-}
-
-fn update_notice(current_version: &str, latest_tag: &str) -> String {
+    if latest <= current {
+        return None;
+    }
     let install_script =
         format!("{REGISTRYCTL_RAW_REPOSITORY}/{latest_tag}/crates/registryctl/install.sh");
-    format!(
+    Some(format!(
         "registryctl {latest_tag} is available. You have {}.\nThe quick installer verifies SHA256 integrity only. For canonical release authenticity guidance, see:\n  {REGISTRYCTL_VERIFY_GUIDE}\nUpgrade with:\n  curl -fsSL {install_script} | REGISTRYCTL_VERSION={latest_tag} sh",
         display_version(current_version),
-    )
+    ))
 }
 
 fn display_version(version: &str) -> String {
@@ -1209,6 +1214,21 @@ struct VersionNumber {
 }
 
 impl VersionNumber {
+    fn parse_release_tag(value: &str) -> Option<Self> {
+        let version = value.strip_prefix('v')?;
+        if !version
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || byte == b'.')
+        {
+            return None;
+        }
+        let parsed = Self::parse(version)?;
+        if value != format!("v{}.{}.{}", parsed.major, parsed.minor, parsed.patch) {
+            return None;
+        }
+        Some(parsed)
+    }
+
     fn parse(value: &str) -> Option<Self> {
         let trimmed = value.trim().trim_start_matches('v');
         let without_prerelease = trimmed.split_once('-').map_or(trimmed, |(base, _)| base);
@@ -5376,17 +5396,17 @@ mod tests {
     }
 
     #[test]
-    fn update_check_detects_newer_semver_tags() {
-        assert!(is_newer_release("0.1.0", "v0.1.1"));
-        assert!(is_newer_release("0.1.9", "v0.10.0"));
-        assert!(!is_newer_release("0.1.0", "v0.1.0"));
-        assert!(!is_newer_release("0.2.0", "v0.1.9"));
-        assert!(!is_newer_release("not-a-version", "v0.2.0"));
+    fn update_check_detects_newer_canonical_release_tags() {
+        assert!(update_notice("0.1.0", "v0.1.1").is_some());
+        assert!(update_notice("0.1.9", "v0.10.0").is_some());
+        assert!(update_notice("0.1.0", "v0.1.0").is_none());
+        assert!(update_notice("0.2.0", "v0.1.9").is_none());
+        assert!(update_notice("not-a-version", "v0.2.0").is_none());
     }
 
     #[test]
     fn update_notice_uses_exact_tag_pinned_installer_url_and_env_on_sh() {
-        let notice = update_notice("0.1.0", "v0.2.0");
+        let notice = update_notice("0.1.0", "v0.2.0").unwrap();
 
         assert!(notice.contains("registryctl v0.2.0 is available"));
         assert!(notice.contains("You have v0.1.0"));
@@ -5404,7 +5424,7 @@ mod tests {
 
     #[test]
     fn update_notice_warns_about_checksum_only_installer_before_command() {
-        let notice = update_notice("0.1.0", "v0.2.0");
+        let notice = update_notice("0.1.0", "v0.2.0").unwrap();
         let warning = notice
             .find("The quick installer verifies SHA256 integrity only.")
             .unwrap();
@@ -5412,6 +5432,28 @@ mod tests {
 
         assert!(warning < command);
         assert!(notice.contains(REGISTRYCTL_VERIFY_GUIDE));
+    }
+
+    #[test]
+    fn update_notice_rejects_shell_active_and_noncanonical_tags() {
+        let hostile = "v999.0.0-$(touch${IFS}/tmp/registryctl-owned)";
+        let temp = TempDir::new().unwrap();
+        let cache_path = temp.path().join("registryctl/update-check.json");
+
+        assert!(update_notice("0.1.0", hostile).is_none());
+        assert!(VersionNumber::parse_release_tag(hostile).is_none());
+        assert!(VersionNumber::parse_release_tag("999.0.0").is_none());
+        assert!(VersionNumber::parse_release_tag("v01.0.0").is_none());
+        assert!(write_update_check_cache(&cache_path, hostile).is_err());
+        assert!(!cache_path.exists());
+
+        fs::create_dir_all(cache_path.parent().unwrap()).unwrap();
+        let poisoned = UpdateCheckCache {
+            checked_at: 1,
+            latest_tag: hostile.to_string(),
+        };
+        fs::write(&cache_path, serde_json::to_string(&poisoned).unwrap()).unwrap();
+        assert!(read_update_check_cache(&cache_path).is_err());
     }
 
     #[test]

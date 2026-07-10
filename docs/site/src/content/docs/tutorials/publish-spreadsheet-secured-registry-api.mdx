@@ -35,6 +35,12 @@ Do not use the generated local keys in production.
 
 Install `registryctl` without cloning the repository:
 
+The quick installer verifies the downloaded binary against the release's
+`SHA256SUMS`; it does not authenticate the installer script or release. Before
+running it, review the available signature and provenance evidence in the
+canonical [`release/VERIFY.md`](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md)
+guide. Evidence availability varies by release, and `v0.8.0` is unsigned.
+
 ```sh
 curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/v0.8.4/crates/registryctl/install.sh | REGISTRYCTL_VERSION=v0.8.4 sh
 registryctl --version
@@ -42,11 +48,6 @@ registryctl --version
 
 If your shell cannot find `registryctl`, add the install directory printed by the installer to your
 `PATH`.
-
-The quick installer verifies the downloaded binary against `SHA256SUMS` only.
-It does not verify cosign signatures or SLSA provenance; use
-[`release/VERIFY.md`](https://github.com/registrystack/registry-stack/blob/v0.8.4/release/VERIFY.md)
-for release authenticity checks.
 
 Prebuilt `registryctl` assets exist for Linux x86_64, Linux arm64, and macOS arm64.
 On Intel macOS, the installer stops after printing the pinned `cargo install` command.

@@ -36,15 +36,16 @@ You need:
 
 Install `registryctl` if you have not already:
 
+The quick installer verifies the downloaded binary against the release's
+`SHA256SUMS`; it does not authenticate the installer script or release. Before
+running it, review the available signature and provenance evidence in the
+canonical [`release/VERIFY.md`](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md)
+guide. Evidence availability varies by release, and `v0.8.0` is unsigned.
+
 ```sh
 curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/v0.8.4/crates/registryctl/install.sh | REGISTRYCTL_VERSION=v0.8.4 sh
 registryctl --version
 ```
-
-The quick installer verifies the downloaded binary against `SHA256SUMS` only.
-It does not verify cosign signatures or SLSA provenance; use
-[`release/VERIFY.md`](https://github.com/registrystack/registry-stack/blob/v0.8.4/release/VERIFY.md)
-for release authenticity checks.
 
 ## Generate the Notary project
 
