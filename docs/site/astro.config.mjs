@@ -53,8 +53,7 @@ export function resolveDocsetBuildContext(docsets, env = process.env) {
 
   const base = env.DOCS_BASE || undefined;
   const basePath = base?.replace(/\/$/, '');
-  const explicitArchive = env.DOCS_ARCHIVE === 'true' || env.DOCS_ARCHIVE === '1';
-  const isArchivedBuild = explicitArchive || selectedDocset.status === 'archived';
+  const isArchivedBuild = selectedDocset.status === 'archived';
   /** @param {string} path */
   const internalRedirect = (path) => basePath ? `${basePath}${path}` : path;
   /** @param {string} path */

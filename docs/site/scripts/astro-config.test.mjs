@@ -57,16 +57,13 @@ test('archived docset redirects current-only pages to canonical production', () 
   );
 });
 
-test('explicit archive signal overrides the selected current docset', () => {
+test('unsupported archive flags cannot make current components and config disagree', () => {
   const context = resolveDocsetBuildContext(docsets, {
     DOCS_DOCSET: 'latest',
     DOCS_BASE: '/snapshot',
     DOCS_ARCHIVE: 'true',
   });
 
-  assert.equal(context.isArchivedBuild, true);
-  assert.equal(
-    context.currentDocsetRedirect(currentOnlyPath),
-    `https://docs.registrystack.org${currentOnlyPath}`,
-  );
+  assert.equal(context.isArchivedBuild, false);
+  assert.equal(context.currentDocsetRedirect(currentOnlyPath), `/snapshot${currentOnlyPath}`);
 });
