@@ -181,20 +181,20 @@ async fn handle_federated_evaluate(
     validate_federation_claims(&state.federation, &peer.config, &verified)
         .map_err(|problem| audit_context.denied(problem))?;
     let request_jti = string_extra(&verified, "jti")
-        .ok_or_else(FederationProblem::invalid_token)?
+        .ok_or_else(|| audit_context.denied(FederationProblem::invalid_token()))?
         .to_string();
     let exp = verified
         .claims
         .exp
-        .ok_or_else(FederationProblem::invalid_token)?;
+        .ok_or_else(|| audit_context.denied(FederationProblem::invalid_token()))?;
     let protocol = string_extra(&verified, "protocol")
-        .ok_or_else(FederationProblem::invalid_request_owned)?
+        .ok_or_else(|| audit_context.denied(FederationProblem::invalid_request_owned()))?
         .to_string();
     let profile_id = string_extra(&verified, "profile")
-        .ok_or_else(FederationProblem::invalid_request_owned)?
+        .ok_or_else(|| audit_context.denied(FederationProblem::invalid_request_owned()))?
         .to_string();
     let purpose = string_extra(&verified, "purpose")
-        .ok_or_else(FederationProblem::invalid_request_owned)?
+        .ok_or_else(|| audit_context.denied(FederationProblem::invalid_request_owned()))?
         .to_string();
     let replay_scope = ReplayScope::federation_request_jwt(
         &state.federation.node_id,
@@ -499,6 +499,7 @@ mod tests {
         let peer = FederationPeerConfig {
             node_id: "did:web:agency-b.example.gov".to_string(),
             issuer: "https://agency-b.example.gov".to_string(),
+            source_scopes: vec!["farmer_registry:evidence_verification".to_string()],
             ..FederationPeerConfig::default()
         };
         let profile = FederationEvaluationProfileConfig {
@@ -549,6 +550,10 @@ mod tests {
         assert_eq!(record["status"], json!(500));
         assert_eq!(record["error_code"], json!("federation.server_error"));
         assert!(record["claim_hash"].is_string());
+        assert_eq!(
+            record["scopes_used"],
+            json!(["farmer_registry:evidence_verification"])
+        );
         assert!(record["federation_peer_id_hash"].is_string());
         assert_eq!(
             record["federation_issuer"],

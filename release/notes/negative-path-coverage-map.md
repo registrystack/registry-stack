@@ -232,9 +232,10 @@ public evidence or disposition.
   and `crates/registry-notary-server/src/federation/mod.rs::federation_response_signing_failure_emits_denial_audit_with_context`.
   Disposition: pre-verification signature and emergency-denylist denials omit
   untrusted request context. After signature verification, denial records retain
-  the configured issuer and the request profile and purpose, hash the peer id and
-  request JTI, and include a pairwise subject-reference hash when the locally
-  allowed profile and subject are structurally valid. Tests cover replay,
+  the configured issuer and peer source scopes plus the request profile and
+  purpose, hash the peer id and request JTI, and include a pairwise
+  subject-reference hash when the locally allowed profile and subject are
+  structurally valid. Tests cover replay,
   policy, claim-mismatch, unknown-key, denylisted-key, denylisted-node, and
   signed stale-source outcomes; preserve no-source-read ordering; and assert
   that raw subject ids and request JTIs do not reach audit records.

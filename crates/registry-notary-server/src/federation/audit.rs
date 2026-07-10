@@ -16,6 +16,7 @@ use super::errors::FederationProblem;
 #[derive(Clone, Debug, Default)]
 pub(super) struct FederationAuditContext {
     pub(super) claim_ids: Vec<String>,
+    pub(super) scopes_used: Vec<String>,
     pub(super) peer_node_id: Option<String>,
     pub(super) issuer: Option<String>,
     pub(super) profile: Option<String>,
@@ -27,6 +28,7 @@ pub(super) struct FederationAuditContext {
 impl FederationAuditContext {
     pub(super) fn from_verified(peer: &FederationPeerConfig, verified: &VerifiedToken) -> Self {
         Self {
+            scopes_used: peer.source_scopes.clone(),
             peer_node_id: Some(peer.node_id.clone()),
             issuer: Some(peer.issuer.clone()),
             profile: verified
@@ -61,6 +63,7 @@ pub(super) struct FederationAuditOutcome {
     pub(super) decision: String,
     pub(super) verification_id: Option<String>,
     pub(super) claim_ids: Vec<String>,
+    pub(super) scopes_used: Vec<String>,
     pub(super) error_code: Option<String>,
     pub(super) peer_node_id: Option<String>,
     pub(super) issuer: Option<String>,
@@ -83,6 +86,7 @@ impl FederationAuditOutcome {
             decision: "federated_evaluate_denied".to_string(),
             verification_id: None,
             claim_ids: context.claim_ids,
+            scopes_used: context.scopes_used,
             error_code: Some(problem.code.clone()),
             peer_node_id: context.peer_node_id,
             issuer: context.issuer,
@@ -138,7 +142,7 @@ pub(super) fn federation_audit_event(
         event_id: Ulid::new().to_string(),
         occurred_at,
         principal_id_hash: None,
-        scopes_used: Vec::new(),
+        scopes_used: audit.scopes_used,
         decision: audit.decision,
         method: "POST".to_string(),
         path: "/federation/v1/evaluations".to_string(),

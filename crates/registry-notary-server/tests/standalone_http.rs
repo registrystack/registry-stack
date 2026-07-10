@@ -1516,6 +1516,10 @@ fn assert_verified_federation_audit_context(
     purpose: &str,
     includes_subject_hash: bool,
 ) {
+    assert_eq!(
+        record["scopes_used"],
+        json!(["farmer_registry:evidence_verification"])
+    );
     assert_hmac_audit_field(record, "federation_peer_id_hash");
     assert_eq!(
         record["federation_issuer"],
@@ -1532,6 +1536,7 @@ fn assert_verified_federation_audit_context(
 }
 
 fn assert_federation_request_context_is_absent(record: &Value) {
+    assert_eq!(record["scopes_used"], json!([]));
     for field in [
         "federation_peer_id_hash",
         "federation_issuer",
@@ -1683,6 +1688,10 @@ async fn federation_evaluation_returns_signed_response_and_rejects_replay() {
         json!("https://agency-b.example.gov")
     );
     assert_eq!(allowed["federation_profile"], json!("farmer_under_4ha"));
+    assert_eq!(
+        allowed["scopes_used"],
+        json!(["farmer_registry:evidence_verification"])
+    );
     assert_eq!(
         allowed["federation_purpose"],
         json!("https://purpose.example.test/eligibility")
