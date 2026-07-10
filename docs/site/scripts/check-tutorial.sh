@@ -17,6 +17,11 @@
 #   scripts/check-tutorial.sh              extract + execute (needs Docker)
 #   scripts/check-tutorial.sh --dry-run    extract + print only (no Docker)
 #
+# CI policy:
+#   npm run check calls check:tutorial:dry-run. CI guarantees command
+#   extraction and drift detection only. Full execution remains a manual
+#   check through check:tutorial and is tracked by registry-stack#212.
+#
 # Configuration:
 #   SOLMARA_LAB_PATH   path to an existing Solmara Lab checkout.
 #                      Default: clone https://github.com/registrystack/solmara-lab
@@ -72,7 +77,7 @@ for arg in "$@"; do
 	case "$arg" in
 	--dry-run) DRY_RUN=1 ;;
 	-h | --help)
-		sed -n '3,32p' "$0"
+		sed -n '3,37p' "$0"
 		exit 0
 		;;
 	*)
@@ -196,7 +201,7 @@ for entry in "${REGISTRYCTL_TUTORIALS[@]}"; do
 done
 
 if ((DRY_RUN)); then
-	printf 'dry-run: extraction OK, skipping execution\n'
+	printf 'dry-run: extraction and drift checks passed; execution skipped by CI policy (#212)\n'
 	exit 0
 fi
 

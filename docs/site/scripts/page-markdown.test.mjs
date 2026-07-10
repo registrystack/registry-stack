@@ -16,6 +16,7 @@ import { resolve, dirname } from 'node:path';
 // Mirrors the loader in md-href.test.mjs.
 const here = dirname(fileURLToPath(import.meta.url));
 const srcPath = resolve(here, '../src/lib/page-markdown.ts');
+const routePath = resolve(here, '../src/pages/[...slug].md.ts');
 const jsSource = readFileSync(srcPath, 'utf8')
   .replace(/^\/\*\*[\s\S]*?\*\//gm, '')       // remove JSDoc block comments
   .replace(/:\s*string\s*\|\s*undefined/g, '') // ": string | undefined" annotations
@@ -24,6 +25,15 @@ const jsSource = readFileSync(srcPath, 'utf8')
 
 const dataUrl = 'data:text/javascript,' + encodeURIComponent(jsSource);
 const { DISCOVERY_HEADER, entrySlugToOutputPath, buildPageMarkdown } = await import(dataUrl);
+
+test('per-page Markdown route excludes Starlight draft entries', () => {
+  const routeSource = readFileSync(routePath, 'utf8');
+  assert.match(
+    routeSource,
+    /getCollection\('docs', \(\{ data \}\) => !data\.draft\)/,
+    'expected the docs collection query to reject data.draft entries',
+  );
+});
 
 // ---- buildPageMarkdown ----
 
