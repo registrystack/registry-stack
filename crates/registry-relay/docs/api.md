@@ -166,16 +166,21 @@ Use stable, reviewable purpose IRIs. Do not put secrets, bearer tokens, or perso
 ## Governed request context
 
 Registry Relay treats client-supplied Policy Decision Point (PDP) context as
-untrusted. Relay passes each header in this table to the PDP only when the
-authenticated principal has the exact
-`registry:trust:<scope_field>:<header_value>` scope.
+untrusted. The supported client-supplied trust-context headers are listed
+below. Relay passes each one to the PDP only when the authenticated principal
+has the exact `registry:trust:<scope_field>:<header_value>` scope.
 
 | Header | Scope field | Classification |
 | --- | --- | --- |
+| `x-registry-trust-jurisdiction` | `jurisdiction` | Scope-gated |
+| `x-registry-trust-assurance` | `assurance` | Scope-gated |
+| `x-registry-trust-legal-basis` | `legal_basis` | Scope-gated |
+| `x-registry-trust-consent` | `consent` | Scope-gated |
 | `x-registry-subject-ref` | `subject_ref` | Scope-gated |
 | `x-registry-relationship` | `relationship` | Scope-gated |
 | `x-registry-on-behalf-of` | `on_behalf_of` | Scope-gated |
 | `x-registry-credential-format` | `requested_credential_format` | Scope-gated |
+| `x-registry-source-observed-age-seconds` | `source_observed_age_seconds` | Scope-gated |
 | `x-registry-source-observed-at-unix-seconds` | `source_observed_at_unix_seconds` | Scope-gated |
 
 An absent or nonmatching scope makes the header absent from PDP context. A
