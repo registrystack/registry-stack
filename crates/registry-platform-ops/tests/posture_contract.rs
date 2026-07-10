@@ -149,11 +149,18 @@ fn posture_audit_shipping_health_fields_are_required_and_enumerated() {
         .remove("shipping_observed_at");
     assert_invalid(&validator, &missing_observed);
 
-    // null is an accepted value for both fields (unconfigured / unshipped).
+    // shipping_health is null exactly when no shipping target is configured.
     let mut null_health = parse(registry_platform_ops::DEFAULT_REDACTED_POSTURE_FIXTURE_V1);
     null_health["posture"]["audit"]["shipping_health"] = json!(null);
     null_health["posture"]["audit"]["shipping_observed_at"] = json!(null);
+    assert_invalid(&validator, &null_health);
+
+    null_health["posture"]["audit"]["shipping_target_configured"] = json!(false);
+    null_health["posture"]["audit"]["shipping_target"] = json!("none");
     assert_valid(&validator, &null_health);
+
+    null_health["posture"]["audit"]["shipping_health"] = json!("unverified");
+    assert_invalid(&validator, &null_health);
 }
 
 #[test]

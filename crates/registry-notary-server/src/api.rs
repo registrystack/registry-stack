@@ -4,8 +4,8 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     net::{IpAddr, SocketAddr},
-    sync::{Arc, RwLock},
-    time::Duration,
+    sync::{Arc, OnceLock, RwLock},
+    time::{Duration, SystemTime},
 };
 
 use axum::body::{to_bytes, Body, Bytes};
@@ -54,7 +54,7 @@ use registry_platform_oid4vci::{
     PRE_AUTHORIZED_CODE_GRANT_TYPE, PROOF_TYPE_JWT, SD_JWT_VC_FORMAT,
 };
 use registry_platform_ops::{
-    ConfigOverridePin, ConfigProvenance, ConfigSource, PostureApplyResult,
+    AckObservation, ConfigOverridePin, ConfigProvenance, ConfigSource, PostureApplyResult,
 };
 use registry_platform_pdp::{
     decide as pdp_decide, Decision as PdpDecision, EvidenceRequestContext as PdpRequestContext,
@@ -96,6 +96,45 @@ use crate::{
     SelfAttestationRateLimitBucket, SelfAttestationRateLimitError, SelfAttestationRateLimitKeys,
     SelfAttestationRateLimiter, SourceReader,
 };
+
+const AUDIT_ACK_CURSOR_READ_TIMEOUT: Duration = Duration::from_millis(500);
+static AUDIT_ACK_CURSOR_READ_PERMIT: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
+
+fn audit_ack_cursor_read_permit() -> Arc<tokio::sync::Semaphore> {
+    Arc::clone(
+        AUDIT_ACK_CURSOR_READ_PERMIT.get_or_init(|| Arc::new(tokio::sync::Semaphore::new(1))),
+    )
+}
+
+async fn bounded_audit_ack_observation(config: &StandaloneRegistryNotaryConfig) -> AckObservation {
+    let Some(path) = config
+        .deployment
+        .evidence
+        .audit_ack_cursor_path()
+        .map(std::path::Path::to_path_buf)
+    else {
+        return AckObservation::unverified();
+    };
+    let max_age = config.deployment.evidence.audit_ack_max_age();
+    let permit = match audit_ack_cursor_read_permit().try_acquire_owned() {
+        Ok(permit) => permit,
+        Err(tokio::sync::TryAcquireError::Closed) => {
+            return AckObservation::invalid("ack cursor read worker is unavailable");
+        }
+        Err(tokio::sync::TryAcquireError::NoPermits) => {
+            return AckObservation::invalid("ack cursor read is still in progress");
+        }
+    };
+    let worker = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        registry_platform_ops::evaluate_ack_health(Some(path.as_path()), SystemTime::now(), max_age)
+    });
+    match tokio::time::timeout(AUDIT_ACK_CURSOR_READ_TIMEOUT, worker).await {
+        Ok(Ok(observation)) => observation,
+        Ok(Err(_)) => AckObservation::invalid("ack cursor read worker failed"),
+        Err(_) => AckObservation::invalid("ack cursor read timed out"),
+    }
+}
 
 const DATA_PURPOSE_HEADER: &str = "data-purpose";
 const IDEMPOTENCY_KEY_HEADER: &str = "idempotency-key";
@@ -328,6 +367,10 @@ async fn ready(state: Option<Extension<Arc<RegistryNotaryApiState>>>) -> Respons
         _ => (false, false, 0, 0, 0),
     };
     let degraded = usize::from(base_degraded);
+    let current_deployment_gates = match state.as_ref() {
+        Some(Extension(state)) => Some(state.current_deployment_gates().await),
+        None => None,
+    };
     #[cfg(feature = "registry-notary-cel")]
     let (total, ok, failed) = {
         let mut total = 1 + signer_total;
@@ -350,9 +393,12 @@ async fn ready(state: Option<Extension<Arc<RegistryNotaryApiState>>>) -> Respons
                     failed += 1;
                 }
             }
-            if state.deployment_gates.is_bound() {
+            if let Some(gates) = current_deployment_gates
+                .as_ref()
+                .filter(|gates| gates.is_bound())
+            {
                 total += 1;
-                if state.deployment_gates.has_readiness_failure() {
+                if gates.has_readiness_failure() {
                     failed += 1;
                 } else {
                     ok += 1;
@@ -375,9 +421,12 @@ async fn ready(state: Option<Extension<Arc<RegistryNotaryApiState>>>) -> Respons
                     failed += 1;
                 }
             }
-            if state.deployment_gates.is_bound() {
+            if let Some(gates) = current_deployment_gates
+                .as_ref()
+                .filter(|gates| gates.is_bound())
+            {
                 total += 1;
-                if state.deployment_gates.has_readiness_failure() {
+                if gates.has_readiness_failure() {
                     failed += 1;
                 } else {
                     ok += 1;
@@ -1593,6 +1642,37 @@ impl RegistryNotaryApiState {
 
     pub(crate) fn runtime_config(&self) -> Option<Arc<StandaloneRegistryNotaryConfig>> {
         self.runtime_snapshot().runtime_config.clone()
+    }
+
+    pub(crate) fn deployment_gates_for_observation(
+        &self,
+        config: &StandaloneRegistryNotaryConfig,
+        observation: &registry_platform_ops::AckObservation,
+    ) -> crate::standalone::DeploymentGateState {
+        self.deployment_gates.evaluate_current(config, observation)
+    }
+
+    pub(crate) async fn current_audit_ack_observation(
+        &self,
+        config: &StandaloneRegistryNotaryConfig,
+    ) -> registry_platform_ops::AckObservation {
+        let observation = bounded_audit_ack_observation(config).await;
+        if !observation.requires_audit_tail_binding() {
+            return observation;
+        }
+        let tail = match &self.audit {
+            Some(audit) => audit.current_tail_hash_bounded().await,
+            None => None,
+        };
+        observation.bind_to_audit_tail(tail)
+    }
+
+    pub(crate) async fn current_deployment_gates(&self) -> crate::standalone::DeploymentGateState {
+        let Some(config) = self.runtime_config() else {
+            return (*self.deployment_gates).clone();
+        };
+        let observation = self.current_audit_ack_observation(&config).await;
+        self.deployment_gates_for_observation(&config, &observation)
     }
 
     fn openapi_requires_auth(&self) -> bool {

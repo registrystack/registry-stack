@@ -4459,7 +4459,7 @@ datasets: []
         // when the candidate source is a signed bundle: the `relay.config.unsigned`
         // startup gate does not fire for a signed bundle.
         let config = parse_deployment_config(
-            "deployment:\n  profile: evidence_grade\n  evidence:\n    ingress_rate_limit: true\n    api_key_rotation: true",
+            "deployment:\n  profile: evidence_grade\n  evidence:\n    ingress_rate_limit: true\n    api_key_rotation: true\n    audit_ack_cursor_path: /var/run/registry-relay/audit-ack-cursor.json",
         );
         for source in [
             ConfigSource::SignedBundleFile,

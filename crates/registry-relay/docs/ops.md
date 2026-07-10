@@ -525,7 +525,8 @@ Readiness is 503:
 Audit records missing:
 
 - In containers, check stdout, not stderr.
-- Confirm `audit.include_health` if expecting health and ready records.
+- Confirm `audit.include_health` if expecting `/healthz` records. `/ready` is
+  always excluded so its zero-backlog shipping check cannot invalidate itself.
 - For `audit.sink: file`, confirm the parent directory exists or can be created
   by the Relay runtime identity. In the production container, that is UID/GID
   `65532:65532`.

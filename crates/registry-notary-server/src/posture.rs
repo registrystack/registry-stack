@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Redacted Registry Ops posture for standalone Registry Notary.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::time::SystemTime;
-
 use registry_notary_core::{
     BulkMode, CredentialStatusConfig, DeploymentEvidenceConfig, EvidenceAuditConfig,
     SelfAttestationConfig, SelfAttestationRateLimitMode, SigningKeyStatus,
@@ -11,10 +8,12 @@ use registry_notary_core::{
     MAX_BEARER_PRE_AUTHORIZED_CODE_TTL_SECONDS, REPLAY_STORAGE_IN_MEMORY, REPLAY_STORAGE_REDIS,
 };
 use registry_platform_ops::{
-    audit_shipping_target, evaluate_ack_health, filter_posture_for_tier, override_pin_posture,
-    posture_safe_runtime_config_hash, AuditSinkKind, PostureFilterError, PostureTier,
+    audit_shipping_target, filter_posture_for_tier, override_pin_posture,
+    posture_safe_runtime_config_hash, AckObservation, AuditSinkKind, PostureFilterError,
+    PostureTier,
 };
 use serde_json::{json, Map, Value};
+use std::collections::{BTreeMap, BTreeSet};
 use time::OffsetDateTime;
 
 use crate::{
@@ -55,9 +54,9 @@ struct AuditPosture {
     configured: bool,
     shipping_target_configured: bool,
     shipping_target: String,
-    /// Observed off-host shipping freshness from the local ack cursor. `None`
-    /// (rendered null) iff `shipping_target_configured` is false; otherwise the
-    /// observation's health, with `"unverified"` when no cursor is configured.
+    /// Observed off-host shipping health from the local ack cursor. `None`
+    /// (rendered null) iff `shipping_target_configured` is false. Runtime `ok`
+    /// requires freshness plus a watermark bound to the live keyed chain tail.
     shipping_health: Option<String>,
     /// The ack cursor's `acked_at` when one was read, else `None` (null).
     shipping_observed_at: Option<String>,
@@ -117,6 +116,9 @@ impl PostureContext {
         config: &StandaloneRegistryNotaryConfig,
         _audit: &AuditPipeline,
     ) -> Result<Self, SigningKeyPostureError> {
+        // Runtime posture replaces this boot-time placeholder with one bounded
+        // cursor sample bound to the live audit tail.
+        let audit_observation = registry_platform_ops::AckObservation::unverified();
         Ok(Self {
             instance: InstancePosture {
                 id: config.instance.id.clone(),
@@ -132,7 +134,11 @@ impl PostureContext {
             credential_status_storage: classify_credential_status_storage(
                 &config.credential_status,
             ),
-            audit: audit_posture(&config.audit, &config.deployment.evidence),
+            audit: audit_posture(
+                &config.audit,
+                &config.deployment.evidence,
+                &audit_observation,
+            ),
             source_connections: SourceConnectionPosture {
                 by_kind: source_connection_counts_by_kind(config),
             },
@@ -153,23 +159,42 @@ pub(crate) async fn posture_document(
     let signer_readiness = state.signer_readiness();
     let signer_ready = signer_readiness.is_ready();
     let config_apply = state.config_apply_posture();
-    let readiness = if replay_ready_bool && credential_status_ready && signer_ready {
-        "ready"
-    } else if matches!(replay_ready, Ok(ReplayReadiness::Degraded))
-        && credential_status_ready
-        && signer_ready
-    {
-        "degraded"
-    } else {
-        "not_ready"
+    let runtime_config = state.runtime_config();
+    let (deployment_gates, current_audit) = match runtime_config.as_deref() {
+        Some(config) => {
+            let observation = state.current_audit_ack_observation(config).await;
+            (
+                state.deployment_gates_for_observation(config, &observation),
+                Some(audit_posture(
+                    &config.audit,
+                    &config.deployment.evidence,
+                    &observation,
+                )),
+            )
+        }
+        None => ((*state.deployment_gates).clone(), None),
     };
+    let deployment_ready = !deployment_gates.has_readiness_failure();
+    let readiness =
+        if replay_ready_bool && credential_status_ready && signer_ready && deployment_ready {
+            "ready"
+        } else if matches!(replay_ready, Ok(ReplayReadiness::Degraded))
+            && credential_status_ready
+            && signer_ready
+            && deployment_ready
+        {
+            "degraded"
+        } else {
+            "not_ready"
+        };
 
     let context = state
         .posture
         .as_ref()
         .map(|context| (**context).clone())
         .unwrap_or_else(default_posture_context);
-    let signing_keys = match state.runtime_config().as_deref() {
+    let audit = current_audit.unwrap_or_else(|| context.audit.clone());
+    let signing_keys = match runtime_config.as_deref() {
         Some(config) => signing_key_posture(config).map_err(PostureDocumentError::SigningKey)?,
         None => context.signing_keys.clone(),
     };
@@ -241,8 +266,8 @@ pub(crate) async fn posture_document(
         instance.insert("public_base_url".to_string(), json!(public_base_url));
     }
 
-    let deployment = deployment_object(&state.deployment_gates);
-    let audit_assurance = audit_assurance_object(state.runtime_config().as_deref());
+    let deployment = deployment_object(&deployment_gates);
+    let audit_assurance = audit_assurance_object(runtime_config.as_deref());
     let configuration = configuration_object(&config_apply, &context);
 
     let posture = json!({
@@ -299,22 +324,26 @@ pub(crate) async fn posture_document(
         "posture": {
             "warnings": warnings,
             "findings": findings,
-            "audit": {
-                "configured": context.audit.configured,
-                "sink_type": context.audit.sink,
-                "shipping_target_configured": context.audit.shipping_target_configured,
-                "shipping_target": context.audit.shipping_target,
-                "shipping_health": context.audit.shipping_health,
-                "shipping_observed_at": context.audit.shipping_observed_at,
-                "checkpoint_status": "unavailable",
-                "latest_tail_hash": Value::Null,
-                "latest_sequence": Value::Null,
-                "verified_at": Value::Null,
-                "verification_status": "not_supported",
-            },
+            "audit": audit_posture_object(&audit),
         },
     });
     filter_posture_for_tier(posture, tier).map_err(PostureDocumentError::Filter)
+}
+
+fn audit_posture_object(audit: &AuditPosture) -> Value {
+    json!({
+        "configured": audit.configured,
+        "sink_type": audit.sink,
+        "shipping_target_configured": audit.shipping_target_configured,
+        "shipping_target": audit.shipping_target,
+        "shipping_health": audit.shipping_health,
+        "shipping_observed_at": audit.shipping_observed_at,
+        "checkpoint_status": "unavailable",
+        "latest_tail_hash": Value::Null,
+        "latest_sequence": Value::Null,
+        "verified_at": Value::Null,
+        "verification_status": "not_supported",
+    })
 }
 
 fn configuration_object(config_apply: &ConfigApplyPosture, context: &PostureContext) -> Value {
@@ -483,6 +512,7 @@ fn classify_credential_status_storage(config: &CredentialStatusConfig) -> String
 fn audit_posture(
     config: &EvidenceAuditConfig,
     evidence: &DeploymentEvidenceConfig,
+    observation: &AckObservation,
 ) -> AuditPosture {
     // Map the config sink string onto the shared classifier's sink kinds; an
     // unrecognised sink is explicitly Unknown rather than a silent wildcard.
@@ -494,14 +524,6 @@ fn audit_posture(
     };
     let (shipping_target_configured, shipping_target) =
         audit_shipping_target(sink_kind, evidence.audit_offhost_shipping);
-    // Observed shipping freshness from the local ack cursor. Sampling now() here
-    // keeps the health out of any gate predicate; the observation is null unless
-    // a shipping target is actually configured.
-    let observation = evaluate_ack_health(
-        evidence.audit_ack_cursor_path(),
-        SystemTime::now(),
-        evidence.audit_ack_max_age(),
-    );
     let shipping_health =
         shipping_target_configured.then(|| observation.health.as_str().to_string());
     AuditPosture {
@@ -515,7 +537,7 @@ fn audit_posture(
         shipping_target_configured,
         shipping_target: shipping_target.to_string(),
         shipping_health,
-        shipping_observed_at: observation.acked_at,
+        shipping_observed_at: observation.acked_at.clone(),
     }
 }
 
@@ -824,6 +846,22 @@ fn production_like(environment: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn named_posture_example_audit_matches_live_projection() {
+        let example: Value = serde_json::from_str(registry_platform_ops::NOTARY_POSTURE_EXAMPLE_V1)
+            .expect("named Notary posture example parses");
+        let live = audit_posture_object(&AuditPosture {
+            sink: "file".to_string(),
+            configured: true,
+            shipping_target_configured: true,
+            shipping_target: "declared_external".to_string(),
+            shipping_health: Some("ok".to_string()),
+            shipping_observed_at: Some("2026-06-04T09:59:00Z".to_string()),
+        });
+
+        assert_eq!(example["posture"]["audit"], live);
+    }
 
     #[test]
     fn config_hash_is_stable_for_json_object_order() {

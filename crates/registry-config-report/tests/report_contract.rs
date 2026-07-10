@@ -169,8 +169,11 @@ fn product_diagnostic_schema_accepts_observed_audit_shipping_fields() {
     with_health["audit_shipping"]["shipping_observed_at"] = json!("2026-06-19T23:00:00Z");
     assert_valid(PRODUCT_DIAGNOSTIC_REPORT_SCHEMA_V1, &with_health);
 
-    // Null health/observed (declared-only, no cursor) validates.
+    // Null health/observed is the canonical no-shipping-target state.
     let mut null_health = parse(RELAY_DIAGNOSTIC_OK_FIXTURE_V1);
+    null_health["audit_shipping"]["sink_type"] = json!("file");
+    null_health["audit_shipping"]["shipping_target_configured"] = json!(false);
+    null_health["audit_shipping"]["shipping_target"] = json!("none");
     null_health["audit_shipping"]["shipping_health"] = json!(null);
     null_health["audit_shipping"]["shipping_observed_at"] = json!(null);
     assert_valid(PRODUCT_DIAGNOSTIC_REPORT_SCHEMA_V1, &null_health);
@@ -209,7 +212,22 @@ fn registryctl_schema_validates_embedded_product_diagnostics() {
         document["schema_version"],
         REGISTRYCTL_VALIDATION_REPORT_SCHEMA_VERSION_V1
     );
+    assert_eq!(
+        document["products"][0]["report"]["audit_shipping"]["shipping_health"],
+        "unverified"
+    );
+    assert_eq!(
+        document["products"][1]["report"]["audit_shipping"]["shipping_health"],
+        "invalid"
+    );
     assert_valid(REGISTRYCTL_VALIDATION_REPORT_SCHEMA_V1, &document);
+}
+
+#[test]
+fn registryctl_schema_rejects_malformed_embedded_audit_shipping() {
+    let mut document = parse(REGISTRYCTL_VALIDATION_FIXTURE_V1);
+    document["products"][0]["report"]["audit_shipping"]["backlog_depth"] = json!(1);
+    assert_invalid(REGISTRYCTL_VALIDATION_REPORT_SCHEMA_V1, &document);
 }
 
 #[test]

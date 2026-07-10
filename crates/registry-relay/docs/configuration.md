@@ -494,6 +494,11 @@ audit:
   include_health: false
 ```
 
+`include_health` controls audit records for `/healthz`. Registry Relay always
+excludes `/ready`: evidence-grade readiness requires the shipper cursor to equal
+the live audit-chain tail, so appending a record after that comparison would
+make a successful probe invalidate the next probe.
+
 Supported sinks:
 
 ```yaml
@@ -587,7 +592,7 @@ The four profiles escalate from `local` (binds no hard gates) through `hosted_la
 
 Some controls live outside the relay and cannot be observed by the process (for example ingress rate limiting enforced by a gateway, an API-key rotation process, or audit records shipped off-host to a log collector or SIEM). The `evidence` flags let the operator assert those controls are in place. Each flag defaults to `false`, which leaves the corresponding gate active until the operator declares the control.
 
-`audit_ack_cursor_path` and `audit_ack_max_age_secs` are not booleans: they point at the local state file an off-host audit shipper writes on each successful hand-off (the `registry.audit.ack_cursor.v1` contract: `acked_at`, `last_acked_hash`, an optional `writer`) and set how old that cursor's `acked_at` may get before it reads as stale (defaults to 900 seconds). This is an *observed* freshness signal layered on top of the `audit_offhost_shipping` *declaration*: config load rejects `audit_ack_max_age_secs` set without `audit_ack_cursor_path`, and rejects `audit_ack_cursor_path` set on a local `file` audit sink that has not also declared `audit_offhost_shipping`. A `stdout`/`syslog` sink may carry a cursor without that declaration.
+`audit_ack_cursor_path` and `audit_ack_max_age_secs` are not booleans: they point at the regular, non-symlink state file a trusted off-host shipper atomically replaces after each successful hand-off (the `registry.audit.ack_cursor.v1` contract: `acked_at`, `last_acked_hash`, optional `writer`; maximum 16 KiB) and set how old `acked_at` may get before it reads as stale (defaults to 900 seconds). Mount the cursor read-only for Relay and keep it on local storage. Runtime health is `ok` only when the timestamp is fresh and the watermark equals the live keyed chain tail. Public readiness and posture reads use one blocking worker with a 500 ms deadline; a stalled read fails closed without queuing more readers. Config load rejects `audit_ack_max_age_secs` without a cursor path, and rejects a cursor on a local `file` sink without `audit_offhost_shipping`. `stdout` and `syslog` do not need that declaration, but evidence-grade policy still requires their cursor so shipping progress is observed.
 
 ### Waivers
 
@@ -619,12 +624,12 @@ Waiver reasons are only visible in the restricted posture tier; the default tier
 | `relay.audit.best_effort` | (not bound) | warn | readiness_fail |
 | `relay.audit.sink_missing` | error | readiness_fail | startup_fail |
 | `relay.audit.retention_local_only` | (not bound) | warn | startup_fail |
-| `relay.audit.shipping_unverified` | (not bound) | warn | warn |
+| `relay.audit.shipping_unverified` | (not bound) | warn | startup_fail |
 | `relay.audit.shipping_stale` | (not bound) | error | readiness_fail |
 
 `relay.audit.retention_local_only` fires when the audit sink is a local rotating `file` sink and `evidence.audit_offhost_shipping` is not declared: a local rotating file caps retention, and an attacker with host access can destroy the audit trail. `stdout` sinks are exempt (retention is the orchestrator's log pipeline's concern) and `syslog` sinks are exempt (forwarding is the syslog daemon's own surface).
 
-`relay.audit.shipping_unverified` and `relay.audit.shipping_stale` read the ack cursor's observed health. `shipping_unverified` fires when off-host shipping is declared for a local `file` sink (`evidence.audit_offhost_shipping: true`) but no `evidence.audit_ack_cursor_path` is configured, so shipping is asserted but not observed. `stdout` and `syslog` sinks do not fire it; they may still configure a cursor to opt into observation. `shipping_stale` fires when a cursor is configured but its observed health is not `ok` (missing, unreadable, malformed, or older than `evidence.audit_ack_max_age_secs`); it is `readiness_fail` under `evidence_grade`, so it is never waivable there. Remediation: restore off-host shipping so the writer refreshes the ack cursor, widen `evidence.audit_ack_max_age_secs` if the shipping cadence is legitimately slower, or remove `evidence.audit_ack_cursor_path` if the cursor is no longer meaningful.
+`relay.audit.shipping_unverified` and `relay.audit.shipping_stale` read the ack cursor's observed health. `shipping_unverified` fires when any shipping target (`stdout`, `syslog`, or an attested local `file` sink) lacks `evidence.audit_ack_cursor_path`. It warns under `production` and refuses startup under `evidence_grade`, because a missing observation capability cannot heal at runtime. `shipping_stale` fires when a cursor is configured but is missing, unreadable, malformed, too old, too slow to read, or names a `last_acked_hash` other than the live keyed audit-chain tail. It fails readiness under `evidence_grade` and recovers when the trusted shipper advances a fresh cursor to the current tail. Neither hard gate is waivable. Runtime tail equality establishes that the claimed watermark belongs to this chain and the local backlog is zero; the unsigned local cursor is not cryptographic proof of remote receipt. Offline `doctor` cannot bind to a live chain and therefore reports a fresh cursor as `unverified`, never `ok`; an evidence-grade offline check consequently reports the hard shipping gate. The signed-bundle acceptance audit advances the tail before Relay serves requests, so the shipper must run independently of application readiness and acknowledge that boot record before `/ready` can return 200. Remediation: configure the cursor maintained by the off-host shipper, restore shipping, adjust `evidence.audit_ack_max_age_secs` if the cadence is legitimately slower, or repair a path or watermark mismatch. Removing the cursor does not satisfy `evidence_grade`.
 
 The current deployment profile, its findings, and active waivers are reported under `deployment` in the operations posture (`GET /admin/v1/posture`).
 

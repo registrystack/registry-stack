@@ -625,6 +625,9 @@ pub struct AuditConfig {
     pub format: AuditFormat,
     #[serde(default)]
     pub chain: bool,
+    /// Include `/healthz` liveness probes in the audit stream. `/ready` is
+    /// always excluded because auditing it would advance the chain after its
+    /// zero-backlog shipping check and self-invalidate the next probe.
     #[serde(default)]
     pub include_health: bool,
     /// Behavior when an audit record fails to write.

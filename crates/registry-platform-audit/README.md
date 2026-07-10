@@ -64,10 +64,18 @@ async fn write_audit_event() -> Result<(), registry_platform_audit::AuditError> 
   logs.
 - Off-host audit shipping is the completeness guarantee. Evidence-grade Relay
   and Notary deployments refuse startup when a local `file` or `jsonl` sink is
-  used without declaring off-host shipping. `registry-platform-ops`'s
-  `registry.audit.ack_cursor.v1` contract and `evaluate_ack_health` add an
-  observed freshness signal on top of that declaration: whether the shipper
-  is still checking in, not whether every record arrived.
+  used without declaring off-host shipping. Every evidence-grade shipping
+  target, including `stdout` and `syslog`, also requires a
+  `registry.audit.ack_cursor.v1` cursor. A cursor is healthy only when its
+  `acked_at` is fresh and its `last_acked_hash` equals the live keyed chain
+  tail. Equality establishes zero local backlog for the trusted shipper's
+  claim. The unsigned local cursor is not cryptographic proof that a remote
+  system received or retained the records.
+- Shippers must replace the cursor atomically after a successful hand-off.
+  Mount the cursor read-only for the Registry runtime. Cursor reads reject
+  symbolic links and non-regular files and are limited to 16 KiB. Relay and
+  Notary readiness handlers run the read through one 500 ms bounded worker so
+  a stalled filesystem fails readiness without accumulating blocked workers.
 - The chain does not replace durable storage, retention policy, clock integrity,
   or off-host log shipping.
 - Use `AuditProfile::registry_relay_from_env` or

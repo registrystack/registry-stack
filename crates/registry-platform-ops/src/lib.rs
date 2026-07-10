@@ -5,8 +5,8 @@
 //! sensitivity-tier filter used before posture leaves a runtime.
 
 use std::fmt::{self, Display, Write as _};
-use std::fs;
-use std::io::Write;
+use std::fs::{self, File};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -19,6 +19,9 @@ use sha2::{Digest, Sha256};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use ulid::Ulid;
+
+#[cfg(unix)]
+use rustix::fs::{Mode, OFlags};
 
 pub const POSTURE_SCHEMA_V1: &str = include_str!("../schemas/registry.ops.posture.v1.schema.json");
 
@@ -271,24 +274,30 @@ const AUDIT_ACK_MAX_FUTURE_SKEW: Duration = Duration::from_secs(300);
 
 const AUDIT_ACK_CURSOR_SCHEMA_CONST: &str = "registry.audit.ack_cursor.v1";
 
-/// Observed off-host audit shipping freshness derived from the local ack cursor.
+/// Ack cursors contain four short scalar fields. Bound reads keep a readiness
+/// probe from allocating based on an attacker-controlled or misconfigured file.
+const MAX_AUDIT_ACK_CURSOR_BYTES: u64 = 16 * 1024;
+
+/// Observed off-host audit shipping state derived from the local ack cursor.
 ///
 /// This is the OBSERVED counterpart to the DECLARED shipping target reported by
-/// [`audit_shipping_target`]: local hash chains prove only retained-set
-/// consistency, so the cursor written by the shipper is the completeness signal.
+/// [`audit_shipping_target`]. A cursor is a trusted shipper's progress claim,
+/// not cryptographic proof of remote receipt. `Ok` additionally requires the
+/// claimed watermark to bind to the runtime's current keyed chain tail.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum AckHealth {
-    /// A cursor was read and its `acked_at` is within the freshness window.
+    /// A cursor is fresh and its watermark equals the current keyed chain tail.
     Ok,
     /// A cursor was read but its `acked_at` is older than the freshness window.
     Stale,
     /// A cursor path was configured but no file exists at it.
     Missing,
-    /// A cursor exists but is unreadable, not valid JSON, fails the contract, or
-    /// carries a future-skewed timestamp.
+    /// A cursor is unsafe to read, fails the contract, carries a future-skewed
+    /// timestamp, or does not bind to the current keyed chain tail.
     Invalid,
-    /// No cursor path was configured, so shipping freshness is not observed.
+    /// No cursor path is configured, or a fresh cursor has not yet been bound to
+    /// a live keyed chain tail (for example in an offline doctor command).
     Unverified,
 }
 
@@ -309,24 +318,105 @@ impl AckHealth {
 pub struct AckObservation {
     pub health: AckHealth,
     /// Raw RFC3339 `acked_at` string from the cursor, when one was successfully
-    /// parsed (`Ok`, `Stale`, or a future-skew `Invalid`).
+    /// parsed (including `Ok`, `Unverified`, `Stale`, and future-skew `Invalid`).
     pub acked_at: Option<String>,
-    /// Human-readable reason for a `Missing` or `Invalid` observation. Never
-    /// swallows the underlying error; carries the parse or I/O message.
+    /// Lowercase `sha256:` chain hash named by a contract-valid cursor. The
+    /// observation carries the watermark so callers do not silently discard it;
+    /// freshness evaluation alone does not prove retained-chain membership.
+    pub last_acked_hash: Option<String>,
+    /// Human-readable reason for a state that needs more evidence or repair.
+    /// Never swallows an underlying parse or I/O error.
     pub detail: Option<String>,
 }
 
 impl AckObservation {
-    fn invalid(detail: String) -> Self {
+    /// Build an observation that has no live shipping evidence.
+    #[must_use]
+    pub const fn unverified() -> Self {
+        Self {
+            health: AckHealth::Unverified,
+            acked_at: None,
+            last_acked_hash: None,
+            detail: None,
+        }
+    }
+
+    /// Build a fail-closed observation for a cursor that could not be sampled
+    /// safely. Runtime callers use this for bounded-read timeout and worker
+    /// failures without pretending the cursor is merely absent.
+    #[must_use]
+    pub fn invalid(detail: impl Into<String>) -> Self {
         Self {
             health: AckHealth::Invalid,
             acked_at: None,
-            detail: Some(detail),
+            last_acked_hash: None,
+            detail: Some(detail.into()),
         }
+    }
+
+    /// Whether this observation carries a contract-valid fresh cursor that
+    /// still needs to be bound to the live keyed audit-chain tail.
+    #[must_use]
+    pub fn requires_audit_tail_binding(&self) -> bool {
+        self.health == AckHealth::Ok
+            || (self.health == AckHealth::Unverified
+                && self.acked_at.is_some()
+                && self.last_acked_hash.is_some())
+    }
+
+    /// Bind a fresh cursor watermark to the live audit-chain tail.
+    ///
+    /// A local cursor is a trusted shipper's claim, not cryptographic proof of
+    /// remote receipt. Requiring the claimed hash to equal the process's current
+    /// keyed chain tail does prove that the claim names this chain and that the
+    /// observed backlog is zero. Any mismatch fails closed as `invalid`.
+    #[must_use]
+    pub fn bind_to_audit_tail(mut self, tail: Option<[u8; 32]>) -> Self {
+        if self.health == AckHealth::Ok
+            && (self.acked_at.is_none() || self.last_acked_hash.is_none())
+        {
+            self.health = AckHealth::Invalid;
+            self.detail =
+                Some("ok ack observation is missing its timestamp or last_acked_hash".to_string());
+            return self;
+        }
+        if !self.requires_audit_tail_binding() {
+            return self;
+        }
+        let Some(tail) = tail else {
+            self.health = AckHealth::Invalid;
+            self.detail = Some(
+                "ack cursor cannot be bound because the audit chain has no current tail"
+                    .to_string(),
+            );
+            return self;
+        };
+        let expected = audit_hash_uri(&tail);
+        if self.last_acked_hash.as_deref() == Some(expected.as_str()) {
+            self.health = AckHealth::Ok;
+            self.detail = None;
+        } else {
+            self.health = AckHealth::Invalid;
+            self.detail = Some(
+                "ack cursor last_acked_hash does not match the current audit chain tail"
+                    .to_string(),
+            );
+        }
+        self
     }
 }
 
-/// Evaluate the freshness of off-host audit shipping from a local ack cursor.
+struct ValidatedAckCursor {
+    acked_at: String,
+    last_acked_hash: String,
+}
+
+enum AckCursorReadError {
+    Missing,
+    Invalid(String),
+}
+
+/// Parse and evaluate the freshness of an off-host audit ack cursor.
 ///
 /// `now` is a parameter (never sampled internally) so callers can test every
 /// state deterministically. `max_age` is the freshness window; use
@@ -337,31 +427,28 @@ impl AckObservation {
 /// - file missing -> [`AckHealth::Missing`].
 /// - unreadable / invalid JSON / contract violation / future-skewed timestamp ->
 ///   [`AckHealth::Invalid`] with a `detail`.
-/// - `acked_at` within `max_age` of `now` -> [`AckHealth::Ok`]; older ->
-///   [`AckHealth::Stale`].
+/// - `acked_at` within `max_age` of `now` -> [`AckHealth::Unverified`] until
+///   [`AckObservation::bind_to_audit_tail`] succeeds; older -> [`AckHealth::Stale`].
 pub fn evaluate_ack_health(
     cursor_path: Option<&Path>,
     now: SystemTime,
     max_age: Duration,
 ) -> AckObservation {
     let Some(path) = cursor_path else {
-        return AckObservation {
-            health: AckHealth::Unverified,
-            acked_at: None,
-            detail: None,
-        };
+        return AckObservation::unverified();
     };
-    let bytes = match fs::read(path) {
+    let bytes = match read_ack_cursor(path) {
         Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+        Err(AckCursorReadError::Missing) => {
             return AckObservation {
                 health: AckHealth::Missing,
                 acked_at: None,
+                last_acked_hash: None,
                 detail: Some(format!("ack cursor not found at {}", path.display())),
             };
         }
-        Err(error) => {
-            return AckObservation::invalid(format!("ack cursor unreadable: {error}"));
+        Err(AckCursorReadError::Invalid(detail)) => {
+            return AckObservation::invalid(detail);
         }
     };
     let value: Value = match serde_json::from_slice(&bytes) {
@@ -370,11 +457,11 @@ pub fn evaluate_ack_health(
             return AckObservation::invalid(format!("ack cursor is not valid JSON: {error}"));
         }
     };
-    let acked_at_raw = match validate_ack_cursor(&value) {
-        Ok(acked_at) => acked_at,
+    let cursor = match validate_ack_cursor(&value) {
+        Ok(cursor) => cursor,
         Err(reason) => return AckObservation::invalid(reason),
     };
-    let acked_at = match OffsetDateTime::parse(&acked_at_raw, &Rfc3339) {
+    let acked_at = match OffsetDateTime::parse(&cursor.acked_at, &Rfc3339) {
         Ok(parsed) => parsed,
         Err(error) => {
             return AckObservation::invalid(format!(
@@ -387,7 +474,8 @@ pub fn evaluate_ack_health(
         if ahead > AUDIT_ACK_MAX_FUTURE_SKEW {
             return AckObservation {
                 health: AckHealth::Invalid,
-                acked_at: Some(acked_at_raw),
+                acked_at: Some(cursor.acked_at),
+                last_acked_hash: Some(cursor.last_acked_hash),
                 detail: Some(format!(
                     "ack cursor acked_at is {}s in the future (max tolerated skew {}s)",
                     ahead.as_secs(),
@@ -399,22 +487,130 @@ pub fn evaluate_ack_health(
     let age = now
         .duration_since(acked_at_system)
         .unwrap_or(Duration::ZERO);
-    let health = if age <= max_age {
-        AckHealth::Ok
+    let (health, detail) = if age <= max_age {
+        (
+            AckHealth::Unverified,
+            Some(
+                "ack cursor is fresh but has not been bound to the current audit chain tail"
+                    .to_string(),
+            ),
+        )
     } else {
-        AckHealth::Stale
+        (AckHealth::Stale, None)
     };
     AckObservation {
         health,
-        acked_at: Some(acked_at_raw),
-        detail: None,
+        acked_at: Some(cursor.acked_at),
+        last_acked_hash: Some(cursor.last_acked_hash),
+        detail,
     }
 }
 
+fn audit_hash_uri(hash: &[u8; 32]) -> String {
+    let mut output = String::with_capacity("sha256:".len() + 64);
+    output.push_str("sha256:");
+    for byte in hash {
+        write!(&mut output, "{byte:02x}").expect("writing to String cannot fail");
+    }
+    output
+}
+
+fn read_ack_cursor(path: &Path) -> Result<Vec<u8>, AckCursorReadError> {
+    let mut file = match open_ack_cursor(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(AckCursorReadError::Missing);
+        }
+        Err(error) => {
+            return Err(AckCursorReadError::Invalid(format!(
+                "ack cursor cannot be opened safely: {error}"
+            )));
+        }
+    };
+    let metadata = file.metadata().map_err(|error| {
+        AckCursorReadError::Invalid(format!("ack cursor metadata is unreadable: {error}"))
+    })?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(AckCursorReadError::Invalid(
+                "ack cursor is a reparse point, not a regular file".to_string(),
+            ));
+        }
+    }
+    if !metadata.is_file() {
+        return Err(AckCursorReadError::Invalid(
+            "ack cursor is not a regular file".to_string(),
+        ));
+    }
+    if metadata.len() > MAX_AUDIT_ACK_CURSOR_BYTES {
+        return Err(AckCursorReadError::Invalid(format!(
+            "ack cursor exceeds the {MAX_AUDIT_ACK_CURSOR_BYTES}-byte size limit"
+        )));
+    }
+    let read_cap = MAX_AUDIT_ACK_CURSOR_BYTES + 1;
+    let mut bytes = Vec::new();
+    Read::by_ref(&mut file)
+        .take(read_cap)
+        .read_to_end(&mut bytes)
+        .map_err(|error| {
+            AckCursorReadError::Invalid(format!("ack cursor is unreadable: {error}"))
+        })?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_AUDIT_ACK_CURSOR_BYTES {
+        return Err(AckCursorReadError::Invalid(format!(
+            "ack cursor exceeds the {MAX_AUDIT_ACK_CURSOR_BYTES}-byte size limit"
+        )));
+    }
+    Ok(bytes)
+}
+
+#[cfg(unix)]
+fn open_ack_cursor(path: &Path) -> std::io::Result<File> {
+    let fd = rustix::fs::open(
+        path,
+        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
+        Mode::empty(),
+    )
+    .map_err(std::io::Error::from)?;
+    Ok(File::from(fd))
+}
+
+#[cfg(windows)]
+fn open_ack_cursor(path: &Path) -> std::io::Result<File> {
+    use std::fs::OpenOptions;
+    use std::os::windows::fs::OpenOptionsExt;
+
+    // Open the reparse point itself instead of following it. The subsequent
+    // metadata check rejects every reparse point before reading.
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn open_ack_cursor(path: &Path) -> std::io::Result<File> {
+    // Best-effort fallback for targets without Unix O_NOFOLLOW or Windows
+    // reparse-point flags. Supported production targets use the guarded paths
+    // above.
+    let metadata = std::fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "ack cursor symbolic links are not allowed",
+        ));
+    }
+    File::open(path)
+}
+
 /// Validate a parsed ack cursor against the `registry.audit.ack_cursor.v1`
-/// contract, mirroring the JSON Schema. Returns the raw `acked_at` string on
-/// success or a human-readable reason on failure.
-fn validate_ack_cursor(value: &Value) -> Result<String, String> {
+/// contract, mirroring the JSON Schema. Returns the validated timestamp and
+/// chain watermark on success or a human-readable reason on failure.
+fn validate_ack_cursor(value: &Value) -> Result<ValidatedAckCursor, String> {
     let object = value
         .as_object()
         .ok_or_else(|| "ack cursor is not a JSON object".to_string())?;
@@ -445,15 +641,20 @@ fn validate_ack_cursor(value: &Value) -> Result<String, String> {
         ));
     }
     if let Some(writer) = object.get("writer") {
-        if !writer.is_string() {
-            return Err("ack cursor writer must be a string".to_string());
+        match writer.as_str() {
+            Some("") => return Err("ack cursor writer must not be empty".to_string()),
+            Some(_) => {}
+            None => return Err("ack cursor writer must be a string".to_string()),
         }
     }
     let acked_at = object
         .get("acked_at")
         .and_then(Value::as_str)
         .ok_or_else(|| "ack cursor is missing required field: acked_at".to_string())?;
-    Ok(acked_at.to_string())
+    Ok(ValidatedAckCursor {
+        acked_at: acked_at.to_string(),
+        last_acked_hash: last_acked_hash.to_string(),
+    })
 }
 
 /// Match the `^sha256:[0-9a-f]{64}$` pattern the ack cursor schema pins on
@@ -2675,11 +2876,16 @@ mod tests {
         path
     }
 
+    fn fixture_tail_hash() -> [u8; 32] {
+        [0x44; 32]
+    }
+
     #[test]
     fn evaluate_ack_health_unverified_when_no_cursor_configured() {
         let observation = evaluate_ack_health(None, SystemTime::now(), DEFAULT_AUDIT_ACK_MAX_AGE);
         assert_eq!(observation.health, AckHealth::Unverified);
         assert!(observation.acked_at.is_none());
+        assert!(observation.last_acked_hash.is_none());
         assert!(observation.detail.is_none());
     }
 
@@ -2707,10 +2913,16 @@ mod tests {
         let path = write_cursor(dir.path(), AUDIT_ACK_CURSOR_FIXTURE_V1);
         let now = cursor_acked_at_system() + Duration::from_secs(60);
         let observation = evaluate_ack_health(Some(&path), now, DEFAULT_AUDIT_ACK_MAX_AGE);
+        assert_eq!(observation.health, AckHealth::Unverified);
+        let observation = observation.bind_to_audit_tail(Some(fixture_tail_hash()));
         assert_eq!(observation.health, AckHealth::Ok);
         assert_eq!(
             observation.acked_at.as_deref(),
             Some("2026-06-04T09:59:00Z")
+        );
+        assert_eq!(
+            observation.last_acked_hash.as_deref(),
+            Some("sha256:4444444444444444444444444444444444444444444444444444444444444444")
         );
         assert!(observation.detail.is_none());
     }
@@ -2720,7 +2932,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = write_cursor(dir.path(), AUDIT_ACK_CURSOR_FIXTURE_V1);
         let now = cursor_acked_at_system() + DEFAULT_AUDIT_ACK_MAX_AGE;
-        let observation = evaluate_ack_health(Some(&path), now, DEFAULT_AUDIT_ACK_MAX_AGE);
+        let observation = evaluate_ack_health(Some(&path), now, DEFAULT_AUDIT_ACK_MAX_AGE)
+            .bind_to_audit_tail(Some(fixture_tail_hash()));
         assert_eq!(
             observation.health,
             AckHealth::Ok,
@@ -2770,8 +2983,75 @@ mod tests {
         let path = write_cursor(dir.path(), AUDIT_ACK_CURSOR_FIXTURE_V1);
         // 60s in the future is within the 300s skew tolerance and counts as fresh.
         let now = cursor_acked_at_system() - Duration::from_secs(60);
-        let observation = evaluate_ack_health(Some(&path), now, DEFAULT_AUDIT_ACK_MAX_AGE);
+        let observation = evaluate_ack_health(Some(&path), now, DEFAULT_AUDIT_ACK_MAX_AGE)
+            .bind_to_audit_tail(Some(fixture_tail_hash()));
         assert_eq!(observation.health, AckHealth::Ok);
+    }
+
+    #[test]
+    fn evaluate_ack_health_fails_closed_when_fresh_hash_does_not_match_tail() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = write_cursor(dir.path(), AUDIT_ACK_CURSOR_FIXTURE_V1);
+        let now = cursor_acked_at_system() + Duration::from_secs(60);
+        let observation = evaluate_ack_health(Some(&path), now, DEFAULT_AUDIT_ACK_MAX_AGE)
+            .bind_to_audit_tail(Some([0x55; 32]));
+        assert_eq!(observation.health, AckHealth::Invalid);
+        assert!(observation
+            .detail
+            .as_deref()
+            .expect("binding detail")
+            .contains("does not match"));
+    }
+
+    #[test]
+    fn bound_ack_observation_fails_closed_when_rebound_to_changed_tail() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = write_cursor(dir.path(), AUDIT_ACK_CURSOR_FIXTURE_V1);
+        let now = cursor_acked_at_system() + Duration::from_secs(60);
+        let observation = evaluate_ack_health(Some(&path), now, DEFAULT_AUDIT_ACK_MAX_AGE)
+            .bind_to_audit_tail(Some(fixture_tail_hash()));
+        assert_eq!(observation.health, AckHealth::Ok);
+
+        let rebound = observation.bind_to_audit_tail(Some([0x55; 32]));
+        assert_eq!(rebound.health, AckHealth::Invalid);
+        assert_eq!(
+            rebound.detail.as_deref(),
+            Some("ack cursor last_acked_hash does not match the current audit chain tail")
+        );
+    }
+
+    #[test]
+    fn malformed_ok_ack_observation_fails_closed_when_rebound() {
+        let observation = AckObservation {
+            health: AckHealth::Ok,
+            acked_at: None,
+            last_acked_hash: None,
+            detail: None,
+        };
+        assert!(observation.requires_audit_tail_binding());
+
+        let rebound = observation.bind_to_audit_tail(Some(fixture_tail_hash()));
+        assert_eq!(rebound.health, AckHealth::Invalid);
+        assert!(rebound
+            .detail
+            .as_deref()
+            .expect("malformed ok detail")
+            .contains("missing"));
+    }
+
+    #[test]
+    fn evaluate_ack_health_fails_closed_when_chain_has_no_tail() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = write_cursor(dir.path(), AUDIT_ACK_CURSOR_FIXTURE_V1);
+        let now = cursor_acked_at_system() + Duration::from_secs(60);
+        let observation = evaluate_ack_health(Some(&path), now, DEFAULT_AUDIT_ACK_MAX_AGE)
+            .bind_to_audit_tail(None);
+        assert_eq!(observation.health, AckHealth::Invalid);
+        assert!(observation
+            .detail
+            .as_deref()
+            .expect("binding detail")
+            .contains("no current tail"));
     }
 
     #[test]
@@ -2782,6 +3062,81 @@ mod tests {
             evaluate_ack_health(Some(&path), SystemTime::now(), DEFAULT_AUDIT_ACK_MAX_AGE);
         assert_eq!(observation.health, AckHealth::Invalid);
         assert!(observation.acked_at.is_none());
+        assert!(observation.detail.is_some());
+    }
+
+    #[test]
+    fn evaluate_ack_health_rejects_non_regular_cursor_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let observation = evaluate_ack_health(
+            Some(dir.path()),
+            SystemTime::now(),
+            DEFAULT_AUDIT_ACK_MAX_AGE,
+        );
+        assert_eq!(observation.health, AckHealth::Invalid);
+        assert!(observation
+            .detail
+            .as_deref()
+            .expect("invalid detail")
+            .contains("regular file"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn evaluate_ack_health_rejects_fifo_without_blocking() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("ack-cursor.fifo");
+        let status = std::process::Command::new("mkfifo")
+            .arg(&path)
+            .status()
+            .expect("mkfifo executes");
+        assert!(status.success(), "mkfifo creates the test cursor");
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let observation =
+                evaluate_ack_health(Some(&path), SystemTime::now(), DEFAULT_AUDIT_ACK_MAX_AGE);
+            let _ = tx.send(observation);
+        });
+        let observation = rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("FIFO cursor evaluation returns without a writer");
+        assert_eq!(observation.health, AckHealth::Invalid);
+        assert!(observation
+            .detail
+            .as_deref()
+            .expect("FIFO detail")
+            .contains("regular file"));
+    }
+
+    #[test]
+    fn evaluate_ack_health_rejects_oversized_cursor() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let body = vec![b' '; usize::try_from(MAX_AUDIT_ACK_CURSOR_BYTES + 1).expect("small cap")];
+        let path = dir.path().join("oversized-cursor.json");
+        fs::write(&path, body).expect("write oversized cursor");
+        let observation =
+            evaluate_ack_health(Some(&path), SystemTime::now(), DEFAULT_AUDIT_ACK_MAX_AGE);
+        assert_eq!(observation.health, AckHealth::Invalid);
+        assert!(observation
+            .detail
+            .as_deref()
+            .expect("invalid detail")
+            .contains("size limit"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn evaluate_ack_health_rejects_symlink_cursor() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let target = write_cursor(dir.path(), AUDIT_ACK_CURSOR_FIXTURE_V1);
+        let link = dir.path().join("cursor-link.json");
+        symlink(target, &link).expect("create cursor symlink");
+        let observation =
+            evaluate_ack_health(Some(&link), SystemTime::now(), DEFAULT_AUDIT_ACK_MAX_AGE);
+        assert_eq!(observation.health, AckHealth::Invalid);
         assert!(observation.detail.is_some());
     }
 
@@ -2818,6 +3173,12 @@ mod tests {
                 "unknown field",
                 format!(
                     r#"{{"schema":"registry.audit.ack_cursor.v1","acked_at":"2026-06-04T09:59:00Z","last_acked_hash":"{hash}","backlog_depth":3}}"#
+                ),
+            ),
+            (
+                "empty writer",
+                format!(
+                    r#"{{"schema":"registry.audit.ack_cursor.v1","acked_at":"2026-06-04T09:59:00Z","last_acked_hash":"{hash}","writer":""}}"#
                 ),
             ),
             (

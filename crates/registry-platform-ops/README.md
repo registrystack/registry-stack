@@ -31,6 +31,8 @@ runtime output.
 - `schemas/registry.audit.ack_cursor.v1.schema.json` defines the local state
   file an off-host audit shipper writes on each successful hand-off
   (`acked_at`, `last_acked_hash`, optional `writer`). `evaluate_ack_health`
-  reads a file against this contract and classifies its freshness as `ok`,
-  `stale`, `missing`, `invalid`, or `unverified`.
+  safely reads and validates freshness; a runtime then calls
+  `AckObservation::bind_to_audit_tail` before it may report `ok`. Fresh but
+  unbound cursors remain `unverified`; stale, missing, unsafe, malformed, or
+  mismatched cursors fail closed.
 - `fixtures/audit/ack-cursor.valid.json` is a valid ack cursor fixture.

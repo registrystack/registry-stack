@@ -17,9 +17,9 @@
 - `deployment.evidence.audit_offhost_shipping` attestation and the
   `relay.audit.retention_local_only` deployment gate: a local rotating `file`
   audit sink without a declared off-host shipping attestation now warns under
-  `production` and refuses startup under `evidence_grade` so an attacker with
-  host access cannot silently destroy audit evidence. `stdout` and `syslog`
-  sinks are exempt.
+  `production` and refuses startup under `evidence_grade`, surfacing and
+  blocking the declared local-only retention risk. `stdout` and `syslog` sinks
+  are exempt.
 - `registry-relay audit quarantine --config <path> --reason <text>
   --operator <id>`: offline recovery for a corrupt or forked audit chain
   (#196). The corrupt file set is archived to `<name>.corrupt-<ts>` (never
@@ -43,21 +43,38 @@
   `file` audit sink that has not declared `audit_offhost_shipping`; a
   `stdout`/`syslog` sink may carry a cursor without that declaration.
 - Two new deployment gates read the ack cursor's observed health:
-  `relay.audit.shipping_unverified` (a shipping target is declared but no
-  ack cursor is configured; `finding_warn` under `production` and
-  `evidence_grade`, unbound under `hosted_lab`) and
+  `relay.audit.shipping_unverified` (a shipping target is configured but no
+  ack cursor is configured; `finding_warn` under `production`,
+  `startup_fail` under `evidence_grade`, unbound under `hosted_lab`) and
   `relay.audit.shipping_stale` (a cursor is configured but its observed
-  health is not `ok`; `finding_error` under `production`, `readiness_fail`
+  health is not `ok`, including a watermark that differs from the live keyed
+  chain tail; `finding_error` under `production`, `readiness_fail`
   (non-waivable) under `evidence_grade`, unbound under `hosted_lab`).
 - `registry-relay doctor`'s `audit_shipping` object and the admin `posture.audit`
   block both gain `shipping_health` (`ok`, `stale`, `missing`, `invalid`,
   `unverified`, or `null`) and `shipping_observed_at` (an RFC3339 timestamp, or
   `null`), the observed freshness of off-host audit shipping read from the ack
   cursor. Both are `null` whenever `shipping_target_configured` is `false`.
-  This is a liveness/freshness signal for the shipping path, not proof every
-  audit event arrived.
+  Runtime `ok` requires a fresh cursor bound to the current keyed chain tail;
+  offline doctor output remains `unverified` because it has no live chain to
+  bind. Tail equality establishes a zero local backlog for the trusted
+  shipper's claim, not cryptographic proof of remote receipt.
+- Runtime cursor reads use one blocking worker with a 500 ms deadline. A slow
+  or stalled cursor filesystem fails readiness without blocking async request
+  workers or accumulating additional blocked cursor readers. The cursor must
+  be a regular file of at most 16 KiB and must be replaced atomically by the
+  shipper.
+- A signed-bundle boot writes `config.bundle_accepted` before the service begins
+  serving. Evidence-grade readiness remains `503` until the independent shipper
+  acknowledges that new tail. Offline `registry-relay doctor` cannot perform
+  live tail binding, so a fresh cursor remains `unverified` and the offline
+  evidence-grade check reports the hard shipping gate.
 
 ### Changed
+
+- BREAKING: `audit.include_health: true` now includes `/healthz` only.
+  `/ready` is always excluded because appending a readiness audit record after
+  its zero-backlog comparison would invalidate the next readiness probe.
 
 - BREAKING: Removed Relay-local credential issuance before 1.0. Relay no
   longer accepts `provenance` or entity `publicschema` config, no longer serves
@@ -90,7 +107,8 @@
   `audit.write_policy` to a durability-first policy, or, for
   `relay.audit.retention_local_only`, ship audit events off-host and declare
   `deployment.evidence.audit_offhost_shipping: true` or switch to a
-  `stdout`/`syslog` sink).
+  `stdout`/`syslog` sink). An `evidence_grade` deployment must also configure
+  `deployment.evidence.audit_ack_cursor_path` for every sink type.
 
 ## 0.8.4 - 2026-07-04
 

@@ -735,7 +735,7 @@ fn doctor_json_production_public_openapi_reports_error_but_succeeds() {
 }
 
 #[test]
-fn doctor_json_evidence_grade_public_openapi_reports_error_but_succeeds() {
+fn doctor_json_evidence_grade_public_openapi_reports_error_with_unverified_shipping() {
     let tmp = TempDir::new().expect("tempdir");
     let config = write_config_with_options(
         &tmp,
@@ -754,8 +754,8 @@ fn doctor_json_evidence_grade_public_openapi_reports_error_but_succeeds() {
         .expect("doctor runs");
 
     assert!(
-        output.status.success(),
-        "evidence_grade public OpenAPI should be a finding_error, not startup_fail\nstdout:\n{}\nstderr:\n{}",
+        !output.status.success(),
+        "evidence_grade doctor should fail closed when shipping cannot be bound to the live audit tail\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
@@ -768,6 +768,10 @@ fn doctor_json_evidence_grade_public_openapi_reports_error_but_succeeds() {
         diagnostic_with_code(&report, "notary.config.unsigned").is_none(),
         "config_trust should isolate the OpenAPI finding"
     );
+    let shipping = diagnostic_with_code(&report, "notary.audit.shipping_unverified")
+        .expect("offline shipping remains unverified");
+    assert_eq!(shipping["severity"], "error");
+    assert_active_finding(shipping);
     let diagnostic =
         diagnostic_with_code(&report, "notary.openapi.public").expect("OpenAPI public finding");
     assert_eq!(diagnostic["severity"], "error");
@@ -1199,7 +1203,7 @@ fn doctor_json_production_source_binding_without_matching_policy_reports_once() 
 }
 
 #[test]
-fn doctor_json_evidence_grade_source_binding_without_matching_policy_reports_once() {
+fn doctor_json_evidence_grade_source_binding_reports_once_with_unverified_shipping() {
     let tmp = TempDir::new().expect("tempdir");
     let config = write_config_with_options(
         &tmp,
@@ -1218,14 +1222,19 @@ fn doctor_json_evidence_grade_source_binding_without_matching_policy_reports_onc
         .expect("doctor runs");
 
     assert!(
-        output.status.success(),
-        "evidence_grade binding without a matching policy is a finding_error, not startup_fail\nstdout:\n{}\nstderr:\n{}",
+        !output.status.success(),
+        "evidence_grade doctor should fail closed when shipping cannot be bound to the live audit tail\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).expect("stdout is utf8");
     let report: Value = serde_json::from_str(&stdout).expect("doctor emits JSON");
     assert_product_diagnostic_report(&report);
+
+    let shipping = diagnostic_with_code(&report, "notary.audit.shipping_unverified")
+        .expect("offline shipping remains unverified");
+    assert_eq!(shipping["severity"], "error");
+    assert_active_finding(shipping);
 
     let diagnostics = diagnostics_with_code(&report, "notary.source_binding.no_matching_policy");
     assert_eq!(
@@ -1362,7 +1371,7 @@ fn run_doctor_json(config: &Path, env_file: &Path) -> Value {
 }
 
 #[test]
-fn doctor_json_reports_shipping_health_ok_for_fresh_cursor() {
+fn doctor_json_reports_shipping_health_unverified_for_fresh_cursor() {
     let tmp = TempDir::new().expect("tempdir");
     let acked_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let cursor = write_doctor_ack_cursor(&tmp, &acked_at);
@@ -1380,7 +1389,7 @@ fn doctor_json_reports_shipping_health_ok_for_fresh_cursor() {
     let report = run_doctor_json(&config, &env_file);
 
     assert_eq!(report["audit_shipping"]["shipping_target_configured"], true);
-    assert_eq!(report["audit_shipping"]["shipping_health"], "ok");
+    assert_eq!(report["audit_shipping"]["shipping_health"], "unverified");
     assert_eq!(report["audit_shipping"]["shipping_observed_at"], acked_at);
 }
 

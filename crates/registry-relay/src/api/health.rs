@@ -45,6 +45,15 @@ async fn health() -> Json<Value> {
 /// declared deployment gate demands `readiness_fail`. When no runtime is
 /// installed, it returns a trivial ready response.
 async fn ready(runtime: RuntimeSnapshot) -> Response {
+    // Preserve the established actionable chain-inconsistency response and do
+    // not retry an expensive retained-chain bootstrap after eager verification
+    // has already failed.
+    if let Some(audit) = runtime.audit_sink() {
+        if !audit.chain_healthy() {
+            return audit_chain_not_ready_response();
+        }
+    }
+
     // Deployment gates evaluated at `readiness_fail` keep the process running
     // but report not-ready. This is checked first so that adopting a profile
     // surfaces a posture problem even before ingest state is consulted.
@@ -53,7 +62,21 @@ async fn ready(runtime: RuntimeSnapshot) -> Response {
             .config_provenance()
             .map(|provenance| provenance.source)
             .unwrap_or(registry_platform_ops::ConfigSource::LocalFile);
-        let facts = crate::deployment::facts_from_config(&config, source);
+        let observation = crate::deployment::audit_ack_observation_bounded(&config).await;
+        let observation = if observation.requires_audit_tail_binding() {
+            let tail = match runtime.audit_sink() {
+                Some(audit) => audit.current_tail_hash_bounded().await,
+                None => None,
+            };
+            observation.bind_to_audit_tail(tail)
+        } else {
+            observation
+        };
+        let facts = crate::deployment::facts_from_config_with_ack_observation(
+            &config,
+            source,
+            &observation,
+        );
         let waivers = crate::deployment::waivers_from_config(&config);
         let evaluation = crate::deployment::evaluate(
             config.deployment.profile,
@@ -63,16 +86,6 @@ async fn ready(runtime: RuntimeSnapshot) -> Response {
         );
         if evaluation.has_readiness_failure() {
             return deployment_not_ready_response();
-        }
-    }
-
-    // A retained audit chain that failed startup verification means every
-    // audited request fails closed; report not-ready so the brick is visible on
-    // /ready rather than only as per-request 503s behind a green healthcheck
-    // (#196). Recover with `registry-relay audit quarantine`.
-    if let Some(audit) = runtime.audit_sink() {
-        if !audit.chain_healthy() {
-            return audit_chain_not_ready_response();
         }
     }
 

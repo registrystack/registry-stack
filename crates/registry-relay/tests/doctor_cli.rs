@@ -525,7 +525,7 @@ fn run_doctor_json(config_path: &std::path::Path) -> Value {
 }
 
 #[test]
-fn doctor_json_reports_fresh_ack_cursor_health() {
+fn doctor_json_reports_fresh_ack_cursor_as_unverified_offline() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let acked_at = OffsetDateTime::now_utc()
         .format(&Rfc3339)
@@ -537,7 +537,7 @@ fn doctor_json_reports_fresh_ack_cursor_health() {
     let config_path = write_ack_cursor_config(&tmp, "relay-fresh.yaml", &cursor_path);
 
     let report = run_doctor_json(&config_path);
-    assert_eq!(report["audit_shipping"]["shipping_health"], "ok");
+    assert_eq!(report["audit_shipping"]["shipping_health"], "unverified");
     assert_eq!(report["audit_shipping"]["shipping_observed_at"], acked_at);
 }
 

@@ -29,7 +29,7 @@
     "sink_type": "file",
     "shipping_target_configured": true,
     "shipping_target": "declared_external",
-    "shipping_health": "ok",
+    "shipping_health": "unverified",
     "shipping_observed_at": "2026-06-19T23:59:00Z"
   },
   "hashes": {

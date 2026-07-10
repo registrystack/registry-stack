@@ -63,11 +63,11 @@
       "shipping_target": "declared_external",
       "shipping_health": "ok",
       "shipping_observed_at": "2026-06-04T09:59:00Z",
-      "checkpoint_status": "available",
-      "latest_tail_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-      "latest_sequence": 88,
-      "verified_at": "2026-06-04T09:59:30Z",
-      "verification_status": "verified"
+      "checkpoint_status": "unavailable",
+      "latest_tail_hash": null,
+      "latest_sequence": null,
+      "verified_at": null,
+      "verification_status": "not_supported"
     }
   },
   "notary": {

@@ -41,7 +41,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`HardGateNotWaivable`). Migration: remove the waiver, then either ship
   audit events off-host and declare
   `deployment.evidence.audit_offhost_shipping: true`, or switch to a
-  `stdout`/`syslog` sink.
+  `stdout`/`syslog` sink to clear the local-retention gate. An
+  `evidence_grade` deployment must also configure
+  `deployment.evidence.audit_ack_cursor_path` for every sink type.
 - `registry-notary doctor`'s JSON report
   (`registry.config.diagnostic_report.v1`) now carries an `audit_shipping`
   object (`sink_type`, `shipping_target_configured`, `shipping_target`) when
@@ -68,21 +70,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   declared `audit_offhost_shipping` (`AuditAckCursorWithoutShippingDeclared`);
   a `stdout`/`syslog` sink may carry a cursor without that declaration.
 - Two new deployment gates read the ack cursor's observed health:
-  `notary.audit.shipping_unverified` (a shipping target is declared but no
-  ack cursor is configured; `finding_warn` under `production` and
-  `evidence_grade`, unbound under `hosted_lab`) and
+  `notary.audit.shipping_unverified` (a shipping target is configured but no
+  ack cursor is configured; `finding_warn` under `production`,
+  `startup_fail` under `evidence_grade`, unbound under `hosted_lab`) and
   `notary.audit.shipping_stale` (a cursor is configured but its observed
-  health is not `ok`; `finding_error` under `production`, `readiness_fail`
+  health is not `ok`, including a watermark that differs from the live keyed
+  chain tail; `finding_error` under `production`, `readiness_fail`
   (non-waivable) under `evidence_grade`, unbound under `hosted_lab`).
+- Notary readiness and posture re-evaluate audit shipping gates on each request,
+  so a fresh ack cursor that becomes stale after startup now makes an
+  `evidence_grade` instance not ready without requiring a restart.
+- Runtime cursor reads use one blocking worker with a 500 ms deadline. A slow
+  or stalled cursor filesystem fails readiness without blocking async request
+  workers or accumulating additional blocked cursor readers. The cursor must
+  be a regular file of at most 16 KiB and must be replaced atomically by the
+  shipper.
 - `registry-notary doctor`'s `audit_shipping` object and the admin
   `GET /admin/v1/posture` `posture.audit` block both gain `shipping_health`
   (`ok`, `stale`, `missing`, `invalid`, `unverified`, or `null`) and
   `shipping_observed_at` (an RFC3339 timestamp, or `null`), the observed
   freshness of off-host audit shipping read from the ack cursor. Both are
-  `null` whenever `shipping_target_configured` is `false`. This is a
-  liveness/freshness signal for the shipping path, not proof every audit
-  event arrived. The committed OpenAPI example for `GET /admin/v1/posture`
+  `null` whenever `shipping_target_configured` is `false`. Runtime `ok`
+  requires a fresh cursor bound to the current keyed chain tail; offline doctor
+  output remains `unverified`. Tail equality establishes a zero local backlog
+  for the trusted shipper's claim, not cryptographic proof of remote receipt.
+  The committed OpenAPI example for `GET /admin/v1/posture`
   is regenerated to include both fields.
+- A signed-bundle boot writes `config.bundle_accepted` before the service begins
+  serving. Evidence-grade readiness remains `503` until the independent shipper
+  acknowledges that new tail. Offline `registry-notary doctor` cannot perform
+  live tail binding, so a fresh cursor remains `unverified` and the offline
+  evidence-grade check reports the hard shipping gate.
 
 ### Changed
 

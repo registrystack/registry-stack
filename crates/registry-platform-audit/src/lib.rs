@@ -168,6 +168,14 @@ impl ChainState {
         *self.last_hash.lock().await
     }
 
+    /// Return the current in-memory tail hash without waiting behind an append.
+    ///
+    /// `None` means an append currently owns the chain state. Readiness callers
+    /// must fail closed instead of waiting on a potentially stalled audit sink.
+    pub fn try_last_hash(&self) -> Option<Option<[u8; 32]>> {
+        self.last_hash.try_lock().ok().map(|last_hash| *last_hash)
+    }
+
     /// Append a serializable record, persist it through `sink`, and advance the chain.
     ///
     /// The state advances only after the sink write succeeds. Concurrent appends are
@@ -1952,7 +1960,40 @@ mod option_hash_hex {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::{redact::QueryRedactor, *};
+
+    struct StalledSink {
+        started: tokio::sync::Semaphore,
+        release: tokio::sync::Semaphore,
+    }
+
+    impl Default for StalledSink {
+        fn default() -> Self {
+            Self {
+                started: tokio::sync::Semaphore::new(0),
+                release: tokio::sync::Semaphore::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl AuditSink for StalledSink {
+        async fn write(&self, _envelope: &AuditEnvelope) -> Result<(), AuditError> {
+            self.started.add_permits(1);
+            self.release
+                .acquire()
+                .await
+                .expect("test release semaphore stays open")
+                .forget();
+            Ok(())
+        }
+
+        async fn tail_hash(&self) -> Result<Option<[u8; 32]>, AuditError> {
+            Ok(None)
+        }
+    }
 
     #[test]
     fn default_rotation_retains_fifty_files() {
@@ -2008,6 +2049,36 @@ mod tests {
                 .expect("valid chain");
         assert_eq!(verification.records, 3);
         assert_eq!(verification.last_hash, Some(third.record_hash));
+    }
+
+    #[tokio::test]
+    async fn audit_chain_tail_read_fails_fast_while_append_is_stalled() {
+        let chain = Arc::new(ChainState::unkeyed_dev_only());
+        let sink = Arc::new(StalledSink::default());
+        let append = tokio::spawn({
+            let chain = Arc::clone(&chain);
+            let sink = Arc::clone(&sink);
+            async move {
+                chain
+                    .append(sink.as_ref(), json!({ "event": "stalled" }))
+                    .await
+            }
+        });
+        tokio::time::timeout(Duration::from_secs(1), sink.started.acquire())
+            .await
+            .expect("audit write stalls within the test deadline")
+            .expect("test started semaphore stays open")
+            .forget();
+
+        assert_eq!(chain.try_last_hash(), None);
+
+        sink.release.add_permits(1);
+        let envelope = tokio::time::timeout(Duration::from_secs(1), append)
+            .await
+            .expect("append completes within the test deadline")
+            .expect("append task joins")
+            .expect("append writes");
+        assert_eq!(chain.try_last_hash(), Some(Some(envelope.record_hash)));
     }
 
     #[tokio::test]

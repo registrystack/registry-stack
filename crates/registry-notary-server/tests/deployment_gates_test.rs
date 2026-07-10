@@ -13,15 +13,17 @@ use registry_notary_core::{
 };
 use registry_notary_server::{
     compile_notary_runtime, compile_notary_runtime_with_provenance, notary_router_from_runtime,
-    standalone_router, StandaloneServerError,
+    notary_routers_from_runtime, standalone_router, StandaloneServerError,
 };
+use registry_platform_audit::{AuditProfile, JsonlFileSink};
 use registry_platform_authcommon::{CredentialFingerprintProvider, CredentialFingerprintRef};
 use registry_platform_ops::ConfigSource;
 use registry_platform_testing::fixtures::ED25519_PRIVATE_JWK;
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::path::Path;
 
 const AUDIT_SECRET: &str = "0123456789abcdef0123456789abcdef";
+static SHIPPING_CURSOR_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 // The raw caseworker API-key fingerprint env value. The tests here never
 // present the credential; they exercise startup, readiness, and posture only.
 const CASEWORKER_KEY_HASH: &str =
@@ -555,7 +557,7 @@ async fn production_high_risk_replay_reports_readiness_failure() {
     let mut config = ConfigBuilder::new(&audit_path(&tmp))
         .deployment("deployment:\n  profile: production\n  multi_instance: true\n")
         .build();
-    config.server.admin_listener.mode = RegistryNotaryAdminListenerMode::SharedWithPublic;
+    config.server.admin_listener.mode = RegistryNotaryAdminListenerMode::Dedicated;
 
     let app = standalone_router(config).expect("production high-risk config still starts");
     let server = TestServer::builder().http_transport().build(app);
@@ -597,6 +599,7 @@ async fn production_declared_external_without_cursor_reports_shipping_unverified
 
 #[tokio::test]
 async fn production_stale_cursor_reports_shipping_stale_finding() {
+    let _guard = SHIPPING_CURSOR_TEST_LOCK.lock().await;
     let tmp = tempfile::TempDir::new().expect("tempdir");
     // A cursor stale against the default 900s window, on an attested file sink.
     let cursor = write_ack_cursor(&tmp, "2026-06-04T09:59:00Z");
@@ -811,12 +814,55 @@ async fn posture_renders_deployment_and_audit_assurance() {
 /// Write a `registry.audit.ack_cursor.v1` file with the given `acked_at` and
 /// return its path as a string for embedding in a `deployment` block.
 fn write_ack_cursor(tmp: &tempfile::TempDir, acked_at: &str) -> String {
+    write_ack_cursor_with_hash(tmp, acked_at, &"4".repeat(64))
+}
+
+fn write_ack_cursor_with_hash(
+    tmp: &tempfile::TempDir,
+    acked_at: &str,
+    last_acked_hash: &str,
+) -> String {
     let path = tmp.path().join("ack-cursor.json");
     let body = format!(
-        r#"{{"schema":"registry.audit.ack_cursor.v1","acked_at":"{acked_at}","last_acked_hash":"sha256:4444444444444444444444444444444444444444444444444444444444444444","writer":"test-shipper"}}"#
+        r#"{{"schema":"registry.audit.ack_cursor.v1","acked_at":"{acked_at}","last_acked_hash":"sha256:{last_acked_hash}","writer":"test-shipper"}}"#
     );
     std::fs::write(&path, body).expect("ack cursor writes");
     path.display().to_string()
+}
+
+async fn seed_audit_tail(audit_path: &str) -> String {
+    set_env();
+    let sink = JsonlFileSink::new(audit_path);
+    let profile = AuditProfile::registry_notary_from_env("REGISTRY_NOTARY_GATES_AUDIT_HASH_SECRET")
+        .expect("test audit profile builds");
+    let chain = profile
+        .bootstrap_or_start_empty(&sink)
+        .await
+        .expect("test audit chain starts");
+    let envelope = chain
+        .append(&sink, json!({"event": "shipping-readiness-test"}))
+        .await
+        .expect("test audit record appends");
+    envelope
+        .record_hash
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn read_audit_tail(audit_path: &str) -> String {
+    let contents = std::fs::read_to_string(audit_path).expect("audit file reads");
+    let envelope: Value = serde_json::from_str(
+        contents
+            .lines()
+            .last()
+            .expect("audit file contains an envelope"),
+    )
+    .expect("audit envelope parses");
+    envelope["record_hash"]
+        .as_str()
+        .expect("audit envelope has a record hash")
+        .to_string()
 }
 
 fn rfc3339_now() -> String {
@@ -827,13 +873,16 @@ fn rfc3339_now() -> String {
 
 #[tokio::test]
 async fn posture_reports_shipping_health_ok_for_fresh_cursor() {
+    let _guard = SHIPPING_CURSOR_TEST_LOCK.lock().await;
     let tmp = tempfile::TempDir::new().expect("tempdir");
+    let audit_path = audit_path(&tmp);
+    let tail_hash = seed_audit_tail(&audit_path).await;
     let acked_at = rfc3339_now();
-    let cursor = write_ack_cursor(&tmp, &acked_at);
+    let cursor = write_ack_cursor_with_hash(&tmp, &acked_at, &tail_hash);
     // A durable file sink with attested off-host shipping is declared_external,
     // so shipping_target_configured is true and audit stays off stdout. local
     // binds no gates, so the posture emission is isolated.
-    let config = ConfigBuilder::new(&audit_path(&tmp))
+    let config = ConfigBuilder::new(&audit_path)
         .deployment(&format!(
             "deployment:\n  profile: local\n  evidence:\n    audit_offhost_shipping: true\n    audit_ack_cursor_path: \"{cursor}\"\n"
         ))
@@ -850,7 +899,99 @@ async fn posture_reports_shipping_health_ok_for_fresh_cursor() {
 }
 
 #[tokio::test]
+async fn evidence_grade_readiness_rechecks_cursor_binding_and_recovers() {
+    let _guard = SHIPPING_CURSOR_TEST_LOCK.lock().await;
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let audit_path = audit_path(&tmp);
+    let tail_hash = seed_audit_tail(&audit_path).await;
+    let acked_at = rfc3339_now();
+    let cursor = write_ack_cursor_with_hash(&tmp, &acked_at, &tail_hash);
+    let mut config = ConfigBuilder::new(&audit_path)
+        .deployment(&format!(
+            "deployment:\n  profile: evidence_grade\n  evidence:\n    audit_offhost_shipping: true\n    audit_ack_cursor_path: \"{cursor}\"\n"
+        ))
+        .build();
+    config.server.admin_listener.mode = RegistryNotaryAdminListenerMode::Dedicated;
+    add_ops_read_api_key(&mut config);
+    let runtime =
+        compile_notary_runtime_with_provenance(config, ConfigSource::SignedBundleFile, None)
+            .expect("signed evidence-grade runtime compiles");
+    let routers = notary_routers_from_runtime(runtime);
+    let server = TestServer::builder().http_transport().build(routers.public);
+    let admin_server = TestServer::builder().http_transport().build(routers.admin);
+
+    let ready = server.get("/ready").await;
+    ready.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    let body: Value = ready.json();
+    assert_eq!(body["checks"]["failed"], 0);
+
+    let healthy_posture: Value = admin_server
+        .get("/admin/v1/posture?tier=restricted")
+        .add_header("x-api-key", "ops-token")
+        .await
+        .json();
+    assert_eq!(healthy_posture["posture"]["audit"]["shipping_health"], "ok");
+    assert!(!healthy_posture["deployment"]["findings"]
+        .as_array()
+        .expect("deployment findings")
+        .iter()
+        .any(|finding| finding["id"] == "notary.audit.shipping_stale"));
+    // The protected posture request is itself audited after its response, so
+    // let the shipper catch up before testing a different audited request.
+    let posture_tail = read_audit_tail(&audit_path);
+    write_ack_cursor_with_hash(&tmp, &rfc3339_now(), &posture_tail);
+
+    server
+        .get("/v1/claims")
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    let lagging: Value = server.get("/ready").await.json();
+    assert_eq!(lagging["checks"]["failed"], 1);
+
+    let lagging_posture: Value = admin_server
+        .get("/admin/v1/posture?tier=restricted")
+        .add_header("x-api-key", "ops-token")
+        .await
+        .json();
+    assert_eq!(
+        lagging_posture["posture"]["audit"]["shipping_health"],
+        "invalid"
+    );
+    assert!(lagging_posture["deployment"]["findings"]
+        .as_array()
+        .expect("deployment findings")
+        .iter()
+        .any(|finding| finding["id"] == "notary.audit.shipping_stale"));
+    let advanced_tail = read_audit_tail(&audit_path);
+
+    write_ack_cursor_with_hash(&tmp, &rfc3339_now(), &advanced_tail);
+    let caught_up: Value = server.get("/ready").await.json();
+    assert_eq!(caught_up["checks"]["failed"], 0);
+
+    write_ack_cursor_with_hash(&tmp, "2026-06-04T09:59:00Z", &advanced_tail);
+    let stale: Value = server.get("/ready").await.json();
+    assert_eq!(stale["checks"]["failed"], 1);
+
+    write_ack_cursor_with_hash(&tmp, &rfc3339_now(), &"5".repeat(64));
+    let mismatched: Value = server.get("/ready").await.json();
+    assert_eq!(mismatched["checks"]["failed"], 1);
+
+    write_ack_cursor_with_hash(&tmp, &rfc3339_now(), &advanced_tail);
+    let recovered: Value = server.get("/ready").await.json();
+    assert_eq!(recovered["checks"]["failed"], 0);
+
+    std::fs::remove_file(tmp.path().join("ack-cursor.json")).expect("cursor removed");
+    let missing: Value = server.get("/ready").await.json();
+    assert_eq!(missing["checks"]["failed"], 1);
+
+    write_ack_cursor_with_hash(&tmp, &rfc3339_now(), &advanced_tail);
+    let restored: Value = server.get("/ready").await.json();
+    assert_eq!(restored["checks"]["failed"], 0);
+}
+
+#[tokio::test]
 async fn posture_reports_shipping_health_stale_for_old_cursor() {
+    let _guard = SHIPPING_CURSOR_TEST_LOCK.lock().await;
     let tmp = tempfile::TempDir::new().expect("tempdir");
     // Far in the past relative to the default 900s window.
     let cursor = write_ack_cursor(&tmp, "2026-06-04T09:59:00Z");
@@ -873,6 +1014,7 @@ async fn posture_reports_shipping_health_stale_for_old_cursor() {
 
 #[tokio::test]
 async fn posture_reports_shipping_health_unverified_without_cursor() {
+    let _guard = SHIPPING_CURSOR_TEST_LOCK.lock().await;
     let tmp = tempfile::TempDir::new().expect("tempdir");
     // A declared_external sink (file + attested shipping) with no ack cursor.
     let config = ConfigBuilder::new(&audit_path(&tmp))

@@ -38,6 +38,7 @@ Two consequences follow from that boundary:
 | Store | What it can contain | Expiry or rotation | Operator control |
 |---|---|---|---|
 | Relay, Notary, and sidecar audit sinks | Chained audit envelopes with timestamps, event bodies, hashes, and HMAC-pseudonymized sensitive handles when configured. Operational metadata can still identify actors or actions. | Product file sinks default to `100 MB` and `14` retained files. `stdout` and `syslog` retention belongs to the collector. | Configure `audit.sink`, file path, rotation, `audit.hash_secret_env`, and off-host shipping. |
+| Relay and Notary audit shipper cursor | Local `registry.audit.ack_cursor.v1` state with the acknowledgement time and last acknowledged chain hash, plus an optional shipper identifier. | The shipper atomically replaces the file after each successful hand-off. The runtime does not expire or rewrite it. | Mount the file read-only for the Registry process, keep it on local storage and at or below 16 KiB, and configure `deployment.evidence.audit_ack_cursor_path`. |
 | Relay ingest cache | Normalized Parquet snapshots under `server.cache_dir`. These snapshots can contain full source rows from configured registries. | No time TTL. A successful refresh keeps the current and immediately previous snapshot for each resource and removes older snapshots best effort. | Place `server.cache_dir` on writable storage with the same data classification as the source rows. |
 | Config-trust anti-rollback state | The last accepted sequence, config and bundle hashes, root version, and optional break-glass pin metadata. Operator names, approval references, and reasons can be sensitive. | The state file is rewritten atomically and has no normal TTL. Break-glass overrides require expiry, and consumed override files are renamed. | Preserve `antirollback_state_path` across upgrades and protect break-glass override files with local root controls. |
 | Replay and nonce stores | One-time JWT identifiers, holder-proof identifiers, pre-authorized-code identifiers, and nonce reservations. Redis keys are hashed, but scopes can still encode deployment context. | Entries expire at protocol-supplied times. Consumed nonce state is replaced by a short tombstone and then removed. In-memory stores are lost on restart. | Use Redis for production or multi-instance Notary deployments. Keep in-memory replay to development and tests. |
@@ -74,6 +75,17 @@ deployment-posture findings such as `relay.audit.retention_local_only` and
 Under `evidence_grade`, those findings refuse startup.
 Set `deployment.evidence.audit_offhost_shipping` only after the deployment really ships audit
 records to external durable storage.
+
+An `evidence_grade` Relay or Notary also requires an acknowledgement cursor for every configured
+shipping target, including `stdout` and `syslog`.
+The cursor is healthy only when its timestamp is fresh and its last acknowledged hash equals the
+live keyed audit chain tail.
+That equality records the trusted shipper's claim that the local backlog is zero; the unsigned
+local cursor does not prove that external storage received or retained the records.
+The shipper must continue running while the application reports not ready, because the signed
+bundle acceptance event advances the audit tail before the service begins serving requests.
+Offline `doctor` commands cannot bind a cursor to a live tail and report a fresh cursor as
+`unverified`.
 
 Never truncate, rewrite, or reserialize audit files as part of cleanup.
 Back them up as files, keep old hash secrets for the audit retention period, and rotate hash

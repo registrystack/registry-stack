@@ -558,11 +558,20 @@ pub struct AuditPipeline {
     sink: Arc<dyn registry_platform_audit::AuditSink>,
     chain: Arc<OnceCell<registry_platform_audit::ChainState>>,
     profile: registry_platform_audit::AuditChainProfile,
+    tail_init_in_progress: Arc<std::sync::atomic::AtomicBool>,
     /// Startup chain-verification health, reflected in `/ready` (#196). Starts
     /// healthy and flips to `false` only when eager startup verification finds
     /// the retained chain inconsistent, so the brick surfaces as an actionable
     /// readiness signal instead of a confusing per-request 503.
     chain_healthy: Arc<std::sync::atomic::AtomicBool>,
+}
+
+struct TailInitReset(Arc<std::sync::atomic::AtomicBool>);
+
+impl Drop for TailInitReset {
+    fn drop(&mut self) {
+        self.0.store(false, std::sync::atomic::Ordering::Release);
+    }
 }
 
 impl std::fmt::Debug for AuditPipeline {
@@ -589,6 +598,7 @@ impl AuditPipeline {
             sink,
             chain: Arc::new(OnceCell::new()),
             profile,
+            tail_init_in_progress: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             chain_healthy: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         }
     }
@@ -612,6 +622,54 @@ impl AuditPipeline {
             .await?;
         chain.append(self.sink.as_ref(), record).await?;
         Ok(())
+    }
+
+    /// Return the live keyed chain tail used to bind an off-host ack cursor
+    /// without letting a cold bootstrap or stalled append block public probes.
+    pub async fn current_tail_hash_bounded(&self) -> Option<[u8; 32]> {
+        const DEADLINE: std::time::Duration = std::time::Duration::from_millis(500);
+        if let Some(chain) = self.chain.get() {
+            return chain.try_last_hash().flatten();
+        }
+        if self
+            .tail_init_in_progress
+            .compare_exchange(
+                false,
+                true,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+            )
+            .is_err()
+        {
+            return None;
+        }
+        let pipeline = self.clone();
+        let worker = tokio::spawn(async move {
+            let _reset = TailInitReset(Arc::clone(&pipeline.tail_init_in_progress));
+            let result = pipeline
+                .chain
+                .get_or_try_init(|| async {
+                    pipeline
+                        .profile
+                        .bootstrap_or_start_empty(pipeline.sink.as_ref())
+                        .await
+                })
+                .await
+                .map(|chain| chain.try_last_hash().flatten());
+            result
+        });
+        match tokio::time::timeout(DEADLINE, worker).await {
+            Ok(Ok(Ok(tail))) => tail,
+            Ok(Ok(Err(error))) => {
+                tracing::error!(error = %error, "failed to read current audit chain tail");
+                None
+            }
+            Ok(Err(error)) => {
+                tracing::error!(error = %error, "audit chain tail worker failed");
+                None
+            }
+            Err(_) => None,
+        }
     }
 
     /// Eagerly bootstrap and verify the retained chain at startup (#196).
@@ -905,8 +963,12 @@ pub async fn audit_layer(
         .unwrap_or_default();
 
     let endpoint_kind = classify_endpoint(&path);
-    if matches!(endpoint_kind, EndpointKind::Health | EndpointKind::Ready)
-        && !settings.include_health
+    // Readiness is never self-audited. Evidence-grade shipping requires the
+    // cursor watermark to equal the live audit tail, so appending the probe
+    // after that comparison would make every successful probe invalidate the
+    // next one. `include_health` continues to control liveness records.
+    if endpoint_kind == EndpointKind::Ready
+        || (endpoint_kind == EndpointKind::Health && !settings.include_health)
     {
         return response;
     }
@@ -1355,6 +1417,51 @@ pub fn classify_endpoint_pub(path: &str) -> EndpointKind {
 mod tests {
     use super::*;
 
+    #[derive(Clone)]
+    struct SlowTailSink {
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+        started: Arc<tokio::sync::Semaphore>,
+        release: Arc<tokio::sync::Semaphore>,
+    }
+
+    impl Default for SlowTailSink {
+        fn default() -> Self {
+            Self {
+                calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                started: Arc::new(tokio::sync::Semaphore::new(0)),
+                release: Arc::new(tokio::sync::Semaphore::new(0)),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl registry_platform_audit::AuditSink for SlowTailSink {
+        async fn write(
+            &self,
+            _envelope: &registry_platform_audit::AuditEnvelope,
+        ) -> Result<(), AuditError> {
+            Ok(())
+        }
+
+        async fn tail_hash(&self) -> Result<Option<[u8; 32]>, AuditError> {
+            Ok(None)
+        }
+
+        async fn tail_hash_with_hasher(
+            &self,
+            _hasher: &registry_platform_audit::AuditChainHasher,
+        ) -> Result<Option<[u8; 32]>, AuditError> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.started.add_permits(1);
+            self.release
+                .acquire()
+                .await
+                .expect("test release semaphore stays open")
+                .forget();
+            Ok(None)
+        }
+    }
+
     #[test]
     fn timestamp_helper_emits_24_chars_ending_in_z() {
         let s = now_iso8601_millis();
@@ -1454,6 +1561,65 @@ mod tests {
             .await
             .expect("valid chain verifies at startup");
         assert!(pipeline.chain_healthy());
+    }
+
+    #[tokio::test]
+    async fn current_tail_hash_tracks_successful_appends() {
+        let pipeline = AuditPipeline::from_sink(InMemorySink::new());
+        assert_eq!(pipeline.current_tail_hash_bounded().await, None);
+        pipeline
+            .verify_chain_eager()
+            .await
+            .expect("empty chain initializes");
+        assert_eq!(pipeline.current_tail_hash_bounded().await, None);
+        pipeline
+            .write_operational_event(OperationalAuditEvent::success("test.shipping-tail"))
+            .await
+            .expect("audit event writes");
+        assert!(pipeline.current_tail_hash_bounded().await.is_some());
+    }
+
+    #[tokio::test]
+    async fn current_tail_hash_bounds_cold_bootstrap_to_one_initializer() {
+        let sink = SlowTailSink::default();
+        let pipeline = AuditPipeline::from_sink(sink.clone());
+        let first = tokio::spawn({
+            let pipeline = Arc::clone(&pipeline);
+            async move { pipeline.current_tail_hash_bounded().await }
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(1), sink.started.acquire())
+            .await
+            .expect("tail bootstrap starts within the test deadline")
+            .expect("test started semaphore stays open")
+            .forget();
+
+        assert_eq!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(250),
+                pipeline.current_tail_hash_bounded(),
+            )
+            .await
+            .expect("a concurrent probe fails before the owner deadline"),
+            None
+        );
+        assert_eq!(sink.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        assert_eq!(
+            tokio::time::timeout(std::time::Duration::from_secs(1), first)
+                .await
+                .expect("the first probe observes its deadline")
+                .expect("first probe task joins"),
+            None
+        );
+        sink.release.add_permits(1);
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while pipeline.chain.get().is_none() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("detached initializer completes after release");
+        assert_eq!(sink.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

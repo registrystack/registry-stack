@@ -56,7 +56,7 @@ use registry_platform_oidc::{
     fetch_userinfo_jwt_with_policy, Audience, JwksFetcher, JwksFetcherConfig, OidcError,
     TokenVerifier, TokenVerifierConfig, VerifiedToken,
 };
-use registry_platform_ops::{ConfigProvenance, ConfigSource};
+use registry_platform_ops::{AckObservation, ConfigProvenance, ConfigSource};
 use registry_platform_replay::{ReplayKey, ReplayScope};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
@@ -681,11 +681,12 @@ pub enum StandaloneServerError {
 
 /// Deployment gate evaluation result carried through runtime assembly.
 ///
-/// Evaluated once at startup. `startup_fail` gates abort assembly; the rest is
-/// stored so the readiness handler and posture can report it without
-/// re-evaluating.
-#[derive(Debug, Clone, Default)]
+/// `startup_fail` gates abort assembly. The startup config source is retained so
+/// readiness and posture can safely re-evaluate time-varying facts without
+/// weakening signed-config provenance.
+#[derive(Debug, Clone)]
 pub(crate) struct DeploymentGateState {
+    config_source: ConfigSource,
     pub(crate) profile: Option<&'static str>,
     pub(crate) startup_failures: Vec<String>,
     pub(crate) readiness_failures: Vec<String>,
@@ -693,12 +694,44 @@ pub(crate) struct DeploymentGateState {
     pub(crate) active_waivers: Vec<EvaluatedWaiver>,
 }
 
+impl Default for DeploymentGateState {
+    fn default() -> Self {
+        Self {
+            config_source: ConfigSource::Unknown,
+            profile: None,
+            startup_failures: Vec::new(),
+            readiness_failures: Vec::new(),
+            findings: Vec::new(),
+            active_waivers: Vec::new(),
+        }
+    }
+}
+
 impl DeploymentGateState {
     pub(crate) fn evaluate_with_config_source(
         config: &StandaloneRegistryNotaryConfig,
         config_source: ConfigSource,
     ) -> Self {
-        let mut input = config.gate_input();
+        // Startup evaluates the configured observation capability only. Live
+        // cursor I/O is bounded and performed by readiness/posture handlers.
+        let observation = AckObservation::unverified();
+        Self::evaluate_with_observation(config, config_source, &observation)
+    }
+
+    pub(crate) fn evaluate_current(
+        &self,
+        config: &StandaloneRegistryNotaryConfig,
+        observation: &AckObservation,
+    ) -> Self {
+        Self::evaluate_with_observation(config, self.config_source, observation)
+    }
+
+    fn evaluate_with_observation(
+        config: &StandaloneRegistryNotaryConfig,
+        config_source: ConfigSource,
+        observation: &AckObservation,
+    ) -> Self {
+        let mut input = config.gate_input_with_ack_observation(observation);
         input.config_unsigned = !matches!(
             config_source,
             ConfigSource::SignedBundleFile | ConfigSource::SignedBundleEndpoint
@@ -716,6 +749,7 @@ impl DeploymentGateState {
             active_waivers,
         } = evaluation;
         Self {
+            config_source,
             profile: config.deployment.profile.map(|profile| profile.as_str()),
             startup_failures,
             readiness_failures,
@@ -4170,6 +4204,15 @@ pub(crate) struct AuditPipeline {
     sink: Arc<dyn PlatformAuditSink>,
     chain: Arc<OnceCell<ChainState>>,
     profile: AuditProfile,
+    tail_init_in_progress: Arc<AtomicBool>,
+}
+
+struct TailInitReset(Arc<AtomicBool>);
+
+impl Drop for TailInitReset {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
 }
 
 impl std::fmt::Debug for AuditPipeline {
@@ -4231,6 +4274,7 @@ impl AuditPipeline {
             sink,
             chain: Arc::new(OnceCell::new()),
             profile,
+            tail_init_in_progress: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -4240,6 +4284,7 @@ impl AuditPipeline {
             sink,
             chain: Arc::new(OnceCell::new()),
             profile: AuditProfile::unkeyed_dev_only(),
+            tail_init_in_progress: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -4263,6 +4308,47 @@ impl AuditPipeline {
         let record = serde_json::to_value(event).map_err(AuditError::Json)?;
         chain.append(self.sink.as_ref(), record).await?;
         Ok(())
+    }
+
+    pub(crate) async fn current_tail_hash_bounded(&self) -> Option<[u8; 32]> {
+        const DEADLINE: Duration = Duration::from_millis(500);
+        if let Some(chain) = self.chain.get() {
+            return chain.try_last_hash().flatten();
+        }
+        if self
+            .tail_init_in_progress
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return None;
+        }
+        let pipeline = self.clone();
+        let worker = tokio::spawn(async move {
+            let _reset = TailInitReset(Arc::clone(&pipeline.tail_init_in_progress));
+            let result = pipeline
+                .chain
+                .get_or_try_init(|| async {
+                    pipeline
+                        .profile
+                        .bootstrap_or_start_empty(pipeline.sink.as_ref())
+                        .await
+                })
+                .await
+                .map(|chain| chain.try_last_hash().flatten());
+            result
+        });
+        match tokio::time::timeout(DEADLINE, worker).await {
+            Ok(Ok(Ok(tail))) => tail,
+            Ok(Ok(Err(error))) => {
+                tracing::error!(error = %error, "failed to read current audit chain tail");
+                None
+            }
+            Ok(Err(error)) => {
+                tracing::error!(error = %error, "audit chain tail worker failed");
+                None
+            }
+            Err(_) => None,
+        }
     }
 }
 

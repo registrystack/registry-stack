@@ -2115,8 +2115,8 @@ fn audit_shipping_report(config: &Config) -> Value {
     };
     let (shipping_target_configured, shipping_target) =
         audit_shipping_target(sink_kind, config.deployment.evidence.audit_offhost_shipping);
-    // Observed shipping freshness from the local ack cursor, via the shared
-    // helpers so the doctor report and posture emission never drift.
+    // Doctor is offline and has no live AuditPipeline, so a fresh cursor stays
+    // unverified rather than being promoted to ok without keyed tail binding.
     let observation = registry_relay::deployment::audit_ack_observation(config);
     let (shipping_health, shipping_observed_at) =
         registry_relay::deployment::shipping_health_fields(

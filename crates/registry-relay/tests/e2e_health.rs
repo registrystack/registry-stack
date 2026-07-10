@@ -28,28 +28,110 @@
 //! `axum::serve` directly because `TestServer` only models a single
 //! router.
 
+use std::fs;
 use std::net::SocketAddr;
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use axum::http::StatusCode;
 use axum_test::TestServer;
 use datafusion::execution::context::SessionContext;
-use registry_platform_ops::DeploymentProfile;
-use registry_relay::audit::{AuditPipeline, InMemorySink};
+use registry_platform_audit::{AuditChainHasher, AuditEnvelope, AuditError, AuditSink};
+use registry_platform_ops::{AuditWritePolicy, DeploymentProfile};
+use registry_relay::audit::{AuditPipeline, FileSink, InMemorySink, OperationalAuditEvent};
 use registry_relay::auth::api_key::ApiKeyAuth;
 use registry_relay::auth::AuthProvider;
-use registry_relay::config::{Config, DatasetId, ResourceId};
+use registry_relay::config::{AuditSinkConfig, Config, DatasetId, ResourceId};
 use registry_relay::format::FormatRegistry;
 use registry_relay::ingest::{IngestRegistry, ReadinessSnapshot, ReadyResource};
 use registry_relay::serve::{serve_listener, ServeLimits};
 use registry_relay::server::{build_admin_app, build_app, build_app_with_readiness};
 use serde_json::Value;
+use time::format_description::well_known::Rfc3339;
+use time::OffsetDateTime;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 use ulid::Ulid;
 
+#[derive(Clone, Default)]
+struct ControlledAuditSink {
+    inner: Arc<ControlledAuditSinkState>,
+}
+
+struct ControlledAuditSinkState {
+    stall_next: AtomicBool,
+    tail_reads: AtomicUsize,
+    started: tokio::sync::Semaphore,
+    release: tokio::sync::Semaphore,
+}
+
+impl Default for ControlledAuditSinkState {
+    fn default() -> Self {
+        Self {
+            stall_next: AtomicBool::new(false),
+            tail_reads: AtomicUsize::new(0),
+            started: tokio::sync::Semaphore::new(0),
+            release: tokio::sync::Semaphore::new(0),
+        }
+    }
+}
+
+impl ControlledAuditSink {
+    fn stall_next(&self) {
+        self.inner.stall_next.store(true, Ordering::SeqCst);
+    }
+
+    async fn wait_until_stalled(&self) {
+        tokio::time::timeout(Duration::from_secs(1), self.inner.started.acquire())
+            .await
+            .expect("audit write stalls within the test deadline")
+            .expect("test started semaphore stays open")
+            .forget();
+    }
+
+    fn release_one(&self) {
+        self.inner.release.add_permits(1);
+    }
+
+    fn tail_reads(&self) -> usize {
+        self.inner.tail_reads.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait::async_trait]
+impl AuditSink for ControlledAuditSink {
+    async fn write(&self, _envelope: &AuditEnvelope) -> Result<(), AuditError> {
+        if self.inner.stall_next.swap(false, Ordering::SeqCst) {
+            self.inner.started.add_permits(1);
+            self.inner
+                .release
+                .acquire()
+                .await
+                .expect("test release semaphore stays open")
+                .forget();
+        }
+        Ok(())
+    }
+
+    async fn tail_hash(&self) -> Result<Option<[u8; 32]>, AuditError> {
+        self.inner.tail_reads.fetch_add(1, Ordering::SeqCst);
+        Ok(None)
+    }
+
+    async fn tail_hash_with_hasher(
+        &self,
+        _hasher: &AuditChainHasher,
+    ) -> Result<Option<[u8; 32]>, AuditError> {
+        self.inner.tail_reads.fetch_add(1, Ordering::SeqCst);
+        Ok(None)
+    }
+}
+
 mod support;
+
+static EVIDENCE_CURSOR_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Load the canonical example config from the repo. The config
 /// loader runs cross-field validation; we set the required fingerprint secret
@@ -88,6 +170,41 @@ fn build_test_app_with_readiness(snapshot: ReadinessSnapshot) -> axum::Router {
     let sink: Arc<AuditPipeline> = AuditPipeline::from_sink(InMemorySink::new());
     let (_tx, rx) = watch::channel(snapshot);
     build_app_with_readiness(config, auth, sink, rx).unwrap()
+}
+
+fn rfc3339_now() -> String {
+    OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .expect("current timestamp formats")
+}
+
+fn write_ack_cursor(path: &Path, acked_at: &str, tail: [u8; 32]) {
+    let tail = tail
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    fs::write(
+        path,
+        format!(
+            r#"{{"schema":"registry.audit.ack_cursor.v1","acked_at":"{acked_at}","last_acked_hash":"sha256:{tail}","writer":"test-shipper"}}"#
+        ),
+    )
+    .expect("ack cursor writes");
+}
+
+fn evidence_grade_config_with_cursor(cursor: &Path) -> Config {
+    let mut config = load_example_config();
+    config.deployment.profile = Some(DeploymentProfile::EvidenceGrade);
+    config.deployment.evidence.ingress_rate_limit = true;
+    config.deployment.evidence.api_key_rotation = true;
+    config.deployment.evidence.audit_offhost_shipping = true;
+    config.deployment.evidence.audit_ack_cursor_path = Some(cursor.to_path_buf());
+    config.audit.sink = AuditSinkConfig::Stdout {};
+    config.audit.write_policy = AuditWritePolicy::FailClosed;
+    config.audit.include_health = true;
+    config.server.admin_bind = None;
+    config.server.openapi_requires_auth = true;
+    config
 }
 
 #[tokio::test]
@@ -289,6 +406,221 @@ async fn ready_503_redacts_deployment_gate_findings() {
         !dump.contains("relay.admin.public_exposure"),
         "public readiness must not name the failed deployment gate"
     );
+}
+
+#[tokio::test]
+async fn evidence_grade_ready_tracks_cursor_tail_and_recovers() {
+    let _guard = EVIDENCE_CURSOR_TEST_LOCK.lock().await;
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let cursor = tmp.path().join("ack-cursor.json");
+    let inmem = InMemorySink::new();
+    let pipeline: Arc<AuditPipeline> = AuditPipeline::from_sink(inmem.clone());
+    pipeline
+        .write_operational_event(OperationalAuditEvent::success("test.boot"))
+        .await
+        .expect("boot audit writes");
+    let initial_tail = pipeline
+        .current_tail_hash_bounded()
+        .await
+        .expect("boot audit creates a tail");
+    write_ack_cursor(&cursor, &rfc3339_now(), initial_tail);
+
+    let config = Arc::new(evidence_grade_config_with_cursor(&cursor));
+    let app = build_test_app_with_config(config, Arc::clone(&pipeline));
+    let server = TestServer::new(app);
+
+    server.get("/ready").await.assert_status(StatusCode::OK);
+    assert_eq!(
+        inmem.snapshot().len(),
+        1,
+        "/ready must stay excluded even when audit.include_health is true"
+    );
+
+    pipeline
+        .write_operational_event(OperationalAuditEvent::success("test.request"))
+        .await
+        .expect("request audit writes");
+    let advanced_tail = pipeline
+        .current_tail_hash_bounded()
+        .await
+        .expect("request audit advances the tail");
+    let response = server.get("/ready").await;
+    response.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(response.json::<Value>()["code"], "deployment.not_ready");
+
+    write_ack_cursor(&cursor, &rfc3339_now(), advanced_tail);
+    server.get("/ready").await.assert_status(StatusCode::OK);
+
+    write_ack_cursor(&cursor, "2026-06-04T09:59:00Z", advanced_tail);
+    server
+        .get("/ready")
+        .await
+        .assert_status(StatusCode::SERVICE_UNAVAILABLE);
+
+    write_ack_cursor(&cursor, &rfc3339_now(), [0x55; 32]);
+    server
+        .get("/ready")
+        .await
+        .assert_status(StatusCode::SERVICE_UNAVAILABLE);
+
+    fs::write(&cursor, b"{").expect("malformed cursor writes");
+    server
+        .get("/ready")
+        .await
+        .assert_status(StatusCode::SERVICE_UNAVAILABLE);
+
+    fs::remove_file(&cursor).expect("cursor removes");
+    server
+        .get("/ready")
+        .await
+        .assert_status(StatusCode::SERVICE_UNAVAILABLE);
+
+    write_ack_cursor(&cursor, &rfc3339_now(), advanced_tail);
+    server.get("/ready").await.assert_status(StatusCode::OK);
+}
+
+#[tokio::test]
+async fn evidence_grade_ready_fails_fast_while_audit_append_is_stalled() {
+    let _guard = EVIDENCE_CURSOR_TEST_LOCK.lock().await;
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let cursor = tmp.path().join("ack-cursor.json");
+    let controlled = ControlledAuditSink::default();
+    let pipeline: Arc<AuditPipeline> = AuditPipeline::from_sink(controlled.clone());
+    pipeline
+        .write_operational_event(OperationalAuditEvent::success("test.boot"))
+        .await
+        .expect("boot audit writes");
+    let initial_tail = pipeline
+        .current_tail_hash_bounded()
+        .await
+        .expect("boot audit creates a tail");
+    write_ack_cursor(&cursor, &rfc3339_now(), initial_tail);
+
+    let config = Arc::new(evidence_grade_config_with_cursor(&cursor));
+    let app = build_test_app_with_config(config, Arc::clone(&pipeline));
+    let server = TestServer::new(app);
+
+    controlled.stall_next();
+    let append = tokio::spawn({
+        let pipeline = Arc::clone(&pipeline);
+        async move {
+            pipeline
+                .write_operational_event(OperationalAuditEvent::success("test.stalled"))
+                .await
+        }
+    });
+    controlled.wait_until_stalled().await;
+
+    let response = tokio::time::timeout(Duration::from_secs(1), server.get("/ready"))
+        .await
+        .expect("readiness returns while the audit append is stalled");
+    response.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(response.json::<Value>()["code"], "deployment.not_ready");
+
+    controlled.release_one();
+    tokio::time::timeout(Duration::from_secs(1), append)
+        .await
+        .expect("append completes after release")
+        .expect("append task joins")
+        .expect("append writes");
+    let advanced_tail = pipeline
+        .current_tail_hash_bounded()
+        .await
+        .expect("released append advances the tail");
+    write_ack_cursor(&cursor, &rfc3339_now(), advanced_tail);
+    let recovered = server.get("/ready").await;
+    assert_eq!(
+        recovered.status_code(),
+        StatusCode::OK,
+        "recovery response: {}",
+        recovered.text()
+    );
+}
+
+#[tokio::test]
+async fn evidence_grade_ready_without_cursor_does_not_read_audit_tail() {
+    let _guard = EVIDENCE_CURSOR_TEST_LOCK.lock().await;
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let cursor = tmp.path().join("unused-ack-cursor.json");
+    let controlled = ControlledAuditSink::default();
+    let pipeline: Arc<AuditPipeline> = AuditPipeline::from_sink(controlled.clone());
+    pipeline
+        .write_operational_event(OperationalAuditEvent::success("test.boot"))
+        .await
+        .expect("boot audit writes");
+    let tail_reads_before_probe = controlled.tail_reads();
+
+    let mut config = evidence_grade_config_with_cursor(&cursor);
+    config.deployment.evidence.audit_ack_cursor_path = None;
+    let app = build_test_app_with_config(Arc::new(config), Arc::clone(&pipeline));
+    let server = TestServer::new(app);
+
+    controlled.stall_next();
+    let append = tokio::spawn({
+        let pipeline = Arc::clone(&pipeline);
+        async move {
+            pipeline
+                .write_operational_event(OperationalAuditEvent::success("test.stalled"))
+                .await
+        }
+    });
+    controlled.wait_until_stalled().await;
+
+    let response = tokio::time::timeout(Duration::from_secs(1), server.get("/ready"))
+        .await
+        .expect("readiness returns without a cursor");
+    // This test-only router bypasses startup enforcement, where evidence-grade
+    // rejects the missing cursor. The runtime probe still must not touch the
+    // busy tail for an observation that has nothing to bind.
+    response.assert_status(StatusCode::OK);
+    assert_eq!(controlled.tail_reads(), tail_reads_before_probe);
+
+    controlled.release_one();
+    tokio::time::timeout(Duration::from_secs(1), append)
+        .await
+        .expect("append completes after release")
+        .expect("append task joins")
+        .expect("append writes");
+}
+
+#[tokio::test]
+async fn evidence_grade_ready_preserves_audit_chain_inconsistent_code() {
+    let _guard = EVIDENCE_CURSOR_TEST_LOCK.lock().await;
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    {
+        let pipeline = AuditPipeline::from_sink(
+            FileSink::new(&audit_path, 10, 50).expect("initial audit sink"),
+        );
+        pipeline
+            .write_operational_event(OperationalAuditEvent::success("test.one"))
+            .await
+            .expect("first audit writes");
+        pipeline
+            .write_operational_event(OperationalAuditEvent::success("test.two"))
+            .await
+            .expect("second audit writes");
+    }
+    let contents = fs::read_to_string(&audit_path).expect("audit file reads");
+    fs::write(&audit_path, contents.replace("test.two", "tampered")).expect("audit file tampers");
+
+    let pipeline =
+        AuditPipeline::from_sink(FileSink::new(&audit_path, 10, 50).expect("restarted audit sink"));
+    pipeline
+        .verify_chain_eager()
+        .await
+        .expect_err("tampered chain fails eager verification");
+
+    let cursor = tmp.path().join("ack-cursor.json");
+    let config = Arc::new(evidence_grade_config_with_cursor(&cursor));
+    let app = build_test_app_with_config(config, pipeline);
+    let server = TestServer::new(app);
+
+    for _ in 0..2 {
+        let response = server.get("/ready").await;
+        response.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(response.json::<Value>()["code"], "audit.chain.inconsistent");
+    }
 }
 
 #[tokio::test]

@@ -9,6 +9,8 @@ const ACK_CURSOR_MALFORMED_HASH_FIXTURE: &str =
     include_str!("../fixtures/audit/ack-cursor.malformed-hash.invalid.json");
 const ACK_CURSOR_UNKNOWN_FIELD_FIXTURE: &str =
     include_str!("../fixtures/audit/ack-cursor.unknown-field.invalid.json");
+const ACK_CURSOR_EMPTY_WRITER_FIXTURE: &str =
+    include_str!("../fixtures/audit/ack-cursor.empty-writer.invalid.json");
 
 fn parse(input: &str) -> Value {
     serde_json::from_str(input).expect("fixture parses as JSON")
@@ -45,6 +47,7 @@ fn ack_cursor_invalid_fixtures_fail_validation() {
         ("wrong schema const", ACK_CURSOR_WRONG_SCHEMA_FIXTURE),
         ("malformed hash", ACK_CURSOR_MALFORMED_HASH_FIXTURE),
         ("unknown property", ACK_CURSOR_UNKNOWN_FIELD_FIXTURE),
+        ("empty writer", ACK_CURSOR_EMPTY_WRITER_FIXTURE),
     ] {
         assert!(
             !validator.is_valid(&parse(fixture)),

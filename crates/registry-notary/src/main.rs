@@ -1821,8 +1821,9 @@ fn doctor_json_report(
 /// mirrors the `posture.audit` shipping fields (`sink_type`,
 /// `shipping_target_configured`, `shipping_target`, `shipping_health`,
 /// `shipping_observed_at`). The target is declared state derived from config via
-/// the shared classifier; `shipping_health` is OBSERVED delivery freshness read
-/// from the local ack cursor. Unmapped sink strings fall back to
+/// the shared classifier. Doctor is offline, so a fresh cursor remains
+/// `unverified` until a live runtime can bind it to the keyed chain tail.
+/// Unmapped sink strings fall back to
 /// [`AuditSinkKind::Unknown`] rather than a silent wildcard.
 fn notary_audit_shipping(config: &StandaloneRegistryNotaryConfig) -> Value {
     let (sink_kind, sink_type) = match config.audit.sink.as_str() {
@@ -1833,9 +1834,8 @@ fn notary_audit_shipping(config: &StandaloneRegistryNotaryConfig) -> Value {
     };
     let (shipping_target_configured, shipping_target) =
         audit_shipping_target(sink_kind, config.deployment.evidence.audit_offhost_shipping);
-    // Read the local ack cursor for observed freshness. Health is null unless a
-    // shipping target is actually configured; observed_at echoes the cursor's
-    // acked_at when one was read.
+    // Read the local cursor safely, but never promote freshness to ok without a
+    // live AuditPipeline and its keyed chain tail.
     let observation = evaluate_ack_health(
         config.deployment.evidence.audit_ack_cursor_path(),
         SystemTime::now(),
@@ -1846,7 +1846,11 @@ fn notary_audit_shipping(config: &StandaloneRegistryNotaryConfig) -> Value {
     } else {
         Value::Null
     };
-    let shipping_observed_at = observation.acked_at.map_or(Value::Null, Value::from);
+    let shipping_observed_at = if shipping_target_configured {
+        observation.acked_at.map_or(Value::Null, Value::from)
+    } else {
+        Value::Null
+    };
     json!({
         "sink_type": sink_type,
         "shipping_target_configured": shipping_target_configured,
@@ -4507,7 +4511,7 @@ evidence:
     }
 
     #[test]
-    fn notary_audit_shipping_reports_ok_for_fresh_cursor() {
+    fn notary_audit_shipping_reports_unverified_for_fresh_offline_cursor() {
         let tmp = tempfile::TempDir::new().expect("tempdir");
         let acked_at = OffsetDateTime::now_utc()
             .format(&Rfc3339)
@@ -4519,7 +4523,7 @@ evidence:
 
         let shipping = notary_audit_shipping(&config);
 
-        assert_eq!(shipping["shipping_health"], "ok");
+        assert_eq!(shipping["shipping_health"], "unverified");
         assert_eq!(shipping["shipping_observed_at"], acked_at);
     }
 

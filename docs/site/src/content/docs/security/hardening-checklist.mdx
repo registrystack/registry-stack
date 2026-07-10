@@ -81,6 +81,23 @@ or the [Registry Notary operator configuration reference](../../products/registr
 - Hash-chained envelopes (`prev_hash`, `record_hash`) detect ordering gaps and accidental
   corruption inside the retained set, but they do not prove that every historical audit record
   remains present. Use off-host audit shipping when completeness matters.
+- For `evidence_grade`, configure `deployment.evidence.audit_ack_cursor_path` for every shipping
+  target, including `stdout` and `syslog`. The off-host shipper writes
+  `registry.audit.ack_cursor.v1` after a successful hand-off. Registry Relay and Registry Notary
+  report ready only while `acked_at` is fresh and `last_acked_hash` equals the live keyed audit
+  chain tail. A matching cursor means the trusted shipper claims zero local backlog. The local
+  cursor does not prove remote receipt or retention.
+- Run the shipper independently of application readiness. A signed configuration bundle produces
+  a bundle-acceptance audit record before the service starts serving requests. The service reports
+  `503` until the shipper acknowledges that record, then reports ready while the cursor stays at
+  the current tail.
+- Replace the cursor atomically, keep it at or below 16 KiB, and mount it read-only for the Registry
+  process. Keep the cursor path on local storage. Runtime reads use one 500 ms bounded worker and
+  fail readiness when the file is missing, stale, malformed, unsafe, mismatched, or too slow.
+- Treat `registry-relay doctor` and `registry-notary doctor` as offline contract checks. They can
+  validate the cursor timestamp and shape but cannot bind it to a live audit tail, so a fresh
+  cursor remains `unverified`. An `evidence_grade` offline doctor run therefore reports the hard
+  shipping gate until the live service performs tail binding.
 
 ## Transport and edge
 

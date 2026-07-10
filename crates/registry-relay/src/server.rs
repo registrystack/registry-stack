@@ -18,7 +18,8 @@
 //! 2. Baseline security headers: browser hardening headers applied to
 //!    every response.
 //! 3. Audit middleware: emits one record per request to the configured
-//!    sink, with health/ready gated by `audit.include_health`.
+//!    sink, with liveness gated by `audit.include_health` and readiness always
+//!    excluded to avoid self-invalidating the audit-shipping readiness gate.
 //! 4. Metrics middleware: records low-cardinality request counters and
 //!    duration buckets for the admin-only Prometheus exposition route.
 //! 5. `TraceLayer`: structured request/response spans for operational

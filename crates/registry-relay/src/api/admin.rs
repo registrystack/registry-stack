@@ -301,10 +301,21 @@ async fn posture(
         Ok(tier) => tier,
         Err(()) => return posture_tier_invalid_response(),
     };
-    let posture = match build_posture(
+    let observation = crate::deployment::audit_ack_observation_bounded(&config).await;
+    let observation = if observation.requires_audit_tail_binding() {
+        let tail = match runtime.audit_sink() {
+            Some(audit) if audit.chain_healthy() => audit.current_tail_hash_bounded().await,
+            _ => None,
+        };
+        observation.bind_to_audit_tail(tail)
+    } else {
+        observation
+    };
+    let posture = match build_posture_with_observation(
         &config,
         runtime.config_provenance(),
         snapshot.as_ref(),
+        &observation,
         PostureMetadata {
             compiled: runtime.compiled_metadata().as_deref(),
             source_digest: runtime.metadata_source_digest().as_deref(),
@@ -324,10 +335,11 @@ struct PostureMetadata<'a> {
     package_digest: Option<&'a str>,
 }
 
-fn build_posture(
+fn build_posture_with_observation(
     config: &Config,
     provenance: Option<ConfigProvenance>,
     readiness: Option<&ReadinessSnapshot>,
+    observation: &registry_platform_ops::AckObservation,
     metadata: PostureMetadata<'_>,
     tier: PostureTier,
 ) -> Result<Value, PostureFilterError> {
@@ -361,7 +373,13 @@ fn build_posture(
     if let Some(digest) = metadata.package_digest {
         metadata_manifest.insert("package_digest".to_string(), json!(digest));
     }
-    let deployment = deployment_summary(config, provenance.source);
+    let (deployment, deployment_ready) =
+        deployment_summary_with_observation(config, provenance.source, observation);
+    let runtime_readiness = if deployment_ready {
+        readiness_label(readiness)
+    } else {
+        "not_ready"
+    };
     let mut configuration = Map::new();
     configuration.insert("source".to_string(), json!(provenance.posture_source()));
     configuration.insert(
@@ -411,7 +429,7 @@ fn build_posture(
         "runtime": {
             "auth_mode": auth_mode_label(config.auth.mode),
             "admin_enabled": config.server.admin_bind.is_some(),
-            "readiness": readiness_label(readiness),
+            "readiness": runtime_readiness,
         },
         "configuration": configuration,
         "deployment": deployment,
@@ -433,7 +451,7 @@ fn build_posture(
         "posture": {
             "warnings": warnings,
             "findings": [],
-            "audit": audit_summary(config),
+            "audit": audit_summary_with_observation(config, observation),
         },
     });
     filter_posture_for_tier(posture, tier)
@@ -501,14 +519,16 @@ fn posture_tier_invalid_response() -> Response {
     response
 }
 
-fn audit_summary(config: &Config) -> Value {
+fn audit_summary_with_observation(
+    config: &Config,
+    observation: &registry_platform_ops::AckObservation,
+) -> Value {
     let (shipping_target_configured, shipping_target) = audit_shipping_state(config);
     // Observed shipping freshness from the local ack cursor (declared state is
     // above; this is the observed counterpart). Reading the cursor here mirrors
     // the doctor report via the shared helpers so the two never drift.
-    let observation = crate::deployment::audit_ack_observation(config);
     let (shipping_health, shipping_observed_at) =
-        crate::deployment::shipping_health_fields(&observation, shipping_target_configured);
+        crate::deployment::shipping_health_fields(observation, shipping_target_configured);
     json!({
         "configured": true,
         "sink_type": audit_sink_label(config),
@@ -539,8 +559,16 @@ fn audit_shipping_state(config: &Config) -> (bool, &'static str) {
 /// active waivers. Findings carry only `{id, severity, status}` plus an
 /// optional waiver block; the default-tier posture filter strips waiver
 /// reasons. `findings` and `waivers` are always present (possibly empty).
-fn deployment_summary(config: &Config, config_source: ConfigSource) -> Value {
-    let facts = crate::deployment::facts_from_config(config, config_source);
+fn deployment_summary_with_observation(
+    config: &Config,
+    config_source: ConfigSource,
+    observation: &registry_platform_ops::AckObservation,
+) -> (Value, bool) {
+    let facts = crate::deployment::facts_from_config_with_ack_observation(
+        config,
+        config_source,
+        observation,
+    );
     let waivers = crate::deployment::waivers_from_config(config);
     let evaluation = crate::deployment::evaluate(
         config.deployment.profile,
@@ -572,7 +600,31 @@ fn deployment_summary(config: &Config, config_source: ConfigSource) -> Value {
             }))
             .collect::<Vec<_>>()),
     );
-    Value::Object(summary)
+    (Value::Object(summary), !evaluation.has_readiness_failure())
+}
+
+#[cfg(test)]
+fn build_posture(
+    config: &Config,
+    provenance: Option<ConfigProvenance>,
+    readiness: Option<&ReadinessSnapshot>,
+    metadata: PostureMetadata<'_>,
+    tier: PostureTier,
+) -> Result<Value, PostureFilterError> {
+    let observation = crate::deployment::audit_ack_observation(config);
+    build_posture_with_observation(config, provenance, readiness, &observation, metadata, tier)
+}
+
+#[cfg(test)]
+fn audit_summary(config: &Config) -> Value {
+    let observation = crate::deployment::audit_ack_observation(config);
+    audit_summary_with_observation(config, &observation)
+}
+
+#[cfg(test)]
+fn deployment_summary(config: &Config, config_source: ConfigSource) -> Value {
+    let observation = crate::deployment::audit_ack_observation(config);
+    deployment_summary_with_observation(config, config_source, &observation).0
 }
 
 fn deployment_finding_json(finding: &registry_platform_ops::DeploymentFinding) -> Value {
@@ -970,8 +1022,8 @@ datasets: []
         assert!(audit["shipping_health"].is_null());
         assert!(audit["shipping_observed_at"].is_null());
 
-        // Declared off-host shipping with a fresh cursor: health "ok" and the
-        // observed_at echoes the cursor's acked_at.
+        // A fresh cursor is still unverified until runtime binds its watermark
+        // to the live keyed chain tail.
         config.deployment.evidence.audit_offhost_shipping = true;
         let dir = tempfile::tempdir().expect("tempdir");
         let cursor_path = dir.path().join("ack-cursor.json");
@@ -988,6 +1040,11 @@ datasets: []
         .expect("cursor writes");
         config.deployment.evidence.audit_ack_cursor_path = Some(cursor_path.clone());
         let audit = audit_summary(&config);
+        assert_eq!(audit["shipping_health"], "unverified");
+        assert_eq!(audit["shipping_observed_at"], acked_at);
+        let observation =
+            crate::deployment::audit_ack_observation(&config).bind_to_audit_tail(Some([0x44; 32]));
+        let audit = audit_summary_with_observation(&config, &observation);
         assert_eq!(audit["shipping_health"], "ok");
         assert_eq!(audit["shipping_observed_at"], acked_at);
 
@@ -997,6 +1054,28 @@ datasets: []
         let audit = audit_summary(&config);
         assert_eq!(audit["shipping_health"], "missing");
         assert!(audit["shipping_observed_at"].is_null());
+    }
+
+    #[test]
+    fn named_posture_example_audit_matches_live_projection() {
+        let mut config = parse_minimal_config(&minimal_config_yaml());
+        config.audit.sink = crate::config::AuditSinkConfig::File {
+            path: std::path::PathBuf::from("/tmp/relay-audit.jsonl"),
+            rotate: crate::config::RotateConfig::default(),
+        };
+        config.audit.chain = true;
+        config.deployment.evidence.audit_offhost_shipping = true;
+        let observation = registry_platform_ops::AckObservation {
+            health: registry_platform_ops::AckHealth::Ok,
+            acked_at: Some("2026-06-04T09:59:00Z".to_string()),
+            last_acked_hash: Some(format!("sha256:{}", "4".repeat(64))),
+            detail: None,
+        };
+        let live = audit_summary_with_observation(&config, &observation);
+        let example: Value = serde_json::from_str(registry_platform_ops::RELAY_POSTURE_EXAMPLE_V1)
+            .expect("named Relay posture example parses");
+
+        assert_eq!(example["posture"]["audit"], live);
     }
 
     /// An undeclared profile (the minimal config default) omits `profile`,

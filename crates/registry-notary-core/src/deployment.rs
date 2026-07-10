@@ -124,9 +124,8 @@ pub struct DeploymentEvidenceConfig {
     #[serde(default)]
     pub audit_offhost_shipping: bool,
     /// Optional path to a `registry.audit.ack_cursor.v1` file maintained by
-    /// whatever ships audit events off-host. When set, the cursor's freshness
-    /// is the observed shipping-completeness signal the shipping gates read;
-    /// local hash chains prove only retained-set consistency, not delivery.
+    /// whatever ships audit events off-host. Runtime health requires both a
+    /// fresh timestamp and a watermark equal to the live keyed audit-chain tail.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audit_ack_cursor_path: Option<PathBuf>,
     /// Optional freshness window, in seconds, for the off-host ack cursor.
@@ -182,7 +181,7 @@ pub enum DeploymentConfigError {
     #[error("deployment.waivers[{index}].expires must be a YYYY-MM-DD date")]
     InvalidWaiverExpiry { index: usize },
     #[error(
-        "deployment.waivers[{index}] waives finding '{finding}', a hard deployment gate that cannot be waived; remove the waiver and fix the underlying condition it reports (for audit retention, ship audit events off-host and set deployment.evidence.audit_offhost_shipping: true, or use a non-local audit sink)"
+        "deployment.waivers[{index}] waives finding '{finding}', a hard deployment gate that cannot be waived; remove the waiver and fix the underlying condition it reports (audit shipping findings require deployment.evidence.audit_ack_cursor_path to name the shipper's fresh cursor and require its last_acked_hash to match the live keyed audit-chain tail, including for stdout and syslog sinks)"
     )]
     HardGateNotWaivable { index: usize, finding: String },
     #[error(
@@ -245,10 +244,10 @@ pub struct GateInput {
     pub multi_instance: bool,
     pub audit_sink_class_durable: bool,
     pub audit_retention_local_only: bool,
-    /// The declared audit shipping target is `declared_external`: a local file
-    /// sink with `audit_offhost_shipping` attested. Off-host completeness is
-    /// claimed but only observable through an ack cursor.
-    pub audit_shipping_declared_external: bool,
+    /// A shipping target is configured (stdout, syslog, or a local file with
+    /// `audit_offhost_shipping` attested) and therefore needs a bound ack cursor
+    /// under evidence-grade policy.
+    pub audit_shipping_target_configured: bool,
     /// An off-host ack cursor path is configured, so shipping freshness is
     /// observed rather than merely declared.
     pub audit_ack_cursor_configured: bool,
@@ -380,26 +379,22 @@ fn gate_catalog() -> &'static [Gate] {
             evidence_grade: Some(StartupFail),
             condition: |input| input.audit_retention_local_only,
         },
-        // notary.audit.shipping_unverified: off-host shipping is declared over a
-        // local file sink (shipping_target = declared_external) but no ack
-        // cursor is configured, so the completeness the attestation claims is
-        // never observed. A warn under production and evidence_grade: the
-        // operator should point at the shipper's ack cursor so staleness can be
-        // caught. stdout and syslog do not trigger this: their retention is
-        // owned off-box and needs no local cursor.
+        // notary.audit.shipping_unverified: a shipping target is configured but
+        // no ack cursor is configured. This warns under production and refuses
+        // evidence-grade startup because the static observation capability is
+        // absent. Runtime loss or lag is handled by shipping_stale below.
         Gate {
             id: FINDING_AUDIT_SHIPPING_UNVERIFIED,
             hosted_lab: None,
             production: Some(FindingWarn),
-            evidence_grade: Some(FindingWarn),
+            evidence_grade: Some(StartupFail),
             condition: |input| {
-                input.audit_shipping_declared_external && !input.audit_ack_cursor_configured
+                input.audit_shipping_target_configured && !input.audit_ack_cursor_configured
             },
         },
         // notary.audit.shipping_stale: an ack cursor is configured but its
-        // observed health is not ok. Fail closed: stale, missing, and invalid
-        // all count, because a cursor that cannot be trusted to be fresh is as
-        // good as no completeness evidence. Escalates to readiness_fail under
+        // observed health is not ok. Fail closed: stale, missing, unsafe,
+        // malformed, and chain-mismatched cursors all count. Escalates to readiness_fail under
         // evidence_grade so the instance refuses to report ready.
         Gate {
             id: FINDING_AUDIT_SHIPPING_STALE,
@@ -1027,40 +1022,63 @@ mod tests {
     }
 
     #[test]
-    fn audit_shipping_unverified_binds_finding_warn_under_production_and_evidence_grade() {
+    fn audit_shipping_unverified_warns_under_production() {
         let input = GateInput {
             audit_sink_class_durable: true,
-            audit_shipping_declared_external: true,
+            audit_shipping_target_configured: true,
             audit_ack_cursor_configured: false,
             ..GateInput::default()
         };
-        for profile in [
-            DeploymentProfile::Production,
-            DeploymentProfile::EvidenceGrade,
-        ] {
-            let evaluation = evaluate_gates(Some(profile), &input, &[], "2026-06-13");
-            let finding = evaluation
-                .findings
-                .iter()
-                .find(|f| f.id == FINDING_AUDIT_SHIPPING_UNVERIFIED)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "shipping_unverified finding present under profile '{}'",
-                        profile.as_str()
-                    )
-                });
-            assert_eq!(finding.severity, GateSeverity::FindingWarn);
-            assert_eq!(finding.status, DeploymentFindingStatus::Active);
-            assert!(evaluation.startup_failures.is_empty());
-            assert!(evaluation.readiness_failures.is_empty());
-        }
+        let evaluation = evaluate_gates(
+            Some(DeploymentProfile::Production),
+            &input,
+            &[],
+            "2026-06-13",
+        );
+        let finding = evaluation
+            .findings
+            .iter()
+            .find(|f| f.id == FINDING_AUDIT_SHIPPING_UNVERIFIED)
+            .expect("shipping_unverified finding present under production");
+        assert_eq!(finding.severity, GateSeverity::FindingWarn);
+        assert_eq!(finding.status, DeploymentFindingStatus::Active);
+        assert!(evaluation.startup_failures.is_empty());
+        assert!(evaluation.readiness_failures.is_empty());
+    }
+
+    #[test]
+    fn audit_shipping_unverified_refuses_startup_under_evidence_grade() {
+        let input = GateInput {
+            audit_sink_class_durable: true,
+            audit_shipping_target_configured: true,
+            audit_ack_cursor_configured: false,
+            ..GateInput::default()
+        };
+        let evaluation = evaluate_gates(
+            Some(DeploymentProfile::EvidenceGrade),
+            &input,
+            &[],
+            "2026-06-13",
+        );
+        let finding = evaluation
+            .findings
+            .iter()
+            .find(|f| f.id == FINDING_AUDIT_SHIPPING_UNVERIFIED)
+            .expect("shipping_unverified finding present under evidence_grade");
+        assert_eq!(finding.severity, GateSeverity::StartupFail);
+        assert_eq!(finding.status, DeploymentFindingStatus::Active);
+        assert_eq!(
+            evaluation.startup_failures,
+            vec![FINDING_AUDIT_SHIPPING_UNVERIFIED.to_string()]
+        );
+        assert!(evaluation.readiness_failures.is_empty());
     }
 
     #[test]
     fn audit_shipping_unverified_is_unbound_under_local_and_hosted_lab() {
         let input = GateInput {
             audit_sink_class_durable: true,
-            audit_shipping_declared_external: true,
+            audit_shipping_target_configured: true,
             ..GateInput::default()
         };
         for profile in [DeploymentProfile::Local, DeploymentProfile::HostedLab] {
@@ -1080,7 +1098,7 @@ mod tests {
     fn audit_shipping_unverified_absent_when_cursor_configured() {
         let input = GateInput {
             audit_sink_class_durable: true,
-            audit_shipping_declared_external: true,
+            audit_shipping_target_configured: true,
             audit_ack_cursor_configured: true,
             audit_ack_health_ok: true,
             ..GateInput::default()
@@ -1104,7 +1122,7 @@ mod tests {
     fn audit_shipping_unverified_absent_without_declared_external() {
         let input = GateInput {
             audit_sink_class_durable: true,
-            audit_shipping_declared_external: false,
+            audit_shipping_target_configured: false,
             audit_ack_cursor_configured: false,
             ..GateInput::default()
         };
@@ -1232,6 +1250,23 @@ mod tests {
         let error = config
             .validate()
             .expect_err("readiness_fail shipping_stale waiver rejected");
+        assert!(matches!(
+            error,
+            DeploymentConfigError::HardGateNotWaivable { .. }
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_waiver_for_shipping_unverified_under_evidence_grade() {
+        let config = DeploymentConfig {
+            profile: Some(DeploymentProfile::EvidenceGrade),
+            multi_instance: false,
+            waivers: vec![waiver(FINDING_AUDIT_SHIPPING_UNVERIFIED, "2099-01-01")],
+            evidence: DeploymentEvidenceConfig::default(),
+        };
+        let error = config
+            .validate()
+            .expect_err("readiness_fail shipping_unverified waiver rejected");
         assert!(matches!(
             error,
             DeploymentConfigError::HardGateNotWaivable { .. }

@@ -644,6 +644,40 @@
         "checkpoint_status",
         "verification_status"
       ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "shipping_target_configured": {
+                "const": false
+              }
+            },
+            "required": [
+              "shipping_target_configured"
+            ]
+          },
+          "then": {
+            "properties": {
+              "shipping_health": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "shipping_health": {
+                "enum": [
+                  "ok",
+                  "stale",
+                  "missing",
+                  "invalid",
+                  "unverified"
+                ]
+              }
+            }
+          }
+        }
+      ],
       "properties": {
         "configured": {
           "type": "boolean"
@@ -672,7 +706,7 @@
           ]
         },
         "shipping_health": {
-          "description": "Observed off-host shipping freshness from the local ack cursor. Null iff shipping_target_configured is false; \"unverified\" means a shipping target is declared but no ack cursor is configured.",
+          "description": "Observed off-host shipping health from the local ack cursor. Null iff shipping_target_configured is false. \"ok\" requires a fresh cursor whose last_acked_hash equals the live keyed audit-chain tail. \"unverified\" means no cursor is configured or an offline caller cannot bind it to a live chain.",
           "enum": [
             "ok",
             "stale",
@@ -683,7 +717,7 @@
           ]
         },
         "shipping_observed_at": {
-          "description": "The ack cursor's acked_at when a cursor was successfully read (shipping_health ok or stale), else null.",
+          "description": "The ack cursor's acked_at when a contract-valid timestamp was read, including fresh-but-unverified, stale, future-skewed invalid, and chain-mismatched invalid observations; otherwise null.",
           "anyOf": [
             {
               "$ref": "#/$defs/rfc3339"

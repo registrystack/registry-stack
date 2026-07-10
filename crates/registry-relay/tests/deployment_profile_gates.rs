@@ -157,7 +157,7 @@ fn evidence_grade_from_local_file_refuses_startup() {
     // local YAML file is unsigned, so validation must reject startup. The gate
     // is never waivable, so even a waiver cannot rescue it.
     let yaml = format!(
-        "{}\ndeployment:\n  profile: evidence_grade\n  evidence:\n    ingress_rate_limit: true\n    api_key_rotation: true\n",
+        "{}\ndeployment:\n  profile: evidence_grade\n  evidence:\n    ingress_rate_limit: true\n    api_key_rotation: true\n    audit_ack_cursor_path: /var/run/registry-relay/audit-ack-cursor.json\n",
         minimal_config_yaml()
     );
     let config = parse_config(&yaml).expect("config parses");
@@ -186,7 +186,7 @@ fn evidence_grade_via_signed_bundle_source_validates_and_boots() {
     // validate and boot when the candidate carries a signed-bundle source: the
     // `relay.config.unsigned` startup gate does not fire for a signed bundle.
     let yaml = format!(
-        "{}\ndeployment:\n  profile: evidence_grade\n  evidence:\n    ingress_rate_limit: true\n    api_key_rotation: true\n",
+        "{}\ndeployment:\n  profile: evidence_grade\n  evidence:\n    ingress_rate_limit: true\n    api_key_rotation: true\n    audit_ack_cursor_path: /var/run/registry-relay/audit-ack-cursor.json\n",
         minimal_config_yaml()
     );
     let config = parse_config(&yaml).expect("config parses");
@@ -212,7 +212,7 @@ fn governed_candidate_apply_accepts_evidence_grade_with_signed_provenance() {
     // evaluation, so an evidence_grade candidate delivered as a signed bundle is
     // accepted (its `relay.config.unsigned` startup gate does not fire).
     let yaml = format!(
-        "{}\ndeployment:\n  profile: evidence_grade\n  evidence:\n    ingress_rate_limit: true\n    api_key_rotation: true\n",
+        "{}\ndeployment:\n  profile: evidence_grade\n  evidence:\n    ingress_rate_limit: true\n    api_key_rotation: true\n    audit_ack_cursor_path: /var/run/registry-relay/audit-ack-cursor.json\n",
         minimal_config_yaml()
     );
     let (_config, provenance) = config::governed::parse_candidate_config_with_provenance(

@@ -166,11 +166,20 @@ optional `writer`), the block adds two more fields: `shipping_health` (`ok`,
 `stale`, `missing`, `invalid`, `unverified`, or `null`) and
 `shipping_observed_at` (the cursor's `acked_at`, or `null`). Both are `null`
 whenever `shipping_target_configured` is `false`; `shipping_health` is
-`unverified` when a shipping target is declared but no cursor is configured.
-This is an OBSERVED liveness/freshness signal for the shipping path, read
-from the cursor file, not proof that every audit event arrived: it tells an
-operator whether the shipper is still checking in, not whether the shipped
-copy is complete.
+`unverified` when no cursor is configured or an offline diagnostic cannot bind
+it to a live chain. Runtime `ok` requires both a fresh `acked_at` and a
+`last_acked_hash` equal to the current keyed audit-chain tail, establishing a
+zero local backlog for the trusted shipper's claim. The cursor is unsigned
+local state, so this is not cryptographic proof of remote receipt. A mismatch,
+missing or stale cursor, unsafe file type, cursor larger than 16 KiB, or cursor
+read that exceeds 500 ms fails closed. The shipper must atomically replace the
+cursor, keep it on local storage, and run independently of Notary readiness.
+The signed-bundle acceptance audit advances the tail before Notary serves
+requests, so an evidence-grade instance stays not ready until the shipper
+acknowledges that boot record. Offline `registry-notary doctor` cannot bind to
+the live tail and reports a fresh cursor as `unverified`. Evidence-grade
+deployments require the cursor at startup and recheck it for every readiness
+and posture request.
 
 Note: a running notary always reports `keyed_integrity = hmac` and
 `write_policy = fail_closed_route_families` because startup refuses any

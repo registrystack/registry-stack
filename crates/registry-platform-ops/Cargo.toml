@@ -14,6 +14,7 @@ workspace = true
 fs2.workspace = true
 registry-platform-config = { workspace = true }
 registry-platform-crypto = { workspace = true }
+rustix.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

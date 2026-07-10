@@ -10,6 +10,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Generated local Relay and Notary configs now declare `deployment.profile: local`,
   preserving fail-closed profile validation while allowing new projects to start.
+- Aggregated doctor JSON now preserves each product report's optional
+  `audit_shipping` section and validates it against
+  `registryctl.validation.report.v1`.
 
 ## [0.8.4] - 2026-07-04
 

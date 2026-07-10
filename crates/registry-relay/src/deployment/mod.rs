@@ -25,6 +25,7 @@
 //! When no profile is declared, `deployment.profile_undeclared` is a startup
 //! failure. `local` is the explicit opt-out for development.
 
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime};
 
 use registry_platform_ops::{
@@ -34,6 +35,15 @@ use registry_platform_ops::{
 };
 
 use crate::config::{AuditSinkConfig, AuthMode, Config};
+
+const AUDIT_ACK_CURSOR_READ_TIMEOUT: Duration = Duration::from_millis(500);
+static AUDIT_ACK_CURSOR_READ_PERMIT: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
+
+fn audit_ack_cursor_read_permit() -> Arc<tokio::sync::Semaphore> {
+    Arc::clone(
+        AUDIT_ACK_CURSOR_READ_PERMIT.get_or_init(|| Arc::new(tokio::sync::Semaphore::new(1))),
+    )
+}
 
 /// Finding id emitted when no deployment profile is declared.
 pub const PROFILE_UNDECLARED: &str = "deployment.profile_undeclared";
@@ -80,16 +90,15 @@ pub struct DeploymentFacts {
     /// evidence declared: retention is capped by local rotation, and an
     /// attacker with host access can destroy the audit trail.
     pub audit_retention_local_only: bool,
-    /// The declared audit shipping target is `declared_external` (a local file
-    /// sink whose operator attests off-host shipping). This is the DECLARED
-    /// state that shipping-completeness evidence is expected to back.
-    pub audit_shipping_declared_external: bool,
-    /// An off-host ack cursor path is configured, so shipping freshness is
-    /// observed rather than merely declared.
+    /// A shipping target is configured (stdout, syslog, or a local file with an
+    /// off-host-shipping attestation) and therefore needs a bound ack cursor
+    /// under evidence-grade policy.
+    pub audit_shipping_target_configured: bool,
+    /// An off-host ack cursor path is configured, so runtime shipping progress
+    /// can be observed rather than merely declared.
     pub audit_ack_cursor_configured: bool,
-    /// The observed ack cursor is fresh (health `ok`). False for every other
-    /// observed health (stale, missing, invalid), so the shipping-stale gate
-    /// fails closed when the cursor cannot vouch for recent delivery.
+    /// The cursor is fresh and its watermark equals the current keyed chain
+    /// tail (health `ok`). False for every other observation.
     pub audit_ack_health_ok: bool,
 }
 
@@ -208,29 +217,24 @@ const GATES: &[Gate] = &[
     Gate {
         id: "relay.audit.shipping_unverified",
         condition: |facts| {
-            facts.audit_shipping_declared_external && !facts.audit_ack_cursor_configured
+            facts.audit_shipping_target_configured && !facts.audit_ack_cursor_configured
         },
-        // The operator declares off-host shipping (`declared_external`), but
-        // nothing observes whether events actually arrive: local hash chains
-        // prove only retained-set consistency, so without an ack cursor the
-        // completeness of shipped events is asserted, never checked. Configure
+        // A shipping target is configured, but nothing observes shipper
+        // progress. Configure
         // `deployment.evidence.audit_ack_cursor_path` so the shipper's cursor
-        // becomes observed evidence. Bound at warn under production and
-        // evidence_grade only: it is a gap in evidence quality, not a failed
-        // guarantee, so it never blocks readiness or startup.
+        // becomes observed evidence. This warns under production and refuses
+        // evidence-grade startup because the observation capability is absent.
         hosted_lab: None,
         production: Some(FindingWarn),
-        evidence_grade: Some(FindingWarn),
+        evidence_grade: Some(StartupFail),
     },
     Gate {
         id: "relay.audit.shipping_stale",
         condition: |facts| facts.audit_ack_cursor_configured && !facts.audit_ack_health_ok,
         // An ack cursor is configured, so shipping is observed, but the
-        // observation is not fresh: the cursor is stale, missing, or invalid.
-        // This fails closed (any non-`ok` health trips the gate) because a
-        // cursor that cannot vouch for recent delivery is evidence that
-        // off-host shipping may have stopped, so recent audit events may exist
-        // only in local retention. Escalates to readiness_fail under
+        // observation is not healthy: the cursor is stale, missing, unsafe,
+        // malformed, or not bound to the live keyed chain tail. Any non-`ok`
+        // health trips the gate. Escalates to readiness_fail under
         // evidence_grade so traffic stops until shipping is restored.
         hosted_lab: None,
         production: Some(FindingError),
@@ -448,11 +452,16 @@ pub fn hard_gate_remediation(gate_id: &str) -> &'static str {
             "this gate cannot be waived under the active profile; ship audit events off-host and \
              set deployment.evidence.audit_offhost_shipping: true, or use a non-local audit sink"
         }
+        "relay.audit.shipping_unverified" => {
+            "this gate cannot be waived under the active profile; configure \
+             deployment.evidence.audit_ack_cursor_path to the fresh cursor maintained by the \
+             off-host audit shipper"
+        }
         "relay.audit.shipping_stale" => {
             "this gate cannot be waived under the active profile; restore off-host shipping so the \
              writer refreshes the ack cursor, widen deployment.evidence.audit_ack_max_age_secs if \
-             the freshness window is unrealistic, or remove deployment.evidence.audit_ack_cursor_path \
-             to fall back to declared-only shipping evidence"
+             the freshness window is unrealistic, or repair \
+             deployment.evidence.audit_ack_cursor_path if it names the wrong cursor"
         }
         _ => "fix the underlying condition; this gate cannot be waived under the active profile",
     }
@@ -474,10 +483,22 @@ fn is_expired(waiver: &WaiverInput, today: &str) -> bool {
 /// always configures an audit sink, so `audit_sink_missing` is always false
 /// here; the gate remains in the catalog for completeness.
 pub fn facts_from_config(config: &Config, config_source: ConfigSource) -> DeploymentFacts {
-    // The filesystem read for observed shipping health happens here, where
-    // facts are projected from config, never inside a gate condition (gate
-    // conditions must stay pure functions over plain facts).
-    let observation = audit_ack_observation(config);
+    // Boot-time evaluation is deliberately configuration-only. A configured
+    // cursor clears the static shipping_unverified gate; live readiness and
+    // posture sample the cursor through their bounded async path before they
+    // can clear shipping_stale. This prevents startup from blocking on a
+    // stalled filesystem while keeping gate predicates pure.
+    let observation = AckObservation::unverified();
+    facts_from_config_with_ack_observation(config, config_source, &observation)
+}
+
+/// Project deployment facts from one already sampled and chain-bound cursor
+/// observation so readiness and posture can remain internally consistent.
+pub fn facts_from_config_with_ack_observation(
+    config: &Config,
+    config_source: ConfigSource,
+    observation: &AckObservation,
+) -> DeploymentFacts {
     DeploymentFacts {
         admin_public_exposure: admin_public_exposure(config),
         openapi_public: !config.server.openapi_requires_auth,
@@ -502,11 +523,10 @@ pub fn facts_from_config(config: &Config, config_source: ConfigSource) -> Deploy
         audit_best_effort: config.audit.write_policy == AuditWritePolicy::AvailabilityFirst,
         audit_retention_local_only: matches!(config.audit.sink, AuditSinkConfig::File { .. })
             && !config.deployment.evidence.audit_offhost_shipping,
-        // `declared_external` is the shared classifier's target for a local
-        // file sink whose operator attests off-host shipping; relay's sink enum
-        // is closed, so this `matches!` is exactly that case.
-        audit_shipping_declared_external: matches!(config.audit.sink, AuditSinkConfig::File { .. })
-            && config.deployment.evidence.audit_offhost_shipping,
+        audit_shipping_target_configured: !matches!(
+            config.audit.sink,
+            AuditSinkConfig::File { .. }
+        ) || config.deployment.evidence.audit_offhost_shipping,
         audit_ack_cursor_configured: config.deployment.evidence.audit_ack_cursor_path.is_some(),
         audit_ack_health_ok: observation.health == AckHealth::Ok,
     }
@@ -518,8 +538,9 @@ pub fn facts_from_config(config: &Config, config_source: ConfigSource) -> Deploy
 /// `deployment.evidence`; `audit_ack_max_age_secs` defaults to
 /// [`DEFAULT_AUDIT_ACK_MAX_AGE`] when unset. This performs the cursor
 /// filesystem read (sampling `SystemTime::now()`); with no cursor path
-/// configured the observation is [`AckHealth::Unverified`]. Shared by gate fact
-/// projection, posture emission, and the doctor report so they cannot drift.
+/// configured the observation is [`AckHealth::Unverified`]. Runtime handlers
+/// use the bounded variant below; offline doctor output uses this synchronous
+/// sampler and remains unverified without a live chain tail.
 pub fn audit_ack_observation(config: &Config) -> AckObservation {
     let path = config.deployment.evidence.audit_ack_cursor_path.as_deref();
     let max_age = config
@@ -531,21 +552,79 @@ pub fn audit_ack_observation(config: &Config) -> AckObservation {
     evaluate_ack_health(path, SystemTime::now(), max_age)
 }
 
+/// Sample the ack cursor without letting a stalled filesystem block a public
+/// async handler or create an unbounded queue of blocking workers.
+///
+/// One process-wide permit is moved into the blocking task. If a read times
+/// out, the task keeps the permit until the operating-system call eventually
+/// returns, so later probes fail closed without spawning more stuck workers.
+pub async fn audit_ack_observation_bounded(config: &Config) -> AckObservation {
+    let Some(path) = config.deployment.evidence.audit_ack_cursor_path.clone() else {
+        return AckObservation::unverified();
+    };
+    let max_age = config
+        .deployment
+        .evidence
+        .audit_ack_max_age_secs
+        .map(Duration::from_secs)
+        .unwrap_or(DEFAULT_AUDIT_ACK_MAX_AGE);
+    bounded_ack_cursor_read(
+        audit_ack_cursor_read_permit(),
+        AUDIT_ACK_CURSOR_READ_TIMEOUT,
+        move || evaluate_ack_health(Some(path.as_path()), SystemTime::now(), max_age),
+    )
+    .await
+}
+
+async fn bounded_ack_cursor_read<F>(
+    semaphore: Arc<tokio::sync::Semaphore>,
+    deadline: Duration,
+    read: F,
+) -> AckObservation
+where
+    F: FnOnce() -> AckObservation + Send + 'static,
+{
+    let permit = match semaphore.try_acquire_owned() {
+        Ok(permit) => permit,
+        Err(tokio::sync::TryAcquireError::Closed) => {
+            return AckObservation::invalid("ack cursor read worker is unavailable");
+        }
+        Err(tokio::sync::TryAcquireError::NoPermits) => {
+            return AckObservation::invalid("ack cursor read is still in progress");
+        }
+    };
+    let worker = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        read()
+    });
+    match tokio::time::timeout(deadline, worker).await {
+        Ok(Ok(observation)) => observation,
+        Ok(Err(_)) => AckObservation::invalid("ack cursor read worker failed"),
+        Err(_) => AckObservation::invalid("ack cursor read timed out"),
+    }
+}
+
 /// Map an ack [`AckObservation`] onto the posture `shipping_health` and
 /// `shipping_observed_at` fields, shared by posture emission and the doctor
 /// report so they report identical semantics.
 ///
 /// `shipping_health` is `None` (serialized as null) when no shipping target is
-/// declared; otherwise the observed health string (`"unverified"` when no
-/// cursor is configured). `shipping_observed_at` is the cursor's `acked_at`
-/// when one was successfully read (health `ok`, `stale`, or a future-skew
-/// `invalid`), else `None`.
+/// declared; otherwise the observed health string. `"unverified"` means no
+/// cursor is configured or a fresh cursor has not been bound to a live keyed
+/// chain. `shipping_observed_at` is the cursor's `acked_at` whenever a target
+/// is declared and its timestamp was contract-valid, else `None`.
 pub fn shipping_health_fields(
     observation: &AckObservation,
     shipping_target_configured: bool,
 ) -> (Option<&'static str>, Option<String>) {
-    let health = shipping_target_configured.then(|| observation.health.as_str());
-    (health, observation.acked_at.clone())
+    if shipping_target_configured {
+        (
+            Some(observation.health.as_str()),
+            observation.acked_at.clone(),
+        )
+    } else {
+        (None, None)
+    }
 }
 
 /// Admin routes are "publicly exposed" when the admin listener is bound to a
@@ -607,10 +686,55 @@ mod tests {
             audit_sink_missing: false,
             audit_best_effort: false,
             audit_retention_local_only: false,
-            audit_shipping_declared_external: false,
+            audit_shipping_target_configured: false,
             audit_ack_cursor_configured: false,
             audit_ack_health_ok: true,
         }
+    }
+
+    #[tokio::test]
+    async fn bounded_cursor_reader_times_out_and_keeps_single_worker_permit() {
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(1));
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::sync_channel(0);
+        let first_semaphore = Arc::clone(&semaphore);
+        let first = tokio::spawn(async move {
+            bounded_ack_cursor_read(first_semaphore, Duration::from_millis(25), move || {
+                started_tx.send(()).expect("reader start is observed");
+                release_rx.recv().expect("reader is released");
+                AckObservation::unverified()
+            })
+            .await
+        });
+        tokio::time::timeout(Duration::from_secs(1), started_rx)
+            .await
+            .expect("blocking cursor reader starts in time")
+            .expect("blocking cursor reader starts");
+
+        let timed_out = first.await.expect("bounded read task joins");
+        assert_eq!(timed_out.health, AckHealth::Invalid);
+        assert_eq!(
+            timed_out.detail.as_deref(),
+            Some("ack cursor read timed out")
+        );
+
+        let queued = bounded_ack_cursor_read(
+            Arc::clone(&semaphore),
+            Duration::from_millis(25),
+            AckObservation::unverified,
+        )
+        .await;
+        assert_eq!(queued.health, AckHealth::Invalid);
+        assert_eq!(
+            queued.detail.as_deref(),
+            Some("ack cursor read is still in progress")
+        );
+
+        release_tx.send(()).expect("blocking reader releases");
+        let _permit = tokio::time::timeout(Duration::from_secs(1), semaphore.acquire())
+            .await
+            .expect("reader releases the permit")
+            .expect("semaphore remains open");
     }
 
     fn finding_ids(evaluation: &GateEvaluation) -> Vec<String> {
@@ -652,7 +776,7 @@ mod tests {
             audit_sink_missing: true,
             audit_best_effort: true,
             audit_retention_local_only: true,
-            audit_shipping_declared_external: true,
+            audit_shipping_target_configured: true,
             audit_ack_cursor_configured: true,
             audit_ack_health_ok: false,
         };
@@ -1007,11 +1131,12 @@ mod tests {
     }
 
     #[test]
-    fn shipping_unverified_warns_when_declared_external_without_cursor() {
+    fn shipping_unverified_escalates_when_declared_external_without_cursor() {
         // Off-host shipping is declared but no ack cursor observes it: warn
-        // under production and evidence_grade only, unbound at hosted_lab.
+        // under production, startup_fail under evidence_grade, and unbound at
+        // hosted_lab.
         let facts = DeploymentFacts {
-            audit_shipping_declared_external: true,
+            audit_shipping_target_configured: true,
             audit_ack_cursor_configured: false,
             ..clean_facts()
         };
@@ -1027,10 +1152,10 @@ mod tests {
             FindingWarn
         );
         let evidence = evaluate(Some(DeploymentProfile::EvidenceGrade), &facts, &[], TODAY);
-        assert_eq!(finding(&evidence, id).severity, FindingWarn);
-        // A warn never blocks readiness or startup.
+        assert_eq!(finding(&evidence, id).severity, StartupFail);
+        assert_eq!(evidence.startup_failures, vec![id.to_string()]);
+        assert!(evidence.has_startup_failure());
         assert!(!evidence.has_readiness_failure());
-        assert!(!evidence.has_startup_failure());
     }
 
     #[test]
@@ -1038,7 +1163,7 @@ mod tests {
         let id = "relay.audit.shipping_unverified";
         // A cursor is configured: shipping is observed, so unverified is silent.
         let with_cursor = DeploymentFacts {
-            audit_shipping_declared_external: true,
+            audit_shipping_target_configured: true,
             audit_ack_cursor_configured: true,
             ..clean_facts()
         };
@@ -1052,7 +1177,7 @@ mod tests {
         // Shipping is not declared_external (e.g. stdout sink): unverified is
         // silent even without a cursor.
         let not_declared = DeploymentFacts {
-            audit_shipping_declared_external: false,
+            audit_shipping_target_configured: false,
             audit_ack_cursor_configured: false,
             ..clean_facts()
         };
@@ -1359,6 +1484,7 @@ datasets: []
             ("relay.config.unsigned", "signed"),
             ("relay.audit.sink_missing", "durable audit sink"),
             ("relay.audit.best_effort", "write_policy"),
+            ("relay.audit.shipping_unverified", "audit_ack_cursor_path"),
             ("relay.audit.shipping_stale", "audit_ack_max_age_secs"),
         ] {
             let remediation = hard_gate_remediation(gate_id);

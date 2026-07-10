@@ -567,25 +567,49 @@ impl StandaloneRegistryNotaryConfig {
 
     /// Snapshot the configuration facts the deployment gate engine reads.
     ///
-    /// Projection of the loaded config, sampling the wall clock for the
-    /// off-host ack cursor freshness check. Building it here keeps gate
-    /// predicates free of config-shape knowledge and free of I/O.
+    /// Boot-time projection is configuration-only. A configured cursor clears
+    /// the static shipping-unverified gate, while runtime readiness and posture
+    /// must sample and bind it before shipping-stale clears. Keeping filesystem
+    /// I/O out of this path prevents startup from blocking on a stalled mount.
     pub fn gate_input(&self) -> crate::deployment::GateInput {
-        self.gate_input_at(SystemTime::now())
+        self.gate_input_with_ack_observation(&registry_platform_ops::AckObservation::unverified())
     }
 
-    /// Snapshot gate facts as of `now`.
-    ///
-    /// `now` is threaded through so the ack-cursor freshness read is
-    /// deterministic in tests. This is where the ack cursor is read from disk
-    /// (via [`registry_platform_ops::evaluate_ack_health`]); gate predicates
-    /// never touch the filesystem.
-    pub fn gate_input_at(&self, now: SystemTime) -> crate::deployment::GateInput {
-        let ack_observation = registry_platform_ops::evaluate_ack_health(
+    /// Read the current off-host shipping cursor once for callers that need to
+    /// project both deployment gates and posture from the same observation.
+    pub fn audit_ack_observation(&self) -> registry_platform_ops::AckObservation {
+        self.audit_ack_observation_at(SystemTime::now())
+    }
+
+    /// Deterministic form of [`Self::audit_ack_observation`] for tests.
+    pub fn audit_ack_observation_at(
+        &self,
+        now: SystemTime,
+    ) -> registry_platform_ops::AckObservation {
+        registry_platform_ops::evaluate_ack_health(
             self.deployment.evidence.audit_ack_cursor_path(),
             now,
             self.deployment.evidence.audit_ack_max_age(),
-        );
+        )
+    }
+
+    /// Snapshot gate facts as of `now`, including a synchronous cursor read.
+    ///
+    /// `now` is threaded through so cursor contract tests and offline commands
+    /// can evaluate freshness deterministically. Public runtime handlers use a
+    /// bounded async worker instead of this synchronous path.
+    pub fn gate_input_at(&self, now: SystemTime) -> crate::deployment::GateInput {
+        let ack_observation = self.audit_ack_observation_at(now);
+        self.gate_input_with_ack_observation(&ack_observation)
+    }
+
+    /// Project gate facts using an already sampled shipping observation.
+    /// Keeping filesystem I/O outside the pure projection lets one HTTP response
+    /// use a single cursor snapshot for its gate and posture fields.
+    pub fn gate_input_with_ack_observation(
+        &self,
+        ack_observation: &registry_platform_ops::AckObservation,
+    ) -> crate::deployment::GateInput {
         crate::deployment::GateInput {
             replay_in_memory: self.replay.storage != REPLAY_STORAGE_REDIS,
             federation_enabled: self.federation.enabled,
@@ -603,12 +627,16 @@ impl StandaloneRegistryNotaryConfig {
             // log pipeline or the syslog daemon's own forwarding surface.
             audit_retention_local_only: matches!(self.audit.sink.as_str(), "file" | "jsonl")
                 && !self.deployment.evidence.audit_offhost_shipping,
-            // declared_external: a local file sink whose off-host shipping is
-            // attested. This mirrors `audit_shipping_target(LocalFile, true)`
-            // from the shared classifier, kept as the direct rule here to match
-            // audit_retention_local_only above.
-            audit_shipping_declared_external: matches!(self.audit.sink.as_str(), "file" | "jsonl")
-                && self.deployment.evidence.audit_offhost_shipping,
+            audit_shipping_target_configured: matches!(
+                self.audit.sink.as_str(),
+                "stdout" | "syslog"
+            ) || (matches!(
+                self.audit.sink.as_str(),
+                "file" | "jsonl"
+            ) && self
+                .deployment
+                .evidence
+                .audit_offhost_shipping),
             audit_ack_cursor_configured: self.deployment.evidence.audit_ack_cursor_path().is_some(),
             audit_ack_health_ok: ack_observation.health == registry_platform_ops::AckHealth::Ok,
             source_insecure_url: self
@@ -7044,21 +7072,21 @@ auth:
         let mut config = minimal_config();
         config.audit.sink = "file".to_string();
         config.deployment.evidence.audit_offhost_shipping = true;
-        assert!(config.gate_input().audit_shipping_declared_external);
+        assert!(config.gate_input().audit_shipping_target_configured);
     }
 
     #[test]
     fn gate_input_clears_shipping_declared_external_without_attestation() {
         let mut config = minimal_config();
         config.audit.sink = "file".to_string();
-        assert!(!config.gate_input().audit_shipping_declared_external);
+        assert!(!config.gate_input().audit_shipping_target_configured);
     }
 
     #[test]
-    fn gate_input_clears_shipping_declared_external_for_stdout_sink() {
+    fn gate_input_reports_shipping_target_for_stdout_sink() {
         let mut config = minimal_config();
         config.deployment.evidence.audit_offhost_shipping = true;
-        assert!(!config.gate_input().audit_shipping_declared_external);
+        assert!(config.gate_input().audit_shipping_target_configured);
     }
 
     #[test]
@@ -7071,7 +7099,7 @@ auth:
     }
 
     #[test]
-    fn gate_input_at_reports_ack_health_ok_for_fresh_cursor() {
+    fn gate_input_reports_ack_health_ok_only_after_fresh_cursor_binds_to_tail() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = write_ack_cursor(
             dir.path(),
@@ -7081,7 +7109,15 @@ auth:
         config.deployment.evidence.audit_ack_cursor_path = Some(path);
         // now is 60s after the cursor's acked_at, well within the 900s window.
         let now = fixture_acked_at() + Duration::from_secs(60);
-        assert!(config.gate_input_at(now).audit_ack_health_ok);
+        assert!(!config.gate_input_at(now).audit_ack_health_ok);
+        let observation = config
+            .audit_ack_observation_at(now)
+            .bind_to_audit_tail(Some([0x44; 32]));
+        assert!(
+            config
+                .gate_input_with_ack_observation(&observation)
+                .audit_ack_health_ok
+        );
     }
 
     #[test]
