@@ -61,7 +61,6 @@ run_platform_checks() {
       -p registry-platform-pdp \
       -p registry-platform-replay \
       -p registry-platform-sdjwt \
-      -p registry-platform-sts \
       -p registry-platform-testing
   else
     run_in_dir "${platform_dir}" cargo test --workspace --all-features

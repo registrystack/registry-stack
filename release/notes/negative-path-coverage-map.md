@@ -29,9 +29,10 @@ public evidence or disposition.
   Disposition: keep open for complete product-surface audit parity.
 - `NP-02`: Partial.
   Public anchors: `crates/registry-relay/src/auth/oidc/provider.rs`,
-  `crates/registry-notary-server/src/api.rs`, and
-  `crates/registry-platform-sts/src/lib.rs`.
-  Disposition: keep open for remaining STS and audit assertions.
+  and `crates/registry-notary-server/src/api.rs`.
+  Disposition: keep open for remaining active product-surface audit assertions.
+  The parked STS source is outside the release surface until #298 promotes a
+  named consumer.
 - `NP-03`: Partial.
   Public anchors: `crates/registry-relay/src/auth/oidc/provider.rs`,
   `crates/registry-platform-sdjwt/src/lib.rs`, and
@@ -94,9 +95,9 @@ public evidence or disposition.
   `crates/registry-relay/src/api/admin.rs`,
   `crates/registry-notary-server/src/standalone.rs`,
   `crates/registry-notary-server/tests/standalone_http.rs`, and
-  `crates/registry-notary-server/src/api.rs`,
-  `crates/registry-platform-sts/src/lib.rs::exchange_aborts_when_audit_sink_fails`.
-  Disposition: product paths and STS audit-failure abort behavior are covered.
+  `crates/registry-notary-server/src/api.rs`.
+  Disposition: active Relay and Notary product paths cover audit-failure abort
+  behavior.
 - `NP-14`: Covered.
   Public anchors:
   `crates/registry-relay/tests/admin_auth_extraction_contract.rs::admin_handlers_use_required_scoped_extractors`,
@@ -155,22 +156,13 @@ public evidence or disposition.
   Disposition: single-use transaction-token `jti` enforcement, missing-`jti`
   fail-closed behavior, replay denial, product-surface HTTP audit parity, and
   response/audit redaction are covered.
-- `NP-23`: Partial.
-  Public anchors:
-  `crates/registry-platform-sts/src/lib.rs::exchange_rejects_wrong_resource_before_mint_audit`,
-  `crates/registry-platform-sts/src/lib.rs::exchange_rejects_unsupported_requested_token_type_before_mint_audit`,
-  `crates/registry-platform-sts/src/lib.rs::exchange_rejects_invalid_subject_token_before_mint_audit`,
-  `crates/registry-platform-sts/src/lib.rs::exchange_rejects_missing_sender_constraint_before_mint_audit`,
-  `crates/registry-platform-sts/src/lib.rs::exchange_rejects_session_binding_mismatch_before_mint_audit`,
-  `crates/registry-platform-sts/src/lib.rs::http_token_endpoint_rejects_missing_session_binding`,
-  `crates/registry-platform-sts/src/lib.rs::StsAuditSink`,
-  and `crates/registry-platform-sts/src/bin/registry-platform-sts.rs`.
-  Disposition: STS negative exchange tests now pin no-mint behavior for the
-  mapped request-shape and binding denials, and the HTTP token endpoint has
-  response-shape coverage for a binding denial. The remaining blocker is
-  denial-audit parity: the public STS audit interface currently records
-  token-mint events only, so closing this row requires a maintainer decision to
-  add a denial audit event or approve deferral.
+- `NP-23`: Gap.
+  Public anchor: parked source under `crates/registry-platform-sts`.
+  Disposition: maintainer-approved deferral recorded by #246 and #334. STS has
+  no promoted release-surface consumer and is parked outside workspace CI and
+  release artifacts. Revisit denial-audit parity only when #298 promotes a
+  named consumer, then restore the crate's fuzz and adversarial-review coverage
+  before treating it as release evidence.
 - `NP-24`: Partial.
   Public anchors:
   `crates/registry-notary-server/src/standalone.rs::source_json_reader_rejects_oversized_body`,
