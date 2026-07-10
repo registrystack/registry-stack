@@ -61,7 +61,8 @@ selects the release asset to install.
 Prebuilt binaries are published for the `v0.8.4` stack release on Linux x86_64,
 Linux arm64, and macOS arm64. On other platforms, install from source with
 `cargo install --git https://github.com/registrystack/registry-stack --tag v0.8.4 registryctl --locked`.
-Intel macOS has no prebuilt binary for `v0.8.4`, so the installer uses that source-build path.
+Intel macOS has no prebuilt binary for `v0.8.4`, so the installer stops after
+printing that Cargo command. It does not run the source build automatically.
 
 ## Update checks
 

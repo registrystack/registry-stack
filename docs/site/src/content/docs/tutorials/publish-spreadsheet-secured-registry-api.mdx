@@ -49,7 +49,9 @@ It does not verify cosign signatures or SLSA provenance; use
 for release authenticity checks.
 
 Prebuilt `registryctl` assets exist for Linux x86_64, Linux arm64, and macOS arm64.
-On Intel macOS, the installer falls back to a source build, which requires a Rust toolchain.
+On Intel macOS, the installer stops after printing the pinned `cargo install` command.
+It does not run the source build automatically.
+After installing a Rust toolchain, run the command printed by the installer.
 
 ## Create the sample project
 
