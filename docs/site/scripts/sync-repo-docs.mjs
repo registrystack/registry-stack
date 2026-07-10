@@ -37,8 +37,6 @@ const docsDir = resolve(root, 'src/content/docs');
 const outputRoot = resolve(docsDir, 'products');
 const cacheRoot = resolve(root, '.repo-docs-cache');
 
-const today = new Date().toISOString().slice(0, 10);
-
 const warnings = [];
 function warn(message) {
   warnings.push(message);
@@ -258,7 +256,11 @@ function rewriteLinks(md, ctx) {
 }
 
 export function validateStandardsReferenced(value, context, knownStandards) {
-  if (value === undefined) return [];
+  if (value === undefined) {
+    throw new Error(
+      `${context}: standards_referenced is required; use [] when the page references no registered standards`,
+    );
+  }
   if (!Array.isArray(value)) {
     throw new Error(`${context}: standards_referenced must be a list`);
   }
@@ -279,17 +281,121 @@ export function validateStandardsReferenced(value, context, knownStandards) {
   return value;
 }
 
+export function validateLastReviewed(value, context) {
+  if (value === 'unreviewed') return value;
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    throw new Error(
+      `${context}: last_reviewed is required and must be "unreviewed" or a YYYY-MM-DD date`,
+    );
+  }
+  const parsed = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(parsed.valueOf()) || parsed.toISOString().slice(0, 10) !== value) {
+    throw new Error(`${context}: last_reviewed "${value}" is not a valid calendar date`);
+  }
+  return value;
+}
+
+function validateDocsetOverrides(entry, context, knownStandards, docsets) {
+  const overrides = entry.docset_overrides;
+  if (overrides === undefined) return;
+  if (!Array.isArray(overrides)) {
+    throw new Error(`${context}: docset_overrides must be a list`);
+  }
+
+  const docsetById = new Map(docsets.docsets.map((docset) => [docset.id, docset]));
+  const seenDocsets = new Set();
+  for (const [index, override] of overrides.entries()) {
+    const overrideContext = `${context}: docset_overrides[${index}]`;
+    if (!override || typeof override !== 'object' || Array.isArray(override)) {
+      throw new Error(`${overrideContext} must be a map`);
+    }
+    const unknownKeys = Object.keys(override).filter(
+      (key) => !['docsets', 'standards_referenced'].includes(key),
+    );
+    if (unknownKeys.length > 0) {
+      throw new Error(`${overrideContext} has unknown field "${unknownKeys[0]}"`);
+    }
+    if (!Array.isArray(override.docsets) || override.docsets.length === 0) {
+      throw new Error(`${overrideContext}.docsets must be a non-empty list`);
+    }
+    validateStandardsReferenced(
+      override.standards_referenced,
+      overrideContext,
+      knownStandards,
+    );
+
+    for (const docsetId of override.docsets) {
+      if (typeof docsetId !== 'string' || docsetId.trim() !== docsetId || docsetId === '') {
+        throw new Error(`${overrideContext}.docsets entries must be non-empty strings`);
+      }
+      const docset = docsetById.get(docsetId);
+      if (!docset) {
+        throw new Error(`${overrideContext} references unknown docset "${docsetId}"`);
+      }
+      if (docsetId === docsets.current || docset.status !== 'archived') {
+        throw new Error(`${overrideContext} may reference archived docsets only`);
+      }
+      if (entry.exclude_docsets?.includes(docsetId)) {
+        throw new Error(`${overrideContext} references excluded docset "${docsetId}"`);
+      }
+      if (seenDocsets.has(docsetId)) {
+        throw new Error(`${context}: docset "${docsetId}" has more than one metadata override`);
+      }
+      seenDocsets.add(docsetId);
+    }
+  }
+}
+
+export function validateRepoDocsMetadata(manifest, knownStandards, docsets) {
+  for (const [repoId, repo] of Object.entries(manifest.repos ?? {})) {
+    if (!Array.isArray(repo.docs)) continue;
+    for (const [index, entry] of repo.docs.entries()) {
+      const source = entry?.src ?? `docs[${index}]`;
+      const context = `${repoId}: ${source}`;
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+        throw new Error(`${context}: repo doc entry must be a map`);
+      }
+      validateStandardsReferenced(entry.standards_referenced, context, knownStandards);
+      validateLastReviewed(entry.last_reviewed, context);
+      validateDocsetOverrides(entry, context, knownStandards, docsets);
+    }
+  }
+  return manifest;
+}
+
+// Historical pages can differ from their current source. Each reviewed
+// docset_overrides item names one or more archived docsets and fully replaces
+// standards_referenced for those pinned sources.
+export function applyDocsetMetadataOverrides(manifest, docset) {
+  for (const repo of Object.values(manifest.repos ?? {})) {
+    if (!Array.isArray(repo.docs)) continue;
+    for (const entry of repo.docs) {
+      const override = entry.docset_overrides?.find((candidate) => {
+        return candidate.docsets.includes(docset.id);
+      });
+      if (override) {
+        entry.standards_referenced = [...override.standards_referenced];
+      }
+    }
+  }
+  return manifest;
+}
+
 export function frontmatterBlock(fields) {
+  const lastReviewed = validateLastReviewed(fields.last_reviewed, 'generated frontmatter');
+  if (!Array.isArray(fields.standards_referenced)) {
+    throw new Error('generated frontmatter: standards_referenced must be a list');
+  }
   const fm = {
     title: fields.title,
     description: fields.description,
     status: 'current',
     owner: fields.owner,
     source_repos: [fields.owner],
-    last_reviewed: today,
+    last_reviewed: lastReviewed,
     doc_type: fields.doc_type,
     locale: 'en',
-    standards_referenced: fields.standards_referenced ?? [],
+    standards_referenced: fields.standards_referenced,
     editUrl: fields.editUrl,
   };
   // YAML.stringify keeps the body deterministic and quotes where needed.
@@ -354,11 +460,13 @@ async function syncEntry(repoId, repo, entry, source, destIndex, knownStandards)
     `${repoId}: ${entry.src}`,
     knownStandards,
   );
+  const last_reviewed = validateLastReviewed(entry.last_reviewed, `${repoId}: ${entry.src}`);
   const fm = frontmatterBlock({
     title,
     description,
     owner: repoId,
     doc_type: entry.doc_type,
+    last_reviewed,
     standards_referenced,
     editUrl: blobUrl({ ...repo }, entry.src),
   });
@@ -396,11 +504,13 @@ async function main() {
   }
   const knownStandards = await loadKnownStandards();
   const docsets = await loadDocsets({ dataDir });
+  validateRepoDocsMetadata(manifest, knownStandards, docsets);
   const docset = getDocset(docsets, selectedDocsetId(docsets));
   if (docset.id !== docsets.current) {
     applyDocsetRefs(manifest, docset);
     console.log(`Using archived docset ${docset.id} for product docs.`);
   }
+  applyDocsetMetadataOverrides(manifest, docset);
   filterRepoDocsForDocset(manifest, docset);
 
   // Clean and recreate the output dir so removed allowlist entries don't linger.

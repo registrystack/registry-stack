@@ -7,10 +7,22 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  applyDocsetMetadataOverrides,
   frontmatterBlock,
   stripPageTypeBanner,
+  validateLastReviewed,
+  validateRepoDocsMetadata,
   validateStandardsReferenced,
 } from './sync-repo-docs.mjs';
+
+const knownStandards = new Set(['openapi', 'prov-o', 'sd-jwt-vc']);
+const docsets = {
+  current: 'latest',
+  docsets: [
+    { id: 'latest', status: 'current' },
+    { id: 'v0.8.4', status: 'archived' },
+  ],
+};
 
 test('strips a leading Page-type banner and its trailing blank line', () => {
   const md = [
@@ -42,38 +54,153 @@ test('returns content unchanged when there is no banner', () => {
 });
 
 test('validates standards_referenced ids against the standards register', () => {
-  const known = new Set(['openapi', 'sd-jwt-vc']);
   assert.deepEqual(
-    validateStandardsReferenced(['openapi', 'sd-jwt-vc'], 'registry-notary: docs/api.md', known),
+    validateStandardsReferenced(
+      ['openapi', 'sd-jwt-vc'],
+      'registry-notary: docs/api.md',
+      knownStandards,
+    ),
     ['openapi', 'sd-jwt-vc'],
   );
 });
 
-test('rejects unknown standards_referenced ids', () => {
-  const known = new Set(['openapi']);
+test('rejects omitted standards_referenced metadata with an explicit empty-list remedy', () => {
+  const manifest = {
+    repos: {
+      'registry-relay': {
+        docs: [{ src: 'docs/operator.md', last_reviewed: '2026-07-10' }],
+      },
+    },
+  };
+
   assert.throws(
-    () => validateStandardsReferenced(['missing'], 'registry-relay: docs/api.md', known),
+    () => validateRepoDocsMetadata(manifest, knownStandards, docsets),
+    /registry-relay: docs\/operator\.md: standards_referenced is required; use \[\]/,
+  );
+});
+
+test('accepts an explicit empty standards_referenced list', () => {
+  const manifest = {
+    repos: {
+      'registry-relay': {
+        docs: [
+          {
+            src: 'docs/operator.md',
+            last_reviewed: '2026-07-10',
+            standards_referenced: [],
+          },
+        ],
+      },
+    },
+  };
+
+  assert.equal(validateRepoDocsMetadata(manifest, knownStandards, docsets), manifest);
+});
+
+test('rejects unknown standards_referenced ids', () => {
+  assert.throws(
+    () =>
+      validateStandardsReferenced(
+        ['missing'],
+        'registry-relay: docs/api.md',
+        knownStandards,
+      ),
     /missing.*not in src\/data\/standards.yaml/,
   );
 });
 
 test('rejects duplicate standards_referenced ids', () => {
-  const known = new Set(['openapi']);
   assert.throws(
-    () => validateStandardsReferenced(['openapi', 'openapi'], 'registry-relay: docs/api.md', known),
+    () =>
+      validateStandardsReferenced(
+        ['openapi', 'openapi'],
+        'registry-relay: docs/api.md',
+        knownStandards,
+      ),
     /duplicated/,
   );
 });
 
-test('writes standards_referenced into generated frontmatter', () => {
-  const fm = frontmatterBlock({
+test('validates stable last_reviewed values', () => {
+  assert.equal(validateLastReviewed('unreviewed', 'entry'), 'unreviewed');
+  assert.equal(validateLastReviewed('2024-02-29', 'entry'), '2024-02-29');
+  assert.throws(() => validateLastReviewed(undefined, 'entry'), /last_reviewed is required/);
+  assert.throws(() => validateLastReviewed('2026-02-30', 'entry'), /valid calendar date/);
+});
+
+test('rejects malformed and unknown docset override metadata', () => {
+  const manifest = {
+    repos: {
+      'registry-relay': {
+        docs: [
+          {
+            src: 'docs/provenance.md',
+            last_reviewed: '2026-07-10',
+            standards_referenced: ['openapi'],
+            docset_overrides: [
+              {
+                docsets: ['missing'],
+                standards_referenced: ['prov-o'],
+                unexpected: true,
+              },
+            ],
+          },
+        ],
+      },
+    },
+  };
+
+  assert.throws(
+    () => validateRepoDocsMetadata(manifest, knownStandards, docsets),
+    /docset_overrides\[0\] has unknown field "unexpected"/,
+  );
+  delete manifest.repos['registry-relay'].docs[0].docset_overrides[0].unexpected;
+  assert.throws(
+    () => validateRepoDocsMetadata(manifest, knownStandards, docsets),
+    /docset_overrides\[0\] references unknown docset "missing"/,
+  );
+});
+
+test('uses reviewed standards metadata for a pinned historical source', () => {
+  const manifest = {
+    repos: {
+      'registry-relay': {
+        docs: [
+          {
+            src: 'docs/provenance.md',
+            last_reviewed: '2026-07-10',
+            standards_referenced: ['openapi'],
+            docset_overrides: [
+              {
+                docsets: ['v0.8.4'],
+                standards_referenced: ['prov-o'],
+              },
+            ],
+          },
+        ],
+      },
+    },
+  };
+
+  validateRepoDocsMetadata(manifest, knownStandards, docsets);
+  applyDocsetMetadataOverrides(manifest, docsets.docsets[1]);
+  assert.deepEqual(manifest.repos['registry-relay'].docs[0].standards_referenced, ['prov-o']);
+});
+
+test('writes deterministic manifest metadata into generated frontmatter', () => {
+  const fields = {
     title: 'API guide',
     description: 'Registry Relay API guide.',
     owner: 'registry-relay',
     doc_type: 'reference',
+    last_reviewed: 'unreviewed',
     standards_referenced: ['openapi', 'dcat'],
     editUrl: 'https://example.test/repo/blob/main/docs/api.md',
-  });
+  };
+  const first = frontmatterBlock(fields);
+  const second = frontmatterBlock(fields);
 
-  assert.match(fm, /standards_referenced:\n  - openapi\n  - dcat/);
+  assert.equal(first, second);
+  assert.match(first, /last_reviewed: unreviewed/);
+  assert.match(first, /standards_referenced:\n  - openapi\n  - dcat/);
 });
