@@ -7,8 +7,9 @@ use std::process::Command;
 fn installer_rejects_shell_active_and_noncanonical_release_tags() {
     let installer = Path::new(env!("CARGO_MANIFEST_DIR")).join("install.sh");
     let hostile = "v999.0.0-$(touch${IFS}/tmp/registryctl-owned)";
+    let multiline = "v999.0.0\n$(touch${IFS}/tmp/registryctl-owned)";
 
-    for version in [hostile, "latest", "v1.2.3-rc1", "v01.2.3"] {
+    for version in [hostile, multiline, "latest", "v1.2.3-rc1", "v01.2.3"] {
         let output = Command::new("bash")
             .arg(&installer)
             .env("REGISTRYCTL_VERSION", version)
