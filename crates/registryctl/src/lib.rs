@@ -5791,6 +5791,7 @@ workflows:
                 .unwrap();
         let compose = fs::read_to_string(project.join("compose.yaml")).unwrap();
         assert!(config.get("metadata").is_none());
+        assert_eq!(config["deployment"]["profile"], "local");
         assert!(manifest["relay"].get("metadata").is_none());
         assert!(!compose.contains("metadata.yaml"));
         assert!(compose.contains(
@@ -6003,6 +6004,7 @@ workflows:
 
         let config = fs::read_to_string(project.join("notary/config.yaml")).unwrap();
         let config_yaml: Value = serde_yaml::from_str(&config).unwrap();
+        assert_eq!(config_yaml["deployment"]["profile"], "local");
         assert_eq!(config_yaml["server"]["openapi_requires_auth"], false);
         assert!(config.contains("base_url: http://registry-relay:8080"));
         assert!(config.contains("token_env: EVIDENCE_SOURCE_API_TOKEN"));
@@ -6163,6 +6165,7 @@ workflows:
         assert!(runtime_matching.allowed_consent_refs.is_empty());
 
         let config_yaml: Value = serde_yaml::from_str(&config).unwrap();
+        assert_eq!(config_yaml["deployment"]["profile"], "local");
         let credential = &config_yaml["auth"]["api_keys"][0];
         assert_eq!(
             credential["authorization_details"]["legal_basis_ref"],
@@ -6572,6 +6575,8 @@ workflows:
         let notary_config: Value = serde_yaml::from_str(&notary_config_body).unwrap();
         assert_eq!(relay_config["auth"]["mode"], "api_key");
         assert_eq!(notary_config["auth"]["mode"], "api_key");
+        assert_eq!(relay_config["deployment"]["profile"], "local");
+        assert_eq!(notary_config["deployment"]["profile"], "local");
         assert_eq!(
             notary_config["evidence"]["source_connections"]["relay"]["base_url"],
             "http://registry-relay:8080"
