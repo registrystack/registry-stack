@@ -106,6 +106,57 @@ fn posture_audit_shipping_state_fields_round_trip() {
 }
 
 #[test]
+fn posture_audit_shipping_health_fields_are_required_and_enumerated() {
+    let validator = posture_validator();
+
+    // Canonical examples and fixtures carry the observed shipping-health fields.
+    for fixture in [
+        registry_platform_ops::RELAY_POSTURE_EXAMPLE_V1,
+        registry_platform_ops::NOTARY_POSTURE_EXAMPLE_V1,
+        registry_platform_ops::DEFAULT_REDACTED_POSTURE_FIXTURE_V1,
+        registry_platform_ops::RESTRICTED_POSTURE_FIXTURE_V1,
+    ] {
+        let posture = parse(fixture);
+        assert_valid(&validator, &posture);
+        let audit = &posture["posture"]["audit"];
+        assert!(
+            audit.get("shipping_health").is_some(),
+            "shipping_health must be present"
+        );
+        assert!(
+            audit.get("shipping_observed_at").is_some(),
+            "shipping_observed_at must be present"
+        );
+    }
+
+    // An invalid shipping_health value is rejected.
+    let mut bad_health = parse(registry_platform_ops::RELAY_POSTURE_EXAMPLE_V1);
+    bad_health["posture"]["audit"]["shipping_health"] = json!("healthy");
+    assert_invalid(&validator, &bad_health);
+
+    // Both new fields are required: absence fails validation.
+    let mut missing_health = parse(registry_platform_ops::RELAY_POSTURE_EXAMPLE_V1);
+    missing_health["posture"]["audit"]
+        .as_object_mut()
+        .expect("posture audit is object")
+        .remove("shipping_health");
+    assert_invalid(&validator, &missing_health);
+
+    let mut missing_observed = parse(registry_platform_ops::RELAY_POSTURE_EXAMPLE_V1);
+    missing_observed["posture"]["audit"]
+        .as_object_mut()
+        .expect("posture audit is object")
+        .remove("shipping_observed_at");
+    assert_invalid(&validator, &missing_observed);
+
+    // null is an accepted value for both fields (unconfigured / unshipped).
+    let mut null_health = parse(registry_platform_ops::DEFAULT_REDACTED_POSTURE_FIXTURE_V1);
+    null_health["posture"]["audit"]["shipping_health"] = json!(null);
+    null_health["posture"]["audit"]["shipping_observed_at"] = json!(null);
+    assert_valid(&validator, &null_health);
+}
+
+#[test]
 fn malformed_posture_documents_fail_validation() {
     let validator = posture_validator();
 

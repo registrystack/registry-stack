@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://id.registrystack.org/schemas/registry-platform/registry.audit.ack_cursor.v1.schema.json",
+  "title": "Registry Audit Ack Cursor v1",
+  "description": "Local state file written by whatever ships audit events off-host, and read by services to check shipping freshness. Records the observed off-host delivery watermark; local hash chains prove only retained-set consistency, so this cursor is the completeness evidence for shipped events.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "acked_at",
+    "last_acked_hash"
+  ],
+  "properties": {
+    "schema": {
+      "const": "registry.audit.ack_cursor.v1"
+    },
+    "acked_at": {
+      "description": "RFC3339 timestamp of when the writer last confirmed delivery of audit events to the off-host destination.",
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_acked_hash": {
+      "description": "Chain hash of the last audit entry confirmed delivered. Binds the ack to the actual chain and enables future backlog-depth checks without a schema break.",
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "writer": {
+      "description": "Identity of the shipping component that wrote this cursor.",
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

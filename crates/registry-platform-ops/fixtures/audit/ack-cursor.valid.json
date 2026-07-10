@@ -1,0 +1,6 @@
+{
+  "schema": "registry.audit.ack_cursor.v1",
+  "acked_at": "2026-06-04T09:59:00Z",
+  "last_acked_hash": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+  "writer": "registry-audit-shipper"
+}

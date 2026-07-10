@@ -360,6 +360,28 @@
         },
         "shipping_target": {
           "$ref": "#/$defs/non_empty_string"
+        },
+        "shipping_health": {
+          "description": "Observed off-host shipping freshness from the local ack cursor. \"unverified\" means a shipping target is declared but no ack cursor is configured; null when shipping is not configured.",
+          "enum": [
+            "ok",
+            "stale",
+            "missing",
+            "invalid",
+            "unverified",
+            null
+          ]
+        },
+        "shipping_observed_at": {
+          "description": "The ack cursor's acked_at when a cursor was successfully read (shipping_health ok or stale), else null.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/rfc3339_timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       }
     }

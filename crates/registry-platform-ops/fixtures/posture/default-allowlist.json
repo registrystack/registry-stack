@@ -64,6 +64,8 @@
     "/posture/audit/sink_type",
     "/posture/audit/shipping_target_configured",
     "/posture/audit/shipping_target",
+    "/posture/audit/shipping_health",
+    "/posture/audit/shipping_observed_at",
     "/posture/audit/checkpoint_status",
     "/posture/audit/latest_tail_hash",
     "/posture/audit/latest_sequence",

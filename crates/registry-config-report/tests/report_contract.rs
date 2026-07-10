@@ -138,11 +138,53 @@ fn product_diagnostic_schema_rejects_malformed_audit_shipping() {
         .remove("shipping_target");
     assert_invalid(PRODUCT_DIAGNOSTIC_REPORT_SCHEMA_V1, &missing_field);
 
-    // Declared shipping state carries no observed-delivery health, so extra
-    // fields such as a last-success timestamp are rejected by the schema.
+    // A field that is not part of the audit_shipping contract (e.g. a last-success
+    // timestamp) is still rejected by the strict schema.
     let mut unknown_field = parse(RELAY_DIAGNOSTIC_OK_FIXTURE_V1);
     unknown_field["audit_shipping"]["last_success_at"] = json!("2026-06-20T00:00:00Z");
     assert_invalid(PRODUCT_DIAGNOSTIC_REPORT_SCHEMA_V1, &unknown_field);
+}
+
+#[test]
+fn product_diagnostic_schema_accepts_observed_audit_shipping_fields() {
+    // Canonical fixtures now carry the observed shipping-health fields and still
+    // validate under the strict schema.
+    for fixture in [
+        RELAY_DIAGNOSTIC_OK_FIXTURE_V1,
+        NOTARY_DIAGNOSTIC_OK_FIXTURE_V1,
+        RELAY_DIAGNOSTIC_ERROR_FIXTURE_V1,
+        NOTARY_DIAGNOSTIC_ERROR_FIXTURE_V1,
+    ] {
+        let report = parse(fixture);
+        assert!(report["audit_shipping"].get("shipping_health").is_some());
+        assert!(report["audit_shipping"]
+            .get("shipping_observed_at")
+            .is_some());
+        assert_valid(PRODUCT_DIAGNOSTIC_REPORT_SCHEMA_V1, &report);
+    }
+
+    // An observed health plus timestamp validates.
+    let mut with_health = parse(NOTARY_DIAGNOSTIC_OK_FIXTURE_V1);
+    with_health["audit_shipping"]["shipping_health"] = json!("stale");
+    with_health["audit_shipping"]["shipping_observed_at"] = json!("2026-06-19T23:00:00Z");
+    assert_valid(PRODUCT_DIAGNOSTIC_REPORT_SCHEMA_V1, &with_health);
+
+    // Null health/observed (declared-only, no cursor) validates.
+    let mut null_health = parse(RELAY_DIAGNOSTIC_OK_FIXTURE_V1);
+    null_health["audit_shipping"]["shipping_health"] = json!(null);
+    null_health["audit_shipping"]["shipping_observed_at"] = json!(null);
+    assert_valid(PRODUCT_DIAGNOSTIC_REPORT_SCHEMA_V1, &null_health);
+
+    // An invalid shipping_health enum value is rejected.
+    let mut bad_health = parse(RELAY_DIAGNOSTIC_OK_FIXTURE_V1);
+    bad_health["audit_shipping"]["shipping_health"] = json!("healthy");
+    assert_invalid(PRODUCT_DIAGNOSTIC_REPORT_SCHEMA_V1, &bad_health);
+
+    // Even alongside the new observed fields, unknown fields inside
+    // audit_shipping still fail.
+    let mut unknown = parse(NOTARY_DIAGNOSTIC_OK_FIXTURE_V1);
+    unknown["audit_shipping"]["backlog_depth"] = json!(3);
+    assert_invalid(PRODUCT_DIAGNOSTIC_REPORT_SCHEMA_V1, &unknown);
 }
 
 #[test]
