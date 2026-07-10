@@ -13,12 +13,12 @@ standards_referenced: []
 
 `registryctl` is the local adopter command-line tool for Registry Stack. It creates a local project, starts and stops the generated services, and runs validation and smoke checks against them.
 
-This page lists the commands, subcommands, and flags released in registryctl `v0.8.4`. Run `registryctl <command> --help` for the built-in usage text. Most human-facing commands also perform a once-per-day update check; see [Update check](#update-check).
+This page lists the commands, subcommands, and flags released in registryctl `v0.9.0`. Run `registryctl <command> --help` for the built-in usage text. Most human-facing commands also perform a once-per-day update check; see [Update check](#update-check).
 
 ## Project setup
 
 `init` creates a local project. `add` adds a product to the current project.
-Beginning with registryctl `v0.9.0`, both generation commands require the strict
+In registryctl `v0.9.0`, both generation commands require the strict
 `registryctl-vX.Y.Z-image-lock.json` from the same release beside the running
 binary. Set `REGISTRYCTL_IMAGE_LOCK` only when an operator has verified the same
 file at a separate explicit path. Registryctl does not search the current
@@ -159,4 +159,4 @@ Related environment variables are listed in the [environment variable reference]
 
 ## Source
 
-The command tree, subcommands, and flags above come from the registryctl source. For the canonical definitions, read the [registryctl command tree in `src/main.rs`](https://github.com/registrystack/registry-stack/blob/v0.8.4/crates/registryctl/src/main.rs).
+The command tree, subcommands, and flags above come from the registryctl source. For the canonical definitions, read the [registryctl command tree in `src/main.rs`](https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registryctl/src/main.rs).

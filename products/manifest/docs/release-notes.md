@@ -1,5 +1,17 @@
 # Release Notes
 
+## 0.9.0
+
+- BREAKING: metadata manifests reject unknown keys throughout the supported
+  format. Move non-standard data into documented extension points before
+  validation.
+- Present but unsupported core `schema_version` values now fail validation.
+- Added metadata-YAML and rendered-artifact fuzz targets with nightly smoke
+  coverage.
+- The CLI binary and fuzz targets now share the same library parsing and
+  validation implementation.
+- Workspace crates remain unpublished; pin the v0.9.0 RegistryStack source ref.
+
 ## 0.2.1
 
 - Added governed Evidence Gateway metadata validation, including evidence-pack

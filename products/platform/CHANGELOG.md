@@ -2,8 +2,25 @@
 
 ## Unreleased
 
+## v0.9.0 - 2026-07-10
+
 ### Added
 
+- Registry Config Bundle v1 is the shared offline configuration contract for
+  Relay and Notary. The CLI `config apply-bundle` command and live HTTP apply
+  surfaces are removed. First use `registryctl bundle verify` for stateless
+  signature and binding verification, then place the signed bundle on the
+  node. For a genuinely absent, version-specific antirollback state path,
+  start the product server with `--initialize-state`; that boot verifies the
+  bundle and initializes state. The product's read-only
+  `config verify-bundle` command remains, but it requires accepted state to
+  exist, so use it only for later candidate validation and restarts. Replace
+  retired TUF-era fields inside `config_trust` with the
+  current Config Bundle v1 trust fields because strict parsing rejects the old
+  schema. Acceptance uses the durable
+  `config_trust.antirollback_state_path`. Missing state fails closed except
+  during that intentional first boot; a lower sequence or a different bundle
+  at the accepted sequence is rejected as non-monotonic.
 - `registry-platform-audit`: `JsonlFileSink::with_rotation_single_writer`, a
   constructor that takes a process-lifetime advisory lock on `<path>.lock`
   (refusing to start if another process holds it) and verifies the on-disk
@@ -48,6 +65,11 @@
 
 ### Changed
 
+- Operators must back up antirollback state before an upgrade and keep
+  release-specific bundle and state restore sets. A rollback restores the
+  antirollback state belonging to that release. Deleting or reinitializing
+  state to force an older bundle to load breaks the antirollback guarantee and
+  is not a supported recovery procedure.
 - Parked `registry-platform-sts` outside the active workspace until Assisted
   Access or delegation-profile work promotes a release-surface consumer (#298).
   The source remains in git, but the crate is no longer built as part of

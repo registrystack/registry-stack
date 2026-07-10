@@ -206,6 +206,9 @@ async fn run_ingest(db_url: &str, schema_name: &str) -> Result<(), Box<dyn std::
         &config_path,
         format!(
             r#"
+deployment:
+  profile: local
+
 server:
   bind: 127.0.0.1:0
   cache_dir: "{}"
@@ -353,6 +356,9 @@ async fn run_live_ingest_with_max_rows(
         &config_path,
         format!(
             r#"
+deployment:
+  profile: local
+
 server:
   bind: 127.0.0.1:0
   cache_dir: "{}"
@@ -611,6 +617,9 @@ async fn run_ingest_expect_failure(
         &config_path,
         format!(
             r#"
+deployment:
+  profile: local
+
 server:
   bind: 127.0.0.1:0
   cache_dir: "{}"

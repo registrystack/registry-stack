@@ -2,12 +2,14 @@
 
 ## Unreleased
 
+## 0.9.0 - 2026-07-10
+
 ### Added
 
-- Boot is now loud about reduced posture: warn logs for waiver-suppressed
-  deployment gate findings, expired waivers, and an undeclared deployment
-  profile, plus a boot-time operational audit record (`deployment.gate_waived`)
-  per waived gate.
+- Accepted boots are now loud about reduced posture: warn logs identify
+  waiver-suppressed deployment gate findings and expired waivers, and a
+  boot-time operational audit record (`deployment.gate_waived`) is written per
+  waived gate.
 - Local, in-process auth-failure throttle (`auth.failure_throttle`), disabled
   by default. When enabled, repeated authentication failures from one client
   address within a configured window return a stable 429
@@ -72,17 +74,46 @@
 
 ### Changed
 
+- BREAKING: `deployment.profile` is required and must be one of `local`,
+  `hosted_lab`, `production`, or `evidence_grade`. Relay does not infer a
+  profile and refuses startup when it is absent. Add the explicit profile that
+  matches the deployment before upgrading.
+- BREAKING: The TUF-era `/admin/v1/config/verify`,
+  `/admin/v1/config/dry-run`, and `/admin/v1/config/apply` endpoints are
+  removed, as is the CLI `config apply-bundle` command. First run
+  `registryctl bundle verify` for stateless signature and binding verification,
+  then place the signed Registry Config Bundle v1 on the Relay node. For a
+  genuinely absent, version-specific antirollback state path, start Relay with
+  `--initialize-state`; that boot verifies the bundle and initializes state.
+  Relay's read-only `config verify-bundle` command remains, but it requires
+  accepted state to exist, so use it only for later candidate validation and
+  restarts. Replace retired TUF-era fields inside `config_trust` with the
+  current Config Bundle v1 trust fields; strict parsing rejects the old
+  schema. There is no hot-apply path. Back up
+  `config_trust.antirollback_state_path` before upgrading and keep
+  release-specific restore sets. Before rollback, restore the antirollback
+  state matching that release. Never delete or reinitialize state to force an
+  older bundle to load.
 - BREAKING: `audit.include_health: true` now includes `/healthz` only.
   `/ready` is always excluded because appending a readiness audit record after
   its zero-backlog comparison would invalidate the next readiness probe.
+  Evidence consumers must capture the readiness response, authenticated
+  posture, and acknowledgement cursor instead of expecting a `/ready` audit
+  record.
 
 - BREAKING: Governed reads now ignore `x-registry-subject-ref`,
   `x-registry-relationship`, `x-registry-on-behalf-of`, and
-  `x-registry-credential-format` unless the authenticated principal has the
-  exact `registry:trust:<field>:<value>` scope. These optional trust-context
-  fields are now scope-gated before policy evaluation. Audit records retain
-  ordinary route scopes in `scopes_used`, replace each value-bearing trust
-  scope with a field-bound
+  `x-registry-credential-format`, and
+  `x-registry-source-observed-at-unix-seconds` unless the authenticated
+  principal has the corresponding exact value-bound scope:
+  `registry:trust:subject_ref:<value>`,
+  `registry:trust:relationship:<value>`,
+  `registry:trust:on_behalf_of:<value>`,
+  `registry:trust:requested_credential_format:<value>`, or
+  `registry:trust:source_observed_at_unix_seconds:<value>`. These optional
+  trust-context fields are scope-gated before policy evaluation. Audit records
+  retain ordinary route scopes in `scopes_used`, replace each value-bearing
+  trust scope with a field-bound
   `registry:trust:<field>:hmac-sha256:<digest>` handle under the deployment
   audit key, and record authenticated trust-context field names in
   `pdp_trust_provenance` without their values.

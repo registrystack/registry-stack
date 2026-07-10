@@ -29,13 +29,19 @@ RELEASE_IMAGE_LOCK_REPOSITORIES = {
 }
 
 
-def require_registryctl_image_lock_release_version(version: str) -> None:
+def release_version_tuple(version: str) -> tuple[int, int, int] | None:
     if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version) is None:
+        return None
+    return tuple(int(part) for part in version.split("."))
+
+
+def require_registryctl_image_lock_release_version(version: str) -> None:
+    parsed = release_version_tuple(version)
+    if parsed is None:
         raise ValueError(
             "registryctl image lock release version must be semantic version text, "
             f"got {version!r}"
         )
-    parsed = tuple(int(part) for part in version.split("."))
     if parsed < RELEASE_IMAGE_LOCK_MINIMUM_VERSION:
         raise ValueError("registryctl image lock releases require version 0.9.0 or later")
 
@@ -315,6 +321,13 @@ def validate(manifest_path: Path) -> int:
         errors.append("stack.source_ref must be HEAD for a draft or a 40-character commit")
     if source_ref == "HEAD" and status != "draft":
         errors.append("stack.source_ref may be HEAD only when stack.status is draft")
+    parsed_version = release_version_tuple(version)
+    if (
+        parsed_version is not None
+        and parsed_version >= RELEASE_IMAGE_LOCK_MINIMUM_VERSION
+        and "registryctl-image-lock" not in artifacts
+    ):
+        errors.append("artifact registryctl-image-lock is required for version 0.9.0 or later")
     for name, artifact_version in sorted(artifacts.items()):
         if str(artifact_version) != version:
             errors.append(f"artifact {name} version {artifact_version} does not match stack version {version}")

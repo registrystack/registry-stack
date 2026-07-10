@@ -105,7 +105,7 @@ export default defineConfig({
   // to their new homes so old links and search results keep resolving.
   redirects: {
     '/start/': internalRedirect('/'),
-    '/start/see-it-live/': internalRedirect('/start/quickstart/'),
+    '/start/see-it-live/': internalRedirect('/tutorials/publish-spreadsheet-secured-registry-api/'),
     '/explanation/trust-posture-and-security-guarantees/': internalRedirect('/security/'),
     '/reference/security-self-assessment/': internalRedirect('/security/self-assessment/'),
     '/reference/openssf-evidence/': internalRedirect('/security/openssf-evidence/'),
@@ -159,7 +159,7 @@ export default defineConfig({
     '/products/registry-notary/opencrvs-dci-onboarding/': currentDocsetRedirect('/products/registry-notary/opencrvs-onboarding/'),
     // registry-manifest, registry-atlas, registry-platform, registry-lab projects/*
     // redirects removed: targets are deferred from the MVP docs cut.
-    '/projects/registry-lab/demo-flow/': internalRedirect('/start/quickstart/'),
+    '/projects/registry-lab/demo-flow/': internalRedirect('/tutorials/first-run-with-solmara-lab/'),
     // The API reference moved from static Redoc HTML to native, theme-aware,
     // searchable pages. Keep the old shareable links working.
     '/api/registry-relay.html': internalRedirect('/reference/apis/relay/'),
@@ -252,10 +252,9 @@ export default defineConfig({
       // section; hand-authored operator tutorials append after the generated
       // items.
       //
-      // "Get started" is the first-run journey in reading order: the hosted
-      // quickstart and credential tour, then the two local first-run
-      // tutorials, then the evaluation and lab pages. Named source-system
-      // paths live under Integrations.
+      // "Get started" leads with the promoted local first-run journey. The
+      // hosted pages remain visible but held until their fresh-reader gates
+      // pass. Named source-system paths live under Integrations.
       sidebar: [
         {
           label: 'Get started',
@@ -263,12 +262,12 @@ export default defineConfig({
             // Short nav labels to avoid wrapping in the narrow sidebar; page
             // titles keep the full wording.
             { label: 'Overview', link: '/' },
-            { label: 'Quickstart', slug: 'start/quickstart' },
-            { label: 'Credential tour', slug: 'start/credential-tour' },
             { label: 'Your first registry API', slug: 'tutorials/publish-spreadsheet-secured-registry-api' },
             { label: 'Your first claim check', slug: 'tutorials/verify-claim-registry-api' },
             { label: 'When to use', slug: 'start/when-to-use' },
             { label: 'Run Solmara Lab', slug: 'tutorials/first-run-with-solmara-lab' },
+            { label: 'Hosted Relay demo (held)', slug: 'start/quickstart' },
+            { label: 'Hosted credential tour (held)', slug: 'start/credential-tour' },
           ],
         },
         {

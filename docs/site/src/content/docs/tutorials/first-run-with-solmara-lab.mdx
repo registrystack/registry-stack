@@ -35,12 +35,13 @@ evaluation route directly so you touch the protected API surface, not only the p
 This tutorial uses synthetic data and local demo credentials.
 Do not use the generated local keys in production.
 
-If you only want the shortest hosted path before running anything locally, start with the
-[Quickstart](../../start/quickstart/) instead. For a standalone local project generated from your
-own data, use the `registryctl` tutorials:
+For a standalone local project generated from your own data, use the `registryctl` tutorials:
 [run a protected registry API](../publish-spreadsheet-secured-registry-api/) or
 [evaluate a claim with Registry Notary](../verify-claim-registry-api/). Clone Solmara Lab when you
-want the full multi-service country demo.
+want the full multi-service country demo. The hosted path remains visible for inspection, but its
+credential continuation is held by [GH#330](https://github.com/registrystack/registry-stack/issues/330)
+and the incomplete [GH#198](https://github.com/registrystack/registry-stack/issues/198)
+fresh-reader run.
 
 ## Prerequisites
 
@@ -240,9 +241,12 @@ confirm what you ran by hand against what the lab publishes.
 
 ## Next
 
-- [Quickstart](../../start/quickstart/): the shortest hosted path, no install needed.
-- [Get a verifiable credential from the hosted lab](../../start/credential-tour/): watch Registry
-  Notary issue a signed credential in the browser.
+- [Run a protected registry API locally](../publish-spreadsheet-secured-registry-api/): generate a
+  smaller local Relay project from a sample workbook.
+- [Evaluate a claim with Registry Notary](../verify-claim-registry-api/): add Notary to that local
+  project.
+- [Hosted Relay demo (held)](../../start/quickstart/): inspect the zero-install Relay path.
+- [Hosted credential tour (held)](../../start/credential-tour/): inspect the browser issuance path.
 - [When to use Registry Stack](../../start/when-to-use/): decide whether Relay, Notary, or both fit
   your integration.
 - [Registry Relay](../../products/registry-relay/): route reference, auth scopes, and configuration

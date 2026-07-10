@@ -29,11 +29,11 @@ pub(crate) const TRUST_JURISDICTION_HEADER: &str = "x-registry-trust-jurisdictio
 pub(crate) const TRUST_ASSURANCE_HEADER: &str = "x-registry-trust-assurance";
 pub(crate) const TRUST_LEGAL_BASIS_HEADER: &str = "x-registry-trust-legal-basis";
 pub(crate) const TRUST_CONSENT_HEADER: &str = "x-registry-trust-consent";
-const TRUST_SUBJECT_REF_HEADER: &str = "x-registry-subject-ref";
-const TRUST_RELATIONSHIP_HEADER: &str = "x-registry-relationship";
-const TRUST_ON_BEHALF_OF_HEADER: &str = "x-registry-on-behalf-of";
-const TRUST_REQUESTED_CREDENTIAL_FORMAT_HEADER: &str = "x-registry-credential-format";
-const TRUST_SOURCE_OBSERVED_AT_UNIX_SECONDS_HEADER: &str =
+pub(crate) const TRUST_SUBJECT_REF_HEADER: &str = "x-registry-subject-ref";
+pub(crate) const TRUST_RELATIONSHIP_HEADER: &str = "x-registry-relationship";
+pub(crate) const TRUST_ON_BEHALF_OF_HEADER: &str = "x-registry-on-behalf-of";
+pub(crate) const TRUST_REQUESTED_CREDENTIAL_FORMAT_HEADER: &str = "x-registry-credential-format";
+pub(crate) const TRUST_SOURCE_OBSERVED_AT_UNIX_SECONDS_HEADER: &str =
     "x-registry-source-observed-at-unix-seconds";
 pub(crate) const TRUST_SOURCE_OBSERVED_AGE_SECONDS_HEADER: &str =
     "x-registry-source-observed-age-seconds";

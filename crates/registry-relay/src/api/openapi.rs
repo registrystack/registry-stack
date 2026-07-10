@@ -8,6 +8,12 @@ use axum::{Extension, Router};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeSet;
 
+use crate::api::governed::{
+    TRUST_ASSURANCE_HEADER, TRUST_CONSENT_HEADER, TRUST_JURISDICTION_HEADER,
+    TRUST_LEGAL_BASIS_HEADER, TRUST_ON_BEHALF_OF_HEADER, TRUST_RELATIONSHIP_HEADER,
+    TRUST_REQUESTED_CREDENTIAL_FORMAT_HEADER, TRUST_SOURCE_OBSERVED_AGE_SECONDS_HEADER,
+    TRUST_SOURCE_OBSERVED_AT_UNIX_SECONDS_HEADER, TRUST_SUBJECT_REF_HEADER,
+};
 use crate::audit::ErrorCodeExt;
 use crate::auth::Principal;
 use crate::config::{AuthMode, Config, DatasetConfig, EntityConfig, FilterOp};
@@ -47,6 +53,28 @@ const INFO_SUMMARY: &str = "Read-only data gateway exposing entity records, \
 const INFO_DESCRIPTION: &str = "Read-only HTTP gateway over governed datasets. \
     Serves entity records, catalog metadata, and SHACL/DCAT-AP shapes, with API \
     discovery through the RFC 9727 catalog endpoint.";
+
+const VALUE_BOUND_TRUST_HEADERS: [(&str, &str); 10] = [
+    (TRUST_LEGAL_BASIS_HEADER, "legal_basis"),
+    (TRUST_CONSENT_HEADER, "consent"),
+    (TRUST_ASSURANCE_HEADER, "assurance"),
+    (TRUST_JURISDICTION_HEADER, "jurisdiction"),
+    (TRUST_SUBJECT_REF_HEADER, "subject_ref"),
+    (TRUST_RELATIONSHIP_HEADER, "relationship"),
+    (TRUST_ON_BEHALF_OF_HEADER, "on_behalf_of"),
+    (
+        TRUST_REQUESTED_CREDENTIAL_FORMAT_HEADER,
+        "requested_credential_format",
+    ),
+    (
+        TRUST_SOURCE_OBSERVED_AT_UNIX_SECONDS_HEADER,
+        "source_observed_at_unix_seconds",
+    ),
+    (
+        TRUST_SOURCE_OBSERVED_AGE_SECONDS_HEADER,
+        "source_observed_age_seconds",
+    ),
+];
 
 /// Sub-router for the best-effort OpenAPI document.
 pub fn router<S>() -> Router<S>
@@ -623,6 +651,7 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
             if entity_config.api.require_purpose_header {
                 add_purpose_header_parameter(&mut paths, &collection_path, "get");
             }
+            add_value_bound_trust_header_parameters(&mut paths, &collection_path, "get");
             tag(&mut paths, &collection_path, "get", &entity_tag);
 
             // Get record by id
@@ -673,6 +702,7 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
             if entity_config.api.require_purpose_header {
                 add_purpose_header_parameter(&mut paths, &record_path, "get");
             }
+            add_value_bound_trust_header_parameters(&mut paths, &record_path, "get");
             tag(&mut paths, &record_path, "get", &entity_tag);
 
             // Field schema (JSON Schema view)
@@ -744,6 +774,7 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
                 if entity_config.api.require_purpose_header || target_requires_purpose {
                     add_purpose_header_parameter(&mut paths, &relationship_path, "get");
                 }
+                add_value_bound_trust_header_parameters(&mut paths, &relationship_path, "get");
                 tag(&mut paths, &relationship_path, "get", &entity_tag);
             }
         }
@@ -795,6 +826,7 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
                 if dataset_aggregates_require_purpose(dataset_config) {
                     add_purpose_header_parameter(&mut paths, &aggregate_run_path, "get");
                 }
+                add_value_bound_trust_header_parameters(&mut paths, &aggregate_run_path, "get");
                 tag(&mut paths, &aggregate_run_path, "get", &aggregate_tag);
 
                 let aggregate_query_path = format!(
@@ -820,6 +852,7 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
                 if dataset_aggregates_require_purpose(dataset_config) {
                     add_purpose_header_parameter(&mut paths, &aggregate_query_path, "post");
                 }
+                add_value_bound_trust_header_parameters(&mut paths, &aggregate_query_path, "post");
                 tag(&mut paths, &aggregate_query_path, "post", &aggregate_tag);
 
                 let aggregate_structure_path = format!(
@@ -1673,6 +1706,40 @@ fn set_response_example(
 /// declares the header. The parameter is required by the gateway when
 /// the entity has `api.require_purpose_header: true`.
 fn add_purpose_header_parameter(paths: &mut Map<String, Value>, path: &str, method: &str) {
+    add_header_parameter(paths, path, method, purpose_header_parameter());
+}
+
+/// Document the client-supplied trust context that Relay can pass to the PDP.
+/// Each header is optional and ignored unless the authenticated principal has
+/// the exact value-bound scope described by the parameter.
+fn add_value_bound_trust_header_parameters(
+    paths: &mut Map<String, Value>,
+    path: &str,
+    method: &str,
+) {
+    for (name, scope_field) in VALUE_BOUND_TRUST_HEADERS {
+        add_header_parameter(
+            paths,
+            path,
+            method,
+            value_bound_trust_header_parameter(name, scope_field),
+        );
+    }
+}
+
+fn add_header_parameter(
+    paths: &mut Map<String, Value>,
+    path: &str,
+    method: &str,
+    parameter: Value,
+) {
+    let Some(name) = parameter
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+    else {
+        return;
+    };
     let Some(op) = op_at(paths, path, method) else {
         return;
     };
@@ -1686,11 +1753,11 @@ fn add_purpose_header_parameter(paths: &mut Map<String, Value>, path: &str, meth
     let already_declared = parameters.iter().any(|p| {
         p.get("name")
             .and_then(Value::as_str)
-            .is_some_and(|n| n.eq_ignore_ascii_case("Data-Purpose"))
+            .is_some_and(|declared| declared.eq_ignore_ascii_case(&name))
             && p.get("in").and_then(Value::as_str) == Some("header")
     });
     if !already_declared {
-        parameters.push(purpose_header_parameter());
+        parameters.push(parameter);
     }
 }
 
@@ -3454,6 +3521,7 @@ fn insert_spdci_paths(paths: &mut Map<String, Value>) {
             path.to_string(),
             spdci_path_item(op_id, summary, description),
         );
+        add_value_bound_trust_header_parameters(paths, path, "post");
         tag(paths, path, "post", TAG_SPD_CI);
     }
 }
@@ -3551,6 +3619,11 @@ fn insert_attribute_release_paths(paths: &mut Map<String, Value>) {
                 }
             }
         }),
+    );
+    add_value_bound_trust_header_parameters(
+        paths,
+        "/v1/attribute-releases/{profile_id}/versions/{version}/resolve",
+        "post",
     );
     tag(
         paths,
@@ -3664,6 +3737,11 @@ fn insert_ogc_paths(paths: &mut Map<String, Value>) {
         "get",
         "list_dataset_ogc_features",
     );
+    add_value_bound_trust_header_parameters(
+        paths,
+        "/ogc/v1/datasets/{dataset_id}/collections/{collection_id}/items",
+        "get",
+    );
 
     paths.insert(
         "/ogc/v1/datasets/{dataset_id}/collections/{collection_id}/items/{feature_id}".to_string(),
@@ -3690,6 +3768,11 @@ fn insert_ogc_paths(paths: &mut Map<String, Value>) {
         "/ogc/v1/datasets/{dataset_id}/collections/{collection_id}/items/{feature_id}",
         "get",
         "get_dataset_ogc_feature",
+    );
+    add_value_bound_trust_header_parameters(
+        paths,
+        "/ogc/v1/datasets/{dataset_id}/collections/{collection_id}/items/{feature_id}",
+        "get",
     );
 }
 
@@ -3904,6 +3987,8 @@ fn insert_ogc_edr_paths(paths: &mut Map<String, Value>) {
             }
         }),
     );
+    add_value_bound_trust_header_parameters(paths, area_path, "get");
+    add_value_bound_trust_header_parameters(paths, area_path, "post");
     tag(paths, area_path, "get", TAG_OGC_EDR);
     tag(paths, area_path, "post", TAG_OGC_EDR);
 }
@@ -4506,6 +4591,21 @@ fn purpose_header_parameter_with_required(required: bool) -> Value {
     })
 }
 
+fn value_bound_trust_header_parameter(name: &str, scope_field: &str) -> Value {
+    json!({
+        "name": name,
+        "in": "header",
+        "required": false,
+        "description": format!(
+            "Optional PDP trust context. Relay passes this value to policy evaluation only when \
+             the authenticated principal has the exact value-bound \
+             `registry:trust:{scope_field}:<value>` scope. Without that scope, Relay treats the \
+             header as absent. Header names are case-insensitive."
+        ),
+        "schema": { "type": "string", "minLength": 1 },
+    })
+}
+
 fn enum_query_parameter(name: &str, description: &str, values: Vec<&str>) -> Value {
     json!({
         "name": name,
@@ -4868,6 +4968,111 @@ mod tests {
                 }],
             }],
         }
+    }
+
+    const EXPECTED_VALUE_BOUND_TRUST_HEADERS: [(&str, &str); 10] = [
+        ("x-registry-trust-legal-basis", "legal_basis"),
+        ("x-registry-trust-consent", "consent"),
+        ("x-registry-trust-assurance", "assurance"),
+        ("x-registry-trust-jurisdiction", "jurisdiction"),
+        ("x-registry-subject-ref", "subject_ref"),
+        ("x-registry-relationship", "relationship"),
+        ("x-registry-on-behalf-of", "on_behalf_of"),
+        (
+            "x-registry-credential-format",
+            "requested_credential_format",
+        ),
+        (
+            "x-registry-source-observed-at-unix-seconds",
+            "source_observed_at_unix_seconds",
+        ),
+        (
+            "x-registry-source-observed-age-seconds",
+            "source_observed_age_seconds",
+        ),
+    ];
+
+    fn assert_value_bound_trust_headers(operation: &Value) {
+        let parameters = operation["parameters"]
+            .as_array()
+            .expect("operation parameters");
+        let expected_names = EXPECTED_VALUE_BOUND_TRUST_HEADERS
+            .iter()
+            .map(|(name, _)| *name)
+            .collect::<BTreeSet<_>>();
+        let documented_names = parameters
+            .iter()
+            .filter(|parameter| parameter["in"] == "header")
+            .filter_map(|parameter| parameter["name"].as_str())
+            .filter(|name| name.starts_with("x-registry-"))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(documented_names, expected_names);
+
+        for (name, scope_field) in EXPECTED_VALUE_BOUND_TRUST_HEADERS {
+            let matching = parameters
+                .iter()
+                .filter(|parameter| parameter["name"] == name && parameter["in"] == "header")
+                .collect::<Vec<_>>();
+            assert_eq!(matching.len(), 1, "{name} must be declared exactly once");
+            let parameter = matching[0];
+            assert_eq!(parameter["required"], false, "{name} must stay optional");
+            assert_eq!(parameter["schema"]["type"], "string");
+            assert_eq!(parameter["schema"]["minLength"], 1);
+            assert!(
+                parameter["description"]
+                    .as_str()
+                    .expect("trust header description")
+                    .contains(&format!("registry:trust:{scope_field}:<value>")),
+                "{name} must document its exact value-bound scope"
+            );
+        }
+    }
+
+    #[test]
+    fn governed_read_operations_document_value_bound_trust_headers() {
+        let config = load_example_config();
+        let doc = openapi_document(&catalog_with_individual(), &config);
+
+        for (path, method) in [
+            (
+                "/v1/datasets/social_registry/entities/individual/records",
+                "get",
+            ),
+            (
+                "/v1/datasets/social_registry/entities/individual/records/{id}",
+                "get",
+            ),
+            (
+                "/v1/datasets/social_registry/aggregates/{aggregate_id}",
+                "get",
+            ),
+            (
+                "/v1/datasets/social_registry/aggregates/{aggregate_id}/query",
+                "post",
+            ),
+        ] {
+            assert_value_bound_trust_headers(&doc["paths"][path][method]);
+        }
+    }
+
+    #[test]
+    fn value_bound_trust_header_mutator_is_idempotent() {
+        let mut paths = Map::from_iter([(
+            "/governed".to_string(),
+            json!({ "get": { "parameters": [] } }),
+        )]);
+
+        add_value_bound_trust_header_parameters(&mut paths, "/governed", "get");
+        add_value_bound_trust_header_parameters(&mut paths, "/governed", "get");
+
+        assert_value_bound_trust_headers(&paths["/governed"]["get"]);
+        assert_eq!(
+            paths["/governed"]["get"]["parameters"]
+                .as_array()
+                .expect("operation parameters")
+                .len(),
+            10
+        );
     }
 
     #[test]
@@ -5386,6 +5591,7 @@ mod tests {
             resolve_op["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
             "#/components/schemas/AttributeReleaseResolveResponse"
         );
+        assert_value_bound_trust_headers(resolve_op);
         // Standard denial responses must be present
         assert!(
             resolve_op["responses"]["400"].is_object(),
@@ -5505,8 +5711,34 @@ mod tests {
                 op["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
                 "#/components/schemas/SpdciSyncResponse"
             );
+            assert_value_bound_trust_headers(op);
         }
         assert!(doc["components"]["schemas"]["SpdciSyncRequest"].is_object());
         assert!(doc["components"]["schemas"]["SpdciSyncResponse"].is_object());
+    }
+
+    #[cfg(feature = "ogcapi-features")]
+    #[test]
+    fn ogc_feature_data_paths_document_value_bound_trust_headers() {
+        let mut paths = Map::new();
+        insert_ogc_paths(&mut paths);
+
+        for path in [
+            "/ogc/v1/datasets/{dataset_id}/collections/{collection_id}/items",
+            "/ogc/v1/datasets/{dataset_id}/collections/{collection_id}/items/{feature_id}",
+        ] {
+            assert_value_bound_trust_headers(&paths[path]["get"]);
+        }
+    }
+
+    #[cfg(feature = "ogcapi-edr")]
+    #[test]
+    fn ogc_edr_data_paths_document_value_bound_trust_headers() {
+        let mut paths = Map::new();
+        insert_ogc_edr_paths(&mut paths);
+        let area = &paths["/ogc/edr/v1/collections/{collection_id}/area"];
+
+        assert_value_bound_trust_headers(&area["get"]);
+        assert_value_bound_trust_headers(&area["post"]);
     }
 }

@@ -161,6 +161,25 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("stack.source_ref may be HEAD only", result.stderr)
 
+    def test_validate_requires_registryctl_image_lock_for_v0_9_and_later(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            missing = write_manifest(
+                root,
+                version="0.9.0",
+                include_registryctl_image_lock=False,
+            )
+            rejected = run_tool("validate", str(missing))
+            included = write_manifest(root, version="0.9.0")
+            accepted = run_tool("validate", str(included))
+
+        self.assertNotEqual(0, rejected.returncode)
+        self.assertIn(
+            "artifact registryctl-image-lock is required for version 0.9.0 or later",
+            rejected.stderr,
+        )
+        self.assertEqual(0, accepted.returncode, accepted.stderr)
+
     def test_render_registryctl_image_lock_from_exact_release_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -991,9 +1010,20 @@ def write_manifest(
     source_tag: str | None = None,
     status: str = "release-candidate",
     version: str = "0.8.0",
+    include_registryctl_image_lock: bool | None = None,
 ) -> Path:
     if source_tag is None:
         source_tag = f"v{version}"
+    artifacts = {
+        "registry-notary": version,
+        "registry-relay": version,
+    }
+    if include_registryctl_image_lock is None:
+        include_registryctl_image_lock = tuple(
+            int(part) for part in version.split(".")
+        ) >= (0, 9, 0)
+    if include_registryctl_image_lock:
+        artifacts["registryctl-image-lock"] = version
     manifest = {
         "stack": {
             "release": "beta-6",
@@ -1003,10 +1033,7 @@ def write_manifest(
             "source_tag": source_tag,
             "status": status,
         },
-        "artifacts": {
-            "registry-notary": version,
-            "registry-relay": version,
-        },
+        "artifacts": artifacts,
         "external": {
             "crosswalk": {
                 "repo": "PublicSchema/crosswalk",

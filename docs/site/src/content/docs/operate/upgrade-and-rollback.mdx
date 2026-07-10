@@ -19,8 +19,10 @@ It applies to deployments that consume release artifacts (binaries or the
 One term needs disambiguating up front. This page uses "roll back" for redeploying the
 previous release of the software. The governed-configuration feature has a separate control
 called anti-rollback, which rejects config bundles older than the last applied sequence.
-The two interact: rolling back the software does not permit activating an older config
-sequence. The [revert section](#roll-back-to-the-previous-release) covers this.
+The two interact, but anti-rollback state formats can also change between releases. Keep
+version-specific config and state restore sets, and restore the previous release's exact
+anti-rollback state before starting its binary. The
+[revert section](#roll-back-to-the-previous-release) covers this.
 
 {/* TODO[review]: GH#203 requires this procedure to be exercised at least once against a
      real topology. A partial exercise record now exists at
@@ -31,15 +33,16 @@ sequence. The [revert section](#roll-back-to-the-previous-release) covers this.
 
 ## Prerequisites
 
-- Your deployment pins a version tag (`v0.8.4`) or an image digest, never `latest`.
+- Your deployment pins a version tag (`v0.9.0`) or an image digest, never `latest`.
 - You know where your deployment keeps its persistent state. At minimum: the audit log
   directory of each product, the anti-rollback state file if `config_trust` is enabled
   (`antirollback_state_path`), the Redis instance backing replay and nonce state for
   Registry Notary, and your config files and secrets. For generated and single-node
   Compose deployments, follow [Back up and restore a deployment](../backup-and-restore/)
-  before changing the running containers.
+  before changing the running containers. Store each release's config and anti-rollback
+  state as a separate restore set; do not overwrite an older set with a newer file.
 - You can run the release-verification steps in
-  [SECURITY.md](https://github.com/registrystack/registry-stack/blob/v0.8.4/SECURITY.md)
+  [SECURITY.md](https://github.com/registrystack/registry-stack/blob/v0.9.0/SECURITY.md)
   (cosign, and slsa-verifier for releases with provenance).
 
 ## Upgrade
@@ -77,7 +80,9 @@ sequence. The [revert section](#roll-back-to-the-previous-release) covers this.
 4. Back up state that a failed upgrade must not lose: `secrets/local.env`, the audit log
    directory (copy, never truncate or edit; the hash chain makes hand-edited files
    unverifiable), the anti-rollback state file, Redis replay and nonce state, and your
-   config and source files as currently deployed.
+   config and source files as currently deployed. Record hashes and permissions without
+   printing secrets, label the restore set with the running release, and leave it unchanged
+   when the target release creates or updates its own anti-rollback state.
 
 5. Deploy the new release alongside or in place of the old one, per your orchestration.
    Keep the old release's binary or image reference and config available until the soak
@@ -103,22 +108,25 @@ sequence. The [revert section](#roll-back-to-the-previous-release) covers this.
    issuance, metrics, Redis replay/nonce survival, and anti-rollback monotonicity were not
    exercised by that run.
 
-7. Keep the previous release's artifacts and config until the new release has run through
-   your soak period. Only then remove them.
+7. Keep the previous release's artifacts, config, and exact anti-rollback state restore set
+   until the new release has run through your soak period. Only then remove them under your
+   retention policy.
 
 ## Roll back to the previous release
 
 If the new release misbehaves and the cause is not a config error you can fix forward:
 
-1. Redeploy the previous release's binary or image (the one you kept in the upgrade
-   procedure) with the config that was running before the upgrade.
+1. Stop the target release. Restore the previous release's binary or image, the config that
+   was running before the upgrade, and that release's exact anti-rollback state at its
+   configured path. Retain the target release's state separately. Never start the previous
+   binary against a newer release's state file.
 
 2. Respect the constraints that survive a software roll-back:
 
-   - Anti-rollback state is monotonic. If you activated a new signed config bundle after
-     upgrading, the previous software with the previous config still loads, but you cannot
-     activate an older bundle over a newer sequence number. Roll back the software, not the
-     accepted config sequence.
+   - Anti-rollback state is release-specific durable evidence. Restore the exact prior
+     release file, including its hash and permissions. Do not delete or reinitialize either
+     release's state to make a bundle boot, and do not copy a newer state file over the
+     prior restore set. Sequence monotonicity continues within each retained state lineage.
    - The audit chain must stay continuous. Never truncate or rewrite audit files to "match"
      the previous state; the chain verifies across the retained files, and the record of the
      failed upgrade is evidence, not noise.
@@ -145,9 +153,10 @@ If the new release misbehaves and the cause is not a config error you can fix fo
   the problem body reports the generic code `readiness.not_ready` for any failing readiness
   check, including a profile gate; check the admin posture surface's deployment object to
   confirm whether a gate finding is the cause.
-- Config bundle activation is rejected with a rollback outcome after reverting: expected. The
-  anti-rollback store saw a newer sequence. Issue a new bundle with a higher sequence
-  instead of activating the old one.
+- Config bundle activation is rejected with a rollback outcome after reverting: confirm the
+  previous release's exact config and anti-rollback state restore set is in place. Do not
+  delete or reinitialize state. If the restored lineage itself has already accepted a newer
+  sequence, issue a valid bundle with a higher sequence instead of activating an older one.
 
 ## Next
 
