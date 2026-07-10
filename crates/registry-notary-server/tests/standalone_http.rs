@@ -5394,6 +5394,7 @@ async fn direct_credential_pre_evaluation_denials_are_audited_and_redacted() {
             "request.invalid",
             "request.invalid",
             None,
+            None,
         ),
         (
             "missing evaluation id",
@@ -5403,6 +5404,7 @@ async fn direct_credential_pre_evaluation_denials_are_audited_and_redacted() {
             StatusCode::BAD_REQUEST,
             "request.invalid",
             "request.invalid",
+            None,
             None,
         ),
         (
@@ -5414,6 +5416,7 @@ async fn direct_credential_pre_evaluation_denials_are_audited_and_redacted() {
             "request.invalid",
             "request.invalid",
             None,
+            None,
         ),
         (
             "unknown evaluation id",
@@ -5423,6 +5426,7 @@ async fn direct_credential_pre_evaluation_denials_are_audited_and_redacted() {
             StatusCode::NOT_FOUND,
             "evaluation.not_found",
             "evaluation.not_found",
+            None,
             None,
         ),
         (
@@ -5434,12 +5438,23 @@ async fn direct_credential_pre_evaluation_denials_are_audited_and_redacted() {
             "self_attestation.denied",
             "self_attestation.invalid_token",
             Some("self_attestation.invalid_token"),
+            Some(("self_attestation", "national_id")),
         ),
     ];
 
     for (
         index,
-        (name, case_authorization, payload, idempotency_key, status, code, audit_code, denial_code),
+        (
+            name,
+            case_authorization,
+            payload,
+            idempotency_key,
+            status,
+            code,
+            audit_code,
+            denial_code,
+            attestation_context,
+        ),
     ) in cases.into_iter().enumerate()
     {
         let request = server
@@ -5512,6 +5527,14 @@ async fn direct_credential_pre_evaluation_denials_are_audited_and_redacted() {
         match denial_code {
             Some(denial_code) => assert_eq!(denied["denial_code"], json!(denial_code), "{name}"),
             None => assert!(denied.get("denial_code").is_none(), "{name}"),
+        }
+        if let Some((access_mode, token_claim_name)) = attestation_context {
+            assert_eq!(denied["access_mode"], json!(access_mode), "{name}");
+            assert_eq!(
+                denied["token_claim_name"],
+                json!(token_claim_name),
+                "{name}"
+            );
         }
         assert!(
             denied.get("verification_id").is_none(),
