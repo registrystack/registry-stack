@@ -88,6 +88,7 @@ test('accepts an explicit empty standards_referenced list', () => {
             src: 'docs/operator.md',
             last_reviewed: '2026-07-10',
             standards_referenced: [],
+            exclude_docsets: ['v0.8.4'],
           },
         ],
       },
@@ -141,6 +142,7 @@ test('rejects malformed and unknown docset override metadata', () => {
               {
                 docsets: ['missing'],
                 standards_referenced: ['prov-o'],
+                last_reviewed: 'unreviewed',
                 unexpected: true,
               },
             ],
@@ -161,7 +163,28 @@ test('rejects malformed and unknown docset override metadata', () => {
   );
 });
 
-test('uses reviewed standards metadata for a pinned historical source', () => {
+test('requires complete metadata for every applicable archived docset', () => {
+  const manifest = {
+    repos: {
+      'registry-relay': {
+        docs: [
+          {
+            src: 'docs/operator.md',
+            last_reviewed: 'unreviewed',
+            standards_referenced: [],
+          },
+        ],
+      },
+    },
+  };
+
+  assert.throws(
+    () => validateRepoDocsMetadata(manifest, knownStandards, docsets),
+    /missing complete metadata override for archived docset "v0\.8\.4"/,
+  );
+});
+
+test('uses frozen standards and review metadata for a pinned historical source', () => {
   const manifest = {
     repos: {
       'registry-relay': {
@@ -174,6 +197,7 @@ test('uses reviewed standards metadata for a pinned historical source', () => {
               {
                 docsets: ['v0.8.4'],
                 standards_referenced: ['prov-o'],
+                last_reviewed: '2025-12-31',
               },
             ],
           },
@@ -185,6 +209,7 @@ test('uses reviewed standards metadata for a pinned historical source', () => {
   validateRepoDocsMetadata(manifest, knownStandards, docsets);
   applyDocsetMetadataOverrides(manifest, docsets.docsets[1]);
   assert.deepEqual(manifest.repos['registry-relay'].docs[0].standards_referenced, ['prov-o']);
+  assert.equal(manifest.repos['registry-relay'].docs[0].last_reviewed, '2025-12-31');
 });
 
 test('writes deterministic manifest metadata into generated frontmatter', () => {
@@ -201,6 +226,21 @@ test('writes deterministic manifest metadata into generated frontmatter', () => 
   const second = frontmatterBlock(fields);
 
   assert.equal(first, second);
+  assert.match(first, /status: draft/);
   assert.match(first, /last_reviewed: unreviewed/);
   assert.match(first, /standards_referenced:\n  - openapi\n  - dcat/);
+});
+
+test('marks source-reviewed generated pages current', () => {
+  const fm = frontmatterBlock({
+    title: 'API guide',
+    description: 'Registry Relay API guide.',
+    owner: 'registry-relay',
+    doc_type: 'reference',
+    last_reviewed: '2026-07-10',
+    standards_referenced: [],
+    editUrl: 'https://example.test/repo/blob/main/docs/api.md',
+  });
+
+  assert.match(fm, /status: current/);
 });

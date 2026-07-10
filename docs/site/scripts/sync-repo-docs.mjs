@@ -296,8 +296,7 @@ export function validateLastReviewed(value, context) {
 }
 
 function validateDocsetOverrides(entry, context, knownStandards, docsets) {
-  const overrides = entry.docset_overrides;
-  if (overrides === undefined) return;
+  const overrides = entry.docset_overrides ?? [];
   if (!Array.isArray(overrides)) {
     throw new Error(`${context}: docset_overrides must be a list`);
   }
@@ -310,7 +309,7 @@ function validateDocsetOverrides(entry, context, knownStandards, docsets) {
       throw new Error(`${overrideContext} must be a map`);
     }
     const unknownKeys = Object.keys(override).filter(
-      (key) => !['docsets', 'standards_referenced'].includes(key),
+      (key) => !['docsets', 'standards_referenced', 'last_reviewed'].includes(key),
     );
     if (unknownKeys.length > 0) {
       throw new Error(`${overrideContext} has unknown field "${unknownKeys[0]}"`);
@@ -323,6 +322,7 @@ function validateDocsetOverrides(entry, context, knownStandards, docsets) {
       overrideContext,
       knownStandards,
     );
+    validateLastReviewed(override.last_reviewed, overrideContext);
 
     for (const docsetId of override.docsets) {
       if (typeof docsetId !== 'string' || docsetId.trim() !== docsetId || docsetId === '') {
@@ -344,6 +344,17 @@ function validateDocsetOverrides(entry, context, knownStandards, docsets) {
       seenDocsets.add(docsetId);
     }
   }
+
+  const expectedDocsets = docsets.docsets.filter((docset) => {
+    return docset.status === 'archived' && !entry.exclude_docsets?.includes(docset.id);
+  });
+  for (const docset of expectedDocsets) {
+    if (!seenDocsets.has(docset.id)) {
+      throw new Error(
+        `${context}: missing complete metadata override for archived docset "${docset.id}"`,
+      );
+    }
+  }
 }
 
 export function validateRepoDocsMetadata(manifest, knownStandards, docsets) {
@@ -363,19 +374,22 @@ export function validateRepoDocsMetadata(manifest, knownStandards, docsets) {
   return manifest;
 }
 
-// Historical pages can differ from their current source. Each reviewed
-// docset_overrides item names one or more archived docsets and fully replaces
-// standards_referenced for those pinned sources.
+// Historical metadata is frozen with the pinned source. Every applicable
+// archived docset has a complete standards and review-status override.
 export function applyDocsetMetadataOverrides(manifest, docset) {
+  if (docset.status !== 'archived') return manifest;
   for (const repo of Object.values(manifest.repos ?? {})) {
     if (!Array.isArray(repo.docs)) continue;
     for (const entry of repo.docs) {
+      if (entry.exclude_docsets?.includes(docset.id)) continue;
       const override = entry.docset_overrides?.find((candidate) => {
         return candidate.docsets.includes(docset.id);
       });
-      if (override) {
-        entry.standards_referenced = [...override.standards_referenced];
+      if (!override) {
+        throw new Error(`${entry.src}: missing metadata override for archived docset "${docset.id}"`);
       }
+      entry.standards_referenced = [...override.standards_referenced];
+      entry.last_reviewed = override.last_reviewed;
     }
   }
   return manifest;
@@ -389,7 +403,7 @@ export function frontmatterBlock(fields) {
   const fm = {
     title: fields.title,
     description: fields.description,
-    status: 'current',
+    status: lastReviewed === 'unreviewed' ? 'draft' : 'current',
     owner: fields.owner,
     source_repos: [fields.owner],
     last_reviewed: lastReviewed,
