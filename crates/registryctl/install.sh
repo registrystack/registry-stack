@@ -34,16 +34,16 @@ need() {
 	fi
 }
 
+need grep
+
+if ! printf '%s\n' "$version" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+	echo "Refusing non-canonical registryctl release tag." >&2
+	echo "Set REGISTRYCTL_VERSION to a pinned vMAJOR.MINOR.PATCH tag such as $default_version." >&2
+	exit 1
+fi
+
 need curl
 need uname
-
-case "$version" in
-latest | snapshot)
-	echo "Refusing floating registryctl release tag: $version" >&2
-	echo "Set REGISTRYCTL_VERSION to a pinned release tag such as $default_version." >&2
-	exit 1
-	;;
-esac
 
 os="$(uname -s)"
 arch="$(uname -m)"
