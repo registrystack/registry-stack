@@ -60,8 +60,10 @@ const REGISTRY_STACK_RUNTIME_GID_ENV: &str = "REGISTRY_STACK_RUNTIME_GID";
 const DEFAULT_NONROOT_CONTAINER_ID: &str = "65532";
 const REGISTRYCTL_RELEASES_API: &str =
     "https://api.github.com/repos/registrystack/registry-stack/releases/latest";
-const REGISTRYCTL_INSTALL_SCRIPT: &str =
-    "https://raw.githubusercontent.com/registrystack/registry-stack/main/crates/registryctl/install.sh";
+const REGISTRYCTL_RAW_REPOSITORY: &str =
+    "https://raw.githubusercontent.com/registrystack/registry-stack";
+const REGISTRYCTL_VERIFY_GUIDE: &str =
+    "https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md";
 const UPDATE_CHECK_CACHE_SECONDS: u64 = 60 * 60 * 24;
 /// The only `schema_version` `registryctl_manifest` generates today; `Project::load` rejects
 /// any other value so a future/incompatible schema file fails loudly instead of half-parsing.
@@ -1159,9 +1161,11 @@ fn is_newer_release(current_version: &str, latest_tag: &str) -> bool {
 }
 
 fn update_notice(current_version: &str, latest_tag: &str) -> String {
+    let install_script =
+        format!("{REGISTRYCTL_RAW_REPOSITORY}/{latest_tag}/crates/registryctl/install.sh");
     format!(
-        "registryctl {latest_tag} is available. You have {}.\nUpgrade with:\n  REGISTRYCTL_VERSION={latest_tag} curl -fsSL {REGISTRYCTL_INSTALL_SCRIPT} | sh",
-        display_version(current_version)
+        "registryctl {latest_tag} is available. You have {}.\nThe quick installer verifies SHA256 integrity only. For canonical release authenticity guidance, see:\n  {REGISTRYCTL_VERIFY_GUIDE}\nUpgrade with:\n  curl -fsSL {install_script} | REGISTRYCTL_VERSION={latest_tag} sh",
+        display_version(current_version),
     )
 }
 
@@ -5381,13 +5385,33 @@ mod tests {
     }
 
     #[test]
-    fn update_notice_uses_pinned_installer_version() {
+    fn update_notice_uses_exact_tag_pinned_installer_url_and_env_on_sh() {
         let notice = update_notice("0.1.0", "v0.2.0");
 
         assert!(notice.contains("registryctl v0.2.0 is available"));
         assert!(notice.contains("You have v0.1.0"));
-        assert!(notice.contains("REGISTRYCTL_VERSION=v0.2.0"));
-        assert!(notice.contains(REGISTRYCTL_INSTALL_SCRIPT));
+        assert_eq!(
+            notice.lines().last(),
+            Some(
+                "  curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/v0.2.0/crates/registryctl/install.sh | REGISTRYCTL_VERSION=v0.2.0 sh"
+            )
+        );
+        assert!(!notice.contains(
+            "https://raw.githubusercontent.com/registrystack/registry-stack/main/crates/registryctl/install.sh"
+        ));
+        assert!(!notice.contains("REGISTRYCTL_VERSION=v0.2.0 curl"));
+    }
+
+    #[test]
+    fn update_notice_warns_about_checksum_only_installer_before_command() {
+        let notice = update_notice("0.1.0", "v0.2.0");
+        let warning = notice
+            .find("The quick installer verifies SHA256 integrity only.")
+            .unwrap();
+        let command = notice.find("Upgrade with:").unwrap();
+
+        assert!(warning < command);
+        assert!(notice.contains(REGISTRYCTL_VERIFY_GUIDE));
     }
 
     #[test]

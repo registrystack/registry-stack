@@ -5,14 +5,16 @@ repo="registrystack/registry-stack"
 default_version="v0.8.4"
 version="${REGISTRYCTL_VERSION:-$default_version}"
 install_dir="${REGISTRYCTL_INSTALL_DIR:-$HOME/.local/bin}"
+verify_url="https://github.com/${repo}/blob/main/release/VERIFY.md"
 
 usage() {
-	cat <<'EOF'
+	cat <<EOF
 Install registryctl.
 
 The installer verifies the downloaded binary against SHA256SUMS only. It does
-not verify cosign signatures or SLSA provenance; use release/VERIFY.md for
-release authenticity checks.
+not verify release authenticity. Evidence availability varies by release, and
+v0.8.0 is unsigned. Follow the canonical release verification guide:
+  $verify_url
 
 Environment:
   REGISTRYCTL_VERSION      Pinned release tag to install. Defaults to v0.8.4.
@@ -71,7 +73,6 @@ source_hint() {
 
 asset="registryctl-${version}-${os_label}-${arch_label}"
 base_url="https://github.com/${repo}/releases/download/${version}"
-verify_url="https://github.com/${repo}/blob/${version}/release/VERIFY.md"
 tmpdir="$(mktemp -d 2>/dev/null || mktemp -d -t registryctl)"
 
 cleanup() {
@@ -123,8 +124,9 @@ fi
 
 cat <<EOF
 Integrity check passed: $asset matched SHA256SUMS.
-Authenticity check not performed by this installer. To verify cosign signatures
-and SLSA provenance, follow:
+Authenticity check not performed by this installer.
+Evidence availability varies by release, and v0.8.0 is unsigned.
+Follow the canonical release verification guide to check available evidence:
   $verify_url
 
 EOF

@@ -52,7 +52,7 @@ The installer defaults to `v0.8.4`. To install a different pinned release, set
 `REGISTRYCTL_VERSION`:
 
 ```sh
-REGISTRYCTL_VERSION=vX.Y.Z curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/v0.8.4/crates/registryctl/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/v0.8.4/crates/registryctl/install.sh | REGISTRYCTL_VERSION=vX.Y.Z sh
 ```
 
 The installer still fetches the script from `v0.8.4`; `REGISTRYCTL_VERSION`
