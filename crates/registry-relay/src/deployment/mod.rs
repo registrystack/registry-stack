@@ -11,14 +11,16 @@
 //!
 //! * `startup_fail`: the process refuses to start. Never waivable.
 //! * `readiness_fail`: the readiness endpoint reports not-ready; the process
-//!   keeps running.
+//!   keeps running. Also never waivable: the gate exists to stop traffic when
+//!   an evidence guarantee fails, so a waiver must not silently un-fail it.
 //! * `finding_error` / `finding_warn`: a posture finding only.
 //!
 //! A triggered gate can be suppressed by a config waiver that names the
 //! finding, carries a free-text reason, and a mandatory expiry date. A waived
 //! finding reports status `waived` instead of its severity effect. An expired
 //! waiver stops suppressing the finding and additionally raises
-//! `deployment.waiver_expired`. `startup_fail` gates are never waivable.
+//! `deployment.waiver_expired`. `startup_fail` and `readiness_fail` gates are
+//! never waivable.
 //!
 //! When no profile is declared, `deployment.profile_undeclared` is a startup
 //! failure. `local` is the explicit opt-out for development.
@@ -256,7 +258,7 @@ pub fn evaluate(
         }
 
         // A waivable, triggered gate may be suppressed by a matching waiver.
-        // `startup_fail` is never waivable.
+        // `startup_fail` and `readiness_fail` are never waivable.
         let waivable = severity_is_waivable(severity);
         let waiver = if waivable {
             waivers.iter().find(|waiver| waiver.finding == gate.id)
@@ -351,27 +353,57 @@ pub fn gate_severity_for_profile(
 }
 
 /// Whether a triggered gate at `severity` can be suppressed by a waiver.
-/// `startup_fail` is the hard, never-waivable severity: running at all
-/// falsifies the profile claim, so no waiver may clear it. Every other severity
-/// is waivable. This is the single definition of waivability shared by gate
-/// evaluation and load-time waiver validation.
+/// Only the posture findings `finding_warn` and `finding_error` are waivable.
+/// Both hard gates are non-waivable: `startup_fail` means running at all would
+/// falsify the profile claim, and `readiness_fail` gates exist to stop traffic
+/// when an evidence guarantee fails, so a waiver must not silently un-fail them.
+/// This mirrors Notary's `GateSeverity::is_waivable` and is the single
+/// definition of waivability shared by gate evaluation and load-time waiver
+/// validation. The severities are matched explicitly, so a future
+/// `GateSeverity` variant fails closed as non-waivable until this function is
+/// extended to classify it deliberately.
 pub fn severity_is_waivable(severity: GateSeverity) -> bool {
-    severity != StartupFail
+    match severity {
+        FindingWarn | FindingError => true,
+        ReadinessFail | StartupFail => false,
+        // `GateSeverity` is `#[non_exhaustive]`; an unclassified future variant
+        // must never default to waivable.
+        _ => false,
+    }
 }
 
-/// Operator remediation for a waiver that names a hard, non-waivable gate.
-/// Every hard gate shares the base guidance (remove the waiver and fix the
-/// condition it reports); the audit retention gate additionally names its two
-/// concrete levers, since off-host shipping plus its attestation is the only
-/// completeness evidence that clears it.
+/// Operator remediation for a waiver that names a hard, non-waivable gate
+/// (`readiness_fail` or `startup_fail` under the active profile). Every gate
+/// that can be non-waivable under some profile names its own concrete lever to
+/// clear the underlying condition, since a waiver can never suppress it. An
+/// unmatched id (a gate that is only ever waivable, or an unknown id) falls back
+/// to generic guidance.
 pub fn hard_gate_remediation(gate_id: &str) -> &'static str {
     match gate_id {
-        "relay.audit.retention_local_only" => {
-            "remove the waiver and fix the underlying condition it reports: ship audit events \
-             off-host and set deployment.evidence.audit_offhost_shipping: true, or use a \
-             non-local audit sink"
+        "relay.admin.public_exposure" => {
+            "this gate cannot be waived under the active profile; bind the admin listener to a \
+             loopback address (server.admin_bind) so admin routes are not reachable off-host"
         }
-        _ => "remove the waiver and fix the underlying condition it reports",
+        "relay.oidc.client_allowlist_empty" => {
+            "this gate cannot be waived under the active profile; populate \
+             auth.oidc.allowed_clients so only known clients are accepted"
+        }
+        "relay.config.unsigned" => {
+            "this gate cannot be waived under the active profile; load config from a signed \
+             governed bundle instead of a local YAML file"
+        }
+        "relay.audit.sink_missing" => {
+            "this gate cannot be waived under the active profile; configure a durable audit sink"
+        }
+        "relay.audit.best_effort" => {
+            "this gate cannot be waived under the active profile; set audit.write_policy to a \
+             durability-first policy instead of availability-first (best effort)"
+        }
+        "relay.audit.retention_local_only" => {
+            "this gate cannot be waived under the active profile; ship audit events off-host and \
+             set deployment.evidence.audit_offhost_shipping: true, or use a non-local audit sink"
+        }
+        _ => "fix the underlying condition; this gate cannot be waived under the active profile",
     }
 }
 
@@ -896,22 +928,32 @@ mod tests {
     }
 
     #[test]
-    fn waiver_suppresses_readiness_fail() {
+    fn waiver_does_not_suppress_readiness_fail() {
+        // A readiness_fail gate is non-waivable: readiness gates stop traffic
+        // when an evidence guarantee fails, so a waiver must not silently
+        // un-fail them. `relay.admin.public_exposure` is readiness_fail under
+        // production.
         let facts = DeploymentFacts {
             admin_public_exposure: true,
             ..clean_facts()
         };
+        let id = "relay.admin.public_exposure";
         let waivers = [WaiverInput {
-            finding: "relay.admin.public_exposure".to_string(),
+            finding: id.to_string(),
             reason: "synthetic readiness waiver".to_string(),
             expires: FUTURE.to_string(),
         }];
         let evaluation = evaluate(Some(DeploymentProfile::Production), &facts, &waivers, TODAY);
-        assert_eq!(
-            finding(&evaluation, "relay.admin.public_exposure").status,
-            DeploymentFindingStatus::Waived
-        );
-        assert!(!evaluation.has_readiness_failure());
+        // The waiver does not suppress the finding: it stays active and
+        // readiness still fails.
+        let f = finding(&evaluation, id);
+        assert_eq!(f.status, DeploymentFindingStatus::Active);
+        assert_eq!(f.severity, ReadinessFail);
+        assert!(evaluation.has_readiness_failure());
+        assert_eq!(evaluation.readiness_failures, vec![id.to_string()]);
+        // The waiver is still listed as active for review; it simply does not
+        // suppress the gate.
+        assert_eq!(evaluation.active_waivers.len(), 1);
     }
 
     #[test]
@@ -1044,22 +1086,50 @@ datasets: []
     }
 
     #[test]
-    fn severity_is_waivable_only_below_startup_fail() {
+    fn severity_is_waivable_only_for_findings() {
+        // Only posture findings are waivable. Both hard gates (readiness_fail
+        // and startup_fail) are non-waivable, matching Notary's semantics.
         assert!(severity_is_waivable(FindingWarn));
         assert!(severity_is_waivable(FindingError));
-        assert!(severity_is_waivable(ReadinessFail));
+        assert!(!severity_is_waivable(ReadinessFail));
         assert!(!severity_is_waivable(StartupFail));
     }
 
     #[test]
-    fn hard_gate_remediation_names_audit_offhost_levers() {
+    fn hard_gate_remediation_covers_every_non_waivable_gate() {
+        // The audit retention gate names its off-host levers.
         let audit = hard_gate_remediation("relay.audit.retention_local_only");
         assert!(audit.contains("audit_offhost_shipping"));
         assert!(audit.contains("non-local audit sink"));
-        assert!(audit.contains("remove the waiver"));
-        // Any other hard gate gets the generic guidance without audit specifics.
-        let generic = hard_gate_remediation("relay.config.unsigned");
-        assert!(generic.contains("remove the waiver"));
-        assert!(!generic.contains("audit_offhost_shipping"));
+        assert!(audit.contains("cannot be waived under the active profile"));
+        // Every other gate that can be non-waivable under some profile
+        // (readiness_fail or startup_fail) gets its own actionable lever, not
+        // the audit-retention specifics.
+        for (gate_id, needle) in [
+            ("relay.admin.public_exposure", "admin_bind"),
+            ("relay.oidc.client_allowlist_empty", "allowed_clients"),
+            ("relay.config.unsigned", "signed"),
+            ("relay.audit.sink_missing", "durable audit sink"),
+            ("relay.audit.best_effort", "write_policy"),
+        ] {
+            let remediation = hard_gate_remediation(gate_id);
+            assert!(
+                remediation.contains(needle),
+                "remediation for {gate_id} should mention {needle}: {remediation}"
+            );
+            assert!(
+                remediation.contains("cannot be waived under the active profile"),
+                "remediation for {gate_id} should state non-waivability: {remediation}"
+            );
+            assert!(
+                !remediation.contains("audit_offhost_shipping"),
+                "only the retention gate names the off-host lever: {remediation}"
+            );
+        }
+        // An unmatched gate id falls back to the generic guidance.
+        assert_eq!(
+            hard_gate_remediation("not.a.gate"),
+            "fix the underlying condition; this gate cannot be waived under the active profile"
+        );
     }
 }

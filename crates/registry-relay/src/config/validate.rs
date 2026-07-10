@@ -127,14 +127,14 @@ fn validate_deployment(config: &Config, source: ConfigSource) -> Result<(), Conf
             );
             return Err(ConfigError::ValidationError);
         }
-        // A waiver that names a hard, non-waivable gate under the active
-        // profile can never suppress it. Silently dropping such a waiver would
-        // let an operator believe a startup gate was waived when it was not, so
-        // reject it at load, mirroring Notary's `HardGateNotWaivable`. Waivable
-        // and unbound gates are left to gate evaluation. This check keys on the
-        // gate's severity under the profile, not on whether its condition
-        // currently holds, so the operator hears about an impossible waiver
-        // even before the condition trips.
+        // A waiver that names a hard, non-waivable gate (startup_fail or
+        // readiness_fail) under the active profile can never suppress it.
+        // Silently dropping such a waiver would let an operator believe a hard
+        // gate was waived when it was not, so reject it at load, mirroring
+        // Notary's `HardGateNotWaivable`. Waivable and unbound gates are left to
+        // gate evaluation. This check keys on the gate's severity under the
+        // profile, not on whether its condition currently holds, so the operator
+        // hears about an impossible waiver even before the condition trips.
         if let Some(severity) =
             crate::deployment::gate_severity_for_profile(&waiver.finding, config.deployment.profile)
         {
@@ -4549,6 +4549,38 @@ deployment:
         assert!(
             !rendered.contains("cannot be waived"),
             "a waivable gate must not trigger the hard-gate rejection: {rendered}"
+        );
+    }
+
+    #[test]
+    fn waiver_on_readiness_gate_is_rejected_at_load() {
+        // Under evidence_grade `relay.audit.best_effort` is a readiness_fail
+        // gate, which is non-waivable under Notary's (now Relay's) semantics.
+        // The waiver must be rejected at config load with the structured
+        // validation error, not silently dropped, even though the condition
+        // itself does not hold here. Evaluate as a signed bundle so the
+        // `relay.config.unsigned` startup gate does not fire and the readiness
+        // waiver is the only reason validation can fail.
+        let config = parse_deployment_config(
+            "deployment:\n  profile: evidence_grade\n  waivers:\n    - finding: relay.audit.best_effort\n      reason: \"synthetic-waiver-not-a-secret\"\n      expires: \"2999-01-01\"",
+        );
+        let (result, rendered) =
+            capture_logs(|| run_with_source(&config, ConfigSource::SignedBundleFile));
+        assert!(
+            matches!(result, Err(Error::Config(ConfigError::ValidationError))),
+            "a waiver on a readiness_fail evidence_grade gate must be rejected, got {result:?}"
+        );
+        assert!(
+            rendered.contains("config.validation_error"),
+            "expected the structured validation error code in the log: {rendered}"
+        );
+        assert!(
+            rendered.contains("cannot be waived under the active profile"),
+            "expected the hard-gate rejection message in the log: {rendered}"
+        );
+        assert!(
+            rendered.contains("relay.audit.best_effort"),
+            "expected the rejected readiness-gate finding id in the log: {rendered}"
         );
     }
 
