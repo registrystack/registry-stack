@@ -246,8 +246,7 @@ jobs:
             authcommon_parsers \
             oid4vci_request_and_proof \
             sdjwt_holder_proof \
-            sdjwt_issuance \
-            sts_subject_token
+            sdjwt_issuance
           do
             mkdir -p "fuzz/artifacts/${target}"
             cargo +nightly fuzz run --fuzz-dir fuzz --target x86_64-unknown-linux-gnu "${target}" -- \

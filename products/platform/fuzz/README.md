@@ -14,13 +14,6 @@ crates. These live outside the main workspace (see the root `Cargo.toml`
 - `sdjwt_holder_proof` — SD-JWT holder-proof JWT verification
   (`registry-platform-sdjwt`).
 - `sdjwt_issuance` — SD-JWT issuance input parsing (`registry-platform-sdjwt`).
-- `sts_subject_token` — OAuth2 token-exchange request and authorization-details
-  JSON, plus the JOSE header-decode, algorithm/`typ` enforcement, and
-  kid-lookup path exercised by `OidcSubjectTokenVerifier::verify_subject_token`
-  (`registry-platform-sts`, `registry-platform-oidc`). The verifier is wired to
-  a loopback JWKS URI; `FetchUrlPolicy::strict()` rejects loopback hosts during
-  URL validation before any socket opens, so every fuzz iteration runs fully
-  offline while still exercising the real verifier, not a mock.
 
 Each target fuzzes the crate's real exported deserializer or entry point
 directly, never a locally re-declared mirror struct that could drift from the

@@ -51,14 +51,17 @@
 - Parked `registry-platform-sts` outside the active workspace until Assisted
   Access or delegation-profile work promotes a release-surface consumer (#298).
   The source remains in git, but the crate is no longer built as part of
-  workspace CI or listed as a load-bearing platform crate.
+  workspace CI or listed as a load-bearing platform crate. Its standalone fuzz
+  target and Lab commons-check caller are parked with it, and NP-23 denial-audit
+  parity is deferred until a named consumer reactivates the crate (#246; revisit
+  tracked by #298).
 - `registry-platform-audit`'s `JsonlFileSink::new` default rotation retention
   is raised from 5 files to 50 files (~500 MiB at the 10 MiB default file
   size), so the crate default no longer silently discards audit history after
   ~50 MiB. Consumers that pass explicit rotation settings via
   `JsonlFileSink::with_rotation` (Registry Relay and Registry Notary both
-  configure 100 MB x 14 files) are unaffected; this change primarily protects
-  the `registry-platform-sts` bridge binary, which uses the crate default.
+  configure 100 MB x 14 files) are unaffected. The safer default remains for
+  future standalone consumers when a release-surface consumer is promoted.
 - `registry-platform-audit` chain verification now treats the first retained
   record's `prev_hash` as the retained-set boundary. **Removed the local
   trusted-anchor verification API**: `ChainVerificationAnchors`,
