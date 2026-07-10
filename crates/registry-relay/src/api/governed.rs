@@ -15,7 +15,10 @@ use registry_platform_pdp::{
 use sha2::{Digest, Sha256};
 
 use crate::audit::AuditContextExt;
-use crate::auth::Principal;
+use crate::auth::{
+    scopes::{format_trust_context_scope, TrustContextField},
+    Principal,
+};
 use crate::config::{Config, EntityApiConfig, EntityConfig};
 use crate::entity::EntityModel;
 use crate::error::{AuthError, Error, InternalError, PdpError};
@@ -26,11 +29,14 @@ pub(crate) const TRUST_JURISDICTION_HEADER: &str = "x-registry-trust-jurisdictio
 pub(crate) const TRUST_ASSURANCE_HEADER: &str = "x-registry-trust-assurance";
 pub(crate) const TRUST_LEGAL_BASIS_HEADER: &str = "x-registry-trust-legal-basis";
 pub(crate) const TRUST_CONSENT_HEADER: &str = "x-registry-trust-consent";
+const TRUST_SUBJECT_REF_HEADER: &str = "x-registry-subject-ref";
+const TRUST_RELATIONSHIP_HEADER: &str = "x-registry-relationship";
+const TRUST_ON_BEHALF_OF_HEADER: &str = "x-registry-on-behalf-of";
+const TRUST_REQUESTED_CREDENTIAL_FORMAT_HEADER: &str = "x-registry-credential-format";
 const TRUST_SOURCE_OBSERVED_AT_UNIX_SECONDS_HEADER: &str =
     "x-registry-source-observed-at-unix-seconds";
 pub(crate) const TRUST_SOURCE_OBSERVED_AGE_SECONDS_HEADER: &str =
     "x-registry-source-observed-age-seconds";
-const TRUST_SCOPE_PREFIX: &str = "registry:trust";
 
 const ODRL_PURPOSE: &str = "http://www.w3.org/ns/odrl/2/purpose";
 const ODRL_SPATIAL: &str = "http://www.w3.org/ns/odrl/2/spatial";
@@ -115,6 +121,7 @@ pub(crate) struct GovernedRequestInfo<'a> {
 pub(crate) struct GovernedAccessError {
     pub(crate) error: Error,
     pub(crate) pdp_audit: Option<PdpDecisionAudit>,
+    pub(crate) pdp_trust_provenance: BTreeSet<String>,
 }
 
 impl GovernedAccessError {
@@ -122,6 +129,7 @@ impl GovernedAccessError {
         Self {
             error: error.into(),
             pdp_audit: None,
+            pdp_trust_provenance: BTreeSet::new(),
         }
     }
 
@@ -129,7 +137,13 @@ impl GovernedAccessError {
         Self {
             error,
             pdp_audit: Some(audit),
+            pdp_trust_provenance: BTreeSet::new(),
         }
+    }
+
+    fn with_trust_provenance(mut self, field: &str) -> Self {
+        self.pdp_trust_provenance.insert(field.to_string());
+        self
     }
 }
 
@@ -231,7 +245,7 @@ pub(crate) fn require_governed_read_access<E: GovernedEntity + ?Sized>(
             .map(|policy| policy.unsupported_odrl_terms)
             .unwrap_or_default(),
     };
-    match pdp_decide(&context, &policy) {
+    match relay_pdp_decide(&context, &policy) {
         PdpDecision::Permit(audit) => Ok(GovernedReadDecision {
             audit: Some(audit),
             redaction_fields: BTreeSet::new(),
@@ -254,6 +268,31 @@ pub(crate) fn require_governed_read_access<E: GovernedEntity + ?Sized>(
     }
 }
 
+fn relay_pdp_decide(context: &PdpRequestContext, policy: &PdpPolicyInput) -> PdpDecision {
+    let mut decision = pdp_decide(context, policy);
+    // Keep this enrichment at the Relay boundary. Other platform PDP callers
+    // do not share Relay's exact-value scope semantics for these fields.
+    let audit = match &mut decision {
+        PdpDecision::Permit(audit)
+        | PdpDecision::PermitWithRedaction { audit, .. }
+        | PdpDecision::Deny { audit, .. } => audit,
+    };
+    audit.trust_provenance.extend(
+        [
+            ("subject_ref", context.subject_ref.as_ref()),
+            ("relationship", context.relationship.as_ref()),
+            ("on_behalf_of", context.on_behalf_of.as_ref()),
+            (
+                "requested_credential_format",
+                context.requested_credential_format.as_ref(),
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(field, value)| value.map(|_| field.to_string())),
+    );
+    decision
+}
+
 #[allow(clippy::result_large_err)]
 fn request_pdp_context(
     purpose: &str,
@@ -269,38 +308,61 @@ fn request_pdp_context(
             headers,
             principal,
             TRUST_LEGAL_BASIS_HEADER,
-            "legal_basis",
+            TrustContextField::LegalBasis,
         )
         .map(ToOwned::to_owned),
         consent_ref: verified_trust_header_value(
             headers,
             principal,
             TRUST_CONSENT_HEADER,
-            "consent",
+            TrustContextField::Consent,
         )
         .map(ToOwned::to_owned),
         asserted_assurance: verified_trust_header_value(
             headers,
             principal,
             TRUST_ASSURANCE_HEADER,
-            "assurance",
+            TrustContextField::Assurance,
         )
         .map(ToOwned::to_owned),
         jurisdiction: verified_trust_header_value(
             headers,
             principal,
             TRUST_JURISDICTION_HEADER,
-            "jurisdiction",
+            TrustContextField::Jurisdiction,
         )
         .map(ToOwned::to_owned),
         requester_identity: principal.map(|principal| principal.principal_id.clone()),
-        subject_ref: trust_header_value(headers, "x-registry-subject-ref").map(ToOwned::to_owned),
-        relationship: trust_header_value(headers, "x-registry-relationship").map(ToOwned::to_owned),
-        on_behalf_of: trust_header_value(headers, "x-registry-on-behalf-of").map(ToOwned::to_owned),
+        subject_ref: verified_trust_header_value(
+            headers,
+            principal,
+            TRUST_SUBJECT_REF_HEADER,
+            TrustContextField::SubjectRef,
+        )
+        .map(ToOwned::to_owned),
+        relationship: verified_trust_header_value(
+            headers,
+            principal,
+            TRUST_RELATIONSHIP_HEADER,
+            TrustContextField::Relationship,
+        )
+        .map(ToOwned::to_owned),
+        on_behalf_of: verified_trust_header_value(
+            headers,
+            principal,
+            TRUST_ON_BEHALF_OF_HEADER,
+            TrustContextField::OnBehalfOf,
+        )
+        .map(ToOwned::to_owned),
         requested_fact: Some(requested_fact.to_string()),
         requested_disclosure: Some(request_info.requested_disclosure.to_string()),
-        requested_credential_format: trust_header_value(headers, "x-registry-credential-format")
-            .map(ToOwned::to_owned),
+        requested_credential_format: verified_trust_header_value(
+            headers,
+            principal,
+            TRUST_REQUESTED_CREDENTIAL_FORMAT_HEADER,
+            TrustContextField::RequestedCredentialFormat,
+        )
+        .map(ToOwned::to_owned),
         source_binding: Some(source_binding.to_string()),
         route_identity: Some(request_info.route_identity.to_string()),
         checked_scopes: principal
@@ -311,20 +373,21 @@ fn request_pdp_context(
             headers,
             principal,
             TRUST_SOURCE_OBSERVED_AT_UNIX_SECONDS_HEADER,
-            "source_observed_at_unix_seconds",
+            TrustContextField::SourceObservedAtUnixSeconds,
         )
-        .map(parse_unix_seconds)
+        .map(|value| parse_unix_seconds(value, "source_observed_at_unix_seconds"))
         .transpose()?,
         source_observed_age_seconds: source_observed_age_seconds(headers, principal)?,
     })
 }
 
 #[allow(clippy::result_large_err)]
-fn parse_unix_seconds(value: &str) -> Result<u64, GovernedAccessError> {
+fn parse_unix_seconds(value: &str, provenance_field: &str) -> Result<u64, GovernedAccessError> {
     value.parse::<u64>().map_err(|_| {
         GovernedAccessError::from_error(PdpError::from_stable_code(
             registry_platform_pdp::EVIDENCE_STALE,
         ))
+        .with_trust_provenance(provenance_field)
     })
 }
 
@@ -344,20 +407,13 @@ fn verified_trust_header_value<'a>(
     headers: &'a HeaderMap,
     principal: Option<&Principal>,
     name: &str,
-    field: &str,
+    field: TrustContextField,
 ) -> Option<&'a str> {
     let value = trust_header_value(headers, name)?;
+    let required_scope = format_trust_context_scope(field, value)?;
     principal
-        .filter(|principal| {
-            principal
-                .scopes
-                .contains(&trust_context_scope(field, value))
-        })
+        .filter(|principal| principal.scopes.contains(&required_scope))
         .map(|_| value)
-}
-
-fn trust_context_scope(field: &str, value: &str) -> String {
-    format!("{TRUST_SCOPE_PREFIX}:{field}:{value}")
 }
 
 #[allow(clippy::result_large_err)]
@@ -368,17 +424,19 @@ fn source_observed_age_seconds(
     let Some(value) = trust_header_value(headers, TRUST_SOURCE_OBSERVED_AGE_SECONDS_HEADER) else {
         return Ok(None);
     };
-    if !principal.is_some_and(|principal| {
-        principal
-            .scopes
-            .contains(&trust_context_scope("source_observed_age_seconds", value))
-    }) {
+    let Some(required_scope) =
+        format_trust_context_scope(TrustContextField::SourceObservedAgeSeconds, value)
+    else {
+        return Ok(None);
+    };
+    if !principal.is_some_and(|principal| principal.scopes.contains(&required_scope)) {
         return Ok(None);
     }
     value.parse::<u64>().map(Some).map_err(|_| {
         GovernedAccessError::from_error(PdpError::from_stable_code(
             registry_platform_pdp::EVIDENCE_STALE,
         ))
+        .with_trust_provenance("source_observed_age_seconds")
     })
 }
 
@@ -431,6 +489,34 @@ pub(crate) fn attach_pdp_audit(
         (!audit.checked_scopes.is_empty()).then(|| audit.checked_scopes.iter().cloned().collect());
     context.pdp_trust_provenance = (!audit.trust_provenance.is_empty())
         .then(|| audit.trust_provenance.iter().cloned().collect());
+}
+
+pub(crate) fn attach_pdp_trust_provenance(
+    context: &mut Option<AuditContextExt>,
+    provenance: &BTreeSet<String>,
+) {
+    if provenance.is_empty() {
+        return;
+    }
+    let Some(context) = context.as_mut() else {
+        return;
+    };
+    let mut combined: BTreeSet<String> = context
+        .pdp_trust_provenance
+        .take()
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+    combined.extend(provenance.iter().cloned());
+    context.pdp_trust_provenance = Some(combined.into_iter().collect());
+}
+
+pub(crate) fn attach_governed_error_audit(
+    context: &mut Option<AuditContextExt>,
+    error: &GovernedAccessError,
+) {
+    attach_pdp_audit(context, error.pdp_audit.as_ref());
+    attach_pdp_trust_provenance(context, &error.pdp_trust_provenance);
 }
 
 pub(crate) fn governed_cache_variant<'a>(
@@ -764,7 +850,9 @@ fn hex_lower(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use crate::auth::{AuthMode, ScopeSet};
+    use axum::http::HeaderValue;
     use registry_manifest_core::OdrlEnforcementProfile;
+    use registry_platform_pdp::RequiredContextField;
 
     fn config_with_selector() -> Config {
         serde_saphyr::from_str(
@@ -1011,5 +1099,302 @@ datasets: []
             context.checked_scopes,
             BTreeSet::from(["social_registry:rows".to_string()])
         );
+    }
+
+    #[test]
+    fn malformed_exact_scoped_freshness_records_trusted_field_provenance() {
+        let request_info = GovernedRequestInfo {
+            route_identity: "relay.entity.collection",
+            requested_disclosure: "entity_collection",
+            checked_scope: "social_registry:rows",
+            redaction_projection: GovernedRedactionProjection::EntityFields,
+        };
+        for (header, field) in [
+            (
+                TRUST_SOURCE_OBSERVED_AT_UNIX_SECONDS_HEADER,
+                TrustContextField::SourceObservedAtUnixSeconds,
+            ),
+            (
+                TRUST_SOURCE_OBSERVED_AGE_SECONDS_HEADER,
+                TrustContextField::SourceObservedAgeSeconds,
+            ),
+        ] {
+            let malformed_value = "not-a-unix-second";
+            let principal = Principal {
+                principal_id: "client-a".to_string(),
+                scopes: [
+                    "social_registry:rows".to_string(),
+                    format_trust_context_scope(field, malformed_value)
+                        .expect("non-empty exact trust scope formats"),
+                ]
+                .into_iter()
+                .collect::<ScopeSet>(),
+                auth_mode: AuthMode::ApiKey,
+            };
+            let mut headers = HeaderMap::new();
+            headers.insert(header, HeaderValue::from_static(malformed_value));
+
+            let error = request_pdp_context(
+                "testing",
+                &headers,
+                Some(&principal),
+                "individual",
+                "relay:social_registry:individuals_table",
+                &request_info,
+            )
+            .expect_err("malformed authenticated freshness must deny");
+
+            assert_eq!(
+                error.pdp_trust_provenance,
+                BTreeSet::from([field.as_str().to_string()])
+            );
+        }
+    }
+
+    fn policy_input_context(scopes: &[&str]) -> PdpRequestContext {
+        let principal = Principal {
+            principal_id: "client-a".to_string(),
+            scopes: scopes.iter().copied().collect::<ScopeSet>(),
+            auth_mode: AuthMode::ApiKey,
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            TRUST_SUBJECT_REF_HEADER,
+            HeaderValue::from_static("subject:123"),
+        );
+        headers.insert(
+            TRUST_RELATIONSHIP_HEADER,
+            HeaderValue::from_static("guardian"),
+        );
+        headers.insert(
+            TRUST_ON_BEHALF_OF_HEADER,
+            HeaderValue::from_static("agency:benefits"),
+        );
+        headers.insert(
+            TRUST_REQUESTED_CREDENTIAL_FORMAT_HEADER,
+            HeaderValue::from_static("sd_jwt_vc"),
+        );
+        headers.insert(
+            TRUST_SOURCE_OBSERVED_AT_UNIX_SECONDS_HEADER,
+            HeaderValue::from_static("9999999999"),
+        );
+        let request_info = GovernedRequestInfo {
+            route_identity: "relay.entity.collection",
+            requested_disclosure: "entity_collection",
+            checked_scope: "social_registry:rows",
+            redaction_projection: GovernedRedactionProjection::EntityFields,
+        };
+
+        request_pdp_context(
+            "testing",
+            &headers,
+            Some(&principal),
+            "individual",
+            "relay:social_registry:individuals_table",
+            &request_info,
+        )
+        .expect("PDP context builds")
+    }
+
+    fn policy_with_purpose(purpose: &str) -> PdpPolicyInput {
+        serde_json::from_value(serde_json::json!({
+            "policy_id": "relay.scope-gated-context-test",
+            "policy_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "purpose_constraints": [[purpose]]
+        }))
+        .expect("scope-gated context policy parses")
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum ScopeGatedPolicyField {
+        SubjectRef,
+        Relationship,
+        OnBehalfOf,
+        RequestedCredentialFormat,
+        SourceObservedAt,
+    }
+
+    impl ScopeGatedPolicyField {
+        fn exact_scope(self) -> &'static str {
+            match self {
+                Self::SubjectRef => "registry:trust:subject_ref:subject:123",
+                Self::Relationship => "registry:trust:relationship:guardian",
+                Self::OnBehalfOf => "registry:trust:on_behalf_of:agency:benefits",
+                Self::RequestedCredentialFormat => {
+                    "registry:trust:requested_credential_format:sd_jwt_vc"
+                }
+                Self::SourceObservedAt => {
+                    "registry:trust:source_observed_at_unix_seconds:9999999999"
+                }
+            }
+        }
+
+        fn mismatched_scope(self) -> &'static str {
+            match self {
+                Self::SubjectRef => "registry:trust:subject_ref:subject:other",
+                Self::Relationship => "registry:trust:relationship:self",
+                Self::OnBehalfOf => "registry:trust:on_behalf_of:agency:other",
+                Self::RequestedCredentialFormat => {
+                    "registry:trust:requested_credential_format:jwt_vc_json"
+                }
+                Self::SourceObservedAt => "registry:trust:source_observed_at_unix_seconds:1",
+            }
+        }
+
+        fn policy(self) -> PdpPolicyInput {
+            let mut policy = policy_with_purpose("testing");
+            match self {
+                Self::SubjectRef => {
+                    policy
+                        .required_context
+                        .insert(RequiredContextField::SubjectRef);
+                }
+                Self::Relationship => {
+                    policy.allowed_relationships = vec!["guardian".to_string()];
+                }
+                Self::OnBehalfOf => {
+                    policy
+                        .required_context
+                        .insert(RequiredContextField::OnBehalfOf);
+                }
+                Self::RequestedCredentialFormat => {
+                    policy.allowed_credential_formats = vec!["sd_jwt_vc".to_string()];
+                }
+                Self::SourceObservedAt => {
+                    policy
+                        .required_context
+                        .insert(RequiredContextField::SourceFreshness);
+                }
+            }
+            policy
+        }
+
+        fn denied_code(self) -> &'static str {
+            match self {
+                Self::SubjectRef | Self::OnBehalfOf | Self::SourceObservedAt => {
+                    registry_platform_pdp::CONTEXT_REQUIRED
+                }
+                Self::Relationship => registry_platform_pdp::RELATIONSHIP_NOT_PERMITTED,
+                Self::RequestedCredentialFormat => {
+                    registry_platform_pdp::CREDENTIAL_FORMAT_NOT_PERMITTED
+                }
+            }
+        }
+    }
+
+    fn assert_policy_denied(
+        field: ScopeGatedPolicyField,
+        context: &PdpRequestContext,
+        policy: &PdpPolicyInput,
+    ) {
+        match relay_pdp_decide(context, policy) {
+            PdpDecision::Deny {
+                stable_problem_code,
+                ..
+            } => assert_eq!(stable_problem_code, field.denied_code(), "{field:?}"),
+            decision => panic!("{field:?} should deny, got {decision:?}"),
+        }
+    }
+
+    #[test]
+    fn scope_gated_policy_inputs_require_the_exact_value_scope_to_permit() {
+        for field in [
+            ScopeGatedPolicyField::SubjectRef,
+            ScopeGatedPolicyField::Relationship,
+            ScopeGatedPolicyField::OnBehalfOf,
+            ScopeGatedPolicyField::RequestedCredentialFormat,
+            ScopeGatedPolicyField::SourceObservedAt,
+        ] {
+            let policy = field.policy();
+
+            let absent_scope_context = policy_input_context(&["social_registry:rows"]);
+            assert_policy_denied(field, &absent_scope_context, &policy);
+
+            let mismatched_scope_context =
+                policy_input_context(&["social_registry:rows", field.mismatched_scope()]);
+            assert_policy_denied(field, &mismatched_scope_context, &policy);
+
+            let exact_scope_context =
+                policy_input_context(&["social_registry:rows", field.exact_scope()]);
+            assert!(
+                matches!(
+                    relay_pdp_decide(&exact_scope_context, &policy),
+                    PdpDecision::Permit(_)
+                ),
+                "{field:?} should permit with its exact value scope"
+            );
+        }
+    }
+
+    fn assert_relay_only_provenance(expected_permit: bool) {
+        let cases: &[(&str, &[&str], bool)] = &[
+            ("unscoped", &["social_registry:rows"], false),
+            (
+                "mismatched",
+                &[
+                    "social_registry:rows",
+                    "registry:trust:subject_ref:subject:other",
+                    "registry:trust:relationship:self",
+                    "registry:trust:on_behalf_of:agency:other",
+                    "registry:trust:requested_credential_format:jwt_vc_json",
+                ],
+                false,
+            ),
+            (
+                "exact-scoped",
+                &[
+                    "social_registry:rows",
+                    "registry:trust:subject_ref:subject:123",
+                    "registry:trust:relationship:guardian",
+                    "registry:trust:on_behalf_of:agency:benefits",
+                    "registry:trust:requested_credential_format:sd_jwt_vc",
+                ],
+                true,
+            ),
+        ];
+        let policy = policy_with_purpose(if expected_permit {
+            "testing"
+        } else {
+            "other-purpose"
+        });
+
+        for (label, scopes, expected_provenance) in cases {
+            let context = policy_input_context(scopes);
+            let decision = relay_pdp_decide(&context, &policy);
+            let audit = match (expected_permit, decision) {
+                (true, PdpDecision::Permit(audit)) => audit,
+                (false, PdpDecision::Deny { audit, .. }) => audit,
+                (_, decision) => panic!("{label} produced an unexpected decision: {decision:?}"),
+            };
+            let expected = if *expected_provenance {
+                BTreeSet::from([
+                    "on_behalf_of".to_string(),
+                    "relationship".to_string(),
+                    "requested_credential_format".to_string(),
+                    "subject_ref".to_string(),
+                ])
+            } else {
+                BTreeSet::new()
+            };
+            assert_eq!(audit.trust_provenance, expected, "{label}");
+
+            let serialized = serde_json::to_string(&audit).expect("decision audit serializes");
+            for raw_value in ["subject:123", "guardian", "agency:benefits", "sd_jwt_vc"] {
+                assert!(
+                    !serialized.contains(raw_value),
+                    "{label} audit must not include raw context value {raw_value}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn relay_permit_audit_records_only_exact_scoped_context_field_names() {
+        assert_relay_only_provenance(true);
+    }
+
+    #[test]
+    fn relay_deny_audit_records_only_exact_scoped_context_field_names() {
+        assert_relay_only_provenance(false);
     }
 }

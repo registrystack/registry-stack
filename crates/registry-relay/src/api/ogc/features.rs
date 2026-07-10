@@ -18,8 +18,8 @@ use time::format_description::well_known::Rfc3339;
 use time::{Date, OffsetDateTime};
 
 use crate::api::governed::{
-    attach_pdp_audit, require_governed_read_access, GovernedAccessError,
-    GovernedRedactionProjection, GovernedRequestInfo,
+    attach_governed_error_audit, attach_pdp_audit, require_governed_read_access,
+    GovernedAccessError, GovernedRedactionProjection, GovernedRequestInfo,
 };
 use crate::audit::{AuditContextExt, ErrorCodeExt};
 use crate::auth::scopes::require_scope;
@@ -570,7 +570,7 @@ fn ogc_access_error_response(
     audit: OgcAuditContext,
 ) -> Response {
     let mut context = Some(audit_context(entity, spatial, dataset_id, audit));
-    attach_pdp_audit(&mut context, error.pdp_audit.as_ref());
+    attach_governed_error_audit(&mut context, &error);
     with_audit_context(
         error.error.into_response(),
         context.expect("audit context is present"),

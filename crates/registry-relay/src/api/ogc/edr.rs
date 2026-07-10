@@ -16,8 +16,8 @@ use serde_json::{json, Map, Value};
 use tokio::sync::watch;
 
 use crate::api::governed::{
-    attach_pdp_audit, require_governed_read_access, GovernedAccessError, GovernedReadDecision,
-    GovernedRedactionProjection, GovernedRequestInfo,
+    attach_governed_error_audit, attach_pdp_audit, require_governed_read_access,
+    GovernedAccessError, GovernedReadDecision, GovernedRedactionProjection, GovernedRequestInfo,
 };
 use crate::audit::AuditContextExt;
 use crate::auth::scopes::require_scope;
@@ -947,7 +947,7 @@ fn edr_access_error_response(
         geometry_vertex_count: Some(geometry_vertex_count),
         ..AuditContextExt::default()
     });
-    attach_pdp_audit(&mut audit_context, error.pdp_audit.as_ref());
+    attach_governed_error_audit(&mut audit_context, &error);
     let mut response = error.error.into_response();
     if let Some(context) = audit_context {
         response.extensions_mut().insert(context);

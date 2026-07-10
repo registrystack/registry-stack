@@ -34,8 +34,9 @@ use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
 use crate::api::governed::{
-    attach_pdp_audit, purpose_header_value, require_governed_read_access, GovernedAccessError,
-    GovernedRedactionProjection, GovernedRequestInfo,
+    attach_pdp_audit, attach_pdp_trust_provenance, purpose_header_value,
+    require_governed_read_access, GovernedAccessError, GovernedRedactionProjection,
+    GovernedRequestInfo,
 };
 use crate::attribute_release::AttributeReleaseEvaluator;
 use crate::audit::AuditContextExt;
@@ -137,6 +138,7 @@ async fn resolve(
                     cardinality_outcome: Some("one".to_string()),
                     availability_class: Some("available".to_string()),
                     pdp_audit: success.pdp_audit,
+                    pdp_trust_provenance: BTreeSet::new(),
                 },
             );
             with_release_cache_headers(response, success_max_age)
@@ -173,6 +175,7 @@ struct ResolveAudit {
     cardinality_outcome: Option<String>,
     availability_class: Option<String>,
     pdp_audit: Option<PdpDecisionAudit>,
+    pdp_trust_provenance: BTreeSet<String>,
 }
 
 /// Error carrying the audit context accumulated up to the point of failure, so
@@ -205,6 +208,7 @@ impl ResolveRunError {
                 cardinality_outcome,
                 availability_class,
                 pdp_audit,
+                pdp_trust_provenance: BTreeSet::new(),
             },
         }
     }
@@ -225,6 +229,7 @@ impl From<GovernedAccessError> for ResolveRunError {
             error: error.error,
             audit: ResolveAudit {
                 pdp_audit: error.pdp_audit,
+                pdp_trust_provenance: error.pdp_trust_provenance,
                 ..ResolveAudit::default()
             },
         }
@@ -844,6 +849,7 @@ fn with_audit_context(mut response: Response, route: &RouteState, audit: Resolve
         ..AuditContextExt::default()
     });
     attach_pdp_audit(&mut context, audit.pdp_audit.as_ref());
+    attach_pdp_trust_provenance(&mut context, &audit.pdp_trust_provenance);
     if let Some(context) = context {
         response.extensions_mut().insert(context);
     }

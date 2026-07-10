@@ -199,11 +199,15 @@ leakage, and privacy regressions that expose raw subject identifiers.
 **Audit as a control.** Every request touching person-level data can be recorded with the
 hashed principal, request id, the principal's granted scopes, and `Data-Purpose` context
 when present, and a deployment can run audit fail-closed, so an unrecordable request does
-not return success. Two caveats for the auditor. First, the recorded scope list is not a
+not return success. Relay records ordinary scopes unchanged but replaces each exact-value
+trust scope with a field-bound `registry:trust:<field>:hmac-sha256:<digest>` handle under
+the deployment audit key. The handle supports investigation and same-key correlation
+without disclosing the trusted value. Two caveats for the auditor. First, the recorded scope list is not a
 per-route proof of which scope check authorized the request, and per-route audit coverage
 is something to verify in your deployment. Second, Notary records hashed principal and
-correlation identifiers, so operator-side investigation depends on retaining the hashing
-secret and request context.
+correlation identifiers, and Relay's trust-scope handles have the same operational
+dependency, so operator-side investigation depends on retaining the hashing secret and
+request context.
 
 ## Residual risks and what is left to the operator
 

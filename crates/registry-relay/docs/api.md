@@ -163,6 +163,44 @@ Data-Purpose: https://data.example.gov/purposes/service-intake-check
 
 Use stable, reviewable purpose IRIs. Do not put secrets, bearer tokens, or personal data in this header; it is recorded in audit logs.
 
+## Governed request context
+
+Registry Relay treats client-supplied Policy Decision Point (PDP) context as
+untrusted. The supported client-supplied trust-context headers are listed
+below. Relay passes each one to the PDP only when the authenticated principal
+has the exact `registry:trust:<scope_field>:<header_value>` scope.
+
+| Header | Scope field | Classification |
+| --- | --- | --- |
+| `x-registry-trust-jurisdiction` | `jurisdiction` | Scope-gated |
+| `x-registry-trust-assurance` | `assurance` | Scope-gated |
+| `x-registry-trust-legal-basis` | `legal_basis` | Scope-gated |
+| `x-registry-trust-consent` | `consent` | Scope-gated |
+| `x-registry-subject-ref` | `subject_ref` | Scope-gated |
+| `x-registry-relationship` | `relationship` | Scope-gated |
+| `x-registry-on-behalf-of` | `on_behalf_of` | Scope-gated |
+| `x-registry-credential-format` | `requested_credential_format` | Scope-gated |
+| `x-registry-source-observed-age-seconds` | `source_observed_age_seconds` | Scope-gated |
+| `x-registry-source-observed-at-unix-seconds` | `source_observed_at_unix_seconds` | Scope-gated |
+
+Audit records retain ordinary route scopes unchanged in `scopes_used`. Each
+value-bearing trust scope is replaced by its canonical field-bound form,
+`registry:trust:<field>:hmac-sha256:<digest>`, computed under the deployment
+audit key. This preserves pseudonymous authorization evidence without storing
+the raw value. `pdp_trust_provenance` separately records authenticated field
+names without their values, including a malformed authenticated freshness
+field when parsing denies the request before PDP evaluation.
+
+An absent or nonmatching scope makes the header absent from PDP context. A
+policy that requires the field or matches its value then denies the request.
+`Data-Purpose` remains a caller-stated purpose, not proof of identity,
+delegation, legal basis, consent, or source freshness.
+
+Policy authors must not make a Permit decision depend on unauthenticated
+request context. Use only server-derived context or values authenticated by an
+exact-value trust scope. An adapter that adds another client-supplied
+trust-context field must apply the same guard before the PDP evaluates it.
+
 ## Metadata, catalog, and OpenAPI
 
 `GET /metadata/catalog` and `GET /metadata/dcat/bregdcat-ap` return only datasets visible to the authenticated principal's metadata scopes.
