@@ -926,7 +926,6 @@ fn verified_federation_response_claims_with_key(
     serde_json::from_slice(&payload).expect("response payload is JSON")
 }
 
-#[cfg(feature = "registry-notary-cel")]
 fn audit_records(path: &std::path::Path) -> Vec<Value> {
     std::fs::read_to_string(path)
         .expect("audit was written")
@@ -1501,6 +1500,58 @@ fn assert_audit_records_do_not_contain(records: &[Value], forbidden: &[&str]) {
     }
 }
 
+fn assert_hmac_audit_field(record: &Value, field: &str) {
+    assert!(
+        record[field]
+            .as_str()
+            .unwrap_or_else(|| panic!("{field} is a string"))
+            .starts_with("hmac-sha256:"),
+        "{field} is a keyed HMAC handle"
+    );
+}
+
+fn assert_verified_federation_audit_context(
+    record: &Value,
+    profile: &str,
+    purpose: &str,
+    includes_subject_hash: bool,
+) {
+    assert_eq!(
+        record["scopes_used"],
+        json!(["farmer_registry:evidence_verification"])
+    );
+    assert_hmac_audit_field(record, "federation_peer_id_hash");
+    assert_eq!(
+        record["federation_issuer"],
+        json!("https://agency-b.example.gov")
+    );
+    assert_eq!(record["federation_profile"], json!(profile));
+    assert_eq!(record["federation_purpose"], json!(purpose));
+    assert_hmac_audit_field(record, "federation_request_jti_hash");
+    if includes_subject_hash {
+        assert_hmac_audit_field(record, "federation_subject_ref_hash");
+    } else {
+        assert!(record.get("federation_subject_ref_hash").is_none());
+    }
+}
+
+fn assert_federation_request_context_is_absent(record: &Value) {
+    assert_eq!(record["scopes_used"], json!([]));
+    for field in [
+        "federation_peer_id_hash",
+        "federation_issuer",
+        "federation_profile",
+        "federation_purpose",
+        "federation_request_jti_hash",
+        "federation_subject_ref_hash",
+    ] {
+        assert!(
+            record.get(field).is_none(),
+            "pre-verification denial unexpectedly recorded {field}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn healthz_ready_opaque_counters_in_503_body() {
     let server = TestServer::builder()
@@ -1638,6 +1689,10 @@ async fn federation_evaluation_returns_signed_response_and_rejects_replay() {
     );
     assert_eq!(allowed["federation_profile"], json!("farmer_under_4ha"));
     assert_eq!(
+        allowed["scopes_used"],
+        json!(["farmer_registry:evidence_verification"])
+    );
+    assert_eq!(
         allowed["federation_purpose"],
         json!("https://purpose.example.test/eligibility")
     );
@@ -1657,7 +1712,21 @@ async fn federation_evaluation_returns_signed_response_and_rejects_replay() {
     assert!(records
         .iter()
         .any(|record| record["decision"] == json!("federated_evaluate_denied")));
+    let replay_denied = audit_record_with(
+        &records,
+        "/federation/v1/evaluations",
+        "federated_evaluate_denied",
+        StatusCode::CONFLICT,
+        "federation.replay",
+    );
+    assert_verified_federation_audit_context(
+        replay_denied,
+        "farmer_under_4ha",
+        "https://purpose.example.test/eligibility",
+        true,
+    );
     assert!(!audit.contains("person-1"));
+    assert!(!audit.contains("01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q6Q6"));
     assert!(!audit.contains("source-token"));
 
     let metrics = server
@@ -1762,6 +1831,24 @@ async fn federation_policy_context_satisfies_governed_source_matching() {
     denied.assert_status(StatusCode::FORBIDDEN);
     let body: Value = denied.json();
     assert_eq!(body["code"], json!("pdp.jurisdiction_not_permitted"));
+    let denied_records = audit_records(&denied_audit_path);
+    let denied_audit = audit_record_with(
+        &denied_records,
+        "/federation/v1/evaluations",
+        "federated_evaluate_denied",
+        StatusCode::FORBIDDEN,
+        "pdp.jurisdiction_not_permitted",
+    );
+    assert_verified_federation_audit_context(
+        denied_audit,
+        "farmer_under_4ha",
+        "https://purpose.example.test/eligibility",
+        true,
+    );
+    assert_audit_records_do_not_contain(
+        &denied_records,
+        &["person-1", "01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6G0W1"],
+    );
 }
 
 #[tokio::test]
@@ -1934,6 +2021,21 @@ async fn federation_denial_happens_before_source_read() {
 
     response.assert_status(StatusCode::FORBIDDEN);
     assert_eq!(source_hits.load(Ordering::SeqCst), 0);
+    let records = audit_records(&audit_path);
+    let denied = audit_record_with(
+        &records,
+        "/federation/v1/evaluations",
+        "federated_evaluate_denied",
+        StatusCode::FORBIDDEN,
+        "federation.forbidden",
+    );
+    assert_verified_federation_audit_context(
+        denied,
+        "farmer_under_4ha",
+        "https://purpose.example.test/not-allowed",
+        true,
+    );
+    assert_audit_records_do_not_contain(&records, &["person-1", "01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q6Q7"]);
 
     let unsupported_media_type = server
         .post("/federation/v1/evaluations")
@@ -2018,7 +2120,20 @@ async fn federation_denial_happens_before_source_read() {
         .await;
     unknown_kid_response.assert_status(StatusCode::UNAUTHORIZED);
     assert_eq!(source_hits.load(Ordering::SeqCst), 0);
+    let records = audit_records(&audit_path);
+    let unknown_key_audit = records.last().expect("unknown-key audit record exists");
+    assert_eq!(
+        unknown_key_audit["error_code"],
+        json!("federation.invalid_token")
+    );
+    assert_federation_request_context_is_absent(unknown_key_audit);
+    assert!(!audit_record_contains_text(
+        unknown_key_audit,
+        "01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q7Q6"
+    ));
+    assert!(!audit_record_contains_text(unknown_key_audit, "person-1"));
 
+    let audit_count_before_bad_signature = records.len();
     let bad_signature = tamper_jwt_signature(&federation_request_jwt(
         "01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q7Q7",
         "https://purpose.example.test/eligibility",
@@ -2030,6 +2145,19 @@ async fn federation_denial_happens_before_source_read() {
         .await;
     bad_signature_response.assert_status(StatusCode::UNAUTHORIZED);
     assert_eq!(source_hits.load(Ordering::SeqCst), 0);
+    let records = audit_records(&audit_path);
+    assert_eq!(records.len(), audit_count_before_bad_signature + 1);
+    let bad_signature_audit = &records[audit_count_before_bad_signature];
+    assert_eq!(
+        bad_signature_audit["error_code"],
+        json!("federation.invalid_token")
+    );
+    assert_federation_request_context_is_absent(bad_signature_audit);
+    assert!(!audit_record_contains_text(
+        bad_signature_audit,
+        "01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q7Q7"
+    ));
+    assert!(!audit_record_contains_text(bad_signature_audit, "person-1"));
 
     let bad_alg = federation_jwt_with_header(
         json!({
@@ -2065,7 +2193,16 @@ async fn federation_denial_happens_before_source_read() {
 }
 
 #[tokio::test]
-async fn federation_emergency_denylist_blocks_before_source_read() {
+async fn federation_emergency_kid_denylist_blocks_before_source_read() {
+    assert_federation_emergency_denylist_blocks_before_source_read(true).await;
+}
+
+#[tokio::test]
+async fn federation_emergency_node_id_denylist_blocks_before_source_read() {
+    assert_federation_emergency_denylist_blocks_before_source_read(false).await;
+}
+
+async fn assert_federation_emergency_denylist_blocks_before_source_read(deny_kid: bool) {
     set_federation_env();
     let source_hits = Arc::new(AtomicUsize::new(0));
     let source_hits_for_route = Arc::clone(&source_hits);
@@ -2098,22 +2235,27 @@ async fn federation_emergency_denylist_blocks_before_source_read() {
         audit_path.to_str().expect("audit path is UTF-8"),
         &format!("{}/jwks", peer_jwks.url()),
     );
-    config
-        .federation
-        .emergency_denylist
-        .kids
-        .push("registry-platform-testing-ed25519-1".to_string());
-    config
-        .federation
-        .emergency_denylist
-        .node_ids
-        .push("did:web:agency-b.example.gov".to_string());
+    if deny_kid {
+        config
+            .federation
+            .emergency_denylist
+            .kids
+            .push("registry-platform-testing-ed25519-1".to_string());
+    } else {
+        config
+            .federation
+            .emergency_denylist
+            .node_ids
+            .push("did:web:agency-b.example.gov".to_string());
+    }
     let app = standalone_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
-    let token = federation_request_jwt(
-        "01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q7R0",
-        "https://purpose.example.test/eligibility",
-    );
+    let request_jti = if deny_kid {
+        "01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q7R0"
+    } else {
+        "01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q7R1"
+    };
+    let token = federation_request_jwt(request_jti, "https://purpose.example.test/eligibility");
 
     let response = server
         .post("/federation/v1/evaluations")
@@ -2123,6 +2265,16 @@ async fn federation_emergency_denylist_blocks_before_source_read() {
 
     response.assert_status(StatusCode::FORBIDDEN);
     assert_eq!(source_hits.load(Ordering::SeqCst), 0);
+    let records = audit_records(&audit_path);
+    let denied = audit_record_with(
+        &records,
+        "/federation/v1/evaluations",
+        "federated_evaluate_denied",
+        StatusCode::FORBIDDEN,
+        "federation.forbidden",
+    );
+    assert_federation_request_context_is_absent(denied);
+    assert_audit_records_do_not_contain(&records, &["person-1", request_jti]);
 }
 
 #[tokio::test]
@@ -2175,6 +2327,22 @@ async fn federation_request_claims_must_match_profile_before_source_read() {
 
     response.assert_status(StatusCode::FORBIDDEN);
     assert_eq!(source_hits.load(Ordering::SeqCst), 0);
+    let records = audit_records(&audit_path);
+    let denied = audit_record_with(
+        &records,
+        "/federation/v1/evaluations",
+        "federated_evaluate_denied",
+        StatusCode::FORBIDDEN,
+        "federation.forbidden",
+    );
+    assert_verified_federation_audit_context(
+        denied,
+        "farmer_under_4ha",
+        "https://purpose.example.test/eligibility",
+        true,
+    );
+    assert!(denied["claim_hash"].is_string());
+    assert_audit_records_do_not_contain(&records, &["person-1", "01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q6Q9"]);
 }
 
 #[tokio::test]
@@ -2204,6 +2372,7 @@ async fn federation_stale_source_observation_returns_signed_evaluation_error() {
         audit_path.to_str().expect("audit path is UTF-8"),
         &format!("{}/jwks", peer_jwks.url()),
     );
+    config.cel.eval_timeout_ms = 10_000;
     config.federation.evaluation_profiles[0].max_source_observed_age_seconds = Some(0);
     let app = standalone_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
@@ -2238,6 +2407,13 @@ async fn federation_stale_source_observation_returns_signed_evaluation_error() {
         .as_str()
         .expect("subject ref hash is string")
         .starts_with("hmac-sha256:"));
+    assert_verified_federation_audit_context(
+        error,
+        "farmer_under_4ha",
+        "https://purpose.example.test/eligibility",
+        true,
+    );
+    assert_audit_records_do_not_contain(&records, &["person-1", "01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q6Q8"]);
 }
 
 #[tokio::test]

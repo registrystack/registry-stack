@@ -2,7 +2,7 @@
 
 Issue: [#200](https://github.com/registrystack/registry-stack/issues/200)
 
-Generated: 2026-07-09
+Generated: 2026-07-10
 
 This is the public release-readiness map for negative-path coverage. It maps
 the internal checklist row identifiers to public evidence or disposition without
@@ -219,20 +219,27 @@ public evidence or disposition.
   Tests assert stable problem responses, no unintended
   credential issuance, no credential material, redacted audit records,
   `source_read_count = 0`, and `forwarded = false` on credential denial paths.
-- `NP-29`: Partial.
+- `NP-29`: Covered.
   Public anchors:
   `crates/registry-notary-server/tests/standalone_http.rs::federation_evaluation_returns_signed_response_and_rejects_replay`,
   `crates/registry-notary-server/tests/standalone_http.rs::federation_auth_exempt_route_still_requires_valid_jws`,
   `crates/registry-notary-server/tests/standalone_http.rs::federation_denial_happens_before_source_read`,
+  `crates/registry-notary-server/tests/standalone_http.rs::federation_emergency_kid_denylist_blocks_before_source_read`,
+  `crates/registry-notary-server/tests/standalone_http.rs::federation_emergency_node_id_denylist_blocks_before_source_read`,
+  `crates/registry-notary-server/tests/standalone_http.rs::federation_request_claims_must_match_profile_before_source_read`,
+  `crates/registry-notary-server/tests/standalone_http.rs::federation_policy_context_satisfies_governed_source_matching`,
   `crates/registry-notary-server/tests/standalone_http.rs::federation_stale_source_observation_returns_signed_evaluation_error`,
-  and `crates/registry-notary-server/src/federation/audit.rs::federation_audit_event`.
-  Disposition: federation coverage already exercises disabled-route behavior,
-  invalid JWS denial, replay denial, no-source-read denials, and signed stale
-  source errors with audit redaction. The remaining blocker is complete
-  denied-audit context parity for post-verification federation denials; current
-  denied outcomes do not carry every peer/profile/purpose/JTI/subject hash field
-  that success and signed-error outcomes can carry, so this needs maintainer
-  decision or explicit deferral before release sign-off.
+  and `crates/registry-notary-server/src/federation/mod.rs::federation_response_signing_failure_emits_denial_audit_with_context`.
+  Disposition: pre-verification signature and emergency-denylist denials omit
+  untrusted request context. After signature verification, denial records retain
+  the configured issuer and peer source scopes plus the request profile and
+  purpose, hash the peer id and request JTI, and include a pairwise
+  subject-reference hash when the locally allowed profile and subject are
+  structurally valid. Tests cover replay,
+  policy, claim-mismatch, unknown-key, denylisted-key, denylisted-node, and
+  signed stale-source outcomes; preserve no-source-read ordering; and assert
+  that raw subject ids and request JTIs do not reach audit records.
+  Response-signing failures retain the already assembled redacted context.
 
 ## Release Decision
 

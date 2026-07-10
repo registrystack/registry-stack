@@ -78,6 +78,7 @@ impl FederationSignedOutcome {
                 decision: "federated_evaluate".to_string(),
                 verification_id: Some(evaluation_id),
                 claim_ids: vec![profile.claim_id.clone()],
+                scopes_used: peer.source_scopes.clone(),
                 error_code: None,
                 peer_node_id: Some(peer.node_id.clone()),
                 issuer: Some(peer.issuer.clone()),
@@ -122,6 +123,7 @@ impl FederationSignedOutcome {
                 decision: "federated_evaluate_error".to_string(),
                 verification_id: None,
                 claim_ids: vec![profile.claim_id.clone()],
+                scopes_used: peer.source_scopes.clone(),
                 error_code: Some("federation.stale_source_observation".to_string()),
                 peer_node_id: Some(peer.node_id.clone()),
                 issuer: Some(peer.issuer.clone()),
@@ -147,7 +149,7 @@ impl FederationSignedOutcome {
                 (response, self.audit)
             }
             Err(problem) => {
-                let audit = FederationAuditOutcome::denied(&problem);
+                let audit = self.audit.into_denied(&problem);
                 (federation_problem_response(problem), audit)
             }
         }
