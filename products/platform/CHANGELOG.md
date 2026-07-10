@@ -26,6 +26,20 @@
   posture/doctor shipping-state fields (`shipping_target_configured`,
   `shipping_target`), so Registry Relay and Registry Notary cannot drift on
   the classification.
+- `registry-platform-ops`: `registry.audit.ack_cursor.v1`, the JSON Schema
+  contract for the local state file written by whatever ships audit events
+  off-host (`acked_at`, `last_acked_hash`, optional `writer`), plus
+  `evaluate_ack_health(cursor_path, now, max_age)`, a shared helper that reads
+  the cursor and classifies it as `ok`, `stale`, `missing`, `invalid`, or
+  `unverified` (no cursor configured). The default freshness window is
+  `DEFAULT_AUDIT_ACK_MAX_AGE` (900s); a cursor whose `acked_at` is more than
+  300s ahead of `now` is treated as `invalid` rather than perpetually fresh.
+  An unreadable file, malformed JSON, a contract violation, or a
+  non-RFC3339 `acked_at` all fail closed to `invalid` with a `detail` message,
+  never silently to `ok`. This is an observed liveness/freshness signal for
+  the off-host shipping path, not proof that every audit event arrived:
+  `last_acked_hash` binds the cursor to the chain for future backlog-depth
+  checks, but no such check exists yet.
 
 ### Changed
 
@@ -60,6 +74,25 @@
   documents produced before this release fail against the new schema and
   vice versa: producers and strict validators pinned to
   `registry.ops.posture.v1` must upgrade together.
+- BREAKING: `registry-platform-ops`'s `registry.ops.posture.v1` schema:
+  `posture.audit` gains two more required, nullable fields, `shipping_health`
+  (one of `ok`, `stale`, `missing`, `invalid`, `unverified`, or `null`) and
+  `shipping_observed_at` (an RFC3339 timestamp, or `null`), reporting the
+  observed freshness of off-host audit shipping from the ack cursor described
+  above under Added. Both are `null` iff `shipping_target_configured` is
+  `false`; `shipping_health` is `"unverified"` when a shipping target is
+  declared but no cursor is configured. This fills the delivery-health gap the
+  previous entry called out, but stays an observed *freshness* signal, not
+  proof that every shipped event arrived. The schema keeps the `v1`
+  identifier and `additionalProperties: false`, so this is the second breaking
+  change to `posture.audit` under the `v1` identifier in this release:
+  producers and strict validators pinned to `registry.ops.posture.v1` must
+  upgrade together, and a validator built against the previous field set
+  rejects documents carrying the new fields.
+- `registry-config-report`'s `registry.config.diagnostic_report.v1` schema:
+  the `audit_shipping` block gains optional `shipping_health` and
+  `shipping_observed_at` fields with the same semantics as the posture fields
+  above. Optional, so existing diagnostic report consumers are unaffected.
 
 ## v0.3.1 - 2026-06-21
 

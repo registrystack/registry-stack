@@ -33,6 +33,29 @@
 - `registry-relay doctor`'s JSON report now carries an `audit_shipping`
   object (`sink_type`, `shipping_target_configured`, `shipping_target`) when
   the config parses, mirroring the posture `audit` shipping fields.
+- `deployment.evidence.audit_ack_cursor_path` and
+  `deployment.evidence.audit_ack_max_age_secs` config fields: point Relay at
+  the local state file an off-host audit shipper writes on each successful
+  hand-off (`registry.audit.ack_cursor.v1`), and set how old the cursor's
+  `acked_at` timestamp may get before it reads as stale (defaults to 900s).
+  Config load rejects `audit_ack_max_age_secs` set without
+  `audit_ack_cursor_path`, and rejects `audit_ack_cursor_path` set on a local
+  `file` audit sink that has not declared `audit_offhost_shipping`; a
+  `stdout`/`syslog` sink may carry a cursor without that declaration.
+- Two new deployment gates read the ack cursor's observed health:
+  `relay.audit.shipping_unverified` (a shipping target is declared but no
+  ack cursor is configured; `finding_warn` under `production` and
+  `evidence_grade`, unbound under `hosted_lab`) and
+  `relay.audit.shipping_stale` (a cursor is configured but its observed
+  health is not `ok`; `finding_error` under `production`, `readiness_fail`
+  (non-waivable) under `evidence_grade`, unbound under `hosted_lab`).
+- `registry-relay doctor`'s `audit_shipping` object and the admin `posture.audit`
+  block both gain `shipping_health` (`ok`, `stale`, `missing`, `invalid`,
+  `unverified`, or `null`) and `shipping_observed_at` (an RFC3339 timestamp, or
+  `null`), the observed freshness of off-host audit shipping read from the ack
+  cursor. Both are `null` whenever `shipping_target_configured` is `false`.
+  This is a liveness/freshness signal for the shipping path, not proof every
+  audit event arrived.
 
 ### Changed
 
@@ -51,13 +74,23 @@
   tail before writing. A second Relay process pointed at the same audit file
   fails at startup instead of silently interleaving writes and forking the
   hash chain, and a write that would extend a diverged chain fails closed.
-- BREAKING: A deployment waiver naming a hard (`startup_fail`-severity under
-  the active profile) deployment gate now fails config load instead of being
-  silently accepted and ignored at evaluation. Under `evidence_grade`,
-  `relay.audit.retention_local_only` is such a gate. Migration: remove the
-  waiver, then either ship audit events off-host and declare
-  `deployment.evidence.audit_offhost_shipping: true`, or switch to a
-  `stdout`/`syslog` sink.
+- BREAKING: A deployment waiver naming a hard gate (a gate whose severity
+  under the active profile is `readiness_fail` or `startup_fail`) now fails
+  config load instead of being silently accepted and ignored at evaluation,
+  with a per-gate remediation message; there is no config-level override for
+  a non-waivable gate. This aligns Relay with Notary, where `readiness_fail`
+  gates were already non-waivable. Under `evidence_grade`,
+  `relay.audit.retention_local_only` is `startup_fail`. Also newly
+  non-waivable: `relay.admin.public_exposure` and `relay.audit.sink_missing`
+  under `production` (`readiness_fail` there), and
+  `relay.oidc.client_allowlist_empty` and `relay.audit.best_effort` under
+  `evidence_grade` (`readiness_fail` there). Migration: remove the waiver and
+  fix the condition instead (bind the admin listener to a loopback address,
+  configure a durable audit sink, populate `auth.oidc.allowed_clients`, set
+  `audit.write_policy` to a durability-first policy, or, for
+  `relay.audit.retention_local_only`, ship audit events off-host and declare
+  `deployment.evidence.audit_offhost_shipping: true` or switch to a
+  `stdout`/`syslog` sink).
 
 ## 0.8.4 - 2026-07-04
 

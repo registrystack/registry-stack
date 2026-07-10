@@ -64,7 +64,10 @@ async fn write_audit_event() -> Result<(), registry_platform_audit::AuditError> 
   logs.
 - Off-host audit shipping is the completeness guarantee. Evidence-grade Relay
   and Notary deployments refuse startup when a local `file` or `jsonl` sink is
-  used without declaring off-host shipping.
+  used without declaring off-host shipping. `registry-platform-ops`'s
+  `registry.audit.ack_cursor.v1` contract and `evaluate_ack_health` add an
+  observed freshness signal on top of that declaration: whether the shipper
+  is still checking in, not whether every record arrived.
 - The chain does not replace durable storage, retention policy, clock integrity,
   or off-host log shipping.
 - Use `AuditProfile::registry_relay_from_env` or

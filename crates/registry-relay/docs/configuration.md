@@ -563,6 +563,8 @@ deployment:
     ingress_rate_limit: true # operator asserts a gateway enforces rate limiting
     api_key_rotation: true   # operator asserts an API-key rotation process exists
     audit_offhost_shipping: true # operator asserts audit records are shipped off-host
+    audit_ack_cursor_path: /var/lib/registry-relay/audit-ack-cursor.json # local state file the shipper updates
+    audit_ack_max_age_secs: 900 # how old acked_at may get before the cursor reads as stale
   waivers:
     - finding: relay.openapi.public
       reason: public API catalog is intentional for this deployment
@@ -576,7 +578,7 @@ deployment:
 Each gate maps to one of four severities per profile:
 
 * `startup_fail`: the process refuses to start. Never waivable.
-* `readiness_fail`: the readiness endpoint reports not-ready; the process keeps running.
+* `readiness_fail`: the readiness endpoint reports not-ready; the process keeps running. Never waivable.
 * `finding_error` / `finding_warn`: a posture finding only.
 
 The four profiles escalate from `local` (binds no hard gates) through `hosted_lab` and `production` to `evidence_grade` (the strictest). For example, `evidence_grade` requires a signed, governed config bundle: running it from a plain local YAML file trips a `startup_fail` gate (`relay.config.unsigned`) and the process refuses to start.
@@ -584,6 +586,8 @@ The four profiles escalate from `local` (binds no hard gates) through `hosted_la
 ### Evidence declarations
 
 Some controls live outside the relay and cannot be observed by the process (for example ingress rate limiting enforced by a gateway, an API-key rotation process, or audit records shipped off-host to a log collector or SIEM). The `evidence` flags let the operator assert those controls are in place. Each flag defaults to `false`, which leaves the corresponding gate active until the operator declares the control.
+
+`audit_ack_cursor_path` and `audit_ack_max_age_secs` are not booleans: they point at the local state file an off-host audit shipper writes on each successful hand-off (the `registry.audit.ack_cursor.v1` contract: `acked_at`, `last_acked_hash`, an optional `writer`) and set how old that cursor's `acked_at` may get before it reads as stale (defaults to 900 seconds). This is an *observed* freshness signal layered on top of the `audit_offhost_shipping` *declaration*: config load rejects `audit_ack_max_age_secs` set without `audit_ack_cursor_path`, and rejects `audit_ack_cursor_path` set on a local `file` audit sink that has not also declared `audit_offhost_shipping`. A `stdout`/`syslog` sink may carry a cursor without that declaration.
 
 ### Waivers
 
@@ -598,7 +602,7 @@ deployment:
       expires: 2026-09-30
 ```
 
-A waived finding reports status `waived` instead of its severity effect. Once the expiry date passes, the waiver stops suppressing the finding and the posture additionally raises `deployment.waiver_expired`. The expiry date is mandatory; reasons must be non-empty and must not contain secrets. `startup_fail` gates are never waivable.
+A waived finding reports status `waived` instead of its severity effect. Once the expiry date passes, the waiver stops suppressing the finding and the posture additionally raises `deployment.waiver_expired`. The expiry date is mandatory; reasons must be non-empty and must not contain secrets. A waiver naming a hard gate (`startup_fail` or `readiness_fail` severity under the active profile) fails config load instead of being silently accepted and ignored: there is no config-level override for a non-waivable gate.
 
 Waiver reasons are only visible in the restricted posture tier; the default tier reports finding id, severity, and status but not the reason.
 
@@ -615,8 +619,12 @@ Waiver reasons are only visible in the restricted posture tier; the default tier
 | `relay.audit.best_effort` | (not bound) | warn | readiness_fail |
 | `relay.audit.sink_missing` | error | readiness_fail | startup_fail |
 | `relay.audit.retention_local_only` | (not bound) | warn | startup_fail |
+| `relay.audit.shipping_unverified` | (not bound) | warn | warn |
+| `relay.audit.shipping_stale` | (not bound) | error | readiness_fail |
 
 `relay.audit.retention_local_only` fires when the audit sink is a local rotating `file` sink and `evidence.audit_offhost_shipping` is not declared: a local rotating file caps retention, and an attacker with host access can destroy the audit trail. `stdout` sinks are exempt (retention is the orchestrator's log pipeline's concern) and `syslog` sinks are exempt (forwarding is the syslog daemon's own surface).
+
+`relay.audit.shipping_unverified` and `relay.audit.shipping_stale` read the ack cursor's observed health. `shipping_unverified` fires when off-host shipping is declared for a local `file` sink (`evidence.audit_offhost_shipping: true`) but no `evidence.audit_ack_cursor_path` is configured, so shipping is asserted but not observed. `stdout` and `syslog` sinks do not fire it; they may still configure a cursor to opt into observation. `shipping_stale` fires when a cursor is configured but its observed health is not `ok` (missing, unreadable, malformed, or older than `evidence.audit_ack_max_age_secs`); it is `readiness_fail` under `evidence_grade`, so it is never waivable there. Remediation: restore off-host shipping so the writer refreshes the ack cursor, widen `evidence.audit_ack_max_age_secs` if the shipping cadence is legitimately slower, or remove `evidence.audit_ack_cursor_path` if the cursor is no longer meaningful.
 
 The current deployment profile, its findings, and active waivers are reported under `deployment` in the operations posture (`GET /admin/v1/posture`).
 
