@@ -84,12 +84,27 @@ pub(super) fn request_subject(
     verified: &VerifiedToken,
     profile: &FederationEvaluationProfileConfig,
 ) -> Result<SubjectRequest, FederationProblem> {
-    let request = verified
-        .claims
-        .extra
-        .get("request")
-        .and_then(Value::as_object)
-        .ok_or_else(|| FederationProblem::invalid_request("request object is required"))?;
+    let subject = request_subject_identifier(verified, profile)?;
+    let request = request_object(verified)?;
+    let requested_claims = request
+        .get("claims")
+        .and_then(Value::as_array)
+        .ok_or_else(|| FederationProblem::invalid_request("request.claims is required"))?;
+    if requested_claims.len() != 1
+        || requested_claims.first().and_then(Value::as_str) != Some(profile.claim_id.as_str())
+    {
+        return Err(FederationProblem::forbidden(
+            "request claims do not match profile",
+        ));
+    }
+    Ok(subject)
+}
+
+pub(super) fn request_subject_identifier(
+    verified: &VerifiedToken,
+    profile: &FederationEvaluationProfileConfig,
+) -> Result<SubjectRequest, FederationProblem> {
+    let request = request_object(verified)?;
     let subject = request
         .get("subject")
         .and_then(Value::as_object)
@@ -107,21 +122,21 @@ pub(super) fn request_subject(
             "subject id type is not allowed",
         ));
     }
-    let requested_claims = request
-        .get("claims")
-        .and_then(Value::as_array)
-        .ok_or_else(|| FederationProblem::invalid_request("request.claims is required"))?;
-    if requested_claims.len() != 1
-        || requested_claims.first().and_then(Value::as_str) != Some(profile.claim_id.as_str())
-    {
-        return Err(FederationProblem::forbidden(
-            "request claims do not match profile",
-        ));
-    }
     Ok(SubjectRequest {
         id: id.to_string(),
         id_type: Some(id_type.to_string()),
     })
+}
+
+fn request_object(
+    verified: &VerifiedToken,
+) -> Result<&serde_json::Map<String, Value>, FederationProblem> {
+    verified
+        .claims
+        .extra
+        .get("request")
+        .and_then(Value::as_object)
+        .ok_or_else(|| FederationProblem::invalid_request("request object is required"))
 }
 
 pub(super) fn source_observation_is_stale(

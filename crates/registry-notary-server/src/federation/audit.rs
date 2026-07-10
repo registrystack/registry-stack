@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use axum::response::Response;
-use registry_notary_core::{AccessMode, ConfigMetadata, FEDERATION_PROTOCOL_V0_1};
+use registry_notary_core::{
+    AccessMode, ConfigMetadata, FederationPeerConfig, FEDERATION_PROTOCOL_V0_1,
+};
+use registry_platform_oidc::VerifiedToken;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use ulid::Ulid;
@@ -9,6 +12,49 @@ use ulid::Ulid;
 use crate::api::evidence_claim_hash;
 
 use super::errors::FederationProblem;
+
+#[derive(Clone, Debug, Default)]
+pub(super) struct FederationAuditContext {
+    pub(super) claim_ids: Vec<String>,
+    pub(super) peer_node_id: Option<String>,
+    pub(super) issuer: Option<String>,
+    pub(super) profile: Option<String>,
+    pub(super) purpose: Option<String>,
+    pub(super) request_jti: Option<String>,
+    pub(super) subject_ref_hash: Option<String>,
+}
+
+impl FederationAuditContext {
+    pub(super) fn from_verified(peer: &FederationPeerConfig, verified: &VerifiedToken) -> Self {
+        Self {
+            peer_node_id: Some(peer.node_id.clone()),
+            issuer: Some(peer.issuer.clone()),
+            profile: verified
+                .claims
+                .extra
+                .get("profile")
+                .and_then(|value| value.as_str())
+                .map(str::to_string),
+            purpose: verified
+                .claims
+                .extra
+                .get("purpose")
+                .and_then(|value| value.as_str())
+                .map(str::to_string),
+            request_jti: verified
+                .claims
+                .extra
+                .get("jti")
+                .and_then(|value| value.as_str())
+                .map(str::to_string),
+            ..Self::default()
+        }
+    }
+
+    pub(super) fn denied(&self, problem: FederationProblem) -> FederationDeniedOutcome {
+        FederationDeniedOutcome::with_context(problem, self.clone())
+    }
+}
 
 #[derive(Debug)]
 pub(super) struct FederationAuditOutcome {
@@ -26,18 +72,54 @@ pub(super) struct FederationAuditOutcome {
 
 impl FederationAuditOutcome {
     pub(super) fn denied(problem: &FederationProblem) -> Self {
+        Self::denied_with_context(problem, FederationAuditContext::default())
+    }
+
+    pub(super) fn denied_with_context(
+        problem: &FederationProblem,
+        context: FederationAuditContext,
+    ) -> Self {
         Self {
             decision: "federated_evaluate_denied".to_string(),
             verification_id: None,
-            claim_ids: Vec::new(),
+            claim_ids: context.claim_ids,
             error_code: Some(problem.code.clone()),
-            peer_node_id: None,
-            issuer: None,
-            profile: None,
-            purpose: None,
-            request_jti: None,
-            subject_ref_hash: None,
+            peer_node_id: context.peer_node_id,
+            issuer: context.issuer,
+            profile: context.profile,
+            purpose: context.purpose,
+            request_jti: context.request_jti,
+            subject_ref_hash: context.subject_ref_hash,
         }
+    }
+
+    pub(super) fn into_denied(mut self, problem: &FederationProblem) -> Self {
+        self.decision = "federated_evaluate_denied".to_string();
+        self.error_code = Some(problem.code.clone());
+        self
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct FederationDeniedOutcome {
+    pub(super) problem: FederationProblem,
+    pub(super) audit: FederationAuditOutcome,
+}
+
+impl FederationDeniedOutcome {
+    pub(super) fn with_context(
+        problem: FederationProblem,
+        context: FederationAuditContext,
+    ) -> Self {
+        let audit = FederationAuditOutcome::denied_with_context(&problem, context);
+        Self { problem, audit }
+    }
+}
+
+impl From<FederationProblem> for FederationDeniedOutcome {
+    fn from(problem: FederationProblem) -> Self {
+        let audit = FederationAuditOutcome::denied(&problem);
+        Self { problem, audit }
     }
 }
 

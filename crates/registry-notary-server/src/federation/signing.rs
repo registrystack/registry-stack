@@ -147,7 +147,7 @@ impl FederationSignedOutcome {
                 (response, self.audit)
             }
             Err(problem) => {
-                let audit = FederationAuditOutcome::denied(&problem);
+                let audit = self.audit.into_denied(&problem);
                 (federation_problem_response(problem), audit)
             }
         }

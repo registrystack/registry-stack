@@ -4279,7 +4279,7 @@ impl AuditPipeline {
     }
 
     #[cfg(test)]
-    fn for_sink_dev_only(sink: Arc<dyn PlatformAuditSink>) -> Self {
+    pub(crate) fn for_sink_dev_only(sink: Arc<dyn PlatformAuditSink>) -> Self {
         Self {
             sink,
             chain: Arc::new(OnceCell::new()),
