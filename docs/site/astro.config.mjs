@@ -37,9 +37,46 @@ function loadProductSidebar() {
   }
 }
 
-const base = process.env.DOCS_BASE || undefined;
-const basePath = base?.replace(/\/$/, '');
-const isArchivedBuild = Boolean(basePath);
+function loadDocsetsManifest() {
+  const path = new URL('./src/data/generated/docsets.json', import.meta.url);
+  return JSON.parse(readFileSync(path, 'utf8'));
+}
+
+/**
+ * @param {{ current: string, docsets: Array<{ id: string, status: string }> }} docsets
+ * @param {NodeJS.ProcessEnv} env
+ */
+export function resolveDocsetBuildContext(docsets, env = process.env) {
+  const selectedId = env.DOCS_DOCSET || docsets.current;
+  const selectedDocset = docsets.docsets.find((entry) => entry.id === selectedId);
+  if (!selectedDocset) throw new Error(`selected docs docset "${selectedId}" not found`);
+
+  const base = env.DOCS_BASE || undefined;
+  const basePath = base?.replace(/\/$/, '');
+  const explicitArchive = env.DOCS_ARCHIVE === 'true' || env.DOCS_ARCHIVE === '1';
+  const isArchivedBuild = explicitArchive || selectedDocset.status === 'archived';
+  /** @param {string} path */
+  const internalRedirect = (path) => basePath ? `${basePath}${path}` : path;
+  /** @param {string} path */
+  const currentDocsetRedirect = (path) =>
+    isArchivedBuild ? `https://docs.registrystack.org${path}` : internalRedirect(path);
+
+  return {
+    base,
+    basePath,
+    isArchivedBuild,
+    internalRedirect,
+    currentDocsetRedirect,
+  };
+}
+
+const docsetsManifest = loadDocsetsManifest();
+const {
+  base,
+  isArchivedBuild,
+  internalRedirect,
+  currentDocsetRedirect,
+} = resolveDocsetBuildContext(docsetsManifest);
 const productSidebar = loadProductSidebar();
 
 // Lift a generated per-product group to the top level of the sidebar.
@@ -55,16 +92,6 @@ const disabledSitemap = {
   name: '@astrojs/sitemap',
   hooks: {},
 };
-
-/** @param {string} path */
-function internalRedirect(path) {
-  return basePath ? `${basePath}${path}` : path;
-}
-
-/** @param {string} path */
-function currentDocsetRedirect(path) {
-  return isArchivedBuild ? `https://docs.registrystack.org${path}` : internalRedirect(path);
-}
 
 export default defineConfig({
   site: 'https://docs.registrystack.org',
@@ -87,7 +114,7 @@ export default defineConfig({
     '/start/your-first-call/': internalRedirect('/tutorials/first-run-with-solmara-lab/'),
     // The monorepo lab tutorial was replaced by the standalone Solmara Lab (2026-07).
     '/tutorials/first-run-with-registry-lab/': internalRedirect('/tutorials/first-run-with-solmara-lab/'),
-    // Monorepo lab source-system tutorials are archived until replacement Solmara Lab profiles exist.
+    // Retired monorepo lab tutorials redirect to the current integration guidance.
     '/tutorials/configure-dhis2-claim-checks/': internalRedirect('/explanation/integration-patterns/'),
     '/tutorials/getting-started-fhir-evidence/': internalRedirect('/explanation/integration-patterns/'),
     // verify-claim-own-api moved into the Apply to your stack path (2026-06).
@@ -160,8 +187,8 @@ export default defineConfig({
         // API reference pages (reference/apis/*) are Redoc HTML embeds with
         // minimal prose; they are excluded from llms-small.txt to keep the
         // compact version useful, but remain in llms-full.txt.
-        // Only registered for non-archived builds: base-path builds do not
-        // have a stable canonical site URL, and the plugin requires `site`.
+        // Only registered for current builds. Archived docsets do not publish
+        // a separate machine-readable corpus; preview bases remain current.
         ...(isArchivedBuild ? [] : [starlightLlmsTxt({
           description: 'Documentation for Registry Stack: tutorials, product docs, explanation, and API reference for Registry Relay and Registry Notary.',
           details: DISCOVERY_HEADER,
