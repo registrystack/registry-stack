@@ -9,7 +9,7 @@ RUN mkdir -p \
         /workspace/runtime-root/var/log/registry-relay && \
     chown -R 65532:65532 /workspace/runtime-root
 
-FROM gcr.io/distroless/cc-debian12:nonroot@sha256:bd2899c12b335c827750ccf2359879eab09c09b206023dcebea408947d54127c AS runtime
+FROM gcr.io/distroless/cc-debian12:nonroot@sha256:ce0d66bc0f64aae46e6a03add867b07f42cc7b8799c949c2e898057b7f75a151 AS runtime
 
 COPY --from=runtime-root --chown=65532:65532 /workspace/runtime-root/ /
 COPY --chmod=0755 dist/image-bin/registry-relay /usr/local/bin/registry-relay
