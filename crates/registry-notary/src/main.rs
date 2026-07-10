@@ -10,7 +10,7 @@ use std::io::{self, Write};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use axum::body::Body;
 use axum::extract::MatchedPath;
@@ -46,7 +46,7 @@ use registry_platform_crypto::{LocalJwkSigner, PrivateJwk, PublicJwk};
 use registry_platform_httputil::{url as httputil_url, FetchUrlPolicy};
 use registry_platform_ops::{
     antirollback_key_from_verified_bundle, audit_shipping_target, bundle_verify_rejection_result,
-    load_unsigned_break_glass_or_pin,
+    evaluate_ack_health, load_unsigned_break_glass_or_pin,
     persist_bundle_acceptance as persist_config_bundle_acceptance,
     posture_safe_runtime_config_hash, resolve_bundle_state_action, verify_bundle_state_read_only,
     AuditSinkKind, BundleStateAction, BundleStateRequest, ConfigBootError, ConfigOverrideMode,
@@ -1817,11 +1817,12 @@ fn doctor_json_report(
     report
 }
 
-/// Report the operator-declared audit shipping posture for the doctor
-/// diagnostic report. This mirrors the `posture.audit` shipping fields
-/// (`sink_type`, `shipping_target_configured`, `shipping_target`) and is
-/// derived from config via the shared classifier: it is declared state, not
-/// observed delivery health. Unmapped sink strings fall back to
+/// Report the audit shipping posture for the doctor diagnostic report. This
+/// mirrors the `posture.audit` shipping fields (`sink_type`,
+/// `shipping_target_configured`, `shipping_target`, `shipping_health`,
+/// `shipping_observed_at`). The target is declared state derived from config via
+/// the shared classifier; `shipping_health` is OBSERVED delivery freshness read
+/// from the local ack cursor. Unmapped sink strings fall back to
 /// [`AuditSinkKind::Unknown`] rather than a silent wildcard.
 fn notary_audit_shipping(config: &StandaloneRegistryNotaryConfig) -> Value {
     let (sink_kind, sink_type) = match config.audit.sink.as_str() {
@@ -1832,10 +1833,26 @@ fn notary_audit_shipping(config: &StandaloneRegistryNotaryConfig) -> Value {
     };
     let (shipping_target_configured, shipping_target) =
         audit_shipping_target(sink_kind, config.deployment.evidence.audit_offhost_shipping);
+    // Read the local ack cursor for observed freshness. Health is null unless a
+    // shipping target is actually configured; observed_at echoes the cursor's
+    // acked_at when one was read.
+    let observation = evaluate_ack_health(
+        config.deployment.evidence.audit_ack_cursor_path(),
+        SystemTime::now(),
+        config.deployment.evidence.audit_ack_max_age(),
+    );
+    let shipping_health = if shipping_target_configured {
+        Value::from(observation.health.as_str())
+    } else {
+        Value::Null
+    };
+    let shipping_observed_at = observation.acked_at.map_or(Value::Null, Value::from);
     json!({
         "sink_type": sink_type,
         "shipping_target_configured": shipping_target_configured,
         "shipping_target": shipping_target,
+        "shipping_health": shipping_health,
+        "shipping_observed_at": shipping_observed_at,
     })
 }
 
@@ -4427,6 +4444,9 @@ evidence:
         assert_eq!(shipping["sink_type"], "stdout");
         assert_eq!(shipping["shipping_target_configured"], true);
         assert_eq!(shipping["shipping_target"], "stdout");
+        // A shipping target is declared but no ack cursor is configured.
+        assert_eq!(shipping["shipping_health"], "unverified");
+        assert_eq!(shipping["shipping_observed_at"], Value::Null);
     }
 
     #[test]
@@ -4440,6 +4460,9 @@ evidence:
         assert_eq!(shipping["sink_type"], "file");
         assert_eq!(shipping["shipping_target_configured"], false);
         assert_eq!(shipping["shipping_target"], "none");
+        // No shipping target is configured, so health is null.
+        assert_eq!(shipping["shipping_health"], Value::Null);
+        assert_eq!(shipping["shipping_observed_at"], Value::Null);
     }
 
     #[test]
@@ -4453,6 +4476,9 @@ evidence:
         assert_eq!(shipping["sink_type"], "file");
         assert_eq!(shipping["shipping_target_configured"], true);
         assert_eq!(shipping["shipping_target"], "declared_external");
+        // declared_external with no ack cursor: shipping is declared but unobserved.
+        assert_eq!(shipping["shipping_health"], "unverified");
+        assert_eq!(shipping["shipping_observed_at"], Value::Null);
     }
 
     #[test]
@@ -4465,6 +4491,80 @@ evidence:
         assert_eq!(shipping["sink_type"], "unknown");
         assert_eq!(shipping["shipping_target_configured"], false);
         assert_eq!(shipping["shipping_target"], "unknown");
+        assert_eq!(shipping["shipping_health"], Value::Null);
+        assert_eq!(shipping["shipping_observed_at"], Value::Null);
+    }
+
+    /// Write a `registry.audit.ack_cursor.v1` cursor with `acked_at` and return
+    /// its path, so doctor shipping-health tests can drive each observation.
+    fn write_doctor_ack_cursor(tmp: &tempfile::TempDir, acked_at: &str) -> std::path::PathBuf {
+        let path = tmp.path().join("ack-cursor.json");
+        let body = format!(
+            r#"{{"schema":"registry.audit.ack_cursor.v1","acked_at":"{acked_at}","last_acked_hash":"sha256:4444444444444444444444444444444444444444444444444444444444444444","writer":"test-shipper"}}"#
+        );
+        std::fs::write(&path, body).expect("ack cursor writes");
+        path
+    }
+
+    #[test]
+    fn notary_audit_shipping_reports_ok_for_fresh_cursor() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let acked_at = OffsetDateTime::now_utc()
+            .format(&Rfc3339)
+            .expect("now formats");
+        let cursor = write_doctor_ack_cursor(&tmp, &acked_at);
+        let mut config = doctor_live_test_config("http://127.0.0.1:1");
+        config.audit.sink = "stdout".to_string();
+        config.deployment.evidence.audit_ack_cursor_path = Some(cursor);
+
+        let shipping = notary_audit_shipping(&config);
+
+        assert_eq!(shipping["shipping_health"], "ok");
+        assert_eq!(shipping["shipping_observed_at"], acked_at);
+    }
+
+    #[test]
+    fn notary_audit_shipping_reports_stale_for_old_cursor() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        // Far past the default 900s window relative to any plausible test clock.
+        let cursor = write_doctor_ack_cursor(&tmp, "2026-06-04T09:59:00Z");
+        let mut config = doctor_live_test_config("http://127.0.0.1:1");
+        config.audit.sink = "stdout".to_string();
+        config.deployment.evidence.audit_ack_cursor_path = Some(cursor);
+
+        let shipping = notary_audit_shipping(&config);
+
+        assert_eq!(shipping["shipping_health"], "stale");
+        assert_eq!(shipping["shipping_observed_at"], "2026-06-04T09:59:00Z");
+    }
+
+    #[test]
+    fn notary_audit_shipping_reports_missing_for_absent_cursor_file() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let cursor = tmp.path().join("does-not-exist.json");
+        let mut config = doctor_live_test_config("http://127.0.0.1:1");
+        config.audit.sink = "stdout".to_string();
+        config.deployment.evidence.audit_ack_cursor_path = Some(cursor);
+
+        let shipping = notary_audit_shipping(&config);
+
+        assert_eq!(shipping["shipping_health"], "missing");
+        assert_eq!(shipping["shipping_observed_at"], Value::Null);
+    }
+
+    #[test]
+    fn notary_audit_shipping_reports_invalid_for_malformed_cursor_file() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let cursor = tmp.path().join("ack-cursor.json");
+        std::fs::write(&cursor, "{ not valid json").expect("cursor writes");
+        let mut config = doctor_live_test_config("http://127.0.0.1:1");
+        config.audit.sink = "stdout".to_string();
+        config.deployment.evidence.audit_ack_cursor_path = Some(cursor);
+
+        let shipping = notary_audit_shipping(&config);
+
+        assert_eq!(shipping["shipping_health"], "invalid");
+        assert_eq!(shipping["shipping_observed_at"], Value::Null);
     }
 
     #[test]

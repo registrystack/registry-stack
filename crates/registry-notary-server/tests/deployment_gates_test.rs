@@ -424,6 +424,67 @@ async fn production_high_risk_replay_reports_readiness_failure() {
 }
 
 #[tokio::test]
+async fn production_declared_external_without_cursor_reports_shipping_unverified() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    // A file sink with attested off-host shipping is declared_external; with no
+    // ack cursor the completeness is unobserved, so shipping_unverified binds.
+    let config = ConfigBuilder::new(&audit_path(&tmp))
+        .deployment(
+            "deployment:\n  profile: production\n  evidence:\n    audit_offhost_shipping: true\n",
+        )
+        .build();
+
+    let posture = fetch_posture(config).await;
+    assert_matches_posture_schema(&posture);
+
+    let findings = posture["deployment"]["findings"]
+        .as_array()
+        .expect("deployment findings is an array");
+    let finding = findings
+        .iter()
+        .find(|f| f["id"] == "notary.audit.shipping_unverified")
+        .expect("shipping_unverified finding present under production");
+    assert_eq!(finding["severity"], "finding_warn");
+    assert_eq!(finding["status"], "active");
+
+    let posture_audit = &posture["posture"]["audit"];
+    assert_eq!(posture_audit["shipping_target"], "declared_external");
+    assert_eq!(posture_audit["shipping_health"], "unverified");
+}
+
+#[tokio::test]
+async fn production_stale_cursor_reports_shipping_stale_finding() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    // A cursor stale against the default 900s window, on an attested file sink.
+    let cursor = write_ack_cursor(&tmp, "2026-06-04T09:59:00Z");
+    let config = ConfigBuilder::new(&audit_path(&tmp))
+        .deployment(&format!(
+            "deployment:\n  profile: production\n  evidence:\n    audit_offhost_shipping: true\n    audit_ack_cursor_path: \"{cursor}\"\n"
+        ))
+        .build();
+
+    let posture = fetch_posture(config).await;
+    assert_matches_posture_schema(&posture);
+
+    let findings = posture["deployment"]["findings"]
+        .as_array()
+        .expect("deployment findings is an array");
+    let finding = findings
+        .iter()
+        .find(|f| f["id"] == "notary.audit.shipping_stale")
+        .expect("shipping_stale finding present under production");
+    assert_eq!(finding["severity"], "finding_error");
+    assert_eq!(finding["status"], "active");
+
+    let posture_audit = &posture["posture"]["audit"];
+    assert_eq!(posture_audit["shipping_health"], "stale");
+    assert_eq!(
+        posture_audit["shipping_observed_at"],
+        "2026-06-04T09:59:00Z"
+    );
+}
+
+#[tokio::test]
 async fn posture_renders_deployment_and_audit_assurance() {
     let tmp = tempfile::TempDir::new().expect("tempdir");
     let config = ConfigBuilder::new(&audit_path(&tmp))
@@ -461,6 +522,92 @@ async fn posture_renders_deployment_and_audit_assurance() {
     let posture_audit = &posture["posture"]["audit"];
     assert_eq!(posture_audit["shipping_target_configured"], false);
     assert_eq!(posture_audit["shipping_target"], "none");
+    // No shipping target is configured, so health and observed_at are null.
+    assert_eq!(posture_audit["shipping_health"], Value::Null);
+    assert_eq!(posture_audit["shipping_observed_at"], Value::Null);
+}
+
+/// Write a `registry.audit.ack_cursor.v1` file with the given `acked_at` and
+/// return its path as a string for embedding in a `deployment` block.
+fn write_ack_cursor(tmp: &tempfile::TempDir, acked_at: &str) -> String {
+    let path = tmp.path().join("ack-cursor.json");
+    let body = format!(
+        r#"{{"schema":"registry.audit.ack_cursor.v1","acked_at":"{acked_at}","last_acked_hash":"sha256:4444444444444444444444444444444444444444444444444444444444444444","writer":"test-shipper"}}"#
+    );
+    std::fs::write(&path, body).expect("ack cursor writes");
+    path.display().to_string()
+}
+
+fn rfc3339_now() -> String {
+    time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .expect("now formats as RFC3339")
+}
+
+#[tokio::test]
+async fn posture_reports_shipping_health_ok_for_fresh_cursor() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let acked_at = rfc3339_now();
+    let cursor = write_ack_cursor(&tmp, &acked_at);
+    // A durable file sink with attested off-host shipping is declared_external,
+    // so shipping_target_configured is true and audit stays off stdout. local
+    // binds no gates, so the posture emission is isolated.
+    let config = ConfigBuilder::new(&audit_path(&tmp))
+        .deployment(&format!(
+            "deployment:\n  profile: local\n  evidence:\n    audit_offhost_shipping: true\n    audit_ack_cursor_path: \"{cursor}\"\n"
+        ))
+        .build();
+
+    let posture = fetch_posture(config).await;
+    assert_matches_posture_schema(&posture);
+
+    let posture_audit = &posture["posture"]["audit"];
+    assert_eq!(posture_audit["shipping_target_configured"], true);
+    assert_eq!(posture_audit["shipping_target"], "declared_external");
+    assert_eq!(posture_audit["shipping_health"], "ok");
+    assert_eq!(posture_audit["shipping_observed_at"], acked_at);
+}
+
+#[tokio::test]
+async fn posture_reports_shipping_health_stale_for_old_cursor() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    // Far in the past relative to the default 900s window.
+    let cursor = write_ack_cursor(&tmp, "2026-06-04T09:59:00Z");
+    let config = ConfigBuilder::new(&audit_path(&tmp))
+        .deployment(&format!(
+            "deployment:\n  profile: local\n  evidence:\n    audit_offhost_shipping: true\n    audit_ack_cursor_path: \"{cursor}\"\n"
+        ))
+        .build();
+
+    let posture = fetch_posture(config).await;
+    assert_matches_posture_schema(&posture);
+
+    let posture_audit = &posture["posture"]["audit"];
+    assert_eq!(posture_audit["shipping_health"], "stale");
+    assert_eq!(
+        posture_audit["shipping_observed_at"],
+        "2026-06-04T09:59:00Z"
+    );
+}
+
+#[tokio::test]
+async fn posture_reports_shipping_health_unverified_without_cursor() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    // A declared_external sink (file + attested shipping) with no ack cursor.
+    let config = ConfigBuilder::new(&audit_path(&tmp))
+        .deployment(
+            "deployment:\n  profile: local\n  evidence:\n    audit_offhost_shipping: true\n",
+        )
+        .build();
+
+    let posture = fetch_posture(config).await;
+    assert_matches_posture_schema(&posture);
+
+    let posture_audit = &posture["posture"]["audit"];
+    assert_eq!(posture_audit["shipping_target_configured"], true);
+    assert_eq!(posture_audit["shipping_target"], "declared_external");
+    assert_eq!(posture_audit["shipping_health"], "unverified");
+    assert_eq!(posture_audit["shipping_observed_at"], Value::Null);
 }
 
 #[tokio::test]
