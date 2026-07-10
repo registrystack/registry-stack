@@ -20,6 +20,34 @@ HEX40 = re.compile(r"^[0-9a-f]{40}$")
 SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 SEMVER_TAG = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$")
 IMAGE_DIGEST_REF = re.compile(r"^([^@]+)@(sha256:[0-9a-f]{64})$")
+RELEASE_IMAGE_LOCK_SCHEMA = "registryctl.release_image_lock.v1"
+RELEASE_IMAGE_LOCK_PLATFORM = "linux/amd64"
+RELEASE_IMAGE_LOCK_MINIMUM_VERSION = (0, 9, 0)
+RELEASE_IMAGE_LOCK_REPOSITORIES = {
+    "registry-relay": "ghcr.io/registrystack/registry-relay",
+    "registry-notary": "ghcr.io/registrystack/registry-notary",
+}
+
+
+def require_registryctl_image_lock_release_version(version: str) -> None:
+    if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version) is None:
+        raise ValueError(
+            "registryctl image lock release version must be semantic version text, "
+            f"got {version!r}"
+        )
+    parsed = tuple(int(part) for part in version.split("."))
+    if parsed < RELEASE_IMAGE_LOCK_MINIMUM_VERSION:
+        raise ValueError("registryctl image lock releases require version 0.9.0 or later")
+
+
+def verify_registryctl_image_lock_release_version(version: str) -> int:
+    try:
+        require_registryctl_image_lock_release_version(version)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(f"verified registryctl image lock release version {version}")
+    return 0
 
 
 def load_yaml(path: Path) -> object:
@@ -34,6 +62,157 @@ def load_json(path: Path) -> object:
 
 def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def read_release_image_digest(path: Path, image_name: str) -> str:
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"{image_name} digest evidence must be a regular file: {path}")
+    if path.stat().st_size > 1024:
+        raise ValueError(f"{image_name} digest evidence exceeds 1024 bytes: {path}")
+    body = path.read_text(encoding="utf-8")
+    lines = body.splitlines()
+    if len(lines) != 1 or body not in {lines[0], f"{lines[0]}\n"}:
+        raise ValueError(f"{image_name} digest evidence must contain exactly one unpadded line")
+    digest_ref = lines[0]
+    match = IMAGE_DIGEST_REF.fullmatch(digest_ref)
+    if match is None:
+        raise ValueError(f"{image_name} digest ref must match image@sha256:<64 lowercase hex>")
+    expected_repository = RELEASE_IMAGE_LOCK_REPOSITORIES[image_name]
+    if match.group(1) != expected_repository:
+        raise ValueError(
+            f"{image_name} digest ref repository must be {expected_repository}, got {match.group(1)}"
+        )
+    return digest_ref
+
+
+def render_registryctl_image_lock(
+    manifest_path: Path,
+    relay_digest_path: Path,
+    notary_digest_path: Path,
+    tag_target: str,
+    output: Path,
+) -> int:
+    try:
+        manifest = load_yaml(manifest_path)
+        if not isinstance(manifest, dict) or not isinstance(manifest.get("stack"), dict):
+            raise ValueError("release manifest stack must be an object")
+        stack = manifest["stack"]
+        version = str(stack.get("version", ""))
+        require_registryctl_image_lock_release_version(version)
+        release_tag = str(stack.get("source_tag", ""))
+        if release_tag != f"v{version}":
+            raise ValueError(f"manifest stack.source_tag must be v{version}")
+        manifest_source_ref = str(stack.get("source_ref", ""))
+        if HEX40.fullmatch(manifest_source_ref) is None:
+            raise ValueError("manifest stack.source_ref must be 40 lowercase hexadecimal characters")
+        if HEX40.fullmatch(tag_target) is None:
+            raise ValueError("tag target must be 40 lowercase hexadecimal characters")
+        expected_name = f"registryctl-v{version}-image-lock.json"
+        if output.name != expected_name:
+            raise ValueError(f"image lock output filename must be {expected_name}")
+        if output.is_symlink() or (output.exists() and not output.is_file()):
+            raise ValueError(f"image lock output must be a regular file path: {output}")
+
+        relay_digest = read_release_image_digest(relay_digest_path, "registry-relay")
+        notary_digest = read_release_image_digest(notary_digest_path, "registry-notary")
+        image_lock = {
+            "schema_version": RELEASE_IMAGE_LOCK_SCHEMA,
+            "release_tag": release_tag,
+            "manifest_source_ref": manifest_source_ref,
+            "tag_target": tag_target,
+            "platform": RELEASE_IMAGE_LOCK_PLATFORM,
+            "images": {
+                "registry-relay": relay_digest,
+                "registry-notary": notary_digest,
+            },
+        }
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(image_lock, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    except (KeyError, OSError, UnicodeError, ValueError, yaml.YAMLError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"rendered registryctl release image lock {output}")
+    return 0
+
+
+def validate_registryctl_image_lock_document(
+    data: object,
+    *,
+    version: str,
+    release_tag: str,
+    manifest_source_ref: str,
+    tag_target: str,
+) -> None:
+    if not isinstance(data, dict):
+        raise ValueError("registryctl release image lock must be a JSON object")
+    expected_keys = {
+        "schema_version",
+        "release_tag",
+        "manifest_source_ref",
+        "tag_target",
+        "platform",
+        "images",
+    }
+    if set(data) != expected_keys:
+        raise ValueError("registryctl release image lock has missing or unknown top-level fields")
+    expected_values = {
+        "schema_version": RELEASE_IMAGE_LOCK_SCHEMA,
+        "release_tag": release_tag,
+        "manifest_source_ref": manifest_source_ref,
+        "tag_target": tag_target,
+        "platform": RELEASE_IMAGE_LOCK_PLATFORM,
+    }
+    for field, expected in expected_values.items():
+        if data.get(field) != expected:
+            raise ValueError(f"registryctl release image lock {field} must be {expected!r}")
+    images = data.get("images")
+    if not isinstance(images, dict) or set(images) != set(RELEASE_IMAGE_LOCK_REPOSITORIES):
+        raise ValueError("registryctl release image lock images has missing or unknown fields")
+    for image_name, repository in RELEASE_IMAGE_LOCK_REPOSITORIES.items():
+        digest_ref = images.get(image_name)
+        match = IMAGE_DIGEST_REF.fullmatch(digest_ref) if isinstance(digest_ref, str) else None
+        if match is None or match.group(1) != repository:
+            raise ValueError(
+                f"registryctl release image lock {image_name} must be {repository}@sha256:<64 lowercase hex>"
+            )
+    if data["release_tag"] != f"v{version}":
+        raise ValueError(f"registryctl release image lock release_tag must match v{version}")
+
+
+def verify_registryctl_binary_version(binary: Path, version: str) -> int:
+    if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version) is None:
+        print(f"error: expected registryctl version must be semantic version text, got {version!r}", file=sys.stderr)
+        return 1
+    if binary.is_symlink() or not binary.is_file():
+        print(f"error: registryctl binary must be a regular file: {binary}", file=sys.stderr)
+        return 1
+    try:
+        result = subprocess.run(
+            [str(binary.resolve()), "--version"],
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"error: failed to execute registryctl binary {binary}: {exc}", file=sys.stderr)
+        return 1
+    expected = f"registryctl {version}"
+    if result.returncode != 0:
+        print(
+            f"error: registryctl binary --version exited {result.returncode}: {result.stderr.strip()}",
+            file=sys.stderr,
+        )
+        return 1
+    if result.stderr or result.stdout != f"{expected}\n":
+        print(
+            f"error: registryctl binary version must be exactly {expected!r}, got {result.stdout.strip()!r}",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"verified registryctl binary version {version}: {binary}")
+    return 0
 
 
 def copy_required_asset(asset_dir: Path, name: str, output_dir: Path) -> None:
@@ -75,6 +254,7 @@ def stage_capsule_backfill_assets(asset_dir: Path, tag: str, binary_dir: Path, i
         f"registryctl-{tag}-macos-arm64",
         f"registryctl-{tag}-linux-arm64",
     ]
+    optional_release_file_names = [f"registryctl-{tag}-image-lock.json"]
     image_names = [
         "registry-notary",
         "registry-notary-source-adapter-sidecar",
@@ -82,12 +262,16 @@ def stage_capsule_backfill_assets(asset_dir: Path, tag: str, binary_dir: Path, i
     ]
 
     staged_optional: list[str] = []
+    staged_release_files: list[str] = []
     try:
         for name in binary_names:
             copy_required_asset(asset_dir, name, binary_dir)
         for name in optional_binary_names:
             if copy_optional_asset(asset_dir, name, binary_dir):
                 staged_optional.append(name)
+        for name in optional_release_file_names:
+            if copy_optional_asset(asset_dir, name, binary_dir):
+                staged_release_files.append(name)
         for image in image_names:
             copy_required_asset(asset_dir, f"{image}.digest", image_evidence_dir)
     except OSError as exc:
@@ -97,10 +281,16 @@ def stage_capsule_backfill_assets(asset_dir: Path, tag: str, binary_dir: Path, i
     print(
         f"staged {len(binary_names)} binary assets "
         f"({len(staged_optional)}/{len(optional_binary_names)} optional cross-platform) "
+        f"and {len(staged_release_files)}/{len(optional_release_file_names)} optional release files "
         f"and {len(image_names)} image digest assets for {tag}"
     )
     for name in optional_binary_names:
         print(f"  optional binary {name}: {'staged' if name in staged_optional else 'absent (skipped)'}")
+    for name in optional_release_file_names:
+        print(
+            f"  optional release file {name}: "
+            f"{'staged' if name in staged_release_files else 'absent (skipped)'}"
+        )
     return 0
 
 
@@ -486,6 +676,7 @@ def render_capsule(
     default_branch_protection: str,
     repo: Path,
     default_branch: str,
+    require_registryctl_image_lock: bool = False,
 ) -> int:
     manifest = load_yaml(manifest_path)
     if not isinstance(manifest, dict):
@@ -498,20 +689,26 @@ def render_capsule(
     try:
         checksums = parse_sha256s(binary_dir / "SHA256SUMS")
         binaries = []
+        release_files = []
+        expected_image_lock_name = f"registryctl-v{version}-image-lock.json"
         for path in sorted(binary_dir.iterdir()) if binary_dir.exists() else []:
             if not path.is_file() or path.name == "SHA256SUMS":
                 continue
-            binary_sha256 = verified_binary_sha256(path, checksums)
+            if path.name.endswith("-image-lock.json") and path.name != expected_image_lock_name:
+                raise ValueError(
+                    f"unexpected registryctl image lock filename {path.name}; expected {expected_image_lock_name}"
+                )
+            file_sha256 = verified_binary_sha256(path, checksums)
             sbom = binary_sbom_dir / f"{path.name}.spdx.json"
             if not sbom.is_file():
-                raise ValueError(f"{path.name} is missing a binary SBOM file")
+                raise ValueError(f"{path.name} is missing a file SBOM")
             sbom_report = load_json(sbom)
-            if not spdx_subject_contains_file_digest(sbom_report, path.name, binary_sha256):
-                raise ValueError(f"{path.name} SBOM subject does not contain sha256:{binary_sha256}")
-            binary = {
+            if not spdx_subject_contains_file_digest(sbom_report, path.name, file_sha256):
+                raise ValueError(f"{path.name} SBOM subject does not contain sha256:{file_sha256}")
+            file_evidence = {
                 "name": path.name,
                 "path": str(path),
-                "sha256": binary_sha256,
+                "sha256": file_sha256,
                 "sbom": {
                     "asset_name": sbom.name,
                     "subject": path.name,
@@ -519,7 +716,16 @@ def render_capsule(
                     "sha256": sha256(sbom),
                 },
             }
-            binaries.append(binary)
+            if path.name == expected_image_lock_name:
+                file_evidence["kind"] = "registryctl-release-image-lock"
+                release_files.append(file_evidence)
+            else:
+                binaries.append(file_evidence)
+
+        if require_registryctl_image_lock and len(release_files) != 1:
+            raise ValueError(
+                f"capsule requires exactly one registryctl release image lock named {expected_image_lock_name}"
+            )
 
         images = []
         for digest_path in sorted(image_evidence_dir.rglob("*.digest")):
@@ -573,6 +779,14 @@ def render_capsule(
         errors, source = source_lineage(manifest, tag, repo, default_branch)
         if errors:
             raise ValueError("; ".join(errors))
+        for release_file in release_files:
+            validate_registryctl_image_lock_document(
+                load_json(Path(release_file["path"])),
+                version=version,
+                release_tag=tag,
+                manifest_source_ref=str(manifest["stack"]["source_ref"]),
+                tag_target=source["source_commit"],
+            )
         evidence = {
             "release_tag": tag,
             "version": version,
@@ -590,6 +804,7 @@ def render_capsule(
             "default_branch_protection": {"status": default_branch_protection},
             "external_pinned_inputs": manifest.get("external", {}),
             "binaries": binaries,
+            "release_files": release_files,
             "images": images,
             "warnings": manifest.get("warnings", []),
             "hosted_publication_status": hosted_publication_status(manifest),
@@ -631,6 +846,14 @@ def capsule_markdown(evidence: dict) -> str:
             f"- `{binary['name']}` sha256 `{binary['sha256']}`; "
             f"SBOM `{binary['sbom']['asset_name']}`"
         )
+    release_files = evidence.get("release_files") or []
+    if release_files:
+        lines.extend(["", "## Release files", ""])
+        for release_file in release_files:
+            lines.append(
+                f"- `{release_file['name']}` ({release_file['kind']}) sha256 "
+                f"`{release_file['sha256']}`; SBOM `{release_file['sbom']['asset_name']}`"
+            )
     lines.extend(["", "## Images", ""])
     for image in evidence["images"]:
         scan = image["vulnerability_scan"]
@@ -715,6 +938,19 @@ def main() -> int:
     bind_file_spdx_parser.add_argument("spdx", type=Path)
     bind_file_spdx_parser.add_argument("--file-name", required=True)
     bind_file_spdx_parser.add_argument("--sha256", required=True)
+    image_lock_parser = subparsers.add_parser("render-registryctl-image-lock")
+    image_lock_parser.add_argument("manifest", type=Path)
+    image_lock_parser.add_argument("--relay-digest", type=Path, required=True)
+    image_lock_parser.add_argument("--notary-digest", type=Path, required=True)
+    image_lock_parser.add_argument("--tag-target", required=True)
+    image_lock_parser.add_argument("--output", type=Path, required=True)
+    image_lock_version_parser = subparsers.add_parser(
+        "verify-registryctl-image-lock-release-version"
+    )
+    image_lock_version_parser.add_argument("--version", required=True)
+    binary_version_parser = subparsers.add_parser("verify-registryctl-binary-version")
+    binary_version_parser.add_argument("binary", type=Path)
+    binary_version_parser.add_argument("--version", required=True)
     capsule_parser = subparsers.add_parser("render-capsule")
     capsule_parser.add_argument("manifest", type=Path)
     capsule_parser.add_argument("--tag", required=True)
@@ -730,6 +966,7 @@ def main() -> int:
     capsule_parser.add_argument("--default-branch-protection", default="unverified")
     capsule_parser.add_argument("--repo", type=Path, default=ROOT)
     capsule_parser.add_argument("--default-branch", default="origin/main")
+    capsule_parser.add_argument("--require-registryctl-image-lock", action="store_true")
     args = parser.parse_args()
 
     if args.command == "validate":
@@ -744,6 +981,18 @@ def main() -> int:
         return bind_spdx_subject(args.spdx, args.image_name, args.digest_ref)
     if args.command == "bind-spdx-file-subject":
         return bind_spdx_file_subject(args.spdx, args.file_name, args.sha256)
+    if args.command == "render-registryctl-image-lock":
+        return render_registryctl_image_lock(
+            args.manifest,
+            args.relay_digest,
+            args.notary_digest,
+            args.tag_target,
+            args.output,
+        )
+    if args.command == "verify-registryctl-image-lock-release-version":
+        return verify_registryctl_image_lock_release_version(args.version)
+    if args.command == "verify-registryctl-binary-version":
+        return verify_registryctl_binary_version(args.binary, args.version)
     if args.command == "render-capsule":
         return render_capsule(
             args.manifest,
@@ -760,6 +1009,7 @@ def main() -> int:
             args.default_branch_protection,
             args.repo,
             args.default_branch,
+            args.require_registryctl_image_lock,
         )
     raise AssertionError(args.command)
 

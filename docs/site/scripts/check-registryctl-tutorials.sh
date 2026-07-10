@@ -4,9 +4,9 @@
 # This is a source-under-test CI gate: it builds registryctl and the release
 # product image shapes from the current checkout. It deliberately does not run
 # the published installer or release assets; the fresh-reader release proof is
-# tracked separately in GH#198. The generated Compose files are rebound to the
-# local images after each registryctl generation command so GH#278 cannot turn
-# this gate into either a false failure or a false green.
+# tracked separately in GH#198. The gate writes a valid source-under-test image
+# lock beside registryctl, then rebinds generated Compose files to the local
+# images after each generation command.
 
 set -euo pipefail
 
@@ -33,6 +33,7 @@ CURRENT_SECRET_FILE=""
 COMMAND_COUNTER=0
 REGISTRYCTL_BIN=""
 LAST_OUTPUT=""
+SOURCE_IMAGE_LOCK=""
 
 cleanup_stack() {
 	local project_dir="$1"
@@ -50,6 +51,9 @@ cleanup() {
 		cleanup_stack "${PROJECT_DIRS[$index]}" "${PROJECT_NAMES[$index]}"
 	done
 	docker image rm -f "$RELAY_IMAGE" "$NOTARY_IMAGE" >/dev/null 2>&1 || true
+	if [[ -n "$SOURCE_IMAGE_LOCK" ]]; then
+		rm -f "$SOURCE_IMAGE_LOCK"
+	fi
 	rm -rf "$WORK_ROOT"
 	if ((exit_code == 0)); then
 		printf 'registryctl tutorial source check: PASS\n'
@@ -129,6 +133,27 @@ build_source_under_test() {
 		printf 'registryctl source binary is not executable: %s\n' "$REGISTRYCTL_BIN" >&2
 		exit 1
 	}
+
+	local registryctl_version source_ref
+	registryctl_version="$($REGISTRYCTL_BIN --version | awk '{print $2}')"
+	if [[ ! "$registryctl_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+		printf 'unexpected registryctl source version: %s\n' "$registryctl_version" >&2
+		exit 1
+	fi
+	source_ref="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+	SOURCE_IMAGE_LOCK="$(dirname "$REGISTRYCTL_BIN")/registryctl-v${registryctl_version}-image-lock.json"
+	printf '%s\n' \
+		'{' \
+		'  "schema_version": "registryctl.release_image_lock.v1",' \
+		"  \"release_tag\": \"v${registryctl_version}\"," \
+		"  \"manifest_source_ref\": \"${source_ref}\"," \
+		"  \"tag_target\": \"${source_ref}\"," \
+		'  "platform": "linux/amd64",' \
+		'  "images": {' \
+		'    "registry-relay": "ghcr.io/registrystack/registry-relay@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",' \
+		'    "registry-notary": "ghcr.io/registrystack/registry-notary@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"' \
+		'  }' \
+		'}' >"$SOURCE_IMAGE_LOCK"
 }
 
 sanitize_output() {

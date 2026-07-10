@@ -32,6 +32,15 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertIn("exactly the same bit-for-bit result", text)
         self.assertIn(".github/workflows/release.yml", text)
 
+    def test_registryctl_alternate_installer_uses_the_target_release_tag(self) -> None:
+        text = (ROOT / "crates/registryctl/README.md").read_text(encoding="utf-8")
+
+        self.assertIn(
+            "refs/tags/vX.Y.Z/crates/registryctl/install.sh | "
+            "REGISTRYCTL_VERSION=vX.Y.Z bash",
+            text,
+        )
+
     def test_release_image_packaging_keeps_lab_dockerfiles_source_building(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
         release_dockerfiles = [
@@ -69,18 +78,54 @@ class RegistryReleaseTest(unittest.TestCase):
             self.assertIn(asset, workflow)
             self.assertIn(f"registry-stack-registryctl-{asset}", workflow)
 
-    def test_release_workflow_publishes_digest_bound_binary_sboms(self) -> None:
+    def test_release_workflow_publishes_digest_bound_release_file_sboms(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
         backfill = (ROOT / ".github/workflows/release-capsule-backfill.yml").read_text(
             encoding="utf-8"
         )
 
-        self.assertIn("Generate binary SBOMs", workflow)
+        self.assertIn("Generate release file SBOMs", workflow)
         self.assertIn("dist/binary-sbom", workflow)
         self.assertIn("Generate image binary SBOMs", workflow)
         self.assertIn("dist/image-binary-sbom", workflow)
         self.assertIn("image-input-${asset}.spdx.json", workflow)
         self.assertIn("bind-spdx-file-subject", workflow)
+        self.assertIn("render-registryctl-image-lock", workflow)
+        self.assertIn("verify-registryctl-image-lock-release-version", workflow)
+        self.assertIn("verify-registryctl-binary-version", workflow)
+        self.assertIn(
+            'chmod 0755 "dist/bin/registryctl-${{ needs.verify.outputs.tag }}-linux-amd64"',
+            workflow,
+        )
+        self.assertLess(
+            workflow.index("Verify lock-bearing release version"),
+            workflow.index("\n  binaries:"),
+        )
+        self.assertLess(
+            workflow.index("Verify built registryctl binary version"),
+            workflow.index("Upload binary artifacts"),
+        )
+        images_job = workflow[workflow.index("\n  images:") : workflow.index("\n  github-release:")]
+        self.assertIn("needs:\n      - verify\n      - binaries", images_job)
+        self.assertIn("Build, push, and scan images", images_job)
+        self.assertIn("--require-registryctl-image-lock", workflow)
+        self.assertIn("registryctl-${{ needs.verify.outputs.tag }}-image-lock.json", workflow)
+        self.assertLess(
+            workflow.index("Verify registryctl binary version"),
+            workflow.index("Render registryctl release image lock"),
+        )
+        self.assertLess(
+            workflow.index("Download image evidence"),
+            workflow.index("Render registryctl release image lock"),
+        )
+        self.assertLess(
+            workflow.index("Render registryctl release image lock"),
+            workflow.index("Refresh release file checksums"),
+        )
+        self.assertLess(
+            workflow.index("Refresh release file checksums"),
+            workflow.index("Generate release file SBOMs"),
+        )
         self.assertIn("Generate digest-bound binary SBOMs", backfill)
         self.assertIn("dist/staged/binary-sbom", backfill)
         self.assertIn("--binary-sbom-dir", backfill)
@@ -115,6 +160,173 @@ class RegistryReleaseTest(unittest.TestCase):
             result = run_tool("validate", str(manifest))
         self.assertNotEqual(0, result.returncode)
         self.assertIn("stack.source_ref may be HEAD only", result.stderr)
+
+    def test_render_registryctl_image_lock_from_exact_release_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = write_manifest(root, version="0.9.0")
+            relay_digest = root / "registry-relay.digest"
+            notary_digest = root / "registry-notary.digest"
+            relay_ref = f"ghcr.io/registrystack/registry-relay@{IMAGE_DIGEST}"
+            notary_ref = f"ghcr.io/registrystack/registry-notary@{IMAGE_DIGEST}"
+            relay_digest.write_text(f"{relay_ref}\n", encoding="utf-8")
+            notary_digest.write_text(f"{notary_ref}\n", encoding="utf-8")
+            output = root / "registryctl-v0.9.0-image-lock.json"
+
+            result = run_tool(
+                "render-registryctl-image-lock",
+                str(manifest),
+                "--relay-digest",
+                str(relay_digest),
+                "--notary-digest",
+                str(notary_digest),
+                "--tag-target",
+                "b" * 40,
+                "--output",
+                str(output),
+            )
+            document = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(
+            {
+                "schema_version": "registryctl.release_image_lock.v1",
+                "release_tag": "v0.9.0",
+                "manifest_source_ref": "f30a541df539c2e16de09733c5944c744a60493c",
+                "tag_target": "b" * 40,
+                "platform": "linux/amd64",
+                "images": {
+                    "registry-relay": relay_ref,
+                    "registry-notary": notary_ref,
+                },
+            },
+            document,
+        )
+
+    def test_registryctl_image_lock_release_version_gate(self) -> None:
+        rejected = run_tool(
+            "verify-registryctl-image-lock-release-version",
+            "--version",
+            "0.8.5",
+        )
+        accepted = run_tool(
+            "verify-registryctl-image-lock-release-version",
+            "--version",
+            "0.9.0",
+        )
+
+        self.assertNotEqual(0, rejected.returncode)
+        self.assertIn("require version 0.9.0 or later", rejected.stderr)
+        self.assertEqual(0, accepted.returncode, accepted.stderr)
+        self.assertIn("verified registryctl image lock release version 0.9.0", accepted.stdout)
+
+    def test_render_registryctl_image_lock_rejects_pre_0_9_release(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = write_manifest(root, version="0.8.5")
+            relay_digest = root / "registry-relay.digest"
+            notary_digest = root / "registry-notary.digest"
+            relay_digest.write_text(
+                f"ghcr.io/registrystack/registry-relay@{IMAGE_DIGEST}\n",
+                encoding="utf-8",
+            )
+            notary_digest.write_text(
+                f"ghcr.io/registrystack/registry-notary@{IMAGE_DIGEST}\n",
+                encoding="utf-8",
+            )
+            output = root / "registryctl-v0.8.5-image-lock.json"
+
+            result = run_tool(
+                "render-registryctl-image-lock",
+                str(manifest),
+                "--relay-digest",
+                str(relay_digest),
+                "--notary-digest",
+                str(notary_digest),
+                "--tag-target",
+                "b" * 40,
+                "--output",
+                str(output),
+            )
+
+            self.assertFalse(output.exists())
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("require version 0.9.0 or later", result.stderr)
+
+    def test_verify_registryctl_binary_version_matches_manifest_version(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            binary = Path(tmp) / "registryctl"
+            binary.write_text("#!/bin/sh\nprintf 'registryctl 0.8.0\\n'\n", encoding="utf-8")
+            binary.chmod(0o755)
+
+            matching = run_tool(
+                "verify-registryctl-binary-version",
+                str(binary),
+                "--version",
+                "0.8.0",
+            )
+            mismatch = run_tool(
+                "verify-registryctl-binary-version",
+                str(binary),
+                "--version",
+                "0.9.0",
+            )
+
+        self.assertEqual(0, matching.returncode, matching.stderr)
+        self.assertIn("verified registryctl binary version 0.8.0", matching.stdout)
+        self.assertNotEqual(0, mismatch.returncode)
+        self.assertIn(
+            "registryctl binary version must be exactly 'registryctl 0.9.0'",
+            mismatch.stderr,
+        )
+
+    def test_render_registryctl_image_lock_rejects_wrong_repository_and_filename(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = write_manifest(root, version="0.9.0")
+            relay_digest = root / "registry-relay.digest"
+            notary_digest = root / "registry-notary.digest"
+            relay_digest.write_text(
+                f"ghcr.io/example/registry-relay@{IMAGE_DIGEST}\n", encoding="utf-8"
+            )
+            notary_digest.write_text(
+                f"ghcr.io/registrystack/registry-notary@{IMAGE_DIGEST}\n",
+                encoding="utf-8",
+            )
+
+            wrong_repo = run_tool(
+                "render-registryctl-image-lock",
+                str(manifest),
+                "--relay-digest",
+                str(relay_digest),
+                "--notary-digest",
+                str(notary_digest),
+                "--tag-target",
+                "b" * 40,
+                "--output",
+                str(root / "registryctl-v0.9.0-image-lock.json"),
+            )
+            relay_digest.write_text(
+                f"ghcr.io/registrystack/registry-relay@{IMAGE_DIGEST}\n", encoding="utf-8"
+            )
+            wrong_name = run_tool(
+                "render-registryctl-image-lock",
+                str(manifest),
+                "--relay-digest",
+                str(relay_digest),
+                "--notary-digest",
+                str(notary_digest),
+                "--tag-target",
+                "b" * 40,
+                "--output",
+                str(root / "image-lock.json"),
+            )
+
+        self.assertNotEqual(0, wrong_repo.returncode)
+        self.assertIn("repository must be ghcr.io/registrystack/registry-relay", wrong_repo.stderr)
+        self.assertNotEqual(0, wrong_name.returncode)
+        self.assertIn("output filename must be registryctl-v0.9.0-image-lock.json", wrong_name.stderr)
 
     def test_validate_source_accepts_ancestor_source_ref(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -200,6 +412,70 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertIn("SBOM `registryctl-v0.8.0-linux-amd64.spdx.json`", capsule_markdown)
         self.assertNotIn("signing `", capsule_markdown)
         self.assertNotIn("attestation `", capsule_markdown)
+
+    def test_render_capsule_classifies_required_image_lock_as_release_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_ref = init_release_repo(root)
+            tag_target = git(root, "rev-parse", "v0.8.0^{commit}")
+            manifest = write_manifest(root, source_ref=source_ref)
+            binary_dir = write_binary_fixture(root)
+            add_registryctl_image_lock_fixture(
+                binary_dir,
+                manifest_source_ref=source_ref,
+                tag_target=tag_target,
+            )
+            binary_sbom_dir = write_binary_sbom_fixture(root, binary_dir)
+            image_dir = write_image_fixture(root)
+            output_json = root / "capsule.json"
+            output_md = root / "capsule.md"
+
+            result = render_capsule(
+                manifest,
+                binary_dir,
+                image_dir,
+                output_json,
+                output_md,
+                root,
+                binary_sbom_dir=binary_sbom_dir,
+                require_registryctl_image_lock=True,
+            )
+            evidence = json.loads(output_json.read_text(encoding="utf-8"))
+            markdown = output_md.read_text(encoding="utf-8")
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(1, len(evidence["binaries"]))
+        self.assertEqual(1, len(evidence["release_files"]))
+        release_file = evidence["release_files"][0]
+        self.assertEqual("registryctl-release-image-lock", release_file["kind"])
+        self.assertEqual("registryctl-v0.8.0-image-lock.json", release_file["name"])
+        self.assertEqual(
+            "registryctl-v0.8.0-image-lock.json.spdx.json",
+            release_file["sbom"]["asset_name"],
+        )
+        self.assertNotIn(release_file["name"], {item["name"] for item in evidence["binaries"]})
+        self.assertIn("## Release files", markdown)
+
+    def test_render_capsule_required_image_lock_fails_when_omitted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_ref = init_release_repo(root)
+            manifest = write_manifest(root, source_ref=source_ref)
+            binary_dir = write_binary_fixture(root)
+            image_dir = write_image_fixture(root)
+
+            result = render_capsule(
+                manifest,
+                binary_dir,
+                image_dir,
+                root / "capsule.json",
+                root / "capsule.md",
+                root,
+                require_registryctl_image_lock=True,
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("requires exactly one registryctl release image lock", result.stderr)
 
     def test_render_capsule_includes_cross_platform_binaries(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -372,7 +648,7 @@ class RegistryReleaseTest(unittest.TestCase):
             )
 
         self.assertNotEqual(0, result.returncode)
-        self.assertIn("missing a binary SBOM file", result.stderr)
+        self.assertIn("missing a file SBOM", result.stderr)
 
     def test_render_capsule_rejects_binary_sbom_without_digest_subject(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -543,6 +819,27 @@ class RegistryReleaseTest(unittest.TestCase):
             # Required amd64 binaries are still staged alongside the optional ones.
             self.assertTrue((binary_dir / "registryctl-v0.8.0-linux-amd64").is_file())
 
+    def test_stage_capsule_backfill_assets_stages_optional_registryctl_image_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            asset_dir = write_release_asset_fixture(root, include_image_lock=True)
+            binary_dir = root / "staged-bin"
+
+            result = run_tool(
+                "stage-capsule-backfill-assets",
+                str(asset_dir),
+                "--tag",
+                "v0.8.0",
+                "--binary-dir",
+                str(binary_dir),
+                "--image-evidence-dir",
+                str(root / "staged-images"),
+            )
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertTrue((binary_dir / "registryctl-v0.8.0-image-lock.json").is_file())
+            self.assertIn("1/1 optional release files", result.stdout)
+
     def test_stage_capsule_backfill_assets_rejects_missing_release_asset(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -691,21 +988,24 @@ def write_manifest(
     directory: Path,
     *,
     source_ref: str = "f30a541df539c2e16de09733c5944c744a60493c",
-    source_tag: str = "v0.8.0",
+    source_tag: str | None = None,
     status: str = "release-candidate",
+    version: str = "0.8.0",
 ) -> Path:
+    if source_tag is None:
+        source_tag = f"v{version}"
     manifest = {
         "stack": {
             "release": "beta-6",
-            "version": "0.8.0",
+            "version": version,
             "source_repo": "registrystack/registry-stack",
             "source_ref": source_ref,
             "source_tag": source_tag,
             "status": status,
         },
         "artifacts": {
-            "registry-notary": "0.8.0",
-            "registry-relay": "0.8.0",
+            "registry-notary": version,
+            "registry-relay": version,
         },
         "external": {
             "crosswalk": {
@@ -728,6 +1028,42 @@ def write_binary_fixture(root: Path) -> Path:
     checksum = subprocess.check_output(["sha256sum", binary.name], cwd=binary_dir, text=True)
     (binary_dir / "SHA256SUMS").write_text(checksum, encoding="utf-8")
     return binary_dir
+
+
+def add_registryctl_image_lock_fixture(
+    binary_dir: Path,
+    *,
+    manifest_source_ref: str,
+    tag_target: str,
+) -> Path:
+    image_lock = binary_dir / "registryctl-v0.8.0-image-lock.json"
+    image_lock.write_text(
+        json.dumps(
+            {
+                "schema_version": "registryctl.release_image_lock.v1",
+                "release_tag": "v0.8.0",
+                "manifest_source_ref": manifest_source_ref,
+                "tag_target": tag_target,
+                "platform": "linux/amd64",
+                "images": {
+                    "registry-relay": f"ghcr.io/registrystack/registry-relay@{IMAGE_DIGEST}",
+                    "registry-notary": f"ghcr.io/registrystack/registry-notary@{IMAGE_DIGEST}",
+                },
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    checksums = []
+    for path in sorted(binary_dir.iterdir()):
+        if path.is_file() and path.name != "SHA256SUMS":
+            checksums.append(
+                subprocess.check_output(["sha256sum", path.name], cwd=binary_dir, text=True)
+            )
+    (binary_dir / "SHA256SUMS").write_text("".join(checksums), encoding="utf-8")
+    return image_lock
 
 
 def write_multiplatform_binary_fixture(root: Path) -> Path:
@@ -786,7 +1122,12 @@ def write_binary_sbom_fixture(root: Path, binary_dir: Path) -> Path:
     return sbom_dir
 
 
-def write_release_asset_fixture(root: Path, *, include_cross_platform: bool = False) -> Path:
+def write_release_asset_fixture(
+    root: Path,
+    *,
+    include_cross_platform: bool = False,
+    include_image_lock: bool = False,
+) -> Path:
     asset_dir = root / "release-assets"
     asset_dir.mkdir()
     binary_names = [
@@ -800,6 +1141,8 @@ def write_release_asset_fixture(root: Path, *, include_cross_platform: bool = Fa
             "registryctl-v0.8.0-macos-arm64",
             "registryctl-v0.8.0-linux-arm64",
         ]
+    if include_image_lock:
+        binary_names.append("registryctl-v0.8.0-image-lock.json")
     checksums = []
     for name in binary_names:
         path = asset_dir / name
@@ -873,10 +1216,11 @@ def render_capsule(
     repo: Path,
     *,
     binary_sbom_dir: Path | None = None,
+    require_registryctl_image_lock: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     if binary_sbom_dir is None:
         binary_sbom_dir = write_binary_sbom_fixture(repo, binary_dir)
-    return run_tool(
+    args = [
         "render-capsule",
         str(manifest),
         "--tag",
@@ -901,7 +1245,10 @@ def render_capsule(
         str(repo),
         "--default-branch",
         "main",
-    )
+    ]
+    if require_registryctl_image_lock:
+        args.append("--require-registryctl-image-lock")
+    return run_tool(*args)
 
 
 if __name__ == "__main__":

@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-07-07"
+last_reviewed: "2026-07-10"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -18,6 +18,13 @@ This page lists the commands, subcommands, and flags released in registryctl `v0
 ## Project setup
 
 `init` creates a local project. `add` adds a product to the current project.
+Beginning with registryctl `v0.9.0`, both generation commands require the strict
+`registryctl-vX.Y.Z-image-lock.json` from the same release beside the running
+binary. Set `REGISTRYCTL_IMAGE_LOCK` only when an operator has verified the same
+file at a separate explicit path. Registryctl does not search the current
+working directory or query a registry for image tags. Lifecycle commands use
+the immutable image references already stored in an existing project and do
+not need the lock. Registryctl `v0.8.4` predates the image-lock contract.
 
 | Subcommand or flag | Purpose |
 | --- | --- |

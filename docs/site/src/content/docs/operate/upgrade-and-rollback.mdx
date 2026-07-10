@@ -52,6 +52,15 @@ sequence. The [revert section](#roll-back-to-the-previous-release) covers this.
 2. Download and verify the target release artifacts (cosign signature and, where present,
    SLSA provenance) before anything else touches them.
 
+   When upgrading `registryctl` to `v0.9.0` or later, keep its versioned
+   `registryctl-vX.Y.Z-image-lock.json` beside the binary and verify both against the
+   release `SHA256SUMS` and available authenticity evidence. Existing generated projects
+   can keep starting from the immutable image references already stored in their project
+   files. Any later `registryctl init` or `registryctl add` requires the matching new lock
+   before it changes those files. Do not reuse a lock from another CLI version or replace
+   its digest references with mutable tags. For an intentionally separate verified lock
+   location, set `REGISTRYCTL_IMAGE_LOCK` to that exact file.
+
 3. Validate your current config against the new binary offline, before deploying it:
 
    ```sh
