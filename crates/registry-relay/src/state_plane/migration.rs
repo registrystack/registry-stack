@@ -27,11 +27,12 @@ const STATE_PLANE_SCHEMA_IDENTITY_PREIMAGE_V1: &str = concat!(
     "persistent-quota=registry.relay.postgres-persistent-quota/v1\0",
     "audit-pseudonym-keyring=registry.relay.postgres-audit-pseudonym-keyring/v1\0",
     "consultation-completion=atomic-intent-sealed-seed-plan-slots-selected-operations-known-unfinished-recovery-v1\0",
+    "consultation-authorization=database-expiry-seed-timeout-exact-dispatch-prefix-v1\0",
     "serving-fence-order=fence-row-keyring-intent-permit-audit-head-v1\0",
     "key-order=utf8-bytewise-key-order-v1\0",
 );
 pub(crate) const STATE_PLANE_SCHEMA_FINGERPRINT_V1: &str =
-    "sha256:9d5e698cd128a1f7ed0a28bff1b39f0e566620bb691773a84ea9693c8f647ed7";
+    "sha256:62439f052c70035d4a8b50c3e07896004f324905081950450ff6b77630147b46";
 
 pub(super) const MIGRATION_ADVISORY_LOCK_KEY_V1: i64 = 7_221_091_440;
 const SUPPORTED_POSTGRES_MIN_MAJOR: i32 = 16;
@@ -40,16 +41,16 @@ const SUPPORTED_POSTGRES_MAX_MAJOR: i32 = 18;
 // Filled from the semantic catalog descriptor below on disposable supported
 // PostgreSQL majors. Constraint rendering is explicitly versioned because
 // pg_get_constraintdef is not a cross-major wire contract.
-const CONSTRAINT_FINGERPRINT_PG16: &str = "029d90a02af0ce6207ef12065edd06e9";
-const CONSTRAINT_FINGERPRINT_PG17: &str = "029d90a02af0ce6207ef12065edd06e9";
-const CONSTRAINT_FINGERPRINT_PG18: &str = "4463f6293ba6af46d4c3358f47ba48fc";
-const COLUMN_FINGERPRINT_PG16: &str = "522b6988804e780233dc6ea62b6547f5";
-const COLUMN_FINGERPRINT_PG17: &str = "522b6988804e780233dc6ea62b6547f5";
-const COLUMN_FINGERPRINT_PG18: &str = "522b6988804e780233dc6ea62b6547f5";
-const FUNCTION_FINGERPRINT_PG16: &str = "a01f9e27eb76b9649dd887ee411a0af9";
-const FUNCTION_FINGERPRINT_PG17: &str = "a01f9e27eb76b9649dd887ee411a0af9";
-const FUNCTION_FINGERPRINT_PG18: &str = "a01f9e27eb76b9649dd887ee411a0af9";
-const CAPABILITY_HELPER_BODY_FINGERPRINT_V1: &str = "e600e6ef50ceb9c0c97e26b525a8e3cd";
+const CONSTRAINT_FINGERPRINT_PG16: &str = "cc1635e9b480eea24d4ef3f16cdc5e4a";
+const CONSTRAINT_FINGERPRINT_PG17: &str = "cc1635e9b480eea24d4ef3f16cdc5e4a";
+const CONSTRAINT_FINGERPRINT_PG18: &str = "4ed0bbc9db7e7c13d09dd2ebb57b98cd";
+const COLUMN_FINGERPRINT_PG16: &str = "1098f1125fa6f613d521504e985a351a";
+const COLUMN_FINGERPRINT_PG17: &str = "1098f1125fa6f613d521504e985a351a";
+const COLUMN_FINGERPRINT_PG18: &str = "1098f1125fa6f613d521504e985a351a";
+const FUNCTION_FINGERPRINT_PG16: &str = "82f3f6b8e9ffc454c891cd1ae7a90b87";
+const FUNCTION_FINGERPRINT_PG17: &str = "82f3f6b8e9ffc454c891cd1ae7a90b87";
+const FUNCTION_FINGERPRINT_PG18: &str = "82f3f6b8e9ffc454c891cd1ae7a90b87";
+const CAPABILITY_HELPER_BODY_FINGERPRINT_V1: &str = "191161a090db778ab1e5af814dd466a5";
 
 /// Runtime-forceable session semantics. Server/SUSET state that the runtime
 /// cannot safely repair is rejected by the attested SQL capability instead.
@@ -105,7 +106,7 @@ CREATE TABLE IF NOT EXISTS relay_state_private.state_plane_metadata (
     ),
     CONSTRAINT state_plane_metadata_fingerprint_check CHECK (
         capability_fingerprint =
-        'sha256:9d5e698cd128a1f7ed0a28bff1b39f0e566620bb691773a84ea9693c8f647ed7'
+        'sha256:62439f052c70035d4a8b50c3e07896004f324905081950450ff6b77630147b46'
     ),
     CONSTRAINT state_plane_metadata_roles_distinct_check CHECK (
         owner_role_oid <> runtime_role_oid
@@ -289,6 +290,7 @@ CREATE TABLE IF NOT EXISTS relay_state_private.consultation_completion_intent (
     fence_generation bigint NOT NULL,
     holder_id text NOT NULL,
     budget_ms integer NOT NULL,
+    decision_expires_at_unix_ms bigint NOT NULL,
     credential_permit_count smallint NOT NULL,
     data_permit_count smallint NOT NULL,
     created_at timestamptz NOT NULL,
@@ -327,6 +329,7 @@ CREATE TABLE IF NOT EXISTS relay_state_private.consultation_completion_intent (
     ),
     CONSTRAINT consultation_completion_intent_deadline_check CHECK (
         budget_ms BETWEEN 1 AND 10000
+        AND decision_expires_at_unix_ms BETWEEN 0 AND 9007199254740991
         AND total_deadline_at = created_at + budget_ms * interval '1 millisecond'
     ),
     CONSTRAINT consultation_completion_intent_permit_manifest_check CHECK (
@@ -1233,11 +1236,6 @@ BEGIN
             END IF;
             v_previous_allowed_operation_id := v_allowed_operation_id;
         END LOOP;
-        IF v_seed #>> '{dispatch,plan_kind}' = 'bounded_http'
-           AND jsonb_array_length(v_binding -> 'allowed_operation_ids') <> 1
-        THEN
-            RETURN false;
-        END IF;
         IF v_seed #>> '{dispatch,plan_kind}' = 'sandboxed_rhai'
            AND v_binding ->> 'kind' = 'data'
            AND v_binding -> 'allowed_operation_ids' IS DISTINCT FROM (
@@ -1279,15 +1277,6 @@ BEGIN
            v_seed #>> '{dispatch,plan_kind}' = 'bounded_http'
            AND (
                v_data_binding_count <> v_data_operation_count
-               OR (
-                   SELECT count(*) <> count(DISTINCT (
-                       binding.value #>> '{allowed_operation_ids,0}'
-                   ))
-                   FROM pg_catalog.jsonb_array_elements(
-                       v_seed #> '{dispatch,permit_bindings}'
-                   ) AS binding(value)
-                   WHERE binding.value ->> 'kind' = 'data'
-               )
                OR EXISTS (
                    SELECT 1
                    FROM pg_catalog.jsonb_array_elements(
@@ -1300,8 +1289,8 @@ BEGIN
                              v_seed #> '{dispatch,permit_bindings}'
                          ) AS binding(value)
                          WHERE binding.value ->> 'kind' = 'data'
-                           AND binding.value #>> '{allowed_operation_ids,0}'
-                                = operation.value ->> 'operation_id'
+                           AND binding.value -> 'allowed_operation_ids'
+                                ? (operation.value ->> 'operation_id')
                      )
                )
            )
@@ -1484,7 +1473,7 @@ WITH metadata AS (
       AND schema_version = 1
       AND capability_id = 'registry.relay.postgres-durable-audit/v1'
       AND capability_fingerprint =
-        'sha256:9d5e698cd128a1f7ed0a28bff1b39f0e566620bb691773a84ea9693c8f647ed7'
+        'sha256:62439f052c70035d4a8b50c3e07896004f324905081950450ff6b77630147b46'
       AND serving_fence_capability_id = 'registry.relay.postgres-serving-fence/v1'
       AND serving_fence_lock_key <> 0
       AND serving_fence_lock_key <> 7221091440
@@ -2091,19 +2080,19 @@ SELECT
            )
     )
     AND (SELECT value = CASE server.major
-            WHEN 16 THEN '029d90a02af0ce6207ef12065edd06e9'
-            WHEN 17 THEN '029d90a02af0ce6207ef12065edd06e9'
-            WHEN 18 THEN '4463f6293ba6af46d4c3358f47ba48fc'
+            WHEN 16 THEN 'cc1635e9b480eea24d4ef3f16cdc5e4a'
+            WHEN 17 THEN 'cc1635e9b480eea24d4ef3f16cdc5e4a'
+            WHEN 18 THEN '4ed0bbc9db7e7c13d09dd2ebb57b98cd'
             ELSE '' END FROM constraint_fingerprint, server)
     AND (SELECT value = CASE server.major
-            WHEN 16 THEN '522b6988804e780233dc6ea62b6547f5'
-            WHEN 17 THEN '522b6988804e780233dc6ea62b6547f5'
-            WHEN 18 THEN '522b6988804e780233dc6ea62b6547f5'
+            WHEN 16 THEN '1098f1125fa6f613d521504e985a351a'
+            WHEN 17 THEN '1098f1125fa6f613d521504e985a351a'
+            WHEN 18 THEN '1098f1125fa6f613d521504e985a351a'
             ELSE '' END FROM column_fingerprint, server)
     AND (SELECT value = CASE server.major
-            WHEN 16 THEN 'a01f9e27eb76b9649dd887ee411a0af9'
-            WHEN 17 THEN 'a01f9e27eb76b9649dd887ee411a0af9'
-            WHEN 18 THEN 'a01f9e27eb76b9649dd887ee411a0af9'
+            WHEN 16 THEN '82f3f6b8e9ffc454c891cd1ae7a90b87'
+            WHEN 17 THEN '82f3f6b8e9ffc454c891cd1ae7a90b87'
+            WHEN 18 THEN '82f3f6b8e9ffc454c891cd1ae7a90b87'
             ELSE '' END FROM function_fingerprint, server);
 $function$;
 
@@ -2800,6 +2789,7 @@ CREATE OR REPLACE FUNCTION relay_state_api.consultation_attempt_intent_snapshot_
     p_holder_id text,
     p_fence_generation bigint,
     p_budget_ms integer,
+    p_decision_expires_at_unix_ms bigint,
     p_permit_kinds text[],
     p_permit_ordinals smallint[],
     p_expected_chain_key_epoch_id text,
@@ -2858,6 +2848,10 @@ BEGIN
        OR jsonb_typeof(p_pseudonym_bundle_canonical::jsonb -> 'consent_evidence_commitment')
             NOT IN ('string', 'null')
        OR p_budget_ms NOT BETWEEN 1 AND 10000
+       OR p_decision_expires_at_unix_ms IS NULL
+       OR p_decision_expires_at_unix_ms NOT BETWEEN 0 AND 9007199254740991
+       OR (p_completion_seed_canonical::jsonb #>> '{bounds,timeout_ms}')::integer
+            IS DISTINCT FROM p_budget_ms
        OR p_permit_kinds IS NULL OR p_permit_ordinals IS NULL
        OR cardinality(p_permit_kinds) <> cardinality(p_permit_ordinals)
        OR cardinality(p_permit_kinds) > 6
@@ -2960,6 +2954,18 @@ BEGIN
             NULL::bytea, NULL::bigint, NULL::bigint, NULL::text[], NULL::smallint[];
         RETURN;
     END IF;
+    IF floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint
+           >= p_decision_expires_at_unix_ms
+       AND NOT EXISTS (
+           SELECT 1
+           FROM relay_state_private.consultation_completion_intent AS intent
+           WHERE intent.operation_id = p_operation_id
+       )
+    THEN
+        RETURN QUERY SELECT 'decision_expired'::text, NULL::text, NULL::bytea,
+            NULL::bytea, NULL::bigint, NULL::bigint, NULL::text[], NULL::smallint[];
+        RETURN;
+    END IF;
     INSERT INTO relay_state_private.consultation_audit_context (
         backend_pid, transaction_id, operation_id, purpose
     ) VALUES (
@@ -3021,6 +3027,7 @@ BEGIN
        AND v_intent.fence_generation = p_fence_generation
        AND v_intent.holder_id = p_holder_id
        AND v_intent.budget_ms = p_budget_ms
+       AND v_intent.decision_expires_at_unix_ms = p_decision_expires_at_unix_ms
        AND v_intent.credential_permit_count = (
            SELECT count(*) FROM pg_catalog.unnest(p_permit_kinds) AS kind(value)
            WHERE kind.value = 'credential'
@@ -3076,6 +3083,7 @@ CREATE OR REPLACE FUNCTION relay_state_api.consultation_attempt_intent_cas_v1(
     p_holder_id text,
     p_fence_generation bigint,
     p_budget_ms integer,
+    p_decision_expires_at_unix_ms bigint,
     p_permit_kinds text[],
     p_permit_ordinals smallint[],
     p_expected_chain_key_epoch_id text,
@@ -3124,7 +3132,7 @@ BEGIN
         p_pseudonym_bundle_canonical, p_pseudonym_bundle_digest,
         p_pseudonym_key_id, p_pseudonym_generation,
         p_pseudonym_metadata_digest, p_fence_lock_key, p_holder_id,
-        p_fence_generation, p_budget_ms, p_permit_kinds,
+        p_fence_generation, p_budget_ms, p_decision_expires_at_unix_ms, p_permit_kinds,
         p_permit_ordinals, p_expected_chain_key_epoch_id,
         p_expected_keyring_lock_key
     );
@@ -3137,7 +3145,27 @@ BEGIN
     IF v_snapshot.candidate_generation IS DISTINCT FROM p_candidate_generation
        OR v_snapshot.candidate_predecessor_hash
             IS DISTINCT FROM p_candidate_predecessor_hash
-       OR v_record #> '{payload,completion_seed}'
+    THEN
+        RETURN QUERY SELECT 'head_changed'::text, NULL::text, NULL::bytea,
+            NULL::bigint, p_permit_kinds, p_permit_ordinals;
+        RETURN;
+    END IF;
+    -- Serialize behind the exact audit head before the final expiry check.
+    -- Otherwise a caller could pass the check and then wait on the head until
+    -- after its authorization decision expired before mutating it.
+    PERFORM head.singleton
+    FROM relay_state_private.audit_chain_head AS head
+    WHERE head.singleton = true
+    FOR UPDATE;
+    v_now := clock_timestamp();
+    IF floor(extract(epoch FROM v_now) * 1000)::bigint
+           >= p_decision_expires_at_unix_ms
+    THEN
+        RETURN QUERY SELECT 'decision_expired'::text, NULL::text, NULL::bytea,
+            NULL::bigint, p_permit_kinds, p_permit_ordinals;
+        RETURN;
+    END IF;
+    IF v_record #> '{payload,completion_seed}'
             IS DISTINCT FROM p_completion_seed_canonical::jsonb
        OR v_record #>> '{payload,commitment_key_id}'
             IS DISTINCT FROM p_pseudonym_key_id
@@ -3184,6 +3212,7 @@ BEGIN
     INSERT INTO relay_state_private.consultation_completion_intent (
         operation_id, attempt_envelope_id, attempt_record_hash,
         attempt_payload_digest, fence_generation, holder_id, budget_ms,
+        decision_expires_at_unix_ms,
         credential_permit_count, data_permit_count,
         created_at, total_deadline_at, completion_seed_schema,
         completion_seed_canonical, completion_seed_digest, pseudonym_key_id,
@@ -3191,6 +3220,7 @@ BEGIN
     ) VALUES (
         p_operation_id, p_envelope_id, p_record_hash, p_payload_digest,
         p_fence_generation, p_holder_id, p_budget_ms,
+        p_decision_expires_at_unix_ms,
         (SELECT count(*) FROM pg_catalog.unnest(p_permit_kinds) AS kind(value)
          WHERE kind.value = 'credential'),
         (SELECT count(*) FROM pg_catalog.unnest(p_permit_kinds) AS kind(value)
@@ -3324,8 +3354,36 @@ BEGIN
               SELECT count(*) FROM pg_catalog.unnest(v_kinds) AS kind(value)
               WHERE kind.value = 'data'
           )
+          OR EXISTS (
+              SELECT 1
+              FROM relay_state_private.dispatch_permit AS dispatched
+              WHERE dispatched.operation_id = p_operation_id
+                AND dispatched.kind = 'data'
+                AND dispatched.dispatched_at IS NOT NULL
+                AND EXISTS (
+                    SELECT 1
+                    FROM relay_state_private.dispatch_permit AS prior
+                    WHERE prior.operation_id = dispatched.operation_id
+                      AND prior.kind = 'data'
+                      AND prior.ordinal < dispatched.ordinal
+                      AND prior.dispatched_at IS NULL
+                )
+          )
+          OR (
+              v_intent.completion_seed_canonical::jsonb #>> '{dispatch,plan_kind}'
+                  = 'bounded_http'
+              AND EXISTS (
+                  SELECT 1
+                  FROM relay_state_private.dispatch_permit AS dispatched
+                  WHERE dispatched.operation_id = p_operation_id
+                    AND dispatched.kind = 'data'
+                    AND dispatched.dispatched_at IS NOT NULL
+                  GROUP BY dispatched.source_operation_id
+                  HAVING count(*) > 1
+              )
+          )
     THEN
-        RAISE EXCEPTION 'consultation permit manifest is incomplete'
+        RAISE EXCEPTION 'consultation permit manifest is incomplete or out of order'
             USING ERRCODE = '55000';
     ELSIF v_intent.state = 'completed' THEN
         SELECT phase_row.payload_digest INTO v_stored_digest
@@ -3469,8 +3527,13 @@ BEGIN
            OR v_now_unix_us < v_keyring.active_since_unix_ms::numeric * 1000
            OR v_now_unix_us >= v_keyring.active_write_deadline_unix_ms::numeric * 1000
         THEN
-            RAISE EXCEPTION 'normal consultation completion authority is stale'
-                USING ERRCODE = '55000';
+            RETURN QUERY SELECT 'pseudonym_authority_stale'::text,
+                NULL::text, NULL::text, NULL::bytea, NULL::text, NULL::bytea,
+                NULL::text, NULL::text, NULL::bytea, NULL::bigint,
+                NULL::text[], NULL::smallint[], NULL::text[], NULL::bigint[],
+                NULL::bigint, NULL::bigint, NULL::bytea, NULL::bigint,
+                NULL::text, NULL::bytea, NULL::bytea;
+            RETURN;
         END IF;
     END IF;
     RETURN QUERY SELECT *
@@ -4842,6 +4905,12 @@ BEGIN
             floor(extract(epoch FROM v_intent.total_deadline_at) * 1000)::bigint;
         RETURN;
     END IF;
+    PERFORM permit.operation_id
+    FROM relay_state_private.dispatch_permit AS permit
+    WHERE permit.operation_id = p_operation_id
+    ORDER BY CASE permit.kind WHEN 'credential' THEN 0 ELSE 1 END,
+             permit.ordinal
+    FOR UPDATE;
     SELECT permit.* INTO v_permit
     FROM relay_state_private.dispatch_permit AS permit
     WHERE permit.operation_id = p_operation_id
@@ -4870,6 +4939,49 @@ BEGIN
             floor(extract(epoch FROM v_permit.deadline_at) * 1000)::bigint;
     ELSIF v_permit.dispatched_at IS NOT NULL THEN
         RETURN QUERY SELECT 'already_dispatched'::text,
+            floor(extract(epoch FROM v_permit.deadline_at) * 1000)::bigint;
+    ELSIF p_kind = 'credential' AND EXISTS (
+        SELECT 1
+        FROM relay_state_private.dispatch_permit AS permit
+        WHERE permit.operation_id = p_operation_id
+          AND permit.kind = 'data'
+          AND permit.dispatched_at IS NOT NULL
+    ) THEN
+        RETURN QUERY SELECT 'permit_order_violation'::text,
+            floor(extract(epoch FROM v_permit.deadline_at) * 1000)::bigint;
+    ELSIF p_kind = 'data' AND (
+        EXISTS (
+            SELECT 1
+            FROM relay_state_private.dispatch_permit AS permit
+            WHERE permit.operation_id = p_operation_id
+              AND permit.kind = 'data'
+              AND permit.ordinal < p_ordinal
+              AND permit.dispatched_at IS NULL
+        )
+        OR EXISTS (
+            SELECT 1
+            FROM relay_state_private.dispatch_permit AS permit
+            WHERE permit.operation_id = p_operation_id
+              AND permit.kind = 'data'
+              AND permit.ordinal > p_ordinal
+              AND permit.dispatched_at IS NOT NULL
+        )
+    ) THEN
+        RETURN QUERY SELECT 'permit_order_violation'::text,
+            floor(extract(epoch FROM v_permit.deadline_at) * 1000)::bigint;
+    ELSIF p_kind = 'data'
+          AND v_intent.completion_seed_canonical::jsonb #>> '{dispatch,plan_kind}'
+              = 'bounded_http'
+          AND EXISTS (
+              SELECT 1
+              FROM relay_state_private.dispatch_permit AS permit
+              WHERE permit.operation_id = p_operation_id
+                AND permit.kind = 'data'
+                AND permit.ordinal <> p_ordinal
+                AND permit.source_operation_id = p_source_operation_id
+                AND permit.dispatched_at IS NOT NULL
+          ) THEN
+        RETURN QUERY SELECT 'operation_reuse_rejected'::text,
             floor(extract(epoch FROM v_permit.deadline_at) * 1000)::bigint;
     ELSIF clock_timestamp() >= v_permit.deadline_at THEN
         RETURN QUERY SELECT 'expired'::text,
@@ -6254,12 +6366,12 @@ ALTER FUNCTION relay_state_api.audit_phase_cas_v1(
 ) OWNER TO CURRENT_USER;
 ALTER FUNCTION relay_state_api.consultation_attempt_intent_snapshot_v1(
     text, bytea, text, bytea, text, bytea, text, bigint, bytea, bigint,
-    text, bigint, integer, text[], smallint[], text, bigint
+    text, bigint, integer, bigint, text[], smallint[], text, bigint
 ) OWNER TO CURRENT_USER;
 ALTER FUNCTION relay_state_api.consultation_attempt_intent_cas_v1(
     text, bytea, bigint, bytea, text, bigint, text, text, bytea, text,
     bytea, text, bytea, text, bigint, bytea, bigint, text, bigint, integer,
-    text[], smallint[], text, bigint
+    bigint, text[], smallint[], text, bigint
 ) OWNER TO CURRENT_USER;
 ALTER FUNCTION relay_state_api.consultation_completion_snapshot_normal_v1(
     text, bigint, text, bigint, bigint, text[], smallint[], text, bigint,
@@ -6875,12 +6987,12 @@ GRANT EXECUTE ON FUNCTION relay_state_api.audit_phase_cas_v1(
 ) TO {runtime};
 GRANT EXECUTE ON FUNCTION relay_state_api.consultation_attempt_intent_snapshot_v1(
     text, bytea, text, bytea, text, bytea, text, bigint, bytea, bigint,
-    text, bigint, integer, text[], smallint[], text, bigint
+    text, bigint, integer, bigint, text[], smallint[], text, bigint
 ) TO {runtime};
 GRANT EXECUTE ON FUNCTION relay_state_api.consultation_attempt_intent_cas_v1(
     text, bytea, bigint, bytea, text, bigint, text, text, bytea, text,
     bytea, text, bytea, text, bigint, bytea, bigint, text, bigint, integer,
-    text[], smallint[], text, bigint
+    bigint, text[], smallint[], text, bigint
 ) TO {runtime};
 GRANT EXECUTE ON FUNCTION relay_state_api.consultation_completion_snapshot_normal_v1(
     text, bigint, text, bigint, bigint, text[], smallint[], text, bigint,
@@ -7243,6 +7355,25 @@ mod tests {
     }
 
     #[test]
+    fn consultation_attempt_and_dispatch_authority_is_database_closed() {
+        for required in [
+            "decision_expires_at_unix_ms bigint NOT NULL",
+            "IS DISTINCT FROM p_budget_ms",
+            "'decision_expired'::text",
+            "'permit_order_violation'::text",
+            "'operation_reuse_rejected'::text",
+            "#>> '{dispatch,plan_kind}'",
+            "permit.ordinal < p_ordinal",
+            "permit.ordinal > p_ordinal",
+        ] {
+            assert!(
+                POSTGRES_STATE_PLANE_MIGRATION_V1.contains(required),
+                "consultation state protocol omitted {required}"
+            );
+        }
+    }
+
+    #[test]
     fn function_attestation_covers_full_abi_and_kind() {
         for field in [
             "prorettype",
@@ -7422,6 +7553,7 @@ mod tests {
             SERVING_FENCE_CAPABILITY_V1,
             PERSISTENT_QUOTA_CAPABILITY_V1,
             AUDIT_PSEUDONYM_KEYRING_CAPABILITY_V1,
+            "database-expiry-seed-timeout-exact-dispatch-prefix-v1",
             "utf8-bytewise-key-order-v1",
         ] {
             assert!(

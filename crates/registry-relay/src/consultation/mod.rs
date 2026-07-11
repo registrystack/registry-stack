@@ -7,6 +7,16 @@
 //! and fenced dispatch grant. Raw request values and native source controls are
 //! not backend capabilities.
 
+#[allow(
+    dead_code,
+    reason = "the production audit builders precede consultation service integration"
+)]
+pub(crate) mod audit;
+#[allow(
+    dead_code,
+    reason = "the typed commitment foundation precedes consultation service integration"
+)]
+pub(crate) mod commitments;
 mod identifiers;
 #[allow(
     dead_code,

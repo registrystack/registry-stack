@@ -88,6 +88,7 @@ pub struct VerifiedOidcIdentity {
     audiences: BTreeSet<Box<str>>,
     authorized_party: Option<Box<str>>,
     client_id_claim: Option<Box<str>>,
+    expires_at_unix_ms: i64,
 }
 
 impl VerifiedOidcIdentity {
@@ -98,12 +99,18 @@ impl VerifiedOidcIdentity {
         audiences: BTreeSet<String>,
         authorized_party: Option<String>,
         client_id_claim: Option<String>,
+        expires_at_unix_seconds: i64,
     ) -> Result<Self, AuthError> {
+        const MAX_EXACT_JSON_INTEGER: i64 = 9_007_199_254_740_991;
         let valid_text = |value: &str| {
             !value.is_empty()
                 && value.len() <= Self::MAX_CLAIM_BYTES
                 && value.chars().all(|character| !character.is_control())
         };
+        let expires_at_unix_ms = expires_at_unix_seconds
+            .checked_mul(1_000)
+            .filter(|value| (0..=MAX_EXACT_JSON_INTEGER).contains(value))
+            .ok_or(AuthError::MalformedCredential)?;
         if !valid_text(&issuer)
             || audiences.is_empty()
             || audiences.iter().any(|audience| !valid_text(audience))
@@ -122,6 +129,7 @@ impl VerifiedOidcIdentity {
             audiences: audiences.into_iter().map(String::into_boxed_str).collect(),
             authorized_party: authorized_party.map(String::into_boxed_str),
             client_id_claim: client_id_claim.map(String::into_boxed_str),
+            expires_at_unix_ms,
         })
     }
 
@@ -152,6 +160,12 @@ impl VerifiedOidcIdentity {
     #[must_use]
     pub fn client_id_claim(&self) -> Option<&str> {
         self.client_id_claim.as_deref()
+    }
+
+    /// Return the signature-verified token expiry without verifier leeway.
+    #[must_use]
+    pub const fn expires_at_unix_ms(&self) -> i64 {
+        self.expires_at_unix_ms
     }
 }
 

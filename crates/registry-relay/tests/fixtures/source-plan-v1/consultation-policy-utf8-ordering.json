@@ -1,0 +1,37 @@
+{
+  "schema": "registry.relay.consultation-policy.v1",
+  "enforcement_profile": "registry.relay.consultation-pdp/v1",
+  "rule_set": "registry.relay.consultation-policy-rules.v1",
+  "id": "relay.synthetic.person-status.exact",
+  "action": "consultation_execute",
+  "target": {
+    "profile": {
+      "id": "synthetic.person-status.exact",
+      "version": "1"
+    },
+    "integration_pack": {
+      "id": "synthetic.person-status",
+      "version": "1",
+      "hash": "sha256:2aa6d87bf5c6c04ce0b8982e5ee28bf0d56b4432991c5679b0d342389ec2cb5c"
+    }
+  },
+  "authorization": {
+    "workload": "registry-notary",
+    "required_scope": "registry:consult:person-status",
+    "purposes": [
+      "\uE000",
+      "\uD800\uDC00"
+    ],
+    "legal_basis": "public_task",
+    "consent": {
+      "required": false
+    },
+    "mandatory_obligations": []
+  },
+  "decision": {
+    "permit": "unqualified",
+    "decision_cache": "disabled",
+    "max_decision_age_ms": 1000,
+    "unavailable": "deny"
+  }
+}

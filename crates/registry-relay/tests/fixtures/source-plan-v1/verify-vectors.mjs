@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -301,6 +301,59 @@ for (const vector of manifest.vectors) {
   vectors.set(vector.name, { ...vector, value, actualHash });
 }
 
+function compareUtf8(left, right) {
+  return Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"));
+}
+
+for (const [contractName, policyName] of [
+  ["public_contract", "consultation_policy"],
+  ["public_contract_utf8_ordering", "consultation_policy_utf8_ordering"],
+]) {
+  const publicContract = vectors.get(contractName)?.value;
+  const policyVector = vectors.get(policyName)?.value;
+  if (!publicContract || !policyVector) fail(`missing ${contractName} or ${policyName} vector`);
+  const contractAuthorization = publicContract.spec.authorization;
+  const contractPolicy = contractAuthorization.policy;
+  const generatedPolicy = {
+    schema: "registry.relay.consultation-policy.v1",
+    enforcement_profile: "registry.relay.consultation-pdp/v1",
+    rule_set: "registry.relay.consultation-policy-rules.v1",
+    id: contractPolicy.id,
+    action: "consultation_execute",
+    target: {
+      profile: { id: publicContract.id, version: publicContract.version },
+      integration_pack: publicContract.spec.integration_pack,
+    },
+    authorization: {
+      workload: contractAuthorization.workload,
+      required_scope: contractAuthorization.required_scope,
+      purposes: [...contractAuthorization.purposes].sort(compareUtf8),
+      legal_basis: contractAuthorization.legal_basis,
+      consent: contractAuthorization.consent,
+      mandatory_obligations: contractAuthorization.mandatory_obligations,
+    },
+    decision: {
+      permit: "unqualified",
+      decision_cache: contractPolicy.decision_cache,
+      max_decision_age_ms: contractPolicy.max_decision_age_ms,
+      unavailable: contractPolicy.unavailable,
+    },
+  };
+  if (canonicalize(generatedPolicy) !== canonicalize(policyVector)) {
+    fail(`${policyName} is not the exact compiler-generated ${contractName} preimage`);
+  }
+}
+
+const orderingPurposes = vectors
+  .get("consultation_policy_utf8_ordering")
+  ?.value.authorization.purposes;
+const utf8Order = ["\ue000", "\ud800\udc00"].sort(compareUtf8);
+const utf16Order = ["\ue000", "\ud800\udc00"].sort();
+if (utf8Order[0] === utf16Order[0]) fail("Unicode ordering vector does not discriminate UTF-8 from UTF-16");
+if (canonicalize(orderingPurposes) !== canonicalize(utf8Order)) {
+  fail("consultation_policy_utf8_ordering purposes are not in UTF-8 byte order");
+}
+
 for (const reference of manifest.cross_references) {
   assertExactKeys(reference, ["source", "pointer", "target", "kind"], "cross_reference");
   const source = vectors.get(reference.source);
@@ -311,12 +364,255 @@ for (const reference of manifest.cross_references) {
     fail(`${reference.source}${reference.pointer} is not an identity object`);
   }
   const expected = { id: target.value.id, version: target.value.version };
-  if (reference.kind === "artifact_identity") expected.hash = target.actualHash;
-  else if (reference.kind !== "profile_identity") fail(`unsupported cross-reference kind ${reference.kind}`);
+  if (reference.kind === "artifact_identity") {
+    expected.hash = target.actualHash;
+  } else if (reference.kind === "derived_policy_identity") {
+    delete expected.version;
+    expected.hash = target.actualHash;
+    expected.decision_cache = target.value.decision.decision_cache;
+    expected.max_decision_age_ms = target.value.decision.max_decision_age_ms;
+    expected.unavailable = target.value.decision.unavailable;
+  } else if (reference.kind !== "profile_identity") {
+    fail(`unsupported cross-reference kind ${reference.kind}`);
+  }
   assertExactKeys(actual, Object.keys(expected), `${reference.source}${reference.pointer}`);
   for (const [key, value] of Object.entries(expected)) {
     if (actual[key] !== value) fail(`${reference.source}${reference.pointer}/${key} does not match ${reference.target}`);
   }
 }
 
-process.stdout.write(`verified ${vectors.size} RFC8785 source-plan vectors and ${manifest.cross_references.length} cross-references\n`);
+const runtimeVectorFile = "runtime-chain-vectors.json";
+const runtimeVectorBytes = await readFile(join(fixtureDirectory, runtimeVectorFile));
+const runtimeVector = parseStrictJson(
+  decodeStrictUtf8(runtimeVectorBytes, runtimeVectorFile),
+  runtimeVectorFile,
+);
+assertExactKeys(
+  runtimeVector,
+  [
+    "schema",
+    "canonicalization",
+    "numeric_domain",
+    "synthetic_fixture",
+    "commitment_key",
+    "framing",
+    "cases",
+  ],
+  "runtime vector",
+);
+if (runtimeVector.schema !== "registry.relay.consultation-runtime-chain-v1") {
+  fail("unsupported runtime-chain vector schema");
+}
+if (runtimeVector.canonicalization !== "RFC8785") fail("runtime-chain canonicalization must be RFC8785");
+if (runtimeVector.numeric_domain !== "finite-safe-integers-only") {
+  fail("unexpected runtime-chain numeric domain");
+}
+if (runtimeVector.synthetic_fixture !== true) fail("runtime-chain fixture must be explicitly synthetic");
+
+assertExactKeys(runtimeVector.commitment_key, ["id", "master_key", "derivation"], "commitment_key");
+assertExactKeys(runtimeVector.commitment_key.master_key, ["encoding", "value"], "master_key");
+if (
+  runtimeVector.commitment_key.master_key.encoding !== "hex" ||
+  !/^[0-9a-f]{64}$/.test(runtimeVector.commitment_key.master_key.value)
+) {
+  fail("runtime-chain master key must be an exact synthetic 32-byte lowercase hex value");
+}
+if (runtimeVector.commitment_key.master_key.value !== "42".repeat(32)) {
+  fail("runtime-chain master key is not the reviewed synthetic 0x42 vector");
+}
+assertExactKeys(
+  runtimeVector.commitment_key.derivation,
+  ["algorithm", "info_utf8", "output_bytes"],
+  "commitment_key.derivation",
+);
+const derivation = runtimeVector.commitment_key.derivation;
+if (
+  derivation.algorithm !== "HKDF-Expand-only-HMAC-SHA256" ||
+  derivation.info_utf8 !== "registry-platform-audit/audit-pseudonym-key/v1" ||
+  derivation.output_bytes !== 32
+) {
+  fail("runtime-chain key derivation contract drifted");
+}
+assertExactKeys(runtimeVector.framing, ["encoding", "separator_hex", "shape"], "runtime framing");
+if (
+  runtimeVector.framing.encoding !== "UTF-8" ||
+  runtimeVector.framing.separator_hex !== "00" ||
+  runtimeVector.framing.shape !== "domain_label || 0x00 || RFC8785(value)"
+) {
+  fail("runtime-chain framing contract drifted");
+}
+
+const masterKey = Buffer.from(runtimeVector.commitment_key.master_key.value, "hex");
+const commitmentKey = createHmac("sha256", masterKey)
+  .update(Buffer.from(derivation.info_utf8, "utf8"))
+  .update(Buffer.from([1]))
+  .digest();
+
+function verifyCanonicalMember(member, context) {
+  assertExactKeys(member, ["domain_label", "value", "canonical_json", "expected"], context);
+  if (member.domain_label.includes("\0")) fail(`${context} domain label already contains NUL`);
+  const canonicalJson = canonicalize(member.value);
+  if (member.canonical_json !== canonicalJson) fail(`${context} canonical JSON drifted`);
+  return Buffer.concat([
+    Buffer.from(member.domain_label, "utf8"),
+    Buffer.from([0]),
+    Buffer.from(canonicalJson, "utf8"),
+  ]);
+}
+
+function verifyHmacMember(member, context) {
+  const preimage = verifyCanonicalMember(member, context);
+  if (!/^hmac-sha256:[0-9a-f]{64}$/.test(member.expected)) {
+    fail(`${context} has an invalid HMAC label`);
+  }
+  const actual = `hmac-sha256:${createHmac("sha256", commitmentKey).update(preimage).digest("hex")}`;
+  if (actual !== member.expected) fail(`${context} HMAC mismatch: expected ${member.expected}, got ${actual}`);
+}
+
+function verifyDigestMember(member, context) {
+  const preimage = verifyCanonicalMember(member, context);
+  if (!/^sha256:[0-9a-f]{64}$/.test(member.expected)) fail(`${context} has an invalid digest label`);
+  const actual = `sha256:${createHash("sha256").update(preimage).digest("hex")}`;
+  if (actual !== member.expected) fail(`${context} digest mismatch: expected ${member.expected}, got ${actual}`);
+}
+
+const expectedRuntimeCases = new Map([
+  ["bounded_http_no_consent", { planKind: "bounded_http", consent: false }],
+  ["sandboxed_rhai_no_consent", { planKind: "sandboxed_rhai", consent: false }],
+  ["bounded_http_required_consent", { planKind: "bounded_http", consent: true }],
+]);
+if (!Array.isArray(runtimeVector.cases) || runtimeVector.cases.length !== expectedRuntimeCases.size) {
+  fail("runtime-chain fixture must contain the exact reviewed case set");
+}
+const seenRuntimeCases = new Set();
+for (const runtimeCase of runtimeVector.cases) {
+  assertExactKeys(
+    runtimeCase,
+    ["name", "hmac_commitments", "ordinary_digests", "completion_seed"],
+    `runtime case ${runtimeCase.name}`,
+  );
+  const expectedCase = expectedRuntimeCases.get(runtimeCase.name);
+  if (!expectedCase || seenRuntimeCases.has(runtimeCase.name)) {
+    fail(`unknown or duplicate runtime-chain case ${runtimeCase.name}`);
+  }
+  seenRuntimeCases.add(runtimeCase.name);
+  const context = `runtime case ${runtimeCase.name}`;
+  const commitments = runtimeCase.hmac_commitments;
+  assertExactKeys(commitments, ["subject", "input", "predicate", "consent"], `${context} commitments`);
+  for (const name of ["subject", "input", "predicate"]) {
+    verifyHmacMember(commitments[name], `${context} ${name}`);
+  }
+  if (expectedCase.consent) {
+    if (commitments.consent === null) fail(`${context} omits required consent commitment`);
+    verifyHmacMember(commitments.consent, `${context} consent`);
+    if (commitments.consent.value.raw_consent_reference !== "SYNTHETIC-CONSENT-0001") {
+      fail(`${context} consent reference is not the reviewed synthetic value`);
+    }
+  } else if (commitments.consent !== null) {
+    fail(`${context} unexpectedly includes consent`);
+  }
+  if (commitments.subject.value.canonical_subject !== "SYNTHETIC-SUBJECT-0001") {
+    fail(`${context} subject is not the reviewed synthetic value`);
+  }
+
+  const digests = runtimeCase.ordinary_digests;
+  assertExactKeys(
+    digests,
+    ["authorization_context", "execution_plan", "authorized_request"],
+    `${context} ordinary digests`,
+  );
+  for (const name of ["authorization_context", "execution_plan", "authorized_request"]) {
+    verifyDigestMember(digests[name], `${context} ${name}`);
+  }
+  if (digests.execution_plan.value.backend_kind !== expectedCase.planKind) {
+    fail(`${context} execution plan kind drifted`);
+  }
+  if (digests.execution_plan.value.predicate_commitment !== commitments.predicate.expected) {
+    fail(`${context} execution plan is not bound to its predicate commitment`);
+  }
+  if (
+    digests.authorized_request.value.commitment_key_id !== runtimeVector.commitment_key.id ||
+    digests.authorized_request.value.input_commitment !== commitments.input.expected ||
+    digests.authorized_request.value.subject_handle !== commitments.subject.expected ||
+    digests.authorized_request.value.authorization_context_digest !== digests.authorization_context.expected ||
+    digests.authorized_request.value.execution_plan_digest !== digests.execution_plan.expected
+  ) {
+    fail(`${context} authorized request breaks its commitment chain`);
+  }
+  const consentDecision = digests.authorization_context.value.verified_consent_decision;
+  if (
+    expectedCase.consent !== consentDecision.required ||
+    (expectedCase.consent && consentDecision.evidence_commitment !== commitments.consent.expected)
+  ) {
+    fail(`${context} authorization context breaks its consent chain`);
+  }
+
+  const seed = runtimeCase.completion_seed;
+  assertExactKeys(seed, ["value", "canonical_json", "canonical_bytes", "expected_digest"], `${context} seed`);
+  const canonicalSeed = canonicalize(seed.value);
+  if (seed.canonical_json !== canonicalSeed) fail(`${context} seed canonical JSON drifted`);
+  if (seed.canonical_bytes !== Buffer.byteLength(canonicalSeed, "utf8")) {
+    fail(`${context} seed canonical byte count drifted`);
+  }
+  const seedDigest = `sha256:${createHash("sha256").update(Buffer.from(canonicalSeed, "utf8")).digest("hex")}`;
+  if (seed.expected_digest !== seedDigest) fail(`${context} seed digest mismatch`);
+  assertExactKeys(
+    seed.value,
+    [
+      "schema",
+      "correlation",
+      "profile",
+      "integration_pack",
+      "private_binding_hash",
+      "workload",
+      "purpose",
+      "policy",
+      "acquisition",
+      "destinations",
+      "credential",
+      "authorized_operation_union",
+      "dispatch",
+      "bounds",
+      "request_digest",
+      "authorization_context_digest",
+      "execution_plan_digest",
+    ],
+    `${context} seed value`,
+  );
+  if (
+    seed.value.dispatch.plan_kind !== expectedCase.planKind ||
+    seed.value.request_digest !== digests.authorized_request.expected ||
+    seed.value.authorization_context_digest !== digests.authorization_context.expected ||
+    seed.value.execution_plan_digest !== digests.execution_plan.expected
+  ) {
+    fail(`${context} completion seed breaks its digest chain`);
+  }
+  if (
+    seed.value.bounds.timeout_ms !== digests.execution_plan.value.timeout_ms ||
+    seed.value.bounds.timeout_ms !== digests.execution_plan.value.dispatch_budget_ms ||
+    seed.value.bounds.timeout_ms < 1 ||
+    seed.value.bounds.timeout_ms > 10000
+  ) {
+    fail(`${context} timeout and dispatch budget are not exactly bound`);
+  }
+  if (seed.value.policy.consent.required !== expectedCase.consent) {
+    fail(`${context} completion seed consent contract drifted`);
+  }
+
+  if (expectedCase.planKind === "sandboxed_rhai") {
+    const dataUnion = seed.value.authorized_operation_union
+      .filter(({ kind }) => kind === "data")
+      .map(({ operation_id }) => operation_id);
+    const dataPermits = seed.value.dispatch.permit_bindings.filter(({ kind }) => kind === "data");
+    if (
+      canonicalize(dataPermits.map(({ ordinal }) => ordinal)) !== canonicalize([0, 1]) ||
+      dataPermits.some(({ allowed_operation_ids }) => canonicalize(allowed_operation_ids) !== canonicalize(dataUnion))
+    ) {
+      fail(`${context} Rhai permits do not bind every call slot to the reviewed callable union`);
+    }
+  }
+}
+
+process.stdout.write(
+  `verified ${vectors.size} RFC8785 source-plan vectors, ${manifest.cross_references.length} cross-references, and ${runtimeVector.cases.length} runtime chain cases\n`,
+);

@@ -1,12 +1,16 @@
+use proptest::prelude::*;
 use registry_platform_crypto::{canonicalize_json, parse_json_strict};
 use registry_platform_httputil::destination::DestinationAuthorizationValue;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use super::*;
-use crate::source_plan::artifact::{json_string_max_bytes, ResponseSchemaFieldDocument};
+use crate::source_plan::artifact::{
+    derive_consultation_policy, json_string_max_bytes, ResponseSchemaFieldDocument,
+};
 
 const PACK_DOMAIN: &[u8] = b"registry.relay.integration-pack.v1\0";
+const POLICY_DOMAIN: &[u8] = b"registry.relay.consultation-policy.v1\0";
 const CONTRACT_DOMAIN: &[u8] = b"registry.relay.consultation-contract.v1\0";
 const BINDING_DOMAIN: &[u8] = b"registry.relay.consultation-binding.v1\0";
 const SYNTHETIC_CONFORMANCE_EVIDENCE: &[u8] = b"synthetic registry conformance evidence v1\n";
@@ -20,8 +24,14 @@ const VECTOR_MANIFEST: &[u8] =
     include_bytes!("../../../tests/fixtures/source-plan-v1/manifest.json");
 const VECTOR_PACK: &[u8] =
     include_bytes!("../../../tests/fixtures/source-plan-v1/integration-pack.json");
+const VECTOR_POLICY: &[u8] =
+    include_bytes!("../../../tests/fixtures/source-plan-v1/consultation-policy.json");
+const VECTOR_POLICY_UTF8_ORDERING: &[u8] =
+    include_bytes!("../../../tests/fixtures/source-plan-v1/consultation-policy-utf8-ordering.json");
 const VECTOR_CONTRACT: &[u8] =
     include_bytes!("../../../tests/fixtures/source-plan-v1/public-contract.json");
+const VECTOR_CONTRACT_UTF8_ORDERING: &[u8] =
+    include_bytes!("../../../tests/fixtures/source-plan-v1/public-contract-utf8-ordering.json");
 const VECTOR_BINDING: &[u8] =
     include_bytes!("../../../tests/fixtures/source-plan-v1/private-binding.json");
 
@@ -63,6 +73,7 @@ impl Fixture {
         self.contract_value["spec"]["integration_pack"]["hash"] =
             Value::String(self.pack_hash.clone());
         self.binding_value["integration_pack"]["hash"] = Value::String(self.pack_hash.clone());
+        refresh_policy_hash(&mut self.contract_value);
         self.contract = serde_json::to_vec(&self.contract_value).expect("contract JSON");
         self.contract_hash = typed_hash(CONTRACT_DOMAIN, &self.contract);
         self.binding = serde_json::to_vec(&self.binding_value).expect("binding JSON");
@@ -71,6 +82,45 @@ impl Fixture {
     fn refresh_binding(&mut self) {
         self.binding = serde_json::to_vec(&self.binding_value).expect("binding JSON");
     }
+}
+
+fn policy_preimage_value(contract: &Value) -> Value {
+    let authorization = &contract["spec"]["authorization"];
+    let policy = &authorization["policy"];
+    json!({
+        "schema": "registry.relay.consultation-policy.v1",
+        "enforcement_profile": "registry.relay.consultation-pdp/v1",
+        "rule_set": "registry.relay.consultation-policy-rules.v1",
+        "id": policy["id"].clone(),
+        "action": "consultation_execute",
+        "target": {
+            "profile": {
+                "id": contract["id"].clone(),
+                "version": contract["version"].clone()
+            },
+            "integration_pack": contract["spec"]["integration_pack"].clone()
+        },
+        "authorization": {
+            "workload": authorization["workload"].clone(),
+            "required_scope": authorization["required_scope"].clone(),
+            "purposes": authorization["purposes"].clone(),
+            "legal_basis": authorization["legal_basis"].clone(),
+            "consent": authorization["consent"].clone(),
+            "mandatory_obligations": authorization["mandatory_obligations"].clone()
+        },
+        "decision": {
+            "permit": "unqualified",
+            "decision_cache": policy["decision_cache"].clone(),
+            "max_decision_age_ms": policy["max_decision_age_ms"].clone(),
+            "unavailable": policy["unavailable"].clone()
+        }
+    })
+}
+
+fn refresh_policy_hash(contract: &mut Value) {
+    let preimage = serde_json::to_vec(&policy_preimage_value(contract)).expect("policy preimage");
+    contract["spec"]["authorization"]["policy"]["hash"] =
+        Value::String(typed_hash(POLICY_DOMAIN, &preimage));
 }
 
 fn sync_complete_acquisition_from_responses(fixture: &mut Fixture) {
@@ -107,6 +157,10 @@ fn fixture() -> Fixture {
 
     let contract = VECTOR_CONTRACT.to_vec();
     let contract_value = parse_json_strict(&contract).expect("strict portable contract JSON");
+    assert_eq!(
+        contract_value["spec"]["authorization"]["policy"]["hash"].as_str(),
+        Some(vector_expected_hash("consultation_policy"))
+    );
     let contract_hash = typed_hash(CONTRACT_DOMAIN, &contract);
     assert_eq!(contract_hash, vector_expected_hash("public_contract"));
 
@@ -414,6 +468,52 @@ pub(crate) fn maximum_runtime_profile_fixture(
         .install_maximum_recursive_schema_fixture(schema)
         .expect("maximum runtime profile fixture remains typed");
     profile
+}
+
+pub(crate) fn bounded_runtime_vector_plan_fixture() -> CompiledSourcePlan {
+    compile(&fixture())
+        .expect("bounded vector plan compiles")
+        .plans
+        .into_values()
+        .next()
+        .expect("one bounded vector plan")
+}
+
+pub(crate) fn rhai_runtime_vector_plan_fixture() -> CompiledSourcePlan {
+    let fixture = rhai_five_operation_fixture();
+    let worker = RhaiWorkerCapability::from_initialized_worker(
+        &fixture.pack_hash,
+        &RHAI_FIVE_CALLABLES,
+        rhai_test_worker_limits(2),
+    )
+    .expect("Rhai vector worker capability");
+    compile_with_rhai_workers(&fixture, &[worker])
+        .expect("Rhai vector plan compiles")
+        .plans
+        .into_values()
+        .next()
+        .expect("one Rhai vector plan")
+}
+
+pub(crate) fn consent_runtime_vector_plan_fixture() -> CompiledSourcePlan {
+    let mut fixture = fixture();
+    fixture.contract_value["spec"]["authorization"]["consent"] = json!({
+        "required": true,
+        "verifier": {
+            "id": "registry.consent.v1",
+            "hash": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        },
+        "max_age_ms": 60000,
+        "revocation": "online_required",
+        "unavailable": "deny"
+    });
+    fixture.refresh_all();
+    compile(&fixture)
+        .expect("consent vector plan compiles")
+        .plans
+        .into_values()
+        .next()
+        .expect("one consent vector plan")
 }
 
 #[test]
@@ -762,6 +862,73 @@ fn rhai_five_operation_fixture() -> Fixture {
     fixture
 }
 
+const RHAI_FIVE_CALLABLES: [&str; 5] = [
+    "lookup-status-0",
+    "lookup-status-1",
+    "lookup-status-2",
+    "lookup-status-3",
+    "lookup-status-4",
+];
+
+fn rhai_test_worker_limits(max_calls: u8) -> RhaiWorkerLimits {
+    RhaiWorkerLimits {
+        max_calls,
+        memory_bytes: 67_108_864,
+        cpu_ms: 500,
+        ipc_frame_bytes: 131_072,
+        instructions: 50_000,
+        call_depth: 8,
+        string_bytes: 32_768,
+        array_items: 256,
+        map_entries: 256,
+        output_bytes: 32_768,
+        concurrency: 1,
+    }
+}
+
+fn runtime_digests(fixture: &Fixture) -> (String, String) {
+    let registry = compile(fixture).expect("bounded runtime profile compiles");
+    let profile = registry.iter().next().expect("bounded runtime profile");
+    (
+        profile
+            .runtime_profile()
+            .predicate_plan_digest()
+            .as_str()
+            .to_owned(),
+        profile
+            .runtime_profile()
+            .physical_projection_digest()
+            .as_str()
+            .to_owned(),
+    )
+}
+
+fn rhai_runtime_digests(
+    fixture: &Fixture,
+    callable: &[&str],
+    limits: RhaiWorkerLimits,
+) -> Result<(String, String), SourcePlanCompileError> {
+    let worker =
+        RhaiWorkerCapability::from_initialized_worker(&fixture.pack_hash, callable, limits)?;
+    let registry = compile_with_rhai_workers(fixture, &[worker])?;
+    let profile = registry
+        .iter()
+        .next()
+        .ok_or(SourcePlanCompileError::CompilerInvariant)?;
+    Ok((
+        profile
+            .runtime_profile()
+            .predicate_plan_digest()
+            .as_str()
+            .to_owned(),
+        profile
+            .runtime_profile()
+            .physical_projection_digest()
+            .as_str()
+            .to_owned(),
+    ))
+}
+
 pub(crate) fn normal_completion_seed_fixture() -> Value {
     completion_seed_value(&fixture())
 }
@@ -1000,6 +1167,12 @@ fn compiles_runtime_ready_request_response_and_input_capabilities() {
     let canonical = input
         .canonicalize_and_validate("Person-42")
         .expect("valid selector");
+    assert!(canonical.binding_matches(plan.profile().contract_hash(), input.name(), 0));
+    let unrelated_contract = ProfileContractHash::try_from(
+        "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    )
+    .unwrap();
+    assert!(!canonical.binding_matches(&unrelated_contract, input.name(), 0));
     assert_eq!(canonical.as_str(), "Person-42");
     assert!(!format!("{canonical:?}").contains("Person-42"));
     assert!(input.canonicalize_and_validate("contains space").is_none());
@@ -1040,6 +1213,132 @@ fn compiles_runtime_ready_request_response_and_input_capabilities() {
             None,
         )
         .expect("compiled template renders exact values");
+}
+
+#[test]
+fn resolved_core_is_consumed_only_by_its_exact_compiled_plan() {
+    use crate::consultation::commitments::CanonicalConsultationInputs;
+    use crate::consultation::{
+        DeclaredOperationFootprint, ParsedPurpose, ParsedSingleStringInput,
+        PreAuthorizationConsultationCore, ProfileIdentity, SelectorProvenance,
+    };
+
+    let fixture = fixture();
+    let registry = compile(&fixture).expect("compiled runtime descriptors");
+    let plan = registry.iter().next().expect("plan");
+    let make_core = |profile: ProfileIdentity,
+                     selector: SelectorProvenance,
+                     purpose: &str,
+                     input_name: &str,
+                     input_value: &str,
+                     footprint: DeclaredOperationFootprint| {
+        PreAuthorizationConsultationCore::new_for_test(
+            profile,
+            selector,
+            ParsedPurpose::try_parse(purpose).unwrap(),
+            ParsedSingleStringInput::try_parse(input_name, input_value).unwrap(),
+            footprint,
+        )
+    };
+
+    let exact = make_core(
+        plan.profile().clone(),
+        plan.runtime_profile()
+            .subject()
+            .selector_provenance()
+            .clone(),
+        "benefit-verification",
+        "subject_id",
+        "Person-42",
+        plan.footprint().clone(),
+    );
+    assert!(CanonicalConsultationInputs::try_from_resolved_core(plan, exact).is_ok());
+
+    let wrong_profile = ProfileIdentity::new(
+        plan.profile().id().clone(),
+        plan.profile().version(),
+        ProfileContractHash::try_from(
+            "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        )
+        .unwrap(),
+    );
+    let mut narrower_bounds = plan.footprint().bounds();
+    narrower_bounds.timeout_ms -= 1;
+    let wrong_footprint = DeclaredOperationFootprint::try_new(
+        plan.footprint().operation().as_str(),
+        plan.footprint().acquisition_class(),
+        plan.footprint().acquired_fields(),
+        narrower_bounds,
+    )
+    .unwrap();
+    let mismatches = [
+        make_core(
+            wrong_profile,
+            plan.runtime_profile()
+                .subject()
+                .selector_provenance()
+                .clone(),
+            "benefit-verification",
+            "subject_id",
+            "Person-42",
+            plan.footprint().clone(),
+        ),
+        make_core(
+            plan.profile().clone(),
+            SelectorProvenance::WorkloadSelected,
+            "benefit-verification",
+            "subject_id",
+            "Person-42",
+            plan.footprint().clone(),
+        ),
+        make_core(
+            plan.profile().clone(),
+            plan.runtime_profile()
+                .subject()
+                .selector_provenance()
+                .clone(),
+            "unreviewed-purpose",
+            "subject_id",
+            "Person-42",
+            plan.footprint().clone(),
+        ),
+        make_core(
+            plan.profile().clone(),
+            plan.runtime_profile()
+                .subject()
+                .selector_provenance()
+                .clone(),
+            "benefit-verification",
+            "other_input",
+            "Person-42",
+            plan.footprint().clone(),
+        ),
+        make_core(
+            plan.profile().clone(),
+            plan.runtime_profile()
+                .subject()
+                .selector_provenance()
+                .clone(),
+            "benefit-verification",
+            "subject_id",
+            "contains space",
+            plan.footprint().clone(),
+        ),
+        make_core(
+            plan.profile().clone(),
+            plan.runtime_profile()
+                .subject()
+                .selector_provenance()
+                .clone(),
+            "benefit-verification",
+            "subject_id",
+            "Person-42",
+            wrong_footprint,
+        ),
+    ];
+    for mismatch in mismatches {
+        assert!(CanonicalConsultationInputs::try_from_resolved_core(plan, mismatch).is_err());
+    }
 }
 
 #[test]
@@ -1126,7 +1425,22 @@ fn synthetic_hashes_are_stable_golden_vectors() {
     );
     for (name, file, domain) in [
         ("integration_pack", "integration-pack.json", PACK_DOMAIN),
+        (
+            "consultation_policy",
+            "consultation-policy.json",
+            POLICY_DOMAIN,
+        ),
+        (
+            "consultation_policy_utf8_ordering",
+            "consultation-policy-utf8-ordering.json",
+            POLICY_DOMAIN,
+        ),
         ("public_contract", "public-contract.json", CONTRACT_DOMAIN),
+        (
+            "public_contract_utf8_ordering",
+            "public-contract-utf8-ordering.json",
+            CONTRACT_DOMAIN,
+        ),
         ("private_binding", "private-binding.json", BINDING_DOMAIN),
     ] {
         let entry = vector_entry(name);
@@ -1140,6 +1454,10 @@ fn synthetic_hashes_are_stable_golden_vectors() {
     let fixture = fixture();
     assert_eq!(fixture.pack_hash, vector_expected_hash("integration_pack"));
     assert_eq!(
+        typed_hash(POLICY_DOMAIN, VECTOR_POLICY),
+        vector_expected_hash("consultation_policy")
+    );
+    assert_eq!(
         fixture.contract_hash,
         vector_expected_hash("public_contract")
     );
@@ -1151,6 +1469,56 @@ fn synthetic_hashes_are_stable_golden_vectors() {
     assert_eq!(
         registry.iter().next().expect("golden plan").binding_hash(),
         vector_expected_hash("private_binding")
+    );
+    let contract = parse_public_contract(&fixture.contract, &fixture.contract_hash)
+        .expect("golden contract parses");
+    let derived_policy = derive_consultation_policy(&contract.document)
+        .expect("normalized contract derives its policy");
+    let vector_policy = parse_json_strict(VECTOR_POLICY).expect("strict portable policy JSON");
+    assert_eq!(
+        derived_policy.canonical_json,
+        canonicalize_json(&vector_policy).expect("canonical policy vector")
+    );
+    assert_eq!(
+        derived_policy.hash.as_str(),
+        vector_expected_hash("consultation_policy")
+    );
+
+    assert_eq!(
+        typed_hash(POLICY_DOMAIN, VECTOR_POLICY_UTF8_ORDERING),
+        vector_expected_hash("consultation_policy_utf8_ordering")
+    );
+    assert_eq!(
+        typed_hash(CONTRACT_DOMAIN, VECTOR_CONTRACT_UTF8_ORDERING),
+        vector_expected_hash("public_contract_utf8_ordering")
+    );
+    let ordering_contract = parse_public_contract(
+        VECTOR_CONTRACT_UTF8_ORDERING,
+        vector_expected_hash("public_contract_utf8_ordering"),
+    )
+    .expect("UTF-8 ordering contract parses through production validation");
+    let ordering_policy = derive_consultation_policy(&ordering_contract.document)
+        .expect("UTF-8 ordering policy derives through production code");
+    let ordering_vector = parse_json_strict(VECTOR_POLICY_UTF8_ORDERING)
+        .expect("strict portable UTF-8 ordering policy JSON");
+    assert_eq!(
+        ordering_policy.canonical_json,
+        canonicalize_json(&ordering_vector).expect("canonical UTF-8 ordering policy vector")
+    );
+    assert_eq!(
+        ordering_policy.hash.as_str(),
+        vector_expected_hash("consultation_policy_utf8_ordering")
+    );
+    let utf8_order = vec!["\u{e000}".to_owned(), "\u{10000}".to_owned()];
+    assert_eq!(
+        ordering_contract.document.spec.authorization.purposes,
+        utf8_order
+    );
+    let mut utf16_order = utf8_order.clone();
+    utf16_order.sort_by_key(|value| value.encode_utf16().collect::<Vec<_>>());
+    assert_ne!(
+        utf8_order, utf16_order,
+        "vector must distinguish UTF-8 and UTF-16 order"
     );
 
     let mut changed_pack = fixture.pack_value.clone();
@@ -1199,6 +1567,415 @@ fn synthetic_hashes_are_stable_golden_vectors() {
             .binding_hash(),
         vector_expected_hash("private_binding")
     );
+}
+
+#[test]
+fn policy_preimage_has_the_closed_fixed_v1_decision_shape() {
+    let policy = parse_json_strict(VECTOR_POLICY).expect("strict policy vector");
+    assert_eq!(
+        policy,
+        json!({
+            "schema": "registry.relay.consultation-policy.v1",
+            "enforcement_profile": "registry.relay.consultation-pdp/v1",
+            "rule_set": "registry.relay.consultation-policy-rules.v1",
+            "id": "relay.synthetic.person-status.exact",
+            "action": "consultation_execute",
+            "target": {
+                "profile": {
+                    "id": "synthetic.person-status.exact",
+                    "version": "1"
+                },
+                "integration_pack": {
+                    "id": "synthetic.person-status",
+                    "version": "1",
+                    "hash": vector_expected_hash("integration_pack")
+                }
+            },
+            "authorization": {
+                "workload": "registry-notary",
+                "required_scope": "registry:consult:person-status",
+                "purposes": ["benefit-verification"],
+                "legal_basis": "public_task",
+                "consent": {"required": false},
+                "mandatory_obligations": []
+            },
+            "decision": {
+                "permit": "unqualified",
+                "decision_cache": "disabled",
+                "max_decision_age_ms": 1000,
+                "unavailable": "deny"
+            }
+        })
+    );
+}
+
+#[test]
+fn every_authored_policy_semantic_changes_policy_and_contract_hashes() {
+    let fixture = fixture();
+    let base_policy_hash = fixture.contract_value["spec"]["authorization"]["policy"]["hash"]
+        .as_str()
+        .expect("base policy hash")
+        .to_owned();
+    let base_contract_hash = fixture.contract_hash;
+    let changes = [
+        ("/id", json!("synthetic.person-status.other")),
+        ("/version", json!("2")),
+        (
+            "/spec/integration_pack/id",
+            json!("synthetic.person-status.other"),
+        ),
+        ("/spec/integration_pack/version", json!("2")),
+        (
+            "/spec/integration_pack/hash",
+            json!("sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"),
+        ),
+        ("/spec/authorization/workload", json!("registry-auditor")),
+        (
+            "/spec/authorization/required_scope",
+            json!("registry:consult:other"),
+        ),
+        (
+            "/spec/authorization/purposes",
+            json!(["civil-registration-verification"]),
+        ),
+        ("/spec/authorization/legal_basis", json!("consent")),
+        (
+            "/spec/authorization/policy/id",
+            json!("relay.synthetic.person-status.other"),
+        ),
+        (
+            "/spec/authorization/consent",
+            json!({
+                "required": true,
+                "verifier": {
+                    "id": "registry.consent.v1",
+                    "hash": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+                },
+                "max_age_ms": 60000,
+                "revocation": "online_required",
+                "unavailable": "deny"
+            }),
+        ),
+        ("/spec/authorization/policy/max_decision_age_ms", json!(999)),
+    ];
+
+    for (pointer, replacement) in changes {
+        let mut changed = fixture.contract_value.clone();
+        *changed
+            .pointer_mut(pointer)
+            .unwrap_or_else(|| panic!("known test pointer {pointer}")) = replacement;
+        refresh_policy_hash(&mut changed);
+        let changed_policy_hash = changed["spec"]["authorization"]["policy"]["hash"]
+            .as_str()
+            .expect("changed policy hash")
+            .to_owned();
+        assert_ne!(
+            changed_policy_hash, base_policy_hash,
+            "policy preimage omitted {pointer}"
+        );
+        let changed_contract = serde_json::to_vec(&changed).expect("changed contract");
+        let changed_contract_hash = typed_hash(CONTRACT_DOMAIN, &changed_contract);
+        let production_contract = parse_public_contract(&changed_contract, &changed_contract_hash)
+            .unwrap_or_else(|error| {
+                panic!("production parser rejected matching mutation {pointer}: {error}")
+            });
+        let production_policy = derive_consultation_policy(&production_contract.document)
+            .unwrap_or_else(|error| {
+                panic!("production derivation rejected matching mutation {pointer}: {error}")
+            });
+        assert_eq!(
+            production_policy.hash.as_str(),
+            changed_policy_hash,
+            "production derivation disagrees with the independent oracle for {pointer}"
+        );
+        assert_ne!(
+            changed_contract_hash, base_contract_hash,
+            "contract hash did not bind policy change at {pointer}"
+        );
+    }
+}
+
+#[test]
+fn stale_policy_digest_fails_before_a_matching_authored_contract_hash() {
+    let mut fixture = fixture();
+    fixture.contract_value["spec"]["authorization"]["policy"]["hash"] =
+        json!("sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc");
+    fixture.contract = serde_json::to_vec(&fixture.contract_value).expect("contract JSON");
+    fixture.contract_hash = typed_hash(CONTRACT_DOMAIN, &fixture.contract);
+
+    assert!(matches!(
+        compile(&fixture),
+        Err(SourcePlanCompileError::Artifact(
+            SourcePlanArtifactError::PolicyHashMismatch
+        ))
+    ));
+}
+
+#[test]
+fn updated_policy_digest_requires_the_corresponding_contract_hash() {
+    let mut fixture = fixture();
+    let stale_contract_hash = fixture.contract_hash.clone();
+    fixture.contract_value["spec"]["authorization"]["legal_basis"] = json!("consent");
+    refresh_policy_hash(&mut fixture.contract_value);
+    fixture.contract = serde_json::to_vec(&fixture.contract_value).expect("contract JSON");
+    fixture.contract_hash = stale_contract_hash;
+
+    assert!(matches!(
+        compile(&fixture),
+        Err(SourcePlanCompileError::Artifact(
+            SourcePlanArtifactError::HashMismatch
+        ))
+    ));
+
+    fixture.contract_hash = typed_hash(CONTRACT_DOMAIN, &fixture.contract);
+    compile(&fixture).expect("matching derived policy and contract hashes compile");
+}
+
+#[test]
+fn external_policy_artifacts_and_overlays_are_not_part_of_v1() {
+    let mut fixture = fixture();
+    fixture.contract_value["spec"]["authorization"]["policy"]["artifact_uri"] =
+        json!("https://policy.example.test/policy.json");
+    fixture.contract = serde_json::to_vec(&fixture.contract_value).expect("contract JSON");
+    fixture.contract_hash = typed_hash(CONTRACT_DOMAIN, &fixture.contract);
+
+    assert!(matches!(
+        compile(&fixture),
+        Err(SourcePlanCompileError::Artifact(
+            SourcePlanArtifactError::ClosedSchema
+        ))
+    ));
+}
+
+#[test]
+fn fixed_policy_controls_cannot_be_authored_or_widened() {
+    for (field, value) in [
+        ("permit", json!("qualified")),
+        (
+            "enforcement_profile",
+            json!("operator-selected-enforcement"),
+        ),
+        ("rule_set", json!("operator-selected-rules")),
+        ("action", json!("operator-selected-action")),
+    ] {
+        let mut fixture = fixture();
+        fixture.contract_value["spec"]["authorization"]["policy"][field] = value;
+        fixture.contract = serde_json::to_vec(&fixture.contract_value).expect("contract JSON");
+        fixture.contract_hash = typed_hash(CONTRACT_DOMAIN, &fixture.contract);
+        assert!(matches!(
+            compile(&fixture),
+            Err(SourcePlanCompileError::Artifact(
+                SourcePlanArtifactError::ClosedSchema
+            ))
+        ));
+    }
+
+    for (field, value) in [
+        ("decision_cache", json!("enabled")),
+        ("unavailable", json!("allow")),
+    ] {
+        let mut fixture = fixture();
+        fixture.contract_value["spec"]["authorization"]["policy"][field] = value;
+        fixture.contract = serde_json::to_vec(&fixture.contract_value).expect("contract JSON");
+        fixture.contract_hash = typed_hash(CONTRACT_DOMAIN, &fixture.contract);
+        assert!(matches!(
+            compile(&fixture),
+            Err(SourcePlanCompileError::Artifact(
+                SourcePlanArtifactError::ClosedSchema
+            ))
+        ));
+    }
+
+    let mut fixture = fixture();
+    fixture.contract_value["spec"]["authorization"]["policy"]["max_decision_age_ms"] = json!(1001);
+    fixture.contract = serde_json::to_vec(&fixture.contract_value).expect("contract JSON");
+    fixture.contract_hash = typed_hash(CONTRACT_DOMAIN, &fixture.contract);
+    assert!(matches!(
+        compile(&fixture),
+        Err(SourcePlanCompileError::Artifact(
+            SourcePlanArtifactError::InvalidLimits
+        ))
+    ));
+}
+
+#[test]
+fn required_consent_members_are_exactly_hash_covered() {
+    let consent = json!({
+        "required": true,
+        "verifier": {
+            "id": "registry.consent.v1",
+            "hash": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        },
+        "max_age_ms": 60000,
+        "revocation": "online_required",
+        "unavailable": "deny"
+    });
+    let mut required_fixture = fixture();
+    required_fixture.contract_value["spec"]["authorization"]["consent"] = consent.clone();
+    required_fixture.refresh_all();
+    let base_policy_hash = required_fixture.contract_value["spec"]["authorization"]["policy"]
+        ["hash"]
+        .as_str()
+        .expect("required-consent policy hash")
+        .to_owned();
+
+    let contract =
+        parse_public_contract(&required_fixture.contract, &required_fixture.contract_hash)
+            .expect("required-consent contract parses");
+    let derived =
+        derive_consultation_policy(&contract.document).expect("required-consent policy derives");
+    let preimage = parse_json_strict(&derived.canonical_json).expect("strict derived policy");
+    assert_eq!(preimage["authorization"]["consent"], consent);
+
+    for (pointer, replacement) in [
+        (
+            "/spec/authorization/consent/verifier/id",
+            json!("registry.consent.v2"),
+        ),
+        (
+            "/spec/authorization/consent/verifier/hash",
+            json!("sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"),
+        ),
+        ("/spec/authorization/consent/max_age_ms", json!(59999)),
+    ] {
+        let mut changed = required_fixture.contract_value.clone();
+        *changed
+            .pointer_mut(pointer)
+            .unwrap_or_else(|| panic!("known consent pointer {pointer}")) = replacement;
+        refresh_policy_hash(&mut changed);
+        let changed_policy_hash = changed["spec"]["authorization"]["policy"]["hash"]
+            .as_str()
+            .expect("changed consent policy hash")
+            .to_owned();
+        assert_ne!(
+            changed_policy_hash, base_policy_hash,
+            "policy preimage omitted {pointer}"
+        );
+        let changed_contract = serde_json::to_vec(&changed).expect("changed consent contract");
+        let changed_contract_hash = typed_hash(CONTRACT_DOMAIN, &changed_contract);
+        let production_contract = parse_public_contract(&changed_contract, &changed_contract_hash)
+            .unwrap_or_else(|error| {
+                panic!("production parser rejected matching consent mutation {pointer}: {error}")
+            });
+        let production_policy = derive_consultation_policy(&production_contract.document)
+            .unwrap_or_else(|error| {
+                panic!(
+                    "production derivation rejected matching consent mutation {pointer}: {error}"
+                )
+            });
+        assert_eq!(
+            production_policy.hash.as_str(),
+            changed_policy_hash,
+            "production derivation disagrees with consent oracle for {pointer}"
+        );
+    }
+
+    for member in ["verifier", "max_age_ms", "revocation", "unavailable"] {
+        let mut incomplete = fixture();
+        incomplete.contract_value["spec"]["authorization"]["consent"] = consent.clone();
+        incomplete.contract_value["spec"]["authorization"]["consent"]
+            .as_object_mut()
+            .expect("consent object")
+            .remove(member);
+        incomplete.contract =
+            serde_json::to_vec(&incomplete.contract_value).expect("incomplete contract JSON");
+        incomplete.contract_hash = typed_hash(CONTRACT_DOMAIN, &incomplete.contract);
+        assert!(matches!(
+            compile(&incomplete),
+            Err(SourcePlanCompileError::Artifact(
+                SourcePlanArtifactError::InvalidPlan
+            ))
+        ));
+    }
+}
+
+#[test]
+fn bundle_verification_checks_pack_then_policy_then_binding() {
+    let mut fixture = fixture();
+    fixture.pack_value["schema"] = json!("registry.relay.integration-pack.v2");
+    fixture.pack = serde_json::to_vec(&fixture.pack_value).expect("pack JSON");
+    fixture.contract_value["spec"]["authorization"]["policy"]["hash"] =
+        json!("sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc");
+    fixture.contract = serde_json::to_vec(&fixture.contract_value).expect("contract JSON");
+    fixture.contract_hash = typed_hash(CONTRACT_DOMAIN, &fixture.contract);
+    fixture.binding_value["unreviewed"] = json!(true);
+    fixture.refresh_binding();
+
+    assert!(matches!(
+        compile(&fixture),
+        Err(SourcePlanCompileError::Artifact(
+            SourcePlanArtifactError::UnsupportedSchema
+        ))
+    ));
+
+    fixture.pack_value["schema"] = json!("registry.relay.integration-pack.v1");
+    fixture.pack = serde_json::to_vec(&fixture.pack_value).expect("pack JSON");
+    assert!(matches!(
+        compile(&fixture),
+        Err(SourcePlanCompileError::Artifact(
+            SourcePlanArtifactError::PolicyHashMismatch
+        ))
+    ));
+}
+
+proptest! {
+    #[test]
+    fn policy_digest_is_invariant_to_raw_purpose_order(
+        purposes in proptest::collection::btree_set("[a-z]{1,12}", 1..8)
+    ) {
+        let mut fixture = fixture();
+        let sorted = purposes.into_iter().collect::<Vec<_>>();
+        fixture.contract_value["spec"]["authorization"]["purposes"] = json!(sorted);
+        fixture.refresh_all();
+        let canonical_contract = canonicalize_json(&fixture.contract_value)
+            .expect("canonical normalized contract");
+        let canonical_hash = fixture.contract_hash.clone();
+        let canonical_policy = fixture.contract_value["spec"]["authorization"]["policy"]["hash"]
+            .clone();
+
+        let mut reversed = fixture.contract_value["spec"]["authorization"]["purposes"]
+            .as_array()
+            .expect("purpose array")
+            .clone();
+        reversed.reverse();
+        fixture.contract_value["spec"]["authorization"]["purposes"] = Value::Array(reversed);
+        fixture.contract = serde_json::to_vec(&fixture.contract_value).expect("raw reordered contract");
+
+        let registry = compile(&fixture)
+            .map_err(|error| TestCaseError::fail(error.to_string()))?;
+        let plan = registry.iter().next().expect("compiled plan");
+        prop_assert_eq!(plan.canonical_public_contract(), canonical_contract.as_slice());
+        prop_assert_eq!(
+            plan.profile().contract_hash().as_str(),
+            canonical_hash.as_str()
+        );
+        prop_assert_eq!(
+            plan.runtime_profile().authorization().policy().hash().as_str(),
+            canonical_policy.as_str().expect("policy hash")
+        );
+    }
+}
+
+#[test]
+fn policy_purposes_normalize_in_utf8_byte_order() {
+    let mut fixture = fixture();
+    let expected = vec!["\u{e000}", "\u{10000}"];
+    fixture.contract_value["spec"]["authorization"]["purposes"] = json!(expected);
+    fixture.refresh_all();
+    let expected_contract =
+        canonicalize_json(&fixture.contract_value).expect("canonical normalized Unicode contract");
+
+    fixture.contract_value["spec"]["authorization"]["purposes"] = json!(["\u{10000}", "\u{e000}"]);
+    fixture.contract =
+        serde_json::to_vec(&fixture.contract_value).expect("raw reordered Unicode contract");
+    let registry = compile(&fixture).expect("raw purpose order is normalized");
+    let plan = registry.iter().next().expect("compiled plan");
+
+    assert_eq!(
+        plan.runtime_profile().purposes().collect::<Vec<_>>(),
+        expected
+    );
+    assert_eq!(plan.canonical_public_contract(), expected_contract);
 }
 
 #[test]
@@ -1506,6 +2283,175 @@ fn rhai_completion_seed_sorts_every_dynamic_callable_union() {
             json!(["lookup-eligibility", "lookup-status"])
         );
     }
+}
+
+#[test]
+fn bounded_permits_bind_monotonic_actual_call_positions_across_skips() {
+    use super::super::completion_seed::bounded_actual_call_permit_operations;
+
+    let steps = ["required-first", "z-conditional-middle", "a-required-last"];
+    let conditioned = BTreeSet::from(["z-conditional-middle"]);
+    assert_eq!(
+        bounded_actual_call_permit_operations(&steps, &conditioned),
+        vec![
+            vec!["required-first"],
+            vec!["a-required-last", "z-conditional-middle"],
+            vec!["a-required-last"],
+        ],
+        "the second actual call is either the conditioned step or the later required step"
+    );
+    assert_eq!(
+        bounded_actual_call_permit_operations(&steps, &BTreeSet::new()),
+        vec![
+            vec!["required-first"],
+            vec!["z-conditional-middle"],
+            vec!["a-required-last"],
+        ],
+        "an unconditional flow keeps one reviewed operation per ordinal"
+    );
+}
+
+#[test]
+fn bounded_runtime_commitment_digests_bind_steps_and_conditions() {
+    let normal = runtime_digests(&fixture());
+    let two_step = runtime_digests(&two_step_fixture());
+    assert_ne!(
+        two_step.0, normal.0,
+        "ordered second step must change predicate digest"
+    );
+    assert_ne!(
+        two_step.1, normal.1,
+        "second operation must change physical projection digest"
+    );
+
+    let mut conditioned = two_step_fixture();
+    conditioned.pack_value["spec"]["plan"]["step_conditions"] = json!({
+        "lookup-eligibility": {
+            "predicate": "string_equals",
+            "step": "lookup-status",
+            "output": "route",
+            "value": "eligible-path"
+        }
+    });
+    conditioned.refresh_all();
+    let conditioned = runtime_digests(&conditioned);
+    assert_ne!(
+        conditioned.0, two_step.0,
+        "fixed step condition must change predicate digest"
+    );
+    assert_eq!(
+        conditioned.1, two_step.1,
+        "execution condition must not rewrite physical projection"
+    );
+    assert_eq!(
+        normal.0,
+        "sha256:31f0fcbc0cba178ea211bdce5da7f27a5c643a02a25cfd74cff4f97d7e4097b6"
+    );
+    assert_eq!(
+        normal.1,
+        "sha256:550f3f915fc0396e5f1dc807ea8435d03db787d1d17f23fbef0eab0289bacb36"
+    );
+    assert_eq!(
+        two_step.0,
+        "sha256:fd301ec55d05734d1ce2e9c17abf6f1af4dddb426a251830b6b0bc2c76aede2f"
+    );
+    assert_eq!(
+        two_step.1,
+        "sha256:f34371500b35621eac81f3844c8d5593a5a9230e4a8de9d1ec69592cb1088faa"
+    );
+    assert_eq!(
+        conditioned.0,
+        "sha256:e4d2e2fda70a7069d7f4f49e51c2ea6a508faae18c470743b47fb4f728cee277"
+    );
+}
+
+#[test]
+fn rhai_runtime_commitment_digest_binds_safe_script_and_dispatch_facts() {
+    let limits = rhai_test_worker_limits(2);
+    let base_fixture = rhai_five_operation_fixture();
+    let base = rhai_runtime_digests(&base_fixture, &RHAI_FIVE_CALLABLES, limits)
+        .expect("base Rhai profile compiles");
+
+    let mut changed_script = rhai_five_operation_fixture();
+    let changed_script_source = "fn consult() { 1 }";
+    changed_script.pack_value["spec"]["plan"]["rhai"]["script"] = json!(changed_script_source);
+    changed_script.pack_value["spec"]["plan"]["rhai"]["script_hash"] =
+        json!(raw_hash(changed_script_source.as_bytes()));
+    changed_script.refresh_all();
+    let changed_script_digest = rhai_runtime_digests(&changed_script, &RHAI_FIVE_CALLABLES, limits)
+        .expect("changed reviewed script compiles");
+    assert_ne!(changed_script_digest.0, base.0);
+
+    let mut dual_entrypoint = rhai_five_operation_fixture();
+    let dual_script = "fn consult() { () } fn alternate() { () }";
+    dual_entrypoint.pack_value["spec"]["plan"]["rhai"]["script"] = json!(dual_script);
+    dual_entrypoint.pack_value["spec"]["plan"]["rhai"]["script_hash"] =
+        json!(raw_hash(dual_script.as_bytes()));
+    dual_entrypoint.refresh_all();
+    let primary_entrypoint = rhai_runtime_digests(&dual_entrypoint, &RHAI_FIVE_CALLABLES, limits)
+        .expect("dual-entrypoint script compiles");
+    dual_entrypoint.pack_value["spec"]["plan"]["rhai"]["entrypoint"] = json!("alternate");
+    dual_entrypoint.refresh_all();
+    let alternate_entrypoint = rhai_runtime_digests(&dual_entrypoint, &RHAI_FIVE_CALLABLES, limits)
+        .expect("alternate reviewed entrypoint compiles");
+    assert_ne!(alternate_entrypoint.0, primary_entrypoint.0);
+
+    let mut stale_script_hash = rhai_five_operation_fixture();
+    stale_script_hash.pack_value["spec"]["plan"]["rhai"]["script_hash"] =
+        json!("sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
+    stale_script_hash.refresh_all();
+    assert!(
+        rhai_runtime_digests(&stale_script_hash, &RHAI_FIVE_CALLABLES, limits).is_err(),
+        "a declared script hash that does not commit to the script must fail closed"
+    );
+
+    let mut narrowed_union = rhai_five_operation_fixture();
+    narrowed_union.binding_value["capabilities"]["sandboxed_rhai"]["callable_operations"]
+        .as_array_mut()
+        .expect("callable union")
+        .pop();
+    narrowed_union.refresh_binding();
+    assert!(matches!(
+        rhai_runtime_digests(&narrowed_union, &RHAI_FIVE_CALLABLES[..4], limits),
+        Err(SourcePlanCompileError::BindingWidening)
+    ));
+
+    let mut one_call = rhai_five_operation_fixture();
+    one_call.binding_value["capabilities"]["sandboxed_rhai"]["max_calls"] = json!(1);
+    one_call.refresh_binding();
+    let one_call_digest =
+        rhai_runtime_digests(&one_call, &RHAI_FIVE_CALLABLES, rhai_test_worker_limits(1))
+            .expect("one-call effective Rhai profile compiles");
+    assert_ne!(one_call_digest.0, base.0);
+    assert_eq!(
+        one_call_digest.1, base.1,
+        "effective call budget must not rewrite physical projection"
+    );
+
+    assert_eq!(
+        base.0,
+        "sha256:5b5331cf4d6aae44023ac061584403f8ffea4e92c5d011516ac796659cf36d2e"
+    );
+    assert_eq!(
+        base.1,
+        "sha256:52c3a3bc986065196d127dcb56fbe2edd512fac42521504dc287a85d1b926fc6"
+    );
+    assert_eq!(
+        changed_script_digest.0,
+        "sha256:6b6b47770de6acc3326eb8078c082b2a2697dbede24ba691cd3bdc658c6dfd5c"
+    );
+    assert_eq!(
+        primary_entrypoint.0,
+        "sha256:5d93e225392e8b03bc7729ac5523e6ba5e830f79761dbb7f4de140dabceff5d0"
+    );
+    assert_eq!(
+        alternate_entrypoint.0,
+        "sha256:e5d0aaa36df0441a8f5da9e64fe01dbfb13f425bd7a7c2c06b83272e04c7deec"
+    );
+    assert_eq!(
+        one_call_digest.0,
+        "sha256:ed3c06fb52de799cc0878128923ff160f2f904aed9fecf2122c09d8f77fc6d9b"
+    );
 }
 
 #[test]
@@ -2181,8 +3127,7 @@ fn consent_requires_closed_verifier_freshness_and_revocation_contract() {
         "revocation": "online_required",
         "unavailable": "deny"
     });
-    fixture.contract = serde_json::to_vec(&fixture.contract_value).expect("contract JSON");
-    fixture.contract_hash = typed_hash(CONTRACT_DOMAIN, &fixture.contract);
+    fixture.refresh_all();
     compile(&fixture).expect("complete consent contract");
 }
 

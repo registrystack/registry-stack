@@ -3,8 +3,9 @@
 
 use std::time::Duration;
 
+#[cfg(test)]
+use registry_platform_audit::pseudonym_keyring::{AuditPseudonymCommitment, AuditPseudonymKeyId};
 use registry_platform_audit::{
-    pseudonym_keyring::{AuditPseudonymCommitment, AuditPseudonymKeyId},
     AuditEnvelope, DurableAuditOperationId, DurableAuditPhase, DurableAuditStoredIdentity,
     DurableAuditStreamKind, DurableAuditWrite,
 };
@@ -14,6 +15,12 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::time::Instant;
 use tokio_postgres::{Error as PostgresError, Row};
+
+use crate::consultation::audit::{
+    PreparedAtomicConsultationStateView, TerminalConsultationStateView,
+};
+#[cfg(test)]
+use crate::consultation::audit::{TerminalCompletionTestHook, TerminalCompletionTestPoint};
 
 use super::audit::PostgresDurableAuditStatePlane;
 use super::fence::{
@@ -26,13 +33,13 @@ use super::pseudonym_keyring::ActiveAuditPseudonymWriteEpoch;
 const ATTEMPT_SNAPSHOT_SQL: &str = r#"
 SELECT * FROM relay_state_api.consultation_attempt_intent_snapshot_v1(
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-    $15, $16, $17
+    $15, $16, $17, $18
 )
 "#;
 const ATTEMPT_CAS_SQL: &str = r#"
 SELECT * FROM relay_state_api.consultation_attempt_intent_cas_v1(
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-    $15, $16, $17, $18, $19, $20, $21, $22, $23, $24
+    $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25
 )
 "#;
 const NORMAL_COMPLETION_SNAPSHOT_SQL: &str = r#"
@@ -65,6 +72,7 @@ SELECT * FROM relay_state_api.consultation_completion_cas_recovery_v1(
 
 const MAX_CAS_ATTEMPTS: usize = 8;
 const MAX_ELAPSED: Duration = Duration::from_secs(5);
+#[cfg(test)]
 const MAX_COMPLETION_SEED_CANONICAL_BYTES_V1: usize = 256 * 1024;
 #[cfg(test)]
 const MAX_COMMITMENT_BYTES: usize = 1024;
@@ -86,21 +94,36 @@ pub(crate) enum ConsultationPersistenceError {
 }
 
 /// Immutable, canonical, non-pseudonym context shared by every completion.
+#[cfg(test)]
 pub(crate) struct ConsultationCompletionSeed {
     canonical: String,
     digest: [u8; 32],
+    timeout_ms: u32,
 }
 
+#[cfg(test)]
 impl ConsultationCompletionSeed {
     /// Canonicalize the compiler-owned, secret-free completion seed before it
     /// crosses into the atomic state-plane protocol. PostgreSQL performs the
     /// authoritative exact-shape validation in the attempt CAS.
-    pub(crate) fn from_safe_value(value: Value) -> Result<Self, ConsultationPersistenceError> {
+    fn from_safe_value(value: Value) -> Result<Self, ConsultationPersistenceError> {
+        let timeout_ms = value
+            .get("bounds")
+            .and_then(Value::as_object)
+            .and_then(|bounds| bounds.get("timeout_ms"))
+            .and_then(Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok())
+            .filter(|value| (1..=10_000).contains(value))
+            .ok_or(ConsultationPersistenceError::InvalidInput)?;
         let (canonical, digest) = canonical_binding(value)?;
         if canonical.len() > MAX_COMPLETION_SEED_CANONICAL_BYTES_V1 {
             return Err(ConsultationPersistenceError::InvalidInput);
         }
-        Ok(Self { canonical, digest })
+        Ok(Self {
+            canonical,
+            digest,
+            timeout_ms,
+        })
     }
 
     #[cfg(test)]
@@ -110,17 +133,19 @@ impl ConsultationCompletionSeed {
 }
 
 /// Exact pseudonym values already committed by the attempt audit.
+#[cfg(test)]
 pub(crate) struct AttemptPseudonymBundle {
     key_id: String,
     canonical: String,
     digest: [u8; 32],
 }
 
+#[cfg(test)]
 impl AttemptPseudonymBundle {
     /// Bind the exact four typed consultation commitments to the authoritative
     /// key epoch used for the attempt audit. The platform types have already
     /// enforced the closed key-id and `hmac-sha256:<lowercase hex>` grammars.
-    pub(crate) fn from_commitments(
+    fn from_commitments(
         key_id: &AuditPseudonymKeyId,
         subject_handle: &AuditPseudonymCommitment,
         input_commitment: &AuditPseudonymCommitment,
@@ -480,18 +505,61 @@ enum ActiveCompletionMode {
     Unfinished,
 }
 
+/// One normal-completion attempt while the sealed dispatch remains borrowed.
+/// A stale pseudonym authority proves zero mutation and lets the production
+/// orchestrator reacquire the then-current epoch without dropping the armed
+/// lifecycle seal.
+#[must_use = "a terminal attempt must either complete or trigger a fresh-authority retry"]
+pub(crate) enum TerminalCompletionAttempt<T> {
+    Completed(T),
+    PseudonymAuthorityStale,
+}
+
+enum ActiveConsultationFinalization {
+    Completed {
+        stored_identity: DurableAuditStoredIdentity,
+        outcome: ConsultationCompletionOutcome,
+    },
+    PseudonymAuthorityStale,
+}
+
 impl PostgresDurableAuditStatePlane {
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn write_attempt_with_completion_intent(
+    pub(crate) async fn write_attempt_with_state_view(
         &self,
-        write: &DurableAuditWrite,
-        seed: ConsultationCompletionSeed,
-        bundle: AttemptPseudonymBundle,
-        mut fence: FencedConsultationAttemptAuthority,
-        pseudonym_authority: ActiveAuditPseudonymWriteEpoch,
+        mut attempt: PreparedAtomicConsultationStateView<'_>,
     ) -> Result<AuditedConsultationDispatch, ConsultationPersistenceError> {
+        let write = attempt.audit_write().clone();
+        let seed_canonical = attempt.completion_seed_canonical().to_owned();
+        let seed_digest = *attempt.completion_seed_digest();
+        let bundle_canonical = attempt.pseudonym_bundle_canonical().to_owned();
+        let bundle_digest = *attempt.pseudonym_bundle_digest();
+        let bundle_key_id = attempt.pseudonym_key_id().to_owned();
+        let compiled_timeout_ms = attempt.compiled_timeout_ms();
+        let decision_expires_at_unix_ms = attempt.decision_expires_at_unix_ms();
+        let (
+            fence_lock_key,
+            fence_holder_id,
+            fence_generation,
+            fence_budget_ms,
+            permit_kinds,
+            permit_ordinals,
+        ) = {
+            let fence = attempt
+                .fence_mut()
+                .ok_or(ConsultationPersistenceError::InvalidInput)?;
+            let (permit_kinds, permit_ordinals) = fence.permit_set.postgres_arrays();
+            (
+                fence.lock_key,
+                fence.holder_id.clone(),
+                fence.fence_generation,
+                fence.budget.as_milliseconds(),
+                permit_kinds,
+                permit_ordinals,
+            )
+        };
         if write.key().stream_kind() != DurableAuditStreamKind::Consultation
             || write.key().phase() != DurableAuditPhase::Attempt
+            || i32::try_from(compiled_timeout_ms).ok() != Some(fence_budget_ms)
         {
             return Err(ConsultationPersistenceError::InvalidInput);
         }
@@ -499,17 +567,19 @@ impl PostgresDurableAuditStatePlane {
             .map_err(|_| ConsultationPersistenceError::InvalidInput)?;
         let started = Instant::now();
         let local_not_after = started
-            .checked_add(Duration::from_millis(fence.budget.as_milliseconds() as u64))
+            .checked_add(Duration::from_millis(fence_budget_ms as u64))
             .ok_or(ConsultationPersistenceError::ProtocolDrift)?;
         let (authority_key_id, authority_generation, authority_digest, chain_epoch, lock_key) =
-            pseudonym_authority.postgres_binding();
-        if authority_key_id != bundle.key_id
-            || chain_epoch != &self.chain_key_epoch_id
+            attempt.active_epoch().postgres_binding();
+        let authority_key_id = authority_key_id.to_owned();
+        let authority_digest = *authority_digest;
+        let chain_epoch = chain_epoch.clone();
+        if authority_key_id != bundle_key_id
+            || chain_epoch != self.chain_key_epoch_id
             || lock_key != self.keyring_lock_key.as_i64()
         {
             return Err(ConsultationPersistenceError::InvalidInput);
         }
-        let (permit_kinds, permit_ordinals) = fence.permit_set.postgres_arrays();
         let deadline = Instant::now() + MAX_ELAPSED;
         let client = tokio::time::timeout_at(deadline, self.client.lock())
             .await
@@ -529,17 +599,18 @@ impl PostgresDurableAuditStatePlane {
                     &[
                         &operation_id.as_str(),
                         &write.payload_digest().as_bytes().as_slice(),
-                        &seed.canonical,
-                        &seed.digest.as_slice(),
-                        &bundle.canonical,
-                        &bundle.digest.as_slice(),
-                        &bundle.key_id,
+                        &seed_canonical,
+                        &seed_digest.as_slice(),
+                        &bundle_canonical,
+                        &bundle_digest.as_slice(),
+                        &bundle_key_id,
                         &authority_generation,
                         &authority_digest.as_slice(),
-                        &fence.lock_key.as_i64(),
-                        &fence.holder_id,
-                        &fence.fence_generation,
-                        &fence.budget.as_milliseconds(),
+                        &fence_lock_key.as_i64(),
+                        &fence_holder_id,
+                        &fence_generation,
+                        &fence_budget_ms,
+                        &decision_expires_at_unix_ms,
                         &permit_kinds,
                         &permit_ordinals,
                         &self.chain_key_epoch_id.as_str(),
@@ -550,6 +621,9 @@ impl PostgresDurableAuditStatePlane {
             .await?;
             match required_str(&snapshot, "outcome")? {
                 "identical_duplicate" => {
+                    let fence = attempt
+                        .take_fence()
+                        .ok_or(ConsultationPersistenceError::ProtocolDrift)?;
                     return dispatch_from_attempt_row(
                         &snapshot,
                         operation_id,
@@ -558,6 +632,7 @@ impl PostgresDurableAuditStatePlane {
                     );
                 }
                 "conflicting_duplicate" => return Err(ConsultationPersistenceError::Conflict),
+                "decision_expired" => return Err(ConsultationPersistenceError::StateConflict),
                 "ownership_lost" => return Err(ConsultationPersistenceError::OwnershipLost),
                 "candidate" => {}
                 _ => return Err(ConsultationPersistenceError::ProtocolDrift),
@@ -571,10 +646,16 @@ impl PostgresDurableAuditStatePlane {
                 .map_err(|_| ConsultationPersistenceError::ProtocolDrift)?;
             let envelope_json = serde_json::to_string(&envelope)
                 .map_err(|_| ConsultationPersistenceError::ProtocolDrift)?;
+            attempt
+                .check_persistence_freshness()
+                .map_err(|_| ConsultationPersistenceError::StateConflict)?;
             // From this point PostgreSQL can commit the intent even if this
             // task never observes the acknowledgement. The seal remains armed
             // across retries and transfers into the returned dispatch.
-            fence.arm_lifecycle_seal();
+            attempt
+                .fence_mut()
+                .ok_or(ConsultationPersistenceError::ProtocolDrift)?
+                .arm_lifecycle_seal();
             let cas = consultation_query(
                 deadline,
                 client.query_one(
@@ -589,17 +670,18 @@ impl PostgresDurableAuditStatePlane {
                         &record_json,
                         &envelope_json,
                         &envelope.record_hash.as_slice(),
-                        &seed.canonical,
-                        &seed.digest.as_slice(),
-                        &bundle.canonical,
-                        &bundle.digest.as_slice(),
-                        &bundle.key_id,
+                        &seed_canonical,
+                        &seed_digest.as_slice(),
+                        &bundle_canonical,
+                        &bundle_digest.as_slice(),
+                        &bundle_key_id,
                         &authority_generation,
                         &authority_digest.as_slice(),
-                        &fence.lock_key.as_i64(),
-                        &fence.holder_id,
-                        &fence.fence_generation,
-                        &fence.budget.as_milliseconds(),
+                        &fence_lock_key.as_i64(),
+                        &fence_holder_id,
+                        &fence_generation,
+                        &fence_budget_ms,
+                        &decision_expires_at_unix_ms,
                         &permit_kinds,
                         &permit_ordinals,
                         &self.chain_key_epoch_id.as_str(),
@@ -610,6 +692,9 @@ impl PostgresDurableAuditStatePlane {
             .await?;
             match required_str(&cas, "outcome")? {
                 "inserted" | "identical_duplicate" => {
+                    let fence = attempt
+                        .take_fence()
+                        .ok_or(ConsultationPersistenceError::ProtocolDrift)?;
                     return dispatch_from_attempt_row(&cas, operation_id, fence, local_not_after);
                 }
                 "head_changed" => {
@@ -617,10 +702,25 @@ impl PostgresDurableAuditStatePlane {
                     // and inserted no intent or permit. Return the authority
                     // to its harmless pre-intent state before the read-only
                     // retry; the next mutating CAS re-arms it immediately.
-                    fence.disarm_after_head_changed();
+                    attempt
+                        .fence_mut()
+                        .ok_or(ConsultationPersistenceError::ProtocolDrift)?
+                        .disarm_after_non_mutating_attempt_cas();
                     continue;
                 }
                 "conflicting_duplicate" => return Err(ConsultationPersistenceError::Conflict),
+                "decision_expired" => {
+                    // PostgreSQL proves that expiry won before this CAS wrote
+                    // an audit row, completion intent, or permit. Restore the
+                    // harmless pre-intent seal before returning the conflict so
+                    // an ordinary authorization race cannot abort a healthy
+                    // fence session.
+                    attempt
+                        .fence_mut()
+                        .ok_or(ConsultationPersistenceError::ProtocolDrift)?
+                        .disarm_after_non_mutating_attempt_cas();
+                    return Err(ConsultationPersistenceError::StateConflict);
+                }
                 "ownership_lost" => return Err(ConsultationPersistenceError::OwnershipLost),
                 _ => return Err(ConsultationPersistenceError::ProtocolDrift),
             }
@@ -628,39 +728,146 @@ impl PostgresDurableAuditStatePlane {
         Err(ConsultationPersistenceError::Unavailable)
     }
 
-    pub(crate) async fn finalize_validated_consultation(
+    pub(crate) async fn finalize_validated_consultation_view(
+        &self,
+        mut terminal: TerminalConsultationStateView<'_>,
+        facts: &KnownConsultationCompletionFacts,
+        pseudonym_authority: ActiveAuditPseudonymWriteEpoch,
+        #[cfg(test)] test_hook: Option<&mut TerminalCompletionTestHook>,
+    ) -> Result<TerminalCompletionAttempt<KnownCompletionDisposition>, ConsultationPersistenceError>
+    {
+        let completion = self
+            .finalize_active_consultation(
+                terminal
+                    .dispatch_mut()
+                    .ok_or(ConsultationPersistenceError::InvalidInput)?,
+                Some(facts),
+                ActiveCompletionMode::Known,
+                pseudonym_authority,
+                #[cfg(test)]
+                test_hook,
+            )
+            .await?;
+        let ActiveConsultationFinalization::Completed {
+            stored_identity,
+            outcome,
+        } = completion
+        else {
+            return Ok(TerminalCompletionAttempt::PseudonymAuthorityStale);
+        };
+        if outcome != ConsultationCompletionOutcome::KnownComplete {
+            return Err(ConsultationPersistenceError::ProtocolDrift);
+        }
+        drop(
+            terminal
+                .take_dispatch()
+                .ok_or(ConsultationPersistenceError::ProtocolDrift)?,
+        );
+        Ok(TerminalCompletionAttempt::Completed(known_disposition(
+            facts,
+            stored_identity,
+        )))
+    }
+
+    pub(crate) async fn close_unfinished_consultation_view(
+        &self,
+        mut terminal: TerminalConsultationStateView<'_>,
+        pseudonym_authority: ActiveAuditPseudonymWriteEpoch,
+        #[cfg(test)] test_hook: Option<&mut TerminalCompletionTestHook>,
+    ) -> Result<
+        TerminalCompletionAttempt<ConsultationCompletionReceipt>,
+        ConsultationPersistenceError,
+    > {
+        let completion = self
+            .finalize_active_consultation(
+                terminal
+                    .dispatch_mut()
+                    .ok_or(ConsultationPersistenceError::InvalidInput)?,
+                None,
+                ActiveCompletionMode::Unfinished,
+                pseudonym_authority,
+                #[cfg(test)]
+                test_hook,
+            )
+            .await?;
+        let ActiveConsultationFinalization::Completed {
+            stored_identity,
+            outcome,
+        } = completion
+        else {
+            return Ok(TerminalCompletionAttempt::PseudonymAuthorityStale);
+        };
+        if outcome == ConsultationCompletionOutcome::KnownComplete {
+            return Err(ConsultationPersistenceError::ProtocolDrift);
+        }
+        drop(
+            terminal
+                .take_dispatch()
+                .ok_or(ConsultationPersistenceError::ProtocolDrift)?,
+        );
+        Ok(TerminalCompletionAttempt::Completed(
+            ConsultationCompletionReceipt {
+                stored_identity,
+                outcome,
+            },
+        ))
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn finalize_validated_consultation_for_test(
         &self,
         dispatch: AuditedConsultationDispatch,
         facts: KnownConsultationCompletionFacts,
         pseudonym_authority: ActiveAuditPseudonymWriteEpoch,
     ) -> Result<KnownCompletionDisposition, ConsultationPersistenceError> {
-        let (stored_identity, outcome) = self
+        let mut dispatch = dispatch;
+        let completion = self
             .finalize_active_consultation(
-                dispatch,
+                &mut dispatch,
                 Some(&facts),
                 ActiveCompletionMode::Known,
                 pseudonym_authority,
+                #[cfg(test)]
+                None,
             )
             .await?;
+        let ActiveConsultationFinalization::Completed {
+            stored_identity,
+            outcome,
+        } = completion
+        else {
+            return Err(ConsultationPersistenceError::StateConflict);
+        };
         if outcome != ConsultationCompletionOutcome::KnownComplete {
             return Err(ConsultationPersistenceError::ProtocolDrift);
         }
         Ok(known_disposition(&facts, stored_identity))
     }
 
-    pub(crate) async fn close_unfinished_consultation(
+    #[cfg(test)]
+    pub(crate) async fn close_unfinished_consultation_for_test(
         &self,
         dispatch: AuditedConsultationDispatch,
         pseudonym_authority: ActiveAuditPseudonymWriteEpoch,
     ) -> Result<ConsultationCompletionReceipt, ConsultationPersistenceError> {
-        let (stored_identity, outcome) = self
+        let mut dispatch = dispatch;
+        let completion = self
             .finalize_active_consultation(
-                dispatch,
+                &mut dispatch,
                 None,
                 ActiveCompletionMode::Unfinished,
                 pseudonym_authority,
+                #[cfg(test)]
+                None,
             )
             .await?;
+        let ActiveConsultationFinalization::Completed {
+            stored_identity,
+            outcome,
+        } = completion
+        else {
+            return Err(ConsultationPersistenceError::StateConflict);
+        };
         if outcome == ConsultationCompletionOutcome::KnownComplete {
             return Err(ConsultationPersistenceError::ProtocolDrift);
         }
@@ -672,14 +879,12 @@ impl PostgresDurableAuditStatePlane {
 
     async fn finalize_active_consultation(
         &self,
-        mut dispatch: AuditedConsultationDispatch,
+        dispatch: &mut AuditedConsultationDispatch,
         facts: Option<&KnownConsultationCompletionFacts>,
         mode: ActiveCompletionMode,
         pseudonym_authority: ActiveAuditPseudonymWriteEpoch,
-    ) -> Result<
-        (DurableAuditStoredIdentity, ConsultationCompletionOutcome),
-        ConsultationPersistenceError,
-    > {
+        #[cfg(test)] mut test_hook: Option<&mut TerminalCompletionTestHook>,
+    ) -> Result<ActiveConsultationFinalization, ConsultationPersistenceError> {
         if matches!(mode, ActiveCompletionMode::Known) != facts.is_some() {
             return Err(ConsultationPersistenceError::InvalidInput);
         }
@@ -715,6 +920,12 @@ impl PostgresDurableAuditStatePlane {
                 ),
             )
             .await?;
+            if required_str(&row, "outcome")? == "pseudonym_authority_stale" {
+                // This typed outcome carries null payload columns and proves
+                // the snapshot wrote nothing. Detect it before parsing and
+                // return while the exact armed dispatch remains borrowed.
+                return Ok(ActiveConsultationFinalization::PseudonymAuthorityStale);
+            }
             let snapshot = parse_completion_snapshot(&row)?;
             let completion_outcome = match mode {
                 ActiveCompletionMode::Known => ConsultationCompletionOutcome::KnownComplete,
@@ -730,7 +941,10 @@ impl PostgresDurableAuditStatePlane {
             if snapshot.outcome == "completed" {
                 let stored_identity = identical_completion(&snapshot, &completion)?;
                 dispatch.disarm_after_terminal_completion();
-                return Ok((stored_identity, completion_outcome));
+                return Ok(ActiveConsultationFinalization::Completed {
+                    stored_identity,
+                    outcome: completion_outcome,
+                });
             }
             match snapshot.outcome.as_str() {
                 "candidate" => {}
@@ -738,6 +952,11 @@ impl PostgresDurableAuditStatePlane {
                 "state_conflict" => return Err(ConsultationPersistenceError::StateConflict),
                 "ownership_lost" => return Err(ConsultationPersistenceError::OwnershipLost),
                 _ => return Err(ConsultationPersistenceError::ProtocolDrift),
+            }
+            #[cfg(test)]
+            if let Some(hook) = test_hook.as_mut() {
+                hook.pause_if(TerminalCompletionTestPoint::AfterCandidateSnapshot)
+                    .await?;
             }
             let generation = snapshot
                 .generation
@@ -788,9 +1007,18 @@ impl PostgresDurableAuditStatePlane {
                     }
                     let stored_identity = stored_identity(&cas)?;
                     dispatch.disarm_after_terminal_completion();
-                    return Ok((stored_identity, completion_outcome));
+                    return Ok(ActiveConsultationFinalization::Completed {
+                        stored_identity,
+                        outcome: completion_outcome,
+                    });
                 }
                 "head_changed" => continue,
+                "pseudonym_authority_stale" => {
+                    // The CAS revalidated authority under its mutation lock and
+                    // proved zero writes. Keep the dispatch armed and borrowed
+                    // so production can reacquire the current epoch and retry.
+                    return Ok(ActiveConsultationFinalization::PseudonymAuthorityStale);
+                }
                 "conflicting_duplicate" => return Err(ConsultationPersistenceError::Conflict),
                 "state_conflict" => return Err(ConsultationPersistenceError::StateConflict),
                 "ownership_lost" => return Err(ConsultationPersistenceError::OwnershipLost),
@@ -1252,6 +1480,7 @@ fn required_i16_array(row: &Row, column: &str) -> Result<Vec<i16>, ConsultationP
 }
 
 #[cfg(test)]
+#[cfg(test)]
 fn valid_key_id(value: &str) -> bool {
     let mut bytes = value.bytes();
     matches!(bytes.next(), Some(b'a'..=b'z' | b'0'..=b'9'))
@@ -1259,6 +1488,7 @@ fn valid_key_id(value: &str) -> bool {
         && bytes.all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'.' | b'_' | b'-'))
 }
 
+#[cfg(test)]
 #[cfg(test)]
 fn valid_commitment(value: &str) -> bool {
     !value.is_empty()

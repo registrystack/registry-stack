@@ -295,12 +295,14 @@ pub(super) fn compile_operation_descriptors(
 
 pub(super) fn compile_input_slots(
     pack: &IntegrationPackArtifact,
+    profile_contract_hash: &ProfileContractHash,
 ) -> Result<Vec<CompiledInputSlot>, SourcePlanCompileError> {
     pack.document
         .spec
         .input_slots
         .iter()
-        .map(|(name, input)| {
+        .enumerate()
+        .map(|(slot_index, (name, input))| {
             let pattern = parse_input_pattern(&input.pattern)
                 .map_err(|_| SourcePlanCompileError::CompilerInvariant)?;
             let canonicalization = match input.canonicalization {
@@ -311,6 +313,9 @@ pub(super) fn compile_input_slots(
             };
             Ok(CompiledInputSlot {
                 name: name.as_str().into(),
+                profile_contract_hash: profile_contract_hash.clone(),
+                slot_index: u16::try_from(slot_index)
+                    .map_err(|_| SourcePlanCompileError::CompilerInvariant)?,
                 max_bytes: input.max_bytes,
                 canonicalization,
                 matcher: CompiledInputMatcher { pattern },

@@ -24,11 +24,13 @@ pub(crate) use audit::{
     CompletionAttemptReference, PostgresDurableAuditStatePlane,
     PseudonymBoundDuplicateRecoveryOutcome, StatePlaneInitializationError, StatePlaneReadiness,
 };
+#[cfg(test)]
+pub(crate) use consultation::{AttemptPseudonymBundle, ConsultationCompletionSeed};
 pub(crate) use consultation::{
-    AttemptPseudonymBundle, ConsultationCompletionOutcome, ConsultationCompletionReceipt,
-    ConsultationCompletionSeed, ConsultationPersistenceError, ConsultationPublicationGrant,
-    KnownCompletionDisposition, KnownConsultationCompletionFacts, KnownFailureClass,
-    PublicConsultationOutcome, RecoveredConsultationCompletion,
+    ConsultationCompletionOutcome, ConsultationCompletionReceipt, ConsultationPersistenceError,
+    ConsultationPublicationGrant, KnownCompletionDisposition, KnownConsultationCompletionFacts,
+    KnownFailureClass, PublicConsultationOutcome, RecoveredConsultationCompletion,
+    TerminalCompletionAttempt,
 };
 pub(crate) use fence::{
     AuditedConsultationDispatch, ConsultationDispatchPermit, ConsultationPermitSet,

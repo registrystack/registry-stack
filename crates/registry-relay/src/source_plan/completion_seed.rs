@@ -6,25 +6,617 @@
 //! the resulting byte count. Runtime code never reconstructs or reparses a
 //! canonical artifact to establish this bound.
 
+use std::collections::BTreeSet;
+
 use registry_platform_audit::{
     DurableAuditOperationId, DurableAuditPhase, DurableAuditStreamKind, DurableAuditWrite,
 };
 use registry_platform_crypto::canonicalize_json;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
 use super::artifact::{
     IntegrationPackArtifact, PrivateBindingArtifact, PublicContractArtifact, SourcePlanKind,
     SourcePlanLimits,
 };
-use super::compiler::{RhaiWorkerLimits, SourcePlanCompileError};
+use super::compiler::{
+    CompiledBodyTemplate, CompiledCardinalityMechanism, CompiledOperation,
+    CompiledProjectionMechanism, CompiledScalarShape, CompiledSelectorLocation,
+    CompiledSelectorSource, CompiledStep, CompiledStepPredicate, CompiledValueExpression,
+    RhaiWorkerLimits, SourcePlanCompileError,
+};
+use super::runtime_profile::{
+    CompiledDispatchProfile, PhysicalProjectionDigest, PredicatePlanDigest, RhaiPredicateIdentity,
+};
 
 pub(super) const MAX_COMPLETION_AUDIT_CANONICAL_BYTES_V1: usize = 768 * 1024;
+
+const PREDICATE_PLAN_DOMAIN_V1: &str = "registry.relay.consultation-predicate-plan.v1";
+const PHYSICAL_PROJECTION_DOMAIN_V1: &str = "registry.relay.consultation-physical-projection.v1";
 
 pub(super) struct CompletionSeedSizing {
     pub(super) canonical_bytes_max: usize,
     pub(super) completion_audit_canonical_bytes_max: usize,
+    pub(super) template: CompiledCompletionSeedTemplate,
     #[cfg(test)]
     pub(super) canonical_value_max: Value,
+}
+
+/// Immutable, secret-free state-plane bindings needed to render one runtime
+/// completion seed.
+///
+/// This value deliberately retains no canonical JSON, source URL, credential
+/// material, request selector, predicate, or script source. Its private
+/// topology identifiers belong only in the restricted completion intent and
+/// audit path, so the type implements neither `Debug` nor serialization.
+pub(super) struct CompiledCompletionSeedTemplate {
+    credential_destination_id: Option<Box<str>>,
+    data_destination_id: Option<Box<str>>,
+    credential_reference: Option<Box<str>>,
+    credential_generation: Option<u64>,
+    authorized_operation_union: Box<[CompiledAuthorizedOperation]>,
+    permit_bindings: Box<[CompiledPermitBinding]>,
+    credential_token_lifetime_ms: Option<u32>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum CompiledOperationKind {
+    Credential,
+    Data,
+}
+
+impl CompiledOperationKind {
+    pub(super) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Credential => "credential",
+            Self::Data => "data",
+        }
+    }
+}
+
+pub(super) struct CompiledAuthorizedOperation {
+    kind: CompiledOperationKind,
+    operation_id: Box<str>,
+}
+
+impl CompiledAuthorizedOperation {
+    pub(super) const fn kind(&self) -> CompiledOperationKind {
+        self.kind
+    }
+
+    pub(super) fn operation_id(&self) -> &str {
+        &self.operation_id
+    }
+}
+
+pub(super) struct CompiledPermitBinding {
+    kind: CompiledOperationKind,
+    ordinal: u8,
+    allowed_operation_ids: Box<[Box<str>]>,
+}
+
+impl CompiledPermitBinding {
+    pub(super) const fn kind(&self) -> CompiledOperationKind {
+        self.kind
+    }
+
+    pub(super) const fn ordinal(&self) -> u8 {
+        self.ordinal
+    }
+
+    pub(super) fn allowed_operation_ids(&self) -> impl ExactSizeIterator<Item = &str> {
+        self.allowed_operation_ids.iter().map(AsRef::as_ref)
+    }
+}
+
+impl CompiledCompletionSeedTemplate {
+    pub(super) fn credential_destination_id(&self) -> Option<&str> {
+        self.credential_destination_id.as_deref()
+    }
+
+    pub(super) fn data_destination_id(&self) -> Option<&str> {
+        self.data_destination_id.as_deref()
+    }
+
+    pub(super) fn credential_reference(&self) -> Option<&str> {
+        self.credential_reference.as_deref()
+    }
+
+    pub(super) const fn credential_generation(&self) -> Option<u64> {
+        self.credential_generation
+    }
+
+    pub(super) fn authorized_operation_union(
+        &self,
+    ) -> impl ExactSizeIterator<Item = &CompiledAuthorizedOperation> {
+        self.authorized_operation_union.iter()
+    }
+
+    pub(super) fn permit_bindings(&self) -> impl ExactSizeIterator<Item = &CompiledPermitBinding> {
+        self.permit_bindings.iter()
+    }
+
+    pub(super) const fn credential_token_lifetime_ms(&self) -> Option<u32> {
+        self.credential_token_lifetime_ms
+    }
+}
+
+pub(super) fn compile_runtime_commitment_digests(
+    kind: SourcePlanKind,
+    input_names: &[&str],
+    operations: &[CompiledOperation],
+    steps: &[CompiledStep],
+    dispatch: &CompiledDispatchProfile,
+    rhai: Option<&RhaiPredicateIdentity>,
+) -> Result<(PredicatePlanDigest, PhysicalProjectionDigest), SourcePlanCompileError> {
+    let predicate =
+        compile_predicate_plan_digest(kind, input_names, operations, steps, dispatch, rhai)?;
+    let projection = compile_physical_projection_digest(kind, operations)?;
+    Ok((predicate, projection))
+}
+
+fn compile_predicate_plan_digest(
+    kind: SourcePlanKind,
+    input_names: &[&str],
+    operations: &[CompiledOperation],
+    steps: &[CompiledStep],
+    dispatch: &CompiledDispatchProfile,
+    rhai: Option<&RhaiPredicateIdentity>,
+) -> Result<PredicatePlanDigest, SourcePlanCompileError> {
+    let mut operation_preimages = operations
+        .iter()
+        .map(|operation| {
+            Ok((
+                operation.id().as_str(),
+                predicate_operation_preimage(operation, input_names, operations)?,
+            ))
+        })
+        .collect::<Result<Vec<_>, SourcePlanCompileError>>()?;
+    operation_preimages.sort_unstable_by(|left, right| left.0.as_bytes().cmp(right.0.as_bytes()));
+    let operation_preimages = operation_preimages
+        .into_iter()
+        .map(|(_, preimage)| preimage)
+        .collect::<Vec<_>>();
+
+    let plan = match (kind, dispatch, rhai) {
+        (SourcePlanKind::SnapshotExact, CompiledDispatchProfile::SnapshotExact, None) => {
+            let input = input_names
+                .first()
+                .copied()
+                .ok_or(SourcePlanCompileError::CompilerInvariant)?;
+            json!({
+                "schema": "registry.relay.consultation-predicate-plan.v1",
+                "kind": "snapshot_exact",
+                "operations": operation_preimages,
+                "snapshot_selector": {
+                    "source": {"kind": "consultation_input", "input": input},
+                    "location": {"kind": "materialized_snapshot_key"},
+                },
+            })
+        }
+        (SourcePlanKind::BoundedHttp, CompiledDispatchProfile::BoundedHttp { .. }, None) => {
+            let ordered_steps = steps
+                .iter()
+                .map(|step| bounded_step_preimage(step, operations))
+                .collect::<Result<Vec<_>, SourcePlanCompileError>>()?;
+            json!({
+                "schema": "registry.relay.consultation-predicate-plan.v1",
+                "kind": "bounded_http",
+                "operations": operation_preimages,
+                "ordered_steps": ordered_steps,
+            })
+        }
+        (
+            SourcePlanKind::SandboxedRhai,
+            CompiledDispatchProfile::SandboxedRhai {
+                callable_operations,
+                worker_limits,
+            },
+            Some(rhai),
+        ) if worker_limits.max_calls() > 0 => json!({
+            "schema": "registry.relay.consultation-predicate-plan.v1",
+            "kind": "sandboxed_rhai",
+            "operations": operation_preimages,
+            "rhai": {
+                "script_hash": rhai.script_hash(),
+                "entrypoint": rhai.entrypoint(),
+                "callable_operation_ids": callable_operations
+                    .iter()
+                    .map(crate::consultation::OperationId::as_str)
+                    .collect::<Vec<_>>(),
+                "effective_max_calls": worker_limits.max_calls(),
+            },
+        }),
+        _ => return Err(SourcePlanCompileError::CompilerInvariant),
+    };
+    PredicatePlanDigest::from_compiled_label(domain_separated_digest(
+        PREDICATE_PLAN_DOMAIN_V1,
+        &plan,
+    )?)
+}
+
+fn compile_physical_projection_digest(
+    kind: SourcePlanKind,
+    operations: &[CompiledOperation],
+) -> Result<PhysicalProjectionDigest, SourcePlanCompileError> {
+    let mut operation_preimages = operations
+        .iter()
+        .map(|operation| {
+            let outputs = operation
+                .response()
+                .outputs()
+                .map(|output| {
+                    json!({
+                        "field": output.field(),
+                        "pointer_tokens": output.extraction_pointer().tokens().collect::<Vec<_>>(),
+                    })
+                })
+                .collect::<Vec<_>>();
+            Ok((
+                operation.id().as_str(),
+                json!({
+                    "operation_id": operation.id().as_str(),
+                    "projection": projection_preimage(operation)?,
+                    "cardinality": cardinality_preimage(operation)?,
+                    "output_mappings": outputs,
+                }),
+            ))
+        })
+        .collect::<Result<Vec<_>, SourcePlanCompileError>>()?;
+    operation_preimages.sort_unstable_by(|left, right| left.0.as_bytes().cmp(right.0.as_bytes()));
+    PhysicalProjectionDigest::from_compiled_label(domain_separated_digest(
+        PHYSICAL_PROJECTION_DOMAIN_V1,
+        &json!({
+            "schema": "registry.relay.consultation-physical-projection.v1",
+            "plan_kind": source_plan_kind_str(kind),
+            "operations": operation_preimages
+                .into_iter()
+                .map(|(_, preimage)| preimage)
+                .collect::<Vec<_>>(),
+        }),
+    )?)
+}
+
+fn predicate_operation_preimage(
+    operation: &CompiledOperation,
+    input_names: &[&str],
+    operations: &[CompiledOperation],
+) -> Result<Value, SourcePlanCompileError> {
+    let prior_output_declarations = operation
+        .response()
+        .prior_outputs()
+        .map(|output| {
+            json!({
+                "name": output.name(),
+                "pointer_tokens": output.extraction_pointer().tokens().collect::<Vec<_>>(),
+                "shape": scalar_shape_preimage(output.shape()),
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(json!({
+        "operation_id": operation.id().as_str(),
+        "selector": selector_preimage(operation, input_names, operations)?,
+        "prior_output_dependencies": prior_output_dependencies(operation, operations)?,
+        "prior_output_declarations": prior_output_declarations,
+        "projection": projection_preimage(operation)?,
+        "cardinality": cardinality_preimage(operation)?,
+    }))
+}
+
+fn selector_preimage(
+    operation: &CompiledOperation,
+    input_names: &[&str],
+    operations: &[CompiledOperation],
+) -> Result<Value, SourcePlanCompileError> {
+    let source = match operation.selector().source() {
+        CompiledSelectorSource::ConsultationInput { input_index } => json!({
+            "kind": "consultation_input",
+            "input": input_names
+                .get(input_index)
+                .copied()
+                .ok_or(SourcePlanCompileError::CompilerInvariant)?,
+        }),
+        CompiledSelectorSource::PriorStepOutput {
+            operation_index,
+            output_slot_index,
+        } => prior_output_source_preimage(operations, operation_index, output_slot_index)?,
+    };
+    Ok(json!({
+        "source": source,
+        "location": selector_location_preimage(operation, operation.selector().location())?,
+    }))
+}
+
+fn selector_location_preimage(
+    operation: &CompiledOperation,
+    location: &CompiledSelectorLocation,
+) -> Result<Value, SourcePlanCompileError> {
+    match location {
+        CompiledSelectorLocation::Query { component_index } => Ok(json!({
+            "kind": "query",
+            "parameter": operation
+                .query()
+                .nth(*component_index)
+                .map(|component| component.name())
+                .ok_or(SourcePlanCompileError::CompilerInvariant)?,
+        })),
+        CompiledSelectorLocation::Body { pointer } => Ok(json!({
+            "kind": "body",
+            "pointer_tokens": pointer.tokens().collect::<Vec<_>>(),
+        })),
+        CompiledSelectorLocation::DciIdtypeValue => Ok(json!({
+            "kind": "codec",
+            "role": "dci_idtype_value",
+        })),
+        // A future closed path-segment selector must commit only its compiled
+        // fixed segment ordinal/role here. It must never place a rendered path
+        // or raw selector value in this preimage.
+    }
+}
+
+fn prior_output_source_preimage(
+    operations: &[CompiledOperation],
+    operation_index: usize,
+    output_slot_index: usize,
+) -> Result<Value, SourcePlanCompileError> {
+    let operation = operations
+        .get(operation_index)
+        .ok_or(SourcePlanCompileError::CompilerInvariant)?;
+    let output = operation
+        .response()
+        .prior_outputs()
+        .nth(output_slot_index)
+        .ok_or(SourcePlanCompileError::CompilerInvariant)?;
+    Ok(json!({
+        "kind": "prior_output",
+        "operation_id": operation.id().as_str(),
+        "output": output.name(),
+    }))
+}
+
+fn prior_output_dependencies(
+    operation: &CompiledOperation,
+    operations: &[CompiledOperation],
+) -> Result<Vec<Value>, SourcePlanCompileError> {
+    let mut dependencies = Vec::new();
+    if let CompiledSelectorSource::PriorStepOutput {
+        operation_index,
+        output_slot_index,
+    } = operation.selector().source()
+    {
+        dependencies.push(json!({
+            "request_location": selector_location_preimage(
+                operation,
+                operation.selector().location(),
+            )?,
+            "source": prior_output_source_preimage(
+                operations,
+                operation_index,
+                output_slot_index,
+            )?,
+        }));
+    }
+    for component in operation.query() {
+        append_expression_dependency(
+            component.value(),
+            json!({"kind": "query", "parameter": component.name()}),
+            operations,
+            &mut dependencies,
+        )?;
+    }
+    for component in operation.headers() {
+        append_expression_dependency(
+            component.value(),
+            json!({"kind": "header", "name": component.name()}),
+            operations,
+            &mut dependencies,
+        )?;
+    }
+    if let Some(body) = operation.body() {
+        collect_body_dependencies(body, &mut Vec::new(), operations, &mut dependencies)?;
+    }
+    Ok(dependencies)
+}
+
+fn append_expression_dependency(
+    expression: &CompiledValueExpression,
+    request_location: Value,
+    operations: &[CompiledOperation],
+    dependencies: &mut Vec<Value>,
+) -> Result<(), SourcePlanCompileError> {
+    if let CompiledValueExpression::PriorStepOutput {
+        operation_index,
+        output_slot_index,
+    } = expression
+    {
+        dependencies.push(json!({
+            "request_location": request_location,
+            "source": prior_output_source_preimage(
+                operations,
+                *operation_index,
+                *output_slot_index,
+            )?,
+        }));
+    }
+    Ok(())
+}
+
+fn collect_body_dependencies(
+    body: &CompiledBodyTemplate,
+    path: &mut Vec<Value>,
+    operations: &[CompiledOperation],
+    dependencies: &mut Vec<Value>,
+) -> Result<(), SourcePlanCompileError> {
+    match body {
+        CompiledBodyTemplate::Expression(expression) => append_expression_dependency(
+            expression,
+            json!({"kind": "body_template", "path": path}),
+            operations,
+            dependencies,
+        ),
+        CompiledBodyTemplate::Array(items) => {
+            for (index, item) in items.iter().enumerate() {
+                path.push(json!(index));
+                collect_body_dependencies(item, path, operations, dependencies)?;
+                path.pop();
+            }
+            Ok(())
+        }
+        CompiledBodyTemplate::Object(fields) => {
+            for field in fields {
+                path.push(json!(field.name()));
+                collect_body_dependencies(field.value(), path, operations, dependencies)?;
+                path.pop();
+            }
+            Ok(())
+        }
+        CompiledBodyTemplate::Null
+        | CompiledBodyTemplate::Boolean(_)
+        | CompiledBodyTemplate::Integer(_)
+        | CompiledBodyTemplate::StringLiteral(_) => Ok(()),
+    }
+}
+
+fn projection_preimage(operation: &CompiledOperation) -> Result<Value, SourcePlanCompileError> {
+    match operation.projection() {
+        CompiledProjectionMechanism::QueryParameterExact { query_index } => Ok(json!({
+            "kind": "query_parameter_exact",
+            "parameter": operation
+                .query()
+                .nth(*query_index)
+                .map(|component| component.name())
+                .ok_or(SourcePlanCompileError::CompilerInvariant)?,
+        })),
+        CompiledProjectionMechanism::ReviewedRequestTemplate { evidence_hash } => Ok(json!({
+            "kind": "reviewed_request_template",
+            "evidence_hash": evidence_hash.as_ref(),
+        })),
+        CompiledProjectionMechanism::BoundedFullRecord => {
+            Ok(json!({"kind": "bounded_full_record"}))
+        }
+    }
+}
+
+fn cardinality_preimage(operation: &CompiledOperation) -> Result<Value, SourcePlanCompileError> {
+    match operation.response().cardinality() {
+        CompiledCardinalityMechanism::ProbeQueryParameter { query_index } => Ok(json!({
+            "kind": "probe_query_parameter",
+            "parameter": operation
+                .query()
+                .nth(*query_index)
+                .map(|component| component.name())
+                .ok_or(SourcePlanCompileError::CompilerInvariant)?,
+        })),
+        CompiledCardinalityMechanism::ProbeBodyInteger { pointer } => Ok(json!({
+            "kind": "probe_body_integer",
+            "pointer_tokens": pointer.tokens().collect::<Vec<_>>(),
+        })),
+        CompiledCardinalityMechanism::ReviewedRequestTemplateProbe { evidence_hash } => Ok(json!({
+            "kind": "reviewed_request_template_probe",
+            "evidence_hash": evidence_hash.as_ref(),
+        })),
+        CompiledCardinalityMechanism::SourceEnforcedSingleton { evidence_hash } => Ok(json!({
+            "kind": "source_enforced_singleton",
+            "evidence_hash": evidence_hash.as_ref(),
+        })),
+    }
+}
+
+fn bounded_step_preimage(
+    step: &CompiledStep,
+    operations: &[CompiledOperation],
+) -> Result<Value, SourcePlanCompileError> {
+    let operation = operations
+        .get(step.operation_index())
+        .ok_or(SourcePlanCompileError::CompilerInvariant)?;
+    let condition = match (
+        step.condition_source_index(),
+        step.condition_output_slot_index(),
+        step.condition(),
+    ) {
+        (None, None, None) => Value::Null,
+        (Some(source_index), Some(output_index), Some(predicate)) => json!({
+            "source": prior_output_source_preimage(operations, source_index, output_index)?,
+            "predicate": match predicate {
+                CompiledStepPredicate::Exists => json!({"kind": "exists"}),
+                CompiledStepPredicate::StringEquals(value) => {
+                    json!({"kind": "string_equals", "value": value.as_ref()})
+                }
+                CompiledStepPredicate::BooleanEquals(value) => {
+                    json!({"kind": "boolean_equals", "value": value})
+                }
+                CompiledStepPredicate::IntegerEquals(value) => {
+                    json!({"kind": "integer_equals", "value": value})
+                }
+            },
+        }),
+        _ => return Err(SourcePlanCompileError::CompilerInvariant),
+    };
+    Ok(json!({
+        "operation_id": operation.id().as_str(),
+        "condition": condition,
+    }))
+}
+
+fn scalar_shape_preimage(shape: &CompiledScalarShape) -> Value {
+    match shape {
+        CompiledScalarShape::String {
+            nullable,
+            max_bytes,
+        } => json!({"type": "string", "nullable": nullable, "max_bytes": max_bytes}),
+        CompiledScalarShape::Boolean { nullable } => {
+            json!({"type": "boolean", "nullable": nullable})
+        }
+        CompiledScalarShape::Integer {
+            nullable,
+            minimum,
+            maximum,
+        } => json!({
+            "type": "integer",
+            "nullable": nullable,
+            "minimum": minimum,
+            "maximum": maximum,
+        }),
+        CompiledScalarShape::Number {
+            nullable,
+            minimum,
+            maximum,
+        } => json!({
+            "type": "number",
+            "nullable": nullable,
+            "minimum": minimum,
+            "maximum": maximum,
+        }),
+    }
+}
+
+fn domain_separated_digest(
+    domain: &str,
+    value: &Value,
+) -> Result<Box<str>, SourcePlanCompileError> {
+    use std::fmt::Write as _;
+
+    let canonical =
+        canonicalize_json(value).map_err(|_| SourcePlanCompileError::CompilerInvariant)?;
+    let mut hasher = Sha256::new();
+    hasher.update(domain.as_bytes());
+    hasher.update([0]);
+    hasher.update(canonical);
+    let digest = hasher.finalize();
+    let mut label = String::with_capacity(71);
+    label.push_str("sha256:");
+    for byte in digest {
+        write!(label, "{byte:02x}").map_err(|_| SourcePlanCompileError::CompilerInvariant)?;
+    }
+    Ok(label.into())
+}
+
+const fn source_plan_kind_str(kind: SourcePlanKind) -> &'static str {
+    match kind {
+        SourcePlanKind::SnapshotExact => "snapshot_exact",
+        SourcePlanKind::BoundedHttp => "bounded_http",
+        SourcePlanKind::SandboxedRhai => "sandboxed_rhai",
+    }
 }
 
 pub(super) fn measure_completion_seed(
@@ -48,6 +640,17 @@ pub(super) fn measure_completion_seed(
         )
         .collect::<Vec<_>>();
     authorized_operation_union.sort_unstable();
+    let compiled_authorized_operation_union = authorized_operation_union
+        .iter()
+        .map(|(kind, operation_id)| CompiledAuthorizedOperation {
+            kind: match *kind {
+                "credential" => CompiledOperationKind::Credential,
+                "data" => CompiledOperationKind::Data,
+                _ => unreachable!("closed operation kind"),
+            },
+            operation_id: (*operation_id).into(),
+        })
+        .collect::<Box<[_]>>();
     let authorized_operation_union = authorized_operation_union
         .into_iter()
         .map(|(kind, operation_id)| {
@@ -59,14 +662,25 @@ pub(super) fn measure_completion_seed(
         .collect::<Vec<_>>();
     let data_permit_operations = match pack.document.spec.plan.kind {
         SourcePlanKind::SnapshotExact => Vec::new(),
-        SourcePlanKind::BoundedHttp => pack
-            .document
-            .spec
-            .plan
-            .steps
-            .iter()
-            .map(|operation| vec![operation.as_str()])
-            .collect::<Vec<_>>(),
+        SourcePlanKind::BoundedHttp => {
+            let steps = pack
+                .document
+                .spec
+                .plan
+                .steps
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>();
+            let conditioned = pack
+                .document
+                .spec
+                .plan
+                .step_conditions
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>();
+            bounded_actual_call_permit_operations(&steps, &conditioned)
+        }
         SourcePlanKind::SandboxedRhai => {
             let limits = rhai_limits.ok_or(SourcePlanCompileError::CompilerInvariant)?;
             let mut callable = operations
@@ -79,26 +693,37 @@ pub(super) fn measure_completion_seed(
                 .collect::<Vec<_>>()
         }
     };
+    let mut compiled_permit_bindings = Vec::new();
     let mut permit_bindings = Vec::new();
     if let Some(operation) = credential_operation {
+        compiled_permit_bindings.push(CompiledPermitBinding {
+            kind: CompiledOperationKind::Credential,
+            ordinal: 0,
+            allowed_operation_ids: vec![Box::<str>::from(operation.id.as_str())].into_boxed_slice(),
+        });
         permit_bindings.push(json!({
             "kind": "credential",
             "ordinal": 0,
             "allowed_operation_ids": [operation.id.as_str()],
         }));
     }
-    permit_bindings.extend(
-        data_permit_operations
-            .iter()
-            .enumerate()
-            .map(|(ordinal, allowed)| {
-                json!({
-                    "kind": "data",
-                    "ordinal": ordinal,
-                    "allowed_operation_ids": allowed,
-                })
-            }),
-    );
+    for (ordinal, allowed) in data_permit_operations.iter().enumerate() {
+        let ordinal =
+            u8::try_from(ordinal).map_err(|_| SourcePlanCompileError::CompilerInvariant)?;
+        compiled_permit_bindings.push(CompiledPermitBinding {
+            kind: CompiledOperationKind::Data,
+            ordinal,
+            allowed_operation_ids: allowed
+                .iter()
+                .map(|operation_id| Box::<str>::from(*operation_id))
+                .collect(),
+        });
+        permit_bindings.push(json!({
+            "kind": "data",
+            "ordinal": ordinal,
+            "allowed_operation_ids": allowed,
+        }));
+    }
     let consent = &contract.document.spec.authorization.consent;
     let consent_verifier = consent.verifier.as_ref();
     let acquisition_fields = serde_json::to_value(&contract.document.spec.acquisition.fields)
@@ -139,6 +764,15 @@ pub(super) fn measure_completion_seed(
         .credential
         .as_ref()
         .map(|credential| credential.generation);
+    let template = CompiledCompletionSeedTemplate {
+        credential_destination_id: credential_destination_id.map(Into::into),
+        data_destination_id: data_destination_id.map(Into::into),
+        credential_reference: credential_reference.map(Into::into),
+        credential_generation,
+        authorized_operation_union: compiled_authorized_operation_union,
+        permit_bindings: compiled_permit_bindings.into_boxed_slice(),
+        credential_token_lifetime_ms: effective_token_lifetime_ms,
+    };
     let operation_bounds = effective_limits.operation();
     let kind = match pack.document.spec.plan.kind {
         SourcePlanKind::SnapshotExact => "snapshot_exact",
@@ -267,9 +901,36 @@ pub(super) fn measure_completion_seed(
     Ok(CompletionSeedSizing {
         canonical_bytes_max,
         completion_audit_canonical_bytes_max,
+        template,
         #[cfg(test)]
         canonical_value_max,
     })
+}
+
+/// Bind Bounded HTTP permits to monotonic actual-call positions, not fixed
+/// step positions. A conditioned earlier step may be skipped while a later
+/// step executes, so each position carries the exact safe operation union that
+/// can occupy it. The executor still proves the reviewed condition and
+/// dependency before selecting one member of that union.
+pub(super) fn bounded_actual_call_permit_operations<'a>(
+    steps: &[&'a str],
+    conditioned: &BTreeSet<&str>,
+) -> Vec<Vec<&'a str>> {
+    let mut permits = vec![Vec::new(); steps.len()];
+    let mut required_predecessors = 0_usize;
+    for (step_index, operation) in steps.iter().copied().enumerate() {
+        for permit in &mut permits[required_predecessors..=step_index] {
+            permit.push(operation);
+        }
+        if !conditioned.contains(operation) {
+            required_predecessors += 1;
+        }
+    }
+    for permit in &mut permits {
+        permit.sort_unstable();
+        permit.dedup();
+    }
+    permits
 }
 
 fn measure_completion_audit_payload(

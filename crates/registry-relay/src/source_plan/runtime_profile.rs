@@ -26,10 +26,93 @@ use super::compiler::{
     CompiledResponseSchema, CompiledSourceAuth, CompiledStep, RhaiWorkerLimits,
     SourcePlanCompileError,
 };
+use super::completion_seed::{compile_runtime_commitment_digests, CompiledCompletionSeedTemplate};
 use super::identifiers::{CanonicalPurpose, LegalBasisId, SourceDestinationId};
 
 /// Canonical completion-intent seed ceiling enforced by both compiler and SQL.
 pub(crate) const MAX_COMPLETION_SEED_CANONICAL_BYTES_V1: usize = 256 * 1024;
+
+macro_rules! compiled_digest {
+    ($(#[$meta:meta])* $name:ident) => {
+        $(#[$meta])*
+        #[derive(Clone, PartialEq, Eq, Hash)]
+        pub(crate) struct $name(Box<str>);
+
+        impl $name {
+            pub(crate) fn as_str(&self) -> &str {
+                &self.0
+            }
+
+            pub(super) fn from_compiled_label(
+                label: Box<str>,
+            ) -> Result<Self, SourcePlanCompileError> {
+                IntegrationPackHash::try_from(label.as_ref())
+                    .map_err(|_| SourcePlanCompileError::CompilerInvariant)?;
+                Ok(Self(label))
+            }
+        }
+
+        impl fmt::Debug for $name {
+            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter
+                    .debug_tuple(stringify!($name))
+                    .field(&"sha256:<redacted>")
+                    .finish()
+            }
+        }
+    };
+}
+
+compiled_digest!(
+    /// Digest of the exact typed compiled predicate-plan v1 preimage.
+    PredicatePlanDigest
+);
+compiled_digest!(
+    /// Digest of the fixed physical projection and cardinality mechanisms.
+    PhysicalProjectionDigest
+);
+
+/// Safe Rhai identity borrowed from the already validated integration pack.
+///
+/// The script source is intentionally absent. This value is consumed while
+/// deriving the predicate-plan digest and is not retained in the runtime
+/// profile.
+pub(super) struct RhaiPredicateIdentity {
+    script_hash: Box<str>,
+    entrypoint: Box<str>,
+}
+
+impl RhaiPredicateIdentity {
+    pub(super) fn from_validated_artifact(
+        script_hash: &str,
+        entrypoint: &str,
+    ) -> Result<Self, SourcePlanCompileError> {
+        let mut entrypoint_bytes = entrypoint.bytes();
+        let valid_entrypoint = matches!(entrypoint_bytes.next(), Some(b'a'..=b'z'))
+            && entrypoint.len() <= 96
+            && entrypoint_bytes.all(|byte| {
+                matches!(
+                    byte,
+                    b'a'..=b'z' | b'0'..=b'9' | b'.' | b'_' | b':' | b'-'
+                )
+            });
+        if IntegrationPackHash::try_from(script_hash).is_err() || !valid_entrypoint {
+            return Err(SourcePlanCompileError::CompilerInvariant);
+        }
+        Ok(Self {
+            script_hash: script_hash.into(),
+            entrypoint: entrypoint.into(),
+        })
+    }
+
+    pub(super) fn script_hash(&self) -> &str {
+        &self.script_hash
+    }
+
+    pub(super) fn entrypoint(&self) -> &str {
+        &self.entrypoint
+    }
+}
 
 /// The typed, immutable consultation profile used by runtime layers.
 pub(crate) struct CompiledRuntimeProfile {
@@ -57,6 +140,9 @@ pub(crate) struct CompiledRuntimeProfile {
     cardinality: SourceCardinality,
     dispatch: CompiledDispatchProfile,
     operations: Box<[CompiledDataOperationDescriptor]>,
+    predicate_plan_digest: PredicatePlanDigest,
+    physical_projection_digest: PhysicalProjectionDigest,
+    completion_seed_template: CompiledCompletionSeedTemplate,
     completion_seed_canonical_bytes_max: usize,
     completion_audit_canonical_bytes_max: usize,
 }
@@ -91,6 +177,8 @@ impl CompiledRuntimeProfile {
         steps: &[CompiledStep],
         data_destination_id: Option<&SourceDestinationId>,
         rhai_worker_limits: Option<RhaiWorkerLimits>,
+        rhai_predicate_identity: Option<RhaiPredicateIdentity>,
+        completion_seed_template: CompiledCompletionSeedTemplate,
         completion_seed_canonical_bytes_max: usize,
         completion_audit_canonical_bytes_max: usize,
         product_family: &str,
@@ -253,6 +341,22 @@ impl CompiledRuntimeProfile {
             },
             _ => return Err(SourcePlanCompileError::CompilerInvariant),
         };
+        let (predicate_plan_digest, physical_projection_digest) =
+            compile_runtime_commitment_digests(
+                kind,
+                contract
+                    .document
+                    .spec
+                    .inputs
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+                    .as_slice(),
+                operations,
+                steps,
+                &dispatch,
+                rhai_predicate_identity.as_ref(),
+            )?;
         let acquisition_provenance = match (
             &contract.document.spec.source_provenance.source_observed_at,
             &contract.document.spec.source_provenance.source_revision,
@@ -299,6 +403,9 @@ impl CompiledRuntimeProfile {
             cardinality: contract.cardinality,
             dispatch,
             operations: operation_descriptors,
+            predicate_plan_digest,
+            physical_projection_digest,
+            completion_seed_template,
             completion_seed_canonical_bytes_max,
             completion_audit_canonical_bytes_max,
         })
@@ -402,6 +509,56 @@ impl CompiledRuntimeProfile {
         self.operations.iter()
     }
 
+    pub(crate) const fn predicate_plan_digest(&self) -> &PredicatePlanDigest {
+        &self.predicate_plan_digest
+    }
+
+    pub(crate) const fn physical_projection_digest(&self) -> &PhysicalProjectionDigest {
+        &self.physical_projection_digest
+    }
+
+    pub(crate) fn authorized_operation_union(
+        &self,
+    ) -> impl ExactSizeIterator<Item = (&'static str, &str)> {
+        self.completion_seed_template
+            .authorized_operation_union()
+            .map(|operation| (operation.kind().as_str(), operation.operation_id()))
+    }
+
+    pub(crate) fn permit_bindings(
+        &self,
+    ) -> impl ExactSizeIterator<Item = (&'static str, u8, Vec<&str>)> {
+        self.completion_seed_template
+            .permit_bindings()
+            .map(|binding| {
+                (
+                    binding.kind().as_str(),
+                    binding.ordinal(),
+                    binding.allowed_operation_ids().collect(),
+                )
+            })
+    }
+
+    pub(crate) fn credential_destination_id(&self) -> Option<&str> {
+        self.completion_seed_template.credential_destination_id()
+    }
+
+    pub(crate) fn data_destination_id(&self) -> Option<&str> {
+        self.completion_seed_template.data_destination_id()
+    }
+
+    pub(crate) fn credential_reference(&self) -> Option<&str> {
+        self.completion_seed_template.credential_reference()
+    }
+
+    pub(crate) const fn credential_generation(&self) -> Option<u64> {
+        self.completion_seed_template.credential_generation()
+    }
+
+    pub(crate) const fn credential_token_lifetime_ms(&self) -> Option<u32> {
+        self.completion_seed_template.credential_token_lifetime_ms()
+    }
+
     pub(crate) const fn completion_seed_canonical_bytes_max(&self) -> usize {
         self.completion_seed_canonical_bytes_max
     }
@@ -458,6 +615,7 @@ impl CompiledRuntimeProfile {
             .first_mut()
             .ok_or(SourcePlanCompileError::CompilerInvariant)?;
         operation.response_schema = schema;
+        self.completion_seed_canonical_bytes_max = MAX_COMPLETION_SEED_CANONICAL_BYTES_V1;
         Ok(())
     }
 }

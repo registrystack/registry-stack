@@ -25,6 +25,8 @@ use thiserror::Error;
 use crate::config::{ConsultationConfig, MAX_AUDIT_PSEUDONYM_MATERIALS};
 use crate::state_plane::{ActiveAuditPseudonymWriteEpoch, AuditPseudonymWriteAuthority};
 
+use super::commitments::{ConsultationPseudonymInputs, VerifiedConsentDecision};
+
 /// Value-free failure taxonomy for startup loading and authority binding.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AuditPseudonymMaterialProviderError {
@@ -138,13 +140,19 @@ pub(crate) struct BoundAuditPseudonymCommitter<'provider> {
 impl BoundAuditPseudonymCommitter<'_> {
     /// Consume typed, zeroizing inputs and compute only the four frozen Relay
     /// consultation commitment domains.
-    pub(crate) fn prepare_attempt(
+    pub(crate) fn prepare_attempt<'profile>(
         self,
-        subject: TransientPseudonymInput,
-        input: TransientPseudonymInput,
-        predicate: TransientPseudonymInput,
-        consent_evidence: Option<TransientPseudonymInput>,
-    ) -> PreparedConsultationPseudonyms {
+        inputs: ConsultationPseudonymInputs<'profile>,
+    ) -> PreparedConsultationPseudonyms<'profile> {
+        let ConsultationPseudonymInputs {
+            profile,
+            canonical_purpose,
+            consent,
+            subject,
+            input,
+            predicate,
+            consent_evidence,
+        } = inputs;
         let commitments = compute_commitments(
             self.material,
             &subject,
@@ -153,6 +161,9 @@ impl BoundAuditPseudonymCommitter<'_> {
             consent_evidence.as_ref(),
         );
         PreparedConsultationPseudonyms {
+            profile,
+            canonical_purpose,
+            consent,
             key_id: self.active_epoch.key_id().clone(),
             subject_handle: commitments.subject_handle,
             input_commitment: commitments.input_commitment,
@@ -172,19 +183,22 @@ impl fmt::Debug for BoundAuditPseudonymCommitter<'_> {
 /// Exact attempt commitments and the epoch that must be consumed by the
 /// pseudonym-bound durable PostgreSQL CAS.
 ///
-/// Fields are crate-private for the next consultation workflow integration
+/// Fields are consultation-local for the workflow integration
 /// slice. There is no constructor, Clone, serde implementation, raw material,
 /// or generic commitment domain.
-pub(crate) struct PreparedConsultationPseudonyms {
-    pub(crate) key_id: AuditPseudonymKeyId,
-    pub(crate) subject_handle: AuditPseudonymCommitment,
-    pub(crate) input_commitment: AuditPseudonymCommitment,
-    pub(crate) predicate_commitment: AuditPseudonymCommitment,
-    pub(crate) consent_evidence_commitment: Option<AuditPseudonymCommitment>,
-    pub(crate) active_epoch: ActiveAuditPseudonymWriteEpoch,
+pub(crate) struct PreparedConsultationPseudonyms<'profile> {
+    pub(super) profile: &'profile crate::source_plan::runtime_profile::CompiledRuntimeProfile,
+    pub(super) canonical_purpose: Box<str>,
+    pub(super) consent: VerifiedConsentDecision,
+    pub(super) key_id: AuditPseudonymKeyId,
+    pub(super) subject_handle: AuditPseudonymCommitment,
+    pub(super) input_commitment: AuditPseudonymCommitment,
+    pub(super) predicate_commitment: AuditPseudonymCommitment,
+    pub(super) consent_evidence_commitment: Option<AuditPseudonymCommitment>,
+    pub(super) active_epoch: ActiveAuditPseudonymWriteEpoch,
 }
 
-impl fmt::Debug for PreparedConsultationPseudonyms {
+impl fmt::Debug for PreparedConsultationPseudonyms<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("PreparedConsultationPseudonyms")

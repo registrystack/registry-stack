@@ -14,10 +14,28 @@
       "expected_hash": "sha256:2aa6d87bf5c6c04ce0b8982e5ee28bf0d56b4432991c5679b0d342389ec2cb5c"
     },
     {
+      "name": "consultation_policy",
+      "file": "consultation-policy.json",
+      "domain_label": "registry.relay.consultation-policy.v1",
+      "expected_hash": "sha256:28ece7689edff4f02c39fcb1b7d7abb63eddd3c29c2701898e7a53fe15a2cd17"
+    },
+    {
+      "name": "consultation_policy_utf8_ordering",
+      "file": "consultation-policy-utf8-ordering.json",
+      "domain_label": "registry.relay.consultation-policy.v1",
+      "expected_hash": "sha256:e529a505e9c29746942dc35a10aa173efa3928422d2c121f516b9fcd3e556f32"
+    },
+    {
       "name": "public_contract",
       "file": "public-contract.json",
       "domain_label": "registry.relay.consultation-contract.v1",
-      "expected_hash": "sha256:a03a5c8a17cd32d522ba065839c3d3c0c23969363f076ac85b88ccbdacd72010"
+      "expected_hash": "sha256:2c2b1d85d7fae354d6780d64fdd521fe223bdfebefec0525e3b3cc2155c37111"
+    },
+    {
+      "name": "public_contract_utf8_ordering",
+      "file": "public-contract-utf8-ordering.json",
+      "domain_label": "registry.relay.consultation-contract.v1",
+      "expected_hash": "sha256:54c5f70a2b39d6fc514337c67a9638f9c95f8528674c9b037ed151b394042e49"
     },
     {
       "name": "private_binding",
@@ -32,6 +50,48 @@
       "pointer": "/spec/integration_pack",
       "target": "integration_pack",
       "kind": "artifact_identity"
+    },
+    {
+      "source": "public_contract_utf8_ordering",
+      "pointer": "/spec/integration_pack",
+      "target": "integration_pack",
+      "kind": "artifact_identity"
+    },
+    {
+      "source": "consultation_policy",
+      "pointer": "/target/integration_pack",
+      "target": "integration_pack",
+      "kind": "artifact_identity"
+    },
+    {
+      "source": "consultation_policy",
+      "pointer": "/target/profile",
+      "target": "public_contract",
+      "kind": "profile_identity"
+    },
+    {
+      "source": "consultation_policy_utf8_ordering",
+      "pointer": "/target/integration_pack",
+      "target": "integration_pack",
+      "kind": "artifact_identity"
+    },
+    {
+      "source": "consultation_policy_utf8_ordering",
+      "pointer": "/target/profile",
+      "target": "public_contract_utf8_ordering",
+      "kind": "profile_identity"
+    },
+    {
+      "source": "public_contract",
+      "pointer": "/spec/authorization/policy",
+      "target": "consultation_policy",
+      "kind": "derived_policy_identity"
+    },
+    {
+      "source": "public_contract_utf8_ordering",
+      "pointer": "/spec/authorization/policy",
+      "target": "consultation_policy_utf8_ordering",
+      "kind": "derived_policy_identity"
     },
     {
       "source": "private_binding",

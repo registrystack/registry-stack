@@ -15,7 +15,8 @@ use zeroize::Zeroizing;
 
 use crate::consultation::{
     AcquiredField, AcquisitionClass, DeclaredOperationFootprint, IntegrationPackId,
-    IntegrationPackIdentity, OperationId, ProfileId, ProfileIdentity, ProfileVersion,
+    IntegrationPackIdentity, OperationId, ProfileContractHash, ProfileId, ProfileIdentity,
+    ProfileVersion,
 };
 
 use super::artifact::{
@@ -36,7 +37,9 @@ use super::artifact::{
 };
 use super::completion_seed::{measure_completion_seed, MAX_COMPLETION_AUDIT_CANONICAL_BYTES_V1};
 use super::identifiers::{CredentialReferenceId, SourceDestinationId};
-use super::runtime_profile::{CompiledRuntimeProfile, MAX_COMPLETION_SEED_CANONICAL_BYTES_V1};
+use super::runtime_profile::{
+    CompiledRuntimeProfile, RhaiPredicateIdentity, MAX_COMPLETION_SEED_CANONICAL_BYTES_V1,
+};
 
 /// One raw, hash-pinned public contract or reviewed integration pack.
 ///
@@ -307,6 +310,8 @@ impl CompiledInputMatcher {
 /// One immutable input slot and its compiled validation capability.
 pub struct CompiledInputSlot {
     name: Box<str>,
+    profile_contract_hash: ProfileContractHash,
+    slot_index: u16,
     max_bytes: u16,
     canonicalization: CompiledInputCanonicalization,
     matcher: CompiledInputMatcher,
@@ -326,6 +331,9 @@ pub struct CompiledInputSlot {
 /// ```
 pub struct CompiledInputValue {
     value: Zeroizing<String>,
+    profile_contract_hash: ProfileContractHash,
+    slot_name: Box<str>,
+    slot_index: u16,
 }
 
 impl fmt::Debug for CompiledInputValue {
@@ -337,6 +345,17 @@ impl fmt::Debug for CompiledInputValue {
 impl CompiledInputValue {
     pub(crate) fn as_str(&self) -> &str {
         &self.value
+    }
+
+    pub(crate) fn binding_matches(
+        &self,
+        profile_contract_hash: &ProfileContractHash,
+        slot_name: &str,
+        slot_index: usize,
+    ) -> bool {
+        usize::from(self.slot_index) == slot_index
+            && self.slot_name.as_ref() == slot_name
+            && &self.profile_contract_hash == profile_contract_hash
     }
 }
 
@@ -379,6 +398,9 @@ impl CompiledInputSlot {
             .is_match(&canonical)
             .then(|| CompiledInputValue {
                 value: Zeroizing::new(canonical),
+                profile_contract_hash: self.profile_contract_hash.clone(),
+                slot_name: self.name.clone(),
+                slot_index: self.slot_index,
             })
     }
 }
@@ -1432,8 +1454,11 @@ impl CompiledSourcePlanRegistry {
         if artifact_count > MAX_ARTIFACTS_PER_BUNDLE {
             return Err(SourcePlanCompileError::TooManyArtifacts);
         }
-        let contracts = parse_contracts(bundle.public_contracts)?;
+        // Preserve the normative generation and verification order: reviewed
+        // integration pack, derived contract policy, public contract, then
+        // runtime-private binding.
         let packs = parse_packs(bundle.integration_packs)?;
+        let contracts = parse_contracts(bundle.public_contracts)?;
         let mut bindings = parse_bindings(bundle.private_bindings)?;
 
         let contract_keys = contracts.keys().cloned().collect::<BTreeSet<_>>();
@@ -1669,7 +1694,7 @@ fn compile_one(
     )
     .map_err(|_| SourcePlanCompileError::CompilerInvariant)?;
 
-    let inputs = compile_input_slots(pack)?;
+    let inputs = compile_input_slots(pack, contract.identity().contract_hash())?;
     let input_indexes = pack
         .document
         .spec
@@ -1794,6 +1819,16 @@ fn compile_one(
         })
         .collect::<Result<Box<[_]>, _>>()?;
     let snapshot = compile_snapshot_binding(&contract, pack, &binding)?;
+    let rhai_predicate_identity = pack
+        .document
+        .spec
+        .plan
+        .rhai
+        .as_ref()
+        .map(|rhai| {
+            RhaiPredicateIdentity::from_validated_artifact(&rhai.script_hash, &rhai.entrypoint)
+        })
+        .transpose()?;
     let runtime_profile = CompiledRuntimeProfile::from_compiled_artifacts(
         &contract,
         pack.identity().clone(),
@@ -1806,6 +1841,8 @@ fn compile_one(
         &steps,
         binding.data_destination_id.as_ref(),
         rhai_worker_limits,
+        rhai_predicate_identity,
+        completion_seed_sizing.template,
         completion_seed_sizing.canonical_bytes_max,
         completion_seed_sizing.completion_audit_canonical_bytes_max,
         &pack.document.spec.product_family,
@@ -1924,7 +1961,8 @@ pub(in crate::source_plan) fn compile_runtime_response_schema(
 mod tests;
 #[cfg(test)]
 pub(crate) use tests::{
+    bounded_runtime_vector_plan_fixture, consent_runtime_vector_plan_fixture,
     maximum_completion_seed_fixture, maximum_runtime_profile_fixture,
     normal_completion_seed_fixture, rhai_five_operation_two_slot_completion_seed_fixture,
-    semantic_alias_completion_seed_fixture,
+    rhai_runtime_vector_plan_fixture, semantic_alias_completion_seed_fixture,
 };

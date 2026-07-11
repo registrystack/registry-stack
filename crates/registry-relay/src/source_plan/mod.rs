@@ -47,7 +47,8 @@ pub use registry::{
 #[cfg(test)]
 #[allow(unused_imports, reason = "consumed by cross-layer state-plane tests")]
 pub(crate) use compiler::{
+    bounded_runtime_vector_plan_fixture, consent_runtime_vector_plan_fixture,
     maximum_completion_seed_fixture, maximum_runtime_profile_fixture,
     normal_completion_seed_fixture, rhai_five_operation_two_slot_completion_seed_fixture,
-    semantic_alias_completion_seed_fixture,
+    rhai_runtime_vector_plan_fixture, semantic_alias_completion_seed_fixture,
 };

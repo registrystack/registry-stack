@@ -28,12 +28,20 @@ use registry_platform_audit::{
 use registry_platform_crypto::canonicalize_json;
 use serde_json::json;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use tokio::time::Instant;
 use tokio::{sync::Barrier, task::JoinHandle};
 use tokio_postgres::{error::SqlState, Client, Config, GenericClient};
 use ulid::Ulid;
 
-use crate::consultation::OperationId;
+use crate::consultation::{
+    audit::{
+        terminal_completion_test_hook, FinalizedValidatedConsultation,
+        PreparedAtomicConsultationAttempt, PreparedAuditedConsultationDispatch,
+        TerminalCompletionTestPoint, ValidatedConsultationBackendResult,
+    },
+    OperationId,
+};
 use crate::source_plan::{
     maximum_completion_seed_fixture, normal_completion_seed_fixture,
     rhai_five_operation_two_slot_completion_seed_fixture, semantic_alias_completion_seed_fixture,
@@ -42,12 +50,12 @@ use crate::source_plan::{
 use super::migration::RUNTIME_SESSION_LIMITS_SQL;
 use super::pseudonym_keyring::canonical_metadata as canonical_keyring_metadata;
 use super::{
-    install_postgres_state_plane_v1, AttemptPseudonymBundle, AuditChainKeyEpochId,
-    AuditPseudonymKeyringLockKey, AuditPseudonymLookupEpoch, AuditPseudonymMaintenanceDatabaseRole,
+    install_postgres_state_plane_v1, AuditChainKeyEpochId, AuditPseudonymKeyringLockKey,
+    AuditPseudonymLookupEpoch, AuditPseudonymMaintenanceDatabaseRole,
     AuditPseudonymReaderDatabaseRole, AuditedConsultationDispatch,
     AuthorizedAuditPseudonymLookupSubset, CompletionAttemptReference,
-    ConsultationCompletionOutcome, ConsultationCompletionSeed, ConsultationPermitSet,
-    ConsultationPersistenceError, DispatchOperationId, DispatchPermitBudget, EffectiveQuotaLimits,
+    ConsultationCompletionOutcome, ConsultationPermitSet, ConsultationPersistenceError,
+    DispatchOperationId, DispatchPermitBudget, DispatchPermitKind, EffectiveQuotaLimits,
     KeyringInitializationOutcome, KnownCompletionDisposition, KnownConsultationCompletionFacts,
     KnownFailureClass, PostgresAuditPseudonymKeyringMaintenance,
     PostgresAuditPseudonymKeyringReader, PostgresAuditPseudonymKeyringRuntime,
@@ -217,15 +225,18 @@ fn atomic_consultation_attempt_write(
     .expect("test atomic consultation attempt is valid")
 }
 
-fn attempt_pseudonym_bundle(key_id: &AuditPseudonymKeyId) -> AttemptPseudonymBundle {
-    AttemptPseudonymBundle::new(
-        key_id.as_str(),
-        "hmac-sha256:test-only-redacted-handle",
-        "hmac-sha256:test-only-input-commitment",
-        "hmac-sha256:test-only-predicate-commitment",
-        None,
-    )
-    .expect("test pseudonym bundle is bounded")
+fn future_decision_expiry_unix_ms() -> i64 {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("test clock is after the Unix epoch");
+    i64::try_from(now.as_millis()).expect("test time fits the v1 integer") + 60_000
+}
+
+fn canonical_test_binding(value: &Value) -> (String, [u8; 32]) {
+    let canonical = canonicalize_json(value).expect("test value is canonicalizable");
+    let digest = Sha256::digest(&canonical).into();
+    let canonical = String::from_utf8(canonical).expect("canonical JSON is UTF-8");
+    (canonical, digest)
 }
 
 fn completion_seed_value(
@@ -362,11 +373,39 @@ async fn persist_test_consultation_attempt(
     permit_set: ConsultationPermitSet,
     marker: &str,
 ) -> Result<AuditedConsultationDispatch, Box<dyn std::error::Error>> {
+    Ok(persist_test_prepared_dispatch(
+        plane,
+        fence,
+        keyring_runtime,
+        key_id,
+        seed,
+        permit_set,
+        marker,
+        future_decision_expiry_unix_ms(),
+    )
+    .await?
+    .into_dispatch_for_state_test())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn persist_test_prepared_dispatch(
+    plane: &PostgresDurableAuditStatePlane,
+    fence: &PostgresServingFence,
+    keyring_runtime: &PostgresAuditPseudonymKeyringRuntime,
+    key_id: &AuditPseudonymKeyId,
+    seed: Value,
+    permit_set: ConsultationPermitSet,
+    marker: &str,
+    decision_expires_at_unix_ms: i64,
+) -> Result<PreparedAuditedConsultationDispatch, Box<dyn std::error::Error>> {
     let operation_id = DurableAuditOperationId::from_ulid(Ulid::new());
     let write = atomic_consultation_attempt_write(&operation_id, key_id, &seed, marker);
+    let timeout_ms = seed["bounds"]["timeout_ms"]
+        .as_u64()
+        .expect("test seed timeout is present");
     let attempt_authority = fence
         .authorize_consultation_attempt(
-            DispatchPermitBudget::new(Duration::from_secs(10))?,
+            DispatchPermitBudget::new(Duration::from_millis(timeout_ms))?,
             permit_set,
         )
         .await?;
@@ -374,16 +413,38 @@ async fn persist_test_consultation_attempt(
         .current_write_authority()
         .await?
         .authorize_use()?;
+    let prepared = PreparedAtomicConsultationAttempt::for_state_test(
+        write,
+        seed,
+        key_id,
+        attempt_authority,
+        pseudonym_authority,
+        decision_expires_at_unix_ms,
+    )?;
     plane
-        .write_attempt_with_completion_intent(
-            &write,
-            ConsultationCompletionSeed::from_value_for_test(seed)?,
-            attempt_pseudonym_bundle(key_id),
-            attempt_authority,
-            pseudonym_authority,
-        )
+        .write_attempt_with_completion_intent(prepared)
         .await
         .map_err(Into::into)
+}
+
+async fn persist_prepared_test_consultation_attempt(
+    plane: &PostgresDurableAuditStatePlane,
+    write: DurableAuditWrite,
+    seed: Value,
+    key_id: &AuditPseudonymKeyId,
+    attempt_authority: super::FencedConsultationAttemptAuthority,
+    pseudonym_authority: super::ActiveAuditPseudonymWriteEpoch,
+) -> Result<AuditedConsultationDispatch, Box<dyn std::error::Error>> {
+    let prepared = PreparedAtomicConsultationAttempt::for_state_test(
+        write,
+        seed,
+        key_id,
+        attempt_authority,
+        pseudonym_authority,
+        future_decision_expiry_unix_ms(),
+    )?;
+    let persisted = plane.write_attempt_with_completion_intent(prepared).await?;
+    Ok(persisted.into_dispatch_for_state_test())
 }
 
 fn rotation_successor(
@@ -769,12 +830,12 @@ async fn seed_catalog_for_unsafe_restart(
              ) TO {runtime}; \
              GRANT EXECUTE ON FUNCTION relay_state_api.consultation_attempt_intent_snapshot_v1( \
                  text, bytea, text, bytea, text, bytea, text, bigint, bytea, bigint, \
-                 text, bigint, integer, text[], smallint[], text, bigint \
+                 text, bigint, integer, bigint, text[], smallint[], text, bigint \
              ) TO {runtime}; \
              GRANT EXECUTE ON FUNCTION relay_state_api.consultation_attempt_intent_cas_v1( \
                  text, bytea, bigint, bytea, text, bigint, text, text, bytea, text, \
                  bytea, text, bytea, text, bigint, bytea, bigint, text, bigint, integer, \
-                 text[], smallint[], text, bigint \
+                 bigint, text[], smallint[], text, bigint \
              ) TO {runtime}; \
              GRANT EXECUTE ON FUNCTION relay_state_api.consultation_completion_snapshot_normal_v1( \
                  text, bigint, text, bigint, bigint, text[], smallint[], text, bigint, \
@@ -1641,10 +1702,29 @@ fn order_chain(mut envelopes: Vec<AuditEnvelope>) -> Vec<AuditEnvelope> {
     ordered
 }
 
-#[tokio::test]
+#[test]
 #[ignore = "requires dedicated REGISTRY_RELAY_STATE_PLANE_POSTGRES_TEST_URL"]
-async fn postgres_state_plane_enforces_role_catalog_and_chain_contract(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn postgres_state_plane_enforces_role_catalog_and_chain_contract() {
+    let worker = std::thread::Builder::new()
+        .name("relay-state-plane-conformance".to_owned())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("state-plane conformance runtime builds")
+                .block_on(postgres_state_plane_contract())
+                .map_err(|_| ())
+        })
+        .expect("state-plane conformance worker starts");
+    match worker.join() {
+        Ok(Ok(())) => {}
+        Ok(Err(())) => panic!("state-plane conformance returned an error"),
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
+}
+
+async fn postgres_state_plane_contract() -> Result<(), Box<dyn std::error::Error>> {
     let Ok(database_url) = env::var(DATABASE_URL_ENV) else {
         eprintln!("SKIPPED: {DATABASE_URL_ENV} is not set");
         return Ok(());
@@ -2672,6 +2752,12 @@ WHERE metadata.singleton = true
     let compiler_semantic_alias_seed = semantic_alias_completion_seed_fixture();
     let compiler_maximum_seed = maximum_completion_seed_fixture();
     let compiler_rhai_seed = rhai_five_operation_two_slot_completion_seed_fixture();
+    let conditional_bounded_seed = completion_seed_value(
+        "bounded_http",
+        None,
+        &["step-a", "step-b", "step-c"],
+        &[vec!["step-a"], vec!["step-b", "step-c"], vec!["step-c"]],
+    );
     assert!(
         canonicalize_json(&compiler_maximum_seed)
             .expect("compiler maximum seed is canonicalizable")
@@ -2707,6 +2793,13 @@ WHERE metadata.singleton = true
         )
         .await?
         .try_get(0)?;
+    let conditional_bounded_seed_valid: bool = admin
+        .query_one(
+            "SELECT relay_state_private.consultation_completion_seed_valid_v1($1)",
+            &[&serde_json::to_string(&conditional_bounded_seed)?],
+        )
+        .await?
+        .try_get(0)?;
     reset_role(&admin).await?;
     assert!(seed_valid, "snapshot completion seed must satisfy SQL");
     assert!(
@@ -2733,6 +2826,10 @@ WHERE metadata.singleton = true
         compiler_rhai_seed_valid,
         "the SQL seed validator must accept the compiler's five-operation two-slot Rhai profile"
     );
+    assert!(
+        conditional_bounded_seed_valid,
+        "Bounded HTTP permits bind actual-call positions across conditional skips"
+    );
     let pseudonym_write = atomic_consultation_attempt_write(
         &pseudonym_operation,
         initial_keyring_metadata.active_key_id(),
@@ -2754,16 +2851,17 @@ WHERE metadata.singleton = true
             ConsultationPermitSet::from_counts(0, 0)?,
         )
         .await?;
-    let mut pseudonym_dispatch = plane_one
-        .write_attempt_with_completion_intent(
-            &pseudonym_write,
-            ConsultationCompletionSeed::from_value_for_test(pseudonym_seed.clone())?,
-            attempt_pseudonym_bundle(initial_keyring_metadata.active_key_id()),
-            pseudonym_attempt_authority,
-            initial_write_epoch,
-        )
-        .await?;
-    assert!(pseudonym_dispatch.permits_mut().is_empty());
+    let mut pseudonym_dispatch = persist_prepared_test_consultation_attempt(
+        &plane_one,
+        pseudonym_write.clone(),
+        pseudonym_seed.clone(),
+        initial_keyring_metadata.active_key_id(),
+        pseudonym_attempt_authority,
+        initial_write_epoch,
+    )
+    .await?;
+    assert!(pseudonym_dispatch.credential_permit_mut()?.is_none());
+    assert!(pseudonym_dispatch.next_data_permit_mut()?.is_none());
     assert!(matches!(
         plane_one
             .recover_pseudonym_bound_duplicate(&pseudonym_write)
@@ -2816,6 +2914,10 @@ WHERE metadata.singleton = true
     );
 
     let stale_issued_epoch = keyring_runtime
+        .current_write_authority()
+        .await?
+        .authorize_use()?;
+    let stale_consultation_completion_epoch = keyring_runtime
         .current_write_authority()
         .await?
         .authorize_use()?;
@@ -2876,6 +2978,52 @@ WHERE metadata.singleton = true
         .await?
         .authorize_use()?;
     assert_eq!(current_epoch_2.key_id().as_str(), "epoch-2");
+    let (stale_key_id, stale_generation, stale_digest, stale_chain, stale_lock_key) =
+        stale_consultation_completion_epoch.postgres_binding();
+    let (stale_completion_client, stale_completion_driver) =
+        postgres_client_as(&database_url, &runtime_role_name, &runtime_password).await?;
+    stale_completion_client
+        .batch_execute(RUNTIME_SESSION_LIMITS_SQL)
+        .await?;
+    let (pseudonym_permit_kinds, pseudonym_permit_ordinals) =
+        pseudonym_dispatch.postgres_permit_arrays();
+    let stale_completion_outcome: String = stale_completion_client
+        .query_one(
+            "SELECT outcome FROM relay_state_api.consultation_completion_snapshot_normal_v1(\
+                $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12\
+            )",
+            &[
+                &pseudonym_dispatch.operation_id.as_str(),
+                &pseudonym_dispatch.lock_key.as_i64(),
+                &pseudonym_dispatch.holder_id,
+                &pseudonym_dispatch.fence_generation,
+                &pseudonym_dispatch.deadline_unix_ms,
+                &pseudonym_permit_kinds,
+                &pseudonym_permit_ordinals,
+                &stale_key_id,
+                &stale_generation,
+                &stale_digest.as_slice(),
+                &stale_chain.as_str(),
+                &stale_lock_key,
+            ],
+        )
+        .await?
+        .try_get("outcome")?;
+    assert_eq!(stale_completion_outcome, "pseudonym_authority_stale");
+    let stale_completion_rows: i64 = admin
+        .query_one(
+            "SELECT count(*) FROM relay_state_private.audit_phase \
+             WHERE operation_id=$1 AND phase='completion'",
+            &[&pseudonym_dispatch.operation_id.as_str()],
+        )
+        .await?
+        .try_get(0)?;
+    assert_eq!(
+        stale_completion_rows, 0,
+        "a stale completion epoch must be proven non-mutating"
+    );
+    drop(stale_completion_client);
+    stale_completion_driver.abort();
     let snapshot_acquired_at_unix_ms = current_unix_ms();
     let snapshot_generation = Ulid::new().to_string();
     let snapshot_facts = KnownConsultationCompletionFacts::public_for_snapshot_test(
@@ -2887,7 +3035,11 @@ WHERE metadata.singleton = true
         snapshot_acquired_at_unix_ms,
     )?;
     let publication_after_rotation = match plane_one
-        .finalize_validated_consultation(pseudonym_dispatch, snapshot_facts, current_epoch_2)
+        .finalize_validated_consultation_for_test(
+            pseudonym_dispatch,
+            snapshot_facts,
+            current_epoch_2,
+        )
         .await?
     {
         KnownCompletionDisposition::Published(publication) => publication,
@@ -3481,7 +3633,7 @@ WHERE metadata.singleton = true
         )
         .await?;
         let compiler_receipt = plane_one
-            .close_unfinished_consultation(
+            .close_unfinished_consultation_for_test(
                 compiler_dispatch,
                 keyring_runtime
                     .current_write_authority()
@@ -3517,18 +3669,20 @@ WHERE metadata.singleton = true
             ConsultationPermitSet::from_counts(0, 1)?,
         )
         .await?;
+    let invalid_atomic_prepared = PreparedAtomicConsultationAttempt::for_state_test(
+        invalid_atomic_write,
+        invalid_atomic_seed,
+        &pseudonym_key_id("epoch-2"),
+        invalid_atomic_authority,
+        keyring_runtime
+            .current_write_authority()
+            .await?
+            .authorize_use()?,
+        future_decision_expiry_unix_ms(),
+    )?;
     assert_eq!(
         plane_one
-            .write_attempt_with_completion_intent(
-                &invalid_atomic_write,
-                ConsultationCompletionSeed::from_value_for_test(invalid_atomic_seed)?,
-                attempt_pseudonym_bundle(&pseudonym_key_id("epoch-2")),
-                invalid_atomic_authority,
-                keyring_runtime
-                    .current_write_authority()
-                    .await?
-                    .authorize_use()?,
-            )
+            .write_attempt_with_completion_intent(invalid_atomic_prepared)
             .await
             .err(),
         Some(ConsultationPersistenceError::InvalidInput)
@@ -3547,16 +3701,298 @@ WHERE metadata.singleton = true
         .await?
         .try_get(0)?;
     assert_eq!(partial_atomic_rows, 0);
+
+    // The Rust aggregate cannot shorten or widen the compiler-owned timeout.
+    // Both directions fail before any audit, intent, or child permit mutation.
+    for (marker, seed_timeout_ms, fence_timeout_ms) in [
+        ("timeout-shortening-rejected", 10_000_u64, 9_000_u64),
+        ("timeout-widening-rejected", 5_000_u64, 6_000_u64),
+    ] {
+        let operation = DurableAuditOperationId::from_ulid(Ulid::new());
+        let mut seed = completion_seed_value("snapshot_exact", None, &[], &[]);
+        seed["bounds"]["timeout_ms"] = json!(seed_timeout_ms);
+        let write = atomic_consultation_attempt_write(
+            &operation,
+            &pseudonym_key_id("epoch-2"),
+            &seed,
+            marker,
+        );
+        let fence_authority = fence_one
+            .authorize_consultation_attempt(
+                DispatchPermitBudget::new(Duration::from_millis(fence_timeout_ms))?,
+                ConsultationPermitSet::from_counts(0, 0)?,
+            )
+            .await?;
+        let prepared = PreparedAtomicConsultationAttempt::for_state_test(
+            write,
+            seed,
+            &pseudonym_key_id("epoch-2"),
+            fence_authority,
+            keyring_runtime
+                .current_write_authority()
+                .await?
+                .authorize_use()?,
+            future_decision_expiry_unix_ms(),
+        )?;
+        assert_eq!(
+            plane_one
+                .write_attempt_with_completion_intent(prepared)
+                .await
+                .err(),
+            Some(ConsultationPersistenceError::InvalidInput)
+        );
+        let rows: i64 = admin
+            .query_one(
+                "SELECT \
+                     (SELECT count(*) FROM relay_state_private.audit_phase \
+                      WHERE operation_id=$1) + \
+                     (SELECT count(*) FROM relay_state_private.consultation_completion_intent \
+                      WHERE operation_id=$1) + \
+                     (SELECT count(*) FROM relay_state_private.dispatch_permit \
+                      WHERE operation_id=$1)",
+                &[&operation.as_str()],
+            )
+            .await?
+            .try_get(0)?;
+        assert_eq!(rows, 0, "timeout mismatch must be non-mutating");
+    }
+
+    // The SQL boundary independently rejects both timeout mismatch directions,
+    // even when a runtime session bypasses the sealed Rust aggregate.
+    let (direct_budget_client, direct_budget_driver) =
+        postgres_client_as(&database_url, &runtime_role_name, &runtime_password).await?;
+    direct_budget_client
+        .batch_execute(RUNTIME_SESSION_LIMITS_SQL)
+        .await?;
+    let fence_holder: String = admin
+        .query_one(
+            "SELECT holder_id FROM relay_state_private.serving_fence_state \
+             WHERE singleton = true",
+            &[],
+        )
+        .await?
+        .try_get(0)?;
+    let direct_epoch = keyring_runtime
+        .current_write_authority()
+        .await?
+        .authorize_use()?;
+    let (epoch_key_id, epoch_generation, epoch_digest, epoch_chain, epoch_lock_key) =
+        direct_epoch.postgres_binding();
+    let (bundle_canonical, bundle_digest) = canonical_test_binding(&json!({
+        "commitment_key_id": epoch_key_id,
+        "subject_handle": "hmac-sha256:test-only-redacted-handle",
+        "input_commitment": "hmac-sha256:test-only-input-commitment",
+        "predicate_commitment": "hmac-sha256:test-only-predicate-commitment",
+        "consent_evidence_commitment": null,
+    }));
+    let empty_kinds = Vec::<String>::new();
+    let empty_ordinals = Vec::<i16>::new();
+    for (marker, seed_timeout_ms, supplied_budget_ms) in [
+        ("sql-timeout-shortening", 10_000_i64, 9_000_i32),
+        ("sql-timeout-widening", 5_000_i64, 6_000_i32),
+    ] {
+        let operation = DurableAuditOperationId::from_ulid(Ulid::new());
+        let mut seed = completion_seed_value("snapshot_exact", None, &[], &[]);
+        seed["bounds"]["timeout_ms"] = json!(seed_timeout_ms);
+        let (seed_canonical, seed_digest) = canonical_test_binding(&seed);
+        let write = atomic_consultation_attempt_write(
+            &operation,
+            &pseudonym_key_id("epoch-2"),
+            &seed,
+            marker,
+        );
+        let payload_digest = write.payload_digest().as_bytes().to_vec();
+        let error = direct_budget_client
+            .query_one(
+                "SELECT * FROM relay_state_api.consultation_attempt_intent_snapshot_v1(\
+                    $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18\
+                )",
+                &[
+                    &operation.as_str(),
+                    &payload_digest,
+                    &seed_canonical,
+                    &seed_digest.as_slice(),
+                    &bundle_canonical,
+                    &bundle_digest.as_slice(),
+                    &epoch_key_id,
+                    &epoch_generation,
+                    &epoch_digest.as_slice(),
+                    &fence_key.as_i64(),
+                    &fence_holder,
+                    &fence_one.generation(),
+                    &supplied_budget_ms,
+                    &future_decision_expiry_unix_ms(),
+                    &empty_kinds,
+                    &empty_ordinals,
+                    &epoch_chain.as_str(),
+                    &epoch_lock_key,
+                ],
+            )
+            .await
+            .expect_err("SQL must reject a seed/permit budget mismatch");
+        assert_eq!(
+            error.as_db_error().map(|error| error.code()),
+            Some(&SqlState::INVALID_PARAMETER_VALUE)
+        );
+        let rows: i64 = admin
+            .query_one(
+                "SELECT \
+                     (SELECT count(*) FROM relay_state_private.audit_phase \
+                      WHERE operation_id=$1) + \
+                     (SELECT count(*) FROM relay_state_private.consultation_completion_intent \
+                      WHERE operation_id=$1) + \
+                     (SELECT count(*) FROM relay_state_private.dispatch_permit \
+                      WHERE operation_id=$1) + \
+                     (SELECT count(*) FROM relay_state_private.consultation_audit_context \
+                      WHERE operation_id=$1)",
+                &[&operation.as_str()],
+            )
+            .await?
+            .try_get(0)?;
+        assert_eq!(rows, 0, "SQL timeout mismatch must be non-mutating");
+    }
+    drop(direct_budget_client);
+    direct_budget_driver.abort();
+
+    // PostgreSQL independently rejects an expired decision before the attempt
+    // snapshot's temporary audit context or any durable row can be written.
+    let expired_operation = DurableAuditOperationId::from_ulid(Ulid::new());
+    let expired_seed = completion_seed_value("snapshot_exact", None, &[], &[]);
+    let expired_write = atomic_consultation_attempt_write(
+        &expired_operation,
+        &pseudonym_key_id("epoch-2"),
+        &expired_seed,
+        "database-expired-decision",
+    );
+    let expired_authority = fence_one
+        .authorize_consultation_attempt(
+            DispatchPermitBudget::new(Duration::from_secs(10))?,
+            ConsultationPermitSet::from_counts(0, 0)?,
+        )
+        .await?;
+    let expired_prepared = PreparedAtomicConsultationAttempt::for_state_test(
+        expired_write,
+        expired_seed,
+        &pseudonym_key_id("epoch-2"),
+        expired_authority,
+        keyring_runtime
+            .current_write_authority()
+            .await?
+            .authorize_use()?,
+        current_unix_ms() - 1,
+    )?;
+    assert_eq!(
+        plane_one
+            .write_attempt_with_completion_intent(expired_prepared)
+            .await
+            .err(),
+        Some(ConsultationPersistenceError::StateConflict)
+    );
+    let expired_rows: i64 = admin
+        .query_one(
+            "SELECT \
+                 (SELECT count(*) FROM relay_state_private.audit_phase \
+                  WHERE operation_id=$1) + \
+                 (SELECT count(*) FROM relay_state_private.consultation_completion_intent \
+                  WHERE operation_id=$1) + \
+                 (SELECT count(*) FROM relay_state_private.dispatch_permit \
+                  WHERE operation_id=$1) + \
+                 (SELECT count(*) FROM relay_state_private.consultation_audit_context \
+                  WHERE operation_id=$1)",
+            &[&expired_operation.as_str()],
+        )
+        .await?
+        .try_get(0)?;
+    assert_eq!(expired_rows, 0, "expired decision must be non-mutating");
     assert_eq!(
         fence_one.readiness().await,
         ServingFenceReadiness::Ready,
         "an authority stays harmless until a mutating attempt CAS is possible"
     );
 
-    // The initial read-only snapshot can itself prove an identical durable
-    // attempt. Dispatch construction is the single invariant boundary: both
-    // the inserting and snapshot-replay paths return an armed lifecycle seal,
-    // and identical terminal completion disarms each handle.
+    // Expiry is rechecked only after the CAS has serialized behind the audit
+    // head. If the decision expires while waiting for that lock, PostgreSQL
+    // mutates nothing and Rust disarms the proven-nonmutating lifecycle seal.
+    let boundary_operation = DurableAuditOperationId::from_ulid(Ulid::new());
+    let boundary_seed = completion_seed_value("snapshot_exact", None, &[], &[]);
+    let boundary_write = atomic_consultation_attempt_write(
+        &boundary_operation,
+        &pseudonym_key_id("epoch-2"),
+        &boundary_seed,
+        "decision-expires-between-snapshot-and-cas",
+    );
+    let boundary_authority = fence_one
+        .authorize_consultation_attempt(
+            DispatchPermitBudget::new(Duration::from_secs(10))?,
+            ConsultationPermitSet::from_counts(0, 0)?,
+        )
+        .await?;
+    let boundary_expiry = current_unix_ms() + 1_000;
+    let boundary_prepared = PreparedAtomicConsultationAttempt::for_state_test(
+        boundary_write,
+        boundary_seed,
+        &pseudonym_key_id("epoch-2"),
+        boundary_authority,
+        keyring_runtime
+            .current_write_authority()
+            .await?
+            .authorize_use()?,
+        boundary_expiry,
+    )?;
+    let (mut boundary_blocker, boundary_blocker_driver) = postgres_client(&database_url).await?;
+    let boundary_transaction = boundary_blocker.transaction().await?;
+    boundary_transaction
+        .query_one(
+            "SELECT singleton FROM relay_state_private.audit_chain_head \
+             WHERE singleton = true FOR UPDATE",
+            &[],
+        )
+        .await?;
+    let boundary_plane = Arc::clone(&plane_one);
+    let boundary_task = tokio::spawn(async move {
+        boundary_plane
+            .write_attempt_with_completion_intent(boundary_prepared)
+            .await
+    });
+    wait_for_blocked_consultation_query(
+        &admin,
+        &runtime_role_name,
+        "consultation_attempt_intent_cas_v1",
+    )
+    .await?;
+    let remaining_ms = boundary_expiry.saturating_sub(current_unix_ms()) + 50;
+    tokio::time::sleep(Duration::from_millis(
+        u64::try_from(remaining_ms.max(0)).expect("nonnegative expiry delay"),
+    ))
+    .await;
+    boundary_transaction.commit().await?;
+    assert_eq!(
+        boundary_task.await?.err(),
+        Some(ConsultationPersistenceError::StateConflict)
+    );
+    let boundary_rows: i64 = admin
+        .query_one(
+            "SELECT \
+                 (SELECT count(*) FROM relay_state_private.audit_phase \
+                  WHERE operation_id=$1) + \
+                 (SELECT count(*) FROM relay_state_private.consultation_completion_intent \
+                  WHERE operation_id=$1) + \
+                 (SELECT count(*) FROM relay_state_private.dispatch_permit \
+                  WHERE operation_id=$1) + \
+                 (SELECT count(*) FROM relay_state_private.consultation_audit_context \
+                  WHERE operation_id=$1)",
+            &[&boundary_operation.as_str()],
+        )
+        .await?
+        .try_get(0)?;
+    assert_eq!(boundary_rows, 0);
+    assert_eq!(fence_one.readiness().await, ServingFenceReadiness::Ready);
+    drop(boundary_blocker);
+    boundary_blocker_driver.abort();
+
+    // Exact durable replay remains recoverable after the authorization
+    // decision expires. The retained dispatch guard then denies backend entry,
+    // invokes no closure, and records a terminal not_started completion.
     let replay_operation = DurableAuditOperationId::from_ulid(Ulid::new());
     let replay_seed = completion_seed_value("snapshot_exact", None, &[], &[]);
     let replay_write = atomic_consultation_attempt_write(
@@ -3565,56 +4001,80 @@ WHERE metadata.singleton = true
         &replay_seed,
         "identical-attempt-dispatch-seal",
     );
+    let replay_expiry = current_unix_ms() + 2_000;
     let replay_authority_one = fence_one
         .authorize_consultation_attempt(
             DispatchPermitBudget::new(Duration::from_secs(10))?,
             ConsultationPermitSet::from_counts(0, 0)?,
         )
         .await?;
+    let replay_prepared_one = PreparedAtomicConsultationAttempt::for_state_test(
+        replay_write.clone(),
+        replay_seed.clone(),
+        &pseudonym_key_id("epoch-2"),
+        replay_authority_one,
+        keyring_runtime
+            .current_write_authority()
+            .await?
+            .authorize_use()?,
+        replay_expiry,
+    )?;
     let replay_dispatch_one = plane_one
-        .write_attempt_with_completion_intent(
-            &replay_write,
-            ConsultationCompletionSeed::from_value_for_test(replay_seed.clone())?,
-            attempt_pseudonym_bundle(&pseudonym_key_id("epoch-2")),
-            replay_authority_one,
-            keyring_runtime
-                .current_write_authority()
-                .await?
-                .authorize_use()?,
-        )
-        .await?;
+        .write_attempt_with_completion_intent(replay_prepared_one)
+        .await?
+        .into_dispatch_for_state_test();
+    let remaining_ms = replay_expiry.saturating_sub(current_unix_ms()) + 100;
+    tokio::time::sleep(Duration::from_millis(
+        u64::try_from(remaining_ms.max(0)).expect("nonnegative replay expiry delay"),
+    ))
+    .await;
     let replay_authority_two = fence_one
         .authorize_consultation_attempt(
             DispatchPermitBudget::new(Duration::from_secs(10))?,
             ConsultationPermitSet::from_counts(0, 0)?,
         )
         .await?;
+    let replay_prepared_two = PreparedAtomicConsultationAttempt::for_state_test(
+        replay_write,
+        replay_seed,
+        &pseudonym_key_id("epoch-2"),
+        replay_authority_two,
+        keyring_runtime
+            .current_write_authority()
+            .await?
+            .authorize_use()?,
+        replay_expiry,
+    )?;
     let replay_dispatch_two = plane_one
-        .write_attempt_with_completion_intent(
-            &replay_write,
-            ConsultationCompletionSeed::from_value_for_test(replay_seed)?,
-            attempt_pseudonym_bundle(&pseudonym_key_id("epoch-2")),
-            replay_authority_two,
-            keyring_runtime
-                .current_write_authority()
-                .await?
-                .authorize_use()?,
-        )
+        .write_attempt_with_completion_intent(replay_prepared_two)
         .await?;
     assert!(replay_dispatch_one.lifecycle_is_armed());
-    assert!(replay_dispatch_two.lifecycle_is_armed());
-    let replay_completion_one = plane_one
-        .close_unfinished_consultation(
-            replay_dispatch_one,
-            keyring_runtime
-                .current_write_authority()
-                .await?
-                .authorize_use()?,
-        )
-        .await?;
+    let replay_backend_invocations = Arc::new(AtomicUsize::new(0));
+    let observed_invocations = Arc::clone(&replay_backend_invocations);
+    let replay_denied = match replay_dispatch_two
+        .run_backend(move |_| {
+            Box::pin(async move {
+                observed_invocations.fetch_add(1, Ordering::SeqCst);
+                ValidatedConsultationBackendResult::for_test(
+                    (),
+                    KnownConsultationCompletionFacts::failure_for_test(
+                        KnownFailureClass::SourceUnavailable,
+                    ),
+                )
+            })
+        })
+        .await
+    {
+        Err(denied) => denied,
+        Ok(_) => panic!("expired exact replay must not enter the backend"),
+    };
+    assert_eq!(replay_backend_invocations.load(Ordering::SeqCst), 0);
     let replay_completion_two = plane_one
-        .close_unfinished_consultation(
-            replay_dispatch_two,
+        .close_unfinished_consultation(replay_denied, &keyring_runtime)
+        .await?;
+    let replay_completion_one = plane_one
+        .close_unfinished_consultation_for_test(
+            replay_dispatch_one,
             keyring_runtime
                 .current_write_authority()
                 .await?
@@ -3655,13 +4115,21 @@ WHERE metadata.singleton = true
         "bounded-selected-operation",
     )
     .await?;
+    let bounded_operation_id = bounded_dispatch
+        .next_data_permit_mut()?
+        .expect("bounded data permit")
+        .operation_id()
+        .clone();
     let rejected_dispatches = Arc::new(AtomicUsize::new(0));
     {
         let rejected_dispatches = Arc::clone(&rejected_dispatches);
+        let permit = bounded_dispatch
+            .next_data_permit_mut()?
+            .expect("bounded data permit remains ready");
         assert_eq!(
             fence_one
                 .authorize_and_dispatch(
-                    &mut bounded_dispatch.permits_mut()[0],
+                    permit,
                     &OperationId::try_from("undeclared-operation")?,
                     move || async move {
                         rejected_dispatches.fetch_add(1, Ordering::SeqCst);
@@ -3677,14 +4145,17 @@ WHERE metadata.singleton = true
         .query_one(
             "SELECT source_operation_id FROM relay_state_private.dispatch_permit \
              WHERE operation_id=$1 AND kind='data' AND ordinal=0",
-            &[&bounded_dispatch.permits_mut()[0].operation_id().as_str()],
+            &[&bounded_operation_id.as_str()],
         )
         .await?
         .try_get(0)?;
     assert_eq!(operation_after_rejection, None);
+    let permit = bounded_dispatch
+        .next_data_permit_mut()?
+        .expect("bounded data permit remains ready after rejection");
     fence_one
         .authorize_and_dispatch(
-            &mut bounded_dispatch.permits_mut()[0],
+            permit,
             &OperationId::try_from("lookup-registration")?,
             || async {},
         )
@@ -3693,13 +4164,13 @@ WHERE metadata.singleton = true
         .query_one(
             "SELECT source_operation_id FROM relay_state_private.dispatch_permit \
              WHERE operation_id=$1 AND kind='data' AND ordinal=0",
-            &[&bounded_dispatch.permits_mut()[0].operation_id().as_str()],
+            &[&bounded_operation_id.as_str()],
         )
         .await?
         .try_get(0)?;
     assert_eq!(persisted_operation, "lookup-registration");
     let unfinished_receipt = plane_one
-        .close_unfinished_consultation(
+        .close_unfinished_consultation_for_test(
             bounded_dispatch,
             keyring_runtime
                 .current_write_authority()
@@ -3731,15 +4202,18 @@ WHERE metadata.singleton = true
         "credential-only-known-failure",
     )
     .await?;
+    let credential_permit = credential_dispatch
+        .credential_permit_mut()?
+        .expect("credential permit");
     fence_one
         .authorize_and_dispatch(
-            &mut credential_dispatch.permits_mut()[0],
+            credential_permit,
             &OperationId::try_from("fetch-credential")?,
             || async {},
         )
         .await?;
     let credential_failure = plane_one
-        .finalize_validated_consultation(
+        .finalize_validated_consultation_for_test(
             credential_dispatch,
             KnownConsultationCompletionFacts::failure_for_test(
                 KnownFailureClass::CredentialUnavailable,
@@ -3783,9 +4257,17 @@ WHERE metadata.singleton = true
             "rhai-call-budget-slot",
         )
         .await?;
+        let operation_id = rhai_dispatch
+            .next_data_permit_mut()?
+            .expect("Rhai data permit")
+            .operation_id()
+            .clone();
+        let permit = rhai_dispatch
+            .next_data_permit_mut()?
+            .expect("Rhai data permit remains ready");
         fence_one
             .authorize_and_dispatch(
-                &mut rhai_dispatch.permits_mut()[0],
+                permit,
                 &OperationId::try_from(selected_operation)?,
                 || async {},
             )
@@ -3794,13 +4276,13 @@ WHERE metadata.singleton = true
             .query_one(
                 "SELECT source_operation_id FROM relay_state_private.dispatch_permit \
                  WHERE operation_id=$1 AND kind='data' AND ordinal=0",
-                &[&rhai_dispatch.permits_mut()[0].operation_id().as_str()],
+                &[&operation_id.as_str()],
             )
             .await?
             .try_get(0)?;
         assert_eq!(selected_operation_stored, selected_operation);
         let receipt = plane_one
-            .close_unfinished_consultation(
+            .close_unfinished_consultation_for_test(
                 rhai_dispatch,
                 keyring_runtime
                     .current_write_authority()
@@ -3813,6 +4295,235 @@ WHERE metadata.singleton = true
             ConsultationCompletionOutcome::OutcomeUnknown
         );
     }
+
+    // Bypassing the safe Rust cursor still cannot authorize Rhai data ordinal
+    // one before zero. The rejected SQL call leaves both durable markers
+    // untouched; the exact prefix is then accepted in order.
+    let ordered_rhai_seed = completion_seed_value(
+        "sandboxed_rhai",
+        None,
+        &["lookup-a", "lookup-b"],
+        &[vec!["lookup-a", "lookup-b"], vec!["lookup-a", "lookup-b"]],
+    );
+    let mut ordered_rhai_dispatch = persist_test_consultation_attempt(
+        &plane_one,
+        &fence_one,
+        &keyring_runtime,
+        &pseudonym_key_id("epoch-2"),
+        ordered_rhai_seed,
+        ConsultationPermitSet::from_counts(0, 2)?,
+        "rhai-monotonic-prefix",
+    )
+    .await?;
+    let ordered_operation_id = ordered_rhai_dispatch
+        .next_data_permit_mut()?
+        .expect("first Rhai permit")
+        .operation_id()
+        .clone();
+    let ordered_deadline = ordered_rhai_dispatch.deadline_unix_ms();
+    assert_eq!(
+        fence_one
+            .authorize_permit_position_for_test(
+                &ordered_operation_id,
+                DispatchPermitKind::Data,
+                1,
+                &OperationId::try_from("lookup-b")?,
+                ordered_deadline,
+            )
+            .await
+            .err(),
+        Some(ServingFenceError::PermitOrderViolation)
+    );
+    let markers_after_gap: Vec<(i16, Option<String>, bool)> = admin
+        .query(
+            "SELECT ordinal, source_operation_id, dispatched_at IS NOT NULL \
+             FROM relay_state_private.dispatch_permit \
+             WHERE operation_id=$1 AND kind='data' ORDER BY ordinal",
+            &[&ordered_operation_id.as_str()],
+        )
+        .await?
+        .into_iter()
+        .map(|row| Ok((row.try_get(0)?, row.try_get(1)?, row.try_get(2)?)))
+        .collect::<Result<_, tokio_postgres::Error>>()?;
+    assert_eq!(
+        markers_after_gap,
+        vec![(0, None, false), (1, None, false)],
+        "out-of-order authorization must not mutate either marker"
+    );
+    fence_one
+        .authorize_permit_position_for_test(
+            &ordered_operation_id,
+            DispatchPermitKind::Data,
+            0,
+            &OperationId::try_from("lookup-a")?,
+            ordered_deadline,
+        )
+        .await?;
+    fence_one
+        .authorize_permit_position_for_test(
+            &ordered_operation_id,
+            DispatchPermitKind::Data,
+            1,
+            &OperationId::try_from("lookup-b")?,
+            ordered_deadline,
+        )
+        .await?;
+    plane_one
+        .close_unfinished_consultation_for_test(
+            ordered_rhai_dispatch,
+            keyring_runtime
+                .current_write_authority()
+                .await?
+                .authorize_use()?,
+        )
+        .await?;
+
+    // Bounded HTTP steps are fixed and cannot retry or reuse the same
+    // operation at a later actual-call ordinal. Conditional skips may widen
+    // each ordinal's accepted union, but they cannot turn one compiled step
+    // into two outbound calls. Rhai intentionally retains repeatable calls.
+    let bounded_reuse_seed = completion_seed_value(
+        "bounded_http",
+        None,
+        &["lookup-a", "lookup-b", "lookup-c"],
+        &[
+            vec!["lookup-a"],
+            vec!["lookup-b", "lookup-c"],
+            vec!["lookup-c"],
+        ],
+    );
+    let mut bounded_reuse_dispatch = persist_test_consultation_attempt(
+        &plane_one,
+        &fence_one,
+        &keyring_runtime,
+        &pseudonym_key_id("epoch-2"),
+        bounded_reuse_seed,
+        ConsultationPermitSet::from_counts(0, 3)?,
+        "bounded-fixed-step-no-reuse",
+    )
+    .await?;
+    let bounded_reuse_operation = bounded_reuse_dispatch
+        .next_data_permit_mut()?
+        .expect("first Bounded HTTP permit")
+        .operation_id()
+        .clone();
+    let bounded_reuse_deadline = bounded_reuse_dispatch.deadline_unix_ms();
+    fence_one
+        .authorize_permit_position_for_test(
+            &bounded_reuse_operation,
+            DispatchPermitKind::Data,
+            0,
+            &OperationId::try_from("lookup-a")?,
+            bounded_reuse_deadline,
+        )
+        .await?;
+    fence_one
+        .authorize_permit_position_for_test(
+            &bounded_reuse_operation,
+            DispatchPermitKind::Data,
+            1,
+            &OperationId::try_from("lookup-c")?,
+            bounded_reuse_deadline,
+        )
+        .await?;
+    assert_eq!(
+        fence_one
+            .authorize_permit_position_for_test(
+                &bounded_reuse_operation,
+                DispatchPermitKind::Data,
+                2,
+                &OperationId::try_from("lookup-c")?,
+                bounded_reuse_deadline,
+            )
+            .await
+            .err(),
+        Some(ServingFenceError::SourceOperationAlreadyUsed)
+    );
+    let bounded_reuse_marker: (Option<String>, bool) = admin
+        .query_one(
+            "SELECT source_operation_id, dispatched_at IS NOT NULL \
+             FROM relay_state_private.dispatch_permit \
+             WHERE operation_id=$1 AND kind='data' AND ordinal=2",
+            &[&bounded_reuse_operation.as_str()],
+        )
+        .await
+        .and_then(|row| Ok((row.try_get(0)?, row.try_get(1)?)))?;
+    assert_eq!(bounded_reuse_marker, (None, false));
+    plane_one
+        .close_unfinished_consultation_for_test(
+            bounded_reuse_dispatch,
+            keyring_runtime
+                .current_write_authority()
+                .await?
+                .authorize_use()?,
+        )
+        .await?;
+
+    // A cached OAuth token may leave the credential permit unused, but once a
+    // data call is recorded the credential exchange cannot be inserted later.
+    let credential_order_seed = completion_seed_value(
+        "bounded_http",
+        Some("fetch-credential"),
+        &["lookup-registration"],
+        &[vec!["lookup-registration"]],
+    );
+    let mut credential_order_dispatch = persist_test_consultation_attempt(
+        &plane_one,
+        &fence_one,
+        &keyring_runtime,
+        &pseudonym_key_id("epoch-2"),
+        credential_order_seed,
+        ConsultationPermitSet::from_counts(1, 1)?,
+        "credential-before-data-if-used",
+    )
+    .await?;
+    let credential_order_operation = credential_order_dispatch
+        .next_data_permit_mut()?
+        .expect("data permit with optional credential")
+        .operation_id()
+        .clone();
+    let credential_order_deadline = credential_order_dispatch.deadline_unix_ms();
+    fence_one
+        .authorize_permit_position_for_test(
+            &credential_order_operation,
+            DispatchPermitKind::Data,
+            0,
+            &OperationId::try_from("lookup-registration")?,
+            credential_order_deadline,
+        )
+        .await?;
+    assert_eq!(
+        fence_one
+            .authorize_permit_position_for_test(
+                &credential_order_operation,
+                DispatchPermitKind::Credential,
+                0,
+                &OperationId::try_from("fetch-credential")?,
+                credential_order_deadline,
+            )
+            .await
+            .err(),
+        Some(ServingFenceError::PermitOrderViolation)
+    );
+    let credential_marker: (Option<String>, bool) = admin
+        .query_one(
+            "SELECT source_operation_id, dispatched_at IS NOT NULL \
+             FROM relay_state_private.dispatch_permit \
+             WHERE operation_id=$1 AND kind='credential' AND ordinal=0",
+            &[&credential_order_operation.as_str()],
+        )
+        .await
+        .and_then(|row| Ok((row.try_get(0)?, row.try_get(1)?)))?;
+    assert_eq!(credential_marker, (None, false));
+    plane_one
+        .close_unfinished_consultation_for_test(
+            credential_order_dispatch,
+            keyring_runtime
+                .current_write_authority()
+                .await?
+                .authorize_use()?,
+        )
+        .await?;
 
     // A runtime session without the advisory lock cannot authorize a child
     // permit, even when it knows the durable holder identity.
@@ -3913,10 +4624,13 @@ WHERE metadata.singleton = true
             .expect("guarded orphan dispatch start signal must be delivered");
         orphan_driver_abort.abort();
     });
+    let orphan_permit = orphan_dispatch
+        .next_data_permit_mut()?
+        .expect("orphan data permit");
     assert_eq!(
         orphan_fence
             .authorize_and_dispatch(
-                &mut orphan_dispatch.permits_mut()[0],
+                orphan_permit,
                 &OperationId::try_from("lookup-registration")?,
                 move || async move {
                     let _ = orphan_dispatch_started.send(());
@@ -3928,7 +4642,10 @@ WHERE metadata.singleton = true
         Some(ServingFenceError::Unavailable)
     );
     abort_orphan_driver.await?;
-    assert!(orphan_dispatch.permits_mut()[0].is_uncertain());
+    assert!(orphan_dispatch
+        .next_data_permit_mut()?
+        .expect("uncertain orphan permit remains current")
+        .is_uncertain());
     assert_eq!(
         orphan_fence.readiness().await,
         ServingFenceReadiness::Unavailable
@@ -3972,14 +4689,19 @@ WHERE metadata.singleton = true
         ServingFenceReadiness::Ready
     );
     assert_eq!(
-        takeover_fence
-            .authorize_and_dispatch(
-                &mut orphan_dispatch.permits_mut()[0],
-                &OperationId::try_from("lookup-registration")?,
-                || async { panic!("a stale-generation permit must never dispatch") },
-            )
-            .await
-            .err(),
+        {
+            let orphan_permit = orphan_dispatch
+                .next_data_permit_mut()?
+                .expect("stale orphan permit remains current");
+            takeover_fence
+                .authorize_and_dispatch(
+                    orphan_permit,
+                    &OperationId::try_from("lookup-registration")?,
+                    || async { panic!("a stale-generation permit must never dispatch") },
+                )
+                .await
+                .err()
+        },
         Some(ServingFenceError::StaleGeneration)
     );
     takeover_fence.release().await?;
@@ -4000,7 +4722,8 @@ WHERE metadata.singleton = true
     .await?;
     let linearized_operation = DurableAuditOperationId::from_ulid(Ulid::new());
     let linearized_operation_text = linearized_operation.as_str().to_owned();
-    let linearized_seed = completion_seed_value("snapshot_exact", None, &[], &[]);
+    let mut linearized_seed = completion_seed_value("snapshot_exact", None, &[], &[]);
+    linearized_seed["bounds"]["timeout_ms"] = json!(1);
     let linearized_write = atomic_consultation_attempt_write(
         &linearized_operation,
         &pseudonym_key_id("epoch-2"),
@@ -4017,6 +4740,14 @@ WHERE metadata.singleton = true
         .current_write_authority()
         .await?
         .authorize_use()?;
+    let linearized_prepared = PreparedAtomicConsultationAttempt::for_state_test(
+        linearized_write,
+        linearized_seed,
+        &pseudonym_key_id("epoch-2"),
+        linearized_authority,
+        linearized_pseudonym_authority,
+        future_decision_expiry_unix_ms(),
+    )?;
     let (mut head_blocker, head_blocker_driver) = postgres_client(&database_url).await?;
     let head_blocker_transaction = head_blocker.transaction().await?;
     head_blocker_transaction
@@ -4029,13 +4760,7 @@ WHERE metadata.singleton = true
     let linearized_plane = Arc::clone(&plane_one);
     let linearized_attempt = tokio::spawn(async move {
         linearized_plane
-            .write_attempt_with_completion_intent(
-                &linearized_write,
-                ConsultationCompletionSeed::from_value_for_test(linearized_seed)?,
-                attempt_pseudonym_bundle(&pseudonym_key_id("epoch-2")),
-                linearized_authority,
-                linearized_pseudonym_authority,
-            )
+            .write_attempt_with_completion_intent(linearized_prepared)
             .await
     });
     wait_for_blocked_consultation_query(
@@ -4076,7 +4801,7 @@ WHERE metadata.singleton = true
         ) => observed?,
     }
     head_blocker_transaction.commit().await?;
-    let linearized_dispatch = linearized_attempt.await??;
+    let linearized_dispatch = linearized_attempt.await??.into_dispatch_for_state_test();
     assert!(linearized_dispatch.lifecycle_is_armed());
     let successor_row = successor_acquire.as_mut().await?;
     drop(successor_acquire);
@@ -4155,7 +4880,8 @@ WHERE metadata.singleton = true
     .await?;
     let lost_attempt_operation = DurableAuditOperationId::from_ulid(Ulid::new());
     let lost_attempt_operation_text = lost_attempt_operation.as_str().to_owned();
-    let lost_attempt_seed = completion_seed_value("snapshot_exact", None, &[], &[]);
+    let mut lost_attempt_seed = completion_seed_value("snapshot_exact", None, &[], &[]);
+    lost_attempt_seed["bounds"]["timeout_ms"] = json!(1);
     let lost_attempt_write = atomic_consultation_attempt_write(
         &lost_attempt_operation,
         &pseudonym_key_id("epoch-2"),
@@ -4172,6 +4898,14 @@ WHERE metadata.singleton = true
         .current_write_authority()
         .await?
         .authorize_use()?;
+    let lost_attempt_prepared = PreparedAtomicConsultationAttempt::for_state_test(
+        lost_attempt_write,
+        lost_attempt_seed,
+        &pseudonym_key_id("epoch-2"),
+        lost_attempt_authority,
+        lost_attempt_pseudonym_authority,
+        future_decision_expiry_unix_ms(),
+    )?;
     let (mut lost_attempt_blocker, lost_attempt_blocker_driver) =
         postgres_client(&database_url).await?;
     let lost_attempt_blocker_transaction = lost_attempt_blocker.transaction().await?;
@@ -4185,13 +4919,7 @@ WHERE metadata.singleton = true
     let lost_attempt_plane = Arc::clone(&plane_one);
     let lost_attempt_task = tokio::spawn(async move {
         lost_attempt_plane
-            .write_attempt_with_completion_intent(
-                &lost_attempt_write,
-                ConsultationCompletionSeed::from_value_for_test(lost_attempt_seed)?,
-                attempt_pseudonym_bundle(&pseudonym_key_id("epoch-2")),
-                lost_attempt_authority,
-                lost_attempt_pseudonym_authority,
-            )
+            .write_attempt_with_completion_intent(lost_attempt_prepared)
             .await
     });
     wait_for_blocked_consultation_query(
@@ -4293,12 +5021,13 @@ WHERE metadata.singleton = true
     );
     let marker_operation = DurableAuditOperationId::from_ulid(Ulid::new());
     let marker_operation_text = marker_operation.as_str().to_owned();
-    let marker_seed = completion_seed_value(
+    let mut marker_seed = completion_seed_value(
         "bounded_http",
         None,
         &["lookup-registration"],
         &[vec!["lookup-registration"]],
     );
+    marker_seed["bounds"]["timeout_ms"] = json!(5_000);
     let marker_write = atomic_consultation_attempt_write(
         &marker_operation,
         &pseudonym_key_id("epoch-2"),
@@ -4315,29 +5044,29 @@ WHERE metadata.singleton = true
         .current_write_authority()
         .await?
         .authorize_use()?;
-    let mut marker_dispatch = plane_one
-        .write_attempt_with_completion_intent(
-            &marker_write,
-            ConsultationCompletionSeed::from_value_for_test(marker_seed)?,
-            attempt_pseudonym_bundle(&pseudonym_key_id("epoch-2")),
-            marker_authority,
-            marker_pseudonym_authority,
-        )
-        .await?;
+    let mut marker_dispatch = persist_prepared_test_consultation_attempt(
+        &plane_one,
+        marker_write,
+        marker_seed,
+        &pseudonym_key_id("epoch-2"),
+        marker_authority,
+        marker_pseudonym_authority,
+    )
+    .await?;
     assert!(marker_dispatch.lifecycle_is_armed());
     let (marker_visible, marker_started) = tokio::sync::oneshot::channel();
     let marker_task_fence = Arc::clone(&marker_fence);
     let marker_source_operation = OperationId::try_from("lookup-registration")?;
     let marker_task = tokio::spawn(async move {
+        let permit = marker_dispatch
+            .next_data_permit_mut()
+            .expect("marker cursor is valid")
+            .expect("marker data permit");
         marker_task_fence
-            .authorize_and_dispatch(
-                &mut marker_dispatch.permits_mut()[0],
-                &marker_source_operation,
-                move || async move {
-                    let _ = marker_visible.send(());
-                    std::future::pending::<()>().await;
-                },
-            )
+            .authorize_and_dispatch(permit, &marker_source_operation, move || async move {
+                let _ = marker_visible.send(());
+                std::future::pending::<()>().await;
+            })
             .await
     });
     tokio::time::timeout(Duration::from_secs(3), marker_started)
@@ -4441,7 +5170,8 @@ WHERE metadata.singleton = true
     .await?;
     let completion_race_operation = DurableAuditOperationId::from_ulid(Ulid::new());
     let completion_race_operation_text = completion_race_operation.as_str().to_owned();
-    let completion_race_seed = completion_seed_value("snapshot_exact", None, &[], &[]);
+    let mut completion_race_seed = completion_seed_value("snapshot_exact", None, &[], &[]);
+    completion_race_seed["bounds"]["timeout_ms"] = json!(1);
     let completion_race_write = atomic_consultation_attempt_write(
         &completion_race_operation,
         &pseudonym_key_id("epoch-2"),
@@ -4458,15 +5188,15 @@ WHERE metadata.singleton = true
         .current_write_authority()
         .await?
         .authorize_use()?;
-    let completion_race_dispatch = plane_one
-        .write_attempt_with_completion_intent(
-            &completion_race_write,
-            ConsultationCompletionSeed::from_value_for_test(completion_race_seed)?,
-            attempt_pseudonym_bundle(&pseudonym_key_id("epoch-2")),
-            completion_race_authority,
-            completion_race_attempt_authority,
-        )
-        .await?;
+    let completion_race_dispatch = persist_prepared_test_consultation_attempt(
+        &plane_one,
+        completion_race_write,
+        completion_race_seed,
+        &pseudonym_key_id("epoch-2"),
+        completion_race_authority,
+        completion_race_attempt_authority,
+    )
+    .await?;
     assert!(completion_race_dispatch.lifecycle_is_armed());
     let completion_race_pseudonym_authority = keyring_runtime
         .current_write_authority()
@@ -4485,7 +5215,7 @@ WHERE metadata.singleton = true
     let completion_race_plane = Arc::clone(&plane_one);
     let completion_race_task = tokio::spawn(async move {
         completion_race_plane
-            .close_unfinished_consultation(
+            .close_unfinished_consultation_for_test(
                 completion_race_dispatch,
                 completion_race_pseudonym_authority,
             )
@@ -4622,6 +5352,196 @@ WHERE metadata.singleton = true
         plane_one.write_phase(&blocked_write).await?,
         DurableAuditWriteOutcome::Inserted(_)
     ));
+
+    // Both production terminal orchestrators retain their exact armed
+    // dispatch across pseudonym-key rotation. One rotation is scheduled at
+    // the two distinct boundaries: known completion before its snapshot and
+    // unfinished completion after its candidate snapshot but before CAS.
+    let (terminal_rotation_client, terminal_rotation_driver) =
+        postgres_client_as(&database_url, &runtime_role_name, &runtime_password).await?;
+    let terminal_rotation_fence = PostgresServingFence::acquire(
+        terminal_rotation_client,
+        terminal_rotation_driver,
+        &chain_key_epoch_id,
+        fence_key,
+    )
+    .await?;
+    let completion_rows_before_rotation: i64 = admin
+        .query_one(
+            "SELECT count(*) FROM relay_state_private.audit_phase \
+             WHERE stream_kind='consultation' AND phase='completion'",
+            &[],
+        )
+        .await?
+        .try_get(0)?;
+    let completed_intents_before_rotation: i64 = admin
+        .query_one(
+            "SELECT count(*) FROM relay_state_private.consultation_completion_intent \
+             WHERE state='completed'",
+            &[],
+        )
+        .await?
+        .try_get(0)?;
+
+    let known_rotation_dispatch = persist_test_prepared_dispatch(
+        &plane_one,
+        &terminal_rotation_fence,
+        &keyring_runtime,
+        &pseudonym_key_id("epoch-2"),
+        completion_seed_value("snapshot_exact", None, &[], &[]),
+        ConsultationPermitSet::from_counts(0, 0)?,
+        "terminal-rotation-before-snapshot",
+        current_unix_ms() + 30_000,
+    )
+    .await?;
+    let known_rotation_observed_at = current_unix_ms();
+    let known_rotation_facts = KnownConsultationCompletionFacts::public_for_snapshot_test(
+        PublicConsultationOutcome::NoMatch,
+        known_rotation_observed_at,
+        None,
+        None,
+        &Ulid::new().to_string(),
+        known_rotation_observed_at,
+    )?;
+    let known_rotation_executed = match known_rotation_dispatch
+        .run_backend(|_| {
+            Box::pin(async {
+                ValidatedConsultationBackendResult::for_test(42_u8, known_rotation_facts)
+            })
+        })
+        .await
+    {
+        Ok(executed) => executed,
+        Err(_) => panic!("fresh known-completion decision must enter its backend"),
+    };
+
+    let unfinished_rotation_expiry = current_unix_ms() + 500;
+    let unfinished_rotation_dispatch = persist_test_prepared_dispatch(
+        &plane_one,
+        &terminal_rotation_fence,
+        &keyring_runtime,
+        &pseudonym_key_id("epoch-2"),
+        completion_seed_value("snapshot_exact", None, &[], &[]),
+        ConsultationPermitSet::from_counts(0, 0)?,
+        "terminal-rotation-before-cas",
+        unfinished_rotation_expiry,
+    )
+    .await?;
+    let remaining_until_denial = unfinished_rotation_expiry
+        .saturating_sub(current_unix_ms())
+        .saturating_add(25);
+    tokio::time::sleep(Duration::from_millis(u64::try_from(
+        remaining_until_denial,
+    )?))
+    .await;
+    let unfinished_rotation_denied = match unfinished_rotation_dispatch
+        .run_backend::<(), _>(|_| Box::pin(async { panic!("expired decision must not run") }))
+        .await
+    {
+        Err(denied) => denied,
+        Ok(_) => panic!("expired unfinished-completion decision must be denied"),
+    };
+
+    let (known_hook, mut known_control) =
+        terminal_completion_test_hook(TerminalCompletionTestPoint::AfterAuthorityMinted);
+    let (unfinished_hook, mut unfinished_control) =
+        terminal_completion_test_hook(TerminalCompletionTestPoint::AfterCandidateSnapshot);
+    let known_completion = plane_one.finalize_validated_consultation_with_test_hook(
+        known_rotation_executed,
+        &keyring_runtime,
+        known_hook,
+    );
+    let unfinished_completion = plane_one.close_unfinished_consultation_with_test_hook(
+        unfinished_rotation_denied,
+        &keyring_runtime,
+        unfinished_hook,
+    );
+    let terminal_rotation = async {
+        tokio::time::timeout(Duration::from_secs(2), known_control.wait_until_paused())
+            .await
+            .expect("known completion reaches its authority pause")
+            .expect("known completion pause remains connected");
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            unfinished_control.wait_until_paused(),
+        )
+        .await
+        .expect("unfinished completion reaches its candidate pause")
+        .expect("unfinished completion pause remains connected");
+        let result = keyring_maintenance
+            .rotate(maintained_binding, |current, transition_time| {
+                if !current.retained_keys().is_empty() {
+                    return Err(PostgresKeyringError::InvalidRotation);
+                }
+                rotation_successor(current, transition_time.unix_ms(), "epoch-3")
+            })
+            .await;
+        known_control
+            .resume()
+            .expect("known completion pause resumes");
+        unfinished_control
+            .resume()
+            .expect("unfinished completion pause resumes");
+        result
+    };
+    let (known_completion, unfinished_completion, terminal_rotation) =
+        tokio::join!(known_completion, unfinished_completion, terminal_rotation);
+    terminal_rotation?;
+    let (known_publication, known_output) = match known_completion? {
+        FinalizedValidatedConsultation::Published { grant, output } => (grant, output),
+        FinalizedValidatedConsultation::FinalizedFailure(_) => {
+            panic!("validated public facts must mint publication authority")
+        }
+    };
+    let unfinished_receipt = unfinished_completion?;
+    assert_eq!(known_output, 42);
+    assert_eq!(
+        unfinished_receipt.outcome(),
+        ConsultationCompletionOutcome::NotStarted
+    );
+    assert_ne!(
+        known_publication.stored_identity().envelope_id(),
+        unfinished_receipt.stored_identity().envelope_id()
+    );
+    assert_eq!(
+        keyring_runtime
+            .current_write_authority()
+            .await?
+            .authorize_use()?
+            .key_id()
+            .as_str(),
+        "epoch-3"
+    );
+    let completion_rows_after_rotation: i64 = admin
+        .query_one(
+            "SELECT count(*) FROM relay_state_private.audit_phase \
+             WHERE stream_kind='consultation' AND phase='completion'",
+            &[],
+        )
+        .await?
+        .try_get(0)?;
+    let completed_intents_after_rotation: i64 = admin
+        .query_one(
+            "SELECT count(*) FROM relay_state_private.consultation_completion_intent \
+             WHERE state='completed'",
+            &[],
+        )
+        .await?
+        .try_get(0)?;
+    assert_eq!(
+        completion_rows_after_rotation,
+        completion_rows_before_rotation + 2
+    );
+    assert_eq!(
+        completed_intents_after_rotation,
+        completed_intents_before_rotation + 2
+    );
+    assert_eq!(
+        terminal_rotation_fence.readiness().await,
+        ServingFenceReadiness::Ready
+    );
+    terminal_rotation_fence.release().await?;
+    wait_for_fence_unlock(&admin, fence_key).await?;
 
     // The database can validate structure and referential consistency, but it
     // cannot authenticate an external HMAC or classify arbitrary payload fields

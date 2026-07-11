@@ -280,6 +280,7 @@ mod tests {
             BTreeSet::from(["registry-relay".to_string()]),
             Some("registry-notary".to_string()),
             Some("notary-client-id".to_string()),
+            4_102_444_800,
         )
         .expect("valid verified identity");
         AuthenticationResult::oidc(

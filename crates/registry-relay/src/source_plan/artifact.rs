@@ -134,6 +134,9 @@ pub enum SourcePlanArtifactError {
     /// A committed hash does not match the typed artifact.
     #[error("source-plan artifact hash does not match its committed digest")]
     HashMismatch,
+    /// The authored policy hash does not match the policy derived from the contract.
+    #[error("consultation policy hash does not match its derived digest")]
+    PolicyHashMismatch,
 }
 
 pub(super) struct ValidatedAuthorization {
@@ -348,6 +351,9 @@ use parsing::hash_document;
 pub(super) use parsing::{
     parse_integration_pack, parse_private_binding, parse_public_contract, sha256_label,
 };
+
+mod policy;
+pub(super) use policy::derive_consultation_policy;
 
 mod validation;
 #[cfg(test)]

@@ -54,12 +54,13 @@
       "workload": "registry-notary",
       "required_scope": "registry:consult:person-status",
       "purposes": [
-        "benefit-verification"
+        "\uE000",
+        "\uD800\uDC00"
       ],
       "legal_basis": "public_task",
       "policy": {
         "id": "relay.synthetic.person-status.exact",
-        "hash": "sha256:28ece7689edff4f02c39fcb1b7d7abb63eddd3c29c2701898e7a53fe15a2cd17",
+        "hash": "sha256:e529a505e9c29746942dc35a10aa173efa3928422d2c121f516b9fcd3e556f32",
         "decision_cache": "disabled",
         "max_decision_age_ms": 1000,
         "unavailable": "deny"

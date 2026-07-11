@@ -226,6 +226,7 @@ impl OidcAuth {
         .collect();
 
         let issuer = claims.iss.clone().ok_or(AuthError::MalformedCredential)?;
+        let expires_at_unix_seconds = claims.exp.ok_or(AuthError::MalformedCredential)?;
         let audiences = match claims.aud.as_ref().ok_or(AuthError::MalformedCredential)? {
             Audience::One(audience) => [audience.clone()].into_iter().collect(),
             Audience::Many(audiences) => audiences.iter().cloned().collect(),
@@ -235,6 +236,7 @@ impl OidcAuth {
             audiences,
             claims.azp.clone(),
             claims.client_id.clone(),
+            expires_at_unix_seconds,
         )?;
 
         let principal_id = claims

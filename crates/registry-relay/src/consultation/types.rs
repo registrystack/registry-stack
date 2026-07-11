@@ -494,13 +494,6 @@ impl ParsedSingleStringInput {
     /// This accessor is deliberately crate-private. Public API and backend
     /// types cannot serialize or debug the raw selector.
     #[must_use]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the reviewed profile validator will consume the private value"
-        )
-    )]
     pub(crate) fn value_for_internal_use(&self) -> &str {
         &self.value
     }
@@ -818,7 +811,7 @@ pub struct PreAuthorizationConsultationCore {
 
 impl PreAuthorizationConsultationCore {
     #[cfg(test)]
-    const fn new_for_test(
+    pub(crate) const fn new_for_test(
         profile: ProfileIdentity,
         selector_provenance: SelectorProvenance,
         purpose: ParsedPurpose,

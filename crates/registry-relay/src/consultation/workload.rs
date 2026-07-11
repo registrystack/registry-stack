@@ -532,11 +532,30 @@ pub struct AuthenticatedConsultationWorkload {
     client_value: ExpectedClientValue,
     principal_id: ConfiguredPrincipalId,
     checked_scope: RequiredConsultationScope,
+    authentication_expires_at_unix_ms: i64,
     tenant: TenantId,
     registry_instance: RegistryInstanceId,
 }
 
 impl AuthenticatedConsultationWorkload {
+    #[cfg(test)]
+    pub(crate) fn for_runtime_vector_test(authentication_expires_at_unix_ms: i64) -> Self {
+        Self {
+            role: ConsultationWorkloadRole::Notary,
+            workload_id: WorkloadId::try_from("registry-notary").unwrap(),
+            issuer: ConfiguredIssuer::try_from("https://issuer.synthetic.example").unwrap(),
+            audience: ConfiguredAudience::try_from("registry-relay").unwrap(),
+            client_selector: ClientClaimSelector::Azp,
+            client_value: ExpectedClientValue::try_from("synthetic-notary-client").unwrap(),
+            principal_id: ConfiguredPrincipalId::try_from("synthetic-notary-service").unwrap(),
+            checked_scope: RequiredConsultationScope::try_from("registry:consult:person-status")
+                .unwrap(),
+            authentication_expires_at_unix_ms,
+            tenant: TenantId::try_from("synthetic-government").unwrap(),
+            registry_instance: RegistryInstanceId::try_from("people-primary").unwrap(),
+        }
+    }
+
     /// Prove one fixed workload binding from a single coupled authentication
     /// result.
     ///
@@ -591,6 +610,7 @@ impl AuthenticatedConsultationWorkload {
             client_value: binding.client().expected.clone(),
             principal_id: binding.principal_id().clone(),
             checked_scope: binding.required_scope.clone(),
+            authentication_expires_at_unix_ms: identity.expires_at_unix_ms(),
             tenant: binding.tenant.clone(),
             registry_instance: binding.registry_instance.clone(),
         })
@@ -666,6 +686,12 @@ impl AuthenticatedConsultationWorkload {
     /// Iterate exactly the scopes checked by this binding.
     pub fn checked_scopes(&self) -> impl ExactSizeIterator<Item = &str> {
         std::iter::once(self.checked_scope.as_str())
+    }
+
+    /// Return the signature-verified client authentication expiry.
+    #[must_use]
+    pub(crate) const fn authentication_expires_at_unix_ms(&self) -> i64 {
+        self.authentication_expires_at_unix_ms
     }
 
     /// Return the fixed tenant.

@@ -30,6 +30,15 @@ pub(in super::super) fn parse_public_contract(
     validate_public_behavior(&mut document.spec.public_behavior, cardinality)?;
     validate_materialization_contract(&mut document.spec, &acquired_fields)?;
 
+    // The policy is a compiler-generated commitment over this normalized
+    // contract, not a separately supplied or runtime-selected artifact. Verify
+    // it before hashing the contract so the contract hash binds the verified
+    // digest rather than an arbitrary well-formed declaration.
+    let derived_policy = derive_consultation_policy(&document)?;
+    if authorization.policy_identity.hash() != &derived_policy.hash {
+        return Err(SourcePlanArtifactError::PolicyHashMismatch);
+    }
+
     let (canonical_json, digest) = hash_document(CONTRACT_HASH_DOMAIN, &document)?;
     if digest != expected_hash {
         return Err(SourcePlanArtifactError::HashMismatch);
