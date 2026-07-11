@@ -1031,6 +1031,82 @@
     {
       "service": "registry-relay",
       "listener": "public",
+      "method": "GET",
+      "path": "/v1/consultations/{profile_id}/versions/{profile_version}",
+      "feature": null,
+      "audience": "platform",
+      "auth": "oidc",
+      "scopes": [
+        "configured"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": false,
+      "stability": "experimental",
+      "data_classification": "metadata",
+      "notes": "Protected consultation profile metadata for the fixed Notary workload.",
+      "source": "manual",
+      "enforcement_tests": [
+        "src/api/consultation.rs::router_exposes_only_the_exact_get_and_post_paths",
+        "src/auth/middleware.rs::exact_consultation_routes_collapse_every_typed_auth_failure",
+        "tests/audit_record.rs::consultation_http_audit_never_retains_untrusted_target_or_purpose"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "HEAD",
+      "path": "/v1/consultations/{profile_id}/versions/{profile_version}",
+      "feature": null,
+      "audience": "platform",
+      "auth": "oidc",
+      "scopes": [
+        "configured"
+      ],
+      "rate_limit": null,
+      "audit": "required",
+      "openapi": false,
+      "stability": "experimental",
+      "data_classification": "metadata",
+      "notes": "Explicit protected method denial; consultation metadata exposes GET only.",
+      "source": "manual",
+      "enforcement_tests": [
+        "src/api/consultation.rs::router_exposes_only_the_exact_get_and_post_paths",
+        "src/auth/middleware.rs::exact_consultation_routes_collapse_every_typed_auth_failure",
+        "tests/audit_record.rs::consultation_http_audit_never_retains_untrusted_target_or_purpose"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
+      "method": "POST",
+      "path": "/v1/consultations/{profile_id}/versions/{profile_version}/execute",
+      "feature": null,
+      "audience": "platform",
+      "auth": "oidc",
+      "scopes": [
+        "configured"
+      ],
+      "rate_limit": "persistent_profile_quota",
+      "audit": "required",
+      "openapi": false,
+      "stability": "experimental",
+      "data_classification": "personal",
+      "notes": "Purpose-bound, fenced consultation execution for the fixed Notary workload.",
+      "source": "manual",
+      "enforcement_tests": [
+        "src/api/consultation.rs::quota_denial_has_one_bounded_integer_retry_after_header",
+        "src/api/consultation.rs::router_exposes_only_the_exact_get_and_post_paths",
+        "src/auth/middleware.rs::exact_consultation_routes_collapse_every_typed_auth_failure",
+        "tests/audit_record.rs::consultation_http_audit_never_retains_untrusted_target_or_purpose"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-relay",
+      "listener": "public",
       "method": "POST",
       "path": "/dci/{registry}/registry/sync/search",
       "feature": "spdci-api-standards",
