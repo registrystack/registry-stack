@@ -8,6 +8,7 @@
 //! not backend capabilities.
 
 mod types;
+mod workload;
 
 pub use types::{
     AcquiredField, AcquisitionClass, AssertionContractHash, AssertionContractId,
@@ -16,4 +17,10 @@ pub use types::{
     OperationBounds, OperationId, ParsedPurpose, ParsedSingleStringInput, PolicyHash, PolicyId,
     PolicyIdentity, PreAuthorizationConsultationCore, ProfileContractHash, ProfileId,
     ProfileIdentity, ProfileVersion, SelectorProvenance, SnapshotGenerationId,
+};
+pub use workload::{
+    AuthenticatedConsultationWorkload, ClientClaimSelector, ConfiguredAudience,
+    ConfiguredClientBinding, ConfiguredIssuer, ConfiguredOidcWorkloadProof, ConfiguredPrincipalId,
+    ConsultationAuthMode, ConsultationWorkloadBinding, ExpectedClientValue, RegistryInstanceId,
+    RequiredConsultationScope, TenantId, WorkloadBindingError, WorkloadId,
 };
