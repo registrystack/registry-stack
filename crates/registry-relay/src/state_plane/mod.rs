@@ -16,6 +16,7 @@ mod fence;
 mod migration;
 mod pseudonym_keyring;
 mod quota;
+mod runtime;
 
 #[cfg(test)]
 mod postgres_tests;
@@ -56,4 +57,8 @@ pub(crate) use pseudonym_keyring::{
 pub(crate) use quota::{
     EffectiveQuotaLimits, PostgresQuotaStatePlane, PublicQuotaLimits, QuotaError, QuotaExhaustion,
     QuotaGrant, QuotaKey, QuotaReadiness, QuotaReservation,
+};
+pub(crate) use runtime::{
+    ConsultationStatePlaneReadiness, ConsultationStatePlaneRuntime,
+    ConsultationStatePlaneRuntimeError,
 };
