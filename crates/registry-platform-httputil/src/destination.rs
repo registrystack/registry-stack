@@ -1655,13 +1655,11 @@ pub enum DestinationResponseError {
 
 /// Marker-typed bounded response bytes.
 ///
-/// Production code cannot inspect these bytes through this transport
-/// foundation. The eventual plan compiler must expose separate, reviewed data
-/// mapping and credential-token pathways instead of a generic raw-byte escape
-/// hatch shared by both slots.
+/// The bytes can be inspected only through the separate consuming data and
+/// credential callbacks below. This keeps the two capabilities distinct and
+/// prevents a reusable generic raw-body accessor from crossing slot boundaries.
 pub struct BoundedDestinationBody<S: DestinationSlot> {
-    // Intentionally opaque until the reviewed plan compiler supplies
-    // slot-specific response handling.
+    // Intentionally opaque outside the consuming slot-specific callbacks.
     #[cfg_attr(not(test), allow(dead_code))]
     bytes: Zeroizing<Vec<u8>>,
     slot: PhantomData<fn() -> S>,
@@ -1693,6 +1691,28 @@ impl<S: DestinationSlot> BoundedDestinationBody<S> {
     #[cfg(test)]
     #[must_use]
     fn with_bytes<T>(&self, inspect: impl FnOnce(&[u8]) -> T) -> T {
+        inspect(self.bytes.as_slice())
+    }
+}
+
+impl BoundedDestinationBody<DataDestination> {
+    /// Consume registry-data bytes inside one reviewed response decoder.
+    ///
+    /// The callback should return only the validated, bounded representation
+    /// needed by the caller. The backing buffer is zeroized when this method
+    /// returns and no generic accessor is shared with credential responses.
+    pub fn inspect_data<T>(self, inspect: impl FnOnce(&[u8]) -> T) -> T {
+        inspect(self.bytes.as_slice())
+    }
+}
+
+impl BoundedDestinationBody<CredentialDestination> {
+    /// Consume credential-exchange bytes inside one reviewed token decoder.
+    ///
+    /// The callback should return only the zeroizing credential capability
+    /// produced by the decoder. The backing response buffer is zeroized when
+    /// this method returns and cannot be passed to a registry-data decoder.
+    pub fn inspect_credential<T>(self, inspect: impl FnOnce(&[u8]) -> T) -> T {
         inspect(self.bytes.as_slice())
     }
 }
@@ -2271,6 +2291,24 @@ mod tests {
             &cidrs,
         )
         .expect("production policy validates")
+    }
+
+    #[test]
+    fn response_bodies_have_separate_consuming_inspection_paths() {
+        let data = BoundedDestinationBody::<DataDestination> {
+            bytes: Zeroizing::new(b"registry-record".to_vec()),
+            slot: PhantomData,
+        };
+        let credential = BoundedDestinationBody::<CredentialDestination> {
+            bytes: Zeroizing::new(b"credential-token".to_vec()),
+            slot: PhantomData,
+        };
+
+        assert_eq!(
+            data.inspect_data(|bytes| bytes.len()),
+            b"registry-record".len()
+        );
+        assert!(credential.inspect_credential(|bytes| bytes == b"credential-token"));
     }
 
     fn classify(
