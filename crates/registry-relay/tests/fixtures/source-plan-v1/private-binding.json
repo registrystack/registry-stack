@@ -6,7 +6,7 @@
   "integration_pack": {
     "id": "synthetic.person-status",
     "version": "1",
-    "hash": "sha256:7054fae6ad999029759835838214f188fb5726cf48e0006479e98340fb7c22a7"
+    "hash": "sha256:2aa6d87bf5c6c04ce0b8982e5ee28bf0d56b4432991c5679b0d342389ec2cb5c"
   },
   "tenant": "synthetic-government",
   "registry_instance": "people-primary",
@@ -29,7 +29,7 @@
     "program": "benefits"
   },
   "limits": {
-    "max_source_bytes": 65536,
+    "max_source_bytes": 81920,
     "timeout_ms": 4000,
     "max_in_flight": 8,
     "quota_per_minute": 30,

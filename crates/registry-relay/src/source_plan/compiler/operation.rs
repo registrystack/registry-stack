@@ -577,7 +577,9 @@ fn compile_prior_scalar_shape(
     }
 }
 
-fn compile_response_schema(schema: &ResponseSchemaDocument) -> CompiledResponseSchema {
+pub(in crate::source_plan) fn compile_response_schema(
+    schema: &ResponseSchemaDocument,
+) -> CompiledResponseSchema {
     match schema {
         ResponseSchemaDocument::Object {
             nullable, fields, ..

@@ -11,19 +11,19 @@
       "name": "integration_pack",
       "file": "integration-pack.json",
       "domain_label": "registry.relay.integration-pack.v1",
-      "expected_hash": "sha256:7054fae6ad999029759835838214f188fb5726cf48e0006479e98340fb7c22a7"
+      "expected_hash": "sha256:2aa6d87bf5c6c04ce0b8982e5ee28bf0d56b4432991c5679b0d342389ec2cb5c"
     },
     {
       "name": "public_contract",
       "file": "public-contract.json",
       "domain_label": "registry.relay.consultation-contract.v1",
-      "expected_hash": "sha256:222be054cef37b080ce873692c88bf845d6868ed6310475ee0efce9eff747ee6"
+      "expected_hash": "sha256:a03a5c8a17cd32d522ba065839c3d3c0c23969363f076ac85b88ccbdacd72010"
     },
     {
       "name": "private_binding",
       "file": "private-binding.json",
       "domain_label": "registry.relay.consultation-binding.v1",
-      "expected_hash": "sha256:1b941bd7da3d91a5b97b385eea922e40943dce5abefb910959bafc5ff8ebeb8e"
+      "expected_hash": "sha256:10cdb75edb3b772575dea22ced33417a528840fd1d2c420441cbef335daf7e7a"
     }
   ],
   "cross_references": [

@@ -27,13 +27,16 @@ use super::artifact::{
     IntegrationPackArtifact, MaterializationRefreshClassDocument,
     OAuth2ClientCredentialsRequestFormatDocument, OAuth2TokenResponseSchemaDocument,
     OAuth2TokenTypeDocument, OutputTypeDocument, PriorOutputBindingDocument,
-    PrivateBindingArtifact, PrivateBindingHash, ProjectionMechanismDocument,
-    PublicContractArtifact, ReadMethod, RequestCodecDocument, RequestSelectorLocationDocument,
-    RequestSignerDocument, ResponseNormalizationDocument, ResponseSchemaDocument,
-    SourceAuthDocument, SourceCardinality, SourcePlanArtifactError, SourcePlanKind,
-    SourcePlanLimits, StepConditionDocument, ValueExpressionDocument, MAX_ARTIFACTS_PER_BUNDLE,
-    MAX_EVIDENCE_CLASS_BYTES, MAX_EVIDENCE_FILES_PER_CLASS, MAX_EVIDENCE_FILE_BYTES,
+    PrivateBindingArtifact, ProjectionMechanismDocument, PublicContractArtifact, ReadMethod,
+    RequestCodecDocument, RequestSelectorLocationDocument, RequestSignerDocument,
+    ResponseNormalizationDocument, ResponseSchemaDocument, SourceAuthDocument, SourceCardinality,
+    SourcePlanArtifactError, SourcePlanKind, SourcePlanLimits, StepConditionDocument,
+    ValueExpressionDocument, MAX_ARTIFACTS_PER_BUNDLE, MAX_EVIDENCE_CLASS_BYTES,
+    MAX_EVIDENCE_FILES_PER_CLASS, MAX_EVIDENCE_FILE_BYTES,
 };
+use super::completion_seed::{measure_completion_seed, MAX_COMPLETION_AUDIT_CANONICAL_BYTES_V1};
+use super::identifiers::{CredentialReferenceId, SourceDestinationId};
+use super::runtime_profile::{CompiledRuntimeProfile, MAX_COMPLETION_SEED_CANONICAL_BYTES_V1};
 
 /// One raw, hash-pinned public contract or reviewed integration pack.
 ///
@@ -199,6 +202,12 @@ pub enum SourcePlanCompileError {
     /// Evidence exceeds the bounded file count or per-class byte budget.
     #[error("source-plan evidence exceeds its class bounds")]
     EvidenceBoundsExceeded,
+    /// The full canonical completion seed would exceed durable-state bounds.
+    #[error("compiled source plan exceeds the completion-seed persistence ceiling")]
+    CompletionSeedTooLarge,
+    /// Completion audit context plus bounded pseudonyms would exceed audit bounds.
+    #[error("compiled source plan exceeds the completion-audit persistence ceiling")]
+    CompletionAuditTooLarge,
     /// A previously validated field could not be represented in the compiled plan.
     #[error("source-plan compiler invariant failed")]
     CompilerInvariant,
@@ -206,17 +215,17 @@ pub enum SourcePlanCompileError {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RhaiWorkerLimits {
-    max_calls: u8,
-    memory_bytes: u64,
-    cpu_ms: u32,
-    ipc_frame_bytes: u32,
-    instructions: u64,
-    call_depth: u8,
-    string_bytes: u32,
-    array_items: u32,
-    map_entries: u32,
-    output_bytes: u32,
-    concurrency: u16,
+    pub(crate) max_calls: u8,
+    pub(crate) memory_bytes: u64,
+    pub(crate) cpu_ms: u32,
+    pub(crate) ipc_frame_bytes: u32,
+    pub(crate) instructions: u64,
+    pub(crate) call_depth: u8,
+    pub(crate) string_bytes: u32,
+    pub(crate) array_items: u32,
+    pub(crate) map_entries: u32,
+    pub(crate) output_bytes: u32,
+    pub(crate) concurrency: u16,
 }
 
 /// Non-config startup capability minted only after the worker harness has
@@ -547,6 +556,27 @@ pub enum CompiledScalarShape {
     },
 }
 
+impl CompiledScalarShape {
+    pub(crate) const fn nullable(&self) -> bool {
+        match self {
+            Self::String { nullable, .. }
+            | Self::Boolean { nullable }
+            | Self::Integer { nullable, .. }
+            | Self::Number { nullable, .. } => *nullable,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CompiledResponseSchemaKind {
+    Object,
+    Array,
+    String,
+    Boolean,
+    Integer,
+    Number,
+}
+
 /// Closed recursive raw response schema.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompiledResponseSchema {
@@ -560,6 +590,53 @@ pub enum CompiledResponseSchema {
         items: Box<CompiledResponseSchema>,
     },
     Scalar(CompiledScalarShape),
+}
+
+impl CompiledResponseSchema {
+    pub(crate) const fn kind(&self) -> CompiledResponseSchemaKind {
+        match self {
+            Self::Object { .. } => CompiledResponseSchemaKind::Object,
+            Self::Array { .. } => CompiledResponseSchemaKind::Array,
+            Self::Scalar(CompiledScalarShape::String { .. }) => CompiledResponseSchemaKind::String,
+            Self::Scalar(CompiledScalarShape::Boolean { .. }) => {
+                CompiledResponseSchemaKind::Boolean
+            }
+            Self::Scalar(CompiledScalarShape::Integer { .. }) => {
+                CompiledResponseSchemaKind::Integer
+            }
+            Self::Scalar(CompiledScalarShape::Number { .. }) => CompiledResponseSchemaKind::Number,
+        }
+    }
+
+    pub(crate) const fn nullable(&self) -> bool {
+        match self {
+            Self::Object { nullable, .. } | Self::Array { nullable, .. } => *nullable,
+            Self::Scalar(shape) => shape.nullable(),
+        }
+    }
+
+    pub(crate) fn object_fields(&self) -> Option<&[CompiledResponseField]> {
+        match self {
+            Self::Object { fields, .. } => Some(fields),
+            Self::Array { .. } | Self::Scalar(_) => None,
+        }
+    }
+
+    pub(crate) const fn array_items(&self) -> Option<(u16, &CompiledResponseSchema)> {
+        match self {
+            Self::Array {
+                max_items, items, ..
+            } => Some((*max_items, items)),
+            Self::Object { .. } | Self::Scalar(_) => None,
+        }
+    }
+
+    pub(crate) const fn scalar(&self) -> Option<&CompiledScalarShape> {
+        match self {
+            Self::Scalar(shape) => Some(shape),
+            Self::Object { .. } | Self::Array { .. } => None,
+        }
+    }
 }
 
 /// One required or optional field in a closed response object.
@@ -764,6 +841,10 @@ impl fmt::Debug for CompiledStep {
 }
 
 impl CompiledStep {
+    pub(crate) const fn operation_index(&self) -> usize {
+        self.operation_index
+    }
+
     /// Return the earlier operation index providing the normalized condition slot.
     #[must_use]
     pub const fn condition_source_index(&self) -> Option<usize> {
@@ -1047,7 +1128,7 @@ impl CompiledSnapshotBinding {
 struct RuntimePrivateBinding {
     data_destination: Option<DataDestinationPolicy>,
     credential_destination: Option<CredentialDestinationPolicy>,
-    credential_reference: Option<Box<str>>,
+    credential_reference: Option<CredentialReferenceId>,
     credential_generation: Option<u64>,
     deployment_parameters: Box<[Box<str>]>,
     oauth_cache: Option<OAuthCacheIdentityInputs>,
@@ -1065,9 +1146,9 @@ use credential::*;
 pub(crate) struct OAuthCacheIdentityInputs {
     integration_pack_hash: Box<str>,
     binding_hash: Box<str>,
-    credential_reference: Box<str>,
+    credential_reference: CredentialReferenceId,
     credential_generation: u64,
-    credential_destination_id: Box<str>,
+    credential_destination_id: SourceDestinationId,
     audience: Option<Box<str>>,
     scopes: Vec<Box<str>>,
     resource: Option<Box<str>>,
@@ -1140,9 +1221,9 @@ impl OAuthCacheIdentityInputs {
         OAuthCacheKeyParts {
             integration_pack_hash: &self.integration_pack_hash,
             binding_hash: &self.binding_hash,
-            credential_reference: &self.credential_reference,
+            credential_reference: self.credential_reference.as_str(),
             credential_generation: self.credential_generation,
-            credential_destination_id: &self.credential_destination_id,
+            credential_destination_id: self.credential_destination_id.as_str(),
             audience: self.audience.as_deref(),
             scopes: &self.scopes,
             resource: self.resource.as_deref(),
@@ -1173,13 +1254,8 @@ impl OAuthCacheIdentityInputs {
 /// let forged = CompiledSourcePlan {};
 /// ```
 pub struct CompiledSourcePlan {
+    runtime_profile: CompiledRuntimeProfile,
     contract: PublicContractArtifact,
-    pack: IntegrationPackArtifact,
-    binding_hash: PrivateBindingHash,
-    footprint: DeclaredOperationFootprint,
-    limits: SourcePlanLimits,
-    kind: SourcePlanKind,
-    cardinality: SourceCardinality,
     inputs: Vec<CompiledInputSlot>,
     operations: Vec<CompiledOperation>,
     credential_operation: Option<CompiledCredentialOperation>,
@@ -1193,8 +1269,8 @@ impl fmt::Debug for CompiledSourcePlan {
             .debug_struct("CompiledSourcePlan")
             .field("profile", self.profile())
             .field("integration_pack", self.integration_pack())
-            .field("kind", &self.kind)
-            .field("cardinality", &self.cardinality)
+            .field("kind", &self.kind())
+            .field("cardinality", &self.cardinality())
             .field("operation_count", &self.operations.len())
             .field("step_count", &self.steps.len())
             .finish_non_exhaustive()
@@ -1202,46 +1278,52 @@ impl fmt::Debug for CompiledSourcePlan {
 }
 
 impl CompiledSourcePlan {
+    /// Return the immutable, already typed runtime consultation facts.
+    #[must_use]
+    pub(crate) const fn runtime_profile(&self) -> &CompiledRuntimeProfile {
+        &self.runtime_profile
+    }
+
     /// Return the complete public profile identity.
     #[must_use]
     pub const fn profile(&self) -> &ProfileIdentity {
-        self.contract.identity()
+        self.runtime_profile.profile()
     }
 
     /// Return the complete reviewed pack identity.
     #[must_use]
     pub const fn integration_pack(&self) -> &IntegrationPackIdentity {
-        self.pack.identity()
+        self.runtime_profile.integration_pack()
     }
 
     /// Return the runtime-private, secret-free binding hash.
     #[must_use]
     pub(crate) fn binding_hash(&self) -> &str {
-        self.binding_hash.as_str()
+        self.runtime_profile.private_binding_hash()
     }
 
     /// Return the closed template kind.
     #[must_use]
     pub const fn kind(&self) -> SourcePlanKind {
-        self.kind
+        self.runtime_profile.kind()
     }
 
     /// Return the public acquisition class and numerical footprint.
     #[must_use]
     pub const fn footprint(&self) -> &DeclaredOperationFootprint {
-        &self.footprint
+        self.runtime_profile.footprint()
     }
 
     /// Return the singleton or ambiguity-probe contract.
     #[must_use]
     pub const fn cardinality(&self) -> SourceCardinality {
-        self.cardinality
+        self.runtime_profile.cardinality()
     }
 
     /// Return the effective, possibly narrowed deployment limits.
     #[must_use]
     pub const fn limits(&self) -> SourcePlanLimits {
-        self.limits
+        self.runtime_profile.effective_limits()
     }
 
     /// Return the fixed reviewed operation union.
@@ -1260,14 +1342,23 @@ impl CompiledSourcePlan {
 
     /// Return the fixed execution sequence as operation descriptors.
     pub fn steps(&self) -> impl ExactSizeIterator<Item = &CompiledOperation> {
-        self.steps
+        let steps = if self.kind() == SourcePlanKind::SandboxedRhai {
+            &self.steps[..0]
+        } else {
+            &self.steps
+        };
+        steps
             .iter()
             .map(|step| &self.operations[step.operation_index])
     }
 
     /// Return immutable step and condition descriptors in fixed execution order.
     pub fn compiled_steps(&self) -> impl ExactSizeIterator<Item = &CompiledStep> {
-        self.steps.iter()
+        if self.kind() == SourcePlanKind::SandboxedRhai {
+            self.steps[..0].iter()
+        } else {
+            self.steps.iter()
+        }
     }
 
     /// Return exactly the RFC 8785 canonical public contract served as metadata.
@@ -1287,7 +1378,8 @@ impl CompiledSourcePlan {
     pub(crate) fn credential_reference(&self) -> Option<(&str, u64)> {
         self.runtime_binding
             .credential_reference
-            .as_deref()
+            .as_ref()
+            .map(CredentialReferenceId::as_str)
             .zip(self.runtime_binding.credential_generation)
     }
 
@@ -1522,12 +1614,32 @@ fn compile_one(
     validate_cross_references(&contract, pack, &binding)?;
     validate_contract_implementation(&contract, pack)?;
     validate_materialization_binding(&contract, pack, &binding)?;
-    let limits = validate_binding_narrowing(&contract, pack, &binding)?;
+    let binding_limits = validate_binding_narrowing(&contract, pack, &binding)?;
     validate_parameters(pack, &binding)?;
     validate_credential_shape(pack, &binding)?;
     let effective_token_lifetime_ms = effective_token_lifetime_ms(pack, &binding)?;
 
-    validate_capabilities(pack, &binding, rhai_workers)?;
+    let rhai_worker_limits = validate_capabilities(pack, &binding, rhai_workers)?;
+    let limits = match rhai_worker_limits {
+        Some(rhai_limits) => binding_limits
+            .with_max_data_exchanges(rhai_limits.max_calls)
+            .map_err(SourcePlanCompileError::Artifact)?,
+        None => binding_limits,
+    };
+    validate_effective_source_bytes(pack, limits)?;
+    let completion_seed_sizing = measure_completion_seed(
+        &contract,
+        pack,
+        &binding,
+        binding.hash().as_str(),
+        limits,
+        effective_token_lifetime_ms,
+        rhai_worker_limits,
+    )?;
+    validate_completion_sizing(
+        completion_seed_sizing.canonical_bytes_max,
+        completion_seed_sizing.completion_audit_canonical_bytes_max,
+    )?;
 
     let data_destination = match pack.document.spec.plan.kind {
         SourcePlanKind::SnapshotExact => None,
@@ -1620,11 +1732,7 @@ fn compile_one(
         &prior_slot_indexes,
     )?;
 
-    let credential_reference = binding
-        .document
-        .credential
-        .as_ref()
-        .map(|credential| credential.reference.clone().into_boxed_str());
+    let credential_reference = binding.credential_reference.clone();
     let credential_generation = binding
         .document
         .credential
@@ -1643,15 +1751,20 @@ fn compile_one(
                 .credential
                 .as_ref()
                 .ok_or(SourcePlanCompileError::CompilerInvariant)?;
-            let destination = credential_destination
-                .as_ref()
-                .ok_or(SourcePlanCompileError::CompilerInvariant)?;
             Ok::<_, SourcePlanCompileError>(OAuthCacheIdentityInputs {
                 integration_pack_hash: pack.identity().hash().as_str().into(),
                 binding_hash: binding_hash.as_str().into(),
-                credential_reference: credential.reference.as_str().into(),
+                credential_reference: binding
+                    .credential_reference
+                    .as_ref()
+                    .ok_or(SourcePlanCompileError::CompilerInvariant)?
+                    .clone(),
                 credential_generation: credential.generation,
-                credential_destination_id: destination.origin_id().into(),
+                credential_destination_id: binding
+                    .credential_destination_id
+                    .as_ref()
+                    .ok_or(SourcePlanCompileError::CompilerInvariant)?
+                    .clone(),
                 audience: operation.request.audience.as_deref().map(Into::into),
                 scopes: operation
                     .request
@@ -1681,6 +1794,25 @@ fn compile_one(
         })
         .collect::<Result<Box<[_]>, _>>()?;
     let snapshot = compile_snapshot_binding(&contract, pack, &binding)?;
+    let runtime_profile = CompiledRuntimeProfile::from_compiled_artifacts(
+        &contract,
+        pack.identity().clone(),
+        binding_hash.clone(),
+        binding.tenant.clone(),
+        binding.registry_instance.clone(),
+        footprint.clone(),
+        limits,
+        &operations,
+        &steps,
+        binding.data_destination_id.as_ref(),
+        rhai_worker_limits,
+        completion_seed_sizing.canonical_bytes_max,
+        completion_seed_sizing.completion_audit_canonical_bytes_max,
+        &pack.document.spec.product_family,
+        &pack.document.spec.supported_version_evidence,
+        pack.logical_operation.clone(),
+        pack.document.spec.plan.kind,
+    )?;
     let runtime_binding = RuntimePrivateBinding {
         data_destination,
         credential_destination,
@@ -1690,23 +1822,28 @@ fn compile_one(
         oauth_cache,
         snapshot,
     };
-    let kind = pack.document.spec.plan.kind;
-    let cardinality = contract.cardinality;
-
     Ok(CompiledSourcePlan {
+        runtime_profile,
         contract,
-        pack: pack.clone(),
-        binding_hash,
-        footprint,
-        limits,
-        kind,
-        cardinality,
         inputs,
         operations,
         credential_operation,
         steps,
         runtime_binding,
     })
+}
+
+fn validate_completion_sizing(
+    completion_seed_canonical_bytes: usize,
+    completion_audit_canonical_bytes: usize,
+) -> Result<(), SourcePlanCompileError> {
+    if completion_seed_canonical_bytes > MAX_COMPLETION_SEED_CANONICAL_BYTES_V1 {
+        return Err(SourcePlanCompileError::CompletionSeedTooLarge);
+    }
+    if completion_audit_canonical_bytes > MAX_COMPLETION_AUDIT_CANONICAL_BYTES_V1 {
+        return Err(SourcePlanCompileError::CompletionAuditTooLarge);
+    }
+    Ok(())
 }
 
 fn compile_steps(
@@ -1777,5 +1914,17 @@ use binding::*;
 mod operation;
 use operation::*;
 
+pub(in crate::source_plan) fn compile_runtime_response_schema(
+    schema: &ResponseSchemaDocument,
+) -> CompiledResponseSchema {
+    operation::compile_response_schema(schema)
+}
+
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+pub(crate) use tests::{
+    maximum_completion_seed_fixture, maximum_runtime_profile_fixture,
+    normal_completion_seed_fixture, rhai_five_operation_two_slot_completion_seed_fixture,
+    semantic_alias_completion_seed_fixture,
+};

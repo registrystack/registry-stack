@@ -24,7 +24,7 @@
     "integration_pack": {
       "id": "synthetic.person-status",
       "version": "1",
-      "hash": "sha256:7054fae6ad999029759835838214f188fb5726cf48e0006479e98340fb7c22a7"
+      "hash": "sha256:2aa6d87bf5c6c04ce0b8982e5ee28bf0d56b4432991c5679b0d342389ec2cb5c"
     },
     "acquisition": {
       "class": "source_projected_exact",
@@ -34,6 +34,14 @@
           "nullable": false,
           "max_bytes": 64
         }
+      }
+    },
+    "source_provenance": {
+      "source_observed_at": {
+        "type": "absent"
+      },
+      "source_revision": {
+        "type": "absent"
       }
     },
     "output": {
@@ -58,7 +66,8 @@
       },
       "consent": {
         "required": false
-      }
+      },
+      "mandatory_obligations": []
     },
     "bounds": {
       "max_source_matches": 2,

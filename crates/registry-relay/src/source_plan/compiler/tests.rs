@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use super::*;
-use crate::source_plan::artifact::json_string_max_bytes;
+use crate::source_plan::artifact::{json_string_max_bytes, ResponseSchemaFieldDocument};
 
 const PACK_DOMAIN: &[u8] = b"registry.relay.integration-pack.v1\0";
 const CONTRACT_DOMAIN: &[u8] = b"registry.relay.consultation-contract.v1\0";
@@ -191,6 +191,41 @@ fn compile_with_evidence(
     )
 }
 
+fn completion_seed_value(fixture: &Fixture) -> Value {
+    completion_seed_value_with_rhai_limits(fixture, None)
+}
+
+fn completion_seed_value_with_rhai_limits(
+    fixture: &Fixture,
+    rhai_limits: Option<RhaiWorkerLimits>,
+) -> Value {
+    let contract = parse_public_contract(&fixture.contract, &fixture.contract_hash)
+        .expect("fixture contract parses");
+    let pack =
+        parse_integration_pack(&fixture.pack, &fixture.pack_hash).expect("fixture pack parses");
+    let binding = parse_private_binding(&fixture.binding).expect("fixture binding parses");
+    let binding_limits =
+        validate_binding_narrowing(&contract, &pack, &binding).expect("fixture binding narrows");
+    let limits = rhai_limits.map_or(binding_limits, |rhai_limits| {
+        binding_limits
+            .with_max_data_exchanges(rhai_limits.max_calls)
+            .expect("Rhai call ceiling narrows public exchange ceiling")
+    });
+    let token_lifetime =
+        effective_token_lifetime_ms(&pack, &binding).expect("fixture token lifetime validates");
+    measure_completion_seed(
+        &contract,
+        &pack,
+        &binding,
+        binding.hash().as_str(),
+        limits,
+        token_lifetime,
+        rhai_limits,
+    )
+    .expect("fixture completion seed sizes")
+    .canonical_value_max
+}
+
 fn binding_as_strict_yaml(value: &Value) -> String {
     serde_saphyr::to_string(value).expect("binding YAML")
 }
@@ -255,6 +290,201 @@ fn raw_hash(raw: &[u8]) -> String {
         write!(&mut encoded, "{byte:02x}").expect("writing to String is infallible");
     }
     encoded
+}
+
+fn response_field(schema: ResponseSchemaDocument) -> ResponseSchemaFieldDocument {
+    ResponseSchemaFieldDocument {
+        required: true,
+        schema: Box::new(schema),
+    }
+}
+
+fn string_schema() -> ResponseSchemaDocument {
+    ResponseSchemaDocument::String {
+        nullable: false,
+        max_bytes: 65_536,
+    }
+}
+
+fn object_schema(fields: BTreeMap<String, ResponseSchemaFieldDocument>) -> ResponseSchemaDocument {
+    ResponseSchemaDocument::Object {
+        nullable: false,
+        reject_unknown_fields: true,
+        fields,
+    }
+}
+
+fn maximum_recursive_response_schema_document() -> ResponseSchemaDocument {
+    // Depth 8 chain with 15 non-array nodes under the 256-item array.
+    let mut chain = string_schema();
+    for depth in (4..=7).rev() {
+        chain = object_schema(BTreeMap::from([(
+            format!("depth_{depth}"),
+            response_field(chain),
+        )]));
+    }
+    let mut array_item_fields = BTreeMap::from([("chain".to_owned(), response_field(chain))]);
+    for index in 0..9 {
+        let name = if index == 0 {
+            "n".repeat(128)
+        } else {
+            format!("sibling_{index:02}")
+        };
+        let schema = match index {
+            1 => ResponseSchemaDocument::Boolean { nullable: true },
+            2 => ResponseSchemaDocument::Integer {
+                nullable: false,
+                minimum: -9_007_199_254_740_991,
+                maximum: 9_007_199_254_740_991,
+            },
+            3 => ResponseSchemaDocument::Number {
+                nullable: true,
+                minimum: -9_007_199_254_740_991,
+                maximum: 9_007_199_254_740_991,
+            },
+            _ => string_schema(),
+        };
+        array_item_fields.insert(name, response_field(schema));
+    }
+    let maximal_array = ResponseSchemaDocument::Array {
+        nullable: false,
+        max_items: 256,
+        items: Box::new(object_schema(array_item_fields)),
+    };
+
+    let mut root = BTreeMap::from([
+        ("max_array".to_owned(), response_field(maximal_array)),
+        (
+            "adjustment_array".to_owned(),
+            response_field(ResponseSchemaDocument::Array {
+                nullable: true,
+                max_items: 16,
+                items: Box::new(string_schema()),
+            }),
+        ),
+    ]);
+    for branch in 0..6 {
+        let fields = (0..32)
+            .map(|index| (format!("field_{index:02}"), response_field(string_schema())))
+            .collect();
+        root.insert(
+            format!("full_branch_{branch}"),
+            response_field(object_schema(fields)),
+        );
+    }
+    let partial = (0..15)
+        .map(|index| (format!("field_{index:02}"), response_field(string_schema())))
+        .collect();
+    root.insert(
+        "partial_branch".to_owned(),
+        response_field(object_schema(partial)),
+    );
+    for index in 0..23 {
+        root.insert(
+            format!("root_scalar_{index:02}"),
+            response_field(string_schema()),
+        );
+    }
+    object_schema(root)
+}
+
+fn response_schema_chain(nodes: usize) -> ResponseSchemaDocument {
+    let mut schema = string_schema();
+    for index in 1..nodes {
+        schema = object_schema(BTreeMap::from([(
+            format!("level_{index}"),
+            response_field(schema),
+        )]));
+    }
+    schema
+}
+
+pub(crate) fn maximum_runtime_profile_fixture(
+) -> super::super::runtime_profile::CompiledRuntimeProfile {
+    let document = maximum_recursive_response_schema_document();
+    let mut nodes = 0;
+    let expanded = super::super::artifact::validate_response_schema(&document, 1, &mut nodes)
+        .expect("maximum recursive schema is compiler-valid");
+    assert_eq!((nodes, expanded), (256, 4_096));
+    let schema = compile_runtime_response_schema(&document);
+    let registry = compile(&fixture()).expect("portable source plan compiles");
+    let plan = registry.plans.into_values().next().expect("one plan");
+    let mut profile = plan.runtime_profile;
+    profile
+        .install_maximum_recursive_schema_fixture(schema)
+        .expect("maximum runtime profile fixture remains typed");
+    profile
+}
+
+#[test]
+fn recursive_schema_accepts_every_exact_maximum_and_rejects_just_over() {
+    let maximum = maximum_recursive_response_schema_document();
+    let mut nodes = 0;
+    let expanded = super::super::artifact::validate_response_schema(&maximum, 1, &mut nodes)
+        .expect("exact recursive maxima are accepted");
+    assert_eq!(nodes, 256);
+    assert_eq!(expanded, 4_096);
+
+    let mut nodes = 0;
+    assert!(matches!(
+        super::super::artifact::validate_response_schema(&response_schema_chain(9), 1, &mut nodes,),
+        Err(SourcePlanArtifactError::InvalidLimits)
+    ));
+
+    let mut array_over = maximum.clone();
+    if let ResponseSchemaDocument::Object { fields, .. } = &mut array_over {
+        if let ResponseSchemaDocument::Array { max_items, .. } = fields
+            .get_mut("max_array")
+            .expect("max array")
+            .schema
+            .as_mut()
+        {
+            *max_items = 257;
+        }
+    }
+    let mut nodes = 0;
+    assert!(matches!(
+        super::super::artifact::validate_response_schema(&array_over, 1, &mut nodes),
+        Err(SourcePlanArtifactError::InvalidLimits)
+    ));
+
+    let profile = maximum_runtime_profile_fixture();
+    assert_eq!(profile.acquisition().fields().len(), 64);
+    assert_eq!(profile.output().len(), 64);
+    assert_eq!(
+        profile
+            .acquisition()
+            .field("recursive_max")
+            .expect("recursive maximum field")
+            .schema()
+            .kind(),
+        CompiledResponseSchemaKind::Object
+    );
+}
+
+#[test]
+fn completion_persistence_caps_accept_exact_maxima_and_reject_one_byte_over() {
+    assert_eq!(
+        validate_completion_sizing(
+            super::super::runtime_profile::MAX_COMPLETION_SEED_CANONICAL_BYTES_V1,
+            super::super::completion_seed::MAX_COMPLETION_AUDIT_CANONICAL_BYTES_V1,
+        ),
+        Ok(())
+    );
+    assert_eq!(
+        validate_completion_sizing(
+            super::super::runtime_profile::MAX_COMPLETION_SEED_CANONICAL_BYTES_V1 + 1,
+            super::super::completion_seed::MAX_COMPLETION_AUDIT_CANONICAL_BYTES_V1,
+        ),
+        Err(SourcePlanCompileError::CompletionSeedTooLarge)
+    );
+    assert_eq!(
+        validate_completion_sizing(
+            super::super::runtime_profile::MAX_COMPLETION_SEED_CANONICAL_BYTES_V1,
+            super::super::completion_seed::MAX_COMPLETION_AUDIT_CANONICAL_BYTES_V1 + 1,
+        ),
+        Err(SourcePlanCompileError::CompletionAuditTooLarge)
+    );
 }
 
 fn two_step_fixture() -> Fixture {
@@ -356,8 +586,228 @@ fn two_step_fixture() -> Fixture {
     fixture.pack_value["spec"]["plan"]["steps"] = json!(["lookup-status", "lookup-eligibility"]);
     fixture.pack_value["spec"]["bounds"]["max_data_exchanges"] = json!(2);
     fixture.contract_value["spec"]["bounds"]["max_data_exchanges"] = json!(2);
+    fixture.binding_value["limits"]["max_source_bytes"] = json!(114_688);
     fixture.refresh_all();
     fixture
+}
+
+fn semantic_alias_fixture() -> Fixture {
+    let mut fixture = fixture();
+    let disclosed_schema =
+        fixture.pack_value["spec"]["reviewed_acquisition"]["fields"]["registration_status"].take();
+    fixture.pack_value["spec"]["reviewed_acquisition"]["fields"] =
+        json!({"status": disclosed_schema});
+    fixture.pack_value["spec"]["plan"]["operations"][0]["acquisition_fields"] = json!(["status"]);
+    fixture.pack_value["spec"]["plan"]["operations"][0]["response"]["output_mapping"] =
+        json!({"status": "/registration_status"});
+    fixture.pack_value["spec"]["output"] = json!({"status": {"type": "string", "nullable": false}});
+    fixture.contract_value["spec"]["output"] =
+        json!({"status": {"type": "string", "nullable": false}});
+    fixture.refresh_all();
+    fixture
+}
+
+fn rhai_five_operation_fixture() -> Fixture {
+    let mut fixture = fixture();
+    let scalar = json!({
+        "type": "string",
+        "nullable": false,
+        "max_bytes": 64
+    });
+    let reviewed_fields = (0..5)
+        .map(|index| (format!("status_{index}"), scalar.clone()))
+        .collect::<serde_json::Map<_, _>>();
+    fixture.pack_value["spec"]["reviewed_acquisition"]["fields"] = Value::Object(reviewed_fields);
+    fixture.pack_value["spec"]["reviewed_acquisition"]["control_fields"] = json!({
+        "route": {
+            "type": "string",
+            "nullable": false,
+            "max_bytes": 32
+        }
+    });
+    fixture.pack_value["spec"]["reviewed_acquisition"]["selector"]["operation"] =
+        json!("lookup-status-0");
+    let public_fields = (0..5)
+        .map(|index| {
+            (
+                format!("status_{index}"),
+                json!({"type": "string", "nullable": false}),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
+    fixture.pack_value["spec"]["output"] = Value::Object(public_fields.clone());
+    fixture.contract_value["spec"]["output"] = Value::Object(public_fields);
+
+    let mut first = fixture.pack_value["spec"]["plan"]["operations"][0].clone();
+    first["id"] = json!("lookup-status-0");
+    first["path"] = json!("/api/person/status/0");
+    first["query"]["fields"]["value"] = json!("route,status_0");
+    first["acquisition_fields"] = json!(["status_0"]);
+    first["control_fields"] = json!(["route"]);
+    first["response"]["max_bytes"] = json!(20_000);
+    first["response"]["schema"]["items"]["fields"] = json!({
+        "route": {
+            "required": true,
+            "schema": {
+                "type": "string",
+                "nullable": false,
+                "max_bytes": 32
+            }
+        },
+        "status_0": {
+            "required": true,
+            "schema": scalar.clone()
+        }
+    });
+    first["response"]["output_mapping"] = json!({"status_0": "/status_0"});
+    first["response"]["prior_outputs"] = json!({
+        "route": {
+            "pointer": "/route",
+            "type": "string",
+            "nullable": false,
+            "max_bytes": 32
+        }
+    });
+
+    let mut operations = vec![first.clone()];
+    for index in 1..5 {
+        let mut operation = first.clone();
+        operation["id"] = json!(format!("lookup-status-{index}"));
+        operation["path"] = json!(format!("/api/person/status/{index}"));
+        operation["query"]
+            .as_object_mut()
+            .expect("query object")
+            .remove("subject_id");
+        operation["query"]["fields"]["value"] = json!(format!("status_{index}"));
+        operation["query"]["route"] = json!({
+            "source": "prior_step_output",
+            "step": "lookup-status-0",
+            "output": "route"
+        });
+        operation["relation_selector"] = json!({
+            "step": "lookup-status-0",
+            "output": "route",
+            "location": {
+                "type": "query",
+                "parameter": "route"
+            }
+        });
+        operation["acquisition_fields"] = json!([format!("status_{index}")]);
+        operation["control_fields"] = json!([]);
+        operation["response"]["schema"]["items"]["fields"] = json!({
+            format!("status_{index}"): {
+                "required": true,
+                "schema": scalar.clone()
+            }
+        });
+        operation["response"]["output_mapping"] =
+            json!({format!("status_{index}"): format!("/status_{index}")});
+        operation["response"]
+            .as_object_mut()
+            .expect("response object")
+            .remove("prior_outputs");
+        operations.push(operation);
+    }
+    fixture.pack_value["spec"]["plan"]["operations"] = Value::Array(operations);
+    fixture.pack_value["spec"]["plan"]["steps"] = json!([
+        "lookup-status-0",
+        "lookup-status-1",
+        "lookup-status-2",
+        "lookup-status-3",
+        "lookup-status-4"
+    ]);
+    fixture.pack_value["spec"]["plan"]["kind"] = json!("sandboxed_rhai");
+    let script = "fn consult() { () }";
+    fixture.pack_value["spec"]["plan"]["rhai"] = json!({
+        "script": script,
+        "script_hash": raw_hash(script.as_bytes()),
+        "entrypoint": "consult",
+        "memory_bytes": 67108864,
+        "cpu_ms": 500,
+        "ipc_frame_bytes": 131072,
+        "instructions": 50000,
+        "call_depth": 8,
+        "string_bytes": 32768,
+        "array_items": 256,
+        "map_entries": 256,
+        "output_bytes": 32768,
+        "concurrency": 1
+    });
+    fixture.pack_value["spec"]["bounds"]["max_data_exchanges"] = json!(5);
+    fixture.contract_value["spec"]["bounds"]["max_data_exchanges"] = json!(5);
+    sync_complete_acquisition_from_responses(&mut fixture);
+    fixture.binding_value["capabilities"]["allow_sandboxed_rhai"] = json!(true);
+    fixture.binding_value["capabilities"]["sandboxed_rhai"] = json!({
+        "callable_operations": [
+            "lookup-status-0",
+            "lookup-status-1",
+            "lookup-status-2",
+            "lookup-status-3",
+            "lookup-status-4"
+        ],
+        "max_calls": 2,
+        "memory_bytes": 67108864,
+        "cpu_ms": 500,
+        "ipc_frame_bytes": 131072,
+        "instructions": 50000,
+        "call_depth": 8,
+        "string_bytes": 32768,
+        "array_items": 256,
+        "map_entries": 256,
+        "output_bytes": 32768,
+        "concurrency": 1,
+        "isolation": "one_shot_worker_v1"
+    });
+    fixture.refresh_all();
+    fixture
+}
+
+pub(crate) fn normal_completion_seed_fixture() -> Value {
+    completion_seed_value(&fixture())
+}
+
+pub(crate) fn semantic_alias_completion_seed_fixture() -> Value {
+    completion_seed_value(&semantic_alias_fixture())
+}
+
+pub(crate) fn maximum_completion_seed_fixture() -> Value {
+    let mut seed = normal_completion_seed_fixture();
+    let mut fields = serde_json::Map::new();
+    fields.insert(
+        "recursive_max".to_owned(),
+        serde_json::to_value(maximum_recursive_response_schema_document())
+            .expect("maximum recursive schema serializes"),
+    );
+    for index in 0..63 {
+        fields.insert(
+            format!("scalar_{index:02}"),
+            serde_json::to_value(string_schema()).expect("scalar schema serializes"),
+        );
+    }
+    let mut disclosure_fields = fields.keys().cloned().collect::<Vec<_>>();
+    disclosure_fields.sort_unstable();
+    seed["acquisition"]["schema"]["fields"] = Value::Object(fields);
+    seed["acquisition"]["disclosure_fields"] = json!(disclosure_fields);
+    seed
+}
+
+pub(crate) fn rhai_five_operation_two_slot_completion_seed_fixture() -> Value {
+    completion_seed_value_with_rhai_limits(
+        &rhai_five_operation_fixture(),
+        Some(RhaiWorkerLimits {
+            max_calls: 2,
+            memory_bytes: 67_108_864,
+            cpu_ms: 500,
+            ipc_frame_bytes: 131_072,
+            instructions: 50_000,
+            call_depth: 8,
+            string_bytes: 32_768,
+            array_items: 256,
+            map_entries: 256,
+            output_bytes: 32_768,
+            concurrency: 1,
+        }),
+    )
 }
 
 fn snapshot_fixture() -> Fixture {
@@ -431,7 +881,7 @@ fn compiles_closed_bundle_and_exposes_only_safe_metadata() {
     let plan = registry.iter().next().expect("compiled plan");
     assert_eq!(plan.kind(), SourcePlanKind::BoundedHttp);
     assert_eq!(plan.cardinality(), SourceCardinality::AmbiguityProbe);
-    assert_eq!(plan.limits().operation().max_source_bytes, 65_536);
+    assert_eq!(plan.limits().operation().max_source_bytes, 81_920);
     assert_eq!(plan.operations().len(), 1);
     let operation = plan.operations().next().expect("operation");
     assert_eq!(operation.max_source_calls(), 1);
@@ -450,6 +900,94 @@ fn compiles_closed_bundle_and_exposes_only_safe_metadata() {
     assert_eq!(plan.deployment_parameter_value(0), Some("benefits"));
     assert!(format!("{plan:?}").contains("operation_count"));
     assert!(!format!("{plan:?}").contains("registry.example.test"));
+}
+
+#[test]
+fn runtime_profile_is_typed_bounded_and_has_no_artifact_reparse_surface() {
+    let fixture = fixture();
+    let registry = compile(&fixture).expect("valid runtime profile");
+    let plan = registry.iter().next().expect("plan");
+    let profile = plan.runtime_profile();
+
+    assert_eq!(profile.profile(), plan.profile());
+    assert_eq!(profile.integration_pack(), plan.integration_pack());
+    assert_eq!(profile.workload_id().as_str(), "registry-notary");
+    assert_eq!(
+        profile.required_scope().as_str(),
+        "registry:consult:person-status"
+    );
+    assert_eq!(profile.tenant().as_str(), "synthetic-government");
+    assert_eq!(profile.registry_instance().as_str(), "people-primary");
+    assert_eq!(
+        profile.purposes().collect::<Vec<_>>(),
+        ["benefit-verification"]
+    );
+    assert_eq!(profile.legal_basis(), "public_task");
+    assert!(profile.authorization().mandatory_obligations().is_empty());
+    assert_eq!(
+        profile.public_limits().operation().max_source_bytes,
+        131_072
+    );
+    assert_eq!(
+        profile.effective_limits().operation().max_source_bytes,
+        81_920
+    );
+    assert_eq!(profile.acquisition().fields().len(), 1);
+    assert_eq!(profile.output().len(), 1);
+    assert_eq!(profile.operations().len(), 1);
+    assert_eq!(
+        profile
+            .dispatch()
+            .bounded_http_operations()
+            .expect("bounded HTTP order")
+            .iter()
+            .map(OperationId::as_str)
+            .collect::<Vec<_>>(),
+        ["lookup-status"]
+    );
+    assert!(
+        profile.completion_seed_canonical_bytes_max()
+            <= super::super::runtime_profile::MAX_COMPLETION_SEED_CANONICAL_BYTES_V1
+    );
+    assert!(
+        profile.completion_audit_canonical_bytes_max()
+            <= super::super::completion_seed::MAX_COMPLETION_AUDIT_CANONICAL_BYTES_V1
+    );
+    assert_eq!(
+        (
+            profile.completion_seed_canonical_bytes_max(),
+            profile.completion_audit_canonical_bytes_max(),
+        ),
+        (2_513, 7_794),
+        "portable completion sizing is a reviewed golden",
+    );
+
+    let debug = format!("{profile:?}");
+    for forbidden in [
+        "synthetic-government",
+        "people-primary",
+        "people-api-reader",
+        "registry-data-private",
+        "https://registry.example.test",
+    ] {
+        assert!(
+            !debug.contains(forbidden),
+            "runtime Debug leaked {forbidden}"
+        );
+    }
+    let source = include_str!("../runtime_profile.rs");
+    for forbidden in [
+        "serde_json::",
+        "Serialize",
+        "Deserialize",
+        "canonical_public_contract",
+        "canonical_json()",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "runtime profile source unexpectedly contains {forbidden}"
+        );
+    }
 }
 
 #[test]
@@ -847,18 +1385,7 @@ fn rejects_committed_hash_mismatch() {
 
 #[test]
 fn semantic_output_aliases_are_distinct_from_complete_raw_acquisition() {
-    let mut fixture = fixture();
-    let disclosed_schema =
-        fixture.pack_value["spec"]["reviewed_acquisition"]["fields"]["registration_status"].take();
-    fixture.pack_value["spec"]["reviewed_acquisition"]["fields"] =
-        json!({"status": disclosed_schema});
-    fixture.pack_value["spec"]["plan"]["operations"][0]["acquisition_fields"] = json!(["status"]);
-    fixture.pack_value["spec"]["plan"]["operations"][0]["response"]["output_mapping"] =
-        json!({"status": "/registration_status"});
-    fixture.pack_value["spec"]["output"] = json!({"status": {"type": "string", "nullable": false}});
-    fixture.contract_value["spec"]["output"] =
-        json!({"status": {"type": "string", "nullable": false}});
-    fixture.refresh_all();
+    let fixture = semantic_alias_fixture();
 
     let registry = compile(&fixture).expect("semantic alias maps to a complete raw schema");
     let operation = registry
@@ -873,6 +1400,381 @@ fn semantic_output_aliases_are_distinct_from_complete_raw_acquisition() {
         ["registration_status"]
     );
     assert_eq!(operation.disclosed_fields().collect::<Vec<_>>(), ["status"]);
+
+    let seed = completion_seed_value(&fixture);
+    assert!(seed["acquisition"]["schema"]["fields"]
+        .get("registration_status")
+        .is_some());
+    assert!(seed["acquisition"]["schema"]["fields"]
+        .get("status")
+        .is_none());
+    assert_eq!(seed["acquisition"]["disclosure_fields"], json!(["status"]));
+}
+
+#[test]
+fn completion_seed_static_shape_matches_the_frozen_sql_contract() {
+    let seed = completion_seed_value(&fixture());
+    assert_eq!(
+        seed["acquisition"]["provenance_contract"],
+        json!({
+            "source_observed_at": null,
+            "source_revision": null,
+            "snapshot_generation": "absent",
+            "snapshot_published_at": "absent"
+        })
+    );
+    assert_eq!(
+        seed["acquisition"]["public_outcomes"],
+        json!(["match", "no_match", "ambiguous"])
+    );
+    assert_eq!(
+        seed["acquisition"]["schema"]["type"],
+        json!("acquisition_union")
+    );
+    assert_eq!(
+        seed["authorized_operation_union"],
+        json!([
+            {"kind": "credential", "operation_id": "acquire-token"},
+            {"kind": "data", "operation_id": "lookup-status"}
+        ])
+    );
+}
+
+#[test]
+fn completion_sizing_checks_every_purpose_when_exact_and_conservative_order_differ() {
+    let mut fixture = fixture();
+    let escaped_exact_winner = "\"".repeat(200);
+    let longer_conservative_winner = "a".repeat(256);
+    fixture.contract_value["spec"]["authorization"]["purposes"] =
+        json!([escaped_exact_winner, longer_conservative_winner]);
+    fixture.refresh_all();
+
+    let seed = completion_seed_value(&fixture);
+    assert_eq!(
+        seed["purpose"],
+        json!("\"".repeat(200)),
+        "JSON escaping makes the shorter purpose the exact-canonical winner"
+    );
+    compile(&fixture).expect("every allowed purpose passes authoritative audit sizing");
+}
+
+#[test]
+fn rhai_completion_seed_sorts_every_dynamic_callable_union() {
+    let mut fixture = two_step_fixture();
+    let script = "fn consult() { () }";
+    fixture.pack_value["spec"]["plan"]["kind"] = json!("sandboxed_rhai");
+    fixture.pack_value["spec"]["plan"]["rhai"] = json!({
+        "script": script,
+        "script_hash": raw_hash(script.as_bytes()),
+        "entrypoint": "consult",
+        "memory_bytes": 67108864,
+        "cpu_ms": 500,
+        "ipc_frame_bytes": 131072,
+        "instructions": 50000,
+        "call_depth": 8,
+        "string_bytes": 32768,
+        "array_items": 256,
+        "map_entries": 256,
+        "output_bytes": 32768,
+        "concurrency": 1
+    });
+    fixture.pack_value["spec"]["bounds"]["max_source_bytes"] = json!(147_456);
+    fixture.contract_value["spec"]["bounds"]["max_source_bytes"] = json!(147_456);
+    fixture.refresh_all();
+    let seed = completion_seed_value_with_rhai_limits(
+        &fixture,
+        Some(RhaiWorkerLimits {
+            max_calls: 2,
+            memory_bytes: 67_108_864,
+            cpu_ms: 500,
+            ipc_frame_bytes: 131_072,
+            instructions: 50_000,
+            call_depth: 8,
+            string_bytes: 32_768,
+            array_items: 256,
+            map_entries: 256,
+            output_bytes: 32_768,
+            concurrency: 1,
+        }),
+    );
+    let bindings = seed["dispatch"]["permit_bindings"]
+        .as_array()
+        .expect("permit bindings");
+    for binding in &bindings[1..] {
+        assert_eq!(
+            binding["allowed_operation_ids"],
+            json!(["lookup-eligibility", "lookup-status"])
+        );
+    }
+}
+
+#[test]
+fn rhai_uses_five_reviewed_callables_but_two_effective_exchange_slots() {
+    let fixture = rhai_five_operation_fixture();
+    let callable = [
+        "lookup-status-0",
+        "lookup-status-1",
+        "lookup-status-2",
+        "lookup-status-3",
+        "lookup-status-4",
+    ];
+    let worker_limits = RhaiWorkerLimits {
+        max_calls: 2,
+        memory_bytes: 67_108_864,
+        cpu_ms: 500,
+        ipc_frame_bytes: 131_072,
+        instructions: 50_000,
+        call_depth: 8,
+        string_bytes: 32_768,
+        array_items: 256,
+        map_entries: 256,
+        output_bytes: 32_768,
+        concurrency: 1,
+    };
+    let worker =
+        RhaiWorkerCapability::from_initialized_worker(&fixture.pack_hash, &callable, worker_limits)
+            .expect("five-operation worker capability");
+    let registry = compile_with_rhai_workers(&fixture, &[worker]).expect("reviewed Rhai plan");
+    let plan = registry.iter().next().expect("Rhai plan");
+    let profile = plan.runtime_profile();
+    assert_eq!(profile.public_limits().operation().max_data_exchanges, 5);
+    assert_eq!(profile.effective_limits().operation().max_data_exchanges, 2);
+    assert_eq!(plan.limits().operation().max_data_exchanges, 2);
+    assert_eq!(plan.steps().len(), 0, "Rhai has no fixed runtime flow");
+    assert_eq!(
+        profile
+            .dispatch()
+            .sandboxed_rhai_limits()
+            .expect("Rhai limits")
+            .max_calls(),
+        2
+    );
+    assert_eq!(
+        profile
+            .dispatch()
+            .sandboxed_rhai_operations()
+            .expect("reviewed callable union")
+            .iter()
+            .map(OperationId::as_str)
+            .collect::<Vec<_>>(),
+        callable
+    );
+
+    let seed = rhai_five_operation_two_slot_completion_seed_fixture();
+    assert_eq!(seed["bounds"]["data_exchanges"], json!(2));
+    let permits = seed["dispatch"]["permit_bindings"]
+        .as_array()
+        .expect("permit bindings");
+    assert_eq!(permits.len(), 3, "one credential plus two data slots");
+    for permit in &permits[1..] {
+        assert_eq!(permit["allowed_operation_ids"], json!(callable));
+    }
+}
+
+#[test]
+fn rhai_reviewed_topology_rejects_duplicate_omitted_unknown_and_conditioned_operations() {
+    let mut duplicate = rhai_five_operation_fixture();
+    duplicate.pack_value["spec"]["plan"]["steps"] = json!([
+        "lookup-status-0",
+        "lookup-status-0",
+        "lookup-status-2",
+        "lookup-status-3",
+        "lookup-status-4"
+    ]);
+    duplicate.refresh_all();
+
+    let mut omitted = rhai_five_operation_fixture();
+    omitted.pack_value["spec"]["plan"]["steps"]
+        .as_array_mut()
+        .expect("reviewed topology")
+        .pop();
+    omitted.refresh_all();
+
+    let mut unknown = rhai_five_operation_fixture();
+    unknown.pack_value["spec"]["plan"]["steps"][4] = json!("lookup-status-unknown");
+    unknown.refresh_all();
+
+    let mut conditioned = rhai_five_operation_fixture();
+    conditioned.pack_value["spec"]["plan"]["step_conditions"] = json!({
+        "lookup-status-1": {
+            "predicate": "string_equals",
+            "step": "lookup-status-0",
+            "output": "route",
+            "value": "route-a"
+        }
+    });
+    conditioned.refresh_all();
+
+    for invalid in [&duplicate, &omitted, &unknown, &conditioned] {
+        assert!(matches!(
+            compile(invalid),
+            Err(SourcePlanCompileError::Artifact(
+                SourcePlanArtifactError::InvalidPlan
+            ))
+        ));
+    }
+}
+
+#[test]
+fn response_byte_bounds_cover_fixed_flow_and_repeated_largest_rhai_calls() {
+    let mut bounded_exact = fixture();
+    bounded_exact.pack_value["spec"]["bounds"]["max_source_bytes"] = json!(81_920);
+    bounded_exact.contract_value["spec"]["bounds"]["max_source_bytes"] = json!(81_920);
+    bounded_exact.refresh_all();
+    compile(&bounded_exact).expect("fixed data plus credential response sum fits exactly");
+
+    let mut bounded_private_short = fixture();
+    bounded_private_short.binding_value["limits"]["max_source_bytes"] = json!(81_919);
+    bounded_private_short.refresh_binding();
+    assert!(matches!(
+        compile(&bounded_private_short),
+        Err(SourcePlanCompileError::BindingWidening)
+    ));
+
+    let mut bounded_short = bounded_exact;
+    bounded_short.pack_value["spec"]["bounds"]["max_source_bytes"] = json!(81_919);
+    bounded_short.contract_value["spec"]["bounds"]["max_source_bytes"] = json!(81_919);
+    bounded_short.refresh_all();
+    assert!(matches!(
+        compile(&bounded_short),
+        Err(SourcePlanCompileError::Artifact(
+            SourcePlanArtifactError::InvalidLimits
+        ))
+    ));
+
+    let callable = [
+        "lookup-status-0",
+        "lookup-status-1",
+        "lookup-status-2",
+        "lookup-status-3",
+        "lookup-status-4",
+    ];
+    let worker_limits = RhaiWorkerLimits {
+        max_calls: 2,
+        memory_bytes: 67_108_864,
+        cpu_ms: 500,
+        ipc_frame_bytes: 131_072,
+        instructions: 50_000,
+        call_depth: 8,
+        string_bytes: 32_768,
+        array_items: 256,
+        map_entries: 256,
+        output_bytes: 32_768,
+        concurrency: 1,
+    };
+    let mut rhai_exact = rhai_five_operation_fixture();
+    // Any slot may repeat the largest callable, so public sizing is
+    // 5 * 20_000 data bytes + 16_384 credential bytes.
+    rhai_exact.pack_value["spec"]["bounds"]["max_source_bytes"] = json!(116_384);
+    rhai_exact.contract_value["spec"]["bounds"]["max_source_bytes"] = json!(116_384);
+    rhai_exact.binding_value["limits"]["max_source_bytes"] = json!(56_384);
+    rhai_exact.refresh_all();
+    let worker = RhaiWorkerCapability::from_initialized_worker(
+        &rhai_exact.pack_hash,
+        &callable,
+        worker_limits,
+    )
+    .expect("exact-bound worker");
+    compile_with_rhai_workers(&rhai_exact, &[worker])
+        .expect("public and effective repeated-call byte bounds fit exactly");
+
+    let mut public_short = rhai_exact;
+    public_short.pack_value["spec"]["bounds"]["max_source_bytes"] = json!(116_383);
+    public_short.contract_value["spec"]["bounds"]["max_source_bytes"] = json!(116_383);
+    public_short.refresh_all();
+    assert!(matches!(
+        compile(&public_short),
+        Err(SourcePlanCompileError::Artifact(
+            SourcePlanArtifactError::InvalidLimits
+        ))
+    ));
+
+    let mut effective_short = rhai_five_operation_fixture();
+    effective_short.binding_value["limits"]["max_source_bytes"] = json!(56_383);
+    effective_short.refresh_all();
+    let worker = RhaiWorkerCapability::from_initialized_worker(
+        &effective_short.pack_hash,
+        &callable,
+        worker_limits,
+    )
+    .expect("effective short-bound worker");
+    assert!(matches!(
+        compile_with_rhai_workers(&effective_short, &[worker]),
+        Err(SourcePlanCompileError::BindingWidening)
+    ));
+}
+
+#[test]
+fn compiler_seed_values_use_the_exact_state_plane_identifier_grammars() {
+    use super::super::identifiers::{
+        CanonicalPurpose, CredentialReferenceId, LegalBasisId, SourceDestinationId,
+    };
+
+    let seed = normal_completion_seed_fixture();
+    LegalBasisId::try_from(
+        seed["policy"]["legal_basis_id"]
+            .as_str()
+            .expect("legal basis"),
+    )
+    .expect("SQL-compatible legal basis");
+    CanonicalPurpose::try_from(seed["purpose"].as_str().expect("purpose"))
+        .expect("SQL-compatible purpose");
+    SourceDestinationId::try_from(
+        seed["destinations"]["data_destination_id"]
+            .as_str()
+            .expect("data destination"),
+    )
+    .expect("SQL-compatible data destination");
+    SourceDestinationId::try_from(
+        seed["destinations"]["credential_destination_id"]
+            .as_str()
+            .expect("credential destination"),
+    )
+    .expect("SQL-compatible credential destination");
+    CredentialReferenceId::try_from(
+        seed["credential"]["reference"]
+            .as_str()
+            .expect("credential reference"),
+    )
+    .expect("SQL-compatible credential reference");
+
+    let mut invalid_legal_basis = fixture();
+    invalid_legal_basis.contract_value["spec"]["authorization"]["legal_basis"] =
+        json!("public:task");
+    invalid_legal_basis.refresh_all();
+    assert!(matches!(
+        compile(&invalid_legal_basis),
+        Err(SourcePlanCompileError::Artifact(
+            SourcePlanArtifactError::InvalidIdentity
+        ))
+    ));
+
+    let mut invalid_purpose = fixture();
+    invalid_purpose.contract_value["spec"]["authorization"]["purposes"] =
+        json!(["benefit,verification"]);
+    invalid_purpose.refresh_all();
+    assert!(matches!(
+        compile(&invalid_purpose),
+        Err(SourcePlanCompileError::Artifact(
+            SourcePlanArtifactError::InvalidText
+        ))
+    ));
+
+    for (path, value) in [
+        (("data_destination", "id"), "data:primary"),
+        (("credential_destination", "id"), "credential:primary"),
+        (("credential", "ref"), "reader:v1"),
+    ] {
+        let mut invalid_binding = fixture();
+        invalid_binding.binding_value[path.0][path.1] = json!(value);
+        invalid_binding.refresh_binding();
+        assert!(matches!(
+            compile(&invalid_binding),
+            Err(SourcePlanCompileError::Artifact(
+                SourcePlanArtifactError::InvalidIdentity
+            ))
+        ));
+    }
 }
 
 #[test]
@@ -1282,6 +2184,115 @@ fn consent_requires_closed_verifier_freshness_and_revocation_contract() {
     fixture.contract = serde_json::to_vec(&fixture.contract_value).expect("contract JSON");
     fixture.contract_hash = typed_hash(CONTRACT_DOMAIN, &fixture.contract);
     compile(&fixture).expect("complete consent contract");
+}
+
+#[test]
+fn mandatory_obligations_are_required_and_structurally_empty_in_v1() {
+    let mut missing = fixture();
+    missing.contract_value["spec"]["authorization"]
+        .as_object_mut()
+        .expect("authorization object")
+        .remove("mandatory_obligations");
+    missing.refresh_all();
+    assert!(matches!(
+        compile(&missing),
+        Err(SourcePlanCompileError::Artifact(
+            SourcePlanArtifactError::ClosedSchema
+        ))
+    ));
+
+    for value in [json!([{}]), json!(["unsupported"])] {
+        let mut nonempty = fixture();
+        nonempty.contract_value["spec"]["authorization"]["mandatory_obligations"] = value;
+        nonempty.refresh_all();
+        assert!(matches!(
+            compile(&nonempty),
+            Err(SourcePlanCompileError::Artifact(
+                SourcePlanArtifactError::ClosedSchema
+            ))
+        ));
+    }
+}
+
+#[test]
+fn source_provenance_is_hash_covered_and_frozen_absent_until_pointer_mapping_v2() {
+    let mut missing_contract = fixture();
+    missing_contract.contract_value["spec"]
+        .as_object_mut()
+        .expect("contract spec")
+        .remove("source_provenance");
+    missing_contract.refresh_all();
+    assert!(matches!(
+        compile(&missing_contract),
+        Err(SourcePlanCompileError::Artifact(
+            SourcePlanArtifactError::ClosedSchema
+        ))
+    ));
+
+    let mut acquired = fixture();
+    let declaration = json!({
+        "source_observed_at": {
+            "type": "acquired_rfc3339",
+            "field": "registration_status"
+        },
+        "source_revision": {"type": "absent"}
+    });
+    acquired.contract_value["spec"]["source_provenance"] = declaration.clone();
+    acquired.pack_value["spec"]["source_provenance"] = declaration;
+    acquired.refresh_all();
+    assert!(matches!(
+        compile(&acquired),
+        Err(SourcePlanCompileError::Artifact(
+            SourcePlanArtifactError::InvalidPlan
+        ))
+    ));
+
+    let profile = compile(&fixture())
+        .expect("absent provenance contract")
+        .plans
+        .into_values()
+        .next()
+        .expect("plan")
+        .runtime_profile;
+    assert!(matches!(
+        profile.acquisition_provenance().source_observed_at(),
+        super::super::runtime_profile::CompiledSourceObservedAtContract::Absent
+    ));
+    assert!(matches!(
+        profile.acquisition_provenance().source_revision(),
+        super::super::runtime_profile::CompiledSourceRevisionContract::Absent
+    ));
+    assert!(!profile
+        .acquisition_provenance()
+        .snapshot_generation_required());
+    assert!(!profile
+        .acquisition_provenance()
+        .snapshot_published_at_required());
+}
+
+#[test]
+fn workload_and_deployment_boundaries_use_their_exact_newtype_grammars() {
+    let mut workload = fixture();
+    workload.contract_value["spec"]["authorization"]["workload"] = json!("registry:notary");
+    workload.refresh_all();
+    assert!(matches!(
+        compile(&workload),
+        Err(SourcePlanCompileError::Artifact(
+            SourcePlanArtifactError::InvalidIdentity
+        ))
+    ));
+
+    for field in ["tenant", "registry_instance"] {
+        let mut binding = fixture();
+        binding.binding_value[field] = json!("government:primary");
+        binding.refresh_binding();
+        assert!(matches!(
+            compile(&binding),
+            Err(SourcePlanCompileError::Artifact(
+                SourcePlanArtifactError::InvalidIdentity
+            ))
+        ));
+    }
 }
 
 #[test]
@@ -2114,8 +3125,27 @@ fn rejects_sandboxed_rhai_without_explicit_deployment_opt_in() {
         },
     )
     .expect("initialized worker capability");
-    compile_with_rhai_workers(&fixture, &[worker])
+    let registry = compile_with_rhai_workers(&fixture, &[worker])
         .expect("explicit binding plus initialized reviewed Rhai worker");
+    let plan = registry.iter().next().expect("Rhai plan");
+    assert_eq!(plan.steps().len(), 0, "Rhai has no fixed step sequence");
+    let dispatch = plan.runtime_profile().dispatch();
+    assert_eq!(
+        dispatch
+            .sandboxed_rhai_operations()
+            .expect("Rhai callable union")
+            .iter()
+            .map(OperationId::as_str)
+            .collect::<Vec<_>>(),
+        ["lookup-status"]
+    );
+    assert_eq!(
+        dispatch
+            .sandboxed_rhai_limits()
+            .expect("Rhai worker limits")
+            .max_calls(),
+        1
+    );
 
     let wrong_limits = RhaiWorkerCapability::from_initialized_worker(
         &fixture.pack_hash,
@@ -2206,6 +3236,14 @@ fn snapshot_plan_compiles_without_a_live_transport_capability() {
     assert_eq!(snapshot.consultation_live_destinations(), 0);
     assert!(snapshot.immutable_generation());
     assert!(snapshot.digest_bound_active_pointer());
+    assert!(plan
+        .runtime_profile()
+        .acquisition_provenance()
+        .snapshot_generation_required());
+    assert!(plan
+        .runtime_profile()
+        .acquisition_provenance()
+        .snapshot_published_at_required());
     assert!(!format!("{snapshot:?}").contains("people-snapshot"));
 }
 

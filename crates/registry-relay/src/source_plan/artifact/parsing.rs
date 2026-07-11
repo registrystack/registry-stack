@@ -16,15 +16,16 @@ pub(in super::super) fn parse_public_contract(
     let version = ProfileVersion::try_from(document.version.as_str())
         .map_err(|_| SourcePlanArtifactError::InvalidIdentity)?;
     let pack_identity = parse_pack_reference(&document.spec.integration_pack)?;
-    validate_subject(&document.spec.subject)?;
+    let selector_provenance = validate_subject(&document.spec.subject)?;
     validate_inputs(&document.spec.inputs)?;
     let acquired_fields = validate_acquisition(&document.spec.acquisition)?;
+    validate_source_provenance(&document.spec.source_provenance)?;
     document.spec.bounds = document
         .spec
         .bounds
         .validate_for_acquisition(document.spec.acquisition.class)?;
     validate_output(&document.spec.output, &acquired_fields)?;
-    validate_authorization(&mut document.spec.authorization)?;
+    let authorization = validate_authorization(&mut document.spec.authorization)?;
     let cardinality = cardinality_from_bounds(document.spec.bounds)?;
     validate_public_behavior(&mut document.spec.public_behavior, cardinality)?;
     validate_materialization_contract(&mut document.spec, &acquired_fields)?;
@@ -47,6 +48,13 @@ pub(in super::super) fn parse_public_contract(
         acquired_fields,
         cardinality,
         public_limits,
+        workload_id: authorization.workload_id,
+        required_scope: authorization.required_scope,
+        policy_identity: authorization.policy_identity,
+        consent_verifier: authorization.consent_verifier,
+        purposes: authorization.purposes,
+        legal_basis: authorization.legal_basis,
+        selector_provenance,
         canonical_json: canonical_json.into_boxed_slice(),
     })
 }
@@ -72,10 +80,11 @@ pub(in super::super) fn parse_integration_pack(
     if document.spec.supported_version_evidence.len() > MAX_SUPPORTED_VERSIONS {
         return Err(SourcePlanArtifactError::InvalidSet);
     }
-    OperationId::try_from(document.spec.logical_operation.as_str())
+    let logical_operation = OperationId::try_from(document.spec.logical_operation.as_str())
         .map_err(|_| SourcePlanArtifactError::InvalidIdentity)?;
     validate_inputs(&document.spec.input_slots)?;
     let acquired_fields = validate_acquisition(&document.spec.acquisition)?;
+    validate_source_provenance(&document.spec.source_provenance)?;
     validate_output(&document.spec.output, &acquired_fields)?;
     validate_parameter_declarations(&mut document.spec.deployment_parameters)?;
     validate_evidence_manifest(&mut document.spec.evidence)?;
@@ -96,6 +105,7 @@ pub(in super::super) fn parse_integration_pack(
     Ok(IntegrationPackArtifact {
         document,
         identity,
+        logical_operation,
         canonical_json: canonical_json.into_boxed_slice(),
     })
 }
@@ -135,25 +145,43 @@ pub(in super::super) fn parse_private_binding(
     let profile_version = ProfileVersion::try_from(document.profile.version.as_str())
         .map_err(|_| SourcePlanArtifactError::InvalidIdentity)?;
     let pack_identity = parse_pack_reference(&document.integration_pack)?;
-    for value in [
-        &document.tenant,
-        &document.registry_instance,
-        &document.source_instance,
-    ] {
-        validate_stable_text(value)?;
-    }
+    let tenant = TenantId::try_from(document.tenant.as_str())
+        .map_err(|_| SourcePlanArtifactError::InvalidIdentity)?;
+    let registry_instance = RegistryInstanceId::try_from(document.registry_instance.as_str())
+        .map_err(|_| SourcePlanArtifactError::InvalidIdentity)?;
+    validate_stable_text(&document.source_instance)?;
+    let data_destination_id = document
+        .data_destination
+        .as_ref()
+        .map(|destination| {
+            SourceDestinationId::try_from(destination.id.as_str())
+                .map_err(|_| SourcePlanArtifactError::InvalidIdentity)
+        })
+        .transpose()?;
     if let Some(destination) = &mut document.data_destination {
         validate_destination_document(destination)?;
     }
+    let credential_destination_id = document
+        .credential_destination
+        .as_ref()
+        .map(|destination| {
+            SourceDestinationId::try_from(destination.id.as_str())
+                .map_err(|_| SourcePlanArtifactError::InvalidIdentity)
+        })
+        .transpose()?;
     if let Some(destination) = &mut document.credential_destination {
         validate_destination_document(destination)?;
     }
-    if let Some(credential) = &document.credential {
-        validate_stable_text(&credential.reference)?;
+    let credential_reference = if let Some(credential) = &document.credential {
+        let reference = CredentialReferenceId::try_from(credential.reference.as_str())
+            .map_err(|_| SourcePlanArtifactError::InvalidIdentity)?;
         if credential.generation == 0 || credential.generation > MAX_JSON_INTEROPERABLE_INTEGER {
             return Err(SourcePlanArtifactError::InvalidLimits);
         }
-    }
+        Some(reference)
+    } else {
+        None
+    };
     if let Some(materialization) = &document.materialization {
         validate_stable_text(&materialization.table_provider)?;
         for value in [
@@ -182,6 +210,11 @@ pub(in super::super) fn parse_private_binding(
         profile_id,
         profile_version,
         pack_identity,
+        tenant,
+        registry_instance,
+        data_destination_id,
+        credential_destination_id,
+        credential_reference,
         hash: PrivateBindingHash::from_digest(digest),
     })
 }

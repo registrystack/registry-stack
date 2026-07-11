@@ -13,18 +13,21 @@ pub(super) fn parse_pack_reference(
     Ok(IntegrationPackIdentity::new(id, version, hash))
 }
 
-pub(super) fn validate_subject(subject: &SubjectDocument) -> Result<(), SourcePlanArtifactError> {
+pub(super) fn validate_subject(
+    subject: &SubjectDocument,
+) -> Result<SelectorProvenance, SourcePlanArtifactError> {
     match &subject.selector_provenance {
         SelectorProvenanceDocument::TrustedNotaryAssertion { assertion_contract } => {
             let id = AssertionContractId::try_from(assertion_contract.id.as_str())
                 .map_err(|_| SourcePlanArtifactError::InvalidIdentity)?;
             let hash = AssertionContractHash::try_from(assertion_contract.hash.as_str())
                 .map_err(|_| SourcePlanArtifactError::InvalidIdentity)?;
-            let _ = AssertionContractIdentity::new(id, hash);
+            Ok(SelectorProvenance::TrustedNotaryAssertion(
+                AssertionContractIdentity::new(id, hash),
+            ))
         }
-        SelectorProvenanceDocument::WorkloadSelected => {}
+        SelectorProvenanceDocument::WorkloadSelected => Ok(SelectorProvenance::WorkloadSelected),
     }
-    Ok(())
 }
 
 pub(super) fn validate_inputs(
@@ -64,6 +67,18 @@ pub(super) fn validate_acquisition(
             Ok(field)
         })
         .collect()
+}
+
+pub(super) fn validate_source_provenance(
+    provenance: &SourceProvenanceDocument,
+) -> Result<(), SourcePlanArtifactError> {
+    match (&provenance.source_observed_at, &provenance.source_revision) {
+        (SourceObservedAtDocument::Absent, SourceRevisionDocument::Absent) => Ok(()),
+        // V1 has no reviewed extraction mapping for provenance fields. Keep the
+        // closed document variants explicit, but fail closed until a contract
+        // version binds them to exact pack response pointers.
+        _ => Err(SourcePlanArtifactError::InvalidPlan),
+    }
 }
 
 pub(super) fn cardinality_from_bounds(
@@ -128,29 +143,52 @@ pub(super) fn validate_output(
 
 pub(super) fn validate_authorization(
     authorization: &mut AuthorizationDocument,
-) -> Result<(), SourcePlanArtifactError> {
-    validate_stable_text(&authorization.workload)?;
-    validate_token(&authorization.required_scope, MAX_PURPOSE_BYTES)?;
-    validate_stable_text(&authorization.legal_basis)?;
+) -> Result<ValidatedAuthorization, SourcePlanArtifactError> {
+    let workload_id = WorkloadId::try_from(authorization.workload.as_str())
+        .map_err(|_| SourcePlanArtifactError::InvalidIdentity)?;
+    let required_scope = RequiredConsultationScope::try_from(authorization.required_scope.as_str())
+        .map_err(|_| SourcePlanArtifactError::InvalidIdentity)?;
+    let legal_basis = LegalBasisId::try_from(authorization.legal_basis.as_str())
+        .map_err(|_| SourcePlanArtifactError::InvalidIdentity)?;
     normalize_token_set(&mut authorization.purposes, MAX_PURPOSE_BYTES)?;
     if authorization.purposes.len() > MAX_PURPOSES {
         return Err(SourcePlanArtifactError::InvalidSet);
     }
+    let purposes = authorization
+        .purposes
+        .iter()
+        .map(|purpose| {
+            CanonicalPurpose::try_from(purpose.as_str())
+                .map_err(|_| SourcePlanArtifactError::InvalidText)
+        })
+        .collect::<Result<Box<[_]>, _>>()?;
     let id = PolicyId::try_from(authorization.policy.id.as_str())
         .map_err(|_| SourcePlanArtifactError::InvalidIdentity)?;
     let hash = PolicyHash::try_from(authorization.policy.hash.as_str())
         .map_err(|_| SourcePlanArtifactError::InvalidIdentity)?;
-    let _ = PolicyIdentity::new(id, hash);
+    let policy_identity = PolicyIdentity::new(id, hash);
     if authorization.policy.max_decision_age_ms == 0
         || authorization.policy.max_decision_age_ms > 1_000
     {
         return Err(SourcePlanArtifactError::InvalidLimits);
     }
-    validate_consent(&authorization.consent)?;
-    Ok(())
+    let consent_verifier = validate_consent(&authorization.consent)?;
+    if !authorization.mandatory_obligations.is_empty() {
+        return Err(SourcePlanArtifactError::InvalidPlan);
+    }
+    Ok(ValidatedAuthorization {
+        workload_id,
+        required_scope,
+        policy_identity,
+        consent_verifier,
+        purposes,
+        legal_basis,
+    })
 }
 
-pub(super) fn validate_consent(consent: &ConsentDocument) -> Result<(), SourcePlanArtifactError> {
+pub(super) fn validate_consent(
+    consent: &ConsentDocument,
+) -> Result<Option<(OperationId, IntegrationPackHash)>, SourcePlanArtifactError> {
     match (
         consent.required,
         &consent.verifier,
@@ -158,15 +196,15 @@ pub(super) fn validate_consent(consent: &ConsentDocument) -> Result<(), SourcePl
         &consent.revocation,
         &consent.unavailable,
     ) {
-        (false, None, None, None, None) => Ok(()),
+        (false, None, None, None, None) => Ok(None),
         (true, Some(verifier), Some(max_age_ms), Some(_), Some(_))
             if (1..=MAX_CONSENT_AGE_MS).contains(&max_age_ms) =>
         {
-            OperationId::try_from(verifier.id.as_str())
+            let id = OperationId::try_from(verifier.id.as_str())
                 .map_err(|_| SourcePlanArtifactError::InvalidIdentity)?;
-            IntegrationPackHash::try_from(verifier.hash.as_str())
+            let hash = IntegrationPackHash::try_from(verifier.hash.as_str())
                 .map_err(|_| SourcePlanArtifactError::InvalidIdentity)?;
-            Ok(())
+            Ok(Some((id, hash)))
         }
         _ => Err(SourcePlanArtifactError::InvalidPlan),
     }
@@ -268,6 +306,7 @@ pub(super) fn validate_plan(
     let mut operation_response_fields = BTreeMap::new();
     let mut auth_modes = BTreeSet::new();
     let mut response_bytes = 0_u64;
+    let mut maximum_data_response_bytes = 0_u64;
     let reviewed_acquisition = spec
         .reviewed_acquisition
         .as_ref()
@@ -355,6 +394,8 @@ pub(super) fn validate_plan(
         response_bytes = response_bytes
             .checked_add(u64::from(operation.response.max_bytes))
             .ok_or(SourcePlanArtifactError::InvalidLimits)?;
+        maximum_data_response_bytes =
+            maximum_data_response_bytes.max(u64::from(operation.response.max_bytes));
     }
     let declared_disclosed_fields = reviewed_acquisition
         .fields
@@ -402,7 +443,9 @@ pub(super) fn validate_plan(
         }
     }
     if used_operations != known_operations
-        || plan.steps.len() != usize::from(spec.bounds.max_data_exchanges)
+        || (plan.kind == SourcePlanKind::BoundedHttp
+            && plan.steps.len() != usize::from(spec.bounds.max_data_exchanges))
+        || (plan.kind == SourcePlanKind::SandboxedRhai && !plan.step_conditions.is_empty())
     {
         return Err(SourcePlanArtifactError::InvalidPlan);
     }
@@ -417,6 +460,11 @@ pub(super) fn validate_plan(
     }
     let credential_auth = credential_auth_modes.iter().next().copied();
     validate_credential_operation(plan, spec.bounds, credential_auth)?;
+    if plan.kind == SourcePlanKind::SandboxedRhai {
+        response_bytes = maximum_data_response_bytes
+            .checked_mul(u64::from(spec.bounds.max_data_exchanges))
+            .ok_or(SourcePlanArtifactError::InvalidLimits)?;
+    }
     if let Some(credential) = &plan.credential_operation {
         response_bytes = response_bytes
             .checked_add(u64::from(credential.response.max_bytes))
@@ -864,7 +912,7 @@ fn validate_http_operation(
     Ok(())
 }
 
-pub(super) fn validate_response_schema(
+pub(in crate::source_plan) fn validate_response_schema(
     schema: &ResponseSchemaDocument,
     depth: usize,
     nodes: &mut usize,

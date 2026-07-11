@@ -94,6 +94,27 @@ pub(in super::super) struct PublicAcquisitionDocument {
     pub(in super::super) fields: BTreeMap<String, ResponseSchemaDocument>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub(in super::super) enum SourceObservedAtDocument {
+    Absent,
+    AcquiredRfc3339 { field: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub(in super::super) enum SourceRevisionDocument {
+    Absent,
+    AcquiredString { field: String, max_bytes: u16 },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(in super::super) struct SourceProvenanceDocument {
+    pub(in super::super) source_observed_at: SourceObservedAtDocument,
+    pub(in super::super) source_revision: SourceRevisionDocument,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(in super::super) enum OutputTypeDocument {
@@ -424,6 +445,15 @@ pub(in super::super) struct ConsentDocument {
     pub(in super::super) unavailable: Option<UnavailableDocument>,
 }
 
+/// V1 accepts no conditional policy obligations.
+///
+/// An uninhabited element type makes the required sequence structurally
+/// capable of representing only `[]`. Any non-empty or unknown element fails
+/// strict deserialization before the public contract can be compiled.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(in super::super) enum MandatoryObligationDocument {}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(in super::super) struct AuthorizationDocument {
@@ -433,6 +463,7 @@ pub(in super::super) struct AuthorizationDocument {
     pub(in super::super) legal_basis: String,
     pub(in super::super) policy: PolicyDocument,
     pub(in super::super) consent: ConsentDocument,
+    pub(in super::super) mandatory_obligations: Vec<MandatoryObligationDocument>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -494,6 +525,7 @@ pub(in super::super) struct PublicContractSpecDocument {
     pub(in super::super) inputs: BTreeMap<String, InputDocument>,
     pub(in super::super) integration_pack: ArtifactReferenceDocument,
     pub(in super::super) acquisition: PublicAcquisitionDocument,
+    pub(in super::super) source_provenance: SourceProvenanceDocument,
     pub(in super::super) output: BTreeMap<String, OutputFieldDocument>,
     pub(in super::super) authorization: AuthorizationDocument,
     pub(in super::super) bounds: LimitsDocument,
@@ -520,6 +552,13 @@ pub struct PublicContractArtifact {
     pub(in super::super) acquired_fields: BTreeSet<AcquiredField>,
     pub(in super::super) cardinality: SourceCardinality,
     pub(in super::super) public_limits: LimitsDocument,
+    pub(in super::super) workload_id: WorkloadId,
+    pub(in super::super) required_scope: RequiredConsultationScope,
+    pub(in super::super) policy_identity: PolicyIdentity,
+    pub(in super::super) consent_verifier: Option<(OperationId, IntegrationPackHash)>,
+    pub(in super::super) selector_provenance: SelectorProvenance,
+    pub(in super::super) purposes: Box<[CanonicalPurpose]>,
+    pub(in super::super) legal_basis: LegalBasisId,
     pub(super) canonical_json: Box<[u8]>,
 }
 
@@ -916,6 +955,7 @@ pub(in super::super) struct IntegrationPackSpecDocument {
     pub(in super::super) logical_operation: String,
     pub(in super::super) input_slots: BTreeMap<String, InputDocument>,
     pub(in super::super) acquisition: PublicAcquisitionDocument,
+    pub(in super::super) source_provenance: SourceProvenanceDocument,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(in super::super) reviewed_acquisition: Option<PackAcquisitionDocument>,
     pub(in super::super) output: BTreeMap<String, OutputFieldDocument>,
@@ -939,6 +979,7 @@ pub(in super::super) struct IntegrationPackDocument {
 pub struct IntegrationPackArtifact {
     pub(in super::super) document: IntegrationPackDocument,
     pub(super) identity: IntegrationPackIdentity,
+    pub(in super::super) logical_operation: OperationId,
     pub(super) canonical_json: Box<[u8]>,
 }
 
@@ -1062,6 +1103,11 @@ pub struct PrivateBindingArtifact {
     pub(in super::super) profile_id: ProfileId,
     pub(in super::super) profile_version: ProfileVersion,
     pub(in super::super) pack_identity: IntegrationPackIdentity,
+    pub(in super::super) tenant: TenantId,
+    pub(in super::super) registry_instance: RegistryInstanceId,
+    pub(in super::super) data_destination_id: Option<SourceDestinationId>,
+    pub(in super::super) credential_destination_id: Option<SourceDestinationId>,
+    pub(in super::super) credential_reference: Option<CredentialReferenceId>,
     pub(super) hash: PrivateBindingHash,
 }
 

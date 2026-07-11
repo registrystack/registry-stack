@@ -11,6 +11,13 @@ mod artifact;
     reason = "WP1B stages the closed artifact compiler before the executor integration"
 )]
 mod compiler;
+mod completion_seed;
+mod identifiers;
+#[allow(
+    dead_code,
+    reason = "the typed runtime profile is consumed by the admission/state integration slice"
+)]
+pub(crate) mod runtime_profile;
 
 pub(crate) mod codec;
 
@@ -30,4 +37,12 @@ pub use compiler::{
     CompiledStepPredicate, CompiledValueExpression, PinnedEvidenceArtifact,
     PinnedSourcePlanArtifact, RhaiWorkerCapability, SourcePlanArtifactBundle,
     SourcePlanCompileError,
+};
+
+#[cfg(test)]
+#[allow(unused_imports, reason = "consumed by cross-layer state-plane tests")]
+pub(crate) use compiler::{
+    maximum_completion_seed_fixture, maximum_runtime_profile_fixture,
+    normal_completion_seed_fixture, rhai_five_operation_two_slot_completion_seed_fixture,
+    semantic_alias_completion_seed_fixture,
 };

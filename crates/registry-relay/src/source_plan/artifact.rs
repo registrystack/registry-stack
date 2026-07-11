@@ -17,7 +17,12 @@ use crate::consultation::{
     AcquiredField, AcquisitionClass, AssertionContractHash, AssertionContractId,
     AssertionContractIdentity, IntegrationPackHash, IntegrationPackId, IntegrationPackIdentity,
     OperationBounds, OperationId, PolicyHash, PolicyId, PolicyIdentity, ProfileContractHash,
-    ProfileId, ProfileIdentity, ProfileVersion,
+    ProfileId, ProfileIdentity, ProfileVersion, RegistryInstanceId, RequiredConsultationScope,
+    SelectorProvenance, TenantId, WorkloadId,
+};
+
+use super::identifiers::{
+    CanonicalPurpose, CredentialReferenceId, LegalBasisId, SourceDestinationId,
 };
 
 pub(super) const CONTRACT_SCHEMA: &str = "registry.relay.consultation-contract.v1";
@@ -129,6 +134,15 @@ pub enum SourcePlanArtifactError {
     /// A committed hash does not match the typed artifact.
     #[error("source-plan artifact hash does not match its committed digest")]
     HashMismatch,
+}
+
+pub(super) struct ValidatedAuthorization {
+    pub(super) workload_id: WorkloadId,
+    pub(super) required_scope: RequiredConsultationScope,
+    pub(super) policy_identity: PolicyIdentity,
+    pub(super) consent_verifier: Option<(OperationId, IntegrationPackHash)>,
+    pub(super) purposes: Box<[CanonicalPurpose]>,
+    pub(super) legal_basis: LegalBasisId,
 }
 
 /// A closed source-plan template kind accepted by consultation v1.
@@ -281,6 +295,17 @@ impl SourcePlanLimits {
             max_public_response_bytes: MAX_PUBLIC_RESPONSE_BYTES,
         }
     }
+
+    pub(super) fn with_max_data_exchanges(
+        mut self,
+        max_data_exchanges: u8,
+    ) -> Result<Self, SourcePlanArtifactError> {
+        if max_data_exchanges == 0 || max_data_exchanges > self.operation.max_data_exchanges {
+            return Err(SourcePlanArtifactError::InvalidLimits);
+        }
+        self.operation.max_data_exchanges = max_data_exchanges;
+        Ok(self)
+    }
 }
 
 /// Hash of one typed private binding with secret values excluded by schema.
@@ -325,6 +350,8 @@ pub(super) use parsing::{
 };
 
 mod validation;
+#[cfg(test)]
+pub(super) use validation::validate_response_schema;
 pub(super) use validation::{decode_pointer_tokens, response_record_schema};
 
 mod bounds;

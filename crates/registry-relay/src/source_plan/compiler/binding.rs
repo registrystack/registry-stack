@@ -126,14 +126,14 @@ pub(super) fn validate_capabilities(
     pack: &IntegrationPackArtifact,
     binding: &PrivateBindingArtifact,
     rhai_workers: &[RhaiWorkerCapability],
-) -> Result<(), SourcePlanCompileError> {
+) -> Result<Option<RhaiWorkerLimits>, SourcePlanCompileError> {
     let capabilities = &binding.document.capabilities;
     match pack.document.spec.plan.kind {
         SourcePlanKind::SnapshotExact | SourcePlanKind::BoundedHttp => {
             if capabilities.allow_sandboxed_rhai || capabilities.sandboxed_rhai.is_some() {
                 Err(SourcePlanCompileError::CapabilityMismatch)
             } else {
-                Ok(())
+                Ok(None)
             }
         }
         SourcePlanKind::SandboxedRhai if !capabilities.allow_sandboxed_rhai => {
@@ -222,10 +222,57 @@ pub(super) fn validate_capabilities(
             if worker_operations != callable || worker.limits != expected_limits {
                 Err(SourcePlanCompileError::RhaiWorkerMismatch)
             } else {
-                Ok(())
+                Ok(Some(expected_limits))
             }
         }
     }
+}
+
+pub(super) fn validate_effective_source_bytes(
+    pack: &IntegrationPackArtifact,
+    effective_limits: SourcePlanLimits,
+) -> Result<(), SourcePlanCompileError> {
+    let data_response_bytes = match pack.document.spec.plan.kind {
+        SourcePlanKind::SnapshotExact => 0,
+        SourcePlanKind::BoundedHttp => pack
+            .document
+            .spec
+            .plan
+            .operations
+            .iter()
+            .try_fold(0_u64, |total, operation| {
+                total.checked_add(u64::from(operation.response.max_bytes))
+            })
+            .ok_or(SourcePlanCompileError::BindingWidening)?,
+        SourcePlanKind::SandboxedRhai => {
+            let maximum_data_response_bytes = pack
+                .document
+                .spec
+                .plan
+                .operations
+                .iter()
+                .map(|operation| u64::from(operation.response.max_bytes))
+                .max()
+                .ok_or(SourcePlanCompileError::CompilerInvariant)?;
+            maximum_data_response_bytes
+                .checked_mul(u64::from(effective_limits.operation().max_data_exchanges))
+                .ok_or(SourcePlanCompileError::BindingWidening)?
+        }
+    };
+    let credential_response_bytes = pack
+        .document
+        .spec
+        .plan
+        .credential_operation
+        .as_ref()
+        .map_or(0, |operation| u64::from(operation.response.max_bytes));
+    let worst_case = data_response_bytes
+        .checked_add(credential_response_bytes)
+        .ok_or(SourcePlanCompileError::BindingWidening)?;
+    if worst_case > effective_limits.operation().max_source_bytes {
+        return Err(SourcePlanCompileError::BindingWidening);
+    }
+    Ok(())
 }
 
 pub(super) fn validate_cross_references(
@@ -259,6 +306,7 @@ pub(super) fn validate_contract_implementation(
     let pack_spec = &pack.document.spec;
     let exact = pack_spec.input_slots == contract_spec.inputs
         && pack_spec.acquisition == contract_spec.acquisition
+        && pack_spec.source_provenance == contract_spec.source_provenance
         && pack_spec.output == contract_spec.output
         && pack_spec.bounds == contract_spec.bounds;
     exact

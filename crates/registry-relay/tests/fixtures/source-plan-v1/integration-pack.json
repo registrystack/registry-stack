@@ -26,6 +26,14 @@
         }
       }
     },
+    "source_provenance": {
+      "source_observed_at": {
+        "type": "absent"
+      },
+      "source_revision": {
+        "type": "absent"
+      }
+    },
     "reviewed_acquisition": {
       "class": "source_projected_exact",
       "fields": {
