@@ -6,7 +6,15 @@
 //! `REGISTRY_RELAY_STATE_PLANE_POSTGRES_TEST_URL='postgres://...' cargo test \
 //!   -p registry-relay --lib postgres_state_plane -- --ignored --nocapture`
 
-use std::{collections::HashMap, env, fs, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    env, fs,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use postgres_native_tls::MakeTlsConnector;
 use registry_platform_audit::{
@@ -23,9 +31,12 @@ use ulid::Ulid;
 use super::migration::RUNTIME_SESSION_LIMITS_SQL;
 use super::{
     install_postgres_state_plane_v1, AuditChainKeyEpochId, CompletionAttemptReference,
-    PostgresDurableAuditStatePlane, RuntimeDatabaseRole, StatePlaneInitializationError,
+    DispatchOperationId, DispatchPermitBudget, PermitCompletionOutcome,
+    PostgresDurableAuditStatePlane, PostgresServingFence, RuntimeDatabaseRole, ServingFenceError,
+    ServingFenceLockKey, ServingFenceReadiness, StatePlaneInitializationError,
     StatePlaneInstallError, StatePlaneReadiness, DURABLE_AUDIT_CAPABILITY_V1,
-    POSTGRES_STATE_PLANE_MIGRATION_V1, STATE_PLANE_SCHEMA_FINGERPRINT_V1,
+    POSTGRES_STATE_PLANE_MIGRATION_V1, SERVING_FENCE_CAPABILITY_V1,
+    STATE_PLANE_SCHEMA_FINGERPRINT_V1,
 };
 
 const DATABASE_URL_ENV: &str = "REGISTRY_RELAY_STATE_PLANE_POSTGRES_TEST_URL";
@@ -38,10 +49,22 @@ const CAS_SQL: &str = "SELECT * FROM relay_state_api.audit_phase_cas_v1(\
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13\
 )";
 
+fn test_serving_fence_lock_key() -> ServingFenceLockKey {
+    ServingFenceLockKey::new(7_221_091_442).expect("test fence key is distinct and nonzero")
+}
+
 #[derive(Debug)]
 struct DirectCandidate {
     predecessor: Option<[u8; 32]>,
     generation: i64,
+}
+
+struct DispatchDropCounter(Arc<AtomicUsize>);
+
+impl Drop for DispatchDropCounter {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
 }
 
 async fn postgres_client(
@@ -168,6 +191,39 @@ async fn reset_role(client: &Client) -> Result<(), tokio_postgres::Error> {
     client.batch_execute("RESET ROLE").await
 }
 
+async fn wait_for_fence_unlock(
+    client: &Client,
+    lock_key: ServingFenceLockKey,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let unlocked: bool = client
+            .query_one(
+                "SELECT NOT EXISTS ( \
+                     SELECT 1 FROM pg_catalog.pg_locks AS lock_row \
+                     WHERE lock_row.locktype = 'advisory' \
+                       AND lock_row.database = ( \
+                           SELECT database_row.oid FROM pg_catalog.pg_database AS database_row \
+                           WHERE database_row.datname = current_database() \
+                       ) \
+                       AND lock_row.classid::bigint = (($1::bigint >> 32) & 4294967295) \
+                       AND lock_row.objid::bigint = ($1::bigint & 4294967295) \
+                       AND lock_row.objsubid = 1 AND lock_row.granted \
+                 ) AS unlocked",
+                &[&lock_key.as_i64()],
+            )
+            .await?
+            .try_get("unlocked")?;
+        if unlocked {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err("serving-fence advisory lock did not release".into());
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 async fn seed_catalog_for_unsafe_restart(
     client: &Client,
     runtime_role_name: &str,
@@ -180,15 +236,18 @@ async fn seed_catalog_for_unsafe_restart(
         .execute(
             "INSERT INTO relay_state_private.state_plane_metadata ( \
                  singleton, schema_version, capability_id, capability_fingerprint, \
-                 owner_role_oid, runtime_role_oid, chain_key_epoch_id \
-             ) SELECT true, 1, $1, $2, owner_role.oid, runtime_role.oid, $3 \
+                 owner_role_oid, runtime_role_oid, chain_key_epoch_id, \
+                 serving_fence_capability_id, serving_fence_lock_key \
+             ) SELECT true, 1, $1, $2, owner_role.oid, runtime_role.oid, $3, $4, $5 \
              FROM pg_catalog.pg_roles AS owner_role \
-             JOIN pg_catalog.pg_roles AS runtime_role ON runtime_role.rolname = $4 \
+             JOIN pg_catalog.pg_roles AS runtime_role ON runtime_role.rolname = $6 \
              WHERE owner_role.rolname = current_user",
             &[
                 &DURABLE_AUDIT_CAPABILITY_V1,
                 &STATE_PLANE_SCHEMA_FINGERPRINT_V1,
                 &chain_key_epoch_id.as_str(),
+                &SERVING_FENCE_CAPABILITY_V1,
+                &test_serving_fence_lock_key().as_i64(),
                 &runtime_role_name,
             ],
         )
@@ -204,6 +263,23 @@ async fn seed_catalog_for_unsafe_restart(
                  text, text, bytea, text, bytea \
              ) TO {runtime}; \
              GRANT EXECUTE ON FUNCTION relay_state_api.audit_readiness_v1(text) \
+                 TO {runtime}; \
+             GRANT EXECUTE ON FUNCTION relay_state_api.serving_fence_acquire_v1(bigint, text) \
+                 TO {runtime}; \
+             GRANT EXECUTE ON FUNCTION relay_state_api.serving_fence_finalize_v1(bigint, text, bigint) \
+                 TO {runtime}; \
+             GRANT EXECUTE ON FUNCTION relay_state_api.serving_fence_status_v1(bigint, text, bigint) \
+                 TO {runtime}; \
+             GRANT EXECUTE ON FUNCTION relay_state_api.dispatch_permit_create_v1( \
+                 bigint, text, bigint, text, integer \
+             ) TO {runtime}; \
+             GRANT EXECUTE ON FUNCTION relay_state_api.dispatch_permit_authorize_v1( \
+                 bigint, text, bigint, text \
+             ) TO {runtime}; \
+             GRANT EXECUTE ON FUNCTION relay_state_api.dispatch_permit_complete_v1( \
+                 bigint, text, bigint, text \
+             ) TO {runtime}; \
+             GRANT EXECUTE ON FUNCTION relay_state_api.serving_fence_release_v1(bigint, text, bigint) \
                  TO {runtime};",
             runtime = quote_identifier(runtime_role_name),
         ))
@@ -323,6 +399,7 @@ GRANT CREATE ON DATABASE {database} TO {stale};
             &mut non_superuser_admin,
             &runtime_role,
             &chain_key_epoch_id,
+            test_serving_fence_lock_key(),
         )
         .await,
         Err(StatePlaneInstallError::InvalidMigrationAuthority)
@@ -332,7 +409,13 @@ GRANT CREATE ON DATABASE {database} TO {stale};
     non_superuser_admin_driver.abort();
     set_role(&admin, &owner_role).await?;
     assert_eq!(
-        install_postgres_state_plane_v1(&mut admin, &runtime_role, &chain_key_epoch_id).await,
+        install_postgres_state_plane_v1(
+            &mut admin,
+            &runtime_role,
+            &chain_key_epoch_id,
+            test_serving_fence_lock_key()
+        )
+        .await,
         Err(StatePlaneInstallError::OwnerRoleNotIsolated)
     );
     reset_role(&admin).await?;
@@ -355,7 +438,13 @@ GRANT CREATE ON DATABASE {database} TO {stale};
         .await?;
     set_role(&admin, &owner_role).await?;
     assert_eq!(
-        install_postgres_state_plane_v1(&mut admin, &runtime_role, &chain_key_epoch_id).await,
+        install_postgres_state_plane_v1(
+            &mut admin,
+            &runtime_role,
+            &chain_key_epoch_id,
+            test_serving_fence_lock_key()
+        )
+        .await,
         Err(StatePlaneInstallError::OwnerRoleNotIsolated)
     );
     reset_role(&admin).await?;
@@ -377,7 +466,13 @@ GRANT CREATE ON DATABASE {database} TO {stale};
         .await?;
     set_role(&admin, &owner_role).await?;
     assert_eq!(
-        install_postgres_state_plane_v1(&mut admin, &runtime_role, &chain_key_epoch_id).await,
+        install_postgres_state_plane_v1(
+            &mut admin,
+            &runtime_role,
+            &chain_key_epoch_id,
+            test_serving_fence_lock_key()
+        )
+        .await,
         Err(StatePlaneInstallError::OwnerRoleNotIsolated)
     );
     reset_role(&admin).await?;
@@ -418,7 +513,13 @@ GRANT CREATE ON DATABASE {database} TO {stale};
         admin.batch_execute(&grant).await?;
         set_role(&admin, &owner_role).await?;
         assert_eq!(
-            install_postgres_state_plane_v1(&mut admin, &runtime_role, &chain_key_epoch_id).await,
+            install_postgres_state_plane_v1(
+                &mut admin,
+                &runtime_role,
+                &chain_key_epoch_id,
+                test_serving_fence_lock_key()
+            )
+            .await,
             Err(StatePlaneInstallError::RuntimeRoleNotIsolated)
         );
         reset_role(&admin).await?;
@@ -433,7 +534,13 @@ GRANT CREATE ON DATABASE {database} TO {stale};
     reset_role(&admin).await?;
     set_role(&admin, &owner_role).await?;
     assert_eq!(
-        install_postgres_state_plane_v1(&mut admin, &runtime_role, &chain_key_epoch_id).await,
+        install_postgres_state_plane_v1(
+            &mut admin,
+            &runtime_role,
+            &chain_key_epoch_id,
+            test_serving_fence_lock_key()
+        )
+        .await,
         Err(StatePlaneInstallError::CapabilityDrift)
     );
     reset_role(&admin).await?;
@@ -449,8 +556,18 @@ GRANT CREATE ON DATABASE {database} TO {stale};
     set_role(&admin, &owner_role).await?;
     set_role(&concurrent_admin, &owner_role).await?;
     let (first_install, second_install) = tokio::join!(
-        install_postgres_state_plane_v1(&mut admin, &runtime_role, &chain_key_epoch_id),
-        install_postgres_state_plane_v1(&mut concurrent_admin, &runtime_role, &chain_key_epoch_id)
+        install_postgres_state_plane_v1(
+            &mut admin,
+            &runtime_role,
+            &chain_key_epoch_id,
+            test_serving_fence_lock_key()
+        ),
+        install_postgres_state_plane_v1(
+            &mut concurrent_admin,
+            &runtime_role,
+            &chain_key_epoch_id,
+            test_serving_fence_lock_key()
+        )
     );
     assert_eq!(first_install, Ok(()));
     assert_eq!(second_install, Ok(()));
@@ -461,7 +578,13 @@ GRANT CREATE ON DATABASE {database} TO {stale};
     let _ = concurrent_admin_driver.await;
 
     set_role(&admin, &owner_role).await?;
-    install_postgres_state_plane_v1(&mut admin, &runtime_role, &chain_key_epoch_id).await?;
+    install_postgres_state_plane_v1(
+        &mut admin,
+        &runtime_role,
+        &chain_key_epoch_id,
+        test_serving_fence_lock_key(),
+    )
+    .await?;
     reset_role(&admin).await?;
 
     let metadata = admin
@@ -942,6 +1065,605 @@ WHERE metadata.singleton = true
         verification.last_hash.as_ref().map(<[u8; 32]>::as_slice)
     );
 
+    // The serving fence is a separate, dedicated session capability. Runtime
+    // role/database GUC inheritance must fail before advisory-lock acquisition.
+    let fence_key = test_serving_fence_lock_key();
+    admin
+        .batch_execute(&format!(
+            "ALTER ROLE {} SET session_replication_role = 'replica'",
+            quote_identifier(&runtime_role_name)
+        ))
+        .await?;
+    let (replica_fence_client, replica_fence_driver) =
+        postgres_client_as(&database_url, &runtime_role_name, &runtime_password).await?;
+    let replica_fence_result = PostgresServingFence::acquire(
+        replica_fence_client,
+        replica_fence_driver,
+        &chain_key_epoch_id,
+        fence_key,
+    )
+    .await;
+    admin
+        .batch_execute(&format!(
+            "ALTER ROLE {} RESET session_replication_role",
+            quote_identifier(&runtime_role_name)
+        ))
+        .await?;
+    assert_eq!(
+        replica_fence_result
+            .err()
+            .expect("replica-mode fence client must fail"),
+        ServingFenceError::CapabilityDrift
+    );
+
+    // A different advisory key cannot create a second deployment fence.
+    let (wrong_key_client, wrong_key_driver) =
+        postgres_client_as(&database_url, &runtime_role_name, &runtime_password).await?;
+    let wrong_key = ServingFenceLockKey::new(fence_key.as_i64() + 1)?;
+    assert_eq!(
+        PostgresServingFence::acquire(
+            wrong_key_client,
+            wrong_key_driver,
+            &chain_key_epoch_id,
+            wrong_key,
+        )
+        .await
+        .err()
+        .expect("unbound deployment key must fail"),
+        ServingFenceError::Unavailable
+    );
+
+    // Constructor ownership starts by rolling back caller transaction state
+    // and replacing every forceable hostile GUC before lock acquisition.
+    let (fence_one_client, fence_one_driver) =
+        postgres_client_as(&database_url, &runtime_role_name, &runtime_password).await?;
+    fence_one_client
+        .batch_execute(
+            "SET search_path = public; \
+             SET lock_timeout = '0'; \
+             SET statement_timeout = '0'; \
+             SET idle_in_transaction_session_timeout = '0'; \
+             SET synchronous_commit = 'off'; \
+             SET client_encoding = 'SQL_ASCII'; \
+             SET standard_conforming_strings = 'off'; \
+             SET default_transaction_isolation = 'serializable';",
+        )
+        .await?;
+    fence_one_client.batch_execute("BEGIN").await?;
+    let fence_one = PostgresServingFence::acquire(
+        fence_one_client,
+        fence_one_driver,
+        &chain_key_epoch_id,
+        fence_key,
+    )
+    .await?;
+    assert_eq!(fence_one.generation(), 1);
+    assert_eq!(fence_one.readiness().await, ServingFenceReadiness::Ready);
+    let durable_generation: i64 = admin
+        .query_one(
+            "SELECT generation FROM relay_state_private.serving_fence_state \
+             WHERE singleton = true",
+            &[],
+        )
+        .await?
+        .try_get(0)?;
+    assert_eq!(durable_generation, 1);
+    let null_backend_error = admin
+        .execute(
+            "UPDATE relay_state_private.serving_fence_state \
+             SET holder_backend_pid = NULL WHERE singleton = true",
+            &[],
+        )
+        .await
+        .expect_err("an active fence must always bind a backend PID");
+    assert_eq!(
+        null_backend_error.as_db_error().map(|error| error.code()),
+        Some(&SqlState::CHECK_VIOLATION)
+    );
+
+    // A second Relay cannot acquire the same deployment fence while the first
+    // dedicated session owns it.
+    let (contender_client, contender_driver) =
+        postgres_client_as(&database_url, &runtime_role_name, &runtime_password).await?;
+    let contention_started = Instant::now();
+    assert_eq!(
+        PostgresServingFence::acquire(
+            contender_client,
+            contender_driver,
+            &chain_key_epoch_id,
+            fence_key,
+        )
+        .await
+        .err()
+        .expect("second holder must be rejected"),
+        ServingFenceError::Contended
+    );
+    assert!(contention_started.elapsed() < Duration::from_secs(3));
+
+    // A runtime session without the advisory lock cannot use the permit API,
+    // even when it knows the durable generation and holder identifier.
+    let fence_one_holder: String = admin
+        .query_one(
+            "SELECT holder_id FROM relay_state_private.serving_fence_state \
+             WHERE singleton = true",
+            &[],
+        )
+        .await?
+        .try_get(0)?;
+    let direct_nonholder_operation = DispatchOperationId::from_ulid(Ulid::new());
+    let (direct_nonholder_client, direct_nonholder_driver) =
+        postgres_client_as(&database_url, &runtime_role_name, &runtime_password).await?;
+    direct_nonholder_client
+        .batch_execute(RUNTIME_SESSION_LIMITS_SQL)
+        .await?;
+    let direct_nonholder_outcome: String = direct_nonholder_client
+        .query_one(
+            "SELECT outcome FROM relay_state_api.dispatch_permit_create_v1( \
+                 $1, $2, $3, $4, $5 \
+             )",
+            &[
+                &fence_key.as_i64(),
+                &fence_one_holder,
+                &fence_one.generation(),
+                &direct_nonholder_operation.as_str(),
+                &1_000_i32,
+            ],
+        )
+        .await?
+        .try_get("outcome")?;
+    assert_eq!(direct_nonholder_outcome, "ownership_lost");
+    drop(direct_nonholder_client);
+    direct_nonholder_driver.abort();
+
+    // Permit creation is durable, exact-replay aware, and cannot widen the
+    // original PostgreSQL-clock deadline.
+    let normal_operation = DispatchOperationId::from_ulid(Ulid::new());
+    let normal_budget = DispatchPermitBudget::new(Duration::from_secs(5))?;
+    let mut normal_permit = fence_one
+        .create_permit(normal_operation.clone(), normal_budget)
+        .await?;
+    assert_eq!(normal_permit.fence_generation(), fence_one.generation());
+    let normal_dispatches = Arc::new(AtomicUsize::new(0));
+    let observed_dispatches = Arc::clone(&normal_dispatches);
+    assert_eq!(
+        fence_one
+            .authorize_and_dispatch(&mut normal_permit, move || async move {
+                observed_dispatches.fetch_add(1, Ordering::SeqCst);
+                "dispatched"
+            })
+            .await?,
+        "dispatched"
+    );
+    assert_eq!(normal_dispatches.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        fence_one
+            .create_permit(normal_operation.clone(), normal_budget)
+            .await
+            .err(),
+        Some(ServingFenceError::PermitReplay)
+    );
+    assert_eq!(
+        fence_one
+            .create_permit(
+                normal_operation.clone(),
+                DispatchPermitBudget::new(Duration::from_secs(6))?,
+            )
+            .await
+            .err(),
+        Some(ServingFenceError::PermitConflict)
+    );
+    let stored_permit = admin
+        .query_one(
+            "SELECT budget_ms, \
+                    floor(extract(epoch FROM deadline_at) * 1000)::bigint \
+             FROM relay_state_private.dispatch_permit WHERE operation_id = $1",
+            &[&normal_operation.as_str()],
+        )
+        .await?;
+    let stored_budget_ms: i32 = stored_permit.try_get(0)?;
+    let stored_deadline_unix_ms: i64 = stored_permit.try_get(1)?;
+    assert_eq!(stored_budget_ms, 5_000);
+    assert_eq!(stored_deadline_unix_ms, normal_permit.deadline_unix_ms());
+    assert_eq!(
+        fence_one.complete_permit(&mut normal_permit).await?,
+        PermitCompletionOutcome::Completed
+    );
+    assert_eq!(
+        fence_one.complete_permit(&mut normal_permit).await?,
+        PermitCompletionOutcome::AlreadyCompleted
+    );
+    let post_completion_dispatches = Arc::new(AtomicUsize::new(0));
+    let observed_dispatches = Arc::clone(&post_completion_dispatches);
+    assert_eq!(
+        fence_one
+            .authorize_and_dispatch(&mut normal_permit, move || async move {
+                observed_dispatches.fetch_add(1, Ordering::SeqCst);
+            })
+            .await
+            .err(),
+        Some(ServingFenceError::PermitCompleted)
+    );
+    assert_eq!(post_completion_dispatches.load(Ordering::SeqCst), 0);
+
+    // An already expired PostgreSQL permit never constructs its lazy outbound
+    // future, and can still be durably completed before clean release.
+    let mut expired_permit = fence_one
+        .create_permit(
+            DispatchOperationId::from_ulid(Ulid::new()),
+            DispatchPermitBudget::new(Duration::from_millis(1))?,
+        )
+        .await?;
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    let expired_dispatches = Arc::new(AtomicUsize::new(0));
+    let observed_dispatches = Arc::clone(&expired_dispatches);
+    assert_eq!(
+        fence_one
+            .authorize_and_dispatch(&mut expired_permit, move || async move {
+                observed_dispatches.fetch_add(1, Ordering::SeqCst);
+            })
+            .await
+            .err(),
+        Some(ServingFenceError::PermitExpired)
+    );
+    assert_eq!(expired_dispatches.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        fence_one.complete_permit(&mut expired_permit).await?,
+        PermitCompletionOutcome::Completed
+    );
+    fence_one.release().await?;
+    wait_for_fence_unlock(&admin, fence_key).await?;
+
+    // Failed caller transactions are normalized before the next generation is
+    // durably acquired.
+    let (failed_fence_client, failed_fence_driver) =
+        postgres_client_as(&database_url, &runtime_role_name, &runtime_password).await?;
+    failed_fence_client.batch_execute("BEGIN").await?;
+    let failed_fence_error = failed_fence_client
+        .batch_execute("SELECT 1 / 0")
+        .await
+        .expect_err("test must leave the fence session aborted");
+    assert_eq!(
+        failed_fence_error.as_db_error().map(|error| error.code()),
+        Some(&SqlState::DIVISION_BY_ZERO)
+    );
+    let failed_fence = PostgresServingFence::acquire(
+        failed_fence_client,
+        failed_fence_driver,
+        &chain_key_epoch_id,
+        fence_key,
+    )
+    .await?;
+    assert_eq!(failed_fence.generation(), 2);
+
+    // An insert blocked past the function-owned lock timeout closes admission
+    // permanently on that fence instance and stores no provisional permit.
+    let blocked_operation = DispatchOperationId::from_ulid(Ulid::new());
+    let table_lock = admin.transaction().await?;
+    table_lock
+        .batch_execute("LOCK TABLE relay_state_private.dispatch_permit IN ACCESS EXCLUSIVE MODE")
+        .await?;
+    let blocked_started = Instant::now();
+    assert_eq!(
+        failed_fence
+            .create_permit(
+                blocked_operation.clone(),
+                DispatchPermitBudget::new(Duration::from_secs(1))?,
+            )
+            .await
+            .err(),
+        Some(ServingFenceError::Unavailable)
+    );
+    assert!(blocked_started.elapsed() < Duration::from_secs(4));
+    assert_eq!(
+        failed_fence
+            .create_permit(
+                DispatchOperationId::from_ulid(Ulid::new()),
+                DispatchPermitBudget::new(Duration::from_secs(1))?,
+            )
+            .await
+            .err(),
+        Some(ServingFenceError::AdmissionClosed)
+    );
+    table_lock.rollback().await?;
+    let blocked_rows: i64 = admin
+        .query_one(
+            "SELECT count(*) FROM relay_state_private.dispatch_permit \
+             WHERE operation_id = $1",
+            &[&blocked_operation.as_str()],
+        )
+        .await?
+        .try_get(0)?;
+    assert_eq!(blocked_rows, 0);
+    // The failed actor still has a live public handle here. Its owned database
+    // session must already be gone so a standby can acquire without a manual
+    // drop or process restart.
+    wait_for_fence_unlock(&admin, fence_key).await?;
+
+    // Valid catalog state is not enough when the durable holder identity no
+    // longer matches the dedicated backend. Ownership uncertainty seals the
+    // local capability.
+    let (uncertain_client, uncertain_driver) =
+        postgres_client_as(&database_url, &runtime_role_name, &runtime_password).await?;
+    let uncertain_fence = PostgresServingFence::acquire(
+        uncertain_client,
+        uncertain_driver,
+        &chain_key_epoch_id,
+        fence_key,
+    )
+    .await?;
+    assert_eq!(uncertain_fence.generation(), 3);
+    admin
+        .execute(
+            "UPDATE relay_state_private.serving_fence_state \
+             SET holder_id = '00000000000000000000000000' \
+             WHERE singleton = true",
+            &[],
+        )
+        .await?;
+    assert_eq!(
+        uncertain_fence.readiness().await,
+        ServingFenceReadiness::Unavailable
+    );
+    let sealed_dispatches = Arc::new(AtomicUsize::new(0));
+    let observed_dispatches = Arc::clone(&sealed_dispatches);
+    assert_eq!(
+        uncertain_fence
+            .authorize_and_dispatch(&mut normal_permit, move || async move {
+                observed_dispatches.fetch_add(1, Ordering::SeqCst);
+            })
+            .await
+            .err(),
+        Some(ServingFenceError::AdmissionClosed)
+    );
+    assert_eq!(sealed_dispatches.load(Ordering::SeqCst), 0);
+    wait_for_fence_unlock(&admin, fence_key).await?;
+
+    // Cancelling a command whose database outcome is unknown aborts the actor
+    // and its owned session. The still-live handle cannot wedge the standby.
+    let (cancelled_client, cancelled_driver) =
+        postgres_client_as(&database_url, &runtime_role_name, &runtime_password).await?;
+    let cancelled_fence = PostgresServingFence::acquire(
+        cancelled_client,
+        cancelled_driver,
+        &chain_key_epoch_id,
+        fence_key,
+    )
+    .await?;
+    assert_eq!(cancelled_fence.generation(), 4);
+    let cancelled_operation = DispatchOperationId::from_ulid(Ulid::new());
+    let cancellation_lock = admin.transaction().await?;
+    cancellation_lock
+        .batch_execute("LOCK TABLE relay_state_private.dispatch_permit IN ACCESS EXCLUSIVE MODE")
+        .await?;
+    assert!(tokio::time::timeout(
+        Duration::from_millis(100),
+        cancelled_fence.create_permit(
+            cancelled_operation.clone(),
+            DispatchPermitBudget::new(Duration::from_secs(1))?,
+        ),
+    )
+    .await
+    .is_err());
+    cancellation_lock.rollback().await?;
+    wait_for_fence_unlock(&admin, fence_key).await?;
+    assert_eq!(
+        cancelled_fence.readiness().await,
+        ServingFenceReadiness::Unavailable
+    );
+    let cancelled_row = admin
+        .query_one(
+            "SELECT count(*) AS row_count, \
+                    count(*) FILTER (WHERE completed_at IS NOT NULL \
+                                      OR abandoned_at IS NOT NULL) AS terminal_count \
+             FROM relay_state_private.dispatch_permit \
+             WHERE operation_id = $1",
+            &[&cancelled_operation.as_str()],
+        )
+        .await?;
+    let cancelled_rows: i64 = cancelled_row.try_get("row_count")?;
+    let cancelled_terminal_rows: i64 = cancelled_row.try_get("terminal_count")?;
+    assert!(cancelled_rows <= 1);
+    assert_eq!(cancelled_terminal_rows, 0);
+
+    // A lost dedicated connection closes new authorization immediately. The
+    // next generation cannot open until both the PostgreSQL deadline plus one
+    // second and the non-shortenable local eleven-second barrier have passed.
+    let (hung_client, hung_driver) =
+        postgres_client_as(&database_url, &runtime_role_name, &runtime_password).await?;
+    let hung_driver_abort = hung_driver.abort_handle();
+    let hung_fence = Arc::new(
+        PostgresServingFence::acquire(hung_client, hung_driver, &chain_key_epoch_id, fence_key)
+            .await?,
+    );
+    assert_eq!(hung_fence.generation(), 5);
+    let hung_operation = DispatchOperationId::from_ulid(Ulid::new());
+    let mut hung_permit = hung_fence
+        .create_permit(
+            hung_operation.clone(),
+            DispatchPermitBudget::new(Duration::from_secs(10))?,
+        )
+        .await?;
+    assert_eq!(
+        hung_fence
+            .authorize_and_dispatch(&mut hung_permit, || async { "initial dispatch" })
+            .await?,
+        "initial dispatch"
+    );
+
+    // A slow source call is cancelled at the local permit deadline without
+    // turning one caller's timeout into a deployment-wide fence outage.
+    let mut timed_out_permit = hung_fence
+        .create_permit(
+            DispatchOperationId::from_ulid(Ulid::new()),
+            DispatchPermitBudget::new(Duration::from_secs(1))?,
+        )
+        .await?;
+    let timed_dispatches = Arc::new(AtomicUsize::new(0));
+    let observed_dispatches = Arc::clone(&timed_dispatches);
+    assert_eq!(
+        hung_fence
+            .authorize_and_dispatch(&mut timed_out_permit, move || async move {
+                observed_dispatches.fetch_add(1, Ordering::SeqCst);
+                std::future::pending::<()>().await;
+            })
+            .await
+            .err(),
+        Some(ServingFenceError::PermitExpired)
+    );
+    assert_eq!(timed_dispatches.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        hung_fence
+            .complete_permit(&mut timed_out_permit)
+            .await
+            .err(),
+        Some(ServingFenceError::PermitUncertain)
+    );
+    assert_eq!(hung_fence.readiness().await, ServingFenceReadiness::Ready);
+
+    // Caller/task cancellation after the closure starts likewise invalidates
+    // only that permit. The actor and its advisory-lock session remain live.
+    let cancelled_dispatch_permit = hung_fence
+        .create_permit(
+            DispatchOperationId::from_ulid(Ulid::new()),
+            DispatchPermitBudget::new(Duration::from_secs(1))?,
+        )
+        .await?;
+    let (dispatch_started, started) = tokio::sync::oneshot::channel();
+    let cancelled_dispatch_fence = Arc::clone(&hung_fence);
+    let cancelled_dispatch = tokio::spawn(async move {
+        let mut permit = cancelled_dispatch_permit;
+        cancelled_dispatch_fence
+            .authorize_and_dispatch(&mut permit, move || async move {
+                let _ = dispatch_started.send(());
+                std::future::pending::<()>().await;
+            })
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(3), started).await??;
+    cancelled_dispatch.abort();
+    assert!(cancelled_dispatch
+        .await
+        .expect_err("dispatch task must be cancelled")
+        .is_cancelled());
+    assert_eq!(hung_fence.readiness().await, ServingFenceReadiness::Ready);
+
+    let mut post_cancellation_permit = hung_fence
+        .create_permit(
+            DispatchOperationId::from_ulid(Ulid::new()),
+            DispatchPermitBudget::new(Duration::from_secs(1))?,
+        )
+        .await?;
+    hung_fence
+        .authorize_and_dispatch(&mut post_cancellation_permit, || async {})
+        .await?;
+    assert_eq!(
+        hung_fence
+            .complete_permit(&mut post_cancellation_permit)
+            .await?,
+        PermitCompletionOutcome::Completed
+    );
+
+    // Driver loss while a lazy outbound future is actually pending cancels the
+    // future promptly, drops its resources, marks only the permit uncertain,
+    // closes admission, and releases the advisory lock while this handle lives.
+    let (inflight_began, began) = tokio::sync::oneshot::channel();
+    let abort_driver = tokio::spawn(async move {
+        tokio::time::timeout(Duration::from_secs(3), began)
+            .await
+            .expect("guarded dispatch must start promptly")
+            .expect("guarded dispatch start signal must be delivered");
+        hung_driver_abort.abort();
+    });
+    let closure_drops = Arc::new(AtomicUsize::new(0));
+    let observed_drops = Arc::clone(&closure_drops);
+    let driver_loss_started = Instant::now();
+    assert_eq!(
+        hung_fence
+            .authorize_and_dispatch(&mut hung_permit, move || async move {
+                let _drop_counter = DispatchDropCounter(observed_drops);
+                let _ = inflight_began.send(());
+                std::future::pending::<()>().await;
+            })
+            .await
+            .err(),
+        Some(ServingFenceError::Unavailable)
+    );
+    abort_driver.await?;
+    assert!(driver_loss_started.elapsed() < Duration::from_secs(3));
+    assert_eq!(closure_drops.load(Ordering::SeqCst), 1);
+    assert!(hung_permit.is_uncertain());
+    assert_eq!(
+        hung_fence.readiness().await,
+        ServingFenceReadiness::Unavailable
+    );
+    wait_for_fence_unlock(&admin, fence_key).await?;
+
+    let (takeover_client, takeover_driver) =
+        postgres_client_as(&database_url, &runtime_role_name, &runtime_password).await?;
+    let takeover_started = Instant::now();
+    let takeover_fence = PostgresServingFence::acquire(
+        takeover_client,
+        takeover_driver,
+        &chain_key_epoch_id,
+        fence_key,
+    )
+    .await?;
+    let takeover_elapsed = takeover_started.elapsed();
+    assert!(takeover_elapsed >= Duration::from_secs(11));
+    assert!(takeover_elapsed < Duration::from_secs(30));
+    assert_eq!(takeover_fence.generation(), 6);
+    assert_eq!(
+        takeover_fence
+            .authorize_and_dispatch(&mut hung_permit, || async {
+                panic!("stale permit must not dispatch")
+            })
+            .await
+            .err(),
+        Some(ServingFenceError::StaleGeneration)
+    );
+    let hung_abandoned: bool = admin
+        .query_one(
+            "SELECT abandoned_at IS NOT NULL FROM relay_state_private.dispatch_permit \
+             WHERE operation_id = $1",
+            &[&hung_operation.as_str()],
+        )
+        .await?
+        .try_get(0)?;
+    assert!(hung_abandoned);
+    let mut post_takeover_permit = takeover_fence
+        .create_permit(
+            DispatchOperationId::from_ulid(Ulid::new()),
+            DispatchPermitBudget::new(Duration::from_secs(1))?,
+        )
+        .await?;
+    takeover_fence
+        .authorize_and_dispatch(&mut post_takeover_permit, || async {})
+        .await?;
+    assert_eq!(
+        takeover_fence
+            .complete_permit(&mut post_takeover_permit)
+            .await?,
+        PermitCompletionOutcome::Completed
+    );
+    takeover_fence.release().await?;
+    wait_for_fence_unlock(&admin, fence_key).await?;
+
+    // Restart/failover advances, rather than reusing, the durable generation.
+    let (restart_client, restart_driver) =
+        postgres_client_as(&database_url, &runtime_role_name, &runtime_password).await?;
+    let restart_started = Instant::now();
+    let restart_fence = PostgresServingFence::acquire(
+        restart_client,
+        restart_driver,
+        &chain_key_epoch_id,
+        fence_key,
+    )
+    .await?;
+    assert_eq!(restart_fence.generation(), 7);
+    assert!(restart_started.elapsed() < Duration::from_secs(3));
+    restart_fence.release().await?;
+    wait_for_fence_unlock(&admin, fence_key).await?;
+
     // A direct runtime caller can hold a successful CAS open in an explicit
     // transaction, but the function-owned limits bound both the contender and
     // the idle lock holder. The failed contender can then safely rebuild.
@@ -1128,7 +1850,13 @@ WHERE metadata.singleton = true
     );
     set_role(&admin, &owner_role).await?;
     assert_eq!(
-        install_postgres_state_plane_v1(&mut admin, &runtime_role, &chain_key_epoch_id).await,
+        install_postgres_state_plane_v1(
+            &mut admin,
+            &runtime_role,
+            &chain_key_epoch_id,
+            test_serving_fence_lock_key()
+        )
+        .await,
         Err(StatePlaneInstallError::RuntimeRoleNotIsolated)
     );
     reset_role(&admin).await?;
@@ -1197,7 +1925,13 @@ WHERE metadata.singleton = true
     );
     set_role(&admin, &owner_role).await?;
     assert_eq!(
-        install_postgres_state_plane_v1(&mut admin, &runtime_role, &chain_key_epoch_id).await,
+        install_postgres_state_plane_v1(
+            &mut admin,
+            &runtime_role,
+            &chain_key_epoch_id,
+            test_serving_fence_lock_key()
+        )
+        .await,
         Err(StatePlaneInstallError::CapabilityDrift)
     );
     reset_role(&admin).await?;
@@ -1229,7 +1963,13 @@ ALTER TABLE relay_state_private.state_plane_metadata
     );
     set_role(&admin, &owner_role).await?;
     assert_eq!(
-        install_postgres_state_plane_v1(&mut admin, &runtime_role, &chain_key_epoch_id).await,
+        install_postgres_state_plane_v1(
+            &mut admin,
+            &runtime_role,
+            &chain_key_epoch_id,
+            test_serving_fence_lock_key()
+        )
+        .await,
         Err(StatePlaneInstallError::CapabilityDrift)
     );
     reset_role(&admin).await?;
@@ -1505,7 +2245,13 @@ GRANT EXECUTE ON FUNCTION relay_state_api.audit_readiness_v1(text) TO {runtime};
     );
     set_role(&admin, &owner_role).await?;
     assert_eq!(
-        install_postgres_state_plane_v1(&mut admin, &runtime_role, &chain_key_epoch_id).await,
+        install_postgres_state_plane_v1(
+            &mut admin,
+            &runtime_role,
+            &chain_key_epoch_id,
+            test_serving_fence_lock_key()
+        )
+        .await,
         Err(StatePlaneInstallError::CapabilityDrift)
     );
     reset_role(&admin).await?;
@@ -1595,7 +2341,13 @@ async fn postgres_state_plane_rejects_prepared_transaction_capability(
     let chain_key_epoch_id = AuditChainKeyEpochId::parse("prepared-rejection-epoch")?;
     set_role(&admin, &owner_role).await?;
     assert_eq!(
-        install_postgres_state_plane_v1(&mut admin, &runtime_role, &chain_key_epoch_id).await,
+        install_postgres_state_plane_v1(
+            &mut admin,
+            &runtime_role,
+            &chain_key_epoch_id,
+            test_serving_fence_lock_key()
+        )
+        .await,
         Err(StatePlaneInstallError::UnsafeDatabaseConfiguration)
     );
 
@@ -1714,7 +2466,13 @@ async fn postgres_state_plane_rejects_unsafe_wal_durability(
     let chain_key_epoch_id = AuditChainKeyEpochId::parse("unsafe-durability-epoch")?;
     set_role(&admin, &owner_role).await?;
     assert_eq!(
-        install_postgres_state_plane_v1(&mut admin, &runtime_role, &chain_key_epoch_id).await,
+        install_postgres_state_plane_v1(
+            &mut admin,
+            &runtime_role,
+            &chain_key_epoch_id,
+            test_serving_fence_lock_key()
+        )
+        .await,
         Err(StatePlaneInstallError::UnsafeDatabaseConfiguration)
     );
     seed_catalog_for_unsafe_restart(&admin, &runtime_role_name, &chain_key_epoch_id).await?;

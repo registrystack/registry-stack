@@ -11,6 +11,7 @@
 //! readiness, fencing/quota, and this durable sink before any route can use it.
 
 mod audit;
+mod fence;
 mod migration;
 
 #[cfg(test)]
@@ -20,8 +21,12 @@ pub(crate) use audit::{
     CompletionAttemptReference, PostgresDurableAuditStatePlane, StatePlaneInitializationError,
     StatePlaneReadiness,
 };
+pub(crate) use fence::{
+    DispatchOperationId, DispatchPermit, DispatchPermitBudget, PermitCompletionOutcome,
+    PostgresServingFence, ServingFenceError, ServingFenceLockKey, ServingFenceReadiness,
+};
 pub(crate) use migration::{
     install_postgres_state_plane_v1, AuditChainKeyEpochId, RuntimeDatabaseRole,
     StatePlaneInstallError, DURABLE_AUDIT_CAPABILITY_V1, POSTGRES_STATE_PLANE_MIGRATION_V1,
-    STATE_PLANE_SCHEMA_FINGERPRINT_V1,
+    SERVING_FENCE_CAPABILITY_V1, STATE_PLANE_SCHEMA_FINGERPRINT_V1,
 };

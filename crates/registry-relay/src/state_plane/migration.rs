@@ -6,28 +6,31 @@ use std::fmt;
 use thiserror::Error;
 use tokio_postgres::{Client, GenericClient, Row, Transaction};
 
+use super::fence::ServingFenceLockKey;
+
 pub(crate) const DURABLE_AUDIT_CAPABILITY_V1: &str = "registry.relay.postgres-durable-audit/v1";
+pub(crate) const SERVING_FENCE_CAPABILITY_V1: &str = "registry.relay.postgres-serving-fence/v1";
 pub(crate) const STATE_PLANE_SCHEMA_VERSION_V1: i32 = 1;
 pub(crate) const STATE_PLANE_SCHEMA_FINGERPRINT_V1: &str =
-    "sha256:b6f6e75e0f3d5c7a4bc6bc202d890938fc83ff6459f18e0e3afa8487f0c09524";
+    "sha256:bd1058dd6010b0b2e6f27200149bbc488b54a0516178def93a04b3a380144418";
 
-const MIGRATION_ADVISORY_LOCK_KEY_V1: i64 = 7_221_091_440;
+pub(super) const MIGRATION_ADVISORY_LOCK_KEY_V1: i64 = 7_221_091_440;
 const SUPPORTED_POSTGRES_MIN_MAJOR: i32 = 16;
 const SUPPORTED_POSTGRES_MAX_MAJOR: i32 = 18;
 
 // Filled from the semantic catalog descriptor below on disposable supported
 // PostgreSQL majors. Constraint rendering is explicitly versioned because
 // pg_get_constraintdef is not a cross-major wire contract.
-const CONSTRAINT_FINGERPRINT_PG16: &str = "9b49af03f0b29828205001fa9206d95f";
-const CONSTRAINT_FINGERPRINT_PG17: &str = "9b49af03f0b29828205001fa9206d95f";
-const CONSTRAINT_FINGERPRINT_PG18: &str = "94fe0ac2923d35f0788aa6eabfc96f6f";
-const COLUMN_FINGERPRINT_PG16: &str = "41221d50a8e0dbe3164641ce8473f903";
-const COLUMN_FINGERPRINT_PG17: &str = "41221d50a8e0dbe3164641ce8473f903";
-const COLUMN_FINGERPRINT_PG18: &str = "41221d50a8e0dbe3164641ce8473f903";
-const FUNCTION_FINGERPRINT_PG16: &str = "92645f155989302a3a217c10fd1040c9";
-const FUNCTION_FINGERPRINT_PG17: &str = "92645f155989302a3a217c10fd1040c9";
-const FUNCTION_FINGERPRINT_PG18: &str = "92645f155989302a3a217c10fd1040c9";
-const CAPABILITY_HELPER_BODY_FINGERPRINT_V1: &str = "32a9d69fb72feeab5e3ec523db9dac8c";
+const CONSTRAINT_FINGERPRINT_PG16: &str = "22a9c0e13067bbc7210faff7d5ca840c";
+const CONSTRAINT_FINGERPRINT_PG17: &str = "22a9c0e13067bbc7210faff7d5ca840c";
+const CONSTRAINT_FINGERPRINT_PG18: &str = "a12595e348f0730b0e72d376246cc8a7";
+const COLUMN_FINGERPRINT_PG16: &str = "d609ba7f07d479944391a6a2e2fbc356";
+const COLUMN_FINGERPRINT_PG17: &str = "d609ba7f07d479944391a6a2e2fbc356";
+const COLUMN_FINGERPRINT_PG18: &str = "d609ba7f07d479944391a6a2e2fbc356";
+const FUNCTION_FINGERPRINT_PG16: &str = "bda2c51bcd31a82ad8e81cf3d0e4b346";
+const FUNCTION_FINGERPRINT_PG17: &str = "bda2c51bcd31a82ad8e81cf3d0e4b346";
+const FUNCTION_FINGERPRINT_PG18: &str = "bda2c51bcd31a82ad8e81cf3d0e4b346";
+const CAPABILITY_HELPER_BODY_FINGERPRINT_V1: &str = "287f29327b683efbf1a8c582a35e67fe";
 
 /// Runtime-forceable session semantics. Server/SUSET state that the runtime
 /// cannot safely repair is rejected by the attested SQL capability instead.
@@ -67,6 +70,8 @@ CREATE TABLE IF NOT EXISTS relay_state_private.state_plane_metadata (
     owner_role_oid oid NOT NULL,
     runtime_role_oid oid NOT NULL,
     chain_key_epoch_id text NOT NULL,
+    serving_fence_capability_id text NOT NULL,
+    serving_fence_lock_key bigint NOT NULL,
     installed_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     CONSTRAINT state_plane_metadata_pk PRIMARY KEY (singleton),
     CONSTRAINT state_plane_metadata_singleton_check CHECK (singleton),
@@ -76,7 +81,7 @@ CREATE TABLE IF NOT EXISTS relay_state_private.state_plane_metadata (
     ),
     CONSTRAINT state_plane_metadata_fingerprint_check CHECK (
         capability_fingerprint =
-        'sha256:b6f6e75e0f3d5c7a4bc6bc202d890938fc83ff6459f18e0e3afa8487f0c09524'
+        'sha256:bd1058dd6010b0b2e6f27200149bbc488b54a0516178def93a04b3a380144418'
     ),
     CONSTRAINT state_plane_metadata_roles_distinct_check CHECK (
         owner_role_oid <> runtime_role_oid
@@ -84,6 +89,12 @@ CREATE TABLE IF NOT EXISTS relay_state_private.state_plane_metadata (
     CONSTRAINT state_plane_metadata_chain_epoch_check CHECK (
         octet_length(chain_key_epoch_id) BETWEEN 1 AND 64
         AND chain_key_epoch_id ~ '^[A-Za-z0-9][A-Za-z0-9._:-]*$'
+    ),
+    CONSTRAINT state_plane_metadata_fence_capability_check CHECK (
+        serving_fence_capability_id = 'registry.relay.postgres-serving-fence/v1'
+    ),
+    CONSTRAINT state_plane_metadata_fence_lock_key_check CHECK (
+        serving_fence_lock_key <> 0 AND serving_fence_lock_key <> 7221091440
     )
 );
 
@@ -185,9 +196,85 @@ CREATE TABLE IF NOT EXISTS relay_state_private.audit_phase (
     )
 );
 
+CREATE TABLE IF NOT EXISTS relay_state_private.serving_fence_state (
+    singleton boolean NOT NULL DEFAULT true,
+    generation bigint NOT NULL DEFAULT 0,
+    holder_id text NULL,
+    holder_backend_pid integer NULL,
+    acquired_at timestamptz NULL,
+    takeover_pending boolean NOT NULL DEFAULT false,
+    takeover_pg_not_before timestamptz NULL,
+    admission_open boolean NOT NULL DEFAULT false,
+    CONSTRAINT serving_fence_state_pk PRIMARY KEY (singleton),
+    CONSTRAINT serving_fence_state_singleton_check CHECK (singleton),
+    CONSTRAINT serving_fence_state_generation_check CHECK (generation >= 0),
+    CONSTRAINT serving_fence_state_holder_id_check CHECK (
+        holder_id IS NULL OR holder_id ~ '^[0-7][0-9A-HJKMNP-TV-Z]{25}$'
+    ),
+    CONSTRAINT serving_fence_state_shape_check CHECK (
+        (
+            generation = 0
+            AND holder_id IS NULL
+            AND holder_backend_pid IS NULL
+            AND acquired_at IS NULL
+            AND NOT takeover_pending
+            AND takeover_pg_not_before IS NULL
+            AND NOT admission_open
+        )
+        OR
+        (
+            generation > 0
+            AND holder_id IS NOT NULL
+            AND holder_backend_pid IS NOT NULL
+            AND holder_backend_pid > 0
+            AND acquired_at IS NOT NULL
+            AND (takeover_pending = (takeover_pg_not_before IS NOT NULL))
+            AND NOT (takeover_pending AND admission_open)
+        )
+    )
+);
+INSERT INTO relay_state_private.serving_fence_state (
+    singleton, generation, takeover_pending, admission_open
+) VALUES (true, 0, false, false)
+ON CONFLICT (singleton) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS relay_state_private.dispatch_permit (
+    operation_id text NOT NULL,
+    fence_generation bigint NOT NULL,
+    holder_id text NOT NULL,
+    budget_ms integer NOT NULL,
+    created_at timestamptz NOT NULL,
+    deadline_at timestamptz NOT NULL,
+    completed_at timestamptz NULL,
+    abandoned_at timestamptz NULL,
+    CONSTRAINT dispatch_permit_pk PRIMARY KEY (operation_id),
+    CONSTRAINT dispatch_permit_operation_id_check CHECK (
+        operation_id ~ '^[0-7][0-9A-HJKMNP-TV-Z]{25}$'
+    ),
+    CONSTRAINT dispatch_permit_generation_check CHECK (fence_generation > 0),
+    CONSTRAINT dispatch_permit_holder_id_check CHECK (
+        holder_id ~ '^[0-7][0-9A-HJKMNP-TV-Z]{25}$'
+    ),
+    CONSTRAINT dispatch_permit_budget_check CHECK (budget_ms BETWEEN 1 AND 10000),
+    CONSTRAINT dispatch_permit_deadline_check CHECK (
+        deadline_at = created_at + budget_ms * interval '1 millisecond'
+    ),
+    CONSTRAINT dispatch_permit_terminal_time_check CHECK (
+        (completed_at IS NULL OR completed_at >= created_at)
+        AND (abandoned_at IS NULL OR abandoned_at >= created_at)
+        AND NOT (completed_at IS NOT NULL AND abandoned_at IS NOT NULL)
+    )
+);
+CREATE INDEX IF NOT EXISTS dispatch_permit_takeover_idx
+ON relay_state_private.dispatch_permit (
+    fence_generation, completed_at, abandoned_at, deadline_at
+);
+
 ALTER TABLE relay_state_private.state_plane_metadata OWNER TO CURRENT_USER;
 ALTER TABLE relay_state_private.audit_chain_head OWNER TO CURRENT_USER;
 ALTER TABLE relay_state_private.audit_phase OWNER TO CURRENT_USER;
+ALTER TABLE relay_state_private.serving_fence_state OWNER TO CURRENT_USER;
+ALTER TABLE relay_state_private.dispatch_permit OWNER TO CURRENT_USER;
 REVOKE ALL ON ALL TABLES IN SCHEMA relay_state_private FROM PUBLIC;
 REVOKE ALL ON ALL SEQUENCES IN SCHEMA relay_state_private FROM PUBLIC;
 ALTER DEFAULT PRIVILEGES IN SCHEMA relay_state_private REVOKE ALL ON TABLES FROM PUBLIC;
@@ -209,7 +296,10 @@ WITH metadata AS (
       AND schema_version = 1
       AND capability_id = 'registry.relay.postgres-durable-audit/v1'
       AND capability_fingerprint =
-        'sha256:b6f6e75e0f3d5c7a4bc6bc202d890938fc83ff6459f18e0e3afa8487f0c09524'
+        'sha256:bd1058dd6010b0b2e6f27200149bbc488b54a0516178def93a04b3a380144418'
+      AND serving_fence_capability_id = 'registry.relay.postgres-serving-fence/v1'
+      AND serving_fence_lock_key <> 0
+      AND serving_fence_lock_key <> 7221091440
 ),
 target_schemas AS (
     SELECT namespace.oid, namespace.nspname, namespace.nspowner, namespace.nspacl
@@ -238,6 +328,7 @@ target_indexes AS (
            index_row.indcheckxmin, index_row.indisready,
            index_row.indislive, index_row.indisreplident,
            index_row.indnullsnotdistinct,
+           pg_catalog.pg_get_indexdef(index_relation.oid) AS index_definition,
            index_row.indexprs IS NULL AS expression_free,
            index_row.indpred IS NULL AS predicate_free,
            EXISTS (
@@ -256,7 +347,8 @@ target_indexes AS (
     JOIN pg_catalog.pg_am AS access_method ON access_method.oid = index_relation.relam
     WHERE namespace.nspname = 'relay_state_private'
       AND table_relation.relname IN (
-          'state_plane_metadata', 'audit_chain_head', 'audit_phase'
+          'state_plane_metadata', 'audit_chain_head', 'audit_phase',
+          'serving_fence_state', 'dispatch_permit'
       )
 ),
 target_triggers AS (
@@ -269,7 +361,8 @@ target_triggers AS (
       ON constraint_row.oid = trigger_row.tgconstraint
     WHERE namespace.nspname = 'relay_state_private'
       AND relation.relname IN (
-          'state_plane_metadata', 'audit_chain_head', 'audit_phase'
+          'state_plane_metadata', 'audit_chain_head', 'audit_phase',
+          'serving_fence_state', 'dispatch_permit'
       )
 ),
 target_rules AS (
@@ -279,7 +372,8 @@ target_rules AS (
     JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = relation.relnamespace
     WHERE namespace.nspname = 'relay_state_private'
       AND relation.relname IN (
-          'state_plane_metadata', 'audit_chain_head', 'audit_phase'
+          'state_plane_metadata', 'audit_chain_head', 'audit_phase',
+          'serving_fence_state', 'dispatch_permit'
       )
 ),
 target_policies AS (
@@ -289,7 +383,8 @@ target_policies AS (
     JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = relation.relnamespace
     WHERE namespace.nspname = 'relay_state_private'
       AND relation.relname IN (
-          'state_plane_metadata', 'audit_chain_head', 'audit_phase'
+          'state_plane_metadata', 'audit_chain_head', 'audit_phase',
+          'serving_fence_state', 'dispatch_permit'
       )
 ),
 target_functions AS (
@@ -434,7 +529,7 @@ SELECT
         SELECT 1 FROM target_schemas, metadata
         WHERE target_schemas.nspowner <> metadata.owner_role_oid
     )
-    AND (SELECT count(*) = 3 FROM target_relations)
+    AND (SELECT count(*) = 5 FROM target_relations)
     AND NOT EXISTS (
         SELECT 1 FROM target_relations, metadata
         WHERE target_relations.nspname <> 'relay_state_private'
@@ -446,17 +541,17 @@ SELECT
            OR target_relations.relispartition
            OR target_relations.amname IS DISTINCT FROM 'heap'
            OR target_relations.relname NOT IN (
-               'state_plane_metadata', 'audit_chain_head', 'audit_phase'
+               'state_plane_metadata', 'audit_chain_head', 'audit_phase',
+               'serving_fence_state', 'dispatch_permit'
            )
     )
-    AND (SELECT count(*) = 5 FROM target_indexes)
+    AND (SELECT count(*) = 8 FROM target_indexes)
     AND NOT EXISTS (
         SELECT 1 FROM target_indexes, metadata
         WHERE target_indexes.relowner <> metadata.owner_role_oid
            OR target_indexes.relpersistence <> 'p'
            OR target_indexes.reloptions IS NOT NULL
            OR target_indexes.amname <> 'btree'
-           OR NOT target_indexes.indisunique
            OR target_indexes.indisexclusion
            OR NOT target_indexes.indimmediate
            OR target_indexes.indisclustered
@@ -468,15 +563,34 @@ SELECT
            OR target_indexes.indnullsnotdistinct
            OR NOT target_indexes.expression_free
            OR NOT target_indexes.predicate_free
-           OR NOT target_indexes.constraint_backed
            OR target_indexes.index_name NOT IN (
                'state_plane_metadata_pk', 'audit_chain_head_pk', 'audit_phase_pk',
                'audit_phase_envelope_id_unique',
-               'audit_phase_stored_identity_unique'
+               'audit_phase_stored_identity_unique',
+               'serving_fence_state_pk', 'dispatch_permit_pk',
+               'dispatch_permit_takeover_idx'
+           )
+           OR NOT (
+               (target_indexes.table_name = 'state_plane_metadata'
+                AND target_indexes.index_name = 'state_plane_metadata_pk')
+               OR (target_indexes.table_name = 'audit_chain_head'
+                   AND target_indexes.index_name = 'audit_chain_head_pk')
+               OR (target_indexes.table_name = 'audit_phase'
+                   AND target_indexes.index_name IN (
+                       'audit_phase_pk', 'audit_phase_envelope_id_unique',
+                       'audit_phase_stored_identity_unique'
+                   ))
+               OR (target_indexes.table_name = 'serving_fence_state'
+                   AND target_indexes.index_name = 'serving_fence_state_pk')
+               OR (target_indexes.table_name = 'dispatch_permit'
+                   AND target_indexes.index_name IN (
+                       'dispatch_permit_pk', 'dispatch_permit_takeover_idx'
+                   ))
            )
            OR (
                target_indexes.index_name IN (
-                   'state_plane_metadata_pk', 'audit_chain_head_pk', 'audit_phase_pk'
+                   'state_plane_metadata_pk', 'audit_chain_head_pk', 'audit_phase_pk',
+                   'serving_fence_state_pk', 'dispatch_permit_pk'
                ) AND NOT target_indexes.indisprimary
            )
            OR (
@@ -484,6 +598,20 @@ SELECT
                    'audit_phase_envelope_id_unique',
                    'audit_phase_stored_identity_unique'
                ) AND target_indexes.indisprimary
+           )
+           OR (
+               target_indexes.index_name = 'dispatch_permit_takeover_idx'
+               AND (
+                   target_indexes.indisunique
+                   OR target_indexes.indisprimary
+                   OR target_indexes.constraint_backed
+                   OR target_indexes.index_definition <>
+                       'CREATE INDEX dispatch_permit_takeover_idx ON relay_state_private.dispatch_permit USING btree (fence_generation, completed_at, abandoned_at, deadline_at)'
+               )
+           )
+           OR (
+               target_indexes.index_name <> 'dispatch_permit_takeover_idx'
+               AND (NOT target_indexes.indisunique OR NOT target_indexes.constraint_backed)
            )
     )
     AND (SELECT count(*) = 4 FROM target_triggers)
@@ -496,7 +624,7 @@ SELECT
     )
     AND NOT EXISTS (SELECT 1 FROM target_rules)
     AND NOT EXISTS (SELECT 1 FROM target_policies)
-    AND (SELECT count(*) = 4 FROM target_functions)
+    AND (SELECT count(*) = 11 FROM target_functions)
     AND NOT EXISTS (
         SELECT 1 FROM target_functions, metadata
         WHERE target_functions.proowner <> metadata.owner_role_oid
@@ -515,8 +643,12 @@ SELECT
                         AND NOT target_functions.prosecdef
                         AND target_functions.lanname = 'sql'))
            OR (target_functions.nspname = 'relay_state_api'
-               AND NOT (target_functions.proname IN (
-                            'audit_phase_snapshot_v1', 'audit_phase_cas_v1', 'audit_readiness_v1'
+                       AND NOT (target_functions.proname IN (
+                            'audit_phase_snapshot_v1', 'audit_phase_cas_v1', 'audit_readiness_v1',
+                            'serving_fence_acquire_v1', 'serving_fence_finalize_v1',
+                            'serving_fence_status_v1', 'dispatch_permit_create_v1',
+                            'dispatch_permit_authorize_v1', 'dispatch_permit_complete_v1',
+                            'serving_fence_release_v1'
                        )
                         AND target_functions.prosecdef
                         AND target_functions.lanname = 'plpgsql'))
@@ -540,7 +672,7 @@ SELECT
            )
     )
     AND (SELECT count(*) FROM table_acl) = (
-        SELECT 3 * count(*) FROM metadata
+        SELECT 5 * count(*) FROM metadata
         CROSS JOIN LATERAL pg_catalog.aclexplode(
             pg_catalog.acldefault('r', metadata.owner_role_oid)
         ) AS expected_acl
@@ -555,7 +687,7 @@ SELECT
                'REFERENCES', 'TRIGGER', 'MAINTAIN'
            )
     )
-    AND (SELECT count(*) = 7 FROM function_acl)
+    AND (SELECT count(*) = 21 FROM function_acl)
     AND NOT EXISTS (
         SELECT 1 FROM function_acl, metadata
         WHERE function_acl.grantor <> metadata.owner_role_oid
@@ -571,19 +703,19 @@ SELECT
            )
     )
     AND (SELECT value = CASE server.major
-            WHEN 16 THEN '9b49af03f0b29828205001fa9206d95f'
-            WHEN 17 THEN '9b49af03f0b29828205001fa9206d95f'
-            WHEN 18 THEN '94fe0ac2923d35f0788aa6eabfc96f6f'
+            WHEN 16 THEN '22a9c0e13067bbc7210faff7d5ca840c'
+            WHEN 17 THEN '22a9c0e13067bbc7210faff7d5ca840c'
+            WHEN 18 THEN 'a12595e348f0730b0e72d376246cc8a7'
             ELSE '' END FROM constraint_fingerprint, server)
     AND (SELECT value = CASE server.major
-            WHEN 16 THEN '41221d50a8e0dbe3164641ce8473f903'
-            WHEN 17 THEN '41221d50a8e0dbe3164641ce8473f903'
-            WHEN 18 THEN '41221d50a8e0dbe3164641ce8473f903'
+            WHEN 16 THEN 'd609ba7f07d479944391a6a2e2fbc356'
+            WHEN 17 THEN 'd609ba7f07d479944391a6a2e2fbc356'
+            WHEN 18 THEN 'd609ba7f07d479944391a6a2e2fbc356'
             ELSE '' END FROM column_fingerprint, server)
     AND (SELECT value = CASE server.major
-            WHEN 16 THEN '92645f155989302a3a217c10fd1040c9'
-            WHEN 17 THEN '92645f155989302a3a217c10fd1040c9'
-            WHEN 18 THEN '92645f155989302a3a217c10fd1040c9'
+            WHEN 16 THEN 'bda2c51bcd31a82ad8e81cf3d0e4b346'
+            WHEN 17 THEN 'bda2c51bcd31a82ad8e81cf3d0e4b346'
+            WHEN 18 THEN 'bda2c51bcd31a82ad8e81cf3d0e4b346'
             ELSE '' END FROM function_fingerprint, server);
 $function$;
 
@@ -974,6 +1106,629 @@ BEGIN
 END;
 $function$;
 
+CREATE OR REPLACE FUNCTION relay_state_api.serving_fence_acquire_v1(
+    p_lock_key bigint,
+    p_holder_id text
+)
+RETURNS TABLE (
+    outcome text,
+    fence_generation bigint,
+    holder_id text,
+    lock_key bigint,
+    takeover_required boolean,
+    admission_open boolean
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, relay_state_private
+SET lock_timeout = '2s'
+SET statement_timeout = '5s'
+SET idle_in_transaction_session_timeout = '5s'
+SET synchronous_commit = 'on'
+AS $function$
+DECLARE
+    v_runtime_oid oid;
+    v_session_oid oid;
+    v_lock_acquired boolean := false;
+    v_prior_barrier timestamptz;
+    v_takeover_required boolean;
+    v_generation bigint;
+    v_admission_open boolean;
+BEGIN
+    PERFORM set_config('lock_timeout', '2s', false);
+    PERFORM set_config('statement_timeout', '5s', false);
+    PERFORM set_config('idle_in_transaction_session_timeout', '5s', false);
+    PERFORM set_config('synchronous_commit', 'on', false);
+    SELECT metadata.runtime_role_oid INTO v_runtime_oid
+    FROM relay_state_private.state_plane_metadata AS metadata
+    WHERE metadata.singleton = true;
+    SELECT oid INTO v_session_oid FROM pg_catalog.pg_roles WHERE rolname = session_user;
+    IF v_session_oid IS DISTINCT FROM v_runtime_oid THEN
+        RAISE EXCEPTION 'serving fence caller is not bound' USING ERRCODE = '42501';
+    END IF;
+    IF NOT relay_state_private.capability_valid_v1() THEN
+        RAISE EXCEPTION 'serving fence capability unavailable' USING ERRCODE = '55000';
+    END IF;
+    IF p_lock_key IS NULL OR p_holder_id IS NULL
+       OR p_holder_id !~ '^[0-7][0-9A-HJKMNP-TV-Z]{25}$'
+       OR NOT EXISTS (
+           SELECT 1 FROM relay_state_private.state_plane_metadata AS metadata
+           WHERE metadata.singleton = true
+             AND metadata.serving_fence_capability_id =
+                 'registry.relay.postgres-serving-fence/v1'
+             AND metadata.serving_fence_lock_key = p_lock_key
+       )
+    THEN
+        RAISE EXCEPTION 'invalid serving fence acquisition' USING ERRCODE = '22023';
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM pg_catalog.pg_locks AS lock_row
+        WHERE lock_row.locktype = 'advisory'
+          AND lock_row.pid = pg_catalog.pg_backend_pid()
+          AND lock_row.database = (
+              SELECT database_row.oid FROM pg_catalog.pg_database AS database_row
+              WHERE database_row.datname = current_database()
+          )
+          AND lock_row.classid::bigint = ((p_lock_key >> 32) & 4294967295)
+          AND lock_row.objid::bigint = (p_lock_key & 4294967295)
+          AND lock_row.objsubid = 1
+          AND lock_row.granted
+    ) THEN
+        RAISE EXCEPTION 'serving fence session already owns the lock'
+            USING ERRCODE = '55000';
+    END IF;
+
+    SELECT pg_catalog.pg_try_advisory_lock(p_lock_key) INTO v_lock_acquired;
+    IF NOT v_lock_acquired THEN
+        RETURN QUERY SELECT 'contended'::text, NULL::bigint, NULL::text,
+            p_lock_key, NULL::boolean, false;
+        RETURN;
+    END IF;
+
+    BEGIN
+        SELECT max(permit.deadline_at + interval '1 second')
+        INTO v_prior_barrier
+        FROM relay_state_private.dispatch_permit AS permit
+        WHERE permit.completed_at IS NULL AND permit.abandoned_at IS NULL;
+        v_takeover_required := v_prior_barrier IS NOT NULL;
+        v_admission_open := NOT v_takeover_required;
+        UPDATE relay_state_private.serving_fence_state AS fence
+        SET generation = fence.generation + 1,
+            holder_id = p_holder_id,
+            holder_backend_pid = pg_catalog.pg_backend_pid(),
+            acquired_at = clock_timestamp(),
+            takeover_pending = v_takeover_required,
+            takeover_pg_not_before = v_prior_barrier,
+            admission_open = v_admission_open
+        WHERE fence.singleton = true
+        RETURNING fence.generation INTO v_generation;
+        IF NOT FOUND OR v_generation <= 0 THEN
+            RAISE EXCEPTION 'serving fence state is unavailable' USING ERRCODE = '55000';
+        END IF;
+        RETURN QUERY SELECT 'acquired'::text, v_generation, p_holder_id,
+            p_lock_key, v_takeover_required, v_admission_open;
+    EXCEPTION WHEN OTHERS THEN
+        PERFORM pg_catalog.pg_advisory_unlock(p_lock_key);
+        RAISE;
+    END;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION relay_state_api.serving_fence_finalize_v1(
+    p_lock_key bigint,
+    p_holder_id text,
+    p_fence_generation bigint
+)
+RETURNS TABLE (
+    outcome text,
+    remaining_ms bigint,
+    abandoned_count bigint
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, relay_state_private
+SET lock_timeout = '2s'
+SET statement_timeout = '5s'
+SET idle_in_transaction_session_timeout = '5s'
+SET synchronous_commit = 'on'
+AS $function$
+DECLARE
+    v_runtime_oid oid;
+    v_session_oid oid;
+    v_now timestamptz := clock_timestamp();
+    v_pending boolean;
+    v_barrier timestamptz;
+    v_open boolean;
+    v_abandoned bigint := 0;
+BEGIN
+    PERFORM set_config('lock_timeout', '2s', false);
+    PERFORM set_config('statement_timeout', '5s', false);
+    PERFORM set_config('idle_in_transaction_session_timeout', '5s', false);
+    PERFORM set_config('synchronous_commit', 'on', false);
+    SELECT metadata.runtime_role_oid INTO v_runtime_oid
+    FROM relay_state_private.state_plane_metadata AS metadata
+    WHERE metadata.singleton = true;
+    SELECT oid INTO v_session_oid FROM pg_catalog.pg_roles WHERE rolname = session_user;
+    IF v_session_oid IS DISTINCT FROM v_runtime_oid THEN
+        RAISE EXCEPTION 'serving fence caller is not bound' USING ERRCODE = '42501';
+    END IF;
+    IF NOT relay_state_private.capability_valid_v1() THEN
+        RAISE EXCEPTION 'serving fence capability unavailable' USING ERRCODE = '55000';
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_locks AS lock_row
+        WHERE lock_row.locktype = 'advisory'
+          AND lock_row.pid = pg_catalog.pg_backend_pid()
+          AND lock_row.database = (
+              SELECT database_row.oid FROM pg_catalog.pg_database AS database_row
+              WHERE database_row.datname = current_database()
+          )
+          AND lock_row.classid::bigint = ((p_lock_key >> 32) & 4294967295)
+          AND lock_row.objid::bigint = (p_lock_key & 4294967295)
+          AND lock_row.objsubid = 1
+          AND lock_row.granted
+    ) OR NOT EXISTS (
+        SELECT 1 FROM relay_state_private.serving_fence_state AS fence
+        JOIN relay_state_private.state_plane_metadata AS metadata
+          ON metadata.singleton = true
+        WHERE fence.singleton = true
+          AND fence.generation = p_fence_generation
+          AND fence.holder_id = p_holder_id
+          AND fence.holder_backend_pid = pg_catalog.pg_backend_pid()
+          AND metadata.serving_fence_lock_key = p_lock_key
+    ) THEN
+        RETURN QUERY SELECT 'ownership_lost'::text, NULL::bigint, NULL::bigint;
+        RETURN;
+    END IF;
+    SELECT fence.takeover_pending, fence.takeover_pg_not_before, fence.admission_open
+    INTO v_pending, v_barrier, v_open
+    FROM relay_state_private.serving_fence_state AS fence
+    WHERE fence.singleton = true;
+    IF v_open AND NOT v_pending THEN
+        RETURN QUERY SELECT 'opened'::text, 0::bigint, 0::bigint;
+        RETURN;
+    END IF;
+    IF NOT v_pending OR v_barrier IS NULL THEN
+        RETURN QUERY SELECT 'ownership_lost'::text, NULL::bigint, NULL::bigint;
+        RETURN;
+    END IF;
+    IF v_now < v_barrier THEN
+        RETURN QUERY SELECT 'barrier_pending'::text,
+            greatest(1::bigint, ceil(extract(epoch FROM (v_barrier - v_now)) * 1000)::bigint),
+            0::bigint;
+        RETURN;
+    END IF;
+    UPDATE relay_state_private.dispatch_permit AS permit
+    SET abandoned_at = v_now
+    WHERE permit.fence_generation < p_fence_generation
+      AND permit.completed_at IS NULL AND permit.abandoned_at IS NULL;
+    GET DIAGNOSTICS v_abandoned = ROW_COUNT;
+    UPDATE relay_state_private.serving_fence_state AS fence
+    SET takeover_pending = false,
+        takeover_pg_not_before = NULL,
+        admission_open = true
+    WHERE fence.singleton = true
+      AND fence.generation = p_fence_generation
+      AND fence.holder_id = p_holder_id
+      AND fence.holder_backend_pid = pg_catalog.pg_backend_pid();
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'serving fence ownership changed' USING ERRCODE = '55000';
+    END IF;
+    RETURN QUERY SELECT 'opened'::text, 0::bigint, v_abandoned;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION relay_state_api.serving_fence_status_v1(
+    p_lock_key bigint,
+    p_holder_id text,
+    p_fence_generation bigint
+)
+RETURNS TABLE (outcome text)
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, relay_state_private
+SET lock_timeout = '2s'
+SET statement_timeout = '5s'
+SET idle_in_transaction_session_timeout = '5s'
+SET synchronous_commit = 'on'
+AS $function$
+DECLARE
+    v_runtime_oid oid;
+    v_session_oid oid;
+BEGIN
+    PERFORM set_config('lock_timeout', '2s', false);
+    PERFORM set_config('statement_timeout', '5s', false);
+    PERFORM set_config('idle_in_transaction_session_timeout', '5s', false);
+    PERFORM set_config('synchronous_commit', 'on', false);
+    SELECT metadata.runtime_role_oid INTO v_runtime_oid
+    FROM relay_state_private.state_plane_metadata AS metadata
+    WHERE metadata.singleton = true;
+    SELECT oid INTO v_session_oid FROM pg_catalog.pg_roles WHERE rolname = session_user;
+    IF v_session_oid IS DISTINCT FROM v_runtime_oid THEN
+        RAISE EXCEPTION 'serving fence caller is not bound' USING ERRCODE = '42501';
+    END IF;
+    IF NOT relay_state_private.capability_valid_v1() THEN
+        RETURN QUERY SELECT 'ownership_lost'::text;
+        RETURN;
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM relay_state_private.serving_fence_state AS fence
+        JOIN relay_state_private.state_plane_metadata AS metadata
+          ON metadata.singleton = true
+        WHERE fence.singleton = true
+          AND fence.generation = p_fence_generation
+          AND fence.holder_id = p_holder_id
+          AND fence.holder_backend_pid = pg_catalog.pg_backend_pid()
+          AND fence.admission_open AND NOT fence.takeover_pending
+          AND metadata.serving_fence_lock_key = p_lock_key
+    ) AND EXISTS (
+        SELECT 1 FROM pg_catalog.pg_locks AS lock_row
+        WHERE lock_row.locktype = 'advisory'
+          AND lock_row.pid = pg_catalog.pg_backend_pid()
+          AND lock_row.database = (
+              SELECT database_row.oid FROM pg_catalog.pg_database AS database_row
+              WHERE database_row.datname = current_database()
+          )
+          AND lock_row.classid::bigint = ((p_lock_key >> 32) & 4294967295)
+          AND lock_row.objid::bigint = (p_lock_key & 4294967295)
+          AND lock_row.objsubid = 1
+          AND lock_row.granted
+    ) THEN
+        RETURN QUERY SELECT 'ready'::text;
+    ELSE
+        RETURN QUERY SELECT 'ownership_lost'::text;
+    END IF;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION relay_state_api.dispatch_permit_create_v1(
+    p_lock_key bigint,
+    p_holder_id text,
+    p_fence_generation bigint,
+    p_operation_id text,
+    p_budget_ms integer
+)
+RETURNS TABLE (
+    outcome text,
+    operation_id text,
+    fence_generation bigint,
+    holder_id text,
+    budget_ms integer,
+    deadline_unix_ms bigint
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, relay_state_private
+SET lock_timeout = '2s'
+SET statement_timeout = '5s'
+SET idle_in_transaction_session_timeout = '5s'
+SET synchronous_commit = 'on'
+AS $function$
+DECLARE
+    v_runtime_oid oid;
+    v_session_oid oid;
+    v_now timestamptz := clock_timestamp();
+    v_existing relay_state_private.dispatch_permit%ROWTYPE;
+    v_inserted bigint;
+BEGIN
+    PERFORM set_config('lock_timeout', '2s', false);
+    PERFORM set_config('statement_timeout', '5s', false);
+    PERFORM set_config('idle_in_transaction_session_timeout', '5s', false);
+    PERFORM set_config('synchronous_commit', 'on', false);
+    SELECT metadata.runtime_role_oid INTO v_runtime_oid
+    FROM relay_state_private.state_plane_metadata AS metadata
+    WHERE metadata.singleton = true;
+    SELECT oid INTO v_session_oid FROM pg_catalog.pg_roles WHERE rolname = session_user;
+    IF v_session_oid IS DISTINCT FROM v_runtime_oid THEN
+        RAISE EXCEPTION 'dispatch permit caller is not bound' USING ERRCODE = '42501';
+    END IF;
+    IF NOT relay_state_private.capability_valid_v1() THEN
+        RAISE EXCEPTION 'dispatch permit capability unavailable' USING ERRCODE = '55000';
+    END IF;
+    IF p_operation_id IS NULL OR p_operation_id !~ '^[0-7][0-9A-HJKMNP-TV-Z]{25}$'
+       OR p_budget_ms IS NULL OR p_budget_ms NOT BETWEEN 1 AND 10000
+    THEN
+        RAISE EXCEPTION 'invalid dispatch permit request' USING ERRCODE = '22023';
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM relay_state_private.serving_fence_state AS fence
+        JOIN relay_state_private.state_plane_metadata AS metadata
+          ON metadata.singleton = true
+        WHERE fence.singleton = true
+          AND fence.generation = p_fence_generation
+          AND fence.holder_id = p_holder_id
+          AND fence.holder_backend_pid = pg_catalog.pg_backend_pid()
+          AND fence.admission_open AND NOT fence.takeover_pending
+          AND metadata.serving_fence_lock_key = p_lock_key
+    ) OR NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_locks AS lock_row
+        WHERE lock_row.locktype = 'advisory'
+          AND lock_row.pid = pg_catalog.pg_backend_pid()
+          AND lock_row.database = (
+              SELECT database_row.oid FROM pg_catalog.pg_database AS database_row
+              WHERE database_row.datname = current_database()
+          )
+          AND lock_row.classid::bigint = ((p_lock_key >> 32) & 4294967295)
+          AND lock_row.objid::bigint = (p_lock_key & 4294967295)
+          AND lock_row.objsubid = 1
+          AND lock_row.granted
+    ) THEN
+        RETURN QUERY SELECT 'ownership_lost'::text, p_operation_id,
+            NULL::bigint, NULL::text, NULL::integer, NULL::bigint;
+        RETURN;
+    END IF;
+    SELECT permit.* INTO v_existing
+    FROM relay_state_private.dispatch_permit AS permit
+    WHERE permit.operation_id = p_operation_id;
+    IF FOUND THEN
+        RETURN QUERY SELECT
+            CASE WHEN v_existing.fence_generation = p_fence_generation
+                       AND v_existing.holder_id = p_holder_id
+                       AND v_existing.budget_ms = p_budget_ms
+                THEN 'identical_replay'::text ELSE 'conflicting_replay'::text END,
+            v_existing.operation_id, v_existing.fence_generation,
+            v_existing.holder_id, v_existing.budget_ms,
+            floor(extract(epoch FROM v_existing.deadline_at) * 1000)::bigint;
+        RETURN;
+    END IF;
+    INSERT INTO relay_state_private.dispatch_permit (
+        operation_id, fence_generation, holder_id, budget_ms,
+        created_at, deadline_at
+    ) VALUES (
+        p_operation_id, p_fence_generation, p_holder_id, p_budget_ms,
+        v_now, v_now + p_budget_ms * interval '1 millisecond'
+    );
+    GET DIAGNOSTICS v_inserted = ROW_COUNT;
+    IF v_inserted <> 1 THEN
+        RAISE EXCEPTION 'dispatch permit insert did not store exactly one row'
+            USING ERRCODE = '55000';
+    END IF;
+    RETURN QUERY SELECT 'inserted'::text, p_operation_id,
+        p_fence_generation, p_holder_id, p_budget_ms,
+        floor(extract(epoch FROM (v_now + p_budget_ms * interval '1 millisecond')) * 1000)::bigint;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION relay_state_api.dispatch_permit_authorize_v1(
+    p_lock_key bigint,
+    p_holder_id text,
+    p_fence_generation bigint,
+    p_operation_id text
+)
+RETURNS TABLE (outcome text, deadline_unix_ms bigint)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, relay_state_private
+SET lock_timeout = '2s'
+SET statement_timeout = '5s'
+SET idle_in_transaction_session_timeout = '5s'
+SET synchronous_commit = 'on'
+AS $function$
+DECLARE
+    v_runtime_oid oid;
+    v_session_oid oid;
+    v_permit relay_state_private.dispatch_permit%ROWTYPE;
+BEGIN
+    PERFORM set_config('lock_timeout', '2s', false);
+    PERFORM set_config('statement_timeout', '5s', false);
+    PERFORM set_config('idle_in_transaction_session_timeout', '5s', false);
+    PERFORM set_config('synchronous_commit', 'on', false);
+    SELECT metadata.runtime_role_oid INTO v_runtime_oid
+    FROM relay_state_private.state_plane_metadata AS metadata
+    WHERE metadata.singleton = true;
+    SELECT oid INTO v_session_oid FROM pg_catalog.pg_roles WHERE rolname = session_user;
+    IF v_session_oid IS DISTINCT FROM v_runtime_oid THEN
+        RAISE EXCEPTION 'dispatch permit caller is not bound' USING ERRCODE = '42501';
+    END IF;
+    IF NOT relay_state_private.capability_valid_v1() THEN
+        RAISE EXCEPTION 'dispatch permit capability unavailable' USING ERRCODE = '55000';
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM relay_state_private.serving_fence_state AS fence
+        JOIN relay_state_private.state_plane_metadata AS metadata
+          ON metadata.singleton = true
+        WHERE fence.singleton = true
+          AND fence.generation = p_fence_generation
+          AND fence.holder_id = p_holder_id
+          AND fence.holder_backend_pid = pg_catalog.pg_backend_pid()
+          AND fence.admission_open AND NOT fence.takeover_pending
+          AND metadata.serving_fence_lock_key = p_lock_key
+    ) OR NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_locks AS lock_row
+        WHERE lock_row.locktype = 'advisory'
+          AND lock_row.pid = pg_catalog.pg_backend_pid()
+          AND lock_row.database = (
+              SELECT database_row.oid FROM pg_catalog.pg_database AS database_row
+              WHERE database_row.datname = current_database()
+          )
+          AND lock_row.classid::bigint = ((p_lock_key >> 32) & 4294967295)
+          AND lock_row.objid::bigint = (p_lock_key & 4294967295)
+          AND lock_row.objsubid = 1
+          AND lock_row.granted
+    ) THEN
+        RETURN QUERY SELECT 'ownership_lost'::text, NULL::bigint;
+        RETURN;
+    END IF;
+    SELECT permit.* INTO v_permit
+    FROM relay_state_private.dispatch_permit AS permit
+    WHERE permit.operation_id = p_operation_id;
+    IF NOT FOUND THEN
+        RETURN QUERY SELECT 'unknown'::text, NULL::bigint;
+    ELSIF v_permit.fence_generation <> p_fence_generation
+          OR v_permit.holder_id <> p_holder_id THEN
+        RETURN QUERY SELECT 'stale_generation'::text,
+            floor(extract(epoch FROM v_permit.deadline_at) * 1000)::bigint;
+    ELSIF v_permit.abandoned_at IS NOT NULL THEN
+        RETURN QUERY SELECT 'abandoned'::text,
+            floor(extract(epoch FROM v_permit.deadline_at) * 1000)::bigint;
+    ELSIF v_permit.completed_at IS NOT NULL THEN
+        RETURN QUERY SELECT 'completed'::text,
+            floor(extract(epoch FROM v_permit.deadline_at) * 1000)::bigint;
+    ELSIF clock_timestamp() >= v_permit.deadline_at THEN
+        RETURN QUERY SELECT 'expired'::text,
+            floor(extract(epoch FROM v_permit.deadline_at) * 1000)::bigint;
+    ELSE
+        RETURN QUERY SELECT 'authorized'::text,
+            floor(extract(epoch FROM v_permit.deadline_at) * 1000)::bigint;
+    END IF;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION relay_state_api.dispatch_permit_complete_v1(
+    p_lock_key bigint,
+    p_holder_id text,
+    p_fence_generation bigint,
+    p_operation_id text
+)
+RETURNS TABLE (outcome text)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, relay_state_private
+SET lock_timeout = '2s'
+SET statement_timeout = '5s'
+SET idle_in_transaction_session_timeout = '5s'
+SET synchronous_commit = 'on'
+AS $function$
+DECLARE
+    v_runtime_oid oid;
+    v_session_oid oid;
+    v_permit relay_state_private.dispatch_permit%ROWTYPE;
+BEGIN
+    PERFORM set_config('lock_timeout', '2s', false);
+    PERFORM set_config('statement_timeout', '5s', false);
+    PERFORM set_config('idle_in_transaction_session_timeout', '5s', false);
+    PERFORM set_config('synchronous_commit', 'on', false);
+    SELECT metadata.runtime_role_oid INTO v_runtime_oid
+    FROM relay_state_private.state_plane_metadata AS metadata
+    WHERE metadata.singleton = true;
+    SELECT oid INTO v_session_oid FROM pg_catalog.pg_roles WHERE rolname = session_user;
+    IF v_session_oid IS DISTINCT FROM v_runtime_oid THEN
+        RAISE EXCEPTION 'dispatch permit caller is not bound' USING ERRCODE = '42501';
+    END IF;
+    IF NOT relay_state_private.capability_valid_v1() THEN
+        RAISE EXCEPTION 'dispatch permit capability unavailable' USING ERRCODE = '55000';
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM relay_state_private.serving_fence_state AS fence
+        JOIN relay_state_private.state_plane_metadata AS metadata
+          ON metadata.singleton = true
+        WHERE fence.singleton = true
+          AND fence.generation = p_fence_generation
+          AND fence.holder_id = p_holder_id
+          AND fence.holder_backend_pid = pg_catalog.pg_backend_pid()
+          AND fence.admission_open AND NOT fence.takeover_pending
+          AND metadata.serving_fence_lock_key = p_lock_key
+    ) OR NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_locks AS lock_row
+        WHERE lock_row.locktype = 'advisory'
+          AND lock_row.pid = pg_catalog.pg_backend_pid()
+          AND lock_row.database = (
+              SELECT database_row.oid FROM pg_catalog.pg_database AS database_row
+              WHERE database_row.datname = current_database()
+          )
+          AND lock_row.classid::bigint = ((p_lock_key >> 32) & 4294967295)
+          AND lock_row.objid::bigint = (p_lock_key & 4294967295)
+          AND lock_row.objsubid = 1
+          AND lock_row.granted
+    ) THEN
+        RETURN QUERY SELECT 'ownership_lost'::text;
+        RETURN;
+    END IF;
+    SELECT permit.* INTO v_permit
+    FROM relay_state_private.dispatch_permit AS permit
+    WHERE permit.operation_id = p_operation_id;
+    IF NOT FOUND THEN
+        RETURN QUERY SELECT 'unknown'::text;
+    ELSIF v_permit.fence_generation <> p_fence_generation
+          OR v_permit.holder_id <> p_holder_id THEN
+        RETURN QUERY SELECT 'stale_generation'::text;
+    ELSIF v_permit.abandoned_at IS NOT NULL THEN
+        RETURN QUERY SELECT 'abandoned'::text;
+    ELSIF v_permit.completed_at IS NOT NULL THEN
+        RETURN QUERY SELECT 'already_completed'::text;
+    ELSE
+        UPDATE relay_state_private.dispatch_permit AS permit
+        SET completed_at = clock_timestamp()
+        WHERE permit.operation_id = p_operation_id
+          AND permit.completed_at IS NULL AND permit.abandoned_at IS NULL;
+        IF NOT FOUND THEN
+            RAISE EXCEPTION 'dispatch permit completion changed concurrently'
+                USING ERRCODE = '55000';
+        END IF;
+        RETURN QUERY SELECT 'completed'::text;
+    END IF;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION relay_state_api.serving_fence_release_v1(
+    p_lock_key bigint,
+    p_holder_id text,
+    p_fence_generation bigint
+)
+RETURNS TABLE (outcome text)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, relay_state_private
+SET lock_timeout = '2s'
+SET statement_timeout = '5s'
+SET idle_in_transaction_session_timeout = '5s'
+SET synchronous_commit = 'on'
+AS $function$
+DECLARE
+    v_runtime_oid oid;
+    v_session_oid oid;
+BEGIN
+    PERFORM set_config('lock_timeout', '2s', false);
+    PERFORM set_config('statement_timeout', '5s', false);
+    PERFORM set_config('idle_in_transaction_session_timeout', '5s', false);
+    PERFORM set_config('synchronous_commit', 'on', false);
+    SELECT metadata.runtime_role_oid INTO v_runtime_oid
+    FROM relay_state_private.state_plane_metadata AS metadata
+    WHERE metadata.singleton = true;
+    SELECT oid INTO v_session_oid FROM pg_catalog.pg_roles WHERE rolname = session_user;
+    IF v_session_oid IS DISTINCT FROM v_runtime_oid THEN
+        RAISE EXCEPTION 'serving fence caller is not bound' USING ERRCODE = '42501';
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM relay_state_private.serving_fence_state AS fence
+        JOIN relay_state_private.state_plane_metadata AS metadata
+          ON metadata.singleton = true
+        WHERE fence.singleton = true
+          AND fence.generation = p_fence_generation
+          AND fence.holder_id = p_holder_id
+          AND fence.holder_backend_pid = pg_catalog.pg_backend_pid()
+          AND metadata.serving_fence_lock_key = p_lock_key
+    ) OR NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_locks AS lock_row
+        WHERE lock_row.locktype = 'advisory'
+          AND lock_row.pid = pg_catalog.pg_backend_pid()
+          AND lock_row.database = (
+              SELECT database_row.oid FROM pg_catalog.pg_database AS database_row
+              WHERE database_row.datname = current_database()
+          )
+          AND lock_row.classid::bigint = ((p_lock_key >> 32) & 4294967295)
+          AND lock_row.objid::bigint = (p_lock_key & 4294967295)
+          AND lock_row.objsubid = 1
+          AND lock_row.granted
+    ) THEN
+        RETURN QUERY SELECT 'ownership_lost'::text;
+        RETURN;
+    END IF;
+    UPDATE relay_state_private.serving_fence_state AS fence
+    SET admission_open = false,
+        takeover_pending = false,
+        takeover_pg_not_before = NULL
+    WHERE fence.singleton = true
+      AND fence.generation = p_fence_generation
+      AND fence.holder_id = p_holder_id;
+    IF NOT FOUND OR NOT pg_catalog.pg_advisory_unlock(p_lock_key) THEN
+        RAISE EXCEPTION 'serving fence release failed' USING ERRCODE = '55000';
+    END IF;
+    RETURN QUERY SELECT 'released'::text;
+END;
+$function$;
+
 ALTER FUNCTION relay_state_private.capability_valid_v1() OWNER TO CURRENT_USER;
 ALTER FUNCTION relay_state_api.audit_phase_snapshot_v1(text, text, text, bytea)
     OWNER TO CURRENT_USER;
@@ -982,6 +1737,23 @@ ALTER FUNCTION relay_state_api.audit_phase_cas_v1(
     text, text, bytea, text, bytea
 ) OWNER TO CURRENT_USER;
 ALTER FUNCTION relay_state_api.audit_readiness_v1(text) OWNER TO CURRENT_USER;
+ALTER FUNCTION relay_state_api.serving_fence_acquire_v1(bigint, text)
+    OWNER TO CURRENT_USER;
+ALTER FUNCTION relay_state_api.serving_fence_finalize_v1(bigint, text, bigint)
+    OWNER TO CURRENT_USER;
+ALTER FUNCTION relay_state_api.serving_fence_status_v1(bigint, text, bigint)
+    OWNER TO CURRENT_USER;
+ALTER FUNCTION relay_state_api.dispatch_permit_create_v1(
+    bigint, text, bigint, text, integer
+) OWNER TO CURRENT_USER;
+ALTER FUNCTION relay_state_api.dispatch_permit_authorize_v1(
+    bigint, text, bigint, text
+) OWNER TO CURRENT_USER;
+ALTER FUNCTION relay_state_api.dispatch_permit_complete_v1(
+    bigint, text, bigint, text
+) OWNER TO CURRENT_USER;
+ALTER FUNCTION relay_state_api.serving_fence_release_v1(bigint, text, bigint)
+    OWNER TO CURRENT_USER;
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA relay_state_private FROM PUBLIC;
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA relay_state_api FROM PUBLIC;
 ALTER DEFAULT PRIVILEGES IN SCHEMA relay_state_private REVOKE ALL ON FUNCTIONS FROM PUBLIC;
@@ -1095,6 +1867,7 @@ pub(crate) async fn install_postgres_state_plane_v1(
     client: &mut Client,
     runtime_role: &RuntimeDatabaseRole,
     chain_key_epoch_id: &AuditChainKeyEpochId,
+    serving_fence_lock_key: ServingFenceLockKey,
 ) -> Result<(), StatePlaneInstallError> {
     let transaction = client
         .transaction()
@@ -1159,7 +1932,13 @@ pub(crate) async fn install_postgres_state_plane_v1(
         if !try_bool(&catalog_shape, "schemas_owned")?
             || !try_bool(&catalog_shape, "metadata_exists")?
             || !try_bool(&catalog_shape, "metadata_owned")?
-            || !owner_capability_matches(&transaction, role_oids, chain_key_epoch_id).await?
+            || !owner_capability_matches(
+                &transaction,
+                role_oids,
+                chain_key_epoch_id,
+                serving_fence_lock_key,
+            )
+            .await?
         {
             return Err(StatePlaneInstallError::CapabilityDrift);
         }
@@ -1169,12 +1948,25 @@ pub(crate) async fn install_postgres_state_plane_v1(
         .batch_execute(POSTGRES_STATE_PLANE_MIGRATION_V1)
         .await
         .map_err(|_| StatePlaneInstallError::Unavailable)?;
-    bind_or_validate_metadata(&transaction, role_oids, chain_key_epoch_id).await?;
+    bind_or_validate_metadata(
+        &transaction,
+        role_oids,
+        chain_key_epoch_id,
+        serving_fence_lock_key,
+    )
+    .await?;
     transaction
         .batch_execute(&runtime_role_grants_sql(runtime_role))
         .await
         .map_err(|_| StatePlaneInstallError::Unavailable)?;
-    if !owner_capability_matches(&transaction, role_oids, chain_key_epoch_id).await? {
+    if !owner_capability_matches(
+        &transaction,
+        role_oids,
+        chain_key_epoch_id,
+        serving_fence_lock_key,
+    )
+    .await?
+    {
         return Err(StatePlaneInstallError::CapabilityDrift);
     }
     transaction
@@ -1267,13 +2059,15 @@ async fn bind_or_validate_metadata(
     transaction: &Transaction<'_>,
     role_oids: BoundRoleOids,
     chain_key_epoch_id: &AuditChainKeyEpochId,
+    serving_fence_lock_key: ServingFenceLockKey,
 ) -> Result<(), StatePlaneInstallError> {
     let existing = transaction
         .query_opt(
             r#"
 SELECT schema_version, capability_id, capability_fingerprint,
        owner_role_oid::bigint AS owner_role_oid,
-       runtime_role_oid::bigint AS runtime_role_oid, chain_key_epoch_id
+       runtime_role_oid::bigint AS runtime_role_oid, chain_key_epoch_id,
+       serving_fence_capability_id, serving_fence_lock_key
 FROM relay_state_private.state_plane_metadata WHERE singleton = true
 "#,
             &[],
@@ -1286,7 +2080,9 @@ FROM relay_state_private.state_plane_metadata WHERE singleton = true
             && try_str(&existing, "capability_fingerprint")? == STATE_PLANE_SCHEMA_FINGERPRINT_V1
             && try_i64(&existing, "owner_role_oid")? == role_oids.owner
             && try_i64(&existing, "runtime_role_oid")? == role_oids.runtime
-            && try_str(&existing, "chain_key_epoch_id")? == chain_key_epoch_id.as_str();
+            && try_str(&existing, "chain_key_epoch_id")? == chain_key_epoch_id.as_str()
+            && try_str(&existing, "serving_fence_capability_id")? == SERVING_FENCE_CAPABILITY_V1
+            && try_i64(&existing, "serving_fence_lock_key")? == serving_fence_lock_key.as_i64();
         return if matches {
             Ok(())
         } else {
@@ -1298,8 +2094,9 @@ FROM relay_state_private.state_plane_metadata WHERE singleton = true
             r#"
 INSERT INTO relay_state_private.state_plane_metadata (
     singleton, schema_version, capability_id, capability_fingerprint,
-    owner_role_oid, runtime_role_oid, chain_key_epoch_id
-) VALUES (true, $1, $2, $3, $4::bigint::oid, $5::bigint::oid, $6)
+    owner_role_oid, runtime_role_oid, chain_key_epoch_id,
+    serving_fence_capability_id, serving_fence_lock_key
+) VALUES (true, $1, $2, $3, $4::bigint::oid, $5::bigint::oid, $6, $7, $8)
 "#,
             &[
                 &STATE_PLANE_SCHEMA_VERSION_V1,
@@ -1308,6 +2105,8 @@ INSERT INTO relay_state_private.state_plane_metadata (
                 &role_oids.owner,
                 &role_oids.runtime,
                 &chain_key_epoch_id.as_str(),
+                &SERVING_FENCE_CAPABILITY_V1,
+                &serving_fence_lock_key.as_i64(),
             ],
         )
         .await
@@ -1333,6 +2132,23 @@ GRANT EXECUTE ON FUNCTION relay_state_api.audit_phase_cas_v1(
     text, text, bytea, text, bytea
 ) TO {role};
 GRANT EXECUTE ON FUNCTION relay_state_api.audit_readiness_v1(text) TO {role};
+GRANT EXECUTE ON FUNCTION relay_state_api.serving_fence_acquire_v1(bigint, text)
+    TO {role};
+GRANT EXECUTE ON FUNCTION relay_state_api.serving_fence_finalize_v1(bigint, text, bigint)
+    TO {role};
+GRANT EXECUTE ON FUNCTION relay_state_api.serving_fence_status_v1(bigint, text, bigint)
+    TO {role};
+GRANT EXECUTE ON FUNCTION relay_state_api.dispatch_permit_create_v1(
+    bigint, text, bigint, text, integer
+) TO {role};
+GRANT EXECUTE ON FUNCTION relay_state_api.dispatch_permit_authorize_v1(
+    bigint, text, bigint, text
+) TO {role};
+GRANT EXECUTE ON FUNCTION relay_state_api.dispatch_permit_complete_v1(
+    bigint, text, bigint, text
+) TO {role};
+GRANT EXECUTE ON FUNCTION relay_state_api.serving_fence_release_v1(bigint, text, bigint)
+    TO {role};
 "#
     )
 }
@@ -1341,13 +2157,15 @@ async fn owner_capability_matches(
     client: &impl GenericClient,
     role_oids: BoundRoleOids,
     chain_key_epoch_id: &AuditChainKeyEpochId,
+    serving_fence_lock_key: ServingFenceLockKey,
 ) -> Result<bool, StatePlaneInstallError> {
     let metadata = client
         .query_opt(
             r#"
 SELECT schema_version, capability_id, capability_fingerprint,
        owner_role_oid::bigint AS owner_role_oid,
-       runtime_role_oid::bigint AS runtime_role_oid, chain_key_epoch_id
+       runtime_role_oid::bigint AS runtime_role_oid, chain_key_epoch_id,
+       serving_fence_capability_id, serving_fence_lock_key
 FROM relay_state_private.state_plane_metadata WHERE singleton = true
 "#,
             &[],
@@ -1362,7 +2180,9 @@ FROM relay_state_private.state_plane_metadata WHERE singleton = true
         && try_str(&metadata, "capability_fingerprint")? == STATE_PLANE_SCHEMA_FINGERPRINT_V1
         && try_i64(&metadata, "owner_role_oid")? == role_oids.owner
         && try_i64(&metadata, "runtime_role_oid")? == role_oids.runtime
-        && try_str(&metadata, "chain_key_epoch_id")? == chain_key_epoch_id.as_str();
+        && try_str(&metadata, "chain_key_epoch_id")? == chain_key_epoch_id.as_str()
+        && try_str(&metadata, "serving_fence_capability_id")? == SERVING_FENCE_CAPABILITY_V1
+        && try_i64(&metadata, "serving_fence_lock_key")? == serving_fence_lock_key.as_i64();
     if !metadata_matches {
         return Ok(false);
     }
@@ -1549,25 +2369,25 @@ mod tests {
             POSTGRES_STATE_PLANE_MIGRATION_V1
                 .matches("SET lock_timeout = '2s'")
                 .count(),
-            4
+            11
         );
         assert_eq!(
             POSTGRES_STATE_PLANE_MIGRATION_V1
                 .matches("set_config('idle_in_transaction_session_timeout', '5s', false)")
                 .count(),
-            3
+            10
         );
         assert_eq!(
             POSTGRES_STATE_PLANE_MIGRATION_V1
                 .matches("SET synchronous_commit = 'on'")
                 .count(),
-            4
+            11
         );
         assert_eq!(
             POSTGRES_STATE_PLANE_MIGRATION_V1
                 .matches("set_config('synchronous_commit', 'on', false)")
                 .count(),
-            3
+            10
         );
         assert!(POSTGRES_STATE_PLANE_MIGRATION_V1.contains("exceeded its deadline"));
         for required_setting in [
@@ -1600,6 +2420,7 @@ mod tests {
             "attidentity",
             "attgenerated",
             "attribute.attacl",
+            "holder_backend_pid IS NOT NULL",
             "GET DIAGNOSTICS v_inserted_rows = ROW_COUNT",
         ] {
             assert!(POSTGRES_STATE_PLANE_MIGRATION_V1.contains(field));
