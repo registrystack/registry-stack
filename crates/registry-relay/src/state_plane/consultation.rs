@@ -4,6 +4,7 @@
 use std::time::Duration;
 
 use registry_platform_audit::{
+    pseudonym_keyring::{AuditPseudonymCommitment, AuditPseudonymKeyId},
     AuditEnvelope, DurableAuditOperationId, DurableAuditPhase, DurableAuditStoredIdentity,
     DurableAuditStreamKind, DurableAuditWrite,
 };
@@ -91,13 +92,20 @@ pub(crate) struct ConsultationCompletionSeed {
 }
 
 impl ConsultationCompletionSeed {
-    #[cfg(test)]
-    pub(crate) fn from_value_for_test(value: Value) -> Result<Self, ConsultationPersistenceError> {
+    /// Canonicalize the compiler-owned, secret-free completion seed before it
+    /// crosses into the atomic state-plane protocol. PostgreSQL performs the
+    /// authoritative exact-shape validation in the attempt CAS.
+    pub(crate) fn from_safe_value(value: Value) -> Result<Self, ConsultationPersistenceError> {
         let (canonical, digest) = canonical_binding(value)?;
         if canonical.len() > MAX_COMPLETION_SEED_CANONICAL_BYTES_V1 {
             return Err(ConsultationPersistenceError::InvalidInput);
         }
         Ok(Self { canonical, digest })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_value_for_test(value: Value) -> Result<Self, ConsultationPersistenceError> {
+        Self::from_safe_value(value)
     }
 }
 
@@ -109,6 +117,31 @@ pub(crate) struct AttemptPseudonymBundle {
 }
 
 impl AttemptPseudonymBundle {
+    /// Bind the exact four typed consultation commitments to the authoritative
+    /// key epoch used for the attempt audit. The platform types have already
+    /// enforced the closed key-id and `hmac-sha256:<lowercase hex>` grammars.
+    pub(crate) fn from_commitments(
+        key_id: &AuditPseudonymKeyId,
+        subject_handle: &AuditPseudonymCommitment,
+        input_commitment: &AuditPseudonymCommitment,
+        predicate_commitment: &AuditPseudonymCommitment,
+        consent_evidence_commitment: Option<&AuditPseudonymCommitment>,
+    ) -> Result<Self, ConsultationPersistenceError> {
+        let (canonical, digest) = canonical_binding(json!({
+            "commitment_key_id": key_id.as_str(),
+            "subject_handle": subject_handle.as_str(),
+            "input_commitment": input_commitment.as_str(),
+            "predicate_commitment": predicate_commitment.as_str(),
+            "consent_evidence_commitment": consent_evidence_commitment
+                .map(AuditPseudonymCommitment::as_str),
+        }))?;
+        Ok(Self {
+            key_id: key_id.as_str().to_owned(),
+            canonical,
+            digest,
+        })
+    }
+
     #[cfg(test)]
     pub(crate) fn new(
         key_id: &str,
@@ -223,6 +256,35 @@ pub(crate) struct KnownConsultationCompletionFacts {
 }
 
 impl KnownConsultationCompletionFacts {
+    /// Mint the only public-success provenance supported by the live v1
+    /// executor. Source-observed and revision facts are deliberately absent.
+    pub(crate) fn public_for_live(
+        outcome: PublicConsultationOutcome,
+        relay_acquired_at_unix_ms: i64,
+    ) -> Result<Self, ConsultationPersistenceError> {
+        if !valid_public_unix_ms(relay_acquired_at_unix_ms) {
+            return Err(ConsultationPersistenceError::InvalidInput);
+        }
+        Ok(Self {
+            result: KnownExecutionResult::Public {
+                outcome,
+                provenance: ValidatedPublicProvenance {
+                    relay_acquired_at_unix_ms,
+                    source_observed_at_unix_ms: None,
+                    source_revision: None,
+                    acquisition: ValidatedAcquisitionProvenance::Live,
+                },
+            },
+        })
+    }
+
+    /// Mint a value-free known execution failure for atomic completion.
+    pub(crate) const fn failure(failure: KnownFailureClass) -> Self {
+        Self {
+            result: KnownExecutionResult::Failure(failure),
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn public_for_live_test(
         outcome: PublicConsultationOutcome,
@@ -230,6 +292,9 @@ impl KnownConsultationCompletionFacts {
         source_observed_at_unix_ms: Option<i64>,
         source_revision: Option<&str>,
     ) -> Result<Self, ConsultationPersistenceError> {
+        if source_observed_at_unix_ms.is_none() && source_revision.is_none() {
+            return Self::public_for_live(outcome, relay_acquired_at_unix_ms);
+        }
         Self::public_for_test(
             outcome,
             relay_acquired_at_unix_ms,
@@ -298,9 +363,7 @@ impl KnownConsultationCompletionFacts {
 
     #[cfg(test)]
     pub(crate) const fn failure_for_test(failure: KnownFailureClass) -> Self {
-        Self {
-            result: KnownExecutionResult::Failure(failure),
-        }
+        Self::failure(failure)
     }
 
     fn payload_values(&self) -> (Value, Value) {
@@ -1098,7 +1161,6 @@ fn identity_from_parts(
     .map_err(|_| ConsultationPersistenceError::ProtocolDrift)
 }
 
-#[cfg(test)]
 fn canonical_binding(value: Value) -> Result<(String, [u8; 32]), ConsultationPersistenceError> {
     let bytes =
         canonicalize_json(&value).map_err(|_| ConsultationPersistenceError::InvalidInput)?;
