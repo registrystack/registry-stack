@@ -1,7 +1,7 @@
 use super::*;
 
 #[allow(clippy::too_many_arguments)]
-pub(in super::super) async fn authenticate_oidc(
+pub(super) async fn authenticate_oidc(
     credentials: &RequestCredentials,
     verifier: &TokenVerifier,
     fetch_url_policy: &FetchUrlPolicy,
@@ -127,7 +127,7 @@ pub(in super::super) fn principal_from_oidc(
     })
 }
 
-pub(in super::super) fn authorization_details_from_oidc(
+fn authorization_details_from_oidc(
     verified: &VerifiedToken,
 ) -> Result<Option<EvidenceAuthorizationDetails>, EvidenceError> {
     let Some(details) = verified.claims.extra.get("authorization_details") else {
@@ -195,17 +195,14 @@ pub(in super::super) fn bounded_verified_claims_from_oidc(
     })
 }
 
-pub(in super::super) fn claim_string<'a>(
-    verified: &'a VerifiedToken,
-    claim: &str,
-) -> Option<&'a str> {
+fn claim_string<'a>(verified: &'a VerifiedToken, claim: &str) -> Option<&'a str> {
     if claim == "sub" {
         return verified.claims.sub.as_deref();
     }
     claim_string_from_claims(&verified.claims, claim)
 }
 
-pub(in super::super) fn claim_string_from_claims<'a>(
+fn claim_string_from_claims<'a>(
     claims: &'a registry_platform_oidc::Claims,
     claim: &str,
 ) -> Option<&'a str> {
@@ -219,7 +216,7 @@ pub(in super::super) fn verified_claim_value(value: &str) -> Option<VerifiedClai
     VerifiedClaimValue::new(value).ok()
 }
 
-pub(in super::super) fn bounded_audience(audience: Option<&Audience>) -> Vec<VerifiedClaimValue> {
+fn bounded_audience(audience: Option<&Audience>) -> Vec<VerifiedClaimValue> {
     let values: Vec<&str> = match audience {
         Some(Audience::One(value)) => vec![value.as_str()],
         Some(Audience::Many(values)) => values.iter().map(String::as_str).collect(),
@@ -231,7 +228,7 @@ pub(in super::super) fn bounded_audience(audience: Option<&Audience>) -> Vec<Ver
         .collect()
 }
 
-pub(in super::super) fn verified_client(verified: &VerifiedToken) -> Option<VerifiedClaimValue> {
+fn verified_client(verified: &VerifiedToken) -> Option<VerifiedClaimValue> {
     let client = verified
         .claims
         .azp
@@ -248,14 +245,14 @@ pub(in super::super) fn verified_client(verified: &VerifiedToken) -> Option<Veri
     verified_claim_value(&client)
 }
 
-pub(in super::super) fn bounded_scopes(scopes: &[String]) -> Vec<VerifiedClaimValue> {
+fn bounded_scopes(scopes: &[String]) -> Vec<VerifiedClaimValue> {
     scopes
         .iter()
         .filter_map(|scope| verified_claim_value(scope))
         .collect()
 }
 
-pub(in super::super) fn numeric_claim(extra: &Map<String, Value>, claim: &str) -> Option<i64> {
+fn numeric_claim(extra: &Map<String, Value>, claim: &str) -> Option<i64> {
     extra.get(claim).and_then(Value::as_i64)
 }
 
@@ -295,9 +292,7 @@ pub(in super::super) fn oidc_internal_error_code(error: &OidcError) -> &'static 
     }
 }
 
-pub(in super::super) fn parse_oidc_algorithm(
-    algorithm: &str,
-) -> Result<Algorithm, StandaloneServerError> {
+pub(super) fn parse_oidc_algorithm(algorithm: &str) -> Result<Algorithm, StandaloneServerError> {
     match algorithm {
         "EdDSA" => Ok(Algorithm::EdDSA),
         "RS256" => Ok(Algorithm::RS256),

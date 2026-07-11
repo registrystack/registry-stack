@@ -23,7 +23,7 @@ impl std::fmt::Debug for NotaryTokenAnchor {
     }
 }
 
-pub(in super::super) fn unverified_issuer(token: &str) -> Option<String> {
+pub(super) fn unverified_issuer(token: &str) -> Option<String> {
     let payload_b64 = token.split('.').nth(1)?;
     let bytes = BASE64_URL_SAFE_NO_PAD.decode(payload_b64).ok()?;
     let payload: Value = serde_json::from_slice(&bytes).ok()?;
@@ -121,7 +121,7 @@ pub(in super::super) async fn consume_notary_token_jti(
 
 /// Adapt a verified Notary token payload into the platform `VerifiedToken` the
 /// `principal_from_oidc` mapping consumes.
-pub(in super::super) fn verified_token_from_notary_payload(
+fn verified_token_from_notary_payload(
     payload: &Value,
 ) -> Option<registry_platform_oidc::VerifiedToken> {
     let claims: registry_platform_oidc::Claims = serde_json::from_value(payload.clone()).ok()?;

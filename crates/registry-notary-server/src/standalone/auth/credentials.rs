@@ -41,7 +41,7 @@ impl RequestCredentials {
             + usize::from(self.authorization_present || self.bearer_token.is_some())
     }
 
-    pub(in super::super) fn are_absent(&self) -> bool {
+    pub(super) fn are_absent(&self) -> bool {
         self.api_key.is_none()
             && !self.authorization_present
             && self.bearer_token.is_none()
@@ -49,7 +49,7 @@ impl RequestCredentials {
     }
 }
 
-pub(in super::super) fn resolve_credentials(
+pub(super) fn resolve_credentials(
     credentials: &[EvidenceCredentialConfig],
 ) -> Result<Vec<ResolvedCredential>, StandaloneServerError> {
     credentials
@@ -157,9 +157,7 @@ pub fn find_credential<'a>(
         .find(|credential| verify_api_key(token, &credential.fingerprint).unwrap_or(false))
 }
 
-pub(in super::super) fn principal_from_credential(
-    credential: &ResolvedCredential,
-) -> EvidencePrincipal {
+fn principal_from_credential(credential: &ResolvedCredential) -> EvidencePrincipal {
     EvidencePrincipal {
         principal_id: credential.id.clone(),
         scopes: credential.scopes.clone(),
@@ -169,6 +167,6 @@ pub(in super::super) fn principal_from_credential(
     }
 }
 
-pub(in super::super) fn header_str(value: &axum::http::HeaderValue) -> Option<&str> {
+fn header_str(value: &axum::http::HeaderValue) -> Option<&str> {
     value.to_str().ok()
 }
