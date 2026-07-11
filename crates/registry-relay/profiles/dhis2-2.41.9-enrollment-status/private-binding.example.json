@@ -6,7 +6,7 @@
   "integration_pack": {
     "id": "dhis2.tracker.enrollment-status",
     "version": "1",
-    "hash": "sha256:2084e411891eabbd974fdbdeb2fd6059b33606093250a9d156eb86276dad445c"
+    "hash": "sha256:017783fe880863e9dedc5138df4e1212d020ce7cfac5a13b58911fc4705f0e7a"
   },
   "tenant": "example-government",
   "registry_instance": "dhis2-primary",

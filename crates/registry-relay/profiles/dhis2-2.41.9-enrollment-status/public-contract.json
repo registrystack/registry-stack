@@ -20,7 +20,7 @@
     "integration_pack": {
       "id": "dhis2.tracker.enrollment-status",
       "version": "1",
-      "hash": "sha256:2084e411891eabbd974fdbdeb2fd6059b33606093250a9d156eb86276dad445c"
+      "hash": "sha256:017783fe880863e9dedc5138df4e1212d020ce7cfac5a13b58911fc4705f0e7a"
     },
     "acquisition": {
       "class": "source_projected_exact",
@@ -55,7 +55,7 @@
       "legal_basis": "public_task",
       "policy": {
         "id": "relay.dhis2.tracker.enrollment-status.exact",
-        "hash": "sha256:673b8507cccc073fe67d64558fc3ddf9775f9d1e38fed72435ca94ea19df6e7a",
+        "hash": "sha256:0eaec9b82087299193efb25a9189a41b7373e64abf152ba7204fdf5b05722959",
         "decision_cache": "disabled",
         "max_decision_age_ms": 1000,
         "unavailable": "deny"
