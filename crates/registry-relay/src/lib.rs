@@ -21,6 +21,7 @@ pub mod audit;
 pub mod auth;
 pub mod config;
 pub mod connector;
+pub mod consultation;
 pub mod deployment;
 pub mod entity;
 pub mod error;

@@ -1,0 +1,19 @@
+// SPDX-License-Identifier: Apache-2.0
+//! Closed domain types for purpose-aware Relay consultations.
+//!
+//! This module deliberately contains no HTTP parsing or source dispatch. It
+//! establishes parsed values and validated declarations that the consultation
+//! service will later bind to a profile, authorization decision, durable audit,
+//! and fenced dispatch grant. Raw request values and native source controls are
+//! not backend capabilities.
+
+mod types;
+
+pub use types::{
+    AcquiredField, AcquisitionClass, AssertionContractHash, AssertionContractId,
+    AssertionContractIdentity, ConsultationOutcome, ConsultationValidationError,
+    DeclaredOperationFootprint, IntegrationPackHash, IntegrationPackId, IntegrationPackIdentity,
+    OperationBounds, OperationId, ParsedPurpose, ParsedSingleStringInput, PolicyHash, PolicyId,
+    PolicyIdentity, PreAuthorizationConsultationCore, ProfileContractHash, ProfileId,
+    ProfileIdentity, ProfileVersion, SelectorProvenance, SnapshotGenerationId,
+};
