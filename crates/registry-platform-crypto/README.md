@@ -72,6 +72,11 @@ policy.
 
 - `PrivateJwk` redacts private material in `Debug`.
 - `PrivateJwk::public` strips private members before serialization.
+- Raw JWK JSON and decoded `did:jwk` payloads are limited to 64 KiB and reject
+  duplicate members before interpretation. Every `PublicJwk` deserialization
+  rejects symmetric or asymmetric private members (`k`, `d`, `p`, `q`, `dp`,
+  `dq`, `qi`, and `oth`) while continuing to ignore non-secret extension
+  metadata.
 - `LocalJwkSigner` requires a non-empty `kid`, stores local key material behind
   shared ownership, and exposes only public JWK metadata through
   `SigningProvider`.

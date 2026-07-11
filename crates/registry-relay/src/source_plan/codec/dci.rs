@@ -7,6 +7,7 @@
 //! explicit DCI protocol version and all product-specific constants before a
 //! compiled source plan can construct this type.
 
+use registry_platform_crypto::parse_json_strict;
 use serde::de;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
@@ -15,8 +16,6 @@ use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use ulid::Ulid;
 use zeroize::Zeroizing;
-
-use crate::source_plan::strict_json::DuplicateFreeJsonValue;
 
 const MAX_PROTOCOL_VERSION_BYTES: usize = 16;
 const MAX_PROTOCOL_IDENTIFIER_BYTES: usize = 160;
@@ -573,8 +572,9 @@ pub(crate) fn decode_exact_search_response(
     if bytes.len() > expected.max_response_bytes {
         return Err(DciCodecError::ResponseTooLarge);
     }
+    let value = parse_json_strict(bytes).map_err(|_| DciCodecError::MalformedResponse)?;
     let envelope: WireResponseEnvelope =
-        serde_json::from_slice(bytes).map_err(|_| DciCodecError::MalformedResponse)?;
+        serde_json::from_value(value).map_err(|_| DciCodecError::MalformedResponse)?;
 
     if envelope.signature.is_some() {
         return Err(DciCodecError::UnexpectedResponseSignature);
@@ -780,7 +780,7 @@ impl<'de> Deserialize<'de> for StrictRecord {
     where
         D: Deserializer<'de>,
     {
-        let value = DuplicateFreeJsonValue::deserialize(deserializer)?.into_inner();
+        let value = Value::deserialize(deserializer)?;
         if !value.is_object() {
             return Err(de::Error::custom("DCI record must be an object"));
         }

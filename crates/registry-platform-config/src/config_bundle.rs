@@ -5,9 +5,11 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use registry_platform_crypto::{canonicalize_json, verify, PublicJwk, SigningAlgorithm};
+use registry_platform_crypto::{
+    canonicalize_json, parse_json_strict, verify, PublicJwk, SigningAlgorithm,
+};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
@@ -181,6 +183,15 @@ impl fmt::Display for ConfigBundleError {
 
 impl std::error::Error for ConfigBundleError {}
 
+fn deserialize_strict<T>(bytes: &[u8]) -> Result<T, ConfigBundleError>
+where
+    T: DeserializeOwned,
+{
+    let value =
+        parse_json_strict(bytes).map_err(|error| ConfigBundleError::Json(error.to_string()))?;
+    serde_json::from_value(value).map_err(|error| ConfigBundleError::Json(error.to_string()))
+}
+
 pub fn verify_config_bundle(
     bundle_dir: impl AsRef<Path>,
     trust_anchor_path: impl AsRef<Path>,
@@ -190,7 +201,7 @@ pub fn verify_config_bundle(
     let manifest_path = bundle_dir.join(MANIFEST_FILE);
     let signature_path = bundle_dir.join(SIGNATURE_FILE);
     let manifest_bytes = read_limited(&manifest_path, MAX_MANIFEST_BYTES)?;
-    let manifest_value: Value = serde_json::from_slice(&manifest_bytes)
+    let manifest_value = parse_json_strict(&manifest_bytes)
         .map_err(|error| ConfigBundleError::Json(error.to_string()))?;
     let manifest: ConfigBundleManifest = serde_json::from_value(manifest_value.clone())
         .map_err(|error| ConfigBundleError::Json(error.to_string()))?;
@@ -198,8 +209,7 @@ pub fn verify_config_bundle(
     anchor.validate()?;
 
     let signature_bytes = read_limited(&signature_path, MAX_SIGNATURE_ENVELOPE_BYTES)?;
-    let envelope: ConfigBundleSignatureEnvelope = serde_json::from_slice(&signature_bytes)
-        .map_err(|error| ConfigBundleError::Json(error.to_string()))?;
+    let envelope: ConfigBundleSignatureEnvelope = deserialize_strict(&signature_bytes)?;
     envelope.validate()?;
     let canonical_manifest = canonicalize_json(&manifest_value)
         .map_err(|error| ConfigBundleError::Json(error.to_string()))?;
@@ -222,8 +232,7 @@ pub fn load_trust_anchor(path: &Path) -> Result<ConfigTrustAnchor, ConfigBundleE
         MAX_TRUST_ANCHOR_BYTES,
         ArtifactPermissions::TrustAnchor,
     )?;
-    let anchor: ConfigTrustAnchor = serde_json::from_slice(&bytes)
-        .map_err(|error| ConfigBundleError::Json(error.to_string()))?;
+    let anchor: ConfigTrustAnchor = deserialize_strict(&bytes)?;
     anchor.validate()?;
     Ok(anchor)
 }
@@ -398,8 +407,7 @@ pub fn load_break_glass_override(
         MAX_SIGNATURE_ENVELOPE_BYTES,
         ArtifactPermissions::BreakGlassOverride,
     )?;
-    let override_file: ConfigBreakGlassOverride = serde_json::from_slice(&bytes)
-        .map_err(|error| ConfigBundleError::Json(error.to_string()))?;
+    let override_file: ConfigBreakGlassOverride = deserialize_strict(&bytes)?;
     override_file.validate_fields()?;
     if matches!(override_file.mode, ConfigBreakGlassMode::AcceptUnsigned) {
         let config_path = override_file
@@ -942,6 +950,74 @@ mod tests {
     }
 
     #[test]
+    fn rejects_duplicate_members_in_every_signed_json_artifact() {
+        let fixture = fixture();
+
+        let manifest_path = fixture.bundle_dir.join(MANIFEST_FILE);
+        let manifest = fs::read_to_string(&manifest_path).expect("manifest text");
+        fs::write(
+            &manifest_path,
+            manifest.replacen("\"schema\":", "\"schema\":\"shadow\",\"schema\":", 1),
+        )
+        .expect("duplicate manifest");
+        assert!(matches!(
+            verify_config_bundle(&fixture.bundle_dir, &fixture.anchor_path),
+            Err(ConfigBundleError::Json(message))
+                if message.contains("duplicate JSON object member")
+        ));
+
+        write_manifest_and_signature(&fixture.bundle_dir, &fixture.manifest, &fixture.private);
+        let signature_path = fixture.bundle_dir.join(SIGNATURE_FILE);
+        let signature = fs::read_to_string(&signature_path).expect("signature text");
+        fs::write(
+            &signature_path,
+            signature.replacen("\"kid\":", "\"kid\":\"shadow\",\"kid\":", 1),
+        )
+        .expect("duplicate signature");
+        assert!(matches!(
+            verify_config_bundle(&fixture.bundle_dir, &fixture.anchor_path),
+            Err(ConfigBundleError::Json(message))
+                if message.contains("duplicate JSON object member")
+        ));
+
+        let anchor = fs::read_to_string(&fixture.anchor_path).expect("anchor text");
+        fs::write(
+            &fixture.anchor_path,
+            anchor.replacen("\"kty\":", "\"kty\":\"shadow\",\"kty\":", 1),
+        )
+        .expect("duplicate trust anchor");
+        assert!(matches!(
+            load_trust_anchor(&fixture.anchor_path),
+            Err(ConfigBundleError::Json(message))
+                if message.contains("duplicate JSON object member")
+        ));
+    }
+
+    #[test]
+    fn trust_anchor_rejects_private_members_inside_public_jwks() {
+        const PRIVATE_MARKER: &str = "PRIVATE_KEY_MATERIAL_MUST_NOT_SURVIVE";
+
+        for member in ["d", "k", "oth"] {
+            let fixture = fixture();
+            let bytes = fs::read(&fixture.anchor_path).expect("anchor bytes");
+            let mut anchor: serde_json::Value =
+                serde_json::from_slice(&bytes).expect("anchor fixture JSON");
+            anchor["signers"][0]["jwk"][member] = serde_json::json!(PRIVATE_MARKER);
+            fs::write(
+                &fixture.anchor_path,
+                serde_json::to_vec_pretty(&anchor).expect("private anchor fixture"),
+            )
+            .expect("write private anchor fixture");
+
+            let error = load_trust_anchor(&fixture.anchor_path)
+                .expect_err("public trust anchors must reject private JWK members");
+            let diagnostic = format!("{error:?} {error}");
+            assert!(diagnostic.contains("public JWK contains private material"));
+            assert!(!diagnostic.contains(PRIVATE_MARKER));
+        }
+    }
+
+    #[test]
     fn accepts_fleet_wide_bundle_for_instance_anchor() {
         let fixture = fixture();
 
@@ -1275,6 +1351,20 @@ mod tests {
             .validate_fields()
             .expect_err("expired override rejected");
         assert_eq!(expired, ConfigBundleError::InvalidBreakGlass("expired"));
+    }
+
+    #[test]
+    fn break_glass_rejects_duplicate_json_members_before_interpretation() {
+        let tmp = TempDir::new().expect("tempdir");
+        let path = tmp.path().join("break_glass_override.json");
+        fs::write(&path, br#"{"schema":"first","schema":"second"}"#).expect("override fixture");
+
+        let bytes = fs::read(&path).expect("override bytes");
+        assert!(matches!(
+            deserialize_strict::<ConfigBreakGlassOverride>(&bytes),
+            Err(ConfigBundleError::Json(message))
+                if message.contains("duplicate JSON object member")
+        ));
     }
 
     #[cfg(unix)]

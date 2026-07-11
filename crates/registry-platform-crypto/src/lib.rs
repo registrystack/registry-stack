@@ -17,8 +17,11 @@ use p256::ecdsa::{
     VerifyingKey as P256VerifyingKey,
 };
 use pkcs1::{der::asn1::UintRef, der::SecretDocument, RsaPrivateKey as Pkcs1RsaPrivateKey};
-pub use registry_platform_canonical_json::{canonicalize_json, JcsError};
-use serde::{Deserialize, Serialize};
+pub use registry_platform_canonical_json::{
+    canonicalize_json, parse_json_strict, JcsError, StrictJsonError,
+};
+use serde::de::{self, IgnoredAny, MapAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::fmt;
@@ -27,6 +30,10 @@ use std::sync::Arc;
 use thiserror::Error;
 use url::{Host, Url};
 use zeroize::{Zeroize, Zeroizing};
+
+/// Maximum raw JSON bytes accepted by the JWK parsing boundaries.
+pub const MAX_JWK_JSON_BYTES: usize = 64 * 1024;
+const MAX_DID_JWK_IDENTIFIER_BYTES: usize = MAX_JWK_JSON_BYTES.div_ceil(3) * 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SigningAlgorithm {
@@ -220,7 +227,7 @@ impl Drop for PrivateJwk {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct PublicJwk {
     pub kty: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -237,6 +244,90 @@ pub struct PublicJwk {
     pub n: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub e: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for PublicJwk {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_map(PublicJwkVisitor)
+    }
+}
+
+struct PublicJwkVisitor;
+
+impl<'de> Visitor<'de> for PublicJwkVisitor {
+    type Value = PublicJwk;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a public JWK without private key material")
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut kty = None;
+        let mut kid = None;
+        let mut alg = None;
+        let mut crv = None;
+        let mut x = None;
+        let mut y = None;
+        let mut n = None;
+        let mut e = None;
+
+        while let Some(field) = map.next_key::<String>()? {
+            match field.as_str() {
+                "kty" => {
+                    if kty.is_some() {
+                        return Err(de::Error::duplicate_field("kty"));
+                    }
+                    kty = Some(map.next_value()?);
+                }
+                "kid" => deserialize_optional_jwk_field(&mut map, &mut kid, "kid")?,
+                "alg" => deserialize_optional_jwk_field(&mut map, &mut alg, "alg")?,
+                "crv" => deserialize_optional_jwk_field(&mut map, &mut crv, "crv")?,
+                "x" => deserialize_optional_jwk_field(&mut map, &mut x, "x")?,
+                "y" => deserialize_optional_jwk_field(&mut map, &mut y, "y")?,
+                "n" => deserialize_optional_jwk_field(&mut map, &mut n, "n")?,
+                "e" => deserialize_optional_jwk_field(&mut map, &mut e, "e")?,
+                "k" | "d" | "p" | "q" | "dp" | "dq" | "qi" | "oth" => {
+                    let _: IgnoredAny = map.next_value()?;
+                    return Err(de::Error::custom("public JWK contains private material"));
+                }
+                _ => {
+                    let _: IgnoredAny = map.next_value()?;
+                }
+            }
+        }
+
+        Ok(PublicJwk {
+            kty: kty.ok_or_else(|| de::Error::missing_field("kty"))?,
+            kid: kid.unwrap_or(None),
+            alg: alg.unwrap_or(None),
+            crv: crv.unwrap_or(None),
+            x: x.unwrap_or(None),
+            y: y.unwrap_or(None),
+            n: n.unwrap_or(None),
+            e: e.unwrap_or(None),
+        })
+    }
+}
+
+fn deserialize_optional_jwk_field<'de, A>(
+    map: &mut A,
+    slot: &mut Option<Option<String>>,
+    field: &'static str,
+) -> Result<(), A::Error>
+where
+    A: MapAccess<'de>,
+{
+    if slot.is_some() {
+        return Err(de::Error::duplicate_field(field));
+    }
+    *slot = Some(map.next_value()?);
+    Ok(())
 }
 
 /// A key-backed signer that can produce detached signatures and publish
@@ -322,7 +413,11 @@ impl SigningProvider for LocalJwkSigner {
 
 impl PrivateJwk {
     pub fn parse(json: &str) -> Result<Self, JwkError> {
-        let value: Value = serde_json::from_str(json).map_err(JwkError::Json)?;
+        if json.len() > MAX_JWK_JSON_BYTES {
+            return Err(JwkError::JsonTooLarge);
+        }
+        let value = parse_json_strict(json.as_bytes()).map_err(JwkError::StrictJson)?;
+        reject_unsupported_private_members(&value)?;
         let jwk: Self = serde_json::from_value(value).map_err(JwkError::Json)?;
         jwk.validate_private()?;
         Ok(jwk)
@@ -389,7 +484,10 @@ impl PrivateJwk {
 
 impl PublicJwk {
     pub fn parse(json: &str) -> Result<Self, JwkError> {
-        let value: Value = serde_json::from_str(json).map_err(JwkError::Json)?;
+        if json.len() > MAX_JWK_JSON_BYTES {
+            return Err(JwkError::JsonTooLarge);
+        }
+        let value = parse_json_strict(json.as_bytes()).map_err(JwkError::StrictJson)?;
         reject_private_members(&value)?;
         let jwk: Self = serde_json::from_value(value).map_err(JwkError::Json)?;
         jwk.validate_public()?;
@@ -462,6 +560,10 @@ impl PublicJwk {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum JwkError {
+    #[error("JWK JSON exceeds the 64 KiB limit")]
+    JsonTooLarge,
+    #[error("invalid JWK JSON: {0}")]
+    StrictJson(#[from] StrictJsonError),
     #[error("invalid JWK JSON: {0}")]
     Json(#[from] serde_json::Error),
     #[error("invalid JWK: {0}")]
@@ -604,10 +706,16 @@ pub fn parse_did_jwk(s: &str) -> Result<PublicJwk, DidError> {
     if identifier.is_empty() || identifier.contains('/') || identifier.contains('?') {
         return Err(DidError::InvalidIdentifier);
     }
+    if identifier.len() > MAX_DID_JWK_IDENTIFIER_BYTES {
+        return Err(DidError::InvalidDidJwk);
+    }
     let jwk_json = URL_SAFE_NO_PAD
         .decode(identifier)
         .map_err(|_| DidError::InvalidDidJwk)?;
-    let value: Value = serde_json::from_slice(&jwk_json).map_err(|_| DidError::InvalidDidJwk)?;
+    if jwk_json.len() > MAX_JWK_JSON_BYTES {
+        return Err(DidError::InvalidDidJwk);
+    }
+    let value = parse_json_strict(&jwk_json).map_err(|_| DidError::InvalidDidJwk)?;
     reject_private_members(&value).map_err(|_| DidError::InvalidDidJwk)?;
     let minimal = minimal_did_jwk_value_from_value(&value).map_err(|_| DidError::InvalidDidJwk)?;
     let jwk: PublicJwk = serde_json::from_value(minimal).map_err(|_| DidError::InvalidDidJwk)?;
@@ -855,12 +963,22 @@ fn algorithm_from_fields(
 }
 
 fn reject_private_members(value: &Value) -> Result<(), JwkError> {
-    const PRIVATE_MEMBERS: [&str; 7] = ["d", "p", "q", "dp", "dq", "qi", "oth"];
+    const PRIVATE_MEMBERS: [&str; 8] = ["k", "d", "p", "q", "dp", "dq", "qi", "oth"];
     if PRIVATE_MEMBERS
         .iter()
         .any(|member| value.get(member).is_some())
     {
         return Err(JwkError::Invalid("public JWK contains private material"));
+    }
+    Ok(())
+}
+
+fn reject_unsupported_private_members(value: &Value) -> Result<(), JwkError> {
+    if ["k", "oth"]
+        .iter()
+        .any(|member| value.get(member).is_some())
+    {
+        return Err(JwkError::Invalid("unsupported private JWK material"));
     }
     Ok(())
 }
@@ -1051,6 +1169,20 @@ mod tests {
     }
 
     #[test]
+    fn jwk_parsers_reject_duplicate_members_before_key_interpretation() {
+        let duplicate = r#"{"kty":"OKP","\u006bty":"EC","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}"#;
+
+        assert!(matches!(
+            PrivateJwk::parse(duplicate),
+            Err(JwkError::StrictJson(_))
+        ));
+        assert!(matches!(
+            PublicJwk::parse(duplicate),
+            Err(JwkError::StrictJson(_))
+        ));
+    }
+
+    #[test]
     fn private_jwk_serializes_as_public_projection() {
         let private = PrivateJwk::parse(RAW_JWK).expect("private jwk parses");
         let serialized = serde_json::to_value(&private).expect("private jwk serializes safely");
@@ -1069,6 +1201,38 @@ mod tests {
     fn public_jwk_rejects_private_members() {
         let err = PublicJwk::parse(RAW_JWK).expect_err("private member must reject");
         assert!(matches!(err, JwkError::Invalid(_)));
+
+        const MARKER: &str = "PRIVATE_MEMBER_VALUE_MUST_NOT_LEAK";
+        for member in ["d", "k", "oth", "\\u006b"] {
+            let raw = format!(
+                r#"{{"kty":"OKP","crv":"Ed25519","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","{member}":"{MARKER}"}}"#
+            );
+            assert!(matches!(PublicJwk::parse(&raw), Err(JwkError::Invalid(_))));
+            let typed_error = serde_json::from_str::<PublicJwk>(&raw)
+                .expect_err("typed public-key decoding must reject private material");
+            let diagnostic = typed_error.to_string();
+            assert!(diagnostic.contains("public JWK contains private material"));
+            assert!(!diagnostic.contains(MARKER));
+        }
+
+        let duplicate = r#"{"kty":"OKP","kty":"EC","crv":"Ed25519","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc"}"#;
+        assert!(serde_json::from_str::<PublicJwk>(duplicate).is_err());
+    }
+
+    #[test]
+    fn raw_jwk_parsers_enforce_the_shared_byte_limit() {
+        let oversized = " ".repeat(MAX_JWK_JSON_BYTES + 1);
+        assert!(matches!(
+            PrivateJwk::parse(&oversized),
+            Err(JwkError::JsonTooLarge)
+        ));
+        assert!(matches!(
+            PublicJwk::parse(&oversized),
+            Err(JwkError::JsonTooLarge)
+        ));
+
+        let oversized_did = format!("did:jwk:{}", "A".repeat(MAX_DID_JWK_IDENTIFIER_BYTES + 1));
+        assert_eq!(parse_did_jwk(&oversized_did), Err(DidError::InvalidDidJwk));
     }
 
     #[test]
@@ -1176,6 +1340,23 @@ mod tests {
             private.algorithm().expect("algorithm"),
             SigningAlgorithm::EdDsa
         );
+    }
+
+    #[test]
+    fn private_jwk_parser_rejects_unsupported_secret_members() {
+        const MARKER: &str = "UNSUPPORTED_PRIVATE_VALUE_MUST_NOT_LEAK";
+        for member in ["k", "oth", "\\u006b"] {
+            let raw = RAW_JWK.replacen(
+                r#""kty":"OKP""#,
+                &format!(r#""kty":"OKP","{member}":"{MARKER}""#),
+                1,
+            );
+            let error =
+                PrivateJwk::parse(&raw).expect_err("unsupported private-key material must reject");
+            let diagnostic = format!("{error:?} {error}");
+            assert!(diagnostic.contains("unsupported private JWK material"));
+            assert!(!diagnostic.contains(MARKER));
+        }
     }
 
     #[test]
@@ -1566,6 +1747,17 @@ mod tests {
         );
         assert_eq!(
             parse_did_jwk(&unsupported_member),
+            Err(DidError::InvalidDidJwk)
+        );
+
+        let duplicate_member = format!(
+            "did:jwk:{}",
+            URL_SAFE_NO_PAD.encode(
+                br#"{"kty":"OKP","\u006bty":"EC","crv":"Ed25519","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc"}"#
+            )
+        );
+        assert_eq!(
+            parse_did_jwk(&duplicate_member),
             Err(DidError::InvalidDidJwk)
         );
     }

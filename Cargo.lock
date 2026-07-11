@@ -5303,6 +5303,7 @@ name = "registry-platform-canonical-json"
 version = "0.9.0"
 dependencies = [
  "ryu-js",
+ "serde",
  "serde_json",
  "thiserror 2.0.18",
 ]
@@ -5579,6 +5580,7 @@ dependencies = [
  "time",
  "ureq",
  "url",
+ "zeroize",
 ]
 
 [[package]]

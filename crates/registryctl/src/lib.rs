@@ -21,14 +21,18 @@ use registry_platform_authcommon::{fingerprint_api_key, validate_api_key_entropy
 use registry_platform_config::{
     sha256_uri, verify_config_bundle, ConfigBundleFile, ConfigBundleManifest,
     ConfigBundleSignature, ConfigBundleSignatureEnvelope, ConfigTrustAnchor,
-    ConfigTrustAnchorSigner, MAX_BUNDLE_FILE_BYTES, MAX_CONFIG_BUNDLE_SEQUENCE,
+    ConfigTrustAnchorSigner, MAX_BUNDLE_FILE_BYTES, MAX_CONFIG_BUNDLE_SEQUENCE, MAX_MANIFEST_BYTES,
+    MAX_SIGNATURE_ENVELOPE_BYTES, MAX_TRUST_ANCHOR_BYTES,
 };
 use registry_platform_crypto::{
-    canonicalize_json, sign as sign_payload, PrivateJwk, PublicJwk, SigningAlgorithm,
+    canonicalize_json, parse_json_strict, sign as sign_payload, PrivateJwk, PublicJwk,
+    SigningAlgorithm, MAX_JWK_JSON_BYTES,
 };
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
+use zeroize::Zeroizing;
 
 pub use crate::sample::Sample;
 
@@ -619,10 +623,8 @@ pub struct OpenFnImportOptions {
 pub fn inspect_config_bundle(bundle_dir: &Path) -> Result<BundleInspectReport> {
     let manifest_path = bundle_dir.join("manifest.json");
     let signature_path = bundle_dir.join("manifest.sig.json");
-    let manifest_bytes = fs::read(&manifest_path)
-        .with_context(|| format!("failed to read {}", manifest_path.display()))?;
-    let manifest: ConfigBundleManifest = serde_json::from_slice(&manifest_bytes)
-        .with_context(|| format!("failed to parse {}", manifest_path.display()))?;
+    let manifest: ConfigBundleManifest =
+        read_bounded_strict_json(&manifest_path, MAX_MANIFEST_BYTES)?;
     manifest
         .validate()
         .with_context(|| format!("invalid config bundle manifest {}", manifest_path.display()))?;
@@ -787,13 +789,9 @@ pub fn add_config_anchor_key(
     enabled: bool,
 ) -> Result<AnchorReport> {
     let mut anchor = read_anchor_unvalidated(anchor_path)?;
-    let jwk_bytes =
-        fs::read(jwk_path).with_context(|| format!("failed to read {}", jwk_path.display()))?;
-    let jwk = PublicJwk::parse(
-        std::str::from_utf8(&jwk_bytes)
-            .with_context(|| format!("{} is not UTF-8 JSON", jwk_path.display()))?,
-    )
-    .with_context(|| format!("failed to parse public JWK {}", jwk_path.display()))?;
+    let jwk_text = read_bounded_utf8_file(jwk_path, MAX_JWK_JSON_BYTES)?;
+    let jwk = PublicJwk::parse(&jwk_text)
+        .with_context(|| format!("failed to parse public JWK {}", jwk_path.display()))?;
     let kid = jwk
         .jkt()
         .context("failed to compute JWK thumbprint for anchor key")?;
@@ -963,20 +961,66 @@ fn primary_config_path(product: &str, files: &[BundleInputFile]) -> Result<Strin
     )
 }
 
-fn read_private_jwk_text(key_ref: &str) -> Result<String> {
+fn read_private_jwk_text(key_ref: &str) -> Result<Zeroizing<String>> {
     if key_ref.starts_with("op://") {
-        let output = Command::new("op")
+        let mut child = Command::new("op")
             .arg("read")
             .arg(key_ref)
-            .output()
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
             .context("failed to run op read for bundle signing key")?;
-        if !output.status.success() {
+        let Some(stdout) = child.stdout.take() else {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("op read did not provide a stdout pipe");
+        };
+        let bytes = match read_bounded_zeroizing(stdout, MAX_JWK_JSON_BYTES, "op read output") {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error);
+            }
+        };
+        let status = child
+            .wait()
+            .context("failed to wait for op read bundle signing key")?;
+        if !status.success() {
             bail!("op read failed for bundle signing key reference");
         }
-        return String::from_utf8(output.stdout)
-            .context("private JWK returned by op read is not UTF-8 JSON");
+        return zeroizing_utf8(bytes, "private JWK returned by op read is not UTF-8 JSON");
     }
-    fs::read_to_string(key_ref).with_context(|| format!("failed to read {}", key_ref))
+    read_bounded_utf8_file(Path::new(key_ref), MAX_JWK_JSON_BYTES)
+}
+
+fn read_bounded_utf8_file(path: &Path, max_bytes: usize) -> Result<Zeroizing<String>> {
+    let file =
+        fs::File::open(path).with_context(|| format!("failed to read {}", path.display()))?;
+    let label = path.display().to_string();
+    let bytes = read_bounded_zeroizing(file, max_bytes, &label)?;
+    zeroizing_utf8(bytes, &format!("{} is not UTF-8 JSON", path.display()))
+}
+
+fn read_bounded_zeroizing(
+    reader: impl Read,
+    max_bytes: usize,
+    label: &str,
+) -> Result<Zeroizing<Vec<u8>>> {
+    let mut bytes = Zeroizing::new(Vec::new());
+    reader
+        .take(max_bytes as u64 + 1)
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("failed to read {label}"))?;
+    if bytes.len() > max_bytes {
+        bail!("{label} exceeds the {max_bytes}-byte limit");
+    }
+    Ok(bytes)
+}
+
+fn zeroizing_utf8(bytes: Zeroizing<Vec<u8>>, invalid_message: &str) -> Result<Zeroizing<String>> {
+    let text = std::str::from_utf8(&bytes).with_context(|| invalid_message.to_string())?;
+    Ok(Zeroizing::new(text.to_owned()))
 }
 
 fn key_display(key_ref: &str) -> &str {
@@ -990,10 +1034,10 @@ fn key_display(key_ref: &str) -> &str {
 fn read_signature_envelope_if_present(
     signature_path: &Path,
 ) -> Result<Option<ConfigBundleSignatureEnvelope>> {
-    match fs::read(signature_path) {
-        Ok(bytes) => serde_json::from_slice(&bytes)
-            .with_context(|| format!("failed to parse {}", signature_path.display()))
-            .map(Some),
+    match fs::File::open(signature_path) {
+        Ok(file) => {
+            decode_bounded_strict_json(file, signature_path, MAX_SIGNATURE_ENVELOPE_BYTES).map(Some)
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => {
             Err(error).with_context(|| format!("failed to read {}", signature_path.display()))
@@ -1002,10 +1046,7 @@ fn read_signature_envelope_if_present(
 }
 
 fn read_anchor_unvalidated(anchor_path: &Path) -> Result<ConfigTrustAnchor> {
-    let bytes = fs::read(anchor_path)
-        .with_context(|| format!("failed to read {}", anchor_path.display()))?;
-    let anchor: ConfigTrustAnchor = serde_json::from_slice(&bytes)
-        .with_context(|| format!("failed to parse {}", anchor_path.display()))?;
+    let anchor: ConfigTrustAnchor = read_bounded_strict_json(anchor_path, MAX_TRUST_ANCHOR_BYTES)?;
     if anchor.schema != CONFIG_TRUST_ANCHOR_SCHEMA {
         bail!("trust anchor schema is invalid");
     }
@@ -1017,6 +1058,35 @@ fn read_anchor_unvalidated(anchor_path: &Path) -> Result<ConfigTrustAnchor> {
         bail!("trust anchor binding fields must be non-empty");
     }
     Ok(anchor)
+}
+
+fn read_bounded_strict_json<T>(path: &Path, max_bytes: u64) -> Result<T>
+where
+    T: DeserializeOwned,
+{
+    let file =
+        fs::File::open(path).with_context(|| format!("failed to read {}", path.display()))?;
+    decode_bounded_strict_json(file, path, max_bytes)
+}
+
+fn decode_bounded_strict_json<T>(reader: impl Read, path: &Path, max_bytes: u64) -> Result<T>
+where
+    T: DeserializeOwned,
+{
+    let mut bytes = Vec::new();
+    reader
+        .take(max_bytes + 1)
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+    if bytes.len() as u64 > max_bytes {
+        bail!(
+            "JSON artifact exceeds the {max_bytes}-byte limit: {}",
+            path.display()
+        );
+    }
+    let value =
+        parse_json_strict(&bytes).with_context(|| format!("failed to parse {}", path.display()))?;
+    serde_json::from_value(value).with_context(|| format!("failed to parse {}", path.display()))
 }
 
 fn write_json_file<T: Serialize>(path: &Path, value: &T) -> Result<()> {
@@ -5600,6 +5670,32 @@ mod tests {
         assert_eq!(verified.config_hash, config_hash);
         assert_eq!(verified.signer_kids, vec![public.jkt().unwrap()]);
         assert_eq!(verified.config_path, bundle_dir.join("config/notary.yaml"));
+    }
+
+    #[test]
+    fn config_artifact_reader_rejects_duplicate_members_and_oversize_input() {
+        let temp = TempDir::new().unwrap();
+        let duplicate_path = temp.path().join("duplicate.json");
+        fs::write(&duplicate_path, br#"{"id":1,"\u0069d":2}"#).unwrap();
+
+        let error = read_bounded_strict_json::<Value>(&duplicate_path, 1024).unwrap_err();
+        assert!(format!("{error:#}").contains("duplicate JSON object member"));
+
+        let oversized_path = temp.path().join("oversized.json");
+        fs::write(&oversized_path, br#"{"value":"too-large"}"#).unwrap();
+        let error = read_bounded_strict_json::<Value>(&oversized_path, 4).unwrap_err();
+        assert!(format!("{error:#}").contains("exceeds the 4-byte limit"));
+
+        let oversized_jwk_path = temp.path().join("oversized.jwk");
+        fs::write(&oversized_jwk_path, vec![b' '; MAX_JWK_JSON_BYTES + 1]).unwrap();
+        let error = read_private_jwk_text(oversized_jwk_path.to_str().unwrap()).unwrap_err();
+        assert!(
+            format!("{error:#}").contains(&format!("exceeds the {MAX_JWK_JSON_BYTES}-byte limit"))
+        );
+        let error = read_bounded_utf8_file(&oversized_jwk_path, MAX_JWK_JSON_BYTES).unwrap_err();
+        assert!(
+            format!("{error:#}").contains(&format!("exceeds the {MAX_JWK_JSON_BYTES}-byte limit"))
+        );
     }
 
     #[test]
