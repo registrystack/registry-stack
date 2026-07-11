@@ -284,6 +284,7 @@ export default defineConfig({
           items: [
             ...generatedProduct('Notary').items,
             { label: 'Notary for a Registry Data API', slug: 'tutorials/run-notary-standalone-for-api' },
+            { label: 'Production signing', slug: 'tutorials/move-notary-to-production-signing' },
           ],
         },
         {
