@@ -61,14 +61,14 @@ pub enum ConsultationValidationError {
     /// A disclosed-record bound is outside the v1 exact profile contract.
     #[error("consultation disclosed-record bound must be one")]
     InvalidDisclosedRecordBound,
-    /// A data-exchange bound is outside `1..=5`.
-    #[error("consultation data-exchange bound must be between one and five")]
+    /// A live bound is outside `1..=5`, or a Snapshot bound is not zero.
+    #[error("consultation data-exchange bound is invalid for its acquisition class")]
     InvalidDataExchangeBound,
-    /// A credential-exchange bound is outside `0..=1`.
-    #[error("consultation credential-exchange bound must be zero or one")]
+    /// A live bound is outside `0..=1`, or a Snapshot bound is not zero.
+    #[error("consultation credential-exchange bound is invalid for its acquisition class")]
     InvalidCredentialExchangeBound,
-    /// A v1 profile does not declare exactly one registry data origin.
-    #[error("consultation must declare exactly one data destination")]
+    /// A live plan does not declare one origin, or a Snapshot declares any.
+    #[error("consultation data-destination bound is invalid for its acquisition class")]
     InvalidDataDestinationBound,
     /// An aggregate byte bound is zero or exceeds 1 MiB.
     #[error("consultation source-byte bound is outside the v1 ceiling")]
@@ -574,14 +574,29 @@ impl DeclaredOperationFootprint {
         if bounds.max_disclosed_records != MAX_DISCLOSED_RECORDS {
             return Err(ConsultationValidationError::InvalidDisclosedRecordBound);
         }
-        if !(1..=MAX_DATA_EXCHANGES).contains(&bounds.max_data_exchanges) {
-            return Err(ConsultationValidationError::InvalidDataExchangeBound);
-        }
-        if bounds.max_credential_exchanges > MAX_CREDENTIAL_EXCHANGES {
-            return Err(ConsultationValidationError::InvalidCredentialExchangeBound);
-        }
-        if bounds.max_data_destinations != MAX_DATA_DESTINATIONS {
-            return Err(ConsultationValidationError::InvalidDataDestinationBound);
+        match acquisition_class {
+            AcquisitionClass::SourceProjectedExact | AcquisitionClass::BoundedFullRecord => {
+                if !(1..=MAX_DATA_EXCHANGES).contains(&bounds.max_data_exchanges) {
+                    return Err(ConsultationValidationError::InvalidDataExchangeBound);
+                }
+                if bounds.max_credential_exchanges > MAX_CREDENTIAL_EXCHANGES {
+                    return Err(ConsultationValidationError::InvalidCredentialExchangeBound);
+                }
+                if bounds.max_data_destinations != MAX_DATA_DESTINATIONS {
+                    return Err(ConsultationValidationError::InvalidDataDestinationBound);
+                }
+            }
+            AcquisitionClass::MaterializedSnapshot => {
+                if bounds.max_data_exchanges != 0 {
+                    return Err(ConsultationValidationError::InvalidDataExchangeBound);
+                }
+                if bounds.max_credential_exchanges != 0 {
+                    return Err(ConsultationValidationError::InvalidCredentialExchangeBound);
+                }
+                if bounds.max_data_destinations != 0 {
+                    return Err(ConsultationValidationError::InvalidDataDestinationBound);
+                }
+            }
         }
         if !(1..=MAX_SOURCE_BYTES).contains(&bounds.max_source_bytes) {
             return Err(ConsultationValidationError::InvalidSourceByteBound);
@@ -1141,6 +1156,53 @@ mod tests {
             ),
             Err(ConsultationValidationError::DuplicateAcquiredField)
         );
+
+        let snapshot_bounds = OperationBounds {
+            max_data_exchanges: 0,
+            max_credential_exchanges: 0,
+            max_data_destinations: 0,
+            ..base
+        };
+        assert!(DeclaredOperationFootprint::try_new(
+            "person-status-snapshot",
+            AcquisitionClass::MaterializedSnapshot,
+            ["registration_status"],
+            snapshot_bounds,
+        )
+        .is_ok());
+        for (bounds, error) in [
+            (
+                OperationBounds {
+                    max_data_exchanges: 1,
+                    ..snapshot_bounds
+                },
+                ConsultationValidationError::InvalidDataExchangeBound,
+            ),
+            (
+                OperationBounds {
+                    max_credential_exchanges: 1,
+                    ..snapshot_bounds
+                },
+                ConsultationValidationError::InvalidCredentialExchangeBound,
+            ),
+            (
+                OperationBounds {
+                    max_data_destinations: 1,
+                    ..snapshot_bounds
+                },
+                ConsultationValidationError::InvalidDataDestinationBound,
+            ),
+        ] {
+            assert_eq!(
+                DeclaredOperationFootprint::try_new(
+                    "person-status-snapshot",
+                    AcquisitionClass::MaterializedSnapshot,
+                    ["registration_status"],
+                    bounds,
+                ),
+                Err(error)
+            );
+        }
     }
 
     #[test]

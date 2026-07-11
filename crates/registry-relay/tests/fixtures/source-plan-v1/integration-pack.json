@@ -1,0 +1,212 @@
+{
+  "schema": "registry.relay.integration-pack.v1",
+  "id": "synthetic.person-status",
+  "version": "1",
+  "spec": {
+    "product_family": "synthetic-registry",
+    "supported_version_evidence": [
+      "synthetic-v1"
+    ],
+    "logical_operation": "person.status",
+    "input_slots": {
+      "subject_id": {
+        "type": "string",
+        "max_bytes": 256,
+        "pattern": "^[A-Za-z0-9._:-]+$",
+        "canonicalization": "identity"
+      }
+    },
+    "acquisition": {
+      "class": "source_projected_exact",
+      "fields": {
+        "registration_status": {
+          "type": "string",
+          "nullable": false,
+          "max_bytes": 64
+        }
+      }
+    },
+    "reviewed_acquisition": {
+      "class": "source_projected_exact",
+      "fields": {
+        "registration_status": {
+          "type": "string",
+          "nullable": false,
+          "max_bytes": 64
+        }
+      },
+      "control_fields": {},
+      "selector": {
+        "type": "http_anchor",
+        "input": "subject_id",
+        "operation": "lookup-status",
+        "location": {
+          "type": "query",
+          "parameter": "subject_id"
+        }
+      },
+      "cardinality": "probe_two",
+      "reject_unknown_fields": true
+    },
+    "output": {
+      "registration_status": {
+        "type": "string",
+        "nullable": false
+      }
+    },
+    "plan": {
+      "kind": "bounded_http",
+      "data_destination_slot": "registry-data",
+      "credential_destination_slot": "registry-oauth",
+      "operations": [
+        {
+          "id": "lookup-status",
+          "method": "GET",
+          "destination_slot": "registry-data",
+          "path": "/api/person/status",
+          "query": {
+            "fields": {
+              "source": "literal",
+              "value": "registration_status"
+            },
+            "limit": {
+              "source": "literal",
+              "value": "2"
+            },
+            "subject_id": {
+              "source": "consultation_input",
+              "name": "subject_id"
+            },
+            "program": {
+              "source": "deployment_parameter",
+              "name": "program"
+            }
+          },
+          "headers": {},
+          "body": null,
+          "request_codec": "none",
+          "step_limits": {
+            "max_request_bytes": 8192,
+            "timeout_ms": 5000,
+            "max_in_flight": 1
+          },
+          "auth": {
+            "mode": "oauth_client_credentials"
+          },
+          "acquisition_fields": [
+            "registration_status"
+          ],
+          "control_fields": [],
+          "projection": {
+            "mechanism": "query_parameter_exact",
+            "parameter": "fields",
+            "delimiter": ","
+          },
+          "response": {
+            "max_bytes": 65536,
+            "max_records": 2,
+            "normalization": "json_array_probe_two",
+            "cardinality": {
+              "mechanism": "probe_query_parameter",
+              "parameter": "limit"
+            },
+            "schema": {
+              "type": "array",
+              "nullable": false,
+              "max_items": 2,
+              "items": {
+                "type": "object",
+                "nullable": false,
+                "reject_unknown_fields": true,
+                "fields": {
+                  "registration_status": {
+                    "required": true,
+                    "schema": {
+                      "type": "string",
+                      "nullable": false,
+                      "max_bytes": 64
+                    }
+                  }
+                }
+              }
+            },
+            "accepted_statuses": [
+              200
+            ],
+            "output_mapping": {
+              "registration_status": "/registration_status"
+            }
+          }
+        }
+      ],
+      "steps": [
+        "lookup-status"
+      ],
+      "credential_operation": {
+        "id": "acquire-token",
+        "kind": "oauth2_client_credentials",
+        "destination_slot": "registry-oauth",
+        "path": "/oauth/token",
+        "request": {
+          "format": "json_client_secret_body",
+          "max_client_id_bytes": 256,
+          "max_client_secret_bytes": 512,
+          "max_body_bytes": 8192,
+          "max_request_bytes": 12288,
+          "timeout_ms": 3000,
+          "audience": "registry-data",
+          "scopes": [
+            "registry.read"
+          ]
+        },
+        "response": {
+          "max_bytes": 16384,
+          "accepted_statuses": [
+            200
+          ],
+          "schema": "strict_access_token_bearer_expires_in",
+          "access_token_max_bytes": 4089,
+          "token_type": "Bearer",
+          "expires_in_min_seconds": 60,
+          "expires_in_max_seconds": 3600,
+          "max_token_lifetime_ms": 3600000,
+          "expiry_safety_skew_ms": 30000
+        },
+        "failure_policy": "fail_closed_source_unavailable_no_retry_no_stale_no_data_dispatch"
+      },
+      "snapshot": null,
+      "rhai": null
+    },
+    "bounds": {
+      "max_source_matches": 2,
+      "max_disclosed_records": 1,
+      "max_data_exchanges": 1,
+      "max_credential_exchanges": 1,
+      "max_data_destinations": 1,
+      "max_source_bytes": 131072,
+      "timeout_ms": 5000,
+      "max_in_flight": 16,
+      "quota_per_minute": 60,
+      "quota_burst": 10
+    },
+    "deployment_parameters": {
+      "program": {
+        "allowed_values": [
+          "benefits",
+          "civil-registration"
+        ]
+      }
+    },
+    "evidence": {
+      "conformance": [
+        "sha256:75e879afb4588cfb043b876d5d66fbf53ed74929391ee738a07e596901a95ac2"
+      ],
+      "negative_security": [
+        "sha256:99c321483a1e2c9f763702ecb00232335653254656b37f2351fa282430c8f1c0"
+      ],
+      "minimization": [
+        "sha256:d6a1c368ae3970e72ee5caa25a0bfc61dd861c53cb5b3a40de46a8798cc74689"
+      ]
+    }
+  }
+}

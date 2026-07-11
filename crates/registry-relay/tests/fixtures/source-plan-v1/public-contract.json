@@ -1,0 +1,85 @@
+{
+  "schema": "registry.relay.consultation-contract.v1",
+  "id": "synthetic.person-status.exact",
+  "version": "1",
+  "spec": {
+    "subject": {
+      "mode": "single_subject",
+      "selector_provenance": {
+        "type": "trusted_notary_assertion",
+        "assertion_contract": {
+          "id": "registry.notary.subject-binding.v1",
+          "hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      }
+    },
+    "inputs": {
+      "subject_id": {
+        "type": "string",
+        "max_bytes": 256,
+        "pattern": "^[A-Za-z0-9._:-]+$",
+        "canonicalization": "identity"
+      }
+    },
+    "integration_pack": {
+      "id": "synthetic.person-status",
+      "version": "1",
+      "hash": "sha256:7054fae6ad999029759835838214f188fb5726cf48e0006479e98340fb7c22a7"
+    },
+    "acquisition": {
+      "class": "source_projected_exact",
+      "fields": {
+        "registration_status": {
+          "type": "string",
+          "nullable": false,
+          "max_bytes": 64
+        }
+      }
+    },
+    "output": {
+      "registration_status": {
+        "type": "string",
+        "nullable": false
+      }
+    },
+    "authorization": {
+      "workload": "registry-notary",
+      "required_scope": "registry:consult:person-status",
+      "purposes": [
+        "benefit-verification"
+      ],
+      "legal_basis": "public_task",
+      "policy": {
+        "id": "relay.synthetic.person-status.exact",
+        "hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "decision_cache": "disabled",
+        "max_decision_age_ms": 1000,
+        "unavailable": "deny"
+      },
+      "consent": {
+        "required": false
+      }
+    },
+    "bounds": {
+      "max_source_matches": 2,
+      "max_disclosed_records": 1,
+      "max_data_exchanges": 1,
+      "max_credential_exchanges": 1,
+      "max_data_destinations": 1,
+      "max_source_bytes": 131072,
+      "timeout_ms": 5000,
+      "max_in_flight": 16,
+      "quota_per_minute": 60,
+      "quota_burst": 10
+    },
+    "public_behavior": {
+      "outcomes": [
+        "match",
+        "no_match",
+        "ambiguous"
+      ],
+      "denial_code": "consultation.denied",
+      "denial_timing_profile": "measured-uniform-v1"
+    }
+  }
+}

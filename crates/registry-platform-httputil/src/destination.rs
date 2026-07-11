@@ -17,16 +17,16 @@ use std::str::FromStr;
 use std::sync::OnceLock;
 use std::time::Duration;
 
+use bytes::Bytes;
 use hickory_resolver::config::ResolveHosts;
 use hickory_resolver::net::{DnsError, NetError};
 use hickory_resolver::proto::op::ResponseCode;
 use hickory_resolver::proto::rr::{Name, RData};
 use hickory_resolver::TokioResolver;
-use http::header::{HeaderName, HeaderValue, AUTHORIZATION};
-#[cfg(test)]
 use http::header::{
-    ACCEPT_ENCODING, CONNECTION, CONTENT_LENGTH, COOKIE, FORWARDED, HOST, PROXY_AUTHENTICATE,
-    PROXY_AUTHORIZATION, TE, TRAILER, TRANSFER_ENCODING, UPGRADE,
+    HeaderName, HeaderValue, ACCEPT_ENCODING, AUTHORIZATION, CONNECTION, CONTENT_LENGTH, COOKIE,
+    FORWARDED, HOST, PROXY_AUTHENTICATE, PROXY_AUTHORIZATION, TE, TRAILER, TRANSFER_ENCODING,
+    UPGRADE,
 };
 use http::uri::PathAndQuery;
 use http::{HeaderMap, StatusCode};
@@ -49,6 +49,8 @@ pub const MAX_DESTINATION_PRIVATE_CIDRS: usize = 16;
 pub const MAX_DESTINATION_RESOLVER_ANSWERS: usize = 32;
 /// Maximum operation path-and-query length.
 pub const MAX_DESTINATION_TARGET_BYTES: usize = 4_096;
+/// Maximum fixed query components on one reviewed request template.
+pub const MAX_DESTINATION_REQUEST_QUERY_COMPONENTS: usize = 32;
 /// Maximum static header count on one operation.
 pub const MAX_DESTINATION_REQUEST_HEADERS: usize = 32;
 /// Maximum bytes in one static or authorization header value.
@@ -132,6 +134,8 @@ mod sealed {
 pub trait DestinationSlot: sealed::Sealed {
     #[doc(hidden)]
     const DEBUG_NAME: &'static str;
+    #[doc(hidden)]
+    const CREDENTIAL_EXCHANGE: bool;
 }
 
 /// Registry-data destination marker.
@@ -140,6 +144,7 @@ pub enum DataDestination {}
 impl sealed::Sealed for DataDestination {}
 impl DestinationSlot for DataDestination {
     const DEBUG_NAME: &'static str = "data";
+    const CREDENTIAL_EXCHANGE: bool = false;
 }
 
 /// Credential-exchange destination marker.
@@ -148,6 +153,7 @@ pub enum CredentialDestination {}
 impl sealed::Sealed for CredentialDestination {}
 impl DestinationSlot for CredentialDestination {
     const DEBUG_NAME: &'static str = "credential";
+    const CREDENTIAL_EXCHANGE: bool = true;
 }
 
 /// Runtime class for a fixed outbound destination.
@@ -430,8 +436,8 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
             value.set_sensitive(true);
             builder = builder.header(AUTHORIZATION, value);
         }
-        if let Some(body) = &body {
-            builder = builder.body(body.as_slice().to_vec());
+        if let Some(body) = body {
+            builder = builder.body(sensitive_reqwest_body(body));
         }
 
         let response = timeout_at(deadline, builder.send())
@@ -529,6 +535,31 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
     }
 }
 
+/// Owns the caller's zeroizing allocation while `Bytes` and reqwest retain it.
+///
+/// `Bytes::from_owner` lets the request body share this allocation without a
+/// caller-created ordinary `Vec<u8>` copy. The owner zeroizes that allocation
+/// when the last shared `Bytes` reference is dropped. Reqwest, hyper, TLS, and
+/// operating-system transports may make additional internal copies whose
+/// erasure this crate cannot control.
+struct SensitiveRequestBodyOwner(Zeroizing<Vec<u8>>);
+
+impl AsRef<[u8]> for SensitiveRequestBodyOwner {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_slice()
+    }
+}
+
+impl fmt::Debug for SensitiveRequestBodyOwner {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("SensitiveRequestBodyOwner([REDACTED])")
+    }
+}
+
+fn sensitive_reqwest_body(body: Zeroizing<Vec<u8>>) -> reqwest::Body {
+    reqwest::Body::from(Bytes::from_owner(SensitiveRequestBodyOwner(body)))
+}
+
 /// Value-free fixed-destination configuration failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum DestinationPolicyError {
@@ -570,13 +601,15 @@ pub enum DestinationMethod {
     Get,
     /// POST whose exact product operation has been independently reviewed as read-only.
     ReviewedReadOnlyPost,
+    /// OAuth 2.0 client-credentials POST, valid only for a credential destination slot.
+    OAuth2ClientCredentialsPost,
 }
 
 impl DestinationMethod {
     fn as_reqwest(self) -> reqwest::Method {
         match self {
             Self::Get => reqwest::Method::GET,
-            Self::ReviewedReadOnlyPost => reqwest::Method::POST,
+            Self::ReviewedReadOnlyPost | Self::OAuth2ClientCredentialsPost => reqwest::Method::POST,
         }
     }
 }
@@ -605,6 +638,690 @@ impl fmt::Debug for DestinationAuthorization {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("DestinationAuthorization([REDACTED])")
     }
+}
+
+/// Authorization presence, scheme, and maximum rendered header bytes frozen by a template.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DestinationAuthorizationTemplate {
+    Forbidden,
+    Basic { max_value_bytes: usize },
+    Bearer { max_value_bytes: usize },
+}
+
+impl DestinationAuthorizationTemplate {
+    fn max_value_bytes(self) -> usize {
+        match self {
+            Self::Forbidden => 0,
+            Self::Basic { max_value_bytes } | Self::Bearer { max_value_bytes } => max_value_bytes,
+        }
+    }
+}
+
+/// Request-body presence and byte ceiling frozen by a template.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DestinationBodyTemplate {
+    Forbidden,
+    Required { max_bytes: usize },
+}
+
+impl DestinationBodyTemplate {
+    fn max_bytes(self) -> usize {
+        match self {
+            Self::Forbidden => 0,
+            Self::Required { max_bytes } => max_bytes,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DestinationAuthorizationKind {
+    Basic,
+    Bearer,
+}
+
+/// Opaque typed authorization value produced by a credential provider.
+///
+/// Callers provide only scheme payload bytes. The fixed header name and scheme
+/// prefix are constructed here, and `Debug` never exposes the retained value.
+pub struct DestinationAuthorizationValue {
+    kind: DestinationAuthorizationKind,
+    value: Zeroizing<Vec<u8>>,
+}
+
+impl DestinationAuthorizationValue {
+    /// Build a Basic value from a provider-produced base64 credential payload.
+    pub fn basic(encoded_credentials: Vec<u8>) -> Result<Self, DestinationRequestError> {
+        Self::with_prefix(
+            DestinationAuthorizationKind::Basic,
+            b"Basic ",
+            encoded_credentials,
+        )
+    }
+
+    /// Build a Bearer value from a provider-produced token payload.
+    pub fn bearer(token: Vec<u8>) -> Result<Self, DestinationRequestError> {
+        Self::with_prefix(DestinationAuthorizationKind::Bearer, b"Bearer ", token)
+    }
+
+    fn with_prefix(
+        kind: DestinationAuthorizationKind,
+        prefix: &[u8],
+        payload: Vec<u8>,
+    ) -> Result<Self, DestinationRequestError> {
+        let payload = Zeroizing::new(payload);
+        if payload.is_empty() {
+            return Err(DestinationRequestError::InvalidAuthorization);
+        }
+        let mut value = Zeroizing::new(Vec::with_capacity(prefix.len() + payload.len()));
+        value.extend_from_slice(prefix);
+        value.extend_from_slice(payload.as_slice());
+        if value.len() > MAX_DESTINATION_HEADER_VALUE_BYTES || !is_valid_header_value(&value) {
+            return Err(DestinationRequestError::InvalidAuthorization);
+        }
+        Ok(Self { kind, value })
+    }
+}
+
+impl fmt::Debug for DestinationAuthorizationValue {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("DestinationAuthorizationValue([REDACTED])")
+    }
+}
+
+struct QueryValueTemplate {
+    name: String,
+    max_value_bytes: usize,
+}
+
+enum HeaderValueTemplate {
+    Dynamic {
+        name: HeaderName,
+        max_value_bytes: usize,
+    },
+    Exact {
+        name: HeaderName,
+        value: Box<[u8]>,
+    },
+}
+
+impl HeaderValueTemplate {
+    fn name(&self) -> &HeaderName {
+        match self {
+            Self::Dynamic { name, .. } | Self::Exact { name, .. } => name,
+        }
+    }
+
+    fn max_value_bytes(&self) -> usize {
+        match self {
+            Self::Dynamic {
+                max_value_bytes, ..
+            } => *max_value_bytes,
+            Self::Exact { value, .. } => value.len(),
+        }
+    }
+
+    fn is_dynamic(&self) -> bool {
+        matches!(self, Self::Dynamic { .. })
+    }
+}
+
+enum HeaderTemplateInput<'a> {
+    Dynamic {
+        name: &'a str,
+        max_value_bytes: usize,
+    },
+    Exact {
+        name: &'a str,
+        value: &'a [u8],
+    },
+}
+
+enum RequestTemplateKind {
+    General(DestinationMethod),
+    OAuth2ClientCredentials(OAuth2ClientCredentialsBodyFormat),
+}
+
+/// Slot-typed, immutable request shape compiled before any sensitive values exist.
+///
+/// The template freezes the method, fixed path, query/header names, and reviewed
+/// worst-case sizes. Rendering accepts values only in that exact order, builds
+/// the canonical target itself, rechecks the aggregate request budget, and is
+/// the production constructor for the opaque request capability.
+pub struct BoundedDestinationRequestTemplate<S: DestinationSlot> {
+    method: DestinationMethod,
+    fixed_path: String,
+    query: Vec<QueryValueTemplate>,
+    headers: Vec<HeaderValueTemplate>,
+    authorization: DestinationAuthorizationTemplate,
+    body: DestinationBodyTemplate,
+    max_target_bytes: usize,
+    max_request_bytes: usize,
+    slot: PhantomData<fn() -> S>,
+}
+
+/// Reviewed data-destination request template.
+pub type DataDestinationRequestTemplate = BoundedDestinationRequestTemplate<DataDestination>;
+/// Reviewed credential-destination request template.
+pub type CredentialDestinationRequestTemplate =
+    BoundedDestinationRequestTemplate<CredentialDestination>;
+
+/// Closed OAuth 2.0 client-credentials request-body encoding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OAuth2ClientCredentialsBodyFormat {
+    JsonClientSecretBody,
+    FormClientSecretBody,
+}
+
+impl BoundedDestinationRequestTemplate<CredentialDestination> {
+    /// Compile the only credential-destination request shape accepted in v1.
+    ///
+    /// ```compile_fail
+    /// use registry_platform_httputil::destination::{
+    ///     CredentialDestinationRequestTemplate, DataDestinationRequest,
+    ///     OAuth2ClientCredentialsBodyFormat,
+    /// };
+    ///
+    /// fn data_only(_: DataDestinationRequest) {}
+    ///
+    /// let template = CredentialDestinationRequestTemplate::oauth2_client_credentials(
+    ///     "/oauth/token",
+    ///     OAuth2ClientCredentialsBodyFormat::JsonClientSecretBody,
+    ///     1024,
+    ///     2048,
+    /// ).unwrap();
+    /// let request = template.render(&[], &[], None, Some(b"{}".to_vec())).unwrap();
+    /// data_only(request);
+    /// ```
+    pub fn oauth2_client_credentials(
+        fixed_path: &str,
+        format: OAuth2ClientCredentialsBodyFormat,
+        max_body_bytes: usize,
+        max_request_bytes: usize,
+    ) -> Result<Self, DestinationRequestError> {
+        let content_type: &[u8] = match format {
+            OAuth2ClientCredentialsBodyFormat::JsonClientSecretBody => b"application/json",
+            OAuth2ClientCredentialsBodyFormat::FormClientSecretBody => {
+                b"application/x-www-form-urlencoded"
+            }
+        };
+        let headers = [
+            HeaderTemplateInput::Exact {
+                name: "accept",
+                value: b"application/json",
+            },
+            HeaderTemplateInput::Exact {
+                name: "content-type",
+                value: content_type,
+            },
+        ];
+        Self::new_with_headers(
+            RequestTemplateKind::OAuth2ClientCredentials(format),
+            fixed_path,
+            &[],
+            &headers,
+            DestinationAuthorizationTemplate::Forbidden,
+            DestinationBodyTemplate::Required {
+                max_bytes: max_body_bytes,
+            },
+            max_request_bytes,
+        )
+    }
+}
+
+impl<S: DestinationSlot> fmt::Debug for BoundedDestinationRequestTemplate<S> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BoundedDestinationRequestTemplate")
+            .field("slot", &S::DEBUG_NAME)
+            .field("method", &self.method)
+            .field("fixed_path", &"[REDACTED]")
+            .field("query_count", &self.query.len())
+            .field("header_count", &self.headers.len())
+            .field("authorization", &self.authorization)
+            .field("body", &self.body)
+            .field("max_request_bytes", &self.max_request_bytes)
+            .finish()
+    }
+}
+
+impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
+    /// Validate and freeze a reviewed request shape.
+    pub fn new(
+        method: DestinationMethod,
+        fixed_path: &str,
+        query: &[(&str, usize)],
+        headers: &[(&str, usize)],
+        authorization: DestinationAuthorizationTemplate,
+        body: DestinationBodyTemplate,
+        max_request_bytes: usize,
+    ) -> Result<Self, DestinationRequestError> {
+        if method == DestinationMethod::OAuth2ClientCredentialsPost {
+            return Err(DestinationRequestError::MethodSlotMismatch);
+        }
+        let headers = headers
+            .iter()
+            .map(|(name, max_value_bytes)| HeaderTemplateInput::Dynamic {
+                name,
+                max_value_bytes: *max_value_bytes,
+            })
+            .collect::<Vec<_>>();
+        Self::new_with_headers(
+            RequestTemplateKind::General(method),
+            fixed_path,
+            query,
+            &headers,
+            authorization,
+            body,
+            max_request_bytes,
+        )
+    }
+
+    /// Validate and freeze a request whose non-authorization header values are exact.
+    pub fn new_with_exact_headers(
+        method: DestinationMethod,
+        fixed_path: &str,
+        query: &[(&str, usize)],
+        headers: &[(&str, &[u8])],
+        authorization: DestinationAuthorizationTemplate,
+        body: DestinationBodyTemplate,
+        max_request_bytes: usize,
+    ) -> Result<Self, DestinationRequestError> {
+        if method == DestinationMethod::OAuth2ClientCredentialsPost {
+            return Err(DestinationRequestError::MethodSlotMismatch);
+        }
+        let headers = headers
+            .iter()
+            .map(|(name, value)| HeaderTemplateInput::Exact { name, value })
+            .collect::<Vec<_>>();
+        Self::new_with_headers(
+            RequestTemplateKind::General(method),
+            fixed_path,
+            query,
+            &headers,
+            authorization,
+            body,
+            max_request_bytes,
+        )
+    }
+
+    fn new_with_headers(
+        kind: RequestTemplateKind,
+        fixed_path: &str,
+        query: &[(&str, usize)],
+        headers: &[HeaderTemplateInput<'_>],
+        authorization: DestinationAuthorizationTemplate,
+        body: DestinationBodyTemplate,
+        max_request_bytes: usize,
+    ) -> Result<Self, DestinationRequestError> {
+        let (method, oauth_format) = match kind {
+            RequestTemplateKind::General(method) => (method, None),
+            RequestTemplateKind::OAuth2ClientCredentials(format) => {
+                (DestinationMethod::OAuth2ClientCredentialsPost, Some(format))
+            }
+        };
+        validate_fixed_destination_path(fixed_path)?;
+        if query.len() > MAX_DESTINATION_REQUEST_QUERY_COMPONENTS {
+            return Err(DestinationRequestError::TooManyQueryComponents);
+        }
+        if headers.len() + usize::from(authorization != DestinationAuthorizationTemplate::Forbidden)
+            > MAX_DESTINATION_REQUEST_HEADERS
+        {
+            return Err(DestinationRequestError::TooManyHeaders);
+        }
+        if method == DestinationMethod::OAuth2ClientCredentialsPost
+            && (!query.is_empty()
+                || !closed_oauth_headers(
+                    headers,
+                    oauth_format.ok_or(DestinationRequestError::MethodSlotMismatch)?,
+                ))
+        {
+            return Err(DestinationRequestError::MethodSlotMismatch);
+        }
+        let max_body_bytes = body.max_bytes();
+        if max_body_bytes > MAX_DESTINATION_REQUEST_BODY_BYTES {
+            return Err(DestinationRequestError::BodyTooLarge);
+        }
+        match method {
+            DestinationMethod::Get if S::CREDENTIAL_EXCHANGE => {
+                return Err(DestinationRequestError::MethodSlotMismatch);
+            }
+            DestinationMethod::Get if body != DestinationBodyTemplate::Forbidden => {
+                return Err(DestinationRequestError::GetBodyDenied);
+            }
+            DestinationMethod::ReviewedReadOnlyPost
+                if S::CREDENTIAL_EXCHANGE
+                    || !matches!(body, DestinationBodyTemplate::Required { max_bytes } if max_bytes > 0) =>
+            {
+                return Err(DestinationRequestError::MethodSlotMismatch);
+            }
+            DestinationMethod::OAuth2ClientCredentialsPost
+                if !S::CREDENTIAL_EXCHANGE
+                    || authorization != DestinationAuthorizationTemplate::Forbidden
+                    || !matches!(body, DestinationBodyTemplate::Required { max_bytes } if max_bytes > 0) =>
+            {
+                return Err(DestinationRequestError::MethodSlotMismatch);
+            }
+            _ => {}
+        }
+        let max_authorization_bytes = authorization.max_value_bytes();
+        let authorization_bound_valid = match authorization {
+            DestinationAuthorizationTemplate::Forbidden => true,
+            DestinationAuthorizationTemplate::Basic { max_value_bytes } => {
+                (7..=MAX_DESTINATION_HEADER_VALUE_BYTES).contains(&max_value_bytes)
+            }
+            DestinationAuthorizationTemplate::Bearer { max_value_bytes } => {
+                (8..=MAX_DESTINATION_HEADER_VALUE_BYTES).contains(&max_value_bytes)
+            }
+        };
+        if !authorization_bound_valid {
+            return Err(DestinationRequestError::InvalidAuthorization);
+        }
+
+        let mut target_bytes = fixed_path.len();
+        let mut retained_query = Vec::with_capacity(query.len());
+        for (index, (name, max_value_bytes)) in query.iter().copied().enumerate() {
+            if name.is_empty()
+                || name.len() > 128
+                || !name.is_ascii()
+                || name.chars().any(char::is_control)
+            {
+                return Err(DestinationRequestError::InvalidTarget);
+            }
+            target_bytes = target_bytes
+                .checked_add(usize::from(index == 0))
+                .and_then(|total| total.checked_add(usize::from(index > 0)))
+                .and_then(|total| total.checked_add(name.len().saturating_mul(3)))
+                .and_then(|total| total.checked_add(1))
+                .and_then(|total| total.checked_add(max_value_bytes.saturating_mul(3)))
+                .ok_or(DestinationRequestError::TemplateBoundsExceeded)?;
+            retained_query.push(QueryValueTemplate {
+                name: name.to_owned(),
+                max_value_bytes,
+            });
+        }
+        if target_bytes > MAX_DESTINATION_TARGET_BYTES {
+            return Err(DestinationRequestError::TargetTooLong);
+        }
+
+        let mut header_bytes = if max_authorization_bytes == 0 {
+            0
+        } else {
+            AUTHORIZATION.as_str().len() + max_authorization_bytes
+        };
+        let mut retained_headers = Vec::with_capacity(headers.len());
+        for (index, header) in headers.iter().enumerate() {
+            let (raw_name, max_value_bytes, exact_value) = match header {
+                HeaderTemplateInput::Dynamic {
+                    name,
+                    max_value_bytes,
+                } => (*name, *max_value_bytes, None),
+                HeaderTemplateInput::Exact { name, value } => (*name, value.len(), Some(*value)),
+            };
+            let name = HeaderName::from_str(raw_name)
+                .map_err(|_| DestinationRequestError::ForbiddenHeader)?;
+            if is_forbidden_static_request_header(&name) {
+                return Err(DestinationRequestError::ForbiddenHeader);
+            }
+            if retained_headers[..index]
+                .iter()
+                .any(|prior: &HeaderValueTemplate| prior.name() == name)
+            {
+                return Err(DestinationRequestError::DuplicateHeader);
+            }
+            if max_value_bytes > MAX_DESTINATION_HEADER_VALUE_BYTES {
+                return Err(DestinationRequestError::HeaderValueTooLong);
+            }
+            if exact_value.is_some_and(|value| !is_valid_header_value(value)) {
+                return Err(DestinationRequestError::InvalidHeaderValue);
+            }
+            header_bytes = header_bytes
+                .checked_add(name.as_str().len())
+                .and_then(|total| total.checked_add(max_value_bytes))
+                .ok_or(DestinationRequestError::HeaderBytesExceeded)?;
+            retained_headers.push(match exact_value {
+                Some(value) => HeaderValueTemplate::Exact {
+                    name,
+                    value: value.into(),
+                },
+                None => HeaderValueTemplate::Dynamic {
+                    name,
+                    max_value_bytes,
+                },
+            });
+        }
+        if header_bytes > MAX_DESTINATION_REQUEST_HEADER_BYTES {
+            return Err(DestinationRequestError::HeaderBytesExceeded);
+        }
+        let worst_case = target_bytes
+            .checked_add(header_bytes)
+            .and_then(|total| total.checked_add(max_body_bytes))
+            .ok_or(DestinationRequestError::TemplateBoundsExceeded)?;
+        if worst_case > max_request_bytes {
+            return Err(DestinationRequestError::TemplateBoundsExceeded);
+        }
+
+        Ok(Self {
+            method,
+            fixed_path: fixed_path.to_owned(),
+            query: retained_query,
+            headers: retained_headers,
+            authorization,
+            body,
+            max_target_bytes: target_bytes,
+            max_request_bytes,
+            slot: PhantomData,
+        })
+    }
+
+    /// Render bounded values into the opaque slot-typed request capability.
+    pub fn render(
+        &self,
+        query_values: &[&str],
+        header_values: &[&[u8]],
+        authorization: Option<DestinationAuthorizationValue>,
+        body: Option<Vec<u8>>,
+    ) -> Result<BoundedDestinationRequest<S>, DestinationRequestError> {
+        self.render_zeroizing(
+            query_values,
+            header_values,
+            authorization,
+            body.map(Zeroizing::new),
+        )
+    }
+
+    /// Render a request while retaining a caller-produced sensitive body in zeroizing storage.
+    pub fn render_zeroizing(
+        &self,
+        query_values: &[&str],
+        header_values: &[&[u8]],
+        authorization: Option<DestinationAuthorizationValue>,
+        body: Option<Zeroizing<Vec<u8>>>,
+    ) -> Result<BoundedDestinationRequest<S>, DestinationRequestError> {
+        let dynamic_header_count = self
+            .headers
+            .iter()
+            .filter(|header| header.is_dynamic())
+            .count();
+        if query_values.len() != self.query.len() || header_values.len() != dynamic_header_count {
+            return Err(DestinationRequestError::TemplateValueCountMismatch);
+        }
+        if self
+            .query
+            .iter()
+            .zip(query_values)
+            .any(|(template, value)| value.len() > template.max_value_bytes)
+            || self
+                .headers
+                .iter()
+                .filter(|header| header.is_dynamic())
+                .zip(header_values)
+                .any(|(template, value)| value.len() > template.max_value_bytes())
+            || body
+                .as_ref()
+                .is_some_and(|value| value.len() > self.body.max_bytes())
+        {
+            return Err(DestinationRequestError::TemplateBoundsExceeded);
+        }
+        match (self.authorization, authorization.as_ref()) {
+            (DestinationAuthorizationTemplate::Forbidden, None) => {}
+            (DestinationAuthorizationTemplate::Basic { .. }, Some(value))
+                if value.kind == DestinationAuthorizationKind::Basic => {}
+            (DestinationAuthorizationTemplate::Bearer { .. }, Some(value))
+                if value.kind == DestinationAuthorizationKind::Bearer => {}
+            _ => return Err(DestinationRequestError::AuthorizationShapeMismatch),
+        }
+        if authorization
+            .as_ref()
+            .is_some_and(|value| value.value.len() > self.authorization.max_value_bytes())
+        {
+            return Err(DestinationRequestError::TemplateBoundsExceeded);
+        }
+        match (self.body, body.as_ref()) {
+            (DestinationBodyTemplate::Forbidden, None) => {}
+            (DestinationBodyTemplate::Required { .. }, Some(value)) if !value.is_empty() => {}
+            _ => return Err(DestinationRequestError::BodyPresenceMismatch),
+        }
+
+        let mut target = BoundedTargetWriter::new(self.max_target_bytes);
+        target.extend_from_slice(self.fixed_path.as_bytes())?;
+        for (index, (template, value)) in self.query.iter().zip(query_values).enumerate() {
+            target.push(if index == 0 { b'?' } else { b'&' })?;
+            append_form_component(&mut target, template.name.as_bytes())?;
+            target.push(b'=')?;
+            append_form_component(&mut target, value.as_bytes())?;
+        }
+        let target = target.into_inner();
+        let mut dynamic_values = header_values.iter();
+        let headers = self
+            .headers
+            .iter()
+            .map(|template| match template {
+                HeaderValueTemplate::Dynamic { name, .. } => {
+                    let value = dynamic_values
+                        .next()
+                        .ok_or(DestinationRequestError::TemplateValueCountMismatch)?;
+                    Ok((name.clone(), Zeroizing::new((*value).to_vec())))
+                }
+                HeaderValueTemplate::Exact { name, value } => {
+                    Ok((name.clone(), Zeroizing::new(value.to_vec())))
+                }
+            })
+            .collect::<Result<Vec<_>, DestinationRequestError>>()?;
+        let actual_bytes = target
+            .len()
+            .checked_add(
+                headers
+                    .iter()
+                    .map(|(name, value)| name.as_str().len() + value.len())
+                    .sum::<usize>(),
+            )
+            .and_then(|total| {
+                total.checked_add(
+                    authorization
+                        .as_ref()
+                        .map_or(0, |value| AUTHORIZATION.as_str().len() + value.value.len()),
+                )
+            })
+            .and_then(|total| total.checked_add(body.as_ref().map_or(0, |value| value.len())))
+            .ok_or(DestinationRequestError::TemplateBoundsExceeded)?;
+        if actual_bytes > self.max_request_bytes {
+            return Err(DestinationRequestError::TemplateBoundsExceeded);
+        }
+        let authorization =
+            authorization.map(|value| DestinationAuthorization { value: value.value });
+        BoundedDestinationRequest::new_sensitive(self.method, target, headers, authorization, body)
+    }
+}
+
+fn closed_oauth_headers(
+    headers: &[HeaderTemplateInput<'_>],
+    format: OAuth2ClientCredentialsBodyFormat,
+) -> bool {
+    if headers.len() != 2 {
+        return false;
+    }
+    let mut accept = false;
+    let mut content_type = false;
+    for header in headers {
+        let HeaderTemplateInput::Exact { name, value } = header else {
+            return false;
+        };
+        match (*name, *value) {
+            ("accept", b"application/json") => accept = true,
+            ("content-type", b"application/json")
+                if format == OAuth2ClientCredentialsBodyFormat::JsonClientSecretBody =>
+            {
+                content_type = true;
+            }
+            ("content-type", b"application/x-www-form-urlencoded")
+                if format == OAuth2ClientCredentialsBodyFormat::FormClientSecretBody =>
+            {
+                content_type = true;
+            }
+            _ => return false,
+        }
+    }
+    accept && content_type
+}
+
+struct BoundedTargetWriter {
+    bytes: Zeroizing<Vec<u8>>,
+    limit: usize,
+}
+
+impl BoundedTargetWriter {
+    fn new(limit: usize) -> Self {
+        Self {
+            bytes: Zeroizing::new(Vec::with_capacity(limit)),
+            limit,
+        }
+    }
+
+    fn push(&mut self, byte: u8) -> Result<(), DestinationRequestError> {
+        if self.bytes.len() >= self.limit || self.bytes.len() >= self.bytes.capacity() {
+            return Err(DestinationRequestError::TemplateBoundsExceeded);
+        }
+        self.bytes.push(byte);
+        Ok(())
+    }
+
+    fn extend_from_slice(&mut self, value: &[u8]) -> Result<(), DestinationRequestError> {
+        let next_len = self
+            .bytes
+            .len()
+            .checked_add(value.len())
+            .ok_or(DestinationRequestError::TemplateBoundsExceeded)?;
+        if next_len > self.limit || next_len > self.bytes.capacity() {
+            return Err(DestinationRequestError::TemplateBoundsExceeded);
+        }
+        self.bytes.extend_from_slice(value);
+        Ok(())
+    }
+
+    fn into_inner(self) -> Zeroizing<Vec<u8>> {
+        self.bytes
+    }
+}
+
+fn append_form_component(
+    output: &mut BoundedTargetWriter,
+    value: &[u8],
+) -> Result<(), DestinationRequestError> {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    for byte in value {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'*' | b'-' | b'.' | b'_' => {
+                output.push(*byte)?;
+            }
+            b' ' => output.push(b'+')?,
+            _ => {
+                output.push(b'%')?;
+                output.push(HEX[usize::from(*byte >> 4)])?;
+                output.push(HEX[usize::from(*byte & 0x0f)])?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// One bounded operation request tied to a data or credential destination slot.
@@ -675,15 +1392,26 @@ impl<S: DestinationSlot> BoundedDestinationRequest<S> {
         authorization: Option<DestinationAuthorization>,
         body: Option<Vec<u8>>,
     ) -> Result<Self, DestinationRequestError> {
-        let headers: Vec<_> = headers
+        let target = Zeroizing::new(target.as_bytes().to_vec());
+        let headers = headers
             .into_iter()
             .map(|(name, value)| (name, Zeroizing::new(value)))
             .collect();
         let body = body.map(Zeroizing::new);
-        if target.len() > MAX_DESTINATION_TARGET_BYTES {
-            return Err(DestinationRequestError::TargetTooLong);
-        }
-        if headers.len() > MAX_DESTINATION_REQUEST_HEADERS {
+        Self::new_sensitive(method, target, headers, authorization, body)
+    }
+
+    fn new_sensitive(
+        method: DestinationMethod,
+        target: Zeroizing<Vec<u8>>,
+        headers: Vec<(HeaderName, Zeroizing<Vec<u8>>)>,
+        authorization: Option<DestinationAuthorization>,
+        body: Option<Zeroizing<Vec<u8>>>,
+    ) -> Result<Self, DestinationRequestError> {
+        let target_text =
+            std::str::from_utf8(&target).map_err(|_| DestinationRequestError::InvalidTarget)?;
+        validate_destination_target(target_text)?;
+        if headers.len() + usize::from(authorization.is_some()) > MAX_DESTINATION_REQUEST_HEADERS {
             return Err(DestinationRequestError::TooManyHeaders);
         }
         if body
@@ -695,20 +1423,14 @@ impl<S: DestinationSlot> BoundedDestinationRequest<S> {
         if method == DestinationMethod::Get && body.is_some() {
             return Err(DestinationRequestError::GetBodyDenied);
         }
-        if !target.starts_with('/')
-            || target.starts_with("//")
-            || target.contains(['#', '\\', '\r', '\n'])
-        {
-            return Err(DestinationRequestError::InvalidTarget);
-        }
+        PathAndQuery::from_str(target_text).map_err(|_| DestinationRequestError::InvalidTarget)?;
 
-        let target =
-            PathAndQuery::from_str(target).map_err(|_| DestinationRequestError::InvalidTarget)?;
-        if !target_is_canonical(&target) {
-            return Err(DestinationRequestError::NonCanonicalTarget);
+        let mut aggregate_bytes = authorization.as_ref().map_or(0, |authorization| {
+            AUTHORIZATION.as_str().len() + authorization.value.len()
+        });
+        if aggregate_bytes > MAX_DESTINATION_REQUEST_HEADER_BYTES {
+            return Err(DestinationRequestError::HeaderBytesExceeded);
         }
-
-        let mut aggregate_bytes = 0_usize;
         for (index, (name, value)) in headers.iter().enumerate() {
             if is_forbidden_static_request_header(name) {
                 return Err(DestinationRequestError::ForbiddenHeader);
@@ -741,7 +1463,7 @@ impl<S: DestinationSlot> BoundedDestinationRequest<S> {
 
         Ok(Self {
             method,
-            target: Zeroizing::new(target.as_str().as_bytes().to_vec()),
+            target,
             headers: retained_headers,
             authorization,
             body,
@@ -761,6 +1483,8 @@ pub enum DestinationRequestError {
     NonCanonicalTarget,
     #[error("operation has too many headers")]
     TooManyHeaders,
+    #[error("operation has too many query components")]
+    TooManyQueryComponents,
     #[error("operation header is forbidden")]
     ForbiddenHeader,
     #[error("operation header is duplicated")]
@@ -775,8 +1499,18 @@ pub enum DestinationRequestError {
     InvalidAuthorization,
     #[error("GET request body is denied")]
     GetBodyDenied,
+    #[error("operation method is not valid for the destination slot")]
+    MethodSlotMismatch,
     #[error("operation request body exceeds the platform bound")]
     BodyTooLarge,
+    #[error("operation values do not match the compiled request template")]
+    TemplateValueCountMismatch,
+    #[error("operation values exceed the compiled request-template bounds")]
+    TemplateBoundsExceeded,
+    #[error("operation authorization does not match the compiled request template")]
+    AuthorizationShapeMismatch,
+    #[error("operation body presence does not match the compiled request template")]
+    BodyPresenceMismatch,
 }
 
 /// Value-free resolve, destination-policy, and transport failures.
@@ -1210,7 +1944,63 @@ fn is_canonical_origin_id(origin_id: &str) -> bool {
     })
 }
 
-#[cfg(test)]
+fn validate_destination_target(target: &str) -> Result<(), DestinationRequestError> {
+    if target.len() > MAX_DESTINATION_TARGET_BYTES {
+        return Err(DestinationRequestError::TargetTooLong);
+    }
+    if !target.starts_with('/')
+        || target.starts_with("//")
+        || target.contains(['#', '\\', '\r', '\n'])
+    {
+        return Err(DestinationRequestError::InvalidTarget);
+    }
+    let target =
+        PathAndQuery::from_str(target).map_err(|_| DestinationRequestError::InvalidTarget)?;
+    if !target_is_canonical(&target) || !path_percent_encoding_is_canonical(target.path()) {
+        return Err(DestinationRequestError::NonCanonicalTarget);
+    }
+    Ok(())
+}
+
+/// Validate one exact fixed operation path using the same rules as rendering.
+pub fn validate_fixed_destination_path(path: &str) -> Result<(), DestinationRequestError> {
+    if path.contains('?') {
+        return Err(DestinationRequestError::InvalidTarget);
+    }
+    validate_destination_target(path)
+}
+
+fn path_percent_encoding_is_canonical(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    let mut index = 0_usize;
+    while index < bytes.len() {
+        if bytes[index] != b'%' {
+            index += 1;
+            continue;
+        }
+        let Some(high) = bytes.get(index + 1).copied() else {
+            return false;
+        };
+        let Some(low) = bytes.get(index + 2).copied() else {
+            return false;
+        };
+        if !matches!(high, b'0'..=b'9' | b'A'..=b'F') || !matches!(low, b'0'..=b'9' | b'A'..=b'F') {
+            return false;
+        }
+        let hex = |byte| match byte {
+            b'0'..=b'9' => byte - b'0',
+            b'A'..=b'F' => byte - b'A' + 10,
+            _ => 0,
+        };
+        let decoded = (hex(high) << 4) | hex(low);
+        if decoded.is_ascii() {
+            return false;
+        }
+        index += 3;
+    }
+    true
+}
+
 fn target_is_canonical(target: &PathAndQuery) -> bool {
     let mut canonical =
         Url::parse("https://bounded.invalid/").expect("constant canonicalization URL is valid");
@@ -1223,7 +2013,6 @@ fn target_is_canonical(target: &PathAndQuery) -> bool {
     serialized == target.as_str()
 }
 
-#[cfg(test)]
 fn is_forbidden_static_request_header(name: &HeaderName) -> bool {
     name == AUTHORIZATION
         || name == ACCEPT_ENCODING
@@ -1245,7 +2034,6 @@ fn is_forbidden_static_request_header(name: &HeaderName) -> bool {
         || name.as_str().starts_with("x-forwarded-")
 }
 
-#[cfg(test)]
 fn is_valid_header_value(value: &[u8]) -> bool {
     value
         .iter()
@@ -1447,9 +2235,9 @@ fn is_ipv6_unicast_link_local(ip: Ipv6Addr) -> bool {
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
-    use axum::routing::get;
+    use axum::routing::{get, post};
     use axum::Router;
     use proptest::prelude::*;
     use rcgen::{generate_simple_self_signed, CertifiedKey};
@@ -2063,6 +2851,250 @@ mod tests {
     }
 
     #[test]
+    fn compiled_request_template_renders_only_its_exact_bounded_shape() {
+        let template = DataDestinationRequestTemplate::new(
+            DestinationMethod::Get,
+            "/records",
+            &[("id", 3)],
+            &[("accept", 32)],
+            DestinationAuthorizationTemplate::Bearer {
+                max_value_bytes: 32,
+            },
+            DestinationBodyTemplate::Forbidden,
+            128,
+        )
+        .expect("reviewed template validates");
+        template
+            .render(
+                &["42"],
+                &[b"application/json"],
+                Some(
+                    DestinationAuthorizationValue::bearer(b"bounded".to_vec())
+                        .expect("typed provider value"),
+                ),
+                None,
+            )
+            .expect("exact template values render");
+        assert_eq!(
+            template
+                .render(
+                    &["1234"],
+                    &[b"application/json"],
+                    Some(
+                        DestinationAuthorizationValue::bearer(b"bounded".to_vec())
+                            .expect("typed provider value"),
+                    ),
+                    None,
+                )
+                .unwrap_err(),
+            DestinationRequestError::TemplateBoundsExceeded
+        );
+        assert_eq!(
+            template
+                .render(&[], &[b"application/json"], None, None)
+                .unwrap_err(),
+            DestinationRequestError::TemplateValueCountMismatch
+        );
+        assert_eq!(
+            DataDestinationRequestTemplate::new(
+                DestinationMethod::Get,
+                "/records",
+                &[],
+                &[("x-forwarded-host", 8)],
+                DestinationAuthorizationTemplate::Forbidden,
+                DestinationBodyTemplate::Forbidden,
+                128,
+            )
+            .unwrap_err(),
+            DestinationRequestError::ForbiddenHeader
+        );
+        assert_eq!(
+            template
+                .render(&["42"], &[b"application/json"], None, None)
+                .unwrap_err(),
+            DestinationRequestError::AuthorizationShapeMismatch
+        );
+        let no_auth = DataDestinationRequestTemplate::new(
+            DestinationMethod::Get,
+            "/records",
+            &[],
+            &[],
+            DestinationAuthorizationTemplate::Forbidden,
+            DestinationBodyTemplate::Forbidden,
+            32,
+        )
+        .expect("no-auth template");
+        assert_eq!(
+            no_auth
+                .render(
+                    &[],
+                    &[],
+                    Some(
+                        DestinationAuthorizationValue::bearer(b"unexpected".to_vec())
+                            .expect("typed provider value"),
+                    ),
+                    None,
+                )
+                .unwrap_err(),
+            DestinationRequestError::AuthorizationShapeMismatch
+        );
+        let post = DataDestinationRequestTemplate::new(
+            DestinationMethod::ReviewedReadOnlyPost,
+            "/search",
+            &[],
+            &[],
+            DestinationAuthorizationTemplate::Forbidden,
+            DestinationBodyTemplate::Required { max_bytes: 16 },
+            64,
+        )
+        .expect("required-body template");
+        for body in [None, Some(Vec::new())] {
+            assert_eq!(
+                post.render(&[], &[], None, body).unwrap_err(),
+                DestinationRequestError::BodyPresenceMismatch
+            );
+        }
+        post.render(&[], &[], None, Some(b"{}".to_vec()))
+            .expect("nonempty bounded POST body");
+        let encoded = DataDestinationRequestTemplate::new(
+            DestinationMethod::Get,
+            "/records/%E2%9C%93",
+            &[("selector:subject", 1)],
+            &[],
+            DestinationAuthorizationTemplate::Forbidden,
+            DestinationBodyTemplate::Forbidden,
+            128,
+        )
+        .expect("canonical escaped path and colon query name");
+        let request = encoded
+            .render(&["x"], &[], None, None)
+            .expect("encoded query renders");
+        assert_eq!(
+            request.target.as_slice(),
+            b"/records/%E2%9C%93?selector%3Asubject=x"
+        );
+        let query = (0..=MAX_DESTINATION_REQUEST_QUERY_COMPONENTS)
+            .map(|index| format!("q{index}"))
+            .collect::<Vec<_>>();
+        let query = query
+            .iter()
+            .map(|name| (name.as_str(), 1_usize))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            DataDestinationRequestTemplate::new(
+                DestinationMethod::Get,
+                "/records",
+                &query,
+                &[],
+                DestinationAuthorizationTemplate::Forbidden,
+                DestinationBodyTemplate::Forbidden,
+                512,
+            )
+            .unwrap_err(),
+            DestinationRequestError::TooManyQueryComponents
+        );
+        assert!(!format!("{template:?}").contains("records"));
+    }
+
+    #[test]
+    fn credential_request_template_has_one_closed_slot_and_header_shape() {
+        let template = CredentialDestinationRequestTemplate::oauth2_client_credentials(
+            "/oauth/token",
+            OAuth2ClientCredentialsBodyFormat::JsonClientSecretBody,
+            1_024,
+            2_048,
+        )
+        .expect("closed OAuth template");
+        template
+            .render(
+                &[],
+                &[],
+                None,
+                Some(br#"{"grant_type":"client_credentials"}"#.to_vec()),
+            )
+            .expect("exact credential request");
+
+        assert_eq!(
+            DataDestinationRequestTemplate::new(
+                DestinationMethod::OAuth2ClientCredentialsPost,
+                "/oauth/token",
+                &[],
+                &[],
+                DestinationAuthorizationTemplate::Forbidden,
+                DestinationBodyTemplate::Required { max_bytes: 1_024 },
+                2_048,
+            )
+            .unwrap_err(),
+            DestinationRequestError::MethodSlotMismatch
+        );
+        assert_eq!(
+            CredentialDestinationRequestTemplate::new(
+                DestinationMethod::Get,
+                "/oauth/token",
+                &[],
+                &[],
+                DestinationAuthorizationTemplate::Forbidden,
+                DestinationBodyTemplate::Forbidden,
+                2_048,
+            )
+            .unwrap_err(),
+            DestinationRequestError::MethodSlotMismatch
+        );
+        assert_eq!(
+            CredentialDestinationRequestTemplate::new_with_exact_headers(
+                DestinationMethod::OAuth2ClientCredentialsPost,
+                "/oauth/token",
+                &[],
+                &[
+                    ("accept", b"application/json"),
+                    ("content-type", b"application/json"),
+                ],
+                DestinationAuthorizationTemplate::Forbidden,
+                DestinationBodyTemplate::Required { max_bytes: 1_024 },
+                2_048,
+            )
+            .unwrap_err(),
+            DestinationRequestError::MethodSlotMismatch
+        );
+        assert_eq!(
+            template
+                .render(&[], &[b"text/plain"], None, Some(b"{}".to_vec()))
+                .unwrap_err(),
+            DestinationRequestError::TemplateValueCountMismatch
+        );
+    }
+
+    #[test]
+    fn sensitive_body_adapter_retains_the_zeroizing_owner_without_a_plain_vec_copy() {
+        let body = sensitive_reqwest_body(Zeroizing::new(b"client-secret-body".to_vec()));
+        assert_eq!(body.as_bytes(), Some(b"client-secret-body".as_slice()));
+
+        let owner = SensitiveRequestBodyOwner(Zeroizing::new(b"never-in-debug".to_vec()));
+        let debug = format!("{owner:?}");
+        assert!(debug.contains("[REDACTED]"));
+        assert!(!debug.contains("never-in-debug"));
+
+        let source = include_str!("destination.rs");
+        let send_body_path = source
+            .split_once("if let Some(body) = body {")
+            .and_then(|(_, suffix)| suffix.split_once("let response = timeout_at"))
+            .map(|(path, _)| path)
+            .expect("bounded send body path remains inspectable");
+        assert!(send_body_path.contains("sensitive_reqwest_body(body)"));
+        assert!(!send_body_path.contains(".to_vec()"));
+        assert!(!send_body_path.contains("Vec::from"));
+
+        let adapter = source
+            .split_once("fn sensitive_reqwest_body")
+            .and_then(|(_, suffix)| suffix.split_once("/// Value-free fixed-destination"))
+            .map(|(path, _)| path)
+            .expect("sensitive adapter remains inspectable");
+        assert!(adapter.contains("Bytes::from_owner(SensitiveRequestBodyOwner(body))"));
+        assert!(!adapter.contains(".to_vec()"));
+        assert!(!adapter.contains("Vec::from"));
+    }
+
+    #[test]
     fn request_and_policy_debug_are_redacted() {
         let policy = production(&["10.0.0.0/8"]);
         let authorization = DestinationAuthorization::new(b"Bearer top-secret-token".to_vec())
@@ -2206,6 +3238,80 @@ mod tests {
         assert_eq!(body.as_bytes(), b"one-shot");
         assert_eq!(resolver.calls.load(Ordering::SeqCst), 1);
         assert_eq!(hits.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn credential_send_delivers_the_exact_owned_sensitive_body() {
+        let captured = Arc::new(Mutex::new(None));
+        let route_captured = Arc::clone(&captured);
+        let app = Router::new().route(
+            "/oauth/token",
+            post(move |headers: HeaderMap, body: Bytes| {
+                let route_captured = Arc::clone(&route_captured);
+                async move {
+                    let exact_headers = headers.get("accept").and_then(|value| value.to_str().ok())
+                        == Some("application/json")
+                        && headers
+                            .get("content-type")
+                            .and_then(|value| value.to_str().ok())
+                            == Some("application/json");
+                    *route_captured.lock().expect("capture lock") = Some(body.to_vec());
+                    if exact_headers {
+                        (StatusCode::OK, "accepted")
+                    } else {
+                        (StatusCode::BAD_REQUEST, "wrong headers")
+                    }
+                }
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind credential test server");
+        let address = listener.local_addr().expect("credential test address");
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve credential test app");
+        });
+
+        let policy = CredentialDestinationPolicy::new(
+            "dev-oauth",
+            &format!("http://localhost:{}/", address.port()),
+            DestinationProfile::LoopbackDevelopmentHttp,
+            &[],
+        )
+        .expect("development credential policy validates");
+        let template = CredentialDestinationRequestTemplate::oauth2_client_credentials(
+            "/oauth/token",
+            OAuth2ClientCredentialsBodyFormat::JsonClientSecretBody,
+            1_024,
+            2_048,
+        )
+        .expect("closed credential template");
+        let expected =
+            br#"{"grant_type":"client_credentials","client_id":"doctor","client_secret":"secret"}"#;
+        let request = template
+            .render_zeroizing(&[], &[], None, Some(Zeroizing::new(expected.to_vec())))
+            .expect("credential request renders");
+        let resolver = FakeResolver {
+            answers: vec![address],
+            calls: AtomicUsize::new(0),
+        };
+
+        let response = policy
+            .send_with_resolver(
+                request,
+                Duration::from_secs(2),
+                &resolver,
+                TransportTrust::System,
+            )
+            .await
+            .expect("credential send succeeds");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            captured.lock().expect("capture lock").as_deref(),
+            Some(expected.as_slice())
+        );
     }
 
     #[tokio::test]

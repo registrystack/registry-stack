@@ -1,0 +1,43 @@
+{
+  "profile": {
+    "id": "synthetic.person-status.exact",
+    "version": "1"
+  },
+  "integration_pack": {
+    "id": "synthetic.person-status",
+    "version": "1",
+    "hash": "sha256:7054fae6ad999029759835838214f188fb5726cf48e0006479e98340fb7c22a7"
+  },
+  "tenant": "synthetic-government",
+  "registry_instance": "people-primary",
+  "source_instance": "people-api",
+  "data_destination": {
+    "id": "registry-data-private",
+    "origin": "https://registry.example.test/",
+    "allowed_private_cidrs": []
+  },
+  "credential_destination": {
+    "id": "registry-oauth-private",
+    "origin": "https://identity.example.test/",
+    "allowed_private_cidrs": []
+  },
+  "credential": {
+    "ref": "people-api-reader",
+    "generation": 7
+  },
+  "deployment_parameters": {
+    "program": "benefits"
+  },
+  "limits": {
+    "max_source_bytes": 65536,
+    "timeout_ms": 4000,
+    "max_in_flight": 8,
+    "quota_per_minute": 30,
+    "quota_burst": 5,
+    "max_public_response_bytes": 32768,
+    "max_token_lifetime_ms": 1800000
+  },
+  "capabilities": {
+    "allow_sandboxed_rhai": false
+  }
+}
