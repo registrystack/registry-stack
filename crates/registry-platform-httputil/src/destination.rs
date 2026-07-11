@@ -49,6 +49,8 @@ pub const MAX_DESTINATION_PRIVATE_CIDRS: usize = 16;
 pub const MAX_DESTINATION_RESOLVER_ANSWERS: usize = 32;
 /// Maximum operation path-and-query length.
 pub const MAX_DESTINATION_TARGET_BYTES: usize = 4_096;
+/// Maximum decoded bytes in one compiler-owned dynamic path segment.
+pub const MAX_DESTINATION_PATH_SEGMENT_BYTES: usize = 1_024;
 /// Maximum fixed query components on one reviewed request template.
 pub const MAX_DESTINATION_REQUEST_QUERY_COMPONENTS: usize = 32;
 /// Maximum static header count on one operation.
@@ -781,6 +783,14 @@ enum RequestTemplateKind {
     OAuth2ClientCredentials(OAuth2ClientCredentialsBodyFormat),
 }
 
+enum TargetTemplateInput<'a> {
+    Fixed(&'a str),
+    PathSegment {
+        fixed_path: &'a str,
+        max_value_bytes: usize,
+    },
+}
+
 /// Slot-typed, immutable request shape compiled before any sensitive values exist.
 ///
 /// The template freezes the method, fixed path, query/header names, and reviewed
@@ -790,6 +800,7 @@ enum RequestTemplateKind {
 pub struct BoundedDestinationRequestTemplate<S: DestinationSlot> {
     method: DestinationMethod,
     fixed_path: String,
+    path_segment_max_bytes: Option<usize>,
     query: Vec<QueryValueTemplate>,
     headers: Vec<HeaderValueTemplate>,
     authorization: DestinationAuthorizationTemplate,
@@ -856,7 +867,7 @@ impl BoundedDestinationRequestTemplate<CredentialDestination> {
         ];
         Self::new_with_headers(
             RequestTemplateKind::OAuth2ClientCredentials(format),
-            fixed_path,
+            TargetTemplateInput::Fixed(fixed_path),
             &[],
             &headers,
             DestinationAuthorizationTemplate::Forbidden,
@@ -875,6 +886,7 @@ impl<S: DestinationSlot> fmt::Debug for BoundedDestinationRequestTemplate<S> {
             .field("slot", &S::DEBUG_NAME)
             .field("method", &self.method)
             .field("fixed_path", &"[REDACTED]")
+            .field("path_segment", &self.path_segment_max_bytes.is_some())
             .field("query_count", &self.query.len())
             .field("header_count", &self.headers.len())
             .field("authorization", &self.authorization)
@@ -907,7 +919,47 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
             .collect::<Vec<_>>();
         Self::new_with_headers(
             RequestTemplateKind::General(method),
-            fixed_path,
+            TargetTemplateInput::Fixed(fixed_path),
+            query,
+            &headers,
+            authorization,
+            body,
+            max_request_bytes,
+        )
+    }
+
+    /// Validate and freeze a request with one compiler-owned dynamic path segment.
+    ///
+    /// The fixed path must end in `/`. Rendering accepts exactly one non-empty
+    /// segment, encodes it as a single RFC 3986 path component, and rejects
+    /// path delimiters, traversal segments, control bytes, and pre-encoding.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_path_segment(
+        method: DestinationMethod,
+        fixed_path: &str,
+        path_segment_max_bytes: usize,
+        query: &[(&str, usize)],
+        headers: &[(&str, usize)],
+        authorization: DestinationAuthorizationTemplate,
+        body: DestinationBodyTemplate,
+        max_request_bytes: usize,
+    ) -> Result<Self, DestinationRequestError> {
+        if method == DestinationMethod::OAuth2ClientCredentialsPost {
+            return Err(DestinationRequestError::MethodSlotMismatch);
+        }
+        let headers = headers
+            .iter()
+            .map(|(name, max_value_bytes)| HeaderTemplateInput::Dynamic {
+                name,
+                max_value_bytes: *max_value_bytes,
+            })
+            .collect::<Vec<_>>();
+        Self::new_with_headers(
+            RequestTemplateKind::General(method),
+            TargetTemplateInput::PathSegment {
+                fixed_path,
+                max_value_bytes: path_segment_max_bytes,
+            },
             query,
             &headers,
             authorization,
@@ -935,7 +987,7 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
             .collect::<Vec<_>>();
         Self::new_with_headers(
             RequestTemplateKind::General(method),
-            fixed_path,
+            TargetTemplateInput::Fixed(fixed_path),
             query,
             &headers,
             authorization,
@@ -946,7 +998,7 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
 
     fn new_with_headers(
         kind: RequestTemplateKind,
-        fixed_path: &str,
+        target: TargetTemplateInput<'_>,
         query: &[(&str, usize)],
         headers: &[HeaderTemplateInput<'_>],
         authorization: DestinationAuthorizationTemplate,
@@ -959,7 +1011,21 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
                 (DestinationMethod::OAuth2ClientCredentialsPost, Some(format))
             }
         };
+        let (fixed_path, path_segment_max_bytes) = match target {
+            TargetTemplateInput::Fixed(fixed_path) => (fixed_path, None),
+            TargetTemplateInput::PathSegment {
+                fixed_path,
+                max_value_bytes,
+            } => (fixed_path, Some(max_value_bytes)),
+        };
         validate_fixed_destination_path(fixed_path)?;
+        if let Some(max_bytes) = path_segment_max_bytes {
+            if !fixed_path.ends_with('/')
+                || !(1..=MAX_DESTINATION_PATH_SEGMENT_BYTES).contains(&max_bytes)
+            {
+                return Err(DestinationRequestError::InvalidPathSegment);
+            }
+        }
         if query.len() > MAX_DESTINATION_REQUEST_QUERY_COMPONENTS {
             return Err(DestinationRequestError::TooManyQueryComponents);
         }
@@ -1018,6 +1084,11 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
         }
 
         let mut target_bytes = fixed_path.len();
+        if let Some(max_bytes) = path_segment_max_bytes {
+            target_bytes = target_bytes
+                .checked_add(max_bytes.saturating_mul(3))
+                .ok_or(DestinationRequestError::TemplateBoundsExceeded)?;
+        }
         let mut retained_query = Vec::with_capacity(query.len());
         for (index, (name, max_value_bytes)) in query.iter().copied().enumerate() {
             if name.is_empty()
@@ -1103,6 +1174,7 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
         Ok(Self {
             method,
             fixed_path: fixed_path.to_owned(),
+            path_segment_max_bytes,
             query: retained_query,
             headers: retained_headers,
             authorization,
@@ -1129,6 +1201,24 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
         )
     }
 
+    /// Render one path-segment request into the opaque slot-typed capability.
+    pub fn render_with_path_segment(
+        &self,
+        path_segment: &str,
+        query_values: &[&str],
+        header_values: &[&[u8]],
+        authorization: Option<DestinationAuthorizationValue>,
+        body: Option<Vec<u8>>,
+    ) -> Result<BoundedDestinationRequest<S>, DestinationRequestError> {
+        self.render_zeroizing_parts(
+            Some(path_segment),
+            query_values,
+            header_values,
+            authorization,
+            body.map(Zeroizing::new),
+        )
+    }
+
     /// Render a request while retaining a caller-produced sensitive body in zeroizing storage.
     pub fn render_zeroizing(
         &self,
@@ -1137,6 +1227,26 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
         authorization: Option<DestinationAuthorizationValue>,
         body: Option<Zeroizing<Vec<u8>>>,
     ) -> Result<BoundedDestinationRequest<S>, DestinationRequestError> {
+        self.render_zeroizing_parts(None, query_values, header_values, authorization, body)
+    }
+
+    fn render_zeroizing_parts(
+        &self,
+        path_segment: Option<&str>,
+        query_values: &[&str],
+        header_values: &[&[u8]],
+        authorization: Option<DestinationAuthorizationValue>,
+        body: Option<Zeroizing<Vec<u8>>>,
+    ) -> Result<BoundedDestinationRequest<S>, DestinationRequestError> {
+        match (self.path_segment_max_bytes, path_segment) {
+            (None, None) => {}
+            (Some(max_bytes), Some(segment))
+                if !segment.is_empty()
+                    && segment.len() <= max_bytes
+                    && valid_dynamic_path_segment(segment) => {}
+            (Some(_), Some(_)) => return Err(DestinationRequestError::InvalidPathSegment),
+            _ => return Err(DestinationRequestError::TemplateValueCountMismatch),
+        }
         let dynamic_header_count = self
             .headers
             .iter()
@@ -1184,6 +1294,9 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
 
         let mut target = BoundedTargetWriter::new(self.max_target_bytes);
         target.extend_from_slice(self.fixed_path.as_bytes())?;
+        if let Some(segment) = path_segment {
+            append_path_segment_component(&mut target, segment.as_bytes())?;
+        }
         for (index, (template, value)) in self.query.iter().zip(query_values).enumerate() {
             target.push(if index == 0 { b'?' } else { b'&' })?;
             append_form_component(&mut target, template.name.as_bytes())?;
@@ -1319,6 +1432,30 @@ fn append_form_component(
                 output.push(HEX[usize::from(*byte >> 4)])?;
                 output.push(HEX[usize::from(*byte & 0x0f)])?;
             }
+        }
+    }
+    Ok(())
+}
+
+fn valid_dynamic_path_segment(segment: &str) -> bool {
+    !matches!(segment, "." | "..")
+        && !segment
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || matches!(byte, b'/' | b'\\' | b'?' | b'%'))
+}
+
+fn append_path_segment_component(
+    output: &mut BoundedTargetWriter,
+    value: &[u8],
+) -> Result<(), DestinationRequestError> {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    for byte in value {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~' | b':') {
+            output.push(*byte)?;
+        } else {
+            output.push(b'%')?;
+            output.push(HEX[usize::from(*byte >> 4)])?;
+            output.push(HEX[usize::from(*byte & 0x0f)])?;
         }
     }
     Ok(())
@@ -1481,6 +1618,8 @@ pub enum DestinationRequestError {
     InvalidTarget,
     #[error("operation target is not canonical")]
     NonCanonicalTarget,
+    #[error("operation path segment is invalid")]
+    InvalidPathSegment,
     #[error("operation has too many headers")]
     TooManyHeaders,
     #[error("operation has too many query components")]
@@ -2013,7 +2152,12 @@ fn path_percent_encoding_is_canonical(path: &str) -> bool {
             _ => 0,
         };
         let decoded = (hex(high) << 4) | hex(low);
-        if decoded.is_ascii() {
+        if decoded.is_ascii_alphanumeric()
+            || matches!(
+                decoded,
+                b'-' | b'.' | b'_' | b'~' | b'/' | b'\\' | b'?' | 0 | b'\r' | b'\n'
+            )
+        {
             return false;
         }
         index += 3;
@@ -3032,6 +3176,83 @@ mod tests {
             DestinationRequestError::TooManyQueryComponents
         );
         assert!(!format!("{template:?}").contains("records"));
+    }
+
+    #[test]
+    fn compiled_path_segment_is_single_bounded_and_canonically_encoded() {
+        let template = DataDestinationRequestTemplate::new_with_path_segment(
+            DestinationMethod::Get,
+            "/api/v2/spp/Individual/",
+            96,
+            &[("_elements", 32)],
+            &[],
+            DestinationAuthorizationTemplate::Bearer {
+                max_value_bytes: 128,
+            },
+            DestinationBodyTemplate::Forbidden,
+            1_024,
+        )
+        .expect("path-segment template validates");
+        let request = template
+            .render_with_path_segment(
+                "urn:openspp:vocab:id-type#national_id|IND-001",
+                &["identifier,active"],
+                &[],
+                Some(
+                    DestinationAuthorizationValue::bearer(b"bounded".to_vec())
+                        .expect("typed bearer"),
+                ),
+                None,
+            )
+            .expect("one encoded segment renders");
+        assert_eq!(
+            request.target.as_slice(),
+            b"/api/v2/spp/Individual/urn:openspp:vocab:id-type%23national_id%7CIND-001?_elements=identifier%2Cactive"
+        );
+        assert!(!format!("{template:?}").contains("Individual"));
+
+        for invalid in ["", ".", "..", "a/b", "a\\b", "a?b", "a%2Fb", "a\nb"] {
+            assert_eq!(
+                template
+                    .render_with_path_segment(invalid, &["identifier"], &[], None, None)
+                    .unwrap_err(),
+                DestinationRequestError::InvalidPathSegment
+            );
+        }
+        assert_eq!(
+            template
+                .render(&["identifier"], &[], None, None)
+                .unwrap_err(),
+            DestinationRequestError::TemplateValueCountMismatch
+        );
+        assert_eq!(
+            DataDestinationRequestTemplate::new_with_path_segment(
+                DestinationMethod::Get,
+                "/api/v2/spp/Individual",
+                32,
+                &[],
+                &[],
+                DestinationAuthorizationTemplate::Forbidden,
+                DestinationBodyTemplate::Forbidden,
+                128,
+            )
+            .unwrap_err(),
+            DestinationRequestError::InvalidPathSegment
+        );
+        assert_eq!(
+            DataDestinationRequestTemplate::new_with_path_segment(
+                DestinationMethod::Get,
+                "/record/",
+                MAX_DESTINATION_PATH_SEGMENT_BYTES + 1,
+                &[],
+                &[],
+                DestinationAuthorizationTemplate::Forbidden,
+                DestinationBodyTemplate::Forbidden,
+                MAX_DESTINATION_TARGET_BYTES,
+            )
+            .unwrap_err(),
+            DestinationRequestError::InvalidPathSegment
+        );
     }
 
     #[test]
