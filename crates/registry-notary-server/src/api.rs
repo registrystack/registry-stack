@@ -150,6 +150,10 @@ const POSTURE_TIER_INVALID_CODE: &str = "registry.admin.posture.invalid_tier";
 
 pub use crate::federation::federation_router;
 
+pub(crate) fn oid4vci_proof_precheck_applies(path: &str) -> bool {
+    path == OID4VCI_CREDENTIAL_PATH
+}
+
 pub fn router<S>() -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
@@ -288,7 +292,7 @@ pub async fn oid4vci_proof_precheck_middleware(
     request: Request<Body>,
     next: Next,
 ) -> Response {
-    if request.uri().path() != OID4VCI_CREDENTIAL_PATH {
+    if !oid4vci_proof_precheck_applies(request.uri().path()) {
         return next.run(request).await;
     }
     if !state.oid4vci.enabled {

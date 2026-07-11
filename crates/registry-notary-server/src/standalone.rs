@@ -466,6 +466,8 @@ fn layer_notary_routes(
         .layer(from_fn_with_state(Arc::clone(&metrics), metrics_middleware))
         .layer(axum::Extension(Arc::clone(&api_state)))
         .layer(from_fn_with_state(auth_state, auth_audit_middleware))
+        // Axum executes later layers first. Keep the proof precheck here so a
+        // malformed OID4VCI proof is rejected before authentication side effects.
         .layer(from_fn_with_state(
             api_state,
             crate::api::oid4vci_proof_precheck_middleware,
@@ -7301,6 +7303,10 @@ fn projected_source_fields_with_query_values(
     fields.dedup();
     fields
 }
+
+#[cfg(test)]
+#[path = "standalone/route_security_characterization.rs"]
+mod route_security_characterization;
 
 #[cfg(test)]
 mod tests {
