@@ -32,6 +32,9 @@ const UNKEYED_HASH_PREFIX: &str = "sha256:";
 const CHAIN_HMAC_CONTEXT: &[u8] = b"registry-platform-audit-chain-v1";
 const AUDIT_REFERENCE_HASH_CONTEXT: &str = "registry-platform:audit-reference:v1";
 
+/// Stable schema identifier for sink-built durable phase records.
+pub const DURABLE_AUDIT_RECORD_SCHEMA_V1: &str = "registry.durable-audit/v1";
+
 /// HKDF-Expand `info` label deriving the chain-integrity sub-key (AUDIT-03).
 const CHAIN_KEY_DERIVATION_INFO: &[u8] = b"registry-platform-audit/chain-key/v1";
 /// HKDF-Expand `info` label deriving the identifier-hashing sub-key (AUDIT-03).
@@ -302,6 +305,538 @@ impl AuditProfile {
         sink: &dyn AuditSink,
     ) -> Result<ChainState, AuditError> {
         ChainState::bootstrap_or_start_empty(sink, self.chain_hasher()).await
+    }
+}
+
+/// Closed durable audit stream classes that require atomic phase idempotency.
+///
+/// Adding a stream is a contract change that requires a matching durable-store
+/// migration. Request-supplied labels cannot enter the idempotency key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum DurableAuditStreamKind {
+    /// A governed Relay consultation.
+    Consultation,
+    /// A governed source materialization acquisition.
+    Materialization,
+    /// A fail-closed access denial decision.
+    Denial,
+    /// An operator-controlled startup credential probe.
+    StartupCredentialProbe,
+    /// An operator-controlled readiness credential probe.
+    ReadinessCredentialProbe,
+}
+
+impl DurableAuditStreamKind {
+    /// Stable storage label for this stream kind.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Consultation => "consultation",
+            Self::Materialization => "materialization",
+            Self::Denial => "denial",
+            Self::StartupCredentialProbe => "startup_credential_probe",
+            Self::ReadinessCredentialProbe => "readiness_credential_probe",
+        }
+    }
+
+    const fn accepts_phase(self, phase: DurableAuditPhase) -> bool {
+        match self {
+            Self::Denial => matches!(phase, DurableAuditPhase::DenialDecision),
+            Self::Consultation
+            | Self::Materialization
+            | Self::StartupCredentialProbe
+            | Self::ReadinessCredentialProbe => {
+                matches!(
+                    phase,
+                    DurableAuditPhase::Attempt | DurableAuditPhase::Completion
+                )
+            }
+        }
+    }
+}
+
+impl TryFrom<&str> for DurableAuditStreamKind {
+    type Error = DurableAuditValidationError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "consultation" => Ok(Self::Consultation),
+            "materialization" => Ok(Self::Materialization),
+            "denial" => Ok(Self::Denial),
+            "startup_credential_probe" => Ok(Self::StartupCredentialProbe),
+            "readiness_credential_probe" => Ok(Self::ReadinessCredentialProbe),
+            _ => Err(DurableAuditValidationError::InvalidStreamKind),
+        }
+    }
+}
+
+/// Closed phases of a durable governed audit operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum DurableAuditPhase {
+    /// Written durably before any governed source or credential access.
+    Attempt,
+    /// Written durably before an operation result is published.
+    Completion,
+    /// One fail-closed denial decision that cannot masquerade as source access.
+    DenialDecision,
+}
+
+impl DurableAuditPhase {
+    /// Stable storage label for this phase.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Attempt => "attempt",
+            Self::Completion => "completion",
+            Self::DenialDecision => "denial_decision",
+        }
+    }
+}
+
+impl TryFrom<&str> for DurableAuditPhase {
+    type Error = DurableAuditValidationError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "attempt" => Ok(Self::Attempt),
+            "completion" => Ok(Self::Completion),
+            "denial_decision" => Ok(Self::DenialDecision),
+            _ => Err(DurableAuditValidationError::InvalidPhase),
+        }
+    }
+}
+
+/// Canonical ULID syntax identifying one durable audit operation.
+///
+/// This type validates only syntax and canonical encoding. The consumer must
+/// enforce that it was server-minted and was not derived from a selector,
+/// credential, source identifier, or other sensitive input.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct DurableAuditOperationId(String);
+
+impl DurableAuditOperationId {
+    /// Construct an operation id from a ULID the consumer has server-minted.
+    ///
+    /// This constructor can preserve only syntax, so the consumer remains
+    /// responsible for the minting provenance documented on this type.
+    #[must_use]
+    pub fn from_ulid(value: Ulid) -> Self {
+        Self(value.to_string())
+    }
+
+    /// Parse an exact canonical ULID string.
+    pub fn parse(value: &str) -> Result<Self, DurableAuditValidationError> {
+        let parsed = Ulid::from_string(value)
+            .map_err(|_| DurableAuditValidationError::InvalidOperationId)?;
+        if parsed.to_string() != value {
+            return Err(DurableAuditValidationError::InvalidOperationId);
+        }
+        Ok(Self(value.to_string()))
+    }
+
+    /// Return the canonical ULID string.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for DurableAuditOperationId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("DurableAuditOperationId")
+            .field(&self.0)
+            .finish()
+    }
+}
+
+impl fmt::Display for DurableAuditOperationId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl TryFrom<&str> for DurableAuditOperationId {
+    type Error = DurableAuditValidationError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Self::parse(value)
+    }
+}
+
+/// SHA-256 of consumer-owned canonical, audit-safe JSON bytes.
+///
+/// Only [`DurableAuditWrite`] constructs this value, so a caller cannot supply
+/// payload bytes and a mismatched digest. The digest remains redacted from
+/// `Debug` and errors.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct CanonicalSafeAuditPayloadDigest([u8; 32]);
+
+impl CanonicalSafeAuditPayloadDigest {
+    fn from_canonical_bytes(canonical_safe_payload: &[u8]) -> Self {
+        Self(sha256_bytes(canonical_safe_payload))
+    }
+
+    /// Return the digest bytes for atomic durable-store comparison.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+
+    /// Return the stable lowercase SHA-256 representation.
+    #[must_use]
+    pub fn to_lower_hex(self) -> String {
+        hex_lower(&self.0)
+    }
+}
+
+impl fmt::Debug for CanonicalSafeAuditPayloadDigest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("CanonicalSafeAuditPayloadDigest(sha256:<redacted>)")
+    }
+}
+
+/// Validated idempotency key for one durable audit phase.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct DurableAuditOperationKey {
+    stream_kind: DurableAuditStreamKind,
+    operation_id: DurableAuditOperationId,
+    phase: DurableAuditPhase,
+}
+
+impl DurableAuditOperationKey {
+    /// Construct a key and enforce the closed stream/phase matrix.
+    pub fn new(
+        stream_kind: DurableAuditStreamKind,
+        operation_id: DurableAuditOperationId,
+        phase: DurableAuditPhase,
+    ) -> Result<Self, DurableAuditValidationError> {
+        if !stream_kind.accepts_phase(phase) {
+            return Err(DurableAuditValidationError::InvalidStreamPhaseCombination);
+        }
+        Ok(Self {
+            stream_kind,
+            operation_id,
+            phase,
+        })
+    }
+
+    #[must_use]
+    pub const fn stream_kind(&self) -> DurableAuditStreamKind {
+        self.stream_kind
+    }
+
+    #[must_use]
+    pub fn operation_id(&self) -> &DurableAuditOperationId {
+        &self.operation_id
+    }
+
+    #[must_use]
+    pub const fn phase(&self) -> DurableAuditPhase {
+        self.phase
+    }
+}
+
+/// Stable identity of the envelope actually stored for a durable phase.
+#[derive(Clone, PartialEq, Eq)]
+pub struct DurableAuditStoredIdentity {
+    envelope_id: String,
+    record_hash: [u8; 32],
+}
+
+impl DurableAuditStoredIdentity {
+    /// Validate and capture the identity of a sink-built envelope.
+    pub fn from_envelope(envelope: &AuditEnvelope) -> Result<Self, DurableAuditValidationError> {
+        let parsed = Ulid::from_string(&envelope.envelope_id)
+            .map_err(|_| DurableAuditValidationError::InvalidEnvelopeId)?;
+        if parsed.to_string() != envelope.envelope_id {
+            return Err(DurableAuditValidationError::InvalidEnvelopeId);
+        }
+        Ok(Self {
+            envelope_id: envelope.envelope_id.clone(),
+            record_hash: envelope.record_hash,
+        })
+    }
+
+    /// Canonical ULID assigned to the stored envelope.
+    #[must_use]
+    pub fn envelope_id(&self) -> &str {
+        &self.envelope_id
+    }
+
+    /// Chained record hash of the stored envelope.
+    #[must_use]
+    pub const fn record_hash(&self) -> &[u8; 32] {
+        &self.record_hash
+    }
+}
+
+impl fmt::Debug for DurableAuditStoredIdentity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DurableAuditStoredIdentity")
+            .field("envelope_id", &self.envelope_id)
+            .field("record_hash", &"sha256:<redacted>")
+            .finish()
+    }
+}
+
+/// One validated operation-phase write for an atomic durable audit sink.
+///
+/// The write owns the safe JSON object and derives its digest from the shared
+/// RFC 8785 canonical representation. It carries no envelope, predecessor hash,
+/// or event identity. Those are assigned by the sink under the same serialized
+/// durable-chain operation that inserts the idempotency key.
+#[derive(Clone)]
+pub struct DurableAuditWrite {
+    key: DurableAuditOperationKey,
+    payload_digest: CanonicalSafeAuditPayloadDigest,
+    safe_payload: Value,
+}
+
+impl DurableAuditWrite {
+    /// Validate one non-empty top-level JSON object containing only audit-safe
+    /// fields, canonicalize it with RFC 8785, and derive its SHA-256 digest.
+    /// Payload data is never included in diagnostics.
+    pub fn new(
+        stream_kind: DurableAuditStreamKind,
+        operation_id: DurableAuditOperationId,
+        phase: DurableAuditPhase,
+        safe_payload: Value,
+    ) -> Result<Self, DurableAuditValidationError> {
+        let Value::Object(fields) = &safe_payload else {
+            return Err(DurableAuditValidationError::SafePayloadMustBeObject);
+        };
+        if fields.is_empty() {
+            return Err(DurableAuditValidationError::SafePayloadMustBeNonEmpty);
+        }
+        let canonical_safe_payload =
+            registry_platform_canonical_json::canonicalize_json(&safe_payload)
+                .map_err(|_| DurableAuditValidationError::SafePayloadCanonicalizationFailed)?;
+
+        Ok(Self {
+            key: DurableAuditOperationKey::new(stream_kind, operation_id, phase)?,
+            payload_digest: CanonicalSafeAuditPayloadDigest::from_canonical_bytes(
+                &canonical_safe_payload,
+            ),
+            safe_payload,
+        })
+    }
+
+    #[must_use]
+    pub fn key(&self) -> &DurableAuditOperationKey {
+        &self.key
+    }
+
+    #[must_use]
+    pub const fn payload_digest(&self) -> CanonicalSafeAuditPayloadDigest {
+        self.payload_digest
+    }
+
+    /// Build the envelope after a durable sink has serialized access to its
+    /// current chain head.
+    ///
+    /// The sink-built record wraps the consumer payload with the stable schema,
+    /// operation key, phase, and canonical payload digest. The chain hash
+    /// therefore detects reassociation of an envelope with a different durable
+    /// row key.
+    ///
+    /// Sink implementations call this only after resolving duplicates and
+    /// while holding the database transaction or equivalent critical section
+    /// that owns `predecessor`. Callers cannot place a precomputed predecessor
+    /// or envelope into [`DurableAuditWrite`].
+    pub fn build_envelope_at_chain_head(
+        &self,
+        predecessor: Option<[u8; 32]>,
+        hasher: &AuditChainHasher,
+    ) -> Result<AuditEnvelope, AuditError> {
+        let record = json!({
+            "schema": DURABLE_AUDIT_RECORD_SCHEMA_V1,
+            "stream_kind": self.key.stream_kind().as_str(),
+            "operation_id": self.key.operation_id().as_str(),
+            "phase": self.key.phase().as_str(),
+            "payload_digest": format!("sha256:{}", self.payload_digest.to_lower_hex()),
+            "payload": self.safe_payload.clone(),
+        });
+        AuditEnvelope::new_with_hasher(record, predecessor, hasher)
+    }
+}
+
+impl fmt::Debug for DurableAuditWrite {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DurableAuditWrite")
+            .field("key", &self.key)
+            .field("payload_digest", &self.payload_digest)
+            .field("safe_payload", &"<redacted>")
+            .finish()
+    }
+}
+
+/// Validation failures for the closed durable audit write contract.
+///
+/// Variants deliberately do not retain rejected input values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum DurableAuditValidationError {
+    #[error("durable audit stream kind is not supported")]
+    InvalidStreamKind,
+    #[error("durable audit phase is not supported")]
+    InvalidPhase,
+    #[error("durable audit stream and phase combination is not supported")]
+    InvalidStreamPhaseCombination,
+    #[error("durable audit operation id is not a canonical ULID")]
+    InvalidOperationId,
+    #[error("safe audit payload must be a top-level JSON object")]
+    SafePayloadMustBeObject,
+    #[error("safe audit payload object must not be empty")]
+    SafePayloadMustBeNonEmpty,
+    #[error("safe audit payload canonicalization failed")]
+    SafePayloadCanonicalizationFailed,
+    #[error("durable audit envelope id is not a canonical ULID")]
+    InvalidEnvelopeId,
+}
+
+/// Atomic result of a durable phase write.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DurableAuditWriteOutcome {
+    /// This call inserted a newly sink-built envelope.
+    Inserted(DurableAuditStoredIdentity),
+    /// The key already held the same payload digest.
+    IdenticalDuplicate(DurableAuditStoredIdentity),
+    /// The key already held a different payload digest.
+    ConflictingDuplicate(DurableAuditStoredIdentity),
+}
+
+impl DurableAuditWriteOutcome {
+    /// Identity of the envelope originally stored for this phase.
+    #[must_use]
+    pub fn stored_identity(&self) -> &DurableAuditStoredIdentity {
+        match self {
+            Self::Inserted(identity)
+            | Self::IdenticalDuplicate(identity)
+            | Self::ConflictingDuplicate(identity) => identity,
+        }
+    }
+}
+
+/// Availability or internal failures from an atomic durable phase write.
+///
+/// Storage implementations map database details to these safe classes and log
+/// only separately sanitized diagnostics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum DurableAuditWriteError {
+    #[error("durable audit store is unavailable")]
+    StoreUnavailable,
+    #[error("durable audit store failed")]
+    StoreFailure,
+}
+
+/// Atomic, durable, idempotent audit-phase persistence.
+///
+/// A sink resolves the key, compares the digest, and inserts a sink-built
+/// envelope while it owns the serialized durable chain head. Identical and
+/// conflicting duplicates return the original stored identity. This trait is
+/// intentionally independent of [`AuditSink`]; append-only sinks have no
+/// fallback or blanket implementation and cannot satisfy this contract.
+#[async_trait]
+pub trait DurableAuditSink: Send + Sync {
+    async fn write_phase(
+        &self,
+        write: &DurableAuditWrite,
+    ) -> Result<DurableAuditWriteOutcome, DurableAuditWriteError>;
+}
+
+#[cfg(test)]
+struct InMemoryDurableAuditEntry {
+    payload_digest: CanonicalSafeAuditPayloadDigest,
+    envelope: AuditEnvelope,
+    stored_identity: DurableAuditStoredIdentity,
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct InMemoryDurableAuditState {
+    entries: BTreeMap<DurableAuditOperationKey, InMemoryDurableAuditEntry>,
+    last_hash: Option<[u8; 32]>,
+}
+
+/// Unit-test-only atomic conformance sink. It is absent from production builds.
+#[cfg(test)]
+struct InMemoryDurableAuditTestSink {
+    hasher: AuditChainHasher,
+    state: tokio::sync::Mutex<InMemoryDurableAuditState>,
+}
+
+#[cfg(test)]
+impl Default for InMemoryDurableAuditTestSink {
+    fn default() -> Self {
+        Self {
+            hasher: AuditChainHasher::unkeyed_dev_only(),
+            state: tokio::sync::Mutex::new(InMemoryDurableAuditState::default()),
+        }
+    }
+}
+
+#[cfg(test)]
+impl fmt::Debug for InMemoryDurableAuditTestSink {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("InMemoryDurableAuditTestSink")
+            .field("state", &"<opaque>")
+            .finish()
+    }
+}
+
+#[cfg(test)]
+impl InMemoryDurableAuditTestSink {
+    async fn len(&self) -> usize {
+        self.state.lock().await.entries.len()
+    }
+
+    async fn stored_envelope(&self, key: &DurableAuditOperationKey) -> Option<AuditEnvelope> {
+        self.state
+            .lock()
+            .await
+            .entries
+            .get(key)
+            .map(|entry| entry.envelope.clone())
+    }
+}
+
+#[cfg(test)]
+#[async_trait]
+impl DurableAuditSink for InMemoryDurableAuditTestSink {
+    async fn write_phase(
+        &self,
+        write: &DurableAuditWrite,
+    ) -> Result<DurableAuditWriteOutcome, DurableAuditWriteError> {
+        let mut state = self.state.lock().await;
+        if let Some(stored) = state.entries.get(write.key()) {
+            let stored_identity = stored.stored_identity.clone();
+            return if stored.payload_digest == write.payload_digest() {
+                Ok(DurableAuditWriteOutcome::IdenticalDuplicate(
+                    stored_identity,
+                ))
+            } else {
+                Ok(DurableAuditWriteOutcome::ConflictingDuplicate(
+                    stored_identity,
+                ))
+            };
+        }
+
+        let envelope = write
+            .build_envelope_at_chain_head(state.last_hash, &self.hasher)
+            .map_err(|_| DurableAuditWriteError::StoreFailure)?;
+        let stored_identity = DurableAuditStoredIdentity::from_envelope(&envelope)
+            .map_err(|_| DurableAuditWriteError::StoreFailure)?;
+        state.last_hash = Some(envelope.record_hash);
+        state.entries.insert(
+            write.key().clone(),
+            InMemoryDurableAuditEntry {
+                payload_digest: write.payload_digest(),
+                envelope,
+                stored_identity: stored_identity.clone(),
+            },
+        );
+        Ok(DurableAuditWriteOutcome::Inserted(stored_identity))
     }
 }
 
@@ -1993,6 +2528,531 @@ mod tests {
         async fn tail_hash(&self) -> Result<Option<[u8; 32]>, AuditError> {
             Ok(None)
         }
+    }
+
+    fn durable_operation_id() -> DurableAuditOperationId {
+        DurableAuditOperationId::parse("01J5K8M0000000000000000000")
+            .expect("test operation id is canonical")
+    }
+
+    fn durable_write(
+        stream_kind: DurableAuditStreamKind,
+        phase: DurableAuditPhase,
+        payload: Value,
+    ) -> DurableAuditWrite {
+        DurableAuditWrite::new(stream_kind, durable_operation_id(), phase, payload)
+            .expect("test durable write is valid")
+    }
+
+    #[test]
+    fn durable_audit_closed_labels_parse_exactly() {
+        for (label, expected) in [
+            ("consultation", DurableAuditStreamKind::Consultation),
+            ("materialization", DurableAuditStreamKind::Materialization),
+            ("denial", DurableAuditStreamKind::Denial),
+            (
+                "startup_credential_probe",
+                DurableAuditStreamKind::StartupCredentialProbe,
+            ),
+            (
+                "readiness_credential_probe",
+                DurableAuditStreamKind::ReadinessCredentialProbe,
+            ),
+        ] {
+            assert_eq!(DurableAuditStreamKind::try_from(label), Ok(expected));
+            assert_eq!(expected.as_str(), label);
+        }
+        assert_eq!(
+            DurableAuditStreamKind::try_from("caller-supplied"),
+            Err(DurableAuditValidationError::InvalidStreamKind)
+        );
+
+        for (label, expected) in [
+            ("attempt", DurableAuditPhase::Attempt),
+            ("completion", DurableAuditPhase::Completion),
+            ("denial_decision", DurableAuditPhase::DenialDecision),
+        ] {
+            assert_eq!(DurableAuditPhase::try_from(label), Ok(expected));
+            assert_eq!(expected.as_str(), label);
+        }
+        assert_eq!(
+            DurableAuditPhase::try_from("dispatch"),
+            Err(DurableAuditValidationError::InvalidPhase)
+        );
+    }
+
+    #[test]
+    fn durable_audit_stream_phase_matrix_is_closed() {
+        let operation_id = durable_operation_id();
+        let valid = [
+            (
+                DurableAuditStreamKind::Consultation,
+                DurableAuditPhase::Attempt,
+            ),
+            (
+                DurableAuditStreamKind::Consultation,
+                DurableAuditPhase::Completion,
+            ),
+            (
+                DurableAuditStreamKind::Materialization,
+                DurableAuditPhase::Attempt,
+            ),
+            (
+                DurableAuditStreamKind::Materialization,
+                DurableAuditPhase::Completion,
+            ),
+            (
+                DurableAuditStreamKind::Denial,
+                DurableAuditPhase::DenialDecision,
+            ),
+            (
+                DurableAuditStreamKind::StartupCredentialProbe,
+                DurableAuditPhase::Attempt,
+            ),
+            (
+                DurableAuditStreamKind::StartupCredentialProbe,
+                DurableAuditPhase::Completion,
+            ),
+            (
+                DurableAuditStreamKind::ReadinessCredentialProbe,
+                DurableAuditPhase::Attempt,
+            ),
+            (
+                DurableAuditStreamKind::ReadinessCredentialProbe,
+                DurableAuditPhase::Completion,
+            ),
+        ];
+        for (stream, phase) in valid {
+            DurableAuditOperationKey::new(stream, operation_id.clone(), phase)
+                .expect("accepted stream/phase pair");
+        }
+
+        let invalid = [
+            (DurableAuditStreamKind::Denial, DurableAuditPhase::Attempt),
+            (
+                DurableAuditStreamKind::Denial,
+                DurableAuditPhase::Completion,
+            ),
+            (
+                DurableAuditStreamKind::Consultation,
+                DurableAuditPhase::DenialDecision,
+            ),
+            (
+                DurableAuditStreamKind::Materialization,
+                DurableAuditPhase::DenialDecision,
+            ),
+            (
+                DurableAuditStreamKind::StartupCredentialProbe,
+                DurableAuditPhase::DenialDecision,
+            ),
+            (
+                DurableAuditStreamKind::ReadinessCredentialProbe,
+                DurableAuditPhase::DenialDecision,
+            ),
+        ];
+        for (stream, phase) in invalid {
+            assert_eq!(
+                DurableAuditOperationKey::new(stream, operation_id.clone(), phase),
+                Err(DurableAuditValidationError::InvalidStreamPhaseCombination)
+            );
+        }
+    }
+
+    #[test]
+    fn durable_audit_operation_id_validates_canonical_syntax() {
+        let canonical = "01J5K8M0000000000000000000";
+        assert_eq!(
+            DurableAuditOperationId::parse(canonical)
+                .expect("canonical operation id")
+                .as_str(),
+            canonical
+        );
+        assert_eq!(
+            DurableAuditOperationId::parse("not-an-operation-id"),
+            Err(DurableAuditValidationError::InvalidOperationId)
+        );
+        assert_eq!(
+            DurableAuditOperationId::parse(&canonical.to_ascii_lowercase()),
+            Err(DurableAuditValidationError::InvalidOperationId)
+        );
+    }
+
+    #[test]
+    fn durable_audit_write_canonicalizes_object_and_derives_fixed_digest() {
+        let write = durable_write(
+            DurableAuditStreamKind::Consultation,
+            DurableAuditPhase::Attempt,
+            json!({"event": "consultation.attempt"}),
+        );
+        assert_eq!(
+            write.payload_digest().to_lower_hex(),
+            "be830668de05435f7be931b49de534d7a009c1003385ec757e85dfef117e6fb6"
+        );
+
+        let envelope = write
+            .build_envelope_at_chain_head(None, &AuditChainHasher::unkeyed_dev_only())
+            .expect("sink can build envelope");
+        let expected_payload_digest = format!("sha256:{}", write.payload_digest().to_lower_hex());
+        assert_eq!(
+            envelope.record,
+            json!({
+                "schema": DURABLE_AUDIT_RECORD_SCHEMA_V1,
+                "stream_kind": "consultation",
+                "operation_id": "01J5K8M0000000000000000000",
+                "phase": "attempt",
+                "payload_digest": expected_payload_digest,
+                "payload": { "event": "consultation.attempt" },
+            })
+        );
+        assert!(envelope.prev_hash.is_none());
+    }
+
+    #[test]
+    fn durable_audit_write_rejects_invalid_payload_shapes_without_echoing_input() {
+        let make = |payload: Value| {
+            DurableAuditWrite::new(
+                DurableAuditStreamKind::Consultation,
+                durable_operation_id(),
+                DurableAuditPhase::Attempt,
+                payload,
+            )
+        };
+        assert_eq!(
+            make(Value::Null).expect_err("null fails"),
+            DurableAuditValidationError::SafePayloadMustBeObject
+        );
+        assert_eq!(
+            make(json!([])).expect_err("array fails"),
+            DurableAuditValidationError::SafePayloadMustBeObject
+        );
+        assert_eq!(
+            make(json!({})).expect_err("empty object fails"),
+            DurableAuditValidationError::SafePayloadMustBeNonEmpty
+        );
+    }
+
+    #[test]
+    fn durable_audit_write_maps_jcs_integer_rounding_rejection_to_a_safe_error() {
+        let result = DurableAuditWrite::new(
+            DurableAuditStreamKind::Consultation,
+            durable_operation_id(),
+            DurableAuditPhase::Attempt,
+            json!({
+                "nested": {
+                    "rounded_by_binary64": 9_007_199_254_740_993_u64,
+                }
+            }),
+        );
+
+        assert_eq!(
+            result.expect_err("out-of-range integer must not enter the digest"),
+            DurableAuditValidationError::SafePayloadCanonicalizationFailed
+        );
+    }
+
+    #[tokio::test]
+    async fn durable_audit_sink_builds_envelopes_at_its_serialized_chain_head() {
+        let sink = InMemoryDurableAuditTestSink::default();
+        let attempt = durable_write(
+            DurableAuditStreamKind::Consultation,
+            DurableAuditPhase::Attempt,
+            json!({"event": "consultation.attempt"}),
+        );
+        let completion = durable_write(
+            DurableAuditStreamKind::Consultation,
+            DurableAuditPhase::Completion,
+            json!({"event": "consultation.completion"}),
+        );
+
+        let attempt_outcome = sink.write_phase(&attempt).await.expect("attempt insert");
+        let completion_outcome = sink
+            .write_phase(&completion)
+            .await
+            .expect("completion insert");
+        assert!(matches!(
+            attempt_outcome,
+            DurableAuditWriteOutcome::Inserted(_)
+        ));
+        assert!(matches!(
+            completion_outcome,
+            DurableAuditWriteOutcome::Inserted(_)
+        ));
+        let attempt_envelope = sink
+            .stored_envelope(attempt.key())
+            .await
+            .expect("attempt envelope");
+        let completion_envelope = sink
+            .stored_envelope(completion.key())
+            .await
+            .expect("completion envelope");
+        assert!(attempt_envelope.prev_hash.is_none());
+        assert_eq!(
+            completion_envelope.prev_hash,
+            Some(attempt_envelope.record_hash)
+        );
+        assert_eq!(sink.len().await, 2);
+    }
+
+    #[tokio::test]
+    async fn durable_audit_identical_replay_returns_original_stored_identity() {
+        let sink = InMemoryDurableAuditTestSink::default();
+        let payload = json!({"event": "consultation.attempt"});
+        let original = durable_write(
+            DurableAuditStreamKind::Consultation,
+            DurableAuditPhase::Attempt,
+            payload.clone(),
+        );
+        let replay = durable_write(
+            DurableAuditStreamKind::Consultation,
+            DurableAuditPhase::Attempt,
+            payload,
+        );
+
+        let inserted = sink.write_phase(&original).await.expect("initial insert");
+        let outcome = sink.write_phase(&replay).await.expect("replay succeeds");
+
+        assert_eq!(
+            outcome,
+            DurableAuditWriteOutcome::IdenticalDuplicate(inserted.stored_identity().clone())
+        );
+        assert_eq!(sink.len().await, 1);
+    }
+
+    #[tokio::test]
+    async fn durable_audit_conflicting_replay_is_outcome_with_original_identity() {
+        let sink = InMemoryDurableAuditTestSink::default();
+        let original = durable_write(
+            DurableAuditStreamKind::Consultation,
+            DurableAuditPhase::Completion,
+            json!({"outcome": "known_complete"}),
+        );
+        let conflicting = durable_write(
+            DurableAuditStreamKind::Consultation,
+            DurableAuditPhase::Completion,
+            json!({"outcome": "outcome_unknown"}),
+        );
+
+        let inserted = sink.write_phase(&original).await.expect("initial insert");
+        let outcome = sink
+            .write_phase(&conflicting)
+            .await
+            .expect("conflict is a deterministic outcome");
+        assert_eq!(
+            outcome,
+            DurableAuditWriteOutcome::ConflictingDuplicate(inserted.stored_identity().clone())
+        );
+        assert_eq!(sink.len().await, 1);
+        assert_eq!(
+            sink.stored_envelope(original.key())
+                .await
+                .expect("original remains")
+                .envelope_id,
+            inserted.stored_identity().envelope_id()
+        );
+    }
+
+    #[tokio::test]
+    async fn durable_audit_key_separates_streams_and_phases() {
+        let sink = InMemoryDurableAuditTestSink::default();
+        let valid = [
+            (
+                DurableAuditStreamKind::Consultation,
+                DurableAuditPhase::Attempt,
+            ),
+            (
+                DurableAuditStreamKind::Consultation,
+                DurableAuditPhase::Completion,
+            ),
+            (
+                DurableAuditStreamKind::Materialization,
+                DurableAuditPhase::Attempt,
+            ),
+            (
+                DurableAuditStreamKind::Materialization,
+                DurableAuditPhase::Completion,
+            ),
+            (
+                DurableAuditStreamKind::Denial,
+                DurableAuditPhase::DenialDecision,
+            ),
+            (
+                DurableAuditStreamKind::StartupCredentialProbe,
+                DurableAuditPhase::Attempt,
+            ),
+            (
+                DurableAuditStreamKind::StartupCredentialProbe,
+                DurableAuditPhase::Completion,
+            ),
+            (
+                DurableAuditStreamKind::ReadinessCredentialProbe,
+                DurableAuditPhase::Attempt,
+            ),
+            (
+                DurableAuditStreamKind::ReadinessCredentialProbe,
+                DurableAuditPhase::Completion,
+            ),
+        ];
+        for (stream_kind, phase) in valid {
+            let payload = json!({
+                "phase": phase.as_str(),
+                "stream": stream_kind.as_str(),
+            });
+            let write = durable_write(stream_kind, phase, payload);
+            assert!(matches!(
+                sink.write_phase(&write)
+                    .await
+                    .expect("distinct key inserts"),
+                DurableAuditWriteOutcome::Inserted(_)
+            ));
+        }
+
+        assert_eq!(sink.len().await, 9);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn durable_audit_concurrent_identical_writes_insert_exactly_once() {
+        const WRITERS: usize = 64;
+        let sink = Arc::new(InMemoryDurableAuditTestSink::default());
+        let barrier = Arc::new(tokio::sync::Barrier::new(WRITERS));
+        let mut writes = tokio::task::JoinSet::new();
+
+        for _ in 0..WRITERS {
+            let sink = Arc::clone(&sink);
+            let barrier = Arc::clone(&barrier);
+            let write = durable_write(
+                DurableAuditStreamKind::Materialization,
+                DurableAuditPhase::Attempt,
+                json!({"event": "materialization.attempt"}),
+            );
+            writes.spawn(async move {
+                barrier.wait().await;
+                sink.write_phase(&write).await
+            });
+        }
+
+        let mut inserted = 0;
+        let mut duplicates = 0;
+        let mut stored_ids = BTreeSet::new();
+        while let Some(joined) = writes.join_next().await {
+            let outcome = joined
+                .expect("writer task completes")
+                .expect("write succeeds");
+            match &outcome {
+                DurableAuditWriteOutcome::Inserted(_) => inserted += 1,
+                DurableAuditWriteOutcome::IdenticalDuplicate(_) => duplicates += 1,
+                DurableAuditWriteOutcome::ConflictingDuplicate(_) => {
+                    panic!("identical digest must not conflict")
+                }
+            }
+            stored_ids.insert(outcome.stored_identity().envelope_id().to_string());
+        }
+
+        assert_eq!(inserted, 1);
+        assert_eq!(duplicates, WRITERS - 1);
+        assert_eq!(stored_ids.len(), 1);
+        assert_eq!(sink.len().await, 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn durable_audit_concurrent_conflicting_writers_choose_one_payload() {
+        const WRITERS_PER_PAYLOAD: usize = 32;
+        const WRITERS: usize = WRITERS_PER_PAYLOAD * 2;
+        let sink = Arc::new(InMemoryDurableAuditTestSink::default());
+        let barrier = Arc::new(tokio::sync::Barrier::new(WRITERS));
+        let mut writes = tokio::task::JoinSet::new();
+
+        for index in 0..WRITERS {
+            let sink = Arc::clone(&sink);
+            let barrier = Arc::clone(&barrier);
+            let payload = if index < WRITERS_PER_PAYLOAD {
+                json!({"outcome": "known_complete"})
+            } else {
+                json!({"outcome": "outcome_unknown"})
+            };
+            let write = durable_write(
+                DurableAuditStreamKind::Materialization,
+                DurableAuditPhase::Completion,
+                payload,
+            );
+            writes.spawn(async move {
+                barrier.wait().await;
+                sink.write_phase(&write).await
+            });
+        }
+
+        let mut inserted = 0;
+        let mut duplicates = 0;
+        let mut conflicts = 0;
+        let mut stored_ids = BTreeSet::new();
+        while let Some(joined) = writes.join_next().await {
+            let outcome = joined
+                .expect("writer task completes")
+                .expect("write returns deterministic outcome");
+            match &outcome {
+                DurableAuditWriteOutcome::Inserted(_) => inserted += 1,
+                DurableAuditWriteOutcome::IdenticalDuplicate(_) => duplicates += 1,
+                DurableAuditWriteOutcome::ConflictingDuplicate(_) => conflicts += 1,
+            }
+            stored_ids.insert(outcome.stored_identity().envelope_id().to_string());
+        }
+
+        assert_eq!(inserted, 1);
+        assert_eq!(duplicates, WRITERS_PER_PAYLOAD - 1);
+        assert_eq!(conflicts, WRITERS_PER_PAYLOAD);
+        assert_eq!(stored_ids.len(), 1);
+        assert_eq!(sink.len().await, 1);
+    }
+
+    #[tokio::test]
+    async fn durable_audit_debug_and_errors_redact_payloads_and_digests() {
+        const RAW_SELECTOR: &str = "NID-raw-selector-must-not-leak";
+        const RAW_SECRET: &str = "source-token-must-not-leak";
+        let sink = InMemoryDurableAuditTestSink::default();
+        let safe_payload = json!({
+            "selector": RAW_SELECTOR,
+            "token": RAW_SECRET,
+        });
+        let write = durable_write(
+            DurableAuditStreamKind::Consultation,
+            DurableAuditPhase::Attempt,
+            safe_payload,
+        );
+
+        let write_debug = format!("{write:?}");
+        assert!(!write_debug.contains(RAW_SELECTOR));
+        assert!(!write_debug.contains(RAW_SECRET));
+        assert!(!write_debug.contains(&write.payload_digest().to_lower_hex()));
+        sink.write_phase(&write).await.expect("insert");
+        let sink_debug = format!("{sink:?}");
+        assert!(!sink_debug.contains(RAW_SELECTOR));
+        assert!(!sink_debug.contains(RAW_SECRET));
+
+        let conflict = durable_write(
+            DurableAuditStreamKind::Consultation,
+            DurableAuditPhase::Attempt,
+            json!({"event": "different"}),
+        );
+        let outcome = sink
+            .write_phase(&conflict)
+            .await
+            .expect("conflict is an outcome");
+        let stored_record_hash = hex_lower(outcome.stored_identity().record_hash());
+        for diagnostic in [
+            format!("{outcome:?}"),
+            format!("{:?}", DurableAuditWriteError::StoreUnavailable),
+            DurableAuditWriteError::StoreFailure.to_string(),
+        ] {
+            assert!(!diagnostic.contains(RAW_SELECTOR));
+            assert!(!diagnostic.contains(RAW_SECRET));
+            assert!(!diagnostic.contains(&write.payload_digest().to_lower_hex()));
+            assert!(!diagnostic.contains(&stored_record_hash));
+        }
+
+        let rejected = format!("{RAW_SECRET}-not-a-ulid");
+        let validation = DurableAuditOperationId::parse(&rejected)
+            .expect_err("invalid operation id is rejected");
+        assert!(!format!("{validation:?}").contains(RAW_SECRET));
+        assert!(!validation.to_string().contains(RAW_SECRET));
     }
 
     #[test]

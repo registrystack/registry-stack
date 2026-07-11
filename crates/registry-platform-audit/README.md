@@ -9,6 +9,10 @@ helpers for registry services.
 - `AuditEnvelope` records with ULID ids, timestamps, previous hashes, payloads,
   and record hashes.
 - `AuditSink` for pluggable persistence.
+- `DurableAuditSink` for atomic, idempotent governed-operation writes keyed by
+  stream, operation ULID, and phase.
+- A `cfg(test)` in-memory conformance sink plus a public-API integration test.
+  No in-memory sink exists in production builds.
 - Built-in `JsonlFileSink`, `JsonlStdoutSink`, and `SyslogSink`.
 - `verify_chain` and `verify_jsonl_lines` for retained audit consistency
   checks.
@@ -41,6 +45,68 @@ async fn write_audit_event() -> Result<(), registry_platform_audit::AuditError> 
     Ok(())
 }
 ```
+
+## Durable Phase Contract
+
+Access-capable consultation and materialization flows use
+`DurableAuditSink::write_phase`, not `AuditSink::write`. Each
+`DurableAuditWrite` carries:
+
+- a closed stream kind;
+- a canonical operation ULID whose server-minted provenance is enforced by the
+  consumer;
+- a closed phase accepted for that stream; and
+- one non-empty top-level JSON object containing the consumer-owned safe event
+  payload.
+
+The stream/phase matrix is closed:
+
+- `consultation` and `materialization` accept `attempt` and `completion`;
+- `denial` accepts only `denial_decision`; and
+- `startup_credential_probe` and `readiness_credential_probe` each accept
+  `attempt` and `completion`.
+
+`DurableAuditWrite` canonicalizes the safe payload with the shared RFC 8785
+implementation and derives its SHA-256 digest internally, so payload and digest
+cannot disagree. Integer values that are not exactly representable as IEEE 754
+binary64 are rejected rather than rounded into a colliding digest; encode such
+values as strings under a reviewed schema. Raw JSON parsers must reject
+duplicate property names before constructing the `serde_json::Value`, because
+the parsed value no longer retains that ambiguity. The write carries no
+predecessor, envelope, or event identity. The sink first resolves duplicate
+state, then builds the `AuditEnvelope` from the current durable chain head while
+holding the same transaction or equivalent critical section that performs
+insertion.
+
+The sink-built envelope uses this stable record shape:
+
+```json
+{
+  "schema": "registry.durable-audit/v1",
+  "stream_kind": "consultation",
+  "operation_id": "01J5K8M0000000000000000000",
+  "phase": "attempt",
+  "payload_digest": "sha256:<64 lowercase hex characters>",
+  "payload": { "event": "consultation.attempt" }
+}
+```
+
+The chained record therefore binds the schema, durable row key, phase, digest,
+and payload. Reassociating an envelope with another row key is detectable.
+
+The sink atomically inserts by `(stream_kind, operation_id, phase)`. The first
+write returns `Inserted`. A retry with the same digest returns
+`IdenticalDuplicate` and the identity of the envelope originally stored. A
+retry with a different digest returns the deterministic `ConflictingDuplicate`
+outcome with the original identity and must be treated as an integrity failure.
+Only store availability or internal failure uses the error channel.
+
+`DurableAuditSink` is deliberately independent of the append-only `AuditSink`.
+There is no blanket adapter or fallback because stdout, syslog, and ordinary
+JSONL appends cannot provide crash-safe or replica-safe phase idempotency. The
+in-memory implementation is a conformance harness only. A fail-closed runtime
+must use a durable implementation, with PostgreSQL as the initial state-plane
+target.
 
 ## Operational Notes
 
@@ -78,6 +144,13 @@ async fn write_audit_event() -> Result<(), registry_platform_audit::AuditError> 
   a stalled filesystem fails readiness without accumulating blocked workers.
 - The chain does not replace durable storage, retention policy, clock integrity,
   or off-host log shipping.
+- Safe payload objects passed to `DurableAuditWrite::new` must already exclude
+  raw selectors, credentials, tokens, source URLs, and secret-derived
+  fingerprints. Durable-write diagnostics include neither rejected input,
+  payload contents, nor digests.
+- `DurableAuditOperationId` validates canonical ULID syntax only. The consumer
+  must enforce that the id is server-minted and is not derived from a subject
+  selector, token, source identifier, or other sensitive input.
 - Use `AuditProfile::registry_relay_from_env` or
   `AuditProfile::registry_notary_from_env` in production. `unkeyed_dev_only` is
   for tests and local development.
