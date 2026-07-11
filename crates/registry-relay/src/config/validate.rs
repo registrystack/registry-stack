@@ -11,7 +11,11 @@ use std::collections::{BTreeMap, HashSet};
 use std::net::IpAddr;
 use std::time::Duration;
 
+use crate::consultation::{
+    ConfiguredAudience, ConfiguredIssuer, ConfiguredPrincipalId, ExpectedClientValue,
+};
 use crate::error::{ConfigError, Error, RuntimeBindingError};
+use crate::state_plane::{AuditChainKeyEpochId, AuditPseudonymKeyringLockKey, ServingFenceLockKey};
 use crate::table_provider::table_name;
 use registry_manifest_core::CompiledMetadata;
 use registry_platform_authcommon::CredentialFingerprintRefError;
@@ -83,17 +87,52 @@ pub fn run_with_source(config: &Config, source: ConfigSource) -> Result<(), Erro
     Ok(())
 }
 
-/// Validate the restart-only audit-pseudonym material catalog without loading
-/// any secret values.
+/// Validate the complete restart-only consultation activation without loading
+/// any secret values or opening the state-plane database.
 ///
-/// Key-id and environment-name grammar is enforced by the typed serde model.
-/// This pass enforces the cross-entry bounds and uniqueness that cannot be
-/// expressed by individual value types. Source names are deliberately omitted
+/// The typed serde model closes individual field grammars. This pass binds the
+/// Notary workload to OIDC, checks the state-plane identity, requires the
+/// governed artifact closure, and enforces cross-catalog bounds and uniqueness.
+/// Environment references and configured claim values are deliberately omitted
 /// from diagnostics.
 fn validate_consultation(config: &Config) -> Result<(), ConfigError> {
     let Some(consultation) = &config.consultation else {
         return Ok(());
     };
+
+    if config.auth.mode != AuthMode::Oidc {
+        tracing::error!(
+            code = "config.validation_error",
+            field = "auth.mode",
+            "consultation activation requires auth.mode = oidc"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+    let oidc = config.auth.oidc.as_ref().ok_or_else(|| {
+        tracing::error!(
+            code = "config.validation_error",
+            field = "auth.oidc",
+            "consultation activation requires OIDC configuration"
+        );
+        ConfigError::ValidationError
+    })?;
+    if ConfiguredIssuer::try_from(oidc.issuer.as_str()).is_err() {
+        tracing::error!(
+            code = "config.validation_error",
+            field = "auth.oidc.issuer",
+            "consultation activation requires a bounded HTTPS OIDC issuer"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+
+    if consultation.artifacts.is_none() {
+        tracing::error!(
+            code = "config.validation_error",
+            field = "consultation.artifacts",
+            "consultation activation requires a complete artifact closure"
+        );
+        return Err(ConfigError::ValidationError);
+    }
     super::consultation_artifacts::validate_consultation_artifact_config(consultation).map_err(
         |error| {
             tracing::error!(
@@ -104,6 +143,91 @@ fn validate_consultation(config: &Config) -> Result<(), ConfigError> {
             ConfigError::ValidationError
         },
     )?;
+
+    let notary = &consultation.notary_workload;
+    if ConfiguredAudience::try_from(notary.audience.as_str()).is_err() {
+        tracing::error!(
+            code = "config.validation_error",
+            field = "consultation.notary_workload.audience",
+            "Notary workload audience is invalid"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+    if !oidc
+        .audiences
+        .iter()
+        .any(|audience| audience == &notary.audience)
+    {
+        tracing::error!(
+            code = "config.validation_error",
+            field = "consultation.notary_workload.audience",
+            "Notary workload audience must be one exact auth.oidc.audiences entry"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+    if ExpectedClientValue::try_from(notary.client_value.as_str()).is_err() {
+        tracing::error!(
+            code = "config.validation_error",
+            field = "consultation.notary_workload.client_value",
+            "Notary workload client value is invalid"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+    if ConfiguredPrincipalId::try_from(notary.principal_id.as_str()).is_err() {
+        tracing::error!(
+            code = "config.validation_error",
+            field = "consultation.notary_workload.principal_id",
+            "Notary workload principal identifier is invalid"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+
+    let state_plane = &consultation.state_plane;
+    if state_plane
+        .root_certificate_path
+        .as_ref()
+        .is_some_and(|path| path.as_os_str().is_empty())
+    {
+        tracing::error!(
+            code = "config.validation_error",
+            field = "consultation.state_plane.root_certificate_path",
+            "state-plane root-certificate path must not be empty"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+    if AuditChainKeyEpochId::parse(&state_plane.chain_key_epoch_id).is_err() {
+        tracing::error!(
+            code = "config.validation_error",
+            field = "consultation.state_plane.chain_key_epoch_id",
+            "state-plane chain-key epoch identifier is invalid"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+    if ServingFenceLockKey::new(state_plane.serving_fence_lock_key).is_err() {
+        tracing::error!(
+            code = "config.validation_error",
+            field = "consultation.state_plane.serving_fence_lock_key",
+            "state-plane serving-fence lock key is invalid"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+    if AuditPseudonymKeyringLockKey::new(state_plane.audit_pseudonym_keyring_lock_key).is_err() {
+        tracing::error!(
+            code = "config.validation_error",
+            field = "consultation.state_plane.audit_pseudonym_keyring_lock_key",
+            "state-plane audit-pseudonym keyring lock key is invalid"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+    if state_plane.serving_fence_lock_key == state_plane.audit_pseudonym_keyring_lock_key {
+        tracing::error!(
+            code = "config.validation_error",
+            field = "consultation.state_plane",
+            "state-plane advisory-lock keys must be distinct"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+
     let entries = consultation.audit_pseudonym_materials.entries();
     if entries.is_empty() || entries.len() > super::MAX_AUDIT_PSEUDONYM_MATERIALS {
         tracing::error!(
@@ -116,7 +240,8 @@ fn validate_consultation(config: &Config) -> Result<(), ConfigError> {
     }
 
     let mut key_ids = HashSet::with_capacity(entries.len());
-    let mut source_names = HashSet::with_capacity(entries.len());
+    let mut source_names = HashSet::with_capacity(entries.len() + 1);
+    source_names.insert(consultation.state_plane.database_url_env.as_str());
     for (index, entry) in entries.iter().enumerate() {
         if !key_ids.insert(entry.key_id.as_str()) {
             tracing::error!(
@@ -4436,10 +4561,76 @@ datasets: []
         serde_saphyr::from_str(&deployment_config_yaml(extra)).expect("config parses")
     }
 
+    fn consultation_deployment_config_yaml(extra: &str) -> String {
+        format!(
+            r#"
+server:
+  bind: "127.0.0.1:8080"
+catalog:
+  title: "Test Registry"
+  base_url: "https://data.example.test"
+  publisher: "Test Ministry"
+auth:
+  mode: oidc
+  oidc:
+    issuer: "https://identity.example.test"
+    audiences: ["relay-consultation"]
+    jwks_url: "https://identity.example.test/jwks"
+audit:
+  sink: stdout
+datasets: []
+{extra}
+"#
+        )
+    }
+
+    fn parse_consultation_config(extra: &str) -> Config {
+        serde_saphyr::from_str(&consultation_deployment_config_yaml(extra))
+            .expect("consultation config parses")
+    }
+
+    fn consultation_activation_prefix() -> String {
+        let hash = |digit: char| format!("sha256:{}", digit.to_string().repeat(64));
+        format!(
+            r#"consultation:
+  notary_workload:
+    audience: relay-consultation
+    client_claim_selector: azp
+    client_value: registry-notary
+    principal_id: registry-notary
+  state_plane:
+    database_url_env: REGISTRY_RELAY_STATE_DATABASE_URL
+    root_certificate_path: /etc/registry-relay/state-plane-ca.pem
+    chain_key_epoch_id: chain-epoch-1
+    serving_fence_lock_key: 7221091441
+    audit_pseudonym_keyring_lock_key: 7221091442
+  artifacts:
+    public_contracts:
+      - path: contracts/test.json
+        hash: {}
+        sha256: {}
+    integration_packs:
+      - path: packs/test.json
+        hash: {}
+        sha256: {}
+    private_bindings:
+      - path: bindings/test.json
+        sha256: {}
+    evidence: []
+"#,
+            hash('1'),
+            hash('a'),
+            hash('2'),
+            hash('b'),
+            hash('c')
+        )
+    }
+
     fn consultation_section(entries: &[(&str, &str)]) -> String {
         use std::fmt::Write as _;
 
-        let mut yaml = String::from("consultation:\n  audit_pseudonym_materials:\n");
+        let mut yaml = consultation_activation_prefix();
+        yaml.push_str("  audit_pseudonym_materials:\n");
         for (key_id, source_name) in entries {
             writeln!(
                 yaml,
@@ -4454,8 +4645,9 @@ datasets: []
     fn consultation_credentials_section(entries: &[(&str, u64, &str, &str)]) -> String {
         use std::fmt::Write as _;
 
-        let mut yaml = String::from(
-            "consultation:\n  audit_pseudonym_materials:\n    - key_id: epoch-a\n      source:\n        provider: environment\n        name: PSEUDONYM_SOURCE\n  source_credentials:\n",
+        let mut yaml = consultation_activation_prefix();
+        yaml.push_str(
+            "  audit_pseudonym_materials:\n    - key_id: epoch-a\n      source:\n        provider: environment\n        name: PSEUDONYM_SOURCE\n  source_credentials:\n",
         );
         for (reference, generation, username_env, password_env) in entries {
             writeln!(
@@ -4521,8 +4713,151 @@ datasets: []
     }
 
     #[test]
+    fn null_consultation_keeps_the_runtime_disabled() {
+        let config = parse_deployment_config("consultation: null\ndeployment:\n  profile: local");
+        run(&config).expect("an explicit null consultation remains disabled");
+    }
+
+    #[test]
+    fn consultation_activation_requires_oidc_and_artifacts() {
+        let api_key_config =
+            parse_deployment_config(&consultation_section(&[("epoch-a", "PSEUDONYM_SOURCE")]));
+        assert!(matches!(
+            run(&api_key_config),
+            Err(Error::Config(ConfigError::ValidationError))
+        ));
+
+        let dev_http_issuer = consultation_deployment_config_yaml(&consultation_section(&[(
+            "epoch-a",
+            "PSEUDONYM_SOURCE",
+        )]))
+        .replace(
+            "issuer: \"https://identity.example.test\"",
+            "issuer: \"http://127.0.0.1:8080\"\n    allow_dev_insecure_fetch_urls: true",
+        );
+        let dev_http_issuer: Config =
+            serde_saphyr::from_str(&dev_http_issuer).expect("dev OIDC config parses");
+        validate_oidc(
+            dev_http_issuer
+                .auth
+                .oidc
+                .as_ref()
+                .expect("OIDC config is present"),
+        )
+        .expect("generic OIDC permits explicit loopback development issuers");
+        assert!(matches!(
+            run(&dev_http_issuer),
+            Err(Error::Config(ConfigError::ValidationError))
+        ));
+
+        let without_artifacts = r#"
+consultation:
+  notary_workload:
+    audience: relay-consultation
+    client_claim_selector: azp
+    client_value: registry-notary
+    principal_id: registry-notary
+  state_plane:
+    database_url_env: REGISTRY_RELAY_STATE_DATABASE_URL
+    chain_key_epoch_id: chain-epoch-1
+    serving_fence_lock_key: 7221091441
+    audit_pseudonym_keyring_lock_key: 7221091442
+  audit_pseudonym_materials:
+    - key_id: epoch-a
+      source:
+        provider: environment
+        name: PSEUDONYM_SOURCE
+deployment:
+  profile: local
+"#;
+        let without_artifacts = parse_consultation_config(without_artifacts);
+        assert!(matches!(
+            run(&without_artifacts),
+            Err(Error::Config(ConfigError::ValidationError))
+        ));
+    }
+
+    #[test]
+    fn consultation_notary_binding_is_bounded_and_audience_is_exact() {
+        let audience_marker = "unlisted-audience-must-not-leak";
+        let mismatched = consultation_section(&[("epoch-a", "PSEUDONYM_SOURCE")]).replace(
+            "audience: relay-consultation",
+            &format!("audience: {audience_marker}"),
+        );
+        let mismatched = parse_consultation_config(&mismatched);
+        let (result, logs) = run_with_captured_logs(&mismatched);
+        assert!(matches!(
+            result,
+            Err(Error::Config(ConfigError::ValidationError))
+        ));
+        assert!(!logs.contains(audience_marker));
+
+        for (configured, invalid) in [
+            ("audience: relay-consultation", "audience: \"\""),
+            (
+                "client_value: registry-notary",
+                "client_value: \"registry notary\"",
+            ),
+            (
+                "principal_id: registry-notary",
+                "principal_id: \"registry notary\"",
+            ),
+        ] {
+            let yaml = consultation_section(&[("epoch-a", "PSEUDONYM_SOURCE")])
+                .replace(configured, invalid);
+            let config = parse_consultation_config(&yaml);
+            assert!(matches!(
+                run(&config),
+                Err(Error::Config(ConfigError::ValidationError))
+            ));
+        }
+    }
+
+    #[test]
+    fn consultation_state_plane_identity_is_closed_and_collision_free() {
+        for (configured, invalid) in [
+            (
+                "root_certificate_path: /etc/registry-relay/state-plane-ca.pem",
+                "root_certificate_path: \"\"",
+            ),
+            (
+                "chain_key_epoch_id: chain-epoch-1",
+                "chain_key_epoch_id: \"invalid epoch\"",
+            ),
+            (
+                "serving_fence_lock_key: 7221091441",
+                "serving_fence_lock_key: 0",
+            ),
+            (
+                "serving_fence_lock_key: 7221091441",
+                "serving_fence_lock_key: 7221091440",
+            ),
+            (
+                "audit_pseudonym_keyring_lock_key: 7221091442",
+                "audit_pseudonym_keyring_lock_key: 0",
+            ),
+            (
+                "audit_pseudonym_keyring_lock_key: 7221091442",
+                "audit_pseudonym_keyring_lock_key: 7221091440",
+            ),
+            (
+                "audit_pseudonym_keyring_lock_key: 7221091442",
+                "audit_pseudonym_keyring_lock_key: 7221091441",
+            ),
+        ] {
+            let yaml = consultation_section(&[("epoch-a", "PSEUDONYM_SOURCE")])
+                .replace(configured, invalid);
+            let config = parse_consultation_config(&yaml);
+            assert!(matches!(
+                run(&config),
+                Err(Error::Config(ConfigError::ValidationError))
+            ));
+        }
+    }
+
+    #[test]
     fn consultation_material_catalog_accepts_one_and_thirty_two_entries() {
-        let one = parse_deployment_config(&consultation_section(&[("epoch-0", "SOURCE_0")]));
+        let one = parse_consultation_config(&consultation_section(&[("epoch-0", "SOURCE_0")]));
         run(&one).expect("one material is valid");
 
         let owned = (0..32)
@@ -4532,13 +4867,13 @@ datasets: []
             .iter()
             .map(|(key_id, source)| (key_id.as_str(), source.as_str()))
             .collect::<Vec<_>>();
-        let thirty_two = parse_deployment_config(&consultation_section(&entries));
+        let thirty_two = parse_consultation_config(&consultation_section(&entries));
         run(&thirty_two).expect("32 materials are valid");
     }
 
     #[test]
     fn consultation_material_catalog_rejects_empty_and_over_bound() {
-        let empty = parse_deployment_config(&consultation_section(&[]));
+        let empty = parse_consultation_config(&consultation_section(&[]));
         assert!(matches!(
             run(&empty),
             Err(Error::Config(ConfigError::ValidationError))
@@ -4551,7 +4886,7 @@ datasets: []
             .iter()
             .map(|(key_id, source)| (key_id.as_str(), source.as_str()))
             .collect::<Vec<_>>();
-        let over_bound = parse_deployment_config(&consultation_section(&entries));
+        let over_bound = parse_consultation_config(&consultation_section(&entries));
         assert!(matches!(
             run(&over_bound),
             Err(Error::Config(ConfigError::ValidationError))
@@ -4560,7 +4895,7 @@ datasets: []
 
     #[test]
     fn consultation_material_catalog_rejects_duplicate_ids_and_sources_without_leaks() {
-        let duplicate_id = parse_deployment_config(&consultation_section(&[
+        let duplicate_id = parse_consultation_config(&consultation_section(&[
             ("epoch-a", "SOURCE_A"),
             ("epoch-a", "SOURCE_B"),
         ]));
@@ -4570,7 +4905,7 @@ datasets: []
         ));
 
         let source_marker = "SOURCE_REFERENCE_MUST_NOT_LEAK";
-        let duplicate_source = parse_deployment_config(&consultation_section(&[
+        let duplicate_source = parse_consultation_config(&consultation_section(&[
             ("epoch-a", source_marker),
             ("epoch-b", source_marker),
         ]));
@@ -4580,11 +4915,21 @@ datasets: []
             Err(Error::Config(ConfigError::ValidationError))
         ));
         assert!(!logs.contains(source_marker));
+
+        let state_database_marker = "REGISTRY_RELAY_STATE_DATABASE_URL";
+        let cross_state_plane =
+            parse_consultation_config(&consultation_section(&[("epoch-a", state_database_marker)]));
+        let (result, logs) = run_with_captured_logs(&cross_state_plane);
+        assert!(matches!(
+            result,
+            Err(Error::Config(ConfigError::ValidationError))
+        ));
+        assert!(!logs.contains(state_database_marker));
     }
 
     #[test]
     fn consultation_source_credential_catalog_accepts_empty_and_protocol_bound() {
-        let empty = parse_deployment_config(&consultation_credentials_section(&[]));
+        let empty = parse_consultation_config(&consultation_credentials_section(&[]));
         run(&empty).expect("credential-free compiled registries may use an empty catalog");
 
         let owned = (0..super::super::MAX_CONSULTATION_SOURCE_CREDENTIALS)
@@ -4602,7 +4947,7 @@ datasets: []
                 (reference.as_str(), 1, username.as_str(), password.as_str())
             })
             .collect::<Vec<_>>();
-        let bounded = parse_deployment_config(&consultation_credentials_section(&entries));
+        let bounded = parse_consultation_config(&consultation_credentials_section(&entries));
         run(&bounded).expect("bounded credential catalog is valid");
     }
 
@@ -4623,14 +4968,14 @@ datasets: []
                 (reference.as_str(), 1, username.as_str(), password.as_str())
             })
             .collect::<Vec<_>>();
-        let over_bound = parse_deployment_config(&consultation_credentials_section(&entries));
+        let over_bound = parse_consultation_config(&consultation_credentials_section(&entries));
         assert!(matches!(
             run(&over_bound),
             Err(Error::Config(ConfigError::ValidationError))
         ));
 
         for generation in [0, 9_007_199_254_740_992] {
-            let invalid = parse_deployment_config(&consultation_credentials_section(&[(
+            let invalid = parse_consultation_config(&consultation_credentials_section(&[(
                 "reader-a",
                 generation,
                 "USERNAME_A",
@@ -4646,7 +4991,7 @@ datasets: []
     #[test]
     fn consultation_source_credential_duplicates_are_rejected_without_reference_leaks() {
         let reference_marker = "reader-reference-must-not-leak";
-        let duplicate_reference = parse_deployment_config(&consultation_credentials_section(&[
+        let duplicate_reference = parse_consultation_config(&consultation_credentials_section(&[
             (reference_marker, 1, "USERNAME_A", "PASSWORD_A"),
             (reference_marker, 1, "USERNAME_B", "PASSWORD_B"),
         ]));
@@ -4658,7 +5003,7 @@ datasets: []
         assert!(!logs.contains(reference_marker));
 
         let source_marker = "CREDENTIAL_SOURCE_MUST_NOT_LEAK";
-        let duplicate_source = parse_deployment_config(&consultation_credentials_section(&[
+        let duplicate_source = parse_consultation_config(&consultation_credentials_section(&[
             ("reader-a", 1, source_marker, "PASSWORD_A"),
             ("reader-b", 1, "USERNAME_B", source_marker),
         ]));
@@ -4670,9 +5015,11 @@ datasets: []
         assert!(!logs.contains(source_marker));
 
         let pseudonym_source_marker = "PSEUDONYM_SOURCE_MUST_NOT_BECOME_A_CREDENTIAL";
-        let cross_catalog = parse_deployment_config(&format!(
-            "consultation:\n  audit_pseudonym_materials:\n    - key_id: epoch-a\n      source:\n        provider: environment\n        name: {pseudonym_source_marker}\n  source_credentials:\n    - type: basic\n      ref: reader-a\n      generation: 1\n      username_env: {pseudonym_source_marker}\n      password_env: PASSWORD_A\ndeployment:\n  profile: local"
+        let mut cross_catalog_yaml = consultation_activation_prefix();
+        cross_catalog_yaml.push_str(&format!(
+            "  audit_pseudonym_materials:\n    - key_id: epoch-a\n      source:\n        provider: environment\n        name: {pseudonym_source_marker}\n  source_credentials:\n    - type: basic\n      ref: reader-a\n      generation: 1\n      username_env: {pseudonym_source_marker}\n      password_env: PASSWORD_A\ndeployment:\n  profile: local"
         ));
+        let cross_catalog = parse_consultation_config(&cross_catalog_yaml);
         let (result, logs) = run_with_captured_logs(&cross_catalog);
         assert!(matches!(
             result,

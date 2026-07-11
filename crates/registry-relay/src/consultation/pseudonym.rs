@@ -295,7 +295,9 @@ mod tests {
     }
 
     fn config_result(entries: &[(&str, &str)]) -> Result<ConsultationConfig, serde_saphyr::Error> {
-        let mut yaml = String::from("audit_pseudonym_materials:\n");
+        let mut yaml = String::from(
+            "notary_workload:\n  audience: relay-consultation\n  client_claim_selector: azp\n  client_value: registry-notary\n  principal_id: registry-notary\nstate_plane:\n  database_url_env: REGISTRY_RELAY_STATE_DATABASE_URL\n  chain_key_epoch_id: chain-epoch-1\n  serving_fence_lock_key: 7221091441\n  audit_pseudonym_keyring_lock_key: 7221091442\naudit_pseudonym_materials:\n",
+        );
         for (key_id, source_name) in entries {
             writeln!(
                 yaml,

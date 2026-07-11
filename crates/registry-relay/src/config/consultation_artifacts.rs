@@ -1024,6 +1024,18 @@ mod tests {
         config.deployment.profile = Some(DeploymentProfile::Production);
         config.consultation = Some(
             serde_json::from_value(json!({
+                "notary_workload": {
+                    "audience": "relay-consultation",
+                    "client_claim_selector": "azp",
+                    "client_value": "registry-notary",
+                    "principal_id": "registry-notary"
+                },
+                "state_plane": {
+                    "database_url_env": "REGISTRY_RELAY_STATE_DATABASE_URL",
+                    "chain_key_epoch_id": "chain-epoch-1",
+                    "serving_fence_lock_key": 7_221_091_441_i64,
+                    "audit_pseudonym_keyring_lock_key": 7_221_091_442_i64
+                },
                 "audit_pseudonym_materials": [{
                     "key_id": "epoch-test",
                     "source": {

@@ -627,15 +627,23 @@ fn default_oidc_token_types() -> Vec<String> {
     vec!["JWT".to_string(), "at+jwt".to_string()]
 }
 
-/// Restart-only material references for governed consultations.
+/// Restart-only activation configuration for governed consultations.
 ///
-/// Each environment reference must identify immutable, versioned secret
-/// material. Replacing the value behind an existing reference requires a new
-/// key id. PostgreSQL intentionally stores no secret-derived verifier, so it
-/// cannot detect a changed value after a process restart.
+/// The block is all-or-nothing: validation requires OIDC authentication, the
+/// exact Notary workload, PostgreSQL state-plane identity, an artifact closure,
+/// and immutable, versioned secret references. PostgreSQL intentionally stores
+/// no secret-derived verifier, so replacing audit-pseudonym material behind an
+/// existing reference requires a new key id.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ConsultationConfig {
+    /// Exact OIDC claims that identify the only caller allowed to execute
+    /// consultation profiles. The issuer is inherited from `auth.oidc`; the
+    /// workload, scope, tenant, and registry bindings come from each compiled
+    /// profile.
+    pub notary_workload: ConsultationNotaryWorkloadConfig,
+    /// Dedicated PostgreSQL control-plane connection and deployment identity.
+    pub state_plane: ConsultationStatePlaneConfig,
     pub audit_pseudonym_materials: AuditPseudonymMaterialCatalogConfig,
     /// Complete restart-only catalog of source credentials referenced by the
     /// compiled consultation plans.
@@ -652,6 +660,104 @@ pub struct ConsultationConfig {
     /// hash, but intentionally has no signing requirement.
     #[serde(default)]
     pub artifacts: Option<ConsultationArtifactClosureConfig>,
+}
+
+/// Exact fixed OIDC binding for Registry Notary.
+///
+/// There is deliberately no automatic client-claim selection. Deployments
+/// must name exactly one verified claim, and later runtime compilation binds
+/// this configuration to the issuer from `auth.oidc`.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ConsultationNotaryWorkloadConfig {
+    pub audience: String,
+    pub client_claim_selector: ConsultationClientClaimSelectorConfig,
+    pub client_value: String,
+    pub principal_id: String,
+}
+
+/// Closed set of verified OAuth claims that may identify Registry Notary.
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ConsultationClientClaimSelectorConfig {
+    Azp,
+    ClientId,
+}
+
+impl ConsultationClientClaimSelectorConfig {
+    /// Return the exact JWT claim name represented by this selector.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Azp => "azp",
+            Self::ClientId => "client_id",
+        }
+    }
+}
+
+/// Required PostgreSQL state-plane activation settings.
+///
+/// The database URL itself cannot be embedded in YAML. Only the name of an
+/// environment variable may be configured. Debug output also redacts that
+/// reference and the optional trust-root path so diagnostics do not disclose
+/// deployment secret topology.
+#[derive(Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ConsultationStatePlaneConfig {
+    pub database_url_env: ConsultationDatabaseUrlEnvironmentName,
+    #[serde(default)]
+    pub root_certificate_path: Option<PathBuf>,
+    pub chain_key_epoch_id: String,
+    pub serving_fence_lock_key: i64,
+    pub audit_pseudonym_keyring_lock_key: i64,
+}
+
+impl fmt::Debug for ConsultationStatePlaneConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ConsultationStatePlaneConfig")
+            .field("database_url_env", &"<configured>")
+            .field(
+                "root_certificate_path",
+                &self.root_certificate_path.as_ref().map(|_| "<configured>"),
+            )
+            .field("chain_key_epoch_id", &self.chain_key_epoch_id)
+            .field("serving_fence_lock_key", &"<deployment-bound>")
+            .field("audit_pseudonym_keyring_lock_key", &"<deployment-bound>")
+            .finish()
+    }
+}
+
+/// Portable environment-variable name that resolves the state-plane URL.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct ConsultationDatabaseUrlEnvironmentName(String);
+
+impl ConsultationDatabaseUrlEnvironmentName {
+    fn parse(value: String) -> Result<Self, &'static str> {
+        is_portable_environment_name(&value)
+            .then_some(Self(value))
+            .ok_or("consultation database URL environment-variable name is invalid")
+    }
+
+    #[must_use]
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for ConsultationDatabaseUrlEnvironmentName {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::parse(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
+
+impl fmt::Debug for ConsultationDatabaseUrlEnvironmentName {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ConsultationDatabaseUrlEnvironmentName(<configured>)")
+    }
 }
 
 /// Bounded source-credential references loaded only during runtime startup.
@@ -2046,6 +2152,27 @@ impl_id!(AggregateId);
 mod tests {
     use super::*;
 
+    const TEST_STATE_DATABASE_ENV: &str = "REGISTRY_RELAY_STATE_DATABASE_REFERENCE_MUST_NOT_LEAK";
+    const TEST_STATE_ROOT_PATH: &str = "/state/root/reference-must-not-leak.pem";
+
+    fn consultation_runtime_fields() -> String {
+        format!(
+            r#"
+notary_workload:
+  audience: relay-consultation
+  client_claim_selector: azp
+  client_value: registry-notary
+  principal_id: registry-notary
+state_plane:
+  database_url_env: {TEST_STATE_DATABASE_ENV}
+  root_certificate_path: {TEST_STATE_ROOT_PATH}
+  chain_key_epoch_id: chain-epoch-1
+  serving_fence_lock_key: 7221091441
+  audit_pseudonym_keyring_lock_key: 7221091442
+"#
+        )
+    }
+
     #[test]
     fn id_newtypes_display_and_as_ref() {
         let id = DatasetId("hello".to_string());
@@ -2150,19 +2277,23 @@ mod tests {
         let source_name = "REGISTRY_RELAY_SOURCE_NAME_MUST_NOT_LEAK";
         let config: ConsultationConfig = serde_saphyr::from_str(&format!(
             r#"
+{}
 audit_pseudonym_materials:
   - key_id: epoch-2026-07
     source:
       provider: environment
       name: {source_name}
-"#
+"#,
+            consultation_runtime_fields()
         ))
         .expect("valid consultation config");
         let debug = format!("{config:?}");
-        assert!(!debug.contains(source_name));
+        for marker in [source_name, TEST_STATE_DATABASE_ENV, TEST_STATE_ROOT_PATH] {
+            assert!(!debug.contains(marker));
+        }
         assert!(debug.contains("<configured>"));
 
-        for invalid in [
+        for invalid_body in [
             r#"
 audit_pseudonym_materials:
   - key_id: UPPERCASE
@@ -2193,8 +2324,9 @@ audit_pseudonym_materials:
       name: VALID_NAME
 "#,
         ] {
+            let invalid = format!("{}\n{invalid_body}", consultation_runtime_fields());
             assert!(
-                serde_saphyr::from_str::<ConsultationConfig>(invalid).is_err(),
+                serde_saphyr::from_str::<ConsultationConfig>(&invalid).is_err(),
                 "invalid or open-ended consultation config must be rejected"
             );
         }
@@ -2207,6 +2339,7 @@ audit_pseudonym_materials:
         let password_marker = "REGISTRY_RELAY_PASSWORD_ENV_MUST_NOT_LEAK";
         let config: ConsultationConfig = serde_saphyr::from_str(&format!(
             r#"
+{}
 audit_pseudonym_materials:
   - key_id: epoch-a
     source:
@@ -2218,7 +2351,8 @@ source_credentials:
     generation: 7
     username_env: {username_marker}
     password_env: {password_marker}
-"#
+"#,
+            consultation_runtime_fields()
         ))
         .expect("closed Basic credential config");
         let debug = format!("{config:?}");
@@ -2262,7 +2396,8 @@ source_credentials:
 "#,
         ] {
             let yaml = format!(
-                "audit_pseudonym_materials:\n  - key_id: epoch-a\n    source:\n      provider: environment\n      name: PSEUDONYM_SOURCE\n{invalid}"
+                "{}\naudit_pseudonym_materials:\n  - key_id: epoch-a\n    source:\n      provider: environment\n      name: PSEUDONYM_SOURCE\n{invalid}",
+                consultation_runtime_fields()
             );
             assert!(
                 serde_saphyr::from_str::<ConsultationConfig>(&yaml).is_err(),
@@ -2286,6 +2421,72 @@ source_credentials:
             "A".repeat(129),
         ] {
             assert!(ConsultationCredentialEnvironmentName::parse(value).is_err());
+        }
+    }
+
+    #[test]
+    fn consultation_runtime_fields_are_required_and_closed() {
+        let materials = r#"
+audit_pseudonym_materials:
+  - key_id: epoch-a
+    source:
+      provider: environment
+      name: PSEUDONYM_SOURCE
+"#;
+        assert!(serde_saphyr::from_str::<ConsultationConfig>(materials).is_err());
+
+        let unknown = format!(
+            "{}\n{materials}\noptional_engine: generic",
+            consultation_runtime_fields()
+        );
+        assert!(serde_saphyr::from_str::<ConsultationConfig>(&unknown).is_err());
+
+        let direct_database_url = consultation_runtime_fields().replace(
+            &format!("database_url_env: {TEST_STATE_DATABASE_ENV}"),
+            "database_url: postgresql://embedded-values-are-forbidden",
+        );
+        let direct_database_url = format!("{direct_database_url}\n{materials}");
+        assert!(serde_saphyr::from_str::<ConsultationConfig>(&direct_database_url).is_err());
+    }
+
+    #[test]
+    fn consultation_client_claim_selector_is_exact() {
+        for (spelling, expected) in [
+            ("azp", ConsultationClientClaimSelectorConfig::Azp),
+            ("client_id", ConsultationClientClaimSelectorConfig::ClientId),
+        ] {
+            let yaml = format!(
+                "{}\naudit_pseudonym_materials:\n  - key_id: epoch-a\n    source:\n      provider: environment\n      name: PSEUDONYM_SOURCE",
+                consultation_runtime_fields().replace("client_claim_selector: azp", &format!("client_claim_selector: {spelling}"))
+            );
+            let config: ConsultationConfig = serde_saphyr::from_str(&yaml).unwrap();
+            assert_eq!(config.notary_workload.client_claim_selector, expected);
+            assert_eq!(expected.as_str(), spelling);
+        }
+
+        let invalid = format!(
+            "{}\naudit_pseudonym_materials:\n  - key_id: epoch-a\n    source:\n      provider: environment\n      name: PSEUDONYM_SOURCE",
+            consultation_runtime_fields().replace("client_claim_selector: azp", "client_claim_selector: auto")
+        );
+        assert!(serde_saphyr::from_str::<ConsultationConfig>(&invalid).is_err());
+    }
+
+    #[test]
+    fn consultation_database_environment_name_uses_portable_grammar() {
+        let max_name = "A".repeat(128);
+        for value in ["A", "_A", "registry_relay_1", max_name.as_str()] {
+            let parsed = ConsultationDatabaseUrlEnvironmentName::parse(value.to_owned()).unwrap();
+            assert_eq!(parsed.as_str(), value);
+        }
+        for value in [
+            "".to_owned(),
+            "1LEADING".to_owned(),
+            "HAS-DASH".to_owned(),
+            "HAS SPACE".to_owned(),
+            "NON_ASCII_é".to_owned(),
+            "A".repeat(129),
+        ] {
+            assert!(ConsultationDatabaseUrlEnvironmentName::parse(value).is_err());
         }
     }
 }
