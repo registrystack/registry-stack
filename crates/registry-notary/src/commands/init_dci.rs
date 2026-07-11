@@ -297,3 +297,6 @@ The generated config uses explicit DCI config fields and generic
 built-in registry-specific code path.
 "#
 }
+#[cfg(test)]
+#[path = "init_dci/tests.rs"]
+mod tests;

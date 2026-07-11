@@ -60,3 +60,6 @@ pub(crate) fn http_trace_span(request: &Request<Body>) -> tracing::Span {
         matched_path,
     )
 }
+#[cfg(test)]
+#[path = "logging/tests.rs"]
+mod tests;

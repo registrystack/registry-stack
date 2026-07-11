@@ -1288,3 +1288,6 @@ pub(crate) fn dci_probe_body(
         },
     }))
 }
+#[cfg(test)]
+#[path = "doctor/tests.rs"]
+mod tests;

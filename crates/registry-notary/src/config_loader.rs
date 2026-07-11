@@ -366,3 +366,6 @@ pub(crate) fn admin_listener_default_warning_needed(
     !admin_listener_present
         && config.server.admin_listener.mode == RegistryNotaryAdminListenerMode::Disabled
 }
+#[cfg(test)]
+#[path = "config_loader/tests.rs"]
+mod tests;

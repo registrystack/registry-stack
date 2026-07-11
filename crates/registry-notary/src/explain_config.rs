@@ -418,3 +418,6 @@ pub(crate) fn redact_value(value: &mut Value) {
         _ => {}
     }
 }
+#[cfg(test)]
+#[path = "explain_config/tests.rs"]
+mod tests;

@@ -250,3 +250,6 @@ pub(crate) async fn shutdown_signal() {
         () = terminate => {},
     }
 }
+#[cfg(test)]
+#[path = "boot/tests.rs"]
+mod tests;

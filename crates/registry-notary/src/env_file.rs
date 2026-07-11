@@ -130,3 +130,6 @@ pub(crate) fn env_file_error(line: usize, reason: &str) -> EnvFileError {
         reason: reason.to_string(),
     }
 }
+#[cfg(test)]
+#[path = "env_file/tests.rs"]
+mod tests;

@@ -156,3 +156,6 @@ pub(crate) fn build_info() -> Value {
         },
     })
 }
+#[cfg(test)]
+#[path = "config_bundle/tests.rs"]
+mod tests;

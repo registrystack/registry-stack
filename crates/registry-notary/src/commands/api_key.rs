@@ -65,3 +65,6 @@ pub(crate) fn demo_issuer_jwk(kid: &str) -> Result<String, Box<dyn std::error::E
     PrivateJwk::parse(&serialized)?;
     Ok(serialized)
 }
+#[cfg(test)]
+#[path = "api_key/tests.rs"]
+mod tests;

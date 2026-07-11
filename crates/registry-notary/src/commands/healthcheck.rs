@@ -37,3 +37,6 @@ pub(crate) fn lightweight_schema() -> Value {
         "additionalProperties": false
     })
 }
+#[cfg(test)]
+#[path = "healthcheck/tests.rs"]
+mod tests;
