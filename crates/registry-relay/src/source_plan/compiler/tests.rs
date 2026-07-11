@@ -1176,6 +1176,10 @@ fn maintained_dhis2_enrollment_status_pack_compiles_to_one_bounded_exchange() {
     assert_eq!(operation.max_source_records(), 2);
     assert_eq!(operation.acquired_fields().collect::<Vec<_>>(), ["status"]);
     assert_eq!(operation.disclosed_fields().collect::<Vec<_>>(), ["status"]);
+    let decoder_debug = format!("{:?}", operation.response_decoder());
+    assert!(decoder_debug.contains("projection_count: 1"));
+    assert!(decoder_debug.contains("ObjectArrayProbeTwo"));
+    assert!(!decoder_debug.contains("enrollments"));
     assert_eq!(
         operation
             .query()
@@ -1203,6 +1207,160 @@ fn maintained_dhis2_enrollment_status_pack_compiles_to_one_bounded_exchange() {
             .expect("strict wrapper object")[0]
             .name(),
         "enrollments"
+    );
+}
+
+#[test]
+fn closed_decoder_compiles_every_reviewed_record_root() {
+    let array = compile(&fixture()).expect("array-probe-two decoder compiles");
+    let array_debug = format!(
+        "{:?}",
+        array
+            .iter()
+            .next()
+            .expect("array plan")
+            .operations()
+            .next()
+            .expect("array operation")
+            .response_decoder()
+    );
+    assert!(array_debug.contains("ArrayProbeTwo"));
+
+    let mut object = fixture();
+    object.pack_value["spec"]["reviewed_acquisition"]["cardinality"] =
+        json!("source_enforced_singleton");
+    object.pack_value["spec"]["bounds"]["max_source_matches"] = json!(1);
+    object.contract_value["spec"]["bounds"]["max_source_matches"] = json!(1);
+    object.contract_value["spec"]["public_behavior"]["outcomes"] = json!(["match", "no_match"]);
+    let response = &mut object.pack_value["spec"]["plan"]["operations"][0]["response"];
+    response["max_records"] = json!(1);
+    response["normalization"] = json!("json_object");
+    response["cardinality"] = json!({
+        "mechanism": "source_enforced_singleton",
+        "conformance_evidence": raw_hash(SYNTHETIC_CONFORMANCE_EVIDENCE)
+    });
+    response["schema"] = response["schema"]["items"].clone();
+    object.refresh_all();
+    let object = compile(&object).expect("object decoder compiles");
+    let object_debug = format!(
+        "{:?}",
+        object
+            .iter()
+            .next()
+            .expect("object plan")
+            .operations()
+            .next()
+            .expect("object operation")
+            .response_decoder()
+    );
+    assert!(object_debug.contains("root: Object"));
+
+    let wrapper = compile_dhis2(&dhis2_fixture()).expect("object-wrapper decoder compiles");
+    let wrapper_debug = format!(
+        "{:?}",
+        wrapper
+            .iter()
+            .next()
+            .expect("wrapper plan")
+            .operations()
+            .next()
+            .expect("wrapper operation")
+            .response_decoder()
+    );
+    assert!(wrapper_debug.contains("ObjectArrayProbeTwo"));
+}
+
+#[test]
+fn impossible_compiled_decoder_shapes_fail_closed_without_value_diagnostics() {
+    let registry = compile(&fixture()).expect("valid decoder fixture compiles");
+    let response = registry
+        .iter()
+        .next()
+        .expect("plan")
+        .operations()
+        .next()
+        .expect("operation")
+        .response();
+
+    let mut mismatched_root = response.clone();
+    mismatched_root.normalization = CompiledResponseNormalization::Object;
+    assert_eq!(
+        compile_closed_json_decoder(&mismatched_root).unwrap_err(),
+        SourcePlanCompileError::CompilerInvariant
+    );
+
+    let mut invalid_schema = response.clone();
+    invalid_schema.schema = CompiledResponseSchema::Object {
+        nullable: false,
+        fields: Box::new([]),
+    };
+    invalid_schema.normalization = CompiledResponseNormalization::Object;
+    assert_eq!(
+        compile_closed_json_decoder(&invalid_schema).unwrap_err(),
+        SourcePlanCompileError::CompilerInvariant
+    );
+
+    let mut invalid_projection = response.clone();
+    invalid_projection.outputs[0].pointer = CompiledJsonPointer {
+        tokens: Box::new([]),
+    };
+    assert_eq!(
+        compile_closed_json_decoder(&invalid_projection).unwrap_err(),
+        SourcePlanCompileError::CompilerInvariant
+    );
+}
+
+#[test]
+fn artifact_and_closed_decoder_response_byte_caps_remain_aligned() {
+    use registry_platform_httputil::destination::json::MAX_CLOSED_JSON_ENCODED_BODY_BYTES;
+
+    assert_eq!(MAX_CLOSED_JSON_ENCODED_BODY_BYTES, 256 * 1_024);
+
+    let mut at_cap = fixture();
+    let credential_bytes = at_cap.pack_value["spec"]["plan"]["credential_operation"]["response"]
+        ["max_bytes"]
+        .as_u64()
+        .expect("credential response bound");
+    let platform_cap =
+        u64::try_from(MAX_CLOSED_JSON_ENCODED_BODY_BYTES).expect("platform response cap fits u64");
+    let source_bytes = platform_cap + credential_bytes;
+    at_cap.pack_value["spec"]["plan"]["operations"][0]["response"]["max_bytes"] =
+        json!(platform_cap);
+    at_cap.pack_value["spec"]["bounds"]["max_source_bytes"] = json!(source_bytes);
+    at_cap.contract_value["spec"]["bounds"]["max_source_bytes"] = json!(source_bytes);
+    at_cap.binding_value["limits"]["max_source_bytes"] = json!(source_bytes);
+    at_cap.refresh_all();
+    compile(&at_cap).expect("artifact ceiling remains accepted by the platform decoder");
+
+    let mut above_cap = at_cap;
+    above_cap.pack_value["spec"]["plan"]["operations"][0]["response"]["max_bytes"] =
+        json!(platform_cap + 1);
+    above_cap.pack_value["spec"]["bounds"]["max_source_bytes"] = json!(source_bytes + 1);
+    above_cap.contract_value["spec"]["bounds"]["max_source_bytes"] = json!(source_bytes + 1);
+    above_cap.binding_value["limits"]["max_source_bytes"] = json!(source_bytes + 1);
+    above_cap.refresh_all();
+    assert!(matches!(
+        compile(&above_cap),
+        Err(SourcePlanCompileError::Artifact(
+            SourcePlanArtifactError::InvalidLimits
+        ))
+    ));
+
+    let registry = compile(&fixture()).expect("valid decoder fixture compiles");
+    let mut impossible = registry
+        .iter()
+        .next()
+        .expect("plan")
+        .operations()
+        .next()
+        .expect("operation")
+        .response()
+        .clone();
+    impossible.max_bytes =
+        u32::try_from(MAX_CLOSED_JSON_ENCODED_BODY_BYTES + 1).expect("test cap fits u32");
+    assert_eq!(
+        compile_closed_json_decoder(&impossible).unwrap_err(),
+        SourcePlanCompileError::CompilerInvariant
     );
 }
 

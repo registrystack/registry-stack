@@ -1,6 +1,10 @@
 //! Data-operation descriptor and closed parser compilation.
 
 use super::*;
+use registry_platform_httputil::destination::json::{
+    ClosedJsonDecoder, ClosedJsonField, ClosedJsonRecordRoot, ClosedJsonScalarProjection,
+    ClosedJsonSchema, MAX_CLOSED_JSON_ENCODED_BODY_BYTES,
+};
 
 pub(super) struct OperationCompilationIndexes<'maps, 'artifacts> {
     pub(super) inputs: &'maps BTreeMap<&'artifacts str, usize>,
@@ -275,6 +279,7 @@ pub(super) fn compile_operation_descriptors(
             })?;
             let projection = compile_projection(operation)?;
             let response = compile_response(operation)?;
+            let response_decoder = compile_closed_json_decoder(&response)?;
             Ok(CompiledOperation {
                 id,
                 method: operation.method,
@@ -292,6 +297,7 @@ pub(super) fn compile_operation_descriptors(
                 projection,
                 transport_template,
                 response,
+                response_decoder,
                 acquisition_class,
                 cardinality,
                 total_deadline_ms,
@@ -561,6 +567,83 @@ fn compile_response(
         prior_outputs,
         cardinality,
     })
+}
+
+pub(super) fn compile_closed_json_decoder(
+    response: &CompiledResponse,
+) -> Result<ClosedJsonDecoder, SourcePlanCompileError> {
+    let max_bytes = usize::try_from(response.max_bytes)
+        .map_err(|_| SourcePlanCompileError::CompilerInvariant)?;
+    if max_bytes > MAX_CLOSED_JSON_ENCODED_BODY_BYTES {
+        return Err(SourcePlanCompileError::CompilerInvariant);
+    }
+
+    let schema = compile_closed_json_schema(&response.schema)?;
+    let root = match response.normalization {
+        CompiledResponseNormalization::Object => ClosedJsonRecordRoot::Object,
+        CompiledResponseNormalization::ArrayProbeTwo => ClosedJsonRecordRoot::ArrayProbeTwo,
+        CompiledResponseNormalization::ObjectArrayProbeTwo {
+            records_field_index,
+        } => ClosedJsonRecordRoot::ObjectArrayProbeTwo {
+            field_index: records_field_index,
+        },
+    };
+    let projections = response
+        .outputs
+        .iter()
+        .map(|output| {
+            ClosedJsonScalarProjection::new(output.field(), output.extraction_pointer().tokens())
+                .map_err(|_| SourcePlanCompileError::CompilerInvariant)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    ClosedJsonDecoder::new(schema, root, projections)
+        .map_err(|_| SourcePlanCompileError::CompilerInvariant)
+}
+
+fn compile_closed_json_schema(
+    schema: &CompiledResponseSchema,
+) -> Result<ClosedJsonSchema, SourcePlanCompileError> {
+    match schema {
+        CompiledResponseSchema::Object { nullable, fields } => {
+            let fields = fields
+                .iter()
+                .map(|field| {
+                    let schema = compile_closed_json_schema(&field.schema)?;
+                    ClosedJsonField::new(&field.name, field.required, schema)
+                        .map_err(|_| SourcePlanCompileError::CompilerInvariant)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            ClosedJsonSchema::object(*nullable, fields)
+                .map_err(|_| SourcePlanCompileError::CompilerInvariant)
+        }
+        CompiledResponseSchema::Array {
+            nullable,
+            max_items,
+            items,
+        } => ClosedJsonSchema::array(*nullable, *max_items, compile_closed_json_schema(items)?)
+            .map_err(|_| SourcePlanCompileError::CompilerInvariant),
+        CompiledResponseSchema::Scalar(CompiledScalarShape::String {
+            nullable,
+            max_bytes,
+        }) => ClosedJsonSchema::string(*nullable, *max_bytes)
+            .map_err(|_| SourcePlanCompileError::CompilerInvariant),
+        CompiledResponseSchema::Scalar(CompiledScalarShape::Boolean { nullable }) => {
+            Ok(ClosedJsonSchema::boolean(*nullable))
+        }
+        CompiledResponseSchema::Scalar(CompiledScalarShape::Integer {
+            nullable,
+            minimum,
+            maximum,
+        }) => ClosedJsonSchema::integer(*nullable, *minimum, *maximum)
+            .map_err(|_| SourcePlanCompileError::CompilerInvariant),
+        CompiledResponseSchema::Scalar(CompiledScalarShape::Number {
+            nullable,
+            minimum,
+            maximum,
+        }) => ClosedJsonSchema::number(*nullable, *minimum, *maximum)
+            .map_err(|_| SourcePlanCompileError::CompilerInvariant),
+    }
 }
 
 fn compile_json_pointer(pointer: &str) -> Result<CompiledJsonPointer, SourcePlanCompileError> {

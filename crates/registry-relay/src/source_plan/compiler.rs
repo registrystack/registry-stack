@@ -4,6 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+use registry_platform_httputil::destination::json::ClosedJsonDecoder;
 use registry_platform_httputil::destination::{
     CredentialDestinationPolicy, CredentialDestinationRequestTemplate, DataDestinationPolicy,
     DataDestinationRequestTemplate, DestinationAuthorizationTemplate, DestinationBodyTemplate,
@@ -825,6 +826,7 @@ pub struct CompiledOperation {
     projection: CompiledProjectionMechanism,
     transport_template: DataDestinationRequestTemplate,
     response: CompiledResponse,
+    response_decoder: ClosedJsonDecoder,
     acquisition_class: AcquisitionClass,
     cardinality: SourceCardinality,
     total_deadline_ms: u32,
@@ -1028,6 +1030,10 @@ impl CompiledOperation {
     #[must_use]
     pub const fn response(&self) -> &CompiledResponse {
         &self.response
+    }
+
+    pub(crate) const fn response_decoder(&self) -> &ClosedJsonDecoder {
+        &self.response_decoder
     }
 
     pub(crate) const fn transport_template(&self) -> &DataDestinationRequestTemplate {
