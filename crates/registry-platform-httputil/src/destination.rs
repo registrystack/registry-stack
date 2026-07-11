@@ -1440,9 +1440,9 @@ fn append_form_component(
 fn valid_dynamic_path_segment(segment: &str) -> bool {
     !matches!(segment, "." | "..")
         && !segment.chars().any(disallowed_path_scalar)
-        && !segment
-            .bytes()
-            .any(|byte| byte.is_ascii_control() || matches!(byte, b'/' | b'\\' | b'?' | b'%'))
+        && !segment.bytes().any(|byte| {
+            byte.is_ascii_control() || matches!(byte, b'/' | b'\\' | b'?' | b'%' | b';')
+        })
 }
 
 /// Unicode controls and invisible format characters that cannot be part of a
@@ -2194,7 +2194,7 @@ fn path_percent_encoding_is_canonical(path: &str) -> bool {
             || decoded.is_ascii_alphanumeric()
             || matches!(
                 decoded,
-                b'-' | b'.' | b'_' | b'~' | b':' | b'%' | b'/' | b'\\' | b'?'
+                b'-' | b'.' | b'_' | b'~' | b':' | b'%' | b'/' | b'\\' | b'?' | b';'
             )
         {
             return false;
@@ -3296,6 +3296,7 @@ mod tests {
             "/base/%5C",
             "/base/%3F",
             "/base/%3A",
+            "/base/id%3Bx",
             "/base/%7c",
             "/base/%C2%85",
             "/base/%E2%80%AE",
@@ -3367,6 +3368,8 @@ mod tests {
             "a\\b",
             "a?b",
             "a%2Fb",
+            "id;x",
+            "..;x",
             "a\nb",
             "a\u{0085}b",
             "a\u{00ad}b",
