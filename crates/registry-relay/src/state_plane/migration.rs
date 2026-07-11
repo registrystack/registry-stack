@@ -12,9 +12,24 @@ pub(crate) const DURABLE_AUDIT_CAPABILITY_V1: &str = "registry.relay.postgres-du
 pub(crate) const SERVING_FENCE_CAPABILITY_V1: &str = "registry.relay.postgres-serving-fence/v1";
 pub(crate) const PERSISTENT_QUOTA_CAPABILITY_V1: &str =
     "registry.relay.postgres-persistent-quota/v1";
+pub(crate) const AUDIT_PSEUDONYM_KEYRING_CAPABILITY_V1: &str =
+    "registry.relay.postgres-audit-pseudonym-keyring/v1";
 pub(crate) const STATE_PLANE_SCHEMA_VERSION_V1: i32 = 1;
+// This semantic identity deliberately changes when a capability revision or
+// cross-runtime protocol invariant changes. Exact PostgreSQL structure and
+// executable bodies are attested separately by the live catalog fingerprints.
+#[cfg(test)]
+const STATE_PLANE_SCHEMA_IDENTITY_PREIMAGE_V1: &str = concat!(
+    "registry.relay.postgres-state-plane.semantic-identity.v1\0",
+    "schema-version=1\0",
+    "durable-audit=registry.relay.postgres-durable-audit/v1\0",
+    "serving-fence=registry.relay.postgres-serving-fence/v1\0",
+    "persistent-quota=registry.relay.postgres-persistent-quota/v1\0",
+    "audit-pseudonym-keyring=registry.relay.postgres-audit-pseudonym-keyring/v1\0",
+    "key-order=utf8-bytewise-key-order-v1\0",
+);
 pub(crate) const STATE_PLANE_SCHEMA_FINGERPRINT_V1: &str =
-    "sha256:b7d062f1c8acc053158cab59a72c147a9ea7076d23b0336597682b284cc123a4";
+    "sha256:c381f2fbf8b6e5afbd428a0a4f53f2ba8571913aaf0d11351d4065b376e8ceef";
 
 pub(super) const MIGRATION_ADVISORY_LOCK_KEY_V1: i64 = 7_221_091_440;
 const SUPPORTED_POSTGRES_MIN_MAJOR: i32 = 16;
@@ -23,16 +38,16 @@ const SUPPORTED_POSTGRES_MAX_MAJOR: i32 = 18;
 // Filled from the semantic catalog descriptor below on disposable supported
 // PostgreSQL majors. Constraint rendering is explicitly versioned because
 // pg_get_constraintdef is not a cross-major wire contract.
-const CONSTRAINT_FINGERPRINT_PG16: &str = "f75fa38ddcdd78444422f472993c53f1";
-const CONSTRAINT_FINGERPRINT_PG17: &str = "f75fa38ddcdd78444422f472993c53f1";
-const CONSTRAINT_FINGERPRINT_PG18: &str = "e0027e210e87ab855209d3662ee86c69";
-const COLUMN_FINGERPRINT_PG16: &str = "babb2b16a889c0bac5c69c6cc805b907";
-const COLUMN_FINGERPRINT_PG17: &str = "babb2b16a889c0bac5c69c6cc805b907";
-const COLUMN_FINGERPRINT_PG18: &str = "babb2b16a889c0bac5c69c6cc805b907";
-const FUNCTION_FINGERPRINT_PG16: &str = "0afddda861cc635715c1b8f8407713e9";
-const FUNCTION_FINGERPRINT_PG17: &str = "0afddda861cc635715c1b8f8407713e9";
-const FUNCTION_FINGERPRINT_PG18: &str = "0afddda861cc635715c1b8f8407713e9";
-const CAPABILITY_HELPER_BODY_FINGERPRINT_V1: &str = "490beadaa3f09d33f3157df247a4d393";
+const CONSTRAINT_FINGERPRINT_PG16: &str = "b94332ef6c5b85a716b75a08c5296450";
+const CONSTRAINT_FINGERPRINT_PG17: &str = "b94332ef6c5b85a716b75a08c5296450";
+const CONSTRAINT_FINGERPRINT_PG18: &str = "50514ab7d176148d8af8a6e14fdd4c00";
+const COLUMN_FINGERPRINT_PG16: &str = "4983bc1f7f0b50c8f820ad8544e70d81";
+const COLUMN_FINGERPRINT_PG17: &str = "4983bc1f7f0b50c8f820ad8544e70d81";
+const COLUMN_FINGERPRINT_PG18: &str = "4983bc1f7f0b50c8f820ad8544e70d81";
+const FUNCTION_FINGERPRINT_PG16: &str = "bdc9313a889a1d7a25a06b04cba77bad";
+const FUNCTION_FINGERPRINT_PG17: &str = "bdc9313a889a1d7a25a06b04cba77bad";
+const FUNCTION_FINGERPRINT_PG18: &str = "bdc9313a889a1d7a25a06b04cba77bad";
+const CAPABILITY_HELPER_BODY_FINGERPRINT_V1: &str = "31554bfb3eb93b535eac932f9f2c831c";
 
 /// Runtime-forceable session semantics. Server/SUSET state that the runtime
 /// cannot safely repair is rejected by the attested SQL capability instead.
@@ -71,10 +86,14 @@ CREATE TABLE IF NOT EXISTS relay_state_private.state_plane_metadata (
     capability_fingerprint text NOT NULL,
     owner_role_oid oid NOT NULL,
     runtime_role_oid oid NOT NULL,
+    audit_pseudonym_maintenance_role_oid oid NOT NULL,
+    audit_pseudonym_reader_role_oid oid NOT NULL,
     chain_key_epoch_id text NOT NULL,
     serving_fence_capability_id text NOT NULL,
     serving_fence_lock_key bigint NOT NULL,
     quota_capability_id text NOT NULL,
+    audit_pseudonym_keyring_capability_id text NOT NULL,
+    audit_pseudonym_keyring_lock_key bigint NOT NULL,
     installed_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     CONSTRAINT state_plane_metadata_pk PRIMARY KEY (singleton),
     CONSTRAINT state_plane_metadata_singleton_check CHECK (singleton),
@@ -84,10 +103,15 @@ CREATE TABLE IF NOT EXISTS relay_state_private.state_plane_metadata (
     ),
     CONSTRAINT state_plane_metadata_fingerprint_check CHECK (
         capability_fingerprint =
-        'sha256:b7d062f1c8acc053158cab59a72c147a9ea7076d23b0336597682b284cc123a4'
+        'sha256:c381f2fbf8b6e5afbd428a0a4f53f2ba8571913aaf0d11351d4065b376e8ceef'
     ),
     CONSTRAINT state_plane_metadata_roles_distinct_check CHECK (
         owner_role_oid <> runtime_role_oid
+        AND owner_role_oid <> audit_pseudonym_maintenance_role_oid
+        AND owner_role_oid <> audit_pseudonym_reader_role_oid
+        AND runtime_role_oid <> audit_pseudonym_maintenance_role_oid
+        AND runtime_role_oid <> audit_pseudonym_reader_role_oid
+        AND audit_pseudonym_maintenance_role_oid <> audit_pseudonym_reader_role_oid
     ),
     CONSTRAINT state_plane_metadata_chain_epoch_check CHECK (
         octet_length(chain_key_epoch_id) BETWEEN 1 AND 64
@@ -101,6 +125,15 @@ CREATE TABLE IF NOT EXISTS relay_state_private.state_plane_metadata (
     ),
     CONSTRAINT state_plane_metadata_quota_capability_check CHECK (
         quota_capability_id = 'registry.relay.postgres-persistent-quota/v1'
+    ),
+    CONSTRAINT state_plane_metadata_pseudonym_keyring_capability_check CHECK (
+        audit_pseudonym_keyring_capability_id =
+        'registry.relay.postgres-audit-pseudonym-keyring/v1'
+    ),
+    CONSTRAINT state_plane_metadata_pseudonym_keyring_lock_key_check CHECK (
+        audit_pseudonym_keyring_lock_key <> 0
+        AND audit_pseudonym_keyring_lock_key <> 7221091440
+        AND audit_pseudonym_keyring_lock_key <> serving_fence_lock_key
     )
 );
 
@@ -310,16 +343,279 @@ CREATE TABLE IF NOT EXISTS relay_state_private.consultation_quota_bucket (
     )
 );
 
+CREATE TABLE IF NOT EXISTS relay_state_private.audit_pseudonym_keyring (
+    singleton boolean NOT NULL DEFAULT true,
+    generation bigint NOT NULL,
+    metadata_digest bytea NOT NULL,
+    metadata_canonical text NOT NULL,
+    active_key_id text NOT NULL,
+    active_since_unix_ms bigint NOT NULL,
+    active_write_deadline_unix_ms bigint NOT NULL,
+    audit_event_retention_ms bigint NOT NULL,
+    retained_key_ids text[] NOT NULL,
+    retained_retired_at_unix_ms bigint[] NOT NULL,
+    retained_destroy_after_unix_ms bigint[] NOT NULL,
+    used_key_id_count bigint NOT NULL,
+    used_key_ids_digest bytea NOT NULL,
+    transitioned_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    CONSTRAINT audit_pseudonym_keyring_pk PRIMARY KEY (singleton),
+    CONSTRAINT audit_pseudonym_keyring_singleton_check CHECK (singleton),
+    CONSTRAINT audit_pseudonym_keyring_generation_check CHECK (
+        generation BETWEEN 1 AND 9007199254740991
+    ),
+    CONSTRAINT audit_pseudonym_keyring_metadata_digest_check CHECK (
+        octet_length(metadata_digest) = 32
+    ),
+    CONSTRAINT audit_pseudonym_keyring_metadata_canonical_check CHECK (
+        octet_length(metadata_canonical) BETWEEN 1 AND 16384
+        AND jsonb_typeof(metadata_canonical::jsonb) = 'object'
+    ),
+    CONSTRAINT audit_pseudonym_keyring_active_key_id_check CHECK (
+        octet_length(active_key_id) BETWEEN 1 AND 64
+        AND active_key_id ~ '^[a-z0-9][a-z0-9._-]{0,63}$'
+    ),
+    CONSTRAINT audit_pseudonym_keyring_time_check CHECK (
+        active_since_unix_ms BETWEEN 0 AND 9007199254740991
+        AND active_write_deadline_unix_ms > active_since_unix_ms
+        AND active_write_deadline_unix_ms <= 9007199254740991
+        AND audit_event_retention_ms BETWEEN 1 AND 9007199254740991
+    ),
+    CONSTRAINT audit_pseudonym_keyring_retained_shape_check CHECK (
+        cardinality(retained_key_ids) <= 31
+        AND cardinality(retained_key_ids) = cardinality(retained_retired_at_unix_ms)
+        AND cardinality(retained_key_ids) = cardinality(retained_destroy_after_unix_ms)
+        AND (
+            cardinality(retained_key_ids) = 0
+            OR (
+                array_ndims(retained_key_ids) = 1
+                AND array_ndims(retained_retired_at_unix_ms) = 1
+                AND array_ndims(retained_destroy_after_unix_ms) = 1
+                AND array_lower(retained_key_ids, 1) = 1
+                AND array_lower(retained_retired_at_unix_ms, 1) = 1
+                AND array_lower(retained_destroy_after_unix_ms, 1) = 1
+            )
+        )
+    ),
+    CONSTRAINT audit_pseudonym_keyring_history_commitment_check CHECK (
+        used_key_id_count >= 1 AND octet_length(used_key_ids_digest) = 32
+    )
+);
+
+CREATE TABLE IF NOT EXISTS relay_state_private.audit_pseudonym_used_key_id (
+    key_id text NOT NULL,
+    first_generation bigint NOT NULL,
+    first_activated_at_unix_ms bigint NOT NULL,
+    recorded_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    CONSTRAINT audit_pseudonym_used_key_id_pk PRIMARY KEY (key_id),
+    CONSTRAINT audit_pseudonym_used_key_id_key_check CHECK (
+        octet_length(key_id) BETWEEN 1 AND 64
+        AND key_id ~ '^[a-z0-9][a-z0-9._-]{0,63}$'
+    ),
+    CONSTRAINT audit_pseudonym_used_key_id_generation_check CHECK (
+        first_generation BETWEEN 1 AND 9007199254740991
+    ),
+    CONSTRAINT audit_pseudonym_used_key_id_time_check CHECK (
+        first_activated_at_unix_ms BETWEEN 0 AND 9007199254740991
+    )
+);
+
+CREATE TABLE IF NOT EXISTS relay_state_private.audit_pseudonym_transition_context (
+    backend_pid integer NOT NULL,
+    transaction_id bigint NOT NULL,
+    transition_kind text NOT NULL,
+    transition_time_unix_ms bigint NOT NULL,
+    expected_generation bigint NOT NULL,
+    expected_metadata_digest bytea NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    CONSTRAINT audit_pseudonym_transition_context_pk PRIMARY KEY (
+        backend_pid, transaction_id
+    ),
+    CONSTRAINT audit_pseudonym_transition_context_backend_check CHECK (
+        backend_pid > 0
+    ),
+    CONSTRAINT audit_pseudonym_transition_context_transaction_check CHECK (
+        transaction_id > 0
+    ),
+    CONSTRAINT audit_pseudonym_transition_context_kind_check CHECK (
+        transition_kind IN ('rotation', 'maintenance')
+    ),
+    CONSTRAINT audit_pseudonym_transition_context_time_check CHECK (
+        transition_time_unix_ms BETWEEN 0 AND 9007199254740991
+    ),
+    CONSTRAINT audit_pseudonym_transition_context_generation_check CHECK (
+        expected_generation BETWEEN 1 AND 9007199254740991
+    ),
+    CONSTRAINT audit_pseudonym_transition_context_digest_check CHECK (
+        octet_length(expected_metadata_digest) = 32
+    )
+);
+
 ALTER TABLE relay_state_private.state_plane_metadata OWNER TO CURRENT_USER;
 ALTER TABLE relay_state_private.audit_chain_head OWNER TO CURRENT_USER;
 ALTER TABLE relay_state_private.audit_phase OWNER TO CURRENT_USER;
 ALTER TABLE relay_state_private.serving_fence_state OWNER TO CURRENT_USER;
 ALTER TABLE relay_state_private.dispatch_permit OWNER TO CURRENT_USER;
 ALTER TABLE relay_state_private.consultation_quota_bucket OWNER TO CURRENT_USER;
+ALTER TABLE relay_state_private.audit_pseudonym_keyring OWNER TO CURRENT_USER;
+ALTER TABLE relay_state_private.audit_pseudonym_used_key_id OWNER TO CURRENT_USER;
+ALTER TABLE relay_state_private.audit_pseudonym_transition_context OWNER TO CURRENT_USER;
 REVOKE ALL ON ALL TABLES IN SCHEMA relay_state_private FROM PUBLIC;
 REVOKE ALL ON ALL SEQUENCES IN SCHEMA relay_state_private FROM PUBLIC;
 ALTER DEFAULT PRIVILEGES IN SCHEMA relay_state_private REVOKE ALL ON TABLES FROM PUBLIC;
 ALTER DEFAULT PRIVILEGES IN SCHEMA relay_state_private REVOKE ALL ON SEQUENCES FROM PUBLIC;
+
+CREATE OR REPLACE FUNCTION relay_state_private.audit_pseudonym_metadata_canonical_v1(
+    p_generation bigint,
+    p_active_key_id text,
+    p_active_since_unix_ms bigint,
+    p_active_write_deadline_unix_ms bigint,
+    p_audit_event_retention_ms bigint,
+    p_retained_key_ids text[],
+    p_retained_retired_at_unix_ms bigint[],
+    p_retained_destroy_after_unix_ms bigint[]
+)
+RETURNS text
+LANGUAGE plpgsql
+IMMUTABLE
+SET search_path = pg_catalog, relay_state_private
+SET lock_timeout = '2s'
+SET statement_timeout = '5s'
+SET idle_in_transaction_session_timeout = '5s'
+SET synchronous_commit = 'on'
+AS $function$
+DECLARE
+    v_retained_count integer;
+    v_index integer;
+    v_previous_key_id text := NULL;
+    v_retained_canonical text := '';
+BEGIN
+    IF p_generation IS NULL OR p_active_key_id IS NULL
+       OR p_active_since_unix_ms IS NULL
+       OR p_active_write_deadline_unix_ms IS NULL
+       OR p_audit_event_retention_ms IS NULL
+       OR p_retained_key_ids IS NULL
+       OR p_retained_retired_at_unix_ms IS NULL
+       OR p_retained_destroy_after_unix_ms IS NULL
+       OR p_generation NOT BETWEEN 1 AND 9007199254740991
+       OR p_active_key_id !~ '^[a-z0-9][a-z0-9._-]{0,63}$'
+       OR octet_length(p_active_key_id) NOT BETWEEN 1 AND 64
+       OR p_active_since_unix_ms NOT BETWEEN 0 AND 9007199254740991
+       OR p_active_write_deadline_unix_ms <= p_active_since_unix_ms
+       OR p_active_write_deadline_unix_ms > 9007199254740991
+       OR p_audit_event_retention_ms NOT BETWEEN 1 AND 9007199254740991
+       OR cardinality(p_retained_key_ids) > 31
+       OR cardinality(p_retained_key_ids) <> cardinality(p_retained_retired_at_unix_ms)
+       OR cardinality(p_retained_key_ids) <> cardinality(p_retained_destroy_after_unix_ms)
+       OR (
+           cardinality(p_retained_key_ids) > 0
+           AND (
+               array_ndims(p_retained_key_ids) <> 1
+               OR array_ndims(p_retained_retired_at_unix_ms) <> 1
+               OR array_ndims(p_retained_destroy_after_unix_ms) <> 1
+               OR array_lower(p_retained_key_ids, 1) <> 1
+               OR array_lower(p_retained_retired_at_unix_ms, 1) <> 1
+               OR array_lower(p_retained_destroy_after_unix_ms, 1) <> 1
+           )
+       )
+    THEN
+        RETURN NULL;
+    END IF;
+    v_retained_count := cardinality(p_retained_key_ids);
+    FOR v_index IN 1..v_retained_count LOOP
+        IF p_retained_key_ids[v_index] IS NULL
+           OR p_retained_retired_at_unix_ms[v_index] IS NULL
+           OR p_retained_destroy_after_unix_ms[v_index] IS NULL
+           OR p_retained_key_ids[v_index] !~ '^[a-z0-9][a-z0-9._-]{0,63}$'
+           OR octet_length(p_retained_key_ids[v_index]) NOT BETWEEN 1 AND 64
+           OR p_retained_key_ids[v_index] = p_active_key_id
+           OR (v_previous_key_id IS NOT NULL
+               AND pg_catalog.convert_to(p_retained_key_ids[v_index], 'UTF8')
+                    <= pg_catalog.convert_to(v_previous_key_id, 'UTF8'))
+           OR p_retained_retired_at_unix_ms[v_index] NOT BETWEEN 0 AND 9007199254740991
+           OR p_retained_destroy_after_unix_ms[v_index]
+                <= p_retained_retired_at_unix_ms[v_index]
+           OR p_retained_destroy_after_unix_ms[v_index] > 9007199254740991
+           OR p_retained_retired_at_unix_ms[v_index] > p_active_since_unix_ms
+           OR p_retained_destroy_after_unix_ms[v_index] <= p_active_since_unix_ms
+           OR p_retained_retired_at_unix_ms[v_index]
+                > 9007199254740991 - p_audit_event_retention_ms
+           OR p_retained_destroy_after_unix_ms[v_index]
+                < p_retained_retired_at_unix_ms[v_index] + p_audit_event_retention_ms
+        THEN
+            RETURN NULL;
+        END IF;
+        IF v_index > 1 THEN
+            v_retained_canonical := v_retained_canonical || ',';
+        END IF;
+        v_retained_canonical := v_retained_canonical || pg_catalog.format(
+            '{"destroy_after_unix_ms":%s,"key_id":"%s","retired_at_unix_ms":%s}',
+            p_retained_destroy_after_unix_ms[v_index],
+            p_retained_key_ids[v_index],
+            p_retained_retired_at_unix_ms[v_index]
+        );
+        v_previous_key_id := p_retained_key_ids[v_index];
+    END LOOP;
+    RETURN pg_catalog.format(
+        '{"active_key_id":"%s","active_since_unix_ms":%s,'
+        '"active_write_deadline_unix_ms":%s,"audit_event_retention_ms":%s,'
+        '"generation":%s,"retained_keys":[%s],'
+        '"schema":"registry.audit-pseudonym-keyring/v1"}',
+        p_active_key_id, p_active_since_unix_ms,
+        p_active_write_deadline_unix_ms, p_audit_event_retention_ms,
+        p_generation, v_retained_canonical
+    );
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION relay_state_private.audit_pseudonym_history_snapshot_v1()
+RETURNS TABLE (
+    used_key_id_count bigint,
+    used_key_ids_digest bytea,
+    used_key_ids text[]
+)
+LANGUAGE plpgsql
+STABLE
+SET search_path = pg_catalog, relay_state_private
+SET lock_timeout = '2s'
+SET statement_timeout = '5s'
+SET idle_in_transaction_session_timeout = '5s'
+SET synchronous_commit = 'on'
+AS $function$
+DECLARE
+    v_count bigint;
+    v_total_id_bytes bigint;
+    v_ids text[];
+    v_framed_ids bytea;
+BEGIN
+    SELECT count(*)::bigint,
+           COALESCE(sum(octet_length(row.key_id)), 0)::bigint,
+           COALESCE(pg_catalog.array_agg(
+               row.key_id ORDER BY pg_catalog.convert_to(row.key_id, 'UTF8')
+           ), ARRAY[]::text[]),
+           COALESCE(pg_catalog.string_agg(
+               pg_catalog.int2send(octet_length(row.key_id)::smallint)
+               || pg_catalog.convert_to(row.key_id, 'UTF8'),
+               pg_catalog.decode('', 'hex')
+               ORDER BY pg_catalog.convert_to(row.key_id, 'UTF8')
+           ), pg_catalog.decode('', 'hex'))
+    INTO v_count, v_total_id_bytes, v_ids, v_framed_ids
+    FROM relay_state_private.audit_pseudonym_used_key_id AS row;
+    IF v_count > 4096 OR v_total_id_bytes > 262144 THEN
+        RAISE EXCEPTION 'audit pseudonym used-key-id history exceeds its protocol bound'
+            USING ERRCODE = '54000';
+    END IF;
+    RETURN QUERY SELECT
+        v_count,
+        pg_catalog.sha256(
+            pg_catalog.convert_to(
+                'registry.audit-pseudonym-key-id-history.v1', 'UTF8'
+            ) || pg_catalog.decode('00', 'hex')
+              || pg_catalog.int8send(v_count)
+              || v_framed_ids
+        ),
+        v_ids;
+END;
+$function$;
 
 CREATE OR REPLACE FUNCTION relay_state_private.capability_valid_v1()
 RETURNS boolean
@@ -337,11 +633,16 @@ WITH metadata AS (
       AND schema_version = 1
       AND capability_id = 'registry.relay.postgres-durable-audit/v1'
       AND capability_fingerprint =
-        'sha256:b7d062f1c8acc053158cab59a72c147a9ea7076d23b0336597682b284cc123a4'
+        'sha256:c381f2fbf8b6e5afbd428a0a4f53f2ba8571913aaf0d11351d4065b376e8ceef'
       AND serving_fence_capability_id = 'registry.relay.postgres-serving-fence/v1'
       AND serving_fence_lock_key <> 0
       AND serving_fence_lock_key <> 7221091440
       AND quota_capability_id = 'registry.relay.postgres-persistent-quota/v1'
+      AND audit_pseudonym_keyring_capability_id =
+        'registry.relay.postgres-audit-pseudonym-keyring/v1'
+      AND audit_pseudonym_keyring_lock_key <> 0
+      AND audit_pseudonym_keyring_lock_key <> 7221091440
+      AND audit_pseudonym_keyring_lock_key <> serving_fence_lock_key
 ),
 target_schemas AS (
     SELECT namespace.oid, namespace.nspname, namespace.nspowner, namespace.nspacl
@@ -390,7 +691,9 @@ target_indexes AS (
     WHERE namespace.nspname = 'relay_state_private'
       AND table_relation.relname IN (
           'state_plane_metadata', 'audit_chain_head', 'audit_phase',
-          'serving_fence_state', 'dispatch_permit', 'consultation_quota_bucket'
+          'serving_fence_state', 'dispatch_permit', 'consultation_quota_bucket',
+          'audit_pseudonym_keyring', 'audit_pseudonym_used_key_id',
+          'audit_pseudonym_transition_context'
       )
 ),
 target_triggers AS (
@@ -404,7 +707,9 @@ target_triggers AS (
     WHERE namespace.nspname = 'relay_state_private'
       AND relation.relname IN (
           'state_plane_metadata', 'audit_chain_head', 'audit_phase',
-          'serving_fence_state', 'dispatch_permit', 'consultation_quota_bucket'
+          'serving_fence_state', 'dispatch_permit', 'consultation_quota_bucket',
+          'audit_pseudonym_keyring', 'audit_pseudonym_used_key_id',
+          'audit_pseudonym_transition_context'
       )
 ),
 target_rules AS (
@@ -415,7 +720,9 @@ target_rules AS (
     WHERE namespace.nspname = 'relay_state_private'
       AND relation.relname IN (
           'state_plane_metadata', 'audit_chain_head', 'audit_phase',
-          'serving_fence_state', 'dispatch_permit', 'consultation_quota_bucket'
+          'serving_fence_state', 'dispatch_permit', 'consultation_quota_bucket',
+          'audit_pseudonym_keyring', 'audit_pseudonym_used_key_id',
+          'audit_pseudonym_transition_context'
       )
 ),
 target_policies AS (
@@ -426,7 +733,9 @@ target_policies AS (
     WHERE namespace.nspname = 'relay_state_private'
       AND relation.relname IN (
           'state_plane_metadata', 'audit_chain_head', 'audit_phase',
-          'serving_fence_state', 'dispatch_permit', 'consultation_quota_bucket'
+          'serving_fence_state', 'dispatch_permit', 'consultation_quota_bucket',
+          'audit_pseudonym_keyring', 'audit_pseudonym_used_key_id',
+          'audit_pseudonym_transition_context'
       )
 ),
 target_functions AS (
@@ -524,7 +833,12 @@ function_fingerprint AS (
         || ':parallel=' || function_row.proparallel::text
         || ':leakproof=' || function_row.proleakproof::text
         || ':language=' || function_row.lanname
-        || ':body=' || CASE WHEN function_row.nspname = 'relay_state_api'
+        || ':body=' || CASE
+            WHEN function_row.nspname = 'relay_state_api'
+              OR function_row.proname IN (
+                  'audit_pseudonym_metadata_canonical_v1',
+                  'audit_pseudonym_history_snapshot_v1'
+              )
             THEN pg_catalog.md5(function_row.prosrc) ELSE '' END,
         E'\n' ORDER BY function_row.nspname, function_row.proname,
                      pg_catalog.oidvectortypes(function_row.proargtypes)
@@ -549,10 +863,53 @@ SELECT
     AND NOT pg_catalog.pg_is_in_recovery()
     AND (SELECT major BETWEEN 16 AND 18 FROM server)
     AND (SELECT count(*) = 1 FROM metadata)
+    AND (
+        (
+            NOT EXISTS (
+                SELECT 1 FROM relay_state_private.audit_pseudonym_keyring
+            )
+            AND NOT EXISTS (
+                SELECT 1 FROM relay_state_private.audit_pseudonym_used_key_id
+            )
+        )
+        OR EXISTS (
+            SELECT 1
+            FROM relay_state_private.audit_pseudonym_keyring AS keyring
+            CROSS JOIN LATERAL
+                relay_state_private.audit_pseudonym_history_snapshot_v1() AS history
+            WHERE keyring.singleton = true
+              AND keyring.metadata_canonical =
+                  relay_state_private.audit_pseudonym_metadata_canonical_v1(
+                      keyring.generation,
+                      keyring.active_key_id,
+                      keyring.active_since_unix_ms,
+                      keyring.active_write_deadline_unix_ms,
+                      keyring.audit_event_retention_ms,
+                      keyring.retained_key_ids,
+                      keyring.retained_retired_at_unix_ms,
+                      keyring.retained_destroy_after_unix_ms
+                  )
+              AND keyring.metadata_digest = pg_catalog.sha256(
+                  pg_catalog.convert_to(keyring.metadata_canonical, 'UTF8')
+              )
+              AND keyring.used_key_id_count = history.used_key_id_count
+              AND keyring.used_key_ids_digest = history.used_key_ids_digest
+              AND keyring.active_key_id = ANY(history.used_key_ids)
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM pg_catalog.unnest(keyring.retained_key_ids) AS retained(key_id)
+                  WHERE retained.key_id <> ALL(history.used_key_ids)
+              )
+        )
+    )
     AND EXISTS (
         SELECT 1 FROM metadata AS bound
         JOIN pg_catalog.pg_roles AS owner_role ON owner_role.oid = bound.owner_role_oid
         JOIN pg_catalog.pg_roles AS runtime_role ON runtime_role.oid = bound.runtime_role_oid
+        JOIN pg_catalog.pg_roles AS maintenance_role
+          ON maintenance_role.oid = bound.audit_pseudonym_maintenance_role_oid
+        JOIN pg_catalog.pg_roles AS reader_role
+          ON reader_role.oid = bound.audit_pseudonym_reader_role_oid
         WHERE bound.owner_role_oid = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = current_user)
           AND NOT owner_role.rolcanlogin AND NOT owner_role.rolsuper
           AND NOT owner_role.rolcreaterole AND NOT owner_role.rolbypassrls
@@ -560,10 +917,24 @@ SELECT
           AND runtime_role.rolcanlogin AND NOT runtime_role.rolsuper
           AND NOT runtime_role.rolcreaterole AND NOT runtime_role.rolbypassrls
           AND NOT runtime_role.rolreplication AND NOT runtime_role.rolcreatedb
+          AND maintenance_role.rolcanlogin AND NOT maintenance_role.rolsuper
+          AND NOT maintenance_role.rolcreaterole AND NOT maintenance_role.rolbypassrls
+          AND NOT maintenance_role.rolreplication AND NOT maintenance_role.rolcreatedb
+          AND reader_role.rolcanlogin AND NOT reader_role.rolsuper
+          AND NOT reader_role.rolcreaterole AND NOT reader_role.rolbypassrls
+          AND NOT reader_role.rolreplication AND NOT reader_role.rolcreatedb
           AND NOT EXISTS (
               SELECT 1 FROM pg_catalog.pg_auth_members AS membership
-              WHERE membership.member IN (bound.owner_role_oid, bound.runtime_role_oid)
-                 OR membership.roleid IN (bound.owner_role_oid, bound.runtime_role_oid)
+              WHERE membership.member IN (
+                        bound.owner_role_oid, bound.runtime_role_oid,
+                        bound.audit_pseudonym_maintenance_role_oid,
+                        bound.audit_pseudonym_reader_role_oid
+                    )
+                 OR membership.roleid IN (
+                        bound.owner_role_oid, bound.runtime_role_oid,
+                        bound.audit_pseudonym_maintenance_role_oid,
+                        bound.audit_pseudonym_reader_role_oid
+                    )
           )
     )
     AND (SELECT count(*) = 2 FROM target_schemas)
@@ -571,7 +942,7 @@ SELECT
         SELECT 1 FROM target_schemas, metadata
         WHERE target_schemas.nspowner <> metadata.owner_role_oid
     )
-    AND (SELECT count(*) = 6 FROM target_relations)
+    AND (SELECT count(*) = 9 FROM target_relations)
     AND NOT EXISTS (
         SELECT 1 FROM target_relations, metadata
         WHERE target_relations.nspname <> 'relay_state_private'
@@ -584,10 +955,12 @@ SELECT
            OR target_relations.amname IS DISTINCT FROM 'heap'
            OR target_relations.relname NOT IN (
                'state_plane_metadata', 'audit_chain_head', 'audit_phase',
-               'serving_fence_state', 'dispatch_permit', 'consultation_quota_bucket'
+               'serving_fence_state', 'dispatch_permit', 'consultation_quota_bucket',
+               'audit_pseudonym_keyring', 'audit_pseudonym_used_key_id',
+               'audit_pseudonym_transition_context'
            )
     )
-    AND (SELECT count(*) = 9 FROM target_indexes)
+    AND (SELECT count(*) = 12 FROM target_indexes)
     AND NOT EXISTS (
         SELECT 1 FROM target_indexes, metadata
         WHERE target_indexes.relowner <> metadata.owner_role_oid
@@ -610,7 +983,9 @@ SELECT
                'audit_phase_envelope_id_unique',
                'audit_phase_stored_identity_unique',
                'serving_fence_state_pk', 'dispatch_permit_pk',
-               'dispatch_permit_takeover_idx', 'consultation_quota_bucket_pk'
+               'dispatch_permit_takeover_idx', 'consultation_quota_bucket_pk',
+               'audit_pseudonym_keyring_pk', 'audit_pseudonym_used_key_id_pk',
+               'audit_pseudonym_transition_context_pk'
            )
            OR NOT (
                (target_indexes.table_name = 'state_plane_metadata'
@@ -630,12 +1005,20 @@ SELECT
                    ))
                OR (target_indexes.table_name = 'consultation_quota_bucket'
                    AND target_indexes.index_name = 'consultation_quota_bucket_pk')
+               OR (target_indexes.table_name = 'audit_pseudonym_keyring'
+                   AND target_indexes.index_name = 'audit_pseudonym_keyring_pk')
+               OR (target_indexes.table_name = 'audit_pseudonym_used_key_id'
+                   AND target_indexes.index_name = 'audit_pseudonym_used_key_id_pk')
+               OR (target_indexes.table_name = 'audit_pseudonym_transition_context'
+                   AND target_indexes.index_name = 'audit_pseudonym_transition_context_pk')
            )
            OR (
                target_indexes.index_name IN (
                    'state_plane_metadata_pk', 'audit_chain_head_pk', 'audit_phase_pk',
                    'serving_fence_state_pk', 'dispatch_permit_pk',
-                   'consultation_quota_bucket_pk'
+                   'consultation_quota_bucket_pk', 'audit_pseudonym_keyring_pk',
+                   'audit_pseudonym_used_key_id_pk',
+                   'audit_pseudonym_transition_context_pk'
                ) AND NOT target_indexes.indisprimary
            )
            OR (
@@ -669,7 +1052,7 @@ SELECT
     )
     AND NOT EXISTS (SELECT 1 FROM target_rules)
     AND NOT EXISTS (SELECT 1 FROM target_policies)
-    AND (SELECT count(*) = 12 FROM target_functions)
+    AND (SELECT count(*) = 20 FROM target_functions)
     AND NOT EXISTS (
         SELECT 1 FROM target_functions, metadata
         WHERE target_functions.proowner <> metadata.owner_role_oid
@@ -684,22 +1067,36 @@ SELECT
                 'synchronous_commit=on'
               ]::text[]
            OR (target_functions.nspname = 'relay_state_private'
-               AND NOT (target_functions.proname = 'capability_valid_v1'
-                        AND NOT target_functions.prosecdef
-                        AND target_functions.lanname = 'sql'))
+               AND NOT (
+                   NOT target_functions.prosecdef
+                   AND (
+                       (target_functions.proname = 'capability_valid_v1'
+                           AND target_functions.lanname = 'sql')
+                       OR (target_functions.proname IN (
+                            'audit_pseudonym_metadata_canonical_v1',
+                            'audit_pseudonym_history_snapshot_v1'
+                           ) AND target_functions.lanname = 'plpgsql')
+                   )
+               ))
            OR (target_functions.nspname = 'relay_state_api'
                        AND NOT (target_functions.proname IN (
-                            'audit_phase_snapshot_v1', 'audit_phase_cas_v1', 'audit_readiness_v1',
+                            'audit_phase_snapshot_v1', 'audit_phase_duplicate_v1',
+                            'audit_phase_cas_v1', 'audit_readiness_v1',
                             'serving_fence_acquire_v1', 'serving_fence_finalize_v1',
                             'serving_fence_status_v1', 'dispatch_permit_create_v1',
                             'dispatch_permit_authorize_v1', 'dispatch_permit_complete_v1',
-                            'serving_fence_release_v1', 'quota_reserve_v1'
+                            'serving_fence_release_v1', 'quota_reserve_v1',
+                            'audit_pseudonym_keyring_snapshot_v1',
+                            'audit_pseudonym_keyring_readiness_v1',
+                            'audit_pseudonym_keyring_initialize_v1',
+                            'audit_pseudonym_keyring_rotate_v1',
+                            'audit_pseudonym_keyring_maintain_v1'
                        )
                         AND target_functions.prosecdef
                         AND target_functions.lanname = 'plpgsql'))
            OR target_functions.nspname NOT IN ('relay_state_private', 'relay_state_api')
     )
-    AND (SELECT count(*) = 5 FROM schema_acl)
+    AND (SELECT count(*) = 7 FROM schema_acl)
     AND NOT EXISTS (
         SELECT 1 FROM schema_acl, metadata
         WHERE schema_acl.grantor <> metadata.owner_role_oid
@@ -712,12 +1109,16 @@ SELECT
                    AND schema_acl.grantee = metadata.owner_role_oid
                    AND schema_acl.privilege_type IN ('CREATE', 'USAGE'))
                OR (schema_acl.nspname = 'relay_state_api'
-                   AND schema_acl.grantee = metadata.runtime_role_oid
+                   AND schema_acl.grantee IN (
+                       metadata.runtime_role_oid,
+                       metadata.audit_pseudonym_maintenance_role_oid,
+                       metadata.audit_pseudonym_reader_role_oid
+                   )
                    AND schema_acl.privilege_type = 'USAGE')
            )
     )
     AND (SELECT count(*) FROM table_acl) = (
-        SELECT 6 * count(*) FROM metadata
+        SELECT 9 * count(*) FROM metadata
         CROSS JOIN LATERAL pg_catalog.aclexplode(
             pg_catalog.acldefault('r', metadata.owner_role_oid)
         ) AS expected_acl
@@ -732,7 +1133,7 @@ SELECT
                'REFERENCES', 'TRIGGER', 'MAINTAIN'
            )
     )
-    AND (SELECT count(*) = 23 FROM function_acl)
+    AND (SELECT count(*) = 41 FROM function_acl)
     AND NOT EXISTS (
         SELECT 1 FROM function_acl, metadata
         WHERE function_acl.grantor <> metadata.owner_role_oid
@@ -742,25 +1143,52 @@ SELECT
                (function_acl.nspname = 'relay_state_private'
                 AND function_acl.grantee = metadata.owner_role_oid)
                OR (function_acl.nspname = 'relay_state_api'
+                   AND function_acl.grantee = metadata.owner_role_oid)
+               OR (function_acl.nspname = 'relay_state_api'
+                   AND function_acl.proname IN (
+                       'audit_phase_snapshot_v1', 'audit_phase_duplicate_v1',
+                       'audit_phase_cas_v1',
+                       'audit_readiness_v1', 'serving_fence_acquire_v1',
+                       'serving_fence_finalize_v1', 'serving_fence_status_v1',
+                       'dispatch_permit_create_v1', 'dispatch_permit_authorize_v1',
+                       'dispatch_permit_complete_v1', 'serving_fence_release_v1',
+                       'quota_reserve_v1'
+                   )
+                   AND function_acl.grantee = metadata.runtime_role_oid)
+               OR (function_acl.nspname = 'relay_state_api'
+                   AND function_acl.proname IN (
+                       'audit_pseudonym_keyring_snapshot_v1',
+                       'audit_pseudonym_keyring_readiness_v1'
+                   )
                    AND function_acl.grantee IN (
-                       metadata.owner_role_oid, metadata.runtime_role_oid
+                       metadata.runtime_role_oid,
+                       metadata.audit_pseudonym_maintenance_role_oid,
+                       metadata.audit_pseudonym_reader_role_oid
                    ))
+               OR (function_acl.nspname = 'relay_state_api'
+                   AND function_acl.proname IN (
+                       'audit_pseudonym_keyring_initialize_v1',
+                       'audit_pseudonym_keyring_rotate_v1',
+                       'audit_pseudonym_keyring_maintain_v1'
+                   )
+                   AND function_acl.grantee =
+                       metadata.audit_pseudonym_maintenance_role_oid)
            )
     )
     AND (SELECT value = CASE server.major
-            WHEN 16 THEN 'f75fa38ddcdd78444422f472993c53f1'
-            WHEN 17 THEN 'f75fa38ddcdd78444422f472993c53f1'
-            WHEN 18 THEN 'e0027e210e87ab855209d3662ee86c69'
+            WHEN 16 THEN 'b94332ef6c5b85a716b75a08c5296450'
+            WHEN 17 THEN 'b94332ef6c5b85a716b75a08c5296450'
+            WHEN 18 THEN '50514ab7d176148d8af8a6e14fdd4c00'
             ELSE '' END FROM constraint_fingerprint, server)
     AND (SELECT value = CASE server.major
-            WHEN 16 THEN 'babb2b16a889c0bac5c69c6cc805b907'
-            WHEN 17 THEN 'babb2b16a889c0bac5c69c6cc805b907'
-            WHEN 18 THEN 'babb2b16a889c0bac5c69c6cc805b907'
+            WHEN 16 THEN '4983bc1f7f0b50c8f820ad8544e70d81'
+            WHEN 17 THEN '4983bc1f7f0b50c8f820ad8544e70d81'
+            WHEN 18 THEN '4983bc1f7f0b50c8f820ad8544e70d81'
             ELSE '' END FROM column_fingerprint, server)
     AND (SELECT value = CASE server.major
-            WHEN 16 THEN '0afddda861cc635715c1b8f8407713e9'
-            WHEN 17 THEN '0afddda861cc635715c1b8f8407713e9'
-            WHEN 18 THEN '0afddda861cc635715c1b8f8407713e9'
+            WHEN 16 THEN 'bdc9313a889a1d7a25a06b04cba77bad'
+            WHEN 17 THEN 'bdc9313a889a1d7a25a06b04cba77bad'
+            WHEN 18 THEN 'bdc9313a889a1d7a25a06b04cba77bad'
             ELSE '' END FROM function_fingerprint, server);
 $function$;
 
@@ -768,7 +1196,12 @@ CREATE OR REPLACE FUNCTION relay_state_api.audit_phase_snapshot_v1(
     p_stream_kind text,
     p_operation_id text,
     p_phase text,
-    p_payload_digest bytea
+    p_payload_digest bytea,
+    p_expected_chain_key_epoch_id text,
+    p_pseudonym_key_id text,
+    p_pseudonym_generation bigint,
+    p_pseudonym_metadata_digest bytea,
+    p_expected_keyring_lock_key bigint
 )
 RETURNS TABLE (
     outcome text,
@@ -790,6 +1223,11 @@ DECLARE
     v_runtime_oid oid;
     v_session_oid oid;
     v_existing relay_state_private.audit_phase%ROWTYPE;
+    v_existing_record jsonb;
+    v_pseudonym_fields_present integer;
+    v_existing_pseudonym_payload_present boolean;
+    v_keyring relay_state_private.audit_pseudonym_keyring%ROWTYPE;
+    v_keyring_now_unix_us numeric;
 BEGIN
     PERFORM set_config('lock_timeout', '2s', false);
     PERFORM set_config('statement_timeout', '5s', false);
@@ -822,7 +1260,8 @@ BEGIN
         RAISE EXCEPTION 'durable audit capability unavailable' USING ERRCODE = '55000';
     END IF;
     IF p_stream_kind IS NULL OR p_operation_id IS NULL OR p_phase IS NULL
-       OR p_payload_digest IS NULL
+       OR p_payload_digest IS NULL OR p_expected_chain_key_epoch_id IS NULL
+       OR p_expected_keyring_lock_key IS NULL
        OR p_stream_kind NOT IN (
            'consultation', 'materialization', 'denial',
            'startup_credential_probe', 'readiness_credential_probe'
@@ -836,22 +1275,115 @@ BEGIN
     THEN
         RAISE EXCEPTION 'invalid durable audit request' USING ERRCODE = '22023';
     END IF;
+    IF NOT EXISTS (
+        SELECT 1
+        FROM relay_state_private.state_plane_metadata AS metadata
+        WHERE metadata.singleton = true
+          AND metadata.chain_key_epoch_id = p_expected_chain_key_epoch_id
+          AND metadata.audit_pseudonym_keyring_lock_key = p_expected_keyring_lock_key
+    ) THEN
+        RAISE EXCEPTION 'durable audit deployment authority drifted'
+            USING ERRCODE = '55000';
+    END IF;
+    v_pseudonym_fields_present := pg_catalog.num_nonnulls(
+        p_pseudonym_key_id,
+        p_pseudonym_generation,
+        p_pseudonym_metadata_digest
+    );
+    IF v_pseudonym_fields_present NOT IN (0, 3)
+       OR (p_stream_kind = 'consultation' AND v_pseudonym_fields_present <> 3)
+       OR (v_pseudonym_fields_present = 3
+           AND p_stream_kind NOT IN ('consultation', 'denial'))
+       OR (v_pseudonym_fields_present = 3
+           AND (
+               p_pseudonym_key_id !~ '^[a-z0-9][a-z0-9._-]{0,63}$'
+               OR octet_length(p_pseudonym_key_id) NOT BETWEEN 1 AND 64
+               OR p_pseudonym_generation NOT BETWEEN 1 AND 9007199254740991
+               OR octet_length(p_pseudonym_metadata_digest) <> 32
+           ))
+    THEN
+        RAISE EXCEPTION 'durable audit pseudonym authority is invalid'
+            USING ERRCODE = '22023';
+    END IF;
     SELECT phase_row.* INTO v_existing
     FROM relay_state_private.audit_phase AS phase_row
     WHERE phase_row.stream_kind = p_stream_kind
       AND phase_row.operation_id = p_operation_id
       AND phase_row.phase = p_phase;
     IF FOUND THEN
+        IF v_existing.payload_digest IS DISTINCT FROM p_payload_digest THEN
+            IF clock_timestamp() - v_started_at > interval '5 seconds' THEN
+                RAISE EXCEPTION 'durable audit snapshot exceeded its deadline'
+                    USING ERRCODE = '57014';
+            END IF;
+            RETURN QUERY SELECT
+                'conflicting_duplicate'::text, v_existing.envelope_id,
+                v_existing.record_hash, NULL::bytea, NULL::bigint;
+            RETURN;
+        END IF;
+        v_existing_record := v_existing.record_json::jsonb;
+        v_existing_pseudonym_payload_present :=
+            v_existing_record @? '$.**.commitment_key_id'
+            OR v_existing_record @? '$.**.subject_handle'
+            OR v_existing_record @? '$.**.input_commitment'
+            OR v_existing_record @? '$.**.predicate_commitment'
+            OR v_existing_record @? '$.**.consent_evidence_commitment';
+        IF (p_stream_kind = 'denial' AND v_existing_pseudonym_payload_present
+            AND v_pseudonym_fields_present <> 3)
+           OR (v_pseudonym_fields_present = 3
+               AND v_existing_record #>> '{payload,commitment_key_id}'
+                    IS DISTINCT FROM p_pseudonym_key_id)
+        THEN
+            RAISE EXCEPTION 'durable audit pseudonym authority is invalid'
+                USING ERRCODE = '22023';
+        END IF;
         IF clock_timestamp() - v_started_at > interval '5 seconds' THEN
             RAISE EXCEPTION 'durable audit snapshot exceeded its deadline'
                 USING ERRCODE = '57014';
         END IF;
         RETURN QUERY SELECT
-            CASE WHEN v_existing.payload_digest = p_payload_digest
-                THEN 'identical_duplicate'::text ELSE 'conflicting_duplicate'::text END,
+            'identical_duplicate'::text,
             v_existing.envelope_id, v_existing.record_hash,
             NULL::bytea, NULL::bigint;
         RETURN;
+    END IF;
+    IF v_pseudonym_fields_present = 3 THEN
+        PERFORM pg_catalog.pg_advisory_xact_lock_shared(p_expected_keyring_lock_key);
+        IF NOT EXISTS (
+            SELECT 1
+            FROM relay_state_private.state_plane_metadata AS metadata
+            WHERE metadata.singleton = true
+              AND metadata.chain_key_epoch_id = p_expected_chain_key_epoch_id
+              AND metadata.audit_pseudonym_keyring_lock_key = p_expected_keyring_lock_key
+        ) THEN
+            RAISE EXCEPTION 'durable audit deployment authority drifted'
+                USING ERRCODE = '55000';
+        END IF;
+        SELECT row.* INTO v_keyring
+        FROM relay_state_private.audit_pseudonym_keyring AS row
+        WHERE row.singleton = true;
+        v_keyring_now_unix_us := pg_catalog.floor(
+            extract(epoch FROM clock_timestamp()) * 1000000
+        );
+        IF NOT FOUND
+           OR v_keyring.active_key_id IS DISTINCT FROM p_pseudonym_key_id
+           OR v_keyring.generation IS DISTINCT FROM p_pseudonym_generation
+           OR v_keyring.metadata_digest IS DISTINCT FROM p_pseudonym_metadata_digest
+           OR v_keyring_now_unix_us
+                < v_keyring.active_since_unix_ms::numeric * 1000
+           OR v_keyring_now_unix_us
+                >= v_keyring.active_write_deadline_unix_ms::numeric * 1000
+           OR EXISTS (
+               SELECT 1
+               FROM pg_catalog.unnest(
+                   v_keyring.retained_destroy_after_unix_ms
+               ) AS deadline(value)
+               WHERE deadline.value::numeric * 1000 <= v_keyring_now_unix_us
+           )
+        THEN
+            RAISE EXCEPTION 'durable audit pseudonym authority is stale'
+                USING ERRCODE = '55000';
+        END IF;
     END IF;
     RETURN QUERY
     SELECT 'candidate'::text, NULL::text, NULL::bytea,
@@ -865,20 +1397,13 @@ BEGIN
 END;
 $function$;
 
-CREATE OR REPLACE FUNCTION relay_state_api.audit_phase_cas_v1(
+CREATE OR REPLACE FUNCTION relay_state_api.audit_phase_duplicate_v1(
     p_stream_kind text,
     p_operation_id text,
     p_phase text,
     p_payload_digest bytea,
-    p_candidate_generation bigint,
-    p_candidate_predecessor_hash bytea,
-    p_envelope_id text,
-    p_timestamp_unix_ms bigint,
-    p_record_json text,
-    p_envelope_json text,
-    p_record_hash bytea,
-    p_attempt_envelope_id text,
-    p_attempt_record_hash bytea
+    p_expected_chain_key_epoch_id text,
+    p_expected_keyring_lock_key bigint
 )
 RETURNS TABLE (
     outcome text,
@@ -898,10 +1423,142 @@ DECLARE
     v_runtime_oid oid;
     v_session_oid oid;
     v_existing relay_state_private.audit_phase%ROWTYPE;
+    v_existing_record jsonb;
+BEGIN
+    PERFORM set_config('lock_timeout', '2s', false);
+    PERFORM set_config('statement_timeout', '5s', false);
+    PERFORM set_config('idle_in_transaction_session_timeout', '5s', false);
+    PERFORM set_config('synchronous_commit', 'on', false);
+    SELECT metadata.runtime_role_oid INTO v_runtime_oid
+    FROM relay_state_private.state_plane_metadata AS metadata
+    WHERE metadata.singleton = true;
+    SELECT oid INTO v_session_oid FROM pg_catalog.pg_roles WHERE rolname = session_user;
+    IF v_session_oid IS DISTINCT FROM v_runtime_oid THEN
+        RAISE EXCEPTION 'durable audit caller is not bound' USING ERRCODE = '42501';
+    END IF;
+    IF current_setting('search_path') <> 'pg_catalog, relay_state_private'
+       OR current_setting('lock_timeout') <> '2s'
+       OR current_setting('statement_timeout') <> '5s'
+       OR current_setting('idle_in_transaction_session_timeout') <> '5s'
+       OR current_setting('synchronous_commit') <> 'on'
+       OR current_setting('client_encoding') <> 'UTF8'
+       OR current_setting('standard_conforming_strings') <> 'on'
+       OR current_setting('session_replication_role') <> 'origin'
+       OR current_setting('default_transaction_isolation') <> 'read committed'
+       OR current_setting('transaction_isolation') <> 'read committed'
+       OR current_setting('default_transaction_read_only') <> 'off'
+       OR current_setting('transaction_read_only') <> 'off'
+       OR pg_catalog.pg_is_in_recovery()
+    THEN
+        RAISE EXCEPTION 'durable audit runtime session is unsafe' USING ERRCODE = '55000';
+    END IF;
+    IF NOT relay_state_private.capability_valid_v1() THEN
+        RAISE EXCEPTION 'durable audit capability unavailable' USING ERRCODE = '55000';
+    END IF;
+    IF p_stream_kind IS NULL OR p_operation_id IS NULL OR p_phase IS NULL
+       OR p_payload_digest IS NULL OR p_expected_chain_key_epoch_id IS NULL
+       OR p_expected_keyring_lock_key IS NULL
+       OR p_stream_kind NOT IN ('consultation', 'denial')
+       OR p_operation_id !~ '^[0-7][0-9A-HJKMNP-TV-Z]{25}$'
+       OR octet_length(p_payload_digest) <> 32
+       OR NOT (
+           (p_stream_kind = 'denial' AND p_phase = 'denial_decision')
+           OR (p_stream_kind = 'consultation' AND p_phase IN ('attempt', 'completion'))
+       )
+    THEN
+        RAISE EXCEPTION 'invalid durable audit duplicate recovery request'
+            USING ERRCODE = '22023';
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1
+        FROM relay_state_private.state_plane_metadata AS metadata
+        WHERE metadata.singleton = true
+          AND metadata.chain_key_epoch_id = p_expected_chain_key_epoch_id
+          AND metadata.audit_pseudonym_keyring_lock_key = p_expected_keyring_lock_key
+    ) THEN
+        RAISE EXCEPTION 'durable audit deployment authority drifted'
+            USING ERRCODE = '55000';
+    END IF;
+    SELECT phase_row.* INTO v_existing
+    FROM relay_state_private.audit_phase AS phase_row
+    WHERE phase_row.stream_kind = p_stream_kind
+      AND phase_row.operation_id = p_operation_id
+      AND phase_row.phase = p_phase;
+    IF NOT FOUND THEN
+        outcome := 'not_found';
+        RETURN NEXT;
+        RETURN;
+    END IF;
+    v_existing_record := v_existing.record_json::jsonb;
+    IF v_existing_record #>> '{payload,commitment_key_id}' IS NULL
+       OR v_existing_record #>> '{payload,commitment_key_id}'
+            !~ '^[a-z0-9][a-z0-9._-]{0,63}$'
+       OR octet_length(v_existing_record #>> '{payload,commitment_key_id}')
+            NOT BETWEEN 1 AND 64
+    THEN
+        RAISE EXCEPTION 'durable audit duplicate is not pseudonym-bound'
+            USING ERRCODE = '22023';
+    END IF;
+    IF clock_timestamp() - v_started_at > interval '5 seconds' THEN
+        RAISE EXCEPTION 'durable audit duplicate recovery exceeded its deadline'
+            USING ERRCODE = '57014';
+    END IF;
+    outcome := CASE WHEN v_existing.payload_digest = p_payload_digest
+        THEN 'identical_duplicate' ELSE 'conflicting_duplicate' END;
+    stored_envelope_id := v_existing.envelope_id;
+    stored_chain_hash := v_existing.record_hash;
+    RETURN NEXT;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION relay_state_api.audit_phase_cas_v1(
+    p_stream_kind text,
+    p_operation_id text,
+    p_phase text,
+    p_payload_digest bytea,
+    p_candidate_generation bigint,
+    p_candidate_predecessor_hash bytea,
+    p_envelope_id text,
+    p_timestamp_unix_ms bigint,
+    p_record_json text,
+    p_envelope_json text,
+    p_record_hash bytea,
+    p_attempt_envelope_id text,
+    p_attempt_record_hash bytea,
+    p_pseudonym_key_id text,
+    p_pseudonym_generation bigint,
+    p_pseudonym_metadata_digest bytea,
+    p_expected_chain_key_epoch_id text,
+    p_expected_keyring_lock_key bigint
+)
+RETURNS TABLE (
+    outcome text,
+    stored_envelope_id text,
+    stored_chain_hash bytea
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, relay_state_private
+SET lock_timeout = '2s'
+SET statement_timeout = '5s'
+SET idle_in_transaction_session_timeout = '5s'
+SET synchronous_commit = 'on'
+AS $function$
+DECLARE
+    v_started_at timestamptz := clock_timestamp();
+    v_runtime_oid oid;
+    v_session_oid oid;
+    v_existing relay_state_private.audit_phase%ROWTYPE;
+    v_existing_record jsonb;
     v_record jsonb;
     v_envelope jsonb;
     v_expected_digest text;
     v_inserted_rows bigint;
+    v_pseudonym_fields_present integer;
+    v_pseudonym_payload_present boolean;
+    v_existing_pseudonym_payload_present boolean;
+    v_keyring relay_state_private.audit_pseudonym_keyring%ROWTYPE;
+    v_keyring_now_unix_us numeric;
 BEGIN
     PERFORM set_config('lock_timeout', '2s', false);
     PERFORM set_config('statement_timeout', '5s', false);
@@ -937,6 +1594,7 @@ BEGIN
        OR p_payload_digest IS NULL OR p_candidate_generation IS NULL
        OR p_envelope_id IS NULL OR p_timestamp_unix_ms IS NULL
        OR p_record_json IS NULL OR p_envelope_json IS NULL OR p_record_hash IS NULL
+       OR p_expected_chain_key_epoch_id IS NULL OR p_expected_keyring_lock_key IS NULL
        OR p_stream_kind NOT IN (
            'consultation', 'materialization', 'denial',
            'startup_credential_probe', 'readiness_credential_probe'
@@ -957,6 +1615,36 @@ BEGIN
     THEN
         RAISE EXCEPTION 'invalid durable audit request' USING ERRCODE = '22023';
     END IF;
+    IF NOT EXISTS (
+        SELECT 1
+        FROM relay_state_private.state_plane_metadata AS metadata
+        WHERE metadata.singleton = true
+          AND metadata.chain_key_epoch_id = p_expected_chain_key_epoch_id
+          AND metadata.audit_pseudonym_keyring_lock_key = p_expected_keyring_lock_key
+    ) THEN
+        RAISE EXCEPTION 'durable audit deployment authority drifted'
+            USING ERRCODE = '55000';
+    END IF;
+    v_pseudonym_fields_present := pg_catalog.num_nonnulls(
+        p_pseudonym_key_id,
+        p_pseudonym_generation,
+        p_pseudonym_metadata_digest
+    );
+    IF v_pseudonym_fields_present NOT IN (0, 3)
+       OR (p_stream_kind = 'consultation' AND v_pseudonym_fields_present <> 3)
+       OR (v_pseudonym_fields_present = 3
+           AND p_stream_kind NOT IN ('consultation', 'denial'))
+       OR (v_pseudonym_fields_present = 3
+           AND (
+               p_pseudonym_key_id !~ '^[a-z0-9][a-z0-9._-]{0,63}$'
+               OR octet_length(p_pseudonym_key_id) NOT BETWEEN 1 AND 64
+               OR p_pseudonym_generation NOT BETWEEN 1 AND 9007199254740991
+               OR octet_length(p_pseudonym_metadata_digest) <> 32
+           ))
+    THEN
+        RAISE EXCEPTION 'durable audit pseudonym authority is invalid'
+            USING ERRCODE = '22023';
+    END IF;
 
     SELECT phase_row.* INTO v_existing
     FROM relay_state_private.audit_phase AS phase_row
@@ -964,13 +1652,38 @@ BEGIN
       AND phase_row.operation_id = p_operation_id
       AND phase_row.phase = p_phase;
     IF FOUND THEN
+        IF v_existing.payload_digest IS DISTINCT FROM p_payload_digest THEN
+            IF clock_timestamp() - v_started_at > interval '5 seconds' THEN
+                RAISE EXCEPTION 'durable audit CAS exceeded its deadline'
+                    USING ERRCODE = '57014';
+            END IF;
+            RETURN QUERY SELECT
+                'conflicting_duplicate'::text, v_existing.envelope_id,
+                v_existing.record_hash;
+            RETURN;
+        END IF;
+        v_existing_record := v_existing.record_json::jsonb;
+        v_existing_pseudonym_payload_present :=
+            v_existing_record @? '$.**.commitment_key_id'
+            OR v_existing_record @? '$.**.subject_handle'
+            OR v_existing_record @? '$.**.input_commitment'
+            OR v_existing_record @? '$.**.predicate_commitment'
+            OR v_existing_record @? '$.**.consent_evidence_commitment';
+        IF (p_stream_kind = 'denial' AND v_existing_pseudonym_payload_present
+            AND v_pseudonym_fields_present <> 3)
+           OR (v_pseudonym_fields_present = 3
+               AND v_existing_record #>> '{payload,commitment_key_id}'
+                    IS DISTINCT FROM p_pseudonym_key_id)
+        THEN
+            RAISE EXCEPTION 'durable audit pseudonym authority is invalid'
+                USING ERRCODE = '22023';
+        END IF;
         IF clock_timestamp() - v_started_at > interval '5 seconds' THEN
             RAISE EXCEPTION 'durable audit CAS exceeded its deadline'
                 USING ERRCODE = '57014';
         END IF;
         RETURN QUERY SELECT
-            CASE WHEN v_existing.payload_digest = p_payload_digest
-                THEN 'identical_duplicate'::text ELSE 'conflicting_duplicate'::text END,
+            'identical_duplicate'::text,
             v_existing.envelope_id, v_existing.record_hash;
         RETURN;
     END IF;
@@ -1019,6 +1732,60 @@ BEGIN
         END IF;
     ELSIF p_attempt_envelope_id IS NOT NULL OR p_attempt_record_hash IS NOT NULL THEN
         RAISE EXCEPTION 'durable audit envelope is inconsistent' USING ERRCODE = '22023';
+    END IF;
+
+    v_pseudonym_payload_present :=
+        v_record @? '$.**.commitment_key_id'
+        OR v_record @? '$.**.subject_handle'
+        OR v_record @? '$.**.input_commitment'
+        OR v_record @? '$.**.predicate_commitment'
+        OR v_record @? '$.**.consent_evidence_commitment';
+    IF (p_stream_kind = 'denial' AND v_pseudonym_payload_present
+        AND v_pseudonym_fields_present <> 3)
+       OR (v_pseudonym_fields_present = 3
+           AND v_record #>> '{payload,commitment_key_id}'
+                IS DISTINCT FROM p_pseudonym_key_id)
+    THEN
+        RAISE EXCEPTION 'durable audit pseudonym authority is invalid'
+            USING ERRCODE = '22023';
+    END IF;
+    IF v_pseudonym_fields_present = 3 THEN
+        PERFORM pg_catalog.pg_advisory_xact_lock_shared(p_expected_keyring_lock_key);
+        IF NOT EXISTS (
+            SELECT 1
+            FROM relay_state_private.state_plane_metadata AS metadata
+            WHERE metadata.singleton = true
+              AND metadata.chain_key_epoch_id = p_expected_chain_key_epoch_id
+              AND metadata.audit_pseudonym_keyring_lock_key = p_expected_keyring_lock_key
+        ) THEN
+            RAISE EXCEPTION 'durable audit deployment authority drifted'
+                USING ERRCODE = '55000';
+        END IF;
+        SELECT row.* INTO v_keyring
+        FROM relay_state_private.audit_pseudonym_keyring AS row
+        WHERE row.singleton = true;
+        v_keyring_now_unix_us := pg_catalog.floor(
+            extract(epoch FROM clock_timestamp()) * 1000000
+        );
+        IF NOT FOUND
+           OR v_keyring.active_key_id IS DISTINCT FROM p_pseudonym_key_id
+           OR v_keyring.generation IS DISTINCT FROM p_pseudonym_generation
+           OR v_keyring.metadata_digest IS DISTINCT FROM p_pseudonym_metadata_digest
+           OR v_keyring_now_unix_us
+                < v_keyring.active_since_unix_ms::numeric * 1000
+           OR v_keyring_now_unix_us
+                >= v_keyring.active_write_deadline_unix_ms::numeric * 1000
+           OR EXISTS (
+               SELECT 1
+               FROM pg_catalog.unnest(
+                   v_keyring.retained_destroy_after_unix_ms
+               ) AS deadline(value)
+               WHERE deadline.value::numeric * 1000 <= v_keyring_now_unix_us
+           )
+        THEN
+            RAISE EXCEPTION 'durable audit pseudonym authority is stale'
+                USING ERRCODE = '55000';
+        END IF;
     END IF;
 
     UPDATE relay_state_private.audit_chain_head AS head
@@ -1089,8 +1856,12 @@ RETURNS TABLE (
     capability_fingerprint text,
     owner_role_oid bigint,
     runtime_role_oid bigint,
+    audit_pseudonym_maintenance_role_oid bigint,
+    audit_pseudonym_reader_role_oid bigint,
     chain_key_epoch_id text,
-    quota_capability_id text
+    quota_capability_id text,
+    audit_pseudonym_keyring_capability_id text,
+    audit_pseudonym_keyring_lock_key bigint
 )
 LANGUAGE plpgsql
 STABLE
@@ -1142,12 +1913,93 @@ BEGIN
            metadata.capability_fingerprint,
            metadata.owner_role_oid::bigint,
            metadata.runtime_role_oid::bigint,
+           metadata.audit_pseudonym_maintenance_role_oid::bigint,
+           metadata.audit_pseudonym_reader_role_oid::bigint,
            metadata.chain_key_epoch_id,
-           metadata.quota_capability_id
+           metadata.quota_capability_id,
+           metadata.audit_pseudonym_keyring_capability_id,
+           metadata.audit_pseudonym_keyring_lock_key
     FROM relay_state_private.state_plane_metadata AS metadata
     WHERE metadata.singleton = true;
     IF clock_timestamp() - v_started_at > interval '5 seconds' THEN
         RAISE EXCEPTION 'durable audit readiness exceeded its deadline'
+            USING ERRCODE = '57014';
+    END IF;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION relay_state_api.audit_pseudonym_keyring_readiness_v1(
+    p_expected_chain_key_epoch_id text,
+    p_expected_role_kind text
+)
+RETURNS TABLE (
+    ready boolean,
+    capability_id text,
+    capability_fingerprint text,
+    owner_role_oid bigint,
+    caller_role_oid bigint,
+    chain_key_epoch_id text,
+    audit_pseudonym_keyring_capability_id text,
+    audit_pseudonym_keyring_lock_key bigint
+)
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, relay_state_private
+SET lock_timeout = '2s'
+SET statement_timeout = '5s'
+SET idle_in_transaction_session_timeout = '5s'
+SET synchronous_commit = 'on'
+AS $function$
+DECLARE
+    v_started_at timestamptz := clock_timestamp();
+    v_session_oid oid;
+    v_expected_oid oid;
+BEGIN
+    PERFORM set_config('lock_timeout', '2s', false);
+    PERFORM set_config('statement_timeout', '5s', false);
+    PERFORM set_config('idle_in_transaction_session_timeout', '5s', false);
+    PERFORM set_config('synchronous_commit', 'on', false);
+    SELECT oid INTO v_session_oid FROM pg_catalog.pg_roles WHERE rolname = session_user;
+    SELECT CASE p_expected_role_kind
+        WHEN 'runtime' THEN metadata.runtime_role_oid
+        WHEN 'maintenance' THEN metadata.audit_pseudonym_maintenance_role_oid
+        WHEN 'reader' THEN metadata.audit_pseudonym_reader_role_oid
+        ELSE NULL::oid
+    END INTO v_expected_oid
+    FROM relay_state_private.state_plane_metadata AS metadata
+    WHERE metadata.singleton = true;
+    IF v_expected_oid IS NULL OR v_session_oid IS DISTINCT FROM v_expected_oid THEN
+        RAISE EXCEPTION 'audit pseudonym keyring caller role is not bound'
+            USING ERRCODE = '42501';
+    END IF;
+    RETURN QUERY
+    SELECT relay_state_private.capability_valid_v1()
+           AND current_setting('search_path') = 'pg_catalog, relay_state_private'
+           AND current_setting('lock_timeout') = '2s'
+           AND current_setting('statement_timeout') = '5s'
+           AND current_setting('idle_in_transaction_session_timeout') = '5s'
+           AND current_setting('synchronous_commit') = 'on'
+           AND current_setting('client_encoding') = 'UTF8'
+           AND current_setting('standard_conforming_strings') = 'on'
+           AND current_setting('session_replication_role') = 'origin'
+           AND current_setting('default_transaction_isolation') = 'read committed'
+           AND current_setting('transaction_isolation') = 'read committed'
+           AND current_setting('default_transaction_read_only') = 'off'
+           AND current_setting('transaction_read_only') = 'off'
+           AND NOT pg_catalog.pg_is_in_recovery()
+           AND metadata.chain_key_epoch_id = p_expected_chain_key_epoch_id,
+           metadata.capability_id,
+           metadata.capability_fingerprint,
+           metadata.owner_role_oid::bigint,
+           v_expected_oid::bigint,
+           metadata.chain_key_epoch_id,
+           metadata.audit_pseudonym_keyring_capability_id,
+           metadata.audit_pseudonym_keyring_lock_key
+    FROM relay_state_private.state_plane_metadata AS metadata
+    WHERE metadata.singleton = true;
+    IF clock_timestamp() - v_started_at > interval '5 seconds' THEN
+        RAISE EXCEPTION 'audit pseudonym keyring readiness exceeded its deadline'
             USING ERRCODE = '57014';
     END IF;
 END;
@@ -1967,14 +2819,1083 @@ BEGIN
 END;
 $function$;
 
+CREATE OR REPLACE FUNCTION relay_state_api.audit_pseudonym_keyring_snapshot_v1(
+    p_purpose text,
+    p_lookup_key_ids text[],
+    p_expected_chain_key_epoch_id text,
+    p_expected_keyring_lock_key bigint
+)
+RETURNS TABLE (
+    outcome text,
+    authoritative_now_unix_ms bigint,
+    generation bigint,
+    metadata_digest bytea,
+    metadata_canonical text,
+    active_key_id text,
+    active_since_unix_ms bigint,
+    active_write_deadline_unix_ms bigint,
+    audit_event_retention_ms bigint,
+    retained_key_ids text[],
+    retained_retired_at_unix_ms bigint[],
+    retained_destroy_after_unix_ms bigint[],
+    used_key_id_count bigint,
+    used_key_ids_digest bytea,
+    used_key_ids text[],
+    active_write_remaining_ms bigint,
+    lookup_key_ids text[],
+    lookup_retired_at_unix_ms bigint[],
+    lookup_destroy_after_unix_ms bigint[]
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, relay_state_private
+SET lock_timeout = '2s'
+SET statement_timeout = '5s'
+SET idle_in_transaction_session_timeout = '5s'
+SET synchronous_commit = 'on'
+AS $function$
+DECLARE
+    v_started_at timestamptz := clock_timestamp();
+    v_now timestamptz;
+    v_now_unix_us numeric;
+    v_runtime_oid oid;
+    v_maintenance_oid oid;
+    v_reader_oid oid;
+    v_session_oid oid;
+    v_current relay_state_private.audit_pseudonym_keyring%ROWTYPE;
+    v_history record;
+BEGIN
+    PERFORM set_config('lock_timeout', '2s', false);
+    PERFORM set_config('statement_timeout', '5s', false);
+    PERFORM set_config('idle_in_transaction_session_timeout', '5s', false);
+    PERFORM set_config('synchronous_commit', 'on', false);
+    SELECT metadata.runtime_role_oid,
+           metadata.audit_pseudonym_maintenance_role_oid,
+           metadata.audit_pseudonym_reader_role_oid
+    INTO v_runtime_oid, v_maintenance_oid, v_reader_oid
+    FROM relay_state_private.state_plane_metadata AS metadata
+    WHERE metadata.singleton = true;
+    SELECT oid INTO v_session_oid FROM pg_catalog.pg_roles WHERE rolname = session_user;
+    IF p_purpose IS NULL
+       OR p_purpose NOT IN ('rotation', 'maintenance', 'write', 'lookup')
+       OR p_lookup_key_ids IS NULL
+       OR p_expected_chain_key_epoch_id IS NULL
+       OR p_expected_keyring_lock_key IS NULL
+       OR (p_purpose = 'write' AND v_session_oid IS DISTINCT FROM v_runtime_oid)
+       OR (p_purpose IN ('rotation', 'maintenance')
+           AND v_session_oid IS DISTINCT FROM v_maintenance_oid)
+       OR (p_purpose = 'lookup' AND v_session_oid IS DISTINCT FROM v_reader_oid)
+    THEN
+        RAISE EXCEPTION 'audit pseudonym keyring caller is not bound'
+            USING ERRCODE = '42501';
+    END IF;
+    IF current_setting('search_path') <> 'pg_catalog, relay_state_private'
+       OR current_setting('lock_timeout') <> '2s'
+       OR current_setting('statement_timeout') <> '5s'
+       OR current_setting('idle_in_transaction_session_timeout') <> '5s'
+       OR current_setting('synchronous_commit') <> 'on'
+       OR current_setting('client_encoding') <> 'UTF8'
+       OR current_setting('standard_conforming_strings') <> 'on'
+       OR current_setting('session_replication_role') <> 'origin'
+       OR current_setting('default_transaction_isolation') <> 'read committed'
+       OR current_setting('transaction_isolation') <> 'read committed'
+       OR current_setting('default_transaction_read_only') <> 'off'
+       OR current_setting('transaction_read_only') <> 'off'
+       OR pg_catalog.pg_is_in_recovery()
+    THEN
+        RAISE EXCEPTION 'audit pseudonym keyring runtime session is unsafe'
+            USING ERRCODE = '55000';
+    END IF;
+    IF NOT relay_state_private.capability_valid_v1() THEN
+        RAISE EXCEPTION 'audit pseudonym keyring capability unavailable'
+            USING ERRCODE = '55000';
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1
+        FROM relay_state_private.state_plane_metadata AS metadata
+        WHERE metadata.singleton = true
+          AND metadata.chain_key_epoch_id = p_expected_chain_key_epoch_id
+          AND metadata.audit_pseudonym_keyring_lock_key = p_expected_keyring_lock_key
+    ) THEN
+        RAISE EXCEPTION 'audit pseudonym deployment authority drifted'
+            USING ERRCODE = '55000';
+    END IF;
+    IF (p_purpose <> 'lookup' AND cardinality(p_lookup_key_ids) <> 0)
+       OR (p_purpose = 'lookup' AND cardinality(p_lookup_key_ids) NOT BETWEEN 1 AND 32)
+       OR (cardinality(p_lookup_key_ids) > 0 AND (
+           array_ndims(p_lookup_key_ids) <> 1
+           OR array_lower(p_lookup_key_ids, 1) <> 1
+           OR EXISTS (
+               SELECT 1
+               FROM pg_catalog.unnest(p_lookup_key_ids) WITH ORDINALITY AS requested(key_id, ordinal)
+               WHERE requested.key_id IS NULL
+                  OR requested.key_id !~ '^[a-z0-9][a-z0-9._-]{0,63}$'
+                  OR octet_length(requested.key_id) NOT BETWEEN 1 AND 64
+                  OR (requested.ordinal > 1
+                      AND pg_catalog.convert_to(requested.key_id, 'UTF8')
+                          <= pg_catalog.convert_to(
+                              p_lookup_key_ids[requested.ordinal - 1], 'UTF8'
+                          ))
+           )
+       ))
+    THEN
+        RAISE EXCEPTION 'invalid audit pseudonym lookup subset'
+            USING ERRCODE = '22023';
+    END IF;
+    IF p_purpose IN ('rotation', 'maintenance') THEN
+        PERFORM pg_catalog.pg_advisory_xact_lock(p_expected_keyring_lock_key);
+    ELSE
+        PERFORM pg_catalog.pg_advisory_xact_lock_shared(p_expected_keyring_lock_key);
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1
+        FROM relay_state_private.state_plane_metadata AS metadata
+        WHERE metadata.singleton = true
+          AND metadata.chain_key_epoch_id = p_expected_chain_key_epoch_id
+          AND metadata.audit_pseudonym_keyring_lock_key = p_expected_keyring_lock_key
+    ) THEN
+        RAISE EXCEPTION 'audit pseudonym deployment authority drifted'
+            USING ERRCODE = '55000';
+    END IF;
+    IF p_purpose IN ('rotation', 'maintenance') THEN
+        SELECT row.* INTO v_current
+        FROM relay_state_private.audit_pseudonym_keyring AS row
+        WHERE row.singleton = true
+        FOR UPDATE;
+    ELSE
+        SELECT row.* INTO v_current
+        FROM relay_state_private.audit_pseudonym_keyring AS row
+        WHERE row.singleton = true;
+    END IF;
+    v_now := clock_timestamp();
+    v_now_unix_us := pg_catalog.floor(extract(epoch FROM v_now) * 1000000);
+    authoritative_now_unix_ms := pg_catalog.floor(v_now_unix_us / 1000)::bigint;
+    IF NOT FOUND THEN
+        outcome := 'uninitialized';
+        lookup_key_ids := ARRAY[]::text[];
+        lookup_retired_at_unix_ms := ARRAY[]::bigint[];
+        lookup_destroy_after_unix_ms := ARRAY[]::bigint[];
+        RETURN NEXT;
+        RETURN;
+    END IF;
+    IF p_purpose IN ('rotation', 'maintenance') THEN
+        DELETE FROM relay_state_private.audit_pseudonym_transition_context;
+        INSERT INTO relay_state_private.audit_pseudonym_transition_context (
+            backend_pid, transaction_id, transition_kind,
+            transition_time_unix_ms, expected_generation,
+            expected_metadata_digest
+        ) VALUES (
+            pg_catalog.pg_backend_pid(), pg_catalog.txid_current(), p_purpose,
+            authoritative_now_unix_ms, v_current.generation,
+            v_current.metadata_digest
+        );
+    END IF;
+    SELECT * INTO STRICT v_history
+    FROM relay_state_private.audit_pseudonym_history_snapshot_v1();
+    IF v_current.metadata_canonical IS DISTINCT FROM
+           relay_state_private.audit_pseudonym_metadata_canonical_v1(
+               v_current.generation, v_current.active_key_id,
+               v_current.active_since_unix_ms,
+               v_current.active_write_deadline_unix_ms,
+               v_current.audit_event_retention_ms,
+               v_current.retained_key_ids,
+               v_current.retained_retired_at_unix_ms,
+               v_current.retained_destroy_after_unix_ms
+           )
+       OR v_current.metadata_digest IS DISTINCT FROM pg_catalog.sha256(
+           pg_catalog.convert_to(v_current.metadata_canonical, 'UTF8')
+       )
+       OR v_current.used_key_id_count IS DISTINCT FROM v_history.used_key_id_count
+       OR v_current.used_key_ids_digest IS DISTINCT FROM v_history.used_key_ids_digest
+       OR v_current.active_key_id <> ALL(v_history.used_key_ids)
+       OR EXISTS (
+           SELECT 1 FROM pg_catalog.unnest(v_current.retained_key_ids) AS retained(key_id)
+           WHERE retained.key_id <> ALL(v_history.used_key_ids)
+       )
+    THEN
+        RAISE EXCEPTION 'audit pseudonym keyring authority is incomplete'
+            USING ERRCODE = '55000';
+    END IF;
+    generation := v_current.generation;
+    metadata_digest := v_current.metadata_digest;
+    metadata_canonical := NULL;
+    active_key_id := NULL;
+    active_since_unix_ms := NULL;
+    active_write_deadline_unix_ms := NULL;
+    audit_event_retention_ms := NULL;
+    retained_key_ids := ARRAY[]::text[];
+    retained_retired_at_unix_ms := ARRAY[]::bigint[];
+    retained_destroy_after_unix_ms := ARRAY[]::bigint[];
+    used_key_id_count := NULL;
+    used_key_ids_digest := NULL;
+    used_key_ids := ARRAY[]::text[];
+    active_write_remaining_ms := NULL;
+    lookup_key_ids := ARRAY[]::text[];
+    lookup_retired_at_unix_ms := ARRAY[]::bigint[];
+    lookup_destroy_after_unix_ms := ARRAY[]::bigint[];
+    IF p_purpose IN ('rotation', 'maintenance') THEN
+        metadata_canonical := v_current.metadata_canonical;
+        active_key_id := v_current.active_key_id;
+        active_since_unix_ms := v_current.active_since_unix_ms;
+        active_write_deadline_unix_ms := v_current.active_write_deadline_unix_ms;
+        audit_event_retention_ms := v_current.audit_event_retention_ms;
+        retained_key_ids := v_current.retained_key_ids;
+        retained_retired_at_unix_ms := v_current.retained_retired_at_unix_ms;
+        retained_destroy_after_unix_ms := v_current.retained_destroy_after_unix_ms;
+        used_key_id_count := v_history.used_key_id_count;
+        used_key_ids_digest := v_history.used_key_ids_digest;
+        used_key_ids := v_history.used_key_ids;
+    ELSIF p_purpose = 'write' THEN
+        active_key_id := v_current.active_key_id;
+        active_since_unix_ms := v_current.active_since_unix_ms;
+        active_write_deadline_unix_ms := v_current.active_write_deadline_unix_ms;
+        IF v_now_unix_us < v_current.active_since_unix_ms::numeric * 1000 THEN
+            outcome := 'not_active';
+            RETURN NEXT;
+            RETURN;
+        END IF;
+        IF v_now_unix_us >= v_current.active_write_deadline_unix_ms::numeric * 1000 THEN
+            outcome := 'deadline_reached';
+            RETURN NEXT;
+            RETURN;
+        END IF;
+        IF EXISTS (
+            SELECT 1
+            FROM pg_catalog.unnest(v_current.retained_destroy_after_unix_ms) AS deadline(value)
+            WHERE deadline.value::numeric * 1000 <= v_now_unix_us
+        ) THEN
+            outcome := 'retained_expired';
+            RETURN NEXT;
+            RETURN;
+        END IF;
+        active_write_remaining_ms := pg_catalog.floor(
+            (v_current.active_write_deadline_unix_ms::numeric * 1000 - v_now_unix_us)
+            / 1000
+        )::bigint;
+        IF active_write_remaining_ms < 1 THEN
+            outcome := 'deadline_reached';
+            active_write_remaining_ms := NULL;
+            RETURN NEXT;
+            RETURN;
+        END IF;
+    ELSIF p_purpose = 'lookup' THEN
+        SELECT COALESCE(pg_catalog.array_agg(requested.key_id ORDER BY requested.ordinal), ARRAY[]::text[]),
+               COALESCE(pg_catalog.array_agg(
+                   CASE WHEN requested.key_id = v_current.active_key_id
+                       THEN NULL::bigint ELSE retained.retired_at END
+                   ORDER BY requested.ordinal
+               ), ARRAY[]::bigint[]),
+               COALESCE(pg_catalog.array_agg(
+                   CASE WHEN requested.key_id = v_current.active_key_id
+                       THEN NULL::bigint ELSE retained.destroy_after END
+                   ORDER BY requested.ordinal
+               ), ARRAY[]::bigint[])
+        INTO lookup_key_ids, lookup_retired_at_unix_ms,
+             lookup_destroy_after_unix_ms
+        FROM pg_catalog.unnest(p_lookup_key_ids) WITH ORDINALITY
+            AS requested(key_id, ordinal)
+        LEFT JOIN LATERAL (
+            SELECT v_current.retained_key_ids[retained_index] AS key_id,
+                   v_current.retained_retired_at_unix_ms[retained_index] AS retired_at,
+                   v_current.retained_destroy_after_unix_ms[retained_index] AS destroy_after
+            FROM pg_catalog.generate_subscripts(
+                v_current.retained_key_ids, 1
+            ) AS retained_index
+        ) AS retained
+          ON retained.key_id = requested.key_id
+        WHERE requested.key_id = v_current.active_key_id
+           OR (
+               retained.key_id IS NOT NULL
+               AND retained.destroy_after::numeric * 1000 > v_now_unix_us
+           );
+        IF cardinality(lookup_key_ids) <> cardinality(p_lookup_key_ids) THEN
+            outcome := 'unauthorized_lookup';
+            lookup_key_ids := ARRAY[]::text[];
+            lookup_retired_at_unix_ms := ARRAY[]::bigint[];
+            lookup_destroy_after_unix_ms := ARRAY[]::bigint[];
+            RETURN NEXT;
+            RETURN;
+        END IF;
+    END IF;
+    outcome := 'ready';
+    IF clock_timestamp() - v_started_at > interval '5 seconds' THEN
+        RAISE EXCEPTION 'audit pseudonym keyring snapshot exceeded its deadline'
+            USING ERRCODE = '57014';
+    END IF;
+    RETURN NEXT;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION relay_state_api.audit_pseudonym_keyring_initialize_v1(
+    p_generation bigint,
+    p_metadata_digest bytea,
+    p_metadata_canonical text,
+    p_active_key_id text,
+    p_active_since_unix_ms bigint,
+    p_active_write_deadline_unix_ms bigint,
+    p_audit_event_retention_ms bigint,
+    p_retained_key_ids text[],
+    p_retained_retired_at_unix_ms bigint[],
+    p_retained_destroy_after_unix_ms bigint[],
+    p_expected_chain_key_epoch_id text,
+    p_expected_keyring_lock_key bigint
+)
+RETURNS TABLE (
+    outcome text,
+    stored_generation bigint,
+    stored_metadata_digest bytea
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, relay_state_private
+SET lock_timeout = '2s'
+SET statement_timeout = '5s'
+SET idle_in_transaction_session_timeout = '5s'
+SET synchronous_commit = 'on'
+AS $function$
+DECLARE
+    v_started_at timestamptz := clock_timestamp();
+    v_now_unix_us numeric;
+    v_runtime_oid oid;
+    v_session_oid oid;
+    v_current relay_state_private.audit_pseudonym_keyring%ROWTYPE;
+    v_history record;
+    v_expected_canonical text;
+BEGIN
+    PERFORM set_config('lock_timeout', '2s', false);
+    PERFORM set_config('statement_timeout', '5s', false);
+    PERFORM set_config('idle_in_transaction_session_timeout', '5s', false);
+    PERFORM set_config('synchronous_commit', 'on', false);
+    SELECT metadata.audit_pseudonym_maintenance_role_oid INTO v_runtime_oid
+    FROM relay_state_private.state_plane_metadata AS metadata
+    WHERE metadata.singleton = true;
+    SELECT oid INTO v_session_oid FROM pg_catalog.pg_roles WHERE rolname = session_user;
+    IF v_session_oid IS DISTINCT FROM v_runtime_oid THEN
+        RAISE EXCEPTION 'audit pseudonym keyring caller is not bound'
+            USING ERRCODE = '42501';
+    END IF;
+    IF current_setting('search_path') <> 'pg_catalog, relay_state_private'
+       OR current_setting('lock_timeout') <> '2s'
+       OR current_setting('statement_timeout') <> '5s'
+       OR current_setting('idle_in_transaction_session_timeout') <> '5s'
+       OR current_setting('synchronous_commit') <> 'on'
+       OR current_setting('client_encoding') <> 'UTF8'
+       OR current_setting('standard_conforming_strings') <> 'on'
+       OR current_setting('session_replication_role') <> 'origin'
+       OR current_setting('default_transaction_isolation') <> 'read committed'
+       OR current_setting('transaction_isolation') <> 'read committed'
+       OR current_setting('default_transaction_read_only') <> 'off'
+       OR current_setting('transaction_read_only') <> 'off'
+       OR pg_catalog.pg_is_in_recovery()
+    THEN
+        RAISE EXCEPTION 'audit pseudonym keyring runtime session is unsafe'
+            USING ERRCODE = '55000';
+    END IF;
+    IF NOT relay_state_private.capability_valid_v1() THEN
+        RAISE EXCEPTION 'audit pseudonym keyring capability unavailable'
+            USING ERRCODE = '55000';
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1
+        FROM relay_state_private.state_plane_metadata AS metadata
+        WHERE metadata.singleton = true
+          AND metadata.chain_key_epoch_id = p_expected_chain_key_epoch_id
+          AND metadata.audit_pseudonym_keyring_lock_key = p_expected_keyring_lock_key
+    ) THEN
+        RAISE EXCEPTION 'audit pseudonym deployment authority drifted'
+            USING ERRCODE = '55000';
+    END IF;
+    PERFORM pg_catalog.pg_advisory_xact_lock(p_expected_keyring_lock_key);
+    IF NOT EXISTS (
+        SELECT 1
+        FROM relay_state_private.state_plane_metadata AS metadata
+        WHERE metadata.singleton = true
+          AND metadata.chain_key_epoch_id = p_expected_chain_key_epoch_id
+          AND metadata.audit_pseudonym_keyring_lock_key = p_expected_keyring_lock_key
+    ) THEN
+        RAISE EXCEPTION 'audit pseudonym deployment authority drifted'
+            USING ERRCODE = '55000';
+    END IF;
+    DELETE FROM relay_state_private.audit_pseudonym_transition_context;
+    SELECT row.* INTO v_current
+    FROM relay_state_private.audit_pseudonym_keyring AS row
+    WHERE row.singleton = true
+    FOR UPDATE;
+    IF FOUND THEN
+        stored_generation := v_current.generation;
+        stored_metadata_digest := v_current.metadata_digest;
+        outcome := CASE
+            WHEN v_current.generation = p_generation
+             AND v_current.metadata_digest = p_metadata_digest
+             AND v_current.metadata_canonical = p_metadata_canonical
+            THEN 'identical' ELSE 'already_initialized' END;
+        RETURN NEXT;
+        RETURN;
+    END IF;
+    v_expected_canonical :=
+        relay_state_private.audit_pseudonym_metadata_canonical_v1(
+            p_generation, p_active_key_id, p_active_since_unix_ms,
+            p_active_write_deadline_unix_ms, p_audit_event_retention_ms,
+            p_retained_key_ids, p_retained_retired_at_unix_ms,
+            p_retained_destroy_after_unix_ms
+        );
+    IF v_expected_canonical IS NULL
+       OR p_metadata_canonical IS DISTINCT FROM v_expected_canonical
+       OR p_metadata_digest IS NULL OR octet_length(p_metadata_digest) <> 32
+       OR p_metadata_digest IS DISTINCT FROM pg_catalog.sha256(
+           pg_catalog.convert_to(p_metadata_canonical, 'UTF8')
+       )
+       OR p_generation <> 1
+       OR cardinality(p_retained_key_ids) <> 0
+       OR EXISTS (SELECT 1 FROM relay_state_private.audit_pseudonym_used_key_id)
+    THEN
+        outcome := 'invalid';
+        RETURN NEXT;
+        RETURN;
+    END IF;
+    v_now_unix_us := pg_catalog.floor(extract(epoch FROM clock_timestamp()) * 1000000);
+    IF v_now_unix_us < p_active_since_unix_ms::numeric * 1000 THEN
+        outcome := 'not_active';
+        RETURN NEXT;
+        RETURN;
+    END IF;
+    IF v_now_unix_us >= p_active_write_deadline_unix_ms::numeric * 1000
+       OR pg_catalog.floor(
+           (p_active_write_deadline_unix_ms::numeric * 1000 - v_now_unix_us) / 1000
+       ) < 1
+    THEN
+        outcome := 'deadline_reached';
+        RETURN NEXT;
+        RETURN;
+    END IF;
+    INSERT INTO relay_state_private.audit_pseudonym_used_key_id (
+        key_id, first_generation, first_activated_at_unix_ms
+    ) VALUES (p_active_key_id, p_generation, p_active_since_unix_ms);
+    SELECT * INTO STRICT v_history
+    FROM relay_state_private.audit_pseudonym_history_snapshot_v1();
+    INSERT INTO relay_state_private.audit_pseudonym_keyring (
+        singleton, generation, metadata_digest, metadata_canonical,
+        active_key_id, active_since_unix_ms, active_write_deadline_unix_ms,
+        audit_event_retention_ms, retained_key_ids,
+        retained_retired_at_unix_ms, retained_destroy_after_unix_ms,
+        used_key_id_count, used_key_ids_digest
+    ) VALUES (
+        true, p_generation, p_metadata_digest, p_metadata_canonical,
+        p_active_key_id, p_active_since_unix_ms, p_active_write_deadline_unix_ms,
+        p_audit_event_retention_ms, p_retained_key_ids,
+        p_retained_retired_at_unix_ms, p_retained_destroy_after_unix_ms,
+        v_history.used_key_id_count, v_history.used_key_ids_digest
+    );
+    IF clock_timestamp() - v_started_at > interval '5 seconds' THEN
+        RAISE EXCEPTION 'audit pseudonym keyring initialization exceeded its deadline'
+            USING ERRCODE = '57014';
+    END IF;
+    outcome := 'initialized';
+    stored_generation := p_generation;
+    stored_metadata_digest := p_metadata_digest;
+    RETURN NEXT;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION relay_state_api.audit_pseudonym_keyring_rotate_v1(
+    p_expected_generation bigint,
+    p_expected_metadata_digest bytea,
+    p_expected_history_count bigint,
+    p_expected_history_digest bytea,
+    p_transition_time_unix_ms bigint,
+    p_successor_generation bigint,
+    p_successor_metadata_digest bytea,
+    p_successor_metadata_canonical text,
+    p_successor_active_key_id text,
+    p_successor_active_since_unix_ms bigint,
+    p_successor_active_write_deadline_unix_ms bigint,
+    p_successor_audit_event_retention_ms bigint,
+    p_successor_retained_key_ids text[],
+    p_successor_retained_retired_at_unix_ms bigint[],
+    p_successor_retained_destroy_after_unix_ms bigint[],
+    p_expected_chain_key_epoch_id text,
+    p_expected_keyring_lock_key bigint
+)
+RETURNS TABLE (
+    outcome text,
+    stored_generation bigint,
+    stored_metadata_digest bytea
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, relay_state_private
+SET lock_timeout = '2s'
+SET statement_timeout = '5s'
+SET idle_in_transaction_session_timeout = '5s'
+SET synchronous_commit = 'on'
+AS $function$
+DECLARE
+    v_started_at timestamptz := clock_timestamp();
+    v_now_unix_us numeric;
+    v_runtime_oid oid;
+    v_session_oid oid;
+    v_current relay_state_private.audit_pseudonym_keyring%ROWTYPE;
+    v_history record;
+    v_context record;
+    v_expected_canonical text;
+    v_index integer;
+    v_successor_index integer;
+BEGIN
+    PERFORM set_config('lock_timeout', '2s', false);
+    PERFORM set_config('statement_timeout', '5s', false);
+    PERFORM set_config('idle_in_transaction_session_timeout', '5s', false);
+    PERFORM set_config('synchronous_commit', 'on', false);
+    SELECT metadata.audit_pseudonym_maintenance_role_oid INTO v_runtime_oid
+    FROM relay_state_private.state_plane_metadata AS metadata
+    WHERE metadata.singleton = true;
+    SELECT oid INTO v_session_oid FROM pg_catalog.pg_roles WHERE rolname = session_user;
+    IF v_session_oid IS DISTINCT FROM v_runtime_oid THEN
+        RAISE EXCEPTION 'audit pseudonym keyring caller is not bound'
+            USING ERRCODE = '42501';
+    END IF;
+    IF current_setting('search_path') <> 'pg_catalog, relay_state_private'
+       OR current_setting('lock_timeout') <> '2s'
+       OR current_setting('statement_timeout') <> '5s'
+       OR current_setting('idle_in_transaction_session_timeout') <> '5s'
+       OR current_setting('synchronous_commit') <> 'on'
+       OR current_setting('client_encoding') <> 'UTF8'
+       OR current_setting('standard_conforming_strings') <> 'on'
+       OR current_setting('session_replication_role') <> 'origin'
+       OR current_setting('default_transaction_isolation') <> 'read committed'
+       OR current_setting('transaction_isolation') <> 'read committed'
+       OR current_setting('default_transaction_read_only') <> 'off'
+       OR current_setting('transaction_read_only') <> 'off'
+       OR pg_catalog.pg_is_in_recovery()
+    THEN
+        RAISE EXCEPTION 'audit pseudonym keyring runtime session is unsafe'
+            USING ERRCODE = '55000';
+    END IF;
+    IF NOT relay_state_private.capability_valid_v1() THEN
+        RAISE EXCEPTION 'audit pseudonym keyring capability unavailable'
+            USING ERRCODE = '55000';
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1
+        FROM relay_state_private.state_plane_metadata AS metadata
+        WHERE metadata.singleton = true
+          AND metadata.chain_key_epoch_id = p_expected_chain_key_epoch_id
+          AND metadata.audit_pseudonym_keyring_lock_key = p_expected_keyring_lock_key
+    ) THEN
+        RAISE EXCEPTION 'audit pseudonym deployment authority drifted'
+            USING ERRCODE = '55000';
+    END IF;
+    PERFORM pg_catalog.pg_advisory_xact_lock(p_expected_keyring_lock_key);
+    IF NOT EXISTS (
+        SELECT 1
+        FROM relay_state_private.state_plane_metadata AS metadata
+        WHERE metadata.singleton = true
+          AND metadata.chain_key_epoch_id = p_expected_chain_key_epoch_id
+          AND metadata.audit_pseudonym_keyring_lock_key = p_expected_keyring_lock_key
+    ) THEN
+        RAISE EXCEPTION 'audit pseudonym deployment authority drifted'
+            USING ERRCODE = '55000';
+    END IF;
+    SELECT row.* INTO v_current
+    FROM relay_state_private.audit_pseudonym_keyring AS row
+    WHERE row.singleton = true
+    FOR UPDATE;
+    IF NOT FOUND THEN
+        outcome := 'stale';
+        RETURN NEXT;
+        RETURN;
+    END IF;
+    SELECT * INTO STRICT v_history
+    FROM relay_state_private.audit_pseudonym_history_snapshot_v1();
+    IF v_current.metadata_canonical IS DISTINCT FROM
+           relay_state_private.audit_pseudonym_metadata_canonical_v1(
+               v_current.generation, v_current.active_key_id,
+               v_current.active_since_unix_ms,
+               v_current.active_write_deadline_unix_ms,
+               v_current.audit_event_retention_ms,
+               v_current.retained_key_ids,
+               v_current.retained_retired_at_unix_ms,
+               v_current.retained_destroy_after_unix_ms
+           )
+       OR v_current.metadata_digest IS DISTINCT FROM pg_catalog.sha256(
+           pg_catalog.convert_to(v_current.metadata_canonical, 'UTF8')
+       )
+       OR v_current.used_key_id_count IS DISTINCT FROM v_history.used_key_id_count
+       OR v_current.used_key_ids_digest IS DISTINCT FROM v_history.used_key_ids_digest
+       OR v_current.active_key_id <> ALL(v_history.used_key_ids)
+       OR EXISTS (
+           SELECT 1 FROM pg_catalog.unnest(v_current.retained_key_ids) AS retained(key_id)
+           WHERE retained.key_id <> ALL(v_history.used_key_ids)
+       )
+    THEN
+        outcome := 'authority_incomplete';
+        RETURN NEXT;
+        RETURN;
+    END IF;
+    IF v_current.generation IS DISTINCT FROM p_expected_generation
+       OR v_current.metadata_digest IS DISTINCT FROM p_expected_metadata_digest
+       OR v_history.used_key_id_count IS DISTINCT FROM p_expected_history_count
+       OR v_history.used_key_ids_digest IS DISTINCT FROM p_expected_history_digest
+    THEN
+        outcome := 'stale';
+        RETURN NEXT;
+        RETURN;
+    END IF;
+    IF v_history.used_key_id_count >= 4096
+       OR (
+           SELECT COALESCE(sum(octet_length(history_row.key_id)), 0)::bigint
+           FROM relay_state_private.audit_pseudonym_used_key_id AS history_row
+       ) + COALESCE(octet_length(p_successor_active_key_id), 0) > 262144
+    THEN
+        outcome := 'history_full';
+        RETURN NEXT;
+        RETURN;
+    END IF;
+    SELECT context.* INTO v_context
+    FROM relay_state_private.audit_pseudonym_transition_context AS context
+    WHERE context.backend_pid = pg_catalog.pg_backend_pid()
+      AND context.transaction_id = pg_catalog.txid_current()
+    FOR UPDATE;
+    v_now_unix_us := pg_catalog.floor(extract(epoch FROM clock_timestamp()) * 1000000);
+    IF NOT FOUND
+       OR v_context.transition_kind IS DISTINCT FROM 'rotation'
+       OR v_context.transition_time_unix_ms IS DISTINCT FROM p_transition_time_unix_ms
+       OR v_context.expected_generation IS DISTINCT FROM p_expected_generation
+       OR v_context.expected_metadata_digest IS DISTINCT FROM p_expected_metadata_digest
+       OR p_transition_time_unix_ms IS NULL
+       OR p_transition_time_unix_ms NOT BETWEEN 0 AND 9007199254740991
+       OR p_transition_time_unix_ms::numeric * 1000 > v_now_unix_us
+       OR v_now_unix_us - p_transition_time_unix_ms::numeric * 1000 > 5000000
+    THEN
+        outcome := 'invalid';
+        RETURN NEXT;
+        RETURN;
+    END IF;
+    IF v_now_unix_us > v_current.active_write_deadline_unix_ms::numeric * 1000 THEN
+        outcome := 'deadline_reached';
+        RETURN NEXT;
+        RETURN;
+    END IF;
+    v_expected_canonical :=
+        relay_state_private.audit_pseudonym_metadata_canonical_v1(
+            p_successor_generation, p_successor_active_key_id,
+            p_successor_active_since_unix_ms,
+            p_successor_active_write_deadline_unix_ms,
+            p_successor_audit_event_retention_ms,
+            p_successor_retained_key_ids,
+            p_successor_retained_retired_at_unix_ms,
+            p_successor_retained_destroy_after_unix_ms
+        );
+    IF v_expected_canonical IS NULL
+       OR p_successor_metadata_canonical IS DISTINCT FROM v_expected_canonical
+       OR p_successor_metadata_digest IS NULL
+       OR octet_length(p_successor_metadata_digest) <> 32
+       OR p_successor_metadata_digest IS DISTINCT FROM pg_catalog.sha256(
+           pg_catalog.convert_to(p_successor_metadata_canonical, 'UTF8')
+       )
+       OR p_successor_metadata_digest = v_current.metadata_digest
+       OR p_successor_generation <= v_current.generation
+       OR p_successor_active_since_unix_ms <> p_transition_time_unix_ms
+       OR p_successor_active_since_unix_ms <= v_current.active_since_unix_ms
+       OR p_successor_active_write_deadline_unix_ms
+            <= v_current.active_write_deadline_unix_ms
+       OR p_successor_active_write_deadline_unix_ms::numeric * 1000 <= v_now_unix_us
+       OR p_successor_audit_event_retention_ms < v_current.audit_event_retention_ms
+       OR p_successor_active_key_id = ANY(v_history.used_key_ids)
+       OR EXISTS (
+           SELECT 1
+           FROM pg_catalog.unnest(p_successor_retained_destroy_after_unix_ms) AS deadline(value)
+           WHERE deadline.value::numeric * 1000 <= v_now_unix_us
+       )
+    THEN
+        outcome := CASE WHEN p_successor_active_key_id = ANY(v_history.used_key_ids)
+            THEN 'reused' ELSE 'invalid' END;
+        RETURN NEXT;
+        RETURN;
+    END IF;
+    v_successor_index := pg_catalog.array_position(
+        p_successor_retained_key_ids, v_current.active_key_id
+    );
+    IF v_successor_index IS NULL
+       OR p_successor_retained_retired_at_unix_ms[v_successor_index]
+            <> p_transition_time_unix_ms
+    THEN
+        outcome := 'invalid';
+        RETURN NEXT;
+        RETURN;
+    END IF;
+    FOR v_index IN 1..cardinality(v_current.retained_key_ids) LOOP
+        v_successor_index := pg_catalog.array_position(
+            p_successor_retained_key_ids, v_current.retained_key_ids[v_index]
+        );
+        IF v_current.retained_destroy_after_unix_ms[v_index] <= p_transition_time_unix_ms THEN
+            IF v_successor_index IS NOT NULL THEN
+                outcome := 'invalid';
+                RETURN NEXT;
+                RETURN;
+            END IF;
+        ELSIF v_successor_index IS NULL
+           OR p_successor_retained_retired_at_unix_ms[v_successor_index]
+                <> v_current.retained_retired_at_unix_ms[v_index]
+           OR p_successor_retained_destroy_after_unix_ms[v_successor_index]
+                < v_current.retained_destroy_after_unix_ms[v_index]
+        THEN
+            outcome := 'invalid';
+            RETURN NEXT;
+            RETURN;
+        END IF;
+    END LOOP;
+    FOR v_index IN 1..cardinality(p_successor_retained_key_ids) LOOP
+        IF p_successor_retained_key_ids[v_index] <> v_current.active_key_id
+           AND pg_catalog.array_position(
+               v_current.retained_key_ids, p_successor_retained_key_ids[v_index]
+           ) IS NULL
+        THEN
+            outcome := 'invalid';
+            RETURN NEXT;
+            RETURN;
+        END IF;
+    END LOOP;
+    INSERT INTO relay_state_private.audit_pseudonym_used_key_id (
+        key_id, first_generation, first_activated_at_unix_ms
+    ) VALUES (
+        p_successor_active_key_id, p_successor_generation,
+        p_successor_active_since_unix_ms
+    ) ON CONFLICT (key_id) DO NOTHING;
+    IF NOT FOUND THEN
+        outcome := 'reused';
+        RETURN NEXT;
+        RETURN;
+    END IF;
+    SELECT * INTO STRICT v_history
+    FROM relay_state_private.audit_pseudonym_history_snapshot_v1();
+    DELETE FROM relay_state_private.audit_pseudonym_transition_context AS context
+    WHERE context.backend_pid = pg_catalog.pg_backend_pid()
+      AND context.transaction_id = pg_catalog.txid_current();
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'audit pseudonym rotation context was not consumed'
+            USING ERRCODE = '55000';
+    END IF;
+    UPDATE relay_state_private.audit_pseudonym_keyring AS row
+    SET generation = p_successor_generation,
+        metadata_digest = p_successor_metadata_digest,
+        metadata_canonical = p_successor_metadata_canonical,
+        active_key_id = p_successor_active_key_id,
+        active_since_unix_ms = p_successor_active_since_unix_ms,
+        active_write_deadline_unix_ms = p_successor_active_write_deadline_unix_ms,
+        audit_event_retention_ms = p_successor_audit_event_retention_ms,
+        retained_key_ids = p_successor_retained_key_ids,
+        retained_retired_at_unix_ms = p_successor_retained_retired_at_unix_ms,
+        retained_destroy_after_unix_ms = p_successor_retained_destroy_after_unix_ms,
+        used_key_id_count = v_history.used_key_id_count,
+        used_key_ids_digest = v_history.used_key_ids_digest,
+        transitioned_at = clock_timestamp()
+    WHERE row.singleton = true
+      AND row.generation = p_expected_generation
+      AND row.metadata_digest = p_expected_metadata_digest;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'audit pseudonym rotation lost its locked authority'
+            USING ERRCODE = '55000';
+    END IF;
+    IF clock_timestamp() - v_started_at > interval '5 seconds' THEN
+        RAISE EXCEPTION 'audit pseudonym keyring rotation exceeded its deadline'
+            USING ERRCODE = '57014';
+    END IF;
+    outcome := 'rotated';
+    stored_generation := p_successor_generation;
+    stored_metadata_digest := p_successor_metadata_digest;
+    RETURN NEXT;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION relay_state_api.audit_pseudonym_keyring_maintain_v1(
+    p_expected_generation bigint,
+    p_expected_metadata_digest bytea,
+    p_expected_history_count bigint,
+    p_expected_history_digest bytea,
+    p_transition_time_unix_ms bigint,
+    p_successor_generation bigint,
+    p_successor_metadata_digest bytea,
+    p_successor_metadata_canonical text,
+    p_successor_active_key_id text,
+    p_successor_active_since_unix_ms bigint,
+    p_successor_active_write_deadline_unix_ms bigint,
+    p_successor_audit_event_retention_ms bigint,
+    p_successor_retained_key_ids text[],
+    p_successor_retained_retired_at_unix_ms bigint[],
+    p_successor_retained_destroy_after_unix_ms bigint[],
+    p_expected_chain_key_epoch_id text,
+    p_expected_keyring_lock_key bigint
+)
+RETURNS TABLE (
+    outcome text,
+    stored_generation bigint,
+    stored_metadata_digest bytea
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, relay_state_private
+SET lock_timeout = '2s'
+SET statement_timeout = '5s'
+SET idle_in_transaction_session_timeout = '5s'
+SET synchronous_commit = 'on'
+AS $function$
+DECLARE
+    v_started_at timestamptz := clock_timestamp();
+    v_now_unix_us numeric;
+    v_runtime_oid oid;
+    v_session_oid oid;
+    v_current relay_state_private.audit_pseudonym_keyring%ROWTYPE;
+    v_history record;
+    v_context record;
+    v_expected_canonical text;
+    v_index integer;
+    v_successor_index integer;
+BEGIN
+    PERFORM set_config('lock_timeout', '2s', false);
+    PERFORM set_config('statement_timeout', '5s', false);
+    PERFORM set_config('idle_in_transaction_session_timeout', '5s', false);
+    PERFORM set_config('synchronous_commit', 'on', false);
+    SELECT metadata.audit_pseudonym_maintenance_role_oid INTO v_runtime_oid
+    FROM relay_state_private.state_plane_metadata AS metadata
+    WHERE metadata.singleton = true;
+    SELECT oid INTO v_session_oid FROM pg_catalog.pg_roles WHERE rolname = session_user;
+    IF v_session_oid IS DISTINCT FROM v_runtime_oid THEN
+        RAISE EXCEPTION 'audit pseudonym keyring caller is not bound'
+            USING ERRCODE = '42501';
+    END IF;
+    IF current_setting('search_path') <> 'pg_catalog, relay_state_private'
+       OR current_setting('lock_timeout') <> '2s'
+       OR current_setting('statement_timeout') <> '5s'
+       OR current_setting('idle_in_transaction_session_timeout') <> '5s'
+       OR current_setting('synchronous_commit') <> 'on'
+       OR current_setting('client_encoding') <> 'UTF8'
+       OR current_setting('standard_conforming_strings') <> 'on'
+       OR current_setting('session_replication_role') <> 'origin'
+       OR current_setting('default_transaction_isolation') <> 'read committed'
+       OR current_setting('transaction_isolation') <> 'read committed'
+       OR current_setting('default_transaction_read_only') <> 'off'
+       OR current_setting('transaction_read_only') <> 'off'
+       OR pg_catalog.pg_is_in_recovery()
+    THEN
+        RAISE EXCEPTION 'audit pseudonym keyring runtime session is unsafe'
+            USING ERRCODE = '55000';
+    END IF;
+    IF NOT relay_state_private.capability_valid_v1() THEN
+        RAISE EXCEPTION 'audit pseudonym keyring capability unavailable'
+            USING ERRCODE = '55000';
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1
+        FROM relay_state_private.state_plane_metadata AS metadata
+        WHERE metadata.singleton = true
+          AND metadata.chain_key_epoch_id = p_expected_chain_key_epoch_id
+          AND metadata.audit_pseudonym_keyring_lock_key = p_expected_keyring_lock_key
+    ) THEN
+        RAISE EXCEPTION 'audit pseudonym deployment authority drifted'
+            USING ERRCODE = '55000';
+    END IF;
+    PERFORM pg_catalog.pg_advisory_xact_lock(p_expected_keyring_lock_key);
+    IF NOT EXISTS (
+        SELECT 1
+        FROM relay_state_private.state_plane_metadata AS metadata
+        WHERE metadata.singleton = true
+          AND metadata.chain_key_epoch_id = p_expected_chain_key_epoch_id
+          AND metadata.audit_pseudonym_keyring_lock_key = p_expected_keyring_lock_key
+    ) THEN
+        RAISE EXCEPTION 'audit pseudonym deployment authority drifted'
+            USING ERRCODE = '55000';
+    END IF;
+    SELECT row.* INTO v_current
+    FROM relay_state_private.audit_pseudonym_keyring AS row
+    WHERE row.singleton = true
+    FOR UPDATE;
+    IF NOT FOUND THEN
+        outcome := 'stale';
+        RETURN NEXT;
+        RETURN;
+    END IF;
+    SELECT * INTO STRICT v_history
+    FROM relay_state_private.audit_pseudonym_history_snapshot_v1();
+    IF v_current.metadata_canonical IS DISTINCT FROM
+           relay_state_private.audit_pseudonym_metadata_canonical_v1(
+               v_current.generation, v_current.active_key_id,
+               v_current.active_since_unix_ms,
+               v_current.active_write_deadline_unix_ms,
+               v_current.audit_event_retention_ms,
+               v_current.retained_key_ids,
+               v_current.retained_retired_at_unix_ms,
+               v_current.retained_destroy_after_unix_ms
+           )
+       OR v_current.metadata_digest IS DISTINCT FROM pg_catalog.sha256(
+           pg_catalog.convert_to(v_current.metadata_canonical, 'UTF8')
+       )
+       OR v_current.used_key_id_count IS DISTINCT FROM v_history.used_key_id_count
+       OR v_current.used_key_ids_digest IS DISTINCT FROM v_history.used_key_ids_digest
+       OR v_current.active_key_id <> ALL(v_history.used_key_ids)
+       OR EXISTS (
+           SELECT 1 FROM pg_catalog.unnest(v_current.retained_key_ids) AS retained(key_id)
+           WHERE retained.key_id <> ALL(v_history.used_key_ids)
+       )
+    THEN
+        outcome := 'authority_incomplete';
+        RETURN NEXT;
+        RETURN;
+    END IF;
+    IF v_current.generation IS DISTINCT FROM p_expected_generation
+       OR v_current.metadata_digest IS DISTINCT FROM p_expected_metadata_digest
+       OR v_history.used_key_id_count IS DISTINCT FROM p_expected_history_count
+       OR v_history.used_key_ids_digest IS DISTINCT FROM p_expected_history_digest
+    THEN
+        outcome := 'stale';
+        RETURN NEXT;
+        RETURN;
+    END IF;
+    SELECT context.* INTO v_context
+    FROM relay_state_private.audit_pseudonym_transition_context AS context
+    WHERE context.backend_pid = pg_catalog.pg_backend_pid()
+      AND context.transaction_id = pg_catalog.txid_current()
+    FOR UPDATE;
+    v_now_unix_us := pg_catalog.floor(extract(epoch FROM clock_timestamp()) * 1000000);
+    IF NOT FOUND
+       OR v_context.transition_kind IS DISTINCT FROM 'maintenance'
+       OR v_context.transition_time_unix_ms IS DISTINCT FROM p_transition_time_unix_ms
+       OR v_context.expected_generation IS DISTINCT FROM p_expected_generation
+       OR v_context.expected_metadata_digest IS DISTINCT FROM p_expected_metadata_digest
+       OR p_transition_time_unix_ms IS NULL
+       OR p_transition_time_unix_ms NOT BETWEEN 0 AND 9007199254740991
+       OR p_transition_time_unix_ms::numeric * 1000 > v_now_unix_us
+       OR v_now_unix_us - p_transition_time_unix_ms::numeric * 1000 > 5000000
+    THEN
+        outcome := 'invalid';
+        RETURN NEXT;
+        RETURN;
+    END IF;
+    IF v_now_unix_us >= v_current.active_write_deadline_unix_ms::numeric * 1000 THEN
+        outcome := 'deadline_reached';
+        RETURN NEXT;
+        RETURN;
+    END IF;
+    v_expected_canonical :=
+        relay_state_private.audit_pseudonym_metadata_canonical_v1(
+            p_successor_generation, p_successor_active_key_id,
+            p_successor_active_since_unix_ms,
+            p_successor_active_write_deadline_unix_ms,
+            p_successor_audit_event_retention_ms,
+            p_successor_retained_key_ids,
+            p_successor_retained_retired_at_unix_ms,
+            p_successor_retained_destroy_after_unix_ms
+        );
+    IF v_expected_canonical IS NULL
+       OR p_successor_metadata_canonical IS DISTINCT FROM v_expected_canonical
+       OR p_successor_metadata_digest IS NULL
+       OR octet_length(p_successor_metadata_digest) <> 32
+       OR p_successor_metadata_digest IS DISTINCT FROM pg_catalog.sha256(
+           pg_catalog.convert_to(p_successor_metadata_canonical, 'UTF8')
+       )
+       OR p_successor_metadata_digest = v_current.metadata_digest
+       OR p_successor_generation <= v_current.generation
+       OR p_successor_active_key_id <> v_current.active_key_id
+       OR p_successor_active_since_unix_ms <> v_current.active_since_unix_ms
+       OR p_successor_active_write_deadline_unix_ms
+            <> v_current.active_write_deadline_unix_ms
+       OR p_successor_audit_event_retention_ms < v_current.audit_event_retention_ms
+    THEN
+        outcome := 'invalid';
+        RETURN NEXT;
+        RETURN;
+    END IF;
+    FOR v_index IN 1..cardinality(v_current.retained_key_ids) LOOP
+        v_successor_index := pg_catalog.array_position(
+            p_successor_retained_key_ids, v_current.retained_key_ids[v_index]
+        );
+        IF v_current.retained_destroy_after_unix_ms[v_index]::numeric * 1000
+                <= v_now_unix_us
+        THEN
+            IF v_successor_index IS NOT NULL THEN
+                outcome := 'invalid';
+                RETURN NEXT;
+                RETURN;
+            END IF;
+        ELSIF v_successor_index IS NULL
+           OR p_successor_retained_retired_at_unix_ms[v_successor_index]
+                <> v_current.retained_retired_at_unix_ms[v_index]
+           OR p_successor_retained_destroy_after_unix_ms[v_successor_index]
+                <> v_current.retained_destroy_after_unix_ms[v_index]
+        THEN
+            outcome := 'invalid';
+            RETURN NEXT;
+            RETURN;
+        END IF;
+    END LOOP;
+    FOR v_index IN 1..cardinality(p_successor_retained_key_ids) LOOP
+        IF pg_catalog.array_position(
+            v_current.retained_key_ids, p_successor_retained_key_ids[v_index]
+        ) IS NULL THEN
+            outcome := 'invalid';
+            RETURN NEXT;
+            RETURN;
+        END IF;
+    END LOOP;
+    DELETE FROM relay_state_private.audit_pseudonym_transition_context AS context
+    WHERE context.backend_pid = pg_catalog.pg_backend_pid()
+      AND context.transaction_id = pg_catalog.txid_current();
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'audit pseudonym maintenance context was not consumed'
+            USING ERRCODE = '55000';
+    END IF;
+    UPDATE relay_state_private.audit_pseudonym_keyring AS row
+    SET generation = p_successor_generation,
+        metadata_digest = p_successor_metadata_digest,
+        metadata_canonical = p_successor_metadata_canonical,
+        active_key_id = p_successor_active_key_id,
+        active_since_unix_ms = p_successor_active_since_unix_ms,
+        active_write_deadline_unix_ms = p_successor_active_write_deadline_unix_ms,
+        audit_event_retention_ms = p_successor_audit_event_retention_ms,
+        retained_key_ids = p_successor_retained_key_ids,
+        retained_retired_at_unix_ms = p_successor_retained_retired_at_unix_ms,
+        retained_destroy_after_unix_ms = p_successor_retained_destroy_after_unix_ms,
+        transitioned_at = clock_timestamp()
+    WHERE row.singleton = true
+      AND row.generation = p_expected_generation
+      AND row.metadata_digest = p_expected_metadata_digest
+      AND row.used_key_id_count = p_expected_history_count
+      AND row.used_key_ids_digest = p_expected_history_digest;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'audit pseudonym maintenance lost its locked authority'
+            USING ERRCODE = '55000';
+    END IF;
+    IF clock_timestamp() - v_started_at > interval '5 seconds' THEN
+        RAISE EXCEPTION 'audit pseudonym keyring maintenance exceeded its deadline'
+            USING ERRCODE = '57014';
+    END IF;
+    outcome := 'maintained';
+    stored_generation := p_successor_generation;
+    stored_metadata_digest := p_successor_metadata_digest;
+    RETURN NEXT;
+END;
+$function$;
+
+ALTER FUNCTION relay_state_private.audit_pseudonym_metadata_canonical_v1(
+    bigint, text, bigint, bigint, bigint, text[], bigint[], bigint[]
+) OWNER TO CURRENT_USER;
+ALTER FUNCTION relay_state_private.audit_pseudonym_history_snapshot_v1()
+    OWNER TO CURRENT_USER;
 ALTER FUNCTION relay_state_private.capability_valid_v1() OWNER TO CURRENT_USER;
-ALTER FUNCTION relay_state_api.audit_phase_snapshot_v1(text, text, text, bytea)
+ALTER FUNCTION relay_state_api.audit_phase_snapshot_v1(
+    text, text, text, bytea, text, text, bigint, bytea, bigint
+)
+    OWNER TO CURRENT_USER;
+ALTER FUNCTION relay_state_api.audit_phase_duplicate_v1(
+    text, text, text, bytea, text, bigint
+)
     OWNER TO CURRENT_USER;
 ALTER FUNCTION relay_state_api.audit_phase_cas_v1(
     text, text, text, bytea, bigint, bytea, text, bigint,
-    text, text, bytea, text, bytea
+    text, text, bytea, text, bytea, text, bigint, bytea, text, bigint
 ) OWNER TO CURRENT_USER;
 ALTER FUNCTION relay_state_api.audit_readiness_v1(text) OWNER TO CURRENT_USER;
+ALTER FUNCTION relay_state_api.audit_pseudonym_keyring_readiness_v1(text, text)
+    OWNER TO CURRENT_USER;
 ALTER FUNCTION relay_state_api.serving_fence_acquire_v1(bigint, text)
     OWNER TO CURRENT_USER;
 ALTER FUNCTION relay_state_api.serving_fence_finalize_v1(bigint, text, bigint)
@@ -1994,6 +3915,22 @@ ALTER FUNCTION relay_state_api.serving_fence_release_v1(bigint, text, bigint)
     OWNER TO CURRENT_USER;
 ALTER FUNCTION relay_state_api.quota_reserve_v1(text, text, bigint, integer, integer)
     OWNER TO CURRENT_USER;
+ALTER FUNCTION relay_state_api.audit_pseudonym_keyring_snapshot_v1(
+    text, text[], text, bigint
+)
+    OWNER TO CURRENT_USER;
+ALTER FUNCTION relay_state_api.audit_pseudonym_keyring_initialize_v1(
+    bigint, bytea, text, text, bigint, bigint, bigint, text[], bigint[], bigint[],
+    text, bigint
+) OWNER TO CURRENT_USER;
+ALTER FUNCTION relay_state_api.audit_pseudonym_keyring_rotate_v1(
+    bigint, bytea, bigint, bytea, bigint, bigint, bytea, text, text,
+    bigint, bigint, bigint, text[], bigint[], bigint[], text, bigint
+) OWNER TO CURRENT_USER;
+ALTER FUNCTION relay_state_api.audit_pseudonym_keyring_maintain_v1(
+    bigint, bytea, bigint, bytea, bigint, bigint, bytea, text, text,
+    bigint, bigint, bigint, text[], bigint[], bigint[], text, bigint
+) OWNER TO CURRENT_USER;
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA relay_state_private FROM PUBLIC;
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA relay_state_api FROM PUBLIC;
 ALTER DEFAULT PRIVILEGES IN SCHEMA relay_state_private REVOKE ALL ON FUNCTIONS FROM PUBLIC;
@@ -2067,10 +4004,94 @@ impl fmt::Debug for RuntimeDatabaseRole {
     }
 }
 
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct AuditPseudonymMaintenanceDatabaseRole(String);
+
+impl AuditPseudonymMaintenanceDatabaseRole {
+    pub(crate) fn parse(value: &str) -> Result<Self, StatePlaneInstallError> {
+        validate_database_role_name(value)
+            .then(|| Self(value.to_owned()))
+            .ok_or(StatePlaneInstallError::InvalidPseudonymMaintenanceRole)
+    }
+
+    fn quoted(&self) -> String {
+        format!("\"{}\"", self.0)
+    }
+}
+
+impl fmt::Debug for AuditPseudonymMaintenanceDatabaseRole {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("AuditPseudonymMaintenanceDatabaseRole(<redacted>)")
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct AuditPseudonymReaderDatabaseRole(String);
+
+impl AuditPseudonymReaderDatabaseRole {
+    pub(crate) fn parse(value: &str) -> Result<Self, StatePlaneInstallError> {
+        validate_database_role_name(value)
+            .then(|| Self(value.to_owned()))
+            .ok_or(StatePlaneInstallError::InvalidPseudonymReaderRole)
+    }
+
+    fn quoted(&self) -> String {
+        format!("\"{}\"", self.0)
+    }
+}
+
+impl fmt::Debug for AuditPseudonymReaderDatabaseRole {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("AuditPseudonymReaderDatabaseRole(<redacted>)")
+    }
+}
+
+fn validate_database_role_name(value: &str) -> bool {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    value.len() <= 63
+        && (first == '_' || first.is_ascii_alphabetic())
+        && chars.all(|character| character == '_' || character.is_ascii_alphanumeric())
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AuditPseudonymKeyringLockKey(i64);
+
+impl AuditPseudonymKeyringLockKey {
+    pub(crate) fn new(value: i64) -> Result<Self, StatePlaneInstallError> {
+        if value == 0 || value == MIGRATION_ADVISORY_LOCK_KEY_V1 {
+            return Err(StatePlaneInstallError::InvalidPseudonymKeyringLockKey);
+        }
+        Ok(Self(value))
+    }
+
+    pub(crate) const fn as_i64(self) -> i64 {
+        self.0
+    }
+}
+
+impl fmt::Debug for AuditPseudonymKeyringLockKey {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("AuditPseudonymKeyringLockKey(<deployment authority>)")
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub(crate) enum StatePlaneInstallError {
     #[error("Relay state-plane runtime role is invalid")]
     InvalidRuntimeRole,
+    #[error("Relay audit-pseudonym maintenance role is invalid")]
+    InvalidPseudonymMaintenanceRole,
+    #[error("Relay audit-pseudonym reader role is invalid")]
+    InvalidPseudonymReaderRole,
+    #[error("Relay state-plane authority roles must be distinct")]
+    AuthorityRoleCollision,
+    #[error("Relay audit-pseudonym keyring lock key is invalid")]
+    InvalidPseudonymKeyringLockKey,
+    #[error("Relay audit-pseudonym keyring lock key collides with another state-plane lock")]
+    PseudonymKeyringLockKeyCollision,
     #[error("Relay state-plane chain-key epoch identifier is invalid")]
     InvalidChainKeyEpochId,
     #[error("Relay state-plane installation session is not an isolated owner migration")]
@@ -2079,6 +4100,10 @@ pub(crate) enum StatePlaneInstallError {
     OwnerRoleNotIsolated,
     #[error("Relay state-plane runtime role is not isolated")]
     RuntimeRoleNotIsolated,
+    #[error("Relay audit-pseudonym maintenance role is not isolated")]
+    PseudonymMaintenanceRoleNotIsolated,
+    #[error("Relay audit-pseudonym reader role is not isolated")]
+    PseudonymReaderRoleNotIsolated,
     #[error("Relay state-plane database configuration is unsupported")]
     UnsafeDatabaseConfiguration,
     #[error("Relay state-plane capability catalog has drifted")]
@@ -2101,6 +4126,8 @@ pub(super) enum RuntimeCapabilityError {
 struct BoundRoleOids {
     owner: i64,
     runtime: i64,
+    maintenance: i64,
+    reader: i64,
 }
 
 pub(crate) async fn install_postgres_state_plane_v1(
@@ -2108,7 +4135,19 @@ pub(crate) async fn install_postgres_state_plane_v1(
     runtime_role: &RuntimeDatabaseRole,
     chain_key_epoch_id: &AuditChainKeyEpochId,
     serving_fence_lock_key: ServingFenceLockKey,
+    maintenance_role: &AuditPseudonymMaintenanceDatabaseRole,
+    reader_role: &AuditPseudonymReaderDatabaseRole,
+    audit_pseudonym_keyring_lock_key: AuditPseudonymKeyringLockKey,
 ) -> Result<(), StatePlaneInstallError> {
+    if runtime_role.0 == maintenance_role.0
+        || runtime_role.0 == reader_role.0
+        || maintenance_role.0 == reader_role.0
+    {
+        return Err(StatePlaneInstallError::AuthorityRoleCollision);
+    }
+    if serving_fence_lock_key.as_i64() == audit_pseudonym_keyring_lock_key.as_i64() {
+        return Err(StatePlaneInstallError::PseudonymKeyringLockKeyCollision);
+    }
     let transaction = client
         .transaction()
         .await
@@ -2125,7 +4164,8 @@ pub(crate) async fn install_postgres_state_plane_v1(
         .await
         .map_err(|_| StatePlaneInstallError::Unavailable)?;
 
-    let role_oids = validate_install_roles(&transaction, runtime_role).await?;
+    let role_oids =
+        validate_install_roles(&transaction, runtime_role, maintenance_role, reader_role).await?;
     let schema_count = try_i64(
         &transaction
             .query_one(
@@ -2177,6 +4217,7 @@ pub(crate) async fn install_postgres_state_plane_v1(
                 role_oids,
                 chain_key_epoch_id,
                 serving_fence_lock_key,
+                audit_pseudonym_keyring_lock_key,
             )
             .await?
         {
@@ -2193,10 +4234,15 @@ pub(crate) async fn install_postgres_state_plane_v1(
         role_oids,
         chain_key_epoch_id,
         serving_fence_lock_key,
+        audit_pseudonym_keyring_lock_key,
     )
     .await?;
     transaction
-        .batch_execute(&runtime_role_grants_sql(runtime_role))
+        .batch_execute(&role_grants_sql(
+            runtime_role,
+            maintenance_role,
+            reader_role,
+        ))
         .await
         .map_err(|_| StatePlaneInstallError::Unavailable)?;
     if !owner_capability_matches(
@@ -2204,6 +4250,7 @@ pub(crate) async fn install_postgres_state_plane_v1(
         role_oids,
         chain_key_epoch_id,
         serving_fence_lock_key,
+        audit_pseudonym_keyring_lock_key,
     )
     .await?
     {
@@ -2218,12 +4265,16 @@ pub(crate) async fn install_postgres_state_plane_v1(
 async fn validate_install_roles(
     transaction: &Transaction<'_>,
     runtime_role: &RuntimeDatabaseRole,
+    maintenance_role: &AuditPseudonymMaintenanceDatabaseRole,
+    reader_role: &AuditPseudonymReaderDatabaseRole,
 ) -> Result<BoundRoleOids, StatePlaneInstallError> {
     let row = transaction
         .query_opt(
             r#"
 SELECT owner_role.oid::bigint AS owner_oid,
        runtime_role.oid::bigint AS runtime_oid,
+       maintenance_role.oid::bigint AS maintenance_oid,
+       reader_role.oid::bigint AS reader_oid,
        session_role.rolsuper AS session_is_superuser,
        session_role.oid <> owner_role.oid AS session_is_distinct,
        NOT owner_role.rolcanlogin AND NOT owner_role.rolsuper
@@ -2232,6 +4283,13 @@ SELECT owner_role.oid::bigint AS owner_oid,
        runtime_role.rolcanlogin AND NOT runtime_role.rolsuper
          AND NOT runtime_role.rolcreaterole AND NOT runtime_role.rolbypassrls
          AND NOT runtime_role.rolreplication AND NOT runtime_role.rolcreatedb AS runtime_safe,
+       maintenance_role.rolcanlogin AND NOT maintenance_role.rolsuper
+         AND NOT maintenance_role.rolcreaterole AND NOT maintenance_role.rolbypassrls
+         AND NOT maintenance_role.rolreplication AND NOT maintenance_role.rolcreatedb
+         AS maintenance_safe,
+       reader_role.rolcanlogin AND NOT reader_role.rolsuper
+         AND NOT reader_role.rolcreaterole AND NOT reader_role.rolbypassrls
+         AND NOT reader_role.rolreplication AND NOT reader_role.rolcreatedb AS reader_safe,
        NOT EXISTS (
            SELECT 1 FROM pg_catalog.pg_auth_members AS membership
            WHERE membership.member = owner_role.oid OR membership.roleid = owner_role.oid
@@ -2240,6 +4298,15 @@ SELECT owner_role.oid::bigint AS owner_oid,
            SELECT 1 FROM pg_catalog.pg_auth_members AS membership
            WHERE membership.member = runtime_role.oid OR membership.roleid = runtime_role.oid
        ) AS runtime_membership_safe,
+       NOT EXISTS (
+           SELECT 1 FROM pg_catalog.pg_auth_members AS membership
+           WHERE membership.member = maintenance_role.oid
+              OR membership.roleid = maintenance_role.oid
+       ) AS maintenance_membership_safe,
+       NOT EXISTS (
+           SELECT 1 FROM pg_catalog.pg_auth_members AS membership
+           WHERE membership.member = reader_role.oid OR membership.roleid = reader_role.oid
+       ) AS reader_membership_safe,
        current_setting('max_prepared_transactions')::integer = 0 AS prepared_safe,
        current_setting('fsync') = 'on'
          AND current_setting('full_page_writes') = 'on' AS durability_safe,
@@ -2252,15 +4319,19 @@ SELECT owner_role.oid::bigint AS owner_oid,
        current_setting('default_transaction_read_only') = 'off'
          AND current_setting('transaction_read_only') = 'off'
          AND NOT pg_catalog.pg_is_in_recovery() AS primary_writable,
-       current_setting('server_version_num')::integer / 10000 BETWEEN $2 AND $3
+       current_setting('server_version_num')::integer / 10000 BETWEEN $4 AND $5
          AS version_safe
 FROM pg_catalog.pg_roles AS owner_role
 JOIN pg_catalog.pg_roles AS session_role ON session_role.rolname = session_user
 JOIN pg_catalog.pg_roles AS runtime_role ON runtime_role.rolname = $1
+JOIN pg_catalog.pg_roles AS maintenance_role ON maintenance_role.rolname = $2
+JOIN pg_catalog.pg_roles AS reader_role ON reader_role.rolname = $3
 WHERE owner_role.rolname = current_user
 "#,
             &[
                 &runtime_role.0,
+                &maintenance_role.0,
+                &reader_role.0,
                 &SUPPORTED_POSTGRES_MIN_MAJOR,
                 &SUPPORTED_POSTGRES_MAX_MAJOR,
             ],
@@ -2285,12 +4356,27 @@ WHERE owner_role.rolname = current_user
     if !try_bool(&row, "runtime_safe")? || !try_bool(&row, "runtime_membership_safe")? {
         return Err(StatePlaneInstallError::RuntimeRoleNotIsolated);
     }
+    if !try_bool(&row, "maintenance_safe")? || !try_bool(&row, "maintenance_membership_safe")? {
+        return Err(StatePlaneInstallError::PseudonymMaintenanceRoleNotIsolated);
+    }
+    if !try_bool(&row, "reader_safe")? || !try_bool(&row, "reader_membership_safe")? {
+        return Err(StatePlaneInstallError::PseudonymReaderRoleNotIsolated);
+    }
     let role_oids = BoundRoleOids {
         owner: try_i64(&row, "owner_oid")?,
         runtime: try_i64(&row, "runtime_oid")?,
+        maintenance: try_i64(&row, "maintenance_oid")?,
+        reader: try_i64(&row, "reader_oid")?,
     };
-    if role_oids.owner == role_oids.runtime {
-        return Err(StatePlaneInstallError::RuntimeRoleNotIsolated);
+    let mut distinct = std::collections::BTreeSet::new();
+    distinct.extend([
+        role_oids.owner,
+        role_oids.runtime,
+        role_oids.maintenance,
+        role_oids.reader,
+    ]);
+    if distinct.len() != 4 {
+        return Err(StatePlaneInstallError::AuthorityRoleCollision);
     }
     Ok(role_oids)
 }
@@ -2300,14 +4386,19 @@ async fn bind_or_validate_metadata(
     role_oids: BoundRoleOids,
     chain_key_epoch_id: &AuditChainKeyEpochId,
     serving_fence_lock_key: ServingFenceLockKey,
+    audit_pseudonym_keyring_lock_key: AuditPseudonymKeyringLockKey,
 ) -> Result<(), StatePlaneInstallError> {
     let existing = transaction
         .query_opt(
             r#"
 SELECT schema_version, capability_id, capability_fingerprint,
        owner_role_oid::bigint AS owner_role_oid,
-       runtime_role_oid::bigint AS runtime_role_oid, chain_key_epoch_id,
-       serving_fence_capability_id, serving_fence_lock_key, quota_capability_id
+       runtime_role_oid::bigint AS runtime_role_oid,
+       audit_pseudonym_maintenance_role_oid::bigint AS maintenance_role_oid,
+       audit_pseudonym_reader_role_oid::bigint AS reader_role_oid,
+       chain_key_epoch_id, serving_fence_capability_id, serving_fence_lock_key,
+       quota_capability_id, audit_pseudonym_keyring_capability_id,
+       audit_pseudonym_keyring_lock_key
 FROM relay_state_private.state_plane_metadata WHERE singleton = true
 "#,
             &[],
@@ -2320,10 +4411,16 @@ FROM relay_state_private.state_plane_metadata WHERE singleton = true
             && try_str(&existing, "capability_fingerprint")? == STATE_PLANE_SCHEMA_FINGERPRINT_V1
             && try_i64(&existing, "owner_role_oid")? == role_oids.owner
             && try_i64(&existing, "runtime_role_oid")? == role_oids.runtime
+            && try_i64(&existing, "maintenance_role_oid")? == role_oids.maintenance
+            && try_i64(&existing, "reader_role_oid")? == role_oids.reader
             && try_str(&existing, "chain_key_epoch_id")? == chain_key_epoch_id.as_str()
             && try_str(&existing, "serving_fence_capability_id")? == SERVING_FENCE_CAPABILITY_V1
             && try_i64(&existing, "serving_fence_lock_key")? == serving_fence_lock_key.as_i64()
-            && try_str(&existing, "quota_capability_id")? == PERSISTENT_QUOTA_CAPABILITY_V1;
+            && try_str(&existing, "quota_capability_id")? == PERSISTENT_QUOTA_CAPABILITY_V1
+            && try_str(&existing, "audit_pseudonym_keyring_capability_id")?
+                == AUDIT_PSEUDONYM_KEYRING_CAPABILITY_V1
+            && try_i64(&existing, "audit_pseudonym_keyring_lock_key")?
+                == audit_pseudonym_keyring_lock_key.as_i64();
         return if matches {
             Ok(())
         } else {
@@ -2335,9 +4432,14 @@ FROM relay_state_private.state_plane_metadata WHERE singleton = true
             r#"
 INSERT INTO relay_state_private.state_plane_metadata (
     singleton, schema_version, capability_id, capability_fingerprint,
-    owner_role_oid, runtime_role_oid, chain_key_epoch_id,
-    serving_fence_capability_id, serving_fence_lock_key, quota_capability_id
-) VALUES (true, $1, $2, $3, $4::bigint::oid, $5::bigint::oid, $6, $7, $8, $9)
+    owner_role_oid, runtime_role_oid, audit_pseudonym_maintenance_role_oid,
+    audit_pseudonym_reader_role_oid, chain_key_epoch_id,
+    serving_fence_capability_id, serving_fence_lock_key, quota_capability_id,
+    audit_pseudonym_keyring_capability_id, audit_pseudonym_keyring_lock_key
+) VALUES (
+    true, $1, $2, $3, $4::bigint::oid, $5::bigint::oid, $6::bigint::oid,
+    $7::bigint::oid, $8, $9, $10, $11, $12, $13
+)
 "#,
             &[
                 &STATE_PLANE_SCHEMA_VERSION_V1,
@@ -2345,10 +4447,14 @@ INSERT INTO relay_state_private.state_plane_metadata (
                 &STATE_PLANE_SCHEMA_FINGERPRINT_V1,
                 &role_oids.owner,
                 &role_oids.runtime,
+                &role_oids.maintenance,
+                &role_oids.reader,
                 &chain_key_epoch_id.as_str(),
                 &SERVING_FENCE_CAPABILITY_V1,
                 &serving_fence_lock_key.as_i64(),
                 &PERSISTENT_QUOTA_CAPABILITY_V1,
+                &AUDIT_PSEUDONYM_KEYRING_CAPABILITY_V1,
+                &audit_pseudonym_keyring_lock_key.as_i64(),
             ],
         )
         .await
@@ -2356,44 +4462,73 @@ INSERT INTO relay_state_private.state_plane_metadata (
     Ok(())
 }
 
-fn runtime_role_grants_sql(runtime_role: &RuntimeDatabaseRole) -> String {
-    let role = runtime_role.quoted();
+fn role_grants_sql(
+    runtime_role: &RuntimeDatabaseRole,
+    maintenance_role: &AuditPseudonymMaintenanceDatabaseRole,
+    reader_role: &AuditPseudonymReaderDatabaseRole,
+) -> String {
+    let runtime = runtime_role.quoted();
+    let maintenance = maintenance_role.quoted();
+    let reader = reader_role.quoted();
     format!(
         r#"
-REVOKE ALL ON SCHEMA relay_state_private FROM {role};
-REVOKE ALL ON ALL TABLES IN SCHEMA relay_state_private FROM {role};
-REVOKE ALL ON ALL SEQUENCES IN SCHEMA relay_state_private FROM {role};
-REVOKE ALL ON ALL FUNCTIONS IN SCHEMA relay_state_private FROM {role};
-REVOKE ALL ON SCHEMA relay_state_api FROM {role};
-REVOKE ALL ON ALL FUNCTIONS IN SCHEMA relay_state_api FROM {role};
-GRANT USAGE ON SCHEMA relay_state_api TO {role};
-GRANT EXECUTE ON FUNCTION relay_state_api.audit_phase_snapshot_v1(text, text, text, bytea)
-    TO {role};
+REVOKE ALL ON SCHEMA relay_state_private FROM {runtime}, {maintenance}, {reader};
+REVOKE ALL ON ALL TABLES IN SCHEMA relay_state_private FROM {runtime}, {maintenance}, {reader};
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA relay_state_private FROM {runtime}, {maintenance}, {reader};
+REVOKE ALL ON ALL FUNCTIONS IN SCHEMA relay_state_private FROM {runtime}, {maintenance}, {reader};
+REVOKE ALL ON SCHEMA relay_state_api FROM {runtime}, {maintenance}, {reader};
+REVOKE ALL ON ALL FUNCTIONS IN SCHEMA relay_state_api FROM {runtime}, {maintenance}, {reader};
+GRANT USAGE ON SCHEMA relay_state_api TO {runtime}, {maintenance}, {reader};
+GRANT EXECUTE ON FUNCTION relay_state_api.audit_phase_snapshot_v1(
+    text, text, text, bytea, text, text, bigint, bytea, bigint
+)
+    TO {runtime};
+GRANT EXECUTE ON FUNCTION relay_state_api.audit_phase_duplicate_v1(
+    text, text, text, bytea, text, bigint
+) TO {runtime};
 GRANT EXECUTE ON FUNCTION relay_state_api.audit_phase_cas_v1(
     text, text, text, bytea, bigint, bytea, text, bigint,
-    text, text, bytea, text, bytea
-) TO {role};
-GRANT EXECUTE ON FUNCTION relay_state_api.audit_readiness_v1(text) TO {role};
+    text, text, bytea, text, bytea, text, bigint, bytea, text, bigint
+) TO {runtime};
+GRANT EXECUTE ON FUNCTION relay_state_api.audit_readiness_v1(text) TO {runtime};
 GRANT EXECUTE ON FUNCTION relay_state_api.serving_fence_acquire_v1(bigint, text)
-    TO {role};
+    TO {runtime};
 GRANT EXECUTE ON FUNCTION relay_state_api.serving_fence_finalize_v1(bigint, text, bigint)
-    TO {role};
+    TO {runtime};
 GRANT EXECUTE ON FUNCTION relay_state_api.serving_fence_status_v1(bigint, text, bigint)
-    TO {role};
+    TO {runtime};
 GRANT EXECUTE ON FUNCTION relay_state_api.dispatch_permit_create_v1(
     bigint, text, bigint, text, integer
-) TO {role};
+) TO {runtime};
 GRANT EXECUTE ON FUNCTION relay_state_api.dispatch_permit_authorize_v1(
     bigint, text, bigint, text
-) TO {role};
+) TO {runtime};
 GRANT EXECUTE ON FUNCTION relay_state_api.dispatch_permit_complete_v1(
     bigint, text, bigint, text
-) TO {role};
+) TO {runtime};
 GRANT EXECUTE ON FUNCTION relay_state_api.serving_fence_release_v1(bigint, text, bigint)
-    TO {role};
+    TO {runtime};
 GRANT EXECUTE ON FUNCTION relay_state_api.quota_reserve_v1(
     text, text, bigint, integer, integer
-) TO {role};
+) TO {runtime};
+GRANT EXECUTE ON FUNCTION relay_state_api.audit_pseudonym_keyring_snapshot_v1(
+    text, text[], text, bigint
+)
+    TO {runtime}, {maintenance}, {reader};
+GRANT EXECUTE ON FUNCTION relay_state_api.audit_pseudonym_keyring_readiness_v1(text, text)
+    TO {runtime}, {maintenance}, {reader};
+GRANT EXECUTE ON FUNCTION relay_state_api.audit_pseudonym_keyring_initialize_v1(
+    bigint, bytea, text, text, bigint, bigint, bigint, text[], bigint[], bigint[],
+    text, bigint
+) TO {maintenance};
+GRANT EXECUTE ON FUNCTION relay_state_api.audit_pseudonym_keyring_rotate_v1(
+    bigint, bytea, bigint, bytea, bigint, bigint, bytea, text, text,
+    bigint, bigint, bigint, text[], bigint[], bigint[], text, bigint
+) TO {maintenance};
+GRANT EXECUTE ON FUNCTION relay_state_api.audit_pseudonym_keyring_maintain_v1(
+    bigint, bytea, bigint, bytea, bigint, bigint, bytea, text, text,
+    bigint, bigint, bigint, text[], bigint[], bigint[], text, bigint
+) TO {maintenance};
 "#
     )
 }
@@ -2403,14 +4538,19 @@ async fn owner_capability_matches(
     role_oids: BoundRoleOids,
     chain_key_epoch_id: &AuditChainKeyEpochId,
     serving_fence_lock_key: ServingFenceLockKey,
+    audit_pseudonym_keyring_lock_key: AuditPseudonymKeyringLockKey,
 ) -> Result<bool, StatePlaneInstallError> {
     let metadata = client
         .query_opt(
             r#"
 SELECT schema_version, capability_id, capability_fingerprint,
        owner_role_oid::bigint AS owner_role_oid,
-       runtime_role_oid::bigint AS runtime_role_oid, chain_key_epoch_id,
-       serving_fence_capability_id, serving_fence_lock_key, quota_capability_id
+       runtime_role_oid::bigint AS runtime_role_oid,
+       audit_pseudonym_maintenance_role_oid::bigint AS maintenance_role_oid,
+       audit_pseudonym_reader_role_oid::bigint AS reader_role_oid,
+       chain_key_epoch_id, serving_fence_capability_id, serving_fence_lock_key,
+       quota_capability_id, audit_pseudonym_keyring_capability_id,
+       audit_pseudonym_keyring_lock_key
 FROM relay_state_private.state_plane_metadata WHERE singleton = true
 "#,
             &[],
@@ -2425,10 +4565,16 @@ FROM relay_state_private.state_plane_metadata WHERE singleton = true
         && try_str(&metadata, "capability_fingerprint")? == STATE_PLANE_SCHEMA_FINGERPRINT_V1
         && try_i64(&metadata, "owner_role_oid")? == role_oids.owner
         && try_i64(&metadata, "runtime_role_oid")? == role_oids.runtime
+        && try_i64(&metadata, "maintenance_role_oid")? == role_oids.maintenance
+        && try_i64(&metadata, "reader_role_oid")? == role_oids.reader
         && try_str(&metadata, "chain_key_epoch_id")? == chain_key_epoch_id.as_str()
         && try_str(&metadata, "serving_fence_capability_id")? == SERVING_FENCE_CAPABILITY_V1
         && try_i64(&metadata, "serving_fence_lock_key")? == serving_fence_lock_key.as_i64()
-        && try_str(&metadata, "quota_capability_id")? == PERSISTENT_QUOTA_CAPABILITY_V1;
+        && try_str(&metadata, "quota_capability_id")? == PERSISTENT_QUOTA_CAPABILITY_V1
+        && try_str(&metadata, "audit_pseudonym_keyring_capability_id")?
+            == AUDIT_PSEUDONYM_KEYRING_CAPABILITY_V1
+        && try_i64(&metadata, "audit_pseudonym_keyring_lock_key")?
+            == audit_pseudonym_keyring_lock_key.as_i64();
     if !metadata_matches {
         return Ok(false);
     }
@@ -2451,6 +4597,23 @@ FROM relay_state_private.state_plane_metadata WHERE singleton = true
 pub(super) async fn validate_runtime_capability_v1(
     client: &Client,
     chain_key_epoch_id: &AuditChainKeyEpochId,
+) -> Result<(), RuntimeCapabilityError> {
+    validate_runtime_capability_expected_v1(client, chain_key_epoch_id, None).await
+}
+
+pub(super) async fn validate_runtime_pseudonym_capability_v1(
+    client: &Client,
+    chain_key_epoch_id: &AuditChainKeyEpochId,
+    keyring_lock_key: AuditPseudonymKeyringLockKey,
+) -> Result<(), RuntimeCapabilityError> {
+    validate_runtime_capability_expected_v1(client, chain_key_epoch_id, Some(keyring_lock_key))
+        .await
+}
+
+async fn validate_runtime_capability_expected_v1(
+    client: &Client,
+    chain_key_epoch_id: &AuditChainKeyEpochId,
+    expected_keyring_lock_key: Option<AuditPseudonymKeyringLockKey>,
 ) -> Result<(), RuntimeCapabilityError> {
     let identity = client
         .query_one(
@@ -2488,12 +4651,96 @@ WHERE session_role.rolname = session_user
     if session_oid != runtime_oid || current_oid != runtime_oid {
         return Err(RuntimeCapabilityError::WrongRuntimeIdentity);
     }
+    let actual_keyring_lock_key = try_i64_runtime(&readiness, "audit_pseudonym_keyring_lock_key")?;
     if !try_bool_runtime(&readiness, "ready")?
         || try_str_runtime(&readiness, "capability_id")? != DURABLE_AUDIT_CAPABILITY_V1
         || try_str_runtime(&readiness, "capability_fingerprint")?
             != STATE_PLANE_SCHEMA_FINGERPRINT_V1
         || try_str_runtime(&readiness, "chain_key_epoch_id")? != chain_key_epoch_id.as_str()
         || try_str_runtime(&readiness, "quota_capability_id")? != PERSISTENT_QUOTA_CAPABILITY_V1
+        || try_str_runtime(&readiness, "audit_pseudonym_keyring_capability_id")?
+            != AUDIT_PSEUDONYM_KEYRING_CAPABILITY_V1
+        || actual_keyring_lock_key == 0
+        || expected_keyring_lock_key
+            .is_some_and(|expected| actual_keyring_lock_key != expected.as_i64())
+    {
+        return Err(RuntimeCapabilityError::Drift);
+    }
+    let owner_oid = try_i64_runtime(&readiness, "owner_role_oid")?;
+    if !helper_body_matches(client, owner_oid).await? {
+        return Err(RuntimeCapabilityError::Drift);
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum KeyringDatabaseRoleKind {
+    Runtime,
+    Maintenance,
+    Reader,
+}
+
+impl KeyringDatabaseRoleKind {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Runtime => "runtime",
+            Self::Maintenance => "maintenance",
+            Self::Reader => "reader",
+        }
+    }
+}
+
+pub(super) async fn validate_keyring_role_capability_v1(
+    client: &Client,
+    chain_key_epoch_id: &AuditChainKeyEpochId,
+    keyring_lock_key: AuditPseudonymKeyringLockKey,
+    role_kind: KeyringDatabaseRoleKind,
+) -> Result<(), RuntimeCapabilityError> {
+    let identity = client
+        .query_one(
+            r#"
+SELECT session_role.oid::bigint AS session_oid,
+       current_role_row.oid::bigint AS current_oid
+FROM pg_catalog.pg_roles AS session_role
+JOIN pg_catalog.pg_roles AS current_role_row ON current_role_row.rolname = current_user
+WHERE session_role.rolname = session_user
+"#,
+            &[],
+        )
+        .await
+        .map_err(|_| RuntimeCapabilityError::Unavailable)?;
+    let session_oid = try_i64_runtime(&identity, "session_oid")?;
+    let current_oid = try_i64_runtime(&identity, "current_oid")?;
+    let readiness = client
+        .query_opt(
+            "SELECT * FROM relay_state_api.audit_pseudonym_keyring_readiness_v1($1, $2)",
+            &[&chain_key_epoch_id.as_str(), &role_kind.as_str()],
+        )
+        .await
+        .map_err(|error| {
+            if error
+                .as_db_error()
+                .is_some_and(|error| error.code().code() == "42501")
+            {
+                RuntimeCapabilityError::WrongRuntimeIdentity
+            } else {
+                RuntimeCapabilityError::Unavailable
+            }
+        })?
+        .ok_or(RuntimeCapabilityError::Drift)?;
+    let caller_oid = try_i64_runtime(&readiness, "caller_role_oid")?;
+    if session_oid != caller_oid || current_oid != caller_oid {
+        return Err(RuntimeCapabilityError::WrongRuntimeIdentity);
+    }
+    if !try_bool_runtime(&readiness, "ready")?
+        || try_str_runtime(&readiness, "capability_id")? != DURABLE_AUDIT_CAPABILITY_V1
+        || try_str_runtime(&readiness, "capability_fingerprint")?
+            != STATE_PLANE_SCHEMA_FINGERPRINT_V1
+        || try_str_runtime(&readiness, "chain_key_epoch_id")? != chain_key_epoch_id.as_str()
+        || try_str_runtime(&readiness, "audit_pseudonym_keyring_capability_id")?
+            != AUDIT_PSEUDONYM_KEYRING_CAPABILITY_V1
+        || try_i64_runtime(&readiness, "audit_pseudonym_keyring_lock_key")?
+            != keyring_lock_key.as_i64()
     {
         return Err(RuntimeCapabilityError::Drift);
     }
@@ -2564,6 +4811,10 @@ fn try_str_runtime<'a>(row: &'a Row, column: &str) -> Result<&'a str, RuntimeCap
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Write as _;
+
+    use sha2::{Digest, Sha256};
+
     use super::*;
 
     #[test]
@@ -2620,25 +4871,25 @@ mod tests {
             POSTGRES_STATE_PLANE_MIGRATION_V1
                 .matches("SET lock_timeout = '2s'")
                 .count(),
-            12
+            20
         );
         assert_eq!(
             POSTGRES_STATE_PLANE_MIGRATION_V1
                 .matches("set_config('idle_in_transaction_session_timeout', '5s', false)")
                 .count(),
-            11
+            17
         );
         assert_eq!(
             POSTGRES_STATE_PLANE_MIGRATION_V1
                 .matches("SET synchronous_commit = 'on'")
                 .count(),
-            12
+            20
         );
         assert_eq!(
             POSTGRES_STATE_PLANE_MIGRATION_V1
                 .matches("set_config('synchronous_commit', 'on', false)")
                 .count(),
-            11
+            17
         );
         assert!(POSTGRES_STATE_PLANE_MIGRATION_V1.contains("exceeded its deadline"));
         for required_setting in [
@@ -2673,7 +4924,32 @@ mod tests {
         ] {
             assert!(POSTGRES_STATE_PLANE_MIGRATION_V1.contains(required));
         }
-        assert!(!POSTGRES_STATE_PLANE_MIGRATION_V1.contains("pg_advisory_xact_lock(p_"));
+        let quota_sql = POSTGRES_STATE_PLANE_MIGRATION_V1
+            .split("CREATE OR REPLACE FUNCTION relay_state_api.quota_reserve_v1")
+            .nth(1)
+            .expect("quota SQL")
+            .split("CREATE OR REPLACE FUNCTION relay_state_api.audit_pseudonym_keyring_snapshot_v1")
+            .next()
+            .expect("quota function body");
+        assert!(!quota_sql.contains("pg_advisory_xact_lock(p_"));
+    }
+
+    #[test]
+    fn keyring_identifier_order_is_utf8_bytewise() {
+        assert_eq!(
+            POSTGRES_STATE_PLANE_MIGRATION_V1
+                .matches("ORDER BY pg_catalog.convert_to(row.key_id, 'UTF8')")
+                .count(),
+            2
+        );
+        for required in [
+            "pg_catalog.convert_to(p_retained_key_ids[v_index], 'UTF8')",
+            "pg_catalog.convert_to(v_previous_key_id, 'UTF8')",
+            "pg_catalog.convert_to(requested.key_id, 'UTF8')",
+            "p_lookup_key_ids[requested.ordinal - 1], 'UTF8'",
+        ] {
+            assert!(POSTGRES_STATE_PLANE_MIGRATION_V1.contains(required));
+        }
     }
 
     #[test]
@@ -2726,5 +5002,27 @@ mod tests {
             assert!(fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit()));
         }
         assert!(!POSTGRES_STATE_PLANE_MIGRATION_V1.contains("__"));
+    }
+
+    #[test]
+    fn schema_fingerprint_is_the_framed_semantic_identity() {
+        assert!(STATE_PLANE_SCHEMA_IDENTITY_PREIMAGE_V1.ends_with('\0'));
+        for semantic_revision in [
+            DURABLE_AUDIT_CAPABILITY_V1,
+            SERVING_FENCE_CAPABILITY_V1,
+            PERSISTENT_QUOTA_CAPABILITY_V1,
+            AUDIT_PSEUDONYM_KEYRING_CAPABILITY_V1,
+            "utf8-bytewise-key-order-v1",
+        ] {
+            assert!(
+                STATE_PLANE_SCHEMA_IDENTITY_PREIMAGE_V1.contains(semantic_revision),
+                "semantic fingerprint preimage omitted {semantic_revision}"
+            );
+        }
+        let mut calculated = String::from("sha256:");
+        for byte in Sha256::digest(STATE_PLANE_SCHEMA_IDENTITY_PREIMAGE_V1.as_bytes()) {
+            write!(&mut calculated, "{byte:02x}").expect("write to String");
+        }
+        assert_eq!(calculated, STATE_PLANE_SCHEMA_FINGERPRINT_V1);
     }
 }

@@ -22,7 +22,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use registry_platform_audit::{
     AuditChainHasher, AuditEnvelope, DurableAuditPhase, DurableAuditSink,
-    DurableAuditStoredIdentity, DurableAuditWrite, DurableAuditWriteError,
+    DurableAuditStoredIdentity, DurableAuditStreamKind, DurableAuditWrite, DurableAuditWriteError,
     DurableAuditWriteOutcome,
 };
 use serde_json::{json, Value};
@@ -31,14 +31,18 @@ use tokio::{sync::Mutex, time::Instant};
 use tokio_postgres::{Client, Error as PostgresError, Row};
 
 use super::migration::{
-    validate_runtime_capability_v1, AuditChainKeyEpochId, RuntimeCapabilityError,
-    RUNTIME_SESSION_LIMITS_SQL,
+    validate_runtime_pseudonym_capability_v1, AuditChainKeyEpochId, AuditPseudonymKeyringLockKey,
+    RuntimeCapabilityError, RUNTIME_SESSION_LIMITS_SQL,
 };
+use super::pseudonym_keyring::ActiveAuditPseudonymWriteEpoch;
 
-const SNAPSHOT_AUDIT_PHASE_SQL: &str =
-    "SELECT * FROM relay_state_api.audit_phase_snapshot_v1($1, $2, $3, $4)";
+const SNAPSHOT_AUDIT_PHASE_SQL: &str = "SELECT * FROM relay_state_api.audit_phase_snapshot_v1(\
+        $1, $2, $3, $4, $5, $6, $7, $8, $9\
+    )";
+const RECOVER_AUDIT_PHASE_DUPLICATE_SQL: &str =
+    "SELECT * FROM relay_state_api.audit_phase_duplicate_v1($1, $2, $3, $4, $5, $6)";
 const CAS_AUDIT_PHASE_SQL: &str = "SELECT * FROM relay_state_api.audit_phase_cas_v1(\
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13\
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18\
 )";
 const MAX_HEAD_CAS_ATTEMPTS: usize = 8;
 const MAX_WRITE_ELAPSED: Duration = Duration::from_secs(5);
@@ -98,12 +102,20 @@ pub(crate) enum StatePlaneReadiness {
     Unavailable,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum PseudonymBoundDuplicateRecoveryOutcome {
+    IdenticalDuplicate(DurableAuditStoredIdentity),
+    ConflictingDuplicate(DurableAuditStoredIdentity),
+    NotFound,
+}
+
 /// Crate-private execute-only state plane. No public API can obtain the raw
 /// runtime database client or construct this value without attestation.
 pub(crate) struct PostgresDurableAuditStatePlane {
     client: Mutex<Client>,
     chain_hasher: AuditChainHasher,
     chain_key_epoch_id: AuditChainKeyEpochId,
+    keyring_lock_key: AuditPseudonymKeyringLockKey,
 }
 
 impl PostgresDurableAuditStatePlane {
@@ -111,17 +123,19 @@ impl PostgresDurableAuditStatePlane {
         client: Client,
         chain_hasher: AuditChainHasher,
         chain_key_epoch_id: AuditChainKeyEpochId,
+        keyring_lock_key: AuditPseudonymKeyringLockKey,
     ) -> Result<Self, StatePlaneInitializationError> {
         if matches!(chain_hasher, AuditChainHasher::UnkeyedDevOnly) {
             return Err(StatePlaneInitializationError::UnkeyedAuditChain);
         }
-        Self::validated(client, chain_hasher, chain_key_epoch_id).await
+        Self::validated(client, chain_hasher, chain_key_epoch_id, keyring_lock_key).await
     }
 
     async fn validated(
         client: Client,
         chain_hasher: AuditChainHasher,
         chain_key_epoch_id: AuditChainKeyEpochId,
+        keyring_lock_key: AuditPseudonymKeyringLockKey,
     ) -> Result<Self, StatePlaneInitializationError> {
         // A supplied Client may already be inside either a live or failed
         // explicit transaction. Never let a durable-write acknowledgement be
@@ -134,7 +148,7 @@ impl PostgresDurableAuditStatePlane {
             .batch_execute(RUNTIME_SESSION_LIMITS_SQL)
             .await
             .map_err(|_| StatePlaneInitializationError::Unavailable)?;
-        validate_runtime_capability_v1(&client, &chain_key_epoch_id)
+        validate_runtime_pseudonym_capability_v1(&client, &chain_key_epoch_id, keyring_lock_key)
             .await
             .map_err(map_capability_initialization_error)?;
         // This attested connection is the future integration point for the
@@ -145,6 +159,7 @@ impl PostgresDurableAuditStatePlane {
             client: Mutex::new(client),
             chain_hasher,
             chain_key_epoch_id,
+            keyring_lock_key,
         })
     }
 
@@ -152,9 +167,13 @@ impl PostgresDurableAuditStatePlane {
         let Ok(client) = self.client.try_lock() else {
             return StatePlaneReadiness::Unavailable;
         };
-        if validate_runtime_capability_v1(&client, &self.chain_key_epoch_id)
-            .await
-            .is_ok()
+        if validate_runtime_pseudonym_capability_v1(
+            &client,
+            &self.chain_key_epoch_id,
+            self.keyring_lock_key,
+        )
+        .await
+        .is_ok()
         {
             StatePlaneReadiness::Ready
         } else {
@@ -165,6 +184,7 @@ impl PostgresDurableAuditStatePlane {
     async fn write_phase_cas(
         &self,
         write: &DurableAuditWrite,
+        pseudonym_authority: Option<&ActiveAuditPseudonymWriteEpoch>,
     ) -> Result<DurableAuditWriteOutcome, DurableAuditWriteError> {
         let deadline = Instant::now() + MAX_WRITE_ELAPSED;
         let client = tokio::time::timeout_at(deadline, self.client.lock())
@@ -172,12 +192,33 @@ impl PostgresDurableAuditStatePlane {
             .map_err(|_| DurableAuditWriteError::StoreUnavailable)?;
         tokio::time::timeout_at(
             deadline,
-            validate_runtime_capability_v1(&client, &self.chain_key_epoch_id),
+            validate_runtime_pseudonym_capability_v1(
+                &client,
+                &self.chain_key_epoch_id,
+                self.keyring_lock_key,
+            ),
         )
         .await
         .map_err(|_| DurableAuditWriteError::StoreUnavailable)?
         .map_err(|_| DurableAuditWriteError::StoreUnavailable)?;
 
+        let (pseudonym_key_id, pseudonym_generation, pseudonym_digest): (
+            Option<&str>,
+            Option<i64>,
+            Option<&[u8]>,
+        ) = match pseudonym_authority {
+            Some(authority) => {
+                let (key_id, generation, digest, chain_key_epoch_id, keyring_lock_key) =
+                    authority.postgres_binding();
+                if chain_key_epoch_id != &self.chain_key_epoch_id
+                    || keyring_lock_key != self.keyring_lock_key.as_i64()
+                {
+                    return Err(DurableAuditWriteError::StoreFailure);
+                }
+                (Some(key_id), Some(generation), Some(digest.as_slice()))
+            }
+            None => (None, None, None),
+        };
         for _ in 0..MAX_HEAD_CAS_ATTEMPTS {
             let snapshot = timeout_query(
                 deadline,
@@ -188,6 +229,11 @@ impl PostgresDurableAuditStatePlane {
                         &write.key().operation_id().as_str(),
                         &write.key().phase().as_str(),
                         &write.payload_digest().as_bytes().as_slice(),
+                        &self.chain_key_epoch_id.as_str(),
+                        &pseudonym_key_id,
+                        &pseudonym_generation,
+                        &pseudonym_digest,
+                        &self.keyring_lock_key.as_i64(),
                     ],
                 ),
             )
@@ -259,6 +305,11 @@ impl PostgresDurableAuditStatePlane {
                         &envelope.record_hash.as_slice(),
                         &attempt_envelope_id,
                         &attempt_chain_hash,
+                        &pseudonym_key_id,
+                        &pseudonym_generation,
+                        &pseudonym_digest,
+                        &self.chain_key_epoch_id.as_str(),
+                        &self.keyring_lock_key.as_i64(),
                     ],
                 ),
             )
@@ -288,6 +339,90 @@ impl PostgresDurableAuditStatePlane {
             }
         }
         Err(DurableAuditWriteError::StoreUnavailable)
+    }
+
+    /// Persist a consultation or pseudonym-bearing denial only while
+    /// PostgreSQL atomically confirms that the consumed key epoch is still the
+    /// current write binding and before its exclusive deadline. The SQL CAS
+    /// holds the shared keyring transition barrier through the insert.
+    pub(crate) async fn write_phase_with_pseudonym_authority(
+        &self,
+        write: &DurableAuditWrite,
+        authority: ActiveAuditPseudonymWriteEpoch,
+    ) -> Result<DurableAuditWriteOutcome, DurableAuditWriteError> {
+        self.write_phase_cas(write, Some(&authority)).await
+    }
+
+    /// Resolve only a prior pseudonym-bound durable write after process or key
+    /// rotation recovery. This operation has no candidate or insert outcome,
+    /// so absence can never authorize a write without current key authority.
+    pub(crate) async fn recover_pseudonym_bound_duplicate(
+        &self,
+        write: &DurableAuditWrite,
+    ) -> Result<PseudonymBoundDuplicateRecoveryOutcome, DurableAuditWriteError> {
+        if !matches!(
+            write.key().stream_kind(),
+            DurableAuditStreamKind::Consultation | DurableAuditStreamKind::Denial
+        ) {
+            return Err(DurableAuditWriteError::StoreFailure);
+        }
+        let deadline = Instant::now() + MAX_WRITE_ELAPSED;
+        let client = tokio::time::timeout_at(deadline, self.client.lock())
+            .await
+            .map_err(|_| DurableAuditWriteError::StoreUnavailable)?;
+        tokio::time::timeout_at(
+            deadline,
+            validate_runtime_pseudonym_capability_v1(
+                &client,
+                &self.chain_key_epoch_id,
+                self.keyring_lock_key,
+            ),
+        )
+        .await
+        .map_err(|_| DurableAuditWriteError::StoreUnavailable)?
+        .map_err(|_| DurableAuditWriteError::StoreUnavailable)?;
+        let row = timeout_query(
+            deadline,
+            client.query_one(
+                RECOVER_AUDIT_PHASE_DUPLICATE_SQL,
+                &[
+                    &write.key().stream_kind().as_str(),
+                    &write.key().operation_id().as_str(),
+                    &write.key().phase().as_str(),
+                    &write.payload_digest().as_bytes().as_slice(),
+                    &self.chain_key_epoch_id.as_str(),
+                    &self.keyring_lock_key.as_i64(),
+                ],
+            ),
+        )
+        .await?;
+        match try_str(&row, "outcome")? {
+            "identical_duplicate" => {
+                Ok(PseudonymBoundDuplicateRecoveryOutcome::IdenticalDuplicate(
+                    stored_identity_from_row(&row)?,
+                ))
+            }
+            "conflicting_duplicate" => Ok(
+                PseudonymBoundDuplicateRecoveryOutcome::ConflictingDuplicate(
+                    stored_identity_from_row(&row)?,
+                ),
+            ),
+            "not_found" => {
+                if row
+                    .try_get::<_, Option<&str>>("stored_envelope_id")
+                    .map_err(|_| DurableAuditWriteError::StoreFailure)?
+                    .is_some()
+                    || row
+                        .try_get::<_, Option<&[u8]>>("stored_chain_hash")
+                        .map_err(|_| DurableAuditWriteError::StoreFailure)?
+                        .is_some()
+                {
+                    return Err(DurableAuditWriteError::StoreFailure);
+                }
+                Ok(PseudonymBoundDuplicateRecoveryOutcome::NotFound)
+            }
+            _ => Err(DurableAuditWriteError::StoreFailure),
+        }
     }
 }
 
@@ -319,7 +454,10 @@ impl DurableAuditSink for PostgresDurableAuditStatePlane {
         &self,
         write: &DurableAuditWrite,
     ) -> Result<DurableAuditWriteOutcome, DurableAuditWriteError> {
-        self.write_phase_cas(write).await
+        if write.key().stream_kind() == DurableAuditStreamKind::Consultation {
+            return Err(DurableAuditWriteError::StoreFailure);
+        }
+        self.write_phase_cas(write, None).await
     }
 }
 

@@ -13,24 +13,34 @@
 mod audit;
 mod fence;
 mod migration;
+mod pseudonym_keyring;
 mod quota;
 
 #[cfg(test)]
 mod postgres_tests;
 
 pub(crate) use audit::{
-    CompletionAttemptReference, PostgresDurableAuditStatePlane, StatePlaneInitializationError,
-    StatePlaneReadiness,
+    CompletionAttemptReference, PostgresDurableAuditStatePlane,
+    PseudonymBoundDuplicateRecoveryOutcome, StatePlaneInitializationError, StatePlaneReadiness,
 };
 pub(crate) use fence::{
     DispatchOperationId, DispatchPermit, DispatchPermitBudget, PermitCompletionOutcome,
     PostgresServingFence, ServingFenceError, ServingFenceLockKey, ServingFenceReadiness,
 };
+pub(crate) use migration::install_postgres_state_plane_v1;
 pub(crate) use migration::{
-    install_postgres_state_plane_v1, AuditChainKeyEpochId, RuntimeDatabaseRole,
-    StatePlaneInstallError, DURABLE_AUDIT_CAPABILITY_V1, PERSISTENT_QUOTA_CAPABILITY_V1,
-    POSTGRES_STATE_PLANE_MIGRATION_V1, SERVING_FENCE_CAPABILITY_V1,
+    AuditChainKeyEpochId, AuditPseudonymKeyringLockKey, AuditPseudonymMaintenanceDatabaseRole,
+    AuditPseudonymReaderDatabaseRole, RuntimeDatabaseRole, StatePlaneInstallError,
+    AUDIT_PSEUDONYM_KEYRING_CAPABILITY_V1, DURABLE_AUDIT_CAPABILITY_V1,
+    PERSISTENT_QUOTA_CAPABILITY_V1, POSTGRES_STATE_PLANE_MIGRATION_V1, SERVING_FENCE_CAPABILITY_V1,
     STATE_PLANE_SCHEMA_FINGERPRINT_V1,
+};
+pub(crate) use pseudonym_keyring::{
+    ActiveAuditPseudonymWriteEpoch, AuditPseudonymLookupEpoch, AuditPseudonymLookupSnapshot,
+    AuditPseudonymWriteAuthority, AuthorizedAuditPseudonymLookupSubset,
+    KeyringInitializationOutcome, KeyringReadiness, PostgresAuditPseudonymKeyringMaintenance,
+    PostgresAuditPseudonymKeyringReader, PostgresAuditPseudonymKeyringRuntime,
+    PostgresKeyringError,
 };
 pub(crate) use quota::{
     EffectiveQuotaLimits, PostgresQuotaStatePlane, PublicQuotaLimits, QuotaError, QuotaExhaustion,

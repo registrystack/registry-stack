@@ -13,11 +13,14 @@ use std::{
         atomic::{AtomicUsize, Ordering},
         Arc,
     },
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use postgres_native_tls::MakeTlsConnector;
 use registry_platform_audit::{
+    pseudonym_keyring::{
+        AuditPseudonymKeyId, AuditPseudonymKeyringMetadata, RetainedAuditPseudonymKeyEpoch,
+    },
     verify_chain, AuditChainHasher, AuditEnvelope, ChainVerificationError, DurableAuditOperationId,
     DurableAuditPhase, DurableAuditSink, DurableAuditStreamKind, DurableAuditWrite,
     DurableAuditWriteError, DurableAuditWriteOutcome,
@@ -29,15 +32,22 @@ use tokio_postgres::{error::SqlState, Client, Config, GenericClient};
 use ulid::Ulid;
 
 use super::migration::RUNTIME_SESSION_LIMITS_SQL;
+use super::pseudonym_keyring::canonical_metadata as canonical_keyring_metadata;
 use super::{
-    install_postgres_state_plane_v1, AuditChainKeyEpochId, CompletionAttemptReference,
-    DispatchOperationId, DispatchPermitBudget, EffectiveQuotaLimits, PermitCompletionOutcome,
-    PostgresDurableAuditStatePlane, PostgresQuotaStatePlane, PostgresServingFence,
+    install_postgres_state_plane_v1, AuditChainKeyEpochId, AuditPseudonymKeyringLockKey,
+    AuditPseudonymLookupEpoch, AuditPseudonymMaintenanceDatabaseRole,
+    AuditPseudonymReaderDatabaseRole, AuthorizedAuditPseudonymLookupSubset,
+    CompletionAttemptReference, DispatchOperationId, DispatchPermitBudget, EffectiveQuotaLimits,
+    KeyringInitializationOutcome, PermitCompletionOutcome,
+    PostgresAuditPseudonymKeyringMaintenance, PostgresAuditPseudonymKeyringReader,
+    PostgresAuditPseudonymKeyringRuntime, PostgresDurableAuditStatePlane, PostgresKeyringError,
+    PostgresQuotaStatePlane, PostgresServingFence, PseudonymBoundDuplicateRecoveryOutcome,
     PublicQuotaLimits, QuotaError, QuotaGrant, QuotaKey, QuotaReadiness, QuotaReservation,
     RuntimeDatabaseRole, ServingFenceError, ServingFenceLockKey, ServingFenceReadiness,
     StatePlaneInitializationError, StatePlaneInstallError, StatePlaneReadiness,
-    DURABLE_AUDIT_CAPABILITY_V1, PERSISTENT_QUOTA_CAPABILITY_V1, POSTGRES_STATE_PLANE_MIGRATION_V1,
-    SERVING_FENCE_CAPABILITY_V1, STATE_PLANE_SCHEMA_FINGERPRINT_V1,
+    AUDIT_PSEUDONYM_KEYRING_CAPABILITY_V1, DURABLE_AUDIT_CAPABILITY_V1,
+    PERSISTENT_QUOTA_CAPABILITY_V1, POSTGRES_STATE_PLANE_MIGRATION_V1, SERVING_FENCE_CAPABILITY_V1,
+    STATE_PLANE_SCHEMA_FINGERPRINT_V1,
 };
 
 const DATABASE_URL_ENV: &str = "REGISTRY_RELAY_STATE_PLANE_POSTGRES_TEST_URL";
@@ -45,13 +55,20 @@ const PREPARED_DATABASE_URL_ENV: &str = "REGISTRY_RELAY_STATE_PLANE_PREPARED_POS
 const UNSAFE_DURABILITY_DATABASE_URL_ENV: &str =
     "REGISTRY_RELAY_STATE_PLANE_UNSAFE_DURABILITY_POSTGRES_TEST_URL";
 const TEST_ADVISORY_LOCK: i64 = 7_221_091_441;
-const SNAPSHOT_SQL: &str = "SELECT * FROM relay_state_api.audit_phase_snapshot_v1($1, $2, $3, $4)";
+const SNAPSHOT_SQL: &str = "SELECT * FROM relay_state_api.audit_phase_snapshot_v1(\
+        $1, $2, $3, $4, $5, $6, $7, $8, $9\
+    )";
 const CAS_SQL: &str = "SELECT * FROM relay_state_api.audit_phase_cas_v1(\
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13\
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18\
 )";
 
 fn test_serving_fence_lock_key() -> ServingFenceLockKey {
     ServingFenceLockKey::new(7_221_091_442).expect("test fence key is distinct and nonzero")
+}
+
+fn test_pseudonym_keyring_lock_key() -> AuditPseudonymKeyringLockKey {
+    AuditPseudonymKeyringLockKey::new(7_221_091_443)
+        .expect("test keyring lock key is distinct and nonzero")
 }
 
 #[derive(Debug)]
@@ -111,7 +128,7 @@ fn role_name(kind: &str) -> String {
 
 fn attempt_write(operation_id: &DurableAuditOperationId, marker: &str) -> DurableAuditWrite {
     DurableAuditWrite::new(
-        DurableAuditStreamKind::Consultation,
+        DurableAuditStreamKind::Materialization,
         operation_id.clone(),
         DurableAuditPhase::Attempt,
         json!({
@@ -120,6 +137,61 @@ fn attempt_write(operation_id: &DurableAuditOperationId, marker: &str) -> Durabl
         }),
     )
     .expect("test attempt is valid")
+}
+
+fn pseudonym_key_id(value: &str) -> AuditPseudonymKeyId {
+    AuditPseudonymKeyId::parse(value).expect("valid test pseudonym key id")
+}
+
+fn current_unix_ms() -> i64 {
+    i64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("test clock follows Unix epoch")
+            .as_millis(),
+    )
+    .expect("test time fits i64")
+}
+
+fn consultation_attempt_write(
+    operation_id: &DurableAuditOperationId,
+    key_id: &AuditPseudonymKeyId,
+    marker: &str,
+) -> DurableAuditWrite {
+    DurableAuditWrite::new(
+        DurableAuditStreamKind::Consultation,
+        operation_id.clone(),
+        DurableAuditPhase::Attempt,
+        json!({
+            "authorization": "accepted",
+            "commitment_key_id": key_id.as_str(),
+            "subject_handle": "hmac-sha256:test-only-redacted-handle",
+            "test_marker": marker,
+        }),
+    )
+    .expect("test consultation attempt is valid")
+}
+
+fn rotation_successor(
+    current: &AuditPseudonymKeyringMetadata,
+    activation_time_unix_ms: i64,
+    successor_key_id: &str,
+) -> Result<AuditPseudonymKeyringMetadata, PostgresKeyringError> {
+    let retained_active = RetainedAuditPseudonymKeyEpoch::new(
+        current.active_key_id().clone(),
+        activation_time_unix_ms,
+        activation_time_unix_ms + current.audit_event_retention_ms() + 1_000,
+    )
+    .map_err(|_| PostgresKeyringError::InvalidRotation)?;
+    AuditPseudonymKeyringMetadata::new(
+        current.generation() + 1,
+        pseudonym_key_id(successor_key_id),
+        activation_time_unix_ms,
+        current.active_write_deadline_unix_ms() + 120_000,
+        current.audit_event_retention_ms(),
+        vec![retained_active],
+    )
+    .map_err(|_| PostgresKeyringError::InvalidRotation)
 }
 
 async fn direct_snapshot(
@@ -134,6 +206,11 @@ async fn direct_snapshot(
                 &write.key().operation_id().as_str(),
                 &write.key().phase().as_str(),
                 &write.payload_digest().as_bytes().as_slice(),
+                &"test-chain-key-epoch-1",
+                &Option::<&str>::None,
+                &Option::<i64>::None,
+                &Option::<&[u8]>::None,
+                &test_pseudonym_keyring_lock_key().as_i64(),
             ],
         )
         .await?;
@@ -159,6 +236,9 @@ async fn direct_cas(
     let predecessor = candidate.predecessor.as_ref().map(<[u8; 32]>::as_slice);
     let no_attempt_envelope: Option<&str> = None;
     let no_attempt_hash: Option<&[u8]> = None;
+    let no_pseudonym_key_id: Option<&str> = None;
+    let no_pseudonym_generation: Option<i64> = None;
+    let no_pseudonym_digest: Option<&[u8]> = None;
     let row = client
         .query_one(
             CAS_SQL,
@@ -176,6 +256,11 @@ async fn direct_cas(
                 &envelope.record_hash.as_slice(),
                 &no_attempt_envelope,
                 &no_attempt_hash,
+                &no_pseudonym_key_id,
+                &no_pseudonym_generation,
+                &no_pseudonym_digest,
+                &"test-chain-key-epoch-1",
+                &test_pseudonym_keyring_lock_key().as_i64(),
             ],
         )
         .await?;
@@ -229,7 +314,10 @@ async fn wait_for_blocked_quota_query(
     admin: &Client,
     runtime_role: &str,
 ) -> Result<i64, Box<dyn std::error::Error>> {
-    let deadline = Instant::now() + Duration::from_secs(2);
+    // Test-harness observation window only. Product SQL still owns its fixed
+    // two-second lock timeout; allow a loaded test executor time to schedule
+    // the contender before deciding that it never reached PostgreSQL.
+    let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let blocked = blocked_quota_query_count(admin, runtime_role).await?;
         if blocked > 0 {
@@ -261,6 +349,8 @@ async fn blocked_quota_query_count(
 async fn seed_catalog_for_unsafe_restart(
     client: &Client,
     runtime_role_name: &str,
+    maintenance_role_name: &str,
+    reader_role_name: &str,
     chain_key_epoch_id: &AuditChainKeyEpochId,
 ) -> Result<(), Box<dyn std::error::Error>> {
     client
@@ -270,11 +360,16 @@ async fn seed_catalog_for_unsafe_restart(
         .execute(
             "INSERT INTO relay_state_private.state_plane_metadata ( \
                  singleton, schema_version, capability_id, capability_fingerprint, \
-                 owner_role_oid, runtime_role_oid, chain_key_epoch_id, \
-                 serving_fence_capability_id, serving_fence_lock_key, quota_capability_id \
-             ) SELECT true, 1, $1, $2, owner_role.oid, runtime_role.oid, $3, $4, $5, $6 \
+                 owner_role_oid, runtime_role_oid, audit_pseudonym_maintenance_role_oid, \
+                 audit_pseudonym_reader_role_oid, chain_key_epoch_id, \
+                 serving_fence_capability_id, serving_fence_lock_key, quota_capability_id, \
+                 audit_pseudonym_keyring_capability_id, audit_pseudonym_keyring_lock_key \
+             ) SELECT true, 1, $1, $2, owner_role.oid, runtime_role.oid, \
+                      maintenance_role.oid, reader_role.oid, $3, $4, $5, $6, $7, $8 \
              FROM pg_catalog.pg_roles AS owner_role \
-             JOIN pg_catalog.pg_roles AS runtime_role ON runtime_role.rolname = $7 \
+             JOIN pg_catalog.pg_roles AS runtime_role ON runtime_role.rolname = $9 \
+             JOIN pg_catalog.pg_roles AS maintenance_role ON maintenance_role.rolname = $10 \
+             JOIN pg_catalog.pg_roles AS reader_role ON reader_role.rolname = $11 \
              WHERE owner_role.rolname = current_user",
             &[
                 &DURABLE_AUDIT_CAPABILITY_V1,
@@ -283,19 +378,30 @@ async fn seed_catalog_for_unsafe_restart(
                 &SERVING_FENCE_CAPABILITY_V1,
                 &test_serving_fence_lock_key().as_i64(),
                 &PERSISTENT_QUOTA_CAPABILITY_V1,
+                &AUDIT_PSEUDONYM_KEYRING_CAPABILITY_V1,
+                &test_pseudonym_keyring_lock_key().as_i64(),
                 &runtime_role_name,
+                &maintenance_role_name,
+                &reader_role_name,
             ],
         )
         .await?;
     client
         .batch_execute(&format!(
-            "GRANT USAGE ON SCHEMA relay_state_api TO {runtime}; \
+            "GRANT USAGE ON SCHEMA relay_state_api TO {runtime}, {maintenance}, {reader}; \
              GRANT EXECUTE ON FUNCTION \
-                 relay_state_api.audit_phase_snapshot_v1(text, text, text, bytea) \
+                 relay_state_api.audit_phase_snapshot_v1( \
+                     text, text, text, bytea, text, text, bigint, bytea, bigint \
+                 ) \
+                 TO {runtime}; \
+             GRANT EXECUTE ON FUNCTION \
+                 relay_state_api.audit_phase_duplicate_v1( \
+                     text, text, text, bytea, text, bigint \
+                 ) \
                  TO {runtime}; \
              GRANT EXECUTE ON FUNCTION relay_state_api.audit_phase_cas_v1( \
                  text, text, text, bytea, bigint, bytea, text, bigint, \
-                 text, text, bytea, text, bytea \
+                 text, text, bytea, text, bytea, text, bigint, bytea, text, bigint \
              ) TO {runtime}; \
              GRANT EXECUTE ON FUNCTION relay_state_api.audit_readiness_v1(text) \
                  TO {runtime}; \
@@ -318,8 +424,35 @@ async fn seed_catalog_for_unsafe_restart(
                  TO {runtime}; \
              GRANT EXECUTE ON FUNCTION relay_state_api.quota_reserve_v1( \
                  text, text, bigint, integer, integer \
-             ) TO {runtime};",
+             ) TO {runtime}; \
+             GRANT EXECUTE ON FUNCTION \
+                 relay_state_api.audit_pseudonym_keyring_snapshot_v1( \
+                     text, text[], text, bigint \
+                 ) \
+                 TO {runtime}, {maintenance}, {reader}; \
+             GRANT EXECUTE ON FUNCTION \
+                 relay_state_api.audit_pseudonym_keyring_readiness_v1(text, text) \
+                 TO {runtime}, {maintenance}, {reader}; \
+             GRANT EXECUTE ON FUNCTION \
+                 relay_state_api.audit_pseudonym_keyring_initialize_v1( \
+                     bigint, bytea, text, text, bigint, bigint, bigint, \
+                     text[], bigint[], bigint[], text, bigint \
+                 ) TO {maintenance}; \
+             GRANT EXECUTE ON FUNCTION \
+                 relay_state_api.audit_pseudonym_keyring_rotate_v1( \
+                     bigint, bytea, bigint, bytea, bigint, bigint, bytea, \
+                     text, text, bigint, bigint, bigint, text[], bigint[], bigint[], \
+                     text, bigint \
+                 ) TO {maintenance}; \
+             GRANT EXECUTE ON FUNCTION \
+                 relay_state_api.audit_pseudonym_keyring_maintain_v1( \
+                     bigint, bytea, bigint, bytea, bigint, bigint, bytea, \
+                     text, text, bigint, bigint, bigint, text[], bigint[], bigint[], \
+                     text, bigint \
+                 ) TO {maintenance};",
             runtime = quote_identifier(runtime_role_name),
+            maintenance = quote_identifier(maintenance_role_name),
+            reader = quote_identifier(reader_role_name),
         ))
         .await?;
     Ok(())
@@ -1153,10 +1286,14 @@ async fn postgres_state_plane_enforces_role_catalog_and_chain_contract(
     let owner_role = role_name("owner");
     let stale_owner_role = role_name("stale");
     let runtime_role_name = role_name("runtime");
+    let keyring_maintenance_role_name = role_name("keymaint");
+    let keyring_reader_role_name = role_name("keyreader");
     let private_reader_role = role_name("reader");
     let attacker_role = role_name("attacker");
     let bridge_role = role_name("bridge");
     let runtime_password = Ulid::new().to_string();
+    let keyring_maintenance_password = Ulid::new().to_string();
+    let keyring_reader_password = Ulid::new().to_string();
     let attacker_password = Ulid::new().to_string();
     let database_name: String = admin
         .query_one("SELECT current_database()", &[])
@@ -1168,6 +1305,8 @@ async fn postgres_state_plane_enforces_role_catalog_and_chain_contract(
 CREATE ROLE {owner} NOLOGIN NOSUPERUSER NOCREATEROLE NOCREATEDB NOREPLICATION NOBYPASSRLS;
 CREATE ROLE {stale} NOLOGIN NOSUPERUSER NOCREATEROLE NOCREATEDB NOREPLICATION NOBYPASSRLS;
 CREATE ROLE {runtime} LOGIN PASSWORD '{runtime_password}' NOSUPERUSER NOCREATEROLE NOCREATEDB NOREPLICATION NOBYPASSRLS;
+CREATE ROLE {keymaint} LOGIN PASSWORD '{keyring_maintenance_password}' NOSUPERUSER NOCREATEROLE NOCREATEDB NOREPLICATION NOBYPASSRLS;
+CREATE ROLE {keyreader} LOGIN PASSWORD '{keyring_reader_password}' NOSUPERUSER NOCREATEROLE NOCREATEDB NOREPLICATION NOBYPASSRLS;
 CREATE ROLE {reader} NOLOGIN NOSUPERUSER NOCREATEROLE NOCREATEDB NOREPLICATION NOBYPASSRLS;
 CREATE ROLE {attacker} LOGIN PASSWORD '{attacker_password}' NOSUPERUSER NOCREATEROLE NOCREATEDB NOREPLICATION NOBYPASSRLS;
 CREATE ROLE {bridge} NOLOGIN NOSUPERUSER NOCREATEROLE NOCREATEDB NOREPLICATION NOBYPASSRLS;
@@ -1177,6 +1316,8 @@ GRANT CREATE ON DATABASE {database} TO {stale};
             owner = quote_identifier(&owner_role),
             stale = quote_identifier(&stale_owner_role),
             runtime = quote_identifier(&runtime_role_name),
+            keymaint = quote_identifier(&keyring_maintenance_role_name),
+            keyreader = quote_identifier(&keyring_reader_role_name),
             reader = quote_identifier(&private_reader_role),
             attacker = quote_identifier(&attacker_role),
             bridge = quote_identifier(&bridge_role),
@@ -1185,6 +1326,9 @@ GRANT CREATE ON DATABASE {database} TO {stale};
         .await?;
 
     let runtime_role = RuntimeDatabaseRole::parse(&runtime_role_name)?;
+    let keyring_maintenance_role =
+        AuditPseudonymMaintenanceDatabaseRole::parse(&keyring_maintenance_role_name)?;
+    let keyring_reader_role = AuditPseudonymReaderDatabaseRole::parse(&keyring_reader_role_name)?;
     let chain_key_epoch_id = AuditChainKeyEpochId::parse("test-chain-key-epoch-1")?;
 
     let server = admin
@@ -1222,6 +1366,9 @@ GRANT CREATE ON DATABASE {database} TO {stale};
             &runtime_role,
             &chain_key_epoch_id,
             test_serving_fence_lock_key(),
+            &keyring_maintenance_role,
+            &keyring_reader_role,
+            test_pseudonym_keyring_lock_key(),
         )
         .await,
         Err(StatePlaneInstallError::InvalidMigrationAuthority)
@@ -1235,7 +1382,10 @@ GRANT CREATE ON DATABASE {database} TO {stale};
             &mut admin,
             &runtime_role,
             &chain_key_epoch_id,
-            test_serving_fence_lock_key()
+            test_serving_fence_lock_key(),
+            &keyring_maintenance_role,
+            &keyring_reader_role,
+            test_pseudonym_keyring_lock_key(),
         )
         .await,
         Err(StatePlaneInstallError::OwnerRoleNotIsolated)
@@ -1264,7 +1414,10 @@ GRANT CREATE ON DATABASE {database} TO {stale};
             &mut admin,
             &runtime_role,
             &chain_key_epoch_id,
-            test_serving_fence_lock_key()
+            test_serving_fence_lock_key(),
+            &keyring_maintenance_role,
+            &keyring_reader_role,
+            test_pseudonym_keyring_lock_key(),
         )
         .await,
         Err(StatePlaneInstallError::OwnerRoleNotIsolated)
@@ -1292,7 +1445,10 @@ GRANT CREATE ON DATABASE {database} TO {stale};
             &mut admin,
             &runtime_role,
             &chain_key_epoch_id,
-            test_serving_fence_lock_key()
+            test_serving_fence_lock_key(),
+            &keyring_maintenance_role,
+            &keyring_reader_role,
+            test_pseudonym_keyring_lock_key(),
         )
         .await,
         Err(StatePlaneInstallError::OwnerRoleNotIsolated)
@@ -1339,7 +1495,10 @@ GRANT CREATE ON DATABASE {database} TO {stale};
                 &mut admin,
                 &runtime_role,
                 &chain_key_epoch_id,
-                test_serving_fence_lock_key()
+                test_serving_fence_lock_key(),
+                &keyring_maintenance_role,
+                &keyring_reader_role,
+                test_pseudonym_keyring_lock_key(),
             )
             .await,
             Err(StatePlaneInstallError::RuntimeRoleNotIsolated)
@@ -1360,7 +1519,10 @@ GRANT CREATE ON DATABASE {database} TO {stale};
             &mut admin,
             &runtime_role,
             &chain_key_epoch_id,
-            test_serving_fence_lock_key()
+            test_serving_fence_lock_key(),
+            &keyring_maintenance_role,
+            &keyring_reader_role,
+            test_pseudonym_keyring_lock_key(),
         )
         .await,
         Err(StatePlaneInstallError::CapabilityDrift)
@@ -1382,13 +1544,19 @@ GRANT CREATE ON DATABASE {database} TO {stale};
             &mut admin,
             &runtime_role,
             &chain_key_epoch_id,
-            test_serving_fence_lock_key()
+            test_serving_fence_lock_key(),
+            &keyring_maintenance_role,
+            &keyring_reader_role,
+            test_pseudonym_keyring_lock_key(),
         ),
         install_postgres_state_plane_v1(
             &mut concurrent_admin,
             &runtime_role,
             &chain_key_epoch_id,
-            test_serving_fence_lock_key()
+            test_serving_fence_lock_key(),
+            &keyring_maintenance_role,
+            &keyring_reader_role,
+            test_pseudonym_keyring_lock_key(),
         )
     );
     assert_eq!(first_install, Ok(()));
@@ -1405,6 +1573,9 @@ GRANT CREATE ON DATABASE {database} TO {stale};
         &runtime_role,
         &chain_key_epoch_id,
         test_serving_fence_lock_key(),
+        &keyring_maintenance_role,
+        &keyring_reader_role,
+        test_pseudonym_keyring_lock_key(),
     )
     .await?;
     reset_role(&admin).await?;
@@ -1453,6 +1624,7 @@ WHERE metadata.singleton = true
             unkeyed_client,
             AuditChainHasher::unkeyed_dev_only(),
             chain_key_epoch_id.clone(),
+            test_pseudonym_keyring_lock_key(),
         )
         .await
         .err()
@@ -1471,6 +1643,313 @@ WHERE metadata.singleton = true
     );
     let test_chain_hasher = AuditChainHasher::from_env(&secret_env)?;
     env::remove_var(&secret_env);
+
+    let (keyring_runtime_client, keyring_runtime_driver) =
+        postgres_client_as(&database_url, &runtime_role_name, &runtime_password).await?;
+    let keyring_runtime = Arc::new(
+        PostgresAuditPseudonymKeyringRuntime::connect(
+            keyring_runtime_client,
+            chain_key_epoch_id.clone(),
+            test_pseudonym_keyring_lock_key(),
+        )
+        .await?,
+    );
+    let (keyring_maintenance_client, keyring_maintenance_driver) = postgres_client_as(
+        &database_url,
+        &keyring_maintenance_role_name,
+        &keyring_maintenance_password,
+    )
+    .await?;
+    let keyring_maintenance = Arc::new(
+        PostgresAuditPseudonymKeyringMaintenance::connect(
+            keyring_maintenance_client,
+            chain_key_epoch_id.clone(),
+            test_pseudonym_keyring_lock_key(),
+        )
+        .await?,
+    );
+    let (keyring_reader_client, keyring_reader_driver) = postgres_client_as(
+        &database_url,
+        &keyring_reader_role_name,
+        &keyring_reader_password,
+    )
+    .await?;
+    let keyring_reader = Arc::new(
+        PostgresAuditPseudonymKeyringReader::connect(
+            keyring_reader_client,
+            chain_key_epoch_id.clone(),
+            test_pseudonym_keyring_lock_key(),
+        )
+        .await?,
+    );
+    assert_eq!(
+        keyring_runtime.current_write_authority().await.err(),
+        Some(PostgresKeyringError::Uninitialized)
+    );
+    let initial_now = current_unix_ms();
+    let initial_keyring_metadata = AuditPseudonymKeyringMetadata::new(
+        1,
+        pseudonym_key_id("epoch-1"),
+        initial_now - 1_000,
+        initial_now + 120_000,
+        2_000,
+        vec![],
+    )?;
+    assert_eq!(
+        keyring_maintenance
+            .initialize(initial_keyring_metadata.clone())
+            .await?,
+        KeyringInitializationOutcome::Initialized
+    );
+    assert_eq!(
+        keyring_maintenance
+            .initialize(initial_keyring_metadata.clone())
+            .await?,
+        KeyringInitializationOutcome::Identical
+    );
+    let initial_lookup = keyring_reader
+        .lookup_snapshot(AuthorizedAuditPseudonymLookupSubset::for_test([
+            pseudonym_key_id("epoch-1"),
+        ])?)
+        .await?;
+    assert_eq!(initial_lookup.epochs().len(), 1);
+    assert_eq!(initial_lookup.epochs()[0].key_id().as_str(), "epoch-1");
+
+    let (keyring_shape_runtime, keyring_shape_runtime_driver) =
+        postgres_client_as(&database_url, &runtime_role_name, &runtime_password).await?;
+    keyring_shape_runtime
+        .batch_execute(RUNTIME_SESSION_LIMITS_SQL)
+        .await?;
+    let empty_lookup_ids = Vec::<String>::new();
+    let runtime_shape = keyring_shape_runtime
+        .query_one(
+            "SELECT * FROM relay_state_api.audit_pseudonym_keyring_snapshot_v1($1,$2,$3,$4)",
+            &[
+                &"write",
+                &empty_lookup_ids,
+                &chain_key_epoch_id.as_str(),
+                &test_pseudonym_keyring_lock_key().as_i64(),
+            ],
+        )
+        .await?;
+    assert_eq!(runtime_shape.try_get::<_, &str>("outcome")?, "ready");
+    assert!(runtime_shape
+        .try_get::<_, Option<&str>>("metadata_canonical")?
+        .is_none());
+    assert!(runtime_shape
+        .try_get::<_, Vec<String>>("retained_key_ids")?
+        .is_empty());
+    assert!(runtime_shape
+        .try_get::<_, Option<i64>>("used_key_id_count")?
+        .is_none());
+    let wrong_purpose = keyring_shape_runtime
+        .query_one(
+            "SELECT * FROM relay_state_api.audit_pseudonym_keyring_snapshot_v1($1,$2,$3,$4)",
+            &[
+                &"lookup",
+                &vec!["epoch-1".to_owned()],
+                &chain_key_epoch_id.as_str(),
+                &test_pseudonym_keyring_lock_key().as_i64(),
+            ],
+        )
+        .await
+        .expect_err("runtime role cannot perform reader lookup");
+    assert_eq!(
+        wrong_purpose.as_db_error().map(|error| error.code()),
+        Some(&SqlState::INSUFFICIENT_PRIVILEGE)
+    );
+    let runtime_initialize_denial = keyring_shape_runtime
+        .query_one(
+            "SELECT * FROM relay_state_api.audit_pseudonym_keyring_initialize_v1(\
+             1,decode(repeat('00',32),'hex'),'{}','epoch-x',0,1,1,\
+             ARRAY[]::text[],ARRAY[]::bigint[],ARRAY[]::bigint[],$1,$2)",
+            &[
+                &chain_key_epoch_id.as_str(),
+                &test_pseudonym_keyring_lock_key().as_i64(),
+            ],
+        )
+        .await
+        .expect_err("runtime role cannot initialize keyring");
+    assert_eq!(
+        runtime_initialize_denial
+            .as_db_error()
+            .map(|error| error.code()),
+        Some(&SqlState::INSUFFICIENT_PRIVILEGE)
+    );
+    let private_read_denial = keyring_shape_runtime
+        .query_one(
+            "SELECT count(*) FROM relay_state_private.audit_pseudonym_keyring",
+            &[],
+        )
+        .await
+        .expect_err("runtime has no keyring table read access");
+    assert_eq!(
+        private_read_denial.as_db_error().map(|error| error.code()),
+        Some(&SqlState::INSUFFICIENT_PRIVILEGE)
+    );
+    drop(keyring_shape_runtime);
+    keyring_shape_runtime_driver.abort();
+
+    let (keyring_shape_reader, keyring_shape_reader_driver) = postgres_client_as(
+        &database_url,
+        &keyring_reader_role_name,
+        &keyring_reader_password,
+    )
+    .await?;
+    keyring_shape_reader
+        .batch_execute(RUNTIME_SESSION_LIMITS_SQL)
+        .await?;
+    let reader_shape = keyring_shape_reader
+        .query_one(
+            "SELECT * FROM relay_state_api.audit_pseudonym_keyring_snapshot_v1($1,$2,$3,$4)",
+            &[
+                &"lookup",
+                &vec!["epoch-1".to_owned()],
+                &chain_key_epoch_id.as_str(),
+                &test_pseudonym_keyring_lock_key().as_i64(),
+            ],
+        )
+        .await?;
+    assert_eq!(reader_shape.try_get::<_, &str>("outcome")?, "ready");
+    assert!(reader_shape
+        .try_get::<_, Option<&str>>("active_key_id")?
+        .is_none());
+    assert!(reader_shape
+        .try_get::<_, Vec<String>>("retained_key_ids")?
+        .is_empty());
+    assert_eq!(
+        reader_shape.try_get::<_, Vec<String>>("lookup_key_ids")?,
+        ["epoch-1"]
+    );
+    let reader_rotate_denial = keyring_shape_reader
+        .query_one(
+            "SELECT * FROM relay_state_api.audit_pseudonym_keyring_rotate_v1(\
+             1,decode(repeat('00',32),'hex'),1,decode(repeat('00',32),'hex'),0,\
+             2,decode(repeat('00',32),'hex'),'{}','epoch-x',0,1,1,\
+             ARRAY[]::text[],ARRAY[]::bigint[],ARRAY[]::bigint[],$1,$2)",
+            &[
+                &chain_key_epoch_id.as_str(),
+                &test_pseudonym_keyring_lock_key().as_i64(),
+            ],
+        )
+        .await
+        .expect_err("reader role cannot rotate keyring");
+    assert_eq!(
+        reader_rotate_denial.as_db_error().map(|error| error.code()),
+        Some(&SqlState::INSUFFICIENT_PRIVILEGE)
+    );
+    drop(keyring_shape_reader);
+    keyring_shape_reader_driver.abort();
+
+    let (keyring_spoof_client, keyring_spoof_driver) = postgres_client_as(
+        &database_url,
+        &keyring_maintenance_role_name,
+        &keyring_maintenance_password,
+    )
+    .await?;
+    keyring_spoof_client
+        .batch_execute(RUNTIME_SESSION_LIMITS_SQL)
+        .await?;
+    let maintenance_audit_denial = keyring_spoof_client
+        .query_one(
+            "SELECT * FROM relay_state_api.audit_phase_duplicate_v1(\
+             'consultation','00000000000000000000000000','attempt',\
+             decode(repeat('00',32),'hex'),$1,$2)",
+            &[
+                &chain_key_epoch_id.as_str(),
+                &test_pseudonym_keyring_lock_key().as_i64(),
+            ],
+        )
+        .await
+        .expect_err("maintenance role cannot call durable audit API");
+    assert_eq!(
+        maintenance_audit_denial
+            .as_db_error()
+            .map(|error| error.code()),
+        Some(&SqlState::INSUFFICIENT_PRIVILEGE)
+    );
+    let spoof_snapshot = keyring_spoof_client
+        .query_one(
+            "SELECT * FROM relay_state_api.audit_pseudonym_keyring_snapshot_v1($1,$2,$3,$4)",
+            &[
+                &"rotation",
+                &Vec::<String>::new(),
+                &chain_key_epoch_id.as_str(),
+                &test_pseudonym_keyring_lock_key().as_i64(),
+            ],
+        )
+        .await?;
+    assert_eq!(spoof_snapshot.try_get::<_, &str>("outcome")?, "ready");
+    let spoof_transition_time: i64 = spoof_snapshot.try_get("authoritative_now_unix_ms")?;
+    let spoof_history_count: i64 = spoof_snapshot.try_get("used_key_id_count")?;
+    let spoof_history_digest: Vec<u8> = spoof_snapshot.try_get("used_key_ids_digest")?;
+    let spoof_successor = rotation_successor(
+        &initial_keyring_metadata,
+        spoof_transition_time,
+        "epoch-spoof",
+    )?;
+    let spoof_canonical = canonical_keyring_metadata(&spoof_successor)?;
+    let initial_binding = initial_keyring_metadata.binding()?;
+    let spoof_binding = spoof_successor.binding()?;
+    let spoof_retained_key_ids = spoof_successor
+        .retained_keys()
+        .iter()
+        .map(|epoch| epoch.key_id().as_str().to_owned())
+        .collect::<Vec<_>>();
+    let spoof_retired = spoof_successor
+        .retained_keys()
+        .iter()
+        .map(RetainedAuditPseudonymKeyEpoch::retired_at_unix_ms)
+        .collect::<Vec<_>>();
+    let spoof_destroy = spoof_successor
+        .retained_keys()
+        .iter()
+        .map(RetainedAuditPseudonymKeyEpoch::destroy_after_unix_ms)
+        .collect::<Vec<_>>();
+    keyring_spoof_client
+        .batch_execute(
+            "SELECT set_config('registry.audit_pseudonym_transition_time', 'forged', false)",
+        )
+        .await?;
+    let spoof_apply = keyring_spoof_client
+        .query_one(
+            "SELECT * FROM relay_state_api.audit_pseudonym_keyring_rotate_v1(\
+             $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)",
+            &[
+                &i64::try_from(initial_keyring_metadata.generation())?,
+                &initial_binding.digest().as_slice(),
+                &spoof_history_count,
+                &spoof_history_digest,
+                &spoof_transition_time,
+                &i64::try_from(spoof_successor.generation())?,
+                &spoof_binding.digest().as_slice(),
+                &spoof_canonical,
+                &spoof_successor.active_key_id().as_str(),
+                &spoof_successor.active_since_unix_ms(),
+                &spoof_successor.active_write_deadline_unix_ms(),
+                &spoof_successor.audit_event_retention_ms(),
+                &spoof_retained_key_ids,
+                &spoof_retired,
+                &spoof_destroy,
+                &chain_key_epoch_id.as_str(),
+                &test_pseudonym_keyring_lock_key().as_i64(),
+            ],
+        )
+        .await?;
+    assert_eq!(spoof_apply.try_get::<_, &str>("outcome")?, "invalid");
+    let context_read_denial = keyring_spoof_client
+        .query_one(
+            "SELECT count(*) FROM relay_state_private.audit_pseudonym_transition_context",
+            &[],
+        )
+        .await
+        .expect_err("maintenance identity cannot read private transition context");
+    assert_eq!(
+        context_read_denial.as_db_error().map(|error| error.code()),
+        Some(&SqlState::INSUFFICIENT_PRIVILEGE)
+    );
+    drop(keyring_spoof_client);
+    keyring_spoof_driver.abort();
 
     // SUSET role/database defaults are inherited before Relay receives the
     // Client. The runtime cannot repair session_replication_role, and replica
@@ -1516,6 +1995,7 @@ WHERE metadata.singleton = true
             replica_client,
             test_chain_hasher.clone(),
             chain_key_epoch_id.clone(),
+            test_pseudonym_keyring_lock_key(),
         )
         .await;
         replica_driver.abort();
@@ -1542,6 +2022,7 @@ WHERE metadata.singleton = true
             read_only_default_client,
             test_chain_hasher.clone(),
             chain_key_epoch_id.clone(),
+            test_pseudonym_keyring_lock_key(),
         )
         .await
         .err()
@@ -1600,6 +2081,7 @@ WHERE metadata.singleton = true
         open_transaction_client,
         test_chain_hasher.clone(),
         chain_key_epoch_id.clone(),
+        test_pseudonym_keyring_lock_key(),
     )
     .await?;
     assert_eq!(
@@ -1674,6 +2156,7 @@ WHERE metadata.singleton = true
         failed_transaction_client,
         test_chain_hasher.clone(),
         chain_key_epoch_id.clone(),
+        test_pseudonym_keyring_lock_key(),
     )
     .await?;
     assert_eq!(
@@ -1708,6 +2191,7 @@ WHERE metadata.singleton = true
             client_one,
             test_chain_hasher.clone(),
             chain_key_epoch_id.clone(),
+            test_pseudonym_keyring_lock_key(),
         )
         .await?,
     );
@@ -1718,6 +2202,7 @@ WHERE metadata.singleton = true
             client_two,
             test_chain_hasher.clone(),
             chain_key_epoch_id.clone(),
+            test_pseudonym_keyring_lock_key(),
         )
         .await?,
     );
@@ -1755,6 +2240,7 @@ WHERE metadata.singleton = true
             wrong_epoch_client,
             test_chain_hasher.clone(),
             AuditChainKeyEpochId::parse("wrong-epoch")?,
+            test_pseudonym_keyring_lock_key(),
         )
         .await
         .err()
@@ -1762,6 +2248,467 @@ WHERE metadata.singleton = true
         StatePlaneInitializationError::CapabilityDrift
     );
     wrong_epoch_driver.abort();
+
+    let pseudonym_operation = DurableAuditOperationId::from_ulid(Ulid::new());
+    let pseudonym_write = consultation_attempt_write(
+        &pseudonym_operation,
+        initial_keyring_metadata.active_key_id(),
+        "pseudonym-bound-insert",
+    );
+    assert_eq!(
+        plane_one.write_phase(&pseudonym_write).await,
+        Err(DurableAuditWriteError::StoreFailure),
+        "generic durable sink must never insert a consultation"
+    );
+    let initial_write_epoch = keyring_runtime
+        .current_write_authority()
+        .await?
+        .authorize_use()?;
+    assert!(matches!(
+        plane_one
+            .write_phase_with_pseudonym_authority(&pseudonym_write, initial_write_epoch)
+            .await?,
+        DurableAuditWriteOutcome::Inserted(_)
+    ));
+    assert!(matches!(
+        plane_one
+            .recover_pseudonym_bound_duplicate(&pseudonym_write)
+            .await?,
+        PseudonymBoundDuplicateRecoveryOutcome::IdenticalDuplicate(_)
+    ));
+    let missing_pseudonym_write = consultation_attempt_write(
+        &DurableAuditOperationId::from_ulid(Ulid::new()),
+        initial_keyring_metadata.active_key_id(),
+        "duplicate-only-must-not-insert",
+    );
+    let head_before_missing_recovery: i64 = admin
+        .query_one(
+            "SELECT generation FROM relay_state_private.audit_chain_head WHERE singleton",
+            &[],
+        )
+        .await?
+        .try_get(0)?;
+    assert_eq!(
+        plane_one
+            .recover_pseudonym_bound_duplicate(&missing_pseudonym_write)
+            .await?,
+        PseudonymBoundDuplicateRecoveryOutcome::NotFound
+    );
+    let head_after_missing_recovery: i64 = admin
+        .query_one(
+            "SELECT generation FROM relay_state_private.audit_chain_head WHERE singleton",
+            &[],
+        )
+        .await?
+        .try_get(0)?;
+    assert_eq!(head_after_missing_recovery, head_before_missing_recovery);
+
+    let coarse_denial = DurableAuditWrite::new(
+        DurableAuditStreamKind::Denial,
+        DurableAuditOperationId::from_ulid(Ulid::new()),
+        DurableAuditPhase::DenialDecision,
+        json!({"reason_class": "authentication"}),
+    )?;
+    assert!(matches!(
+        plane_one.write_phase(&coarse_denial).await?,
+        DurableAuditWriteOutcome::Inserted(_)
+    ));
+    assert_eq!(
+        plane_one
+            .recover_pseudonym_bound_duplicate(&coarse_denial)
+            .await,
+        Err(DurableAuditWriteError::StoreFailure),
+        "duplicate-only pseudonym recovery must reject a coarse denial"
+    );
+
+    let stale_issued_epoch = keyring_runtime
+        .current_write_authority()
+        .await?
+        .authorize_use()?;
+    let held_operation = DurableAuditOperationId::from_ulid(Ulid::new());
+    let held_write = consultation_attempt_write(
+        &held_operation,
+        initial_keyring_metadata.active_key_id(),
+        "held-shared-keyring-barrier",
+    );
+    let held_epoch = keyring_runtime
+        .current_write_authority()
+        .await?
+        .authorize_use()?;
+    let (held_key_id, held_generation, held_digest, held_chain, held_lock_key) =
+        held_epoch.postgres_binding();
+    let (mut held_client, held_driver) =
+        postgres_client_as(&database_url, &runtime_role_name, &runtime_password).await?;
+    held_client
+        .batch_execute(RUNTIME_SESSION_LIMITS_SQL)
+        .await?;
+    let held_transaction = held_client.transaction().await?;
+    let held_snapshot = held_transaction
+        .query_one(
+            SNAPSHOT_SQL,
+            &[
+                &held_write.key().stream_kind().as_str(),
+                &held_write.key().operation_id().as_str(),
+                &held_write.key().phase().as_str(),
+                &held_write.payload_digest().as_bytes().as_slice(),
+                &held_chain.as_str(),
+                &Some(held_key_id),
+                &Some(held_generation),
+                &Some(held_digest.as_slice()),
+                &held_lock_key,
+            ],
+        )
+        .await?;
+    assert_eq!(held_snapshot.try_get::<_, &str>("outcome")?, "candidate");
+    let rotating_maintenance = Arc::clone(&keyring_maintenance);
+    let rotation_task = tokio::spawn(async move {
+        rotating_maintenance
+            .rotate(initial_binding, |current, transition_time| {
+                rotation_successor(current, transition_time.unix_ms(), "epoch-2")
+            })
+            .await
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        !rotation_task.is_finished(),
+        "exclusive rotation must wait behind a held shared CAS barrier"
+    );
+    held_transaction.rollback().await?;
+    drop(held_client);
+    held_driver.abort();
+    let rotated_binding = rotation_task.await??;
+    let current_epoch_2 = keyring_runtime
+        .current_write_authority()
+        .await?
+        .authorize_use()?;
+    assert_eq!(current_epoch_2.key_id().as_str(), "epoch-2");
+    drop(current_epoch_2);
+    let stale_after_rotation_write = consultation_attempt_write(
+        &DurableAuditOperationId::from_ulid(Ulid::new()),
+        initial_keyring_metadata.active_key_id(),
+        "stale-issued-authority",
+    );
+    assert!(plane_one
+        .write_phase_with_pseudonym_authority(&stale_after_rotation_write, stale_issued_epoch)
+        .await
+        .is_err());
+    let stale_rows: i64 = admin
+        .query_one(
+            "SELECT count(*) FROM relay_state_private.audit_phase WHERE operation_id=$1",
+            &[&stale_after_rotation_write.key().operation_id().as_str()],
+        )
+        .await?
+        .try_get(0)?;
+    assert_eq!(stale_rows, 0);
+
+    let (recovery_client, recovery_driver) =
+        postgres_client_as(&database_url, &runtime_role_name, &runtime_password).await?;
+    let recovery_plane = PostgresDurableAuditStatePlane::connect(
+        recovery_client,
+        test_chain_hasher.clone(),
+        chain_key_epoch_id.clone(),
+        test_pseudonym_keyring_lock_key(),
+    )
+    .await?;
+    assert!(matches!(
+        recovery_plane
+            .recover_pseudonym_bound_duplicate(&pseudonym_write)
+            .await?,
+        PseudonymBoundDuplicateRecoveryOutcome::IdenticalDuplicate(_)
+    ));
+    let conflicting_recovery_write = consultation_attempt_write(
+        &pseudonym_operation,
+        initial_keyring_metadata.active_key_id(),
+        "conflicting-recovery-payload",
+    );
+    assert!(matches!(
+        recovery_plane
+            .recover_pseudonym_bound_duplicate(&conflicting_recovery_write)
+            .await?,
+        PseudonymBoundDuplicateRecoveryOutcome::ConflictingDuplicate(_)
+    ));
+    drop(recovery_plane);
+    recovery_driver.abort();
+
+    let retained_lookup = keyring_reader
+        .lookup_snapshot(AuthorizedAuditPseudonymLookupSubset::for_test([
+            pseudonym_key_id("epoch-1"),
+            pseudonym_key_id("epoch-2"),
+        ])?)
+        .await?;
+    assert_eq!(retained_lookup.epochs().len(), 2);
+    assert_eq!(retained_lookup.epochs()[0].key_id().as_str(), "epoch-1");
+    assert_eq!(retained_lookup.epochs()[1].key_id().as_str(), "epoch-2");
+    let retired_epoch_1_destroy_after = match &retained_lookup.epochs()[0] {
+        AuditPseudonymLookupEpoch::Retained(epoch) => epoch.destroy_after_unix_ms(),
+        AuditPseudonymLookupEpoch::Active { .. } => {
+            panic!("epoch-1 must be retained after rotation")
+        }
+    };
+    let wait_for_retirement_ms = retired_epoch_1_destroy_after
+        .saturating_sub(current_unix_ms())
+        .saturating_add(25);
+    tokio::time::sleep(Duration::from_millis(u64::try_from(
+        wait_for_retirement_ms,
+    )?))
+    .await;
+    assert_eq!(
+        keyring_reader
+            .lookup_snapshot(AuthorizedAuditPseudonymLookupSubset::for_test([
+                pseudonym_key_id("epoch-1"),
+            ])?)
+            .await
+            .err(),
+        Some(PostgresKeyringError::UnauthorizedLookupSubset)
+    );
+    assert_eq!(
+        keyring_runtime.current_write_authority().await.err(),
+        Some(PostgresKeyringError::RetainedEpochExpired)
+    );
+    let maintained_binding = keyring_maintenance
+        .maintain(rotated_binding, |current, _maintenance_time| {
+            AuditPseudonymKeyringMetadata::new(
+                current.generation() + 1,
+                current.active_key_id().clone(),
+                current.active_since_unix_ms(),
+                current.active_write_deadline_unix_ms(),
+                current.audit_event_retention_ms(),
+                vec![],
+            )
+            .map_err(|_| PostgresKeyringError::InvalidMaintenance)
+        })
+        .await?;
+    assert_eq!(
+        keyring_runtime
+            .current_write_authority()
+            .await?
+            .authorize_use()?
+            .key_id()
+            .as_str(),
+        "epoch-2"
+    );
+    assert_eq!(
+        keyring_maintenance
+            .rotate(maintained_binding, |current, transition_time| {
+                rotation_successor(current, transition_time.unix_ms(), "epoch-1")
+            })
+            .await
+            .err(),
+        Some(PostgresKeyringError::ReusedKeyId)
+    );
+
+    let history_transaction = admin.transaction().await?;
+    history_transaction
+        .batch_execute(&format!("SET ROLE {}", quote_identifier(&owner_role)))
+        .await?;
+    history_transaction
+        .execute(
+            "INSERT INTO relay_state_private.audit_pseudonym_used_key_id(\
+                 key_id,first_generation,first_activated_at_unix_ms\
+             ) SELECT 'k'||lpad(value::text,63,'0'), value+10, 0 \
+             FROM generate_series(1,4094) AS value",
+            &[],
+        )
+        .await?;
+    let bounded_history = history_transaction
+        .query_one(
+            "SELECT * FROM relay_state_private.audit_pseudonym_history_snapshot_v1()",
+            &[],
+        )
+        .await?;
+    assert_eq!(
+        bounded_history.try_get::<_, i64>("used_key_id_count")?,
+        4096
+    );
+    assert_eq!(
+        bounded_history
+            .try_get::<_, Vec<String>>("used_key_ids")?
+            .len(),
+        4096
+    );
+    history_transaction
+        .execute(
+            "INSERT INTO relay_state_private.audit_pseudonym_used_key_id(\
+                 key_id,first_generation,first_activated_at_unix_ms\
+             ) VALUES ('k-over-protocol-history-limit',5000,0)",
+            &[],
+        )
+        .await?;
+    let history_overflow = history_transaction
+        .query_one(
+            "SELECT * FROM relay_state_private.audit_pseudonym_history_snapshot_v1()",
+            &[],
+        )
+        .await
+        .expect_err("history helper must fail before returning an over-cap array");
+    assert_eq!(
+        history_overflow.as_db_error().map(|error| error.code()),
+        Some(&SqlState::PROGRAM_LIMIT_EXCEEDED)
+    );
+    history_transaction.rollback().await?;
+
+    let (chain_drift_client, chain_drift_driver) =
+        postgres_client_as(&database_url, &runtime_role_name, &runtime_password).await?;
+    let chain_drift_runtime = PostgresAuditPseudonymKeyringRuntime::connect(
+        chain_drift_client,
+        chain_key_epoch_id.clone(),
+        test_pseudonym_keyring_lock_key(),
+    )
+    .await?;
+    let (chain_drift_maintenance_client, chain_drift_maintenance_driver) = postgres_client_as(
+        &database_url,
+        &keyring_maintenance_role_name,
+        &keyring_maintenance_password,
+    )
+    .await?;
+    let chain_drift_maintenance = PostgresAuditPseudonymKeyringMaintenance::connect(
+        chain_drift_maintenance_client,
+        chain_key_epoch_id.clone(),
+        test_pseudonym_keyring_lock_key(),
+    )
+    .await?;
+    let (chain_drift_reader_client, chain_drift_reader_driver) = postgres_client_as(
+        &database_url,
+        &keyring_reader_role_name,
+        &keyring_reader_password,
+    )
+    .await?;
+    let chain_drift_reader = PostgresAuditPseudonymKeyringReader::connect(
+        chain_drift_reader_client,
+        chain_key_epoch_id.clone(),
+        test_pseudonym_keyring_lock_key(),
+    )
+    .await?;
+    set_role(&admin, &owner_role).await?;
+    admin
+        .execute(
+            "UPDATE relay_state_private.state_plane_metadata \
+             SET chain_key_epoch_id='drifted-chain-epoch' WHERE singleton",
+            &[],
+        )
+        .await?;
+    reset_role(&admin).await?;
+    assert_eq!(
+        chain_drift_runtime.current_write_authority().await.err(),
+        Some(PostgresKeyringError::CapabilityDrift)
+    );
+    assert_eq!(
+        chain_drift_maintenance
+            .maintain(maintained_binding, |_current, _transition_time| {
+                panic!("metadata drift must be rejected before building a successor")
+            })
+            .await
+            .err(),
+        Some(PostgresKeyringError::CapabilityDrift)
+    );
+    assert_eq!(
+        chain_drift_reader
+            .lookup_snapshot(AuthorizedAuditPseudonymLookupSubset::for_test([
+                pseudonym_key_id("epoch-2"),
+            ])?)
+            .await
+            .err(),
+        Some(PostgresKeyringError::CapabilityDrift)
+    );
+    set_role(&admin, &owner_role).await?;
+    admin
+        .execute(
+            "UPDATE relay_state_private.state_plane_metadata \
+             SET chain_key_epoch_id=$1 WHERE singleton",
+            &[&chain_key_epoch_id.as_str()],
+        )
+        .await?;
+    reset_role(&admin).await?;
+    drop(chain_drift_runtime);
+    chain_drift_driver.abort();
+    drop(chain_drift_maintenance);
+    chain_drift_maintenance_driver.abort();
+    drop(chain_drift_reader);
+    chain_drift_reader_driver.abort();
+
+    let (lock_drift_client, lock_drift_driver) =
+        postgres_client_as(&database_url, &runtime_role_name, &runtime_password).await?;
+    let lock_drift_runtime = PostgresAuditPseudonymKeyringRuntime::connect(
+        lock_drift_client,
+        chain_key_epoch_id.clone(),
+        test_pseudonym_keyring_lock_key(),
+    )
+    .await?;
+    let (lock_drift_maintenance_client, lock_drift_maintenance_driver) = postgres_client_as(
+        &database_url,
+        &keyring_maintenance_role_name,
+        &keyring_maintenance_password,
+    )
+    .await?;
+    let lock_drift_maintenance = PostgresAuditPseudonymKeyringMaintenance::connect(
+        lock_drift_maintenance_client,
+        chain_key_epoch_id.clone(),
+        test_pseudonym_keyring_lock_key(),
+    )
+    .await?;
+    let (lock_drift_reader_client, lock_drift_reader_driver) = postgres_client_as(
+        &database_url,
+        &keyring_reader_role_name,
+        &keyring_reader_password,
+    )
+    .await?;
+    let lock_drift_reader = PostgresAuditPseudonymKeyringReader::connect(
+        lock_drift_reader_client,
+        chain_key_epoch_id.clone(),
+        test_pseudonym_keyring_lock_key(),
+    )
+    .await?;
+    set_role(&admin, &owner_role).await?;
+    admin
+        .execute(
+            "UPDATE relay_state_private.state_plane_metadata \
+             SET audit_pseudonym_keyring_lock_key=7221091444 WHERE singleton",
+            &[],
+        )
+        .await?;
+    reset_role(&admin).await?;
+    assert_eq!(
+        lock_drift_runtime.current_write_authority().await.err(),
+        Some(PostgresKeyringError::CapabilityDrift)
+    );
+    assert_eq!(
+        lock_drift_maintenance
+            .maintain(maintained_binding, |_current, _transition_time| {
+                panic!("metadata drift must be rejected before building a successor")
+            })
+            .await
+            .err(),
+        Some(PostgresKeyringError::CapabilityDrift)
+    );
+    assert_eq!(
+        lock_drift_reader
+            .lookup_snapshot(AuthorizedAuditPseudonymLookupSubset::for_test([
+                pseudonym_key_id("epoch-2"),
+            ])?)
+            .await
+            .err(),
+        Some(PostgresKeyringError::CapabilityDrift)
+    );
+    assert_eq!(
+        plane_one.readiness().await,
+        StatePlaneReadiness::Unavailable
+    );
+    set_role(&admin, &owner_role).await?;
+    admin
+        .execute(
+            "UPDATE relay_state_private.state_plane_metadata \
+             SET audit_pseudonym_keyring_lock_key=$1 WHERE singleton",
+            &[&test_pseudonym_keyring_lock_key().as_i64()],
+        )
+        .await?;
+    reset_role(&admin).await?;
+    drop(lock_drift_runtime);
+    lock_drift_driver.abort();
+    drop(lock_drift_maintenance);
+    lock_drift_maintenance_driver.abort();
+    drop(lock_drift_reader);
+    lock_drift_reader_driver.abort();
+    assert_eq!(plane_one.readiness().await, StatePlaneReadiness::Ready);
 
     let operation_id = DurableAuditOperationId::from_ulid(Ulid::new());
     let write = attempt_write(&operation_id, "identical");
@@ -1849,7 +2796,7 @@ WHERE metadata.singleton = true
 
     let attempt_identity = first.stored_identity();
     let completion = DurableAuditWrite::new(
-        DurableAuditStreamKind::Consultation,
+        DurableAuditStreamKind::Materialization,
         operation_id,
         DurableAuditPhase::Completion,
         json!({
@@ -1863,7 +2810,7 @@ WHERE metadata.singleton = true
         DurableAuditWriteOutcome::Inserted(_)
     ));
     let orphan_completion = DurableAuditWrite::new(
-        DurableAuditStreamKind::Consultation,
+        DurableAuditStreamKind::Materialization,
         DurableAuditOperationId::from_ulid(Ulid::new()),
         DurableAuditPhase::Completion,
         json!({
@@ -1888,7 +2835,7 @@ WHERE metadata.singleton = true
         .collect::<Result<Vec<_>, _>>()?;
     let ordered_chain = order_chain(stored_envelopes);
     let verification = verify_chain(&ordered_chain, &test_chain_hasher)?;
-    assert_eq!(verification.records, 5);
+    assert_eq!(verification.records, 7);
     let head: Vec<u8> = admin
         .query_one(
             "SELECT record_hash FROM relay_state_private.audit_chain_head WHERE singleton = true",
@@ -2569,7 +3516,7 @@ WHERE metadata.singleton = true
     // is what detects the forged chain hash.
     let arbitrary_operation = DurableAuditOperationId::from_ulid(Ulid::new());
     let arbitrary_write = DurableAuditWrite::new(
-        DurableAuditStreamKind::Consultation,
+        DurableAuditStreamKind::Materialization,
         arbitrary_operation,
         DurableAuditPhase::Attempt,
         json!({
@@ -2690,7 +3637,10 @@ WHERE metadata.singleton = true
             &mut admin,
             &runtime_role,
             &chain_key_epoch_id,
-            test_serving_fence_lock_key()
+            test_serving_fence_lock_key(),
+            &keyring_maintenance_role,
+            &keyring_reader_role,
+            test_pseudonym_keyring_lock_key(),
         )
         .await,
         Err(StatePlaneInstallError::RuntimeRoleNotIsolated)
@@ -2765,7 +3715,10 @@ WHERE metadata.singleton = true
             &mut admin,
             &runtime_role,
             &chain_key_epoch_id,
-            test_serving_fence_lock_key()
+            test_serving_fence_lock_key(),
+            &keyring_maintenance_role,
+            &keyring_reader_role,
+            test_pseudonym_keyring_lock_key(),
         )
         .await,
         Err(StatePlaneInstallError::CapabilityDrift)
@@ -2803,7 +3756,10 @@ ALTER TABLE relay_state_private.state_plane_metadata
             &mut admin,
             &runtime_role,
             &chain_key_epoch_id,
-            test_serving_fence_lock_key()
+            test_serving_fence_lock_key(),
+            &keyring_maintenance_role,
+            &keyring_reader_role,
+            test_pseudonym_keyring_lock_key(),
         )
         .await,
         Err(StatePlaneInstallError::CapabilityDrift)
@@ -3085,7 +4041,10 @@ GRANT EXECUTE ON FUNCTION relay_state_api.audit_readiness_v1(text) TO {runtime};
             &mut admin,
             &runtime_role,
             &chain_key_epoch_id,
-            test_serving_fence_lock_key()
+            test_serving_fence_lock_key(),
+            &keyring_maintenance_role,
+            &keyring_reader_role,
+            test_pseudonym_keyring_lock_key(),
         )
         .await,
         Err(StatePlaneInstallError::CapabilityDrift)
@@ -3094,8 +4053,14 @@ GRANT EXECUTE ON FUNCTION relay_state_api.audit_readiness_v1(text) TO {runtime};
 
     drop(plane_one);
     drop(plane_two);
+    drop(keyring_runtime);
+    drop(keyring_maintenance);
+    drop(keyring_reader);
     driver_one.abort();
     driver_two.abort();
+    keyring_runtime_driver.abort();
+    keyring_maintenance_driver.abort();
+    keyring_reader_driver.abort();
     let _ = driver_one.await;
     let _ = driver_two.await;
     admin
@@ -3105,6 +4070,8 @@ GRANT EXECUTE ON FUNCTION relay_state_api.audit_readiness_v1(text) TO {runtime};
         .await?;
     for role in [
         &runtime_role_name,
+        &keyring_maintenance_role_name,
+        &keyring_reader_role_name,
         &private_reader_role,
         &attacker_role,
         &bridge_role,
@@ -3154,6 +4121,8 @@ async fn postgres_state_plane_rejects_prepared_transaction_capability(
 
     let owner_role = role_name("prepared_owner");
     let runtime_role_name = role_name("prepared_runtime");
+    let maintenance_role_name = role_name("prepared_maintenance");
+    let reader_role_name = role_name("prepared_reader");
     let runtime_password = Ulid::new().to_string();
     let database_name: String = admin
         .query_one("SELECT current_database()", &[])
@@ -3166,14 +4135,22 @@ async fn postgres_state_plane_rejects_prepared_transaction_capability(
              CREATE ROLE {runtime} LOGIN PASSWORD '{runtime_password}' \
                  NOSUPERUSER NOCREATEROLE NOCREATEDB \
                  NOREPLICATION NOBYPASSRLS; \
+             CREATE ROLE {maintenance} LOGIN NOSUPERUSER NOCREATEROLE NOCREATEDB \
+                 NOREPLICATION NOBYPASSRLS; \
+             CREATE ROLE {reader} LOGIN NOSUPERUSER NOCREATEROLE NOCREATEDB \
+                 NOREPLICATION NOBYPASSRLS; \
              GRANT CREATE ON DATABASE {database} TO {owner};",
             owner = quote_identifier(&owner_role),
             runtime = quote_identifier(&runtime_role_name),
+            maintenance = quote_identifier(&maintenance_role_name),
+            reader = quote_identifier(&reader_role_name),
             runtime_password = runtime_password,
             database = quote_identifier(&database_name),
         ))
         .await?;
     let runtime_role = RuntimeDatabaseRole::parse(&runtime_role_name)?;
+    let maintenance_role = AuditPseudonymMaintenanceDatabaseRole::parse(&maintenance_role_name)?;
+    let reader_role = AuditPseudonymReaderDatabaseRole::parse(&reader_role_name)?;
     let chain_key_epoch_id = AuditChainKeyEpochId::parse("prepared-rejection-epoch")?;
     set_role(&admin, &owner_role).await?;
     assert_eq!(
@@ -3181,7 +4158,10 @@ async fn postgres_state_plane_rejects_prepared_transaction_capability(
             &mut admin,
             &runtime_role,
             &chain_key_epoch_id,
-            test_serving_fence_lock_key()
+            test_serving_fence_lock_key(),
+            &maintenance_role,
+            &reader_role,
+            test_pseudonym_keyring_lock_key(),
         )
         .await,
         Err(StatePlaneInstallError::UnsafeDatabaseConfiguration)
@@ -3190,7 +4170,14 @@ async fn postgres_state_plane_rejects_prepared_transaction_capability(
     // Simulate a previously valid catalog observed after a restart that
     // enabled prepared transactions. The installer cannot create this state
     // under the unsafe setting, but readiness must independently reject it.
-    seed_catalog_for_unsafe_restart(&admin, &runtime_role_name, &chain_key_epoch_id).await?;
+    seed_catalog_for_unsafe_restart(
+        &admin,
+        &runtime_role_name,
+        &maintenance_role_name,
+        &reader_role_name,
+        &chain_key_epoch_id,
+    )
+    .await?;
     reset_role(&admin).await?;
 
     let (readiness_client, readiness_driver) =
@@ -3218,10 +4205,15 @@ async fn postgres_state_plane_rejects_prepared_transaction_capability(
     let (runtime_client, runtime_driver) =
         postgres_client_as(&database_url, &runtime_role_name, &runtime_password).await?;
     assert_eq!(
-        PostgresDurableAuditStatePlane::connect(runtime_client, chain_hasher, chain_key_epoch_id,)
-            .await
-            .err()
-            .expect("runtime capability must reject prepared transactions after restart"),
+        PostgresDurableAuditStatePlane::connect(
+            runtime_client,
+            chain_hasher,
+            chain_key_epoch_id,
+            test_pseudonym_keyring_lock_key(),
+        )
+        .await
+        .err()
+        .expect("runtime capability must reject prepared transactions after restart"),
         StatePlaneInitializationError::CapabilityDrift
     );
     runtime_driver.abort();
@@ -3232,7 +4224,12 @@ async fn postgres_state_plane_rejects_prepared_transaction_capability(
              DROP SCHEMA relay_state_private CASCADE;",
         )
         .await?;
-    for role in [&runtime_role_name, &owner_role] {
+    for role in [
+        &runtime_role_name,
+        &maintenance_role_name,
+        &reader_role_name,
+        &owner_role,
+    ] {
         admin
             .batch_execute(&format!(
                 "DROP OWNED BY {role}; DROP ROLE {role};",
@@ -3279,6 +4276,8 @@ async fn postgres_state_plane_rejects_unsafe_wal_durability(
 
     let owner_role = role_name("durability_owner");
     let runtime_role_name = role_name("durability_runtime");
+    let maintenance_role_name = role_name("durability_maintenance");
+    let reader_role_name = role_name("durability_reader");
     let runtime_password = Ulid::new().to_string();
     let database_name: String = admin
         .query_one("SELECT current_database()", &[])
@@ -3291,14 +4290,22 @@ async fn postgres_state_plane_rejects_unsafe_wal_durability(
              CREATE ROLE {runtime} LOGIN PASSWORD '{runtime_password}' \
                  NOSUPERUSER NOCREATEROLE NOCREATEDB \
                  NOREPLICATION NOBYPASSRLS; \
+             CREATE ROLE {maintenance} LOGIN NOSUPERUSER NOCREATEROLE NOCREATEDB \
+                 NOREPLICATION NOBYPASSRLS; \
+             CREATE ROLE {reader} LOGIN NOSUPERUSER NOCREATEROLE NOCREATEDB \
+                 NOREPLICATION NOBYPASSRLS; \
              GRANT CREATE ON DATABASE {database} TO {owner};",
             owner = quote_identifier(&owner_role),
             runtime = quote_identifier(&runtime_role_name),
+            maintenance = quote_identifier(&maintenance_role_name),
+            reader = quote_identifier(&reader_role_name),
             runtime_password = runtime_password,
             database = quote_identifier(&database_name),
         ))
         .await?;
     let runtime_role = RuntimeDatabaseRole::parse(&runtime_role_name)?;
+    let maintenance_role = AuditPseudonymMaintenanceDatabaseRole::parse(&maintenance_role_name)?;
+    let reader_role = AuditPseudonymReaderDatabaseRole::parse(&reader_role_name)?;
     let chain_key_epoch_id = AuditChainKeyEpochId::parse("unsafe-durability-epoch")?;
     set_role(&admin, &owner_role).await?;
     assert_eq!(
@@ -3306,12 +4313,22 @@ async fn postgres_state_plane_rejects_unsafe_wal_durability(
             &mut admin,
             &runtime_role,
             &chain_key_epoch_id,
-            test_serving_fence_lock_key()
+            test_serving_fence_lock_key(),
+            &maintenance_role,
+            &reader_role,
+            test_pseudonym_keyring_lock_key(),
         )
         .await,
         Err(StatePlaneInstallError::UnsafeDatabaseConfiguration)
     );
-    seed_catalog_for_unsafe_restart(&admin, &runtime_role_name, &chain_key_epoch_id).await?;
+    seed_catalog_for_unsafe_restart(
+        &admin,
+        &runtime_role_name,
+        &maintenance_role_name,
+        &reader_role_name,
+        &chain_key_epoch_id,
+    )
+    .await?;
     reset_role(&admin).await?;
     let (runtime_client, runtime_driver) =
         postgres_client_as(&database_url, &runtime_role_name, &runtime_password).await?;
@@ -3330,7 +4347,12 @@ async fn postgres_state_plane_rejects_unsafe_wal_durability(
              DROP SCHEMA relay_state_private CASCADE;",
         )
         .await?;
-    for role in [&runtime_role_name, &owner_role] {
+    for role in [
+        &runtime_role_name,
+        &maintenance_role_name,
+        &reader_role_name,
+        &owner_role,
+    ] {
         admin
             .batch_execute(&format!(
                 "DROP OWNED BY {role}; DROP ROLE {role};",
