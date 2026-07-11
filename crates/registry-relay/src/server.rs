@@ -56,9 +56,9 @@
 use std::sync::Arc;
 
 use axum::body::Body;
-use axum::extract::MatchedPath;
+use axum::extract::{MatchedPath, State};
 use axum::http::{header, HeaderName, HeaderValue, Method, Request, StatusCode};
-use axum::middleware::{from_fn, Next};
+use axum::middleware::{from_fn, from_fn_with_state, Next};
 use axum::response::{IntoResponse, Response};
 use axum::Extension;
 use axum::Router;
@@ -82,7 +82,7 @@ use crate::audit::{self, AuditPipeline, AuditSettings, OperationalAuditEvent};
 use crate::auth::middleware::{auth_layer_with_failure_throttle, AuthProviderRef};
 use crate::config::{Config, CorsConfig};
 use crate::entity::EntityRegistry;
-use crate::error::{ConfigError, Error, InternalError};
+use crate::error::{ConfigError, ConsultationError, Error, InternalError};
 use crate::ingest::{IngestRegistry, ReadinessSnapshot};
 use crate::observability::RequestMetrics;
 use crate::query::{AggregateQueryEngine, EntityQueryEngine};
@@ -98,6 +98,8 @@ const REQUEST_BODY_LIMIT_BYTES: usize = 1024 * 1024;
 /// installed at the transport layer. Requests exceeding the cap are
 /// rejected with `414 URI Too Long` before any handler runs.
 const MAX_URI_BYTES: usize = 8192;
+const MIN_CONSULTATION_RETRY_AFTER_SECONDS: u64 = 1;
+const MAX_CONSULTATION_RETRY_AFTER_SECONDS: u64 = 60;
 
 #[cfg(test)]
 const CONTENT_SECURITY_POLICY: HeaderName = HeaderName::from_static("content-security-policy");
@@ -202,6 +204,7 @@ fn build_app_with_metadata_and_metrics(
     let protected = protected.merge(api::records_router());
     let protected = merge_spdci_routes(protected);
     let protected = merge_attribute_release_routes(protected);
+    let protected = merge_consultation_routes(protected, config.consultation.is_some());
     let failure_throttle =
         crate::auth::failure_throttle::AuthFailureThrottle::new(&config.auth.failure_throttle)
             .map(Arc::new);
@@ -236,10 +239,16 @@ fn build_app_with_metadata_and_metrics(
     let cursor_signer = Arc::new(CursorSigner::new_random());
     let attribute_release_evaluator =
         Arc::new(AttributeReleaseEvaluator::from_config(config.as_ref()));
-    let mut router = apply_cross_cutting_layers_with_metrics(merged, &config, audit_sink, metrics)?
-        .layer(Extension(attribute_release_evaluator))
-        .layer(Extension(cursor_signer))
-        .layer(Extension(config));
+    let mut router = apply_cross_cutting_layers_with_metrics(
+        merged,
+        &config,
+        audit_sink,
+        metrics,
+        config.consultation.is_some(),
+    )?
+    .layer(Extension(attribute_release_evaluator))
+    .layer(Extension(cursor_signer))
+    .layer(Extension(config));
     if let Some(metadata) = metadata {
         router = router.layer(Extension(metadata));
     }
@@ -264,6 +273,14 @@ fn merge_attribute_release_routes(router: Router) -> Router {
 #[cfg(not(feature = "attribute-release"))]
 fn merge_attribute_release_routes(router: Router) -> Router {
     router
+}
+
+fn merge_consultation_routes(router: Router, enabled: bool) -> Router {
+    if enabled {
+        router.merge(api::consultation_router())
+    } else {
+        router
+    }
 }
 
 /// Assemble the main application with an ingest readiness watch.
@@ -425,10 +442,11 @@ pub fn build_admin_app_with_metadata_and_metrics(
         .merge(public)
         .merge(metrics_router)
         .merge(protected);
-    let mut router = apply_cross_cutting_layers_with_metrics(merged, &config, audit_sink, metrics)?
-        .layer(Extension(readiness))
-        .layer(Extension(readiness_tx))
-        .layer(Extension(config));
+    let mut router =
+        apply_cross_cutting_layers_with_metrics(merged, &config, audit_sink, metrics, false)?
+            .layer(Extension(readiness))
+            .layer(Extension(readiness_tx))
+            .layer(Extension(config));
     if let Some(metadata) = metadata {
         router = router.layer(Extension(metadata));
     }
@@ -440,6 +458,7 @@ fn apply_cross_cutting_layers_with_metrics(
     config: &Config,
     audit_sink: Arc<AuditPipeline>,
     metrics: Arc<RequestMetrics>,
+    consultation_namespace_active: bool,
 ) -> Result<Router, ConfigError> {
     let x_request_id: HeaderName = HeaderName::from_static("x-request-id");
     let (cors, cors_fell_back) = build_cors_layer_with_status(&config.server.cors);
@@ -469,7 +488,10 @@ fn apply_cross_cutting_layers_with_metrics(
         ))
         .layer(from_fn(reject_overlong_uri))
         .layer(from_fn(normalize_internal_error_response))
-        .layer(from_fn(attach_request_id_to_problem_response))
+        .layer(from_fn_with_state(
+            consultation_namespace_active,
+            normalize_consultation_response,
+        ))
         .layer(cors)
         .layer(
             TraceLayer::new_for_http()
@@ -492,6 +514,10 @@ fn apply_cross_cutting_layers_with_metrics(
     );
 
     Ok(with_audit
+        // Audit is allowed to replace a response when a required write fails.
+        // Keep Problem request-id augmentation outside that boundary so the
+        // replacement carries the same correlation contract as handler errors.
+        .layer(from_fn(attach_request_id_to_problem_response))
         // Strip client-supplied request ids, then mint and propagate a
         // server-owned `x-request-id` value.
         .layer(PropagateRequestIdLayer::new(x_request_id.clone()))
@@ -609,6 +635,113 @@ async fn normalize_internal_error_response(request: Request<Body>, next: Next) -
         }
         _ => response,
     }
+}
+
+/// Close application-controlled failures on the active consultation namespace
+/// into its six-code public contract.
+///
+/// Typed authentication failures are normalized earlier by the auth layer.
+/// This boundary owns only failures created by shared HTTP machinery, such as
+/// timeout, body/URI bounds, method fallback, and unmatched paths. Hyper parser
+/// failures occur before Axum and are intentionally outside this contract.
+async fn normalize_consultation_response(
+    State(enabled): State<bool>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    let applies = enabled && is_consultation_namespace_path(request.uri().path());
+    let response = next.run(request).await;
+    if !applies {
+        return response;
+    }
+
+    let mut response = if is_closed_consultation_error(&response) {
+        response
+    } else if let Some(error) = consultation_error_for_status(response.status()) {
+        let allow = (response.status() == StatusCode::METHOD_NOT_ALLOWED)
+            .then(|| response.headers().get(header::ALLOW).cloned())
+            .flatten();
+        let retry_after = (response.status() == StatusCode::TOO_MANY_REQUESTS)
+            .then(|| bounded_consultation_retry_after(response.headers()));
+        let mut normalized = Error::from(error).into_response();
+        if let Some(allow) = allow {
+            normalized.headers_mut().insert(header::ALLOW, allow);
+        }
+        if let Some(seconds) = retry_after {
+            normalized.headers_mut().insert(
+                header::RETRY_AFTER,
+                HeaderValue::from_str(&seconds.to_string())
+                    .expect("bounded consultation retry seconds form a valid header"),
+            );
+        }
+        normalized
+    } else {
+        response
+    };
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-store"),
+    );
+    response
+}
+
+fn is_consultation_namespace_path(path: &str) -> bool {
+    path == "/v1/consultations" || path.starts_with("/v1/consultations/")
+}
+
+fn is_closed_consultation_error(response: &Response) -> bool {
+    let code = response
+        .extensions()
+        .get::<crate::audit::ErrorCodeExt>()
+        .map(|code| code.0.as_str());
+    matches!(
+        (response.status(), code),
+        (
+            StatusCode::BAD_REQUEST,
+            Some("consultation.invalid_request")
+        ) | (StatusCode::UNAUTHORIZED, Some("auth.invalid_credentials"))
+            | (StatusCode::FORBIDDEN, Some("consultation.denied"))
+            | (
+                StatusCode::NOT_FOUND,
+                Some("consultation.profile_not_found")
+            )
+            | (
+                StatusCode::TOO_MANY_REQUESTS,
+                Some("consultation.rate_limited")
+            )
+            | (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Some("consultation.unavailable")
+            )
+    )
+}
+
+fn consultation_error_for_status(status: StatusCode) -> Option<ConsultationError> {
+    match status {
+        StatusCode::UNAUTHORIZED => Some(ConsultationError::InvalidCredentials),
+        StatusCode::FORBIDDEN => Some(ConsultationError::Denied),
+        StatusCode::NOT_FOUND => Some(ConsultationError::ProfileNotFound),
+        StatusCode::TOO_MANY_REQUESTS => Some(ConsultationError::RateLimited),
+        status if status.is_client_error() => Some(ConsultationError::InvalidRequest),
+        status if status.is_server_error() => Some(ConsultationError::Unavailable),
+        _ => None,
+    }
+}
+
+fn bounded_consultation_retry_after(headers: &axum::http::HeaderMap) -> u64 {
+    let mut values = headers.get_all(header::RETRY_AFTER).iter();
+    let first = values.next();
+    if values.next().is_some() {
+        return MIN_CONSULTATION_RETRY_AFTER_SECONDS;
+    }
+    first
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(MIN_CONSULTATION_RETRY_AFTER_SECONDS)
+        .clamp(
+            MIN_CONSULTATION_RETRY_AFTER_SECONDS,
+            MAX_CONSULTATION_RETRY_AFTER_SECONDS,
+        )
 }
 
 async fn attach_request_id_to_problem_response(request: Request<Body>, next: Next) -> Response {
@@ -863,6 +996,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn consultation_routes_mount_only_for_an_enabled_activation() {
+        const PROFILE: &str = "/v1/consultations/example.person-status/versions/1";
+        let disabled = merge_consultation_routes(Router::<()>::new(), false);
+        let response = disabled
+            .oneshot(
+                Request::builder()
+                    .method(Method::HEAD)
+                    .uri(PROFILE)
+                    .body(Body::empty())
+                    .expect("disabled request builds"),
+            )
+            .await
+            .expect("disabled router responds");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        // HEAD is an explicit closed 405 on the metadata route. Receiving it
+        // proves the exact path was mounted without invoking a stateful handler.
+        let enabled = merge_consultation_routes(Router::<()>::new(), true);
+        let response = enabled
+            .oneshot(
+                Request::builder()
+                    .method(Method::HEAD)
+                    .uri(PROFILE)
+                    .body(Body::empty())
+                    .expect("enabled request builds"),
+            )
+            .await
+            .expect("enabled router responds");
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    #[tokio::test]
     async fn invalid_cors_policy_writes_operational_audit_event() {
         let mut config = load_example_config();
         config.server.cors.allowed_origins = vec!["https://bad\norigin".to_string()];
@@ -875,6 +1040,7 @@ mod tests {
             &config,
             sink,
             RequestMetrics::shared(),
+            false,
         )
         .expect("audit hash secret configured");
 
@@ -917,6 +1083,7 @@ mod tests {
             &config,
             sink,
             RequestMetrics::shared(),
+            false,
         )
         .expect("audit hash secret configured");
 
@@ -986,6 +1153,7 @@ mod tests {
             &config,
             sink,
             RequestMetrics::shared(),
+            false,
         )
         .expect("audit hash secret configured");
 
@@ -1035,6 +1203,7 @@ mod tests {
             &config,
             sink,
             RequestMetrics::shared(),
+            false,
         )
         .expect("audit hash secret configured");
 
@@ -1076,6 +1245,7 @@ mod tests {
             &config,
             sink,
             RequestMetrics::shared(),
+            false,
         )
         .expect("audit hash secret configured");
         let body = vec![b'x'; REQUEST_BODY_LIMIT_BYTES + 1];
@@ -1121,6 +1291,7 @@ mod tests {
             &config,
             sink,
             RequestMetrics::shared(),
+            false,
         )
         .expect("audit hash secret configured");
         let slow_body = Body::from_stream(stream::unfold(false, |sent_first| async move {
@@ -1161,6 +1332,7 @@ mod tests {
             &config,
             sink,
             RequestMetrics::shared(),
+            false,
         )
         .expect("audit hash secret configured");
         let uri = format!("/{}", "x".repeat(MAX_URI_BYTES));
@@ -1188,5 +1360,185 @@ mod tests {
         let record = captured_audit_record(&records[0]);
         assert_eq!(record["error_code"], "internal.uri_too_long");
         assert_eq!(record["status_code"], 414);
+    }
+
+    #[tokio::test]
+    async fn active_consultation_namespace_closes_shared_http_edge_failures() {
+        #[derive(Clone, Copy)]
+        struct Case {
+            source_status: StatusCode,
+            source_code: Option<&'static str>,
+            expected_status: StatusCode,
+            expected_code: &'static str,
+            allow: Option<&'static str>,
+            retry_after: Option<&'static str>,
+            expected_retry_after: Option<&'static str>,
+        }
+
+        let cases = [
+            Case {
+                source_status: StatusCode::GATEWAY_TIMEOUT,
+                source_code: Some("internal.timeout"),
+                expected_status: StatusCode::SERVICE_UNAVAILABLE,
+                expected_code: "consultation.unavailable",
+                allow: None,
+                retry_after: None,
+                expected_retry_after: None,
+            },
+            Case {
+                source_status: StatusCode::PAYLOAD_TOO_LARGE,
+                source_code: Some("internal.payload_too_large"),
+                expected_status: StatusCode::BAD_REQUEST,
+                expected_code: "consultation.invalid_request",
+                allow: None,
+                retry_after: None,
+                expected_retry_after: None,
+            },
+            Case {
+                source_status: StatusCode::URI_TOO_LONG,
+                source_code: Some("internal.uri_too_long"),
+                expected_status: StatusCode::BAD_REQUEST,
+                expected_code: "consultation.invalid_request",
+                allow: None,
+                retry_after: None,
+                expected_retry_after: None,
+            },
+            Case {
+                source_status: StatusCode::NOT_FOUND,
+                source_code: None,
+                expected_status: StatusCode::NOT_FOUND,
+                expected_code: "consultation.profile_not_found",
+                allow: None,
+                retry_after: None,
+                expected_retry_after: None,
+            },
+            Case {
+                source_status: StatusCode::METHOD_NOT_ALLOWED,
+                source_code: None,
+                expected_status: StatusCode::BAD_REQUEST,
+                expected_code: "consultation.invalid_request",
+                allow: Some("POST"),
+                retry_after: None,
+                expected_retry_after: None,
+            },
+            Case {
+                source_status: StatusCode::IM_A_TEAPOT,
+                source_code: None,
+                expected_status: StatusCode::BAD_REQUEST,
+                expected_code: "consultation.invalid_request",
+                allow: None,
+                retry_after: None,
+                expected_retry_after: None,
+            },
+            Case {
+                source_status: StatusCode::TOO_MANY_REQUESTS,
+                source_code: Some("shared.rate_limited"),
+                expected_status: StatusCode::TOO_MANY_REQUESTS,
+                expected_code: "consultation.rate_limited",
+                allow: None,
+                retry_after: Some("999"),
+                expected_retry_after: Some("60"),
+            },
+            Case {
+                source_status: StatusCode::INTERNAL_SERVER_ERROR,
+                source_code: Some("internal.unhandled"),
+                expected_status: StatusCode::SERVICE_UNAVAILABLE,
+                expected_code: "consultation.unavailable",
+                allow: None,
+                retry_after: None,
+                expected_retry_after: None,
+            },
+        ];
+
+        for case in cases {
+            let app = Router::new()
+                .fallback(move || async move {
+                    let mut response = case.source_status.into_response();
+                    if let Some(code) = case.source_code {
+                        response
+                            .extensions_mut()
+                            .insert(crate::audit::ErrorCodeExt(code.to_string()));
+                    }
+                    if let Some(allow) = case.allow {
+                        response
+                            .headers_mut()
+                            .insert(header::ALLOW, HeaderValue::from_static(allow));
+                    }
+                    if let Some(retry_after) = case.retry_after {
+                        response
+                            .headers_mut()
+                            .insert(header::RETRY_AFTER, HeaderValue::from_static(retry_after));
+                    }
+                    response
+                })
+                .layer(from_fn_with_state(true, normalize_consultation_response))
+                .layer(from_fn(attach_request_id_to_problem_response));
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .uri("/v1/consultations/example/versions/1/execute")
+                        .header("x-request-id", "fixed-request-id")
+                        .body(Body::empty())
+                        .expect("request builds"),
+                )
+                .await
+                .expect("edge response normalizes");
+
+            assert_eq!(response.status(), case.expected_status);
+            assert_eq!(
+                response
+                    .extensions()
+                    .get::<crate::audit::ErrorCodeExt>()
+                    .map(|code| code.0.as_str()),
+                Some(case.expected_code)
+            );
+            assert_eq!(
+                response.headers().get(header::CACHE_CONTROL),
+                Some(&HeaderValue::from_static("private, no-store"))
+            );
+            assert_eq!(
+                response
+                    .headers()
+                    .get(header::ALLOW)
+                    .and_then(|value| value.to_str().ok()),
+                case.allow
+            );
+            assert_eq!(
+                response
+                    .headers()
+                    .get(header::RETRY_AFTER)
+                    .and_then(|value| value.to_str().ok()),
+                case.expected_retry_after
+            );
+            let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+                .await
+                .expect("bounded Problem body reads");
+            let body: Value = serde_json::from_slice(&body).expect("Problem body is JSON");
+            assert_eq!(body["code"], case.expected_code);
+            assert_eq!(body["request_id"], "fixed-request-id");
+        }
+    }
+
+    #[tokio::test]
+    async fn inactive_listener_does_not_claim_the_consultation_namespace() {
+        let app = Router::new()
+            .fallback(|| async { StatusCode::NOT_FOUND })
+            .layer(from_fn_with_state(false, normalize_consultation_response));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/consultations/unmounted")
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("inactive listener responds");
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert!(!response.headers().contains_key(header::CACHE_CONTROL));
+        assert!(response
+            .extensions()
+            .get::<crate::audit::ErrorCodeExt>()
+            .is_none());
     }
 }

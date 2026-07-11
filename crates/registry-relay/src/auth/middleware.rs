@@ -24,7 +24,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::pin::Pin;
 use std::sync::Arc;
 
-use axum::extract::{ConnectInfo, Request, State};
+use axum::extract::{ConnectInfo, MatchedPath, Request, State};
 use axum::http::HeaderMap;
 use axum::middleware::{from_fn_with_state, Next};
 use axum::response::{IntoResponse, Response};
@@ -32,8 +32,7 @@ use axum::Router;
 
 use crate::auth::failure_throttle::{AuthFailureThrottle, Decision};
 use crate::auth::AuthenticationResult;
-use crate::error::AuthError;
-use crate::error::Error;
+use crate::error::{AuthError, ConsultationError, Error};
 use crate::runtime_config::RelayRuntimeHandle;
 
 use super::AuthProvider;
@@ -172,6 +171,13 @@ where
 /// `crate::error::Error::into_response`.
 async fn run(State(state): State<AuthMiddlewareState>, mut req: Request, next: Next) -> Response {
     let remote = remote_addr(&req);
+    let consultation_operation = matches!(
+        req.extensions()
+            .get::<MatchedPath>()
+            .map(MatchedPath::as_str),
+        Some(crate::api::consultation::PROFILE_ROUTE)
+            | Some(crate::api::consultation::EXECUTE_ROUTE)
+    );
 
     let throttle_key = state.throttle.as_ref().map(|_| {
         crate::net::resolve_remote_addr(
@@ -188,10 +194,12 @@ async fn run(State(state): State<AuthMiddlewareState>, mut req: Request, next: N
             retry_after_seconds,
         } = throttle.check(key)
         {
-            return Error::from(AuthError::RateLimited {
-                retry_after_seconds,
-            })
-            .into_response();
+            return auth_error_response(
+                AuthError::RateLimited {
+                    retry_after_seconds,
+                },
+                consultation_operation,
+            );
         }
     }
 
@@ -203,15 +211,55 @@ async fn run(State(state): State<AuthMiddlewareState>, mut req: Request, next: N
                     throttle.record_failure(key);
                 }
             }
-            return Error::from(e).into_response();
+            return auth_error_response(e, consultation_operation);
         }
     };
+    if consultation_operation {
+        // Consultation owns a narrower audit identity boundary. The handler
+        // needs the coupled verified authentication, but the generic HTTP
+        // audit deliberately never consumes a standalone principal or scopes.
+        req.extensions_mut().insert(authentication);
+        return next.run(req).await;
+    }
+
     let principal_for_audit = authentication.principal().clone();
     req.extensions_mut().insert(principal_for_audit.clone());
     req.extensions_mut().insert(authentication);
     let mut response = next.run(req).await;
     response.extensions_mut().insert(principal_for_audit);
     response
+}
+
+/// Render shared authentication failures through the closed consultation
+/// taxonomy only for the two exact mounted consultation operations. Every
+/// other Relay route keeps the existing granular `auth.*` contract.
+fn auth_error_response(error: AuthError, consultation_operation: bool) -> Response {
+    if !consultation_operation {
+        return Error::from(error).into_response();
+    }
+
+    let (error, retry_after_seconds) = match error {
+        AuthError::MissingCredential
+        | AuthError::InvalidCredential
+        | AuthError::MalformedCredential
+        | AuthError::TokenExpired
+        | AuthError::TokenNotYetValid
+        | AuthError::TokenSignatureInvalid
+        | AuthError::IssuerMismatch
+        | AuthError::AudienceMismatch
+        | AuthError::KidUnknown
+        | AuthError::AlgorithmNotAllowed
+        | AuthError::ClientNotAllowed => (ConsultationError::InvalidCredentials, None),
+        AuthError::PurposeRequired => (ConsultationError::InvalidRequest, None),
+        AuthError::ScopeDenied { .. } | AuthError::PurposeDenied | AuthError::AdminRequired => {
+            (ConsultationError::Denied, None)
+        }
+        AuthError::JwksUnavailable => (ConsultationError::Unavailable, None),
+        AuthError::RateLimited {
+            retry_after_seconds,
+        } => (ConsultationError::RateLimited, Some(retry_after_seconds)),
+    };
+    crate::api::consultation::consultation_error_response(error, retry_after_seconds)
 }
 
 /// Resolve the peer IP for the trait method. Falls back to
@@ -232,8 +280,8 @@ mod tests {
 
     use axum::body::{to_bytes, Body};
     use axum::extract::Extension;
-    use axum::http::Request;
-    use axum::routing::get;
+    use axum::http::{header, Method, Request, StatusCode};
+    use axum::routing::{get, post};
     use serde_json::Value;
     use tower::ServiceExt;
 
@@ -255,6 +303,25 @@ mod tests {
             >,
         > {
             Box::pin(async { Ok(self.0.clone()) })
+        }
+    }
+
+    struct RejectingAuthProvider(fn() -> AuthError);
+
+    impl AuthProvider for RejectingAuthProvider {
+        fn authenticate<'a>(
+            &'a self,
+            _headers: &'a HeaderMap,
+            _remote_addr: IpAddr,
+        ) -> Pin<
+            Box<
+                dyn std::future::Future<Output = Result<AuthenticationResult, AuthError>>
+                    + Send
+                    + 'a,
+            >,
+        > {
+            let error = (self.0)();
+            Box::pin(async move { Err(error) })
         }
     }
 
@@ -349,5 +416,279 @@ mod tests {
         assert_eq!(value["issuer"], Value::Null);
         assert_eq!(value["authorized_party"], Value::Null);
         assert_eq!(value["client_id_claim"], Value::Null);
+    }
+
+    #[tokio::test]
+    async fn exact_consultation_routes_collapse_every_typed_auth_failure() {
+        type ErrorFactory = fn() -> AuthError;
+        let cases: Vec<(ErrorFactory, StatusCode, &'static str, Option<&'static str>)> = vec![
+            (
+                || AuthError::MissingCredential,
+                StatusCode::UNAUTHORIZED,
+                "auth.invalid_credentials",
+                None,
+            ),
+            (
+                || AuthError::InvalidCredential,
+                StatusCode::UNAUTHORIZED,
+                "auth.invalid_credentials",
+                None,
+            ),
+            (
+                || AuthError::MalformedCredential,
+                StatusCode::UNAUTHORIZED,
+                "auth.invalid_credentials",
+                None,
+            ),
+            (
+                || AuthError::ScopeDenied {
+                    required: "configured-sensitive-scope".to_string(),
+                },
+                StatusCode::FORBIDDEN,
+                "consultation.denied",
+                None,
+            ),
+            (
+                || AuthError::PurposeRequired,
+                StatusCode::BAD_REQUEST,
+                "consultation.invalid_request",
+                None,
+            ),
+            (
+                || AuthError::PurposeDenied,
+                StatusCode::FORBIDDEN,
+                "consultation.denied",
+                None,
+            ),
+            (
+                || AuthError::AdminRequired,
+                StatusCode::FORBIDDEN,
+                "consultation.denied",
+                None,
+            ),
+            (
+                || AuthError::TokenExpired,
+                StatusCode::UNAUTHORIZED,
+                "auth.invalid_credentials",
+                None,
+            ),
+            (
+                || AuthError::TokenNotYetValid,
+                StatusCode::UNAUTHORIZED,
+                "auth.invalid_credentials",
+                None,
+            ),
+            (
+                || AuthError::TokenSignatureInvalid,
+                StatusCode::UNAUTHORIZED,
+                "auth.invalid_credentials",
+                None,
+            ),
+            (
+                || AuthError::IssuerMismatch,
+                StatusCode::UNAUTHORIZED,
+                "auth.invalid_credentials",
+                None,
+            ),
+            (
+                || AuthError::AudienceMismatch,
+                StatusCode::UNAUTHORIZED,
+                "auth.invalid_credentials",
+                None,
+            ),
+            (
+                || AuthError::KidUnknown,
+                StatusCode::UNAUTHORIZED,
+                "auth.invalid_credentials",
+                None,
+            ),
+            (
+                || AuthError::AlgorithmNotAllowed,
+                StatusCode::UNAUTHORIZED,
+                "auth.invalid_credentials",
+                None,
+            ),
+            (
+                || AuthError::ClientNotAllowed,
+                StatusCode::UNAUTHORIZED,
+                "auth.invalid_credentials",
+                None,
+            ),
+            (
+                || AuthError::JwksUnavailable,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "consultation.unavailable",
+                None,
+            ),
+            (
+                || AuthError::RateLimited {
+                    retry_after_seconds: 600,
+                },
+                StatusCode::TOO_MANY_REQUESTS,
+                "consultation.rate_limited",
+                Some("60"),
+            ),
+        ];
+        let routes = [
+            (
+                crate::api::consultation::PROFILE_ROUTE,
+                "/v1/consultations/example/versions/1",
+                Method::GET,
+            ),
+            (
+                crate::api::consultation::EXECUTE_ROUTE,
+                "/v1/consultations/example/versions/1/execute",
+                Method::POST,
+            ),
+        ];
+
+        for (route, uri, method) in routes {
+            for (error, expected_status, expected_code, expected_retry_after) in &cases {
+                let app = auth_layer(
+                    Router::new()
+                        .route(
+                            crate::api::consultation::PROFILE_ROUTE,
+                            get(|| async { StatusCode::NO_CONTENT }),
+                        )
+                        .route(
+                            crate::api::consultation::EXECUTE_ROUTE,
+                            post(|| async { StatusCode::NO_CONTENT }),
+                        ),
+                    Arc::new(RejectingAuthProvider(*error)),
+                );
+                let response = app
+                    .oneshot(
+                        Request::builder()
+                            .method(method.clone())
+                            .uri(uri)
+                            .body(Body::empty())
+                            .expect("consultation request builds"),
+                    )
+                    .await
+                    .expect("auth middleware responds");
+                assert_eq!(response.status(), *expected_status, "route {route}");
+                assert_eq!(
+                    response
+                        .extensions()
+                        .get::<crate::audit::ErrorCodeExt>()
+                        .map(|code| code.0.as_str()),
+                    Some(*expected_code),
+                    "route {route}"
+                );
+                assert_eq!(
+                    response
+                        .headers()
+                        .get(header::RETRY_AFTER)
+                        .and_then(|value| value.to_str().ok()),
+                    *expected_retry_after,
+                    "route {route}"
+                );
+                let body = to_bytes(response.into_body(), 8 * 1024)
+                    .await
+                    .expect("bounded problem body reads");
+                let body: Value = serde_json::from_slice(&body).expect("problem body is JSON");
+                assert_eq!(body["code"], *expected_code, "route {route}");
+                assert!(!body.to_string().contains("configured-sensitive-scope"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn successful_consultation_auth_does_not_retain_generic_audit_principal() {
+        let app = auth_layer(
+            Router::new().route(
+                crate::api::consultation::PROFILE_ROUTE,
+                get(authentication_handler),
+            ),
+            Arc::new(FixedAuthProvider(oidc_authentication())),
+        );
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/consultations/example/versions/1")
+                    .body(Body::empty())
+                    .expect("consultation request builds"),
+            )
+            .await
+            .expect("auth middleware responds");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.extensions().get::<Principal>().is_none());
+        let body = to_bytes(response.into_body(), 8 * 1024)
+            .await
+            .expect("bounded response reads");
+        let body: Value = serde_json::from_slice(&body).expect("response body is JSON");
+        assert_eq!(body["authorized_party"], "registry-notary");
+    }
+
+    #[tokio::test]
+    async fn non_consultation_route_keeps_granular_auth_failure() {
+        let app = auth_layer(
+            Router::new().route("/identity", get(|| async { StatusCode::NO_CONTENT })),
+            Arc::new(RejectingAuthProvider(|| AuthError::TokenExpired)),
+        );
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/identity")
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("auth middleware responds");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            response
+                .extensions()
+                .get::<crate::audit::ErrorCodeExt>()
+                .map(|code| code.0.as_str()),
+            Some("auth.token_expired")
+        );
+        let body = to_bytes(response.into_body(), 8 * 1024)
+            .await
+            .expect("bounded problem body reads");
+        let body: Value = serde_json::from_slice(&body).expect("problem body is JSON");
+        assert_eq!(body["code"], "auth.token_expired");
+    }
+
+    #[tokio::test]
+    async fn consultation_auth_throttle_short_circuit_uses_closed_taxonomy() {
+        let throttle = Arc::new(
+            AuthFailureThrottle::new(&crate::config::AuthFailureThrottleConfig {
+                enabled: true,
+                max_failures: 1,
+                window_seconds: 600,
+            })
+            .expect("enabled throttle"),
+        );
+        throttle.record_failure("0.0.0.0");
+        let app = auth_layer_with_failure_throttle(
+            Router::new().route(
+                crate::api::consultation::PROFILE_ROUTE,
+                get(|| async { StatusCode::NO_CONTENT }),
+            ),
+            Arc::new(FixedAuthProvider(oidc_authentication())),
+            Some(throttle),
+            false,
+            Vec::new(),
+        );
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/consultations/example/versions/1")
+                    .body(Body::empty())
+                    .expect("consultation request builds"),
+            )
+            .await
+            .expect("auth middleware responds");
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            response
+                .extensions()
+                .get::<crate::audit::ErrorCodeExt>()
+                .map(|code| code.0.as_str()),
+            Some("consultation.rate_limited")
+        );
+        assert_eq!(response.headers()[header::RETRY_AFTER], "60");
     }
 }

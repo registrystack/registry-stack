@@ -57,6 +57,7 @@ use registry_relay::audit::{
 use registry_relay::auth::middleware::{AuthProviderRef, RuntimeAuthProvider};
 use registry_relay::auth::runtime::build_auth;
 use registry_relay::config::{self, AuditSinkConfig, Config, SourceConfig};
+use registry_relay::consultation::ConsultationService;
 use registry_relay::entity::EntityRegistry;
 use registry_relay::error::{ConfigError, Error};
 use registry_relay::format::FormatRegistry;
@@ -319,6 +320,7 @@ async fn run_server(
         datasets = runtime.dataset_count(),
         api_keys = runtime.auth_size_hint(),
         audit_sink = runtime.audit_kind,
+        consultation_enabled = runtime.consultation.is_some(),
         "registry-relay listening"
     );
 
@@ -383,20 +385,41 @@ async fn run_server(
             main_serve.await.map_err(Into::into)
         };
 
-    // Best-effort audit flush on the way out, regardless of which
-    // listener tripped the shutdown.
-    if let Err(err) = runtime.audit_sink.flush().await {
-        warn!(error = %err, "audit flush on shutdown failed");
+    refresh_shutdown.cancel();
+    // The consultation service owns cancellation-shielded accepted work and a
+    // database serving fence. Close admission, drain that work, and explicitly
+    // release the fence before waiting on unrelated refresh tasks. A stuck
+    // refresh must not delay single-active Relay failover.
+    let consultation_shutdown: Result<(), Box<dyn StdError + Send + Sync>> =
+        if let Some(consultation) = runtime.consultation.as_ref() {
+            consultation
+                .shutdown()
+                .await
+                .map_err(|err| Box::new(err) as Box<dyn StdError + Send + Sync>)
+        } else {
+            Ok(())
+        };
+    if let Err(err) = consultation_shutdown.as_ref() {
+        warn!(error = %err, "consultation shutdown failed");
     }
 
-    refresh_shutdown.cancel();
     while let Some(joined) = refresh_tasks.join_next().await {
         if let Err(err) = joined {
             warn!(error = %err, "refresh task failed during shutdown");
         }
     }
 
-    result
+    // Best-effort final audit flush after every runtime writer has stopped,
+    // regardless of which listener tripped the shutdown.
+    if let Err(err) = runtime.audit_sink.flush().await {
+        warn!(error = %err, "audit flush on shutdown failed");
+    }
+
+    match (result, consultation_shutdown) {
+        (Err(serve_error), _) => Err(serve_error),
+        (Ok(()), Err(shutdown_error)) => Err(shutdown_error),
+        (Ok(()), Ok(())) => Ok(()),
+    }
 }
 
 async fn run_openapi(
@@ -826,6 +849,11 @@ fn required_env_report(config: &Config) -> Vec<Value> {
     if let Some(hash_secret_env) = &config.audit.hash_secret_env {
         envs.insert(hash_secret_env.clone(), ConfigValueClassification::Secret);
     }
+    if let Some(consultation) = &config.consultation {
+        for name in consultation.required_environment_references() {
+            envs.insert(name.to_owned(), ConfigValueClassification::Secret);
+        }
+    }
     for dataset in &config.datasets {
         for table in dataset.table_configs() {
             if let SourceConfig::Postgres { connection_env, .. } = &table.source {
@@ -869,8 +897,13 @@ fn relay_live_apply_classes() -> Vec<Value> {
     [
         ("auth.api_keys", LiveApplyClass::HotSwappable),
         ("auth.oidc", LiveApplyClass::HotSwappable),
-        ("audit", LiveApplyClass::HotSwappable),
+        // The consultation state plane derives its durable chain authority
+        // from audit.hash_secret_env at startup. Treat the whole audit block as
+        // restart-only so a future live-apply implementation cannot split the
+        // HTTP and consultation audit authorities.
+        ("audit", LiveApplyClass::RestartRequired),
         ("catalog", LiveApplyClass::HotSwappable),
+        ("consultation", LiveApplyClass::RestartRequired),
         ("datasets", LiveApplyClass::RestartRequired),
         ("server.bind", LiveApplyClass::RestartRequired),
         ("server.admin_bind", LiveApplyClass::RestartRequired),
@@ -902,6 +935,10 @@ fn relay_config_value_classification(path: &[&str], value: &Value) -> ConfigValu
         Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_)
     ) {
         return ConfigValueClassification::Public;
+    }
+
+    if path == ["consultation", "state_plane", "root_certificate_path"] {
+        return ConfigValueClassification::TopologySensitive;
     }
 
     // Value-level defense, independent of the key name: a leaf string whose
@@ -1173,10 +1210,12 @@ async fn compile_relay_runtime_with_options(
     let pending_bundle_acceptance = loaded.pending_bundle_acceptance.clone();
     let compiled_metadata = loaded.metadata.map(Arc::new);
     let metadata_source_digest = loaded.metadata_source_digest;
+    let consultation_artifacts = loaded.consultation_artifacts;
     let config = Arc::new(loaded.runtime);
 
     let auth = build_auth(&config).await?;
-    let audit_sink = build_audit_sink(&config)?;
+    let audit_chain_profile = build_audit_chain_profile(&config)?;
+    let audit_sink = build_audit_sink(&config, audit_chain_profile.clone())?;
     // Eagerly verify the retained audit chain so a chain bricked by an earlier
     // fork surfaces as an actionable /ready signal instead of a per-request 503
     // behind a green healthcheck (#196). Startup is not aborted: readiness
@@ -1226,6 +1265,23 @@ async fn compile_relay_runtime_with_options(
     #[cfg(feature = "spdci-api-standards")]
     let spdci_response_mapper = build_spdci_response_mapper(&config)?.map(Arc::new);
     let metrics = RequestMetrics::shared();
+    let consultation = match (config.consultation.is_some(), consultation_artifacts) {
+        (false, None) => None,
+        (true, Some(artifacts)) => Some(
+            ConsultationService::activate(config.as_ref(), artifacts, audit_chain_profile.hasher())
+                .await?,
+        ),
+        (configured, artifacts) => {
+            error!(
+                code = "config.validation_error",
+                field = "consultation.artifacts",
+                consultation_configured = configured,
+                verified_artifacts_present = artifacts.is_some(),
+                "consultation configuration and verified artifact closure disagree"
+            );
+            return Err(Error::from(ConfigError::ValidationError).into());
+        }
+    };
 
     Ok(RelayRuntimeSnapshot::new(
         config,
@@ -1247,6 +1303,7 @@ async fn compile_relay_runtime_with_options(
         readiness_tx,
         readiness_rx,
         cursor_signer,
+        consultation,
         #[cfg(feature = "spdci-api-standards")]
         spdci_response_mapper,
         metrics,
@@ -2049,8 +2106,26 @@ fn render_generated_api_key(id: &str, bytes: &[u8]) -> String {
     format!("api_key_id={id}\napi_key={key}\nfingerprint={fingerprint}")
 }
 
-/// Instantiate the configured audit sink.
-fn build_audit_sink(config: &Config) -> Result<Arc<AuditPipeline>, Error> {
+/// Load the deployment audit-chain profile exactly once for every runtime
+/// capability that must share the same domain-separated chain key.
+fn build_audit_chain_profile(config: &Config) -> Result<AuditChainProfile, Error> {
+    let hash_secret_env = config
+        .audit
+        .hash_secret_env
+        .as_deref()
+        .ok_or(ConfigError::ValidationError)?;
+    AuditChainProfile::registry_relay_from_env(hash_secret_env).map_err(|err| {
+        error!(error = %err, "audit chain secret failed validation");
+        Error::from(ConfigError::ValidationError)
+    })
+}
+
+/// Instantiate the configured audit sink with the already-loaded chain
+/// profile shared by the consultation state plane.
+fn build_audit_sink(
+    config: &Config,
+    profile: AuditChainProfile,
+) -> Result<Arc<AuditPipeline>, Error> {
     let sink: Arc<dyn registry_platform_audit::AuditSink> = match &config.audit.sink {
         AuditSinkConfig::Stdout {} => Arc::new(StdoutSink::new()),
         AuditSinkConfig::File { path, rotate } => {
@@ -2078,15 +2153,6 @@ fn build_audit_sink(config: &Config) -> Result<Arc<AuditPipeline>, Error> {
             "audit.chain is accepted for config compatibility; platform audit envelopes are always chained"
         );
     }
-    let hash_secret_env = config
-        .audit
-        .hash_secret_env
-        .as_deref()
-        .ok_or(ConfigError::ValidationError)?;
-    let profile = AuditChainProfile::registry_relay_from_env(hash_secret_env).map_err(|err| {
-        error!(error = %err, "audit chain secret failed validation");
-        ConfigError::ValidationError
-    })?;
     Ok(Arc::new(AuditPipeline::new_with_chain_profile(
         sink, profile,
     )))
@@ -2196,11 +2262,12 @@ fn install_sigterm_listener() -> io::Result<tokio::signal::unix::Signal> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_audit_sink, compile_relay_runtime, load_env_file_arg, parse_cli_command_from,
-        parse_env_file_value, relay_config_value_classification, render_generated_api_key,
-        run_audit_quarantine, run_healthcheck, url_contains_userinfo, CliCommand,
-        ConfigValueClassification, GenerateApiKeyCommand, OperationalLogFormat, OutputFormat,
-        DEFAULT_HEALTHCHECK_TIMEOUT_MS, DEFAULT_HEALTHCHECK_URL,
+        build_audit_chain_profile, build_audit_sink, compile_relay_runtime, load_env_file_arg,
+        parse_cli_command_from, parse_env_file_value, redacted_resolved_config,
+        relay_config_value_classification, relay_live_apply_classes, render_generated_api_key,
+        required_env_report, run_audit_quarantine, run_healthcheck, url_contains_userinfo,
+        CliCommand, ConfigValueClassification, GenerateApiKeyCommand, OperationalLogFormat,
+        OutputFormat, DEFAULT_HEALTHCHECK_TIMEOUT_MS, DEFAULT_HEALTHCHECK_URL,
     };
     use axum::routing::get;
     use axum::Router;
@@ -3172,6 +3239,118 @@ audit:
     }
 
     #[test]
+    fn consultation_root_certificate_path_is_topology_redacted() {
+        let marker = "/private/deployment/topology/consultation-root.pem";
+        assert_eq!(
+            relay_config_value_classification(
+                &["consultation", "state_plane", "root_certificate_path"],
+                &json!(marker),
+            ),
+            ConfigValueClassification::TopologySensitive
+        );
+        let resolved = redacted_resolved_config(&format!(
+            "consultation:\n  state_plane:\n    root_certificate_path: {marker}\n"
+        ))
+        .expect("test YAML resolves");
+        let rendered = serde_json::to_string(&resolved).expect("redacted config renders");
+        assert!(!rendered.contains(marker));
+    }
+
+    #[test]
+    fn consultation_is_explicitly_restart_only_in_config_explanations() {
+        let classes = relay_live_apply_classes();
+        let consultation = classes
+            .iter()
+            .find(|entry| entry["path"] == "consultation")
+            .expect("consultation classification is present");
+        assert_eq!(consultation["class"], "restart_required");
+        let audit = classes
+            .iter()
+            .find(|entry| entry["path"] == "audit")
+            .expect("audit classification is present");
+        assert_eq!(audit["class"], "restart_required");
+    }
+
+    #[test]
+    fn consultation_required_env_report_names_references_without_values() {
+        let _guard = env_lock();
+        let names = [
+            "REGISTRY_RELAY_DIAGNOSTIC_AUDIT_HASH",
+            "REGISTRY_RELAY_DIAGNOSTIC_PASSWORD",
+            "REGISTRY_RELAY_DIAGNOSTIC_PSEUDONYM",
+            "REGISTRY_RELAY_DIAGNOSTIC_STATE_DATABASE",
+            "REGISTRY_RELAY_DIAGNOSTIC_USERNAME",
+        ];
+        for name in names {
+            std::env::remove_var(name);
+        }
+        std::env::set_var(
+            "REGISTRY_RELAY_DIAGNOSTIC_STATE_DATABASE",
+            "secret-value-must-not-leak",
+        );
+        let config: Config = serde_saphyr::from_str(
+            r#"
+deployment:
+  profile: local
+server:
+  bind: 127.0.0.1:0
+catalog:
+  title: Test
+  base_url: https://data.example.test
+  publisher: Test
+vocabularies: {}
+auth:
+  mode: api_key
+  api_keys: []
+datasets: []
+audit:
+  sink: stdout
+  hash_secret_env: REGISTRY_RELAY_DIAGNOSTIC_AUDIT_HASH
+consultation:
+  notary_workload:
+    audience: relay-consultation
+    client_claim_selector: azp
+    client_value: registry-notary
+    principal_id: registry-notary
+  state_plane:
+    database_url_env: REGISTRY_RELAY_DIAGNOSTIC_STATE_DATABASE
+    chain_key_epoch_id: chain-epoch-1
+    serving_fence_lock_key: 7221091441
+    audit_pseudonym_keyring_lock_key: 7221091442
+  audit_pseudonym_materials:
+    - key_id: epoch-a
+      source:
+        provider: environment
+        name: REGISTRY_RELAY_DIAGNOSTIC_PSEUDONYM
+  source_credentials:
+    - type: basic
+      ref: source-reader
+      generation: 1
+      username_env: REGISTRY_RELAY_DIAGNOSTIC_USERNAME
+      password_env: REGISTRY_RELAY_DIAGNOSTIC_PASSWORD
+"#,
+        )
+        .expect("diagnostic consultation config parses");
+
+        let report = required_env_report(&config);
+        let reported_names = report
+            .iter()
+            .map(|entry| entry["name"].as_str().expect("name is a string"))
+            .collect::<Vec<_>>();
+        assert_eq!(reported_names, names);
+        assert!(report
+            .iter()
+            .all(|entry| entry["classification"] == "secret"));
+        assert_eq!(report[3]["status"], "present");
+        let rendered = serde_json::to_string(&report).expect("report renders");
+        assert!(!rendered.contains("secret-value-must-not-leak"));
+
+        for name in names {
+            std::env::remove_var(name);
+        }
+    }
+
+    #[test]
     fn config_explanation_redacts_url_with_userinfo_under_non_secret_key() {
         // M-1: a URL carrying basic-auth credentials must be redacted even when
         // the key name is not a trigger word on its own.
@@ -3473,6 +3652,32 @@ audit:
     }
 
     #[test]
+    fn server_shutdown_releases_consultation_fence_before_refresh_join() {
+        let source = include_str!("main.rs");
+        let run_server = source
+            .split("async fn run_server")
+            .nth(1)
+            .and_then(|tail| tail.split("async fn run_openapi").next())
+            .expect("run_server body is present");
+        let refresh_cancel = run_server
+            .find("refresh_shutdown.cancel()")
+            .expect("refresh cancellation is present");
+        let consultation_shutdown = run_server
+            .find("let consultation_shutdown:")
+            .expect("consultation shutdown is present");
+        let refresh_join = run_server
+            .find("refresh_tasks.join_next()")
+            .expect("refresh join is present");
+        let audit_flush = run_server
+            .find("runtime.audit_sink.flush()")
+            .expect("final audit flush is present");
+
+        assert!(refresh_cancel < consultation_shutdown);
+        assert!(consultation_shutdown < refresh_join);
+        assert!(refresh_join < audit_flush);
+    }
+
+    #[test]
     fn operational_log_format_defaults_to_text_for_empty_or_unknown_values() {
         assert_eq!(OperationalLogFormat::parse(""), OperationalLogFormat::Text);
         assert_eq!(
@@ -3509,7 +3714,8 @@ audit:
         std::env::set_var(env_name, "0123456789abcdef0123456789abcdef");
         let config = config_with_file_audit(&path, env_name);
 
-        let sink = build_audit_sink(&config).expect("audit sink builds");
+        let profile = build_audit_chain_profile(&config).expect("audit profile builds");
+        let sink = build_audit_sink(&config, profile).expect("audit sink builds");
         sink.write_record(sample_audit_record())
             .await
             .expect("audit record writes");
@@ -3609,7 +3815,8 @@ audit:
         // Write a valid keyed chain, then release the single-writer lock (the
         // relay has exited) and tamper the second record so the chain no longer
         // verifies under the configured secret.
-        let sink = build_audit_sink(&config).expect("audit sink builds");
+        let profile = build_audit_chain_profile(&config).expect("audit profile builds");
+        let sink = build_audit_sink(&config, profile).expect("audit sink builds");
         sink.write_record(sample_audit_record())
             .await
             .expect("first write");

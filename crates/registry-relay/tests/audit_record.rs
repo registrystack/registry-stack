@@ -395,6 +395,80 @@ async fn middleware_emits_one_record_per_request_with_response_status() {
 }
 
 #[tokio::test]
+async fn consultation_http_audit_never_retains_untrusted_target_or_purpose() {
+    const PROFILE_ROUTE: &str = "/v1/consultations/{profile_id}/versions/{profile_version}";
+    const UNMATCHED_ROUTE: &str = "/v1/consultations/{unmatched}";
+    let (sink, pipeline) = in_memory_pipeline();
+    let app = Router::new()
+        .route(PROFILE_ROUTE, get(|| async { StatusCode::OK }))
+        .layer(from_fn(audit_layer))
+        .layer(Extension(pipeline))
+        .layer(Extension(Principal {
+            principal_id: "citizen-principal-marker".to_string(),
+            scopes: ScopeSet::from_iter(["citizen-scope-marker"]),
+            auth_mode: AuthMode::Oidc,
+        }));
+
+    let matched = Request::builder()
+        .method(Method::GET)
+        .uri("/v1/consultations/citizen-path-marker/versions/1?subject=citizen-query-marker")
+        .header("data-purpose", "citizen-purpose-marker")
+        .header("authorization", "Bearer credential-secret-marker")
+        .header("cookie", "session=credential-cookie-marker")
+        .header(
+            "registry-notary-evaluation-id",
+            "notary-evaluation-id-marker",
+        )
+        .body(Body::empty())
+        .expect("matched consultation request builds");
+    assert_eq!(
+        app.clone().oneshot(matched).await.unwrap().status(),
+        StatusCode::OK
+    );
+
+    let unmatched = Request::builder()
+        .method(Method::GET)
+        .uri("/v1/consultations/citizen-unmatched-marker/private")
+        .header("data-purpose", "other-citizen-purpose-marker")
+        .body(Body::empty())
+        .expect("unmatched consultation request builds");
+    assert_eq!(
+        app.oneshot(unmatched).await.unwrap().status(),
+        StatusCode::NOT_FOUND
+    );
+
+    let records = sink.snapshot();
+    assert_eq!(records.len(), 2);
+    let matched = captured_record(&records[0]);
+    assert_eq!(matched["path"], PROFILE_ROUTE);
+    assert_eq!(matched["query_params"], serde_json::json!({}));
+    assert!(matched["purpose"].is_null());
+    assert!(matched["principal_id"].is_null());
+    assert!(matched["auth_mode"].is_null());
+    assert_eq!(matched["scopes_used"], serde_json::json!([]));
+    let unmatched = captured_record(&records[1]);
+    assert_eq!(unmatched["path"], UNMATCHED_ROUTE);
+    assert_eq!(unmatched["query_params"], serde_json::json!({}));
+    assert!(unmatched["purpose"].is_null());
+
+    let encoded = records.join("");
+    for forbidden in [
+        "citizen-path-marker",
+        "citizen-query-marker",
+        "citizen-purpose-marker",
+        "citizen-unmatched-marker",
+        "other-citizen-purpose-marker",
+        "citizen-principal-marker",
+        "citizen-scope-marker",
+        "credential-secret-marker",
+        "credential-cookie-marker",
+        "notary-evaluation-id-marker",
+    ] {
+        assert!(!encoded.contains(forbidden));
+    }
+}
+
+#[tokio::test]
 async fn middleware_records_error_code_when_handler_sets_extension() {
     async fn failing() -> axum::response::Response {
         let mut resp = (StatusCode::FORBIDDEN, "denied").into_response();

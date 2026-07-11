@@ -123,13 +123,6 @@ pub struct ConsultationId(Ulid);
 impl ConsultationId {
     /// Mint a fresh Relay-owned id for a consultation attempt.
     #[must_use]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "ConsultationService will become the sole production id minter"
-        )
-    )]
     pub(crate) fn generate() -> Self {
         Self(Ulid::new())
     }

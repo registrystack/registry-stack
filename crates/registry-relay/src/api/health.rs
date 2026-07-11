@@ -20,6 +20,7 @@ use axum::routing::get;
 use axum::Router;
 use serde_json::{json, Value};
 
+use crate::consultation::ConsultationServiceReadiness;
 use crate::runtime_config::RuntimeSnapshot;
 
 /// Sub-router carrying both `/healthz` and `/ready`. Returned to
@@ -89,6 +90,12 @@ async fn ready(runtime: RuntimeSnapshot) -> Response {
         }
     }
 
+    if let Some(consultation) = runtime.consultation() {
+        if consultation.readiness().await != ConsultationServiceReadiness::Ready {
+            return consultation_not_ready_response();
+        }
+    }
+
     let Some(readiness) = runtime.readiness_rx() else {
         return Json(ok_health_body(1, 1, 0)).into_response();
     };
@@ -103,6 +110,21 @@ async fn ready(runtime: RuntimeSnapshot) -> Response {
     let not_ready_count = snapshot.not_ready.len();
     let unresolved_count = snapshot.unresolved_entities.len();
 
+    resource_not_ready_response(failed_count, not_ready_count, unresolved_count)
+}
+
+/// Report an enabled consultation service as one unavailable aggregate
+/// capability. The public probe never identifies a profile, database, source,
+/// credential, or state-plane component.
+fn consultation_not_ready_response() -> Response {
+    resource_not_ready_response(0, 1, 0)
+}
+
+fn resource_not_ready_response(
+    failed_count: usize,
+    not_ready_count: usize,
+    unresolved_count: usize,
+) -> Response {
     let body = Json(json!({
         "type": format!("{}schema/resource_unavailable", crate::error::PROBLEM_TYPE_BASE),
         "title": "Resource unavailable",
@@ -174,4 +196,39 @@ fn ok_health_body(total: usize, ok: usize, failed: usize) -> Value {
             "failed": failed,
         },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::body::to_bytes;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn consultation_not_ready_response_is_safe_and_aggregate() {
+        let response = consultation_not_ready_response();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE),
+            Some(&"application/problem+json".parse().expect("valid header"))
+        );
+        let body = to_bytes(response.into_body(), 4 * 1024)
+            .await
+            .expect("bounded response body");
+        let value: Value = serde_json::from_slice(&body).expect("problem JSON");
+        assert_eq!(value["code"], "schema.resource_unavailable");
+        assert_eq!(value["failed_count"], 0);
+        assert_eq!(value["not_ready_count"], 1);
+        assert_eq!(value["unresolved_count"], 0);
+        let rendered = String::from_utf8(body.to_vec()).expect("JSON is UTF-8");
+        for forbidden in [
+            "consultation",
+            "postgres",
+            "database",
+            "credential",
+            "profile",
+        ] {
+            assert!(!rendered.contains(forbidden));
+        }
+    }
 }

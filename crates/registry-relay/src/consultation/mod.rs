@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Closed domain types for purpose-aware Relay consultations.
+//! Closed domain types and the concrete Basic GET service for Relay consultations.
 //!
-//! This module deliberately contains no HTTP parsing or source dispatch. It
-//! establishes parsed values and validated declarations that the consultation
-//! service will later bind to a profile, authorization decision, durable audit,
-//! and fenced dispatch grant. Raw request values and native source controls are
-//! not backend capabilities.
+//! HTTP parsing remains in `api::consultation`. This module binds its parsed
+//! values to exact compiled profiles, authorization, durable audit, and fenced
+//! Basic GET dispatch. Raw request values and native source controls are never
+//! standalone backend capabilities.
 
 #[allow(
     dead_code,
@@ -38,12 +37,26 @@ pub(crate) mod pseudonym;
     reason = "the sealed response is consumed by the concrete consultation executor integration"
 )]
 pub(crate) mod response;
+mod service;
 mod types;
 mod workload;
 
 pub use identifiers::{
     ConsultationId, ConsultationIdentifierError, ConsultationKey, NotaryEvaluationId,
     ResolvedConsultationProfile,
+};
+#[allow(
+    unused_imports,
+    reason = "reachable crate-private service return and error member types for the HTTP boundary"
+)]
+pub(crate) use service::{
+    ConsultationDenialReason, ConsultationDenialRecorded, ConsultationDenialRoute,
+    ConsultationExecutionError, ConsultationRetryAfter, ConsultationServiceError,
+    ResolvedConsultationContext,
+};
+pub use service::{
+    ConsultationService, ConsultationServiceActivationError, ConsultationServiceReadiness,
+    ConsultationServiceShutdownError,
 };
 pub use types::{
     AcquiredField, AcquisitionClass, AssertionContractHash, AssertionContractId,

@@ -335,13 +335,6 @@ pub struct ConfiguredOidcWorkloadProof {
 impl ConfiguredOidcWorkloadProof {
     /// Assemble the four independently validated OIDC binding facts.
     #[must_use]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the private constructor is consumed by the consultation config compiler slice"
-        )
-    )]
     pub(crate) const fn new(
         issuer: ConfiguredIssuer,
         audience: ConfiguredAudience,
@@ -375,6 +368,44 @@ impl ConfiguredOidcWorkloadProof {
     pub const fn principal_id(&self) -> &ConfiguredPrincipalId {
         &self.principal_id
     }
+
+    /// Prove the fixed Notary service identity before any profile lookup.
+    /// Profile-specific scope, tenant, registry, and workload checks remain in
+    /// [`AuthenticatedConsultationWorkload::try_bind`].
+    pub(crate) fn precheck_authentication(
+        &self,
+        authentication: &AuthenticationResult,
+    ) -> Result<(), WorkloadBindingError> {
+        require_exact_oidc_identity(authentication, self).map(|_| ())
+    }
+}
+
+fn require_exact_oidc_identity<'authentication>(
+    authentication: &'authentication AuthenticationResult,
+    expected: &ConfiguredOidcWorkloadProof,
+) -> Result<&'authentication crate::auth::VerifiedOidcIdentity, WorkloadBindingError> {
+    let principal = authentication.principal();
+    if principal.auth_mode != AuthMode::Oidc
+        || principal.principal_id != expected.principal_id().as_str()
+    {
+        return Err(WorkloadBindingError::AuthenticationDenied);
+    }
+    let identity = authentication
+        .verified_oidc()
+        .ok_or(WorkloadBindingError::AuthenticationDenied)?;
+    if identity.issuer() != expected.issuer().as_str()
+        || !identity.has_audience(expected.audience().as_str())
+    {
+        return Err(WorkloadBindingError::AuthenticationDenied);
+    }
+    let selected_client = match expected.client().selector {
+        ClientClaimSelector::Azp => identity.authorized_party(),
+        ClientClaimSelector::ClientId => identity.client_id_claim(),
+    };
+    if selected_client != Some(expected.client().expected.as_str()) {
+        return Err(WorkloadBindingError::AuthenticationDenied);
+    }
+    Ok(identity)
 }
 
 /// The closed role of a consultation workload.
@@ -419,13 +450,6 @@ pub struct ConsultationWorkloadBinding {
 impl ConsultationWorkloadBinding {
     /// Assemble one fixed binding from validated configuration values.
     #[must_use]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the private constructor is consumed by the consultation config compiler slice"
-        )
-    )]
     pub(crate) const fn new(
         role: ConsultationWorkloadRole,
         workload_id: WorkloadId,
@@ -565,39 +589,16 @@ impl AuthenticatedConsultationWorkload {
     /// absent verified OIDC context, any exact binding mismatch, a missing
     /// required scope, or an unsafe principal identifier. The error never
     /// carries an observed claim value.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the private capability boundary is consumed by ConsultationService"
-        )
-    )]
     pub(crate) fn try_bind(
         authentication: &AuthenticationResult,
         binding: &ConsultationWorkloadBinding,
     ) -> Result<Self, WorkloadBindingError> {
-        let principal = authentication.principal();
-        if principal.auth_mode != AuthMode::Oidc
-            || principal.principal_id != binding.principal_id().as_str()
+        let identity = require_exact_oidc_identity(authentication, &binding.oidc)?;
+        if !authentication
+            .principal()
+            .scopes
+            .contains(binding.required_scope.as_str())
         {
-            return Err(WorkloadBindingError::AuthenticationDenied);
-        }
-
-        let identity = authentication
-            .verified_oidc()
-            .ok_or(WorkloadBindingError::AuthenticationDenied)?;
-        if identity.issuer() != binding.issuer().as_str()
-            || !identity.has_audience(binding.audience().as_str())
-            || !principal.scopes.contains(binding.required_scope.as_str())
-        {
-            return Err(WorkloadBindingError::AuthenticationDenied);
-        }
-
-        let selected_client = match binding.client().selector {
-            ClientClaimSelector::Azp => identity.authorized_party(),
-            ClientClaimSelector::ClientId => identity.client_id_claim(),
-        };
-        if selected_client != Some(binding.client().expected.as_str()) {
             return Err(WorkloadBindingError::AuthenticationDenied);
         }
 
@@ -630,13 +631,6 @@ impl AuthenticatedConsultationWorkload {
 
     /// Narrow this generic authenticated service to the Notary-only
     /// correlation capability.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "ConsultationService will mint the Notary capability after exact binding"
-        )
-    )]
     pub(crate) fn try_as_notary(&self) -> Option<AuthenticatedNotaryWorkload<'_>> {
         match self.role {
             ConsultationWorkloadRole::Notary => Some(AuthenticatedNotaryWorkload {
@@ -1124,6 +1118,33 @@ mod tests {
                 Some(WorkloadBindingError::AuthenticationDenied)
             );
         }
+    }
+
+    #[tokio::test]
+    async fn fixed_identity_precheck_precedes_profile_specific_scope() {
+        let (signing, verifying) = keypair();
+        let mut missing_scope_claims = claims(ISSUER, Value::String(AUDIENCE.to_string()));
+        missing_scope_claims.insert(
+            "scope".to_string(),
+            Value::String("other:scope".to_string()),
+        );
+        let authentication = authenticate(
+            oidc_config(ISSUER, vec![AUDIENCE.to_string()]),
+            &signing,
+            &verifying,
+            missing_scope_claims,
+        )
+        .await;
+        let expected = binding(ClientClaimSelector::Azp, "notary-azp");
+
+        assert_eq!(
+            expected.oidc.precheck_authentication(&authentication),
+            Ok(())
+        );
+        assert_eq!(
+            AuthenticatedConsultationWorkload::try_bind(&authentication, &expected).err(),
+            Some(WorkloadBindingError::AuthenticationDenied)
+        );
     }
 
     #[test]

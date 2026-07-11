@@ -173,6 +173,28 @@ fn validate_consultation(config: &Config) -> Result<(), ConfigError> {
         );
         return Err(ConfigError::ValidationError);
     }
+    if !oidc.allowed_clients.is_empty() {
+        if notary.client_claim_selector == super::ConsultationClientClaimSelectorConfig::ClientId {
+            tracing::error!(
+                code = "config.validation_error",
+                field = "consultation.notary_workload.client_claim_selector",
+                "a client_id Notary binding requires auth.oidc.allowed_clients to be empty because shared OIDC admission prefers azp"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+        if !oidc
+            .allowed_clients
+            .iter()
+            .any(|client| client == &notary.client_value)
+        {
+            tracing::error!(
+                code = "config.validation_error",
+                field = "auth.oidc.allowed_clients",
+                "the OIDC client allowlist must admit the fixed Notary client binding"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+    }
     if ConfiguredPrincipalId::try_from(notary.principal_id.as_str()).is_err() {
         tracing::error!(
             code = "config.validation_error",
@@ -4811,6 +4833,53 @@ deployment:
                 Err(Error::Config(ConfigError::ValidationError))
             ));
         }
+    }
+
+    #[test]
+    fn consultation_notary_binding_is_compatible_with_shared_oidc_client_admission() {
+        let base = consultation_deployment_config_yaml(&consultation_section(&[(
+            "epoch-a",
+            "PSEUDONYM_SOURCE",
+        )]));
+
+        let admitted: Config = serde_saphyr::from_str(&base.replace(
+            "jwks_url: \"https://identity.example.test/jwks\"",
+            "jwks_url: \"https://identity.example.test/jwks\"\n    allowed_clients: [registry-notary]",
+        ))
+        .expect("admitted consultation config parses");
+        run(&admitted).expect("the fixed azp binding is admitted by the shared allowlist");
+
+        let omitted: Config = serde_saphyr::from_str(&base.replace(
+            "jwks_url: \"https://identity.example.test/jwks\"",
+            "jwks_url: \"https://identity.example.test/jwks\"\n    allowed_clients: [different-client]",
+        ))
+        .expect("omitted consultation config parses");
+        assert!(matches!(
+            run(&omitted),
+            Err(Error::Config(ConfigError::ValidationError))
+        ));
+
+        let client_id_with_allowlist: Config = serde_saphyr::from_str(
+            &base
+                .replace("client_claim_selector: azp", "client_claim_selector: client_id")
+                .replace(
+                    "jwks_url: \"https://identity.example.test/jwks\"",
+                    "jwks_url: \"https://identity.example.test/jwks\"\n    allowed_clients: [registry-notary]",
+                ),
+        )
+        .expect("client_id consultation config parses");
+        assert!(matches!(
+            run(&client_id_with_allowlist),
+            Err(Error::Config(ConfigError::ValidationError))
+        ));
+
+        let client_id_without_allowlist: Config = serde_saphyr::from_str(&base.replace(
+            "client_claim_selector: azp",
+            "client_claim_selector: client_id",
+        ))
+        .expect("client_id consultation config parses");
+        run(&client_id_without_allowlist)
+            .expect("the exact service binding admits client_id without ambiguous pre-filtering");
     }
 
     #[test]

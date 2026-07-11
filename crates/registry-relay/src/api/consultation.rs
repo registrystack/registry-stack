@@ -1,22 +1,29 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Closed HTTP wire parsing for consultation v1.
 //!
-//! This module deliberately does not mount a route or authorize a profile. It
-//! gives the later consultation service an order-preserving boundary: bind the
-//! authenticated workload, parse and resolve an allowed profile key, then parse
-//! this bounded envelope. No raw HTTP request reaches a source backend.
+//! The router mounts exactly the protected metadata and execute operations. Its
+//! execute handler preserves the security order: authenticate, resolve an exact
+//! workload-visible profile, then acquire and parse the bounded subject body.
+//! No raw HTTP request reaches a source backend.
 
 use axum::body::Body;
-use axum::http::{header, HeaderMap};
+use axum::extract::OriginalUri;
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
+use axum::{Extension, Router};
 use futures::StreamExt;
 use thiserror::Error;
 use zeroize::Zeroizing;
 
+use crate::auth::AuthenticationResult;
 use crate::consultation::{
-    AuthenticatedNotaryWorkload, ConsultationKey, NotaryEvaluationId, ParsedPurpose,
-    ParsedSingleStringInput, ResolvedConsultationProfile,
+    AuthenticatedNotaryWorkload, ConsultationExecutionError, ConsultationKey,
+    ConsultationServiceError, NotaryEvaluationId, ParsedPurpose, ParsedSingleStringInput,
+    ResolvedConsultationProfile,
 };
-use crate::error::ConsultationError;
+use crate::error::{ConsultationError, Error};
+use crate::runtime_config::RuntimeSnapshot;
 
 /// Hard v1 limit applied before JSON parsing.
 pub(crate) const MAX_CONSULTATION_REQUEST_BYTES: usize = 8 * 1024;
@@ -24,6 +31,204 @@ pub(crate) const MAX_CONSULTATION_REQUEST_BYTES: usize = 8 * 1024;
 const DATA_PURPOSE_HEADER: &str = "data-purpose";
 const NOTARY_EVALUATION_ID_HEADER: &str = "registry-notary-evaluation-id";
 const JSON_MEDIA_TYPE: &str = "application/json";
+const MIN_RETRY_AFTER_SECONDS: u64 = 1;
+const MAX_RETRY_AFTER_SECONDS: u64 = 60;
+pub(crate) const PROFILE_ROUTE: &str = "/v1/consultations/{profile_id}/versions/{profile_version}";
+pub(crate) const EXECUTE_ROUTE: &str =
+    "/v1/consultations/{profile_id}/versions/{profile_version}/execute";
+const CONSULTATION_ROUTE_PREFIX: &str = "/v1/consultations/";
+const CONSULTATION_VERSION_SEPARATOR: &str = "/versions/";
+const EXECUTE_SUFFIX: &str = "/execute";
+
+/// Mount only the two frozen consultation-v1 operations.
+pub(crate) fn router<S>() -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    Router::new()
+        // Axum normally treats HEAD as GET. The public contract intentionally
+        // exposes GET only, so install an explicit closed denial for HEAD.
+        .route(
+            PROFILE_ROUTE,
+            get(profile_metadata)
+                .head(metadata_method_not_allowed)
+                .fallback(metadata_method_not_allowed),
+        )
+        .route(
+            EXECUTE_ROUTE,
+            post(execute).fallback(execute_method_not_allowed),
+        )
+}
+
+async fn metadata_method_not_allowed() -> Response {
+    method_not_allowed("GET")
+}
+
+async fn execute_method_not_allowed() -> Response {
+    method_not_allowed("POST")
+}
+
+fn method_not_allowed(allowed: &'static str) -> Response {
+    let mut response = StatusCode::METHOD_NOT_ALLOWED.into_response();
+    response
+        .headers_mut()
+        .insert(header::ALLOW, HeaderValue::from_static(allowed));
+    response
+}
+
+async fn profile_metadata(
+    runtime: RuntimeSnapshot,
+    Extension(authentication): Extension<AuthenticationResult>,
+    OriginalUri(original_uri): OriginalUri,
+) -> Response {
+    let key = match parse_routed_consultation_key(&original_uri, false) {
+        Ok(key) => key,
+        Err(error) => return wire_error_response(error),
+    };
+    let Some(service) = runtime.consultation() else {
+        return consultation_error_response(ConsultationError::Unavailable, None);
+    };
+    let context = match service.resolve(&authentication, &key) {
+        Ok(context) => context,
+        Err(error) => return service_error_response(error),
+    };
+    json_response(context.metadata_bytes().to_vec())
+}
+
+async fn execute(
+    runtime: RuntimeSnapshot,
+    Extension(authentication): Extension<AuthenticationResult>,
+    OriginalUri(original_uri): OriginalUri,
+    headers: HeaderMap,
+    body: Body,
+) -> Response {
+    let key = match parse_routed_consultation_key(&original_uri, true) {
+        Ok(key) => key,
+        Err(error) => return wire_error_response(error),
+    };
+    let Some(service) = runtime.consultation() else {
+        return consultation_error_response(ConsultationError::Unavailable, None);
+    };
+    let context = match service.resolve(&authentication, &key) {
+        Ok(context) => context,
+        Err(error) => return service_error_response(error),
+    };
+
+    // Do not poll the subject-bearing body until authentication and exact
+    // workload-visible profile resolution have both produced their proofs.
+    let notary_workload = context.notary_workload();
+    let parsed_headers =
+        match parse_execute_headers(context.resolved_profile(), &notary_workload, &headers) {
+            Ok(parsed) => parsed,
+            Err(error) => return wire_error_response(error),
+        };
+    // Authorization, cookies, forwarding metadata, and every other ambient
+    // header are no longer retained when body acquisition or execution waits.
+    drop(headers);
+    let body = match ConsultationRequestBody::read_from(
+        context.resolved_profile(),
+        &notary_workload,
+        body,
+    )
+    .await
+    {
+        Ok(body) => body,
+        Err(error) => return wire_error_response(error),
+    };
+    let envelope = match parse_execute_body(
+        context.resolved_profile(),
+        &notary_workload,
+        parsed_headers,
+        body,
+    ) {
+        Ok(envelope) => envelope,
+        Err(error) => return wire_error_response(error),
+    };
+    match service.execute(context, envelope).await {
+        Ok(bytes) => json_response(bytes),
+        Err(error) => execution_error_response(error),
+    }
+}
+
+fn json_response(bytes: Vec<u8>) -> Response {
+    let mut response = Response::new(Body::from(bytes));
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static(JSON_MEDIA_TYPE),
+    );
+    response
+}
+
+fn wire_error_response(error: ConsultationWireError) -> Response {
+    consultation_error_response(error.public_error(), None)
+}
+
+fn parse_routed_consultation_key(
+    original_uri: &axum::http::Uri,
+    execute: bool,
+) -> Result<ConsultationKey, ConsultationWireError> {
+    let raw = original_uri
+        .path_and_query()
+        .map(|value| value.as_str())
+        .ok_or(ConsultationWireError::InvalidProfilePath)?;
+    if raw.contains('?') {
+        return Err(ConsultationWireError::InvalidProfilePath);
+    }
+    let route = raw
+        .strip_prefix(CONSULTATION_ROUTE_PREFIX)
+        .ok_or(ConsultationWireError::InvalidProfilePath)?;
+    let route = if execute {
+        route
+            .strip_suffix(EXECUTE_SUFFIX)
+            .ok_or(ConsultationWireError::InvalidProfilePath)?
+    } else {
+        route
+    };
+    let (profile_id, profile_version) = route
+        .split_once(CONSULTATION_VERSION_SEPARATOR)
+        .ok_or(ConsultationWireError::InvalidProfilePath)?;
+    parse_consultation_key(profile_id, profile_version)
+}
+
+fn service_error_response(error: ConsultationServiceError) -> Response {
+    let (public, retry_after_seconds) = match error {
+        ConsultationServiceError::InvalidCredentials => {
+            (ConsultationError::InvalidCredentials, None)
+        }
+        ConsultationServiceError::Denied => (ConsultationError::Denied, None),
+        ConsultationServiceError::ProfileNotFound => (ConsultationError::ProfileNotFound, None),
+        ConsultationServiceError::InvalidRequest => (ConsultationError::InvalidRequest, None),
+        ConsultationServiceError::RateLimited(retry_after) => (
+            ConsultationError::RateLimited,
+            Some(u64::from(retry_after.seconds())),
+        ),
+        ConsultationServiceError::Unavailable => (ConsultationError::Unavailable, None),
+    };
+    consultation_error_response(public, retry_after_seconds)
+}
+
+fn execution_error_response(error: ConsultationExecutionError) -> Response {
+    let (error, denial_recorded) = error.into_parts();
+    let mut response = service_error_response(error);
+    if let Some(denial_recorded) = denial_recorded {
+        response.extensions_mut().insert(denial_recorded);
+    }
+    response
+}
+
+pub(crate) fn consultation_error_response(
+    error: ConsultationError,
+    retry_after_seconds: Option<u64>,
+) -> Response {
+    let mut response = Error::from(error).into_response();
+    if let Some(seconds) = retry_after_seconds {
+        let seconds = seconds.clamp(MIN_RETRY_AFTER_SECONDS, MAX_RETRY_AFTER_SECONDS);
+        let value = HeaderValue::from_str(&seconds.to_string())
+            .expect("bounded consultation retry seconds form a valid header");
+        response.headers_mut().insert(header::RETRY_AFTER, value);
+    }
+    response
+}
 
 /// Non-debuggable, non-clonable ownership of the subject-bearing request body.
 ///
@@ -129,17 +334,25 @@ pub(crate) struct ParsedConsultationEnvelope {
     notary_evaluation_id: Option<NotaryEvaluationId>,
 }
 
+struct ParsedConsultationHeaders {
+    purpose: ParsedPurpose,
+    notary_evaluation_id: Option<NotaryEvaluationId>,
+}
+
 impl ParsedConsultationEnvelope {
+    #[cfg(test)]
     #[must_use]
     pub(crate) const fn purpose(&self) -> &ParsedPurpose {
         &self.purpose
     }
 
+    #[cfg(test)]
     #[must_use]
     pub(crate) const fn input(&self) -> &ParsedSingleStringInput {
         &self.input
     }
 
+    #[cfg(test)]
     #[must_use]
     pub(crate) const fn notary_evaluation_id(&self) -> Option<NotaryEvaluationId> {
         self.notary_evaluation_id
@@ -371,19 +584,14 @@ pub(crate) fn parse_consultation_key(
         .map_err(|_| ConsultationWireError::InvalidProfilePath)
 }
 
-/// Strictly parse the execute headers and body only after exact Notary
-/// authentication and workload-visible profile resolution have both produced
-/// their non-user-constructible proofs. The body is consumed under a zeroizing
-/// owner, and the closed decoder places every decoded key and candidate input
-/// string under its own zeroizing owner without a library scratch buffer.
-/// Route integration must use [`ConsultationRequestBody::read_from`] to acquire
-/// bytes only after these same capabilities exist.
-pub(crate) fn parse_execute_envelope(
+/// Strictly parse and retain only the three declared execute headers after
+/// exact Notary authentication and workload-visible profile resolution. The
+/// ambient header map can then be dropped before any body or backend await.
+fn parse_execute_headers(
     _resolved_profile: &ResolvedConsultationProfile,
     _notary_workload: &AuthenticatedNotaryWorkload<'_>,
     headers: &HeaderMap,
-    body: ConsultationRequestBody,
-) -> Result<ParsedConsultationEnvelope, ConsultationWireError> {
+) -> Result<ParsedConsultationHeaders, ConsultationWireError> {
     let content_type = exactly_one_header(
         headers,
         header::CONTENT_TYPE.as_str(),
@@ -413,6 +621,26 @@ pub(crate) fn parse_execute_envelope(
             .map_err(|_| ConsultationWireError::InvalidNotaryEvaluationId)
     })
     .transpose()?;
+
+    Ok(ParsedConsultationHeaders {
+        purpose,
+        notary_evaluation_id,
+    })
+}
+
+/// Decode the subject-bearing body under its zeroizing owner after all ambient
+/// headers have been discarded. Both non-forgeable service capabilities remain
+/// required at this second boundary.
+fn parse_execute_body(
+    _resolved_profile: &ResolvedConsultationProfile,
+    _notary_workload: &AuthenticatedNotaryWorkload<'_>,
+    headers: ParsedConsultationHeaders,
+    body: ConsultationRequestBody,
+) -> Result<ParsedConsultationEnvelope, ConsultationWireError> {
+    let ParsedConsultationHeaders {
+        purpose,
+        notary_evaluation_id,
+    } = headers;
 
     let input = parse_consultation_body_strict(body.as_slice())?;
 
@@ -462,16 +690,20 @@ fn optional_header<'a>(
 #[cfg(test)]
 mod tests {
     use std::convert::Infallible;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
 
     use axum::body::to_bytes;
-    use axum::http::{HeaderValue, StatusCode};
+    use axum::http::{HeaderValue, Method, Request, StatusCode};
     use axum::response::IntoResponse;
     use bytes::Bytes;
     use futures::stream;
     use proptest::prelude::*;
     use serde_json::{json, Value};
+    use tower::ServiceExt;
 
     use super::*;
+    use crate::auth::{AuthMode, Principal, ScopeSet};
 
     const EVALUATION_ID: &str = "01JYZZZZZZZZZZZZZZZZZZZZZZ";
 
@@ -501,12 +733,48 @@ mod tests {
         AuthenticatedNotaryWorkload::for_wire_test()
     }
 
+    fn route_app() -> Router {
+        let authentication = AuthenticationResult::api_key(Principal {
+            principal_id: "route-test-caller".to_string(),
+            scopes: ScopeSet::from_iter(["registry:consult"]),
+            auth_mode: AuthMode::ApiKey,
+        })
+        .expect("consistent test authentication");
+        router::<()>().layer(Extension(authentication))
+    }
+
+    async fn route_request(method: Method, uri: &str, body: Body) -> Response {
+        route_app()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(uri)
+                    .body(body)
+                    .expect("route request builds"),
+            )
+            .await
+            .expect("route responds")
+    }
+
+    async fn response_code(response: Response) -> String {
+        let body = to_bytes(response.into_body(), 8 * 1024)
+            .await
+            .expect("bounded problem body");
+        serde_json::from_slice::<Value>(&body).expect("problem JSON")["code"]
+            .as_str()
+            .expect("stable problem code")
+            .to_string()
+    }
+
     fn parse_envelope(
         headers: &HeaderMap,
         body: &[u8],
     ) -> Result<ParsedConsultationEnvelope, ConsultationWireError> {
+        let resolved = resolved_profile();
+        let workload = notary_workload();
+        let headers = parse_execute_headers(&resolved, &workload, headers)?;
         let body = ConsultationRequestBody::try_from_owned(body.to_vec())?;
-        parse_execute_envelope(&resolved_profile(), &notary_workload(), headers, body)
+        parse_execute_body(&resolved, &workload, headers, body)
     }
 
     #[tokio::test]
@@ -569,6 +837,162 @@ mod tests {
                 .err(),
             Some(ConsultationWireError::InvalidBody)
         );
+    }
+
+    #[tokio::test]
+    async fn router_exposes_only_the_exact_get_and_post_paths() {
+        const PROFILE: &str = "/v1/consultations/synthetic.person-status.exact/versions/1";
+        const EXECUTE: &str = "/v1/consultations/synthetic.person-status.exact/versions/1/execute";
+
+        // The handlers are reached for exactly the contracted operations. This
+        // test router deliberately has no service runtime, so both fail closed.
+        assert_eq!(
+            route_request(Method::GET, PROFILE, Body::empty())
+                .await
+                .status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(
+            route_request(Method::POST, EXECUTE, Body::empty())
+                .await
+                .status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+
+        for (method, uri, allowed) in [
+            (Method::HEAD, PROFILE, "GET"),
+            (Method::POST, PROFILE, "GET"),
+            (Method::GET, EXECUTE, "POST"),
+            (Method::PUT, EXECUTE, "POST"),
+        ] {
+            let response = route_request(method, uri, Body::empty()).await;
+            assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+            assert_eq!(response.headers().get(header::ALLOW).unwrap(), allowed);
+        }
+        for uri in [
+            "/v1/consultations",
+            "/v1/consultations/synthetic.person-status.exact/versions/1/status",
+            "/v1/consultations/synthetic.person-status.exact/execute",
+            "/v1/consultations/synthetic.person-status.exact/versions/1/",
+        ] {
+            assert_eq!(
+                route_request(Method::GET, uri, Body::empty())
+                    .await
+                    .status(),
+                StatusCode::NOT_FOUND
+            );
+        }
+        for uri in [
+            "/v1/consultations/%73ynthetic.person-status.exact/versions/1",
+            "/v1/consultations/synthetic%2Fperson-status.exact/versions/1",
+            "/v1/consultations/%FF/versions/1",
+            "/v1/consultations/synthetic.person-status.exact/versions/1?view=summary",
+        ] {
+            let response = route_request(Method::GET, uri, Body::empty()).await;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            assert_eq!(
+                response_code(response).await,
+                "consultation.profile_not_found"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn route_rejects_invalid_profile_before_polling_the_subject_body() {
+        let polled = Arc::new(AtomicBool::new(false));
+        let body_polled = Arc::clone(&polled);
+        let body = Body::from_stream(stream::once(async move {
+            body_polled.store(true, Ordering::SeqCst);
+            Ok::<_, Infallible>(Bytes::from_static(b"must-not-be-polled"))
+        }));
+        let response = route_request(
+            Method::POST,
+            "/v1/consultations/Invalid.Profile/versions/01/execute",
+            body,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            response_code(response).await,
+            "consultation.profile_not_found"
+        );
+        assert!(!polled.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn route_resolves_the_service_before_polling_the_subject_body() {
+        let polled = Arc::new(AtomicBool::new(false));
+        let body_polled = Arc::clone(&polled);
+        let body = Body::from_stream(stream::once(async move {
+            body_polled.store(true, Ordering::SeqCst);
+            Ok::<_, Infallible>(Bytes::from_static(b"must-not-be-polled"))
+        }));
+        let response = route_request(
+            Method::POST,
+            "/v1/consultations/synthetic.person-status.exact/versions/1/execute",
+            body,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(response_code(response).await, "consultation.unavailable");
+        assert!(!polled.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn service_failures_collapse_to_the_frozen_public_taxonomy() {
+        for (service_error, status, code) in [
+            (
+                ConsultationServiceError::InvalidCredentials,
+                StatusCode::UNAUTHORIZED,
+                "auth.invalid_credentials",
+            ),
+            (
+                ConsultationServiceError::Denied,
+                StatusCode::FORBIDDEN,
+                "consultation.denied",
+            ),
+            (
+                ConsultationServiceError::ProfileNotFound,
+                StatusCode::NOT_FOUND,
+                "consultation.profile_not_found",
+            ),
+            (
+                ConsultationServiceError::InvalidRequest,
+                StatusCode::BAD_REQUEST,
+                "consultation.invalid_request",
+            ),
+            (
+                ConsultationServiceError::Unavailable,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "consultation.unavailable",
+            ),
+        ] {
+            let response = service_error_response(service_error);
+            assert_eq!(response.status(), status);
+            assert_eq!(response_code(response).await, code);
+        }
+    }
+
+    #[tokio::test]
+    async fn quota_denial_has_one_bounded_integer_retry_after_header() {
+        for (candidate, expected) in [(0, "1"), (1, "1"), (60, "60"), (u64::from(u8::MAX), "60")] {
+            let response =
+                consultation_error_response(ConsultationError::RateLimited, Some(candidate));
+            assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+            assert_eq!(
+                response
+                    .headers()
+                    .get_all(header::RETRY_AFTER)
+                    .iter()
+                    .count(),
+                1
+            );
+            assert_eq!(
+                response.headers().get(header::RETRY_AFTER).unwrap(),
+                expected
+            );
+            assert_eq!(response_code(response).await, "consultation.rate_limited");
+        }
     }
 
     #[test]

@@ -244,6 +244,15 @@ impl CompiledConsultationRegistry {
         &self.source_plans
     }
 
+    /// Iterate the exact immutable plan closure only while activating the
+    /// concrete one-step Basic GET product journey. Request paths must resolve
+    /// through [`Self::resolve_for_authenticated_workload`] instead.
+    pub(crate) fn plans_for_basic_get_activation(
+        &self,
+    ) -> impl ExactSizeIterator<Item = &CompiledSourcePlan> {
+        self.source_plans.iter()
+    }
+
     fn get_for_workload_id(
         &self,
         key: &ConsultationKey,

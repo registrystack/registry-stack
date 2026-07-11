@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use axum::body::Body;
-use axum::extract::{ConnectInfo, Extension};
+use axum::extract::{ConnectInfo, Extension, MatchedPath};
 use axum::http::{header, HeaderMap, Request, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
@@ -39,6 +39,10 @@ use ulid::Ulid;
 use crate::auth::scopes::{
     format_trust_context_scope, parse_trust_context_scope, ParsedTrustContextScope,
 };
+use crate::consultation::{
+    ConsultationDenialReason, ConsultationDenialRecorded, ConsultationDenialRoute,
+};
+use crate::error::{ConsultationError, Error};
 use crate::runtime_config::RuntimeSnapshot;
 
 pub mod file;
@@ -900,45 +904,64 @@ pub async fn audit_layer(
     request: Request<Body>,
     next: Next,
 ) -> Response {
+    let consultation_route = consultation_audit_route(&request);
+    let consultation_service = consultation_route.and_then(|_| runtime.consultation());
     let Some(sink) = runtime.audit_sink() else {
         error!("audit pipeline unavailable in request runtime");
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        return audit_failure_response(consultation_service.is_some());
     };
     let settings = settings.map(|Extension(s)| s).unwrap_or_default();
     let start = Instant::now();
     let method = request.method().as_str().to_string();
-    let path = request.uri().path().to_string();
-    let query = request.uri().query().unwrap_or("").to_string();
-    let headers = request.headers().clone();
-    let purpose = extract_purpose(&headers);
-    // `ConnectInfo` is propagated by axum when the server is started with
-    // `into_make_service_with_connect_info`. In unit tests using
-    // `oneshot`, no such extension is present, so we fall back to
-    // unspecified. When trust-proxy support is enabled and the socket peer
-    // is trusted, audit records the rightmost `X-Forwarded-For` hop that is
-    // not itself a trusted proxy, falling back to the socket peer when every
-    // hop in the chain is trusted.
-    let remote_addr = crate::net::resolve_remote_addr(
-        &headers,
-        request
-            .extensions()
-            .get::<ConnectInfo<std::net::SocketAddr>>(),
-        settings.trust_proxy_enabled,
-        &settings.trusted_proxies,
-    )
-    .to_string();
-
-    // Adopt the upstream `x-request-id` when present so the audit
-    // record's `request_id`, `tower-http`'s tracing spans, and the
-    // response header propagated by `PropagateRequestIdLayer` all carry
-    // the same value. Falls back to a freshly minted ULID when no
-    // upstream layer set the header (e.g. unit-test `oneshot` calls).
-    let request_id = headers
-        .get("x-request-id")
-        .and_then(|v| v.to_str().ok())
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| Ulid::new().to_string());
+    let path = consultation_route
+        .map(ConsultationDenialRoute::as_str)
+        .unwrap_or_else(|| request.uri().path())
+        .to_string();
+    let query = if consultation_route.is_some() {
+        String::new()
+    } else {
+        request.uri().query().unwrap_or("").to_string()
+    };
+    // Consultation purpose is request data until the dedicated service has
+    // canonicalized and authorized it. Its durable state-plane audit owns the
+    // canonical value; the generic HTTP record must never retain the raw
+    // header, path segments, or query supplied before that boundary.
+    // Extract only the bounded audit inputs needed after the inner service.
+    // Never retain a cloned HeaderMap containing bearer tokens or cookies
+    // across `next.run`.
+    let (purpose, remote_addr, request_id) = {
+        let headers = request.headers();
+        let purpose = if consultation_route.is_some() {
+            None
+        } else {
+            extract_purpose(headers)
+        };
+        // `ConnectInfo` is propagated by axum when the server is started with
+        // `into_make_service_with_connect_info`. In unit tests using
+        // `oneshot`, no such extension is present, so we fall back to
+        // unspecified. When trust-proxy support is enabled and the socket peer
+        // is trusted, audit records the rightmost `X-Forwarded-For` hop that is
+        // not itself a trusted proxy, falling back to the socket peer when every
+        // hop in the chain is trusted.
+        let remote_addr = crate::net::resolve_remote_addr(
+            headers,
+            request
+                .extensions()
+                .get::<ConnectInfo<std::net::SocketAddr>>(),
+            settings.trust_proxy_enabled,
+            &settings.trusted_proxies,
+        )
+        .to_string();
+        // Adopt the upstream `x-request-id` when present so the audit record,
+        // trace span, and propagated response header share one value.
+        let request_id = headers
+            .get("x-request-id")
+            .and_then(|value| value.to_str().ok())
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+            .unwrap_or_else(|| Ulid::new().to_string());
+        (purpose, remote_addr, request_id)
+    };
 
     // Make the id available to downstream handlers via request
     // extensions, and ensure the request header carries it for the rest
@@ -961,12 +984,37 @@ pub async fn audit_layer(
     // extensions below. The request-side read remains as a fallback
     // for unit tests that inject a principal via an outer-to-audit
     // middleware.
-    let principal_on_req = request
-        .extensions()
-        .get::<crate::auth::Principal>()
-        .cloned();
+    let principal_on_req = if consultation_route.is_some() {
+        None
+    } else {
+        request
+            .extensions()
+            .get::<crate::auth::Principal>()
+            .cloned()
+    };
 
-    let response = next.run(request).await;
+    let mut response = next.run(request).await;
+    if consultation_route.is_some() {
+        // Auth attaches this response extension for the outer audit layer.
+        // Consultation audit deliberately does not consume it, so drop the
+        // raw principal and scopes before any durable denial await.
+        response.extensions_mut().remove::<crate::auth::Principal>();
+    }
+    if let Some(route) = consultation_route {
+        if let (Some(service), Some(reason)) = (
+            consultation_service.as_ref(),
+            pending_consultation_denial(&response),
+        ) {
+            let status = response.status();
+            if service
+                .record_denial(route, status.as_u16(), reason)
+                .await
+                .is_err()
+            {
+                response = consultation_unavailable_response();
+            }
+        }
+    }
     let duration_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
     let status_code = response.status().as_u16();
     let error_code = response
@@ -986,15 +1034,31 @@ pub async fn audit_layer(
     // success after the handler returns. Prefer that as the canonical
     // source; fall back to the request-side read above. When a
     // principal is present, its auth mode supplies the audit label.
-    let principal = response
-        .extensions()
-        .get::<crate::auth::Principal>()
-        .cloned()
-        .or(principal_on_req);
-    let principal_id = principal.as_ref().map(|p| p.principal_id.clone());
-    let auth_mode = principal
-        .as_ref()
-        .map(|p| auth_mode_label(p.auth_mode).to_string());
+    let principal = if consultation_route.is_some() {
+        None
+    } else {
+        response
+            .extensions()
+            .get::<crate::auth::Principal>()
+            .cloned()
+            .or(principal_on_req)
+    };
+    // The generic layer cannot prove the fixed Notary workload. Never retain
+    // an unrelated or attacker-selected OIDC principal/scope on consultation
+    // traffic; the dedicated durable consultation audit owns verified
+    // workload identity after exact binding.
+    let principal_id = if consultation_route.is_some() {
+        None
+    } else {
+        principal.as_ref().map(|p| p.principal_id.clone())
+    };
+    let auth_mode = if consultation_route.is_some() {
+        None
+    } else {
+        principal
+            .as_ref()
+            .map(|p| auth_mode_label(p.auth_mode).to_string())
+    };
     let endpoint_kind = classify_endpoint(&path);
     // Readiness is never self-audited. Evidence-grade shipping requires the
     // cursor watermark to equal the live audit tail, so appending the probe
@@ -1006,11 +1070,15 @@ pub async fn audit_layer(
         return response;
     }
 
-    let scopes_used = match scopes_used_for_audit(principal.as_ref(), &settings.hash_hasher) {
-        Some(scopes) => scopes,
-        None => {
-            error!("audit trust-scope redaction requires a keyed hasher and a canonical scope");
-            return audit_write_failed_response();
+    let scopes_used = if consultation_route.is_some() {
+        Vec::new()
+    } else {
+        match scopes_used_for_audit(principal.as_ref(), &settings.hash_hasher) {
+            Some(scopes) => scopes,
+            None => {
+                error!("audit trust-scope redaction requires a keyed hasher and a canonical scope");
+                return audit_write_failed_response();
+            }
         }
     };
 
@@ -1093,10 +1161,95 @@ pub async fn audit_layer(
         // stable error code so no outcome is returned without a durable audit
         // record.
         if settings.write_policy == AuditWritePolicy::FailClosed {
-            return audit_write_failed_response();
+            return audit_failure_response(consultation_service.is_some());
         }
     }
 
+    response
+}
+
+fn pending_consultation_denial(response: &Response) -> Option<ConsultationDenialReason> {
+    if response
+        .extensions()
+        .get::<ConsultationDenialRecorded>()
+        .is_some()
+    {
+        return None;
+    }
+    consultation_denial_reason(
+        response.status(),
+        response
+            .extensions()
+            .get::<ErrorCodeExt>()
+            .map(|code| code.0.as_str()),
+    )
+}
+
+fn consultation_denial_reason(
+    status: StatusCode,
+    stable_error_code: Option<&str>,
+) -> Option<ConsultationDenialReason> {
+    if !status.is_client_error() {
+        return None;
+    }
+    let code_reason = match stable_error_code {
+        Some(
+            "auth.invalid_credentials"
+            | "auth.missing_credential"
+            | "auth.invalid_credential"
+            | "auth.malformed_credential"
+            | "auth.token_expired"
+            | "auth.token_not_yet_valid"
+            | "auth.token_signature_invalid"
+            | "auth.issuer_mismatch"
+            | "auth.audience_mismatch"
+            | "auth.kid_unknown"
+            | "auth.algorithm_not_allowed",
+        ) => Some(ConsultationDenialReason::InvalidCredentials),
+        Some("consultation.invalid_request" | "auth.purpose_required") => {
+            Some(ConsultationDenialReason::InvalidRequest)
+        }
+        Some(
+            "consultation.denied"
+            | "auth.scope_denied"
+            | "auth.purpose_denied"
+            | "auth.admin_required"
+            | "auth.client_not_allowed",
+        ) => Some(ConsultationDenialReason::Denied),
+        Some("consultation.profile_not_found") => Some(ConsultationDenialReason::NotFound),
+        Some("consultation.rate_limited" | "auth.rate_limited") => {
+            Some(ConsultationDenialReason::RateLimited)
+        }
+        _ => None,
+    };
+    code_reason
+        .filter(|reason| reason.accepts_status(status.as_u16()))
+        .or(match status {
+            // These statuses can be emitted by unrelated handler or transport
+            // code. Durable classification requires the stable consultation
+            // or auth code above, never status alone.
+            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::TOO_MANY_REQUESTS => {
+                None
+            }
+            StatusCode::NOT_FOUND => Some(ConsultationDenialReason::NotFound),
+            _ => Some(ConsultationDenialReason::InvalidRequest),
+        })
+}
+
+fn audit_failure_response(consultation_service_active: bool) -> Response {
+    if consultation_service_active {
+        consultation_unavailable_response()
+    } else {
+        audit_write_failed_response()
+    }
+}
+
+fn consultation_unavailable_response() -> Response {
+    let mut response = Error::from(ConsultationError::Unavailable).into_response();
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("private, no-store"),
+    );
     response
 }
 
@@ -1307,6 +1460,23 @@ fn extract_purpose(headers: &HeaderMap) -> Option<String> {
         .map(str::trim)
         .map(|s| s.to_string())
         .filter(|s| !s.is_empty())
+}
+
+fn consultation_audit_route(request: &Request<Body>) -> Option<ConsultationDenialRoute> {
+    match request
+        .extensions()
+        .get::<MatchedPath>()
+        .map(MatchedPath::as_str)
+    {
+        Some(crate::api::consultation::PROFILE_ROUTE) => Some(ConsultationDenialRoute::Profile),
+        Some(crate::api::consultation::EXECUTE_ROUTE) => Some(ConsultationDenialRoute::Execute),
+        _ if is_consultation_path(request.uri().path()) => Some(ConsultationDenialRoute::Unmatched),
+        _ => None,
+    }
+}
+
+fn is_consultation_path(path: &str) -> bool {
+    path == "/v1/consultations" || path.starts_with("/v1/consultations/")
 }
 
 fn auth_mode_label(mode: crate::auth::AuthMode) -> &'static str {
@@ -1574,6 +1744,99 @@ mod tests {
             EndpointKind::Rows
         );
         assert_eq!(classify_endpoint("/anything-else"), EndpointKind::Other);
+    }
+
+    #[test]
+    fn consultation_denial_mapping_is_closed_and_never_classifies_503() {
+        assert_eq!(
+            consultation_denial_reason(StatusCode::UNAUTHORIZED, Some("auth.invalid_credentials")),
+            Some(ConsultationDenialReason::InvalidCredentials)
+        );
+        assert_eq!(
+            consultation_denial_reason(StatusCode::BAD_REQUEST, Some("auth.purpose_required")),
+            Some(ConsultationDenialReason::InvalidRequest)
+        );
+        assert_eq!(
+            consultation_denial_reason(StatusCode::FORBIDDEN, Some("consultation.denied")),
+            Some(ConsultationDenialReason::Denied)
+        );
+        assert_eq!(
+            consultation_denial_reason(
+                StatusCode::NOT_FOUND,
+                Some("consultation.profile_not_found")
+            ),
+            Some(ConsultationDenialReason::NotFound)
+        );
+        assert_eq!(
+            consultation_denial_reason(
+                StatusCode::TOO_MANY_REQUESTS,
+                Some("consultation.rate_limited")
+            ),
+            Some(ConsultationDenialReason::RateLimited)
+        );
+        assert_eq!(
+            consultation_denial_reason(
+                StatusCode::SERVICE_UNAVAILABLE,
+                Some("consultation.unavailable")
+            ),
+            None
+        );
+        assert_eq!(
+            consultation_denial_reason(StatusCode::SERVICE_UNAVAILABLE, None),
+            None
+        );
+        for status in [
+            StatusCode::UNAUTHORIZED,
+            StatusCode::FORBIDDEN,
+            StatusCode::TOO_MANY_REQUESTS,
+        ] {
+            assert_eq!(consultation_denial_reason(status, None), None);
+            assert_eq!(
+                consultation_denial_reason(status, Some("handler.unrelated")),
+                None
+            );
+        }
+
+        let mut tracked_denial = consultation_unavailable_response();
+        *tracked_denial.status_mut() = StatusCode::FORBIDDEN;
+        tracked_denial
+            .extensions_mut()
+            .insert(ErrorCodeExt("consultation.denied".to_string()));
+        assert_eq!(
+            pending_consultation_denial(&tracked_denial),
+            Some(ConsultationDenialReason::Denied)
+        );
+        tracked_denial
+            .extensions_mut()
+            .insert(ConsultationDenialRecorded::for_test());
+        assert_eq!(pending_consultation_denial(&tracked_denial), None);
+    }
+
+    #[test]
+    fn consultation_audit_failures_use_the_frozen_public_taxonomy_only_when_active() {
+        let active = audit_failure_response(true);
+        assert_eq!(active.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            active
+                .extensions()
+                .get::<ErrorCodeExt>()
+                .map(|code| code.0.as_str()),
+            Some("consultation.unavailable")
+        );
+        assert_eq!(
+            active.headers().get(header::CACHE_CONTROL),
+            Some(&axum::http::HeaderValue::from_static("private, no-store"))
+        );
+
+        let inactive = audit_failure_response(false);
+        assert_eq!(inactive.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            inactive
+                .extensions()
+                .get::<ErrorCodeExt>()
+                .map(|code| code.0.as_str()),
+            Some(AUDIT_WRITE_FAILED_CODE)
+        );
     }
 
     #[test]

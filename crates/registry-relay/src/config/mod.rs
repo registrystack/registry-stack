@@ -18,7 +18,7 @@
 //! `src/error.rs`, response and audit detail strings never carry paths,
 //! secrets, or row data.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -660,6 +660,28 @@ pub struct ConsultationConfig {
     /// hash, but intentionally has no signing requirement.
     #[serde(default)]
     pub artifacts: Option<ConsultationArtifactClosureConfig>,
+}
+
+impl ConsultationConfig {
+    /// Return the complete, sorted set of process-environment references that
+    /// operators must provide before consultation activation.
+    ///
+    /// These are reference names only. This diagnostic surface never resolves
+    /// or retains the corresponding secret values.
+    #[must_use]
+    pub fn required_environment_references(&self) -> Vec<&str> {
+        let mut references = BTreeSet::new();
+        references.insert(self.state_plane.database_url_env.as_str());
+        for material in self.audit_pseudonym_materials.entries() {
+            references.insert(material.source.environment_name().as_str());
+        }
+        for credential in self.source_credentials.entries() {
+            let (username, password) = credential.environment_names();
+            references.insert(username.as_str());
+            references.insert(password.as_str());
+        }
+        references.into_iter().collect()
+    }
 }
 
 /// Exact fixed OIDC binding for Registry Notary.
@@ -2330,6 +2352,50 @@ audit_pseudonym_materials:
                 "invalid or open-ended consultation config must be rejected"
             );
         }
+    }
+
+    #[test]
+    fn consultation_required_environment_references_are_complete_sorted_and_unique() {
+        let config: ConsultationConfig = serde_saphyr::from_str(&format!(
+            r#"
+{}
+audit_pseudonym_materials:
+  - key_id: epoch-b
+    source:
+      provider: environment
+      name: REGISTRY_RELAY_PSEUDONYM_B
+  - key_id: epoch-a
+    source:
+      provider: environment
+      name: REGISTRY_RELAY_PSEUDONYM_A
+source_credentials:
+  - type: basic
+    ref: source-b
+    generation: 1
+    username_env: REGISTRY_RELAY_USERNAME_B
+    password_env: REGISTRY_RELAY_PASSWORD_B
+  - type: basic
+    ref: source-a
+    generation: 1
+    username_env: REGISTRY_RELAY_USERNAME_A
+    password_env: REGISTRY_RELAY_PASSWORD_A
+"#,
+            consultation_runtime_fields()
+        ))
+        .expect("valid consultation config");
+
+        assert_eq!(
+            config.required_environment_references(),
+            vec![
+                "REGISTRY_RELAY_PASSWORD_A",
+                "REGISTRY_RELAY_PASSWORD_B",
+                "REGISTRY_RELAY_PSEUDONYM_A",
+                "REGISTRY_RELAY_PSEUDONYM_B",
+                TEST_STATE_DATABASE_ENV,
+                "REGISTRY_RELAY_USERNAME_A",
+                "REGISTRY_RELAY_USERNAME_B",
+            ]
+        );
     }
 
     #[test]

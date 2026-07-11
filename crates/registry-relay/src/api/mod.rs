@@ -15,10 +15,6 @@ pub mod admin;
 pub mod aggregates;
 #[cfg(feature = "attribute-release")]
 pub mod attribute_release;
-#[allow(
-    dead_code,
-    reason = "the closed consultation wire boundary is compiled before the reviewed service route activates it"
-)]
 pub(crate) mod consultation;
 pub mod datasets;
 pub mod docs;
@@ -41,6 +37,7 @@ pub use admin::router as admin_router;
 pub use aggregates::router as aggregates_router;
 #[cfg(feature = "attribute-release")]
 pub use attribute_release::router as attribute_release_router;
+pub(crate) use consultation::router as consultation_router;
 pub use datasets::router as datasets_router;
 pub use docs::router as docs_router;
 pub use entity::router as entity_router;

@@ -26,6 +26,7 @@ use crate::attribute_release::AttributeReleaseEvaluator;
 use crate::audit::AuditPipeline;
 use crate::auth::middleware::AuthProviderRef;
 use crate::config::Config;
+use crate::consultation::ConsultationService;
 use crate::entity::EntityRegistry;
 use crate::ingest::{IngestRegistry, ReadinessSnapshot};
 use crate::observability::RequestMetrics;
@@ -122,6 +123,9 @@ pub struct RelayRuntimeSnapshot {
     pub readiness_rx: watch::Receiver<ReadinessSnapshot>,
     pub cursor_signer: Arc<CursorSigner>,
     pub attribute_release_evaluator: Arc<AttributeReleaseEvaluator>,
+    /// Restart-only consultation service. It is never replaced by a live
+    /// configuration apply; the process owns one service lifecycle.
+    pub consultation: Option<Arc<ConsultationService>>,
     #[cfg(feature = "spdci-api-standards")]
     pub spdci_response_mapper: Option<Arc<SpdciResponseMapper>>,
     pub metrics: Arc<RequestMetrics>,
@@ -150,6 +154,7 @@ impl RelayRuntimeSnapshot {
         readiness_tx: watch::Sender<ReadinessSnapshot>,
         readiness_rx: watch::Receiver<ReadinessSnapshot>,
         cursor_signer: Arc<CursorSigner>,
+        consultation: Option<Arc<ConsultationService>>,
         #[cfg(feature = "spdci-api-standards")] spdci_response_mapper: Option<
             Arc<SpdciResponseMapper>,
         >,
@@ -178,6 +183,7 @@ impl RelayRuntimeSnapshot {
             readiness_rx,
             cursor_signer,
             attribute_release_evaluator,
+            consultation,
             #[cfg(feature = "spdci-api-standards")]
             spdci_response_mapper,
             metrics,
@@ -228,8 +234,8 @@ impl RelayRuntimeHandle {
 /// documented in the runtime component classification contract and the caller
 /// does not hold cloned sub-component `Arc`s across await points as if they
 /// would refresh independently. Components with captured state, such as query
-/// engines and the DataFusion context, stay restart-required until a dedicated
-/// stale-state regression test promotes them.
+/// engines, the DataFusion context, and the consultation service, stay
+/// restart-required until a stale-state regression test promotes them.
 pub struct RuntimeSnapshot {
     handle: Option<Arc<RelayRuntimeHandle>>,
     snapshot: Option<Arc<RelayRuntimeSnapshot>>,
@@ -247,6 +253,7 @@ pub struct RuntimeSnapshot {
     cursor_signer: Option<Arc<CursorSigner>>,
     audit_sink: Option<Arc<AuditPipeline>>,
     attribute_release_evaluator: Option<Arc<AttributeReleaseEvaluator>>,
+    consultation: Option<Arc<ConsultationService>>,
     #[cfg(feature = "spdci-api-standards")]
     spdci_response_mapper: Option<Arc<SpdciResponseMapper>>,
     metrics: Option<Arc<RequestMetrics>>,
@@ -375,6 +382,16 @@ impl RuntimeSnapshot {
             .or_else(|| self.attribute_release_evaluator.clone())
     }
 
+    /// Return the restart-only consultation service from the active snapshot.
+    /// Handlers clone this outer service owner, never its state-plane parts.
+    #[must_use]
+    pub fn consultation(&self) -> Option<Arc<ConsultationService>> {
+        self.snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.consultation.clone())
+            .or_else(|| self.consultation.clone())
+    }
+
     #[cfg(feature = "spdci-api-standards")]
     #[must_use]
     pub fn spdci_response_mapper(&self) -> Option<Arc<SpdciResponseMapper>> {
@@ -475,6 +492,12 @@ where
                 .await
                 .unwrap_or(None)
                 .map(|Extension(value)| value),
+            consultation: Option::<Extension<Arc<ConsultationService>>>::from_request_parts(
+                parts, state,
+            )
+            .await
+            .unwrap_or(None)
+            .map(|Extension(value)| value),
             #[cfg(feature = "spdci-api-standards")]
             spdci_response_mapper:
                 Option::<Extension<Arc<SpdciResponseMapper>>>::from_request_parts(parts, state)
