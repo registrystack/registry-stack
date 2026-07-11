@@ -33,6 +33,8 @@ pub enum CompiledConsultationRegistryError {
     SourcePlan(#[from] SourcePlanCompileError),
     #[error("consultation Rhai script closure does not match reviewed packs")]
     RhaiArtifactClosureMismatch,
+    #[error("consultation Rhai worker registry is not the exact initialized closure")]
+    RhaiWorkerClosureMismatch,
     #[error("consultation consent verifier registry is not the exact initialized closure")]
     ConsentVerifierRegistryMismatch,
     #[error("consultation registry visibility index collided")]
@@ -120,7 +122,10 @@ impl CompiledConsultationRegistry {
         if artifacts.public_contracts().is_empty() {
             return Err(CompiledConsultationRegistryError::EmptyActivation);
         }
-        validate_rhai_artifact_closure(&artifacts)?;
+        let required_rhai_workers = validate_rhai_artifact_closure(&artifacts)?;
+        if rhai_workers.len() != required_rhai_workers {
+            return Err(CompiledConsultationRegistryError::RhaiWorkerClosureMismatch);
+        }
 
         let public_contracts = artifacts
             .public_contracts()
@@ -245,8 +250,9 @@ fn evidence_class(class: VerifiedEvidenceClass) -> EvidenceClass {
 )]
 fn validate_rhai_artifact_closure(
     artifacts: &VerifiedConsultationArtifactClosure,
-) -> Result<(), CompiledConsultationRegistryError> {
-    let mut required = BTreeSet::new();
+) -> Result<usize, CompiledConsultationRegistryError> {
+    let mut required_scripts = BTreeSet::new();
+    let mut required_worker_count = 0_usize;
     for artifact in artifacts.integration_packs() {
         let pack = parse_integration_pack(artifact.bytes(), artifact.artifact_hash())
             .map_err(SourcePlanCompileError::Artifact)?;
@@ -255,9 +261,8 @@ fn validate_rhai_artifact_closure(
             pack.document.spec.plan.rhai.as_ref(),
         ) {
             (SourcePlanKind::SandboxedRhai, Some(rhai)) => {
-                if !required.insert(rhai.script_hash.clone()) {
-                    return Err(CompiledConsultationRegistryError::RhaiArtifactClosureMismatch);
-                }
+                required_worker_count += 1;
+                required_scripts.insert(rhai.script_hash.clone());
             }
             (SourcePlanKind::SandboxedRhai, None) => {
                 return Err(CompiledConsultationRegistryError::RhaiArtifactClosureMismatch)
@@ -273,10 +278,10 @@ fn validate_rhai_artifact_closure(
         .iter()
         .map(|artifact| artifact.sha256().to_owned())
         .collect::<BTreeSet<_>>();
-    if required != supplied {
+    if required_scripts != supplied {
         return Err(CompiledConsultationRegistryError::RhaiArtifactClosureMismatch);
     }
-    Ok(())
+    Ok(required_worker_count)
 }
 
 #[cfg(test)]
@@ -286,6 +291,7 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     use super::*;
+    use crate::source_plan::compiler::RhaiWorkerLimits;
 
     const PACK_DOMAIN: &[u8] = b"registry.relay.integration-pack.v1\0";
     const CONTRACT_DOMAIN: &[u8] = b"registry.relay.consultation-contract.v1\0";
@@ -298,6 +304,7 @@ mod tests {
     const CONFORMANCE: &[u8] = b"synthetic registry conformance evidence v1\n";
     const NEGATIVE_SECURITY: &[u8] = b"synthetic registry negative security evidence v1\n";
     const MINIMIZATION: &[u8] = b"synthetic registry minimization proof v1\n";
+    const RHAI_SCRIPT: &str = "fn consult() { () }";
 
     fn raw_hash(bytes: &[u8]) -> String {
         let mut encoded = String::from("sha256:");
@@ -393,6 +400,96 @@ mod tests {
             evidence,
             Vec::new(),
         )
+    }
+
+    fn rhai_pack(id: &str) -> (Vec<u8>, String) {
+        let mut pack = parse_json_strict(PACK).unwrap();
+        pack["id"] = json!(id);
+        pack["spec"]["plan"]["kind"] = json!("sandboxed_rhai");
+        pack["spec"]["plan"]["rhai"] = json!({
+            "script": RHAI_SCRIPT,
+            "script_hash": raw_hash(RHAI_SCRIPT.as_bytes()),
+            "entrypoint": "consult",
+            "memory_bytes": 67108864,
+            "cpu_ms": 500,
+            "ipc_frame_bytes": 131072,
+            "instructions": 50000,
+            "call_depth": 8,
+            "string_bytes": 32768,
+            "array_items": 256,
+            "map_entries": 256,
+            "output_bytes": 32768,
+            "concurrency": 1
+        });
+        let bytes = serde_json::to_vec(&pack).unwrap();
+        let hash = typed_hash(PACK_DOMAIN, &bytes);
+        (bytes, hash)
+    }
+
+    fn rhai_closure() -> (VerifiedConsultationArtifactClosure, String) {
+        let (pack, pack_hash) = rhai_pack("synthetic.person-status");
+        let mut contract = parse_json_strict(CONTRACT).unwrap();
+        contract["spec"]["integration_pack"]["hash"] = json!(pack_hash);
+        let policy_bytes = serde_json::to_vec(&policy_preimage(&contract)).unwrap();
+        contract["spec"]["authorization"]["policy"]["hash"] =
+            json!(typed_hash(POLICY_DOMAIN, &policy_bytes));
+        let contract = serde_json::to_vec(&contract).unwrap();
+        let contract_hash = typed_hash(CONTRACT_DOMAIN, &contract);
+
+        let mut binding = parse_json_strict(BINDING).unwrap();
+        binding["integration_pack"]["hash"] = json!(pack_hash);
+        binding["capabilities"]["allow_sandboxed_rhai"] = json!(true);
+        binding["capabilities"]["sandboxed_rhai"] = json!({
+            "callable_operations": ["lookup-status"],
+            "max_calls": 1,
+            "memory_bytes": 67108864,
+            "cpu_ms": 500,
+            "ipc_frame_bytes": 131072,
+            "instructions": 50000,
+            "call_depth": 8,
+            "string_bytes": 32768,
+            "array_items": 256,
+            "map_entries": 256,
+            "output_bytes": 32768,
+            "concurrency": 1,
+            "isolation": "one_shot_worker_v1"
+        });
+        let binding = serde_json::to_vec(&binding).unwrap();
+
+        (
+            VerifiedConsultationArtifactClosure::from_parts_for_test(
+                vec![(contract, contract_hash)],
+                vec![(pack, pack_hash.clone())],
+                vec![binding],
+                fixture_evidence(),
+                vec![(
+                    RHAI_SCRIPT.as_bytes().to_vec(),
+                    raw_hash(RHAI_SCRIPT.as_bytes()),
+                )],
+            ),
+            pack_hash,
+        )
+    }
+
+    fn rhai_worker(pack_hash: &str) -> RhaiWorkerCapability {
+        RhaiWorkerCapability::from_initialized_worker(
+            pack_hash,
+            &["lookup-status"],
+            RhaiWorkerLimits {
+                max_calls: 1,
+                memory_bytes: 67_108_864,
+                cpu_ms: 500,
+                ipc_frame_bytes: 131_072,
+                instructions: 50_000,
+                call_depth: 8,
+                string_bytes: 32_768,
+                array_items: 256,
+                map_entries: 256,
+                output_bytes: 32_768,
+                concurrency: 1,
+            },
+        )
+        .unwrap()
     }
 
     #[test]
@@ -637,5 +734,61 @@ mod tests {
             .unwrap_err(),
             CompiledConsultationRegistryError::RhaiArtifactClosureMismatch
         );
+    }
+
+    #[test]
+    fn rhai_worker_registry_rejects_unreferenced_capabilities() {
+        let no_rhai = closure(CONTRACT.to_vec(), typed_hash(CONTRACT_DOMAIN, CONTRACT));
+        let extra_worker =
+            rhai_worker("sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
+        assert_eq!(
+            CompiledConsultationRegistry::compile(
+                no_rhai,
+                &[extra_worker],
+                &InitializedConsentVerifierRegistry::empty(),
+            )
+            .unwrap_err(),
+            CompiledConsultationRegistryError::RhaiWorkerClosureMismatch
+        );
+
+        let (rhai, pack_hash) = rhai_closure();
+        let required_worker = rhai_worker(&pack_hash);
+        let extra_worker =
+            rhai_worker("sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
+        assert_eq!(
+            CompiledConsultationRegistry::compile(
+                rhai,
+                &[required_worker, extra_worker],
+                &InitializedConsentVerifierRegistry::empty(),
+            )
+            .unwrap_err(),
+            CompiledConsultationRegistryError::RhaiWorkerClosureMismatch
+        );
+
+        let (rhai, pack_hash) = rhai_closure();
+        assert!(CompiledConsultationRegistry::compile(
+            rhai,
+            &[rhai_worker(&pack_hash)],
+            &InitializedConsentVerifierRegistry::empty(),
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn distinct_rhai_packs_may_share_one_closed_script_artifact() {
+        let (first_pack, first_hash) = rhai_pack("synthetic.person-status");
+        let (second_pack, second_hash) = rhai_pack("synthetic.person-status-secondary");
+        let artifacts = VerifiedConsultationArtifactClosure::from_parts_for_test(
+            Vec::new(),
+            vec![(first_pack, first_hash), (second_pack, second_hash)],
+            Vec::new(),
+            Vec::new(),
+            vec![(
+                RHAI_SCRIPT.as_bytes().to_vec(),
+                raw_hash(RHAI_SCRIPT.as_bytes()),
+            )],
+        );
+
+        assert_eq!(validate_rhai_artifact_closure(&artifacts), Ok(2));
     }
 }
