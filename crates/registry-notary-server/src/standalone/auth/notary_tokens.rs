@@ -72,6 +72,7 @@ pub(in super::super) async fn authenticate_notary_token(
     // unchanged.
     principal_from_oidc(
         &verified,
+        EvidenceAuthProfileId::NotaryAccessToken,
         None,
         None,
         verified_claim_value(&anchor.token_typ),

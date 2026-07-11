@@ -45,6 +45,7 @@ fn evaluation_access_uses_stored_claim_version_scope() {
     };
     let source = VersionScopedSource;
     let principal = EvidencePrincipal {
+        auth_profile_id: registry_notary_core::EvidenceAuthProfileId::StaticApiKey,
         principal_id: "caseworker".to_string(),
         scopes: vec!["person-is-alive:1.0".to_string()],
         access_mode: AccessMode::MachineClient,

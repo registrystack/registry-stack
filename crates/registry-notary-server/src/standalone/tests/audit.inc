@@ -82,6 +82,7 @@
     #[test]
     fn audit_event_carries_self_attestation_context_fields() {
         let principal = EvidencePrincipal {
+            auth_profile_id: EvidenceAuthProfileId::ExternalOidc,
             principal_id: "citizen".to_string(),
             scopes: vec!["self_attestation".to_string()],
             access_mode: AccessMode::MachineClient,

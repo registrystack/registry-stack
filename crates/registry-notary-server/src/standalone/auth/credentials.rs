@@ -134,12 +134,18 @@ pub(in super::super) fn authenticate_static(
 ) -> Result<EvidencePrincipal, EvidenceError> {
     if let Some(value) = credentials.api_key.as_deref() {
         if let Some(credential) = find_credential(api_keys, value) {
-            return Ok(principal_from_credential(credential));
+            return Ok(principal_from_credential(
+                credential,
+                EvidenceAuthProfileId::StaticApiKey,
+            ));
         }
     }
     if let Some(value) = credentials.bearer_token.as_deref() {
         if let Some(credential) = find_credential(bearer_tokens, value) {
-            return Ok(principal_from_credential(credential));
+            return Ok(principal_from_credential(
+                credential,
+                EvidenceAuthProfileId::StaticBearer,
+            ));
         }
     }
     Err(EvidenceError::MissingCredential)
@@ -159,8 +165,10 @@ pub fn find_credential<'a>(
 
 pub(in super::super) fn principal_from_credential(
     credential: &ResolvedCredential,
+    auth_profile_id: EvidenceAuthProfileId,
 ) -> EvidencePrincipal {
     EvidencePrincipal {
+        auth_profile_id,
         principal_id: credential.id.clone(),
         scopes: credential.scopes.clone(),
         access_mode: AccessMode::MachineClient,

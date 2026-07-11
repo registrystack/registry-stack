@@ -146,6 +146,7 @@ fn evidence_for_batch(subject_count: usize) -> Arc<EvidenceConfig> {
 
 fn principal() -> EvidencePrincipal {
     EvidencePrincipal {
+        auth_profile_id: registry_notary_core::EvidenceAuthProfileId::StaticApiKey,
         principal_id: "test".to_string(),
         scopes: Vec::new(),
         access_mode: AccessMode::MachineClient,

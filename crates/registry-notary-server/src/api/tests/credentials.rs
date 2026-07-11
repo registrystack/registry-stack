@@ -59,6 +59,7 @@ async fn issue_credential_fails_closed_when_status_record_write_fails() {
         .expect("state builds"),
     );
     let principal = EvidencePrincipal {
+        auth_profile_id: registry_notary_core::EvidenceAuthProfileId::StaticApiKey,
         principal_id: "caseworker".to_string(),
         scopes: vec!["civil_registry:evidence_verification".to_string()],
         access_mode: AccessMode::MachineClient,
@@ -136,6 +137,7 @@ async fn issue_credential_rejects_purpose_mismatch() {
         .expect("state builds"),
     );
     let principal = EvidencePrincipal {
+        auth_profile_id: registry_notary_core::EvidenceAuthProfileId::StaticApiKey,
         principal_id: "caseworker".to_string(),
         scopes: vec!["civil_registry:evidence_verification".to_string()],
         access_mode: AccessMode::MachineClient,

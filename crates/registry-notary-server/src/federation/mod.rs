@@ -18,8 +18,8 @@ use axum::routing::post;
 use axum::{Extension, Router};
 use jsonwebtoken::{decode_header, Algorithm};
 use registry_notary_core::{
-    AccessMode, ClaimRef, EvaluateRequest, EvidenceAuthorizationDetails, EvidenceEntity,
-    EvidencePrincipal, FederationEvaluationProfileConfig, SourceCapability,
+    AccessMode, ClaimRef, EvaluateRequest, EvidenceAuthProfileId, EvidenceAuthorizationDetails,
+    EvidenceEntity, EvidencePrincipal, FederationEvaluationProfileConfig, SourceCapability,
     FEDERATION_REQUEST_JWT_TYP, FORMAT_CLAIM_RESULT_JSON,
 };
 use registry_platform_crypto::pairwise_subject_ref_hash;
@@ -255,13 +255,7 @@ async fn handle_federated_evaluate(
     audit_context.claim_ids = vec![profile.claim_id.clone()];
     let subject =
         request_subject(&verified, profile).map_err(|problem| audit_context.denied(problem))?;
-    let principal = EvidencePrincipal {
-        principal_id: peer.config.node_id.clone(),
-        scopes: peer.config.source_scopes.clone(),
-        access_mode: AccessMode::MachineClient,
-        verified_claims: None,
-        authorization_details: federation_authorization_details(profile),
-    };
+    let principal = federation_principal(&peer.config, profile);
     let source_capability = SourceCapability::Machine {
         scopes: peer
             .config
@@ -408,6 +402,20 @@ fn federation_authorization_details(
         assurance_level: profile.assurance_level.clone(),
         ..EvidenceAuthorizationDetails::default()
     })
+}
+
+fn federation_principal(
+    peer: &registry_notary_core::FederationPeerConfig,
+    profile: &FederationEvaluationProfileConfig,
+) -> EvidencePrincipal {
+    EvidencePrincipal {
+        auth_profile_id: EvidenceAuthProfileId::Federation,
+        principal_id: peer.node_id.clone(),
+        scopes: peer.source_scopes.clone(),
+        access_mode: AccessMode::MachineClient,
+        verified_claims: None,
+        authorization_details: federation_authorization_details(profile),
+    }
 }
 
 #[cfg(test)]
@@ -605,6 +613,22 @@ mod tests {
         assert_eq!(details.jurisdiction.as_deref(), Some("ZZ"));
         assert_eq!(details.assurance_level.as_deref(), Some("substantial"));
         assert!(!crate::authz_details::has_transaction_scope(&details));
+    }
+
+    #[test]
+    fn federation_principal_uses_stable_federation_profile() {
+        let peer = FederationPeerConfig {
+            node_id: "did:web:agency-b.example.gov".to_string(),
+            source_scopes: vec!["farmer_registry:evidence_verification".to_string()],
+            ..FederationPeerConfig::default()
+        };
+        let profile = FederationEvaluationProfileConfig::default();
+
+        let principal = federation_principal(&peer, &profile);
+
+        assert_eq!(principal.auth_profile_id, EvidenceAuthProfileId::Federation);
+        assert_eq!(principal.principal_id, peer.node_id);
+        assert_eq!(principal.scopes, peer.source_scopes);
     }
 
     #[test]

@@ -551,6 +551,7 @@ impl RegistryNotaryRuntime {
             let disclosure = request.disclosure.clone();
             let format = request.format.clone();
             let purpose_for_task = subject_purposes[input_index].clone();
+            let auth_profile_id = principal.auth_profile_id;
             let principal_id = principal.principal_id.clone();
             let principal_scopes = principal.scopes.clone();
             let principal_authorization_details = principal.authorization_details.clone();
@@ -574,6 +575,7 @@ impl RegistryNotaryRuntime {
                     purpose: Some(purpose_for_task.clone()),
                 };
                 let principal = EvidencePrincipal {
+                    auth_profile_id,
                     principal_id,
                     scopes: principal_scopes,
                     access_mode: registry_notary_core::AccessMode::MachineClient,

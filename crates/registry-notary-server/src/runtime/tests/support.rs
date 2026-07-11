@@ -628,6 +628,7 @@
 
     fn machine_principal() -> EvidencePrincipal {
         EvidencePrincipal {
+            auth_profile_id: EvidenceAuthProfileId::StaticApiKey,
             principal_id: "machine".to_string(),
             scopes: Vec::new(),
             access_mode: AccessMode::MachineClient,
@@ -638,6 +639,7 @@
 
     fn self_attestation_principal() -> EvidencePrincipal {
         EvidencePrincipal {
+            auth_profile_id: EvidenceAuthProfileId::ExternalOidc,
             principal_id: "citizen".to_string(),
             scopes: vec!["self_attestation".to_string()],
             access_mode: AccessMode::SelfAttestation,
@@ -694,6 +696,7 @@
 
     fn delegated_principal() -> EvidencePrincipal {
         EvidencePrincipal {
+            auth_profile_id: EvidenceAuthProfileId::ExternalOidc,
             principal_id: "guardian".to_string(),
             scopes: Vec::new(),
             access_mode: AccessMode::DelegatedAttestation,

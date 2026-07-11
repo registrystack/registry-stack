@@ -101,6 +101,7 @@ fn bounded(value: &str) -> VerifiedClaimValue {
 fn self_attestation_principal() -> EvidencePrincipal {
     let now = OffsetDateTime::now_utc().unix_timestamp();
     EvidencePrincipal {
+        auth_profile_id: registry_notary_core::EvidenceAuthProfileId::ExternalOidc,
         principal_id: RAW_PRINCIPAL_ID.to_string(),
         scopes: vec!["self_attestation".to_string()],
         access_mode: AccessMode::MachineClient,
@@ -137,6 +138,7 @@ fn self_attestation_principal_with_id(raw_id: &str) -> EvidencePrincipal {
 
 fn machine_principal() -> EvidencePrincipal {
     EvidencePrincipal {
+        auth_profile_id: registry_notary_core::EvidenceAuthProfileId::StaticApiKey,
         principal_id: "caseworker".to_string(),
         scopes: vec!["people:evidence_verification".to_string()],
         access_mode: AccessMode::MachineClient,

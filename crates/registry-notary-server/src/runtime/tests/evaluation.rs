@@ -187,6 +187,7 @@
         let store = EvidenceStore::default();
         let request = test_request("selected");
         let principal = EvidencePrincipal {
+            auth_profile_id: EvidenceAuthProfileId::StaticApiKey,
             principal_id: "machine".to_string(),
             scopes: Vec::new(),
             access_mode: AccessMode::MachineClient,
@@ -226,6 +227,7 @@
         let mut request = test_request("selected");
         request.claims = vec![ClaimRef::with_version("selected", "2.0")];
         let principal = EvidencePrincipal {
+            auth_profile_id: EvidenceAuthProfileId::StaticApiKey,
             principal_id: "machine".to_string(),
             scopes: vec!["selected:1.0".to_string()],
             access_mode: AccessMode::MachineClient,
@@ -394,6 +396,7 @@
         );
 
         let principal = EvidencePrincipal {
+            auth_profile_id: EvidenceAuthProfileId::StaticApiKey,
             principal_id: "caseworker".to_string(),
             scopes: vec!["birth.certificate_summary:1.0".to_string()],
             access_mode: AccessMode::MachineClient,

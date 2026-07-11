@@ -43,6 +43,34 @@ pub type RateLimitBucket = Bounded<MAX_RATE_LIMIT_BUCKET_LEN>;
 pub type VerifiedClaimName = Bounded<MAX_VERIFIED_CLAIM_NAME_LEN>;
 pub type VerifiedClaimValue = Bounded<MAX_VERIFIED_CLAIM_VALUE_LEN>;
 
+/// The authentication trust profile that produced an [`EvidencePrincipal`].
+///
+/// These identifiers are deliberately closed and credential-independent so
+/// they can safely participate in caller binding without incorporating raw
+/// API keys, bearer tokens, or attacker-controlled token claims.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceAuthProfileId {
+    StaticApiKey,
+    StaticBearer,
+    ExternalOidc,
+    NotaryAccessToken,
+    Federation,
+}
+
+impl EvidenceAuthProfileId {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::StaticApiKey => "static_api_key",
+            Self::StaticBearer => "static_bearer",
+            Self::ExternalOidc => "external_oidc",
+            Self::NotaryAccessToken => "notary_access_token",
+            Self::Federation => "federation",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AccessMode {
@@ -1541,6 +1569,7 @@ pub struct EvidenceAssistedAccessContext {
 
 #[derive(Debug, Clone)]
 pub struct EvidencePrincipal {
+    pub auth_profile_id: EvidenceAuthProfileId,
     pub principal_id: String,
     pub scopes: Vec<String>,
     pub access_mode: AccessMode,
@@ -1788,6 +1817,34 @@ mod tests {
         assert_eq!(
             AccessMode::parse("machine_client"),
             Some(AccessMode::MachineClient)
+        );
+    }
+
+    #[test]
+    fn evidence_auth_profile_ids_are_closed_and_stable() {
+        for (profile, expected) in [
+            (EvidenceAuthProfileId::StaticApiKey, "static_api_key"),
+            (EvidenceAuthProfileId::StaticBearer, "static_bearer"),
+            (EvidenceAuthProfileId::ExternalOidc, "external_oidc"),
+            (
+                EvidenceAuthProfileId::NotaryAccessToken,
+                "notary_access_token",
+            ),
+            (EvidenceAuthProfileId::Federation, "federation"),
+        ] {
+            assert_eq!(profile.as_str(), expected);
+            assert_eq!(
+                serde_json::to_value(profile).expect("auth profile serializes"),
+                json!(expected)
+            );
+            assert_eq!(
+                serde_json::from_value::<EvidenceAuthProfileId>(json!(expected))
+                    .expect("known auth profile deserializes"),
+                profile
+            );
+        }
+        assert!(
+            serde_json::from_value::<EvidenceAuthProfileId>(json!("attacker_selected")).is_err()
         );
     }
 

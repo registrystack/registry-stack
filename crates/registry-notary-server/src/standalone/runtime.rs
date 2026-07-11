@@ -34,13 +34,14 @@ use registry_notary_core::deployment::{
 use registry_notary_core::sd_jwt::EvidenceIssuer;
 use registry_notary_core::{
     AccessMode, BoundedCorrelationId, BoundedVerifiedClaims, BulkMode, ConfigAuditEvent,
-    DciSourceConnectionConfig, EvidenceAuditEvent, EvidenceAuthMode, EvidenceAuthorizationDetails,
-    EvidenceConfig, EvidenceCredentialConfig, EvidenceEntity, EvidenceError, EvidencePrincipal,
-    EvidenceRequestContext, ExpectedSidecarConfig, Hashed, Oauth2ClientCredentialsSourceAuthConfig,
-    PrincipalIdentifier, RateLimitBucket, RegistryNotaryAdminListenerMode, RequestIdentifier,
-    SelfAttestationAssuranceClaimSource, SelfAttestationClaimSource, SelfAttestationDenialCode,
-    SigningKeyConfig, SigningKeyProviderConfig, SourceAuthConfig, SourceBindingConfig,
-    SourceConnectionConfig, SourceConnectorKind, SourceRuntimeAssurance, SourceRuntimeSummary,
+    DciSourceConnectionConfig, EvidenceAuditEvent, EvidenceAuthMode, EvidenceAuthProfileId,
+    EvidenceAuthorizationDetails, EvidenceConfig, EvidenceCredentialConfig, EvidenceEntity,
+    EvidenceError, EvidencePrincipal, EvidenceRequestContext, ExpectedSidecarConfig, Hashed,
+    Oauth2ClientCredentialsSourceAuthConfig, PrincipalIdentifier, RateLimitBucket,
+    RegistryNotaryAdminListenerMode, RequestIdentifier, SelfAttestationAssuranceClaimSource,
+    SelfAttestationClaimSource, SelfAttestationDenialCode, SigningKeyConfig,
+    SigningKeyProviderConfig, SourceAuthConfig, SourceBindingConfig, SourceConnectionConfig,
+    SourceConnectorKind, SourceRuntimeAssurance, SourceRuntimeSummary,
     StandaloneRegistryNotaryConfig, SubjectRequest, VerifiedClaimName, VerifiedClaimValue,
     SOURCE_RUNTIME_KIND_SOURCE_ADAPTER_SIDECAR,
 };

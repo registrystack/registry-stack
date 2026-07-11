@@ -1489,6 +1489,7 @@ async fn memo_counters_record_hits_and_misses_on_shared_binding_batch() {
     };
     let memo = Arc::new(MemoState::new());
     let principal = EvidencePrincipal {
+        auth_profile_id: registry_notary_core::EvidenceAuthProfileId::StaticApiKey,
         principal_id: "test".to_string(),
         scopes: Vec::new(),
         access_mode: AccessMode::MachineClient,

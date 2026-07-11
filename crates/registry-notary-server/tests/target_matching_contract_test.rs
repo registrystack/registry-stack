@@ -846,6 +846,7 @@ fn claim(
 
 fn principal() -> EvidencePrincipal {
     EvidencePrincipal {
+        auth_profile_id: registry_notary_core::EvidenceAuthProfileId::StaticApiKey,
         principal_id: "client".to_string(),
         scopes: Vec::new(),
         access_mode: AccessMode::MachineClient,

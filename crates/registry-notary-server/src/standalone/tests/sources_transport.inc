@@ -662,6 +662,7 @@ sources:
                 .expect("source config"),
         );
         let principal = EvidencePrincipal {
+            auth_profile_id: EvidenceAuthProfileId::StaticApiKey,
             principal_id: "caseworker".to_string(),
             scopes: vec!["civil_registry:evidence_verification".to_string()],
             access_mode: AccessMode::MachineClient,
@@ -815,6 +816,7 @@ sources:
                 .expect("source config"),
         );
         let principal = EvidencePrincipal {
+            auth_profile_id: EvidenceAuthProfileId::StaticApiKey,
             principal_id: "caseworker".to_string(),
             scopes: vec!["civil_registry:evidence_verification".to_string()],
             access_mode: AccessMode::MachineClient,

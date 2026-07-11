@@ -55,10 +55,16 @@
             public_jwk,
             publish_until_unix_seconds: Some(u64::try_from(now + 300).expect("future is positive")),
         };
-        assert!(
-            authenticate_notary_token(&token.compact, &anchor, &ReplayStores::memory())
-                .await
-                .is_ok()
+        let principal = authenticate_notary_token(
+            &token.compact,
+            &anchor,
+            &ReplayStores::memory(),
+        )
+        .await
+        .expect("current verification key succeeds");
+        assert_eq!(
+            principal.auth_profile_id,
+            EvidenceAuthProfileId::NotaryAccessToken
         );
     }
 
@@ -319,6 +325,10 @@
             .await
             .expect("bearer auth succeeds");
 
+        assert_eq!(
+            principal.auth_profile_id,
+            EvidenceAuthProfileId::StaticBearer
+        );
         assert_eq!(principal.principal_id, "caseworker");
     }
 
@@ -426,6 +436,10 @@
         let authenticated =
             authenticate_static(&request, &[credential], &[]).expect("static auth succeeds");
 
+        assert_eq!(
+            authenticated.auth_profile_id,
+            EvidenceAuthProfileId::StaticApiKey
+        );
         assert_eq!(authenticated.access_mode, AccessMode::MachineClient);
         assert_eq!(authenticated.principal_id, "caseworker");
         assert_eq!(
@@ -497,6 +511,7 @@
         extra.insert(subject_binding_claim.to_string(), json!("NAT-123"));
         extra.insert("acr".to_string(), json!("loa3"));
         extra.insert("auth_time".to_string(), json!(1_700_000_000_i64));
+        extra.insert("auth_profile_id".to_string(), json!("static_api_key"));
         let verified = VerifiedToken {
             claims: registry_platform_oidc::Claims {
                 sub: Some("login-subject-123".to_string()),
@@ -518,6 +533,7 @@
 
         let authenticated = principal_from_oidc(
             &verified,
+            EvidenceAuthProfileId::ExternalOidc,
             None,
             None,
             verified_claim_value("JWT"),
@@ -531,6 +547,11 @@
             .verified_claims
             .expect("verified claims are transported");
 
+        assert_eq!(
+            authenticated.auth_profile_id,
+            EvidenceAuthProfileId::ExternalOidc,
+            "attacker-controlled claims cannot choose the authentication profile"
+        );
         assert_eq!(authenticated.access_mode, AccessMode::MachineClient);
         assert_eq!(authenticated.principal_id, "NAT-123");
         assert_eq!(
@@ -604,6 +625,7 @@
 
         let error = principal_from_oidc(
             &verified,
+            EvidenceAuthProfileId::ExternalOidc,
             None,
             None,
             verified_claim_value("JWT"),
@@ -627,6 +649,7 @@
 
         let error = principal_from_oidc(
             &verified,
+            EvidenceAuthProfileId::ExternalOidc,
             None,
             None,
             verified_claim_value("JWT"),
@@ -650,6 +673,7 @@
 
         let error = principal_from_oidc(
             &verified,
+            EvidenceAuthProfileId::ExternalOidc,
             None,
             None,
             verified_claim_value("JWT"),
@@ -678,6 +702,7 @@
 
         let error = principal_from_oidc(
             &verified,
+            EvidenceAuthProfileId::ExternalOidc,
             None,
             None,
             verified_claim_value("JWT"),
@@ -708,6 +733,7 @@
 
         let error = principal_from_oidc(
             &verified,
+            EvidenceAuthProfileId::ExternalOidc,
             None,
             None,
             verified_claim_value("JWT"),
@@ -739,6 +765,7 @@
 
         let principal = principal_from_oidc(
             &verified,
+            EvidenceAuthProfileId::ExternalOidc,
             None,
             None,
             verified_claim_value("JWT"),
@@ -805,6 +832,7 @@
 
         let authenticated = principal_from_oidc(
             &access_token,
+            EvidenceAuthProfileId::ExternalOidc,
             Some(&userinfo),
             Some(&id_token),
             verified_claim_value("JWT"),
@@ -891,7 +919,7 @@
     }
 
     #[test]
-    fn resolved_credential_debug_output_is_redacted() {
+    fn credential_principal_debug_and_auth_errors_do_not_expose_secrets() {
         let credential = ResolvedCredential {
             id: "caseworker".to_string(),
             fingerprint: registry_platform_authcommon::fingerprint_api_key("api-token"),
@@ -920,9 +948,31 @@
             expected_sidecar: None,
         };
 
-        let debug = format!("{credential:?} {connection:?}");
+        let request = RequestCredentials {
+            api_key: Some("api-token".to_string()),
+            authorization_present: false,
+            bearer_token: None,
+            id_token: None,
+        };
+        let principal = authenticate_static(&request, std::slice::from_ref(&credential), &[])
+            .expect("static auth succeeds");
+        let rejected_secret = "rejected-api-token";
+        let error = authenticate_static(
+            &RequestCredentials {
+                api_key: Some(rejected_secret.to_string()),
+                authorization_present: false,
+                bearer_token: None,
+                id_token: None,
+            },
+            std::slice::from_ref(&credential),
+            &[],
+        )
+        .expect_err("unknown API key is rejected");
+        let debug = format!("{credential:?} {principal:?} {connection:?}");
+        let error_output = format!("{error:?} {error}");
 
         assert!(debug.contains("<redacted>"));
         assert!(!debug.contains("api-token"));
         assert!(!debug.contains("source-token"));
+        assert!(!error_output.contains(rejected_secret));
     }

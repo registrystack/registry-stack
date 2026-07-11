@@ -420,6 +420,7 @@
 
     fn oidc_principal(client_id: Option<&str>, scopes: &[&str]) -> EvidencePrincipal {
         EvidencePrincipal {
+            auth_profile_id: registry_notary_core::EvidenceAuthProfileId::ExternalOidc,
             principal_id: "citizen-subject".to_string(),
             scopes: scopes.iter().map(|scope| (*scope).to_string()).collect(),
             access_mode: AccessMode::MachineClient,

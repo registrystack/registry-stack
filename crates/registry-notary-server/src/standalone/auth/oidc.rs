@@ -74,6 +74,7 @@ pub(in super::super) async fn authenticate_oidc(
         .and_then(|typ| verified_claim_value(&typ));
     principal_from_oidc(
         &verified,
+        EvidenceAuthProfileId::ExternalOidc,
         verified_userinfo.as_ref(),
         verified_id_token.as_ref(),
         token_type,
@@ -90,6 +91,7 @@ pub(in super::super) async fn authenticate_oidc(
 #[allow(clippy::too_many_arguments)]
 pub(in super::super) fn principal_from_oidc(
     verified: &VerifiedToken,
+    auth_profile_id: EvidenceAuthProfileId,
     userinfo: Option<&registry_platform_oidc::Claims>,
     id_token: Option<&VerifiedToken>,
     token_type: Option<VerifiedClaimValue>,
@@ -111,6 +113,7 @@ pub(in super::super) fn principal_from_oidc(
     .ok_or(EvidenceError::MissingCredential)?;
     let authorization_details = authorization_details_from_oidc(verified)?;
     Ok(EvidencePrincipal {
+        auth_profile_id,
         principal_id,
         scopes: verified.scopes.clone(),
         access_mode: AccessMode::MachineClient,

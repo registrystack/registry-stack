@@ -309,6 +309,7 @@ fn self_attestation_disabled_scope_policy_uses_client_and_audience_only() {
 fn self_attestation_scope_without_verified_claims_fails_closed() {
     let config = self_attestation_config();
     let principal = EvidencePrincipal {
+        auth_profile_id: registry_notary_core::EvidenceAuthProfileId::ExternalOidc,
         principal_id: "citizen-subject".to_string(),
         scopes: vec!["self_attestation".to_string()],
         access_mode: AccessMode::MachineClient,
