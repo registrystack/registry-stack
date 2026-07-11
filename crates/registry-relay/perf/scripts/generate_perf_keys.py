@@ -63,6 +63,22 @@ def generate_audit_hash_secret() -> str:
     return secrets.token_urlsafe(48)
 
 
+def write_secret_file(path: Path, contents: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        if hasattr(os, "fchmod"):
+            os.fchmod(fd, 0o600)
+        else:
+            os.chmod(path, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            fd = -1
+            handle.write(contents)
+    finally:
+        if fd != -1:
+            os.close(fd)
+
+
 def build_env_lines(
     tokens: dict[str, str],
     audit_hash_secret: str,
@@ -126,8 +142,6 @@ def main() -> None:
         )
         sys.exit(1)
 
-    env_path.parent.mkdir(parents=True, exist_ok=True)
-
     # Generate one random token per keyed entry and the audit secret.
     tokens: dict[str, str] = {key_id: generate_token() for key_id, _, _ in KEY_DEFS}
     audit_hash_secret = generate_audit_hash_secret()
@@ -135,9 +149,7 @@ def main() -> None:
     env_lines = build_env_lines(tokens, audit_hash_secret)
     env_content = "\n".join(env_lines) + "\n"
 
-    env_path.write_text(env_content, encoding="utf-8")
-    # Restrict to owner read/write only.
-    os.chmod(env_path, 0o600)
+    write_secret_file(env_path, env_content)
 
     # Report only the path and variable names, never values.
     print(f"Wrote: {env_path}")
