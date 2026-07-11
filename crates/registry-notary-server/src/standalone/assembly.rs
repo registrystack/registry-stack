@@ -36,64 +36,6 @@ impl NotaryRuntimeSnapshot {
     }
 }
 
-fn config_boot_audit_event(event: &'static str, audit: ConfigAuditEvent) -> EvidenceAuditEvent {
-    let occurred_at = OffsetDateTime::now_utc()
-        .format(&Rfc3339)
-        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string());
-    EvidenceAuditEvent {
-        event_id: Ulid::new().to_string(),
-        occurred_at,
-        principal_id_hash: None,
-        scopes_used: Vec::new(),
-        decision: "accepted".to_string(),
-        method: "BACKGROUND".to_string(),
-        path: format!("/__events/{event}"),
-        status: 200,
-        verification_id: None,
-        claim_hash: None,
-        purposes: None,
-        row_count: None,
-        source_read_count: None,
-        forwarded: None,
-        error_code: None,
-        access_mode: None,
-        federation_peer_id_hash: None,
-        federation_issuer: None,
-        federation_profile: None,
-        federation_purpose: None,
-        federation_request_jti_hash: None,
-        federation_subject_ref_hash: None,
-        denial_code: None,
-        token_claim_name: None,
-        correlation_id_hash: None,
-        credential_profile: None,
-        protocol: None,
-        credential_configuration_id: None,
-        holder_binding_mode: None,
-        rate_limit_bucket: None,
-        policy_version: None,
-        policy_hash: None,
-        target_type: None,
-        target_ref_hash: None,
-        requester_type: None,
-        requester_ref_hash: None,
-        matching_policy_id: None,
-        matching_policy_hash: None,
-        matching_evaluated_rule_ids: None,
-        ecosystem_binding_id: None,
-        ecosystem_binding_version: None,
-        pack_id: None,
-        pack_version: None,
-        matching_method: None,
-        matching_outcome: None,
-        matching_error_code: None,
-        redacted_fields: None,
-        batch_items: None,
-        source_sidecar_config_hashes: None,
-        config: Some(audit),
-    }
-}
-
 #[derive(Debug, Clone, Copy)]
 struct NotaryHttpLimits {
     request_timeout: Duration,

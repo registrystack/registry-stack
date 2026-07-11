@@ -4,6 +4,15 @@ mod egress;
 
 pub(super) use egress::*;
 
+/// Outermost response middleware: injects `request_id` into any
+/// `application/problem+json` body and sets the `x-request-id` response header.
+///
+/// Mints a server-owned ULID before running the inner stack so that
+/// early-boundary rejections (414, 413) receive a correlation identifier even
+/// when the inner auth/audit layer has not yet run. For responses produced
+/// by inner handlers that already carry `x-request-id`, the existing header
+/// value is used and the body field is inserted only when absent (idempotent
+/// when the inner response already has both).
 pub(super) async fn attach_request_id_to_problem_response(
     request: Request,
     next: Next,
