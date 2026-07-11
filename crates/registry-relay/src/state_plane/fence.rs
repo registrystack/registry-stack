@@ -10,7 +10,7 @@ use std::{future::Future, time::Duration};
 
 use thiserror::Error;
 use tokio::{
-    sync::{mpsc, oneshot, watch},
+    sync::{mpsc, oneshot, watch, Mutex},
     task::{AbortHandle, JoinHandle},
     time::Instant,
 };
@@ -444,7 +444,7 @@ pub(crate) struct PostgresServingFence {
     commands: mpsc::UnboundedSender<FenceCommand>,
     admission: watch::Sender<bool>,
     actor_abort: AbortHandle,
-    actor: Option<JoinHandle<()>>,
+    actor: Mutex<Option<JoinHandle<()>>>,
     takeover_recovery: Option<TakeoverCompletionRecoveryAuthority>,
 }
 
@@ -688,7 +688,7 @@ impl PostgresServingFence {
             commands,
             admission,
             actor_abort,
-            actor: Some(actor),
+            actor: Mutex::new(Some(actor)),
             takeover_recovery,
         })
     }
@@ -888,7 +888,12 @@ impl PostgresServingFence {
         result
     }
 
-    pub(crate) async fn release(mut self) -> Result<(), ServingFenceError> {
+    /// Close admission, release the database fence, and join its actor.
+    ///
+    /// The shared receiver permits explicit shutdown through an `Arc`; a
+    /// repeated call remains unavailable because the actor is joined once.
+    /// Dropping without a successful release retains the fail-closed abort.
+    pub(crate) async fn release(&self) -> Result<(), ServingFenceError> {
         self.admission.send_replace(false);
         let mut uncertainty = SessionUncertaintyGuard::new(&self.admission, &self.actor_abort);
         let (reply, response) = oneshot::channel();
@@ -896,7 +901,12 @@ impl PostgresServingFence {
             .send(FenceCommand::Release { reply })
             .map_err(|_| ServingFenceError::Unavailable)?;
         let result = response.await.map_err(|_| ServingFenceError::Unavailable)?;
-        let actor = self.actor.take().ok_or(ServingFenceError::Unavailable)?;
+        let actor = self
+            .actor
+            .lock()
+            .await
+            .take()
+            .ok_or(ServingFenceError::Unavailable)?;
         actor.await.map_err(|_| ServingFenceError::Unavailable)?;
         match result {
             Ok(()) => {
@@ -934,7 +944,7 @@ const fn permit_state_after_known_rejection(
 impl Drop for PostgresServingFence {
     fn drop(&mut self) {
         self.admission.send_replace(false);
-        if let Some(actor) = self.actor.take() {
+        if let Some(actor) = self.actor.get_mut().take() {
             actor.abort();
         }
     }
@@ -1291,6 +1301,8 @@ fn try_str<'a>(row: &'a Row, column: &str) -> Result<&'a str, ServingFenceError>
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
 
     fn test_dispatch(
@@ -1337,6 +1349,66 @@ mod tests {
             },
             actor,
         )
+    }
+
+    #[tokio::test]
+    async fn shared_fence_can_release_and_join_its_actor() {
+        let (commands, mut command_receiver) = mpsc::unbounded_channel();
+        let (admission, _) = watch::channel(true);
+        let actor = tokio::spawn(async move {
+            let command = command_receiver.recv().await.expect("release command");
+            let FenceCommand::Release { reply } = command else {
+                panic!("shared fence sends only the expected release command");
+            };
+            reply.send(Ok(())).expect("release receiver remains live");
+        });
+        let actor_abort = actor.abort_handle();
+        let fence = Arc::new(PostgresServingFence {
+            lock_key: ServingFenceLockKey::new(1).expect("test key is valid"),
+            generation: 1,
+            holder_id: Ulid::new().to_string(),
+            commands,
+            admission,
+            actor_abort,
+            actor: Mutex::new(Some(actor)),
+            takeover_recovery: None,
+        });
+
+        Arc::clone(&fence)
+            .release()
+            .await
+            .expect("shared fence releases cleanly");
+
+        assert!(!*fence.admission.borrow());
+        assert!(fence.actor.lock().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn dropping_an_unreleased_shared_fence_aborts_its_actor() {
+        let (commands, _command_receiver) = mpsc::unbounded_channel();
+        let (admission, mut admission_receiver) = watch::channel(true);
+        let actor = tokio::spawn(std::future::pending::<()>());
+        let actor_abort = actor.abort_handle();
+        let fence = PostgresServingFence {
+            lock_key: ServingFenceLockKey::new(1).expect("test key is valid"),
+            generation: 1,
+            holder_id: Ulid::new().to_string(),
+            commands,
+            admission,
+            actor_abort: actor_abort.clone(),
+            actor: Mutex::new(Some(actor)),
+            takeover_recovery: None,
+        };
+
+        drop(fence);
+        admission_receiver
+            .changed()
+            .await
+            .expect("drop publishes closed admission");
+        tokio::task::yield_now().await;
+
+        assert!(!*admission_receiver.borrow());
+        assert!(actor_abort.is_finished());
     }
 
     #[test]
