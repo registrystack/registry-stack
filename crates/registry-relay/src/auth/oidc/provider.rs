@@ -230,9 +230,12 @@ impl OidcAuth {
             Audience::One(audience) => [audience.clone()].into_iter().collect(),
             Audience::Many(audiences) => audiences.iter().cloned().collect(),
         };
-        let client_id = claims.azp.clone().or_else(|| claims.client_id.clone());
-        let verified_oidc =
-            VerifiedOidcIdentity::from_verified_claims(issuer, audiences, client_id)?;
+        let verified_oidc = VerifiedOidcIdentity::from_verified_claims(
+            issuer,
+            audiences,
+            claims.azp.clone(),
+            claims.client_id.clone(),
+        )?;
 
         let principal_id = claims
             .sub
@@ -258,14 +261,14 @@ impl OidcAuth {
             );
         }
 
-        Ok(AuthenticationResult::oidc(
+        AuthenticationResult::oidc(
             Principal {
                 principal_id,
                 scopes,
                 auth_mode: AuthMode::Oidc,
             },
             verified_oidc,
-        ))
+        )
     }
 
     async fn cache_mark_observed(&self, kid: &str) {
@@ -744,7 +747,8 @@ mod tests {
         assert_eq!(identity.issuer(), TEST_ISSUER);
         assert!(identity.has_audience(TEST_AUDIENCE));
         assert_eq!(identity.audiences().collect::<Vec<_>>(), [TEST_AUDIENCE]);
-        assert_eq!(identity.client_id(), None);
+        assert_eq!(identity.authorized_party(), None);
+        assert_eq!(identity.client_id_claim(), None);
     }
 
     #[tokio::test]
@@ -1306,20 +1310,29 @@ mod tests {
         let token = mint(
             &sk,
             TokenOpts {
-                extra: Map::from_iter([(
-                    "azp".to_string(),
-                    Value::String("statistics-office".to_string()),
-                )]),
+                extra: Map::from_iter([
+                    (
+                        "azp".to_string(),
+                        Value::String("statistics-office".to_string()),
+                    ),
+                    (
+                        "client_id".to_string(),
+                        Value::String("different-client-claim".to_string()),
+                    ),
+                ]),
                 ..Default::default()
             },
         );
         let mut config = base_config();
         config.allowed_clients = vec!["statistics-office".to_string()];
         let provider = provider_from(config, jwks_for(TEST_KID, &vk));
-        provider
+        let authenticated = provider
             .verify(&token)
             .await
             .expect("listed client admitted");
+        let identity = authenticated.verified_oidc().expect("verified identity");
+        assert_eq!(identity.authorized_party(), Some("statistics-office"));
+        assert_eq!(identity.client_id_claim(), Some("different-client-claim"));
     }
 
     #[tokio::test]
@@ -1362,12 +1375,9 @@ mod tests {
             .verify(&token)
             .await
             .expect("client_id fallback admitted");
-        assert_eq!(
-            authenticated
-                .verified_oidc()
-                .and_then(VerifiedOidcIdentity::client_id),
-            Some("statistics-office")
-        );
+        let identity = authenticated.verified_oidc().expect("verified identity");
+        assert_eq!(identity.authorized_party(), None);
+        assert_eq!(identity.client_id_claim(), Some("statistics-office"));
     }
 
     #[tokio::test]

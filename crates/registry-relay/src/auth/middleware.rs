@@ -2,10 +2,10 @@
 //! Axum middleware that runs an [`super::AuthProvider`] in front of a router.
 //!
 //! On success the layer inserts [`super::Principal`] into request extensions.
-//! OIDC success also inserts [`super::VerifiedOidcIdentity`] so consultation
-//! handlers can bind the verified issuer, audiences, and client identity to
-//! fixed workload configuration. The audit middleware projects the common
-//! principal into audit records. On failure
+//! The coupled [`super::AuthenticationResult`] is also inserted so consultation
+//! handlers can bind verified OIDC issuer, audiences, and client claims to
+//! fixed workload configuration without pairing independent extensions. The
+//! audit middleware projects the common principal into audit records. On failure
 //! it short-circuits with the RFC 9457 Problem
 //! Details body produced by `crate::error::Error::into_response`.
 //!
@@ -159,8 +159,8 @@ where
 ///
 /// Otherwise reads the bearer token, calls the provider, and either
 /// short-circuits with a Problem Details response or forwards with
-/// [`super::Principal`] and any [`super::VerifiedOidcIdentity`] in request
-/// extensions.
+/// [`super::Principal`] and the coupled [`super::AuthenticationResult`] in
+/// request extensions.
 ///
 /// On success the principal is also cloned onto the response
 /// extensions after the inner handler runs. The audit middleware sits
@@ -206,12 +206,9 @@ async fn run(State(state): State<AuthMiddlewareState>, mut req: Request, next: N
             return Error::from(e).into_response();
         }
     };
-    let (principal, verified_oidc) = authentication.into_parts();
-    let principal_for_audit = principal.clone();
-    req.extensions_mut().insert(principal);
-    if let Some(identity) = verified_oidc {
-        req.extensions_mut().insert(identity);
-    }
+    let principal_for_audit = authentication.principal().clone();
+    req.extensions_mut().insert(principal_for_audit.clone());
+    req.extensions_mut().insert(authentication);
     let mut response = next.run(req).await;
     response.extensions_mut().insert(principal_for_audit);
     response
@@ -261,35 +258,46 @@ mod tests {
         }
     }
 
-    async fn verified_oidc_handler(
-        Extension(identity): Extension<VerifiedOidcIdentity>,
+    async fn authentication_handler(
+        Extension(authentication): Extension<AuthenticationResult>,
     ) -> axum::Json<Value> {
+        let identity = authentication.verified_oidc();
         axum::Json(serde_json::json!({
-            "issuer": identity.issuer(),
-            "audiences": identity.audiences().collect::<Vec<_>>(),
-            "client_id": identity.client_id(),
+            "auth_mode": match authentication.auth_mode {
+                AuthMode::ApiKey => "api_key",
+                AuthMode::Oidc => "oidc",
+            },
+            "issuer": identity.map(VerifiedOidcIdentity::issuer),
+            "audiences": identity.map(|identity| identity.audiences().collect::<Vec<_>>()),
+            "authorized_party": identity.and_then(VerifiedOidcIdentity::authorized_party),
+            "client_id_claim": identity.and_then(VerifiedOidcIdentity::client_id_claim),
         }))
     }
 
-    #[tokio::test]
-    async fn middleware_inserts_verified_oidc_identity_from_the_same_authentication() {
+    fn oidc_authentication() -> AuthenticationResult {
         let identity = VerifiedOidcIdentity::from_verified_claims(
             "https://issuer.example".to_string(),
             BTreeSet::from(["registry-relay".to_string()]),
             Some("registry-notary".to_string()),
+            Some("notary-client-id".to_string()),
         )
         .expect("valid verified identity");
-        let authentication = AuthenticationResult::oidc(
+        AuthenticationResult::oidc(
             Principal {
                 principal_id: "notary-service".to_string(),
                 scopes: ScopeSet::from_iter(["registry:consult"]),
                 auth_mode: AuthMode::Oidc,
             },
             identity,
-        );
+        )
+        .expect("consistent OIDC authentication")
+    }
+
+    #[tokio::test]
+    async fn middleware_inserts_verified_oidc_identity_from_the_same_authentication() {
         let app = auth_layer(
-            Router::new().route("/identity", get(verified_oidc_handler)),
-            Arc::new(FixedAuthProvider(authentication)),
+            Router::new().route("/identity", get(authentication_handler)),
+            Arc::new(FixedAuthProvider(oidc_authentication())),
         );
 
         let response = app
@@ -308,6 +316,37 @@ mod tests {
         let value: Value = serde_json::from_slice(&body).expect("JSON response");
         assert_eq!(value["issuer"], "https://issuer.example");
         assert_eq!(value["audiences"], serde_json::json!(["registry-relay"]));
-        assert_eq!(value["client_id"], "registry-notary");
+        assert_eq!(value["authorized_party"], "registry-notary");
+        assert_eq!(value["client_id_claim"], "notary-client-id");
+    }
+
+    #[tokio::test]
+    async fn api_key_authentication_replaces_preloaded_oidc_context() {
+        let api_key_authentication = AuthenticationResult::api_key(Principal {
+            principal_id: "api-key-client".to_string(),
+            scopes: ScopeSet::from_iter(["registry:consult"]),
+            auth_mode: AuthMode::ApiKey,
+        })
+        .expect("consistent API-key authentication");
+        let app = auth_layer(
+            Router::new().route("/identity", get(authentication_handler)),
+            Arc::new(FixedAuthProvider(api_key_authentication)),
+        );
+        let mut request = Request::builder()
+            .uri("/identity")
+            .body(Body::empty())
+            .expect("request");
+        request.extensions_mut().insert(oidc_authentication());
+
+        let response = app.oneshot(request).await.expect("response");
+        assert!(response.status().is_success());
+        let body = to_bytes(response.into_body(), 8 * 1024)
+            .await
+            .expect("bounded response");
+        let value: Value = serde_json::from_slice(&body).expect("JSON response");
+        assert_eq!(value["auth_mode"], "api_key");
+        assert_eq!(value["issuer"], Value::Null);
+        assert_eq!(value["authorized_party"], Value::Null);
+        assert_eq!(value["client_id_claim"], Value::Null);
     }
 }

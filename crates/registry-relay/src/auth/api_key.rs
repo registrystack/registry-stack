@@ -181,7 +181,8 @@ impl AuthProvider for ApiKeyAuth {
         let parse_result = extract_credential(headers);
         Box::pin(async move {
             let presented = parse_result?;
-            self.verify(&presented).map(AuthenticationResult::api_key)
+            self.verify(&presented)
+                .and_then(AuthenticationResult::api_key)
         })
     }
 }

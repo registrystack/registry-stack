@@ -79,22 +79,25 @@ pub struct Principal {
 /// This value contains no bearer token or unverified claim. It is constructed
 /// only after signature, issuer, audience, time, token-type, and client-policy
 /// verification succeeds. General Relay handlers continue to consume
-/// [`Principal`]; the consultation surface additionally requires this typed
-/// request extension and rejects API-key authentication.
+/// [`Principal`]; the consultation surface reads this identity only through
+/// the coupled [`AuthenticationResult`] extension and rejects API-key
+/// authentication.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifiedOidcIdentity {
     issuer: Box<str>,
     audiences: BTreeSet<Box<str>>,
-    client_id: Option<Box<str>>,
+    authorized_party: Option<Box<str>>,
+    client_id_claim: Option<Box<str>>,
 }
 
 impl VerifiedOidcIdentity {
     const MAX_CLAIM_BYTES: usize = 2_048;
 
-    pub(crate) fn from_verified_claims(
+    fn from_verified_claims(
         issuer: String,
         audiences: BTreeSet<String>,
-        client_id: Option<String>,
+        authorized_party: Option<String>,
+        client_id_claim: Option<String>,
     ) -> Result<Self, AuthError> {
         let valid_text = |value: &str| {
             !value.is_empty()
@@ -104,7 +107,10 @@ impl VerifiedOidcIdentity {
         if !valid_text(&issuer)
             || audiences.is_empty()
             || audiences.iter().any(|audience| !valid_text(audience))
-            || client_id
+            || authorized_party
+                .as_deref()
+                .is_some_and(|client| !valid_text(client))
+            || client_id_claim
                 .as_deref()
                 .is_some_and(|client| !valid_text(client))
         {
@@ -114,7 +120,8 @@ impl VerifiedOidcIdentity {
         Ok(Self {
             issuer: issuer.into_boxed_str(),
             audiences: audiences.into_iter().map(String::into_boxed_str).collect(),
-            client_id: client_id.map(String::into_boxed_str),
+            authorized_party: authorized_party.map(String::into_boxed_str),
+            client_id_claim: client_id_claim.map(String::into_boxed_str),
         })
     }
 
@@ -135,19 +142,25 @@ impl VerifiedOidcIdentity {
         self.audiences.contains(expected)
     }
 
-    /// Return the verified OAuth client identity (`azp` preferred over
-    /// `client_id`) when the token carries one.
+    /// Return the signature-verified OAuth `azp` claim when present.
     #[must_use]
-    pub fn client_id(&self) -> Option<&str> {
-        self.client_id.as_deref()
+    pub fn authorized_party(&self) -> Option<&str> {
+        self.authorized_party.as_deref()
+    }
+
+    /// Return the signature-verified OAuth `client_id` claim when present.
+    #[must_use]
+    pub fn client_id_claim(&self) -> Option<&str> {
+        self.client_id_claim.as_deref()
     }
 }
 
 /// Successful authentication plus provider-specific verified context.
 ///
 /// The wrapper keeps OIDC workload claims coupled to the principal produced by
-/// the same verification operation. Middleware splits it into request
-/// extensions only after authentication succeeds.
+/// the same verification operation. Middleware inserts this wrapper as one
+/// request extension after authentication succeeds, while retaining a separate
+/// principal extension only for existing handlers and audit projection.
 #[derive(Debug, Clone)]
 pub struct AuthenticationResult {
     principal: Principal,
@@ -156,23 +169,25 @@ pub struct AuthenticationResult {
 
 impl AuthenticationResult {
     /// Construct an API-key authentication result.
-    #[must_use]
-    pub fn api_key(principal: Principal) -> Self {
-        debug_assert_eq!(principal.auth_mode, AuthMode::ApiKey);
-        Self {
+    pub fn api_key(principal: Principal) -> Result<Self, AuthError> {
+        if principal.auth_mode != AuthMode::ApiKey {
+            return Err(AuthError::MalformedCredential);
+        }
+        Ok(Self {
             principal,
             verified_oidc: None,
-        }
+        })
     }
 
-    /// Construct a verified OIDC authentication result.
-    #[must_use]
-    pub fn oidc(principal: Principal, verified_oidc: VerifiedOidcIdentity) -> Self {
-        debug_assert_eq!(principal.auth_mode, AuthMode::Oidc);
-        Self {
+    /// Construct a verified OIDC authentication result inside the auth module.
+    fn oidc(principal: Principal, verified_oidc: VerifiedOidcIdentity) -> Result<Self, AuthError> {
+        if principal.auth_mode != AuthMode::Oidc {
+            return Err(AuthError::MalformedCredential);
+        }
+        Ok(Self {
             principal,
             verified_oidc: Some(verified_oidc),
-        }
+        })
     }
 
     /// Borrow the common authenticated principal.
@@ -185,10 +200,6 @@ impl AuthenticationResult {
     #[must_use]
     pub const fn verified_oidc(&self) -> Option<&VerifiedOidcIdentity> {
         self.verified_oidc.as_ref()
-    }
-
-    pub(crate) fn into_parts(self) -> (Principal, Option<VerifiedOidcIdentity>) {
-        (self.principal, self.verified_oidc)
     }
 }
 
