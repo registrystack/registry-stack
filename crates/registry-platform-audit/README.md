@@ -22,6 +22,9 @@ helpers for registry services.
   handles whose service-owned canonical input stays outside the platform domain.
 - `AuditKeyHasher::sensitive_value_hash` for generic field-bound audit lookup
   values used by redaction helpers.
+- `pseudonym_keyring` pure metadata, lifecycle, bounded-domain, and zeroizing
+  input contracts, with production capabilities withheld pending PostgreSQL
+  authority integration.
 
 ## Typical Use
 
@@ -107,6 +110,80 @@ JSONL appends cannot provide crash-safe or replica-safe phase idempotency. The
 in-memory implementation is a conformance harness only. A fail-closed runtime
 must use a durable implementation, with PostgreSQL as the initial state-plane
 target.
+
+## Pseudonym Key Epochs
+
+The public API currently exposes pure, hash-covered key-epoch metadata,
+lifecycle validation, closed consultation commitment domains, audit-safe
+handles, and zeroizing transient canonical input. It deliberately exposes no production
+write-key or historical-lookup capability. A caller-supplied metadata copy,
+timestamp, or used-key-id set cannot prove that it is the current authoritative
+state, even when its generation and digest are internally consistent.
+
+The production wrapper remains a PostgreSQL state-plane integration
+prerequisite. For every write or lookup it must obtain PostgreSQL current time,
+the persisted current metadata generation and digest, and the complete
+never-reusable key-id history through the authority boundary. Rotation must
+validate and persist the successor and used-id history transactionally. The
+wrapper must fail closed on stale generations, expired lookup epochs, state
+unavailability, rollback, or a reached active-write deadline. Only that
+wrapper may load active or retained key material. The serving runtime receives
+one active write capability; an authorized investigation receives only its
+declared, unexpired lookup subset.
+
+The existing general-purpose `AuditKeyHasher` remains available for legacy
+audit redaction and chain-adjacent surfaces. It is not a keyring authority and
+must not be injected into governed consultation pseudonymization or
+investigation code as a substitute for the PostgreSQL-issued wrapper.
+
+Internal test-only scaffolding preserves the intended preflight invariants: the
+serving source set must be exactly active plus retained, duplicate ids and
+duplicate derived key material are rejected, retained hashers are discarded,
+lookup subsets are declared and unexpired, every use rechecks the supplied
+binding and expiry, and lookup ordering is canonical key-id order. These tests
+are not a production authority path.
+
+Relay consultation commitments have a separate closed framing contract. The
+only v1 domains are `registry.relay.consultation-subject.v1`,
+`registry.relay.consultation-input.v1`,
+`registry.relay.consultation-predicate.v1`, and
+`registry.relay.consultation-consent.v1`. Their exact HMAC preimage is the ASCII
+domain, one NUL byte, and the RFC 8785 JCS input. They do not use the legacy
+`AuditKeyHasher::audit_reference_hash` class/scope/length framing. Tenant,
+registry instance, profile, operation, and related semantics remain fields of
+the domain-specific JCS value. Pinned vectors cover all four preimages and
+outputs in the test-only model.
+
+Metadata binding assumes SHA-256 collision resistance. The test-only
+duplicate-material preflight compares domain-separated HMAC-SHA-256 probe
+outputs in constant time; it detects equal derived keys under the standard HMAC
+collision-resistance assumption rather than proving equality of the original
+environment strings.
+
+Selector-bearing inputs use `TransientPseudonymInput::from_jcs_value`. It
+consumes a `serde_json::Value`, produces at most 8 KiB of shared RFC 8785
+canonical JSON, recursively scrubs owned string keys and values on every path,
+and retains only zeroizing canonical bytes. It is not cloneable or serializable
+and redacts `Debug`. Raw parsers must reject duplicate object names before
+constructing the value because parsed JSON cannot recover that ambiguity.
+Domain-specific semantic fields remain inside the bounded JCS value. The HMAC
+framing buffer and temporary key-equivalence fingerprints are scrubbed.
+
+Keyring metadata is non-secret, generation-numbered, hash-coverable, and has no
+default retention. Every generation carries an explicit exclusive active-write
+deadline; lifecycle validity is `active_since <= now < active_write_deadline`.
+Its validation functions are pure checks, not proof that a metadata snapshot,
+timestamp, or history set is authoritative. Rotation requires a strictly newer
+active id, activation no later than the prior deadline, exact retirement of the
+prior active key, a later new deadline, and continuity of every unexpired
+retained epoch without shortened destruction. A separate same-active
+maintenance transition may only prune epochs at or after their destruction
+deadline; it cannot add, mutate, extend, or resurrect retained epochs or alter
+the active id, activation, or deadline. Expired epochs cannot be reintroduced
+when the supplied history is complete. PostgreSQL-backed authorization,
+persisted key-id uniqueness, investigation audit, key-provider access,
+destruction, and signed deployment configuration remain required before
+production use.
 
 ## Operational Notes
 

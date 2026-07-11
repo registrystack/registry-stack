@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Tamper-evident audit envelopes, async sinks, and redaction helpers.
 
+pub mod pseudonym_keyring;
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     env, fmt,
@@ -890,12 +892,10 @@ pub enum AuditError {
     Io(#[source] std::io::Error),
     #[error("audit hash secret environment variable name is empty")]
     EmptyEnvVarName,
-    #[error("audit hash secret environment variable {name} is not set: {source}")]
-    EnvVar {
-        name: String,
-        #[source]
-        source: env::VarError,
-    },
+    #[error("audit hash secret environment variable {name} is unavailable")]
+    EnvVarUnavailable { name: String },
+    #[error("audit hash secret environment variable {name} is not valid Unicode")]
+    EnvVarNotUnicode { name: String },
     #[error("audit hash secret environment variable {name} is empty")]
     EmptySecret { name: String },
     #[error("audit hash secret from {name} must be at least {min_bytes} bytes")]
@@ -1403,10 +1403,7 @@ impl AuditChainHasher {
         if env_var_name.trim().is_empty() {
             return Err(AuditError::EmptyEnvVarName);
         }
-        let value = env::var(env_var_name).map_err(|source| AuditError::EnvVar {
-            name: env_var_name.to_string(),
-            source,
-        })?;
+        let value = read_secret_env(env_var_name)?;
         Ok(Self::Keyed(AuditHashSecret::from_env_value(
             env_var_name,
             value,
@@ -1452,10 +1449,7 @@ impl AuditKeyHasher {
         if env_var_name.trim().is_empty() {
             return Err(AuditError::EmptyEnvVarName);
         }
-        let value = env::var(env_var_name).map_err(|source| AuditError::EnvVar {
-            name: env_var_name.to_string(),
-            source,
-        })?;
+        let value = read_secret_env(env_var_name)?;
         Ok(Self::Keyed(AuditHashSecret::from_env_value(
             env_var_name,
             value,
@@ -1522,13 +1516,17 @@ impl AuditKeyHasher {
     }
 }
 
-fn audit_reference_hash_input(class: &str, scope: &str, canonical_input: &str) -> String {
-    format!(
+fn audit_reference_hash_input(
+    class: &str,
+    scope: &str,
+    canonical_input: &str,
+) -> Zeroizing<String> {
+    Zeroizing::new(format!(
         "{AUDIT_REFERENCE_HASH_CONTEXT}\0{}\0{class}\0{}\0{scope}\0{}\0{canonical_input}",
         class.len(),
         scope.len(),
         canonical_input.len()
-    )
+    ))
 }
 
 pub mod redact {
@@ -2307,10 +2305,7 @@ fn derive_subkey_from_env(env_var_name: &str, info: &[u8]) -> Result<AuditHashSe
     if env_var_name.trim().is_empty() {
         return Err(AuditError::EmptyEnvVarName);
     }
-    let value = Zeroizing::new(env::var(env_var_name).map_err(|source| AuditError::EnvVar {
-        name: env_var_name.to_string(),
-        source,
-    })?);
+    let value = Zeroizing::new(read_secret_env(env_var_name)?);
     if value.is_empty() {
         return Err(AuditError::EmptySecret {
             name: env_var_name.to_string(),
@@ -2327,6 +2322,22 @@ fn derive_subkey_from_env(env_var_name: &str, info: &[u8]) -> Result<AuditHashSe
     }
     let derived = hkdf_expand_sha256(value.as_bytes(), info);
     Ok(AuditHashSecret::from_bytes(derived))
+}
+
+fn read_secret_env(env_var_name: &str) -> Result<String, AuditError> {
+    match env::var(env_var_name) {
+        Ok(value) => Ok(value),
+        Err(env::VarError::NotPresent) => Err(AuditError::EnvVarUnavailable {
+            name: env_var_name.to_string(),
+        }),
+        Err(env::VarError::NotUnicode(value)) => {
+            let mut bytes = value.into_encoded_bytes();
+            bytes.zeroize();
+            Err(AuditError::EnvVarNotUnicode {
+                name: env_var_name.to_string(),
+            })
+        }
+    }
 }
 
 fn hex_lower(bytes: &[u8]) -> String {
@@ -3659,8 +3670,35 @@ mod tests {
         env::remove_var(name);
         assert!(matches!(
             AuditKeyHasher::from_env(name),
-            Err(AuditError::EnvVar { .. })
+            Err(AuditError::EnvVarUnavailable { .. })
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn audit_env_loaders_redact_non_unicode_secret_values() {
+        use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+
+        const NAME: &str = "REGISTRY_PLATFORM_AUDIT_NON_UNICODE_SECRET_TEST";
+        const MARKER: &str = "SECRET_BYTES_MUST_NOT_LEAK";
+        let mut secret = vec![0xff];
+        secret.extend_from_slice(MARKER.as_bytes());
+        env::set_var(NAME, OsString::from_vec(secret));
+
+        let errors = [
+            AuditKeyHasher::from_env(NAME).expect_err("identifier loader rejects non-Unicode"),
+            AuditChainHasher::from_env(NAME).expect_err("chain loader rejects non-Unicode"),
+            derive_subkey_from_env(NAME, IDENTIFIER_KEY_DERIVATION_INFO)
+                .expect_err("derived loader rejects non-Unicode"),
+        ];
+        env::remove_var(NAME);
+
+        for error in errors {
+            assert!(matches!(error, AuditError::EnvVarNotUnicode { .. }));
+            assert!(!format!("{error:?}").contains(MARKER));
+            assert!(!error.to_string().contains(MARKER));
+            assert!(std::error::Error::source(&error).is_none());
+        }
     }
 
     #[test]
