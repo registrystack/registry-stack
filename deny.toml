@@ -86,5 +86,4 @@ unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = [
     "https://github.com/PublicSchema/crosswalk",
-    "https://github.com/jeremi/registry-manifest",
 ]
