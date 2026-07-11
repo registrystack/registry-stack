@@ -31,6 +31,7 @@ import hashlib
 import os
 import secrets
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -61,6 +62,25 @@ def generate_token() -> str:
 def generate_audit_hash_secret() -> str:
     """Return a per-deployment audit HMAC secret for perf smoke runs."""
     return secrets.token_urlsafe(48)
+
+
+def write_secret_file(path: Path, contents: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temp_path = Path(temp_name)
+    try:
+        if hasattr(os, "fchmod"):
+            os.fchmod(fd, 0o600)
+        else:
+            os.chmod(temp_path, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            fd = -1
+            handle.write(contents)
+        os.replace(temp_path, path)
+    finally:
+        if fd != -1:
+            os.close(fd)
+        temp_path.unlink(missing_ok=True)
 
 
 def build_env_lines(
@@ -126,8 +146,6 @@ def main() -> None:
         )
         sys.exit(1)
 
-    env_path.parent.mkdir(parents=True, exist_ok=True)
-
     # Generate one random token per keyed entry and the audit secret.
     tokens: dict[str, str] = {key_id: generate_token() for key_id, _, _ in KEY_DEFS}
     audit_hash_secret = generate_audit_hash_secret()
@@ -135,9 +153,7 @@ def main() -> None:
     env_lines = build_env_lines(tokens, audit_hash_secret)
     env_content = "\n".join(env_lines) + "\n"
 
-    env_path.write_text(env_content, encoding="utf-8")
-    # Restrict to owner read/write only.
-    os.chmod(env_path, 0o600)
+    write_secret_file(env_path, env_content)
 
     # Report only the path and variable names, never values.
     print(f"Wrote: {env_path}")

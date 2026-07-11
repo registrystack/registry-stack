@@ -264,13 +264,16 @@ fn demo_key_generator_writes_secret_files_0600() {
 }
 
 #[test]
-fn write_secret_file_restricts_existing_file_before_writing() {
+fn key_generators_restrict_existing_secret_files_before_writing() {
     let root = repo_root();
     let tmp = TempDir::new().expect("tempdir");
-    let env_file = tmp.path().join("demo.env");
-    std::fs::write(&env_file, "old").expect("seed loose file");
-    std::fs::set_permissions(&env_file, std::fs::Permissions::from_mode(0o644))
-        .expect("loosen seed file");
+    let demo_env_file = tmp.path().join("demo.env");
+    let perf_env_file = tmp.path().join("perf.env");
+    for env_file in [&demo_env_file, &perf_env_file] {
+        std::fs::write(env_file, "old").expect("seed loose file");
+        std::fs::set_permissions(env_file, std::fs::Permissions::from_mode(0o644))
+            .expect("loosen seed file");
+    }
 
     let verifier = r#"
 import importlib.util
@@ -280,24 +283,44 @@ import sys
 from pathlib import Path
 
 root = Path(sys.argv[1])
-target = Path(sys.argv[2])
-spec = importlib.util.spec_from_file_location(
-    "generate_demo_keys", root / "demo/scripts/generate_demo_keys.py"
-)
-module = importlib.util.module_from_spec(spec)
-assert spec.loader is not None
-spec.loader.exec_module(module)
+targets = [Path(sys.argv[2]), Path(sys.argv[3])]
 
-real_fdopen = module.os.fdopen
-observed_modes = []
+def load(name, relative):
+    spec = importlib.util.spec_from_file_location(name, root / relative)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
 
-def checked_fdopen(fd, *args, **kwargs):
-    observed_modes.append(stat.S_IMODE(os.fstat(fd).st_mode))
-    return real_fdopen(fd, *args, **kwargs)
+for module, target in zip([
+    load("generate_demo_keys", "demo/scripts/generate_demo_keys.py"),
+    load("generate_perf_keys", "perf/scripts/generate_perf_keys.py"),
+], targets):
+    real_fdopen = module.os.fdopen
+    observed_modes = []
 
-module.os.fdopen = checked_fdopen
-module.write_secret_file(target, "secret")
-assert observed_modes == [0o600], observed_modes
+    def checked_fdopen(fd, *args, **kwargs):
+        observed_modes.append(stat.S_IMODE(os.fstat(fd).st_mode))
+        return real_fdopen(fd, *args, **kwargs)
+
+    try:
+        module.os.fdopen = checked_fdopen
+        module.write_secret_file(target, "secret")
+    finally:
+        module.os.fdopen = real_fdopen
+    assert observed_modes == [0o600], (module.__name__, observed_modes)
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600, module.__name__
+    assert target.read_text() == "secret", module.__name__
+
+perf = load("generate_perf_keys_replace", "perf/scripts/generate_perf_keys.py")
+target = targets[1]
+target.write_text("old secret material")
+target.chmod(0o644)
+old_inode = target.stat().st_ino
+with target.open() as old_file:
+    perf.write_secret_file(target, "secret")
+    assert old_file.read() == "old secret material"
+assert target.stat().st_ino != old_inode
 assert stat.S_IMODE(target.stat().st_mode) == 0o600
 assert target.read_text() == "secret"
 "#;
@@ -307,13 +330,14 @@ assert target.read_text() == "secret"
         .arg("-c")
         .arg(verifier)
         .arg(&root)
-        .arg(&env_file)
+        .arg(&demo_env_file)
+        .arg(&perf_env_file)
         .output()
-        .expect("write_secret_file verifier runs");
+        .expect("secret file verifier runs");
 
     assert!(
         output.status.success(),
-        "write_secret_file verifier failed\nstdout:\n{}\nstderr:\n{}",
+        "secret file verifier failed\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
