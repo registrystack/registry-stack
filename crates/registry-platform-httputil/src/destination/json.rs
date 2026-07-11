@@ -18,11 +18,11 @@ mod preflight;
 pub const MAX_CLOSED_JSON_ENCODED_BODY_BYTES: usize = 256 * 1_024;
 
 pub use contract::{
-    ClosedJsonDecoder, ClosedJsonDecoderBuildError, ClosedJsonField, ClosedJsonRecordRoot,
-    ClosedJsonScalarProjection, ClosedJsonSchema, MAX_CLOSED_JSON_ARRAY_ITEMS,
-    MAX_CLOSED_JSON_EXPANDED_NODES, MAX_CLOSED_JSON_NAME_BYTES, MAX_CLOSED_JSON_OBJECT_FIELDS,
-    MAX_CLOSED_JSON_PROJECTIONS, MAX_CLOSED_JSON_SCHEMA_DEPTH, MAX_CLOSED_JSON_SCHEMA_NODES,
-    MAX_CLOSED_JSON_STRING_BYTES,
+    ClosedJsonDecoder, ClosedJsonDecoderBuildError, ClosedJsonField, ClosedJsonPresenceProjection,
+    ClosedJsonRecordRoot, ClosedJsonScalarProjection, ClosedJsonSchema,
+    MAX_CLOSED_JSON_ARRAY_ITEMS, MAX_CLOSED_JSON_EXPANDED_NODES, MAX_CLOSED_JSON_NAME_BYTES,
+    MAX_CLOSED_JSON_OBJECT_FIELDS, MAX_CLOSED_JSON_PROJECTIONS, MAX_CLOSED_JSON_SCHEMA_DEPTH,
+    MAX_CLOSED_JSON_SCHEMA_NODES, MAX_CLOSED_JSON_STRING_BYTES,
 };
 pub use decode::{
     ClosedJsonDecodeError, ClosedJsonOutcome, ProjectedJsonField, ProjectedJsonRecord,

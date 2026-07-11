@@ -37,6 +37,10 @@ fn projection(name: &str, tokens: &[&str]) -> ClosedJsonScalarProjection {
     ClosedJsonScalarProjection::new(name, tokens.iter().copied()).unwrap()
 }
 
+fn presence(name: &str, tokens: &[&str]) -> ClosedJsonPresenceProjection {
+    ClosedJsonPresenceProjection::new(name, tokens.iter().copied()).unwrap()
+}
+
 fn dhis2_decoder() -> ClosedJsonDecoder {
     let enrollment = object(vec![field("status", true, string(false, 32))]);
     let pager = object(vec![
@@ -307,6 +311,64 @@ fn all_scalar_kinds_are_validated_and_projected() {
         record.get("empty"),
         Some(ProjectedJsonScalar::Null)
     ));
+}
+
+#[test]
+fn presence_projection_distinguishes_null_from_a_non_null_object_without_releasing_it() {
+    let decoder = ClosedJsonDecoder::new_with_presence(
+        object(vec![field(
+            "data",
+            true,
+            ClosedJsonSchema::object(true, vec![field("status", true, string(true, 16))]).unwrap(),
+        )]),
+        ClosedJsonRecordRoot::Object,
+        vec![],
+        vec![presence("data_present", &["data"])],
+    )
+    .unwrap();
+
+    for (raw, expected) in [
+        (br#"{"data":null}"#.as_slice(), false),
+        (br#"{"data":{"status":null}}"#.as_slice(), true),
+        (br#"{"data":{"status":"SECRET"}}"#.as_slice(), true),
+    ] {
+        let ClosedJsonOutcome::One(record) = decoder.decode(body(raw)).unwrap() else {
+            panic!("one root object expected");
+        };
+        assert!(matches!(
+            record.get("data_present"),
+            Some(ProjectedJsonScalar::Boolean(actual)) if *actual == expected
+        ));
+        assert!(!format!("{record:?}").contains("SECRET"));
+    }
+}
+
+#[test]
+fn presence_projection_is_bounded_and_shares_the_projection_name_namespace() {
+    assert_eq!(
+        ClosedJsonDecoder::new_with_presence(
+            fresh_projection_record(),
+            ClosedJsonRecordRoot::Object,
+            vec![projection("duplicate", &["status"])],
+            vec![presence("duplicate", &["nested"])],
+        )
+        .unwrap_err(),
+        ClosedJsonDecoderBuildError::InvalidProjection
+    );
+
+    let presence_projections = (0..MAX_CLOSED_JSON_PROJECTIONS)
+        .map(|index| presence(&format!("present{index}"), &["nested"]))
+        .collect();
+    assert_eq!(
+        ClosedJsonDecoder::new_with_presence(
+            fresh_projection_record(),
+            ClosedJsonRecordRoot::Object,
+            vec![projection("status", &["status"])],
+            presence_projections,
+        )
+        .unwrap_err(),
+        ClosedJsonDecoderBuildError::InvalidProjection
+    );
 }
 
 #[test]

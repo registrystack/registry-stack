@@ -11,8 +11,8 @@ use zeroize::{Zeroize, Zeroizing};
 use crate::destination::{BoundedDestinationBody, DataDestination, DataDestinationBody};
 
 use super::contract::{
-    ClosedJsonDecoder, ClosedJsonSchema, ClosedJsonSchemaNode, CompiledRecordRoot,
-    CompiledScalarProjection, ProjectionStep, ScalarContract,
+    ClosedJsonDecoder, ClosedJsonSchema, ClosedJsonSchemaNode, CompiledPresenceProjection,
+    CompiledRecordRoot, CompiledScalarProjection, ProjectionStep, ScalarContract,
 };
 use super::preflight::{preflight_json, JsonPreflightError};
 
@@ -43,12 +43,17 @@ pub(super) fn decode_body(
         NormalizedRecords::None => Ok(ClosedJsonOutcome::NoMatch),
         NormalizedRecords::Ambiguous => Ok(ClosedJsonOutcome::Ambiguous),
         NormalizedRecords::One(record) => {
-            let fields = decoder
-                .projections
-                .iter()
-                .map(|projection| project_field(record, projection))
-                .collect::<Result<Box<[_]>, _>>()?;
-            Ok(ClosedJsonOutcome::One(ProjectedJsonRecord { fields }))
+            let mut fields =
+                Vec::with_capacity(decoder.projections.len() + decoder.presence_projections.len());
+            for projection in &decoder.projections {
+                fields.push(project_field(record, projection)?);
+            }
+            for projection in &decoder.presence_projections {
+                fields.push(project_presence(record, projection));
+            }
+            Ok(ClosedJsonOutcome::One(ProjectedJsonRecord {
+                fields: fields.into_boxed_slice(),
+            }))
         }
     }
 }
@@ -332,6 +337,22 @@ fn project_field(
         name: projection.name.clone(),
         value,
     })
+}
+
+fn project_presence(record: &Value, projection: &CompiledPresenceProjection) -> ProjectedJsonField {
+    let mut current = Some(record);
+    for step in &projection.steps {
+        current = current.and_then(|value| match step {
+            ProjectionStep::Object(name) => value
+                .as_object()
+                .and_then(|object| object.get(name.as_ref())),
+            ProjectionStep::Array(index) => value.as_array().and_then(|array| array.get(*index)),
+        });
+    }
+    ProjectedJsonField {
+        name: projection.name.clone(),
+        value: ProjectedJsonScalar::Boolean(current.is_some_and(|value| !value.is_null())),
+    }
 }
 
 fn project_scalar(

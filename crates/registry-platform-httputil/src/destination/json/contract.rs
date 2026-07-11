@@ -33,6 +33,8 @@ const MAX_EXACT_JSON_INTEGER: i64 = 9_007_199_254_740_991;
 // within a fixed factor of the largest closed-schema response.
 const PREFLIGHT_TOKEN_HEADROOM_MULTIPLIER: usize = 2;
 
+type ProjectionTokens = Box<[Box<str>]>;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum ClosedJsonDecoderBuildError {
     #[error("closed JSON schema is outside platform bounds")]
@@ -262,24 +264,39 @@ impl ClosedJsonScalarProjection {
         name: &str,
         tokens: impl IntoIterator<Item = &'a str>,
     ) -> Result<Self, ClosedJsonDecoderBuildError> {
-        if !valid_name(name) {
-            return Err(ClosedJsonDecoderBuildError::InvalidProjection);
-        }
-        let tokens = tokens
-            .into_iter()
-            .map(|token| {
-                valid_name(token)
-                    .then(|| Box::<str>::from(token))
-                    .ok_or(ClosedJsonDecoderBuildError::InvalidProjection)
-            })
-            .collect::<Result<Box<[_]>, _>>()?;
-        if tokens.is_empty() || tokens.len() > MAX_CLOSED_JSON_SCHEMA_DEPTH {
-            return Err(ClosedJsonDecoderBuildError::InvalidProjection);
-        }
-        Ok(Self {
-            name: name.into(),
-            tokens,
-        })
+        let (name, tokens) = projection_path(name, tokens)?;
+        Ok(Self { name, tokens })
+    }
+}
+
+/// One named decoded pointer whose non-null presence may be released.
+///
+/// The decoded value is a boolean. It is `true` only when every path segment
+/// exists and the selected value is not JSON `null`; no selected value escapes
+/// the decoder.
+pub struct ClosedJsonPresenceProjection {
+    name: Box<str>,
+    tokens: Box<[Box<str>]>,
+}
+
+impl ClosedJsonPresenceProjection {
+    /// Compile already-decoded JSON Pointer tokens.
+    pub fn new<'a>(
+        name: &str,
+        tokens: impl IntoIterator<Item = &'a str>,
+    ) -> Result<Self, ClosedJsonDecoderBuildError> {
+        let (name, tokens) = projection_path(name, tokens)?;
+        Ok(Self { name, tokens })
+    }
+}
+
+impl fmt::Debug for ClosedJsonPresenceProjection {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ClosedJsonPresenceProjection")
+            .field("name", &"[REDACTED]")
+            .field("token_count", &self.tokens.len())
+            .finish()
     }
 }
 
@@ -298,6 +315,7 @@ pub struct ClosedJsonDecoder {
     pub(super) schema: ClosedJsonSchema,
     pub(super) root: CompiledRecordRoot,
     pub(super) projections: Box<[CompiledScalarProjection]>,
+    pub(super) presence_projections: Box<[CompiledPresenceProjection]>,
     pub(super) preflight_token_limit: usize,
     pub(super) preflight_depth_limit: usize,
 }
@@ -309,12 +327,27 @@ impl ClosedJsonDecoder {
         root: ClosedJsonRecordRoot,
         projections: Vec<ClosedJsonScalarProjection>,
     ) -> Result<Self, ClosedJsonDecoderBuildError> {
+        Self::new_with_presence(schema, root, projections, Vec::new())
+    }
+
+    /// Validate a decoder with scalar and value-free non-null projections.
+    pub fn new_with_presence(
+        schema: ClosedJsonSchema,
+        root: ClosedJsonRecordRoot,
+        projections: Vec<ClosedJsonScalarProjection>,
+        presence_projections: Vec<ClosedJsonPresenceProjection>,
+    ) -> Result<Self, ClosedJsonDecoderBuildError> {
         let mut nodes = 0;
         let expanded = validate_schema_contract(&schema, 1, &mut nodes)?;
         if expanded > MAX_CLOSED_JSON_EXPANDED_NODES {
             return Err(ClosedJsonDecoderBuildError::InvalidSchema);
         }
-        if projections.len() > MAX_CLOSED_JSON_PROJECTIONS {
+        if projections
+            .len()
+            .checked_add(presence_projections.len())
+            .filter(|count| *count <= MAX_CLOSED_JSON_PROJECTIONS)
+            .is_none()
+        {
             return Err(ClosedJsonDecoderBuildError::InvalidProjection);
         }
         let preflight_token_limit = maximum_runtime_tokens(&schema)?
@@ -338,10 +371,25 @@ impl ClosedJsonDecoder {
                 Ok(compiled)
             })
             .collect::<Result<Box<[_]>, _>>()?;
+        let mut presence_paths = BTreeSet::new();
+        let presence_projections = presence_projections
+            .into_iter()
+            .map(|projection| {
+                if !names.insert(projection.name.clone()) {
+                    return Err(ClosedJsonDecoderBuildError::InvalidProjection);
+                }
+                let compiled = compile_presence_projection(record_schema, projection)?;
+                if !presence_paths.insert(compiled.steps.clone()) {
+                    return Err(ClosedJsonDecoderBuildError::InvalidProjection);
+                }
+                Ok(compiled)
+            })
+            .collect::<Result<Box<[_]>, _>>()?;
         Ok(Self {
             schema,
             root: compiled_root,
             projections,
+            presence_projections,
             preflight_token_limit,
             preflight_depth_limit,
         })
@@ -375,6 +423,10 @@ impl fmt::Debug for ClosedJsonDecoder {
             .field("schema", &self.schema)
             .field("root", &self.root)
             .field("projection_count", &self.projections.len())
+            .field(
+                "presence_projection_count",
+                &self.presence_projections.len(),
+            )
             .field("projections", &"[REDACTED]")
             .field("preflight_token_limit", &self.preflight_token_limit)
             .field("preflight_depth_limit", &self.preflight_depth_limit)
@@ -392,6 +444,11 @@ pub(super) struct CompiledScalarProjection {
     pub(super) name: Box<str>,
     pub(super) steps: Box<[ProjectionStep]>,
     pub(super) scalar: ScalarContract,
+}
+
+pub(super) struct CompiledPresenceProjection {
+    pub(super) name: Box<str>,
+    pub(super) steps: Box<[ProjectionStep]>,
 }
 
 pub(super) enum CompiledRecordRoot {
@@ -449,6 +506,27 @@ fn valid_name(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= MAX_CLOSED_JSON_NAME_BYTES
         && !value.chars().any(char::is_control)
+}
+
+fn projection_path<'a>(
+    name: &str,
+    tokens: impl IntoIterator<Item = &'a str>,
+) -> Result<(Box<str>, ProjectionTokens), ClosedJsonDecoderBuildError> {
+    if !valid_name(name) {
+        return Err(ClosedJsonDecoderBuildError::InvalidProjection);
+    }
+    let tokens = tokens
+        .into_iter()
+        .map(|token| {
+            valid_name(token)
+                .then(|| Box::<str>::from(token))
+                .ok_or(ClosedJsonDecoderBuildError::InvalidProjection)
+        })
+        .collect::<Result<Box<[_]>, _>>()?;
+    if tokens.is_empty() || tokens.len() > MAX_CLOSED_JSON_SCHEMA_DEPTH {
+        return Err(ClosedJsonDecoderBuildError::InvalidProjection);
+    }
+    Ok((name.into(), tokens))
 }
 
 fn validate_numeric_bounds(minimum: i64, maximum: i64) -> Result<(), ClosedJsonDecoderBuildError> {
@@ -653,9 +731,32 @@ fn compile_projection(
     record_schema: &ClosedJsonSchema,
     projection: ClosedJsonScalarProjection,
 ) -> Result<CompiledScalarProjection, ClosedJsonDecoderBuildError> {
+    let (projected_schema, steps) = compile_projection_steps(record_schema, &projection.tokens)?;
+    Ok(CompiledScalarProjection {
+        name: projection.name,
+        steps,
+        scalar: scalar_contract(projected_schema)?,
+    })
+}
+
+fn compile_presence_projection(
+    record_schema: &ClosedJsonSchema,
+    projection: ClosedJsonPresenceProjection,
+) -> Result<CompiledPresenceProjection, ClosedJsonDecoderBuildError> {
+    let (_, steps) = compile_projection_steps(record_schema, &projection.tokens)?;
+    Ok(CompiledPresenceProjection {
+        name: projection.name,
+        steps,
+    })
+}
+
+fn compile_projection_steps<'schema>(
+    record_schema: &'schema ClosedJsonSchema,
+    tokens: &[Box<str>],
+) -> Result<(&'schema ClosedJsonSchema, Box<[ProjectionStep]>), ClosedJsonDecoderBuildError> {
     let mut current = record_schema;
-    let mut steps = Vec::with_capacity(projection.tokens.len());
-    for token in &projection.tokens {
+    let mut steps = Vec::with_capacity(tokens.len());
+    for token in tokens {
         current = match &current.node {
             ClosedJsonSchemaNode::Object { fields, .. } => {
                 let field = fields
@@ -682,11 +783,7 @@ fn compile_projection(
             }
         };
     }
-    Ok(CompiledScalarProjection {
-        name: projection.name,
-        steps: steps.into_boxed_slice(),
-        scalar: scalar_contract(current)?,
-    })
+    Ok((current, steps.into_boxed_slice()))
 }
 
 fn canonical_array_index(token: &str) -> Option<usize> {
