@@ -30,6 +30,7 @@ use registry_platform_ops::{AuditWritePolicy, DeploymentProfile};
 use serde::{Deserialize, Deserializer, Serialize};
 
 pub mod capabilities;
+mod consultation_artifacts;
 pub mod governed;
 pub mod loader;
 #[cfg(test)]
@@ -38,6 +39,12 @@ pub mod test_support;
 pub mod validate;
 pub mod vocabularies;
 
+pub(crate) use consultation_artifacts::VerifiedEvidenceClass;
+pub use consultation_artifacts::{
+    ConsultationArtifactClosureConfig, ConsultationArtifactReferenceConfig,
+    ConsultationEvidenceArtifactConfig, ConsultationEvidenceClassConfig,
+    ConsultationTypedArtifactReferenceConfig, VerifiedConsultationArtifactClosure,
+};
 pub use loader::{
     load, load_config_metadata, load_metadata_manifest, load_with_metadata,
     load_with_metadata_options, validate_verified_bundle_runtime, BundleStateAction, LoadOptions,
@@ -629,6 +636,14 @@ fn default_oidc_token_types() -> Vec<String> {
 #[serde(deny_unknown_fields)]
 pub struct ConsultationConfig {
     pub audit_pseudonym_materials: AuditPseudonymMaterialCatalogConfig,
+    /// Complete restart-only source-plan artifact closure.
+    ///
+    /// Every public contract in this catalog is an enabled consultation. A
+    /// non-local deployment may activate the catalog only from a verified
+    /// Registry Config Bundle v1. Local development still pins every file by
+    /// hash, but intentionally has no signing requirement.
+    #[serde(default)]
+    pub artifacts: Option<ConsultationArtifactClosureConfig>,
 }
 
 /// Bounded startup catalog of audit-pseudonym material references.

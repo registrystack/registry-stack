@@ -94,6 +94,16 @@ fn validate_consultation(config: &Config) -> Result<(), ConfigError> {
     let Some(consultation) = &config.consultation else {
         return Ok(());
     };
+    super::consultation_artifacts::validate_consultation_artifact_config(consultation).map_err(
+        |error| {
+            tracing::error!(
+                code = "config.consultation_artifact_closure_invalid",
+                error = %error,
+                "consultation artifact closure configuration is invalid"
+            );
+            ConfigError::ValidationError
+        },
+    )?;
     let entries = consultation.audit_pseudonym_materials.entries();
     if entries.is_empty() || entries.len() > super::MAX_AUDIT_PSEUDONYM_MATERIALS {
         tracing::error!(

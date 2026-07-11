@@ -7,9 +7,8 @@
 //! path. The operational `tracing::error!` line includes the path so
 //! operators can locate the offending file in their logs.
 
-use std::collections::BTreeSet;
 use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use registry_manifest_core::{
     self as metadata_core, CompiledMetadata, MetadataError as CoreMetadataError, MetadataManifest,
@@ -29,14 +28,20 @@ use serde_json::Value;
 
 use crate::error::{ConfigError, Error, MetadataError};
 
+use super::consultation_artifacts::{
+    load_consultation_artifacts, ConsultationArtifactClosureError, SignedBundleRuntimeFiles,
+};
 use super::validate;
-use super::Config;
+use super::{Config, VerifiedConsultationArtifactClosure};
 
 #[derive(Debug)]
 pub struct LoadedConfig {
     pub runtime: Config,
     pub metadata: Option<CompiledMetadata>,
     pub metadata_source_digest: Option<String>,
+    /// Verified startup inputs for consultation compilation. `None` means
+    /// consultation execution is disabled, never an empty ready registry.
+    pub consultation_artifacts: Option<VerifiedConsultationArtifactClosure>,
     pub provenance: ConfigProvenance,
     pub pending_bundle_acceptance: Option<PendingBundleAcceptance>,
 }
@@ -126,6 +131,9 @@ fn load_config_document(path: &Path, options: LoadOptions) -> Result<LoadedConfi
     }
 
     validate::run(&config)?;
+    let consultation_artifacts =
+        load_consultation_artifacts(path, &config, ConfigSource::LocalFile, None)
+            .map_err(map_consultation_artifact_error)?;
     let provenance = ConfigProvenance::local_file(
         internal_config_hash(expanded.as_bytes()),
         posture_safe_runtime_config_hash(&config_value),
@@ -136,7 +144,8 @@ fn load_config_document(path: &Path, options: LoadOptions) -> Result<LoadedConfi
         runtime: config,
         provenance,
         pending_bundle_acceptance: None,
-        signed_bundle_closure: None,
+        signed_bundle_files: None,
+        consultation_artifacts,
     })
 }
 
@@ -195,7 +204,15 @@ fn load_verified_bundle_config_document(
     .map_err(map_config_boot_error)?;
     let (config, config_value) =
         parse_config_bytes_for_bundle(&verified.config_bytes, ConfigSource::SignedBundleFile)?;
-    let signed_bundle_closure = signed_bundle_closure(&verified)?;
+    let signed_bundle_files = SignedBundleRuntimeFiles::from_verified(&verified)
+        .map_err(map_consultation_artifact_error)?;
+    let consultation_artifacts = load_consultation_artifacts(
+        &verified.config_path,
+        &config,
+        ConfigSource::SignedBundleFile,
+        Some(&signed_bundle_files),
+    )
+    .map_err(map_consultation_artifact_error)?;
     let provenance = ConfigProvenance {
         source: ConfigSource::SignedBundleFile,
         internal_config_hash: verified.manifest.config_hash.clone(),
@@ -232,7 +249,8 @@ fn load_verified_bundle_config_document(
             override_pin: state_decision.override_pin,
             override_path: state_decision.override_path,
         }),
-        signed_bundle_closure: Some(signed_bundle_closure),
+        signed_bundle_files: Some(signed_bundle_files),
+        consultation_artifacts,
     })
 }
 
@@ -259,6 +277,13 @@ fn load_unsigned_pin_config_document(
     let (config, config_value) =
         parse_config_bytes_for_bundle(&selection.config_bytes, ConfigSource::LocalFile)?;
     let override_pin = Some(selection.pin.clone());
+    let consultation_artifacts = load_consultation_artifacts(
+        &selection.config_path,
+        &config,
+        ConfigSource::LocalFile,
+        None,
+    )
+    .map_err(map_consultation_artifact_error)?;
     Ok(LoadedConfigDocument {
         config_path: selection.config_path,
         runtime: config,
@@ -294,7 +319,8 @@ fn load_unsigned_pin_config_document(
             override_pin,
             override_path: selection.override_path,
         }),
-        signed_bundle_closure: None,
+        signed_bundle_files: None,
+        consultation_artifacts,
     })
 }
 
@@ -419,12 +445,13 @@ pub fn load_with_metadata_options(
         &document.config_path,
         &document.runtime,
         document.provenance.source,
-        document.signed_bundle_closure.as_ref(),
+        document.signed_bundle_files.as_ref(),
     )?;
     Ok(LoadedConfig {
         runtime: document.runtime,
         metadata,
         metadata_source_digest,
+        consultation_artifacts: document.consultation_artifacts,
         provenance: document.provenance,
         pending_bundle_acceptance: document.pending_bundle_acceptance,
     })
@@ -433,12 +460,20 @@ pub fn load_with_metadata_options(
 pub fn validate_verified_bundle_runtime(verified: &VerifiedConfigBundle) -> Result<(), Error> {
     let (runtime, _) =
         parse_config_bytes_for_bundle(&verified.config_bytes, ConfigSource::SignedBundleFile)?;
-    let signed_bundle_closure = signed_bundle_closure(verified)?;
+    let signed_bundle_files = SignedBundleRuntimeFiles::from_verified(verified)
+        .map_err(map_consultation_artifact_error)?;
+    load_consultation_artifacts(
+        &verified.config_path,
+        &runtime,
+        ConfigSource::SignedBundleFile,
+        Some(&signed_bundle_files),
+    )
+    .map_err(map_consultation_artifact_error)?;
     load_config_metadata_for_source(
         &verified.config_path,
         &runtime,
         ConfigSource::SignedBundleFile,
-        Some(&signed_bundle_closure),
+        Some(&signed_bundle_files),
     )?;
     Ok(())
 }
@@ -454,16 +489,15 @@ fn load_config_metadata_for_source(
     config_path: &Path,
     config: &Config,
     source: ConfigSource,
-    signed_bundle_closure: Option<&SignedBundleClosure>,
+    signed_bundle_files: Option<&SignedBundleRuntimeFiles>,
 ) -> Result<(Option<CompiledMetadata>, Option<String>), Error> {
     let (metadata, metadata_source_digest) = match config.metadata.as_ref() {
         Some(metadata) => {
             let manifest_path = if source == ConfigSource::SignedBundleFile {
-                resolve_signed_bundle_metadata_path(
-                    config_path,
-                    &metadata.source.path,
-                    signed_bundle_closure,
-                )?
+                signed_bundle_files
+                    .ok_or_else(|| Error::from(MetadataError::ManifestFileNotFound))?
+                    .resolve_metadata_path(&metadata.source.path)
+                    .map_err(|_| Error::from(MetadataError::ManifestFileNotFound))?
             } else {
                 resolve_relative_to_config(config_path, &metadata.source.path)
             };
@@ -508,13 +542,8 @@ struct LoadedConfigDocument {
     runtime: Config,
     provenance: ConfigProvenance,
     pending_bundle_acceptance: Option<PendingBundleAcceptance>,
-    signed_bundle_closure: Option<SignedBundleClosure>,
-}
-
-#[derive(Debug, Clone)]
-struct SignedBundleClosure {
-    primary_config_path: String,
-    files: BTreeSet<String>,
+    signed_bundle_files: Option<SignedBundleRuntimeFiles>,
+    consultation_artifacts: Option<VerifiedConsultationArtifactClosure>,
 }
 
 pub fn load_metadata_manifest(path: &Path) -> Result<CompiledMetadata, Error> {
@@ -590,102 +619,13 @@ fn resolve_relative_to_config(config_path: &Path, target: &Path) -> PathBuf {
         .join(target)
 }
 
-fn resolve_signed_bundle_metadata_path(
-    config_path: &Path,
-    target: &Path,
-    closure: Option<&SignedBundleClosure>,
-) -> Result<PathBuf, Error> {
-    let closure = closure.ok_or_else(|| {
-        tracing::error!(
-            code = "metadata.manifest.file_not_found",
-            "signed bundle metadata loading is missing the signed file closure"
-        );
-        Error::from(MetadataError::ManifestFileNotFound)
-    })?;
-    let Some(bundle_path) = bundle_relative_metadata_path(&closure.primary_config_path, target)
-    else {
-        tracing::error!(
-            code = "metadata.manifest.file_not_found",
-            path = %target.display(),
-            "signed bundle metadata path must be relative and stay inside the bundle"
-        );
-        return Err(MetadataError::ManifestFileNotFound.into());
-    };
-    if !closure.files.contains(&bundle_path) {
-        tracing::error!(
-            code = "metadata.manifest.file_not_found",
-            path = %target.display(),
-            bundle_path,
-            "signed bundle metadata path is not listed in the signed file closure"
-        );
-        return Err(MetadataError::ManifestFileNotFound.into());
-    }
-    Ok(resolve_relative_to_config(config_path, target))
-}
-
-fn signed_bundle_closure(verified: &VerifiedConfigBundle) -> Result<SignedBundleClosure, Error> {
-    let primary_config_path = verified
-        .manifest
-        .files
-        .iter()
-        .find(|file| file.sha256 == verified.manifest.config_hash)
-        .and_then(|file| normalize_bundle_path_for_loader(Path::new(&file.path)))
-        .ok_or_else(|| {
-            tracing::error!(
-                code = "config.bundle_rejected",
-                result = "rejected_validation",
-                "signed bundle primary config path is not valid"
-            );
-            Error::from(ConfigError::ValidationError)
-        })?;
-    let mut files = BTreeSet::new();
-    for file in &verified.manifest.files {
-        let Some(path) = normalize_bundle_path_for_loader(Path::new(&file.path)) else {
-            tracing::error!(
-                code = "config.bundle_rejected",
-                result = "rejected_validation",
-                path = %file.path,
-                "signed bundle file path is not valid"
-            );
-            return Err(Error::from(ConfigError::ValidationError));
-        };
-        files.insert(path);
-    }
-    Ok(SignedBundleClosure {
-        primary_config_path,
-        files,
-    })
-}
-
-fn bundle_relative_metadata_path(primary_config_path: &str, target: &Path) -> Option<String> {
-    if target.is_absolute() {
-        return None;
-    }
-    let mut combined = PathBuf::from(primary_config_path)
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_default();
-    combined.push(target);
-    normalize_bundle_path_for_loader(&combined)
-}
-
-fn normalize_bundle_path_for_loader(path: &Path) -> Option<String> {
-    let mut parts = Vec::new();
-    for component in path.components() {
-        match component {
-            Component::Normal(part) => parts.push(part.to_str()?.to_string()),
-            Component::CurDir => {}
-            Component::ParentDir => {
-                parts.pop()?;
-            }
-            Component::Prefix(_) | Component::RootDir => return None,
-        }
-    }
-    if parts.is_empty() {
-        None
-    } else {
-        Some(parts.join("/"))
-    }
+fn map_consultation_artifact_error(error: ConsultationArtifactClosureError) -> Error {
+    tracing::error!(
+        code = "config.consultation_artifact_closure_rejected",
+        error = %error,
+        "consultation artifact closure rejected startup"
+    );
+    Error::from(ConfigError::ValidationError)
 }
 
 #[cfg(test)]
@@ -710,53 +650,6 @@ mod tests {
         writeln!(file, ":\n\t- not yaml").unwrap();
         let err = load(file.path()).expect_err("garbled yaml must fail");
         assert_eq!(err.code(), "config.parse_error");
-    }
-
-    #[test]
-    fn signed_bundle_metadata_path_must_stay_inside_signed_closure() {
-        let closure = SignedBundleClosure {
-            primary_config_path: "config/relay.yaml".to_string(),
-            files: ["config/relay.yaml", "metadata/manifest.yaml"]
-                .into_iter()
-                .map(str::to_string)
-                .collect(),
-        };
-        let config_path = Path::new("/tmp/bundle/config/relay.yaml");
-
-        let accepted = resolve_signed_bundle_metadata_path(
-            config_path,
-            Path::new("../metadata/manifest.yaml"),
-            Some(&closure),
-        )
-        .expect("listed bundle-local metadata path is accepted");
-        assert_eq!(
-            accepted,
-            Path::new("/tmp/bundle/config/../metadata/manifest.yaml")
-        );
-
-        let absolute = resolve_signed_bundle_metadata_path(
-            config_path,
-            Path::new("/tmp/metadata.yaml"),
-            Some(&closure),
-        )
-        .expect_err("absolute metadata path is rejected");
-        assert_eq!(absolute.code(), "metadata.manifest.file_not_found");
-
-        let escaped = resolve_signed_bundle_metadata_path(
-            config_path,
-            Path::new("../../metadata.yaml"),
-            Some(&closure),
-        )
-        .expect_err("metadata path cannot escape bundle root");
-        assert_eq!(escaped.code(), "metadata.manifest.file_not_found");
-
-        let unlisted = resolve_signed_bundle_metadata_path(
-            config_path,
-            Path::new("metadata/manifest.yaml"),
-            Some(&closure),
-        )
-        .expect_err("metadata path must be listed in files[]");
-        assert_eq!(unlisted.code(), "metadata.manifest.file_not_found");
     }
 
     #[test]

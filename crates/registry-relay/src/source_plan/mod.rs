@@ -13,6 +13,7 @@ mod artifact;
 mod compiler;
 mod completion_seed;
 mod identifiers;
+mod registry;
 #[allow(
     dead_code,
     reason = "the typed runtime profile is consumed by the admission/state integration slice"
@@ -37,6 +38,10 @@ pub use compiler::{
     CompiledStepPredicate, CompiledValueExpression, PinnedEvidenceArtifact,
     PinnedSourcePlanArtifact, RhaiWorkerCapability, SourcePlanArtifactBundle,
     SourcePlanCompileError,
+};
+pub use registry::{
+    CompiledConsultationRegistry, CompiledConsultationRegistryError,
+    InitializedConsentVerifierRegistry,
 };
 
 #[cfg(test)]
