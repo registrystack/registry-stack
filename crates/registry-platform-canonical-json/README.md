@@ -12,5 +12,6 @@ code points, and emits no insignificant whitespace.
 Callers must validate raw input as I-JSON before parsing it into
 `serde_json::Value`. In particular, duplicate object names must be rejected at
 the raw JSON boundary because a parsed value cannot recover names discarded by
-a parser. Integers that must remain exact outside binary64's interoperable
-range must be encoded as strings.
+a parser. Integer `Value`s that are not exactly representable as binary64 are
+rejected so distinct inputs cannot collapse to the same canonical bytes. Such
+integers must be encoded as strings.

@@ -10,6 +10,8 @@ use thiserror::Error;
 pub enum JcsError {
     #[error("JCS number is not a finite IEEE 754 binary64 value")]
     InvalidNumber,
+    #[error("JCS integer is not exactly representable as IEEE 754 binary64")]
+    IntegerNotExactlyRepresentable,
     #[error("JSON serialization failed: {0}")]
     Json(#[from] serde_json::Error),
 }
@@ -17,8 +19,9 @@ pub enum JcsError {
 /// Serialize a JSON value using RFC 8785 JSON Canonicalization Scheme (JCS).
 ///
 /// Object names are ordered by UTF-16 code units and numbers use ECMAScript's
-/// finite IEEE 754 binary64 serialization. Callers that need integers outside
-/// binary64's exact range must represent them as strings, as RFC 8785 advises.
+/// finite IEEE 754 binary64 serialization. Integer `Value`s that are not
+/// exactly representable as binary64 are rejected; callers must represent them
+/// as strings, as RFC 8785 advises.
 /// The input must already satisfy I-JSON, including duplicate-property
 /// rejection at the raw JSON boundary; a parsed [`Value`] cannot recover
 /// duplicate names that a parser discarded.
@@ -33,7 +36,7 @@ fn write_canonical(value: &Value, out: &mut Vec<u8>) -> Result<(), JcsError> {
         Value::Null => out.extend_from_slice(b"null"),
         Value::Bool(value) => out.extend_from_slice(if *value { b"true" } else { b"false" }),
         Value::Number(number) => {
-            let value = number.as_f64().ok_or(JcsError::InvalidNumber)?;
+            let value = number_as_exact_binary64(number)?;
             write_ecmascript_number(value, out)?;
         }
         Value::String(value) => out.extend_from_slice(serde_json::to_string(value)?.as_bytes()),
@@ -50,6 +53,30 @@ fn write_canonical(value: &Value, out: &mut Vec<u8>) -> Result<(), JcsError> {
         Value::Object(map) => write_canonical_object(map, out)?,
     }
     Ok(())
+}
+
+fn number_as_exact_binary64(number: &serde_json::Number) -> Result<f64, JcsError> {
+    if let Some(value) = number.as_i64() {
+        if !integer_magnitude_is_exact_binary64(value.unsigned_abs()) {
+            return Err(JcsError::IntegerNotExactlyRepresentable);
+        }
+        return Ok(value as f64);
+    }
+    if let Some(value) = number.as_u64() {
+        if !integer_magnitude_is_exact_binary64(value) {
+            return Err(JcsError::IntegerNotExactlyRepresentable);
+        }
+        return Ok(value as f64);
+    }
+    number.as_f64().ok_or(JcsError::InvalidNumber)
+}
+
+fn integer_magnitude_is_exact_binary64(value: u64) -> bool {
+    if value == 0 {
+        return true;
+    }
+    let significant_bits = u64::BITS - value.leading_zeros();
+    significant_bits <= 53 || value.trailing_zeros() >= significant_bits - 53
 }
 
 fn write_ecmascript_number(value: f64, out: &mut Vec<u8>) -> Result<(), JcsError> {
@@ -189,6 +216,28 @@ mod tests {
                 Err(JcsError::InvalidNumber)
             ));
             assert!(out.is_empty());
+        }
+    }
+
+    #[test]
+    fn rejects_integer_values_that_would_collapse_to_a_neighboring_binary64() {
+        let positive = Value::Number(serde_json::Number::from(9_007_199_254_740_993_u64));
+        let negative = Value::Number(serde_json::Number::from(-9_007_199_254_740_993_i64));
+        let maximum = Value::Number(serde_json::Number::from(u64::MAX));
+        for value in [positive, negative, maximum] {
+            assert!(matches!(
+                canonicalize_json(&value),
+                Err(JcsError::IntegerNotExactlyRepresentable)
+            ));
+        }
+
+        for (value, expected) in [
+            (9_007_199_254_740_992_u64, "9007199254740992"),
+            (1_u64 << 60, "1152921504606847000"),
+        ] {
+            let canonical = canonicalize_json(&Value::Number(serde_json::Number::from(value)))
+                .expect("exact integer canonicalizes");
+            assert_eq!(String::from_utf8(canonical).expect("UTF-8"), expected);
         }
     }
 
