@@ -1,4 +1,5 @@
 use super::*;
+use crate::request_context::{new_request_correlation_id, with_request_correlation_id};
 
 pub(in super::super) async fn auth_audit_middleware(
     State(state): State<Arc<AuthAuditState>>,

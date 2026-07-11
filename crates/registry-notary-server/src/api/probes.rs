@@ -142,8 +142,8 @@ pub(super) async fn ready(state: Option<Extension<Arc<RegistryNotaryApiState>>>)
         .into_response();
     }
 
-    let request_id = crate::standalone::current_request_correlation_id()
-        .unwrap_or_else(crate::standalone::new_request_correlation_id);
+    let request_id = crate::request_context::current_request_correlation_id()
+        .unwrap_or_else(crate::request_context::new_request_correlation_id);
     let mut response = (
         status,
         Json(json!({

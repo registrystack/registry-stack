@@ -969,7 +969,7 @@ pub(super) fn attach_self_attestation_rate_limit_audit(
 }
 
 pub(crate) fn evidence_error_response(error: EvidenceError) -> Response {
-    let request_id = crate::standalone::current_request_correlation_id();
+    let request_id = crate::request_context::current_request_correlation_id();
     evidence_error_response_with_request_id(error, request_id.as_ref())
 }
 

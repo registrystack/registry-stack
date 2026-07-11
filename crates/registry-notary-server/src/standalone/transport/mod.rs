@@ -1,4 +1,5 @@
 use super::*;
+use crate::request_context::current_request_correlation_id;
 
 mod egress;
 

@@ -91,8 +91,6 @@ use crate::{
 mod assembly;
 #[path = "auth/mod.rs"]
 mod auth;
-#[path = "compat.rs"]
-mod compat;
 #[path = "connectors/mod.rs"]
 mod connectors;
 #[path = "cors.rs"]
@@ -110,7 +108,6 @@ pub use assembly::*;
 use auth::*;
 pub use auth::{find_credential, ResolvedCredential};
 pub(crate) use auth::{AuditPipeline, AuthAuditState};
-pub(crate) use compat::*;
 use connectors::*;
 use cors::*;
 pub(crate) use deployment::*;

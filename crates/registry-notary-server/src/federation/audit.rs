@@ -165,7 +165,7 @@ pub(super) fn federation_audit_event(
         federation_subject_ref_hash: audit.subject_ref_hash,
         denial_code: None,
         token_claim_name: None,
-        correlation_id_hash: crate::standalone::current_request_correlation_id()
+        correlation_id_hash: crate::request_context::current_request_correlation_id()
             .as_ref()
             .and_then(|correlation_id| {
                 audit_pipeline

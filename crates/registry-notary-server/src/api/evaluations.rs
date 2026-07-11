@@ -233,7 +233,7 @@ pub(super) async fn evaluate(
         }
     };
     let evaluation = if let Some(Extension(correlation_id)) = correlation_id {
-        crate::standalone::with_request_correlation_id(correlation_id, evaluation_future).await
+        crate::request_context::with_request_correlation_id(correlation_id, evaluation_future).await
     } else {
         evaluation_future.await
     };
@@ -460,7 +460,7 @@ pub(super) async fn batch_evaluate(
         },
     );
     let result = if let Some(Extension(correlation_id)) = correlation_id {
-        crate::standalone::with_request_correlation_id(correlation_id, evaluation_future).await
+        crate::request_context::with_request_correlation_id(correlation_id, evaluation_future).await
     } else {
         evaluation_future.await
     };
