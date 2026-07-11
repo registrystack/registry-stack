@@ -60,7 +60,7 @@
       "notes": "Protected Registry Notary route.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/src/standalone.rs::evidence_service_discovery_is_not_auth_exempt",
+        "crates/registry-notary-server/src/standalone/tests/auth.inc::evidence_service_discovery_is_not_auth_exempt",
         "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
       ],
       "waiver": null

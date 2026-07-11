@@ -242,7 +242,7 @@
       "methods": [
         "GET"
       ],
-      "source": "crates/registry-notary-server/src/standalone.rs",
+      "source": "crates/registry-notary-server/src/standalone/assembly.rs",
       "notes": "Admin metrics route mounted on the admin listener in dedicated mode and handler-enforced by admin scope. Simple local shared mode keeps the same admin-scope gate."
     },
     {

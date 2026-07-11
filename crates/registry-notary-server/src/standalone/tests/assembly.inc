@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Characterization coverage for static Notary route security policy.
-
-use super::*;
-use axum_test::TestServer;
+// Characterization coverage for static Notary route security policy.
 
 #[derive(Clone, Copy, Debug)]
 enum CharacterizedListener {
