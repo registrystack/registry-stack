@@ -1017,7 +1017,20 @@ impl IntegrationPackArtifact {
 pub(in super::super) struct DestinationDocument {
     pub(in super::super) id: String,
     pub(in super::super) origin: String,
+    #[serde(
+        default = "root_application_base_path",
+        skip_serializing_if = "is_root_application_base_path"
+    )]
+    pub(in super::super) application_base_path: String,
     pub(in super::super) allowed_private_cidrs: Vec<String>,
+}
+
+fn root_application_base_path() -> String {
+    "/".to_owned()
+}
+
+fn is_root_application_base_path(path: &String) -> bool {
+    path == "/"
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]

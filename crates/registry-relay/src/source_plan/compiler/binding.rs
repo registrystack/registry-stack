@@ -453,6 +453,7 @@ pub(super) fn compile_credential_destination(
 pub(super) fn compile_credential_operation(
     pack: &IntegrationPackArtifact,
     effective_token_lifetime_ms: Option<u32>,
+    application_base_path: &str,
 ) -> Result<Option<CompiledCredentialOperation>, SourcePlanCompileError> {
     let Some(operation) = &pack.document.spec.plan.credential_operation else {
         return Ok(None);
@@ -471,13 +472,20 @@ pub(super) fn compile_credential_operation(
             OAuth2ClientCredentialsBodyFormat::FormClientSecretBody,
         ),
     };
+    let fixed_path = destination_fixed_path(application_base_path, &operation.path);
     let transport_template = CredentialDestinationRequestTemplate::oauth2_client_credentials(
-        &operation.path,
+        &fixed_path,
         transport_format,
         operation.request.max_body_bytes as usize,
         operation.request.max_request_bytes as usize,
     )
-    .map_err(|_| SourcePlanCompileError::CompilerInvariant)?;
+    .map_err(|_| {
+        if application_base_path == "/" {
+            SourcePlanCompileError::CompilerInvariant
+        } else {
+            SourcePlanCompileError::BindingWidening
+        }
+    })?;
     if operation.response.schema
         != OAuth2TokenResponseSchemaDocument::StrictAccessTokenBearerExpiresIn
         || operation.response.token_type != OAuth2TokenTypeDocument::Bearer

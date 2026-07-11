@@ -28,12 +28,15 @@ rejected.
 The fixed program UID is deliberately part of the integration-pack hash. A
 country using another DHIS2 program must review and mint a new pack rather than
 turning the program into caller-selected runtime configuration. The example
-private binding uses a root-origin placeholder and an environment-backed Basic
-credential reference. It contains no credential value and no live play-server
-base path.
+private binding uses a pure root-origin placeholder, an exact
+`/stable-2-41-9` application base path, and an environment-backed Basic
+credential reference. The compiler concatenates that hash-covered base path
+with the pack-owned `/api/tracker/enrollments` path without normalization or
+caller input. The destination policy still owns only the HTTPS origin for DNS
+and TLS enforcement. The example contains no credential value or live host.
 
 Compilation and synthetic response fixtures earn only repository conformance
 evidence. They do not claim DHIS2 maintainer endorsement, a country deployment,
-or a successful Relay end-to-end execution. A deployment whose DHIS2 API is
-mounted below an application base path needs a reviewed root ingress or future
-exact base-path binding support before this profile can execute there.
+or a successful Relay end-to-end execution. A root-mounted deployment may omit
+`application_base_path`; omission and an explicit `/` compile to the same
+canonical root binding.

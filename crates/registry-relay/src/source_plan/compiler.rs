@@ -1744,14 +1744,33 @@ fn compile_one(
         operations: &operation_indexes,
         prior_slots: &prior_slot_indexes,
     };
+    let data_application_base_path = binding
+        .document
+        .data_destination
+        .as_ref()
+        .map_or("/", |destination| {
+            destination.application_base_path.as_str()
+        });
     let operations = compile_operation_descriptors(
         pack,
         contract.acquisition_class,
         contract.cardinality,
         limits.operation().timeout_ms,
+        data_application_base_path,
         &compilation_indexes,
     )?;
-    let credential_operation = compile_credential_operation(pack, effective_token_lifetime_ms)?;
+    let credential_application_base_path = binding
+        .document
+        .credential_destination
+        .as_ref()
+        .map_or("/", |destination| {
+            destination.application_base_path.as_str()
+        });
+    let credential_operation = compile_credential_operation(
+        pack,
+        effective_token_lifetime_ms,
+        credential_application_base_path,
+    )?;
     let steps = compile_steps(
         &pack.document.spec.plan,
         &operation_indexes,
@@ -1951,6 +1970,16 @@ use binding::*;
 
 mod operation;
 use operation::*;
+
+fn destination_fixed_path(application_base_path: &str, pack_path: &str) -> Box<str> {
+    if application_base_path == "/" {
+        return pack_path.into();
+    }
+    let mut path = String::with_capacity(application_base_path.len() + pack_path.len());
+    path.push_str(application_base_path);
+    path.push_str(pack_path);
+    path.into_boxed_str()
+}
 
 pub(in crate::source_plan) fn compile_runtime_response_schema(
     schema: &ResponseSchemaDocument,

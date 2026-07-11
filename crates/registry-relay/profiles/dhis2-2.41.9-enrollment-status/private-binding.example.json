@@ -14,6 +14,7 @@
   "data_destination": {
     "id": "dhis2-data-private",
     "origin": "https://dhis2.example.gov/",
+    "application_base_path": "/stable-2-41-9",
     "allowed_private_cidrs": []
   },
   "credential_destination": null,

@@ -88,6 +88,7 @@ pub(super) fn compile_operation_descriptors(
     acquisition_class: AcquisitionClass,
     cardinality: SourceCardinality,
     total_deadline_ms: u32,
+    application_base_path: &str,
     indexes: &OperationCompilationIndexes<'_, '_>,
 ) -> Result<Vec<CompiledOperation>, SourcePlanCompileError> {
     let input_indexes = indexes.inputs;
@@ -249,9 +250,10 @@ pub(super) fn compile_operation_descriptors(
                     )
                 }
             };
+            let fixed_path = destination_fixed_path(application_base_path, &operation.path);
             let transport_template = DataDestinationRequestTemplate::new(
                 destination_method,
-                &operation.path,
+                &fixed_path,
                 &query_bounds,
                 &header_bounds,
                 authorization_template,
@@ -264,13 +266,19 @@ pub(super) fn compile_operation_descriptors(
                 },
                 step_limits.max_request_bytes as usize,
             )
-            .map_err(|_| SourcePlanCompileError::CompilerInvariant)?;
+            .map_err(|_| {
+                if application_base_path == "/" {
+                    SourcePlanCompileError::CompilerInvariant
+                } else {
+                    SourcePlanCompileError::BindingWidening
+                }
+            })?;
             let projection = compile_projection(operation)?;
             let response = compile_response(operation)?;
             Ok(CompiledOperation {
                 id,
                 method: operation.method,
-                fixed_path: operation.path.clone().into_boxed_str(),
+                fixed_path,
                 query,
                 headers,
                 body,

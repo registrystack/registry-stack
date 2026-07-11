@@ -47,6 +47,14 @@ const DHIS2_NEGATIVE_SECURITY: &[u8] = include_bytes!(
 );
 const DHIS2_MINIMIZATION: &[u8] =
     include_bytes!("../../../profiles/dhis2-2.41.9-enrollment-status/evidence/minimization.json");
+const DHIS2_PACK_HASH: &str =
+    "sha256:017783fe880863e9dedc5138df4e1212d020ce7cfac5a13b58911fc4705f0e7a";
+const DHIS2_POLICY_HASH: &str =
+    "sha256:0eaec9b82087299193efb25a9189a41b7373e64abf152ba7204fdf5b05722959";
+const DHIS2_CONTRACT_HASH: &str =
+    "sha256:eb8f6cb4dd81d8a34c25e4da393ada734caa553e7e65a06fabd613afb1fecbc9";
+const DHIS2_BINDING_HASH: &str =
+    "sha256:bab9588ad75f56aa563b34b35c7741e4dc6c3c25726454a4a2ae885b33394e3a";
 
 fn vector_manifest() -> &'static Value {
     static MANIFEST: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
@@ -1138,6 +1146,16 @@ fn compiles_closed_bundle_and_exposes_only_safe_metadata() {
 #[test]
 fn maintained_dhis2_enrollment_status_pack_compiles_to_one_bounded_exchange() {
     let fixture = dhis2_fixture();
+    assert_eq!(fixture.pack_hash, DHIS2_PACK_HASH);
+    assert_eq!(fixture.contract_hash, DHIS2_CONTRACT_HASH);
+    assert_eq!(
+        fixture.contract_value["spec"]["authorization"]["policy"]["hash"].as_str(),
+        Some(DHIS2_POLICY_HASH)
+    );
+    assert_eq!(
+        typed_hash(BINDING_DOMAIN, &fixture.binding),
+        DHIS2_BINDING_HASH
+    );
     let registry = compile_dhis2(&fixture).expect("maintained DHIS2 profile compiles");
     let plan = registry.iter().next().expect("compiled DHIS2 plan");
     assert_eq!(plan.kind(), SourcePlanKind::BoundedHttp);
@@ -1150,7 +1168,10 @@ fn maintained_dhis2_enrollment_status_pack_compiles_to_one_bounded_exchange() {
     assert_eq!(plan.operations().len(), 1);
 
     let operation = plan.operations().next().expect("DHIS2 operation");
-    assert_eq!(operation.fixed_path(), "/api/tracker/enrollments");
+    assert_eq!(
+        operation.fixed_path(),
+        "/stable-2-41-9/api/tracker/enrollments"
+    );
     assert_eq!(operation.auth(), CompiledSourceAuth::Basic);
     assert_eq!(operation.max_source_records(), 2);
     assert_eq!(operation.acquired_fields().collect::<Vec<_>>(), ["status"]);
@@ -4763,12 +4784,174 @@ fn startup_bundle_has_a_global_artifact_count_ceiling() {
 }
 
 #[test]
-fn rejects_non_https_production_destination() {
-    let mut fixture = fixture();
-    fixture.binding_value["data_destination"]["origin"] = json!("http://registry.example.test:80");
-    fixture.refresh_binding();
+fn destination_application_base_path_defaults_to_canonical_root() {
+    let baseline = fixture();
+    let baseline_binding =
+        parse_private_binding(&baseline.binding).expect("default root binding parses");
+    let registry = compile(&baseline).expect("default root binding compiles");
+    assert_eq!(
+        registry
+            .iter()
+            .next()
+            .expect("plan")
+            .operations()
+            .next()
+            .expect("operation")
+            .fixed_path(),
+        "/api/person/status"
+    );
+
+    let mut explicit_root = fixture();
+    explicit_root.binding_value["data_destination"]["application_base_path"] = json!("/");
+    explicit_root.binding_value["credential_destination"]["application_base_path"] = json!("/");
+    explicit_root.refresh_binding();
+    let explicit_binding =
+        parse_private_binding(&explicit_root.binding).expect("explicit root binding parses");
+    assert_eq!(baseline_binding.hash(), explicit_binding.hash());
+    assert_eq!(
+        compile(&explicit_root)
+            .expect("explicit root binding compiles")
+            .iter()
+            .next()
+            .expect("plan")
+            .operations()
+            .next()
+            .expect("operation")
+            .fixed_path(),
+        "/api/person/status"
+    );
+}
+
+#[test]
+fn exact_application_base_path_is_hash_covered_and_compiled_without_normalization() {
+    let baseline = fixture();
+    let baseline_hash = parse_private_binding(&baseline.binding)
+        .expect("baseline binding parses")
+        .hash()
+        .as_str()
+        .to_owned();
+
+    let mut prefixed = fixture();
+    prefixed.binding_value["data_destination"]["application_base_path"] =
+        json!("/country-registry");
+    prefixed.binding_value["credential_destination"]["application_base_path"] =
+        json!("/country-identity");
+    prefixed.refresh_binding();
+    let registry = compile(&prefixed).expect("canonical application base paths compile");
+    let plan = registry.iter().next().expect("plan");
+    assert_ne!(plan.binding_hash(), baseline_hash);
+    assert_eq!(
+        plan.operations().next().expect("operation").fixed_path(),
+        "/country-registry/api/person/status"
+    );
+    plan.credential_operation()
+        .expect("credential operation")
+        .render_request(
+            Zeroizing::new(b"client".to_vec()),
+            Zeroizing::new(b"secret".to_vec()),
+        )
+        .expect("credential request with compiled base path renders");
+}
+
+#[test]
+fn application_base_path_is_charged_to_each_reviewed_request_bound() {
+    let mut data = fixture();
+    // Exact root-path target, authorization, and query maximum for this fixture.
+    data.pack_value["spec"]["plan"]["operations"][0]["step_limits"]["max_request_bytes"] =
+        json!(5_101);
+    data.refresh_all();
+    compile(&data).expect("root data path fits the exact request bound");
+    data.binding_value["data_destination"]["application_base_path"] = json!("/x");
+    data.refresh_binding();
     assert!(matches!(
-        compile(&fixture),
+        compile(&data),
+        Err(SourcePlanCompileError::BindingWidening)
+    ));
+
+    let mut credential = fixture();
+    // Exact root path, fixed headers, and declared body maximum for this fixture.
+    credential.pack_value["spec"]["plan"]["credential_operation"]["request"]["max_request_bytes"] =
+        json!(8_254);
+    credential.refresh_all();
+    compile(&credential).expect("root credential path fits the exact request bound");
+    credential.binding_value["credential_destination"]["application_base_path"] = json!("/x");
+    credential.refresh_binding();
+    assert!(matches!(
+        compile(&credential),
+        Err(SourcePlanCompileError::BindingWidening)
+    ));
+}
+
+#[test]
+fn application_base_path_rejects_aliases_delimiters_and_oversized_values() {
+    for invalid in [
+        "",
+        "relative",
+        "//authority",
+        "/trailing/",
+        "/two//segments",
+        "/query?value",
+        "/fragment#value",
+        "/percent%2Fvalue",
+        "/dot.value",
+        "/../parent",
+        "/back\\slash",
+        "/control\nvalue",
+        "/non-ascii-é",
+    ] {
+        let mut fixture = fixture();
+        fixture.binding_value["data_destination"]["application_base_path"] = json!(invalid);
+        fixture.refresh_binding();
+        assert!(
+            matches!(
+                compile(&fixture),
+                Err(SourcePlanCompileError::Artifact(
+                    SourcePlanArtifactError::InvalidDestination
+                ))
+            ),
+            "application base path alias must be rejected"
+        );
+    }
+
+    let mut maximum = fixture();
+    maximum.binding_value["data_destination"]["application_base_path"] = json!(format!(
+        "/{}",
+        "a".repeat(crate::source_plan::artifact::MAX_PATH_BYTES - 1)
+    ));
+    maximum.refresh_binding();
+    parse_private_binding(&maximum.binding).expect("maximum application base path parses");
+
+    let mut oversized = fixture();
+    oversized.binding_value["data_destination"]["application_base_path"] = json!(format!(
+        "/{}",
+        "a".repeat(crate::source_plan::artifact::MAX_PATH_BYTES)
+    ));
+    oversized.refresh_binding();
+    assert!(matches!(
+        parse_private_binding(&oversized.binding),
+        Err(SourcePlanArtifactError::InvalidDestination)
+    ));
+}
+
+#[test]
+fn rejects_non_https_production_destination() {
+    let mut non_https = fixture();
+    non_https.binding_value["data_destination"]["origin"] =
+        json!("http://registry.example.test:80");
+    non_https.refresh_binding();
+    assert!(matches!(
+        compile(&non_https),
+        Err(SourcePlanCompileError::Artifact(
+            SourcePlanArtifactError::InvalidDestination
+        ))
+    ));
+
+    let mut resource_origin = fixture();
+    resource_origin.binding_value["data_destination"]["origin"] =
+        json!("https://registry.example.test/application");
+    resource_origin.refresh_binding();
+    assert!(matches!(
+        compile(&resource_origin),
         Err(SourcePlanCompileError::Artifact(
             SourcePlanArtifactError::InvalidDestination
         ))

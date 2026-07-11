@@ -703,6 +703,7 @@ pub(in super::super) fn validate_destination_document(
         return Err(SourcePlanArtifactError::InvalidDestination);
     }
     destination.origin = origin.to_string();
+    validate_application_base_path(&destination.application_base_path)?;
     for cidr in &mut destination.allowed_private_cidrs {
         validate_bounded_text(cidr, 64)?;
         *cidr = canonicalize_cidr(cidr)?;
@@ -719,6 +720,20 @@ pub(in super::super) fn validate_destination_document(
         return Err(SourcePlanArtifactError::InvalidDestination);
     }
     Ok(())
+}
+
+fn validate_application_base_path(path: &str) -> Result<(), SourcePlanArtifactError> {
+    let canonical = path == "/"
+        || (path.starts_with('/')
+            && !path.ends_with('/')
+            && path.len() <= MAX_PATH_BYTES
+            && path.is_ascii()
+            && !path.contains(['?', '#', '%', '.', '\\'])
+            && !path.chars().any(char::is_control)
+            && validate_fixed_destination_path(path).is_ok());
+    canonical
+        .then_some(())
+        .ok_or(SourcePlanArtifactError::InvalidDestination)
 }
 
 pub(in super::super) fn canonicalize_cidr(raw: &str) -> Result<String, SourcePlanArtifactError> {
