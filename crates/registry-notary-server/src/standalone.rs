@@ -69,6 +69,10 @@ use zeroize::Zeroizing;
 
 #[cfg(feature = "registry-notary-cel")]
 use crate::cel_worker::{CelWorker, CelWorkerConfig};
+pub(crate) use crate::json_path::get_json_path;
+pub(crate) use crate::request_context::{
+    current_request_correlation_id, new_request_correlation_id, with_request_correlation_id,
+};
 #[cfg(feature = "registry-notary-cel")]
 use crate::runtime::validate_cel_claims_for_startup;
 use crate::{
@@ -94,26 +98,6 @@ const SELF_ATTESTATION_CORS_DEFAULT_HEADERS: &str =
     "authorization,content-type,x-registry-notary-oidc-id-token";
 const DEPLOYMENT_PROFILE_REQUIRED_ACTION: &str =
     "set deployment.profile: local for development, or production/evidence_grade for deployment";
-
-tokio::task_local! {
-    static REQUEST_CORRELATION_ID: BoundedCorrelationId;
-}
-
-pub(crate) async fn with_request_correlation_id<F>(
-    correlation_id: BoundedCorrelationId,
-    future: F,
-) -> F::Output
-where
-    F: Future,
-{
-    REQUEST_CORRELATION_ID.scope(correlation_id, future).await
-}
-
-pub(crate) fn current_request_correlation_id() -> Option<BoundedCorrelationId> {
-    REQUEST_CORRELATION_ID
-        .try_with(BoundedCorrelationId::clone)
-        .ok()
-}
 
 pub fn standalone_router(
     config: StandaloneRegistryNotaryConfig,
@@ -4767,10 +4751,6 @@ fn build_audit_event(
     }
 }
 
-pub(crate) fn new_request_correlation_id() -> BoundedCorrelationId {
-    BoundedCorrelationId::new(Ulid::new().to_string()).expect("generated correlation id is bounded")
-}
-
 fn resolve_credentials(
     credentials: &[EvidenceCredentialConfig],
 ) -> Result<Vec<ResolvedCredential>, StandaloneServerError> {
@@ -5453,8 +5433,8 @@ pub(crate) fn audit_error_response(error: AuditError) -> Response {
 }
 
 fn add_correlation_header(builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-    if let Ok(correlation_id) = REQUEST_CORRELATION_ID.try_with(|id| id.as_str().to_string()) {
-        builder.header("x-request-id", correlation_id)
+    if let Some(correlation_id) = current_request_correlation_id() {
+        builder.header("x-request-id", correlation_id.as_str())
     } else {
         builder
     }
@@ -7093,23 +7073,6 @@ fn get_dci_json_path<'a>(response: &'a Value, record: &'a Value, path: &str) -> 
         return get_json_path(response, response_path);
     }
     get_json_path(record, path)
-}
-
-pub(crate) fn get_json_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
-    if path.starts_with('/') {
-        return value.pointer(path);
-    }
-    let mut current = value;
-    for part in path.split('.') {
-        if part.is_empty() {
-            return None;
-        }
-        current = match current {
-            Value::Array(values) => values.get(part.parse::<usize>().ok()?)?,
-            _ => current.get(part)?,
-        };
-    }
-    Some(current)
 }
 
 fn insert_row_path(row: &mut Map<String, Value>, path: &str, value: Value) {

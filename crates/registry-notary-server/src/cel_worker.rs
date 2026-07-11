@@ -22,7 +22,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::sync::OnceCell;
 
-use crate::metrics::AppMetrics;
+use crate::{digest::hex_encode, metrics::AppMetrics};
 
 pub const CEL_WORKER_PROTOCOL_V1: &str = "registry-notary-cel-worker/v1";
 pub const CEL_WORKER_REQUEST_ENVELOPE_BYTES: usize = 4096;
@@ -268,16 +268,6 @@ pub fn cel_policy_hash(expression: &str) -> String {
         "sha256:{}",
         hex_encode(&Sha256::digest(expression.as_bytes()))
     )
-}
-
-fn hex_encode(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut encoded = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        encoded.push(HEX[(byte >> 4) as usize] as char);
-        encoded.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    encoded
 }
 
 fn worker_pool_config(config: CelWorkerConfig) -> WorkerPoolConfig {

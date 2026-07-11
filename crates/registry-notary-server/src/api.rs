@@ -28,14 +28,14 @@ use registry_notary_core::RegistryNotaryCelConfig;
 use registry_notary_core::{
     signing_key_uses_local_software_custody, AccessMode, BatchEvaluateItemRequest,
     BatchEvaluateRequest, BoundedClaimId, BoundedCorrelationId, ClaimRef, ClaimResultView,
-    ClaimSet, ConfigAuditEvent, ConfigMetadata, CredentialIssueRequest, CredentialProfileConfig,
-    DeploymentProfile, EvaluateRequest, EvidenceActor, EvidenceAuditEvent,
-    EvidenceBatchItemAuditEvent, EvidenceConfig, EvidenceEntity, EvidenceEntityReference,
-    EvidenceError, EvidenceOnBehalfOf, EvidencePrincipal, EvidenceRelationship, FederationConfig,
-    Hashed, HolderRequest, Oid4vciConfig, Oid4vciCredentialClaimMode,
-    Oid4vciCredentialConfigurationConfig, Oid4vciDisplayImageConfig, Oid4vciIssuerDisplayConfig,
-    PolicyIdentifier, RateLimitBucket, RegistryNotaryAdminListenerMode, RenderEvaluationRequest,
-    SelfAttestationConfig, SelfAttestationDelegatedRelationshipConfig, SelfAttestationDenialCode,
+    ClaimSet, ConfigMetadata, CredentialIssueRequest, CredentialProfileConfig, DeploymentProfile,
+    EvaluateRequest, EvidenceActor, EvidenceAuditEvent, EvidenceBatchItemAuditEvent,
+    EvidenceConfig, EvidenceEntity, EvidenceEntityReference, EvidenceError, EvidenceOnBehalfOf,
+    EvidencePrincipal, EvidenceRelationship, FederationConfig, Hashed, HolderRequest,
+    Oid4vciConfig, Oid4vciCredentialClaimMode, Oid4vciCredentialConfigurationConfig,
+    Oid4vciDisplayImageConfig, Oid4vciIssuerDisplayConfig, PolicyIdentifier, RateLimitBucket,
+    RegistryNotaryAdminListenerMode, RenderEvaluationRequest, SelfAttestationConfig,
+    SelfAttestationDelegatedRelationshipConfig, SelfAttestationDenialCode,
     SelfAttestationScopePolicy, SourceCapability, StandaloneRegistryNotaryConfig,
     StoredSelfAttestationMetadata, SubjectRequest, VerifiedClaimValue, FORMAT_CLAIM_RESULT_JSON,
     FORMAT_SD_JWT_VC,
@@ -96,6 +96,11 @@ use crate::{
     SelfAttestationRateLimitBucket, SelfAttestationRateLimitError, SelfAttestationRateLimitKeys,
     SelfAttestationRateLimiter, SourceReader,
 };
+
+pub(crate) use crate::digest::{evidence_claim_hash, hex_encode};
+use crate::digest::{sha256_canonical_json, sha256_json};
+pub(crate) use crate::problem::{evidence_detail, evidence_status, evidence_title};
+pub use crate::response_context::{EvidenceAuditContext, EvidenceErrorCodeContext};
 
 const AUDIT_ACK_CURSOR_READ_TIMEOUT: Duration = Duration::from_millis(500);
 static AUDIT_ACK_CURSOR_READ_PERMIT: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
@@ -1128,11 +1133,6 @@ fn status_list_jwt_cache_key(
     sha256_json(&key_material)
 }
 
-fn sha256_json(value: &Value) -> Result<String, serde_json::Error> {
-    let bytes = serde_json::to_vec(value)?;
-    Ok(format!("sha256:{}", hex_encode(&Sha256::digest(bytes))))
-}
-
 fn status_list_jwt_cache_expires_at(
     record: &CredentialStatusRecord,
     effective_status: &str,
@@ -1760,47 +1760,6 @@ impl RegistryNotaryApiState {
         }
     }
 }
-
-#[derive(Debug, Clone, Default)]
-pub struct EvidenceAuditContext {
-    pub verification_id: Option<String>,
-    pub verification_decision: Option<String>,
-    pub claim_hash: Option<String>,
-    pub purposes: Option<Vec<String>>,
-    pub row_count: Option<u64>,
-    pub source_read_count: Option<u64>,
-    pub forwarded: Option<bool>,
-    pub access_mode: Option<AccessMode>,
-    pub denial_code: Option<SelfAttestationDenialCode>,
-    pub token_claim_name: Option<ConfigMetadata>,
-    pub credential_profile: Option<ConfigMetadata>,
-    pub protocol: Option<ConfigMetadata>,
-    pub credential_configuration_id: Option<ConfigMetadata>,
-    pub holder_binding_mode: Option<ConfigMetadata>,
-    pub rate_limit_bucket: Option<RateLimitBucket>,
-    pub policy_hash: Option<Hashed<PolicyIdentifier>>,
-    pub target_type: Option<String>,
-    pub target_ref_hash: Option<Hashed<EvidenceEntityReference>>,
-    pub requester_type: Option<String>,
-    pub requester_ref_hash: Option<Hashed<EvidenceEntityReference>>,
-    pub matching_policy_id: Option<String>,
-    pub matching_policy_hash: Option<Hashed<PolicyIdentifier>>,
-    pub matching_evaluated_rule_ids: Option<Vec<String>>,
-    pub ecosystem_binding_id: Option<String>,
-    pub ecosystem_binding_version: Option<String>,
-    pub pack_id: Option<String>,
-    pub pack_version: Option<String>,
-    pub matching_method: Option<String>,
-    pub matching_outcome: Option<String>,
-    pub matching_error_code: Option<String>,
-    pub redacted_fields: Option<Vec<String>>,
-    pub batch_items: Option<Vec<EvidenceBatchItemAuditEvent>>,
-    pub source_sidecar_config_hashes: Option<Vec<String>>,
-    pub config: Option<ConfigAuditEvent>,
-}
-
-#[derive(Debug, Clone)]
-pub struct EvidenceErrorCodeContext(pub String);
 
 #[derive(Debug)]
 struct SelfAttestationEvaluateContext {
@@ -6843,8 +6802,7 @@ fn self_attestation_token_policy_hash(
         "max_auth_age_seconds": config.token_policy.max_auth_age_seconds,
         "max_clock_leeway_seconds": config.token_policy.max_clock_leeway_seconds,
     });
-    let bytes = serde_json::to_vec(&canonical).map_err(|_| EvidenceError::InvalidRequest)?;
-    Ok(format!("sha256:{}", hex_encode(&Sha256::digest(bytes))))
+    sha256_canonical_json(&canonical)
 }
 
 fn require_self_attestation_credential_profile_policy(
@@ -8258,216 +8216,6 @@ pub(crate) fn evidence_error_response_with_request_id(
     response
 }
 
-pub(crate) fn evidence_status(error: &EvidenceError) -> StatusCode {
-    match error {
-        EvidenceError::ServerDisabled
-        | EvidenceError::OperationUnsupported
-        | EvidenceError::CredentialIssuerNotConfigured => StatusCode::NOT_IMPLEMENTED,
-        EvidenceError::FormatUnsupported => StatusCode::NOT_ACCEPTABLE,
-        EvidenceError::ClaimNotFound
-        | EvidenceError::ClaimVersionNotFound
-        | EvidenceError::SourceNotFound
-        | EvidenceError::RequesterNotFound
-        | EvidenceError::EvaluationNotFound => StatusCode::NOT_FOUND,
-        EvidenceError::MissingCredential => StatusCode::UNAUTHORIZED,
-        EvidenceError::MultipleCredentials => StatusCode::BAD_REQUEST,
-        EvidenceError::SelfAttestationInvalidToken => StatusCode::UNAUTHORIZED,
-        EvidenceError::InvalidRequest
-        | EvidenceError::TargetIdentifierMissing
-        | EvidenceError::TargetAttributesInsufficient
-        | EvidenceError::RequesterIdentifierMissing
-        | EvidenceError::RequesterAttributesInsufficient
-        | EvidenceError::RelationshipAttributesInsufficient
-        | EvidenceError::ProfileUnsupported
-        | EvidenceError::HolderProofRequired
-        | EvidenceError::PurposeRequired => StatusCode::BAD_REQUEST,
-        EvidenceError::DisclosureNotAllowed
-        | EvidenceError::EvaluationBindingMismatch
-        | EvidenceError::PurposeNotAllowed
-        | EvidenceError::PolicyDenied { .. }
-        | EvidenceError::RequesterReauthenticationRequired
-        | EvidenceError::RequesterMatchingPolicyRejected
-        | EvidenceError::TargetMatchingPolicyRejected
-        | EvidenceError::RelationshipNotEstablished
-        | EvidenceError::RelationshipPurposeNotAllowed
-        | EvidenceError::RelationshipPolicyRejected
-        | EvidenceError::ScopeDenied { .. }
-        | EvidenceError::SelfAttestationDenied { .. }
-        | EvidenceError::SelfAttestationAssuranceDenied => StatusCode::FORBIDDEN,
-        EvidenceError::SourceAmbiguous
-        | EvidenceError::RequesterMatchAmbiguous
-        | EvidenceError::RelationshipMatchAmbiguous
-        | EvidenceError::TargetNotInValidState
-        | EvidenceError::TargetMatchLowConfidence
-        | EvidenceError::EvidenceNotAvailable
-        | EvidenceError::MatchingEvidenceNotAvailable { .. }
-        | EvidenceError::IdempotencyConflict
-        | EvidenceError::HolderProofReplay => StatusCode::CONFLICT,
-        EvidenceError::SourceUnavailable => StatusCode::SERVICE_UNAVAILABLE,
-        EvidenceError::SelfAttestationRateLimited | EvidenceError::MachineQuotaExceeded { .. } => {
-            StatusCode::TOO_MANY_REQUESTS
-        }
-        EvidenceError::BatchTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
-        EvidenceError::CredentialIssuanceFailed | EvidenceError::RuleEvaluationFailed => {
-            StatusCode::INTERNAL_SERVER_ERROR
-        }
-        _ => StatusCode::INTERNAL_SERVER_ERROR,
-    }
-}
-
-pub(crate) fn evidence_title(error: &EvidenceError) -> &'static str {
-    match error {
-        EvidenceError::ServerDisabled => "Evidence server disabled",
-        EvidenceError::ClaimNotFound => "Claim not found",
-        EvidenceError::ClaimVersionNotFound => "Claim version not found",
-        EvidenceError::OperationUnsupported => "Claim operation unsupported",
-        EvidenceError::InvalidRequest => "Invalid evidence request",
-        EvidenceError::DisclosureNotAllowed => "Disclosure not allowed",
-        EvidenceError::SourceNotFound => "Target not found",
-        EvidenceError::SourceAmbiguous => "Target match ambiguous",
-        EvidenceError::TargetIdentifierMissing => "Target identifier missing",
-        EvidenceError::TargetAttributesInsufficient => "Target attributes insufficient",
-        EvidenceError::TargetMatchingPolicyRejected => "Target matching policy rejected",
-        EvidenceError::TargetNotInValidState => "Target not in valid state",
-        EvidenceError::TargetMatchLowConfidence => "Target match confidence too low",
-        EvidenceError::RequesterNotFound => "Requester not found",
-        EvidenceError::RequesterMatchAmbiguous => "Requester match ambiguous",
-        EvidenceError::RequesterIdentifierMissing => "Requester identifier missing",
-        EvidenceError::RequesterAttributesInsufficient => "Requester attributes insufficient",
-        EvidenceError::RequesterMatchingPolicyRejected => "Requester matching policy rejected",
-        EvidenceError::RequesterReauthenticationRequired => "Requester reauthentication required",
-        EvidenceError::RelationshipNotEstablished => "Relationship not established",
-        EvidenceError::RelationshipMatchAmbiguous => "Relationship match ambiguous",
-        EvidenceError::RelationshipAttributesInsufficient => "Relationship attributes insufficient",
-        EvidenceError::RelationshipPolicyRejected => "Relationship policy rejected",
-        EvidenceError::RelationshipPurposeNotAllowed => "Relationship purpose not allowed",
-        EvidenceError::PurposeNotAllowed => "Purpose not allowed",
-        EvidenceError::PolicyDenied { .. } => "Policy decision denied",
-        EvidenceError::ProfileUnsupported => "Profile unsupported",
-        EvidenceError::EvidenceNotAvailable
-        | EvidenceError::MatchingEvidenceNotAvailable { .. } => "Evidence not available",
-        EvidenceError::SourceUnavailable => "Source unavailable",
-        EvidenceError::BatchTooLarge => "Batch too large",
-        EvidenceError::EvaluationNotFound => "Evaluation not found",
-        EvidenceError::EvaluationBindingMismatch => "Evaluation binding mismatch",
-        EvidenceError::FormatUnsupported => "Claim format not supported",
-        EvidenceError::CredentialIssuerNotConfigured => "Credential issuer not configured",
-        EvidenceError::HolderProofRequired => "Holder proof required",
-        EvidenceError::HolderProofReplay => "Holder proof replay",
-        EvidenceError::CredentialIssuanceFailed => "Credential issuance failed",
-        EvidenceError::RuleEvaluationFailed => "Claim rule evaluation failed",
-        EvidenceError::IdempotencyConflict => "Idempotency conflict",
-        EvidenceError::PurposeRequired => "Purpose required",
-        EvidenceError::MissingCredential => "Missing credential",
-        EvidenceError::MultipleCredentials => "Multiple credentials",
-        EvidenceError::ScopeDenied { .. } => "Scope denied",
-        EvidenceError::SelfAttestationDenied { .. } => "Self-attestation denied",
-        EvidenceError::SelfAttestationRateLimited => "Self-attestation rate limited",
-        EvidenceError::SelfAttestationInvalidToken
-        | EvidenceError::SelfAttestationAssuranceDenied => "Self-attestation denied",
-        EvidenceError::MachineQuotaExceeded { .. } => "Machine quota exceeded",
-        _ => "Evidence error",
-    }
-}
-
-pub(crate) fn evidence_detail(error: &EvidenceError) -> &'static str {
-    match error {
-        EvidenceError::ServerDisabled => "the evidence server is not enabled",
-        EvidenceError::ClaimNotFound => "the requested claim is not available",
-        EvidenceError::ClaimVersionNotFound => "the requested claim version is not available",
-        EvidenceError::OperationUnsupported => "the requested operation is not enabled",
-        EvidenceError::InvalidRequest => "the evidence request is invalid",
-        EvidenceError::DisclosureNotAllowed => "the requested disclosure profile is not allowed",
-        EvidenceError::SourceNotFound => "the target could not be uniquely matched",
-        EvidenceError::SourceAmbiguous => "the target match is ambiguous",
-        EvidenceError::TargetIdentifierMissing => {
-            "a required target identifier is missing for the configured matching policy"
-        }
-        EvidenceError::TargetAttributesInsufficient => {
-            "the target data is insufficient for the configured matching policy"
-        }
-        EvidenceError::TargetMatchingPolicyRejected => {
-            "the target context is rejected by the configured matching policy"
-        }
-        EvidenceError::TargetNotInValidState => "the target is not in a valid state",
-        EvidenceError::TargetMatchLowConfidence => {
-            "the target match confidence is below the configured threshold"
-        }
-        EvidenceError::RequesterNotFound => "the requester could not be uniquely matched",
-        EvidenceError::RequesterMatchAmbiguous => "the requester match is ambiguous",
-        EvidenceError::RequesterIdentifierMissing => {
-            "a required requester identifier is missing for the configured matching policy"
-        }
-        EvidenceError::RequesterAttributesInsufficient => {
-            "the requester data is insufficient for the configured matching policy"
-        }
-        EvidenceError::RequesterMatchingPolicyRejected => {
-            "the requester context is rejected by the configured matching policy"
-        }
-        EvidenceError::RequesterReauthenticationRequired => {
-            "stronger requester authentication is required"
-        }
-        EvidenceError::RelationshipNotEstablished => {
-            "the required requester-target relationship is missing"
-        }
-        EvidenceError::RelationshipMatchAmbiguous => {
-            "the requester-target relationship match is ambiguous"
-        }
-        EvidenceError::RelationshipAttributesInsufficient => {
-            "the relationship data is insufficient for the configured matching policy"
-        }
-        EvidenceError::RelationshipPolicyRejected => {
-            "the requester-target relationship is not allowed"
-        }
-        EvidenceError::RelationshipPurposeNotAllowed => {
-            "the requester-target relationship is not allowed for the declared purpose"
-        }
-        EvidenceError::PurposeNotAllowed => "the declared purpose is not allowed",
-        EvidenceError::PolicyDenied { .. } => "the configured policy denied the evidence request",
-        EvidenceError::ProfileUnsupported => "the requested profile is not supported",
-        EvidenceError::EvidenceNotAvailable
-        | EvidenceError::MatchingEvidenceNotAvailable { .. } => "the evidence is not available",
-        EvidenceError::SourceUnavailable => "the source registry is unavailable",
-        EvidenceError::BatchTooLarge => "the batch exceeds the configured inline limit",
-        EvidenceError::EvaluationNotFound => "the evaluation id is unknown or expired",
-        EvidenceError::EvaluationBindingMismatch => {
-            "the request exceeds the original evaluation binding"
-        }
-        EvidenceError::FormatUnsupported => "the requested claim format is not supported",
-        EvidenceError::CredentialIssuerNotConfigured => {
-            "no credential issuer is configured for this claim and format"
-        }
-        EvidenceError::HolderProofRequired => "holder proof of possession is required",
-        EvidenceError::HolderProofReplay => "holder proof of possession has already been used",
-        EvidenceError::CredentialIssuanceFailed => "credential issuance failed",
-        EvidenceError::RuleEvaluationFailed => "claim rule evaluation failed",
-        EvidenceError::IdempotencyConflict => {
-            "the idempotency key was reused with a different request"
-        }
-        EvidenceError::PurposeRequired => "a data purpose is required",
-        EvidenceError::MissingCredential => "missing authentication credential",
-        EvidenceError::MultipleCredentials => "provide exactly one authentication credential",
-        EvidenceError::ScopeDenied { .. } => "missing required scope",
-        EvidenceError::SelfAttestationDenied { .. } => "self-attestation request was denied",
-        EvidenceError::SelfAttestationRateLimited => "self-attestation request was rate limited",
-        EvidenceError::SelfAttestationInvalidToken
-        | EvidenceError::SelfAttestationAssuranceDenied => "self-attestation request was denied",
-        EvidenceError::MachineQuotaExceeded { .. } => {
-            "the machine evaluation quota was exceeded for this principal"
-        }
-        _ => "evidence request failed",
-    }
-}
-
-pub(crate) fn evidence_claim_hash(claim_ids: &[String]) -> String {
-    let mut hasher = Sha256::new();
-    for claim_id in claim_ids {
-        hasher.update(claim_id.as_bytes());
-        hasher.update([0]);
-    }
-    format!("sha256:{}", hex_encode(&hasher.finalize()))
-}
-
 fn self_attestation_policy_hash(
     evidence: &EvidenceConfig,
     config: &SelfAttestationConfig,
@@ -8531,21 +8279,7 @@ fn self_attestation_policy_hash(
         "max_credential_validity_seconds": config.token_policy.max_credential_validity_seconds,
         "claim_profiles": claim_profiles,
     });
-    let bytes = serde_json::to_vec(&canonical).map_err(|_| EvidenceError::InvalidRequest)?;
-    Ok(Hashed::from_hash(format!(
-        "sha256:{}",
-        hex_encode(&Sha256::digest(bytes))
-    )))
-}
-
-pub(crate) fn hex_encode(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        out.push(HEX[(byte >> 4) as usize] as char);
-        out.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    out
+    sha256_canonical_json(&canonical).map(Hashed::from_hash)
 }
 
 fn negotiate_request_format(
