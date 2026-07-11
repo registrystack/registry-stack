@@ -311,6 +311,18 @@ for module, target in zip([
     assert observed_modes == [0o600], (module.__name__, observed_modes)
     assert stat.S_IMODE(target.stat().st_mode) == 0o600, module.__name__
     assert target.read_text() == "secret", module.__name__
+
+perf = load("generate_perf_keys_replace", "perf/scripts/generate_perf_keys.py")
+target = targets[1]
+target.write_text("old secret material")
+target.chmod(0o644)
+old_inode = target.stat().st_ino
+with target.open() as old_file:
+    perf.write_secret_file(target, "secret")
+    assert old_file.read() == "old secret material"
+assert target.stat().st_ino != old_inode
+assert stat.S_IMODE(target.stat().st_mode) == 0o600
+assert target.read_text() == "secret"
 "#;
 
     let output = Command::new(python())
