@@ -16,12 +16,18 @@ rustls = ["reqwest/rustls-tls"]
 
 [dependencies]
 bytes.workspace = true
+hickory-resolver.workspace = true
 http.workspace = true
+ipnet.workspace = true
 reqwest.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 url.workspace = true
+zeroize.workspace = true
 
 [dev-dependencies]
 axum.workspace = true
 proptest.workspace = true
+rcgen.workspace = true
+tokio = { workspace = true, features = ["io-util"] }
+tokio-rustls.workspace = true

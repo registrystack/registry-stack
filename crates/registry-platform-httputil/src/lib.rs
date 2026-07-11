@@ -7,6 +7,8 @@ use http::header::{HeaderName, AUTHORIZATION, CONNECTION, COOKIE, HOST};
 use http::HeaderMap;
 use thiserror::Error;
 
+pub mod destination;
+
 /// Default timeout for requests built from [`ValidatedFetchUrl`].
 pub const DEFAULT_VALIDATED_FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 pub const DEFAULT_VALIDATED_FETCH_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -629,6 +631,8 @@ impl ValidatedFetchUrl {
             .connect_timeout(timeout.min(DEFAULT_VALIDATED_FETCH_CONNECT_TIMEOUT))
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy()
+            .retry(reqwest::retry::never())
+            .pool_max_idle_per_host(0)
             .resolve_to_addrs(&host, &self.resolved_addrs)
             .build()
             .map_err(FetchUrlError::ClientBuild)?;
