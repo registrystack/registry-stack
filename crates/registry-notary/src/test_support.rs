@@ -216,6 +216,19 @@ pub(crate) async fn test_dci_search(
     .into_response()
 }
 
+pub(crate) async fn doctor_live_upstream(
+    State(state): State<DoctorLiveState>,
+    headers: HeaderMap,
+    uri: axum::http::Uri,
+    Json(body): Json<Value>,
+) -> Response {
+    match uri.path() {
+        "/oauth/token" => test_oauth_token(State(state), Json(body)).await,
+        "/registry/sync/search" => test_dci_search(State(state), headers, Json(body)).await,
+        _ => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
 pub(crate) fn test_dci_options(demo_issuer: bool) -> InitDciOptions {
     InitDciOptions {
         base_url: "https://dci.example.test".to_string(),

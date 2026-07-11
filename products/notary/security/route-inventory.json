@@ -251,7 +251,7 @@
       "methods": [
         "GET"
       ],
-      "source": "crates/registry-notary-source-adapter-sidecar/src/sidecar.rs"
+      "source": "crates/registry-notary-source-adapter-sidecar/src/sidecar/server.rs"
     },
     {
       "listener": "sidecar",
@@ -259,7 +259,7 @@
       "methods": [
         "GET"
       ],
-      "source": "crates/registry-notary-source-adapter-sidecar/src/sidecar.rs"
+      "source": "crates/registry-notary-source-adapter-sidecar/src/sidecar/server.rs"
     },
     {
       "listener": "sidecar",
@@ -267,7 +267,7 @@
       "methods": [
         "GET"
       ],
-      "source": "crates/registry-notary-source-adapter-sidecar/src/sidecar.rs"
+      "source": "crates/registry-notary-source-adapter-sidecar/src/sidecar/server.rs"
     },
     {
       "listener": "sidecar",
@@ -275,7 +275,7 @@
       "methods": [
         "GET"
       ],
-      "source": "crates/registry-notary-source-adapter-sidecar/src/sidecar.rs"
+      "source": "crates/registry-notary-source-adapter-sidecar/src/sidecar/server.rs"
     },
     {
       "listener": "sidecar",
@@ -283,7 +283,7 @@
       "methods": [
         "GET"
       ],
-      "source": "crates/registry-notary-source-adapter-sidecar/src/sidecar.rs"
+      "source": "crates/registry-notary-source-adapter-sidecar/src/sidecar/server.rs"
     },
     {
       "listener": "sidecar",
@@ -291,7 +291,7 @@
       "methods": [
         "POST"
       ],
-      "source": "crates/registry-notary-source-adapter-sidecar/src/sidecar.rs"
+      "source": "crates/registry-notary-source-adapter-sidecar/src/sidecar/server.rs"
     }
   ]
 }

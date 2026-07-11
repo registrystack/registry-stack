@@ -526,8 +526,7 @@ async fn doctor_live_fetches_oauth_runs_dci_probe_and_redacts_subject_and_token(
     let state = DoctorLiveState::default();
     let upstream = TestServer::builder().http_transport().build(
         Router::new()
-            .route("/oauth/token", post(test_oauth_token))
-            .route("/registry/sync/search", post(test_dci_search))
+            .fallback(post(doctor_live_upstream))
             .with_state(state.clone()),
     );
     let base_url = upstream

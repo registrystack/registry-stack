@@ -395,18 +395,15 @@ async fn sidecar_data_route_fails_closed_when_preaccess_audit_write_fails() {
     );
     let upstream = axum_test::TestServer::builder()
         .http_transport()
-        .build(Router::new().route(
-            "/records",
-            get(|| async {
-                Json(json!({
-                    "results": [
-                        {
-                            "national_id": "person-1"
-                        }
-                    ]
-                }))
-            }),
-        ));
+        .build(Router::new().fallback(get(|| async {
+            Json(json!({
+                "results": [
+                    {
+                        "national_id": "person-1"
+                    }
+                ]
+            }))
+        })));
     let upstream_url = upstream
         .server_address()
         .expect("HTTP transport exposes server address")
