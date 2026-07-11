@@ -1,0 +1,331 @@
+---
+title: Move Notary to production signing
+description: >-
+  Replace a local demo issuer key with a reviewed PKCS#11 signing provider, then verify provider
+  health, custody approval, and public key publication.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-notary
+last_reviewed: unreviewed
+doc_type: how-to
+locale: en
+standards_referenced:
+  - sd-jwt-vc
+  - w3c-did
+---
+
+Use this guide to replace a Registry Notary demo issuer key with a production signing key reached
+through Public-Key Cryptography Standards #11 (PKCS#11).
+You will keep private key operations inside the selected provider, bind the key to a production
+issuer identity, exercise Notary's fail-closed custody gate, and verify the running provider without
+exposing key material.
+
+## When to use this
+
+Use this guide after a local Registry Notary flow can issue a selective disclosure JSON Web Token
+verifiable credential (SD-JWT VC) with `provider: local_jwk_env`.
+The generated `secrets/local.env` file and `registry-notary demo-issuer-key` output are development
+fixtures: they place exportable private key material in a local environment variable and commonly
+use a `did:web:localhost` issuer.
+Neither the file nor that issuer establishes production key custody or a public trust root.
+
+This guide covers one credential-issuance key.
+Repeat the custody review for access-token and federation-response signing keys if those surfaces
+are enabled.
+
+## Before you start
+
+You need:
+
+- A working Registry Notary configuration with at least one credential profile.
+- The `registry-notary` binary deployed in the same environment as the PKCS#11 module.
+- `curl`, `jq`, and `rg`.
+- A production issuer identifier and a published verification method for that issuer.
+- A PKCS#11 module, token, and non-exportable Ed25519 key approved by your security owner.
+- The module path, token label, key label, key ID in hexadecimal, public JWK, and a secret-store
+  reference for the token PIN.
+- A documented key owner, activation date, rotation interval, incident contact, and verifier
+  retention window.
+
+Registry Notary does not certify a hardware security module (HSM) or infer custody from
+`provider: pkcs11`.
+The configured module can connect to hardware or to a software token.
+Use the [signing key provider reference](../../products/registry-notary/signing-key-provider/) to
+check the complete provider contract and current limits before provisioning the key.
+
+## Inventory the demo signing path
+
+Find the demo key, issuer, and every profile that references the key:
+
+```sh
+rg -n 'registry-notary-demo|local_jwk_env|private_jwk_env|signing_key:|issuer:' \
+  <notary-config.yaml>
+```
+
+A generated demo configuration contains fields like these:
+
+```text
+provider: local_jwk_env
+private_jwk_env: REGISTRY_NOTARY_ISSUER_JWK
+kid: did:web:localhost#registry-notary-demo
+issuer: did:web:localhost
+signing_key: registry-notary-demo
+```
+
+Record every credential profile, access-token setting, and federation setting that references the
+demo key.
+Changing only one reference can leave another signing surface on local software custody.
+
+## Confirm PKCS#11 support
+
+Run the deployed artifact, not a developer build from another machine:
+
+```sh
+registry-notary build-info | jq '.capabilities.signing_providers'
+```
+
+The result must report PKCS#11 support:
+
+```json
+{
+  "local_jwk_env": true,
+  "pkcs11": true
+}
+```
+
+If `pkcs11` is `false`, deploy an official image or a binary built with the `pkcs11` feature before
+continuing.
+Provider configuration fails closed when that capability is absent.
+
+## Provision the key and public identity
+
+Generate the Ed25519 key inside the approved custody boundary.
+Do not generate the production key with `registry-notary demo-issuer-key`, OpenSSL on an operator
+workstation, or the SoftHSM smoke setup from the provider reference.
+SoftHSM verifies protocol integration, not production custody.
+
+Assign a new key ID (`kid`) that combines the production issuer and a unique key fragment, for
+example `did:web:issuer.example#notary-2026-01`.
+Publish the corresponding public verification method for the issuer before issuing credentials.
+The `issuer` in each credential profile must equal the Decentralized Identifier (DID) portion of a
+`did:web` key ID.
+
+For this signing key, load only the token PIN and public JSON Web Key (JWK) into the service's
+secret provider.
+For the examples in this guide, expose them to the process as
+`REGISTRY_NOTARY_PKCS11_PIN` and `REGISTRY_NOTARY_ISSUER_PUBLIC_JWK`.
+The public JWK must contain the configured `kid` and `alg`, and must not contain the private `d`
+member.
+
+Check the public JWK without printing any private environment values:
+
+```sh
+printf '%s\n' "$REGISTRY_NOTARY_ISSUER_PUBLIC_JWK" | jq -e '
+  if has("d") then
+    error("public JWK contains a private member")
+  else
+    {kid, alg, kty, crv, private_member_present: has("d")}
+  end
+'
+```
+
+The values must describe the provisioned public key:
+
+```json
+{
+  "kid": "did:web:issuer.example#notary-2026-01",
+  "alg": "EdDSA",
+  "kty": "OKP",
+  "crv": "Ed25519",
+  "private_member_present": false
+}
+```
+
+## Configure the production provider
+
+Keep custody approval false during the first validation pass.
+Replace the demo signing key and update each credential profile that used it:
+
+```yaml
+deployment:
+  profile: production
+  evidence:
+    signer_custody_approved: false
+
+evidence:
+  signing_keys:
+    issuer-2026-01:
+      provider: pkcs11
+      module_path: /opt/vendor/lib/pkcs11.so
+      token_label: registry-notary-production
+      pin_env: REGISTRY_NOTARY_PKCS11_PIN
+      key_label: notary-issuer-2026-01
+      key_id_hex: 01ab23cd
+      public_jwk_env: REGISTRY_NOTARY_ISSUER_PUBLIC_JWK
+      alg: EdDSA
+      kid: did:web:issuer.example#notary-2026-01
+      status: active
+  credential_profiles:
+    civil-status:
+      format: application/dc+sd-jwt
+      issuer: did:web:issuer.example
+      signing_key: issuer-2026-01
+      vct: https://issuer.example/credentials/civil-status
+      allowed_claims:
+        - person-is-alive
+```
+
+Adapt the profile fields to the credential you already issue.
+Do not copy the example claim or verifiable credential type (`vct`) into an unrelated profile.
+Keep the PIN and all private key material out of YAML, shell history, logs, and diagnostic bundles.
+
+## Exercise the custody gate
+
+Run `doctor` with the same module, token access, environment variables, and filesystem mounts that
+the service will use:
+
+```sh
+registry-notary doctor \
+  --config <notary-config.yaml> \
+  --format json > notary-doctor.json
+
+jq '{
+  pkcs11: [.diagnostics[] | select(.message | startswith("PKCS#11"))],
+  custody: [.diagnostics[] | select(.code == "notary.signer_custody.unapproved")],
+  missing_env: [.required_env[] | select(.status == "missing") | .name]
+}' notary-doctor.json
+```
+
+The first pass must report `PKCS#11 signing providers loaded and self-tested` and the
+`notary.signer_custody.unapproved` finding.
+That combination proves Notary reached the key and refused to treat provider kind as custody
+approval.
+The `missing_env` array must be empty.
+The first `doctor` command exits with a nonzero status because the custody finding is deliberately
+active during this pass.
+
+Resolve every other production-profile error before rollout.
+The [operator configuration reference](../../products/registry-notary/operator-config-reference/)
+documents deployment gates for audit shipping, replay storage, source transport, admin exposure,
+and signed configuration.
+
+## Approve custody after review
+
+The security owner must review:
+
+- How the key was generated and whether private material can be exported.
+- Who can use, rotate, disable, back up, or destroy the key.
+- How token PINs and HSM administrator credentials are separated and rotated.
+- Whether vendor driver timeouts return before Notary's five-second signing timeout.
+- How a new `kid` and public verification method will be published before rotation.
+- How long old public keys remain available for issued credentials and verifier caches.
+- Which issuance audit records are retained off-host and who reviews signing failures.
+
+After that review approves every configured signing role, set:
+
+```yaml
+deployment:
+  profile: production
+  evidence:
+    signer_custody_approved: true
+```
+
+This field is an operator attestation, not proof produced by Registry Notary.
+Do not set it to make a readiness failure disappear without the recorded review.
+
+Rerun `doctor`, then require the provider self-test to pass and the custody finding to be absent:
+
+```sh
+registry-notary doctor \
+  --config <notary-config.yaml> \
+  --format json > notary-doctor.json
+
+jq -e '
+  ([.diagnostics[] | select(.message == "PKCS#11 signing providers loaded and self-tested")]
+    | length == 1) and
+  ([.diagnostics[] | select(.code == "notary.signer_custody.unapproved")]
+    | length == 0) and
+  ([.required_env[] | select(.status == "missing")]
+    | length == 0)
+' notary-doctor.json
+```
+
+`jq` exits with status `0` and prints `true` when the signing checks pass.
+Inspect the full report and resolve unrelated errors or warnings rather than treating this focused
+check as approval for the whole deployment.
+
+## Verify the running provider
+
+Start or restart Registry Notary with the reviewed configuration.
+Read the public readiness document:
+
+```sh
+curl -fsS https://<notary-host>/ready | \
+  jq '.checks.signing_providers.custody | {
+    active_provider_counts,
+    signing_provider_count,
+    local_software_signing_provider_count,
+    custody_approval_required,
+    custody_approved,
+    unapproved_signing_provider_count
+  }'
+```
+
+For one PKCS#11 credential signer, the custody facts are:
+
+```json
+{
+  "active_provider_counts": { "pkcs11": 1 },
+  "signing_provider_count": 1,
+  "local_software_signing_provider_count": 0,
+  "custody_approval_required": true,
+  "custody_approved": true,
+  "unapproved_signing_provider_count": 0
+}
+```
+
+Confirm that Notary publishes the intended verification key and no private JWK member:
+
+```sh
+curl -fsS https://<notary-host>/.well-known/evidence/jwks.json | \
+  jq -e --arg kid 'did:web:issuer.example#notary-2026-01' '
+    [.keys[] | select(.kid == $kid)] |
+    if length != 1 then
+      error("expected exactly one matching verification key")
+    elif .[0] | has("d") then
+      error("published key contains a private member")
+    else
+      .[0] | {kid, alg, kty, private_member_present: has("d")}
+    end
+  '
+```
+
+The result names the production `kid`, uses the configured algorithm, and reports
+`private_member_present: false`.
+Run one controlled issuance through the deployment's existing smoke path, verify the credential
+against the published key, and confirm the issuance audit record reached the restricted off-host
+sink before routing production traffic.
+
+## Retire the demo material
+
+Remove `REGISTRY_NOTARY_ISSUER_JWK` and the demo private JWK from the production service definition
+and secret store after the new configuration is active.
+Do not copy `secrets/local.env` into the production deployment.
+
+If credentials signed by an older production key remain valid, rotate that key to `publish_only`
+with public JWK material and keep it published through the verifier retention window.
+Never reuse a `kid` for different key material.
+The [signing key provider reference](../../products/registry-notary/signing-key-provider/) documents
+the complete active-to-publish-only rotation procedure.
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| `build-info` reports `"pkcs11": false` | The deployed binary was built without the provider capability. | Deploy an official image or rebuild `registry-notary` with the `pkcs11` feature. |
+| `doctor` reports `PKCS#11 signing preflight failed` | The module, token, PIN, key lookup, public JWK, or compiled feature does not match the configuration. | Check each named provider field against the HSM inventory. Keep the full PIN and private key out of the diagnostic record. |
+| `doctor` reports `notary.signer_custody.unapproved` after review | `signer_custody_approved` is false, or another credential, access-token, or federation signer was not included in the review. | Inventory every signing reference, complete the missing review, and attest only after all configured roles are approved. |
+| `/ready` reports a local software signing provider | A custody-relevant role still references `local_jwk_env` or `file_watch`. | Find all `signing_key` references and move the intended role to the reviewed PKCS#11 key. |
+| The public key is absent from JWKS | The key is disabled, its provider failed, or the expected `kid` differs from the configured key. | Check startup logs and `doctor`, then compare the exact public JWK `kid` and `alg` with the YAML. |
+| Existing credentials fail after rotation | The old public key was removed before credentials expired or verifier caches refreshed. | Restore the old public key as `publish_only` and keep it available through the documented retention window. |
