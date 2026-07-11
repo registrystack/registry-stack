@@ -112,7 +112,7 @@ consultation_digest!(
 /// Values retain their zeroizing compiled owners and the type deliberately
 /// implements neither `Clone`, `Debug`, nor serialization.
 pub(crate) struct CanonicalConsultationInputs<'profile> {
-    profile: &'profile CompiledRuntimeProfile,
+    plan: &'profile CompiledSourcePlan,
     canonical_purpose: Box<str>,
     values: BTreeMap<Box<str>, CompiledInputValue>,
 }
@@ -149,10 +149,14 @@ impl<'profile> CanonicalConsultationInputs<'profile> {
             return Err(ConsultationCommitmentError::CanonicalInputMismatch);
         }
         Ok(Self {
-            profile,
+            plan,
             canonical_purpose: canonical_purpose.into(),
             values: BTreeMap::from([(slot.name().into(), value)]),
         })
+    }
+
+    const fn profile(&self) -> &CompiledRuntimeProfile {
+        self.plan.runtime_profile()
     }
 
     fn transient_value(&self) -> Value {
@@ -173,6 +177,82 @@ impl<'profile> CanonicalConsultationInputs<'profile> {
             return Err(ConsultationCommitmentError::CanonicalInputMismatch);
         }
         Ok((name, value.as_str()))
+    }
+}
+
+/// The exact compiled plan and canonical input that produced one consultation's
+/// keyed commitments.
+///
+/// This capability is move-only and has no independent plan or input
+/// constructor. The strict backend executor receives the pair together after
+/// durable attempt persistence, so request rendering cannot accept a selector
+/// captured outside the committed authorization chain.
+pub(crate) struct SealedConsultationExecution<'profile> {
+    inner: SealedConsultationExecutionInner<'profile>,
+}
+
+enum SealedConsultationExecutionInner<'profile> {
+    Bound {
+        plan: &'profile CompiledSourcePlan,
+        input: CompiledInputValue,
+    },
+    #[cfg(test)]
+    StatePlaneOnly,
+}
+
+impl<'profile> SealedConsultationExecution<'profile> {
+    fn try_from_canonical_inputs(
+        plan: &'profile CompiledSourcePlan,
+        mut values: BTreeMap<Box<str>, CompiledInputValue>,
+    ) -> Result<Self, ConsultationCommitmentError> {
+        let mut slots = plan.inputs();
+        let slot = slots
+            .next()
+            .ok_or(ConsultationCommitmentError::CanonicalInputMismatch)?;
+        if slots.next().is_some() || values.len() != 1 {
+            return Err(ConsultationCommitmentError::CanonicalInputMismatch);
+        }
+        let input = values
+            .remove(slot.name())
+            .filter(|value| value.binding_matches(plan.profile().contract_hash(), slot.name(), 0))
+            .ok_or(ConsultationCommitmentError::CanonicalInputMismatch)?;
+        if !values.is_empty() {
+            return Err(ConsultationCommitmentError::CanonicalInputMismatch);
+        }
+        Ok(Self {
+            inner: SealedConsultationExecutionInner::Bound { plan, input },
+        })
+    }
+
+    /// Borrow the exact inseparable pair only for invariant tests. The concrete
+    /// executor integration must add the sole production consume path inside
+    /// the guarded dispatch boundary rather than expose these values generally.
+    #[cfg(test)]
+    pub(crate) fn bound_plan_and_input(&self) -> (&CompiledSourcePlan, &CompiledInputValue) {
+        match &self.inner {
+            SealedConsultationExecutionInner::Bound { plan, input } => (plan, input),
+            #[cfg(test)]
+            SealedConsultationExecutionInner::StatePlaneOnly => {
+                panic!("state-plane-only test dispatch has no source execution")
+            }
+        }
+    }
+
+    pub(super) fn profile(&self) -> &CompiledRuntimeProfile {
+        match &self.inner {
+            SealedConsultationExecutionInner::Bound { plan, .. } => plan.runtime_profile(),
+            #[cfg(test)]
+            SealedConsultationExecutionInner::StatePlaneOnly => {
+                panic!("state-plane-only test dispatch has no source execution")
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) const fn state_plane_only_for_test() -> SealedConsultationExecution<'static> {
+        SealedConsultationExecution {
+            inner: SealedConsultationExecutionInner::StatePlaneOnly,
+        }
     }
 }
 
@@ -269,7 +349,7 @@ impl<'profile> VerifiedConsentAuthority<'profile> {
         inputs: CanonicalConsultationInputs<'profile>,
     ) -> Result<Self, ConsultationCommitmentError> {
         if !matches!(
-            inputs.profile.authorization().consent(),
+            inputs.profile().authorization().consent(),
             CompiledConsentProfile::NotRequired
         ) {
             return Err(ConsultationCommitmentError::ConsentMismatch);
@@ -289,7 +369,7 @@ impl<'profile> VerifiedConsentAuthority<'profile> {
         expires_at_unix_ms: i64,
     ) -> Result<Self, ConsultationCommitmentError> {
         if !matches!(
-            inputs.profile.authorization().consent(),
+            inputs.profile().authorization().consent(),
             CompiledConsentProfile::Required { .. }
         ) {
             return Err(ConsultationCommitmentError::ConsentMismatch);
@@ -304,7 +384,7 @@ impl<'profile> VerifiedConsentAuthority<'profile> {
 
 /// The exact profile-bound HMAC inputs consumed by one authority-bound commit.
 pub(crate) struct ConsultationPseudonymInputs<'profile> {
-    pub(super) profile: &'profile CompiledRuntimeProfile,
+    pub(super) execution: SealedConsultationExecution<'profile>,
     pub(super) canonical_purpose: Box<str>,
     pub(super) consent: VerifiedConsentDecision,
     pub(super) subject: TransientPseudonymInput,
@@ -329,11 +409,11 @@ impl CanonicalConsultationInputs<'_> {
     ) -> Result<RuntimePseudonymPreimagesForTest, ConsultationCommitmentError> {
         let (identifier_type, canonical_subject) = self.only_input()?;
         Ok(RuntimePseudonymPreimagesForTest {
-            subject: subject_pseudonym_value(self.profile, identifier_type, canonical_subject),
-            input: input_pseudonym_value(self.profile, self),
-            predicate: predicate_pseudonym_value(self.profile, self),
+            subject: subject_pseudonym_value(self.profile(), identifier_type, canonical_subject),
+            input: input_pseudonym_value(self.profile(), self),
+            predicate: predicate_pseudonym_value(self.profile(), self),
             consent_evidence: consent_pseudonym_value(
-                self.profile.authorization().consent(),
+                self.profile().authorization().consent(),
                 raw_consent_reference,
             )?,
         })
@@ -349,7 +429,7 @@ pub(crate) fn build_pseudonym_inputs(
         decision,
         evidence,
     } = authority;
-    let profile = inputs.profile;
+    let profile = inputs.profile();
     let (identifier_type, canonical_subject) = inputs.only_input()?;
     let subject = transient_input(subject_pseudonym_value(
         profile,
@@ -379,9 +459,14 @@ pub(crate) fn build_pseudonym_inputs(
         )?),
         _ => return Err(ConsultationCommitmentError::ConsentMismatch),
     };
-    let canonical_purpose = inputs.canonical_purpose;
+    let CanonicalConsultationInputs {
+        plan,
+        canonical_purpose,
+        values,
+    } = inputs;
+    let execution = SealedConsultationExecution::try_from_canonical_inputs(plan, values)?;
     Ok(ConsultationPseudonymInputs {
-        profile,
+        execution,
         canonical_purpose,
         consent: decision,
         subject,
@@ -585,7 +670,6 @@ impl AuthorizedDecisionFreshness {
 /// or atomic-persistence API accepts those members separately, so callers
 /// cannot cross-wire facts from two independently valid authorizations.
 pub(crate) struct AuthorizedConsultationAttempt<'profile> {
-    profile: &'profile CompiledRuntimeProfile,
     canonical_purpose: Box<str>,
     consent: VerifiedConsentDecision,
     pseudonyms: PreparedConsultationPseudonyms<'profile>,
@@ -594,8 +678,8 @@ pub(crate) struct AuthorizedConsultationAttempt<'profile> {
 }
 
 impl<'profile> AuthorizedConsultationAttempt<'profile> {
-    pub(super) const fn profile(&self) -> &CompiledRuntimeProfile {
-        self.profile
+    pub(super) fn profile(&self) -> &CompiledRuntimeProfile {
+        self.pseudonyms.profile()
     }
 
     pub(super) fn canonical_purpose(&self) -> &str {
@@ -705,7 +789,7 @@ fn authorize_consultation_attempt_at<'profile>(
         checked_at_unix_ms,
         expires_at_unix_ms,
     } = decision;
-    let profile = pseudonyms.profile;
+    let profile = pseudonyms.profile();
     let consent = pseudonyms.consent;
     let freshness = validate_decision_window(
         profile,
@@ -734,7 +818,6 @@ fn authorize_consultation_attempt_at<'profile>(
         &execution_plan,
     )?;
     Ok(AuthorizedConsultationAttempt {
-        profile,
         canonical_purpose: pseudonyms.canonical_purpose.clone(),
         consent,
         pseudonyms,
@@ -1308,8 +1391,12 @@ pub(crate) fn public_outcome_str(outcome: CompiledPublicOutcome) -> &'static str
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::consultation::{IntegrationPackHash, OperationId};
-    use crate::source_plan::maximum_runtime_profile_fixture;
+    use crate::consultation::{
+        IntegrationPackHash, OperationId, ParsedPurpose, ParsedSingleStringInput,
+    };
+    use crate::source_plan::{
+        bounded_runtime_vector_plan_fixture, maximum_runtime_profile_fixture,
+    };
 
     #[test]
     fn digest_debug_is_redacted_and_domains_are_distinct() {
@@ -1453,6 +1540,53 @@ mod tests {
             ))
             .err(),
             Some(ConsultationCommitmentError::InputOutOfBounds)
+        );
+    }
+
+    #[test]
+    fn pseudonym_preimages_retain_the_exact_plan_and_canonical_input_for_execution() {
+        let plan = bounded_runtime_vector_plan_fixture();
+        let equivalent_but_distinct_plan = bounded_runtime_vector_plan_fixture();
+        let core = PreAuthorizationConsultationCore::new_for_test(
+            plan.profile().clone(),
+            plan.runtime_profile()
+                .subject()
+                .selector_provenance()
+                .clone(),
+            ParsedPurpose::try_parse("benefit-verification").expect("fixture purpose"),
+            ParsedSingleStringInput::try_parse("subject_id", "Person-42")
+                .expect("fixture selector"),
+            plan.footprint().clone(),
+        );
+        let inputs = CanonicalConsultationInputs::try_from_resolved_core(&plan, core)
+            .expect("resolved core binds to its exact plan");
+        let committed_preimages = inputs
+            .runtime_pseudonym_preimages_for_test(None)
+            .expect("commitment preimages");
+        let authority = VerifiedConsentAuthority::consent_not_required(inputs)
+            .expect("fixture requires no consent");
+        let pseudonym_inputs = build_pseudonym_inputs(authority).expect("sealed pseudonym inputs");
+        let (retained_plan, retained_input) = pseudonym_inputs.execution.bound_plan_and_input();
+
+        assert!(std::ptr::eq(retained_plan, &plan));
+        assert!(!std::ptr::eq(retained_plan, &equivalent_but_distinct_plan));
+        assert_eq!(retained_input.as_str(), "Person-42");
+        assert!(retained_input.binding_matches(plan.profile().contract_hash(), "subject_id", 0,));
+        assert_eq!(
+            committed_preimages
+                .input
+                .pointer("/canonical_inputs/subject_id")
+                .and_then(Value::as_str),
+            Some(retained_input.as_str()),
+            "the executor selector must be the exact value used by the input commitment",
+        );
+        assert_eq!(
+            committed_preimages
+                .predicate
+                .pointer("/exact_predicate/canonical_inputs/subject_id")
+                .and_then(Value::as_str),
+            Some(retained_input.as_str()),
+            "the executor selector must be the exact value used by the predicate commitment",
         );
     }
 }

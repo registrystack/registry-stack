@@ -6,7 +6,9 @@
 //! monotonic permit markers, so constructing a second completion path here
 //! would weaken the sealed lifecycle contract.
 
+#[cfg(test)]
 use std::future::Future;
+#[cfg(test)]
 use std::pin::Pin;
 #[cfg(test)]
 use std::time::{Duration, Instant};
@@ -41,7 +43,7 @@ use super::commitments::{
     empty_obligations_digest, permit_bindings_value, public_outcome_str,
     AuthorizedConsultationAttempt, ConsultationCommitmentError, ConsultationDigests,
     PendingConsultationDispatchFreshness, PendingConsultationPersistenceFreshness,
-    VerifiedConsentDecision,
+    SealedConsultationExecution, VerifiedConsentDecision,
 };
 use super::pseudonym::PreparedConsultationPseudonyms;
 use super::{AcquisitionClass, ConsultationId, NotaryEvaluationId};
@@ -366,7 +368,7 @@ fn attempt_audit_payload(
 /// One fully bound, one-shot input to the atomic attempt-audit and completion
 /// intent CAS. The fields cannot be independently replaced after construction.
 #[must_use = "an authorized attempt must be consumed by the atomic state-plane CAS"]
-pub(crate) struct PreparedAtomicConsultationAttempt {
+pub(crate) struct PreparedAtomicConsultationAttempt<'profile> {
     audit_write: DurableAuditWrite,
     completion_seed: CanonicalStateBinding,
     pseudonym_bundle: CanonicalPseudonymBundle,
@@ -375,32 +377,36 @@ pub(crate) struct PreparedAtomicConsultationAttempt {
     persistence_freshness: PendingConsultationPersistenceFreshness,
     compiled_timeout_ms: u32,
     fence: Option<FencedConsultationAttemptAuthority>,
+    execution: SealedConsultationExecution<'profile>,
 }
 
-impl PreparedAtomicConsultationAttempt {
+impl<'profile> PreparedAtomicConsultationAttempt<'profile> {
     /// Return the exact compiled timeout used to derive the fence budget.
     pub(crate) const fn compiled_timeout_ms(&self) -> u32 {
         self.compiled_timeout_ms
     }
 
-    fn state_view(&mut self) -> PreparedAtomicConsultationStateView<'_> {
+    fn state_view(&mut self) -> PreparedAtomicConsultationStateView<'_, 'profile> {
         PreparedAtomicConsultationStateView { prepared: self }
     }
 
     fn into_persisted_dispatch(
         self,
         dispatch: AuditedConsultationDispatch,
-    ) -> Result<PreparedAuditedConsultationDispatch, ConsultationPersistenceError> {
+    ) -> Result<PreparedAuditedConsultationDispatch<'profile>, ConsultationPersistenceError> {
         if self.fence.is_some() {
             return Err(ConsultationPersistenceError::ProtocolDrift);
         }
         Ok(PreparedAuditedConsultationDispatch {
             dispatch,
             dispatch_freshness: self.dispatch_freshness,
+            execution: self.execution,
         })
     }
+}
 
-    #[cfg(test)]
+#[cfg(test)]
+impl PreparedAtomicConsultationAttempt<'static> {
     pub(crate) fn for_state_test(
         audit_write: DurableAuditWrite,
         completion_seed: Value,
@@ -445,6 +451,7 @@ impl PreparedAtomicConsultationAttempt {
             ),
             compiled_timeout_ms,
             fence: Some(fence),
+            execution: SealedConsultationExecution::state_plane_only_for_test(),
         })
     }
 }
@@ -464,11 +471,11 @@ struct CanonicalPseudonymBundle {
 /// Its fields are private and callers cannot construct it. The durable writer
 /// retains this view across retries and can only move the fence out while the
 /// original aggregate remains borrowed by the sealing orchestration method.
-pub(crate) struct PreparedAtomicConsultationStateView<'attempt> {
-    prepared: &'attempt mut PreparedAtomicConsultationAttempt,
+pub(crate) struct PreparedAtomicConsultationStateView<'attempt, 'profile> {
+    prepared: &'attempt mut PreparedAtomicConsultationAttempt<'profile>,
 }
 
-impl PreparedAtomicConsultationStateView<'_> {
+impl PreparedAtomicConsultationStateView<'_, '_> {
     pub(crate) fn audit_write(&self) -> &DurableAuditWrite {
         &self.prepared.audit_write
     }
@@ -527,9 +534,10 @@ impl PreparedAtomicConsultationStateView<'_> {
 /// epoch across bounded, proven-nonmutating stale-authority retries so key
 /// rotation cannot strand an open consultation.
 #[must_use = "the audited dispatch must reach one terminal completion"]
-pub(crate) struct PreparedAuditedConsultationDispatch {
+pub(crate) struct PreparedAuditedConsultationDispatch<'profile> {
     dispatch: AuditedConsultationDispatch,
     dispatch_freshness: PendingConsultationDispatchFreshness,
+    execution: SealedConsultationExecution<'profile>,
 }
 
 /// One decoder-validated backend result that binds its potentially publishable
@@ -596,10 +604,12 @@ pub(crate) struct ConsultationBackendStartDenied {
     dispatch: Option<AuditedConsultationDispatch>,
 }
 
-impl PreparedAuditedConsultationDispatch {
-    /// Check decision freshness once at the last possible point, then enter
-    /// the whole bounded backend executor. No timeless authorization marker or
-    /// independently replaceable dispatch escapes this method.
+impl<'profile> PreparedAuditedConsultationDispatch<'profile> {
+    /// Exercise production-shaped freshness and terminal orchestration without
+    /// exposing a generic callback in production. The concrete strict executor
+    /// must become the sole production entry point and consume the sealed plan
+    /// and input directly when that integration lands.
+    #[cfg(test)]
     pub(crate) async fn run_backend<T, F>(
         self,
         backend: F,
@@ -607,6 +617,7 @@ impl PreparedAuditedConsultationDispatch {
     where
         F: for<'dispatch> FnOnce(
             &'dispatch mut AuditedConsultationDispatch,
+            &'dispatch SealedConsultationExecution<'profile>,
         ) -> Pin<
             Box<dyn Future<Output = ValidatedConsultationBackendResult<T>> + Send + 'dispatch>,
         >,
@@ -614,13 +625,14 @@ impl PreparedAuditedConsultationDispatch {
         let Self {
             mut dispatch,
             dispatch_freshness,
+            execution,
         } = self;
         if dispatch_freshness.check_fresh_now().is_err() {
             return Err(ConsultationBackendStartDenied {
                 dispatch: Some(dispatch),
             });
         }
-        let validated = backend(&mut dispatch).await;
+        let validated = backend(&mut dispatch, &execution).await;
         Ok(ExecutedAuditedConsultationDispatch {
             dispatch: Some(dispatch),
             validated,
@@ -669,10 +681,10 @@ impl ConsultationBackendStartDenied {
 
 impl PostgresDurableAuditStatePlane {
     /// Consume the sealed attempt through the only production persistence path.
-    pub(crate) async fn write_attempt_with_completion_intent(
+    pub(crate) async fn write_attempt_with_completion_intent<'profile>(
         &self,
-        mut prepared: PreparedAtomicConsultationAttempt,
-    ) -> Result<PreparedAuditedConsultationDispatch, ConsultationPersistenceError> {
+        mut prepared: PreparedAtomicConsultationAttempt<'profile>,
+    ) -> Result<PreparedAuditedConsultationDispatch<'profile>, ConsultationPersistenceError> {
         let dispatch = self
             .write_attempt_with_state_view(prepared.state_view())
             .await?;
@@ -829,12 +841,12 @@ async fn current_completion_epoch(
 
 /// Seal the exact audit write, completion seed, commitment bundle, and current
 /// PostgreSQL pseudonym authority into one atomic-CAS input.
-pub(crate) fn prepare_atomic_consultation_attempt(
+pub(crate) fn prepare_atomic_consultation_attempt<'profile>(
     consultation_id: ConsultationId,
     notary_evaluation_id: Option<NotaryEvaluationId>,
-    attempt: AuthorizedConsultationAttempt<'_>,
+    attempt: AuthorizedConsultationAttempt<'profile>,
     fence: FencedConsultationAttemptAuthority,
-) -> Result<PreparedAtomicConsultationAttempt, ConsultationAuditBuildError> {
+) -> Result<PreparedAtomicConsultationAttempt<'profile>, ConsultationAuditBuildError> {
     attempt.ensure_preparation_fresh()?;
     let seed = RuntimeConsultationCompletionSeed::build(&attempt, notary_evaluation_id)?;
     let compiled_timeout_ms = attempt.profile().effective_limits().operation().timeout_ms;
@@ -857,7 +869,11 @@ pub(crate) fn prepare_atomic_consultation_attempt(
     let completion_seed = canonical_state_binding(seed.into_safe_value())?;
     let (pseudonyms, persistence_freshness, dispatch_freshness) =
         attempt.into_pseudonyms_and_freshness_guards();
-    let PreparedConsultationPseudonyms { active_epoch, .. } = pseudonyms;
+    let PreparedConsultationPseudonyms {
+        active_epoch,
+        execution,
+        ..
+    } = pseudonyms;
     Ok(PreparedAtomicConsultationAttempt {
         audit_write,
         completion_seed,
@@ -867,6 +883,7 @@ pub(crate) fn prepare_atomic_consultation_attempt(
         dispatch_freshness,
         compiled_timeout_ms,
         fence: Some(fence),
+        execution,
     })
 }
 
@@ -989,7 +1006,7 @@ mod tests {
                 AuthorizedConsultationAttempt<'profile>,
                 FencedConsultationAttemptAuthority,
             ) -> Result<
-                PreparedAtomicConsultationAttempt,
+                PreparedAtomicConsultationAttempt<'profile>,
                 ConsultationAuditBuildError,
             >,
         ) {

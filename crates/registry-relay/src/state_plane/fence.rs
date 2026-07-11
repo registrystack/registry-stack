@@ -768,7 +768,10 @@ impl PostgresServingFence {
 
     /// Run one outbound call under fresh database authorization. The closure is
     /// lazy and is never invoked if ownership, permit state, or time is invalid.
-    /// No reusable authorization value can escape this method.
+    /// It receives the exact conservative absolute deadline used by the fence,
+    /// so the transport cannot widen the window by rebuilding it from a later
+    /// remaining-duration observation. No reusable authorization value can
+    /// escape this method.
     pub(crate) async fn authorize_and_dispatch<T, F, Fut>(
         &self,
         permit: &mut ConsultationDispatchPermit,
@@ -776,7 +779,7 @@ impl PostgresServingFence {
         dispatch: F,
     ) -> Result<T, ServingFenceError>
     where
-        F: FnOnce() -> Fut,
+        F: FnOnce(Instant) -> Fut,
         Fut: Future<Output = T>,
     {
         self.require_open()?;
@@ -1217,7 +1220,7 @@ async fn run_guarded_dispatch<T, F, Fut>(
     dispatch: F,
 ) -> Result<T, ServingFenceError>
 where
-    F: FnOnce() -> Fut,
+    F: FnOnce(Instant) -> Fut,
     Fut: Future<Output = T>,
 {
     if Instant::now() >= deadline {
@@ -1226,7 +1229,7 @@ where
     if !*admission.borrow() {
         return Err(ServingFenceError::Unavailable);
     }
-    let outbound = dispatch();
+    let outbound = dispatch(deadline);
     tokio::pin!(outbound);
     let sealed = async {
         loop {
@@ -1594,12 +1597,31 @@ mod tests {
         let (_, admission) = watch::channel(true);
         let invocations = Arc::new(AtomicUsize::new(0));
         let observed = Arc::clone(&invocations);
-        let result = run_guarded_dispatch(Instant::now(), admission, move || async move {
+        let result = run_guarded_dispatch(Instant::now(), admission, move |_deadline| async move {
             observed.fetch_add(1, Ordering::SeqCst);
         })
         .await;
         assert_eq!(result, Err(ServingFenceError::PermitExpired));
         assert_eq!(invocations.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn guarded_dispatch_passes_the_exact_deadline_without_widening() {
+        let (_admission_tx, admission) = watch::channel(true);
+        let exact_deadline = Instant::now() + Duration::from_secs(1);
+
+        // Model callback transit after the deadline was selected. Rebuilding a
+        // deadline from a remaining duration here could move it later; the
+        // callback must instead receive the original instant bit-for-bit.
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        let observed_deadline =
+            run_guarded_dispatch(exact_deadline, admission, |received_deadline| async move {
+                received_deadline
+            })
+            .await
+            .expect("dispatch completes before its exact deadline");
+
+        assert_eq!(observed_deadline, exact_deadline);
     }
 
     #[test]

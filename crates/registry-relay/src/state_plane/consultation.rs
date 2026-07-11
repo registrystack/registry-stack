@@ -526,7 +526,7 @@ enum ActiveConsultationFinalization {
 impl PostgresDurableAuditStatePlane {
     pub(crate) async fn write_attempt_with_state_view(
         &self,
-        mut attempt: PreparedAtomicConsultationStateView<'_>,
+        mut attempt: PreparedAtomicConsultationStateView<'_, '_>,
     ) -> Result<AuditedConsultationDispatch, ConsultationPersistenceError> {
         let write = attempt.audit_write().clone();
         let seed_canonical = attempt.completion_seed_canonical().to_owned();

@@ -397,7 +397,7 @@ async fn persist_test_prepared_dispatch(
     permit_set: ConsultationPermitSet,
     marker: &str,
     decision_expires_at_unix_ms: i64,
-) -> Result<PreparedAuditedConsultationDispatch, Box<dyn std::error::Error>> {
+) -> Result<PreparedAuditedConsultationDispatch<'static>, Box<dyn std::error::Error>> {
     let operation_id = DurableAuditOperationId::from_ulid(Ulid::new());
     let write = atomic_consultation_attempt_write(&operation_id, key_id, &seed, marker);
     let timeout_ms = seed["bounds"]["timeout_ms"]
@@ -4052,7 +4052,7 @@ WHERE metadata.singleton = true
     let replay_backend_invocations = Arc::new(AtomicUsize::new(0));
     let observed_invocations = Arc::clone(&replay_backend_invocations);
     let replay_denied = match replay_dispatch_two
-        .run_backend(move |_| {
+        .run_backend(move |_, _| {
             Box::pin(async move {
                 observed_invocations.fetch_add(1, Ordering::SeqCst);
                 ValidatedConsultationBackendResult::for_test(
@@ -4131,7 +4131,7 @@ WHERE metadata.singleton = true
                 .authorize_and_dispatch(
                     permit,
                     &OperationId::try_from("undeclared-operation")?,
-                    move || async move {
+                    move |_deadline| async move {
                         rejected_dispatches.fetch_add(1, Ordering::SeqCst);
                     },
                 )
@@ -4157,7 +4157,7 @@ WHERE metadata.singleton = true
         .authorize_and_dispatch(
             permit,
             &OperationId::try_from("lookup-registration")?,
-            || async {},
+            |_deadline| async {},
         )
         .await?;
     let persisted_operation: String = admin
@@ -4209,7 +4209,7 @@ WHERE metadata.singleton = true
         .authorize_and_dispatch(
             credential_permit,
             &OperationId::try_from("fetch-credential")?,
-            || async {},
+            |_deadline| async {},
         )
         .await?;
     let credential_failure = plane_one
@@ -4269,7 +4269,7 @@ WHERE metadata.singleton = true
             .authorize_and_dispatch(
                 permit,
                 &OperationId::try_from(selected_operation)?,
-                || async {},
+                |_deadline| async {},
             )
             .await?;
         let selected_operation_stored: String = admin
@@ -4632,7 +4632,7 @@ WHERE metadata.singleton = true
             .authorize_and_dispatch(
                 orphan_permit,
                 &OperationId::try_from("lookup-registration")?,
-                move || async move {
+                move |_deadline| async move {
                     let _ = orphan_dispatch_started.send(());
                     std::future::pending::<()>().await;
                 },
@@ -4697,7 +4697,7 @@ WHERE metadata.singleton = true
                 .authorize_and_dispatch(
                     orphan_permit,
                     &OperationId::try_from("lookup-registration")?,
-                    || async { panic!("a stale-generation permit must never dispatch") },
+                    |_deadline| async { panic!("a stale-generation permit must never dispatch") },
                 )
                 .await
                 .err()
@@ -5063,10 +5063,14 @@ WHERE metadata.singleton = true
             .expect("marker cursor is valid")
             .expect("marker data permit");
         marker_task_fence
-            .authorize_and_dispatch(permit, &marker_source_operation, move || async move {
-                let _ = marker_visible.send(());
-                std::future::pending::<()>().await;
-            })
+            .authorize_and_dispatch(
+                permit,
+                &marker_source_operation,
+                move |_deadline| async move {
+                    let _ = marker_visible.send(());
+                    std::future::pending::<()>().await;
+                },
+            )
             .await
     });
     tokio::time::timeout(Duration::from_secs(3), marker_started)
@@ -5404,7 +5408,7 @@ WHERE metadata.singleton = true
         known_rotation_observed_at,
     )?;
     let known_rotation_executed = match known_rotation_dispatch
-        .run_backend(|_| {
+        .run_backend(|_, _| {
             Box::pin(async {
                 ValidatedConsultationBackendResult::for_test(42_u8, known_rotation_facts)
             })
@@ -5435,7 +5439,7 @@ WHERE metadata.singleton = true
     )?))
     .await;
     let unfinished_rotation_denied = match unfinished_rotation_dispatch
-        .run_backend::<(), _>(|_| Box::pin(async { panic!("expired decision must not run") }))
+        .run_backend::<(), _>(|_, _| Box::pin(async { panic!("expired decision must not run") }))
         .await
     {
         Err(denied) => denied,

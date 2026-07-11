@@ -25,7 +25,9 @@ use thiserror::Error;
 use crate::config::{ConsultationConfig, MAX_AUDIT_PSEUDONYM_MATERIALS};
 use crate::state_plane::{ActiveAuditPseudonymWriteEpoch, AuditPseudonymWriteAuthority};
 
-use super::commitments::{ConsultationPseudonymInputs, VerifiedConsentDecision};
+use super::commitments::{
+    ConsultationPseudonymInputs, SealedConsultationExecution, VerifiedConsentDecision,
+};
 
 /// Value-free failure taxonomy for startup loading and authority binding.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
@@ -145,7 +147,7 @@ impl BoundAuditPseudonymCommitter<'_> {
         inputs: ConsultationPseudonymInputs<'profile>,
     ) -> PreparedConsultationPseudonyms<'profile> {
         let ConsultationPseudonymInputs {
-            profile,
+            execution,
             canonical_purpose,
             consent,
             subject,
@@ -161,7 +163,7 @@ impl BoundAuditPseudonymCommitter<'_> {
             consent_evidence.as_ref(),
         );
         PreparedConsultationPseudonyms {
-            profile,
+            execution,
             canonical_purpose,
             consent,
             key_id: self.active_epoch.key_id().clone(),
@@ -187,7 +189,7 @@ impl fmt::Debug for BoundAuditPseudonymCommitter<'_> {
 /// slice. There is no constructor, Clone, serde implementation, raw material,
 /// or generic commitment domain.
 pub(crate) struct PreparedConsultationPseudonyms<'profile> {
-    pub(super) profile: &'profile crate::source_plan::runtime_profile::CompiledRuntimeProfile,
+    pub(super) execution: SealedConsultationExecution<'profile>,
     pub(super) canonical_purpose: Box<str>,
     pub(super) consent: VerifiedConsentDecision,
     pub(super) key_id: AuditPseudonymKeyId,
@@ -196,6 +198,12 @@ pub(crate) struct PreparedConsultationPseudonyms<'profile> {
     pub(super) predicate_commitment: AuditPseudonymCommitment,
     pub(super) consent_evidence_commitment: Option<AuditPseudonymCommitment>,
     pub(super) active_epoch: ActiveAuditPseudonymWriteEpoch,
+}
+
+impl PreparedConsultationPseudonyms<'_> {
+    pub(super) fn profile(&self) -> &crate::source_plan::runtime_profile::CompiledRuntimeProfile {
+        self.execution.profile()
+    }
 }
 
 impl fmt::Debug for PreparedConsultationPseudonyms<'_> {

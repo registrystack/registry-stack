@@ -326,10 +326,31 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
         request: BoundedDestinationRequest<S>,
         remaining: Duration,
     ) -> Result<BoundedDestinationResponse<S>, DestinationSendError> {
-        self.send_with_resolver(request, remaining, &SystemResolver, TransportTrust::System)
-            .await
+        let deadline = deadline_from_remaining(remaining)?;
+        self.send_with_deadline(request, deadline).await
     }
 
+    /// Resolve, validate, pin, and send under an existing absolute deadline.
+    ///
+    /// This is the exact-deadline primitive for callers that already hold a
+    /// conservative operation deadline. DNS, connect, send, and the eventual
+    /// bounded body read consume that same instant without reconstructing a
+    /// later deadline from an observed remaining duration.
+    pub async fn send_with_deadline(
+        &self,
+        request: BoundedDestinationRequest<S>,
+        deadline: Instant,
+    ) -> Result<BoundedDestinationResponse<S>, DestinationSendError> {
+        self.send_with_deadline_and_resolver(
+            request,
+            deadline,
+            &SystemResolver,
+            TransportTrust::System,
+        )
+        .await
+    }
+
+    #[cfg(test)]
     async fn send_with_resolver<R: Resolver>(
         &self,
         request: BoundedDestinationRequest<S>,
@@ -337,12 +358,19 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
         resolver: &R,
         trust: TransportTrust,
     ) -> Result<BoundedDestinationResponse<S>, DestinationSendError> {
-        if remaining.is_zero() || remaining > MAX_DESTINATION_OPERATION_TIMEOUT {
-            return Err(DestinationSendError::InvalidRemainingTimeout);
-        }
-        let deadline = Instant::now()
-            .checked_add(remaining)
-            .ok_or(DestinationSendError::InvalidRemainingTimeout)?;
+        let deadline = deadline_from_remaining(remaining)?;
+        self.send_with_deadline_and_resolver(request, deadline, resolver, trust)
+            .await
+    }
+
+    async fn send_with_deadline_and_resolver<R: Resolver>(
+        &self,
+        request: BoundedDestinationRequest<S>,
+        deadline: Instant,
+        resolver: &R,
+        trust: TransportTrust,
+    ) -> Result<BoundedDestinationResponse<S>, DestinationSendError> {
+        validate_absolute_deadline(deadline)?;
         let host = self
             .origin
             .host_str()
@@ -535,6 +563,26 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
             .port_or_known_default()
             .expect("fixed destination construction proves a port")
     }
+}
+
+fn deadline_from_remaining(remaining: Duration) -> Result<Instant, DestinationSendError> {
+    if remaining.is_zero() || remaining > MAX_DESTINATION_OPERATION_TIMEOUT {
+        return Err(DestinationSendError::InvalidRemainingTimeout);
+    }
+    Instant::now()
+        .checked_add(remaining)
+        .ok_or(DestinationSendError::InvalidRemainingTimeout)
+}
+
+fn validate_absolute_deadline(deadline: Instant) -> Result<(), DestinationSendError> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Err(DestinationSendError::DeadlineExceeded);
+    }
+    if remaining > MAX_DESTINATION_OPERATION_TIMEOUT {
+        return Err(DestinationSendError::InvalidRemainingTimeout);
+    }
+    Ok(())
 }
 
 /// Owns the caller's zeroizing allocation while `Bytes` and reqwest retain it.
@@ -3612,7 +3660,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn one_shot_send_uses_injected_resolution_and_preserves_host() {
+    async fn exact_deadline_send_uses_injected_resolution_and_preserves_deadline_and_host() {
         let hits = Arc::new(AtomicUsize::new(0));
         let route_hits = Arc::clone(&hits);
         let app = Router::new().route(
@@ -3667,16 +3715,18 @@ mod tests {
             calls: AtomicUsize::new(0),
         };
 
+        let exact_deadline = Instant::now() + Duration::from_secs(2);
         let response = policy
-            .send_with_resolver(
+            .send_with_deadline_and_resolver(
                 request,
-                Duration::from_secs(2),
+                exact_deadline,
                 &resolver,
                 TransportTrust::System,
             )
             .await
             .expect("one-shot send succeeds");
         assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.deadline, exact_deadline);
         let body = response.read_bounded(32).await.expect("bounded body reads");
         assert_eq!(body.as_bytes(), b"one-shot");
         assert_eq!(resolver.calls.load(Ordering::SeqCst), 1);
