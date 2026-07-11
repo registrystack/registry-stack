@@ -61,7 +61,7 @@
       "source": "manual",
       "enforcement_tests": [
         "crates/registry-notary-server/src/standalone.rs::evidence_service_discovery_is_not_auth_exempt",
-        "crates/registry-notary-server/tests/standalone_http.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
+        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
       ],
       "waiver": null
     },
@@ -82,7 +82,7 @@
       "notes": "Public static Scalar docs shell. It does not inline the OpenAPI document; /openapi.json remains authenticated by default.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http.rs::standalone_server_serves_docs_shell_without_auth"
+        "crates/registry-notary-server/tests/standalone_http/http_contracts.rs::standalone_server_serves_docs_shell_without_auth"
       ],
       "waiver": null
     },
@@ -103,7 +103,7 @@
       "notes": "Public static Scalar bundle. It contains no generated OpenAPI document or catalog data.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http.rs::standalone_server_serves_docs_shell_without_auth"
+        "crates/registry-notary-server/tests/standalone_http/http_contracts.rs::standalone_server_serves_docs_shell_without_auth"
       ],
       "waiver": null
     },
@@ -126,7 +126,7 @@
       "notes": "Read-only capabilities route for discovering supported reload and config trust posture operations.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http.rs::admin_capabilities_requires_ops_read_and_reports_notary_surface"
+        "crates/registry-notary-server/tests/standalone_http/admin.rs::admin_capabilities_requires_ops_read_and_reports_notary_surface"
       ],
       "waiver": null
     },
@@ -149,7 +149,7 @@
       "notes": "Read-only redacted operations posture route. In dedicated admin mode it is not mounted on the public listener; simple local shared mode still requires registry_notary:ops_read and local network controls.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http.rs::admin_posture_requires_ops_read_not_admin_and_ops_cannot_reload"
+        "crates/registry-notary-server/tests/standalone_http/admin.rs::admin_posture_requires_ops_read_not_admin_and_ops_cannot_reload"
       ],
       "waiver": null
     },
@@ -170,7 +170,7 @@
       "notes": "Protected Registry Notary route; route boundary requires an authenticated principal but no fixed scope.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
+        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
       ],
       "waiver": null
     },
@@ -193,7 +193,7 @@
       "notes": "Protected Registry Notary route.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
+        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
       ],
       "waiver": null
     },
@@ -214,7 +214,7 @@
       "notes": "Intentionally unauthenticated public JWKS well-known route for wallet and verifier discovery; only public issuer verification keys are emitted.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http.rs::jwks_is_public_and_contains_no_private_members"
+        "crates/registry-notary-server/tests/standalone_http/auth.rs::jwks_is_public_and_contains_no_private_members"
       ],
       "waiver": null
     },
@@ -311,9 +311,9 @@
       "notes": "Intentionally unauthenticated public OID4VCI pre-authorized-code browser start route. The route reserves bounded login state and redirects to the configured IdP without minting a credential offer.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http.rs::preauth_offer_start_redirects_to_esignet_and_mints_nothing",
-        "crates/registry-notary-server/tests/standalone_http.rs::preauth_offer_start_returns_429_when_login_state_store_is_full",
-        "crates/registry-notary-server/tests/standalone_http.rs::preauth_disabled_returns_404_and_offer_is_authorization_code"
+        "crates/registry-notary-server/tests/standalone_http/preauth.rs::preauth_offer_start_redirects_to_esignet_and_mints_nothing",
+        "crates/registry-notary-server/tests/standalone_http/preauth.rs::preauth_offer_start_returns_429_when_login_state_store_is_full",
+        "crates/registry-notary-server/tests/standalone_http/preauth.rs::preauth_disabled_returns_404_and_offer_is_authorization_code"
       ],
       "waiver": null
     },
@@ -334,8 +334,8 @@
       "notes": "Intentionally unauthenticated public OID4VCI pre-authorized-code callback route. Route-local state, nonce, IdP token exchange, subject binding, and hashed-only audit controls apply.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http.rs::preauth_callback_mints_pre_authorized_offer_with_tx_code",
-        "crates/registry-notary-server/tests/standalone_http.rs::preauth_callback_and_token_audit_events_carry_only_hashes"
+        "crates/registry-notary-server/tests/standalone_http/preauth.rs::preauth_callback_mints_pre_authorized_offer_with_tx_code",
+        "crates/registry-notary-server/tests/standalone_http/preauth.rs::preauth_callback_and_token_audit_events_carry_only_hashes"
       ],
       "waiver": null
     },
@@ -356,10 +356,10 @@
       "notes": "Intentionally unauthenticated public OID4VCI pre-authorized-code token route. Route-local code, PIN, replay, flood-throttle, and hashed-only audit controls apply before access-token issuance.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http.rs::preauth_token_endpoint_issues_access_token_and_c_nonce",
-        "crates/registry-notary-server/tests/standalone_http.rs::preauth_token_rejects_wrong_and_missing_tx_code",
-        "crates/registry-notary-server/tests/standalone_http.rs::preauth_random_code_flood_is_throttled_per_client_address",
-        "crates/registry-notary-server/tests/standalone_http.rs::preauth_callback_and_token_audit_events_carry_only_hashes"
+        "crates/registry-notary-server/tests/standalone_http/preauth.rs::preauth_token_endpoint_issues_access_token_and_c_nonce",
+        "crates/registry-notary-server/tests/standalone_http/preauth.rs::preauth_token_rejects_wrong_and_missing_tx_code",
+        "crates/registry-notary-server/tests/standalone_http/preauth.rs::preauth_random_code_flood_is_throttled_per_client_address",
+        "crates/registry-notary-server/tests/standalone_http/preauth.rs::preauth_callback_and_token_audit_events_carry_only_hashes"
       ],
       "waiver": null
     },
@@ -380,8 +380,8 @@
       "notes": "Intentionally unauthenticated public route; auth/audit middleware bypass is exact-match allowlisted and route-local controls apply where relevant.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http.rs::oid4vci_metadata_offer_and_nonce_are_public",
-        "crates/registry-notary-server/tests/standalone_http.rs::oid4vci_nonce_is_rate_limited_before_reservation"
+        "crates/registry-notary-server/tests/standalone_http/oid4vci.rs::oid4vci_metadata_offer_and_nonce_are_public",
+        "crates/registry-notary-server/tests/standalone_http/oid4vci.rs::oid4vci_nonce_is_rate_limited_before_reservation"
       ],
       "waiver": null
     },
@@ -404,8 +404,8 @@
       "notes": "Protected OID4VCI credential endpoint. The proof precheck validates holder proof shape before bearer-token self-attestation auth.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http.rs::oid4vci_malformed_proof_is_rejected_before_oidc_auth",
-        "crates/registry-notary-server/tests/standalone_http.rs::oid4vci_credential_route_issues_holder_bound_sd_jwt"
+        "crates/registry-notary-server/tests/standalone_http/oid4vci.rs::oid4vci_malformed_proof_is_rejected_before_oidc_auth",
+        "crates/registry-notary-server/tests/standalone_http/oid4vci.rs::oid4vci_credential_route_issues_holder_bound_sd_jwt"
       ],
       "waiver": null
     },
@@ -426,7 +426,7 @@
       "notes": "Protected Registry Notary route; route boundary requires an authenticated principal but no fixed scope.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
+        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
       ],
       "waiver": null
     },
@@ -447,7 +447,7 @@
       "notes": "Protected Registry Notary route; route boundary requires an authenticated principal but no fixed scope.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
+        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
       ],
       "waiver": null
     },
@@ -468,7 +468,7 @@
       "notes": "Protected Registry Notary route; route boundary requires an authenticated principal but no fixed scope.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
+        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
       ],
       "waiver": null
     },
@@ -491,7 +491,7 @@
       "notes": "Protected Registry Notary route.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
+        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
       ],
       "waiver": null
     },
@@ -514,7 +514,7 @@
       "notes": "Protected Registry Notary route.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
+        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
       ],
       "waiver": null
     },
@@ -537,7 +537,7 @@
       "notes": "Protected Registry Notary route.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
+        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
       ],
       "waiver": null
     },
@@ -560,7 +560,7 @@
       "notes": "Protected Registry Notary route.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
+        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
       ],
       "waiver": null
     },
@@ -602,7 +602,7 @@
       "notes": "Protected Registry Notary route.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
+        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
       ],
       "waiver": null
     },
@@ -625,8 +625,8 @@
       "notes": "Public federation ingress protected by signed peer JWS and replay checks.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http.rs::federation_evaluation_returns_signed_response_and_rejects_replay",
-        "crates/registry-notary-server/tests/standalone_http.rs::federation_denial_happens_before_source_read"
+        "crates/registry-notary-server/tests/standalone_http/federation.rs::federation_evaluation_returns_signed_response_and_rejects_replay",
+        "crates/registry-notary-server/tests/standalone_http/federation.rs::federation_denial_happens_before_source_read"
       ],
       "waiver": null
     },
@@ -649,7 +649,7 @@
       "notes": "Admin metrics route mounted on the admin listener in dedicated mode and handler-enforced by admin scope. Simple local shared mode keeps the same admin-scope gate.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
+        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
       ],
       "waiver": null
     },
