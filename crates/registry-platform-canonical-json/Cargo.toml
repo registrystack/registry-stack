@@ -1,0 +1,17 @@
+[package]
+name = "registry-platform-canonical-json"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "RFC 8785 JSON canonicalization for Registry Stack."
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+ryu-js.workspace = true
+serde_json = { workspace = true, features = ["float_roundtrip"] }
+thiserror.workspace = true

@@ -4,6 +4,7 @@ members = [
     "crates/registry-platform-audit",
     "crates/registry-platform-authcommon",
     "crates/registry-platform-cache",
+    "crates/registry-platform-canonical-json",
     "crates/registry-platform-config",
     "crates/registry-platform-crypto",
     "crates/registry-platform-httpsec",
@@ -62,6 +63,7 @@ registry-notary-worker-harness = { path = "crates/registry-notary-worker-harness
 registry-platform-audit = { path = "crates/registry-platform-audit", version = "0.9.0" }
 registry-platform-authcommon = { path = "crates/registry-platform-authcommon", version = "0.9.0" }
 registry-platform-cache = { path = "crates/registry-platform-cache", version = "0.9.0" }
+registry-platform-canonical-json = { path = "crates/registry-platform-canonical-json", version = "0.9.0" }
 registry-platform-config = { path = "crates/registry-platform-config", version = "0.9.0" }
 registry-platform-crypto = { path = "crates/registry-platform-crypto", version = "0.9.0" }
 registry-platform-httpsec = { path = "crates/registry-platform-httpsec", version = "0.9.0" }
@@ -122,6 +124,7 @@ redis = { version = "1.2.1", default-features = false, features = ["aio", "tokio
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rhai = { version = "1.25.1", features = ["sync", "serde"] }
 rustix = { version = "1", features = ["fs", "process"] }
+ryu-js = { version = "1.0.2" }
 secrecy = { version = "0.10" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }

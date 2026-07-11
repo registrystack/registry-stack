@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use oxiri::Iri;
 use serde::{de, Deserialize, Deserializer, Serialize};
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
@@ -305,16 +305,14 @@ fn normalize_manifest_key(key: &str) -> String {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum ManifestDigestError {
-    #[error("metadata manifest canonical JSON does not support non-finite numbers")]
-    InvalidNumber,
     #[error("metadata manifest serialization failed: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("metadata manifest canonicalization failed: {0}")]
+    CanonicalJson(#[from] registry_platform_canonical_json::JcsError),
 }
 
 pub fn canonicalize_json(value: &Value) -> Result<Vec<u8>, ManifestDigestError> {
-    let mut out = Vec::new();
-    write_canonical(value, &mut out)?;
-    Ok(out)
+    Ok(registry_platform_canonical_json::canonicalize_json(value)?)
 }
 
 pub fn source_manifest_digest(manifest: &MetadataManifest) -> Result<String, ManifestDigestError> {
@@ -360,53 +358,6 @@ pub fn sha256_uri(bytes: &[u8]) -> String {
         let _ = write!(output, "{byte:02x}");
     }
     output
-}
-
-fn write_canonical(value: &Value, out: &mut Vec<u8>) -> Result<(), ManifestDigestError> {
-    match value {
-        Value::Null => out.extend_from_slice(b"null"),
-        Value::Bool(value) => out.extend_from_slice(if *value { b"true" } else { b"false" }),
-        Value::Number(number) => {
-            if let Some(value) = number.as_f64() {
-                if !value.is_finite() {
-                    return Err(ManifestDigestError::InvalidNumber);
-                }
-            }
-            out.extend_from_slice(number.to_string().as_bytes());
-        }
-        Value::String(value) => out.extend_from_slice(serde_json::to_string(value)?.as_bytes()),
-        Value::Array(values) => {
-            out.push(b'[');
-            for (index, item) in values.iter().enumerate() {
-                if index > 0 {
-                    out.push(b',');
-                }
-                write_canonical(item, out)?;
-            }
-            out.push(b']');
-        }
-        Value::Object(map) => write_canonical_object(map, out)?,
-    }
-    Ok(())
-}
-
-fn write_canonical_object(
-    map: &Map<String, Value>,
-    out: &mut Vec<u8>,
-) -> Result<(), ManifestDigestError> {
-    out.push(b'{');
-    let mut entries = map.iter().collect::<Vec<_>>();
-    entries.sort_unstable_by(|(left, _), (right, _)| left.as_bytes().cmp(right.as_bytes()));
-    for (index, (key, value)) in entries.into_iter().enumerate() {
-        if index > 0 {
-            out.push(b',');
-        }
-        out.extend_from_slice(serde_json::to_string(key)?.as_bytes());
-        out.push(b':');
-        write_canonical(value, out)?;
-    }
-    out.push(b'}');
-    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]

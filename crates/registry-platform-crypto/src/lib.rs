@@ -17,6 +17,7 @@ use p256::ecdsa::{
     VerifyingKey as P256VerifyingKey,
 };
 use pkcs1::{der::asn1::UintRef, der::SecretDocument, RsaPrivateKey as Pkcs1RsaPrivateKey};
+pub use registry_platform_canonical_json::{canonicalize_json, JcsError};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
@@ -658,21 +659,6 @@ pub fn validate_did_web_https_issuer_binding(did: &str, issuer: &str) -> Result<
     }
 }
 
-#[derive(Debug, Error)]
-#[non_exhaustive]
-pub enum JcsError {
-    #[error("JCS does not support non-finite numbers")]
-    InvalidNumber,
-    #[error("JSON serialization failed: {0}")]
-    Json(#[from] serde_json::Error),
-}
-
-pub fn canonicalize_json(value: &Value) -> Result<Vec<u8>, JcsError> {
-    let mut out = Vec::new();
-    write_canonical(value, &mut out)?;
-    Ok(out)
-}
-
 #[must_use]
 pub fn hmac_sha256_base64url_no_pad(key: &[u8], input: &[u8]) -> String {
     let mut mac =
@@ -1026,50 +1012,6 @@ fn hex_value(value: u8) -> Option<u8> {
         b'A'..=b'F' => Some(value - b'A' + 10),
         _ => None,
     }
-}
-
-fn write_canonical(value: &Value, out: &mut Vec<u8>) -> Result<(), JcsError> {
-    match value {
-        Value::Null => out.extend_from_slice(b"null"),
-        Value::Bool(value) => out.extend_from_slice(if *value { b"true" } else { b"false" }),
-        Value::Number(number) => {
-            if let Some(value) = number.as_f64() {
-                if !value.is_finite() {
-                    return Err(JcsError::InvalidNumber);
-                }
-            }
-            out.extend_from_slice(number.to_string().as_bytes());
-        }
-        Value::String(value) => out.extend_from_slice(serde_json::to_string(value)?.as_bytes()),
-        Value::Array(values) => {
-            out.push(b'[');
-            for (index, item) in values.iter().enumerate() {
-                if index > 0 {
-                    out.push(b',');
-                }
-                write_canonical(item, out)?;
-            }
-            out.push(b']');
-        }
-        Value::Object(map) => write_canonical_object(map, out)?,
-    }
-    Ok(())
-}
-
-fn write_canonical_object(map: &Map<String, Value>, out: &mut Vec<u8>) -> Result<(), JcsError> {
-    out.push(b'{');
-    let mut entries = map.iter().collect::<Vec<_>>();
-    entries.sort_unstable_by(|(left, _), (right, _)| left.as_bytes().cmp(right.as_bytes()));
-    for (index, (key, value)) in entries.into_iter().enumerate() {
-        if index > 0 {
-            out.push(b',');
-        }
-        out.extend_from_slice(serde_json::to_string(key)?.as_bytes());
-        out.push(b':');
-        write_canonical(value, out)?;
-    }
-    out.push(b'}');
-    Ok(())
 }
 
 #[cfg(test)]
@@ -1669,17 +1611,6 @@ mod tests {
         assert_eq!(
             validate_did_web_https_issuer_binding("did:key:z6MkiTBz", "https://example.gov"),
             Err(DidError::UnsupportedMethod)
-        );
-    }
-
-    #[test]
-    fn canonicalize_json_sorts_object_keys_recursively() {
-        let value = json!({"z": 1, "a": {"b": true, "a": [null, "x"]}});
-        let canonical = canonicalize_json(&value).expect("canonicalizes");
-
-        assert_eq!(
-            String::from_utf8(canonical).expect("utf8"),
-            r#"{"a":{"a":[null,"x"],"b":true},"z":1}"#
         );
     }
 

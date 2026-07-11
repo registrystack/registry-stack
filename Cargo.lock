@@ -5046,6 +5046,7 @@ version = "0.9.0"
 dependencies = [
  "oxiri",
  "oxjsonld",
+ "registry-platform-canonical-json",
  "serde",
  "serde_json",
  "serde_path_to_error",
@@ -5297,6 +5298,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-platform-canonical-json"
+version = "0.9.0"
+dependencies = [
+ "ryu-js",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "registry-platform-config"
 version = "0.9.0"
 dependencies = [
@@ -5323,6 +5333,7 @@ dependencies = [
  "p256",
  "pkcs1",
  "proptest",
+ "registry-platform-canonical-json",
  "serde",
  "serde_json",
  "sha2 0.11.0",

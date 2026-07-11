@@ -15,6 +15,7 @@ workspace = true
 
 [dependencies]
 oxiri = { version = "0.2.11" }
+registry-platform-canonical-json.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_path_to_error = { workspace = true }
