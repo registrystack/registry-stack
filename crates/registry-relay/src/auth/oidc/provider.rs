@@ -45,7 +45,8 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use jsonwebtoken::{decode_header, Algorithm};
 use registry_platform_oidc::{
-    Claims, OidcError as PlatformOidcError, TokenVerifier, TokenVerifierConfig, VerifiedToken,
+    Audience, Claims, OidcError as PlatformOidcError, TokenVerifier, TokenVerifierConfig,
+    VerifiedToken,
 };
 #[cfg(test)]
 use serde_json::Map;
@@ -55,7 +56,9 @@ use zeroize::Zeroizing;
 use crate::config::{OidcAlgorithm, OidcConfig};
 use crate::error::AuthError;
 
-use super::super::{AuthMode, AuthProvider, Principal, ScopeSet};
+use super::super::{
+    AuthMode, AuthProvider, AuthenticationResult, Principal, ScopeSet, VerifiedOidcIdentity,
+};
 use super::jwks::{JwksCache, JwksFetcher};
 
 /// HTTP authentication scheme accepted by the OIDC provider.
@@ -142,7 +145,7 @@ impl OidcAuth {
         self.cache.key_count()
     }
 
-    async fn verify(&self, presented: &str) -> Result<Principal, AuthError> {
+    async fn verify(&self, presented: &str) -> Result<AuthenticationResult, AuthError> {
         let header = decode_header(presented).map_err(|err| {
             tracing::debug!(
                 target: "registry_relay::auth",
@@ -222,6 +225,15 @@ impl OidcAuth {
         .filter_map(|s| map_scope(&self.scope_claim, &self.scope_map, s))
         .collect();
 
+        let issuer = claims.iss.clone().ok_or(AuthError::MalformedCredential)?;
+        let audiences = match claims.aud.as_ref().ok_or(AuthError::MalformedCredential)? {
+            Audience::One(audience) => [audience.clone()].into_iter().collect(),
+            Audience::Many(audiences) => audiences.iter().cloned().collect(),
+        };
+        let client_id = claims.azp.clone().or_else(|| claims.client_id.clone());
+        let verified_oidc =
+            VerifiedOidcIdentity::from_verified_claims(issuer, audiences, client_id)?;
+
         let principal_id = claims
             .sub
             .or(claims.client_id)
@@ -246,11 +258,14 @@ impl OidcAuth {
             );
         }
 
-        Ok(Principal {
-            principal_id,
-            scopes,
-            auth_mode: AuthMode::Oidc,
-        })
+        Ok(AuthenticationResult::oidc(
+            Principal {
+                principal_id,
+                scopes,
+                auth_mode: AuthMode::Oidc,
+            },
+            verified_oidc,
+        ))
     }
 
     async fn cache_mark_observed(&self, kid: &str) {
@@ -263,7 +278,9 @@ impl AuthProvider for OidcAuth {
         &'a self,
         headers: &'a HeaderMap,
         _remote_addr: std::net::IpAddr,
-    ) -> Pin<Box<dyn std::future::Future<Output = Result<Principal, AuthError>> + Send + 'a>> {
+    ) -> Pin<
+        Box<dyn std::future::Future<Output = Result<AuthenticationResult, AuthError>> + Send + 'a>,
+    > {
         let parsed = extract_bearer(headers);
         Box::pin(async move {
             let token = parsed?;
@@ -721,6 +738,13 @@ mod tests {
         assert_eq!(principal.auth_mode, AuthMode::Oidc);
         assert!(principal.scopes.contains("social_registry:rows"));
         assert!(principal.scopes.contains("social_registry:metadata"));
+        let identity = principal
+            .verified_oidc()
+            .expect("OIDC authentication retains verified workload claims");
+        assert_eq!(identity.issuer(), TEST_ISSUER);
+        assert!(identity.has_audience(TEST_AUDIENCE));
+        assert_eq!(identity.audiences().collect::<Vec<_>>(), [TEST_AUDIENCE]);
+        assert_eq!(identity.client_id(), None);
     }
 
     #[tokio::test]
@@ -1334,10 +1358,16 @@ mod tests {
         let mut config = base_config();
         config.allowed_clients = vec!["statistics-office".to_string()];
         let provider = provider_from(config, jwks_for(TEST_KID, &vk));
-        provider
+        let authenticated = provider
             .verify(&token)
             .await
             .expect("client_id fallback admitted");
+        assert_eq!(
+            authenticated
+                .verified_oidc()
+                .and_then(VerifiedOidcIdentity::client_id),
+            Some("statistics-office")
+        );
     }
 
     #[tokio::test]

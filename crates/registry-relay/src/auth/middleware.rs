@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Axum middleware that runs an [`super::AuthProvider`] in front of a router.
 //!
-//! On success the layer inserts [`super::Principal`] into request extensions
-//! so handlers can extract it via `axum::Extension<Principal>` and so
-//! the audit middleware can project it into audit records. On failure
+//! On success the layer inserts [`super::Principal`] into request extensions.
+//! OIDC success also inserts [`super::VerifiedOidcIdentity`] so consultation
+//! handlers can bind the verified issuer, audiences, and client identity to
+//! fixed workload configuration. The audit middleware projects the common
+//! principal into audit records. On failure
 //! it short-circuits with the RFC 9457 Problem
 //! Details body produced by `crate::error::Error::into_response`.
 //!
@@ -29,7 +31,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Router;
 
 use crate::auth::failure_throttle::{AuthFailureThrottle, Decision};
-use crate::auth::Principal;
+use crate::auth::AuthenticationResult;
 use crate::error::AuthError;
 use crate::error::Error;
 use crate::runtime_config::RelayRuntimeHandle;
@@ -66,7 +68,9 @@ impl AuthProvider for RuntimeAuthProvider {
         &'a self,
         headers: &'a HeaderMap,
         remote_addr: IpAddr,
-    ) -> Pin<Box<dyn std::future::Future<Output = Result<Principal, AuthError>> + Send + 'a>> {
+    ) -> Pin<
+        Box<dyn std::future::Future<Output = Result<AuthenticationResult, AuthError>> + Send + 'a>,
+    > {
         let provider = self.handle.load_full().auth.clone();
         Box::pin(async move { provider.authenticate(headers, remote_addr).await })
     }
@@ -155,7 +159,8 @@ where
 ///
 /// Otherwise reads the bearer token, calls the provider, and either
 /// short-circuits with a Problem Details response or forwards with
-/// [`super::Principal`] in request extensions.
+/// [`super::Principal`] and any [`super::VerifiedOidcIdentity`] in request
+/// extensions.
 ///
 /// On success the principal is also cloned onto the response
 /// extensions after the inner handler runs. The audit middleware sits
@@ -190,8 +195,8 @@ async fn run(State(state): State<AuthMiddlewareState>, mut req: Request, next: N
         }
     }
 
-    let principal = match state.provider.authenticate(req.headers(), remote).await {
-        Ok(p) => p,
+    let authentication = match state.provider.authenticate(req.headers(), remote).await {
+        Ok(authentication) => authentication,
         Err(e) => {
             if e.counts_toward_failure_throttle() {
                 if let (Some(throttle), Some(key)) = (&state.throttle, &throttle_key) {
@@ -201,8 +206,12 @@ async fn run(State(state): State<AuthMiddlewareState>, mut req: Request, next: N
             return Error::from(e).into_response();
         }
     };
+    let (principal, verified_oidc) = authentication.into_parts();
     let principal_for_audit = principal.clone();
     req.extensions_mut().insert(principal);
+    if let Some(identity) = verified_oidc {
+        req.extensions_mut().insert(identity);
+    }
     let mut response = next.run(req).await;
     response.extensions_mut().insert(principal_for_audit);
     response
@@ -218,4 +227,87 @@ fn remote_addr(req: &Request) -> IpAddr {
     req.extensions()
         .get::<ConnectInfo<std::net::SocketAddr>>()
         .map_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED), |ci| ci.0.ip())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use axum::body::{to_bytes, Body};
+    use axum::extract::Extension;
+    use axum::http::Request;
+    use axum::routing::get;
+    use serde_json::Value;
+    use tower::ServiceExt;
+
+    use super::*;
+    use crate::auth::{AuthMode, AuthenticationResult, Principal, ScopeSet, VerifiedOidcIdentity};
+
+    struct FixedAuthProvider(AuthenticationResult);
+
+    impl AuthProvider for FixedAuthProvider {
+        fn authenticate<'a>(
+            &'a self,
+            _headers: &'a HeaderMap,
+            _remote_addr: IpAddr,
+        ) -> Pin<
+            Box<
+                dyn std::future::Future<Output = Result<AuthenticationResult, AuthError>>
+                    + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async { Ok(self.0.clone()) })
+        }
+    }
+
+    async fn verified_oidc_handler(
+        Extension(identity): Extension<VerifiedOidcIdentity>,
+    ) -> axum::Json<Value> {
+        axum::Json(serde_json::json!({
+            "issuer": identity.issuer(),
+            "audiences": identity.audiences().collect::<Vec<_>>(),
+            "client_id": identity.client_id(),
+        }))
+    }
+
+    #[tokio::test]
+    async fn middleware_inserts_verified_oidc_identity_from_the_same_authentication() {
+        let identity = VerifiedOidcIdentity::from_verified_claims(
+            "https://issuer.example".to_string(),
+            BTreeSet::from(["registry-relay".to_string()]),
+            Some("registry-notary".to_string()),
+        )
+        .expect("valid verified identity");
+        let authentication = AuthenticationResult::oidc(
+            Principal {
+                principal_id: "notary-service".to_string(),
+                scopes: ScopeSet::from_iter(["registry:consult"]),
+                auth_mode: AuthMode::Oidc,
+            },
+            identity,
+        );
+        let app = auth_layer(
+            Router::new().route("/identity", get(verified_oidc_handler)),
+            Arc::new(FixedAuthProvider(authentication)),
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/identity")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert!(response.status().is_success());
+        let body = to_bytes(response.into_body(), 8 * 1024)
+            .await
+            .expect("bounded response");
+        let value: Value = serde_json::from_slice(&body).expect("JSON response");
+        assert_eq!(value["issuer"], "https://issuer.example");
+        assert_eq!(value["audiences"], serde_json::json!(["registry-relay"]));
+        assert_eq!(value["client_id"], "registry-notary");
+    }
 }

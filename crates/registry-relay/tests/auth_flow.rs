@@ -27,7 +27,7 @@ use registry_relay::auth::api_key::{ApiKeyAuth, ApiKeyEntry};
 use registry_relay::auth::failure_throttle::AuthFailureThrottle;
 use registry_relay::auth::middleware::{auth_layer, auth_layer_with_failure_throttle};
 use registry_relay::auth::scopes::{require_scope, ScopeSet};
-use registry_relay::auth::{AuthMode, AuthProvider, Principal};
+use registry_relay::auth::{AuthMode, AuthProvider, AuthenticationResult, Principal};
 use registry_relay::config::AuthFailureThrottleConfig;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -417,8 +417,9 @@ impl AuthProvider for JwksUnavailableAuth {
         _remote_addr: IpAddr,
     ) -> std::pin::Pin<
         Box<
-            dyn std::future::Future<Output = Result<Principal, registry_relay::error::AuthError>>
-                + Send
+            dyn std::future::Future<
+                    Output = Result<AuthenticationResult, registry_relay::error::AuthError>,
+                > + Send
                 + 'a,
         >,
     > {

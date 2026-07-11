@@ -19,7 +19,9 @@
 //! is mapped to a Problem Details response that carries only the
 //! stable taxonomy code, never the token bytes.
 
+use std::collections::BTreeSet;
 use std::net::IpAddr;
+use std::ops::Deref;
 
 use crate::error::AuthError;
 
@@ -71,6 +73,133 @@ pub struct Principal {
     pub auth_mode: AuthMode,
 }
 
+/// Verified OIDC claims needed to bind a consultation to one configured
+/// service workload.
+///
+/// This value contains no bearer token or unverified claim. It is constructed
+/// only after signature, issuer, audience, time, token-type, and client-policy
+/// verification succeeds. General Relay handlers continue to consume
+/// [`Principal`]; the consultation surface additionally requires this typed
+/// request extension and rejects API-key authentication.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedOidcIdentity {
+    issuer: Box<str>,
+    audiences: BTreeSet<Box<str>>,
+    client_id: Option<Box<str>>,
+}
+
+impl VerifiedOidcIdentity {
+    const MAX_CLAIM_BYTES: usize = 2_048;
+
+    pub(crate) fn from_verified_claims(
+        issuer: String,
+        audiences: BTreeSet<String>,
+        client_id: Option<String>,
+    ) -> Result<Self, AuthError> {
+        let valid_text = |value: &str| {
+            !value.is_empty()
+                && value.len() <= Self::MAX_CLAIM_BYTES
+                && value.chars().all(|character| !character.is_control())
+        };
+        if !valid_text(&issuer)
+            || audiences.is_empty()
+            || audiences.iter().any(|audience| !valid_text(audience))
+            || client_id
+                .as_deref()
+                .is_some_and(|client| !valid_text(client))
+        {
+            return Err(AuthError::MalformedCredential);
+        }
+
+        Ok(Self {
+            issuer: issuer.into_boxed_str(),
+            audiences: audiences.into_iter().map(String::into_boxed_str).collect(),
+            client_id: client_id.map(String::into_boxed_str),
+        })
+    }
+
+    /// Return the signature-verified issuer claim.
+    #[must_use]
+    pub fn issuer(&self) -> &str {
+        &self.issuer
+    }
+
+    /// Return the signature-verified token audiences in canonical order.
+    pub fn audiences(&self) -> impl ExactSizeIterator<Item = &str> {
+        self.audiences.iter().map(AsRef::as_ref)
+    }
+
+    /// Check whether the verified token contains a configured audience.
+    #[must_use]
+    pub fn has_audience(&self, expected: &str) -> bool {
+        self.audiences.contains(expected)
+    }
+
+    /// Return the verified OAuth client identity (`azp` preferred over
+    /// `client_id`) when the token carries one.
+    #[must_use]
+    pub fn client_id(&self) -> Option<&str> {
+        self.client_id.as_deref()
+    }
+}
+
+/// Successful authentication plus provider-specific verified context.
+///
+/// The wrapper keeps OIDC workload claims coupled to the principal produced by
+/// the same verification operation. Middleware splits it into request
+/// extensions only after authentication succeeds.
+#[derive(Debug, Clone)]
+pub struct AuthenticationResult {
+    principal: Principal,
+    verified_oidc: Option<VerifiedOidcIdentity>,
+}
+
+impl AuthenticationResult {
+    /// Construct an API-key authentication result.
+    #[must_use]
+    pub fn api_key(principal: Principal) -> Self {
+        debug_assert_eq!(principal.auth_mode, AuthMode::ApiKey);
+        Self {
+            principal,
+            verified_oidc: None,
+        }
+    }
+
+    /// Construct a verified OIDC authentication result.
+    #[must_use]
+    pub fn oidc(principal: Principal, verified_oidc: VerifiedOidcIdentity) -> Self {
+        debug_assert_eq!(principal.auth_mode, AuthMode::Oidc);
+        Self {
+            principal,
+            verified_oidc: Some(verified_oidc),
+        }
+    }
+
+    /// Borrow the common authenticated principal.
+    #[must_use]
+    pub const fn principal(&self) -> &Principal {
+        &self.principal
+    }
+
+    /// Borrow verified OIDC workload claims when OIDC produced this result.
+    #[must_use]
+    pub const fn verified_oidc(&self) -> Option<&VerifiedOidcIdentity> {
+        self.verified_oidc.as_ref()
+    }
+
+    pub(crate) fn into_parts(self) -> (Principal, Option<VerifiedOidcIdentity>) {
+        (self.principal, self.verified_oidc)
+    }
+}
+
+impl Deref for AuthenticationResult {
+    type Target = Principal;
+
+    fn deref(&self) -> &Self::Target {
+        &self.principal
+    }
+}
+
 /// Authenticates inbound requests.
 ///
 /// V1 implementation: [`api_key::ApiKeyAuth`], reading
@@ -92,7 +221,7 @@ pub struct Principal {
 pub trait AuthProvider: Send + Sync + 'static {
     /// Authenticate a request from its headers and peer address.
     ///
-    /// Returns `Ok(Principal)` on success and `Err(AuthError)`
+    /// Returns `Ok(AuthenticationResult)` on success and `Err(AuthError)`
     /// otherwise. The `remote_addr` is passed for future
     /// implementations that gate by source IP (e.g. dataspace
     /// connectors); V1 ignores it but logs it via audit downstream.
@@ -106,6 +235,6 @@ pub trait AuthProvider: Send + Sync + 'static {
         headers: &'a axum::http::HeaderMap,
         remote_addr: IpAddr,
     ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<Principal, AuthError>> + Send + 'a>,
+        Box<dyn std::future::Future<Output = Result<AuthenticationResult, AuthError>> + Send + 'a>,
     >;
 }

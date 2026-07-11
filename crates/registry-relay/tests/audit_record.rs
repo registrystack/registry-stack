@@ -1324,8 +1324,9 @@ async fn middleware_records_jwks_unavailable_auth_failure() {
             _remote_addr: IpAddr,
         ) -> std::pin::Pin<
             Box<
-                dyn std::future::Future<Output = Result<registry_relay::auth::Principal, AuthError>>
-                    + Send
+                dyn std::future::Future<
+                        Output = Result<registry_relay::auth::AuthenticationResult, AuthError>,
+                    > + Send
                     + 'a,
             >,
         > {

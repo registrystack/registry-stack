@@ -34,7 +34,7 @@ use zeroize::Zeroizing;
 
 use crate::error::AuthError;
 
-use super::{AuthMode, AuthProvider, Principal, ScopeSet};
+use super::{AuthMode, AuthProvider, AuthenticationResult, Principal, ScopeSet};
 
 /// Compatibility header accepted alongside `Authorization: Bearer`.
 const X_API_KEY: &str = "x-api-key";
@@ -173,13 +173,15 @@ impl AuthProvider for ApiKeyAuth {
         &'a self,
         headers: &'a HeaderMap,
         _remote_addr: std::net::IpAddr,
-    ) -> Pin<Box<dyn std::future::Future<Output = Result<Principal, AuthError>> + Send + 'a>> {
+    ) -> Pin<
+        Box<dyn std::future::Future<Output = Result<AuthenticationResult, AuthError>> + Send + 'a>,
+    > {
         // Parse the header eagerly so we can fail fast and zeroise
         // any owned token bytes on the error path too.
         let parse_result = extract_credential(headers);
         Box::pin(async move {
             let presented = parse_result?;
-            self.verify(&presented)
+            self.verify(&presented).map(AuthenticationResult::api_key)
         })
     }
 }
