@@ -8,7 +8,7 @@ use super::{
 };
 
 #[tokio::test]
-pub(crate) async fn oidc_mode_verifies_token_from_fixture_idp() {
+pub(super) async fn oidc_mode_verifies_token_from_fixture_idp() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
 
@@ -104,7 +104,7 @@ pub(crate) async fn oidc_mode_verifies_token_from_fixture_idp() {
 }
 
 #[tokio::test]
-pub(crate) async fn oidc_metrics_scope_can_scrape_metrics_but_non_metrics_cannot() {
+pub(super) async fn oidc_metrics_scope_can_scrape_metrics_but_non_metrics_cannot() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
 
@@ -178,7 +178,7 @@ pub(crate) async fn oidc_metrics_scope_can_scrape_metrics_but_non_metrics_cannot
 }
 
 #[tokio::test]
-pub(crate) async fn jwks_is_public_and_contains_no_private_members() {
+pub(super) async fn jwks_is_public_and_contains_no_private_members() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
@@ -208,7 +208,7 @@ pub(crate) async fn jwks_is_public_and_contains_no_private_members() {
 }
 
 #[tokio::test]
-pub(crate) async fn oidc_self_attestation_evaluates_renders_and_audits_access_mode() {
+pub(super) async fn oidc_self_attestation_evaluates_renders_and_audits_access_mode() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);

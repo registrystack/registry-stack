@@ -8,7 +8,7 @@ use super::{
 };
 
 #[test]
-pub(crate) fn compile_notary_runtime_is_named_fail_closed_boundary() {
+pub(super) fn compile_notary_runtime_is_named_fail_closed_boundary() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -43,7 +43,7 @@ pub(crate) fn compile_notary_runtime_is_named_fail_closed_boundary() {
         .contains("TEST_COMPILE_BOUNDARY_MISSING_SOURCE_TOKEN"));
 }
 
-pub(crate) fn registry_data_api_target_identifier_config(
+pub(super) fn registry_data_api_target_identifier_config(
     base_url: &str,
     audit_path: &str,
 ) -> StandaloneRegistryNotaryConfig {
@@ -71,7 +71,7 @@ pub(crate) fn registry_data_api_target_identifier_config(
     config
 }
 
-pub(crate) fn set_federation_env() {
+pub(super) fn set_federation_env() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -85,7 +85,7 @@ pub(crate) fn set_federation_env() {
     );
 }
 
-pub(crate) fn federation_config(
+pub(super) fn federation_config(
     base_url: &str,
     audit_path: &str,
     peer_jwks_uri: &str,
@@ -102,7 +102,7 @@ pub(crate) fn federation_config(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn federation_config_for(
+pub(super) fn federation_config_for(
     base_url: &str,
     audit_path: &str,
     node_id: &str,
@@ -186,7 +186,7 @@ evaluation_profiles:
 }
 
 #[cfg(feature = "registry-notary-cel")]
-pub(crate) fn add_governed_federation_policy_context(
+pub(super) fn add_governed_federation_policy_context(
     config: &mut StandaloneRegistryNotaryConfig,
     profile_jurisdiction: &str,
 ) {
@@ -216,11 +216,11 @@ pub(crate) fn add_governed_federation_policy_context(
     profile.assurance_level = Some("substantial".to_string());
 }
 
-pub(crate) fn federation_request_jwt(jti: &str, purpose: &str) -> String {
+pub(super) fn federation_request_jwt(jti: &str, purpose: &str) -> String {
     federation_request_jwt_with_claims(jti, purpose, json!(["farmer-under-4ha"]))
 }
 
-pub(crate) fn federation_request_jwt_with_claims(
+pub(super) fn federation_request_jwt_with_claims(
     jti: &str,
     purpose: &str,
     claims: Value,
@@ -231,13 +231,13 @@ pub(crate) fn federation_request_jwt_with_claims(
     federation_request_jwt_from_payload(payload)
 }
 
-pub(crate) fn federation_request_jwt_with_audience(jti: &str, audience: &str) -> String {
+pub(super) fn federation_request_jwt_with_audience(jti: &str, audience: &str) -> String {
     let mut payload = federation_request_payload(jti);
     payload["aud"] = json!(audience);
     federation_request_jwt_from_payload(payload)
 }
 
-pub(crate) fn federation_request_jwt_with_kid(jti: &str, kid: &str) -> String {
+pub(super) fn federation_request_jwt_with_kid(jti: &str, kid: &str) -> String {
     sign_ed25519_compact_jwt(
         fixtures::ED25519_PRIVATE_JWK,
         FEDERATION_REQUEST_JWT_TYPE,
@@ -246,7 +246,7 @@ pub(crate) fn federation_request_jwt_with_kid(jti: &str, kid: &str) -> String {
     )
 }
 
-pub(crate) fn federation_request_jwt_with_times(jti: &str, iat: i64, nbf: i64, exp: i64) -> String {
+pub(super) fn federation_request_jwt_with_times(jti: &str, iat: i64, nbf: i64, exp: i64) -> String {
     let mut payload = federation_request_payload(jti);
     payload["iat"] = json!(iat);
     payload["nbf"] = json!(nbf);
@@ -254,13 +254,13 @@ pub(crate) fn federation_request_jwt_with_times(jti: &str, iat: i64, nbf: i64, e
     federation_request_jwt_from_payload(payload)
 }
 
-pub(crate) fn federation_request_jwt_with_subject(jti: &str, subject: &str) -> String {
+pub(super) fn federation_request_jwt_with_subject(jti: &str, subject: &str) -> String {
     let mut payload = federation_request_payload(jti);
     payload["sub"] = json!(subject);
     federation_request_jwt_from_payload(payload)
 }
 
-pub(crate) fn federation_request_payload(jti: &str) -> Value {
+pub(super) fn federation_request_payload(jti: &str) -> Value {
     let now = OffsetDateTime::now_utc().unix_timestamp();
     json!({
         "iss": "https://agency-b.example.gov",
@@ -284,7 +284,7 @@ pub(crate) fn federation_request_payload(jti: &str) -> Value {
     })
 }
 
-pub(crate) fn federation_request_jwt_from_payload(payload: Value) -> String {
+pub(super) fn federation_request_jwt_from_payload(payload: Value) -> String {
     sign_ed25519_compact_jwt(
         fixtures::ED25519_PRIVATE_JWK,
         FEDERATION_REQUEST_JWT_TYPE,
@@ -293,7 +293,7 @@ pub(crate) fn federation_request_jwt_from_payload(payload: Value) -> String {
     )
 }
 
-pub(crate) fn federation_jwt_with_header(header: Value, payload: Value) -> String {
+pub(super) fn federation_jwt_with_header(header: Value, payload: Value) -> String {
     format!(
         "{}.{}.{}",
         URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header).expect("header encodes")),
@@ -302,7 +302,7 @@ pub(crate) fn federation_jwt_with_header(header: Value, payload: Value) -> Strin
     )
 }
 
-pub(crate) fn tamper_jwt_signature(jwt: &str) -> String {
+pub(super) fn tamper_jwt_signature(jwt: &str) -> String {
     let mut parts = jwt.split('.').collect::<Vec<_>>();
     assert_eq!(parts.len(), 3, "compact jwt has three parts");
     parts[2] = "AA";
@@ -310,12 +310,12 @@ pub(crate) fn tamper_jwt_signature(jwt: &str) -> String {
 }
 
 #[cfg(feature = "registry-notary-cel")]
-pub(crate) fn verified_federation_response_claims(jwt: &str) -> Value {
+pub(super) fn verified_federation_response_claims(jwt: &str) -> Value {
     verified_federation_response_claims_with_key(jwt, "agency-a-fed-1", TEST_ISSUER_JWK)
 }
 
 #[cfg(feature = "registry-notary-cel")]
-pub(crate) fn verified_federation_response_claims_with_key(
+pub(super) fn verified_federation_response_claims_with_key(
     jwt: &str,
     expected_kid: &str,
     private_jwk: &str,
@@ -345,7 +345,7 @@ pub(crate) fn verified_federation_response_claims_with_key(
     serde_json::from_slice(&payload).expect("response payload is JSON")
 }
 
-pub(crate) fn audit_records(path: &std::path::Path) -> Vec<Value> {
+pub(super) fn audit_records(path: &std::path::Path) -> Vec<Value> {
     std::fs::read_to_string(path)
         .expect("audit was written")
         .lines()
@@ -354,7 +354,7 @@ pub(crate) fn audit_records(path: &std::path::Path) -> Vec<Value> {
         .collect()
 }
 
-pub(crate) fn self_attestation_oidc_config(
+pub(super) fn self_attestation_oidc_config(
     base_url: &str,
     audit_path: &str,
     issuer: &str,
@@ -511,7 +511,7 @@ self_attestation:
     serde_norway::from_str(&raw).expect("self-attestation config deserializes")
 }
 
-pub(crate) fn self_attestation_oid4vci_config(
+pub(super) fn self_attestation_oid4vci_config(
     base_url: &str,
     audit_path: &str,
     issuer: &str,
@@ -557,7 +557,7 @@ credential_configurations:
     config
 }
 
-pub(crate) fn add_self_attestation_projection_claim(
+pub(super) fn add_self_attestation_projection_claim(
     config: &mut StandaloneRegistryNotaryConfig,
     claim_id: &str,
     title: &str,
@@ -611,7 +611,7 @@ pub(crate) fn add_self_attestation_projection_claim(
         .push(claim_id.to_string());
 }
 
-pub(crate) fn enable_oid4vci_field_projection(config: &mut StandaloneRegistryNotaryConfig) {
+pub(super) fn enable_oid4vci_field_projection(config: &mut StandaloneRegistryNotaryConfig) {
     add_self_attestation_projection_claim(
         config,
         "person-given-name",
@@ -651,12 +651,12 @@ pub(crate) fn enable_oid4vci_field_projection(config: &mut StandaloneRegistryNot
 }
 
 #[cfg(feature = "registry-notary-cel")]
-pub(crate) fn dci_config(base_url: &str, audit_path: &str) -> StandaloneRegistryNotaryConfig {
+pub(super) fn dci_config(base_url: &str, audit_path: &str) -> StandaloneRegistryNotaryConfig {
     config(base_url, audit_path, "dci", "farmed_land_size_hectares")
 }
 
 #[cfg(feature = "registry-notary-cel")]
-pub(crate) fn civil_demographic_dci_config(
+pub(super) fn civil_demographic_dci_config(
     base_url: &str,
     audit_path: &str,
 ) -> StandaloneRegistryNotaryConfig {
@@ -773,7 +773,7 @@ evidence:
     serde_norway::from_str(&raw).expect("Civil demographic DCI config deserializes")
 }
 
-pub(crate) fn no_cel_config(base_url: &str, audit_path: &str) -> StandaloneRegistryNotaryConfig {
+pub(super) fn no_cel_config(base_url: &str, audit_path: &str) -> StandaloneRegistryNotaryConfig {
     set_audit_secret();
     let raw = format!(
         r#"
@@ -844,7 +844,7 @@ evidence:
     serde_norway::from_str(&raw).expect("config deserializes")
 }
 
-pub(crate) fn audit_envelopes(path: &std::path::Path) -> Vec<AuditEnvelope> {
+pub(super) fn audit_envelopes(path: &std::path::Path) -> Vec<AuditEnvelope> {
     std::fs::read_to_string(path)
         .expect("audit jsonl is readable")
         .lines()
@@ -852,7 +852,7 @@ pub(crate) fn audit_envelopes(path: &std::path::Path) -> Vec<AuditEnvelope> {
         .collect()
 }
 
-pub(crate) fn audit_record_contains_text(value: &Value, needle: &str) -> bool {
+pub(super) fn audit_record_contains_text(value: &Value, needle: &str) -> bool {
     match value {
         Value::String(value) => value.contains(needle),
         Value::Number(value) => value.to_string().contains(needle),
@@ -866,14 +866,14 @@ pub(crate) fn audit_record_contains_text(value: &Value, needle: &str) -> bool {
     }
 }
 
-pub(crate) fn audit_records_from_envelopes(path: &std::path::Path) -> Vec<Value> {
+pub(super) fn audit_records_from_envelopes(path: &std::path::Path) -> Vec<Value> {
     audit_envelopes(path)
         .into_iter()
         .map(|envelope| envelope.record)
         .collect()
 }
 
-pub(crate) fn audit_record_with<'a>(
+pub(super) fn audit_record_with<'a>(
     records: &'a [Value],
     path: &str,
     decision: &str,
@@ -896,7 +896,7 @@ pub(crate) fn audit_record_with<'a>(
         })
 }
 
-pub(crate) fn assert_problem_identity(body: &Value, status: StatusCode, code: &str) {
+pub(super) fn assert_problem_identity(body: &Value, status: StatusCode, code: &str) {
     assert_eq!(body["status"], json!(status.as_u16()));
     assert_eq!(body["code"], json!(code));
     assert_eq!(
@@ -908,7 +908,7 @@ pub(crate) fn assert_problem_identity(body: &Value, status: StatusCode, code: &s
     );
 }
 
-pub(crate) fn assert_audit_records_do_not_contain(records: &[Value], forbidden: &[&str]) {
+pub(super) fn assert_audit_records_do_not_contain(records: &[Value], forbidden: &[&str]) {
     for needle in forbidden {
         assert!(
             !records
@@ -919,7 +919,7 @@ pub(crate) fn assert_audit_records_do_not_contain(records: &[Value], forbidden: 
     }
 }
 
-pub(crate) fn assert_hmac_audit_field(record: &Value, field: &str) {
+pub(super) fn assert_hmac_audit_field(record: &Value, field: &str) {
     assert!(
         record[field]
             .as_str()
@@ -929,7 +929,7 @@ pub(crate) fn assert_hmac_audit_field(record: &Value, field: &str) {
     );
 }
 
-pub(crate) fn assert_verified_federation_audit_context(
+pub(super) fn assert_verified_federation_audit_context(
     record: &Value,
     profile: &str,
     purpose: &str,
@@ -954,7 +954,7 @@ pub(crate) fn assert_verified_federation_audit_context(
     }
 }
 
-pub(crate) fn assert_federation_request_context_is_absent(record: &Value) {
+pub(super) fn assert_federation_request_context_is_absent(record: &Value) {
     assert_eq!(record["scopes_used"], json!([]));
     for field in [
         "federation_peer_id_hash",
@@ -972,7 +972,7 @@ pub(crate) fn assert_federation_request_context_is_absent(record: &Value) {
 }
 
 #[tokio::test]
-pub(crate) async fn healthz_ready_opaque_counters_in_503_body() {
+pub(super) async fn healthz_ready_opaque_counters_in_503_body() {
     let server = TestServer::builder()
         .http_transport()
         .build(registry_notary_server::router::<()>());
@@ -1005,7 +1005,7 @@ pub(crate) async fn healthz_ready_opaque_counters_in_503_body() {
 }
 
 #[tokio::test]
-pub(crate) async fn federation_route_is_not_mounted_until_enabled() {
+pub(super) async fn federation_route_is_not_mounted_until_enabled() {
     set_federation_env();
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
@@ -1026,7 +1026,7 @@ pub(crate) async fn federation_route_is_not_mounted_until_enabled() {
 
 #[tokio::test]
 #[cfg(feature = "registry-notary-cel")]
-pub(crate) async fn federation_evaluation_returns_signed_response_and_rejects_replay() {
+pub(super) async fn federation_evaluation_returns_signed_response_and_rejects_replay() {
     set_federation_env();
     let upstream = TestServer::builder()
         .http_transport()
@@ -1167,7 +1167,7 @@ pub(crate) async fn federation_evaluation_returns_signed_response_and_rejects_re
 
 #[tokio::test]
 #[cfg(feature = "registry-notary-cel")]
-pub(crate) async fn federation_policy_context_satisfies_governed_source_matching() {
+pub(super) async fn federation_policy_context_satisfies_governed_source_matching() {
     set_federation_env();
     let upstream = TestServer::builder()
         .http_transport()
@@ -1272,7 +1272,7 @@ pub(crate) async fn federation_policy_context_satisfies_governed_source_matching
 
 #[tokio::test]
 #[cfg(feature = "registry-notary-cel")]
-pub(crate) async fn federation_auth_exempt_route_still_requires_valid_jws() {
+pub(super) async fn federation_auth_exempt_route_still_requires_valid_jws() {
     set_federation_env();
     let upstream = TestServer::builder()
         .http_transport()
@@ -1313,7 +1313,7 @@ pub(crate) async fn federation_auth_exempt_route_still_requires_valid_jws() {
 
 #[tokio::test]
 #[cfg(feature = "registry-notary-cel")]
-pub(crate) async fn federation_two_standalone_notaries_smoke() {
+pub(super) async fn federation_two_standalone_notaries_smoke() {
     set_federation_env();
     let upstream = TestServer::builder()
         .http_transport()
@@ -1392,7 +1392,7 @@ pub(crate) async fn federation_two_standalone_notaries_smoke() {
 }
 
 #[tokio::test]
-pub(crate) async fn federation_denial_happens_before_source_read() {
+pub(super) async fn federation_denial_happens_before_source_read() {
     set_federation_env();
     let source_hits = Arc::new(AtomicUsize::new(0));
     let source_hits_for_route = Arc::clone(&source_hits);
@@ -1612,16 +1612,16 @@ pub(crate) async fn federation_denial_happens_before_source_read() {
 }
 
 #[tokio::test]
-pub(crate) async fn federation_emergency_kid_denylist_blocks_before_source_read() {
+pub(super) async fn federation_emergency_kid_denylist_blocks_before_source_read() {
     assert_federation_emergency_denylist_blocks_before_source_read(true).await;
 }
 
 #[tokio::test]
-pub(crate) async fn federation_emergency_node_id_denylist_blocks_before_source_read() {
+pub(super) async fn federation_emergency_node_id_denylist_blocks_before_source_read() {
     assert_federation_emergency_denylist_blocks_before_source_read(false).await;
 }
 
-pub(crate) async fn assert_federation_emergency_denylist_blocks_before_source_read(deny_kid: bool) {
+pub(super) async fn assert_federation_emergency_denylist_blocks_before_source_read(deny_kid: bool) {
     set_federation_env();
     let source_hits = Arc::new(AtomicUsize::new(0));
     let source_hits_for_route = Arc::clone(&source_hits);
@@ -1697,7 +1697,7 @@ pub(crate) async fn assert_federation_emergency_denylist_blocks_before_source_re
 }
 
 #[tokio::test]
-pub(crate) async fn federation_request_claims_must_match_profile_before_source_read() {
+pub(super) async fn federation_request_claims_must_match_profile_before_source_read() {
     set_federation_env();
     let source_hits = Arc::new(AtomicUsize::new(0));
     let source_hits_for_route = Arc::clone(&source_hits);
@@ -1766,7 +1766,7 @@ pub(crate) async fn federation_request_claims_must_match_profile_before_source_r
 
 #[tokio::test]
 #[cfg(feature = "registry-notary-cel")]
-pub(crate) async fn federation_stale_source_observation_returns_signed_evaluation_error() {
+pub(super) async fn federation_stale_source_observation_returns_signed_evaluation_error() {
     set_federation_env();
     let upstream = TestServer::builder()
         .http_transport()
@@ -1836,7 +1836,7 @@ pub(crate) async fn federation_stale_source_observation_returns_signed_evaluatio
 }
 
 #[tokio::test]
-pub(crate) async fn federation_audit_write_failure_replaces_signed_success() {
+pub(super) async fn federation_audit_write_failure_replaces_signed_success() {
     set_federation_env();
     let upstream = TestServer::builder()
         .http_transport()

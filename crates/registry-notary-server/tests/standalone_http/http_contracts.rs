@@ -7,7 +7,7 @@ use super::{
 };
 
 #[tokio::test]
-pub(crate) async fn request_body_limit_returns_413_above_threshold() {
+pub(super) async fn request_body_limit_returns_413_above_threshold() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -57,7 +57,7 @@ pub(crate) async fn request_body_limit_returns_413_above_threshold() {
 }
 
 #[tokio::test]
-pub(crate) async fn request_uri_limit_returns_414_problem_details() {
+pub(super) async fn request_uri_limit_returns_414_problem_details() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -103,7 +103,7 @@ pub(crate) async fn request_uri_limit_returns_414_problem_details() {
 }
 
 #[tokio::test]
-pub(crate) async fn error_responses_match_rfc_9457_problem_details_shape() {
+pub(super) async fn error_responses_match_rfc_9457_problem_details_shape() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -145,7 +145,7 @@ pub(crate) async fn error_responses_match_rfc_9457_problem_details_shape() {
 }
 
 #[tokio::test]
-pub(crate) async fn evaluation_json_rejections_and_unsupported_idempotency_are_problem_details() {
+pub(super) async fn evaluation_json_rejections_and_unsupported_idempotency_are_problem_details() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -217,7 +217,7 @@ pub(crate) async fn evaluation_json_rejections_and_unsupported_idempotency_are_p
     }
 }
 
-pub(crate) fn assert_server_owned_request_id(
+pub(super) fn assert_server_owned_request_id(
     response: &axum_test::TestResponse,
     body: &Value,
     inbound_request_id: &str,
@@ -236,7 +236,7 @@ pub(crate) fn assert_server_owned_request_id(
     Ulid::from_string(body_request_id).expect("request_id is a server-minted ULID");
 }
 
-pub(crate) fn assert_request_invalid_problem(response: axum_test::TestResponse) {
+pub(super) fn assert_request_invalid_problem(response: axum_test::TestResponse) {
     response.assert_status(StatusCode::BAD_REQUEST);
     let content_type = response
         .headers()
@@ -254,7 +254,7 @@ pub(crate) fn assert_request_invalid_problem(response: axum_test::TestResponse) 
 }
 
 #[tokio::test]
-pub(crate) async fn cors_csp_corp_headers_present_and_corp_conditional() {
+pub(super) async fn cors_csp_corp_headers_present_and_corp_conditional() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -337,7 +337,7 @@ pub(crate) async fn cors_csp_corp_headers_present_and_corp_conditional() {
 }
 
 #[tokio::test]
-pub(crate) async fn self_attestation_cors_uses_wallet_origins_on_browser_paths() {
+pub(super) async fn self_attestation_cors_uses_wallet_origins_on_browser_paths() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
@@ -405,7 +405,7 @@ pub(crate) async fn self_attestation_cors_uses_wallet_origins_on_browser_paths()
 }
 
 #[tokio::test]
-pub(crate) async fn self_attestation_preflight_uses_wallet_origin_allow_list() {
+pub(super) async fn self_attestation_preflight_uses_wallet_origin_allow_list() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
@@ -480,7 +480,7 @@ pub(crate) async fn self_attestation_preflight_uses_wallet_origin_allow_list() {
 }
 
 #[tokio::test]
-pub(crate) async fn standalone_router_hides_admin_and_metrics_when_admin_listener_is_not_shared() {
+pub(super) async fn standalone_router_hides_admin_and_metrics_when_admin_listener_is_not_shared() {
     for mode in [
         RegistryNotaryAdminListenerMode::Dedicated,
         RegistryNotaryAdminListenerMode::Disabled,
@@ -520,7 +520,7 @@ pub(crate) async fn standalone_router_hides_admin_and_metrics_when_admin_listene
 }
 
 #[tokio::test]
-pub(crate) async fn standalone_router_default_config_hides_admin_and_metrics() {
+pub(super) async fn standalone_router_default_config_hides_admin_and_metrics() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -553,7 +553,7 @@ pub(crate) async fn standalone_router_default_config_hides_admin_and_metrics() {
 }
 
 #[tokio::test]
-pub(crate) async fn standalone_server_can_serve_openapi_without_auth_when_configured() {
+pub(super) async fn standalone_server_can_serve_openapi_without_auth_when_configured() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -590,7 +590,7 @@ pub(crate) async fn standalone_server_can_serve_openapi_without_auth_when_config
 }
 
 #[tokio::test]
-pub(crate) async fn openapi_json_handler_denies_without_runtime_state_by_default() {
+pub(super) async fn openapi_json_handler_denies_without_runtime_state_by_default() {
     let server = TestServer::new(registry_notary_server::api::public_router());
 
     server
@@ -600,7 +600,7 @@ pub(crate) async fn openapi_json_handler_denies_without_runtime_state_by_default
 }
 
 #[tokio::test]
-pub(crate) async fn standalone_server_serves_docs_shell_without_auth() {
+pub(super) async fn standalone_server_serves_docs_shell_without_auth() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -650,7 +650,7 @@ pub(crate) async fn standalone_server_serves_docs_shell_without_auth() {
 }
 
 #[tokio::test]
-pub(crate) async fn request_uri_limit_414_carries_server_owned_request_id() {
+pub(super) async fn request_uri_limit_414_carries_server_owned_request_id() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -679,7 +679,7 @@ pub(crate) async fn request_uri_limit_414_carries_server_owned_request_id() {
 }
 
 #[tokio::test]
-pub(crate) async fn request_body_limit_413_carries_server_owned_request_id() {
+pub(super) async fn request_body_limit_413_carries_server_owned_request_id() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",

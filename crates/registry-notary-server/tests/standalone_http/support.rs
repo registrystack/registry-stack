@@ -1,23 +1,23 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Standalone Registry Notary tests that do not link Registry Relay.
 
-pub(crate) use axum::body::Bytes;
-pub(crate) use axum::extract::Query;
+pub(super) use axum::body::Bytes;
+pub(super) use axum::extract::Query;
 #[cfg(feature = "registry-notary-cel")]
-pub(crate) use axum::extract::State;
-pub(crate) use axum::http::{header, HeaderMap, Method, StatusCode};
-pub(crate) use axum::response::{IntoResponse, Response};
-pub(crate) use axum::routing::get;
+pub(super) use axum::extract::State;
+pub(super) use axum::http::{header, HeaderMap, Method, StatusCode};
+pub(super) use axum::response::{IntoResponse, Response};
+pub(super) use axum::routing::get;
 #[cfg(feature = "registry-notary-cel")]
-pub(crate) use axum::routing::post;
-pub(crate) use axum::{Json, Router};
-pub(crate) use axum_test::TestServer;
-pub(crate) use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-pub(crate) use base64::Engine;
-pub(crate) use registry_notary_core::tokens::NOTARY_TRANSACTION_TOKEN_JWT_TYP;
+pub(super) use axum::routing::post;
+pub(super) use axum::{Json, Router};
+pub(super) use axum_test::TestServer;
+pub(super) use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+pub(super) use base64::Engine;
+pub(super) use registry_notary_core::tokens::NOTARY_TRANSACTION_TOKEN_JWT_TYP;
 #[cfg(feature = "registry-notary-cel")]
-pub(crate) use registry_notary_core::FEDERATION_RESPONSE_JWT_TYP;
-pub(crate) use registry_notary_core::{
+pub(super) use registry_notary_core::FEDERATION_RESPONSE_JWT_TYP;
+pub(super) use registry_notary_core::{
     BulkMode, ConfigTrustConfig, CredentialProfileConfig, EvidenceAuthMode,
     EvidenceCredentialConfig, EvidenceOidcAuthConfig, Oid4vciConfig, Oid4vciCredentialClaimConfig,
     RegistryNotaryAdminListenerMode, RuleConfig, SelfAttestationClaimSource, SigningKeyConfig,
@@ -25,69 +25,69 @@ pub(crate) use registry_notary_core::{
     SD_JWT_VC_SIGNING_ALG,
 };
 #[cfg(feature = "registry-notary-cel")]
-pub(crate) use registry_notary_server::cel_worker::{CelWorker, CelWorkerConfig};
-pub(crate) use registry_notary_server::{
+pub(super) use registry_notary_server::cel_worker::{CelWorker, CelWorkerConfig};
+pub(super) use registry_notary_server::{
     compile_notary_runtime, notary_routers_from_runtime, openapi_document, standalone_router,
     StandaloneServerError,
 };
-pub(crate) use registry_platform_audit::{
+pub(super) use registry_platform_audit::{
     verify_jsonl_lines_with_hasher, AuditChainHasher, AuditEnvelope,
 };
-pub(crate) use registry_platform_authcommon::{
+pub(super) use registry_platform_authcommon::{
     CredentialFingerprintProvider, CredentialFingerprintRef,
 };
 #[cfg(feature = "registry-notary-cel")]
-pub(crate) use registry_platform_crypto::verify;
-pub(crate) use registry_platform_crypto::{did_jwk_from_public_jwk, sign, PrivateJwk};
-pub(crate) use registry_platform_ops::internal_config_hash;
-pub(crate) use registry_platform_testing::{
+pub(super) use registry_platform_crypto::verify;
+pub(super) use registry_platform_crypto::{did_jwk_from_public_jwk, sign, PrivateJwk};
+pub(super) use registry_platform_ops::internal_config_hash;
+pub(super) use registry_platform_testing::{
     fixtures, jwks_from_private_jwk, sign_ed25519_compact_jwt, sign_openid4vci_proof_jwt,
     MockHttpUpstream, MockIdp, FEDERATION_PROTOCOL, FEDERATION_REQUEST_JWT_TYPE,
 };
-pub(crate) use serde::Deserialize;
-pub(crate) use serde_json::{json, Value};
-pub(crate) use sha2::{Digest, Sha256};
-pub(crate) use std::collections::BTreeMap;
-pub(crate) use std::collections::BTreeSet;
-pub(crate) use std::fs;
+pub(super) use serde::Deserialize;
+pub(super) use serde_json::{json, Value};
+pub(super) use sha2::{Digest, Sha256};
+pub(super) use std::collections::BTreeMap;
+pub(super) use std::collections::BTreeSet;
+pub(super) use std::fs;
 #[cfg(feature = "registry-notary-cel")]
-pub(crate) use std::path::PathBuf;
-pub(crate) use std::sync::atomic::{AtomicUsize, Ordering};
-pub(crate) use std::sync::Arc;
+pub(super) use std::path::PathBuf;
+pub(super) use std::sync::atomic::{AtomicUsize, Ordering};
+pub(super) use std::sync::Arc;
 #[cfg(feature = "registry-notary-cel")]
-pub(crate) use std::sync::Mutex;
-pub(crate) use std::time::Duration;
-pub(crate) use tempfile::TempDir;
+pub(super) use std::sync::Mutex;
+pub(super) use std::time::Duration;
+pub(super) use tempfile::TempDir;
 #[cfg(feature = "registry-notary-cel")]
-pub(crate) use time::format_description::well_known::Rfc3339;
-pub(crate) use time::OffsetDateTime;
-pub(crate) use ulid::Ulid;
+pub(super) use time::format_description::well_known::Rfc3339;
+pub(super) use time::OffsetDateTime;
+pub(super) use ulid::Ulid;
 
-pub(crate) const TEST_AUDIT_SECRET: &str = "0123456789abcdef0123456789abcdef";
-pub(crate) const TEST_ISSUER_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}"#;
-pub(crate) const TEST_HOLDER_JWK: &str = r#"{"crv":"Ed25519","d":"f4QIxnAyRWzhuBOmNRgvBTE56mWePdsPL0mvCtl8Gys","x":"pv4e_hXHBLN27rcs6VDFV1ED0TiU8M3xy9vsuWFEsec","kty":"OKP","alg":"EdDSA"}"#;
+pub(super) const TEST_AUDIT_SECRET: &str = "0123456789abcdef0123456789abcdef";
+pub(super) const TEST_ISSUER_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}"#;
+pub(super) const TEST_HOLDER_JWK: &str = r#"{"crv":"Ed25519","d":"f4QIxnAyRWzhuBOmNRgvBTE56mWePdsPL0mvCtl8Gys","x":"pv4e_hXHBLN27rcs6VDFV1ED0TiU8M3xy9vsuWFEsec","kty":"OKP","alg":"EdDSA"}"#;
 #[derive(Debug, Deserialize)]
-pub(crate) struct ExposureManifest {
-    pub(crate) endpoints: Vec<ExposureEndpoint>,
+pub(super) struct ExposureManifest {
+    pub(super) endpoints: Vec<ExposureEndpoint>,
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct ExposureEndpoint {
-    pub(crate) listener: String,
-    pub(crate) method: String,
-    pub(crate) path: String,
-    pub(crate) feature: Option<String>,
-    pub(crate) auth: String,
+pub(super) struct ExposureEndpoint {
+    pub(super) listener: String,
+    pub(super) method: String,
+    pub(super) path: String,
+    pub(super) feature: Option<String>,
+    pub(super) auth: String,
 }
 
-pub(crate) fn person_target(id: &str) -> Value {
+pub(super) fn person_target(id: &str) -> Value {
     json!({
         "type": "Person",
         "id": id,
     })
 }
 
-pub(crate) fn person_identifier_target(scheme: &str, value: &str) -> Value {
+pub(super) fn person_identifier_target(scheme: &str, value: &str) -> Value {
     json!({
         "type": "Person",
         "identifiers": [
@@ -97,7 +97,7 @@ pub(crate) fn person_identifier_target(scheme: &str, value: &str) -> Value {
 }
 
 #[cfg(feature = "registry-notary-cel")]
-pub(crate) fn cel_worker_bin() -> PathBuf {
+pub(super) fn cel_worker_bin() -> PathBuf {
     let env_path = PathBuf::from(env!("CARGO_BIN_EXE_registry-notary-cel-worker"));
     if env_path
         .parent()
@@ -116,18 +116,18 @@ pub(crate) fn cel_worker_bin() -> PathBuf {
     env_path
 }
 
-pub(crate) fn set_audit_secret() {
+pub(super) fn set_audit_secret() {
     std::env::set_var("REGISTRY_NOTARY_AUDIT_HASH_SECRET", TEST_AUDIT_SECRET);
     #[cfg(feature = "registry-notary-cel")]
     std::env::set_var("REGISTRY_NOTARY_CEL_WORKER_COMMAND", cel_worker_bin());
 }
 
-pub(crate) fn sign_oid4vci_proof(audience: &str, nonce: &str) -> String {
+pub(super) fn sign_oid4vci_proof(audience: &str, nonce: &str) -> String {
     let now = OffsetDateTime::now_utc().unix_timestamp();
     sign_openid4vci_proof_jwt(TEST_HOLDER_JWK, audience, Some(nonce), now)
 }
 
-pub(crate) fn sign_oid4vci_proof_without_iss(audience: &str, nonce: &str) -> String {
+pub(super) fn sign_oid4vci_proof_without_iss(audience: &str, nonce: &str) -> String {
     let holder = PrivateJwk::parse(TEST_HOLDER_JWK).expect("holder JWK parses");
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let header_b64 = URL_SAFE_NO_PAD.encode(
@@ -152,7 +152,7 @@ pub(crate) fn sign_oid4vci_proof_without_iss(audience: &str, nonce: &str) -> Str
     format!("{signing_input}.{}", URL_SAFE_NO_PAD.encode(signature))
 }
 
-pub(crate) fn sign_direct_holder_proof(holder_id: &str, evaluation_id: &str, jti: &str) -> String {
+pub(super) fn sign_direct_holder_proof(holder_id: &str, evaluation_id: &str, jti: &str) -> String {
     let holder = PrivateJwk::parse(TEST_HOLDER_JWK).expect("holder JWK parses");
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let payload = json!({
@@ -181,12 +181,12 @@ pub(crate) fn sign_direct_holder_proof(holder_id: &str, evaluation_id: &str, jti
     format!("{signing_input}.{}", URL_SAFE_NO_PAD.encode(signature))
 }
 
-pub(crate) fn holder_did_jwk() -> String {
+pub(super) fn holder_did_jwk() -> String {
     let holder = PrivateJwk::parse(TEST_HOLDER_JWK).expect("holder JWK parses");
     did_jwk_from_public_jwk(&holder.public()).expect("holder did:jwk encodes")
 }
 
-pub(crate) fn enable_credential_status(config: &mut StandaloneRegistryNotaryConfig) {
+pub(super) fn enable_credential_status(config: &mut StandaloneRegistryNotaryConfig) {
     config.credential_status = serde_norway::from_str(
         r#"
 enabled: true
@@ -198,7 +198,7 @@ retention_seconds: 3600
     .expect("credential status config parses");
 }
 
-pub(crate) fn env_fingerprint_ref(env_name: &str) -> CredentialFingerprintRef {
+pub(super) fn env_fingerprint_ref(env_name: &str) -> CredentialFingerprintRef {
     CredentialFingerprintRef {
         provider: CredentialFingerprintProvider::Env,
         name: Some(env_name.to_string()),
@@ -206,7 +206,7 @@ pub(crate) fn env_fingerprint_ref(env_name: &str) -> CredentialFingerprintRef {
     }
 }
 
-pub(crate) fn add_admin_api_key(config: &mut StandaloneRegistryNotaryConfig) {
+pub(super) fn add_admin_api_key(config: &mut StandaloneRegistryNotaryConfig) {
     let fingerprint = "sha256:10a4c7c9fc5206d6f36dc6944a81bb6f4a3cb0e25014ae3b12e6c3e52712292a";
     std::env::set_var("TEST_EVIDENCE_ADMIN_KEY_HASH", fingerprint);
     config.auth.api_keys.push(EvidenceCredentialConfig {
@@ -217,7 +217,7 @@ pub(crate) fn add_admin_api_key(config: &mut StandaloneRegistryNotaryConfig) {
     });
 }
 
-pub(crate) fn add_ops_read_api_key(config: &mut StandaloneRegistryNotaryConfig) {
+pub(super) fn add_ops_read_api_key(config: &mut StandaloneRegistryNotaryConfig) {
     let fingerprint = "sha256:d9310c002af91822beb0b3487d8b04f85bf6bf1f8a5496bff7d35fc7c5a29def";
     std::env::set_var("TEST_EVIDENCE_OPS_KEY_HASH", fingerprint);
     config.auth.api_keys.push(EvidenceCredentialConfig {
@@ -228,7 +228,7 @@ pub(crate) fn add_ops_read_api_key(config: &mut StandaloneRegistryNotaryConfig) 
     });
 }
 
-pub(crate) fn add_metrics_read_api_key(config: &mut StandaloneRegistryNotaryConfig) {
+pub(super) fn add_metrics_read_api_key(config: &mut StandaloneRegistryNotaryConfig) {
     let fingerprint = "sha256:eb5a63e42b6b498364b3f10d5c3bb71cd8c7a7a9ad16524875557fa2e52f5d41";
     std::env::set_var("TEST_EVIDENCE_METRICS_KEY_HASH", fingerprint);
     config.auth.api_keys.push(EvidenceCredentialConfig {
@@ -239,11 +239,11 @@ pub(crate) fn add_metrics_read_api_key(config: &mut StandaloneRegistryNotaryConf
     });
 }
 
-pub(crate) fn enable_shared_admin_listener(config: &mut StandaloneRegistryNotaryConfig) {
+pub(super) fn enable_shared_admin_listener(config: &mut StandaloneRegistryNotaryConfig) {
     config.server.admin_listener.mode = RegistryNotaryAdminListenerMode::SharedWithPublic;
 }
 
-pub(crate) fn assert_matches_posture_schema(body: &Value) {
+pub(super) fn assert_matches_posture_schema(body: &Value) {
     let schema: Value = serde_json::from_str(registry_platform_ops::POSTURE_SCHEMA_V1)
         .expect("posture schema parses");
     let compiled = jsonschema::JSONSchema::compile(&schema).expect("posture schema compiles");
@@ -258,7 +258,7 @@ pub(crate) fn assert_matches_posture_schema(body: &Value) {
     );
 }
 
-pub(crate) fn assert_standards_artifacts_omit_sha256(body: &Value, label: &str) {
+pub(super) fn assert_standards_artifacts_omit_sha256(body: &Value, label: &str) {
     let artifacts = body["standards_artifacts"]
         .as_object()
         .expect("posture standards_artifacts is object");
@@ -270,7 +270,7 @@ pub(crate) fn assert_standards_artifacts_omit_sha256(body: &Value, label: &str) 
     }
 }
 
-pub(crate) fn assert_matches_admin_capabilities_schema(body: &Value) {
+pub(super) fn assert_matches_admin_capabilities_schema(body: &Value) {
     let schema: Value = serde_json::from_str(registry_platform_ops::ADMIN_CAPABILITIES_SCHEMA_V1)
         .expect("admin capabilities schema parses");
     let compiled =
@@ -286,14 +286,14 @@ pub(crate) fn assert_matches_admin_capabilities_schema(body: &Value) {
     );
 }
 
-pub(crate) fn sample_manifest_path(path: &str) -> String {
+pub(super) fn sample_manifest_path(path: &str) -> String {
     path.replace("{claim_id}", "farmed-land-size")
         .replace("{evaluation_id}", "eval-1")
         .replace("{credential_id}", "urn:ulid:01HX0000000000000000000000")
         .replace("{*vct_path}", "civil-status")
 }
 
-pub(crate) async fn registry_data_api(
+pub(super) async fn registry_data_api(
     headers: HeaderMap,
     Query(query): Query<BTreeMap<String, String>>,
 ) -> Response {
@@ -323,7 +323,7 @@ pub(crate) async fn registry_data_api(
     .into_response()
 }
 
-pub(crate) async fn self_attestation_registry_data_api(
+pub(super) async fn self_attestation_registry_data_api(
     headers: HeaderMap,
     Query(query): Query<BTreeMap<String, String>>,
 ) -> Response {
@@ -356,7 +356,7 @@ pub(crate) async fn self_attestation_registry_data_api(
 }
 
 #[cfg(feature = "registry-notary-cel")]
-pub(crate) async fn dci_source(
+pub(super) async fn dci_source(
     State(observed): State<Arc<Mutex<Option<Value>>>>,
     headers: HeaderMap,
     Json(body): Json<Value>,
@@ -433,7 +433,7 @@ pub(crate) async fn dci_source(
 }
 
 #[cfg(feature = "registry-notary-cel")]
-pub(crate) async fn civil_demographic_dci_source(
+pub(super) async fn civil_demographic_dci_source(
     State(observed): State<Arc<Mutex<Option<Value>>>>,
     headers: HeaderMap,
     Json(body): Json<Value>,
@@ -472,7 +472,7 @@ pub(crate) async fn civil_demographic_dci_source(
     .into_response()
 }
 
-pub(crate) fn config(
+pub(super) fn config(
     base_url: &str,
     audit_path: &str,
     connector: &str,
@@ -587,7 +587,7 @@ evidence:
     serde_norway::from_str(&raw).expect("config deserializes")
 }
 
-pub(crate) fn registry_data_api_config(
+pub(super) fn registry_data_api_config(
     base_url: &str,
     audit_path: &str,
 ) -> StandaloneRegistryNotaryConfig {

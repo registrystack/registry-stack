@@ -8,7 +8,7 @@ use super::{
 };
 
 #[tokio::test]
-pub(crate) async fn evaluate_policy_denial_records_zero_source_and_redacted_audit() {
+pub(super) async fn evaluate_policy_denial_records_zero_source_and_redacted_audit() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -120,7 +120,7 @@ pub(crate) async fn evaluate_policy_denial_records_zero_source_and_redacted_audi
 }
 
 #[tokio::test]
-pub(crate) async fn standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit()
+pub(super) async fn standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit()
 {
     set_audit_secret();
     std::env::set_var(
@@ -315,7 +315,7 @@ pub(crate) async fn standalone_server_authenticates_evaluates_over_http_and_writ
 }
 
 #[tokio::test]
-pub(crate) async fn batch_evaluation_audit_records_per_item_target_model_context() {
+pub(super) async fn batch_evaluation_audit_records_per_item_target_model_context() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -400,7 +400,7 @@ pub(crate) async fn batch_evaluation_audit_records_per_item_target_model_context
 }
 
 #[tokio::test]
-pub(crate) async fn audit_chain_bootstraps_from_sink_tail() {
+pub(super) async fn audit_chain_bootstraps_from_sink_tail() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -451,7 +451,7 @@ pub(crate) async fn audit_chain_bootstraps_from_sink_tail() {
 }
 
 #[tokio::test]
-pub(crate) async fn audit_chain_detects_inserted_envelope() {
+pub(super) async fn audit_chain_detects_inserted_envelope() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",

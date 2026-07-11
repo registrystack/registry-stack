@@ -8,7 +8,7 @@ use super::{
 };
 
 #[tokio::test]
-pub(crate) async fn oid4vci_metadata_offer_and_nonce_are_public() {
+pub(super) async fn oid4vci_metadata_offer_and_nonce_are_public() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
@@ -80,7 +80,7 @@ pub(crate) async fn oid4vci_metadata_offer_and_nonce_are_public() {
 }
 
 #[tokio::test]
-pub(crate) async fn oid4vci_nonce_is_rate_limited_before_reservation() {
+pub(super) async fn oid4vci_nonce_is_rate_limited_before_reservation() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
@@ -129,7 +129,7 @@ pub(crate) async fn oid4vci_nonce_is_rate_limited_before_reservation() {
 }
 
 #[tokio::test]
-pub(crate) async fn oid4vci_type_metadata_is_public_and_matches_configured_vct() {
+pub(super) async fn oid4vci_type_metadata_is_public_and_matches_configured_vct() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
@@ -219,7 +219,7 @@ pub(crate) async fn oid4vci_type_metadata_is_public_and_matches_configured_vct()
 }
 
 #[tokio::test]
-pub(crate) async fn oid4vci_type_metadata_normalizes_forwarded_scheme_and_host_case() {
+pub(super) async fn oid4vci_type_metadata_normalizes_forwarded_scheme_and_host_case() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
@@ -280,7 +280,7 @@ pub(crate) async fn oid4vci_type_metadata_normalizes_forwarded_scheme_and_host_c
 }
 
 #[tokio::test]
-pub(crate) async fn oid4vci_type_metadata_supports_nested_paths_and_public_404s() {
+pub(super) async fn oid4vci_type_metadata_supports_nested_paths_and_public_404s() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
@@ -330,7 +330,7 @@ pub(crate) async fn oid4vci_type_metadata_supports_nested_paths_and_public_404s(
 }
 
 #[tokio::test]
-pub(crate) async fn oid4vci_type_metadata_supports_path_prefixed_issuer_behind_stripping_proxy() {
+pub(super) async fn oid4vci_type_metadata_supports_path_prefixed_issuer_behind_stripping_proxy() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
@@ -391,7 +391,7 @@ pub(crate) async fn oid4vci_type_metadata_supports_path_prefixed_issuer_behind_s
 }
 
 #[tokio::test]
-pub(crate) async fn oid4vci_type_metadata_is_not_served_when_oid4vci_is_disabled() {
+pub(super) async fn oid4vci_type_metadata_is_not_served_when_oid4vci_is_disabled() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
@@ -420,7 +420,7 @@ pub(crate) async fn oid4vci_type_metadata_is_not_served_when_oid4vci_is_disabled
 }
 
 #[tokio::test]
-pub(crate) async fn oid4vci_type_metadata_well_known_is_public_and_matches_configured_vct() {
+pub(super) async fn oid4vci_type_metadata_well_known_is_public_and_matches_configured_vct() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
@@ -483,7 +483,7 @@ pub(crate) async fn oid4vci_type_metadata_well_known_is_public_and_matches_confi
 }
 
 #[tokio::test]
-pub(crate) async fn oid4vci_type_metadata_well_known_supports_nested_paths_and_public_404s() {
+pub(super) async fn oid4vci_type_metadata_well_known_supports_nested_paths_and_public_404s() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
@@ -533,7 +533,7 @@ pub(crate) async fn oid4vci_type_metadata_well_known_supports_nested_paths_and_p
 }
 
 #[tokio::test]
-pub(crate) async fn oid4vci_type_metadata_well_known_is_not_served_when_oid4vci_is_disabled() {
+pub(super) async fn oid4vci_type_metadata_well_known_is_not_served_when_oid4vci_is_disabled() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
@@ -562,7 +562,7 @@ pub(crate) async fn oid4vci_type_metadata_well_known_is_not_served_when_oid4vci_
 }
 
 #[tokio::test]
-pub(crate) async fn oid4vci_type_metadata_well_known_keeps_protected_routes_authenticated() {
+pub(super) async fn oid4vci_type_metadata_well_known_keeps_protected_routes_authenticated() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
@@ -599,7 +599,7 @@ pub(crate) async fn oid4vci_type_metadata_well_known_keeps_protected_routes_auth
 }
 
 #[tokio::test]
-pub(crate) async fn oid4vci_type_metadata_well_known_serves_wallet_cors() {
+pub(super) async fn oid4vci_type_metadata_well_known_serves_wallet_cors() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
@@ -658,7 +658,7 @@ pub(crate) async fn oid4vci_type_metadata_well_known_serves_wallet_cors() {
 }
 
 #[tokio::test]
-pub(crate) async fn public_probe_routes_remain_public_except_metrics() {
+pub(super) async fn public_probe_routes_remain_public_except_metrics() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
@@ -728,7 +728,7 @@ pub(crate) async fn public_probe_routes_remain_public_except_metrics() {
 }
 
 #[tokio::test]
-pub(crate) async fn manifest_public_protected_routes_are_mounted_behind_auth() {
+pub(super) async fn manifest_public_protected_routes_are_mounted_behind_auth() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
@@ -783,7 +783,7 @@ pub(crate) async fn manifest_public_protected_routes_are_mounted_behind_auth() {
 }
 
 #[tokio::test]
-pub(crate) async fn service_document_advertises_credential_status_when_enabled() {
+pub(super) async fn service_document_advertises_credential_status_when_enabled() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -828,7 +828,7 @@ pub(crate) async fn service_document_advertises_credential_status_when_enabled()
 }
 
 #[tokio::test]
-pub(crate) async fn credential_status_admin_edges_return_expected_http_statuses() {
+pub(super) async fn credential_status_admin_edges_return_expected_http_statuses() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -916,7 +916,7 @@ pub(crate) async fn credential_status_admin_edges_return_expected_http_statuses(
 }
 
 #[tokio::test]
-pub(crate) async fn admin_scope_is_instance_global_across_credential_profiles() {
+pub(super) async fn admin_scope_is_instance_global_across_credential_profiles() {
     // Pins the documented instance-global admin model (issue #58): the same
     // registry_notary:admin-scoped credential authorizes admin operations
     // against every credential profile hosted by this instance. Registry
@@ -1034,7 +1034,7 @@ pub(crate) async fn admin_scope_is_instance_global_across_credential_profiles() 
 }
 
 #[tokio::test]
-pub(crate) async fn disabled_oid4vci_credential_route_stays_hidden_for_malformed_body() {
+pub(super) async fn disabled_oid4vci_credential_route_stays_hidden_for_malformed_body() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
@@ -1062,7 +1062,7 @@ pub(crate) async fn disabled_oid4vci_credential_route_stays_hidden_for_malformed
 }
 
 #[tokio::test]
-pub(crate) async fn oid4vci_credential_route_issues_holder_bound_sd_jwt() {
+pub(super) async fn oid4vci_credential_route_issues_holder_bound_sd_jwt() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
@@ -1338,7 +1338,7 @@ pub(crate) async fn oid4vci_credential_route_issues_holder_bound_sd_jwt() {
 }
 
 #[tokio::test]
-pub(crate) async fn oid4vci_field_projection_issues_separate_disclosures() {
+pub(super) async fn oid4vci_field_projection_issues_separate_disclosures() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
@@ -1454,7 +1454,7 @@ pub(crate) async fn oid4vci_field_projection_issues_separate_disclosures() {
 }
 
 #[tokio::test]
-pub(crate) async fn oid4vci_credential_route_rejects_replayed_nonce() {
+pub(super) async fn oid4vci_credential_route_rejects_replayed_nonce() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
@@ -1541,7 +1541,7 @@ pub(crate) async fn oid4vci_credential_route_rejects_replayed_nonce() {
 }
 
 #[tokio::test]
-pub(crate) async fn oid4vci_malformed_proof_is_rejected_before_oidc_auth() {
+pub(super) async fn oid4vci_malformed_proof_is_rejected_before_oidc_auth() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);

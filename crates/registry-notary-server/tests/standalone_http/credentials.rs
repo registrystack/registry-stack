@@ -8,7 +8,7 @@ use super::{
 };
 
 #[tokio::test]
-pub(crate) async fn direct_credential_pre_evaluation_denials_are_audited_and_redacted() {
+pub(super) async fn direct_credential_pre_evaluation_denials_are_audited_and_redacted() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
@@ -251,7 +251,7 @@ pub(crate) async fn direct_credential_pre_evaluation_denials_are_audited_and_red
 }
 
 #[tokio::test]
-pub(crate) async fn direct_credentials_issue_creates_retrievable_status_record() {
+pub(super) async fn direct_credentials_issue_creates_retrievable_status_record() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
@@ -378,7 +378,7 @@ pub(crate) async fn direct_credentials_issue_creates_retrievable_status_record()
 }
 
 #[tokio::test]
-pub(crate) async fn direct_credential_operation_denial_is_audited_and_preserves_denial_code() {
+pub(super) async fn direct_credential_operation_denial_is_audited_and_preserves_denial_code() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
@@ -546,7 +546,7 @@ pub(crate) async fn direct_credential_operation_denial_is_audited_and_preserves_
 }
 
 #[tokio::test]
-pub(crate) async fn direct_credential_rate_limit_is_audited_with_stored_context() {
+pub(super) async fn direct_credential_rate_limit_is_audited_with_stored_context() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
@@ -836,7 +836,7 @@ pub(crate) async fn direct_credential_rate_limit_is_audited_with_stored_context(
 }
 
 #[tokio::test]
-pub(crate) async fn direct_credential_holder_proof_replay_is_audited_and_redacted() {
+pub(super) async fn direct_credential_holder_proof_replay_is_audited_and_redacted() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
@@ -1004,7 +1004,7 @@ pub(crate) async fn direct_credential_holder_proof_replay_is_audited_and_redacte
 }
 
 #[tokio::test]
-pub(crate) async fn strict_credentials_issue_rejects_oid4vci_proof_at_http_boundary() {
+pub(super) async fn strict_credentials_issue_rejects_oid4vci_proof_at_http_boundary() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
@@ -1153,7 +1153,7 @@ pub(crate) async fn strict_credentials_issue_rejects_oid4vci_proof_at_http_bound
 }
 
 #[tokio::test]
-pub(crate) async fn direct_credential_purpose_mismatch_denial_is_audited_and_redacted() {
+pub(super) async fn direct_credential_purpose_mismatch_denial_is_audited_and_redacted() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
@@ -1290,7 +1290,7 @@ pub(crate) async fn direct_credential_purpose_mismatch_denial_is_audited_and_red
 }
 
 #[tokio::test]
-pub(crate) async fn direct_credential_binding_denials_are_audited_and_redacted() {
+pub(super) async fn direct_credential_binding_denials_are_audited_and_redacted() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
@@ -1491,7 +1491,7 @@ pub(crate) async fn direct_credential_binding_denials_are_audited_and_redacted()
 }
 
 #[tokio::test]
-pub(crate) async fn self_attestation_subject_mismatch_audit_names_token_claim_not_value() {
+pub(super) async fn self_attestation_subject_mismatch_audit_names_token_claim_not_value() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);

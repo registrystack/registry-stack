@@ -8,7 +8,7 @@ use super::{
 };
 
 #[tokio::test]
-pub(crate) async fn preauth_offer_start_redirects_to_esignet_and_mints_nothing() {
+pub(super) async fn preauth_offer_start_redirects_to_esignet_and_mints_nothing() {
     set_preauth_env();
     let idp = MockIdp::start().await;
     let token_upstream = MockHttpUpstream::start().await;
@@ -62,7 +62,7 @@ pub(crate) async fn preauth_offer_start_redirects_to_esignet_and_mints_nothing()
 }
 
 #[tokio::test]
-pub(crate) async fn preauth_offer_start_returns_429_when_login_state_store_is_full() {
+pub(super) async fn preauth_offer_start_returns_429_when_login_state_store_is_full() {
     set_preauth_env();
     let idp = MockIdp::start().await;
     let token_upstream = MockHttpUpstream::start().await;
@@ -98,7 +98,7 @@ pub(crate) async fn preauth_offer_start_returns_429_when_login_state_store_is_fu
 }
 
 #[tokio::test]
-pub(crate) async fn preauth_offer_start_requests_userinfo_subject_binding_claim_when_required() {
+pub(super) async fn preauth_offer_start_requests_userinfo_subject_binding_claim_when_required() {
     set_preauth_env();
     let idp = MockIdp::start().await;
     let token_upstream = MockHttpUpstream::start().await;
@@ -154,7 +154,7 @@ pub(crate) async fn preauth_offer_start_requests_userinfo_subject_binding_claim_
 }
 
 #[tokio::test]
-pub(crate) async fn preauth_offer_start_rejects_unknown_configuration_id() {
+pub(super) async fn preauth_offer_start_rejects_unknown_configuration_id() {
     set_preauth_env();
     let idp = MockIdp::start().await;
     let token_upstream = MockHttpUpstream::start().await;
@@ -179,7 +179,7 @@ pub(crate) async fn preauth_offer_start_rejects_unknown_configuration_id() {
 }
 
 #[tokio::test]
-pub(crate) async fn preauth_callback_mints_pre_authorized_offer_with_tx_code() {
+pub(super) async fn preauth_callback_mints_pre_authorized_offer_with_tx_code() {
     set_preauth_env();
     let idp = MockIdp::start().await;
     let token_upstream = MockHttpUpstream::start().await;
@@ -204,7 +204,7 @@ pub(crate) async fn preauth_callback_mints_pre_authorized_offer_with_tx_code() {
 }
 
 #[tokio::test]
-pub(crate) async fn preauth_callback_omits_tx_code_when_optional() {
+pub(super) async fn preauth_callback_omits_tx_code_when_optional() {
     set_preauth_env();
     let idp = MockIdp::start().await;
     let token_upstream = MockHttpUpstream::start().await;
@@ -254,7 +254,7 @@ pub(crate) async fn preauth_callback_omits_tx_code_when_optional() {
 /// Wave 5 hosted blocker where a typ-less id_token was rejected as
 /// `invalid_token` before the nonce/userinfo checks ran.
 #[tokio::test]
-pub(crate) async fn preauth_callback_accepts_esignet_id_token_without_typ_header() {
+pub(super) async fn preauth_callback_accepts_esignet_id_token_without_typ_header() {
     set_preauth_env();
     let idp = MockIdp::start().await;
     let token_upstream = MockHttpUpstream::start().await;
@@ -357,7 +357,7 @@ pub(crate) async fn preauth_callback_accepts_esignet_id_token_without_typ_header
 /// signs the assertion with the configured RS256 key.
 #[cfg(feature = "registry-notary-cel")]
 #[tokio::test]
-pub(crate) async fn preauth_client_assertion_is_rs256_signed_when_rp_key_is_rsa() {
+pub(super) async fn preauth_client_assertion_is_rs256_signed_when_rp_key_is_rsa() {
     set_preauth_env();
     std::env::set_var("TEST_ESIGNET_RP_RSA_JWK", TEST_ESIGNET_RP_RSA_JWK);
     let idp = MockIdp::start().await;
@@ -440,7 +440,7 @@ pub(crate) async fn preauth_client_assertion_is_rs256_signed_when_rp_key_is_rsa(
 }
 
 #[tokio::test]
-pub(crate) async fn preauth_token_endpoint_issues_access_token_and_c_nonce() {
+pub(super) async fn preauth_token_endpoint_issues_access_token_and_c_nonce() {
     set_preauth_env();
     let idp = MockIdp::start().await;
     let token_upstream = MockHttpUpstream::start().await;
@@ -532,7 +532,7 @@ pub(crate) async fn preauth_token_endpoint_issues_access_token_and_c_nonce() {
 /// in-isolation helper. The eSignet RP client key is excluded from this scope by
 /// `admin_config_apply_signed_preauth_signing_rotation_preserves_inflight_tokens`.
 #[tokio::test]
-pub(crate) async fn compile_rejects_access_token_key_reusing_credential_key_material() {
+pub(super) async fn compile_rejects_access_token_key_reusing_credential_key_material() {
     set_preauth_env();
     // A dedicated env var bound to the credential issuer's material. The
     // credential `issuer-key` resolves from `TEST_SELF_ATTESTATION_ISSUER_JWK`,
@@ -585,7 +585,7 @@ pub(crate) async fn compile_rejects_access_token_key_reusing_credential_key_mate
 /// binding claim from the eSignet userinfo JWS, not the `id_token`. This mirrors
 /// the hosted lab, where eSignet delivers `individual_id` only via userinfo.
 #[tokio::test]
-pub(crate) async fn preauth_callback_binds_subject_from_userinfo_when_claim_source_is_userinfo() {
+pub(super) async fn preauth_callback_binds_subject_from_userinfo_when_claim_source_is_userinfo() {
     set_preauth_env();
     let idp = MockIdp::start().await;
     let token_upstream = MockHttpUpstream::start().await;
@@ -641,7 +641,7 @@ pub(crate) async fn preauth_callback_binds_subject_from_userinfo_when_claim_sour
 /// When the subject binding is userinfo-sourced but the userinfo JWS omits the
 /// binding claim, the callback denies the login and mints no code.
 #[tokio::test]
-pub(crate) async fn preauth_callback_denies_when_userinfo_lacks_subject_binding_claim() {
+pub(super) async fn preauth_callback_denies_when_userinfo_lacks_subject_binding_claim() {
     set_preauth_env();
     let idp = MockIdp::start().await;
     let token_upstream = MockHttpUpstream::start().await;
@@ -718,7 +718,7 @@ pub(crate) async fn preauth_callback_denies_when_userinfo_lacks_subject_binding_
 }
 
 #[tokio::test]
-pub(crate) async fn preauth_code_is_single_use() {
+pub(super) async fn preauth_code_is_single_use() {
     set_preauth_env();
     let idp = MockIdp::start().await;
     let token_upstream = MockHttpUpstream::start().await;
@@ -745,7 +745,7 @@ pub(crate) async fn preauth_code_is_single_use() {
 }
 
 #[tokio::test]
-pub(crate) async fn preauth_token_rejects_wrong_and_missing_tx_code() {
+pub(super) async fn preauth_token_rejects_wrong_and_missing_tx_code() {
     set_preauth_env();
     let idp = MockIdp::start().await;
     let token_upstream = MockHttpUpstream::start().await;
@@ -785,7 +785,7 @@ pub(crate) async fn preauth_token_rejects_wrong_and_missing_tx_code() {
 }
 
 #[tokio::test]
-pub(crate) async fn preauth_token_accepts_missing_tx_code_when_optional() {
+pub(super) async fn preauth_token_accepts_missing_tx_code_when_optional() {
     set_preauth_env();
     let idp = MockIdp::start().await;
     let token_upstream = MockHttpUpstream::start().await;
@@ -827,7 +827,7 @@ pub(crate) async fn preauth_token_accepts_missing_tx_code_when_optional() {
 }
 
 #[tokio::test]
-pub(crate) async fn preauth_repeated_wrong_pins_lock_the_code() {
+pub(super) async fn preauth_repeated_wrong_pins_lock_the_code() {
     set_preauth_env();
     let idp = MockIdp::start().await;
     let token_upstream = MockHttpUpstream::start().await;
@@ -866,7 +866,7 @@ pub(crate) async fn preauth_repeated_wrong_pins_lock_the_code() {
 }
 
 #[tokio::test]
-pub(crate) async fn preauth_token_rejects_wrong_and_missing_grant_cleanly() {
+pub(super) async fn preauth_token_rejects_wrong_and_missing_grant_cleanly() {
     set_preauth_env();
     let idp = MockIdp::start().await;
     let token_upstream = MockHttpUpstream::start().await;
@@ -908,7 +908,7 @@ pub(crate) async fn preauth_token_rejects_wrong_and_missing_grant_cleanly() {
 }
 
 #[tokio::test]
-pub(crate) async fn preauth_random_code_flood_is_throttled_per_client_address() {
+pub(super) async fn preauth_random_code_flood_is_throttled_per_client_address() {
     set_preauth_env();
     let idp = MockIdp::start().await;
     let token_upstream = MockHttpUpstream::start().await;
@@ -952,7 +952,7 @@ pub(crate) async fn preauth_random_code_flood_is_throttled_per_client_address() 
 }
 
 #[tokio::test]
-pub(crate) async fn preauth_disabled_returns_404_and_offer_is_authorization_code() {
+pub(super) async fn preauth_disabled_returns_404_and_offer_is_authorization_code() {
     set_preauth_env();
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
@@ -1004,7 +1004,7 @@ pub(crate) async fn preauth_disabled_returns_404_and_offer_is_authorization_code
 
 /// Manually mint a Notary access token (header.payload.signature) so trust-anchor
 /// tests can sign with the access-token key, the credential key, or a wrong key.
-pub(crate) fn mint_notary_access_token(
+pub(super) fn mint_notary_access_token(
     private_jwk: &str,
     kid: &str,
     typ: &str,
@@ -1022,7 +1022,7 @@ pub(crate) fn mint_notary_access_token(
     )
 }
 
-pub(crate) fn mint_notary_access_token_with_scope_and_authorization_details(
+pub(super) fn mint_notary_access_token_with_scope_and_authorization_details(
     private_jwk: &str,
     kid: &str,
     typ: &str,
@@ -1044,7 +1044,7 @@ pub(crate) fn mint_notary_access_token_with_scope_and_authorization_details(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn mint_notary_access_token_with_jti_scope_and_authorization_details(
+pub(super) fn mint_notary_access_token_with_jti_scope_and_authorization_details(
     private_jwk: &str,
     kid: &str,
     typ: &str,
@@ -1089,7 +1089,7 @@ pub(crate) fn mint_notary_access_token_with_jti_scope_and_authorization_details(
     format!("{signing_input}.{}", URL_SAFE_NO_PAD.encode(signature))
 }
 
-pub(crate) fn preauth_test_config(
+pub(super) fn preauth_test_config(
     base_url: &str,
     audit_path: &str,
     idp: &MockIdp,
@@ -1106,7 +1106,7 @@ pub(crate) fn preauth_test_config(
 }
 
 #[tokio::test]
-pub(crate) async fn preauth_trust_anchor_rejects_wrong_key_and_credential_key_notary_tokens() {
+pub(super) async fn preauth_trust_anchor_rejects_wrong_key_and_credential_key_notary_tokens() {
     set_preauth_env();
     let idp = MockIdp::start().await;
     let token_upstream = MockHttpUpstream::start().await;
@@ -1155,7 +1155,7 @@ pub(crate) async fn preauth_trust_anchor_rejects_wrong_key_and_credential_key_no
 }
 
 #[tokio::test]
-pub(crate) async fn preauth_transaction_token_jti_denials_are_stable_and_redacted() {
+pub(super) async fn preauth_transaction_token_jti_denials_are_stable_and_redacted() {
     set_preauth_env();
     let idp = MockIdp::start().await;
     let token_upstream = MockHttpUpstream::start().await;
@@ -1272,7 +1272,7 @@ pub(crate) async fn preauth_transaction_token_jti_denials_are_stable_and_redacte
 }
 
 #[tokio::test]
-pub(crate) async fn preauth_trust_anchor_isolates_esignet_and_notary_paths() {
+pub(super) async fn preauth_trust_anchor_isolates_esignet_and_notary_paths() {
     set_preauth_env();
     let idp = MockIdp::start().await;
     let token_upstream = MockHttpUpstream::start().await;
@@ -1313,7 +1313,7 @@ pub(crate) async fn preauth_trust_anchor_isolates_esignet_and_notary_paths() {
 }
 
 #[tokio::test]
-pub(crate) async fn preauth_existing_esignet_token_still_authenticates_credential_endpoint() {
+pub(super) async fn preauth_existing_esignet_token_still_authenticates_credential_endpoint() {
     // The unchanged eSignet single-issuer path still accepts an eSignet token.
     set_preauth_env();
     let idp = MockIdp::start().await;
@@ -1362,7 +1362,7 @@ pub(crate) async fn preauth_existing_esignet_token_still_authenticates_credentia
 }
 
 #[tokio::test]
-pub(crate) async fn preauth_notary_access_token_with_empty_authorization_details_cannot_issue_credential(
+pub(super) async fn preauth_notary_access_token_with_empty_authorization_details_cannot_issue_credential(
 ) {
     set_preauth_env();
     let idp = MockIdp::start().await;
@@ -1424,7 +1424,7 @@ pub(crate) async fn preauth_notary_access_token_with_empty_authorization_details
 }
 
 #[tokio::test]
-pub(crate) async fn preauth_end_to_end_issues_sd_jwt_vc_bound_to_holder() {
+pub(super) async fn preauth_end_to_end_issues_sd_jwt_vc_bound_to_holder() {
     set_preauth_env();
     let idp = MockIdp::start().await;
     let token_upstream = MockHttpUpstream::start().await;
@@ -1504,7 +1504,7 @@ pub(crate) async fn preauth_end_to_end_issues_sd_jwt_vc_bound_to_holder() {
 }
 
 /// Decode the SD-JWT VC issuer JWS payload (the segment before the first `~`).
-pub(crate) fn decode_sd_jwt_payload(sd_jwt: &str) -> Value {
+pub(super) fn decode_sd_jwt_payload(sd_jwt: &str) -> Value {
     let issuer_jws = sd_jwt
         .split('~')
         .next()
@@ -1524,7 +1524,7 @@ pub(crate) fn decode_sd_jwt_payload(sd_jwt: &str) -> Value {
 /// Decode the SD-JWT VC disclosure for `claim_name` and return its value object.
 /// A disclosure is `base64url([salt, name, value])`; the value is the evaluated
 /// claim result.
-pub(crate) fn decode_disclosed_claim(sd_jwt: &str, claim_name: &str) -> Value {
+pub(super) fn decode_disclosed_claim(sd_jwt: &str, claim_name: &str) -> Value {
     sd_jwt
         .split('~')
         .skip(1)
@@ -1542,7 +1542,7 @@ pub(crate) fn decode_disclosed_claim(sd_jwt: &str, claim_name: &str) -> Value {
 /// The evaluated-claim fields that must be stable across issuance paths. The
 /// `issued_at` timestamp legitimately differs between two evaluations, so it is
 /// excluded from the parity comparison.
-pub(crate) fn semantic_claim_fields(disclosure_value: &Value) -> Value {
+pub(super) fn semantic_claim_fields(disclosure_value: &Value) -> Value {
     json!({
         "claim_id": disclosure_value["claim_id"],
         "version": disclosure_value["version"],
@@ -1556,7 +1556,7 @@ pub(crate) fn semantic_claim_fields(disclosure_value: &Value) -> Value {
 /// endpoint. Its `target_ref_hash`/`requester_ref_hash` are HMACs over the
 /// bound subject reference, deterministic for a fixed audit secret, so two paths
 /// that bind the same eSignet subject produce identical hashes.
-pub(crate) fn credential_issued_audit(audit_path: &std::path::Path) -> Value {
+pub(super) fn credential_issued_audit(audit_path: &std::path::Path) -> Value {
     audit_envelopes(audit_path)
         .into_iter()
         .map(|envelope| envelope.record)
@@ -1585,7 +1585,7 @@ pub(crate) fn credential_issued_audit(audit_path: &std::path::Path) -> Value {
 ///    subject_type), proving the pre-auth path yields an equivalent credential,
 ///    not merely a well-shaped one.
 #[tokio::test]
-pub(crate) async fn preauth_credential_subject_and_evaluation_match_esignet_token_path() {
+pub(super) async fn preauth_credential_subject_and_evaluation_match_esignet_token_path() {
     set_preauth_env();
 
     // The eSignet-token (auth-code) baseline: an eSignet token whose
@@ -1776,7 +1776,7 @@ pub(crate) async fn preauth_credential_subject_and_evaluation_match_esignet_toke
 }
 
 #[tokio::test]
-pub(crate) async fn preauth_callback_and_token_audit_events_carry_only_hashes() {
+pub(super) async fn preauth_callback_and_token_audit_events_carry_only_hashes() {
     set_preauth_env();
     let idp = MockIdp::start().await;
     let token_upstream = MockHttpUpstream::start().await;

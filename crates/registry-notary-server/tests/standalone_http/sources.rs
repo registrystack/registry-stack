@@ -9,7 +9,7 @@ use super::{
 
 #[test]
 #[cfg(feature = "registry-notary-cel")]
-pub(crate) fn cel_worker_config_rejects_missing_command_without_path_leak() {
+pub(super) fn cel_worker_config_rejects_missing_command_without_path_leak() {
     let worker = CelWorker::lazy(CelWorkerConfig {
         command: "/registry-notary-test/missing-cel-worker".into(),
         ..CelWorkerConfig::for_current_exe_subcommand()
@@ -24,7 +24,7 @@ pub(crate) fn cel_worker_config_rejects_missing_command_without_path_leak() {
 
 #[tokio::test]
 #[cfg(feature = "registry-notary-cel")]
-pub(crate) async fn standalone_startup_rejects_cel_expression_compile_error() {
+pub(super) async fn standalone_startup_rejects_cel_expression_compile_error() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -59,7 +59,7 @@ pub(crate) async fn standalone_startup_rejects_cel_expression_compile_error() {
 
 #[tokio::test]
 #[cfg(feature = "registry-notary-cel")]
-pub(crate) async fn standalone_startup_rejects_cel_unknown_root_reference() {
+pub(super) async fn standalone_startup_rejects_cel_unknown_root_reference() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -93,7 +93,7 @@ pub(crate) async fn standalone_startup_rejects_cel_unknown_root_reference() {
 
 #[tokio::test]
 #[cfg(feature = "registry-notary-cel")]
-pub(crate) async fn standalone_startup_rejects_disabled_cel_mode_when_claims_use_cel() {
+pub(super) async fn standalone_startup_rejects_disabled_cel_mode_when_claims_use_cel() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -117,7 +117,7 @@ pub(crate) async fn standalone_startup_rejects_disabled_cel_mode_when_claims_use
 
 #[tokio::test]
 #[cfg(feature = "registry-notary-cel")]
-pub(crate) async fn standalone_startup_rejects_cel_regex_helpers_by_default() {
+pub(super) async fn standalone_startup_rejects_cel_regex_helpers_by_default() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -152,7 +152,7 @@ pub(crate) async fn standalone_startup_rejects_cel_regex_helpers_by_default() {
 
 #[tokio::test]
 #[cfg(feature = "registry-notary-cel")]
-pub(crate) async fn standalone_server_reads_dci_source_and_evaluates_cel_claim() {
+pub(super) async fn standalone_server_reads_dci_source_and_evaluates_cel_claim() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -231,7 +231,7 @@ pub(crate) async fn standalone_server_reads_dci_source_and_evaluates_cel_claim()
 
 #[tokio::test]
 #[cfg(feature = "registry-notary-cel")]
-pub(crate) async fn standalone_server_uses_dci_response_timestamp_for_source_freshness() {
+pub(super) async fn standalone_server_uses_dci_response_timestamp_for_source_freshness() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -319,7 +319,7 @@ pub(crate) async fn standalone_server_uses_dci_response_timestamp_for_source_fre
 
 #[tokio::test]
 #[cfg(feature = "registry-notary-cel")]
-pub(crate) async fn standalone_server_reads_dci_source_by_demographic_target_attributes() {
+pub(super) async fn standalone_server_reads_dci_source_by_demographic_target_attributes() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -407,7 +407,7 @@ pub(crate) async fn standalone_server_reads_dci_source_by_demographic_target_att
 
 #[tokio::test]
 #[cfg(feature = "registry-notary-cel")]
-pub(crate) async fn standalone_server_rejects_cel_result_type_mismatch() {
+pub(super) async fn standalone_server_rejects_cel_result_type_mismatch() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -463,7 +463,7 @@ pub(crate) async fn standalone_server_rejects_cel_result_type_mismatch() {
 
 #[tokio::test]
 #[cfg(feature = "registry-notary-cel")]
-pub(crate) async fn standalone_server_maps_dci_register_not_found_to_source_not_found() {
+pub(super) async fn standalone_server_maps_dci_register_not_found_to_source_not_found() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -507,7 +507,7 @@ pub(crate) async fn standalone_server_maps_dci_register_not_found_to_source_not_
 }
 
 #[tokio::test]
-pub(crate) async fn standalone_server_extract_claim_works_without_default_features() {
+pub(super) async fn standalone_server_extract_claim_works_without_default_features() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -553,7 +553,7 @@ pub(crate) async fn standalone_server_extract_claim_works_without_default_featur
 
 #[cfg(not(feature = "registry-notary-cel"))]
 #[tokio::test]
-pub(crate) async fn standalone_server_rejects_cel_claim_without_cel_feature() {
+pub(super) async fn standalone_server_rejects_cel_claim_without_cel_feature() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -597,7 +597,7 @@ pub(crate) async fn standalone_server_rejects_cel_claim_without_cel_feature() {
 }
 
 #[test]
-pub(crate) fn standalone_router_rejects_unknown_audit_sink() {
+pub(super) fn standalone_router_rejects_unknown_audit_sink() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -621,7 +621,7 @@ pub(crate) fn standalone_router_rejects_unknown_audit_sink() {
 }
 
 #[test]
-pub(crate) fn standalone_router_rejects_missing_redis_replay_url_env() {
+pub(super) fn standalone_router_rejects_missing_redis_replay_url_env() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -656,7 +656,7 @@ redis:
 }
 
 #[tokio::test]
-pub(crate) async fn ready_fails_closed_when_redis_replay_store_is_unavailable() {
+pub(super) async fn ready_fails_closed_when_redis_replay_store_is_unavailable() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -692,7 +692,7 @@ redis:
 }
 
 #[tokio::test]
-pub(crate) async fn ready_accepts_available_redis_replay_store_when_env_is_set() {
+pub(super) async fn ready_accepts_available_redis_replay_store_when_env_is_set() {
     let Ok(redis_url) = std::env::var("REGISTRY_NOTARY_REDIS_TEST_URL") else {
         return;
     };
@@ -731,7 +731,7 @@ redis:
 }
 
 #[test]
-pub(crate) fn audit_hasher_from_env_returns_err_when_unset() {
+pub(super) fn audit_hasher_from_env_returns_err_when_unset() {
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
         "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
@@ -756,7 +756,7 @@ pub(crate) fn audit_hasher_from_env_returns_err_when_unset() {
 }
 
 #[test]
-pub(crate) fn audit_hash_secret_env_is_required_for_runtime_config() {
+pub(super) fn audit_hash_secret_env_is_required_for_runtime_config() {
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
         "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
@@ -786,20 +786,20 @@ pub(crate) fn audit_hash_secret_env_is_required_for_runtime_config() {
 
 // Dedicated access-token signing key, distinct from the credential key
 // (TEST_ISSUER_JWK). Config validation rejects reusing a credential key.
-pub(crate) const TEST_ACCESS_TOKEN_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"8jFBgUJxaaQimd4NjzxhvPYyNbcOnnZsqOntZbpP3Xk","x":"XvW-aWwJCWSYoYudTB9OZqNHURKElnnyGNa6DQNjzZk","alg":"EdDSA"}"#;
+pub(super) const TEST_ACCESS_TOKEN_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"8jFBgUJxaaQimd4NjzxhvPYyNbcOnnZsqOntZbpP3Xk","x":"XvW-aWwJCWSYoYudTB9OZqNHURKElnnyGNa6DQNjzZk","alg":"EdDSA"}"#;
 // eSignet RP client signing key (signs the private_key_jwt client assertion).
-pub(crate) const TEST_ESIGNET_RP_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"EOLPz23yGd5Ju5e-PYybLE-YyvjgXLhGzS6XgmszzXs","x":"3v5jZ5rAf7KGvcC3zuKh6-ujgtA0ABa4jqmAWXq-S_c","alg":"EdDSA"}"#;
+pub(super) const TEST_ESIGNET_RP_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"EOLPz23yGd5Ju5e-PYybLE-YyvjgXLhGzS6XgmszzXs","x":"3v5jZ5rAf7KGvcC3zuKh6-ujgtA0ABa4jqmAWXq-S_c","alg":"EdDSA"}"#;
 // Test-only 2048-bit RSA private JWK (kty=RSA, alg=RS256) for the eSignet RP
 // client when the lab registers the Notary's RP client with an RSA key.
 // Generated once with openssl and converted to a JWK; not a production key.
 #[cfg(feature = "registry-notary-cel")]
-pub(crate) const TEST_ESIGNET_RP_RSA_JWK: &str = r#"{"kty":"RSA","kid":"did:web:rp.example#esignet-rp-rsa-key","alg":"RS256","n":"uujuLM_PhTFXueBzTafeFW7O4kJgQnLIzuoHJQgaYDkCBbUYAznt-IZvGkyTTkg4mfolJj47HDlBsSNzzx7bYcFDKdBMoZQwukVX9bhkXVUPT9-fot1jfW0EPrvdJdDQ-5LjQYfk2a2OpKtV5hmBIxoHm_JRU3QOmKU0h1_vKjwStMO0ntaitIL7pSIE0X7Ht4P3edhBc5Vxf_-Ui7wSaN-jAjHCk6HYRY4BTODI-zo5K8yB5JERBqcawsuAIDPTjQ1eIOHxIQsTlsdbmSgqnMldoyZAkjxCyOm9Ad_rpbJ04WDaIhFxyaqHTVUD32cufcZFYxkSJ35zuIlJYgoebw","e":"AQAB","d":"EEvSyFFuFHzS2z_4jaK_ODsrCosi_WgonfHFobLtKcqOpJS_fTiFyQ9fjHl0tnSRistGhekTGkjbs2gV5s8X7ZP-GR0yMTxMa1E0dBYZmhGafipPLtICpKLmpdmXVH66WdTav5HroBcDwtO1b5R1r-vLEgu0j4Qk6aYtyEfTAGmKRzH9fk7crZwaM2MiklIWLaK6Gfior5KDrQhIMGfKZzu78naJ5FyFSHBUW0VvikTg0C8QbRgBuFbQCuOceu4UZhjySJUhugdgzlbnteVRc_VvSvusLL4i7fSeecRIXURSexUjraLifeh1lM_jrD8ZM-o_2Qop2ada12Asll4gkQ","p":"4QhhINnwbq_vuFTQL3Wx980l2eg8yocFS5hsmk7vbqAUbAZVSVOGW_y6ip-uG_c9xpYBvTyZAANUZHpqDyu0frPDdZplJZX2FTMkiHTg4RJQfj8OD0tmL370cGv3RRfO4md4-0E0wxl8Zsv4-PSVrMZCFyIk8TLgLZs1w7bpg0U","q":"1KGH6VP7TkA3hDXTlSL2GPShsGY0Y9P1Kn6mMA8aHIZ690QmeJU2j91oWcCP1AG6LnAp5pvxT0XJJu3OVsQs7OZPiUwAf_RoSdlMtm6xll1FkBKC3AtTLYn0vgHwFPeXa29wZM1khFv_vBdhk47ZgZT0G3f4Y88FHh5EM5EFPCM","dp":"0D332_WyWEu5c4QQ74pjuaP_XgpajzSpgs432ggn6-B5ZYnqzKNdl6xlV7jy3vBKG4Zfb6YvE-MA6saZdRaFviZOP3s0FLcUdYPRT_GQ1Nck498n_KFSm6tJOuu-dBLXIY6NVz19PPpNs7cX3BJCnBMPv-aZ9xaUe7_A3i9bIl0","dq":"gDDudp5aGSAgGEY3TGdqhTsfK_FCTpkf6sG2Qa0pKd9tzRs6MmKLJYrveYTdcYylCZA3wr9raUaCckTWrHrTNvPXKcg3WO0p3rPySt5LlIKhCK4QVMdDG2Zbth4G9y0aDfx-f1dQ7Xdlo6lY-5QYz8XUsabPiqTpyfGnXotk448","qi":"XlLiaiQDLYZXtyR1ixq3dJ1EqnBtHtx75VjpQydmb4yQMtzsQ1JS5xyRgv1gws8u5KVaF3h3CUo6wBrtKBFGIhL9WFnym_8DEECgVF7eLHZ6WNtnIv6Vs7vjO3CAPKG3TrIuaHhY5KXQf0za7criZ9Euai41_ky9_iU6j0Lw5CY"}"#;
+pub(super) const TEST_ESIGNET_RP_RSA_JWK: &str = r#"{"kty":"RSA","kid":"did:web:rp.example#esignet-rp-rsa-key","alg":"RS256","n":"uujuLM_PhTFXueBzTafeFW7O4kJgQnLIzuoHJQgaYDkCBbUYAznt-IZvGkyTTkg4mfolJj47HDlBsSNzzx7bYcFDKdBMoZQwukVX9bhkXVUPT9-fot1jfW0EPrvdJdDQ-5LjQYfk2a2OpKtV5hmBIxoHm_JRU3QOmKU0h1_vKjwStMO0ntaitIL7pSIE0X7Ht4P3edhBc5Vxf_-Ui7wSaN-jAjHCk6HYRY4BTODI-zo5K8yB5JERBqcawsuAIDPTjQ1eIOHxIQsTlsdbmSgqnMldoyZAkjxCyOm9Ad_rpbJ04WDaIhFxyaqHTVUD32cufcZFYxkSJ35zuIlJYgoebw","e":"AQAB","d":"EEvSyFFuFHzS2z_4jaK_ODsrCosi_WgonfHFobLtKcqOpJS_fTiFyQ9fjHl0tnSRistGhekTGkjbs2gV5s8X7ZP-GR0yMTxMa1E0dBYZmhGafipPLtICpKLmpdmXVH66WdTav5HroBcDwtO1b5R1r-vLEgu0j4Qk6aYtyEfTAGmKRzH9fk7crZwaM2MiklIWLaK6Gfior5KDrQhIMGfKZzu78naJ5FyFSHBUW0VvikTg0C8QbRgBuFbQCuOceu4UZhjySJUhugdgzlbnteVRc_VvSvusLL4i7fSeecRIXURSexUjraLifeh1lM_jrD8ZM-o_2Qop2ada12Asll4gkQ","p":"4QhhINnwbq_vuFTQL3Wx980l2eg8yocFS5hsmk7vbqAUbAZVSVOGW_y6ip-uG_c9xpYBvTyZAANUZHpqDyu0frPDdZplJZX2FTMkiHTg4RJQfj8OD0tmL370cGv3RRfO4md4-0E0wxl8Zsv4-PSVrMZCFyIk8TLgLZs1w7bpg0U","q":"1KGH6VP7TkA3hDXTlSL2GPShsGY0Y9P1Kn6mMA8aHIZ690QmeJU2j91oWcCP1AG6LnAp5pvxT0XJJu3OVsQs7OZPiUwAf_RoSdlMtm6xll1FkBKC3AtTLYn0vgHwFPeXa29wZM1khFv_vBdhk47ZgZT0G3f4Y88FHh5EM5EFPCM","dp":"0D332_WyWEu5c4QQ74pjuaP_XgpajzSpgs432ggn6-B5ZYnqzKNdl6xlV7jy3vBKG4Zfb6YvE-MA6saZdRaFviZOP3s0FLcUdYPRT_GQ1Nck498n_KFSm6tJOuu-dBLXIY6NVz19PPpNs7cX3BJCnBMPv-aZ9xaUe7_A3i9bIl0","dq":"gDDudp5aGSAgGEY3TGdqhTsfK_FCTpkf6sG2Qa0pKd9tzRs6MmKLJYrveYTdcYylCZA3wr9raUaCckTWrHrTNvPXKcg3WO0p3rPySt5LlIKhCK4QVMdDG2Zbth4G9y0aDfx-f1dQ7Xdlo6lY-5QYz8XUsabPiqTpyfGnXotk448","qi":"XlLiaiQDLYZXtyR1ixq3dJ1EqnBtHtx75VjpQydmb4yQMtzsQ1JS5xyRgv1gws8u5KVaF3h3CUo6wBrtKBFGIhL9WFnym_8DEECgVF7eLHZ6WNtnIv6Vs7vjO3CAPKG3TrIuaHhY5KXQf0za7criZ9Euai41_ky9_iU6j0Lw5CY"}"#;
 
-pub(crate) const NOTARY_ISSUER: &str = "http://127.0.0.1:4325";
-pub(crate) const NOTARY_AUDIENCE: &str = "registry-notary-citizen";
-pub(crate) const ESIGNET_RP_CLIENT_ID: &str = "registry-lab-live-client";
+pub(super) const NOTARY_ISSUER: &str = "http://127.0.0.1:4325";
+pub(super) const NOTARY_AUDIENCE: &str = "registry-notary-citizen";
+pub(super) const ESIGNET_RP_CLIENT_ID: &str = "registry-lab-live-client";
 
-pub(crate) fn set_preauth_env() {
+pub(super) fn set_preauth_env() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
@@ -807,7 +807,7 @@ pub(crate) fn set_preauth_env() {
     std::env::set_var("TEST_ESIGNET_RP_JWK", TEST_ESIGNET_RP_JWK);
 }
 
-pub(crate) fn local_jwk_signing_key(private_jwk_env: &str, kid: &str) -> SigningKeyConfig {
+pub(super) fn local_jwk_signing_key(private_jwk_env: &str, kid: &str) -> SigningKeyConfig {
     SigningKeyConfig {
         provider: SigningKeyProviderConfig::LocalJwkEnv,
         alg: SD_JWT_VC_SIGNING_ALG.to_string(),
@@ -829,7 +829,7 @@ pub(crate) fn local_jwk_signing_key(private_jwk_env: &str, kid: &str) -> Signing
 /// A pre-auth-enabled config. eSignet `issuer`/`jwks_uri` point at the MockIdp;
 /// the token endpoint points at `token_url` (a wiremock upstream). The
 /// access-token signing key is dedicated (distinct from the credential key).
-pub(crate) fn self_attestation_preauth_config(
+pub(super) fn self_attestation_preauth_config(
     base_url: &str,
     audit_path: &str,
     esignet_issuer: &str,
@@ -932,7 +932,7 @@ pre_authorized_code_ttl_seconds: 300
 }
 
 /// Extract a query parameter from a URL.
-pub(crate) fn query_param(url: &str, name: &str) -> Option<String> {
+pub(super) fn query_param(url: &str, name: &str) -> Option<String> {
     let query = url.split_once('?')?.1;
     for pair in query.split('&') {
         let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
@@ -943,7 +943,7 @@ pub(crate) fn query_param(url: &str, name: &str) -> Option<String> {
     None
 }
 
-pub(crate) fn percent_decode(value: &str) -> String {
+pub(super) fn percent_decode(value: &str) -> String {
     let bytes = value.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut index = 0;
@@ -973,7 +973,7 @@ pub(crate) fn percent_decode(value: &str) -> String {
 }
 
 /// Mint an eSignet id_token bound to the login nonce, with the civil-id claim.
-pub(crate) fn esignet_id_token(idp: &MockIdp, nonce: &str, national_id: &str) -> String {
+pub(super) fn esignet_id_token(idp: &MockIdp, nonce: &str, national_id: &str) -> String {
     let now = OffsetDateTime::now_utc().unix_timestamp();
     idp.mint_token(json!({
         "sub": "esignet-citizen-subject",
@@ -989,15 +989,15 @@ pub(crate) fn esignet_id_token(idp: &MockIdp, nonce: &str, national_id: &str) ->
     }))
 }
 
-pub(crate) struct PreauthOfferPage {
-    pub(crate) code: String,
-    pub(crate) pin: Option<String>,
-    pub(crate) offer: Value,
-    pub(crate) html: String,
+pub(super) struct PreauthOfferPage {
+    pub(super) code: String,
+    pub(super) pin: Option<String>,
+    pub(super) offer: Value,
+    pub(super) html: String,
 }
 
 /// Drive offer/start + offer/callback, returning the rendered offer details.
-pub(crate) async fn drive_offer_to_page(
+pub(super) async fn drive_offer_to_page(
     server: &TestServer,
     token_upstream: &MockHttpUpstream,
     idp: &MockIdp,
@@ -1057,7 +1057,7 @@ pub(crate) async fn drive_offer_to_page(
 }
 
 /// Drive offer/start + offer/callback, returning (pre_authorized_code, tx_code).
-pub(crate) async fn drive_offer_to_code(
+pub(super) async fn drive_offer_to_code(
     server: &TestServer,
     token_upstream: &MockHttpUpstream,
     idp: &MockIdp,
@@ -1068,13 +1068,13 @@ pub(crate) async fn drive_offer_to_code(
     (page.code, pin)
 }
 
-pub(crate) fn extract_between(haystack: &str, start: &str, end: &str) -> Option<String> {
+pub(super) fn extract_between(haystack: &str, start: &str, end: &str) -> Option<String> {
     let after = haystack.split_once(start)?.1;
     let value = after.split_once(end)?.0;
     Some(value.to_string())
 }
 
-pub(crate) async fn redeem_token(
+pub(super) async fn redeem_token(
     server: &TestServer,
     code: &str,
     pin: &str,
@@ -1090,7 +1090,7 @@ pub(crate) async fn redeem_token(
         .await
 }
 
-pub(crate) async fn redeem_token_without_pin(
+pub(super) async fn redeem_token_without_pin(
     server: &TestServer,
     code: &str,
 ) -> axum_test::TestResponse {
@@ -1104,7 +1104,7 @@ pub(crate) async fn redeem_token_without_pin(
         .await
 }
 
-pub(crate) fn urlencode(value: &str) -> String {
+pub(super) fn urlencode(value: &str) -> String {
     let mut out = String::new();
     for byte in value.as_bytes() {
         match byte {
@@ -1118,7 +1118,7 @@ pub(crate) fn urlencode(value: &str) -> String {
 }
 
 /// Decode (without verifying) the JSON claims of a compact JWT's payload.
-pub(crate) fn jwt_payload(jwt: &str) -> Value {
+pub(super) fn jwt_payload(jwt: &str) -> Value {
     let payload_b64 = jwt.split('.').nth(1).expect("jwt has a payload segment");
     let bytes = URL_SAFE_NO_PAD
         .decode(payload_b64)
@@ -1127,7 +1127,7 @@ pub(crate) fn jwt_payload(jwt: &str) -> Value {
 }
 
 /// Decode (without verifying) the JOSE header of a compact JWT.
-pub(crate) fn jwt_header(jwt: &str) -> Value {
+pub(super) fn jwt_header(jwt: &str) -> Value {
     let header_b64 = jwt.split('.').next().expect("jwt has a header segment");
     let bytes = URL_SAFE_NO_PAD
         .decode(header_b64)
@@ -1137,7 +1137,7 @@ pub(crate) fn jwt_header(jwt: &str) -> Value {
 
 /// Extract a field from an `application/x-www-form-urlencoded` body.
 #[cfg(feature = "registry-notary-cel")]
-pub(crate) fn form_field(body: &str, name: &str) -> Option<String> {
+pub(super) fn form_field(body: &str, name: &str) -> Option<String> {
     for pair in body.split('&') {
         let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
         if key == name {

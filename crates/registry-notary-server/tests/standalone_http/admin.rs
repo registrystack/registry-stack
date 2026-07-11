@@ -8,7 +8,7 @@ use super::{
 };
 
 #[tokio::test]
-pub(crate) async fn admin_reload_401_unauth_403_wrong_scope_501_admin() {
+pub(super) async fn admin_reload_401_unauth_403_wrong_scope_501_admin() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -62,7 +62,7 @@ pub(crate) async fn admin_reload_401_unauth_403_wrong_scope_501_admin() {
 }
 
 #[test]
-pub(crate) fn admin_reload_openapi_says_runtime_config_reload_is_not_supported() {
+pub(super) fn admin_reload_openapi_says_runtime_config_reload_is_not_supported() {
     let document = serde_json::to_value(openapi_document()).expect("OpenAPI serializes");
     let operation = &document["paths"]["/admin/v1/reload"]["post"];
     let rendered = serde_json::to_string(operation).expect("operation serializes");
@@ -94,7 +94,7 @@ pub(crate) fn admin_reload_openapi_says_runtime_config_reload_is_not_supported()
 }
 
 #[tokio::test]
-pub(crate) async fn admin_posture_requires_ops_read_not_admin_and_ops_cannot_reload() {
+pub(super) async fn admin_posture_requires_ops_read_not_admin_and_ops_cannot_reload() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -164,7 +164,7 @@ pub(crate) async fn admin_posture_requires_ops_read_not_admin_and_ops_cannot_rel
 }
 
 #[tokio::test]
-pub(crate) async fn admin_capabilities_requires_ops_read_and_reports_notary_surface() {
+pub(super) async fn admin_capabilities_requires_ops_read_and_reports_notary_surface() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -279,7 +279,7 @@ pub(crate) async fn admin_capabilities_requires_ops_read_and_reports_notary_surf
 }
 
 #[tokio::test]
-pub(crate) async fn dedicated_topology_splits_admin_routes_and_reports_capabilities() {
+pub(super) async fn dedicated_topology_splits_admin_routes_and_reports_capabilities() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -341,7 +341,7 @@ pub(crate) async fn dedicated_topology_splits_admin_routes_and_reports_capabilit
 }
 
 #[tokio::test]
-pub(crate) async fn governed_config_rejects_shared_admin_listener_topology() {
+pub(super) async fn governed_config_rejects_shared_admin_listener_topology() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -374,7 +374,7 @@ pub(crate) async fn governed_config_rejects_shared_admin_listener_topology() {
 }
 
 #[test]
-pub(crate) fn governed_config_docs_do_not_ship_unresolved_config_trust_placeholders() {
+pub(super) fn governed_config_docs_do_not_ship_unresolved_config_trust_placeholders() {
     let doc = fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../products/notary/docs/operator-config-reference.md"),
@@ -396,7 +396,7 @@ pub(crate) fn governed_config_docs_do_not_ship_unresolved_config_trust_placehold
 }
 
 #[tokio::test]
-pub(crate) async fn admin_posture_rejects_unknown_tier_with_shared_error_code() {
+pub(super) async fn admin_posture_rejects_unknown_tier_with_shared_error_code() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -431,7 +431,7 @@ pub(crate) async fn admin_posture_rejects_unknown_tier_with_shared_error_code() 
 }
 
 #[tokio::test]
-pub(crate) async fn admin_posture_reports_configured_instance_override() {
+pub(super) async fn admin_posture_reports_configured_instance_override() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -470,7 +470,7 @@ pub(crate) async fn admin_posture_reports_configured_instance_override() {
 }
 
 #[tokio::test]
-pub(crate) async fn admin_posture_top_level_keys_match_documented_example() {
+pub(super) async fn admin_posture_top_level_keys_match_documented_example() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -556,7 +556,7 @@ pub(crate) async fn admin_posture_top_level_keys_match_documented_example() {
 }
 
 #[tokio::test]
-pub(crate) async fn admin_posture_reports_self_attestation_summary_and_redacts_signing_key_ids() {
+pub(super) async fn admin_posture_reports_self_attestation_summary_and_redacts_signing_key_ids() {
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
 
@@ -627,7 +627,7 @@ pub(crate) async fn admin_posture_reports_self_attestation_summary_and_redacts_s
 }
 
 #[tokio::test]
-pub(crate) async fn admin_posture_reports_oid4vci_bearer_offer_mode() {
+pub(super) async fn admin_posture_reports_oid4vci_bearer_offer_mode() {
     set_preauth_env();
     let issuer = MockIdp::start().await;
     let token_upstream = MockHttpUpstream::start().await;
@@ -694,7 +694,7 @@ pub(crate) async fn admin_posture_reports_oid4vci_bearer_offer_mode() {
 }
 
 #[tokio::test]
-pub(crate) async fn admin_posture_redacts_runtime_config_secrets_and_private_topology() {
+pub(super) async fn admin_posture_redacts_runtime_config_secrets_and_private_topology() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -790,7 +790,7 @@ pub(crate) async fn admin_posture_redacts_runtime_config_secrets_and_private_top
 }
 
 #[tokio::test]
-pub(crate) async fn admin_posture_hash_ignores_secret_only_config_changes() {
+pub(super) async fn admin_posture_hash_ignores_secret_only_config_changes() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -871,7 +871,7 @@ pub(crate) async fn admin_posture_hash_ignores_secret_only_config_changes() {
 }
 
 #[tokio::test]
-pub(crate) async fn admin_posture_hash_tracks_public_instance_config_changes() {
+pub(super) async fn admin_posture_hash_tracks_public_instance_config_changes() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -936,7 +936,7 @@ pub(crate) async fn admin_posture_hash_tracks_public_instance_config_changes() {
 }
 
 #[tokio::test]
-pub(crate) async fn admin_posture_counts_configured_but_unused_source_connections_by_safe_kind() {
+pub(super) async fn admin_posture_counts_configured_but_unused_source_connections_by_safe_kind() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -994,7 +994,7 @@ pub(crate) async fn admin_posture_counts_configured_but_unused_source_connection
 }
 
 #[tokio::test]
-pub(crate) async fn admin_posture_classifies_replay_storage() {
+pub(super) async fn admin_posture_classifies_replay_storage() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -1027,7 +1027,7 @@ pub(crate) async fn admin_posture_classifies_replay_storage() {
 }
 
 #[tokio::test]
-pub(crate) async fn admin_posture_warns_for_production_like_in_memory_replay() {
+pub(super) async fn admin_posture_warns_for_production_like_in_memory_replay() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -1066,7 +1066,7 @@ pub(crate) async fn admin_posture_warns_for_production_like_in_memory_replay() {
 }
 
 #[tokio::test]
-pub(crate) async fn admin_posture_federation_summary_omits_peer_private_data() {
+pub(super) async fn admin_posture_federation_summary_omits_peer_private_data() {
     set_federation_env();
     let peer_jwks = MockHttpUpstream::start().await;
     let tmp = TempDir::new().expect("tempdir");
@@ -1099,7 +1099,7 @@ pub(crate) async fn admin_posture_federation_summary_omits_peer_private_data() {
 }
 
 #[tokio::test]
-pub(crate) async fn metrics_requires_metrics_scope_and_keeps_health_public() {
+pub(super) async fn metrics_requires_metrics_scope_and_keeps_health_public() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
