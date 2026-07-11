@@ -6,7 +6,9 @@ use std::fmt;
 use thiserror::Error;
 use ulid::Ulid;
 
-use super::{ProfileId, ProfileVersion};
+use crate::source_plan::CompiledSourcePlan;
+
+use super::{IntegrationPackHash, ProfileContractHash, ProfileId, ProfileVersion};
 
 /// A value-free reason that a consultation identifier was rejected.
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
@@ -29,10 +31,11 @@ pub struct ConsultationKey {
 /// Proof that an authenticated workload resolved this key through its
 /// workload-visible compiled profile registry.
 ///
-/// There is intentionally no production constructor in this boundary slice.
-/// The reviewed consultation service will mint it only after authentication
-/// and exact profile visibility checks. Until that service exists, production
-/// subject parsing remains unreachable.
+/// The proof binds the public route key and every artifact identity that can
+/// change the activated behavior: public contract, integration pack, and
+/// runtime-private binding. Its only production constructor accepts an exact
+/// compiled plan and is called by the authenticated registry lookup. The
+/// artifact identities remain opaque to request-path callers.
 ///
 /// ```compile_fail
 /// use registry_relay::consultation::{
@@ -43,18 +46,47 @@ pub struct ConsultationKey {
 /// ```
 pub struct ResolvedConsultationProfile {
     key: ConsultationKey,
+    public_contract_hash: ProfileContractHash,
+    integration_pack_hash: IntegrationPackHash,
+    private_binding_hash: Box<str>,
 }
 
 impl ResolvedConsultationProfile {
+    /// Mint a proof from the exact plan returned by the authenticated registry
+    /// lookup. No route-supplied artifact identity is accepted here.
+    #[allow(
+        dead_code,
+        reason = "consumed by the consultation service activation slice"
+    )]
+    pub(crate) fn from_authenticated_registry_plan(plan: &CompiledSourcePlan) -> Self {
+        Self {
+            key: ConsultationKey {
+                id: plan.profile().id().clone(),
+                version: plan.profile().version(),
+            },
+            public_contract_hash: plan.profile().contract_hash().clone(),
+            integration_pack_hash: plan.integration_pack().hash().clone(),
+            private_binding_hash: plan.binding_hash().into(),
+        }
+    }
+
     /// Return the authenticated workload-visible profile key.
     #[must_use]
     pub const fn key(&self) -> &ConsultationKey {
         &self.key
     }
 
+    pub(super) fn matches_exact_plan(&self, plan: &CompiledSourcePlan) -> bool {
+        self.key.id() == plan.profile().id()
+            && self.key.version() == plan.profile().version()
+            && &self.public_contract_hash == plan.profile().contract_hash()
+            && &self.integration_pack_hash == plan.integration_pack().hash()
+            && self.private_binding_hash.as_ref() == plan.binding_hash()
+    }
+
     #[cfg(test)]
-    pub(crate) const fn for_wire_test(key: ConsultationKey) -> Self {
-        Self { key }
+    pub(crate) fn for_wire_test(plan: &CompiledSourcePlan) -> Self {
+        Self::from_authenticated_registry_plan(plan)
     }
 }
 
@@ -202,10 +234,14 @@ mod tests {
     }
 
     #[test]
-    fn resolved_profile_test_capability_retains_the_exact_key() {
-        let key = ConsultationKey::try_parse("example.person", "1").unwrap();
-        let resolved = ResolvedConsultationProfile::for_wire_test(key);
-        assert_eq!(resolved.key().id().as_str(), "example.person");
+    fn resolved_profile_test_capability_retains_the_exact_plan_identity() {
+        let plan = crate::source_plan::bounded_runtime_vector_plan_fixture();
+        let resolved = ResolvedConsultationProfile::for_wire_test(&plan);
+        assert_eq!(
+            resolved.key().id().as_str(),
+            "synthetic.person-status.exact"
+        );
         assert_eq!(resolved.key().version().get(), 1);
+        assert!(resolved.matches_exact_plan(&plan));
     }
 }

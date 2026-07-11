@@ -26,6 +26,7 @@ use crate::consultation::{
     IntegrationPackHash, OperationId, ProfileContractHash, ProfileId, ProfileVersion,
 };
 
+use super::registry::CompiledConsultationRegistry;
 use super::{
     CompiledOperation, CompiledRequestCodec, CompiledSourceAuth, CompiledSourcePlan,
     CompiledSourcePlanRegistry, ReadMethod,
@@ -137,9 +138,18 @@ pub(crate) struct CompiledBasicSourceCredentialProvider {
 }
 
 impl CompiledBasicSourceCredentialProvider {
+    /// Compile the Basic credential subset for one exact consultation
+    /// activation. Raw source-plan registry access stays inside this module.
+    pub(crate) fn compile_for_consultations(
+        config: &ConsultationSourceCredentialCatalogConfig,
+        registry: &CompiledConsultationRegistry,
+    ) -> Result<Self, SourceCredentialProviderError> {
+        Self::compile(config, registry.source_plans_for_basic_credentials())
+    }
+
     /// Validate exact registry/config closure before reading any environment
     /// value, then load and pre-encode every credential once.
-    pub(crate) fn compile(
+    fn compile(
         config: &ConsultationSourceCredentialCatalogConfig,
         registry: &CompiledSourcePlanRegistry,
     ) -> Result<Self, SourceCredentialProviderError> {

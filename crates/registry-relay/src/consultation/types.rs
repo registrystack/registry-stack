@@ -28,6 +28,9 @@ const MAX_TIMEOUT_MS: u32 = 10_000;
 /// cannot accidentally expose a subject selector.
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
 pub enum ConsultationValidationError {
+    /// A resolved registry proof does not name the supplied compiled plan.
+    #[error("resolved consultation profile does not match its compiled plan")]
+    ResolvedProfileMismatch,
     /// A profile identifier does not use the v1 path grammar.
     #[error("invalid consultation profile identifier")]
     InvalidProfileId,
@@ -810,6 +813,33 @@ pub struct PreAuthorizationConsultationCore {
 }
 
 impl PreAuthorizationConsultationCore {
+    /// Bind one owned parsed request to the exact plan proven visible by the
+    /// authenticated registry lookup. Profile-specific purpose and input
+    /// validation still happens when this core is consumed into canonical
+    /// consultation inputs.
+    #[allow(
+        dead_code,
+        reason = "consumed by the consultation service activation slice"
+    )]
+    pub(crate) fn from_resolved_plan(
+        resolved: super::ResolvedConsultationProfile,
+        plan: &crate::source_plan::CompiledSourcePlan,
+        purpose: ParsedPurpose,
+        input: ParsedSingleStringInput,
+    ) -> Result<Self, ConsultationValidationError> {
+        let profile = plan.runtime_profile();
+        if !resolved.matches_exact_plan(plan) {
+            return Err(ConsultationValidationError::ResolvedProfileMismatch);
+        }
+        Ok(Self {
+            profile: profile.profile().clone(),
+            selector_provenance: profile.subject().selector_provenance().clone(),
+            purpose,
+            input,
+            footprint: profile.footprint().clone(),
+        })
+    }
+
     #[cfg(test)]
     pub(crate) const fn new_for_test(
         profile: ProfileIdentity,

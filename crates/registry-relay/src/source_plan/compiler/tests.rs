@@ -553,6 +553,43 @@ pub(crate) fn bounded_runtime_vector_plan_fixture() -> CompiledSourcePlan {
         .expect("one bounded vector plan")
 }
 
+fn same_key_different_private_binding_plan_fixture() -> CompiledSourcePlan {
+    let mut fixture = fixture();
+    fixture.binding_value["registry_instance"] = json!("people-secondary");
+    fixture.refresh_binding();
+    compile(&fixture)
+        .expect("same-key private-binding variant compiles")
+        .plans
+        .into_values()
+        .next()
+        .expect("one same-key private-binding variant")
+}
+
+#[test]
+fn pre_authorization_rejects_same_key_with_a_different_private_binding() {
+    use crate::consultation::{
+        ConsultationValidationError, ParsedPurpose, ParsedSingleStringInput,
+        PreAuthorizationConsultationCore, ResolvedConsultationProfile,
+    };
+
+    let baseline = bounded_runtime_vector_plan_fixture();
+    let variant = same_key_different_private_binding_plan_fixture();
+    assert_eq!(baseline.profile(), variant.profile());
+    assert_eq!(baseline.integration_pack(), variant.integration_pack());
+    assert_ne!(baseline.binding_hash(), variant.binding_hash());
+    let resolved = ResolvedConsultationProfile::from_authenticated_registry_plan(&baseline);
+    assert_eq!(
+        PreAuthorizationConsultationCore::from_resolved_plan(
+            resolved,
+            &variant,
+            ParsedPurpose::try_parse("benefit-verification").unwrap(),
+            ParsedSingleStringInput::try_parse("subject_id", "12345").unwrap(),
+        )
+        .err(),
+        Some(ConsultationValidationError::ResolvedProfileMismatch)
+    );
+}
+
 pub(crate) fn dhis2_runtime_vector_plan_fixture() -> CompiledSourcePlan {
     compile_dhis2(&dhis2_fixture())
         .expect("maintained DHIS2 vector plan compiles")

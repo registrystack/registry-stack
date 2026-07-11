@@ -9,7 +9,7 @@ use thiserror::Error;
 use crate::config::{VerifiedConsultationArtifactClosure, VerifiedEvidenceClass};
 use crate::consultation::{
     AuthenticatedConsultationWorkload, ConsultationKey, IntegrationPackHash, OperationId,
-    ProfileId, ProfileVersion, WorkloadId,
+    ProfileId, ProfileVersion, ResolvedConsultationProfile, WorkloadId,
 };
 
 use super::artifact::{parse_integration_pack, EvidenceClass, SourcePlanKind};
@@ -218,6 +218,30 @@ impl CompiledConsultationRegistry {
         workload: &AuthenticatedConsultationWorkload,
     ) -> Option<&CompiledSourcePlan> {
         self.get_for_workload_id(key, workload.workload_id())
+    }
+
+    /// Resolve the plan and mint its workload-visible proof in one lookup so a
+    /// caller cannot pair a proof with another profile version.
+    #[allow(
+        dead_code,
+        reason = "consumed by the consultation service activation slice"
+    )]
+    pub(crate) fn resolve_for_authenticated_workload(
+        &self,
+        key: &ConsultationKey,
+        workload: &AuthenticatedConsultationWorkload,
+    ) -> Option<(ResolvedConsultationProfile, &CompiledSourcePlan)> {
+        let plan = self.get_for_workload_id(key, workload.workload_id())?;
+        Some((
+            ResolvedConsultationProfile::from_authenticated_registry_plan(plan),
+            plan,
+        ))
+    }
+
+    /// Narrow source-plan access for restart-only Basic credential activation.
+    /// This is visible only inside `source_plan`, never to request paths.
+    pub(super) const fn source_plans_for_basic_credentials(&self) -> &CompiledSourcePlanRegistry {
+        &self.source_plans
     }
 
     fn get_for_workload_id(
@@ -511,6 +535,24 @@ mod tests {
         let visible = WorkloadId::try_from("registry-notary").unwrap();
         let hidden = WorkloadId::try_from("another-workload").unwrap();
         assert!(registry.get_for_workload_id(&key, &visible).is_some());
+        let workload = AuthenticatedConsultationWorkload::for_runtime_vector_test(i64::MAX / 2);
+        let (resolved, plan) = registry
+            .resolve_for_authenticated_workload(&key, &workload)
+            .expect("authenticated workload receives plan and proof together");
+        assert_eq!(resolved.key(), &key);
+        let core = crate::consultation::PreAuthorizationConsultationCore::from_resolved_plan(
+            resolved,
+            plan,
+            crate::consultation::ParsedPurpose::try_parse("benefit-verification").unwrap(),
+            crate::consultation::ParsedSingleStringInput::try_parse("subject_id", "12345").unwrap(),
+        )
+        .expect("resolved proof binds the exact plan");
+        assert_eq!(core.profile(), plan.profile());
+        crate::source_plan::CompiledBasicSourceCredentialProvider::compile_for_consultations(
+            &crate::config::ConsultationSourceCredentialCatalogConfig::default(),
+            &registry,
+        )
+        .expect("OAuth-only consultation activation has an empty Basic credential closure");
         assert!(registry.get_for_workload_id(&key, &hidden).is_none());
         assert!(registry
             .get_for_workload_id(

@@ -6,7 +6,9 @@
 //! authenticated workload, parse and resolve an allowed profile key, then parse
 //! this bounded envelope. No raw HTTP request reaches a source backend.
 
+use axum::body::Body;
 use axum::http::{header, HeaderMap};
+use futures::StreamExt;
 use thiserror::Error;
 use zeroize::Zeroizing;
 
@@ -30,6 +32,7 @@ const JSON_MEDIA_TYPE: &str = "application/json";
 pub(crate) struct ConsultationRequestBody(Zeroizing<Vec<u8>>);
 
 impl ConsultationRequestBody {
+    #[cfg(test)]
     fn try_from_owned(bytes: Vec<u8>) -> Result<Self, ConsultationWireError> {
         let bytes = Zeroizing::new(bytes);
         if bytes.len() > MAX_CONSULTATION_REQUEST_BYTES {
@@ -40,6 +43,31 @@ impl ConsultationRequestBody {
 
     fn as_slice(&self) -> &[u8] {
         self.0.as_slice()
+    }
+
+    /// Stream the HTTP body directly into its zeroizing owner. Individual
+    /// transport chunks are never retained as a second complete request copy.
+    /// Both non-forgeable service capabilities must exist before polling can
+    /// acquire any subject-bearing bytes.
+    pub(crate) async fn read_from(
+        _resolved_profile: &ResolvedConsultationProfile,
+        _notary_workload: &AuthenticatedNotaryWorkload<'_>,
+        body: Body,
+    ) -> Result<Self, ConsultationWireError> {
+        let mut retained = Zeroizing::new(Vec::with_capacity(MAX_CONSULTATION_REQUEST_BYTES));
+        let mut stream = body.into_data_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|_| ConsultationWireError::InvalidBody)?;
+            let next_len = retained
+                .len()
+                .checked_add(chunk.len())
+                .ok_or(ConsultationWireError::BodyTooLarge)?;
+            if next_len > MAX_CONSULTATION_REQUEST_BYTES {
+                return Err(ConsultationWireError::BodyTooLarge);
+            }
+            retained.extend_from_slice(&chunk);
+        }
+        Ok(Self(retained))
     }
 }
 
@@ -115,6 +143,16 @@ impl ParsedConsultationEnvelope {
     #[must_use]
     pub(crate) const fn notary_evaluation_id(&self) -> Option<NotaryEvaluationId> {
         self.notary_evaluation_id
+    }
+
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        ParsedPurpose,
+        ParsedSingleStringInput,
+        Option<NotaryEvaluationId>,
+    ) {
+        (self.purpose, self.input, self.notary_evaluation_id)
     }
 }
 
@@ -337,9 +375,9 @@ pub(crate) fn parse_consultation_key(
 /// authentication and workload-visible profile resolution have both produced
 /// their non-user-constructible proofs. The body is consumed under a zeroizing
 /// owner, and the closed decoder places every decoded key and candidate input
-/// string under its own zeroizing owner without a library scratch buffer. Route integration
-/// must stream directly into this owned buffer under the same 8 KiB cap rather
-/// than first retaining an ordinary subject-bearing `Bytes` copy.
+/// string under its own zeroizing owner without a library scratch buffer.
+/// Route integration must use [`ConsultationRequestBody::read_from`] to acquire
+/// bytes only after these same capabilities exist.
 pub(crate) fn parse_execute_envelope(
     _resolved_profile: &ResolvedConsultationProfile,
     _notary_workload: &AuthenticatedNotaryWorkload<'_>,
@@ -423,9 +461,13 @@ fn optional_header<'a>(
 
 #[cfg(test)]
 mod tests {
+    use std::convert::Infallible;
+
     use axum::body::to_bytes;
     use axum::http::{HeaderValue, StatusCode};
     use axum::response::IntoResponse;
+    use bytes::Bytes;
+    use futures::stream;
     use proptest::prelude::*;
     use serde_json::{json, Value};
 
@@ -451,9 +493,8 @@ mod tests {
     }
 
     fn resolved_profile() -> ResolvedConsultationProfile {
-        ResolvedConsultationProfile::for_wire_test(
-            ConsultationKey::try_parse("example.person-status.exact", "1").unwrap(),
-        )
+        let plan = crate::source_plan::bounded_runtime_vector_plan_fixture();
+        ResolvedConsultationProfile::for_wire_test(&plan)
     }
 
     fn notary_workload() -> AuthenticatedNotaryWorkload<'static> {
@@ -466,6 +507,68 @@ mod tests {
     ) -> Result<ParsedConsultationEnvelope, ConsultationWireError> {
         let body = ConsultationRequestBody::try_from_owned(body.to_vec())?;
         parse_execute_envelope(&resolved_profile(), &notary_workload(), headers, body)
+    }
+
+    #[tokio::test]
+    async fn request_body_streams_chunks_into_one_bounded_zeroizing_owner() {
+        let resolved = resolved_profile();
+        let workload = notary_workload();
+        let streamed = Body::from_stream(stream::iter([
+            Ok::<_, Infallible>(Bytes::from_static(br#"{"inputs":{"subject_"#)),
+            Ok(Bytes::from_static(br#"id":"12345"}}"#)),
+        ]));
+        let retained = ConsultationRequestBody::read_from(&resolved, &workload, streamed)
+            .await
+            .expect("bounded chunks are retained");
+        assert_eq!(retained.as_slice(), body());
+        assert_eq!(retained.0.capacity(), MAX_CONSULTATION_REQUEST_BYTES);
+    }
+
+    #[tokio::test]
+    async fn request_body_accepts_exactly_eight_kib_without_growing_storage() {
+        let resolved = resolved_profile();
+        let workload = notary_workload();
+        let retained = ConsultationRequestBody::read_from(
+            &resolved,
+            &workload,
+            Body::from(vec![b'x'; MAX_CONSULTATION_REQUEST_BYTES]),
+        )
+        .await
+        .expect("the exact request cap is accepted");
+        assert_eq!(retained.as_slice().len(), MAX_CONSULTATION_REQUEST_BYTES);
+        assert_eq!(retained.0.capacity(), MAX_CONSULTATION_REQUEST_BYTES);
+    }
+
+    #[tokio::test]
+    async fn request_body_rejects_chunk_overflow_before_storage_growth() {
+        let resolved = resolved_profile();
+        let workload = notary_workload();
+        let oversized = Body::from_stream(stream::iter([
+            Ok::<_, Infallible>(Bytes::from(vec![b'x'; MAX_CONSULTATION_REQUEST_BYTES])),
+            Ok(Bytes::from_static(b"x")),
+        ]));
+        assert_eq!(
+            ConsultationRequestBody::read_from(&resolved, &workload, oversized)
+                .await
+                .err(),
+            Some(ConsultationWireError::BodyTooLarge)
+        );
+    }
+
+    #[tokio::test]
+    async fn request_body_collapses_transport_errors_without_retaining_values() {
+        let resolved = resolved_profile();
+        let workload = notary_workload();
+        let failed = Body::from_stream(stream::iter([
+            Ok::<_, std::io::Error>(Bytes::from_static(b"partial-subject")),
+            Err(std::io::Error::other("transport detail must not escape")),
+        ]));
+        assert_eq!(
+            ConsultationRequestBody::read_from(&resolved, &workload, failed)
+                .await
+                .err(),
+            Some(ConsultationWireError::InvalidBody)
+        );
     }
 
     #[test]
