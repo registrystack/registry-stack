@@ -1,7 +1,9 @@
+use super::root::{
+    expect_oid4vci_error, expect_self_attestation_error, valid_delegated_self_attestation_config,
+    valid_oid4vci_config, valid_oid4vci_projection_config, valid_self_attestation_config,
+};
 use super::support::*;
 use super::*;
-#[allow(unused_imports)]
-use super::{auth::*, credentials::*, infrastructure::*, preauth::*, root::*, sources::*};
 
 #[test]
 pub(super) fn self_attestation_is_disabled_by_default() {

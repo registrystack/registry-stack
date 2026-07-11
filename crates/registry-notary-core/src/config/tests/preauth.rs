@@ -1,7 +1,11 @@
+use super::infrastructure::valid_federation_config;
+use super::issuance::{
+    expect_access_token_signing_error, publish_only_access_token_verification_key,
+    second_signing_key, test_public_jwk, valid_pre_auth_config,
+};
+use super::root::expect_oid4vci_error;
 use super::support::*;
 use super::*;
-#[allow(unused_imports)]
-use super::{auth::*, credentials::*, infrastructure::*, issuance::*, root::*, sources::*};
 
 #[test]
 pub(super) fn pre_auth_and_access_token_signing_are_disabled_by_default() {

@@ -1,7 +1,8 @@
+use super::root::{
+    expect_credential_status_error, expect_federation_error, expect_replay_error, minimal_claim,
+};
 use super::support::*;
 use super::*;
-#[allow(unused_imports)]
-use super::{auth::*, credentials::*, issuance::*, preauth::*, root::*, sources::*};
 
 #[test]
 pub(super) fn replay_config_validates_redis_backend_shape() {

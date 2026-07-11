@@ -1,7 +1,7 @@
+use super::root::minimal_claim;
+use super::sources::rda_binding;
 use super::support::*;
 use super::*;
-#[allow(unused_imports)]
-use super::{auth::*, infrastructure::*, issuance::*, preauth::*, root::*, sources::*};
 
 #[test]
 pub(super) fn proof_of_possession_required_with_only_did_jwk_is_valid() {

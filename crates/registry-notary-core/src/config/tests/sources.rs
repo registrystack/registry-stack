@@ -1,7 +1,6 @@
+use super::root::minimal_claim;
 use super::support::*;
 use super::*;
-#[allow(unused_imports)]
-use super::{auth::*, credentials::*, infrastructure::*, issuance::*, preauth::*, root::*};
 
 #[test]
 pub(super) fn source_connection_max_in_flight_zero_is_rejected() {

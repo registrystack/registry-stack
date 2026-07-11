@@ -1,7 +1,6 @@
+use super::root::valid_self_attestation_config;
 use super::support::*;
 use super::*;
-#[allow(unused_imports)]
-use super::{credentials::*, infrastructure::*, issuance::*, preauth::*, root::*, sources::*};
 
 #[test]
 pub(super) fn oidc_auth_mode_requires_oidc_block() {
