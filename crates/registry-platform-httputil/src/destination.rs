@@ -172,6 +172,19 @@ pub enum DestinationProfile {
     PinnedLoopbackHttpsTest,
 }
 
+/// Closed DNS address-family policy for one fixed destination.
+///
+/// The default remains strict dual-stack resolution. IPv4-only mode is an
+/// explicit deployment restriction; it performs only an A lookup and never
+/// falls back to or accepts an IPv6 address.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DestinationDnsFamily {
+    /// Require complete, independently successful A and AAAA lookups.
+    DualStackStrict,
+    /// Query, validate, and pin only the complete A answer set.
+    Ipv4Only,
+}
+
 /// Fixed data or credential origin plus its exact private-network allowlist.
 ///
 /// The slot parameter prevents data and credential policies from being
@@ -199,6 +212,7 @@ pub struct FixedDestinationPolicy<S: DestinationSlot> {
     origin: Url,
     profile: DestinationProfile,
     allowed_private_cidrs: Vec<IpNet>,
+    dns_family: DestinationDnsFamily,
     slot: PhantomData<fn() -> S>,
 }
 
@@ -216,6 +230,7 @@ impl<S: DestinationSlot> fmt::Debug for FixedDestinationPolicy<S> {
             .field("origin", &"[REDACTED]")
             .field("profile", &self.profile)
             .field("private_cidr_count", &self.allowed_private_cidrs.len())
+            .field("dns_family", &self.dns_family)
             .finish()
     }
 }
@@ -232,6 +247,27 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
         origin: &str,
         profile: DestinationProfile,
         allowed_private_cidrs: &[IpNet],
+    ) -> Result<Self, DestinationPolicyError> {
+        Self::new_with_dns_family(
+            origin_id,
+            origin,
+            profile,
+            allowed_private_cidrs,
+            DestinationDnsFamily::DualStackStrict,
+        )
+    }
+
+    /// Validate and freeze a destination binding with an explicit DNS family.
+    ///
+    /// IPv4-only mode requires a domain origin and rejects IPv6 private CIDRs
+    /// at construction time instead of retaining no-op or unreachable
+    /// configuration in its A-only resolution path.
+    pub fn new_with_dns_family(
+        origin_id: &str,
+        origin: &str,
+        profile: DestinationProfile,
+        allowed_private_cidrs: &[IpNet],
+        dns_family: DestinationDnsFamily,
     ) -> Result<Self, DestinationPolicyError> {
         if origin_id.len() > MAX_DESTINATION_ORIGIN_ID_BYTES {
             return Err(DestinationPolicyError::OriginIdTooLong);
@@ -255,6 +291,11 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
         }
         if origin.host().is_none() {
             return Err(DestinationPolicyError::OriginMissingHost);
+        }
+        if dns_family == DestinationDnsFamily::Ipv4Only
+            && !matches!(origin.host(), Some(::url::Host::Domain(_)))
+        {
+            return Err(DestinationPolicyError::Ipv4OnlyLiteralOriginDenied);
         }
         let port = origin
             .port_or_known_default()
@@ -288,6 +329,9 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
         }
 
         for cidr in allowed_private_cidrs {
+            if dns_family == DestinationDnsFamily::Ipv4Only && matches!(cidr, IpNet::V6(_)) {
+                return Err(DestinationPolicyError::Ipv4OnlyIpv6ConfigurationDenied);
+            }
             let canonical = cidr.trunc();
             if canonical != *cidr {
                 return Err(DestinationPolicyError::PrivateCidrNotCanonical);
@@ -307,6 +351,7 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
             origin,
             profile,
             allowed_private_cidrs: retained,
+            dns_family,
             slot: PhantomData,
         })
     }
@@ -315,6 +360,12 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
     #[must_use]
     pub fn origin_id(&self) -> &str {
         &self.origin_id
+    }
+
+    /// Frozen non-secret DNS address-family policy.
+    #[must_use]
+    pub fn dns_family(&self) -> DestinationDnsFamily {
+        self.dns_family
     }
 
     /// Resolve, validate, pin, and send exactly one bounded request.
@@ -388,7 +439,7 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
                     .await
                     .map_err(|_| DestinationSendError::DeadlineExceeded)?
                     .map_err(|_| DestinationSendError::ResolutionCapacityUnavailable)?;
-                let answers = timeout_at(deadline, resolver.resolve(domain, port))
+                let answers = timeout_at(deadline, resolver.resolve(domain, port, self.dns_family))
                     .await
                     .map_err(|_| DestinationSendError::DeadlineExceeded)??;
                 drop(permit);
@@ -500,6 +551,9 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
 
         let mut pinned = PinnedAddresses::new();
         for &answer in answers.as_slice() {
+            if self.dns_family == DestinationDnsFamily::Ipv4Only && answer.is_ipv6() {
+                return Err(DestinationSendError::ResolverAddressFamilyMismatch);
+            }
             let normalized = normalize_ipv4_mapped(answer.ip());
             if answer.port() != self.port() {
                 return Err(DestinationSendError::ResolverPortMismatch);
@@ -645,6 +699,10 @@ pub enum DestinationPolicyError {
     PrivateCidrDenied,
     #[error("private CIDR contains host bits instead of an exact network")]
     PrivateCidrNotCanonical,
+    #[error("IPv4-only destination configuration cannot contain IPv6 bindings")]
+    Ipv4OnlyIpv6ConfigurationDenied,
+    #[error("IPv4-only destination configuration requires a domain origin")]
+    Ipv4OnlyLiteralOriginDenied,
 }
 
 /// Method class compiled into a bounded operation.
@@ -1754,6 +1812,8 @@ pub enum DestinationSendError {
     NoResolverAnswers,
     #[error("destination resolver returned an unexpected port")]
     ResolverPortMismatch,
+    #[error("destination resolver returned an unexpected address family")]
+    ResolverAddressFamilyMismatch,
     #[error("literal destination did not resolve to itself")]
     LiteralOriginMismatch,
     #[error("cloud metadata destination is denied")]
@@ -1935,8 +1995,12 @@ impl<S: DestinationSlot> BoundedDestinationBody<S> {
 }
 
 trait Resolver {
-    async fn resolve(&self, host: &str, port: u16)
-        -> Result<ResolvedAnswers, DestinationSendError>;
+    async fn resolve(
+        &self,
+        host: &str,
+        port: u16,
+        dns_family: DestinationDnsFamily,
+    ) -> Result<ResolvedAnswers, DestinationSendError>;
 }
 
 enum TransportTrust {
@@ -1952,39 +2016,58 @@ impl Resolver for SystemResolver {
         &self,
         host: &str,
         port: u16,
+        dns_family: DestinationDnsFamily,
     ) -> Result<ResolvedAnswers, DestinationSendError> {
         let resolver = destination_system_resolver()?;
         let absolute_name = absolute_dns_name(host)?;
-        // These are deliberately independent RRset lookups. The caller's
-        // timeout wraps this future and cancellation drops both in-flight
-        // Hickory queries together.
-        let (ipv4, ipv6) = tokio::join!(
-            resolver.ipv4_lookup(absolute_name.clone()),
-            resolver.ipv6_lookup(absolute_name)
-        );
-        let ipv4 = match ipv4 {
-            Ok(records) => {
-                FamilyResolution::from_addresses(records.answers().iter().filter_map(|record| {
-                    match &record.data {
-                        RData::A(address) => Some(IpAddr::V4(address.0)),
-                        _ => None,
+        match dns_family {
+            DestinationDnsFamily::DualStackStrict => {
+                // These are deliberately independent RRset lookups. The
+                // caller's timeout wraps this future and cancellation drops
+                // both in-flight Hickory queries together.
+                let (ipv4, ipv6) = tokio::join!(
+                    resolver.ipv4_lookup(absolute_name.clone()),
+                    resolver.ipv6_lookup(absolute_name)
+                );
+                let ipv4 = match ipv4 {
+                    Ok(records) => {
+                        FamilyResolution::from_addresses(records.answers().iter().filter_map(
+                            |record| match &record.data {
+                                RData::A(address) => Some(IpAddr::V4(address.0)),
+                                _ => None,
+                            },
+                        ))
                     }
-                }))
-            }
-            Err(error) => classify_hickory_family_error(&error),
-        };
-        let ipv6 = match ipv6 {
-            Ok(records) => {
-                FamilyResolution::from_addresses(records.answers().iter().filter_map(|record| {
-                    match &record.data {
-                        RData::AAAA(address) => Some(IpAddr::V6(address.0)),
-                        _ => None,
+                    Err(error) => classify_hickory_family_error(&error),
+                };
+                let ipv6 = match ipv6 {
+                    Ok(records) => {
+                        FamilyResolution::from_addresses(records.answers().iter().filter_map(
+                            |record| match &record.data {
+                                RData::AAAA(address) => Some(IpAddr::V6(address.0)),
+                                _ => None,
+                            },
+                        ))
                     }
-                }))
+                    Err(error) => classify_hickory_family_error(&error),
+                };
+                combine_family_resolutions(ipv4, ipv6, port)
             }
-            Err(error) => classify_hickory_family_error(&error),
-        };
-        combine_family_resolutions(ipv4, ipv6, port)
+            DestinationDnsFamily::Ipv4Only => {
+                let ipv4 = match resolver.ipv4_lookup(absolute_name).await {
+                    Ok(records) => {
+                        FamilyResolution::from_addresses(records.answers().iter().filter_map(
+                            |record| match &record.data {
+                                RData::A(address) => Some(IpAddr::V4(address.0)),
+                                _ => None,
+                            },
+                        ))
+                    }
+                    Err(error) => classify_hickory_family_error(&error),
+                };
+                collect_family_resolution(ipv4, port)
+            }
+        }
     }
 }
 
@@ -2104,6 +2187,26 @@ fn combine_family_resolutions(
         .copied()
         .map(|ip| SocketAddr::new(ip, port));
     ResolvedAnswers::try_collect(addresses)
+}
+
+fn collect_family_resolution(
+    family: FamilyResolution,
+    port: u16,
+) -> Result<ResolvedAnswers, DestinationSendError> {
+    match family.kind {
+        FamilyResolutionKind::Failure => return Err(DestinationSendError::ResolutionFailed),
+        FamilyResolutionKind::TooManyAnswers => {
+            return Err(DestinationSendError::TooManyResolverAnswers);
+        }
+        FamilyResolutionKind::Answers | FamilyResolutionKind::NoData => {}
+    }
+    ResolvedAnswers::try_collect(
+        family
+            .as_slice()
+            .iter()
+            .copied()
+            .map(|ip| SocketAddr::new(ip, port)),
+    )
 }
 
 struct ResolvedAnswers {
@@ -2746,6 +2849,72 @@ mod tests {
     }
 
     #[test]
+    fn dns_family_default_and_ipv4_only_configuration_are_closed_and_redacted() {
+        let default = DataDestinationPolicy::new(
+            "data",
+            "https://registry.example.test/",
+            DestinationProfile::ProductionHttps,
+            &[],
+        )
+        .expect("default destination validates");
+        assert_eq!(default.dns_family(), DestinationDnsFamily::DualStackStrict);
+
+        let ipv4_only = DataDestinationPolicy::new_with_dns_family(
+            "data",
+            "https://registry.example.test/",
+            DestinationProfile::ProductionHttps,
+            &[],
+            DestinationDnsFamily::Ipv4Only,
+        )
+        .expect("domain origin is compatible with IPv4-only mode");
+        assert_eq!(ipv4_only.dns_family(), DestinationDnsFamily::Ipv4Only);
+
+        for origin in [
+            "https://192.0.0.9/",
+            "https://[2001:db8::feed]/",
+            "https://[::ffff:192.0.2.10]/",
+        ] {
+            let error = DataDestinationPolicy::new_with_dns_family(
+                "data",
+                origin,
+                DestinationProfile::ProductionHttps,
+                &[],
+                DestinationDnsFamily::Ipv4Only,
+            )
+            .unwrap_err();
+            assert_eq!(error, DestinationPolicyError::Ipv4OnlyLiteralOriginDenied);
+            let rendered = error.to_string();
+            assert!(!rendered.contains("192.0.0.9"));
+            assert!(!rendered.contains("2001:db8::feed"));
+            assert!(!rendered.contains("::ffff:192.0.2.10"));
+        }
+
+        for cidrs in [
+            vec![cidr("fd12:3456::/32")],
+            vec![cidr("10.0.0.0/8"), cidr("fd12:3456::/32")],
+        ] {
+            let error = DataDestinationPolicy::new_with_dns_family(
+                "data",
+                "https://registry.example.test/",
+                DestinationProfile::ProductionHttps,
+                &cidrs,
+                DestinationDnsFamily::Ipv4Only,
+            )
+            .unwrap_err();
+            assert_eq!(
+                error,
+                DestinationPolicyError::Ipv4OnlyIpv6ConfigurationDenied
+            );
+            let rendered = error.to_string();
+            assert!(!rendered.contains("fd12:3456"));
+        }
+
+        let debug = format!("{ipv4_only:?}");
+        assert!(debug.contains("Ipv4Only"));
+        assert!(!debug.contains("registry.example.test"));
+    }
+
+    #[test]
     fn only_rfc1918_cgnat_and_ula_subnets_are_configurable() {
         for allowed in [
             "10.0.0.0/8",
@@ -3023,6 +3192,43 @@ mod tests {
         )
         .expect("two legitimate NODATA results form a complete empty answer set");
         assert!(empty.is_empty());
+
+        let ipv4_only = collect_family_resolution(
+            FamilyResolution::from_addresses([ip("93.184.216.34"), ip("93.184.216.35")]),
+            443,
+        )
+        .expect("complete A answer set is retained independently of AAAA");
+        assert_eq!(
+            ipv4_only.as_slice(),
+            &[answer("93.184.216.34", 443), answer("93.184.216.35", 443)]
+        );
+        assert!(matches!(
+            collect_family_resolution(FamilyResolution::failure(), 443),
+            Err(DestinationSendError::ResolutionFailed)
+        ));
+    }
+
+    #[test]
+    fn ipv4_only_rejects_resolver_injected_ipv6_answers() {
+        let policy = DataDestinationPolicy::new_with_dns_family(
+            "data",
+            "https://registry.example.test/",
+            DestinationProfile::ProductionHttps,
+            &[],
+            DestinationDnsFamily::Ipv4Only,
+        )
+        .expect("IPv4-only domain destination validates");
+
+        for raw in ["2606:4700::1111", "::ffff:93.184.216.34"] {
+            let answers = ResolvedAnswers::try_collect([answer(raw, 443)])
+                .expect("single resolver answer is bounded");
+            let error = match policy.classify_answers(answers) {
+                Ok(_) => panic!("IPv4-only policy accepted an IPv6 answer"),
+                Err(error) => error,
+            };
+            assert_eq!(error, DestinationSendError::ResolverAddressFamilyMismatch);
+            assert!(!error.to_string().contains(raw));
+        }
     }
 
     #[test]
@@ -3665,10 +3871,120 @@ mod tests {
             &self,
             _host: &str,
             _port: u16,
+            _dns_family: DestinationDnsFamily,
         ) -> Result<ResolvedAnswers, DestinationSendError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             ResolvedAnswers::try_collect(self.answers.iter().copied())
         }
+    }
+
+    struct UnavailableIpv6Resolver {
+        ipv4_answers: Vec<SocketAddr>,
+        ipv4_only_calls: AtomicUsize,
+        dual_stack_calls: AtomicUsize,
+    }
+
+    impl Resolver for UnavailableIpv6Resolver {
+        async fn resolve(
+            &self,
+            _host: &str,
+            _port: u16,
+            dns_family: DestinationDnsFamily,
+        ) -> Result<ResolvedAnswers, DestinationSendError> {
+            match dns_family {
+                DestinationDnsFamily::DualStackStrict => {
+                    self.dual_stack_calls.fetch_add(1, Ordering::SeqCst);
+                    Err(DestinationSendError::ResolutionFailed)
+                }
+                DestinationDnsFamily::Ipv4Only => {
+                    self.ipv4_only_calls.fetch_add(1, Ordering::SeqCst);
+                    ResolvedAnswers::try_collect(self.ipv4_answers.iter().copied())
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn ipv4_only_selects_a_only_resolution_and_reresolves_every_send() {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let route_hits = Arc::clone(&hits);
+        let app = Router::new().route(
+            "/record",
+            get(move || {
+                let route_hits = Arc::clone(&route_hits);
+                async move {
+                    route_hits.fetch_add(1, Ordering::SeqCst);
+                    (StatusCode::OK, "ipv4-only")
+                }
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind IPv4-only test server");
+        let address = listener.local_addr().expect("IPv4-only test address");
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve IPv4-only test app");
+        });
+
+        let resolver = UnavailableIpv6Resolver {
+            ipv4_answers: vec![address],
+            ipv4_only_calls: AtomicUsize::new(0),
+            dual_stack_calls: AtomicUsize::new(0),
+        };
+        let origin = format!("http://localhost:{}/", address.port());
+        let strict = DataDestinationPolicy::new(
+            "strict-data",
+            &origin,
+            DestinationProfile::LoopbackDevelopmentHttp,
+            &[],
+        )
+        .expect("legacy constructor remains valid");
+        assert_eq!(strict.dns_family(), DestinationDnsFamily::DualStackStrict);
+        let strict_request =
+            DataDestinationRequest::new(DestinationMethod::Get, "/record", vec![], None, None)
+                .expect("strict request validates");
+        let strict_result = strict
+            .send_with_resolver(
+                strict_request,
+                Duration::from_secs(2),
+                &resolver,
+                TransportTrust::System,
+            )
+            .await;
+        assert!(matches!(
+            strict_result,
+            Err(DestinationSendError::ResolutionFailed)
+        ));
+
+        let ipv4_only = DataDestinationPolicy::new_with_dns_family(
+            "ipv4-data",
+            &origin,
+            DestinationProfile::LoopbackDevelopmentHttp,
+            &[],
+            DestinationDnsFamily::Ipv4Only,
+        )
+        .expect("IPv4-only policy validates");
+        for _ in 0..2 {
+            let request =
+                DataDestinationRequest::new(DestinationMethod::Get, "/record", vec![], None, None)
+                    .expect("IPv4-only request validates");
+            let response = ipv4_only
+                .send_with_resolver(
+                    request,
+                    Duration::from_secs(2),
+                    &resolver,
+                    TransportTrust::System,
+                )
+                .await
+                .expect("A-only send succeeds despite unavailable AAAA path");
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+
+        assert_eq!(resolver.dual_stack_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(resolver.ipv4_only_calls.load(Ordering::SeqCst), 2);
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]

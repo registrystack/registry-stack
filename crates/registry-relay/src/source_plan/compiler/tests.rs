@@ -1,6 +1,8 @@
 use proptest::prelude::*;
 use registry_platform_crypto::{canonicalize_json, parse_json_strict};
-use registry_platform_httputil::destination::DestinationAuthorizationValue;
+use registry_platform_httputil::destination::{
+    DestinationAuthorizationValue, DestinationDnsFamily,
+};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
@@ -1066,6 +1068,14 @@ pub(crate) fn normal_completion_seed_fixture() -> Value {
     completion_seed_value(&fixture())
 }
 
+pub(crate) fn dhis2_completion_seed_fixture() -> Value {
+    completion_seed_value(&dhis2_fixture())
+}
+
+pub(crate) fn snapshot_completion_seed_fixture() -> Value {
+    completion_seed_value(&snapshot_fixture())
+}
+
 pub(crate) fn semantic_alias_completion_seed_fixture() -> Value {
     completion_seed_value(&semantic_alias_fixture())
 }
@@ -1267,6 +1277,21 @@ fn maintained_dhis2_enrollment_status_pack_compiles_to_one_bounded_exchange() {
             .name(),
         "enrollments"
     );
+}
+
+#[test]
+fn maintained_dhis2_seed_distinguishes_direct_basic_auth_from_credential_exchange() {
+    let seed = dhis2_completion_seed_fixture();
+    assert_eq!(
+        seed["credential"],
+        json!({"reference": "dhis2-basic-reader", "generation": 1})
+    );
+    assert_eq!(seed["bounds"]["credential_exchanges"], json!(0));
+    assert_eq!(
+        seed["destinations"]["credential_destination_id"],
+        Value::Null
+    );
+    assert_eq!(seed["bounds"]["credential_token_lifetime_ms"], Value::Null);
 }
 
 #[test]
@@ -4611,6 +4636,10 @@ fn snapshot_plan_compiles_without_a_live_transport_capability() {
     assert_eq!(plan.steps().len(), 0);
     assert!(plan.data_destination().is_none());
     assert!(plan.credential_destination().is_none());
+    assert_eq!(
+        snapshot_completion_seed_fixture()["credential"],
+        json!({"reference": null, "generation": null})
+    );
     let snapshot = plan.snapshot_binding().expect("compiled snapshot binding");
     assert_eq!(snapshot.table_provider(), "people-snapshot");
     assert_eq!(snapshot.max_snapshot_age_ms(), 43_200_000);
@@ -5037,6 +5066,128 @@ fn destination_application_base_path_defaults_to_canonical_root() {
             .fixed_path(),
         "/api/person/status"
     );
+}
+
+#[test]
+fn destination_dns_family_defaults_to_strict_dual_stack_without_changing_binding_identity() {
+    let baseline = fixture();
+    let baseline_binding =
+        parse_private_binding(&baseline.binding).expect("default DNS-family binding parses");
+    let baseline_registry = compile(&baseline).expect("default DNS-family binding compiles");
+    let baseline_plan = baseline_registry.iter().next().expect("baseline plan");
+    assert_eq!(
+        baseline_plan
+            .data_destination()
+            .expect("data destination")
+            .dns_family(),
+        DestinationDnsFamily::DualStackStrict
+    );
+    assert_eq!(
+        baseline_plan
+            .credential_destination()
+            .expect("credential destination")
+            .dns_family(),
+        DestinationDnsFamily::DualStackStrict
+    );
+
+    let mut explicit = fixture();
+    explicit.binding_value["data_destination"]["dns_family"] = json!("dual_stack_strict");
+    explicit.binding_value["credential_destination"]["dns_family"] = json!("dual_stack_strict");
+    explicit.refresh_binding();
+    let explicit_binding =
+        parse_private_binding(&explicit.binding).expect("explicit strict DNS families parse");
+    assert_eq!(baseline_binding.hash(), explicit_binding.hash());
+    assert_eq!(
+        explicit_binding.hash().as_str(),
+        vector_expected_hash("private_binding")
+    );
+}
+
+#[test]
+fn ipv4_only_dns_family_is_hash_covered_and_compiled_for_each_destination_slot() {
+    let baseline = fixture();
+    let baseline_hash = parse_private_binding(&baseline.binding)
+        .expect("baseline binding parses")
+        .hash()
+        .as_str()
+        .to_owned();
+
+    for destination in ["data_destination", "credential_destination"] {
+        let mut ipv4_only = fixture();
+        ipv4_only.binding_value[destination]["dns_family"] = json!("ipv4_only");
+        ipv4_only.refresh_binding();
+        let binding = parse_private_binding(&ipv4_only.binding).expect("IPv4-only binding parses");
+        assert_ne!(binding.hash().as_str(), baseline_hash);
+
+        let registry = compile(&ipv4_only).expect("IPv4-only destination binding compiles");
+        let plan = registry.iter().next().expect("IPv4-only plan");
+        let compiled = if destination == "data_destination" {
+            plan.data_destination()
+                .expect("compiled data destination")
+                .dns_family()
+        } else {
+            plan.credential_destination()
+                .expect("compiled credential destination")
+                .dns_family()
+        };
+        assert_eq!(compiled, DestinationDnsFamily::Ipv4Only);
+    }
+}
+
+#[test]
+fn destination_dns_family_rejects_unknown_values_and_non_string_shapes() {
+    for destination in ["data_destination", "credential_destination"] {
+        for invalid in [
+            json!("ipv6_only"),
+            Value::Null,
+            json!(true),
+            json!(4),
+            json!(["ipv4_only"]),
+            json!({"mode": "ipv4_only"}),
+        ] {
+            let mut fixture = fixture();
+            fixture.binding_value[destination]["dns_family"] = invalid;
+            fixture.refresh_binding();
+            assert!(matches!(
+                compile(&fixture),
+                Err(SourcePlanCompileError::Artifact(
+                    SourcePlanArtifactError::ClosedSchema
+                ))
+            ));
+        }
+    }
+}
+
+#[test]
+fn ipv4_only_dns_family_rejects_ipv6_private_cidrs_in_each_destination_slot() {
+    for destination in ["data_destination", "credential_destination"] {
+        for cidrs in [json!(["fd00::/64"]), json!(["10.0.0.0/8", "fd00::/64"])] {
+            let mut fixture = fixture();
+            fixture.binding_value[destination]["dns_family"] = json!("ipv4_only");
+            fixture.binding_value[destination]["allowed_private_cidrs"] = cidrs;
+            fixture.refresh_binding();
+            assert!(matches!(
+                compile(&fixture),
+                Err(SourcePlanCompileError::UnsafeDestination)
+            ));
+        }
+    }
+}
+
+#[test]
+fn ipv4_only_dns_family_rejects_literal_origins_in_each_destination_slot() {
+    for destination in ["data_destination", "credential_destination"] {
+        for origin in ["https://192.0.2.1/", "https://[2001:db8::1]/"] {
+            let mut fixture = fixture();
+            fixture.binding_value[destination]["dns_family"] = json!("ipv4_only");
+            fixture.binding_value[destination]["origin"] = json!(origin);
+            fixture.refresh_binding();
+            assert!(matches!(
+                compile(&fixture),
+                Err(SourcePlanCompileError::UnsafeDestination)
+            ));
+        }
+    }
 }
 
 #[test]

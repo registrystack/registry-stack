@@ -1022,7 +1022,26 @@ pub(in super::super) struct DestinationDocument {
         skip_serializing_if = "is_root_application_base_path"
     )]
     pub(in super::super) application_base_path: String,
+    #[serde(
+        default,
+        skip_serializing_if = "DestinationDnsFamilyDocument::is_dual_stack_strict"
+    )]
+    pub(in super::super) dns_family: DestinationDnsFamilyDocument,
     pub(in super::super) allowed_private_cidrs: Vec<String>,
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(in super::super) enum DestinationDnsFamilyDocument {
+    #[default]
+    DualStackStrict,
+    Ipv4Only,
+}
+
+impl DestinationDnsFamilyDocument {
+    const fn is_dual_stack_strict(&self) -> bool {
+        matches!(self, Self::DualStackStrict)
+    }
 }
 
 fn root_application_base_path() -> String {

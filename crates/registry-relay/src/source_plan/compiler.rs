@@ -8,7 +8,7 @@ use registry_platform_httputil::destination::json::ClosedJsonDecoder;
 use registry_platform_httputil::destination::{
     CredentialDestinationPolicy, CredentialDestinationRequestTemplate, DataDestinationPolicy,
     DataDestinationRequestTemplate, DestinationAuthorizationTemplate, DestinationBodyTemplate,
-    DestinationMethod, DestinationProfile, OAuth2ClientCredentialsBodyFormat,
+    DestinationDnsFamily, DestinationMethod, DestinationProfile, OAuth2ClientCredentialsBodyFormat,
 };
 use reqwest::Url;
 use thiserror::Error;
@@ -25,8 +25,8 @@ use super::artifact::{
     parse_integration_pack, parse_private_binding, parse_public_contract, response_record_schema,
     sha256_label, BodyTemplateDocument, BoundedInputPattern, CanonicalizationDocument,
     CardinalityMechanismDocument, CodecSelectorRoleDocument, CredentialFailurePolicyDocument,
-    DestinationDocument, EvidenceClass, ExactSelectorDocument, HttpOperationDocument,
-    IntegrationPackArtifact, MaterializationRefreshClassDocument,
+    DestinationDnsFamilyDocument, DestinationDocument, EvidenceClass, ExactSelectorDocument,
+    HttpOperationDocument, IntegrationPackArtifact, MaterializationRefreshClassDocument,
     OAuth2ClientCredentialsRequestFormatDocument, OAuth2TokenResponseSchemaDocument,
     OAuth2TokenTypeDocument, OutputTypeDocument, PriorOutputBindingDocument,
     PrivateBindingArtifact, ProjectionMechanismDocument, PublicContractArtifact, ReadMethod,
@@ -1998,8 +1998,9 @@ mod tests;
 #[cfg(test)]
 pub(crate) use tests::{
     bounded_runtime_vector_plan_fixture, consent_runtime_vector_plan_fixture,
-    dhis2_duplicate_selector_runtime_vector_plan_fixture, dhis2_runtime_vector_plan_fixture,
-    maximum_completion_seed_fixture, maximum_runtime_profile_fixture,
-    normal_completion_seed_fixture, rhai_five_operation_two_slot_completion_seed_fixture,
-    rhai_runtime_vector_plan_fixture, semantic_alias_completion_seed_fixture,
+    dhis2_completion_seed_fixture, dhis2_duplicate_selector_runtime_vector_plan_fixture,
+    dhis2_runtime_vector_plan_fixture, maximum_completion_seed_fixture,
+    maximum_runtime_profile_fixture, normal_completion_seed_fixture,
+    rhai_five_operation_two_slot_completion_seed_fixture, rhai_runtime_vector_plan_fixture,
+    semantic_alias_completion_seed_fixture, snapshot_completion_seed_fixture,
 };

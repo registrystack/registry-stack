@@ -35,6 +35,14 @@ with the pack-owned `/api/tracker/enrollments` path without normalization or
 caller input. The destination policy still owns only the HTTPS origin for DNS
 and TLS enforcement. The example contains no credential value or live host.
 
+The example omits `dns_family`, which keeps the strict dual-stack default and
+requires definitive A and AAAA lookup outcomes. If the reviewed domain-based
+DHIS2 deployment is intentionally IPv4-only, set
+`"dns_family": "ipv4_only"` on its `data_destination` and repin the
+private-binding hashes. That mode performs only A lookups and never falls back
+across address families. Do not select it merely to mask a transient DNS
+failure.
+
 Compilation and synthetic response fixtures earn only repository conformance
 evidence. They do not claim DHIS2 maintainer endorsement, a country deployment,
 or a successful Relay end-to-end execution. A root-mounted deployment may omit

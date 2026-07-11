@@ -28,11 +28,12 @@ const STATE_PLANE_SCHEMA_IDENTITY_PREIMAGE_V1: &str = concat!(
     "audit-pseudonym-keyring=registry.relay.postgres-audit-pseudonym-keyring/v1\0",
     "consultation-completion=atomic-intent-sealed-seed-plan-slots-selected-operations-known-unfinished-recovery-v1\0",
     "consultation-authorization=database-expiry-seed-timeout-exact-dispatch-prefix-v1\0",
+    "consultation-credentials=direct-data-auth-reference-distinct-from-outbound-credential-exchange-v1\0",
     "serving-fence-order=fence-row-keyring-intent-permit-audit-head-v1\0",
     "key-order=utf8-bytewise-key-order-v1\0",
 );
 pub(crate) const STATE_PLANE_SCHEMA_FINGERPRINT_V1: &str =
-    "sha256:62439f052c70035d4a8b50c3e07896004f324905081950450ff6b77630147b46";
+    "sha256:538933bee225054724074d37f561656dbf2872cc062828264b6c6b57062f664c";
 
 pub(super) const MIGRATION_ADVISORY_LOCK_KEY_V1: i64 = 7_221_091_440;
 const SUPPORTED_POSTGRES_MIN_MAJOR: i32 = 16;
@@ -41,16 +42,16 @@ const SUPPORTED_POSTGRES_MAX_MAJOR: i32 = 18;
 // Filled from the semantic catalog descriptor below on disposable supported
 // PostgreSQL majors. Constraint rendering is explicitly versioned because
 // pg_get_constraintdef is not a cross-major wire contract.
-const CONSTRAINT_FINGERPRINT_PG16: &str = "cc1635e9b480eea24d4ef3f16cdc5e4a";
-const CONSTRAINT_FINGERPRINT_PG17: &str = "cc1635e9b480eea24d4ef3f16cdc5e4a";
-const CONSTRAINT_FINGERPRINT_PG18: &str = "4ed0bbc9db7e7c13d09dd2ebb57b98cd";
+const CONSTRAINT_FINGERPRINT_PG16: &str = "e9118eae66b02b9988eefc88e8618b8d";
+const CONSTRAINT_FINGERPRINT_PG17: &str = "e9118eae66b02b9988eefc88e8618b8d";
+const CONSTRAINT_FINGERPRINT_PG18: &str = "cb6dca5b73719b38c9dc1c6c061d6a56";
 const COLUMN_FINGERPRINT_PG16: &str = "1098f1125fa6f613d521504e985a351a";
 const COLUMN_FINGERPRINT_PG17: &str = "1098f1125fa6f613d521504e985a351a";
 const COLUMN_FINGERPRINT_PG18: &str = "1098f1125fa6f613d521504e985a351a";
-const FUNCTION_FINGERPRINT_PG16: &str = "82f3f6b8e9ffc454c891cd1ae7a90b87";
-const FUNCTION_FINGERPRINT_PG17: &str = "82f3f6b8e9ffc454c891cd1ae7a90b87";
-const FUNCTION_FINGERPRINT_PG18: &str = "82f3f6b8e9ffc454c891cd1ae7a90b87";
-const CAPABILITY_HELPER_BODY_FINGERPRINT_V1: &str = "191161a090db778ab1e5af814dd466a5";
+const FUNCTION_FINGERPRINT_PG16: &str = "5fa0c0d7fe16bcf04abf7fbf687d7487";
+const FUNCTION_FINGERPRINT_PG17: &str = "5fa0c0d7fe16bcf04abf7fbf687d7487";
+const FUNCTION_FINGERPRINT_PG18: &str = "5fa0c0d7fe16bcf04abf7fbf687d7487";
+const CAPABILITY_HELPER_BODY_FINGERPRINT_V1: &str = "413ad65f2ab72199ddce92a8a672cd48";
 
 /// Runtime-forceable session semantics. Server/SUSET state that the runtime
 /// cannot safely repair is rejected by the attested SQL capability instead.
@@ -106,7 +107,7 @@ CREATE TABLE IF NOT EXISTS relay_state_private.state_plane_metadata (
     ),
     CONSTRAINT state_plane_metadata_fingerprint_check CHECK (
         capability_fingerprint =
-        'sha256:62439f052c70035d4a8b50c3e07896004f324905081950450ff6b77630147b46'
+        'sha256:538933bee225054724074d37f561656dbf2872cc062828264b6c6b57062f664c'
     ),
     CONSTRAINT state_plane_metadata_roles_distinct_check CHECK (
         owner_role_oid <> runtime_role_oid
@@ -1061,8 +1062,11 @@ BEGIN
                     trunc((v_seed #>> '{bounds,credential_token_lifetime_ms}')::numeric)
                 OR (v_seed #>> '{bounds,credential_token_lifetime_ms}')::bigint
                     NOT BETWEEN 1 AND 86400000))
-       OR ((v_seed #>> '{bounds,credential_exchanges}')::integer = 1) <>
-          (jsonb_typeof(v_seed #> '{credential,reference}') = 'string')
+       OR ((v_seed #>> '{bounds,credential_exchanges}')::integer = 1
+           AND jsonb_typeof(v_seed #> '{credential,reference}') <> 'string')
+       OR (jsonb_typeof(v_seed #> '{credential,reference}') = 'string'
+           AND (v_seed #>> '{bounds,credential_exchanges}')::integer = 0
+           AND (v_seed #>> '{bounds,data_exchanges}')::integer = 0)
        OR ((v_seed #>> '{bounds,credential_exchanges}')::integer = 1) <>
           (jsonb_typeof(v_seed #> '{destinations,credential_destination_id}') = 'string')
        OR ((v_seed #>> '{bounds,credential_exchanges}')::integer = 1) <>
@@ -1473,7 +1477,7 @@ WITH metadata AS (
       AND schema_version = 1
       AND capability_id = 'registry.relay.postgres-durable-audit/v1'
       AND capability_fingerprint =
-        'sha256:62439f052c70035d4a8b50c3e07896004f324905081950450ff6b77630147b46'
+        'sha256:538933bee225054724074d37f561656dbf2872cc062828264b6c6b57062f664c'
       AND serving_fence_capability_id = 'registry.relay.postgres-serving-fence/v1'
       AND serving_fence_lock_key <> 0
       AND serving_fence_lock_key <> 7221091440
@@ -2080,9 +2084,9 @@ SELECT
            )
     )
     AND (SELECT value = CASE server.major
-            WHEN 16 THEN 'cc1635e9b480eea24d4ef3f16cdc5e4a'
-            WHEN 17 THEN 'cc1635e9b480eea24d4ef3f16cdc5e4a'
-            WHEN 18 THEN '4ed0bbc9db7e7c13d09dd2ebb57b98cd'
+            WHEN 16 THEN 'e9118eae66b02b9988eefc88e8618b8d'
+            WHEN 17 THEN 'e9118eae66b02b9988eefc88e8618b8d'
+            WHEN 18 THEN 'cb6dca5b73719b38c9dc1c6c061d6a56'
             ELSE '' END FROM constraint_fingerprint, server)
     AND (SELECT value = CASE server.major
             WHEN 16 THEN '1098f1125fa6f613d521504e985a351a'
@@ -2090,9 +2094,9 @@ SELECT
             WHEN 18 THEN '1098f1125fa6f613d521504e985a351a'
             ELSE '' END FROM column_fingerprint, server)
     AND (SELECT value = CASE server.major
-            WHEN 16 THEN '82f3f6b8e9ffc454c891cd1ae7a90b87'
-            WHEN 17 THEN '82f3f6b8e9ffc454c891cd1ae7a90b87'
-            WHEN 18 THEN '82f3f6b8e9ffc454c891cd1ae7a90b87'
+            WHEN 16 THEN '5fa0c0d7fe16bcf04abf7fbf687d7487'
+            WHEN 17 THEN '5fa0c0d7fe16bcf04abf7fbf687d7487'
+            WHEN 18 THEN '5fa0c0d7fe16bcf04abf7fbf687d7487'
             ELSE '' END FROM function_fingerprint, server);
 $function$;
 
@@ -7554,6 +7558,7 @@ mod tests {
             PERSISTENT_QUOTA_CAPABILITY_V1,
             AUDIT_PSEUDONYM_KEYRING_CAPABILITY_V1,
             "database-expiry-seed-timeout-exact-dispatch-prefix-v1",
+            "direct-data-auth-reference-distinct-from-outbound-credential-exchange-v1",
             "utf8-bytewise-key-order-v1",
         ] {
             assert!(

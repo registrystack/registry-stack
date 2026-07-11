@@ -136,6 +136,16 @@ artifact hash where applicable and its raw SHA-256 digest. Non-local profiles
 must receive the files through the verified signed Config Bundle path. Relay
 does not discover, download, or hot-reload consultation profiles.
 
+Each private destination binding defaults to
+`dns_family: dual_stack_strict`: Relay requires definitive A and AAAA lookup
+outcomes before it connects. For a domain destination intentionally operated
+over IPv4, set `dns_family: ipv4_only` on that destination. This is an A-only
+security policy, not a fallback preference. It never queries or accepts IPv6,
+still re-resolves and validates the complete A answer set for every call, and
+rejects literal origins or IPv6 private CIDRs. The selected mode is covered by
+the private-binding hash, so changing it requires reviewing and repinning that
+binding.
+
 `audit_pseudonym_materials` and `source_credentials` contain environment
 references only. An audit key id is immutable: replace material under a new id
 instead of changing bytes behind an existing id. A source credential generation

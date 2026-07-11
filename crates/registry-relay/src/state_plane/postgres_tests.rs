@@ -43,8 +43,9 @@ use crate::consultation::{
     OperationId,
 };
 use crate::source_plan::{
-    maximum_completion_seed_fixture, normal_completion_seed_fixture,
+    dhis2_completion_seed_fixture, maximum_completion_seed_fixture, normal_completion_seed_fixture,
     rhai_five_operation_two_slot_completion_seed_fixture, semantic_alias_completion_seed_fixture,
+    snapshot_completion_seed_fixture,
 };
 
 use super::migration::RUNTIME_SESSION_LIMITS_SQL;
@@ -2749,9 +2750,24 @@ WHERE metadata.singleton = true
         .await?
         .try_get(0)?;
     let compiler_normal_seed = normal_completion_seed_fixture();
+    let compiler_dhis2_seed = dhis2_completion_seed_fixture();
+    let compiler_snapshot_seed = snapshot_completion_seed_fixture();
     let compiler_semantic_alias_seed = semantic_alias_completion_seed_fixture();
     let compiler_maximum_seed = maximum_completion_seed_fixture();
     let compiler_rhai_seed = rhai_five_operation_two_slot_completion_seed_fixture();
+    let mut exchange_without_reference = compiler_normal_seed.clone();
+    exchange_without_reference["credential"]["reference"] = Value::Null;
+    exchange_without_reference["credential"]["generation"] = Value::Null;
+    let mut direct_basic_half_pair = compiler_dhis2_seed.clone();
+    direct_basic_half_pair["credential"]["generation"] = Value::Null;
+    let mut direct_basic_with_destination = compiler_dhis2_seed.clone();
+    direct_basic_with_destination["destinations"]["credential_destination_id"] =
+        json!("unexpected-credential-destination");
+    let mut direct_basic_with_token_lifetime = compiler_dhis2_seed.clone();
+    direct_basic_with_token_lifetime["bounds"]["credential_token_lifetime_ms"] = json!(60_000);
+    let mut snapshot_with_dangling_reference = compiler_snapshot_seed.clone();
+    snapshot_with_dangling_reference["credential"] =
+        json!({"reference": "unused-snapshot-credential", "generation": 1});
     let conditional_bounded_seed = completion_seed_value(
         "bounded_http",
         None,
@@ -2800,6 +2816,44 @@ WHERE metadata.singleton = true
         )
         .await?
         .try_get(0)?;
+    let mut credential_binding_results = Vec::new();
+    for (case, seed, expected) in [
+        ("direct Basic data credential", &compiler_dhis2_seed, true),
+        (
+            "outbound credential exchange without a reference",
+            &exchange_without_reference,
+            false,
+        ),
+        (
+            "direct Basic credential half-pair",
+            &direct_basic_half_pair,
+            false,
+        ),
+        (
+            "zero-exchange credential destination",
+            &direct_basic_with_destination,
+            false,
+        ),
+        (
+            "zero-exchange credential token lifetime",
+            &direct_basic_with_token_lifetime,
+            false,
+        ),
+        (
+            "snapshot dangling credential reference",
+            &snapshot_with_dangling_reference,
+            false,
+        ),
+    ] {
+        let valid = admin
+            .query_one(
+                "SELECT relay_state_private.consultation_completion_seed_valid_v1($1)",
+                &[&serde_json::to_string(seed)?],
+            )
+            .await?
+            .try_get::<_, bool>(0)?;
+        credential_binding_results.push((case, valid, expected));
+    }
     reset_role(&admin).await?;
     assert!(seed_valid, "snapshot completion seed must satisfy SQL");
     assert!(
@@ -2830,6 +2884,9 @@ WHERE metadata.singleton = true
         conditional_bounded_seed_valid,
         "Bounded HTTP permits bind actual-call positions across conditional skips"
     );
+    for (case, actual, expected) in credential_binding_results {
+        assert_eq!(actual, expected, "SQL credential binding case: {case}");
+    }
     let pseudonym_write = atomic_consultation_attempt_write(
         &pseudonym_operation,
         initial_keyring_metadata.active_key_id(),
@@ -3610,6 +3667,7 @@ WHERE metadata.singleton = true
     // atomic attempt path, not only the standalone SQL validator.
     for (marker, compiler_seed) in [
         ("compiler-normal-seed", compiler_normal_seed.clone()),
+        ("compiler-dhis2-basic-seed", compiler_dhis2_seed.clone()),
         ("compiler-maximum-seed", compiler_maximum_seed.clone()),
     ] {
         let credential_count = u8::try_from(

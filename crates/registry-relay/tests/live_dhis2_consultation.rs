@@ -89,7 +89,7 @@ const CONFORMANCE_FILE: &str = "evidence/conformance.json";
 const NEGATIVE_SECURITY_FILE: &str = "evidence/negative-security.json";
 const MINIMIZATION_FILE: &str = "evidence/minimization.json";
 
-#[derive(Debug, Clone, Copy, Error)]
+#[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
 enum LiveJourneyError {
     #[error("required live-test environment is unavailable: {0}")]
     MissingEnvironment(&'static str),
@@ -127,6 +127,32 @@ enum LiveJourneyError {
     MetadataResponse,
     #[error("the protected DHIS2 consultation request failed")]
     ExecuteRequest,
+    #[error("Relay rejected the live consultation as invalid")]
+    ExecuteInvalidRequest,
+    #[error("Relay rejected the live consultation credentials")]
+    ExecuteInvalidCredentials,
+    #[error("Relay denied the live consultation")]
+    ExecuteDenied,
+    #[error("Relay did not resolve the live consultation profile")]
+    ExecuteProfileNotFound,
+    #[error("Relay rate-limited the live consultation")]
+    ExecuteRateLimited,
+    #[error("Relay reported the live consultation unavailable")]
+    ExecuteUnavailable,
+    #[error("Relay recorded unavailable source credentials for the live consultation")]
+    ExecuteSourceCredentialsUnavailable,
+    #[error("Relay recorded the live DHIS2 source as unavailable")]
+    ExecuteSourceUnavailable,
+    #[error("Relay recorded a live DHIS2 response-contract violation")]
+    ExecuteResponseContractViolation,
+    #[error("Relay recorded a live DHIS2 cardinality violation")]
+    ExecuteCardinalityViolation,
+    #[error("Relay closed the live consultation before source dispatch")]
+    ExecuteClosedBeforeSourceDispatch,
+    #[error("Relay closed the live consultation after source dispatch without a known result")]
+    ExecuteClosedAfterSourceDispatch,
+    #[error("Relay left the live consultation without a terminal durable completion")]
+    ExecuteMissingDurableCompletion,
     #[error("the protected DHIS2 consultation response was invalid")]
     ExecuteResponse,
     #[error("the durable consultation evidence did not match the completed journey")]
@@ -159,6 +185,99 @@ fn maintained_operator_example_stages_through_real_loader() {
         .unwrap_or_else(|_| panic!("the staged maintained DHIS2 operator example did not load"));
     assert!(loaded.runtime.consultation.is_some());
     assert!(loaded.consultation_artifacts.is_some());
+}
+
+#[test]
+fn live_failure_diagnostics_remain_closed_and_exact() {
+    for (status, code, expected) in [
+        (
+            StatusCode::BAD_REQUEST,
+            Some("consultation.invalid_request"),
+            LiveJourneyError::ExecuteInvalidRequest,
+        ),
+        (
+            StatusCode::UNAUTHORIZED,
+            Some("auth.invalid_credentials"),
+            LiveJourneyError::ExecuteInvalidCredentials,
+        ),
+        (
+            StatusCode::FORBIDDEN,
+            Some("consultation.denied"),
+            LiveJourneyError::ExecuteDenied,
+        ),
+        (
+            StatusCode::NOT_FOUND,
+            Some("consultation.profile_not_found"),
+            LiveJourneyError::ExecuteProfileNotFound,
+        ),
+        (
+            StatusCode::TOO_MANY_REQUESTS,
+            Some("consultation.rate_limited"),
+            LiveJourneyError::ExecuteRateLimited,
+        ),
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Some("consultation.unavailable"),
+            LiveJourneyError::ExecuteUnavailable,
+        ),
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Some("unexpected"),
+            LiveJourneyError::ExecuteRequest,
+        ),
+    ] {
+        assert_eq!(classify_closed_execute_failure(status, code), expected);
+    }
+
+    for (outcome, class, failure, expected) in [
+        (
+            Some("known_complete"),
+            Some("known_failure"),
+            Some("credential_unavailable"),
+            LiveJourneyError::ExecuteSourceCredentialsUnavailable,
+        ),
+        (
+            Some("known_complete"),
+            Some("known_failure"),
+            Some("source_unavailable"),
+            LiveJourneyError::ExecuteSourceUnavailable,
+        ),
+        (
+            Some("known_complete"),
+            Some("known_failure"),
+            Some("response_contract_violation"),
+            LiveJourneyError::ExecuteResponseContractViolation,
+        ),
+        (
+            Some("known_complete"),
+            Some("known_failure"),
+            Some("cardinality_violation"),
+            LiveJourneyError::ExecuteCardinalityViolation,
+        ),
+        (
+            Some("not_started"),
+            None,
+            None,
+            LiveJourneyError::ExecuteClosedBeforeSourceDispatch,
+        ),
+        (
+            Some("outcome_unknown"),
+            None,
+            None,
+            LiveJourneyError::ExecuteClosedAfterSourceDispatch,
+        ),
+        (
+            Some("known_complete"),
+            Some("known_failure"),
+            Some("unexpected"),
+            LiveJourneyError::ExecuteUnavailable,
+        ),
+    ] {
+        assert_eq!(
+            classify_durable_execute_failure(outcome, class, failure),
+            expected
+        );
+    }
 }
 
 async fn run_live_dhis2_consultation_lifecycle() -> Result<(), LiveJourneyError> {
@@ -243,6 +362,11 @@ async fn run_live_dhis2_consultation_lifecycle() -> Result<(), LiveJourneyError>
     let bearer = jwks.mint_bearer()?;
 
     let journey = execute_protected_journey(app.clone(), bearer.as_str()).await;
+    let closed_diagnostic = if matches!(journey, Err(LiveJourneyError::ExecuteUnavailable)) {
+        Some(database.classify_safe_execute_failure().await)
+    } else {
+        None
+    };
     let shutdown = service
         .shutdown()
         .await
@@ -254,6 +378,7 @@ async fn run_live_dhis2_consultation_lifecycle() -> Result<(), LiveJourneyError>
     } else {
         Ok(())
     };
+    let journey = closed_diagnostic.map_or(journey, Err);
     let cleanup = database.cleanup().await;
     drop(jwks);
 
@@ -329,7 +454,7 @@ async fn execute_protected_journey(app: Router, bearer: &str) -> Result<(), Live
         .await
         .map_err(|_| LiveJourneyError::ExecuteRequest)?;
     if execute_response.status() != StatusCode::OK {
-        return Err(LiveJourneyError::ExecuteRequest);
+        return Err(closed_execute_failure(execute_response).await);
     }
     let response = to_bytes(execute_response.into_body(), 64 * 1024)
         .await
@@ -337,6 +462,40 @@ async fn execute_protected_journey(app: Router, bearer: &str) -> Result<(), Live
     let response: Value =
         serde_json::from_slice(&response).map_err(|_| LiveJourneyError::ExecuteResponse)?;
     validate_public_response(&response)
+}
+
+async fn closed_execute_failure(response: axum::response::Response) -> LiveJourneyError {
+    let status = response.status();
+    let Ok(body) = to_bytes(response.into_body(), 8 * 1024).await else {
+        return LiveJourneyError::ExecuteRequest;
+    };
+    let Ok(problem) = serde_json::from_slice::<Value>(&body) else {
+        return LiveJourneyError::ExecuteRequest;
+    };
+    let code = problem.get("code").and_then(Value::as_str);
+    classify_closed_execute_failure(status, code)
+}
+
+fn classify_closed_execute_failure(status: StatusCode, code: Option<&str>) -> LiveJourneyError {
+    match (status, code) {
+        (StatusCode::BAD_REQUEST, Some("consultation.invalid_request")) => {
+            LiveJourneyError::ExecuteInvalidRequest
+        }
+        (StatusCode::UNAUTHORIZED, Some("auth.invalid_credentials")) => {
+            LiveJourneyError::ExecuteInvalidCredentials
+        }
+        (StatusCode::FORBIDDEN, Some("consultation.denied")) => LiveJourneyError::ExecuteDenied,
+        (StatusCode::NOT_FOUND, Some("consultation.profile_not_found")) => {
+            LiveJourneyError::ExecuteProfileNotFound
+        }
+        (StatusCode::TOO_MANY_REQUESTS, Some("consultation.rate_limited")) => {
+            LiveJourneyError::ExecuteRateLimited
+        }
+        (StatusCode::SERVICE_UNAVAILABLE, Some("consultation.unavailable")) => {
+            LiveJourneyError::ExecuteUnavailable
+        }
+        _ => LiveJourneyError::ExecuteRequest,
+    }
 }
 
 fn validate_public_response(response: &Value) -> Result<(), LiveJourneyError> {
@@ -578,9 +737,13 @@ fn live_private_binding(dhis2_base_url: &str) -> Result<Value, LiveJourneyError>
     origin.set_query(None);
     origin.set_fragment(None);
 
+    // The authorized public test endpoint has a usable A path but no reliable
+    // AAAA response. Make that deployment fact explicit and hash-covered;
+    // production bindings otherwise retain the strict dual-stack default.
     let mut destination = Map::from_iter([
         ("id".to_string(), json!("dhis2-live-data")),
         ("origin".to_string(), json!(origin.as_str())),
+        ("dns_family".to_string(), json!("ipv4_only")),
         ("allowed_private_cidrs".to_string(), json!([])),
     ]);
     if let Some(path) = application_base_path {
@@ -701,6 +864,53 @@ impl LiveDatabase {
         &self.owner_role
     }
 
+    async fn classify_safe_execute_failure(&mut self) -> LiveJourneyError {
+        let rows = match self
+            .admin
+            .query(
+                r#"
+SELECT
+    record_json::jsonb #>> '{payload,outcome}' AS completion_outcome,
+    record_json::jsonb #>>
+        '{payload,completion_facts,execution_result,class}' AS result_class,
+    record_json::jsonb #>>
+        '{payload,completion_facts,execution_result,failure_class}' AS failure_class
+FROM relay_state_private.audit_phase
+WHERE stream_kind = 'consultation' AND phase = 'completion'
+"#,
+                &[],
+            )
+            .await
+        {
+            Ok(rows) => rows,
+            Err(_) => return LiveJourneyError::ExecuteUnavailable,
+        };
+        let [row] = rows.as_slice() else {
+            return if rows.is_empty() {
+                LiveJourneyError::ExecuteMissingDurableCompletion
+            } else {
+                LiveJourneyError::ExecuteUnavailable
+            };
+        };
+        let completion_outcome = match row.try_get::<_, Option<String>>("completion_outcome") {
+            Ok(completion_outcome) => completion_outcome,
+            Err(_) => return LiveJourneyError::ExecuteUnavailable,
+        };
+        let result_class = match row.try_get::<_, Option<String>>("result_class") {
+            Ok(result_class) => result_class,
+            Err(_) => return LiveJourneyError::ExecuteUnavailable,
+        };
+        let failure_class = match row.try_get::<_, Option<String>>("failure_class") {
+            Ok(failure_class) => failure_class,
+            Err(_) => return LiveJourneyError::ExecuteUnavailable,
+        };
+        classify_durable_execute_failure(
+            completion_outcome.as_deref(),
+            result_class.as_deref(),
+            failure_class.as_deref(),
+        )
+    }
+
     async fn assert_safe_durable_evidence(&mut self) -> Result<(), LiveJourneyError> {
         let row = self
             .admin
@@ -812,6 +1022,30 @@ SELECT
         drop(self.admin);
         self.admin_driver.abort();
         result
+    }
+}
+
+fn classify_durable_execute_failure(
+    completion_outcome: Option<&str>,
+    result_class: Option<&str>,
+    failure_class: Option<&str>,
+) -> LiveJourneyError {
+    match (completion_outcome, result_class, failure_class) {
+        (Some("known_complete"), Some("known_failure"), Some("credential_unavailable")) => {
+            LiveJourneyError::ExecuteSourceCredentialsUnavailable
+        }
+        (Some("known_complete"), Some("known_failure"), Some("source_unavailable")) => {
+            LiveJourneyError::ExecuteSourceUnavailable
+        }
+        (Some("known_complete"), Some("known_failure"), Some("response_contract_violation")) => {
+            LiveJourneyError::ExecuteResponseContractViolation
+        }
+        (Some("known_complete"), Some("known_failure"), Some("cardinality_violation")) => {
+            LiveJourneyError::ExecuteCardinalityViolation
+        }
+        (Some("not_started"), None, None) => LiveJourneyError::ExecuteClosedBeforeSourceDispatch,
+        (Some("outcome_unknown"), None, None) => LiveJourneyError::ExecuteClosedAfterSourceDispatch,
+        _ => LiveJourneyError::ExecuteUnavailable,
     }
 }
 

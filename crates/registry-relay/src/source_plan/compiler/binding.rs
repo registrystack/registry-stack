@@ -423,11 +423,12 @@ pub(super) fn compile_data_destination(
         .map(|cidr| cidr.parse())
         .collect::<Result<Vec<_>, _>>()
         .map_err(|_| SourcePlanCompileError::UnsafeDestination)?;
-    DataDestinationPolicy::new(
+    DataDestinationPolicy::new_with_dns_family(
         &destination.id,
         &destination.origin,
         DestinationProfile::ProductionHttps,
         &cidrs,
+        compile_destination_dns_family(destination.dns_family),
     )
     .map_err(|_| SourcePlanCompileError::UnsafeDestination)
 }
@@ -441,13 +442,23 @@ pub(super) fn compile_credential_destination(
         .map(|cidr| cidr.parse())
         .collect::<Result<Vec<_>, _>>()
         .map_err(|_| SourcePlanCompileError::UnsafeDestination)?;
-    CredentialDestinationPolicy::new(
+    CredentialDestinationPolicy::new_with_dns_family(
         &destination.id,
         &destination.origin,
         DestinationProfile::ProductionHttps,
         &cidrs,
+        compile_destination_dns_family(destination.dns_family),
     )
     .map_err(|_| SourcePlanCompileError::UnsafeDestination)
+}
+
+const fn compile_destination_dns_family(
+    family: DestinationDnsFamilyDocument,
+) -> DestinationDnsFamily {
+    match family {
+        DestinationDnsFamilyDocument::DualStackStrict => DestinationDnsFamily::DualStackStrict,
+        DestinationDnsFamilyDocument::Ipv4Only => DestinationDnsFamily::Ipv4Only,
+    }
 }
 
 pub(super) fn compile_credential_operation(
