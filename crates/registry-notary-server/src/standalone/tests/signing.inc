@@ -803,12 +803,16 @@ credential_profiles:
     signing_key: hsm-key
     vct: https://issuer.example/credentials/a
     allowed_claims: [claim-a]
+    holder_binding:
+      mode: none
   profile-b:
     format: application/dc+sd-jwt
     issuer: did:web:issuer.example
     signing_key: hsm-key-secondary
     vct: https://issuer.example/credentials/b
     allowed_claims: [claim-b]
+    holder_binding:
+      mode: none
 "#,
         ))
         .expect("evidence config parses");
