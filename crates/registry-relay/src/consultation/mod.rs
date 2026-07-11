@@ -17,6 +17,11 @@ pub(crate) mod audit;
     reason = "the typed commitment foundation precedes consultation service integration"
 )]
 pub(crate) mod commitments;
+#[allow(
+    dead_code,
+    reason = "the concrete Basic GET executor is activated by the consultation service slice"
+)]
+pub(crate) mod executor;
 mod identifiers;
 #[allow(
     dead_code,
@@ -28,6 +33,11 @@ pub(crate) mod policy;
     reason = "the bounded provider foundation precedes consultation runtime integration"
 )]
 pub(crate) mod pseudonym;
+#[allow(
+    dead_code,
+    reason = "the sealed response is consumed by the concrete consultation executor integration"
+)]
+pub(crate) mod response;
 mod types;
 mod workload;
 

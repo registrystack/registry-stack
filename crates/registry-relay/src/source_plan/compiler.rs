@@ -1998,6 +1998,7 @@ mod tests;
 #[cfg(test)]
 pub(crate) use tests::{
     bounded_runtime_vector_plan_fixture, consent_runtime_vector_plan_fixture,
+    dhis2_duplicate_selector_runtime_vector_plan_fixture, dhis2_runtime_vector_plan_fixture,
     maximum_completion_seed_fixture, maximum_runtime_profile_fixture,
     normal_completion_seed_fixture, rhai_five_operation_two_slot_completion_seed_fixture,
     rhai_runtime_vector_plan_fixture, semantic_alias_completion_seed_fixture,

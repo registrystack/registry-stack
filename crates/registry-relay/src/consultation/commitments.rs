@@ -193,6 +193,23 @@ pub(crate) struct SealedConsultationExecution<'profile> {
     inner: SealedConsultationExecutionInner<'profile>,
 }
 
+/// The exact plan and canonical input released only by consuming a sealed
+/// execution inside the concrete source executor.
+pub(super) struct BoundConsultationExecution<'profile> {
+    plan: &'profile CompiledSourcePlan,
+    input: CompiledInputValue,
+}
+
+impl BoundConsultationExecution<'_> {
+    pub(super) const fn plan(&self) -> &CompiledSourcePlan {
+        self.plan
+    }
+
+    pub(super) const fn input(&self) -> &CompiledInputValue {
+        &self.input
+    }
+}
+
 enum SealedConsultationExecutionInner<'profile> {
     Bound {
         plan: &'profile CompiledSourcePlan,
@@ -246,6 +263,22 @@ impl<'profile> SealedConsultationExecution<'profile> {
             #[cfg(test)]
             SealedConsultationExecutionInner::StatePlaneOnly => {
                 panic!("state-plane-only test dispatch has no source execution")
+            }
+        }
+    }
+
+    /// Consume the authorization-bound plan/input pair into the only shape
+    /// accepted by the concrete consultation executor.
+    pub(super) fn into_bound(
+        self,
+    ) -> Result<BoundConsultationExecution<'profile>, ConsultationCommitmentError> {
+        match self.inner {
+            SealedConsultationExecutionInner::Bound { plan, input } => {
+                Ok(BoundConsultationExecution { plan, input })
+            }
+            #[cfg(test)]
+            SealedConsultationExecutionInner::StatePlaneOnly => {
+                Err(ConsultationCommitmentError::CanonicalInputMismatch)
             }
         }
     }

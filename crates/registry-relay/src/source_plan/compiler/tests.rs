@@ -553,6 +553,28 @@ pub(crate) fn bounded_runtime_vector_plan_fixture() -> CompiledSourcePlan {
         .expect("one bounded vector plan")
 }
 
+pub(crate) fn dhis2_runtime_vector_plan_fixture() -> CompiledSourcePlan {
+    compile_dhis2(&dhis2_fixture())
+        .expect("maintained DHIS2 vector plan compiles")
+        .plans
+        .into_values()
+        .next()
+        .expect("one maintained DHIS2 vector plan")
+}
+
+pub(crate) fn dhis2_duplicate_selector_runtime_vector_plan_fixture() -> CompiledSourcePlan {
+    let mut fixture = dhis2_fixture();
+    fixture.pack_value["spec"]["plan"]["operations"][0]["query"]["trackedEntityAlias"] =
+        json!({"source": "consultation_input", "name": "tracked_entity"});
+    fixture.refresh_all();
+    compile_dhis2(&fixture)
+        .expect("artifact-valid duplicate selector fixture compiles")
+        .plans
+        .into_values()
+        .next()
+        .expect("one duplicate selector vector plan")
+}
+
 pub(crate) fn rhai_runtime_vector_plan_fixture() -> CompiledSourcePlan {
     let fixture = rhai_five_operation_fixture();
     let worker = RhaiWorkerCapability::from_initialized_worker(

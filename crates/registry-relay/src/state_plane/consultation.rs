@@ -423,7 +423,7 @@ impl KnownConsultationCompletionFacts {
         }
     }
 
-    const fn is_public_success(&self) -> bool {
+    pub(crate) const fn is_public_success(&self) -> bool {
         matches!(&self.result, KnownExecutionResult::Public { .. })
     }
 }

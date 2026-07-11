@@ -45,7 +45,11 @@ use super::commitments::{
     PendingConsultationDispatchFreshness, PendingConsultationPersistenceFreshness,
     SealedConsultationExecution, VerifiedConsentDecision,
 };
+use super::executor::{
+    execute_one_step_basic_get, ConcreteExecutorProof, ConcreteExecutorUnfinished,
+};
 use super::pseudonym::PreparedConsultationPseudonyms;
+use super::response::PublishableConsultationResponse;
 use super::{AcquisitionClass, ConsultationId, NotaryEvaluationId};
 
 const MAX_TERMINAL_PSEUDONYM_AUTHORITY_ATTEMPTS: usize = 4;
@@ -379,6 +383,7 @@ pub(crate) struct PreparedAtomicConsultationAttempt<'profile> {
     fence: Option<FencedConsultationAttemptAuthority>,
     quota: QuotaGrant,
     execution: SealedConsultationExecution<'profile>,
+    publication: PendingPublicationContext,
 }
 
 impl<'profile> PreparedAtomicConsultationAttempt<'profile> {
@@ -403,6 +408,7 @@ impl<'profile> PreparedAtomicConsultationAttempt<'profile> {
             dispatch_freshness: self.dispatch_freshness,
             quota: self.quota,
             execution: self.execution,
+            publication: self.publication,
         })
     }
 }
@@ -455,6 +461,10 @@ impl PreparedAtomicConsultationAttempt<'static> {
             fence: Some(fence),
             quota: QuotaGrant::for_consultation_test(),
             execution: SealedConsultationExecution::state_plane_only_for_test(),
+            publication: PendingPublicationContext {
+                consultation_id: ConsultationId::generate(),
+                notary_evaluation_id: None,
+            },
         })
     }
 }
@@ -542,6 +552,23 @@ pub(crate) struct PreparedAuditedConsultationDispatch<'profile> {
     dispatch_freshness: PendingConsultationDispatchFreshness,
     quota: QuotaGrant,
     execution: SealedConsultationExecution<'profile>,
+    publication: PendingPublicationContext,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct PendingPublicationContext {
+    consultation_id: ConsultationId,
+    notary_evaluation_id: Option<NotaryEvaluationId>,
+}
+
+impl PendingPublicationContext {
+    pub(super) const fn consultation_id(self) -> ConsultationId {
+        self.consultation_id
+    }
+
+    pub(super) const fn notary_evaluation_id(self) -> Option<NotaryEvaluationId> {
+        self.notary_evaluation_id
+    }
 }
 
 /// One decoder-validated backend result that binds its potentially publishable
@@ -552,28 +579,55 @@ pub(crate) struct PreparedAuditedConsultationDispatch<'profile> {
 /// particular, the service cannot independently pair output with completion
 /// facts after backend execution.
 #[must_use = "a validated backend result must remain sealed through terminal completion"]
-pub(crate) struct ValidatedConsultationBackendResult<T> {
-    publishable_output: T,
-    completion_facts: KnownConsultationCompletionFacts,
+pub(crate) enum ValidatedConsultationBackendResult<T> {
+    Publishable {
+        output: T,
+        completion_facts: KnownConsultationCompletionFacts,
+    },
+    KnownFailure {
+        completion_facts: KnownConsultationCompletionFacts,
+    },
 }
 
 impl<T> ValidatedConsultationBackendResult<T> {
+    pub(super) fn from_concrete_executor(proof: ConcreteExecutorProof<T>) -> Self {
+        let (output, completion_facts) = proof.into_parts();
+        match output {
+            Some(output) => Self::Publishable {
+                output,
+                completion_facts,
+            },
+            None => Self::KnownFailure { completion_facts },
+        }
+    }
+
     /// Explicit test-only minting boundary for production-shaped state-plane
     /// orchestration tests. Production must instead mint this value at the
     /// concrete strict decoder boundary.
     #[cfg(test)]
-    pub(crate) const fn for_test(
+    pub(crate) fn for_test(
         publishable_output: T,
         completion_facts: KnownConsultationCompletionFacts,
     ) -> Self {
-        Self {
-            publishable_output,
-            completion_facts,
+        if completion_facts.is_public_success() {
+            Self::Publishable {
+                output: publishable_output,
+                completion_facts,
+            }
+        } else {
+            drop(publishable_output);
+            Self::KnownFailure { completion_facts }
         }
     }
 
-    fn into_parts(self) -> (T, KnownConsultationCompletionFacts) {
-        (self.publishable_output, self.completion_facts)
+    fn into_parts(self) -> (Option<T>, KnownConsultationCompletionFacts) {
+        match self {
+            Self::Publishable {
+                output,
+                completion_facts,
+            } => (Some(output), completion_facts),
+            Self::KnownFailure { completion_facts } => (None, completion_facts),
+        }
     }
 }
 
@@ -587,9 +641,18 @@ pub(crate) struct ExecutedAuditedConsultationDispatch<T> {
     validated: ValidatedConsultationBackendResult<T>,
 }
 
-/// Terminal result of one decoder-validated backend execution. Publishable
-/// output exists only in the variant that owns durable publication authority;
-/// a known failure can return only its terminal receipt.
+enum FinalizedValidatedConsultationInner<T> {
+    Published {
+        grant: ConsultationPublicationGrant,
+        output: T,
+    },
+    FinalizedFailure(ConsultationCompletionReceipt),
+}
+
+/// Test-only generic view used by the PostgreSQL lifecycle conformance suite.
+/// Production can declassify consultation output only through the specialized
+/// aggregate below.
+#[cfg(test)]
 #[must_use = "a published output requires the paired durable publication grant"]
 pub(crate) enum FinalizedValidatedConsultation<T> {
     Published {
@@ -599,16 +662,84 @@ pub(crate) enum FinalizedValidatedConsultation<T> {
     FinalizedFailure(ConsultationCompletionReceipt),
 }
 
-/// An expired decision that still owns the exact structurally sealed durable
-/// dispatch so the service can record `not_started` without source access.
-/// Completion reacquires the then-current pseudonym write authority without
-/// moving this dispatch across a stale check.
-#[must_use = "a denied backend start must be recorded as terminal not_started"]
-pub(crate) struct ConsultationBackendStartDenied {
+/// Terminal result of the concrete Basic GET journey. The publication grant
+/// and its candidate bytes cannot be extracted or independently re-paired.
+#[must_use = "a finalized consultation result must be handled"]
+pub(crate) enum FinalizedBasicGetConsultation {
+    Published(PublishedBasicGetResponse),
+    FinalizedFailure(ConsultationCompletionReceipt),
+}
+
+#[must_use = "published consultation bytes must be returned or dropped"]
+pub(crate) struct PublishedBasicGetResponse {
+    grant: ConsultationPublicationGrant,
+    output: PublishableConsultationResponse,
+}
+
+impl PublishedBasicGetResponse {
+    pub(crate) fn into_http_body(self) -> Vec<u8> {
+        self.output.into_http_body(self.grant)
+    }
+}
+
+/// A durable dispatch whose local outcome is not safe to classify. This covers
+/// expiry before the source marker and uncertainty after marker authorization;
+/// PostgreSQL derives `not_started` versus `outcome_unknown` from durable
+/// permit state. Completion reacquires current pseudonym authority without
+/// moving the dispatch across a stale check.
+#[must_use = "an unfinished dispatch must be terminally classified by PostgreSQL"]
+pub(crate) struct UnfinishedAuditedConsultationDispatch {
     dispatch: Option<AuditedConsultationDispatch>,
 }
 
 impl<'profile> PreparedAuditedConsultationDispatch<'profile> {
+    /// Run the first concrete consultation product journey. Every outer fence
+    /// error retains the sealed dispatch for PostgreSQL to classify as
+    /// `not_started` or `outcome_unknown`; only a closure-returned known result
+    /// enters normal completion.
+    pub(crate) async fn execute_one_step_basic_get(
+        self,
+        fence: &crate::state_plane::PostgresServingFence,
+        credentials: &crate::source_plan::CompiledBasicSourceCredentialProvider,
+    ) -> Result<
+        ExecutedAuditedConsultationDispatch<PublishableConsultationResponse>,
+        UnfinishedAuditedConsultationDispatch,
+    > {
+        let Self {
+            mut dispatch,
+            dispatch_freshness,
+            quota,
+            execution,
+            publication,
+        } = self;
+        if dispatch_freshness.check_fresh_now().is_err() {
+            return Err(UnfinishedAuditedConsultationDispatch {
+                dispatch: Some(dispatch),
+            });
+        }
+        let proof = match execute_one_step_basic_get(
+            &mut dispatch,
+            execution,
+            publication,
+            quota,
+            fence,
+            credentials,
+        )
+        .await
+        {
+            Ok(proof) => proof,
+            Err(ConcreteExecutorUnfinished) => {
+                return Err(UnfinishedAuditedConsultationDispatch {
+                    dispatch: Some(dispatch),
+                });
+            }
+        };
+        Ok(ExecutedAuditedConsultationDispatch {
+            dispatch: Some(dispatch),
+            validated: ValidatedConsultationBackendResult::from_concrete_executor(proof),
+        })
+    }
+
     /// Exercise production-shaped freshness and terminal orchestration without
     /// exposing a generic callback in production. The concrete strict executor
     /// must become the sole production entry point and consume the sealed plan
@@ -617,7 +748,7 @@ impl<'profile> PreparedAuditedConsultationDispatch<'profile> {
     pub(crate) async fn run_backend<T, F>(
         self,
         backend: F,
-    ) -> Result<ExecutedAuditedConsultationDispatch<T>, ConsultationBackendStartDenied>
+    ) -> Result<ExecutedAuditedConsultationDispatch<T>, UnfinishedAuditedConsultationDispatch>
     where
         F: for<'dispatch> FnOnce(
             &'dispatch mut AuditedConsultationDispatch,
@@ -631,9 +762,10 @@ impl<'profile> PreparedAuditedConsultationDispatch<'profile> {
             dispatch_freshness,
             quota: _quota,
             execution,
+            publication: _publication,
         } = self;
         if dispatch_freshness.check_fresh_now().is_err() {
-            return Err(ConsultationBackendStartDenied {
+            return Err(UnfinishedAuditedConsultationDispatch {
                 dispatch: Some(dispatch),
             });
         }
@@ -676,7 +808,7 @@ impl<T> ExecutedAuditedConsultationDispatch<T> {
     }
 }
 
-impl ConsultationBackendStartDenied {
+impl UnfinishedAuditedConsultationDispatch {
     fn state_view(&mut self) -> TerminalConsultationStateView<'_> {
         TerminalConsultationStateView {
             dispatch: &mut self.dispatch,
@@ -699,18 +831,42 @@ impl PostgresDurableAuditStatePlane {
     /// Terminally complete one validated backend result without separating its
     /// structurally sealed dispatch from its output. The keyring runtime mints
     /// a fresh then-current pseudonym authority for each bounded stale retry.
+    pub(crate) async fn finalize_basic_get_consultation(
+        &self,
+        executed: ExecutedAuditedConsultationDispatch<PublishableConsultationResponse>,
+        keyring: &PostgresAuditPseudonymKeyringRuntime,
+    ) -> Result<FinalizedBasicGetConsultation, ConsultationPersistenceError> {
+        match self
+            .finalize_validated_consultation_inner(
+                executed,
+                keyring,
+                #[cfg(test)]
+                None,
+            )
+            .await?
+        {
+            FinalizedValidatedConsultationInner::Published { grant, output } => {
+                Ok(FinalizedBasicGetConsultation::Published(
+                    PublishedBasicGetResponse { grant, output },
+                ))
+            }
+            FinalizedValidatedConsultationInner::FinalizedFailure(receipt) => {
+                Ok(FinalizedBasicGetConsultation::FinalizedFailure(receipt))
+            }
+        }
+    }
+
+    /// Test-only generic terminal path for state-plane conformance coverage.
+    #[cfg(test)]
     pub(crate) async fn finalize_validated_consultation<T>(
         &self,
         executed: ExecutedAuditedConsultationDispatch<T>,
         keyring: &PostgresAuditPseudonymKeyringRuntime,
     ) -> Result<FinalizedValidatedConsultation<T>, ConsultationPersistenceError> {
-        self.finalize_validated_consultation_inner(
-            executed,
-            keyring,
-            #[cfg(test)]
-            None,
-        )
-        .await
+        let finalized = self
+            .finalize_validated_consultation_inner(executed, keyring, None)
+            .await?;
+        Ok(test_finalized_result(finalized))
     }
 
     /// Exercise the exact production known-completion retry loop with one
@@ -722,8 +878,10 @@ impl PostgresDurableAuditStatePlane {
         keyring: &PostgresAuditPseudonymKeyringRuntime,
         hook: TerminalCompletionTestHook,
     ) -> Result<FinalizedValidatedConsultation<T>, ConsultationPersistenceError> {
-        self.finalize_validated_consultation_inner(executed, keyring, Some(hook))
-            .await
+        let finalized = self
+            .finalize_validated_consultation_inner(executed, keyring, Some(hook))
+            .await?;
+        Ok(test_finalized_result(finalized))
     }
 
     async fn finalize_validated_consultation_inner<T>(
@@ -731,9 +889,9 @@ impl PostgresDurableAuditStatePlane {
         executed: ExecutedAuditedConsultationDispatch<T>,
         keyring: &PostgresAuditPseudonymKeyringRuntime,
         #[cfg(test)] mut test_hook: Option<TerminalCompletionTestHook>,
-    ) -> Result<FinalizedValidatedConsultation<T>, ConsultationPersistenceError> {
+    ) -> Result<FinalizedValidatedConsultationInner<T>, ConsultationPersistenceError> {
         let (mut dispatch, validated) = executed.into_parts();
-        let (publishable_output, completion_facts) = validated.into_parts();
+        let (mut publishable_output, completion_facts) = validated.into_parts();
         for _ in 0..MAX_TERMINAL_PSEUDONYM_AUTHORITY_ATTEMPTS {
             let completion_epoch = current_completion_epoch(keyring).await?;
             #[cfg(test)]
@@ -756,13 +914,16 @@ impl PostgresDurableAuditStatePlane {
                 TerminalCompletionAttempt::Completed(disposition) => {
                     return Ok(match disposition {
                         KnownCompletionDisposition::Published(grant) => {
-                            FinalizedValidatedConsultation::Published {
-                                grant,
-                                output: publishable_output,
-                            }
+                            let output = publishable_output
+                                .take()
+                                .ok_or(ConsultationPersistenceError::ProtocolDrift)?;
+                            FinalizedValidatedConsultationInner::Published { grant, output }
                         }
                         KnownCompletionDisposition::FinalizedFailure(receipt) => {
-                            FinalizedValidatedConsultation::FinalizedFailure(receipt)
+                            if publishable_output.is_some() {
+                                return Err(ConsultationPersistenceError::ProtocolDrift);
+                            }
+                            FinalizedValidatedConsultationInner::FinalizedFailure(receipt)
                         }
                     });
                 }
@@ -772,13 +933,13 @@ impl PostgresDurableAuditStatePlane {
         Err(ConsultationPersistenceError::Unavailable)
     }
 
-    /// Record an expired pre-backend decision as `not_started` while retaining
-    /// the exact structurally sealed dispatch that the attempt CAS returned.
-    /// The keyring runtime mints a fresh then-current pseudonym authority for
-    /// each bounded stale retry.
+    /// Terminally classify an unfinished dispatch from durable permit state.
+    /// PostgreSQL records `not_started` before a marker or `outcome_unknown`
+    /// after an uncertain marker. The keyring runtime mints a fresh current
+    /// pseudonym authority for each bounded stale retry.
     pub(crate) async fn close_unfinished_consultation(
         &self,
-        denied: ConsultationBackendStartDenied,
+        denied: UnfinishedAuditedConsultationDispatch,
         keyring: &PostgresAuditPseudonymKeyringRuntime,
     ) -> Result<ConsultationCompletionReceipt, ConsultationPersistenceError> {
         self.close_unfinished_consultation_inner(
@@ -795,7 +956,7 @@ impl PostgresDurableAuditStatePlane {
     #[cfg(test)]
     pub(crate) async fn close_unfinished_consultation_with_test_hook(
         &self,
-        denied: ConsultationBackendStartDenied,
+        denied: UnfinishedAuditedConsultationDispatch,
         keyring: &PostgresAuditPseudonymKeyringRuntime,
         hook: TerminalCompletionTestHook,
     ) -> Result<ConsultationCompletionReceipt, ConsultationPersistenceError> {
@@ -805,7 +966,7 @@ impl PostgresDurableAuditStatePlane {
 
     async fn close_unfinished_consultation_inner(
         &self,
-        mut denied: ConsultationBackendStartDenied,
+        mut denied: UnfinishedAuditedConsultationDispatch,
         keyring: &PostgresAuditPseudonymKeyringRuntime,
         #[cfg(test)] mut test_hook: Option<TerminalCompletionTestHook>,
     ) -> Result<ConsultationCompletionReceipt, ConsultationPersistenceError> {
@@ -830,6 +991,20 @@ impl PostgresDurableAuditStatePlane {
             }
         }
         Err(ConsultationPersistenceError::Unavailable)
+    }
+}
+
+#[cfg(test)]
+fn test_finalized_result<T>(
+    finalized: FinalizedValidatedConsultationInner<T>,
+) -> FinalizedValidatedConsultation<T> {
+    match finalized {
+        FinalizedValidatedConsultationInner::Published { grant, output } => {
+            FinalizedValidatedConsultation::Published { grant, output }
+        }
+        FinalizedValidatedConsultationInner::FinalizedFailure(receipt) => {
+            FinalizedValidatedConsultation::FinalizedFailure(receipt)
+        }
     }
 }
 
@@ -890,6 +1065,10 @@ pub(crate) fn prepare_atomic_consultation_attempt<'profile>(
         fence: Some(fence),
         quota,
         execution,
+        publication: PendingPublicationContext {
+            consultation_id,
+            notary_evaluation_id,
+        },
     })
 }
 
