@@ -2171,6 +2171,9 @@ fn path_percent_encoding_is_canonical(path: &str) -> bool {
     let mut index = 0_usize;
     while index < bytes.len() {
         if bytes[index] != b'%' {
+            if bytes[index] == b';' {
+                return false;
+            }
             decoded_path.push(bytes[index]);
             index += 1;
             continue;
@@ -3255,6 +3258,8 @@ mod tests {
             "/a/%C0%AF/b",
             "/a/%ED%A0%80/b",
             "/a/%FF/b",
+            "/base/id;x",
+            "/base/..;x/admin",
             "/a/é/b",
             "/a\u{7f}b",
         ] {
@@ -3297,6 +3302,8 @@ mod tests {
             "/base/%3F",
             "/base/%3A",
             "/base/id%3Bx",
+            "/base/id;x",
+            "/base/..;x/admin",
             "/base/%7c",
             "/base/%C2%85",
             "/base/%E2%80%AE",
