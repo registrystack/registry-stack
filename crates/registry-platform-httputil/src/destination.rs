@@ -1439,9 +1439,32 @@ fn append_form_component(
 
 fn valid_dynamic_path_segment(segment: &str) -> bool {
     !matches!(segment, "." | "..")
+        && !segment.chars().any(disallowed_path_scalar)
         && !segment
             .bytes()
             .any(|byte| byte.is_ascii_control() || matches!(byte, b'/' | b'\\' | b'?' | b'%'))
+}
+
+/// Unicode controls and invisible format characters that cannot be part of a
+/// reviewed path selector. In addition to Unicode `Control`, this closes the
+/// bidi, zero-width, line/paragraph, annotation, and tag controls that could
+/// make an upstream target render differently from its committed byte form.
+fn disallowed_path_scalar(character: char) -> bool {
+    character.is_control()
+        || matches!(
+            character,
+            '\u{00ad}'
+                | '\u{034f}'
+                | '\u{061c}'
+                | '\u{180e}'
+                | '\u{200b}'..='\u{200f}'
+                | '\u{2028}'..='\u{202e}'
+                | '\u{2060}'..='\u{206f}'
+                | '\u{feff}'
+                | '\u{fff9}'..='\u{fffb}'
+                | '\u{e0001}'
+                | '\u{e0020}'..='\u{e007f}'
+        )
 }
 
 fn append_path_segment_component(
@@ -1794,11 +1817,28 @@ pub enum DestinationResponseError {
 
 /// Marker-typed bounded response bytes.
 ///
-/// The bytes can be inspected only through the separate consuming data and
-/// credential callbacks below. This keeps the two capabilities distinct and
-/// prevents a reusable generic raw-body accessor from crossing slot boundaries.
+/// Production code cannot inspect these bytes through this transport
+/// foundation. The reviewed strict data decoder and credential-token parser
+/// must be concrete platform-owned consumers rather than caller-supplied
+/// callbacks that can copy the raw body out of its zeroizing owner.
+///
+/// ```compile_fail
+/// use registry_platform_httputil::destination::DataDestinationBody;
+///
+/// fn cannot_extract_registry_bytes(body: DataDestinationBody) -> Vec<u8> {
+///     body.inspect_data(|bytes| bytes.to_vec())
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use registry_platform_httputil::destination::CredentialDestinationBody;
+///
+/// fn cannot_extract_credential_bytes(body: CredentialDestinationBody) -> Vec<u8> {
+///     body.inspect_credential(|bytes| bytes.to_vec())
+/// }
+/// ```
 pub struct BoundedDestinationBody<S: DestinationSlot> {
-    // Intentionally opaque outside the consuming slot-specific callbacks.
+    // Intentionally opaque until concrete platform-owned decoders land.
     #[cfg_attr(not(test), allow(dead_code))]
     bytes: Zeroizing<Vec<u8>>,
     slot: PhantomData<fn() -> S>,
@@ -1830,28 +1870,6 @@ impl<S: DestinationSlot> BoundedDestinationBody<S> {
     #[cfg(test)]
     #[must_use]
     fn with_bytes<T>(&self, inspect: impl FnOnce(&[u8]) -> T) -> T {
-        inspect(self.bytes.as_slice())
-    }
-}
-
-impl BoundedDestinationBody<DataDestination> {
-    /// Consume registry-data bytes inside one reviewed response decoder.
-    ///
-    /// The callback should return only the validated, bounded representation
-    /// needed by the caller. The backing buffer is zeroized when this method
-    /// returns and no generic accessor is shared with credential responses.
-    pub fn inspect_data<T>(self, inspect: impl FnOnce(&[u8]) -> T) -> T {
-        inspect(self.bytes.as_slice())
-    }
-}
-
-impl BoundedDestinationBody<CredentialDestination> {
-    /// Consume credential-exchange bytes inside one reviewed token decoder.
-    ///
-    /// The callback should return only the zeroizing credential capability
-    /// produced by the decoder. The backing response buffer is zeroized when
-    /// this method returns and cannot be passed to a registry-data decoder.
-    pub fn inspect_credential<T>(self, inspect: impl FnOnce(&[u8]) -> T) -> T {
         inspect(self.bytes.as_slice())
     }
 }
@@ -2121,19 +2139,39 @@ fn validate_destination_target(target: &str) -> Result<(), DestinationRequestErr
     Ok(())
 }
 
-/// Validate one exact fixed operation path using the same rules as rendering.
+/// Validate one exact compiler-owned path as literal structural ASCII.
+///
+/// Percent escapes belong only to the typed dynamic-segment renderer. Keeping
+/// them out of fixed paths prevents reviewed operation identities from hiding
+/// control, delimiter, invalid UTF-8, or double-decoding aliases.
 pub fn validate_fixed_destination_path(path: &str) -> Result<(), DestinationRequestError> {
-    if path.contains('?') {
+    if path.len() > MAX_DESTINATION_TARGET_BYTES {
+        return Err(DestinationRequestError::TargetTooLong);
+    }
+    if !path.is_ascii()
+        || path.contains(['?', '#', '\\', '%'])
+        || path.bytes().any(|byte| byte.is_ascii_control())
+    {
         return Err(DestinationRequestError::InvalidTarget);
+    }
+    let path_without_root = path.strip_prefix('/').unwrap_or(path);
+    if path_without_root.contains("//")
+        || path_without_root
+            .split('/')
+            .any(|segment| matches!(segment, "." | ".."))
+    {
+        return Err(DestinationRequestError::NonCanonicalTarget);
     }
     validate_destination_target(path)
 }
 
 fn path_percent_encoding_is_canonical(path: &str) -> bool {
     let bytes = path.as_bytes();
+    let mut decoded_path = Zeroizing::new(Vec::with_capacity(bytes.len()));
     let mut index = 0_usize;
     while index < bytes.len() {
         if bytes[index] != b'%' {
+            decoded_path.push(bytes[index]);
             index += 1;
             continue;
         }
@@ -2152,17 +2190,20 @@ fn path_percent_encoding_is_canonical(path: &str) -> bool {
             _ => 0,
         };
         let decoded = (hex(high) << 4) | hex(low);
-        if decoded.is_ascii_alphanumeric()
+        if decoded.is_ascii_control()
+            || decoded.is_ascii_alphanumeric()
             || matches!(
                 decoded,
-                b'-' | b'.' | b'_' | b'~' | b'/' | b'\\' | b'?' | 0 | b'\r' | b'\n'
+                b'-' | b'.' | b'_' | b'~' | b':' | b'%' | b'/' | b'\\' | b'?'
             )
         {
             return false;
         }
+        decoded_path.push(decoded);
         index += 3;
     }
-    true
+    std::str::from_utf8(decoded_path.as_slice())
+        .is_ok_and(|decoded| !decoded.chars().any(disallowed_path_scalar))
 }
 
 fn target_is_canonical(target: &PathAndQuery) -> bool {
@@ -2438,7 +2479,7 @@ mod tests {
     }
 
     #[test]
-    fn response_bodies_have_separate_consuming_inspection_paths() {
+    fn response_bodies_remain_opaque_and_redacted() {
         let data = BoundedDestinationBody::<DataDestination> {
             bytes: Zeroizing::new(b"registry-record".to_vec()),
             slot: PhantomData,
@@ -2448,11 +2489,10 @@ mod tests {
             slot: PhantomData,
         };
 
-        assert_eq!(
-            data.inspect_data(|bytes| bytes.len()),
-            b"registry-record".len()
-        );
-        assert!(credential.inspect_credential(|bytes| bytes == b"credential-token"));
+        assert_eq!(data.with_bytes(<[u8]>::len), b"registry-record".len());
+        assert!(credential.with_bytes(|bytes| bytes == b"credential-token"));
+        assert!(!format!("{data:?}").contains("registry-record"));
+        assert!(!format!("{credential:?}").contains("credential-token"));
     }
 
     fn classify(
@@ -3140,20 +3180,20 @@ mod tests {
             .expect("nonempty bounded POST body");
         let encoded = DataDestinationRequestTemplate::new(
             DestinationMethod::Get,
-            "/records/%E2%9C%93",
+            "/records/v1:exact",
             &[("selector:subject", 1)],
             &[],
             DestinationAuthorizationTemplate::Forbidden,
             DestinationBodyTemplate::Forbidden,
             128,
         )
-        .expect("canonical escaped path and colon query name");
+        .expect("structural ASCII path and colon query name");
         let request = encoded
             .render(&["x"], &[], None, None)
             .expect("encoded query renders");
         assert_eq!(
             request.target.as_slice(),
-            b"/records/%E2%9C%93?selector%3Asubject=x"
+            b"/records/v1:exact?selector%3Asubject=x"
         );
         let query = (0..=MAX_DESTINATION_REQUEST_QUERY_COMPONENTS)
             .map(|index| format!("q{index}"))
@@ -3176,6 +3216,98 @@ mod tests {
             DestinationRequestError::TooManyQueryComponents
         );
         assert!(!format!("{template:?}").contains("records"));
+    }
+
+    #[test]
+    fn fixed_paths_are_literal_structural_ascii_without_aliases() {
+        for valid in [
+            "/",
+            "/registry/sync/search",
+            "/api/tracker/trackedEntities/",
+            "/api/v2/spp/Individual/",
+            "/records/v1:exact",
+        ] {
+            assert_eq!(
+                validate_fixed_destination_path(valid),
+                Ok(()),
+                "expected fixed path to remain valid: {valid:?}"
+            );
+        }
+
+        for invalid in [
+            "/a//b",
+            "/a///b",
+            "/a/./b",
+            "/a/../b",
+            "/a/%01/b",
+            "/a/%1F/b",
+            "/a/%7F/b",
+            "/a/%25/b",
+            "/a/%252Fadmin",
+            "/a/%252E%252E/admin",
+            "/a/%2F/b",
+            "/a/%5C/b",
+            "/a/%3F/b",
+            "/a/%23/b",
+            "/a/%3A/b",
+            "/a/%C2%85/b",
+            "/a/%E2%80%AE/b",
+            "/a/%C0%AF/b",
+            "/a/%ED%A0%80/b",
+            "/a/%FF/b",
+            "/a/é/b",
+            "/a\u{7f}b",
+        ] {
+            assert!(
+                validate_fixed_destination_path(invalid).is_err(),
+                "expected fixed path alias to fail: {invalid:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn generated_target_percent_encoding_is_single_pass_utf8_and_canonical() {
+        for valid in [
+            "/base/value%23part%7Ctail",
+            "/base/value%20with%20space",
+            "/base/%E2%9C%93",
+            "/base/Jos%C3%A9",
+        ] {
+            assert_eq!(
+                validate_destination_target(valid),
+                Ok(()),
+                "expected generated target to remain valid: {valid:?}"
+            );
+        }
+
+        for invalid in [
+            "/base/%01",
+            "/base/%09",
+            "/base/%0B",
+            "/base/%0C",
+            "/base/%1F",
+            "/base/%7F",
+            "/base/%25",
+            "/base/%252Fadmin",
+            "/base/%252E%252E/admin",
+            "/base/%2E",
+            "/base/%2E%2E",
+            "/base/%2F",
+            "/base/%5C",
+            "/base/%3F",
+            "/base/%3A",
+            "/base/%7c",
+            "/base/%C2%85",
+            "/base/%E2%80%AE",
+            "/base/%C0%AF",
+            "/base/%ED%A0%80",
+            "/base/%FF",
+        ] {
+            assert!(
+                validate_destination_target(invalid).is_err(),
+                "expected generated target alias to fail: {invalid:?}"
+            );
+        }
     }
 
     #[test]
@@ -3209,9 +3341,51 @@ mod tests {
             request.target.as_slice(),
             b"/api/v2/spp/Individual/urn:openspp:vocab:id-type%23national_id%7CIND-001?_elements=identifier%2Cactive"
         );
+        let unicode_request = template
+            .render_with_path_segment(
+                "บุคคล-001",
+                &["identifier"],
+                &[],
+                Some(
+                    DestinationAuthorizationValue::bearer(b"bounded".to_vec())
+                        .expect("typed bearer"),
+                ),
+                None,
+            )
+            .expect("ordinary Unicode remains one encoded segment");
+        assert_eq!(
+            unicode_request.target.as_slice(),
+            b"/api/v2/spp/Individual/%E0%B8%9A%E0%B8%B8%E0%B8%84%E0%B8%84%E0%B8%A5-001?_elements=identifier"
+        );
         assert!(!format!("{template:?}").contains("Individual"));
 
-        for invalid in ["", ".", "..", "a/b", "a\\b", "a?b", "a%2Fb", "a\nb"] {
+        for invalid in [
+            "",
+            ".",
+            "..",
+            "a/b",
+            "a\\b",
+            "a?b",
+            "a%2Fb",
+            "a\nb",
+            "a\u{0085}b",
+            "a\u{00ad}b",
+            "a\u{034f}b",
+            "a\u{061c}b",
+            "a\u{180e}b",
+            "a\u{200b}b",
+            "a\u{200e}b",
+            "a\u{2028}b",
+            "a\u{2029}b",
+            "a\u{202e}b",
+            "a\u{2060}b",
+            "a\u{2066}b",
+            "a\u{206f}b",
+            "a\u{feff}b",
+            "a\u{fff9}b",
+            "a\u{e0001}b",
+            "a\u{e0020}b",
+        ] {
             assert_eq!(
                 template
                     .render_with_path_segment(invalid, &["identifier"], &[], None, None)
