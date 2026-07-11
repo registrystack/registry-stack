@@ -1,0 +1,74 @@
+# SPDX-License-Identifier: Apache-2.0
+# Local bootstrap example for the maintained DHIS2 2.41.9 consultation profile.
+# Production and evidence-grade deployments must deliver this configuration and
+# its artifacts through the signed configuration-bundle path.
+
+server:
+  bind: "127.0.0.1:8080"
+
+catalog:
+  title: "DHIS2 consultation Relay"
+  base_url: "https://relay.example.gov"
+  publisher: "Example Ministry"
+
+auth:
+  mode: oidc
+  oidc:
+    issuer: "https://identity.example.gov"
+    audiences: ["relay-consultation"]
+    jwks_url: "https://identity.example.gov/.well-known/jwks.json"
+    allowed_clients: ["registry-notary"]
+
+audit:
+  sink: stdout
+  hash_secret_env: REGISTRY_RELAY_AUDIT_HASH_SECRET
+
+consultation:
+  notary_workload:
+    audience: relay-consultation
+    client_claim_selector: azp
+    client_value: registry-notary
+    principal_id: registry-notary
+  state_plane:
+    database_url_env: REGISTRY_RELAY_CONSULTATION_DATABASE_URL
+    chain_key_epoch_id: relay-consultation-chain-1
+    serving_fence_lock_key: 7221091441
+    audit_pseudonym_keyring_lock_key: 7221091442
+  artifacts:
+    public_contracts:
+      - path: public-contract.json
+        hash: sha256:eb8f6cb4dd81d8a34c25e4da393ada734caa553e7e65a06fabd613afb1fecbc9
+        sha256: sha256:b99894e8b94bda460a85c41e2c4061bb741286f53efa64aec26851d97f13ed13
+    integration_packs:
+      - path: integration-pack.json
+        hash: sha256:017783fe880863e9dedc5138df4e1212d020ce7cfac5a13b58911fc4705f0e7a
+        sha256: sha256:bdeb470261c53406a3cbdd165dbd1a7b7e7f6bdb5e54464a46ce668dad1d7072
+    private_bindings:
+      - path: private-binding.example.json
+        sha256: sha256:d5c0a187fddd5caaffe19e18c7da62e1bdc2ec68f7b329fad7e1f7b59b653c45
+    evidence:
+      - class: conformance
+        path: evidence/conformance.json
+        sha256: sha256:a6731a8e3e873d6d8637731b5ff800b10b4bbe13ed773d01e21c3bd43beba7d0
+      - class: negative_security
+        path: evidence/negative-security.json
+        sha256: sha256:c80935c99ea506b1ccbb15ed86bbf90e491992e201ecb5c3a570104cf3abde2b
+      - class: minimization
+        path: evidence/minimization.json
+        sha256: sha256:99e85f99bbb9f61b7e477c6446c2f604eec723f46cc7921d5f21fa7ef13da339
+  audit_pseudonym_materials:
+    - key_id: epoch-1
+      source:
+        provider: environment
+        name: REGISTRY_RELAY_AUDIT_PSEUDONYM_EPOCH_1
+  source_credentials:
+    - type: basic
+      ref: dhis2-basic-reader
+      generation: 1
+      username_env: DHIS2_USERNAME
+      password_env: DHIS2_PASSWORD
+
+datasets: []
+
+deployment:
+  profile: local

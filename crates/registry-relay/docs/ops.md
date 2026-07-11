@@ -125,8 +125,10 @@ checklist carry a one-line note.
 - [ ] Runtime backend URLs, source paths, scope names, and table ids are absent
   from portable metadata manifests.
 - [ ] Scoped runtime metadata is not placed in shared public caches.
-- [ ] Registry Notary evidence verification and credential issuance are kept
-  outside Relay. Relay should not hold issuance signing keys.
+- [ ] Registry Notary claim evaluation and credential issuance stay outside
+  Relay. Relay holds no issuance signing key. Any Relay-native consultation is
+  activated only from the complete reviewed artifact closure and a dedicated
+  durable state plane.
 
 ### Container runtime policy
 
@@ -251,6 +253,9 @@ Important configuration blocks:
 - `server.cors.allowed_origins`: default deny when empty.
 - `server.trust_proxy`: only enable when the gateway is behind trusted proxies and those proxy CIDRs are configured.
 - `auth.api_keys`: key ids, hash env var names, and scopes.
+- `consultation`: optional restart-only Notary workload, PostgreSQL state
+  plane, hash-pinned artifact closure, pseudonym material references, and
+  source credential references.
 - `config_trust`: optional signed bundle trust anchor, bundle path, anti-rollback state, and local break-glass override path.
 - `datasets[].source.path`: local file path inside the container or host.
 - `datasets[].refresh`: `mtime`, `interval`, or `manual`.
@@ -264,13 +269,16 @@ startup `config.yaml`.
 
 ## Operating with Registry Notary
 
-Registry Relay is the protected registry consultation API. Registry Notary is
-the claim evaluation, credential issuance, and attestation service. Relay can
-publish metadata evidence offerings that point callers to Notary, but Relay
-does not execute Notary claims. Notary calls Relay as an HTTP source when a
-claim profile needs registry data.
+Registry Relay is the protected registry consultation service. Registry Notary
+owns claim evaluation, credential issuance, and attestation. With a maintained
+native consultation profile, Notary sends an authenticated purpose and one
+bounded input to Relay. Relay executes only the profile's hash-pinned minimized
+source plan and returns its closed result envelope after durable completion.
+Relay can also publish metadata evidence offerings that point clients to
+Notary. Native consultation does not move claim evaluation or issuance signing
+keys into Relay.
 
-Configure credentials on both sides:
+For the legacy entity-read source shape, configure credentials on both sides:
 
 - Relay must register a token hash for the Notary source caller, with only the
   dataset scopes needed by Notary claim profiles.
@@ -282,6 +290,68 @@ Configure credentials on both sides:
   `REGISTRY_RELAY_LOG_FORMAT`, and `REGISTRY_RELAY_ENV_FILE`; use secret
   indirection fields ending in `_env` for token hashes, audit secrets, signing
   keys, database URLs, and source tokens.
+
+For native consultation, use OIDC rather than a Relay API key. Bind the
+`consultation.notary_workload` audience and exact `azp` or `client_id` to the
+Notary service account, grant only the scope pinned by each public contract,
+and keep the PostgreSQL URL, pseudonym material, and source credentials behind
+the environment references named by the configuration. Configuration changes,
+artifact changes, and secret generation changes require a restart.
+
+### Bootstrap native consultation state
+
+Bootstrap is an offline, idempotent deployment step. Relay does not create a
+database or database roles. A DBA must first provision one writable PostgreSQL
+16 through 18 primary, one migration login, and four distinct bound roles:
+
+- an existing superuser login used only for the migration session;
+- an isolated `NOLOGIN`, non-superuser owner role with `CREATE` on the target
+  database;
+- an isolated, non-superuser runtime login used by the normal Relay process;
+- an isolated, non-superuser audit-pseudonym maintenance login;
+- an isolated, non-superuser audit-pseudonym investigation-reader login.
+
+The owner, runtime, maintenance, and reader roles must have no role memberships
+and no create-role, create-database, replication, row-security-bypass, or
+superuser privilege. The migration login is deliberately not used by the
+serving process. The three login roles need `CONNECT` on the target database;
+the owner needs `CREATE` there.
+
+Store each connection URL in the deployment secret store. The runtime URL's
+environment reference is already named by
+`consultation.state_plane.database_url_env`. Supply only the other environment
+reference names, the non-secret owner role, and the explicit key lifecycle on
+the bootstrap command line:
+
+```sh
+registry-relay consultation bootstrap-state \
+  --config /etc/registry-relay/config.yaml \
+  --env-file /run/secrets/registry-relay-bootstrap.env \
+  --migration-database-url-env REGISTRY_RELAY_STATE_MIGRATION_URL \
+  --owner-role relay_state_owner \
+  --keyring-maintenance-database-url-env REGISTRY_RELAY_STATE_KEYRING_MAINTENANCE_URL \
+  --keyring-reader-database-url-env REGISTRY_RELAY_STATE_KEYRING_READER_URL \
+  --active-key-id epoch-1 \
+  --active-write-deadline-unix-ms "$ACTIVE_WRITE_DEADLINE_UNIX_MS" \
+  --audit-event-retention-ms "$AUDIT_EVENT_RETENTION_MS"
+```
+
+Use a deployment-reviewed future deadline and a retention interval that matches
+the audit policy. PostgreSQL supplies the authoritative activation time. Record
+the exact bootstrap inputs in deployment configuration management: rerunning
+the same command attests the installed schema and keyring, while a different
+schema identity, role binding, lock identity, key id, deadline, or retention
+value is refused as drift. Successful output contains only status values:
+
+```json
+{"schema":"registry.relay.consultation-bootstrap-state.v1","state_plane":"installed_or_attested","keyring":"initialized"}
+```
+
+Run `registry-relay doctor` first, bootstrap before starting the first Relay
+replica, then start all replicas with only the runtime database URL. Keep the
+migration, maintenance, and reader credentials outside the serving workload.
+The maintained DHIS2 profile has an end-to-end deployment checklist in its
+[`README`](../profiles/dhis2-2.41.9-enrollment-status/README.md).
 
 For side-by-side local compose stacks, keep the public host ports distinct
 while letting each container use its internal default listener. A common
@@ -351,7 +421,7 @@ For container deployments, `stdout` is still the simplest default because the pl
 
 Audit records must not contain raw secrets or raw API keys. Mark identifier fields as `sensitive: true` in table or entity field config when query values should be deterministically hashed in audit rather than omitted entirely. As of v0.8, the flag is audit-only; it does not remove fields from authorized API responses.
 
-**Data-Purpose audit semantics** (frozen): when the `Data-Purpose` header is present on a request, its value is always recorded verbatim in the audit trail (`purpose` field). Header presence can be required per entity via `require_purpose_header: true`; a missing header returns `400 auth.purpose_required`. Without an entity `governed_policy`, purpose values are not enforced or compared at the consultation layer; Registry Notary is the purpose-certification layer. With an entity `governed_policy`, governed evidence-gateway routes evaluate the configured PDP purpose allowlist and return stable `pdp.*` denials. Value-level allowlists remain additive opt-in configuration.
+**Data-Purpose audit semantics** (frozen): when the `Data-Purpose` header is present on an ordinary entity or feature request, its value is always recorded verbatim in the audit trail (`purpose` field). Header presence can be required per entity via `require_purpose_header: true`; a missing header returns `400 auth.purpose_required`. Without an entity `governed_policy`, purpose values are not enforced or compared on those ordinary reads. With an entity `governed_policy`, governed evidence-gateway routes evaluate the configured PDP purpose allowlist and return stable `pdp.*` denials. Value-level allowlists remain additive opt-in configuration. Native `/v1/consultations/.../execute` requests instead validate the purpose against the hash-pinned public contract before dispatch and record pseudonymous durable consultation evidence.
 
 ## Dataset refresh and reload
 

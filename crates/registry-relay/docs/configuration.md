@@ -18,6 +18,7 @@ catalog: {}
 vocabularies: {}
 auth: {}
 audit: {}
+consultation: {} # optional restart-only purpose-aware consultation runtime
 deployment:
   profile: local # required; use local only for development
 config_trust: {} # optional signed bundle boot trust
@@ -27,7 +28,7 @@ standards: {}  # optional, feature-gated adapters
 
 Unknown fields are rejected for most blocks. Config validation runs after YAML parsing and checks ids, scopes, table/entity references, filter references, aggregate references, env var presence, and vocabulary prefixes.
 
-A minimal deployment needs `server` (a listener), `catalog` (public metadata base), `auth` (one auth mode), `audit` (a sink and hash secret), and at least one entry in `datasets`.
+A minimal entity-serving deployment needs `server` (a listener), `catalog` (public metadata base), `auth` (one auth mode), `audit` (a sink and hash secret), and at least one entry in `datasets`. A consultation-only deployment can use `datasets: []` when the complete `consultation` block activates at least one profile.
 Every other root block is optional.
 This example shows the required shape.
 For a runnable starting point, use `config/example.yaml`.
@@ -103,6 +104,48 @@ The raw API key stays outside the config and is given only to the authorized cli
 The `REGISTRY_RELAY_AUDIT_HASH_SECRET` environment variable must contain at least 32 bytes of random secret material; startup fails closed when it is absent or weak.
 
 See [config/example.yaml](../config/example.yaml) for a larger working starting point; the sections that follow document each block in full.
+
+## Purpose-aware consultations
+
+`consultation` activates Relay's restart-only native API for the exact Registry
+Notary workload and the exact profiles in one hash-pinned artifact closure. It
+is all-or-nothing: Relay refuses startup when OIDC, workload identity, artifact
+closure, state-plane identity, pseudonym material references, source credential
+references, or compiled plan support are incomplete or inconsistent.
+
+The maintained DHIS2 journey includes a complete local example at
+[`profiles/dhis2-2.41.9-enrollment-status/relay-config.example.yaml`](../profiles/dhis2-2.41.9-enrollment-status/relay-config.example.yaml).
+Use that file as the canonical shape instead of copying a partial block from
+this guide. It keeps the exact typed artifact hashes and raw file digests next
+to the maintained profile that owns them.
+
+`notary_workload` fixes one OIDC client identity. The issuer comes from
+`auth.oidc`; the audience and selected `azp` or `client_id` must agree with the
+OIDC client allowlist. Each compiled public contract adds its own exact scope,
+purpose, tenant, registry, and source-plan binding.
+
+`state_plane.database_url_env` names the environment variable containing the
+PostgreSQL runtime connection URL. The optional `root_certificate_path` pins a
+private PostgreSQL trust root. The epoch id and advisory-lock keys are stable,
+deployment-owned identifiers and must not collide with another state-plane
+user. Do not place a database URL in YAML.
+
+`artifacts` is a complete catalog. Every public contract listed there is an
+enabled consultation. Local development pins every file with both its typed
+artifact hash where applicable and its raw SHA-256 digest. Non-local profiles
+must receive the files through the verified signed Config Bundle path. Relay
+does not discover, download, or hot-reload consultation profiles.
+
+`audit_pseudonym_materials` and `source_credentials` contain environment
+references only. An audit key id is immutable: replace material under a new id
+instead of changing bytes behind an existing id. A source credential generation
+is also explicit and positive. V1 supports environment-backed HTTP Basic source
+credentials for the concrete maintained DHIS2 journey. Secret values must not
+appear in YAML, diagnostics, logs, or evidence.
+
+Run `registry-relay doctor --config <path> --profile <profile> --format json`
+before bootstrap or startup. Consultation activation is restart-only, so deploy
+the reviewed config and artifact closure as one unit.
 
 ## Instance
 
@@ -940,7 +983,12 @@ GET /metadata/evidence-offerings
 GET /metadata/evidence-offerings/{offering_id}
 ```
 
-Relay does not verify claims or evidence. `registry-notary` is the only claim/evidence verifier. The portable metadata manifest declares public offerings with `access.kind: registry-notary`, `endpoint_url`, `discovery_url`, and `ruleset` so clients can discover the Notary service that owns verification.
+Relay's evidence-offering routes do not verify claims or evidence.
+`registry-notary` is the verifier for those offerings. The portable metadata
+manifest declares public offerings with `access.kind: registry-notary`,
+`endpoint_url`, `discovery_url`, and `ruleset` so clients can discover the
+Notary service that owns verification. This handoff is independent of Relay's
+native, profile-bound source consultation API.
 
 ```yaml
 access:

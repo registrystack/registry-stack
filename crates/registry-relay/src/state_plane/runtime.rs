@@ -400,7 +400,7 @@ impl Drop for ConnectionDrivers {
     }
 }
 
-struct OpenedConnection {
+pub(crate) struct OpenedConnection {
     client: Option<Client>,
     driver: Option<ConnectionDriver>,
 }
@@ -410,6 +410,26 @@ impl OpenedConnection {
         let client = self.client.take().expect("opened connection has a client");
         let driver = self.driver.take().expect("opened connection has a driver");
         (client, driver)
+    }
+
+    pub(crate) fn client(&self) -> &Client {
+        self.client
+            .as_ref()
+            .expect("opened connection retains its client")
+    }
+
+    pub(crate) fn client_mut(&mut self) -> &mut Client {
+        self.client
+            .as_mut()
+            .expect("opened connection retains its client")
+    }
+
+    /// Transfer the client to a typed capability while retaining ownership of
+    /// the connection driver in this guard.
+    pub(crate) fn take_client(&mut self) -> Client {
+        self.client
+            .take()
+            .expect("opened connection transfers its client once")
     }
 }
 
@@ -485,6 +505,26 @@ async fn open_connection(
         client: Some(client),
         driver: Some(tokio::spawn(connection)),
     })
+}
+
+/// Open one bounded, TLS-required state-plane session for the offline
+/// bootstrap command.
+///
+/// The URL is resolved only from the supplied environment reference and is
+/// zeroized after the PostgreSQL configuration has been parsed. Reusing the
+/// runtime connector here keeps bootstrap subject to the same trust-root,
+/// primary-selection, timeout, and TLS requirements as normal serving.
+pub(crate) async fn open_operator_connection(
+    config: &ConsultationStatePlaneConfig,
+    database_url_env: &str,
+) -> Result<OpenedConnection, ConsultationStatePlaneRuntimeError> {
+    let database_url = Zeroizing::new(
+        env::var(database_url_env)
+            .map_err(|_| ConsultationStatePlaneRuntimeError::DatabaseUrlUnavailable)?,
+    );
+    let postgres_config = parse_database_config(database_url.as_str())?;
+    let tls_connector = build_tls_connector(config)?;
+    open_connection(&postgres_config, &tls_connector).await
 }
 
 const fn map_audit_initialization_error(

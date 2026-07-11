@@ -437,6 +437,121 @@ impl PostgresAuditPseudonymKeyringMaintenance {
         result
     }
 
+    /// Initialize generation one from PostgreSQL's authoritative current time,
+    /// or attest that an earlier bootstrap stored the same operator-selected
+    /// lifecycle.
+    ///
+    /// The snapshot and initialization share one transaction and the keyring
+    /// advisory lock. This keeps concurrent bootstrap attempts deterministic
+    /// without making the PostgreSQL activation time a CLI input.
+    pub(crate) async fn initialize_or_attest_from_postgres_time(
+        &self,
+        active_key_id: AuditPseudonymKeyId,
+        active_write_deadline_unix_ms: i64,
+        audit_event_retention_ms: i64,
+    ) -> Result<KeyringInitializationOutcome, PostgresKeyringError> {
+        let mut client = self.inner.lock_client().await?;
+        let mut uncertainty = KeyringUncertaintyGuard::new(&self.inner.available);
+        let transaction = tokio::time::timeout(DATABASE_OPERATION_TIMEOUT, client.transaction())
+            .await
+            .map_err(|_| PostgresKeyringError::Unavailable)?
+            .map_err(map_postgres_error)?;
+        let empty_lookup_ids = Vec::<String>::new();
+        let snapshot_row = timeout_row(transaction.query_one(
+            KEYRING_SNAPSHOT_SQL,
+            &[
+                &"maintenance",
+                &empty_lookup_ids,
+                &self.inner.chain_key_epoch_id.as_str(),
+                &self.inner.keyring_lock_key.as_i64(),
+            ],
+        ))
+        .await?;
+
+        let active_since_unix_ms = match parse_maintenance_snapshot_outcome(&snapshot_row) {
+            Ok(snapshot) => {
+                let identical = snapshot.metadata.generation() == 1
+                    && snapshot.metadata.active_key_id() == &active_key_id
+                    && snapshot.metadata.active_write_deadline_unix_ms()
+                        == active_write_deadline_unix_ms
+                    && snapshot.metadata.audit_event_retention_ms() == audit_event_retention_ms
+                    && snapshot.metadata.retained_keys().is_empty();
+                rollback_confirmed(transaction, &mut uncertainty).await?;
+                return if identical {
+                    Ok(KeyringInitializationOutcome::Identical)
+                } else {
+                    Err(PostgresKeyringError::AlreadyInitialized)
+                };
+            }
+            Err(PostgresKeyringError::Uninitialized) => {
+                parse_authoritative_time(&snapshot_row)?.unix_ms()
+            }
+            Err(error) => {
+                rollback_confirmed(transaction, &mut uncertainty).await?;
+                return Err(error);
+            }
+        };
+        let metadata = match AuditPseudonymKeyringMetadata::new(
+            1,
+            active_key_id,
+            active_since_unix_ms,
+            active_write_deadline_unix_ms,
+            audit_event_retention_ms,
+            Vec::new(),
+        ) {
+            Ok(metadata) => metadata,
+            Err(_) => {
+                rollback_confirmed(transaction, &mut uncertainty).await?;
+                return Err(PostgresKeyringError::InvalidMetadata);
+            }
+        };
+        let encoded = match EncodedMetadata::from_metadata(metadata) {
+            Ok(encoded) => encoded,
+            Err(error) => {
+                rollback_confirmed(transaction, &mut uncertainty).await?;
+                return Err(error);
+            }
+        };
+        let row = timeout_row(transaction.query_one(
+            KEYRING_INITIALIZE_SQL,
+            &[
+                &encoded.generation,
+                &encoded.digest.as_slice(),
+                &encoded.canonical,
+                &encoded.active_key_id,
+                &encoded.active_since_unix_ms,
+                &encoded.active_write_deadline_unix_ms,
+                &encoded.audit_event_retention_ms,
+                &encoded.retained_key_ids,
+                &encoded.retained_retired_at_unix_ms,
+                &encoded.retained_destroy_after_unix_ms,
+                &self.inner.chain_key_epoch_id.as_str(),
+                &self.inner.keyring_lock_key.as_i64(),
+            ],
+        ))
+        .await?;
+        let outcome = required_str(&row, "outcome")?;
+        if outcome != "initialized" {
+            let error = match outcome {
+                "identical" => PostgresKeyringError::ProtocolDrift,
+                "already_initialized" => PostgresKeyringError::AlreadyInitialized,
+                "not_active" => PostgresKeyringError::NotActive,
+                "deadline_reached" => PostgresKeyringError::WriteDeadlineReached,
+                "invalid" => PostgresKeyringError::InvalidMetadata,
+                _ => return Err(PostgresKeyringError::ProtocolDrift),
+            };
+            rollback_confirmed(transaction, &mut uncertainty).await?;
+            return Err(error);
+        }
+        verify_transition_result(&row, encoded.generation, &encoded.digest)?;
+        tokio::time::timeout(DATABASE_OPERATION_TIMEOUT, transaction.commit())
+            .await
+            .map_err(|_| PostgresKeyringError::Unavailable)?
+            .map_err(map_postgres_error)?;
+        uncertainty.confirm();
+        Ok(KeyringInitializationOutcome::Initialized)
+    }
+
     pub(crate) async fn rotate<F>(
         &self,
         expected: AuditPseudonymMetadataBinding,

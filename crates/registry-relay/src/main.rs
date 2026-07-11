@@ -57,6 +57,9 @@ use registry_relay::audit::{
 use registry_relay::auth::middleware::{AuthProviderRef, RuntimeAuthProvider};
 use registry_relay::auth::runtime::build_auth;
 use registry_relay::config::{self, AuditSinkConfig, Config, SourceConfig};
+use registry_relay::consultation::operator::{
+    bootstrap_state, BootstrapStateRequest, BootstrapStateResult,
+};
 use registry_relay::consultation::ConsultationService;
 use registry_relay::entity::EntityRegistry;
 use registry_relay::error::{ConfigError, Error};
@@ -110,6 +113,18 @@ const AUDIT_COMMAND: &str = "audit";
 const QUARANTINE_SUBCOMMAND: &str = "quarantine";
 const REASON_FLAG: &str = "--reason";
 const OPERATOR_FLAG: &str = "--operator";
+
+/// Offline consultation operator tooling and its bounded bootstrap journey.
+const CONSULTATION_COMMAND: &str = "consultation";
+const BOOTSTRAP_STATE_SUBCOMMAND: &str = "bootstrap-state";
+const MIGRATION_DATABASE_URL_ENV_FLAG: &str = "--migration-database-url-env";
+const OWNER_ROLE_FLAG: &str = "--owner-role";
+const KEYRING_MAINTENANCE_DATABASE_URL_ENV_FLAG: &str = "--keyring-maintenance-database-url-env";
+const KEYRING_READER_DATABASE_URL_ENV_FLAG: &str = "--keyring-reader-database-url-env";
+const ACTIVE_KEY_ID_FLAG: &str = "--active-key-id";
+const ACTIVE_WRITE_DEADLINE_UNIX_MS_FLAG: &str = "--active-write-deadline-unix-ms";
+const AUDIT_EVENT_RETENTION_MS_FLAG: &str = "--audit-event-retention-ms";
+const MAX_EXACT_JSON_INTEGER: i64 = 9_007_199_254_740_991;
 
 /// Verifies a signed governed-config target without applying it.
 const VERIFY_BUNDLE_COMMAND: &str = "verify-bundle";
@@ -171,6 +186,7 @@ enum CliCommand {
         format: OutputFormat,
     },
     ConfigVerifyBundle(ConfigVerifyBundleCommand),
+    ConsultationBootstrapState(ConsultationBootstrapStateCommand),
     AuditQuarantine {
         config_path: PathBuf,
         env_file: Option<PathBuf>,
@@ -194,6 +210,32 @@ struct ConfigVerifyBundleCommand {
     bundle_dir: PathBuf,
     anchor_path: PathBuf,
     state_path: PathBuf,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct ConsultationBootstrapStateCommand {
+    config_path: PathBuf,
+    env_file: Option<PathBuf>,
+    migration_database_url_env: String,
+    owner_role: String,
+    keyring_maintenance_database_url_env: String,
+    keyring_reader_database_url_env: String,
+    active_key_id: String,
+    active_write_deadline_unix_ms: i64,
+    audit_event_retention_ms: i64,
+}
+
+impl std_fmt::Debug for ConsultationBootstrapStateCommand {
+    fn fmt(&self, formatter: &mut std_fmt::Formatter<'_>) -> std_fmt::Result {
+        formatter
+            .debug_struct("ConsultationBootstrapStateCommand")
+            .field("config_path", &"<configured>")
+            .field("env_file", &self.env_file.as_ref().map(|_| "<configured>"))
+            .field("database_references", &"<configured>")
+            .field("database_roles", &"<configured>")
+            .field("keyring_lifecycle", &"<configured>")
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -282,6 +324,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         } => run_explain_config(config_path, env_file, format).await,
         CliCommand::Schema { format } => run_schema(format).await,
         CliCommand::ConfigVerifyBundle(command) => run_config_verify_bundle(command).await,
+        CliCommand::ConsultationBootstrapState(command) => {
+            run_consultation_bootstrap_state(command).await
+        }
         CliCommand::AuditQuarantine {
             config_path,
             env_file,
@@ -1037,6 +1082,26 @@ fn now_rfc3339() -> String {
         .expect("system clock timestamp formats as RFC3339")
 }
 
+async fn run_consultation_bootstrap_state(
+    command: ConsultationBootstrapStateCommand,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    load_env_file_arg(command.env_file.as_deref())?;
+    let config = config::load(&command.config_path)?;
+    let result: BootstrapStateResult = bootstrap_state(BootstrapStateRequest {
+        config: &config,
+        migration_database_url_env: &command.migration_database_url_env,
+        owner_role: &command.owner_role,
+        keyring_maintenance_database_url_env: &command.keyring_maintenance_database_url_env,
+        keyring_reader_database_url_env: &command.keyring_reader_database_url_env,
+        active_key_id: &command.active_key_id,
+        active_write_deadline_unix_ms: command.active_write_deadline_unix_ms,
+        audit_event_retention_ms: command.audit_event_retention_ms,
+    })
+    .await?;
+    println!("{}", serde_json::to_string(&result)?);
+    Ok(())
+}
+
 async fn run_config_verify_bundle(
     command: ConfigVerifyBundleCommand,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -1482,11 +1547,158 @@ fn parse_cli_command_from(args: Vec<String>) -> Result<CliCommand, CliError> {
         parse_schema_command(&rest[1..])
     } else if rest.first().is_some_and(|arg| arg == CONFIG_COMMAND) {
         parse_config_command(&rest[1..])
+    } else if rest.first().is_some_and(|arg| arg == CONSULTATION_COMMAND) {
+        parse_consultation_command(&rest[1..])
     } else if rest.first().is_some_and(|arg| arg == AUDIT_COMMAND) {
         parse_audit_command(&rest[1..])
     } else {
         parse_serve_command(&rest)
     }
+}
+
+fn parse_consultation_command(args: &[String]) -> Result<CliCommand, CliError> {
+    match args.first().map(String::as_str) {
+        Some(BOOTSTRAP_STATE_SUBCOMMAND) => parse_consultation_bootstrap_state_command(&args[1..]),
+        Some(_) => Err(CliError(
+            "unknown consultation subcommand (expected bootstrap-state)".to_string(),
+        )),
+        None => Err(CliError(
+            "consultation requires a subcommand (expected bootstrap-state)".to_string(),
+        )),
+    }
+}
+
+fn parse_consultation_bootstrap_state_command(args: &[String]) -> Result<CliCommand, CliError> {
+    let mut config_path: Option<PathBuf> = None;
+    let mut env_file: Option<PathBuf> = None;
+    let mut migration_database_url_env: Option<String> = None;
+    let mut owner_role: Option<String> = None;
+    let mut keyring_maintenance_database_url_env: Option<String> = None;
+    let mut keyring_reader_database_url_env: Option<String> = None;
+    let mut active_key_id: Option<String> = None;
+    let mut active_write_deadline_unix_ms: Option<i64> = None;
+    let mut audit_event_retention_ms: Option<i64> = None;
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        if let Some(value) = flag_value(arg, CONFIG_FLAG) {
+            config_path = Some(required_path_value(CONFIG_FLAG, value)?);
+        } else if arg == CONFIG_FLAG {
+            index += 1;
+            config_path = Some(required_path_arg(args, index, CONFIG_FLAG)?);
+        } else if let Some(value) = flag_value(arg, ENV_FILE_FLAG) {
+            env_file = Some(required_path_value(ENV_FILE_FLAG, value)?);
+        } else if arg == ENV_FILE_FLAG {
+            index += 1;
+            env_file = Some(required_path_arg(args, index, ENV_FILE_FLAG)?);
+        } else if let Some(value) = flag_value(arg, MIGRATION_DATABASE_URL_ENV_FLAG) {
+            migration_database_url_env = Some(parse_environment_reference(
+                MIGRATION_DATABASE_URL_ENV_FLAG,
+                value,
+            )?);
+        } else if arg == MIGRATION_DATABASE_URL_ENV_FLAG {
+            index += 1;
+            migration_database_url_env = Some(parse_environment_reference_arg(
+                args,
+                index,
+                MIGRATION_DATABASE_URL_ENV_FLAG,
+            )?);
+        } else if let Some(value) = flag_value(arg, OWNER_ROLE_FLAG) {
+            owner_role = Some(parse_database_role(OWNER_ROLE_FLAG, value)?);
+        } else if arg == OWNER_ROLE_FLAG {
+            index += 1;
+            owner_role = Some(parse_database_role_arg(args, index, OWNER_ROLE_FLAG)?);
+        } else if let Some(value) = flag_value(arg, KEYRING_MAINTENANCE_DATABASE_URL_ENV_FLAG) {
+            keyring_maintenance_database_url_env = Some(parse_environment_reference(
+                KEYRING_MAINTENANCE_DATABASE_URL_ENV_FLAG,
+                value,
+            )?);
+        } else if arg == KEYRING_MAINTENANCE_DATABASE_URL_ENV_FLAG {
+            index += 1;
+            keyring_maintenance_database_url_env = Some(parse_environment_reference_arg(
+                args,
+                index,
+                KEYRING_MAINTENANCE_DATABASE_URL_ENV_FLAG,
+            )?);
+        } else if let Some(value) = flag_value(arg, KEYRING_READER_DATABASE_URL_ENV_FLAG) {
+            keyring_reader_database_url_env = Some(parse_environment_reference(
+                KEYRING_READER_DATABASE_URL_ENV_FLAG,
+                value,
+            )?);
+        } else if arg == KEYRING_READER_DATABASE_URL_ENV_FLAG {
+            index += 1;
+            keyring_reader_database_url_env = Some(parse_environment_reference_arg(
+                args,
+                index,
+                KEYRING_READER_DATABASE_URL_ENV_FLAG,
+            )?);
+        } else if let Some(value) = flag_value(arg, ACTIVE_KEY_ID_FLAG) {
+            active_key_id = Some(parse_audit_pseudonym_key_id(value)?);
+        } else if arg == ACTIVE_KEY_ID_FLAG {
+            index += 1;
+            active_key_id = Some(parse_audit_pseudonym_key_id_arg(args, index)?);
+        } else if let Some(value) = flag_value(arg, ACTIVE_WRITE_DEADLINE_UNIX_MS_FLAG) {
+            active_write_deadline_unix_ms = Some(parse_bounded_positive_i64(
+                ACTIVE_WRITE_DEADLINE_UNIX_MS_FLAG,
+                value,
+            )?);
+        } else if arg == ACTIVE_WRITE_DEADLINE_UNIX_MS_FLAG {
+            index += 1;
+            active_write_deadline_unix_ms = Some(parse_bounded_positive_i64_arg(
+                args,
+                index,
+                ACTIVE_WRITE_DEADLINE_UNIX_MS_FLAG,
+            )?);
+        } else if let Some(value) = flag_value(arg, AUDIT_EVENT_RETENTION_MS_FLAG) {
+            audit_event_retention_ms = Some(parse_bounded_positive_i64(
+                AUDIT_EVENT_RETENTION_MS_FLAG,
+                value,
+            )?);
+        } else if arg == AUDIT_EVENT_RETENTION_MS_FLAG {
+            index += 1;
+            audit_event_retention_ms = Some(parse_bounded_positive_i64_arg(
+                args,
+                index,
+                AUDIT_EVENT_RETENTION_MS_FLAG,
+            )?);
+        } else {
+            return Err(CliError(
+                "unknown consultation bootstrap-state argument".to_string(),
+            ));
+        }
+        index += 1;
+    }
+    if env_file.is_none() {
+        env_file = default_env_file_from_env();
+    }
+    Ok(CliCommand::ConsultationBootstrapState(
+        ConsultationBootstrapStateCommand {
+            config_path: config_path.unwrap_or_else(default_config_path_from_env),
+            env_file,
+            migration_database_url_env: require_flag(
+                migration_database_url_env,
+                MIGRATION_DATABASE_URL_ENV_FLAG,
+            )?,
+            owner_role: require_flag(owner_role, OWNER_ROLE_FLAG)?,
+            keyring_maintenance_database_url_env: require_flag(
+                keyring_maintenance_database_url_env,
+                KEYRING_MAINTENANCE_DATABASE_URL_ENV_FLAG,
+            )?,
+            keyring_reader_database_url_env: require_flag(
+                keyring_reader_database_url_env,
+                KEYRING_READER_DATABASE_URL_ENV_FLAG,
+            )?,
+            active_key_id: require_flag(active_key_id, ACTIVE_KEY_ID_FLAG)?,
+            active_write_deadline_unix_ms: require_flag(
+                active_write_deadline_unix_ms,
+                ACTIVE_WRITE_DEADLINE_UNIX_MS_FLAG,
+            )?,
+            audit_event_retention_ms: require_flag(
+                audit_event_retention_ms,
+                AUDIT_EVENT_RETENTION_MS_FLAG,
+            )?,
+        },
+    ))
 }
 
 fn parse_audit_command(args: &[String]) -> Result<CliCommand, CliError> {
@@ -1718,6 +1930,7 @@ fn lightweight_schema() -> Value {
             "vocabularies": { "type": "object" },
             "auth": { "type": "object" },
             "audit": { "type": "object" },
+            "consultation": { "type": ["object", "null"] },
             "datasets": { "type": "array" },
             "standards": { "type": "object" },
             "deployment": { "type": "object" }
@@ -1889,6 +2102,94 @@ fn required_string_value(flag: &str, value: &str) -> Result<String, CliError> {
         return Err(CliError(format!("{flag} requires a non-empty value")));
     }
     Ok(value.to_string())
+}
+
+fn parse_environment_reference_arg(
+    args: &[String],
+    index: usize,
+    flag: &str,
+) -> Result<String, CliError> {
+    let Some(value) = args.get(index) else {
+        return Err(CliError(format!(
+            "{flag} requires an environment-variable name"
+        )));
+    };
+    parse_environment_reference(flag, value)
+}
+
+fn parse_environment_reference(flag: &str, value: &str) -> Result<String, CliError> {
+    let mut bytes = value.bytes();
+    let valid = bytes
+        .next()
+        .is_some_and(|first| matches!(first, b'A'..=b'Z' | b'a'..=b'z' | b'_'))
+        && value.len() <= 128
+        && bytes.all(|byte| matches!(byte, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_'));
+    if !valid {
+        return Err(CliError(format!(
+            "{flag} requires an environment-variable name"
+        )));
+    }
+    Ok(value.to_string())
+}
+
+fn parse_database_role_arg(args: &[String], index: usize, flag: &str) -> Result<String, CliError> {
+    let Some(value) = args.get(index) else {
+        return Err(CliError(format!("{flag} requires a database role name")));
+    };
+    parse_database_role(flag, value)
+}
+
+fn parse_database_role(flag: &str, value: &str) -> Result<String, CliError> {
+    let mut chars = value.chars();
+    let valid = chars
+        .next()
+        .is_some_and(|first| first == '_' || first.is_ascii_alphabetic())
+        && value.len() <= 63
+        && chars.all(|character| character == '_' || character.is_ascii_alphanumeric());
+    if !valid {
+        return Err(CliError(format!("{flag} requires a database role name")));
+    }
+    Ok(value.to_string())
+}
+
+fn parse_audit_pseudonym_key_id_arg(args: &[String], index: usize) -> Result<String, CliError> {
+    let Some(value) = args.get(index) else {
+        return Err(CliError(format!(
+            "{ACTIVE_KEY_ID_FLAG} requires a canonical key id"
+        )));
+    };
+    parse_audit_pseudonym_key_id(value)
+}
+
+fn parse_audit_pseudonym_key_id(value: &str) -> Result<String, CliError> {
+    registry_platform_audit::pseudonym_keyring::AuditPseudonymKeyId::parse(value.to_string())
+        .map(|key_id| key_id.as_str().to_string())
+        .map_err(|_| CliError(format!("{ACTIVE_KEY_ID_FLAG} requires a canonical key id")))
+}
+
+fn parse_bounded_positive_i64_arg(
+    args: &[String],
+    index: usize,
+    flag: &str,
+) -> Result<i64, CliError> {
+    let Some(value) = args.get(index) else {
+        return Err(CliError(format!(
+            "{flag} requires an integer between 1 and {MAX_EXACT_JSON_INTEGER}"
+        )));
+    };
+    parse_bounded_positive_i64(flag, value)
+}
+
+fn parse_bounded_positive_i64(flag: &str, value: &str) -> Result<i64, CliError> {
+    value
+        .parse::<i64>()
+        .ok()
+        .filter(|value| (1..=MAX_EXACT_JSON_INTEGER).contains(value))
+        .ok_or_else(|| {
+            CliError(format!(
+                "{flag} requires an integer between 1 and {MAX_EXACT_JSON_INTEGER}"
+            ))
+        })
 }
 
 fn required_api_key_id_arg(args: &[String], index: usize, flag: &str) -> Result<String, CliError> {
@@ -2262,12 +2563,13 @@ fn install_sigterm_listener() -> io::Result<tokio::signal::unix::Signal> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_audit_chain_profile, build_audit_sink, compile_relay_runtime, load_env_file_arg,
-        parse_cli_command_from, parse_env_file_value, redacted_resolved_config,
+        build_audit_chain_profile, build_audit_sink, compile_relay_runtime, lightweight_schema,
+        load_env_file_arg, parse_cli_command_from, parse_env_file_value, redacted_resolved_config,
         relay_config_value_classification, relay_live_apply_classes, render_generated_api_key,
         required_env_report, run_audit_quarantine, run_healthcheck, url_contains_userinfo,
-        CliCommand, ConfigValueClassification, GenerateApiKeyCommand, OperationalLogFormat,
-        OutputFormat, DEFAULT_HEALTHCHECK_TIMEOUT_MS, DEFAULT_HEALTHCHECK_URL,
+        CliCommand, ConfigValueClassification, ConsultationBootstrapStateCommand,
+        GenerateApiKeyCommand, OperationalLogFormat, OutputFormat, DEFAULT_HEALTHCHECK_TIMEOUT_MS,
+        DEFAULT_HEALTHCHECK_URL, MAX_EXACT_JSON_INTEGER,
     };
     use axum::routing::get;
     use axum::Router;
@@ -3047,6 +3349,131 @@ audit:
         .expect_err("schema rejects unsupported format");
 
         assert_eq!(err.to_string(), "--format must be json");
+    }
+
+    #[test]
+    fn lightweight_schema_declares_optional_consultation_root() {
+        let schema = lightweight_schema();
+        assert_eq!(
+            schema["properties"]["consultation"]["type"],
+            json!(["object", "null"])
+        );
+        assert!(!schema["required"]
+            .as_array()
+            .expect("required is an array")
+            .iter()
+            .any(|entry| entry == "consultation"));
+    }
+
+    #[test]
+    fn consultation_bootstrap_state_cli_parses_closed_inputs() {
+        let command = parse_cli_command_from(command_args(&[
+            "registry-relay",
+            "consultation",
+            "bootstrap-state",
+            "--config=/etc/registry-relay/config.yaml",
+            "--env-file",
+            "/etc/registry-relay/bootstrap.env",
+            "--migration-database-url-env",
+            "RELAY_STATE_MIGRATION_URL",
+            "--owner-role=relay_state_owner",
+            "--keyring-maintenance-database-url-env",
+            "RELAY_STATE_KEYRING_MAINTENANCE_URL",
+            "--keyring-reader-database-url-env=RELAY_STATE_KEYRING_READER_URL",
+            "--active-key-id",
+            "epoch-1",
+            "--active-write-deadline-unix-ms=1900000000000",
+            "--audit-event-retention-ms",
+            "31536000000",
+        ]))
+        .expect("bootstrap command parses");
+
+        assert_eq!(
+            command,
+            CliCommand::ConsultationBootstrapState(ConsultationBootstrapStateCommand {
+                config_path: PathBuf::from("/etc/registry-relay/config.yaml"),
+                env_file: Some(PathBuf::from("/etc/registry-relay/bootstrap.env")),
+                migration_database_url_env: "RELAY_STATE_MIGRATION_URL".to_string(),
+                owner_role: "relay_state_owner".to_string(),
+                keyring_maintenance_database_url_env: "RELAY_STATE_KEYRING_MAINTENANCE_URL"
+                    .to_string(),
+                keyring_reader_database_url_env: "RELAY_STATE_KEYRING_READER_URL".to_string(),
+                active_key_id: "epoch-1".to_string(),
+                active_write_deadline_unix_ms: 1_900_000_000_000,
+                audit_event_retention_ms: 31_536_000_000,
+            })
+        );
+    }
+
+    #[test]
+    fn consultation_bootstrap_state_cli_rejects_url_values_without_echoing_them() {
+        let error = parse_cli_command_from(command_args(&[
+            "registry-relay",
+            "consultation",
+            "bootstrap-state",
+            "--migration-database-url-env",
+            "postgresql://sentinel-user:sentinel-secret@example.test/state",
+        ]))
+        .expect_err("URL values are never CLI inputs");
+        let rendered = error.to_string();
+        assert_eq!(
+            rendered,
+            "--migration-database-url-env requires an environment-variable name"
+        );
+        assert!(!rendered.contains("sentinel"));
+        assert!(!rendered.contains("postgresql://"));
+
+        let unknown = parse_cli_command_from(command_args(&[
+            "registry-relay",
+            "consultation",
+            "bootstrap-state",
+            "postgresql://sentinel-user:sentinel-secret@example.test/state",
+        ]))
+        .expect_err("unknown values are rejected");
+        assert_eq!(
+            unknown.to_string(),
+            "unknown consultation bootstrap-state argument"
+        );
+    }
+
+    #[test]
+    fn consultation_bootstrap_state_cli_bounds_lifecycle_integers() {
+        for (flag, invalid) in [
+            ("--active-write-deadline-unix-ms", "0"),
+            ("--audit-event-retention-ms", "9007199254740992"),
+        ] {
+            let error = parse_cli_command_from(command_args(&[
+                "registry-relay",
+                "consultation",
+                "bootstrap-state",
+                flag,
+                invalid,
+            ]))
+            .expect_err("out-of-bound lifecycle is rejected");
+            assert_eq!(
+                error.to_string(),
+                format!("{flag} requires an integer between 1 and {MAX_EXACT_JSON_INTEGER}")
+            );
+        }
+    }
+
+    #[test]
+    fn consultation_bootstrap_state_command_debug_is_value_free() {
+        let command = ConsultationBootstrapStateCommand {
+            config_path: PathBuf::from("/sentinel/config.yaml"),
+            env_file: Some(PathBuf::from("/sentinel/secrets.env")),
+            migration_database_url_env: "SENTINEL_MIGRATION".to_string(),
+            owner_role: "sentinel_owner".to_string(),
+            keyring_maintenance_database_url_env: "SENTINEL_MAINTENANCE".to_string(),
+            keyring_reader_database_url_env: "SENTINEL_READER".to_string(),
+            active_key_id: "sentinel-key".to_string(),
+            active_write_deadline_unix_ms: 1_900_000_000_000,
+            audit_event_retention_ms: 31_536_000_000,
+        };
+        let rendered = format!("{command:?}");
+        assert!(!rendered.contains("sentinel"));
+        assert!(!rendered.contains("1900000000000"));
+        assert!(!rendered.contains("31536000000"));
     }
 
     #[test]

@@ -112,19 +112,18 @@ semantics see the [Registry Relay API reference](api.md#authentication).
 
 ## Purpose header
 
-Some entities require `Data-Purpose` for row or feature reads. Send a stable
-purpose URI or controlled string that the operator can audit:
+Some entities require `Data-Purpose` for ordinary row or feature reads. Send a
+stable purpose URI or controlled string that the operator can audit:
 
 ```http
 Data-Purpose: https://data.example.gov/purposes/service-intake-check
 ```
 
-The value is written verbatim into audit records. Purpose values are not
-enforced or validated at the consultation layer; Registry Notary is the
-purpose-certification layer. Do not put subject identifiers, free-text case
-notes, bearer tokens, or other secrets in this header. For the full list of
-entities that enforce this header and the resulting error code, see
-the [Registry Relay API reference](api.md#purpose-headers).
+The value is written verbatim into audit records. Unless the entity has a
+governed policy, an ordinary row or feature route requires only header presence.
+Do not put subject identifiers, free-text case notes, bearer tokens, or other
+secrets in this header. For the full entity-route semantics and resulting error
+code, see the [Registry Relay API reference](api.md#purpose-headers).
 
 The set of acceptable purpose values is defined by the operator and your
 data-sharing agreement, not by Relay: there is no API route that enumerates
@@ -133,6 +132,13 @@ set of stable URIs under a namespace your organization controls (one per
 workflow, as in the example above) and have the operator confirm them. Keep
 the values stable across releases so the operator's audit trail stays
 queryable.
+
+The native `/v1/consultations/.../execute` route has a separate, closed
+contract. It accepts only a configured Registry Notary OIDC workload and
+validates `Data-Purpose` against the selected hash-pinned consultation profile.
+Use the purpose and input name from the protected profile metadata instead of
+reusing assumptions from entity reads. See
+[Purpose-aware consultations](api.md#purpose-aware-consultations).
 
 ## Discovery
 
@@ -334,8 +340,9 @@ illustrative):
 ```
 
 The `access` object is what drives the handoff: `kind` is always
-`registry-notary` in V1 (Relay is never the verifier), `ruleset` names the
-Notary ruleset that governs verification for this offering, `endpoint_url` is
+`registry-notary` in V1 (Relay does not verify the claim or evidence represented
+by this offering), `ruleset` names the Notary ruleset that governs verification
+for this offering, `endpoint_url` is
 where claims or evidence are submitted, `discovery_url` is the Notary
 well-known document for resolving endpoint details (either URL may be null
 when the other is present), and `conforms_to` identifies the evidence contract

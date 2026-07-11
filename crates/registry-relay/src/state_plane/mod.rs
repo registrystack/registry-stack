@@ -59,6 +59,6 @@ pub(crate) use quota::{
     QuotaGrant, QuotaKey, QuotaReadiness, QuotaReservation,
 };
 pub(crate) use runtime::{
-    ConsultationStatePlaneReadiness, ConsultationStatePlaneRuntime,
-    ConsultationStatePlaneRuntimeError,
+    open_operator_connection, ConsultationStatePlaneReadiness, ConsultationStatePlaneRuntime,
+    ConsultationStatePlaneRuntimeError, OpenedConnection,
 };

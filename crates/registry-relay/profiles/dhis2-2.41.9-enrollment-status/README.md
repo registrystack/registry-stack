@@ -40,3 +40,42 @@ evidence. They do not claim DHIS2 maintainer endorsement, a country deployment,
 or a successful Relay end-to-end execution. A root-mounted deployment may omit
 `application_base_path`; omission and an explicit `/` compile to the same
 canonical root binding.
+
+## Operator journey
+
+Use [`relay-config.example.yaml`](relay-config.example.yaml) as the single
+configuration starting point for this profile. It is a complete local-profile
+document with exact artifact hashes, not a production identity or live source
+binding.
+
+1. Review `integration-pack.json` and `public-contract.json`. If the country
+   program, purpose, scope, input, projection, cardinality, or bounds differ,
+   mint and review a new version instead of turning those values into runtime
+   options.
+2. Copy `private-binding.example.json`, replace only the deployment-owned HTTPS
+   origin, optional application base path, tenant and registry identities, and
+   bounded limits, then update its raw SHA-256 digest in the Relay config. Keep
+   the credential reference and generation aligned with `source_credentials`.
+3. Replace the example OIDC issuer, JWKS URL, Relay public URL, and Notary client
+   identity. Put the runtime PostgreSQL URL, audit secrets, pseudonym material,
+   and DHIS2 Basic credential values in the secret store under the environment
+   references named by the config. Do not put values in YAML.
+4. Run `registry-relay doctor --config <path> --profile local --format json` in
+   the same process environment. Resolve every missing reference or artifact
+   closure finding before touching the state plane.
+5. Have the DBA provision the isolated PostgreSQL identities, then run the
+   idempotent `registry-relay consultation bootstrap-state` command documented
+   in the [operations runbook](../../docs/ops.md#bootstrap-native-consultation-state).
+   Bootstrap with one declared pseudonym key id and an explicit future write
+   deadline and audit-retention interval.
+6. Start Relay with only its runtime database identity. Readiness must be green
+   before Notary calls the protected profile metadata route and then the exact
+   `/execute` route using the contract's OIDC scope and
+   `Data-Purpose: program-enrollment-verification`.
+
+The public response releases only the closed cardinality outcome and, for one
+validated match, the DHIS2 enrollment `status`. Relay never releases the
+tracked-entity selector, source URL, Basic credentials, raw DHIS2 envelope, or
+backend diagnostic. Back up the PostgreSQL state plane and manage the
+pseudonym material under the same retention policy before treating the journey
+as production-ready.

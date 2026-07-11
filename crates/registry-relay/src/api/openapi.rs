@@ -35,6 +35,7 @@ const OPENAPI_UNAVAILABLE_CODE: &str = "openapi.generation_unavailable";
 
 const TAG_SERVICE: &str = "Service";
 const TAG_CATALOG: &str = "Catalog";
+const TAG_CONSULTATIONS: &str = "Consultations";
 const TAG_ADMIN: &str = "Admin";
 #[cfg(feature = "ogcapi-features")]
 const TAG_OGC: &str = "OGC API Features";
@@ -191,6 +192,14 @@ fn openapi_document(catalog: &CatalogDocument, config: &Config) -> Value {
     );
     mark_public(&mut paths, "/ready", "get");
     tag(&mut paths, "/ready", "get", TAG_SERVICE);
+
+    // Consultation routes are mounted only when the restart-only activation
+    // block is present. Keep the served document aligned with that mount while
+    // the static release artifact below retains the generic, profile-neutral
+    // contract for adopters.
+    if config.consultation.is_some() {
+        insert_consultation_paths(&mut paths);
+    }
 
     // ---- Portable metadata ----
     insert_json_path(
@@ -1057,13 +1066,34 @@ fn reduce_release_artifact_to_static_contract(document: &mut Value, config: &Con
 }
 
 fn ensure_static_release_tags(document: &mut Value) {
-    let Some(tags) = document.get_mut("tags").and_then(Value::as_array_mut) else {
+    {
+        let Some(tags) = document.get_mut("tags").and_then(Value::as_array_mut) else {
+            return;
+        };
+        if !tags.iter().any(|tag| tag["name"] == TAG_CONSULTATIONS) {
+            tags.push(consultation_tag_definition());
+        }
+        if !tags.iter().any(|tag| tag["name"] == TAG_ADMIN) {
+            tags.push(json!({
+                "name": TAG_ADMIN,
+                "description": "Operator-only routes served on the admin listener.",
+            }));
+        }
+    }
+
+    let Some(groups) = document
+        .get_mut("x-tagGroups")
+        .and_then(Value::as_array_mut)
+    else {
         return;
     };
-    if !tags.iter().any(|tag| tag["name"] == TAG_ADMIN) {
-        tags.push(json!({
-            "name": TAG_ADMIN,
-            "description": "Operator-only routes served on the admin listener.",
+    if !groups
+        .iter()
+        .any(|group| group["name"] == TAG_CONSULTATIONS)
+    {
+        groups.push(json!({
+            "name": TAG_CONSULTATIONS,
+            "tags": [TAG_CONSULTATIONS],
         }));
     }
 }
@@ -1191,11 +1221,14 @@ fn path_parameter_description(name: &str) -> &'static str {
         "record_id" => "Catalog record identifier",
         "offering_id" => "Evidence offering identifier",
         "registry" => "Configured SP DCI registry adapter name.",
+        "profile_id" => "Consultation profile identifier",
+        "profile_version" => "Consultation profile version",
         _ => "Path parameter",
     }
 }
 
 fn ensure_static_release_paths(paths: &mut Map<String, Value>) {
+    insert_consultation_paths(paths);
     paths.entry("/openapi.json".to_string()).or_insert_with(|| {
         public_resource_path_item(
             "get_openapi",
@@ -1363,6 +1396,225 @@ fn ensure_static_release_paths(paths: &mut Map<String, Value>) {
     insert_admin_table_reload_path(paths);
 }
 
+fn insert_consultation_paths(paths: &mut Map<String, Value>) {
+    paths
+        .entry(crate::api::consultation::PROFILE_ROUTE.to_string())
+        .or_insert_with(consultation_profile_path_item);
+    paths
+        .entry(crate::api::consultation::EXECUTE_ROUTE.to_string())
+        .or_insert_with(consultation_execute_path_item);
+}
+
+fn consultation_profile_path_item() -> Value {
+    json!({
+        "get": {
+            "operationId": "get_consultation_profile",
+            "summary": "Get a consultation profile contract",
+            "description": "Returns the hash-pinned public contract for one exact consultation profile. The response is protected and visible only to the configured Registry Notary OIDC workload with the profile's exact required scope. `contract` is the canonical profile contract itself; this generic operation deliberately does not generate a separate OpenAPI schema for every profile.",
+            "tags": [TAG_CONSULTATIONS],
+            "security": [{ "consultationOidc": [] }],
+            "parameters": consultation_path_parameters(),
+            "responses": consultation_profile_responses()
+        }
+    })
+}
+
+fn consultation_execute_path_item() -> Value {
+    let mut parameters = consultation_path_parameters();
+    parameters.push(json!({
+        "name": "Data-Purpose",
+        "in": "header",
+        "required": true,
+        "description": "Purpose of use. The value must match the selected profile's purpose contract and is handled only inside the consultation authorization boundary.",
+        "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+        }
+    }));
+    parameters.push(json!({
+        "name": "Registry-Notary-Evaluation-Id",
+        "in": "header",
+        "required": false,
+        "description": "Optional canonical uppercase ULID supplied by the authenticated Registry Notary workload to correlate this consultation with its evaluation.",
+        "schema": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+        }
+    }));
+
+    json!({
+        "post": {
+            "operationId": "execute_consultation",
+            "summary": "Execute a governed consultation",
+            "description": "Executes one exact, purpose-bound consultation for the configured Registry Notary OIDC workload with the profile's exact required scope. The request is a single profile-named string input, and Relay returns only the profile-approved result envelope and provenance.",
+            "tags": [TAG_CONSULTATIONS],
+            "security": [{ "consultationOidc": [] }],
+            "parameters": parameters,
+            "requestBody": {
+                "required": true,
+                "content": {
+                    "application/json": {
+                        "schema": { "$ref": "#/components/schemas/ConsultationExecuteRequest" },
+                        "example": {
+                            "inputs": {
+                                "subject_id": "profile-defined string"
+                            }
+                        }
+                    }
+                }
+            },
+            "responses": consultation_execute_responses(
+                "Durably completed consultation result.",
+                "ConsultationResult"
+            )
+        }
+    })
+}
+
+fn consultation_path_parameters() -> Vec<Value> {
+    vec![
+        json!({
+            "name": "profile_id",
+            "in": "path",
+            "required": true,
+            "description": "Exact consultation profile identifier from the protected contract catalog.",
+            "schema": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 96,
+                "pattern": "^[a-z][a-z0-9._-]{0,95}$"
+            }
+        }),
+        json!({
+            "name": "profile_version",
+            "in": "path",
+            "required": true,
+            "description": "Canonical positive decimal profile version.",
+            "schema": {
+                "type": "string",
+                "pattern": "^[1-9][0-9]{0,9}$"
+            }
+        }),
+    ]
+}
+
+fn consultation_profile_responses() -> Value {
+    json!({
+        "200": consultation_success_response(
+            "Consultation profile contract metadata.",
+            "ConsultationProfileMetadata"
+        ),
+        "401": consultation_problem_response(
+            401,
+            "auth.invalid_credentials",
+            "The Registry Notary OIDC credential is missing or invalid."
+        ),
+        "403": consultation_problem_response(
+            403,
+            "consultation.denied",
+            "The authenticated workload is not permitted to view this consultation profile."
+        ),
+        "404": consultation_problem_response(
+            404,
+            "consultation.profile_not_found",
+            "The exact profile id and version are not visible to this workload."
+        ),
+        "503": consultation_problem_response(
+            503,
+            "consultation.unavailable",
+            "The consultation profile cannot be resolved safely."
+        )
+    })
+}
+
+fn consultation_execute_responses(success_description: &str, success_schema: &str) -> Value {
+    json!({
+        "200": consultation_success_response(success_description, success_schema),
+        "400": consultation_problem_response(
+            400,
+            "consultation.invalid_request",
+            "The consultation request is invalid."
+        ),
+        "401": consultation_problem_response(
+            401,
+            "auth.invalid_credentials",
+            "The Registry Notary OIDC credential is missing or invalid."
+        ),
+        "403": consultation_problem_response(
+            403,
+            "consultation.denied",
+            "The authenticated workload is not permitted to perform this consultation."
+        ),
+        "404": consultation_problem_response(
+            404,
+            "consultation.profile_not_found",
+            "The exact profile id and version are not visible to this workload."
+        ),
+        "429": consultation_rate_limited_response(),
+        "503": consultation_problem_response(
+            503,
+            "consultation.unavailable",
+            "The consultation cannot be completed safely."
+        )
+    })
+}
+
+fn consultation_success_response(description: &str, schema: &str) -> Value {
+    json!({
+        "description": description,
+        "content": {
+            "application/json": {
+                "schema": {
+                    "$ref": format!("#/components/schemas/{schema}")
+                }
+            }
+        }
+    })
+}
+
+fn consultation_problem_response(status: u16, code: &str, description: &str) -> Value {
+    json!({
+        "description": format!("{description} Stable code: `{code}`."),
+        "content": {
+            "application/problem+json": {
+                "schema": {
+                    "allOf": [
+                        { "$ref": "#/components/schemas/ProblemDetails" },
+                        {
+                            "type": "object",
+                            "properties": {
+                                "status": { "const": status },
+                                "code": { "const": code }
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+    })
+}
+
+fn consultation_rate_limited_response() -> Value {
+    let mut response = consultation_problem_response(
+        429,
+        "consultation.rate_limited",
+        "The consultation quota is exhausted.",
+    );
+    response["headers"] = json!({
+        "Retry-After": {
+            "description": "Whole seconds before retrying, bounded by the consultation-v1 public contract.",
+            "required": true,
+            "schema": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 60
+            }
+        }
+    });
+    response
+}
+
 fn insert_admin_table_reload_path(paths: &mut Map<String, Value>) {
     paths.insert(
         "/admin/v1/datasets/{dataset_id}/tables/{table_id}/reload".to_string(),
@@ -1422,6 +1674,13 @@ fn aggregate_tag_name(dataset_id: &str) -> String {
     format!("{dataset_id} / aggregates")
 }
 
+fn consultation_tag_definition() -> Value {
+    json!({
+        "name": TAG_CONSULTATIONS,
+        "description": "Purpose-bound, read-only consultations exposed only to the configured Registry Notary OIDC workload.",
+    })
+}
+
 /// Build the document-level `tags` array. Tag order drives the sidebar
 /// order in Scalar: `Service` and `Catalog` first, then one tag per
 /// `(dataset, entity)` pair in catalog iteration order (the catalog
@@ -1439,6 +1698,9 @@ fn tag_definitions(catalog: &CatalogDocument, config: &Config) -> Value {
             "description": "Catalog discovery: dataset listing, dataset metadata, DCAT-AP export.",
         }),
     ];
+    if config.consultation.is_some() {
+        tags.push(consultation_tag_definition());
+    }
     #[cfg(feature = "ogcapi-features")]
     tags.push(json!({
         "name": TAG_OGC,
@@ -1516,6 +1778,9 @@ fn tag_groups(catalog: &CatalogDocument, config: &Config) -> Value {
         json!({ "name": "Service", "tags": [TAG_SERVICE] }),
         json!({ "name": "Catalog", "tags": [TAG_CATALOG] }),
     ];
+    if config.consultation.is_some() {
+        groups.push(json!({ "name": TAG_CONSULTATIONS, "tags": [TAG_CONSULTATIONS] }));
+    }
     #[cfg(feature = "ogcapi-features")]
     groups.push(json!({ "name": "OGC", "tags": [TAG_OGC] }));
     #[cfg(feature = "ogcapi-records")]
@@ -1563,6 +1828,15 @@ fn security_requirements(config: &Config) -> Value {
 
 fn security_schemes(config: &Config) -> Value {
     let mut schemes = Map::new();
+    schemes.insert(
+        "consultationOidc".to_string(),
+        json!({
+            "type": "http",
+            "scheme": "bearer",
+            "bearerFormat": "JWT",
+            "description": "OIDC/OAuth2 bearer JWT accepted only when its verified claims identify the configured Registry Notary workload and it carries the selected consultation profile's exact required scope.",
+        }),
+    );
     let bearer_description = match config.auth.mode {
         AuthMode::ApiKey => {
             "API key carried as `Authorization: Bearer <key>`. The gateway hashes the bearer with SHA-256 and matches the fingerprint resolved from `config.auth.api_keys[*].fingerprint`."
@@ -2313,6 +2587,18 @@ fn schemas(catalog: &CatalogDocument, config: &Config) -> Value {
     schemas.insert("Pagination".to_string(), pagination_schema());
     schemas.insert("ProblemDetails".to_string(), problem_details_schema());
     schemas.insert(
+        "ConsultationProfileMetadata".to_string(),
+        consultation_profile_metadata_schema(),
+    );
+    schemas.insert(
+        "ConsultationExecuteRequest".to_string(),
+        consultation_execute_request_schema(),
+    );
+    schemas.insert(
+        "ConsultationResult".to_string(),
+        consultation_result_schema(),
+    );
+    schemas.insert(
         "EvidenceOfferingList".to_string(),
         evidence_offering_list_schema(),
     );
@@ -2636,6 +2922,216 @@ fn problem_details_schema() -> Value {
             "code": "auth.missing_credential",
             "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
         }],
+    })
+}
+
+fn consultation_profile_metadata_schema() -> Value {
+    json!({
+        "type": "object",
+        "description": "Protected metadata for one exact consultation profile. The canonical public contract remains generic here so one operation supports OpenCRVS, DHIS2, OpenSPP, and other reviewed integration packs without generating per-profile OpenAPI schemas.",
+        "required": ["contract_hash", "contract"],
+        "properties": {
+            "contract_hash": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "description": "SHA-256 identity of the canonical public contract."
+            },
+            "contract": {
+                "type": "object",
+                "description": "Canonical public consultation contract selected by the path id and version.",
+                "additionalProperties": true
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn consultation_execute_request_schema() -> Value {
+    json!({
+        "type": "object",
+        "description": "The exact consultation-v1 request envelope. The selected profile contract names the one accepted input. The complete encoded request body is limited to 8 KiB.",
+        "required": ["inputs"],
+        "properties": {
+            "inputs": {
+                "type": "object",
+                "description": "Exactly one profile-defined input name mapped to one string value.",
+                "minProperties": 1,
+                "maxProperties": 1,
+                "propertyNames": {
+                    "pattern": "^[a-z][a-z0-9_]{0,95}$"
+                },
+                "additionalProperties": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                }
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn consultation_result_schema() -> Value {
+    json!({
+        "type": "object",
+        "description": "Closed consultation-v1 result. Relay publishes it only after durable completion succeeds.",
+        "required": [
+            "schema",
+            "consultation_id",
+            "profile",
+            "outcome",
+            "data",
+            "provenance"
+        ],
+        "properties": {
+            "schema": {
+                "const": "registry.relay.consultation-result.v1"
+            },
+            "consultation_id": {
+                "type": "string",
+                "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                "description": "Relay-generated canonical ULID for this attempt."
+            },
+            "notary_evaluation_id": {
+                "type": "string",
+                "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                "description": "Registry Notary evaluation id when supplied on the request."
+            },
+            "profile": {
+                "type": "object",
+                "required": ["id", "version", "contract_hash"],
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9._-]{0,95}$"
+                    },
+                    "version": {
+                        "type": "string",
+                        "pattern": "^[1-9][0-9]{0,9}$"
+                    },
+                    "contract_hash": {
+                        "type": "string",
+                        "pattern": "^sha256:[0-9a-f]{64}$"
+                    }
+                },
+                "additionalProperties": false
+            },
+            "outcome": {
+                "type": "string",
+                "enum": ["match", "no_match", "ambiguous"]
+            },
+            "data": {
+                "description": "Profile-approved scalar fields for `match`; null for `no_match` and `ambiguous`.",
+                "anyOf": [
+                    {
+                        "type": "object",
+                        "additionalProperties": {
+                            "type": ["string", "number", "boolean", "null"]
+                        }
+                    },
+                    { "type": "null" }
+                ]
+            },
+            "provenance": {
+                "type": "object",
+                "required": [
+                    "relay_acquired_at",
+                    "source_observed_at",
+                    "source_revision",
+                    "acquisition_class",
+                    "integration_pack",
+                    "policy_id",
+                    "policy_hash",
+                    "consent"
+                ],
+                "properties": {
+                    "relay_acquired_at": {
+                        "type": "string",
+                        "format": "date-time"
+                    },
+                    "source_observed_at": {
+                        "type": ["string", "null"],
+                        "format": "date-time"
+                    },
+                    "source_revision": {
+                        "type": ["string", "null"]
+                    },
+                    "acquisition_class": {
+                        "type": "string",
+                        "enum": [
+                            "source_projected_exact",
+                            "bounded_full_record",
+                            "materialized_snapshot"
+                        ]
+                    },
+                    "integration_pack": {
+                        "type": "object",
+                        "required": ["id", "version", "hash"],
+                        "properties": {
+                            "id": {
+                                "type": "string",
+                                "pattern": "^[a-z][a-z0-9._-]{0,95}$"
+                            },
+                            "version": {
+                                "type": "string",
+                                "pattern": "^[1-9][0-9]{0,9}$"
+                            },
+                            "hash": {
+                                "type": "string",
+                                "pattern": "^sha256:[0-9a-f]{64}$"
+                            }
+                        },
+                        "additionalProperties": false
+                    },
+                    "policy_id": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9._-]{0,95}$"
+                    },
+                    "policy_hash": {
+                        "type": "string",
+                        "pattern": "^sha256:[0-9a-f]{64}$"
+                    },
+                    "consent": {
+                        "type": "object",
+                        "required": [
+                            "outcome",
+                            "verifier_id",
+                            "verifier_revision",
+                            "checked_at",
+                            "expires_at",
+                            "revocation_status"
+                        ],
+                        "properties": {
+                            "outcome": {
+                                "type": "string",
+                                "enum": ["not_required"]
+                            },
+                            "verifier_id": {
+                                "type": ["string", "null"]
+                            },
+                            "verifier_revision": {
+                                "type": ["string", "null"]
+                            },
+                            "checked_at": {
+                                "type": ["string", "null"],
+                                "format": "date-time"
+                            },
+                            "expires_at": {
+                                "type": ["string", "null"],
+                                "format": "date-time"
+                            },
+                            "revocation_status": {
+                                "type": "string",
+                                "enum": ["not_applicable"]
+                            }
+                        },
+                        "additionalProperties": false
+                    }
+                },
+                "additionalProperties": false
+            }
+        },
+        "additionalProperties": false
     })
 }
 
@@ -4566,8 +5062,11 @@ fn query_parameter(name: &str, description: &str) -> Value {
 /// - Header *presence* can be required per entity configuration
 ///   (`require_purpose_header`).
 /// - When present, the value is recorded verbatim in the audit trail.
-/// - Purpose *values* are not enforced or compared at the consultation layer.
-/// - Registry Notary is the purpose-certification layer.
+/// - On these ordinary entity and feature routes, purpose *values* are not
+///   compared to an allowlist; Registry Notary remains the purpose-certification
+///   layer for an offering handoff.
+/// - Native `/v1/consultations/.../execute` is a separate contract and validates
+///   `Data-Purpose` against the selected consultation profile.
 /// - Value-level allowlists, if ever added, arrive as additive opt-in config
 ///   and do not change this default behavior.
 fn purpose_header_parameter() -> Value {
@@ -4582,9 +5081,11 @@ fn purpose_header_parameter_with_required(required: bool) -> Value {
         "description": "Purpose-of-use IRI or controlled string. \
                         When `require_purpose_header` is set on this entity, \
                         the header must be present; a missing value returns `400 auth.purpose_required`. \
-                        The value is always recorded verbatim in the audit trail when present; \
-                        purpose values are not enforced or validated at the consultation layer. \
-                        Registry Notary is the purpose-certification layer. \
+                        On ordinary entity and feature routes, the value is recorded verbatim \
+                        in the audit trail but is not compared to a value allowlist; Registry \
+                        Notary remains the purpose-certification layer for an offering handoff. \
+                        Native `/v1/consultations/.../execute` is separate and validates \
+                        `Data-Purpose` against the selected consultation profile contract. \
                         Header names are case-insensitive (`Data-Purpose` and `data-purpose` are equivalent).",
         "schema": { "type": "string", "minLength": 1 },
         "example": "https://demo.example.gov/purpose/demo-review",
@@ -4863,6 +5364,34 @@ mod tests {
         crate::config::test_support::load_example_config_for_tests(
             "relay-openapi-audit-secret-32-bytes",
         )
+    }
+
+    fn enable_consultation_openapi(config: &mut Config) {
+        config.auth.mode = AuthMode::Oidc;
+        config.consultation = Some(
+            serde_json::from_value(json!({
+                "notary_workload": {
+                    "audience": "relay-consultation",
+                    "client_claim_selector": "azp",
+                    "client_value": "registry-notary",
+                    "principal_id": "registry-notary"
+                },
+                "state_plane": {
+                    "database_url_env": "REGISTRY_RELAY_STATE_DATABASE_URL",
+                    "chain_key_epoch_id": "chain-epoch-1",
+                    "serving_fence_lock_key": 7_221_091_441_i64,
+                    "audit_pseudonym_keyring_lock_key": 7_221_091_442_i64
+                },
+                "audit_pseudonym_materials": [{
+                    "key_id": "epoch-test",
+                    "source": {
+                        "provider": "environment",
+                        "name": "REGISTRY_RELAY_TEST_PSEUDONYM_SECRET"
+                    }
+                }]
+            }))
+            .expect("consultation OpenAPI fixture parses"),
+        );
     }
 
     #[cfg(feature = "attribute-release")]
@@ -5289,6 +5818,156 @@ mod tests {
             path,
             "/v1/datasets/{dataset_id}/entities/{entity}/records/{id}/relationships/{relationship}"
         );
+    }
+
+    #[test]
+    fn consultation_openapi_is_exact_generic_and_closed() {
+        let mut config = load_example_config();
+        let inactive = openapi_document(&catalog_with_individual(), &config);
+        assert!(inactive["paths"][crate::api::consultation::PROFILE_ROUTE].is_null());
+        assert!(inactive["paths"][crate::api::consultation::EXECUTE_ROUTE].is_null());
+
+        enable_consultation_openapi(&mut config);
+        let doc = openapi_document(&catalog_with_individual(), &config);
+        let profile = &doc["paths"][crate::api::consultation::PROFILE_ROUTE];
+        let execute = &doc["paths"][crate::api::consultation::EXECUTE_ROUTE];
+
+        assert!(profile["get"].is_object());
+        assert!(profile["head"].is_null(), "HEAD must not be advertised");
+        assert!(profile["post"].is_null());
+        assert!(execute["post"].is_object());
+        assert!(execute["get"].is_null());
+        assert!(execute["head"].is_null());
+        assert_eq!(
+            profile["get"]["security"],
+            json!([{ "consultationOidc": [] }])
+        );
+        assert_eq!(
+            execute["post"]["security"],
+            json!([{ "consultationOidc": [] }])
+        );
+        assert_eq!(
+            doc["components"]["securitySchemes"]["consultationOidc"]["bearerFormat"],
+            "JWT"
+        );
+
+        for operation in [&profile["get"], &execute["post"]] {
+            let parameters = operation["parameters"].as_array().expect("parameters");
+            for name in ["profile_id", "profile_version"] {
+                assert!(parameters.iter().any(|parameter| {
+                    parameter["name"] == name
+                        && parameter["in"] == "path"
+                        && parameter["required"] == true
+                }));
+            }
+        }
+        assert_eq!(
+            profile["get"]["responses"]
+                .as_object()
+                .expect("profile responses")
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["200", "401", "403", "404", "503"]
+        );
+        assert_eq!(
+            execute["post"]["responses"]
+                .as_object()
+                .expect("execute responses")
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["200", "400", "401", "403", "404", "429", "503"]
+        );
+
+        let execute_op = &execute["post"];
+        assert_eq!(
+            execute_op["requestBody"]["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/ConsultationExecuteRequest"
+        );
+        let headers = execute_op["parameters"].as_array().expect("parameters");
+        assert!(headers.iter().any(|parameter| {
+            parameter["name"] == "Data-Purpose"
+                && parameter["in"] == "header"
+                && parameter["required"] == true
+        }));
+        assert!(headers.iter().any(|parameter| {
+            parameter["name"] == "Registry-Notary-Evaluation-Id"
+                && parameter["in"] == "header"
+                && parameter["required"] == false
+        }));
+
+        let expected_codes = [
+            ("400", "consultation.invalid_request"),
+            ("401", "auth.invalid_credentials"),
+            ("403", "consultation.denied"),
+            ("404", "consultation.profile_not_found"),
+            ("429", "consultation.rate_limited"),
+            ("503", "consultation.unavailable"),
+        ];
+        for (status, code) in expected_codes {
+            assert_eq!(
+                execute_op["responses"][status]["content"]["application/problem+json"]["schema"]
+                    ["allOf"][1]["properties"]["code"]["const"],
+                code
+            );
+        }
+        let retry_after = &execute_op["responses"]["429"]["headers"]["Retry-After"]["schema"];
+        assert_eq!(retry_after["type"], "integer");
+        assert_eq!(retry_after["minimum"], 1);
+        assert_eq!(retry_after["maximum"], 60);
+
+        let schemas = &doc["components"]["schemas"];
+        assert_eq!(
+            schemas["ConsultationProfileMetadata"]["required"],
+            json!(["contract_hash", "contract"])
+        );
+        assert_eq!(
+            schemas["ConsultationExecuteRequest"]["properties"]["inputs"]["minProperties"],
+            1
+        );
+        assert_eq!(
+            schemas["ConsultationExecuteRequest"]["properties"]["inputs"]["maxProperties"],
+            1
+        );
+        assert_eq!(
+            schemas["ConsultationResult"]["properties"]["outcome"]["enum"],
+            json!(["match", "no_match", "ambiguous"])
+        );
+        for field in ["integration_pack", "policy_id", "policy_hash", "consent"] {
+            assert!(
+                schemas["ConsultationResult"]["properties"]["provenance"]["properties"][field]
+                    .is_object()
+            );
+        }
+    }
+
+    #[test]
+    fn static_and_enabled_served_consultation_contracts_match() {
+        let mut enabled_config = load_example_config();
+        enable_consultation_openapi(&mut enabled_config);
+        let served = openapi_document(&catalog_with_individual(), &enabled_config);
+
+        let static_config = load_example_config();
+        let mut release = openapi_document(&catalog_with_individual(), &static_config);
+        reduce_release_artifact_to_static_contract(&mut release, &static_config);
+
+        for path in [
+            crate::api::consultation::PROFILE_ROUTE,
+            crate::api::consultation::EXECUTE_ROUTE,
+        ] {
+            assert_eq!(release["paths"][path], served["paths"][path]);
+        }
+        for schema in [
+            "ConsultationProfileMetadata",
+            "ConsultationExecuteRequest",
+            "ConsultationResult",
+        ] {
+            assert_eq!(
+                release["components"]["schemas"][schema],
+                served["components"]["schemas"][schema]
+            );
+        }
     }
 
     #[test]

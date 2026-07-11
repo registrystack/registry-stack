@@ -1172,6 +1172,253 @@
         "description": "RFC 9727 API catalog linkset document.",
         "type": "object"
       },
+      "ConsultationExecuteRequest": {
+        "additionalProperties": false,
+        "description": "The exact consultation-v1 request envelope. The selected profile contract names the one accepted input. The complete encoded request body is limited to 8 KiB.",
+        "properties": {
+          "inputs": {
+            "additionalProperties": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "description": "Exactly one profile-defined input name mapped to one string value.",
+            "maxProperties": 1,
+            "minProperties": 1,
+            "propertyNames": {
+              "pattern": "^[a-z][a-z0-9_]{0,95}$"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "inputs"
+        ],
+        "type": "object"
+      },
+      "ConsultationProfileMetadata": {
+        "additionalProperties": false,
+        "description": "Protected metadata for one exact consultation profile. The canonical public contract remains generic here so one operation supports OpenCRVS, DHIS2, OpenSPP, and other reviewed integration packs without generating per-profile OpenAPI schemas.",
+        "properties": {
+          "contract": {
+            "additionalProperties": true,
+            "description": "Canonical public consultation contract selected by the path id and version.",
+            "type": "object"
+          },
+          "contract_hash": {
+            "description": "SHA-256 identity of the canonical public contract.",
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "contract_hash",
+          "contract"
+        ],
+        "type": "object"
+      },
+      "ConsultationResult": {
+        "additionalProperties": false,
+        "description": "Closed consultation-v1 result. Relay publishes it only after durable completion succeeds.",
+        "properties": {
+          "consultation_id": {
+            "description": "Relay-generated canonical ULID for this attempt.",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+            "type": "string"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Profile-approved scalar fields for `match`; null for `no_match` and `ambiguous`."
+          },
+          "notary_evaluation_id": {
+            "description": "Registry Notary evaluation id when supplied on the request.",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+            "type": "string"
+          },
+          "outcome": {
+            "enum": [
+              "match",
+              "no_match",
+              "ambiguous"
+            ],
+            "type": "string"
+          },
+          "profile": {
+            "additionalProperties": false,
+            "properties": {
+              "contract_hash": {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "id": {
+                "pattern": "^[a-z][a-z0-9._-]{0,95}$",
+                "type": "string"
+              },
+              "version": {
+                "pattern": "^[1-9][0-9]{0,9}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "version",
+              "contract_hash"
+            ],
+            "type": "object"
+          },
+          "provenance": {
+            "additionalProperties": false,
+            "properties": {
+              "acquisition_class": {
+                "enum": [
+                  "source_projected_exact",
+                  "bounded_full_record",
+                  "materialized_snapshot"
+                ],
+                "type": "string"
+              },
+              "consent": {
+                "additionalProperties": false,
+                "properties": {
+                  "checked_at": {
+                    "format": "date-time",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "expires_at": {
+                    "format": "date-time",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "outcome": {
+                    "enum": [
+                      "not_required"
+                    ],
+                    "type": "string"
+                  },
+                  "revocation_status": {
+                    "enum": [
+                      "not_applicable"
+                    ],
+                    "type": "string"
+                  },
+                  "verifier_id": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "verifier_revision": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "outcome",
+                  "verifier_id",
+                  "verifier_revision",
+                  "checked_at",
+                  "expires_at",
+                  "revocation_status"
+                ],
+                "type": "object"
+              },
+              "integration_pack": {
+                "additionalProperties": false,
+                "properties": {
+                  "hash": {
+                    "pattern": "^sha256:[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  "id": {
+                    "pattern": "^[a-z][a-z0-9._-]{0,95}$",
+                    "type": "string"
+                  },
+                  "version": {
+                    "pattern": "^[1-9][0-9]{0,9}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "version",
+                  "hash"
+                ],
+                "type": "object"
+              },
+              "policy_hash": {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "policy_id": {
+                "pattern": "^[a-z][a-z0-9._-]{0,95}$",
+                "type": "string"
+              },
+              "relay_acquired_at": {
+                "format": "date-time",
+                "type": "string"
+              },
+              "source_observed_at": {
+                "format": "date-time",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "source_revision": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "relay_acquired_at",
+              "source_observed_at",
+              "source_revision",
+              "acquisition_class",
+              "integration_pack",
+              "policy_id",
+              "policy_hash",
+              "consent"
+            ],
+            "type": "object"
+          },
+          "schema": {
+            "const": "registry.relay.consultation-result.v1"
+          }
+        },
+        "required": [
+          "schema",
+          "consultation_id",
+          "profile",
+          "outcome",
+          "data",
+          "provenance"
+        ],
+        "type": "object"
+      },
       "DatasetList": {
         "description": "Listing of datasets visible to the calling principal.",
         "type": "object"
@@ -1977,6 +2224,12 @@
       },
       "bearerAuth": {
         "description": "API key carried as `Authorization: Bearer <key>`. The gateway hashes the bearer with SHA-256 and matches the fingerprint resolved from `config.auth.api_keys[*].fingerprint`.",
+        "scheme": "bearer",
+        "type": "http"
+      },
+      "consultationOidc": {
+        "bearerFormat": "JWT",
+        "description": "OIDC/OAuth2 bearer JWT accepted only when its verified claims identify the configured Registry Notary workload and it carries the selected consultation profile's exact required scope.",
         "scheme": "bearer",
         "type": "http"
       }
@@ -4464,6 +4717,405 @@
         ]
       }
     },
+    "/v1/consultations/{profile_id}/versions/{profile_version}": {
+      "get": {
+        "description": "Returns the hash-pinned public contract for one exact consultation profile. The response is protected and visible only to the configured Registry Notary OIDC workload with the profile's exact required scope. `contract` is the canonical profile contract itself; this generic operation deliberately does not generate a separate OpenAPI schema for every profile.",
+        "operationId": "get_consultation_profile",
+        "parameters": [
+          {
+            "description": "Exact consultation profile identifier from the protected contract catalog.",
+            "in": "path",
+            "name": "profile_id",
+            "required": true,
+            "schema": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[a-z][a-z0-9._-]{0,95}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical positive decimal profile version.",
+            "in": "path",
+            "name": "profile_version",
+            "required": true,
+            "schema": {
+              "pattern": "^[1-9][0-9]{0,9}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsultationProfileMetadata"
+                }
+              }
+            },
+            "description": "Consultation profile contract metadata."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemDetails"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "const": "auth.invalid_credentials"
+                        },
+                        "status": {
+                          "const": 401
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "The Registry Notary OIDC credential is missing or invalid. Stable code: `auth.invalid_credentials`."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemDetails"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "const": "consultation.denied"
+                        },
+                        "status": {
+                          "const": 403
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "The authenticated workload is not permitted to view this consultation profile. Stable code: `consultation.denied`."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemDetails"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "const": "consultation.profile_not_found"
+                        },
+                        "status": {
+                          "const": 404
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "The exact profile id and version are not visible to this workload. Stable code: `consultation.profile_not_found`."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemDetails"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "const": "consultation.unavailable"
+                        },
+                        "status": {
+                          "const": 503
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "The consultation profile cannot be resolved safely. Stable code: `consultation.unavailable`."
+          }
+        },
+        "security": [
+          {
+            "consultationOidc": []
+          }
+        ],
+        "summary": "Get a consultation profile contract",
+        "tags": [
+          "Consultations"
+        ]
+      }
+    },
+    "/v1/consultations/{profile_id}/versions/{profile_version}/execute": {
+      "post": {
+        "description": "Executes one exact, purpose-bound consultation for the configured Registry Notary OIDC workload with the profile's exact required scope. The request is a single profile-named string input, and Relay returns only the profile-approved result envelope and provenance.",
+        "operationId": "execute_consultation",
+        "parameters": [
+          {
+            "description": "Exact consultation profile identifier from the protected contract catalog.",
+            "in": "path",
+            "name": "profile_id",
+            "required": true,
+            "schema": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[a-z][a-z0-9._-]{0,95}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical positive decimal profile version.",
+            "in": "path",
+            "name": "profile_version",
+            "required": true,
+            "schema": {
+              "pattern": "^[1-9][0-9]{0,9}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Purpose of use. The value must match the selected profile's purpose contract and is handled only inside the consultation authorization boundary.",
+            "in": "header",
+            "name": "Data-Purpose",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional canonical uppercase ULID supplied by the authenticated Registry Notary workload to correlate this consultation with its evaluation.",
+            "in": "header",
+            "name": "Registry-Notary-Evaluation-Id",
+            "required": false,
+            "schema": {
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "example": {
+                "inputs": {
+                  "subject_id": "profile-defined string"
+                }
+              },
+              "schema": {
+                "$ref": "#/components/schemas/ConsultationExecuteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsultationResult"
+                }
+              }
+            },
+            "description": "Durably completed consultation result."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemDetails"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "const": "consultation.invalid_request"
+                        },
+                        "status": {
+                          "const": 400
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "The consultation request is invalid. Stable code: `consultation.invalid_request`."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemDetails"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "const": "auth.invalid_credentials"
+                        },
+                        "status": {
+                          "const": 401
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "The Registry Notary OIDC credential is missing or invalid. Stable code: `auth.invalid_credentials`."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemDetails"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "const": "consultation.denied"
+                        },
+                        "status": {
+                          "const": 403
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "The authenticated workload is not permitted to perform this consultation. Stable code: `consultation.denied`."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemDetails"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "const": "consultation.profile_not_found"
+                        },
+                        "status": {
+                          "const": 404
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "The exact profile id and version are not visible to this workload. Stable code: `consultation.profile_not_found`."
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemDetails"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "const": "consultation.rate_limited"
+                        },
+                        "status": {
+                          "const": 429
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "The consultation quota is exhausted. Stable code: `consultation.rate_limited`.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds before retrying, bounded by the consultation-v1 public contract.",
+                "required": true,
+                "schema": {
+                  "maximum": 60,
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemDetails"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "const": "consultation.unavailable"
+                        },
+                        "status": {
+                          "const": 503
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "The consultation cannot be completed safely. Stable code: `consultation.unavailable`."
+          }
+        },
+        "security": [
+          {
+            "consultationOidc": []
+          }
+        ],
+        "summary": "Execute a governed consultation",
+        "tags": [
+          "Consultations"
+        ]
+      }
+    },
     "/v1/datasets": {
       "get": {
         "description": "Lists every dataset visible to the calling principal.",
@@ -4736,7 +5388,7 @@
             }
           },
           {
-            "description": "Purpose-of-use IRI or controlled string. When `require_purpose_header` is set on this entity, the header must be present; a missing value returns `400 auth.purpose_required`. The value is always recorded verbatim in the audit trail when present; purpose values are not enforced or validated at the consultation layer. Registry Notary is the purpose-certification layer. Header names are case-insensitive (`Data-Purpose` and `data-purpose` are equivalent).",
+            "description": "Purpose-of-use IRI or controlled string. When `require_purpose_header` is set on this entity, the header must be present; a missing value returns `400 auth.purpose_required`. On ordinary entity and feature routes, the value is recorded verbatim in the audit trail but is not compared to a value allowlist; Registry Notary remains the purpose-certification layer for an offering handoff. Native `/v1/consultations/.../execute` is separate and validates `Data-Purpose` against the selected consultation profile contract. Header names are case-insensitive (`Data-Purpose` and `data-purpose` are equivalent).",
             "example": "https://demo.example.gov/purpose/demo-review",
             "in": "header",
             "name": "Data-Purpose",
@@ -5048,7 +5700,7 @@
             }
           },
           {
-            "description": "Purpose-of-use IRI or controlled string. When `require_purpose_header` is set on this entity, the header must be present; a missing value returns `400 auth.purpose_required`. The value is always recorded verbatim in the audit trail when present; purpose values are not enforced or validated at the consultation layer. Registry Notary is the purpose-certification layer. Header names are case-insensitive (`Data-Purpose` and `data-purpose` are equivalent).",
+            "description": "Purpose-of-use IRI or controlled string. When `require_purpose_header` is set on this entity, the header must be present; a missing value returns `400 auth.purpose_required`. On ordinary entity and feature routes, the value is recorded verbatim in the audit trail but is not compared to a value allowlist; Registry Notary remains the purpose-certification layer for an offering handoff. Native `/v1/consultations/.../execute` is separate and validates `Data-Purpose` against the selected consultation profile contract. Header names are case-insensitive (`Data-Purpose` and `data-purpose` are equivalent).",
             "example": "https://demo.example.gov/purpose/demo-review",
             "in": "header",
             "name": "Data-Purpose",
@@ -5572,7 +6224,7 @@
             }
           },
           {
-            "description": "Purpose-of-use IRI or controlled string. When `require_purpose_header` is set on this entity, the header must be present; a missing value returns `400 auth.purpose_required`. The value is always recorded verbatim in the audit trail when present; purpose values are not enforced or validated at the consultation layer. Registry Notary is the purpose-certification layer. Header names are case-insensitive (`Data-Purpose` and `data-purpose` are equivalent).",
+            "description": "Purpose-of-use IRI or controlled string. When `require_purpose_header` is set on this entity, the header must be present; a missing value returns `400 auth.purpose_required`. On ordinary entity and feature routes, the value is recorded verbatim in the audit trail but is not compared to a value allowlist; Registry Notary remains the purpose-certification layer for an offering handoff. Native `/v1/consultations/.../execute` is separate and validates `Data-Purpose` against the selected consultation profile contract. Header names are case-insensitive (`Data-Purpose` and `data-purpose` are equivalent).",
             "example": "https://demo.example.gov/purpose/demo-review",
             "in": "header",
             "name": "Data-Purpose",
@@ -5797,7 +6449,7 @@
             }
           },
           {
-            "description": "Purpose-of-use IRI or controlled string. When `require_purpose_header` is set on this entity, the header must be present; a missing value returns `400 auth.purpose_required`. The value is always recorded verbatim in the audit trail when present; purpose values are not enforced or validated at the consultation layer. Registry Notary is the purpose-certification layer. Header names are case-insensitive (`Data-Purpose` and `data-purpose` are equivalent).",
+            "description": "Purpose-of-use IRI or controlled string. When `require_purpose_header` is set on this entity, the header must be present; a missing value returns `400 auth.purpose_required`. On ordinary entity and feature routes, the value is recorded verbatim in the audit trail but is not compared to a value allowlist; Registry Notary remains the purpose-certification layer for an offering handoff. Native `/v1/consultations/.../execute` is separate and validates `Data-Purpose` against the selected consultation profile contract. Header names are case-insensitive (`Data-Purpose` and `data-purpose` are equivalent).",
             "example": "https://demo.example.gov/purpose/demo-review",
             "in": "header",
             "name": "Data-Purpose",
@@ -6036,7 +6688,7 @@
             }
           },
           {
-            "description": "Purpose-of-use IRI or controlled string. When `require_purpose_header` is set on this entity, the header must be present; a missing value returns `400 auth.purpose_required`. The value is always recorded verbatim in the audit trail when present; purpose values are not enforced or validated at the consultation layer. Registry Notary is the purpose-certification layer. Header names are case-insensitive (`Data-Purpose` and `data-purpose` are equivalent).",
+            "description": "Purpose-of-use IRI or controlled string. When `require_purpose_header` is set on this entity, the header must be present; a missing value returns `400 auth.purpose_required`. On ordinary entity and feature routes, the value is recorded verbatim in the audit trail but is not compared to a value allowlist; Registry Notary remains the purpose-certification layer for an offering handoff. Native `/v1/consultations/.../execute` is separate and validates `Data-Purpose` against the selected consultation profile contract. Header names are case-insensitive (`Data-Purpose` and `data-purpose` are equivalent).",
             "example": "https://demo.example.gov/purpose/demo-review",
             "in": "header",
             "name": "Data-Purpose",
@@ -6503,6 +7155,10 @@
       "x-displayName": "Individual"
     },
     {
+      "description": "Purpose-bound, read-only consultations exposed only to the configured Registry Notary OIDC workload.",
+      "name": "Consultations"
+    },
+    {
       "description": "Operator-only routes served on the admin listener.",
       "name": "Admin"
     }
@@ -6526,6 +7182,12 @@
         "social_registry / aggregates",
         "social_registry / household",
         "social_registry / individual"
+      ]
+    },
+    {
+      "name": "Consultations",
+      "tags": [
+        "Consultations"
       ]
     }
   ]

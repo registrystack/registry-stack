@@ -22,6 +22,7 @@ pub(crate) mod commitments;
 )]
 pub(crate) mod executor;
 mod identifiers;
+pub mod operator;
 #[allow(
     dead_code,
     reason = "the compiled policy adapter is consumed by the consultation service integration"

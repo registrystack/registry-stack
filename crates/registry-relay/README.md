@@ -86,7 +86,7 @@ The production image is distroless, non-root, and built with no optional Cargo f
 
 ## Operating With Registry Notary
 
-Relay is the protected consultation API; [Registry Notary](https://github.com/jeremi/registry-notary) is the claim evaluation and credential issuance service. Relay publishes evidence offerings that point callers to Notary and never executes verification itself; Notary calls Relay as an HTTP source. Credential and port conventions for running both are in [docs/ops.md](docs/ops.md).
+Relay is the protected registry consultation service; [Registry Notary](https://github.com/registrystack/registry-notary) owns claim evaluation and credential issuance. For maintained consultation profiles, Notary calls Relay's purpose-aware API and Relay performs the profile's hash-pinned, minimized source acquisition behind a durable PostgreSQL fence and audit trail. Relay can also publish evidence offerings that hand clients to Notary. Neither path moves credential issuance keys into Relay. Configuration, bootstrap, and port conventions are in [docs/ops.md](docs/ops.md).
 
 ## Performance Testing
 

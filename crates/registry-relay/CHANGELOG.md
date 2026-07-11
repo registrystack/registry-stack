@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Added
+
+- BREAKING: Relay now exposes a restart-only, OIDC-protected
+  `/v1/consultations/{profile_id}/versions/{profile_version}` API for the exact
+  configured Registry Notary workload. The first concrete journey executes one
+  hash-pinned, Basic-authenticated, minimized DHIS2 GET behind PostgreSQL quota,
+  audit, dispatch-fence, and publication guarantees. Requests use one bounded
+  profile-declared input and a contract-enforced `Data-Purpose`; public results
+  use the closed `match`, `no_match`, or `ambiguous` envelope and a six-code
+  failure taxonomy. Configuration and artifacts are restart-only, source and
+  state-plane secrets remain environment-backed, and no generic proxy or
+  caller-selected source operation is exposed.
+
 ## 0.9.0 - 2026-07-10
 
 ### Added
