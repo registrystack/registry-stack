@@ -108,8 +108,11 @@ SoftHSM verifies protocol integration, not production custody.
 Assign a new key ID (`kid`) that combines the production issuer and a unique key fragment, for
 example `did:web:issuer.example#notary-2026-01`.
 Publish the corresponding public verification method for the issuer before issuing credentials.
-The `issuer` in each credential profile must equal the Decentralized Identifier (DID) portion of a
-`did:web` key ID.
+The `issuer` in each credential profile must either equal the Decentralized Identifier (DID)
+portion of a `did:web` key ID or use an HTTPS URL whose host matches the `did:web` host.
+Preserve a matching HTTPS issuer during a signing-key migration unless you have coordinated an
+issuer change with every verifier that trusts the existing issuer.
+Changing the profile issuer changes the SD-JWT VC `iss` value.
 
 For this signing key, load only the token PIN and public JSON Web Key (JWK) into the service's
 secret provider.
@@ -199,8 +202,11 @@ jq '{
 
 The first pass must report `PKCS#11 signing providers loaded and self-tested` and the
 `notary.signer_custody.unapproved` finding.
-That combination proves Notary reached the key and refused to treat provider kind as custody
-approval.
+That combination proves Notary reached at least one active PKCS#11 key and refused to treat provider
+kind as custody approval.
+The preflight does not prove that the credential profile references that key.
+Before approving custody, confirm that each intended profile's `signing_key` names the active
+PKCS#11 entry under `evidence.signing_keys`.
 The `missing_env` array must be empty.
 The first `doctor` command exits with a nonzero status because the custody finding is deliberately
 active during this pass.
@@ -268,7 +274,8 @@ curl -fsS https://<notary-host>/ready | \
     local_software_signing_provider_count,
     custody_approval_required,
     custody_approved,
-    unapproved_signing_provider_count
+    unapproved_signing_provider_count,
+    credential_issuance: .surfaces.credential_issuance
   }'
 ```
 
@@ -281,9 +288,17 @@ For one PKCS#11 credential signer, the custody facts are:
   "local_software_signing_provider_count": 0,
   "custody_approval_required": true,
   "custody_approved": true,
-  "unapproved_signing_provider_count": 0
+  "unapproved_signing_provider_count": 0,
+  "credential_issuance": {
+    "signing_provider_count": 1,
+    "local_software_signing_provider_count": 0,
+    "unapproved_signing_provider_count": 0
+  }
 }
 ```
+
+The `credential_issuance` values confirm that the credential profile resolves to one active signer
+and that the signer does not use local software custody.
 
 Confirm that Notary publishes the intended verification key and no private JWK member:
 
