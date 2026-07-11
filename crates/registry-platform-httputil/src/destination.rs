@@ -39,6 +39,8 @@ use zeroize::Zeroizing;
 
 use crate::{is_cloud_metadata_ip, DEFAULT_VALIDATED_FETCH_CONNECT_TIMEOUT};
 
+pub mod json;
+
 /// Maximum canonical origin identifier length.
 pub const MAX_DESTINATION_ORIGIN_ID_BYTES: usize = 128;
 /// Maximum serialized fixed-origin URL length.
