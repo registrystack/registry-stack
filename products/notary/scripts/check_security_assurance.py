@@ -237,12 +237,23 @@ def validate_route_sources(inventory: object | None = None) -> None:
         if source not in source_files and resolve_repo_path(source).exists():
             source_files.append(source)
 
-    extracted_by_source: dict[str, set[tuple[str, str]]] = {}
-    for source in sorted(set(source_files)):
+    all_sources = sorted(set(source_files))
+    texts: dict[str, str] = {}
+    paths: dict[str, Path] = {}
+    for source in all_sources:
         path = resolve_repo_path(source)
         if not path.exists():
             fail(f"route inventory references missing source file: {source}")
-        routes = extract_axum_routes(path.read_text(encoding="utf-8"))
+        texts[source] = path.read_text(encoding="utf-8")
+        paths[source] = path
+
+    excluded = collect_test_module_files(texts, paths)
+
+    extracted_by_source: dict[str, set[tuple[str, str]]] = {}
+    for source in all_sources:
+        if paths[source].resolve() in excluded:
+            continue
+        routes = extract_axum_routes(texts[source])
         if routes:
             extracted_by_source[source] = routes
 
@@ -287,6 +298,84 @@ def strip_rust_test_module(text: str) -> str:
     )[0]
 
 
+CFG_TEST_MOD_RE = re.compile(
+    r"#\[cfg\(test\)\]\s*((?:#\[[^\]]*\]\s*)*)mod\s+([A-Za-z0-9_]+)\s*(;|\{)"
+)
+MOD_PATH_ATTR_RE = re.compile(r'path\s*=\s*"([^"]+)"')
+INCLUDE_MACRO_RE = re.compile(r'include!\s*\(\s*"([^"]+)"\s*\)')
+
+
+def module_child_dir(file_path: Path) -> Path:
+    """Directory holding the child modules of file_path, per Rust conventions:
+    the same directory for crate roots and mod.rs, else a subdirectory named
+    after the file stem."""
+    if file_path.name in {"mod.rs", "lib.rs", "main.rs"}:
+        return file_path.parent
+    return file_path.parent / file_path.stem
+
+
+def resolve_mod_file(child_dir: Path, name: str) -> Path | None:
+    """Resolve an attribute-free `mod NAME;` to its file via Rust's directory
+    conventions (NAME.rs or NAME/mod.rs)."""
+    for candidate in (child_dir / f"{name}.rs", child_dir / name / "mod.rs"):
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def test_module_files_in(text: str, file_path: Path) -> set[Path]:
+    """Files a source pulls in as #[cfg(test)] module code: external
+    #[path]/mod declarations, convention-resolved `mod NAME;` files, and
+    include! shards inside an inline #[cfg(test)] mod block."""
+    found: set[Path] = set()
+    # #[path] and include! are relative to the file's own directory; an
+    # attribute-free `mod NAME;` is relative to the file's child-module dir.
+    base_dir = file_path.parent
+    for match in CFG_TEST_MOD_RE.finditer(text):
+        attrs, name, delim = match.groups()
+        if delim == ";":
+            path_attr = MOD_PATH_ATTR_RE.search(attrs)
+            target = (
+                base_dir / path_attr.group(1)
+                if path_attr
+                else resolve_mod_file(module_child_dir(file_path), name)
+            )
+            if target is not None:
+                found.add(target.resolve())
+        else:
+            open_brace = match.end() - 1
+            close_brace = matching_brace(text, open_brace)
+            body = text[open_brace : close_brace if close_brace is not None else len(text)]
+            for include in INCLUDE_MACRO_RE.finditer(body):
+                found.add((base_dir / include.group(1)).resolve())
+    return found
+
+
+def collect_test_module_files(
+    texts: dict[str, str], paths: dict[str, Path]
+) -> set[Path]:
+    """Every file that is compiled only as #[cfg(test)] code and therefore
+    must not be scanned as a production route source. A test-module file is
+    entirely test code, so anything it include!s is test code too; expand
+    include! references transitively."""
+    excluded: set[Path] = set()
+    for source, text in texts.items():
+        excluded |= test_module_files_in(text, paths[source])
+    pending = list(excluded)
+    while pending:
+        current = pending.pop()
+        try:
+            body = current.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for include in INCLUDE_MACRO_RE.finditer(body):
+            target = (current.parent / include.group(1)).resolve()
+            if target not in excluded:
+                excluded.add(target)
+                pending.append(target)
+    return excluded
+
+
 def strip_rust_comments(text: str) -> str:
     return "\n".join(
         line for line in text.splitlines() if not line.lstrip().startswith("//")
@@ -312,6 +401,31 @@ def matching_paren(text: str, open_paren: int) -> int | None:
         elif char == "(":
             depth += 1
         elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return index
+    return None
+
+
+def matching_brace(text: str, open_brace: int) -> int | None:
+    depth = 0
+    in_string = False
+    escaped = False
+    for index in range(open_brace, len(text)):
+        char = text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
             depth -= 1
             if depth == 0:
                 return index

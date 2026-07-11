@@ -243,6 +243,78 @@ class SecurityAssuranceCheckTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self.module.check_dockerfile_secret_patterns()
 
+    def write_route_inventory(self):
+        (self.root / "security" / "route-inventory.json").write_text(json.dumps({
+            "version": 1,
+            "service": "registry-notary",
+            "routes": [{
+                "listener": "public",
+                "path": "/x",
+                "methods": ["GET"],
+                "source": "crates/registry-notary-server/src/api.rs",
+            }],
+        }))
+
+    def test_route_sources_ignores_path_included_test_module(self):
+        self.write_route_inventory()
+        src = self.root / "crates" / "registry-notary-server" / "src"
+        (src / "healthcheck.rs").write_text(
+            "pub fn run() {}\n"
+            "#[cfg(test)]\n"
+            '#[path = "healthcheck/tests.rs"]\n'
+            "mod tests;\n"
+        )
+        (src / "healthcheck").mkdir()
+        (src / "healthcheck" / "tests.rs").write_text(
+            "use super::*;\n"
+            "#[tokio::test]\n"
+            "async fn probe() {\n"
+            '    let _ = Router::new().route("/secret", get(handler));\n'
+            "}\n"
+        )
+        self.module.validate_route_sources()
+
+    def test_route_sources_ignores_include_shard_test_module(self):
+        self.write_route_inventory()
+        src = self.root / "crates" / "registry-notary-server" / "src"
+        (src / "runtime.rs").write_text(
+            "pub fn run() {}\n"
+            "#[cfg(test)]\n"
+            "mod tests {\n"
+            "    use super::*;\n"
+            '    include!("runtime/tests/shard.rs");\n'
+            "}\n"
+        )
+        (src / "runtime" / "tests").mkdir(parents=True)
+        (src / "runtime" / "tests" / "shard.rs").write_text(
+            "#[tokio::test]\n"
+            "async fn probe() {\n"
+            '    let _ = Router::new().route("/secret", get(handler));\n'
+            "}\n"
+        )
+        self.module.validate_route_sources()
+
+    def test_route_sources_ignores_convention_and_transitive_test_module(self):
+        self.write_route_inventory()
+        src = self.root / "crates" / "registry-notary-server" / "src"
+        (src / "widget.rs").write_text(
+            "pub fn run() {}\n"
+            "#[cfg(test)]\n"
+            "mod tests;\n"
+        )
+        (src / "widget" / "tests").mkdir(parents=True)
+        (src / "widget" / "tests" / "mod.rs").write_text(
+            "use super::*;\n"
+            'include!("support.rs");\n'
+        )
+        (src / "widget" / "tests" / "support.rs").write_text(
+            "#[tokio::test]\n"
+            "async fn probe() {\n"
+            '    let _ = Router::new().route("/secret", get(handler));\n'
+            "}\n"
+        )
+        self.module.validate_route_sources()
+
     def test_extracts_literal_const_format_and_chained_methods(self):
         source = '''
 use axum::{routing::{get, post}, Router};
