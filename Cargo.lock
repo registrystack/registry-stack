@@ -5312,6 +5312,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-platform-consent"
+version = "0.9.0"
+dependencies = [
+ "base64",
+ "registry-platform-crypto",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "zeroize",
+]
+
+[[package]]
 name = "registry-platform-crypto"
 version = "0.9.0"
 dependencies = [
@@ -5559,6 +5571,7 @@ dependencies = [
  "registry-notary-core",
  "registry-platform-authcommon",
  "registry-platform-config",
+ "registry-platform-consent",
  "registry-platform-crypto",
  "serde",
  "serde_json",
@@ -5567,6 +5580,7 @@ dependencies = [
  "time",
  "ureq",
  "url",
+ "zeroize",
 ]
 
 [[package]]

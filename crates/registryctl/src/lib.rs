@@ -23,12 +23,14 @@ use registry_platform_config::{
     ConfigBundleSignature, ConfigBundleSignatureEnvelope, ConfigTrustAnchor,
     ConfigTrustAnchorSigner, MAX_BUNDLE_FILE_BYTES, MAX_CONFIG_BUNDLE_SEQUENCE,
 };
+use registry_platform_consent::{ConsentEvidenceV1, MAX_CONSENT_EVIDENCE_BYTES};
 use registry_platform_crypto::{
     canonicalize_json, sign as sign_payload, PrivateJwk, PublicJwk, SigningAlgorithm,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
+use zeroize::Zeroizing;
 
 pub use crate::sample::Sample;
 
@@ -71,6 +73,7 @@ const UPDATE_CHECK_CACHE_SECONDS: u64 = 60 * 60 * 24;
 const PROJECT_SCHEMA_VERSION: &str = "registryctl/v1";
 const CONFIG_BUNDLE_SIGNATURE_SCHEMA: &str = "registry.platform.config_bundle_signatures.v1";
 const CONFIG_TRUST_ANCHOR_SCHEMA: &str = "registry.platform.config_trust_anchor.v1";
+const CONSENT_PRIVATE_JWK_MAX_BYTES: u64 = 16 * 1024;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -488,6 +491,37 @@ pub struct BundleSignOptions {
     pub out: PathBuf,
 }
 
+#[derive(Debug)]
+pub struct ConsentKeygenOptions {
+    pub out_dir: PathBuf,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ConsentKeygenReport {
+    pub schema_version: String,
+    pub key_id: String,
+    pub alg: String,
+    pub private_key_path: PathBuf,
+    pub public_key_path: PathBuf,
+    pub public_jwk: PublicJwk,
+}
+
+#[derive(Debug)]
+pub struct ConsentSignOptions {
+    pub payload: PathBuf,
+    pub key: PathBuf,
+    pub out: PathBuf,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ConsentSignReport {
+    pub schema_version: String,
+    pub key_id: String,
+    pub alg: String,
+    pub output_path: PathBuf,
+    pub compact_jws_bytes: usize,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct AnchorReport {
     pub schema_version: String,
@@ -760,6 +794,317 @@ pub fn sign_config_bundle(options: BundleSignOptions) -> Result<BundleSignReport
         alg: alg.to_string(),
         signature_count: envelope.signatures.len(),
     })
+}
+
+pub fn generate_consent_keypair(options: ConsentKeygenOptions) -> Result<ConsentKeygenReport> {
+    let parent = options
+        .out_dir
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))?;
+    let parent_metadata = fs::symlink_metadata(parent)
+        .with_context(|| format!("failed to stat {}", parent.display()))?;
+    if parent_metadata.file_type().is_symlink() || !parent_metadata.is_dir() {
+        bail!(
+            "consent key output parent must be a regular directory, not a symlink: {}",
+            parent.display()
+        );
+    }
+
+    create_private_directory(&options.out_dir).with_context(|| {
+        format!(
+            "consent key output directory must be new: {}",
+            options.out_dir.display()
+        )
+    })?;
+
+    let generated = (|| -> Result<ConsentKeygenReport> {
+        let mut secret = [0_u8; 32];
+        getrandom::fill(&mut secret)
+            .map_err(|error| anyhow!("random generation failed: {error}"))?;
+        let signing_key = SigningKey::from_bytes(&secret);
+        let x = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(signing_key.verifying_key().to_bytes());
+        let d = Zeroizing::new(
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(secret.as_slice()),
+        );
+        secret.fill(0);
+
+        let public_without_kid = PublicJwk::parse(&format!(
+            r#"{{"kty":"OKP","crv":"Ed25519","alg":"EdDSA","x":"{x}"}}"#
+        ))
+        .context("failed to build generated consent public JWK")?;
+        let key_id = public_without_kid
+            .jkt()
+            .context("failed to compute consent key id")?;
+        let public_jwk = PublicJwk::parse(&format!(
+            r#"{{"kty":"OKP","kid":"{key_id}","crv":"Ed25519","alg":"EdDSA","x":"{x}"}}"#
+        ))
+        .context("failed to build generated consent public JWK")?;
+        let private_json = Zeroizing::new(format!(
+            r#"{{"kty":"OKP","kid":"{key_id}","crv":"Ed25519","alg":"EdDSA","d":"{}","x":"{x}"}}"#,
+            d.as_str()
+        ));
+        PrivateJwk::parse(private_json.as_str())
+            .context("generated consent private JWK failed validation")?;
+
+        let private_key_path = options.out_dir.join("private.jwk");
+        let public_key_path = options.out_dir.join("public.jwk");
+        write_new_sensitive_file(&private_key_path, private_json.as_bytes())?;
+        let public_json = serde_json::to_vec_pretty(&public_jwk)
+            .context("failed to render generated consent public JWK")?;
+        write_new_public_file(&public_key_path, &public_json)?;
+
+        Ok(ConsentKeygenReport {
+            schema_version: "registryctl.consent_keygen.v1".to_string(),
+            key_id,
+            alg: "EdDSA".to_string(),
+            private_key_path,
+            public_key_path,
+            public_jwk,
+        })
+    })();
+
+    if generated.is_err() {
+        let _ = fs::remove_dir_all(&options.out_dir);
+    }
+    generated
+}
+
+pub fn sign_consent_evidence(options: ConsentSignOptions) -> Result<ConsentSignReport> {
+    let payload_bytes = read_bounded_regular_file(
+        &options.payload,
+        MAX_CONSENT_EVIDENCE_BYTES as u64,
+        "consent payload",
+        false,
+    )?;
+    let evidence = ConsentEvidenceV1::parse_json(payload_bytes.as_slice()).with_context(|| {
+        format!(
+            "invalid ConsentEvidenceV1 payload {}",
+            options.payload.display()
+        )
+    })?;
+
+    let private_jwk_bytes = read_bounded_regular_file(
+        &options.key,
+        CONSENT_PRIVATE_JWK_MAX_BYTES,
+        "consent private JWK",
+        true,
+    )?;
+    let private_jwk_text =
+        std::str::from_utf8(private_jwk_bytes.as_slice()).with_context(|| {
+            format!(
+                "consent private JWK is not UTF-8 JSON: {}",
+                options.key.display()
+            )
+        })?;
+    let private_jwk = PrivateJwk::parse(private_jwk_text)
+        .with_context(|| format!("invalid consent private JWK: {}", options.key.display()))?;
+    let key_id = private_jwk
+        .kid
+        .as_deref()
+        .filter(|key_id| !key_id.trim().is_empty())
+        .ok_or_else(|| anyhow!("consent private JWK must contain a non-empty kid"))?
+        .to_string();
+    if private_jwk
+        .algorithm()
+        .context("invalid consent signing key algorithm")?
+        != SigningAlgorithm::EdDsa
+    {
+        bail!("consent signing requires an Ed25519 EdDSA private JWK");
+    }
+
+    let artifact = evidence
+        .sign_compact(&private_jwk)
+        .context("failed to sign ConsentEvidenceV1")?;
+    let artifact_bytes = artifact.as_str().as_bytes();
+    if artifact_bytes.len() > MAX_CONSENT_EVIDENCE_BYTES {
+        bail!(
+            "signed consent evidence is {} bytes and exceeds the {}-byte limit",
+            artifact_bytes.len(),
+            MAX_CONSENT_EVIDENCE_BYTES
+        );
+    }
+
+    ensure_consent_output_parent(&options.out)?;
+    write_new_sensitive_file(&options.out, artifact_bytes)?;
+    Ok(ConsentSignReport {
+        schema_version: "registryctl.consent_sign.v1".to_string(),
+        key_id,
+        alg: "EdDSA".to_string(),
+        output_path: options.out,
+        compact_jws_bytes: artifact_bytes.len(),
+    })
+}
+
+fn read_bounded_regular_file(
+    path: &Path,
+    max_bytes: u64,
+    label: &str,
+    require_private_permissions: bool,
+) -> Result<Zeroizing<Vec<u8>>> {
+    let path_metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("failed to stat {label} {}", path.display()))?;
+    if path_metadata.file_type().is_symlink() || !path_metadata.is_file() {
+        bail!(
+            "{label} must be a regular file, not a symlink or directory: {}",
+            path.display()
+        );
+    }
+    if path_metadata.len() > max_bytes {
+        bail!(
+            "{label} exceeds the {max_bytes}-byte limit: {}",
+            path.display()
+        );
+    }
+
+    let file = fs::File::open(path)
+        .with_context(|| format!("failed to open {label} {}", path.display()))?;
+    let opened_metadata = file
+        .metadata()
+        .with_context(|| format!("failed to stat opened {label} {}", path.display()))?;
+    if !opened_metadata.is_file() || opened_metadata.len() > max_bytes {
+        bail!("{label} is not a bounded regular file: {}", path.display());
+    }
+    validate_opened_file_identity(
+        path,
+        label,
+        &path_metadata,
+        &opened_metadata,
+        require_private_permissions,
+    )?;
+    let mut bytes = Zeroizing::new(Vec::with_capacity(opened_metadata.len() as usize));
+    file.take(max_bytes + 1)
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("failed to read {label} {}", path.display()))?;
+    if bytes.len() as u64 > max_bytes {
+        bail!(
+            "{label} exceeds the {max_bytes}-byte limit: {}",
+            path.display()
+        );
+    }
+    Ok(bytes)
+}
+
+#[cfg(unix)]
+fn validate_opened_file_identity(
+    path: &Path,
+    label: &str,
+    path_metadata: &fs::Metadata,
+    opened_metadata: &fs::Metadata,
+    require_private_permissions: bool,
+) -> Result<()> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    if path_metadata.dev() != opened_metadata.dev() || path_metadata.ino() != opened_metadata.ino()
+    {
+        bail!(
+            "{label} changed while it was being opened: {}",
+            path.display()
+        );
+    }
+    if require_private_permissions && opened_metadata.permissions().mode() & 0o077 != 0 {
+        bail!(
+            "consent private JWK must not be readable or writable by group or others: {}",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn validate_opened_file_identity(
+    _path: &Path,
+    _label: &str,
+    _path_metadata: &fs::Metadata,
+    _opened_metadata: &fs::Metadata,
+    _require_private_permissions: bool,
+) -> Result<()> {
+    Ok(())
+}
+
+fn ensure_consent_output_parent(path: &Path) -> Result<()> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))?;
+    let metadata = fs::symlink_metadata(parent)
+        .with_context(|| format!("failed to stat {}", parent.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        bail!(
+            "consent output parent must be a regular directory, not a symlink: {}",
+            parent.display()
+        );
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn create_private_directory(path: &Path) -> Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+
+    let mut builder = fs::DirBuilder::new();
+    builder.mode(0o700);
+    builder
+        .create(path)
+        .with_context(|| format!("failed to create {}", path.display()))
+}
+
+#[cfg(not(unix))]
+fn create_private_directory(path: &Path) -> Result<()> {
+    fs::create_dir(path).with_context(|| format!("failed to create {}", path.display()))
+}
+
+#[cfg(unix)]
+fn write_new_sensitive_file(path: &Path, bytes: &[u8]) -> Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .with_context(|| format!("refusing to overwrite consent output {}", path.display()))?;
+    file.write_all(bytes)
+        .with_context(|| format!("failed to write {}", path.display()))
+}
+
+#[cfg(not(unix))]
+fn write_new_sensitive_file(path: &Path, bytes: &[u8]) -> Result<()> {
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .with_context(|| format!("refusing to overwrite consent output {}", path.display()))?;
+    file.write_all(bytes)
+        .with_context(|| format!("failed to write {}", path.display()))
+}
+
+#[cfg(unix)]
+fn write_new_public_file(path: &Path, bytes: &[u8]) -> Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o644)
+        .open(path)
+        .with_context(|| format!("refusing to overwrite consent output {}", path.display()))?;
+    file.write_all(bytes)
+        .with_context(|| format!("failed to write {}", path.display()))
+}
+
+#[cfg(not(unix))]
+fn write_new_public_file(path: &Path, bytes: &[u8]) -> Result<()> {
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .with_context(|| format!("refusing to overwrite consent output {}", path.display()))?;
+    file.write_all(bytes)
+        .with_context(|| format!("failed to write {}", path.display()))
 }
 
 pub fn init_config_anchor(
@@ -5356,6 +5701,7 @@ mod tests {
     use super::*;
 
     const TEST_PRIVATE_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"registryctl-test-private-key"}"#;
+    const TEST_CONSENT_PAYLOAD: &str = r#"{"version":1,"subject":{"identifier_type":"programme_id","value":"P-1"},"consenting_party":{"identifier":{"identifier_type":"programme_id","value":"P-1"},"relationship":"self"},"purposes":["humanitarian.referral"],"recipient":"partner.example","controller":"ministry.example","assurance":"system_of_record_signed","collection_method":"registration_desk","collection_context":"referral choice","collected_at":1783731600,"issued_at":1783731660,"expires_at":1783731960,"consent_id":"consent-1","notice_reference":"notice-1","notice_language":"en","notice_content_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","notice_modality":"written"}"#;
     const TEST_RELAY_IMAGE: &str = "ghcr.io/registrystack/registry-relay@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const TEST_NOTARY_IMAGE: &str = "ghcr.io/registrystack/registry-notary@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
@@ -5600,6 +5946,254 @@ mod tests {
         assert_eq!(verified.config_hash, config_hash);
         assert_eq!(verified.signer_kids, vec![public.jkt().unwrap()]);
         assert_eq!(verified.config_path, bundle_dir.join("config/notary.yaml"));
+    }
+
+    #[test]
+    fn consent_keygen_writes_a_private_ed25519_key_and_safe_public_report() {
+        let temp = TempDir::new().unwrap();
+        let out_dir = temp.path().join("consent-keys");
+
+        let report = generate_consent_keypair(ConsentKeygenOptions {
+            out_dir: out_dir.clone(),
+        })
+        .unwrap();
+
+        let private_json = fs::read_to_string(out_dir.join("private.jwk")).unwrap();
+        let private = PrivateJwk::parse(&private_json).unwrap();
+        assert_eq!(private.algorithm().unwrap(), SigningAlgorithm::EdDsa);
+        assert_eq!(private.kid.as_deref(), Some(report.key_id.as_str()));
+        let public_json = fs::read_to_string(out_dir.join("public.jwk")).unwrap();
+        let public = PublicJwk::parse(&public_json).unwrap();
+        assert_eq!(public, private.public());
+        assert_eq!(report.public_jwk, public);
+
+        let serialized_report = serde_json::to_string(&report).unwrap();
+        assert!(!serialized_report.contains("\"d\""));
+        assert!(!serialized_report.contains(private.d.as_deref().unwrap()));
+        assert!(!format!("{report:?}").contains(private.d.as_deref().unwrap()));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            assert_eq!(
+                fs::metadata(out_dir.join("private.jwk"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+            assert_eq!(
+                fs::metadata(&out_dir).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+        }
+    }
+
+    #[test]
+    fn consent_keygen_refuses_overwrite_without_changing_existing_keys() {
+        let temp = TempDir::new().unwrap();
+        let out_dir = temp.path().join("consent-keys");
+        generate_consent_keypair(ConsentKeygenOptions {
+            out_dir: out_dir.clone(),
+        })
+        .unwrap();
+        let original_private = fs::read(out_dir.join("private.jwk")).unwrap();
+        let original_public = fs::read(out_dir.join("public.jwk")).unwrap();
+
+        let error = generate_consent_keypair(ConsentKeygenOptions {
+            out_dir: out_dir.clone(),
+        })
+        .unwrap_err();
+
+        assert!(error.to_string().contains("must be new"));
+        assert_eq!(
+            fs::read(out_dir.join("private.jwk")).unwrap(),
+            original_private
+        );
+        assert_eq!(
+            fs::read(out_dir.join("public.jwk")).unwrap(),
+            original_public
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn consent_keygen_refuses_symlink_output_directory() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().unwrap();
+        let target = temp.path().join("target");
+        fs::create_dir(&target).unwrap();
+        let out_dir = temp.path().join("consent-keys");
+        symlink(&target, &out_dir).unwrap();
+
+        let error = generate_consent_keypair(ConsentKeygenOptions { out_dir }).unwrap_err();
+
+        assert!(error.to_string().contains("must be new"));
+        assert!(fs::read_dir(target).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn consent_sign_validates_payload_and_writes_bounded_compact_jws() {
+        let temp = TempDir::new().unwrap();
+        let key_dir = temp.path().join("consent-keys");
+        generate_consent_keypair(ConsentKeygenOptions {
+            out_dir: key_dir.clone(),
+        })
+        .unwrap();
+        let payload = temp.path().join("consent.json");
+        fs::write(&payload, TEST_CONSENT_PAYLOAD).unwrap();
+        let output = temp.path().join("consent.jws");
+
+        let report = sign_consent_evidence(ConsentSignOptions {
+            payload,
+            key: key_dir.join("private.jwk"),
+            out: output.clone(),
+        })
+        .unwrap();
+
+        let compact = fs::read_to_string(&output).unwrap();
+        assert_eq!(compact.split('.').count(), 3);
+        assert_eq!(report.compact_jws_bytes, compact.len());
+        assert!(compact.len() <= MAX_CONSENT_EVIDENCE_BYTES);
+        assert!(!serde_json::to_string(&report).unwrap().contains(&compact));
+        assert!(!format!("{report:?}").contains(&compact));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            assert_eq!(
+                fs::metadata(output).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+    }
+
+    #[test]
+    fn consent_sign_rejects_invalid_or_oversized_payload_before_output() {
+        let temp = TempDir::new().unwrap();
+        let key_dir = temp.path().join("consent-keys");
+        generate_consent_keypair(ConsentKeygenOptions {
+            out_dir: key_dir.clone(),
+        })
+        .unwrap();
+        let payload = temp.path().join("consent.json");
+        fs::write(&payload, r#"{"version":1,"unexpected":true}"#).unwrap();
+        let output = temp.path().join("invalid.jws");
+
+        let error = sign_consent_evidence(ConsentSignOptions {
+            payload: payload.clone(),
+            key: key_dir.join("private.jwk"),
+            out: output.clone(),
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("invalid ConsentEvidenceV1"));
+        assert!(!output.exists());
+
+        fs::write(&payload, vec![b' '; MAX_CONSENT_EVIDENCE_BYTES + 1]).unwrap();
+        let error = sign_consent_evidence(ConsentSignOptions {
+            payload,
+            key: key_dir.join("private.jwk"),
+            out: output.clone(),
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("exceeds the 8192-byte limit"));
+        assert!(!output.exists());
+    }
+
+    #[test]
+    fn consent_sign_refuses_to_overwrite_artifact() {
+        let temp = TempDir::new().unwrap();
+        let key_dir = temp.path().join("consent-keys");
+        generate_consent_keypair(ConsentKeygenOptions {
+            out_dir: key_dir.clone(),
+        })
+        .unwrap();
+        let payload = temp.path().join("consent.json");
+        fs::write(&payload, TEST_CONSENT_PAYLOAD).unwrap();
+        let output = temp.path().join("consent.jws");
+        fs::write(&output, b"keep-me").unwrap();
+
+        let error = sign_consent_evidence(ConsentSignOptions {
+            payload,
+            key: key_dir.join("private.jwk"),
+            out: output.clone(),
+        })
+        .unwrap_err();
+
+        assert!(error.to_string().contains("refusing to overwrite"));
+        assert_eq!(fs::read(output).unwrap(), b"keep-me");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn consent_sign_rejects_private_key_with_broad_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = TempDir::new().unwrap();
+        let key_dir = temp.path().join("consent-keys");
+        generate_consent_keypair(ConsentKeygenOptions {
+            out_dir: key_dir.clone(),
+        })
+        .unwrap();
+        let key = key_dir.join("private.jwk");
+        let mut permissions = fs::metadata(&key).unwrap().permissions();
+        permissions.set_mode(0o644);
+        fs::set_permissions(&key, permissions).unwrap();
+        let payload = temp.path().join("consent.json");
+        fs::write(&payload, TEST_CONSENT_PAYLOAD).unwrap();
+        let output = temp.path().join("consent.jws");
+
+        let error = sign_consent_evidence(ConsentSignOptions {
+            payload,
+            key,
+            out: output.clone(),
+        })
+        .unwrap_err();
+
+        assert!(error.to_string().contains("group or others"));
+        assert!(!output.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn consent_sign_rejects_symlinked_payload_and_private_key() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().unwrap();
+        let key_dir = temp.path().join("consent-keys");
+        generate_consent_keypair(ConsentKeygenOptions {
+            out_dir: key_dir.clone(),
+        })
+        .unwrap();
+        let payload_target = temp.path().join("payload-target.json");
+        fs::write(&payload_target, TEST_CONSENT_PAYLOAD).unwrap();
+        let payload_link = temp.path().join("payload-link.json");
+        symlink(&payload_target, &payload_link).unwrap();
+        let output = temp.path().join("consent.jws");
+
+        let error = sign_consent_evidence(ConsentSignOptions {
+            payload: payload_link,
+            key: key_dir.join("private.jwk"),
+            out: output.clone(),
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("must be a regular file"));
+        assert!(!output.exists());
+
+        let key_link = temp.path().join("private-link.jwk");
+        symlink(key_dir.join("private.jwk"), &key_link).unwrap();
+        let error = sign_consent_evidence(ConsentSignOptions {
+            payload: payload_target,
+            key: key_link,
+            out: output.clone(),
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("must be a regular file"));
+        assert!(!output.exists());
     }
 
     #[test]

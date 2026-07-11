@@ -5,6 +5,7 @@ members = [
     "crates/registry-platform-authcommon",
     "crates/registry-platform-cache",
     "crates/registry-platform-config",
+    "crates/registry-platform-consent",
     "crates/registry-platform-crypto",
     "crates/registry-platform-httpsec",
     "crates/registry-platform-httputil",
@@ -63,6 +64,7 @@ registry-platform-audit = { path = "crates/registry-platform-audit", version = "
 registry-platform-authcommon = { path = "crates/registry-platform-authcommon", version = "0.9.0" }
 registry-platform-cache = { path = "crates/registry-platform-cache", version = "0.9.0" }
 registry-platform-config = { path = "crates/registry-platform-config", version = "0.9.0" }
+registry-platform-consent = { path = "crates/registry-platform-consent", version = "0.9.0" }
 registry-platform-crypto = { path = "crates/registry-platform-crypto", version = "0.9.0" }
 registry-platform-httpsec = { path = "crates/registry-platform-httpsec", version = "0.9.0" }
 registry-platform-httputil = { path = "crates/registry-platform-httputil", version = "0.9.0" }

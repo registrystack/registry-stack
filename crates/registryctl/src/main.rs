@@ -4,8 +4,9 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 use registryctl::{
-    BundleSignOptions, DeploymentProfile, DoctorFormat, NotaryInitOptions, NotaryInitSourceKind,
-    NotarySource, OpenFnBatchMode, OpenFnConvertOptions, OpenFnImportOptions, Sample,
+    BundleSignOptions, ConsentKeygenOptions, ConsentSignOptions, DeploymentProfile, DoctorFormat,
+    NotaryInitOptions, NotaryInitSourceKind, NotarySource, OpenFnBatchMode, OpenFnConvertOptions,
+    OpenFnImportOptions, Sample,
 };
 
 fn main() -> Result<()> {
@@ -160,6 +161,20 @@ fn main() -> Result<()> {
             }
             AnchorCommand::RemoveKey { anchor_path, kid } => {
                 print_json(&registryctl::remove_config_anchor_key(&anchor_path, &kid)?)?;
+            }
+        },
+        Commands::Consent { command } => match command {
+            ConsentCommand::Keygen { out_dir } => {
+                print_json(&registryctl::generate_consent_keypair(
+                    ConsentKeygenOptions { out_dir },
+                )?)?;
+            }
+            ConsentCommand::Sign { payload, key, out } => {
+                print_json(&registryctl::sign_consent_evidence(ConsentSignOptions {
+                    payload,
+                    key,
+                    out,
+                })?)?;
             }
         },
         Commands::Openfn { command } => match *command {
@@ -390,6 +405,11 @@ enum Commands {
         #[command(subcommand)]
         command: AnchorCommand,
     },
+    /// Generate keys and sign verified consent evidence.
+    Consent {
+        #[command(subcommand)]
+        command: ConsentCommand,
+    },
     /// Work with OpenFn workflow exports.
     Openfn {
         #[command(subcommand)]
@@ -409,6 +429,7 @@ impl Commands {
             Self::Doctor { .. }
                 | Self::Bundle { .. }
                 | Self::Anchor { .. }
+                | Self::Consent { .. }
                 | Self::UpdateCheck
                 | Self::UpdateCheckRefresh
         )
@@ -642,6 +663,44 @@ mod tests {
             }
         ));
     }
+
+    #[test]
+    fn consent_cli_accepts_keygen_and_sign() {
+        let keygen = Cli::try_parse_from([
+            "registryctl",
+            "consent",
+            "keygen",
+            "--out-dir",
+            "consent-keys",
+        ])
+        .unwrap();
+        assert!(matches!(
+            keygen.command,
+            Commands::Consent {
+                command: ConsentCommand::Keygen { .. }
+            }
+        ));
+        assert!(!keygen.command.should_check_for_updates());
+
+        let sign = Cli::try_parse_from([
+            "registryctl",
+            "consent",
+            "sign",
+            "--payload",
+            "consent.json",
+            "--key",
+            "consent-keys/private.jwk",
+            "--out",
+            "consent.jws",
+        ])
+        .unwrap();
+        assert!(matches!(
+            sign.command,
+            Commands::Consent {
+                command: ConsentCommand::Sign { .. }
+            }
+        ));
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -814,6 +873,28 @@ enum AnchorCommand {
         /// Signer key id to remove.
         #[arg(long)]
         kid: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ConsentCommand {
+    /// Generate an Ed25519 consent signing keypair in a new directory.
+    Keygen {
+        /// New directory that will receive private.jwk and public.jwk.
+        #[arg(long, default_value = "consent-keys")]
+        out_dir: PathBuf,
+    },
+    /// Validate and sign a ConsentEvidenceV1 JSON payload as compact JWS.
+    Sign {
+        /// ConsentEvidenceV1 payload JSON file.
+        #[arg(long)]
+        payload: PathBuf,
+        /// Ed25519 private JWK file created by consent keygen.
+        #[arg(long)]
+        key: PathBuf,
+        /// New compact-JWS output file.
+        #[arg(long)]
+        out: PathBuf,
     },
 }
 

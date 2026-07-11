@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `registryctl consent keygen` creates a local Ed25519 consent keypair with a
+  `0600` private JWK, and `registryctl consent sign` validates and
+  signs one bounded `ConsentEvidenceV1` payload as compact JWS.
+
 ## [0.9.0] - 2026-07-10
 
 ### Added

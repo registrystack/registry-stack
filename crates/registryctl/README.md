@@ -87,6 +87,31 @@ runtime commands. They keep using the immutable image references already stored
 in `registryctl.yaml` and `compose.yaml`. A later `init` or `add` is a generation
 operation and requires the lock for that registryctl version.
 
+## Consent evidence keys and signing
+
+Create a dedicated Ed25519 keypair for signed consent evidence in one command:
+
+```sh
+registryctl consent keygen --out-dir consent-keys
+```
+
+The command creates a new directory instead of overwriting an existing path.
+Keep `consent-keys/private.jwk` secret; `consent-keys/public.jwk` is the key to
+pin in the governed private binding. On Unix, the private key is mode `0600`.
+
+Validate and sign one `ConsentEvidenceV1` JSON payload:
+
+```sh
+registryctl consent sign \
+  --payload consent.json \
+  --key consent-keys/private.jwk \
+  --out consent.jws
+```
+
+The signer rejects symlinked, non-regular, oversized, or invalid inputs and
+never prints private key material or the consent artifact to standard output.
+The output path must be new and is mode `0600` on Unix.
+
 ## Update checks
 
 `registryctl` checks GitHub releases at most once per day for normal
