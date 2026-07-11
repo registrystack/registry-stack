@@ -68,6 +68,7 @@ pub fn run_with_source(config: &Config, source: ConfigSource) -> Result<(), Erro
     super::vocabularies::validate_registry(&config.vocabularies).map_err(Error::from)?;
     validate_server(config).map_err(Error::from)?;
     validate_config_trust(config).map_err(Error::from)?;
+    validate_consultation(config).map_err(Error::from)?;
     validate_auth_mode(config).map_err(Error::from)?;
     validate_auth_failure_throttle(config).map_err(Error::from)?;
     validate_ids_and_uniqueness(config).map_err(Error::from)?;
@@ -79,6 +80,53 @@ pub fn run_with_source(config: &Config, source: ConfigSource) -> Result<(), Erro
     validate_spdci_feature(config).map_err(Error::from)?;
     validate_audit_ack_cursor(config).map_err(Error::from)?;
     validate_deployment(config, source).map_err(Error::from)?;
+    Ok(())
+}
+
+/// Validate the restart-only audit-pseudonym material catalog without loading
+/// any secret values.
+///
+/// Key-id and environment-name grammar is enforced by the typed serde model.
+/// This pass enforces the cross-entry bounds and uniqueness that cannot be
+/// expressed by individual value types. Source names are deliberately omitted
+/// from diagnostics.
+fn validate_consultation(config: &Config) -> Result<(), ConfigError> {
+    let Some(consultation) = &config.consultation else {
+        return Ok(());
+    };
+    let entries = consultation.audit_pseudonym_materials.entries();
+    if entries.is_empty() || entries.len() > super::MAX_AUDIT_PSEUDONYM_MATERIALS {
+        tracing::error!(
+            code = "config.validation_error",
+            field = "consultation.audit_pseudonym_materials",
+            count = entries.len(),
+            "audit-pseudonym material catalog must contain between 1 and 32 entries"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+
+    let mut key_ids = HashSet::with_capacity(entries.len());
+    let mut source_names = HashSet::with_capacity(entries.len());
+    for (index, entry) in entries.iter().enumerate() {
+        if !key_ids.insert(entry.key_id.as_str()) {
+            tracing::error!(
+                code = "config.duplicate_id",
+                field = "consultation.audit_pseudonym_materials",
+                index,
+                "audit-pseudonym material catalog contains a duplicate key id"
+            );
+            return Err(ConfigError::DuplicateId);
+        }
+        if !source_names.insert(entry.source.environment_name().as_str()) {
+            tracing::error!(
+                code = "config.validation_error",
+                field = "consultation.audit_pseudonym_materials",
+                index,
+                "audit-pseudonym material catalog contains a duplicate source reference"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+    }
     Ok(())
 }
 
@@ -4330,6 +4378,21 @@ datasets: []
         serde_saphyr::from_str(&deployment_config_yaml(extra)).expect("config parses")
     }
 
+    fn consultation_section(entries: &[(&str, &str)]) -> String {
+        use std::fmt::Write as _;
+
+        let mut yaml = String::from("consultation:\n  audit_pseudonym_materials:\n");
+        for (key_id, source_name) in entries {
+            writeln!(
+                yaml,
+                "    - key_id: \"{key_id}\"\n      source:\n        provider: environment\n        name: \"{source_name}\""
+            )
+            .expect("write consultation section");
+        }
+        yaml.push_str("deployment:\n  profile: local");
+        yaml
+    }
+
     #[derive(Clone, Default)]
     struct SharedLog(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
 
@@ -4380,6 +4443,68 @@ datasets: []
     /// rendered log output alongside the validation result.
     fn run_with_captured_logs(config: &Config) -> (Result<(), Error>, String) {
         capture_logs(|| run(config))
+    }
+
+    #[test]
+    fn consultation_material_catalog_accepts_one_and_thirty_two_entries() {
+        let one = parse_deployment_config(&consultation_section(&[("epoch-0", "SOURCE_0")]));
+        run(&one).expect("one material is valid");
+
+        let owned = (0..32)
+            .map(|index| (format!("epoch-{index}"), format!("SOURCE_{index}")))
+            .collect::<Vec<_>>();
+        let entries = owned
+            .iter()
+            .map(|(key_id, source)| (key_id.as_str(), source.as_str()))
+            .collect::<Vec<_>>();
+        let thirty_two = parse_deployment_config(&consultation_section(&entries));
+        run(&thirty_two).expect("32 materials are valid");
+    }
+
+    #[test]
+    fn consultation_material_catalog_rejects_empty_and_over_bound() {
+        let empty = parse_deployment_config(&consultation_section(&[]));
+        assert!(matches!(
+            run(&empty),
+            Err(Error::Config(ConfigError::ValidationError))
+        ));
+
+        let owned = (0..33)
+            .map(|index| (format!("epoch-{index}"), format!("SOURCE_{index}")))
+            .collect::<Vec<_>>();
+        let entries = owned
+            .iter()
+            .map(|(key_id, source)| (key_id.as_str(), source.as_str()))
+            .collect::<Vec<_>>();
+        let over_bound = parse_deployment_config(&consultation_section(&entries));
+        assert!(matches!(
+            run(&over_bound),
+            Err(Error::Config(ConfigError::ValidationError))
+        ));
+    }
+
+    #[test]
+    fn consultation_material_catalog_rejects_duplicate_ids_and_sources_without_leaks() {
+        let duplicate_id = parse_deployment_config(&consultation_section(&[
+            ("epoch-a", "SOURCE_A"),
+            ("epoch-a", "SOURCE_B"),
+        ]));
+        assert!(matches!(
+            run(&duplicate_id),
+            Err(Error::Config(ConfigError::DuplicateId))
+        ));
+
+        let source_marker = "SOURCE_REFERENCE_MUST_NOT_LEAK";
+        let duplicate_source = parse_deployment_config(&consultation_section(&[
+            ("epoch-a", source_marker),
+            ("epoch-b", source_marker),
+        ]));
+        let (result, logs) = run_with_captured_logs(&duplicate_source);
+        assert!(matches!(
+            result,
+            Err(Error::Config(ConfigError::ValidationError))
+        ));
+        assert!(!logs.contains(source_marker));
     }
 
     #[test]

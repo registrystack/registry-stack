@@ -8,6 +8,11 @@
 //! not backend capabilities.
 
 mod identifiers;
+#[allow(
+    dead_code,
+    reason = "the bounded provider foundation precedes consultation runtime integration"
+)]
+pub(crate) mod pseudonym;
 mod types;
 mod workload;
 

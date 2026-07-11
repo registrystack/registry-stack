@@ -19,13 +19,15 @@
 //! secrets, or row data.
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use registry_platform_audit::pseudonym_keyring::AuditPseudonymKeyId;
 use registry_platform_authcommon::CredentialFingerprintRef;
 use registry_platform_ops::{AuditWritePolicy, DeploymentProfile};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 pub mod capabilities;
 pub mod governed;
@@ -41,6 +43,9 @@ pub use loader::{
     load_with_metadata_options, validate_verified_bundle_runtime, BundleStateAction, LoadOptions,
     LoadedConfig, PendingBundleAcceptance,
 };
+
+pub(crate) const MAX_AUDIT_PSEUDONYM_MATERIALS: usize = 32;
+
 /// Root configuration document. Parsed from YAML at startup.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -57,6 +62,12 @@ pub struct Config {
     pub vocabularies: BTreeMap<String, String>,
     pub auth: AuthConfig,
     pub audit: AuditConfig,
+    /// Optional governed consultation runtime configuration.
+    ///
+    /// Consultation configuration is restart-only. In particular, audit
+    /// pseudonym material is never hot-swapped into an active runtime.
+    #[serde(default)]
+    pub consultation: Option<ConsultationConfig>,
     pub datasets: Vec<DatasetConfig>,
     /// Optional external standards adapters. The config model is parsed
     /// in every build so feature-disabled binaries can reject it with a
@@ -606,6 +617,129 @@ fn default_oidc_scope_claim() -> String {
 
 fn default_oidc_token_types() -> Vec<String> {
     vec!["JWT".to_string(), "at+jwt".to_string()]
+}
+
+/// Restart-only material references for governed consultations.
+///
+/// Each environment reference must identify immutable, versioned secret
+/// material. Replacing the value behind an existing reference requires a new
+/// key id. PostgreSQL intentionally stores no secret-derived verifier, so it
+/// cannot detect a changed value after a process restart.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ConsultationConfig {
+    pub audit_pseudonym_materials: AuditPseudonymMaterialCatalogConfig,
+}
+
+/// Bounded startup catalog of audit-pseudonym material references.
+///
+/// The 1..=32 bound and cross-entry uniqueness are enforced by config
+/// validation and repeated by the material provider before loading secrets.
+#[derive(Clone, Deserialize, PartialEq, Eq)]
+#[serde(transparent)]
+pub struct AuditPseudonymMaterialCatalogConfig(Vec<AuditPseudonymMaterialConfig>);
+
+impl AuditPseudonymMaterialCatalogConfig {
+    #[must_use]
+    pub(crate) fn entries(&self) -> &[AuditPseudonymMaterialConfig] {
+        &self.0
+    }
+}
+
+impl fmt::Debug for AuditPseudonymMaterialCatalogConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.debug_list().entries(&self.0).finish()
+    }
+}
+
+/// One public epoch id bound to one secret source reference.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AuditPseudonymMaterialConfig {
+    pub key_id: AuditPseudonymKeyId,
+    pub source: AuditPseudonymSecretSourceConfig,
+}
+
+/// Closed v1 set of audit-pseudonym secret source providers.
+///
+/// The configured name is a reference only. Secret values cannot be embedded
+/// in this model and are loaded exactly once during runtime compilation.
+#[derive(Clone, Deserialize, PartialEq, Eq)]
+#[serde(tag = "provider", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AuditPseudonymSecretSourceConfig {
+    Environment {
+        name: AuditPseudonymSecretEnvironmentName,
+    },
+}
+
+impl AuditPseudonymSecretSourceConfig {
+    #[must_use]
+    pub(crate) fn environment_name(&self) -> &AuditPseudonymSecretEnvironmentName {
+        match self {
+            Self::Environment { name } => name,
+        }
+    }
+}
+
+impl fmt::Debug for AuditPseudonymSecretSourceConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Environment { .. } => formatter
+                .debug_struct("Environment")
+                .field("name", &"<configured>")
+                .finish(),
+        }
+    }
+}
+
+/// Portable environment-variable name used only as a secret reference.
+///
+/// Debug output is redacted even though the name is not itself key material,
+/// preventing configuration diagnostics from disclosing secret topology.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct AuditPseudonymSecretEnvironmentName(String);
+
+impl AuditPseudonymSecretEnvironmentName {
+    fn parse(value: String) -> Result<Self, &'static str> {
+        if is_audit_pseudonym_environment_name(&value) {
+            Ok(Self(value))
+        } else {
+            Err("audit pseudonym environment-variable name is invalid")
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for AuditPseudonymSecretEnvironmentName {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::parse(value).map_err(serde::de::Error::custom)
+    }
+}
+
+impl fmt::Debug for AuditPseudonymSecretEnvironmentName {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("AuditPseudonymSecretEnvironmentName(<configured>)")
+    }
+}
+
+fn is_audit_pseudonym_environment_name(value: &str) -> bool {
+    const MAX_ENVIRONMENT_NAME_BYTES: usize = 128;
+
+    let mut bytes = value.bytes();
+    let Some(first) = bytes.next() else {
+        return false;
+    };
+    value.len() <= MAX_ENVIRONMENT_NAME_BYTES
+        && matches!(first, b'A'..=b'Z' | b'a'..=b'z' | b'_')
+        && bytes.all(|byte| matches!(byte, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_'))
 }
 
 /// Audit configuration. Sink choice gates further fields via the
@@ -1804,5 +1938,85 @@ mod tests {
         assert!(!throttle.enabled);
         assert_eq!(throttle.max_failures, 20);
         assert_eq!(throttle.window_seconds, 60);
+    }
+
+    #[test]
+    fn audit_pseudonym_environment_name_uses_exact_portable_grammar() {
+        let max_name = "A".repeat(128);
+        for value in ["A", "_A", "registry_relay_1", max_name.as_str()] {
+            assert!(
+                AuditPseudonymSecretEnvironmentName::parse(value.to_owned()).is_ok(),
+                "expected valid environment name"
+            );
+        }
+        for value in [
+            "".to_owned(),
+            "1LEADING".to_owned(),
+            "-LEADING".to_owned(),
+            "HAS-DASH".to_owned(),
+            "HAS SPACE".to_owned(),
+            "NON_ASCII_é".to_owned(),
+            "A".repeat(129),
+        ] {
+            assert!(
+                AuditPseudonymSecretEnvironmentName::parse(value).is_err(),
+                "expected invalid environment name"
+            );
+        }
+    }
+
+    #[test]
+    fn consultation_config_is_closed_and_source_debug_is_redacted() {
+        let source_name = "REGISTRY_RELAY_SOURCE_NAME_MUST_NOT_LEAK";
+        let config: ConsultationConfig = serde_saphyr::from_str(&format!(
+            r#"
+audit_pseudonym_materials:
+  - key_id: epoch-2026-07
+    source:
+      provider: environment
+      name: {source_name}
+"#
+        ))
+        .expect("valid consultation config");
+        let debug = format!("{config:?}");
+        assert!(!debug.contains(source_name));
+        assert!(debug.contains("<configured>"));
+
+        for invalid in [
+            r#"
+audit_pseudonym_materials:
+  - key_id: UPPERCASE
+    source:
+      provider: environment
+      name: VALID_NAME
+"#,
+            r#"
+audit_pseudonym_materials:
+  - key_id: epoch-a
+    source:
+      provider: environment
+      name: INVALID-NAME
+"#,
+            r#"
+audit_pseudonym_materials:
+  - key_id: epoch-a
+    source:
+      provider: environment
+      name: VALID_NAME
+      value: secret-values-are-not-config
+"#,
+            r#"
+audit_pseudonym_materials:
+  - key_id: epoch-a
+    source:
+      provider: file
+      name: VALID_NAME
+"#,
+        ] {
+            assert!(
+                serde_saphyr::from_str::<ConsultationConfig>(invalid).is_err(),
+                "invalid or open-ended consultation config must be rejected"
+            );
+        }
     }
 }
