@@ -138,9 +138,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `disclosure.default` outside the claim's allowed disclosure set
   (REQ-DM-CLAIM-008), and an `extract`/`exists` rule whose `source` does not
   name a declared source binding (REQ-DM-CLAIM-006), with an error naming the
-  offending claim and field. Configurations that previously loaded with one
-  of these inconsistencies fail to load until corrected; behavior for
-  consistent configurations is unchanged.
+  offending claim and field. An omitted claim `formats` list now defaults to
+  claim-result JSON. An explicitly configured list must include claim-result
+  JSON and may contain only implemented formats (REQ-DM-CLAIM-009).
+  Configurations that previously loaded with one of these inconsistencies fail
+  to load until corrected.
 - `extract` and `exists` rule results are now checked against the claim's
   declared `value.type` at evaluation time (REQ-DM-CLAIM-009), the same
   enforcement CEL rules already had. A source value that does not conform

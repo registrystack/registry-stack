@@ -285,6 +285,31 @@ impl StandaloneRegistryNotaryConfig {
                 });
             }
             validate_claim_semantics(claim)?;
+            if claim.formats.is_empty() {
+                return Err(EvidenceConfigError::EmptyClaimFormats {
+                    claim: claim.id.clone(),
+                });
+            }
+            if let Some(format) = claim.formats.iter().find(|format| {
+                !matches!(
+                    format.as_str(),
+                    FORMAT_CLAIM_RESULT_JSON | FORMAT_CCCEV_JSONLD | FORMAT_SD_JWT_VC
+                )
+            }) {
+                return Err(EvidenceConfigError::UnsupportedClaimFormat {
+                    claim: claim.id.clone(),
+                    format: format.clone(),
+                });
+            }
+            if !claim
+                .formats
+                .iter()
+                .any(|format| format == FORMAT_CLAIM_RESULT_JSON)
+            {
+                return Err(EvidenceConfigError::MissingClaimResultFormat {
+                    claim: claim.id.clone(),
+                });
+            }
             // REQ-DM-CLAIM-008: reject a disclosure default outside the
             // allowed set at load; this is the most consequential of the
             // three RS-DM-CLAIM Section 10 gaps because a privacy-sensitive

@@ -160,6 +160,7 @@ fn write_config_with_options(tmp: &TempDir, options: TestConfigOptions<'_>) -> P
         type: cel
         expression: "true"
       formats:
+        - application/vnd.registry-notary.claim-result+json
         - application/dc+sd-jwt
       credential_profiles:
         - unbound_sd_jwt

@@ -777,6 +777,81 @@ pub(super) fn unknown_depends_on_is_rejected() {
 // -----------------------------------------------------------------------
 
 #[test]
+pub(super) fn omitted_claim_formats_default_to_claim_result_json() {
+    let claim = minimal_claim("default-format");
+    assert_eq!(claim.formats, vec![FORMAT_CLAIM_RESULT_JSON.to_string()]);
+}
+
+#[test]
+pub(super) fn empty_claim_formats_are_rejected() {
+    let mut config = minimal_config();
+    let mut claim = minimal_claim("unrenderable-claim");
+    claim.formats.clear();
+    config.evidence.claims = vec![claim];
+
+    let err = config
+        .validate()
+        .expect_err("an explicitly empty formats list must fail validation");
+    assert!(matches!(
+        err,
+        EvidenceConfigError::EmptyClaimFormats { ref claim }
+            if claim == "unrenderable-claim"
+    ));
+}
+
+#[test]
+pub(super) fn claim_formats_must_include_claim_result_json() {
+    let mut config = minimal_config();
+    let mut claim = minimal_claim("cccev-only");
+    claim.formats = vec![FORMAT_CCCEV_JSONLD.to_string()];
+    config.evidence.claims = vec![claim];
+
+    let err = config
+        .validate()
+        .expect_err("claim-result JSON must be supported by every claim");
+    assert!(matches!(
+        err,
+        EvidenceConfigError::MissingClaimResultFormat { ref claim }
+            if claim == "cccev-only"
+    ));
+}
+
+#[test]
+pub(super) fn unsupported_claim_formats_are_rejected() {
+    let mut config = minimal_config();
+    let mut claim = minimal_claim("unknown-renderer");
+    claim.formats.push("application/example+json".to_string());
+    config.evidence.claims = vec![claim];
+
+    let err = config
+        .validate()
+        .expect_err("an unimplemented renderer must fail configuration load");
+    assert!(matches!(
+        err,
+        EvidenceConfigError::UnsupportedClaimFormat {
+            ref claim,
+            ref format,
+        } if claim == "unknown-renderer" && format == "application/example+json"
+    ));
+}
+
+#[test]
+pub(super) fn implemented_claim_formats_are_accepted() {
+    let mut config = minimal_config();
+    let mut claim = minimal_claim("supported-formats");
+    claim.formats = vec![
+        FORMAT_CLAIM_RESULT_JSON.to_string(),
+        FORMAT_CCCEV_JSONLD.to_string(),
+        FORMAT_SD_JWT_VC.to_string(),
+    ];
+    config.evidence.claims = vec![claim];
+
+    config
+        .validate()
+        .expect("all implemented claim formats must pass validation");
+}
+
+#[test]
 pub(super) fn duplicate_claim_id_is_rejected() {
     // REQ-DM-CLAIM-001: two claims sharing an id previously loaded
     // cleanly; the loader must now reject it.

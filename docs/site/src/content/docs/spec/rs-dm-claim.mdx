@@ -6,11 +6,11 @@ owner: registry-docs
 source_repos:
   - registry-notary
   - registry-platform
-last_reviewed: "2026-07-07"
+last_reviewed: "2026-07-11"
 doc_type: specification
 doc_id: RS-DM-CLAIM
 category: normative
-evidence: partial
+evidence: verified
 locale: en
 standards_referenced:
   - openapi
@@ -25,7 +25,7 @@ audience:
   - specification editor
 ---
 
-This document defines the target data model of a Registry Notary claim definition: the configuration artifact that declares what Notary can evaluate, what it reads to evaluate it, what it discloses, and what it can issue. It is the structural counterpart to the [Registry Notary protocol](../rs-pr-notary/): RS-PR-NOTARY Section 1 defers the claim-definition structure (source bindings, rule, disclosure policy, and formats) to this document. The Evidence section distinguishes shipped behavior from the implementation gaps tracked in Section 10.
+This document defines the data model of a Registry Notary claim definition: the configuration artifact that declares what Notary can evaluate, what it reads to evaluate it, what it discloses, and what it can issue. It is the structural counterpart to the [Registry Notary protocol](../rs-pr-notary/): RS-PR-NOTARY Section 1 defers the claim-definition structure (source bindings, rule, disclosure policy, and formats) to this document.
 
 Where this document and [RS-PR-NOTARY](../rs-pr-notary/) state the same constraint, RS-PR-NOTARY is the protocol-level (wire) form and this document is the data-model form. Both refine the Registry Notary component of [RS-ARC-G](../rs-arc-g/) Section 3 (REQ-ARC-G-007) one level of detail down, from architectural boundary to the structure a claim takes in configuration. Security-model concerns (the scope and authentication machinery a claim relies on) belong to [RS-SEC-G](../rs-sec-g/); this document refers to them only where they shape the model.
 
@@ -37,6 +37,7 @@ The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 
 | --- | --- | --- | --- |
 | 0.1.0 | 2026-06-13 | draft | Initial claim-definition data model, distilled from the Registry Notary source-and-claim modeling guide, the operator configuration reference, and the two-way credential-eligibility and matching-policy validations the configuration loader enforces. |
 | 0.2.0 | 2026-07-07 | draft | Reworded REQ-DM-CLAIM-005 so the controlled-environment restriction on disabling matching-failure collapse reads as operational guidance rather than a runtime-enforced constraint, and documented the extract/exists value-type-checking gap and the empty-`formats`-list evaluation gap in Limitations. |
+| 0.2.1 | 2026-07-11 | draft | Aligned the configuration-load contract with shipped validation for identifiers, disclosure defaults, rule source references, and response formats; removed the fixed non-CEL value-type limitation. |
 
 ## 1. Scope and references
 
@@ -115,9 +116,9 @@ REQ-DM-CLAIM-008: Registry Notary MUST apply a claim's `default` disclosure mode
 
 ## 7. Response formats and value typing
 
-A claim's `formats` list declares the response formats it can render, and its value descriptor declares the type the evaluated value takes.
+A claim's `formats` list declares the output formats associated with the claim, and its value descriptor declares the type the evaluated value takes. Claim-result JSON and CCCEV JSON-LD are evaluation render formats. SD-JWT VC can appear as a credential capability, but a credential profile controls whether Registry Notary can issue it.
 
-REQ-DM-CLAIM-009: A claim MUST be renderable as the claim-result JSON media type, and MAY additionally declare CCCEV-shaped JSON-LD in its `formats` (the data-model form of REQ-PR-NOTARY-011). SD-JWT VC issuance is governed by credential profiles, not by the evaluation render `formats` list. A claim declares the type its evaluated value takes; where that type is one Registry Notary recognizes, the evaluated value MUST conform to it or the evaluation is refused rather than returned.
+REQ-DM-CLAIM-009: A claim MUST be renderable as the claim-result JSON media type, and MAY additionally declare CCCEV-shaped JSON-LD in its `formats` (the data-model form of REQ-PR-NOTARY-011). An omitted `formats` list defaults to the claim-result JSON media type. An explicit list MUST include that media type and MUST NOT name an unimplemented output format; Registry Notary rejects an empty, incomplete, or unsupported list at configuration load. Listing SD-JWT VC records a credential capability but does not authorize issuance; credential profiles govern issuance. A claim declares the type its evaluated value takes; where that type is one Registry Notary recognizes, the evaluated value MUST conform to it or the evaluation is refused rather than returned.
 
 ## 8. Credential eligibility
 
@@ -133,19 +134,14 @@ REQ-DM-CLAIM-011: Batch evaluation MUST be semantically equivalent to evaluating
 
 ## 10. Limitations
 
-These constraints are stated so a reader does not infer an invariant the reviewed implementation does not enforce at configuration load.
+These constraints bound the reviewed implementation where it does not enforce the complete target model.
 
 - Plugin rule: Declared in configuration, unimplemented; an evaluation that reaches a `plugin` rule is refused at evaluation time, not at configuration load (REQ-DM-CLAIM-006).
-- Identifier uniqueness: The configuration loader does not reject two claims that share an `id`; uniqueness is an operator responsibility (REQ-DM-CLAIM-001).
-- Disclosure default: The loader does not verify that `default` is a member of `allowed`; a `default` outside `allowed` surfaces as a request error when the result is rendered, not as a startup failure (REQ-DM-CLAIM-008).
-- Rule source reference: The loader does not verify that a rule's `source` names a declared source binding; a dangling reference surfaces when the source is read at evaluation, not at configuration load (REQ-DM-CLAIM-006).
 - Matching fallback: A source binding with no matching policy resolves on identifiers alone, with no purpose, relationship, or input-minimization gating (Section 4).
-- Value-type conformance: Registry Notary checks that an evaluated value conforms to its declared `value.type` only for a `cel` rule; the `extract` and `exists` rule paths return their result without checking it against `value.type` (REQ-DM-CLAIM-009). Tracked in [GH#232](https://github.com/registrystack/registry-stack/issues/232).
-- Empty formats list: A claim definition whose `formats` list is empty (the default) can never be evaluated, because format checking rejects any format not listed, including the default-requested claim-result JSON format (REQ-DM-CLAIM-009). This is not rejected at configuration load. Tracked in [GH#170](https://github.com/registrystack/registry-stack/issues/170).
 
 ## Conformance
 
-A claim definition, and the Registry Notary deployment that serves it, conforms to the target model in this specification when it:
+A claim definition, and the Registry Notary deployment that serves it, conforms to this specification when it:
 
 - carries a stable identifier by which it is evaluated and named (REQ-DM-CLAIM-001);
 - binds each source read to the caller scope it requires, enforced before the read, and rejects inputs outside a declared allow-list (REQ-DM-CLAIM-002, REQ-DM-CLAIM-003);
@@ -153,7 +149,7 @@ A claim definition, and the Registry Notary deployment that serves it, conforms 
 - declares exactly one rule of an implemented kind and never depends on the unimplemented plugin kind (REQ-DM-CLAIM-006);
 - keeps `depends_on` references resolvable and acyclic (REQ-DM-CLAIM-007);
 - applies the default disclosure mode and refuses modes outside the allowed set (REQ-DM-CLAIM-008);
-- renders the claim-result format and produces a value matching its declared type after the gaps in Section 10 are closed (REQ-DM-CLAIM-009);
+- renders the claim-result format and produces a value matching its declared type (REQ-DM-CLAIM-009);
 - issues a credential only under the two-way claim-and-profile allow-list (REQ-DM-CLAIM-010);
 - treats batch evaluation as equivalent to repeated single evaluation and never as a way around per-evaluation rules (REQ-DM-CLAIM-011).
 
@@ -161,7 +157,7 @@ Conformance to this specification does not imply conformance to any external sta
 
 ## Evidence
 
-This specification is `partial`: most requirements describe shipped behavior a reader can inspect, per RS-DOC REQ-DOC-014, but Section 10 records two target-model gaps that keep REQ-DM-CLAIM-009 from being fully verified today.
+This specification is `verified`: every requirement describes shipped behavior a reader can inspect, per RS-DOC REQ-DOC-014.
 
 - The [source and claim modeling guide](../../products/registry-notary/source-claim-modeling-guide/) walks the claim structure, the three rule kinds, source bindings, the disclosure policy, the two-way credential eligibility, and batch behavior that Sections 2 through 9 make precise.
 - The [Registry Notary operator configuration reference](../../products/registry-notary/operator-config-reference/) lists the claim, matching-policy, and credential-profile fields and the loader validations they carry (non-empty matching labels and lists, the rejected empty `allowed_claims`, the input allow-list minimization) that Sections 3, 4, and 8 state normatively.
@@ -169,7 +165,6 @@ This specification is `partial`: most requirements describe shipped behavior a r
 - [RS-PR-NOTARY](../rs-pr-notary/) carries the protocol-level form of the scope, rule, disclosure, format, and credential requirements this document gives a data-model form (REQ-PR-NOTARY-004/006/007/009/011/013/015).
 - [RS-ARC-G](../rs-arc-g/) Section 3 holds the Registry Notary component invariant (REQ-ARC-G-007) that both this document and RS-PR-NOTARY refine.
 - The [standards register](../../reference/standards/) records the adoption mode for SD-JWT VC, the W3C DID method, and SP DCI named in `standards_referenced`.
-- [GH#170](https://github.com/registrystack/registry-stack/issues/170) and [GH#232](https://github.com/registrystack/registry-stack/issues/232) track the empty-`formats` evaluation gap and the non-CEL value-type conformance gap called out in Section 10.
 
 ## Next
 

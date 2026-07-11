@@ -3,6 +3,10 @@
 
 use super::*;
 
+fn default_claim_formats() -> Vec<String> {
+    vec![FORMAT_CLAIM_RESULT_JSON.to_string()]
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClaimDefinition {
@@ -27,7 +31,7 @@ pub struct ClaimDefinition {
     pub operations: ClaimOperationsConfig,
     #[serde(default)]
     pub disclosure: DisclosureConfig,
-    #[serde(default)]
+    #[serde(default = "default_claim_formats")]
     pub formats: Vec<String>,
     #[serde(default)]
     pub credential_profiles: Vec<String>,

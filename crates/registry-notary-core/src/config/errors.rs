@@ -54,6 +54,20 @@ pub enum EvidenceConfigError {
     DuplicateClaimId { claim: String },
     #[error("claim '{claim}' has invalid semantics config: {reason}")]
     InvalidClaimSemantics { claim: String, reason: String },
+    #[error(
+        "claim '{claim}' formats must list at least one evaluation response format; \
+         omit formats to use the default claim-result JSON format"
+    )]
+    EmptyClaimFormats { claim: String },
+    #[error(
+        "claim '{claim}' formats contains unsupported format '{format}'; supported formats are \
+         claim-result JSON, CCCEV JSON-LD, and SD-JWT VC"
+    )]
+    UnsupportedClaimFormat { claim: String, format: String },
+    #[error(
+        "claim '{claim}' formats must include application/vnd.registry-notary.claim-result+json"
+    )]
+    MissingClaimResultFormat { claim: String },
     /// REQ-DM-CLAIM-008 requires a claim's `disclosure.default` to be a
     /// member of `disclosure.allowed`; RS-DM-CLAIM Section 10 previously
     /// documented this as unchecked at load, surfacing only when a result

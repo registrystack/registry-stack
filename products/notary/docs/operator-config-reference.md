@@ -736,7 +736,12 @@ Important fields:
 - `depends_on`: prerequisite claims for CEL rules that reuse earlier results.
 - `operations`: enable or cap `evaluate` and `batch_evaluate`.
 - `disclosure`: default and allowed response disclosure modes.
-- `formats`: response formats the claim can render.
+- `formats`: evaluation response formats and credential capabilities associated
+  with the claim. When omitted, the list
+  defaults to `application/vnd.registry-notary.claim-result+json`. An explicit
+  list must include that media type and may also contain CCCEV JSON-LD and
+  SD-JWT VC. Listing SD-JWT VC does not authorize issuance; `credential_profiles`
+  controls that separately. Empty or unknown lists fail configuration load.
 - `credential_profiles`: profiles allowed to issue from this claim.
 
 `semantics` is metadata, not a new credential shape. It helps clients understand
