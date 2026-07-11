@@ -62,12 +62,12 @@ Reason: unsafe `std::env::set_var` and `std::env::remove_var` calls in
 
 Unsafe surface:
 
-- `crates/registry-notary/src/main.rs:4558`
-- `crates/registry-notary/src/main.rs:4579`
-- `crates/registry-notary/src/main.rs:4590`
-- `crates/registry-notary/src/main.rs:4610`
-- `crates/registry-notary/src/main.rs:4621`
-- `crates/registry-notary/src/main.rs:4643`
+- `crates/registry-notary/src/doctor/tests.rs:403`
+- `crates/registry-notary/src/doctor/tests.rs:424`
+- `crates/registry-notary/src/doctor/tests.rs:435`
+- `crates/registry-notary/src/doctor/tests.rs:455`
+- `crates/registry-notary/src/doctor/tests.rs:466`
+- `crates/registry-notary/src/doctor/tests.rs:488`
 
 Review notes:
 
@@ -85,14 +85,14 @@ Reason: unsafe `std::env::set_var` and `std::env::remove_var` calls in
 
 Unsafe surface:
 
-- `crates/registry-notary-server/src/standalone.rs:8057`
-- `crates/registry-notary-server/src/standalone.rs:8148`
-- `crates/registry-notary-server/src/standalone.rs:8183`
-- `crates/registry-notary-server/src/standalone.rs:8260`
-- `crates/registry-notary-server/src/standalone.rs:8369`
-- `crates/registry-notary-server/tests/deployment_gates_test.rs:28`
-- `crates/registry-notary-server/tests/deployment_gates_test.rs:218`
-- `crates/registry-notary-server/tests/deployment_gates_test.rs:236`
+- `crates/registry-notary-server/src/standalone/tests/signing.inc:455`
+- `crates/registry-notary-server/src/standalone/tests/signing.inc:546`
+- `crates/registry-notary-server/src/standalone/tests/signing.inc:581`
+- `crates/registry-notary-server/src/standalone/tests/signing.inc:658`
+- `crates/registry-notary-server/src/standalone/tests/signing.inc:767`
+- `crates/registry-notary-server/tests/deployment_gates_test.rs:34`
+- `crates/registry-notary-server/tests/deployment_gates_test.rs:365`
+- `crates/registry-notary-server/tests/deployment_gates_test.rs:383`
 - `crates/registry-notary-server/tests/demo_config.rs:29`
 - `crates/registry-notary-server/tests/demo_config.rs:66`
 - `crates/registry-notary-server/tests/demo_config.rs:125`
@@ -100,8 +100,8 @@ Unsafe surface:
 - `crates/registry-notary-server/tests/demo_config.rs:306`
 - `crates/registry-notary-server/tests/demo_config.rs:408`
 - `crates/registry-notary-server/tests/demo_config.rs:475`
-- `crates/registry-notary-server/tests/decentralized_cross_source_cel.rs:246`
-- `crates/registry-notary-server/tests/decentralized_cross_source_cel.rs:389`
+- `crates/registry-notary-server/tests/decentralized_cross_source_cel.rs:248`
+- `crates/registry-notary-server/tests/decentralized_cross_source_cel.rs:391`
 
 Review notes:
 

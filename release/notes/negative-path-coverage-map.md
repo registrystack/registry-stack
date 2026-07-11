@@ -124,8 +124,8 @@ public evidence or disposition.
   public scenario detail remains intentionally omitted.
 - `NP-19`: Covered.
   Public anchors:
-  `crates/registry-notary-server/src/api.rs::issue_credential_rejects_purpose_mismatch`
-  and `crates/registry-notary-server/tests/standalone_http.rs::direct_credential_purpose_mismatch_denial_is_audited_and_redacted`.
+  `crates/registry-notary-server/src/api/tests/credentials.rs::issue_credential_rejects_purpose_mismatch`
+  and `crates/registry-notary-server/tests/standalone_http/credentials.rs::direct_credential_purpose_mismatch_denial_is_audited_and_redacted`.
   Disposition: purpose mismatch is denied before credential signing, and the
   direct `/v1/credentials` product route now returns a stable problem response,
   emits a redacted `credential_denied` audit record with self-attestation access
@@ -133,8 +133,8 @@ public evidence or disposition.
 - `NP-20`: Covered.
   Public anchors:
   `crates/registry-platform-sdjwt/src/lib.rs::holder_proof_rejects_wrong_type_and_dangerous_headers`,
-  `crates/registry-notary-server/src/api.rs::strict_credential_issue_rejects_oid4vci_proof_shape`,
-  and `crates/registry-notary-server/tests/standalone_http.rs::strict_credentials_issue_rejects_oid4vci_proof_at_http_boundary`.
+  `crates/registry-notary-server/src/api/tests/credentials.rs::strict_credential_issue_rejects_oid4vci_proof_shape`,
+  and `crates/registry-notary-server/tests/standalone_http/credentials.rs::strict_credentials_issue_rejects_oid4vci_proof_at_http_boundary`.
   Disposition: platform holder-proof validation and the direct
   `/v1/credentials` product route both reject the wrong proof class, return the
   stable `credential.holder_proof_required` problem, emit a redacted
@@ -150,9 +150,9 @@ public evidence or disposition.
   denial behavior.
 - `NP-22`: Covered.
   Public anchors:
-  `crates/registry-notary-server/src/standalone.rs::notary_transaction_token_auth_consumes_jti_once`,
-  `crates/registry-notary-server/src/standalone.rs::consume_notary_token_jti_rejects_missing_jti_for_transaction_typ`,
-  and `crates/registry-notary-server/tests/standalone_http.rs::preauth_transaction_token_jti_denials_are_stable_and_redacted`.
+  `crates/registry-notary-server/src/standalone/tests/auth.inc::notary_transaction_token_auth_consumes_jti_once`,
+  `crates/registry-notary-server/src/standalone/tests/auth.inc::consume_notary_token_jti_rejects_missing_jti_for_transaction_typ`,
+  and `crates/registry-notary-server/tests/standalone_http/preauth.rs::preauth_transaction_token_jti_denials_are_stable_and_redacted`.
   Disposition: single-use transaction-token `jti` enforcement, missing-`jti`
   fail-closed behavior, replay denial, product-surface HTTP audit parity, and
   response/audit redaction are covered.
@@ -165,9 +165,9 @@ public evidence or disposition.
   before treating it as release evidence.
 - `NP-24`: Partial.
   Public anchors:
-  `crates/registry-notary-server/src/standalone.rs::source_json_reader_rejects_oversized_body`,
-  `crates/registry-notary-server/src/standalone.rs::http_sources_reject_private_source_urls_before_fetch`,
-  and `crates/registry-notary-server/src/standalone.rs::http_sources_reject_cloud_metadata_source_urls_before_fetch`.
+  `crates/registry-notary-server/src/standalone/tests/sources_transport.inc::source_json_reader_rejects_oversized_body`,
+  `crates/registry-notary-server/src/standalone/tests/sources_transport.inc::http_sources_reject_private_source_urls_before_fetch`,
+  and `crates/registry-notary-server/src/standalone/tests/sources_transport.inc::http_sources_reject_cloud_metadata_source_urls_before_fetch`.
   Disposition: Notary behavior is covered; Relay handling is a deliberate
   product difference that needs explicit release sign-off.
 - `NP-25`: Covered.
@@ -185,26 +185,26 @@ public evidence or disposition.
   release sign-off.
 - `NP-27`: Covered.
   Public anchors:
-  `crates/registry-notary-server/src/runtime.rs::evaluate_denies_missing_scope_before_reading_source`,
-  `crates/registry-notary-server/src/api.rs::pdp_pre_source_denial_audit_records_zero_source_and_no_forward`,
-  and `crates/registry-notary-server/tests/standalone_http.rs::evaluate_policy_denial_records_zero_source_and_redacted_audit`.
+  `crates/registry-notary-server/src/runtime/tests/evaluation.rs::evaluate_denies_missing_scope_before_reading_source`,
+  `crates/registry-notary-server/src/api/tests/audit.rs::pdp_pre_source_denial_audit_records_zero_source_and_no_forward`,
+  and `crates/registry-notary-server/tests/standalone_http/audit.rs::evaluate_policy_denial_records_zero_source_and_redacted_audit`.
   Disposition: the direct runtime path, API audit helper, and standalone
   `/v1/evaluations` product route now cover pre-source denial, stable PDP
   problem shape, zero upstream source reads, `source_read_count = 0`,
   `forwarded = false`, and response/audit redaction.
 - `NP-28`: Covered.
   Public anchors:
-  `crates/registry-notary-server/tests/standalone_http.rs::direct_credential_pre_evaluation_denials_are_audited_and_redacted`,
-  `crates/registry-notary-server/tests/standalone_http.rs::direct_credential_operation_denial_is_audited_and_preserves_denial_code`,
-  `crates/registry-notary-server/tests/standalone_http.rs::direct_credential_rate_limit_is_audited_with_stored_context`,
-  `crates/registry-notary-server/tests/standalone_http.rs::direct_credential_binding_denials_are_audited_and_redacted`,
-  `crates/registry-notary-server/tests/standalone_http.rs::direct_credential_holder_proof_replay_is_audited_and_redacted`,
-  `crates/registry-notary-server/tests/standalone_http.rs::direct_credential_purpose_mismatch_denial_is_audited_and_redacted`,
-  `crates/registry-notary-server/tests/standalone_http.rs::strict_credentials_issue_rejects_oid4vci_proof_at_http_boundary`,
+  `crates/registry-notary-server/tests/standalone_http/credentials.rs::direct_credential_pre_evaluation_denials_are_audited_and_redacted`,
+  `crates/registry-notary-server/tests/standalone_http/credentials.rs::direct_credential_operation_denial_is_audited_and_preserves_denial_code`,
+  `crates/registry-notary-server/tests/standalone_http/credentials.rs::direct_credential_rate_limit_is_audited_with_stored_context`,
+  `crates/registry-notary-server/tests/standalone_http/credentials.rs::direct_credential_binding_denials_are_audited_and_redacted`,
+  `crates/registry-notary-server/tests/standalone_http/credentials.rs::direct_credential_holder_proof_replay_is_audited_and_redacted`,
+  `crates/registry-notary-server/tests/standalone_http/credentials.rs::direct_credential_purpose_mismatch_denial_is_audited_and_redacted`,
+  `crates/registry-notary-server/tests/standalone_http/credentials.rs::strict_credentials_issue_rejects_oid4vci_proof_at_http_boundary`,
   `crates/registry-notary-server/tests/self_attestation_guard_test.rs::self_attestation_credential_issuance_rejects_disallowed_profile`,
-  `crates/registry-notary-server/src/api.rs::evaluation_access_uses_stored_claim_version_scope`,
-  `crates/registry-notary-server/src/runtime.rs::credential_profile_for_rejects_profile_not_listed_in_claim`,
-  and `crates/registry-notary-server/src/api.rs::issue_credential_fails_closed_when_status_record_write_fails`.
+  `crates/registry-notary-server/src/api/tests/evaluations.rs::evaluation_access_uses_stored_claim_version_scope`,
+  `crates/registry-notary-server/src/runtime/tests/render.rs::credential_profile_for_rejects_profile_not_listed_in_claim`,
+  and `crates/registry-notary-server/src/api/tests/credentials.rs::issue_credential_fails_closed_when_status_record_write_fails`.
   Disposition: caller-triggered pre-evaluation request, classification, and
   lookup denials emit a minimal `credential_denied` event without recording an
   untrusted evaluation id. Evaluation-bound binding, stored-access, policy,
@@ -221,14 +221,14 @@ public evidence or disposition.
   `source_read_count = 0`, and `forwarded = false` on credential denial paths.
 - `NP-29`: Covered.
   Public anchors:
-  `crates/registry-notary-server/tests/standalone_http.rs::federation_evaluation_returns_signed_response_and_rejects_replay`,
-  `crates/registry-notary-server/tests/standalone_http.rs::federation_auth_exempt_route_still_requires_valid_jws`,
-  `crates/registry-notary-server/tests/standalone_http.rs::federation_denial_happens_before_source_read`,
-  `crates/registry-notary-server/tests/standalone_http.rs::federation_emergency_kid_denylist_blocks_before_source_read`,
-  `crates/registry-notary-server/tests/standalone_http.rs::federation_emergency_node_id_denylist_blocks_before_source_read`,
-  `crates/registry-notary-server/tests/standalone_http.rs::federation_request_claims_must_match_profile_before_source_read`,
-  `crates/registry-notary-server/tests/standalone_http.rs::federation_policy_context_satisfies_governed_source_matching`,
-  `crates/registry-notary-server/tests/standalone_http.rs::federation_stale_source_observation_returns_signed_evaluation_error`,
+  `crates/registry-notary-server/tests/standalone_http/federation.rs::federation_evaluation_returns_signed_response_and_rejects_replay`,
+  `crates/registry-notary-server/tests/standalone_http/federation.rs::federation_auth_exempt_route_still_requires_valid_jws`,
+  `crates/registry-notary-server/tests/standalone_http/federation.rs::federation_denial_happens_before_source_read`,
+  `crates/registry-notary-server/tests/standalone_http/federation.rs::federation_emergency_kid_denylist_blocks_before_source_read`,
+  `crates/registry-notary-server/tests/standalone_http/federation.rs::federation_emergency_node_id_denylist_blocks_before_source_read`,
+  `crates/registry-notary-server/tests/standalone_http/federation.rs::federation_request_claims_must_match_profile_before_source_read`,
+  `crates/registry-notary-server/tests/standalone_http/federation.rs::federation_policy_context_satisfies_governed_source_matching`,
+  `crates/registry-notary-server/tests/standalone_http/federation.rs::federation_stale_source_observation_returns_signed_evaluation_error`,
   and `crates/registry-notary-server/src/federation/mod.rs::federation_response_signing_failure_emits_denial_audit_with_context`.
   Disposition: pre-verification signature and emergency-denylist denials omit
   untrusted request context. After signature verification, denial records retain

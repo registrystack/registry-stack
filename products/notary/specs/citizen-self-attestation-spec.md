@@ -450,7 +450,7 @@ For `POST /v1/evaluations`:
 6. Continue through the existing claim evaluation pipeline.
 
 The guard placement is part of the contract. In
-`crates/registry-notary-server/src/api.rs::evaluate`, the self-attestation
+`crates/registry-notary-server/src/api/evaluations.rs::evaluate`, the self-attestation
 guard must run after request parsing, authentication, principal construction,
 and claim selection, but before calling the runtime evaluation path or any code
 that can invoke an upstream source connector. Denials from this guard still
@@ -1041,7 +1041,7 @@ Definition of Done:
 ### Stage 3: Evaluation Guard
 
 - Add a self-attestation guard before source reads in evaluate.
-- Place the guard in `api.rs::evaluate` after request parsing, authentication,
+- Place the guard in `api/evaluations.rs::evaluate` after request parsing, authentication,
   principal construction, and claim selection, but before the runtime evaluation
   path or any upstream source connector call.
 - Add `SourceCapability` to the runtime evaluation context with
@@ -1206,7 +1206,7 @@ The feature is done only when all of the following are true:
   authorization, and ambiguous citizen or machine classification fails closed.
 - Configured assurance policy fails closed when `acr` or `auth_time` is missing
   or unacceptable.
-- The self-attestation guard runs in `api.rs::evaluate` before any runtime
+- The self-attestation guard runs in `api/evaluations.rs::evaluate` before any runtime
   evaluation or upstream source connector call.
 - Citizen tokens never receive direct machine-client source scopes; source
   reads use only `SourceCapability::SelfAttestation` after all citizen guards
@@ -1255,7 +1255,7 @@ unless self-attestation is enabled.
 
 Parallel workers:
 
-- Worker A owns `api.rs::evaluate` guard placement and access-mode
+- Worker A owns `api/evaluations.rs::evaluate` guard placement and access-mode
   classification.
 - Worker B owns subject-binding, allow-list, fixed claim-profile purpose, and
   alternate-subject rejection tests.
