@@ -15,6 +15,11 @@ pub mod admin;
 pub mod aggregates;
 #[cfg(feature = "attribute-release")]
 pub mod attribute_release;
+#[allow(
+    dead_code,
+    reason = "the closed consultation wire boundary is compiled before the reviewed service route activates it"
+)]
+pub(crate) mod consultation;
 pub mod datasets;
 pub mod docs;
 pub mod entity;

@@ -50,6 +50,8 @@ pub enum Error {
     #[error("{0}")]
     Auth(#[from] AuthError),
     #[error("{0}")]
+    Consultation(#[from] ConsultationError),
+    #[error("{0}")]
     Pdp(#[from] PdpError),
     #[error("{0}")]
     Entity(#[from] EntityError),
@@ -163,6 +165,27 @@ pub enum AuthError {
     /// surfaced as the `Retry-After` response header.
     #[error("authentication rate limited")]
     RateLimited { retry_after_seconds: u64 },
+}
+
+/// The closed consultation-v1 public error taxonomy.
+///
+/// More specific internal reasons belong in redacted audit events. None of
+/// these variants carries source, selector, policy-branch, consent, or adapter
+/// data that could leak through Problem Details.
+#[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
+pub enum ConsultationError {
+    #[error("invalid consultation request")]
+    InvalidRequest,
+    #[error("invalid consultation credentials")]
+    InvalidCredentials,
+    #[error("consultation denied")]
+    Denied,
+    #[error("consultation profile not found")]
+    ProfileNotFound,
+    #[error("consultation rate limited")]
+    RateLimited,
+    #[error("consultation unavailable")]
+    Unavailable,
 }
 
 /// `pdp.*` policy decision codes from the shared Registry PDP.
@@ -491,6 +514,7 @@ impl Error {
     pub fn code(&self) -> &'static str {
         match self {
             Error::Auth(e) => e.code(),
+            Error::Consultation(e) => e.code(),
             Error::Pdp(e) => e.code(),
             Error::Entity(e) => e.code(),
             Error::Filter(e) => e.code(),
@@ -520,6 +544,7 @@ impl Error {
     pub fn http_status(&self) -> StatusCode {
         match self {
             Error::Auth(e) => e.http_status(),
+            Error::Consultation(e) => e.http_status(),
             Error::Pdp(e) => e.http_status(),
             Error::Entity(e) => e.http_status(),
             Error::Filter(e) => e.http_status(),
@@ -545,6 +570,7 @@ impl Error {
     pub fn title(&self) -> &'static str {
         match self {
             Error::Auth(e) => e.title(),
+            Error::Consultation(e) => e.title(),
             Error::Pdp(e) => e.title(),
             Error::Entity(e) => e.title(),
             Error::Filter(e) => e.title(),
@@ -572,6 +598,7 @@ impl Error {
     pub fn detail(&self) -> String {
         match self {
             Error::Auth(e) => e.detail(),
+            Error::Consultation(e) => e.detail().to_string(),
             Error::Pdp(e) => e.detail().to_string(),
             Error::Entity(e) => e.detail(),
             Error::Filter(e) => e.detail().to_string(),
@@ -763,6 +790,52 @@ impl AuthError {
             AuthError::RateLimited { retry_after_seconds } => format!(
                 "too many authentication failures from this client; retry after {retry_after_seconds}s"
             ),
+        }
+    }
+}
+
+impl ConsultationError {
+    fn code(&self) -> &'static str {
+        match self {
+            Self::InvalidRequest => "consultation.invalid_request",
+            Self::InvalidCredentials => "auth.invalid_credentials",
+            Self::Denied => "consultation.denied",
+            Self::ProfileNotFound => "consultation.profile_not_found",
+            Self::RateLimited => "consultation.rate_limited",
+            Self::Unavailable => "consultation.unavailable",
+        }
+    }
+
+    fn http_status(&self) -> StatusCode {
+        match self {
+            Self::InvalidRequest => StatusCode::BAD_REQUEST,
+            Self::InvalidCredentials => StatusCode::UNAUTHORIZED,
+            Self::Denied => StatusCode::FORBIDDEN,
+            Self::ProfileNotFound => StatusCode::NOT_FOUND,
+            Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
+            Self::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
+        }
+    }
+
+    fn title(&self) -> &'static str {
+        match self {
+            Self::InvalidRequest => "Invalid consultation request",
+            Self::InvalidCredentials => "Invalid credentials",
+            Self::Denied => "Consultation denied",
+            Self::ProfileNotFound => "Consultation profile not found",
+            Self::RateLimited => "Consultation rate limited",
+            Self::Unavailable => "Consultation unavailable",
+        }
+    }
+
+    fn detail(&self) -> &'static str {
+        match self {
+            Self::InvalidRequest => "the consultation request is invalid",
+            Self::InvalidCredentials => "service authentication failed",
+            Self::Denied => "the consultation is not permitted",
+            Self::ProfileNotFound => "the requested consultation profile is not available",
+            Self::RateLimited => "the consultation quota is exhausted",
+            Self::Unavailable => "the consultation cannot be completed safely",
         }
     }
 }

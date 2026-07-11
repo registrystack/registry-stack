@@ -415,6 +415,7 @@ impl ParsedPurpose {
     pub fn try_parse(value: &str) -> Result<Self, ConsultationValidationError> {
         let valid = !value.is_empty()
             && value.len() <= MAX_CANONICAL_PURPOSE_BYTES
+            && !value.contains(',')
             && value
                 .chars()
                 .all(|character| !character.is_control() && !character.is_whitespace());
@@ -435,15 +436,32 @@ impl ParsedPurpose {
 /// This type intentionally implements neither `Debug` nor serialization. The
 /// value is zeroized when dropped and is visible only inside Relay. This type
 /// does not prove the profile's key, pattern, or canonicalization rule.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub struct ParsedSingleStringInput {
     name: Box<str>,
     value: Zeroizing<String>,
 }
 
 impl ParsedSingleStringInput {
+    /// Maximum decoded structural input-name bytes accepted by v1.
+    pub(crate) const MAX_NAME_BYTES: usize = MAX_STABLE_ID_BYTES;
+    /// Maximum decoded subject-value bytes accepted by v1.
+    pub(crate) const MAX_VALUE_BYTES: usize = MAX_CANONICAL_INPUT_BYTES;
+
     /// Apply the generic one-key and bounded-string parsing rules.
     pub fn try_parse(name: &str, value: &str) -> Result<Self, ConsultationValidationError> {
+        Self::try_parse_zeroizing(
+            Zeroizing::new(name.to_owned()),
+            Zeroizing::new(value.to_owned()),
+        )
+    }
+
+    /// Validate a string already placed under a zeroizing owner by a strict
+    /// request visitor. Rejected values are scrubbed on every return path.
+    pub(crate) fn try_parse_zeroizing(
+        name: Zeroizing<String>,
+        value: Zeroizing<String>,
+    ) -> Result<Self, ConsultationValidationError> {
         let mut name_bytes = name.bytes();
         let valid_name = matches!(name_bytes.next(), Some(b'a'..=b'z'))
             && name.len() <= MAX_STABLE_ID_BYTES
@@ -460,8 +478,8 @@ impl ParsedSingleStringInput {
         }
 
         Ok(Self {
-            name: name.into(),
-            value: Zeroizing::new(value.to_owned()),
+            name: name.as_str().into(),
+            value,
         })
     }
 
@@ -469,6 +487,22 @@ impl ParsedSingleStringInput {
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Return the subject value only inside Relay's private validation stages.
+    ///
+    /// This accessor is deliberately crate-private. Public API and backend
+    /// types cannot serialize or debug the raw selector.
+    #[must_use]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the reviewed profile validator will consume the private value"
+        )
+    )]
+    pub(crate) fn value_for_internal_use(&self) -> &str {
+        &self.value
     }
 
     #[cfg(test)]
@@ -988,6 +1022,10 @@ mod tests {
         );
         assert_eq!(
             ParsedPurpose::try_parse("benefit verification"),
+            Err(ConsultationValidationError::InvalidParsedPurpose)
+        );
+        assert_eq!(
+            ParsedPurpose::try_parse("benefit-verification,other-purpose"),
             Err(ConsultationValidationError::InvalidParsedPurpose)
         );
         assert_eq!(

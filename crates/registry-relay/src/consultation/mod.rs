@@ -7,9 +7,14 @@
 //! and fenced dispatch grant. Raw request values and native source controls are
 //! not backend capabilities.
 
+mod identifiers;
 mod types;
 mod workload;
 
+pub use identifiers::{
+    ConsultationId, ConsultationIdentifierError, ConsultationKey, NotaryEvaluationId,
+    ResolvedConsultationProfile,
+};
 pub use types::{
     AcquiredField, AcquisitionClass, AssertionContractHash, AssertionContractId,
     AssertionContractIdentity, ConsultationOutcome, ConsultationValidationError,
@@ -19,8 +24,9 @@ pub use types::{
     ProfileIdentity, ProfileVersion, SelectorProvenance, SnapshotGenerationId,
 };
 pub use workload::{
-    AuthenticatedConsultationWorkload, ClientClaimSelector, ConfiguredAudience,
-    ConfiguredClientBinding, ConfiguredIssuer, ConfiguredOidcWorkloadProof, ConfiguredPrincipalId,
-    ConsultationAuthMode, ConsultationWorkloadBinding, ExpectedClientValue, RegistryInstanceId,
-    RequiredConsultationScope, TenantId, WorkloadBindingError, WorkloadId,
+    AuthenticatedConsultationWorkload, AuthenticatedNotaryWorkload, ClientClaimSelector,
+    ConfiguredAudience, ConfiguredClientBinding, ConfiguredIssuer, ConfiguredOidcWorkloadProof,
+    ConfiguredPrincipalId, ConsultationAuthMode, ConsultationWorkloadBinding,
+    ConsultationWorkloadRole, ExpectedClientValue, RegistryInstanceId, RequiredConsultationScope,
+    TenantId, WorkloadBindingError, WorkloadId,
 };
