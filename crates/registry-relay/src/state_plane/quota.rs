@@ -30,6 +30,7 @@ const V1_MAX_BURST_TOKENS: u8 = 10;
 const MAX_RETRY_AFTER: Duration = Duration::from_secs(60);
 
 /// Exact durable bucket identity. No request field can construct this key.
+#[derive(PartialEq, Eq)]
 pub(crate) struct QuotaKey {
     workload_id: String,
     profile_id: String,
@@ -149,6 +150,58 @@ pub(crate) enum QuotaReservation {
 pub(crate) struct QuotaGrant {
     key: QuotaKey,
     limits: EffectiveQuotaLimits,
+}
+
+#[cfg(test)]
+impl QuotaGrant {
+    pub(crate) fn for_consultation_test() -> Self {
+        Self::for_test_binding(
+            "registry-notary",
+            "synthetic.person-status.exact",
+            1,
+            V1_MAX_RATE_PER_MINUTE,
+            V1_MAX_BURST_TOKENS,
+        )
+    }
+
+    pub(crate) fn for_test_binding(
+        workload_id: &str,
+        profile_id: &str,
+        profile_version: u64,
+        rate_per_minute: u16,
+        burst_tokens: u8,
+    ) -> Self {
+        Self {
+            key: QuotaKey::for_test(workload_id, profile_id, profile_version),
+            limits: EffectiveQuotaLimits {
+                rate_per_minute,
+                burst_tokens,
+            },
+        }
+    }
+}
+
+impl QuotaGrant {
+    pub(crate) fn binding_matches(
+        &self,
+        workload: &AuthenticatedConsultationWorkload,
+        profile: &ProfileIdentity,
+        effective_rate_per_minute: u32,
+        effective_burst_tokens: u16,
+    ) -> bool {
+        let Ok(rate_per_minute) = u16::try_from(effective_rate_per_minute) else {
+            return false;
+        };
+        let Ok(burst_tokens) = u8::try_from(effective_burst_tokens) else {
+            return false;
+        };
+        self.key == QuotaKey::from_authenticated(workload, profile)
+            && self.limits
+                == (EffectiveQuotaLimits {
+                    rate_per_minute,
+                    burst_tokens,
+                })
+    }
 }
 
 impl std::fmt::Debug for QuotaGrant {

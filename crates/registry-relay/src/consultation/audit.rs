@@ -34,7 +34,7 @@ use crate::state_plane::{
     ActiveAuditPseudonymWriteEpoch, AuditedConsultationDispatch, ConsultationCompletionReceipt,
     ConsultationPersistenceError, ConsultationPublicationGrant, FencedConsultationAttemptAuthority,
     KnownCompletionDisposition, KnownConsultationCompletionFacts,
-    PostgresAuditPseudonymKeyringRuntime, PostgresDurableAuditStatePlane,
+    PostgresAuditPseudonymKeyringRuntime, PostgresDurableAuditStatePlane, QuotaGrant,
     TerminalCompletionAttempt,
 };
 
@@ -377,6 +377,7 @@ pub(crate) struct PreparedAtomicConsultationAttempt<'profile> {
     persistence_freshness: PendingConsultationPersistenceFreshness,
     compiled_timeout_ms: u32,
     fence: Option<FencedConsultationAttemptAuthority>,
+    quota: QuotaGrant,
     execution: SealedConsultationExecution<'profile>,
 }
 
@@ -400,6 +401,7 @@ impl<'profile> PreparedAtomicConsultationAttempt<'profile> {
         Ok(PreparedAuditedConsultationDispatch {
             dispatch,
             dispatch_freshness: self.dispatch_freshness,
+            quota: self.quota,
             execution: self.execution,
         })
     }
@@ -451,6 +453,7 @@ impl PreparedAtomicConsultationAttempt<'static> {
             ),
             compiled_timeout_ms,
             fence: Some(fence),
+            quota: QuotaGrant::for_consultation_test(),
             execution: SealedConsultationExecution::state_plane_only_for_test(),
         })
     }
@@ -537,6 +540,7 @@ impl PreparedAtomicConsultationStateView<'_, '_> {
 pub(crate) struct PreparedAuditedConsultationDispatch<'profile> {
     dispatch: AuditedConsultationDispatch,
     dispatch_freshness: PendingConsultationDispatchFreshness,
+    quota: QuotaGrant,
     execution: SealedConsultationExecution<'profile>,
 }
 
@@ -625,6 +629,7 @@ impl<'profile> PreparedAuditedConsultationDispatch<'profile> {
         let Self {
             mut dispatch,
             dispatch_freshness,
+            quota: _quota,
             execution,
         } = self;
         if dispatch_freshness.check_fresh_now().is_err() {
@@ -867,7 +872,7 @@ pub(crate) fn prepare_atomic_consultation_attempt<'profile>(
         binding: canonical_state_binding(pseudonym_bundle_value)?,
     };
     let completion_seed = canonical_state_binding(seed.into_safe_value())?;
-    let (pseudonyms, persistence_freshness, dispatch_freshness) =
+    let (pseudonyms, quota, persistence_freshness, dispatch_freshness) =
         attempt.into_pseudonyms_and_freshness_guards();
     let PreparedConsultationPseudonyms {
         active_epoch,
@@ -883,6 +888,7 @@ pub(crate) fn prepare_atomic_consultation_attempt<'profile>(
         dispatch_freshness,
         compiled_timeout_ms,
         fence: Some(fence),
+        quota,
         execution,
     })
 }

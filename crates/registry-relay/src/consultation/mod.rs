@@ -20,6 +20,11 @@ pub(crate) mod commitments;
 mod identifiers;
 #[allow(
     dead_code,
+    reason = "the compiled policy adapter is consumed by the consultation service integration"
+)]
+pub(crate) mod policy;
+#[allow(
+    dead_code,
     reason = "the bounded provider foundation precedes consultation runtime integration"
 )]
 pub(crate) mod pseudonym;

@@ -25,7 +25,9 @@ use crate::source_plan::{
     CompiledInputValue, CompiledResponseSchema, CompiledScalarShape, CompiledSourcePlan,
     SourcePlanKind,
 };
+use crate::state_plane::QuotaGrant;
 
+use super::policy::CompiledPolicyProof;
 use super::pseudonym::PreparedConsultationPseudonyms;
 use super::{
     AcquisitionClass, AuthenticatedConsultationWorkload, PreAuthorizationConsultationCore,
@@ -587,6 +589,28 @@ impl TrustedConsultationTime {
         })
     }
 
+    pub(super) const fn unix_ms(self) -> i64 {
+        self.unix_ms
+    }
+
+    pub(super) fn conservative_not_after(
+        self,
+        expires_at_unix_ms: i64,
+    ) -> Result<Instant, ConsultationCommitmentError> {
+        if !valid_unix_ms(self.unix_ms)
+            || self.monotonic_after < self.monotonic_before
+            || !valid_unix_ms(expires_at_unix_ms)
+            || self.unix_ms >= expires_at_unix_ms
+        {
+            return Err(ConsultationCommitmentError::InvalidTime);
+        }
+        let remaining_ms = u64::try_from(expires_at_unix_ms - self.unix_ms)
+            .map_err(|_| ConsultationCommitmentError::InvalidTime)?;
+        self.monotonic_before
+            .checked_add(Duration::from_millis(remaining_ms))
+            .ok_or(ConsultationCommitmentError::InvalidTime)
+    }
+
     #[cfg(test)]
     const fn for_test(unix_ms: i64, monotonic_before: Instant, monotonic_after: Instant) -> Self {
         Self {
@@ -599,23 +623,47 @@ impl TrustedConsultationTime {
 
 /// A move-only policy permit over the exact committed request facts.
 ///
-/// There is intentionally no production constructor until the hash-pinned
-/// policy adapter lands. That adapter must consume the prepared pseudonyms and
-/// exact authenticated workload before it can mint this capability.
+/// Only the fixed compiled-policy adapter can construct this capability. It
+/// must consume the prepared pseudonyms, exact authenticated workload, and
+/// matching durable quota grant together.
 pub(crate) struct VerifiedPolicyDecision<'profile, 'workload> {
     pseudonyms: PreparedConsultationPseudonyms<'profile>,
     workload: &'workload AuthenticatedConsultationWorkload,
+    quota: QuotaGrant,
     checked_at_unix_ms: i64,
     expires_at_unix_ms: i64,
+    local_not_after: Instant,
 }
 
 impl VerifiedPolicyDecision<'_, '_> {
+    pub(super) fn from_compiled_policy<'profile, 'workload>(
+        proof: CompiledPolicyProof<'profile, 'workload>,
+    ) -> Result<VerifiedPolicyDecision<'profile, 'workload>, ConsultationCommitmentError> {
+        let (pseudonyms, workload, quota, checked_at_unix_ms, expires_at_unix_ms, local_not_after) =
+            proof.into_parts();
+        if !valid_unix_ms(checked_at_unix_ms)
+            || !valid_unix_ms(expires_at_unix_ms)
+            || checked_at_unix_ms >= expires_at_unix_ms
+        {
+            return Err(ConsultationCommitmentError::InvalidTime);
+        }
+        Ok(VerifiedPolicyDecision {
+            pseudonyms,
+            workload,
+            quota,
+            checked_at_unix_ms,
+            expires_at_unix_ms,
+            local_not_after,
+        })
+    }
+
     #[cfg(test)]
     fn from_verified_adapter_for_test<'profile, 'workload>(
         pseudonyms: PreparedConsultationPseudonyms<'profile>,
         workload: &'workload AuthenticatedConsultationWorkload,
         checked_at_unix_ms: i64,
         expires_at_unix_ms: i64,
+        local_not_after: Instant,
     ) -> Result<VerifiedPolicyDecision<'profile, 'workload>, ConsultationCommitmentError> {
         if !valid_unix_ms(checked_at_unix_ms)
             || !valid_unix_ms(expires_at_unix_ms)
@@ -626,8 +674,10 @@ impl VerifiedPolicyDecision<'_, '_> {
         Ok(VerifiedPolicyDecision {
             pseudonyms,
             workload,
+            quota: QuotaGrant::for_consultation_test(),
             checked_at_unix_ms,
             expires_at_unix_ms,
+            local_not_after,
         })
     }
 }
@@ -674,6 +724,7 @@ pub(crate) struct AuthorizedConsultationAttempt<'profile> {
     consent: VerifiedConsentDecision,
     pseudonyms: PreparedConsultationPseudonyms<'profile>,
     digests: ConsultationDigests,
+    quota: QuotaGrant,
     freshness: AuthorizedDecisionFreshness,
 }
 
@@ -706,12 +757,13 @@ impl<'profile> AuthorizedConsultationAttempt<'profile> {
         self,
     ) -> (
         PreparedConsultationPseudonyms<'profile>,
+        QuotaGrant,
         PendingConsultationPersistenceFreshness,
         PendingConsultationDispatchFreshness,
     ) {
         let persistence = self.freshness.pending_persistence();
         let dispatch = self.freshness.pending_dispatch();
-        (self.pseudonyms, persistence, dispatch)
+        (self.pseudonyms, self.quota, persistence, dispatch)
     }
 }
 
@@ -786,8 +838,10 @@ fn authorize_consultation_attempt_at<'profile>(
     let VerifiedPolicyDecision {
         pseudonyms,
         workload,
+        quota,
         checked_at_unix_ms,
         expires_at_unix_ms,
+        local_not_after,
     } = decision;
     let profile = pseudonyms.profile();
     let consent = pseudonyms.consent;
@@ -797,6 +851,7 @@ fn authorize_consultation_attempt_at<'profile>(
         consent,
         checked_at_unix_ms,
         expires_at_unix_ms,
+        local_not_after,
         now,
     )?;
     let decision_expires_at = AuthorizationDecisionExpiry(expires_at_unix_ms);
@@ -826,6 +881,7 @@ fn authorize_consultation_attempt_at<'profile>(
             execution_plan,
             request,
         },
+        quota,
         freshness,
     })
 }
@@ -845,6 +901,7 @@ fn validate_decision_window(
     consent: VerifiedConsentDecision,
     decision_checked_at_unix_ms: i64,
     decision_expires_at_unix_ms: i64,
+    policy_local_not_after: Instant,
     now: TrustedConsultationTime,
 ) -> Result<AuthorizedDecisionFreshness, ConsultationCommitmentError> {
     if !valid_unix_ms(now.unix_ms)
@@ -868,13 +925,13 @@ fn validate_decision_window(
     )?;
     let remaining_ms = u64::try_from(decision_expires_at_unix_ms - now.unix_ms)
         .map_err(|_| ConsultationCommitmentError::InvalidTime)?;
-    let local_not_after = now
+    let wall_local_not_after = now
         .monotonic_before
         .checked_add(Duration::from_millis(remaining_ms))
         .ok_or(ConsultationCommitmentError::InvalidTime)?;
     let freshness = AuthorizedDecisionFreshness {
         expires_at_unix_ms: decision_expires_at_unix_ms,
-        local_not_after,
+        local_not_after: policy_local_not_after.min(wall_local_not_after),
     };
     freshness.check(now)?;
     Ok(freshness)
@@ -961,6 +1018,8 @@ fn authorization_context_value(
         "auth_mode": workload.auth_mode().as_str(),
         "issuer": workload.issuer().as_str(),
         "audience": workload.audience().as_str(),
+        "client_claim_selector": workload.client_claim_selector().as_str(),
+        "client_value": workload.client_value().as_str(),
         "workload_id": workload.workload_id().as_str(),
         "principal_id": workload.principal_id(),
         "checked_scopes": workload.checked_scopes().collect::<Vec<_>>(),
@@ -1427,6 +1486,12 @@ mod tests {
     fn decision_window_caps_policy_age_authentication_and_both_clocks() {
         let profile = maximum_runtime_profile_fixture();
         let anchor = Instant::now();
+        assert_eq!(
+            TrustedConsultationTime::for_test(1_000, anchor, anchor + Duration::from_millis(400),)
+                .conservative_not_after(1_500)
+                .expect("policy deadline uses the conservative side of the sampling bracket"),
+            anchor + Duration::from_millis(500),
+        );
         let now = TrustedConsultationTime::for_test(1_000, anchor, anchor);
         let freshness = validate_decision_window(
             &profile,
@@ -1434,6 +1499,7 @@ mod tests {
             VerifiedConsentDecision::not_required(),
             900,
             1_500,
+            anchor + Duration::from_millis(600),
             now,
         )
         .expect("fresh exact decision");
@@ -1465,6 +1531,7 @@ mod tests {
                 VerifiedConsentDecision::not_required(),
                 checked_at,
                 expires_at,
+                anchor + Duration::from_millis(1_000),
                 TrustedConsultationTime::for_test(observed_at, anchor, anchor),
             )
             .is_err());
@@ -1476,6 +1543,7 @@ mod tests {
             VerifiedConsentDecision::not_required(),
             900,
             1_500,
+            anchor + Duration::from_millis(600),
             TrustedConsultationTime::for_test(1_000, anchor, anchor + Duration::from_millis(400)),
         )
         .expect("sampling gap consumes but never extends monotonic lifetime");
@@ -1484,6 +1552,28 @@ mod tests {
                 1_001,
                 anchor + Duration::from_millis(499),
                 anchor + Duration::from_millis(500),
+            ))
+            .is_err());
+
+        let rollback_safe = validate_decision_window(
+            &profile,
+            3_000,
+            VerifiedConsentDecision::not_required(),
+            1_000,
+            2_000,
+            anchor + Duration::from_millis(1_000),
+            TrustedConsultationTime::for_test(
+                1_100,
+                anchor + Duration::from_millis(900),
+                anchor + Duration::from_millis(900),
+            ),
+        )
+        .expect("slow or rolled-back wall time cannot refresh the original policy deadline");
+        assert!(rollback_safe
+            .check(TrustedConsultationTime::for_test(
+                1_101,
+                anchor + Duration::from_millis(999),
+                anchor + Duration::from_millis(1_000),
             ))
             .is_err());
     }
