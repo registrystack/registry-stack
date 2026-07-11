@@ -301,6 +301,9 @@ def strip_rust_test_module(text: str) -> str:
 CFG_TEST_MOD_RE = re.compile(
     r"#\[cfg\(test\)\]\s*((?:#\[[^\]]*\]\s*)*)mod\s+([A-Za-z0-9_]+)\s*(;|\{)"
 )
+MOD_DECL_RE = re.compile(
+    r"((?:#\[[^\]]*\]\s*)*)(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z0-9_]+)\s*;"
+)
 MOD_PATH_ATTR_RE = re.compile(r'path\s*=\s*"([^"]+)"')
 INCLUDE_MACRO_RE = re.compile(r'include!\s*\(\s*"([^"]+)"\s*\)')
 
@@ -351,13 +354,34 @@ def test_module_files_in(text: str, file_path: Path) -> set[Path]:
     return found
 
 
+def child_module_files_in(text: str, file_path: Path) -> set[Path]:
+    """Files a module pulls in as children: every external `mod NAME;`
+    declaration (via #[path] or directory conventions) plus include!
+    shards. Inside a file already known to be test-only, all of these are
+    test-only too, cfg-marked or not."""
+    found: set[Path] = set()
+    for match in MOD_DECL_RE.finditer(text):
+        attrs, name = match.groups()
+        path_attr = MOD_PATH_ATTR_RE.search(attrs)
+        target = (
+            file_path.parent / path_attr.group(1)
+            if path_attr
+            else resolve_mod_file(module_child_dir(file_path), name)
+        )
+        if target is not None:
+            found.add(target.resolve())
+    for include in INCLUDE_MACRO_RE.finditer(text):
+        found.add((file_path.parent / include.group(1)).resolve())
+    return found
+
+
 def collect_test_module_files(
     texts: dict[str, str], paths: dict[str, Path]
 ) -> set[Path]:
     """Every file that is compiled only as #[cfg(test)] code and therefore
     must not be scanned as a production route source. A test-module file is
-    entirely test code, so anything it include!s is test code too; expand
-    include! references transitively."""
+    entirely test code, so its child modules and include! shards are test
+    code too; expand both transitively."""
     excluded: set[Path] = set()
     for source, text in texts.items():
         excluded |= test_module_files_in(text, paths[source])
@@ -368,8 +392,7 @@ def collect_test_module_files(
             body = current.read_text(encoding="utf-8")
         except OSError:
             continue
-        for include in INCLUDE_MACRO_RE.finditer(body):
-            target = (current.parent / include.group(1)).resolve()
+        for target in child_module_files_in(body, current):
             if target not in excluded:
                 excluded.add(target)
                 pending.append(target)

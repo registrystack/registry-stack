@@ -315,6 +315,27 @@ class SecurityAssuranceCheckTest(unittest.TestCase):
         )
         self.module.validate_route_sources()
 
+    def test_route_sources_ignores_child_modules_of_test_module(self):
+        self.write_route_inventory()
+        src = self.root / "crates" / "registry-notary-server" / "src"
+        (src / "gadget.rs").write_text(
+            "pub fn run() {}\n"
+            "#[cfg(test)]\n"
+            "mod tests;\n"
+        )
+        (src / "gadget" / "tests").mkdir(parents=True)
+        (src / "gadget" / "tests" / "mod.rs").write_text(
+            "use super::*;\n"
+            "mod admin;\n"
+        )
+        (src / "gadget" / "tests" / "admin.rs").write_text(
+            "#[tokio::test]\n"
+            "async fn probe() {\n"
+            '    let _ = Router::new().route("/secret", get(handler));\n'
+            "}\n"
+        )
+        self.module.validate_route_sources()
+
     def test_extracts_literal_const_format_and_chained_methods(self):
         source = '''
 use axum::{routing::{get, post}, Router};
